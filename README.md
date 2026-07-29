@@ -131,6 +131,8 @@ git config core.hooksPath .githooks              # 클론마다 한 번
 잡아야 할 결함을 일부러 심어 red 가 나오는지부터 확인한다
 (`python -X utf8 tests/audit/checkSilentFail.py --selftest` 가 그 형태다).
 
+기여는 [CONTRIBUTING.md](CONTRIBUTING.md) 를 본다. 설계 단계의 기여도 진짜 기여다.
+
 ## 라이선스
 
 [MIT](LICENSE)

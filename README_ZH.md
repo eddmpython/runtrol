@@ -131,6 +131,8 @@ git config core.hooksPath .githooks              # 每次克隆执行一次
 先故意植入它应当捕获的缺陷，确认它会变红
 （`python -X utf8 tests/audit/checkSilentFail.py --selftest` 就是这个形态）。
 
+参与贡献请看 [CONTRIBUTING.md](CONTRIBUTING.md)。设计阶段的贡献也是真正的贡献。
+
 ## 许可证
 
 [MIT](LICENSE)

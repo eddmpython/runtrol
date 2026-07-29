@@ -131,6 +131,8 @@ git config core.hooksPath .githooks              # クローンごとに一度
 捕まえるべき欠陥をわざと仕込んで red になるかを確かめる
 （`python -X utf8 tests/audit/checkSilentFail.py --selftest` がその形である）。
 
+貢献は [CONTRIBUTING.md](CONTRIBUTING.md) を見る。設計段階の貢献も本物の貢献である。
+
 ## ライセンス
 
 [MIT](LICENSE)

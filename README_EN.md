@@ -131,6 +131,8 @@ A gate is **a defect detector, not a rubber stamp**. When a new gate goes up, be
 plant the defect it is supposed to catch and confirm it goes red
 (`python -X utf8 tests/audit/checkSilentFail.py --selftest` is that shape).
 
+See [CONTRIBUTING.md](CONTRIBUTING.md) to contribute. Design-stage contributions are real contributions.
+
 ## License
 
 [MIT](LICENSE)
