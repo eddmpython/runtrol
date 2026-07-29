@@ -1,0 +1,25 @@
+# 단일 바이너리. argv 디스패치만 한다.
+#
+# 왜 얇은 bin 을 따로 두는가: bin 은 필연적으로 모든 것을 링크하므로, 그 자체가 계층 위반의
+# 예외가 된다. 그 예외를 한 곳에 40 줄로 가두면 의존 방향 게이트가 나머지 전부를 엄격히 볼 수 있다.
+# 그리고 daemon 과 cli 를 lib 으로 두면 통합 테스트가 그것들을 링크할 수 있다 (bin 은 못 한다).
+[package]
+name = "runtrol"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[[bin]]
+name = "runtrol"
+path = "src/main.rs"
+
+[dependencies]
+runtrol-cli = { workspace = true }
+runtrol-daemon = { workspace = true }
+
+[lints]
+workspace = true

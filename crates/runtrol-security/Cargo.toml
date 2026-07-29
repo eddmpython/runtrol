@@ -1,0 +1,16 @@
+# 스코프 타입 벽, PC 현장 증거, workspace 루트 정규화.
+[package]
+name = "runtrol-security"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[dependencies]
+runtrol-provider = { workspace = true }
+
+[lints]
+workspace = true

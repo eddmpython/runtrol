@@ -1,0 +1,16 @@
+# CLI 와 데몬 사이의 프레임 형식과 양쪽 전송 끝단.
+[package]
+name = "runtrol-ipc"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[dependencies]
+runtrol-provider = { workspace = true }
+
+[lints]
+workspace = true

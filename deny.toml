@@ -1,0 +1,82 @@
+# 공급망 게이트 + **기각한 crate 의 기계 기억**.
+#
+# 두 번째 역할이 중요하다. 설계 문서에 "sled 를 쓰지 않는다" 를 적어도 다음 사람은 안 읽는다.
+# 여기 적으면 `cargo deny` 가 막는다. 기각 이유는 mainPlan 문서에서 왔고 `use-instead` 로 남긴다.
+
+[graph]
+all-features = true
+
+[advisories]
+version = 2
+yanked = "deny"
+
+[licenses]
+version = 2
+# MIT 프로젝트가 무리 없이 배포할 수 있는 것만.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Zlib",
+]
+confidence-threshold = 0.9
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+
+[bans]
+# 중복 버전은 경고까지. 트리 전체를 우리가 통제하지 못한다.
+multiple-versions = "warn"
+# 와일드카드 버전은 재현 빌드를 깨뜨린다. 릴리즈 서명의 전제다.
+wildcards = "deny"
+
+# 기각 원장. 각 항목의 근거는 mainPlan 문서에 있다.
+[[bans.deny]]
+name = "sled"
+reason = "fsync 를 신뢰성 있게 하지 않고 RSS 폭증 보고가 미해결이다. mainPlan/coreRuntime/03-storage-decision.md"
+use-instead = "redb"
+
+[[bans.deny]]
+name = "async-std"
+reason = "RUSTSEC-2025-0052 로 discontinued (전 버전 영향, 패치 없음)"
+use-instead = "tokio"
+
+[[bans.deny]]
+name = "native_db"
+reason = "redb 를 `=3.0.2` 로 핀해서 4.1 의 메모리 개선(-68%)을 못 받는다. 마지막 릴리즈 12 개월 경과"
+use-instead = "redb"
+
+[[bans.deny]]
+name = "linkme"
+reason = "crate 경계를 넘으면 조용히 빈 슬라이스를 반환한다 (실측). 조용한 실패는 CLAUDE.md 금지 사항. mainPlan/providerAdapter/README.md 0 절"
+
+[[bans.deny]]
+name = "enum_dispatch"
+reason = "닫힌 enum 디스패치는 provider 추가 시 코어 수정을 강제한다 (vibe-kanban 안티패턴)"
+
+[[bans.deny]]
+name = "libloading"
+reason = "동적 플러그인 ABI 는 아직 없는 문제에 메모리와 보안 비용을 문다. manifest + kind 드라이버로 충분하다"
+
+[[bans.deny]]
+name = "wasmtime"
+reason = "바이너리 크기를 두 배로 만든다. 플러그인 격리는 M0 문제가 아니다"
+
+[[bans.deny]]
+name = "openssl"
+reason = "네이티브 의존을 끌어와 단일 정적 바이너리와 크로스 플랫폼 설치 동등성을 깬다"
+use-instead = "rustls"
+
+[[bans.deny]]
+name = "dirs"
+reason = "2025-02 GitHub archive 됨. dirs-sys 가 windows-sys 0.59 를 핀해 tokio 의 0.61 과 트리가 갈라진다. 경로 해소는 우리가 소유한다 (약 40 줄)"
+
+[[bans.deny]]
+name = "directories"
+reason = "위와 같음 (같은 archive)"

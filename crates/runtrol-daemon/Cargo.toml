@@ -1,0 +1,22 @@
+# 로컬 소켓 표면, 요청 디스패치, 경계에서의 스코프 강제, 구성 조립.
+[package]
+name = "runtrol-daemon"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[dependencies]
+runtrol-provider = { workspace = true }
+runtrol-security = { workspace = true }
+runtrol-childproc = { workspace = true }
+runtrol-store = { workspace = true }
+runtrol-ipc = { workspace = true }
+runtrol-core = { workspace = true }
+runtrol-drivers = { workspace = true }
+
+[lints]
+workspace = true

@@ -1,0 +1,16 @@
+# OS 자식 프로세스 수명. job object·process group·argv 이스케이프·고아 회수.
+[package]
+name = "runtrol-childproc"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[dependencies]
+runtrol-provider = { workspace = true }
+
+[lints]
+workspace = true

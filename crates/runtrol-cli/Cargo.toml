@@ -1,0 +1,17 @@
+# 사람이 타이핑한 명령을 파싱해 데몬에 묻고 답을 렌더한다.
+[package]
+name = "runtrol-cli"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[dependencies]
+runtrol-provider = { workspace = true }
+runtrol-ipc = { workspace = true }
+
+[lints]
+workspace = true

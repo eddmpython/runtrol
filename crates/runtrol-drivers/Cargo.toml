@@ -1,0 +1,17 @@
+# 내장 kind 드라이버와 임베드 manifest. crates/ 안에서 provider 고유명사가 허용되는 유일한 곳.
+[package]
+name = "runtrol-drivers"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[dependencies]
+runtrol-provider = { workspace = true }
+runtrol-childproc = { workspace = true }
+
+[lints]
+workspace = true

@@ -1,0 +1,140 @@
+# runtrol 워크스페이스 루트. 가상 매니페스트 (루트 자체는 crate 가 아니다).
+#
+# 여기가 정본인 것: 멤버 목록, 제3자 의존 버전, lint 표, 프로파일.
+# 여기가 정본이 아닌 것: 의존 방향 (그건 `tests/audit/dependencyDirection.rs` 의 표가 강제한다).
+
+[workspace]
+resolver = "3"
+members = [
+    "crates/runtrol-provider",
+    "crates/runtrol-security",
+    "crates/runtrol-childproc",
+    "crates/runtrol-store",
+    "crates/runtrol-ipc",
+    "crates/runtrol-core",
+    "crates/runtrol-drivers",
+    "crates/runtrol-daemon",
+    "crates/runtrol-cli",
+    "crates/runtrol",
+    "tests/audit",
+]
+
+[workspace.package]
+edition = "2024"
+# rust-toolchain.toml 의 핀과 같은 값. MSRV 를 증명하는 CI 잡이 없으면 더 낮은 값은
+# 검증되지 않은 주장이므로 적지 않는다 (더 낮은 MSRV 를 원하면 그것을 검증하는 잡을 먼저 만든다).
+rust-version = "1.97"
+license = "MIT"
+repository = "https://github.com/eddmpython/runtrol"
+authors = ["eddmpython"]
+
+# 제3자 버전은 여기 한 번만 적는다 (버전 SSOT). 멤버는 `workspace = true` 로 상속한다.
+# 미사용 항목은 `cargo shear` 가 잡는다 (셋 중 유일하게 이 표를 본다).
+[workspace.dependencies]
+# 런타임. current_thread 로 충분하다 (01-runtime-measurements.md).
+# `process` 만으로는 첫 poll_read 에서 런타임 패닉이 난다. `rt` 가 필수다.
+tokio = { version = "1.53.1", default-features = false }
+tokio-util = { version = "0.7.19", default-features = false }
+bytes = "1.12.1"
+
+# 직렬화. serde_json 의 preserve_order 는 절대 켜지 않는다 (워크스페이스 전역 오염).
+serde = { version = "1.0.229", default-features = false }
+serde_json = { version = "1.0.151", default-features = false }
+toml = { version = "1.1.4", default-features = false }
+
+# 저장소. 배경 스레드가 없어서 골랐다 (03-storage-decision.md).
+redb = "4.1.0"
+
+# 식별자·경로·오류.
+uuid = { version = "1.24.0", default-features = false }
+camino = "1.2.5"
+thiserror = "2.0.19"
+anyhow = "1.0.104"
+
+# 관측.
+tracing = { version = "0.1.44", default-features = false }
+tracing-subscriber = { version = "0.3.23", default-features = false }
+
+# CLI 표면.
+clap = { version = "4.6.4", default-features = false }
+
+# 프로세스·플랫폼.
+which = { version = "8.0.4", default-features = false }
+notify = { version = "8.2.0", default-features = false }
+windows-sys = "0.61.2"
+rustix = { version = "1.1.4", default-features = false }
+
+# 게이트 전용 (dev).
+cargo_metadata = "0.23.1"
+
+# 내부 crate. 경로 의존이고 버전은 워크스페이스가 함께 움직인다.
+runtrol-provider = { path = "crates/runtrol-provider" }
+runtrol-security = { path = "crates/runtrol-security" }
+runtrol-childproc = { path = "crates/runtrol-childproc" }
+runtrol-store = { path = "crates/runtrol-store" }
+runtrol-ipc = { path = "crates/runtrol-ipc" }
+runtrol-core = { path = "crates/runtrol-core" }
+runtrol-drivers = { path = "crates/runtrol-drivers" }
+runtrol-daemon = { path = "crates/runtrol-daemon" }
+runtrol-cli = { path = "crates/runtrol-cli" }
+
+# lint 표. 멤버는 `[lints] workspace = true` 로 상속한다.
+# **주의 (실측)**: `[lints] workspace = true` 와 per-crate 재정의는 공존할 수 없다
+# (cargo 가 "cannot override `workspace.lints` in `lints`" 로 hard error).
+# 그래서 재정의가 필요한 crate 는 자기 표를 통째로 쓴다. 어느 crate 가 그러는지는
+# `tests/audit/workspaceLints.rs` 가 고정한다.
+[workspace.lints.rust]
+# `runtrol-childproc` 에서만 "deny" 로 완화된다 (job object·process group 에 필요).
+unsafe_code = "forbid"
+# clippy 에서 rustc 로 승격된 lint 다. `[workspace.lints.clippy]` 에 적으면 경고가 난다.
+let_underscore_drop = "deny"
+unused_must_use = "deny"
+unreachable_pub = "warn"
+# 모든 `pub` 은 계약이므로 자기 설명을 동반한다.
+missing_docs = "warn"
+
+[workspace.lints.clippy]
+all = { level = "deny", priority = -1 }
+pedantic = { level = "warn", priority = -2 }
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+unreachable = "deny"
+dbg_macro = "deny"
+print_stdout = "deny"
+print_stderr = "deny"
+indexing_slicing = "deny"
+let_underscore_must_use = "deny"
+unwrap_in_result = "deny"
+disallowed_methods = "deny"
+disallowed_types = "deny"
+disallowed_macros = "deny"
+# mod.rs 스타일. 한 관심사 = 한 디렉토리.
+self_named_module_files = "deny"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+# 감독자는 태스크 하나의 패닉에서 살아남는다 (04-memory-contract.md).
+# 이미 release 기본값이지만, 명시해서 미래의 abort 전환을 막는다.
+panic = "unwind"
+# debuginfo 만 버리고 심볼은 남긴다. 패닉 백트레이스가 함수 이름을 말해야
+# 버그 리포트가 쓸모 있다. 데몬에서 이건 타협 대상이 아니다.
+strip = "debuginfo"
+debug = false
+incremental = false
+
+[profile.dev]
+# Windows 링크 시간을 줄이면서 백트레이스는 살린다.
+debug = "line-tables-only"
+
+# `mainPlan/coreRuntime/01-runtime-measurements.md` 의 비교 숫자를 재현하는 프로파일.
+# 그 표는 panic="abort" + strip=true 로 쟀다. 그것은 **측정 조건**이지 제품 프로파일이 아니다.
+# 이 프로파일이 있는 이유는 누군가 표에 맞추려고 release 를 "고치는" 것을 막기 위해서다.
+[profile.measure]
+inherits = "release"
+panic = "abort"
+strip = true

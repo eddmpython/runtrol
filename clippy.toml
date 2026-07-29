@@ -1,0 +1,26 @@
+# clippy 설정. 금지 목록의 정본.
+#
+# 여기 적힌 것은 "쓰면 안 되는 것" 이지 "안 쓰면 좋은 것" 이 아니다.
+# 정당한 예외는 호출 지점에 `#[expect(..., reason = "...")]` 로 근거를 남긴다.
+
+msrv = "1.97"
+
+# `Result::ok()` 로 오류를 조용히 버리는 것이 이 프로젝트의 대표 실패 계열이다
+# (`tests/audit/checkSilentFail.py` 가 같은 것을 텍스트 층에서 잡는다).
+disallowed-methods = [
+    { path = "std::result::Result::ok", reason = "오류를 조용히 버린다. `?` 또는 명시 처리로 바꾼다" },
+    { path = "core::mem::forget", reason = "자식 프로세스 핸들을 잊으면 고아가 된다" },
+    { path = "str::to_lowercase", reason = "경로 비교에 쓰면 안 된다. 플랫폼별 대소문자 규칙이 다르다" },
+]
+
+disallowed-types = [
+    { path = "std::sync::Mutex", reason = "async 문맥에서 await 를 건너 잠긴다. tokio::sync::Mutex 를 쓴다" },
+]
+
+# **주의 (실측)**: 아래 hatch 들은 `#[test]` 함수와 `#[cfg(test)]` 모듈만 덮는다.
+# 통합 테스트 파일의 자유 헬퍼 함수는 여전히 걸린다. 그때는 지역 `#[expect]` 를 쓴다.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true
+allow-dbg-in-tests = false
+allow-print-in-tests = true

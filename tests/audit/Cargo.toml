@@ -1,0 +1,34 @@
+# 계약 게이트. 제품 코드가 아니라 저장소 규약을 강제하는 테스트만 산다.
+#
+# `preflight.py` 가 `cargo test -p runtrol-audit` 로 부른다.
+# 파일명이 camelCase 인 이유: `CLAUDE.md` 가 게이트 파일을 그렇게 쓴다. `autotests = false` +
+# 명시 `[[test]]` 로 등록하면 `-D warnings` 아래에서도 `non_snake_case` 경고가 나지 않는다 (실측).
+[package]
+name = "runtrol-audit"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+autotests = false
+
+[dev-dependencies]
+cargo_metadata = { workspace = true }
+
+[[test]]
+name = "dependencyDirection"
+path = "dependencyDirection.rs"
+
+# **주의 (실측)**: `[lints] workspace = true` 와 per-crate 재정의는 공존할 수 없다
+# (cargo hard error). 게이트 헬퍼는 자유 함수라서 clippy 의 `allow-*-in-tests` hatch 가
+# 덮지 않으므로, 이 crate 는 워크스페이스 표를 상속하지 않고 자기 표를 쓴다.
+# 어느 crate 가 이렇게 하는지는 `workspaceLints` 게이트가 고정한다.
+[lints.rust]
+unsafe_code = "forbid"
+unused_must_use = "deny"
+
+[lints.clippy]
+all = { level = "deny", priority = -1 }
+dbg_macro = "deny"

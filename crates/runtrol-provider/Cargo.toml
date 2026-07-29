@@ -1,0 +1,15 @@
+# provider 저작자가 프로그래밍하는 어휘. 이름·경로·manifest 스키마·이벤트·트레이트·오류.
+[package]
+name = "runtrol-provider"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[dependencies]
+
+[lints]
+workspace = true

@@ -1,4 +1,7 @@
 # rustfmt 와 싸우지 않는다 (CLAUDE.md `Rust 관용구`). 기본값에서 벗어나는 것은 최소로 둔다.
-# 넓은 화면을 쓰는 코드베이스라 100 자로만 늘린다. 그 밖의 취향 설정은 두지 않는다.
+# **stable 옵션만 쓴다.** nightly 옵션을 넣으면 `cargo fmt --check` 가 환경마다 다르게 굴어서
+# 기여자와 CI 가 갈라진다.
 edition = "2024"
 max_width = 100
+newline_style = "Unix"
+use_field_init_shorthand = true
