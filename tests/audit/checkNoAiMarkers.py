@@ -65,10 +65,30 @@ UNPROFESSIONAL_PATTERNS = [
     r"\bdumb(ass)?\b",
 ]
 
+# **runtrol 은 형제 프로젝트(dartlab·xlpod)와 여기서 갈린다.**
+#
+# 그쪽에서는 `claude`·`codex`·`openai` 같은 단어가 커밋 메시지에 나오는 것 자체가 누출 신호였다
+# (그 제품들은 이 도구들과 무관하다). runtrol 은 반대다. **이 이름들이 제품의 주제어다.**
+# 그래서 단순 이름 금지(`\b(claude|codex|...)\b`)와 `\bai\b` 를 제거했다. 남겨두면
+# "추가: codex 드라이버" 나 "개선: 여러 AI 목록" 같은 정직한 메시지를 쓸 수 없고,
+# 결국 완곡어법으로 이력 품질이 나빠진다 (게이트가 이력을 오염시키는 역설).
+#
+# 금지의 본질은 **AI 저작권 주장**이지 통합 대상의 이름이 아니다. 그래서 이름 대신
+# **귀속 형태**를 막는다. BANNED_PATTERNS 가 영어 귀속을 이미 덮고, 아래가 한국어와
+# 나머지 전치사 형태를 덮는다.
+ATTRIBUTION_PATTERNS = [
+    # "by claude" / "via codex" / "thanks to gpt" 류 (영어 귀속)
+    r"\b(by|via|from|using|thanks to|courtesy of)\s+(chatgpt|claude|codex|gpt|gemini|copilot|anthropic|openai)\b",
+    # "claude 가 작성" / "codex 로 생성" 류 (한국어 귀속)
+    r"(chatgpt|claude|codex|gpt|gemini|copilot|anthropic|openai)\s*(가|이|로|으로|와|과|랑)?\s*(작성|생성|만[들든듦]|짬|짜|구현해줌|도움)",
+    # AI 일반 귀속
+    r"(ai|인공지능)\s*(가|이|로|으로)?\s*(작성|생성|만[들든듦]|도움)",
+    r"\b(ai|llm)[- ]?(written|authored|made|assisted)\b",
+]
+
 COMMIT_MESSAGE_BANNED_PATTERNS = [
     *BANNED_PATTERNS,
-    r"\b(chatgpt|claude|codex|gpt|gemini|llm|copilot|anthropic|openai)\b",
-    r"\bai\b",
+    *ATTRIBUTION_PATTERNS,
     r"생성\s*도구",
     r"작성\s*도구",
     r"모델\s*작성",

@@ -63,6 +63,23 @@ argv = ["acp"]
 
 VT 에뮬레이터 비용이 들고, 화면 긁기를 강제하며, **Codex 는 `process/spawn` 과 `process/resizePty` 를 자기가 이미 내준다.** feature gate 로 꺼둔다.
 
+### 4.5. 완료 신호의 출처는 provider 마다 다르다 (실측 확인)
+
+정규화 모델이 **1 급으로** 다뤄야 하는 비대칭이다. 이벤트 어휘가 아니라 **턴이 끝났다는 것을 어디서 아는가**가 다르다.
+
+| | Codex | Claude |
+|---|---|---|
+| 전송 | 데몬 하나가 모든 thread 다중화 | 세션당 프로세스 하나 |
+| 턴 시작 | 요청 -> **2 ms ack** (`status: inProgress`) | stdin 한 줄 |
+| 턴 이벤트 | 데몬 알림 스트림 (thread id 로 구분) | 그 프로세스의 stdout |
+| **턴 완료** | **`turn/completed` 알림** | **`result` 이벤트** |
+| 세션 파일 경로 | **응답이 직접 준다** | **uuid 로 검색해야 한다** |
+
+`turn/start` 가 fire-and-forget 이라는 것을 모르고 probe 를 짰다가 **8 초짜리 턴을 0.01 초에 "끝났다" 고 읽었다.** 드라이버가 같은 실수를 하면 세션이 영원히 진행 중이거나 즉시 완료로 보인다. `Agent` trait 은 완료를 **provider 가 선언**하게 하고 코어가 추론하지 않는다.
+
+부수 소득: **`account/rateLimits/updated` 가 턴마다 공짜로 온다.** `desktopGui` 의 "사용량과 한도가 보인다" 편의가 추가 호출 0 으로 성립한다.
+주의: `mcpServer/startupStatus/updated` 가 6 회 오는 등 **알림 전부가 사용자 대면이 아니다.** 소음과 신호를 가리는 것이 바인딩 목록 규율의 일부다.
+
 ### 5. 스키마 drift 에 대한 구조적 답
 
 정규화 모델은 ACP 모양이되 `payload: Box<RawValue>` 를 통과시키고, **매핑되지 않은 것을 버리지 않는 `Unmapped` variant** 를 둔다. `AgentCommand::Raw` 도 같은 이유다: PWA 가 runtrol 이 들어본 적 없는 provider 고유 기능을 몰아도 runtrol 은 파이프로 남는다.
