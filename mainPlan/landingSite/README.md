@@ -1,6 +1,6 @@
 # landingSite
 
-상태: 설계. **프론트 방식 하나가 운영자 확인 대기** (아래 참조).
+상태: 설계 완료. 착수는 로고 도착 후.
 
 ## 한 문장 정의
 
@@ -52,17 +52,17 @@ xlpod `ui/chrome/bars/brandSocial.jsx` 의 구조를 그대로 가져온다.
 - **JS 없이도 읽힌다.** 로고·설명·링크는 정적 HTML 이고, 릴리즈 조회만 JS 다
 - **다크·라이트 둘 다.** 시스템 설정을 따르고 토글을 준다
 
-## 운영자 확인 대기 . 프론트 "astryx 방식"
+## 프론트 . Astryx + StyleX
 
-운영자가 "프론트는 astryx 방식, 이것도 astryx 참고" 라고 지시했으나 **이 PC 에서 astryx 를 찾지 못했다** (`sideProject/` 아래에도, 홈 아래에도 없다).
+**정본은 [docs/frontendStack.md](../../docs/frontendStack.md) 다.** 여기 되풀이하지 않는다.
 
-확인되기 전까지 착수하지 않는다. 확인되면 이 문서를 그 방식으로 갱신한다.
+랜딩에 직접 관계된 부분만: `TopNav` 로 상단 바, `Stack`/`VStack` 으로 레이아웃, `Button` 으로 다운로드 둘, `Text` 로 타이포. 테마는 `data-astryx-media`. **CDN 없이 벤더링**하므로 GitHub Pages 정적 호스팅에 그대로 올라간다.
 
-그때까지의 기본 가정 (확인되면 대체됨): 정적 HTML + 인라인 CSS + 최소 JS, 빌드 도구 없음. GitHub Pages 에 그대로 올라간다.
+랜딩이 Astryx 를 쓰는 것은 예쁘게 하려는 것이 아니라 **랜딩·PWA·데스크톱이 같은 시각 언어를 갖게** 하려는 것이다. 사용자가 랜딩에서 본 것과 앱에서 보는 것이 같아야 한다.
 
 ## 완료 판정
 
 - 4 개 언어가 다 뜬다
 - 다운로드 링크가 릴리즈에서 파생되고 손으로 적힌 버전이 없다
-- `landingBudget` 과 `landingLinksAlive` 가 CI 에서 돈다
+- `landingBudget` · `landingLinksAlive` · `frontendVendored` · `themeContract` 가 CI 에서 돈다
 - 라이트·다크 둘 다 확인됨

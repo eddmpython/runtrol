@@ -9,6 +9,7 @@
 | 문서 | 내용 |
 |---|---|
 | [positioning.md](positioning.md) | 왜 runtrol 이 존재하는가. 경쟁 지형, 고른 자리와 그 이유, 접어야 할 조건 (kill criteria) |
+| [frontendStack.md](frontendStack.md) | Astryx + StyleX. 랜딩·PWA·데스크톱 세 표면이 공유하는 컴포넌트 층과 테마 계약 |
 | [northStarEvidence.md](northStarEvidence.md) | `README.md` 북극성 표의 각 축이 어떤 실행 게이트에 기대는가. 축과 게이트 대응의 정본 |
 
 코드가 서면 여기가 는다.

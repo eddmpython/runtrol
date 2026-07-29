@@ -1,0 +1,31 @@
+runtrol
+Copyright (c) 2026 eddmpython
+
+This product is licensed under the MIT License. See LICENSE.
+
+This product includes or depends on third-party components, each of which
+remains under its own license. The list below is maintained as components are
+adopted and is not yet complete, because the product is at the design stage.
+
+--------------------------------------------------------------------------------
+Frontend (landing, PWA, desktop shell)
+--------------------------------------------------------------------------------
+
+@astryxdesign/core and @astryxdesign/theme-neutral
+    MIT License.
+    React component library and theme.
+
+@stylexjs/stylex
+    MIT License.
+    https://github.com/facebook/stylex
+
+--------------------------------------------------------------------------------
+Note on the agent CLIs
+--------------------------------------------------------------------------------
+
+runtrol supervises coding agent CLIs that the user has already installed, such
+as Anthropic Claude Code and OpenAI Codex CLI. Those programs are not bundled,
+vendored, modified, or redistributed here. runtrol spawns the official binary
+as the user installed it, and each remains subject to its own license and terms
+of service. runtrol never holds, forwards, or logs the credentials those
+programs use.
