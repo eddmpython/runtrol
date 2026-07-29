@@ -4,6 +4,10 @@
 # 실행 층이 갈려 있는 이유는 `docs/northStarEvidence.md` 를 본다:
 # 두 CLI 의 구독 인증(OAuth)은 사람 로그인이 필요해 hosted 러너에 실을 수 없고,
 # 실물 턴은 돈과 rate limit 을 쓴다. 그래서 실물 게이트는 self-hosted 스케줄이다.
+#
+# **부트스트랩 규약**: `Cargo.toml` 이 아직 없으면 cargo 단계는 건너뛴다. 단
+# 조용히 건너뛰지 않고 "이 표면은 검증되지 않았다" 를 로그와 요약에 남긴다
+# (`tests/audit/preflight.py` 와 같은 정직성 규약).
 
 name: gates
 
@@ -21,11 +25,30 @@ permissions:
   contents: read
 
 jobs:
+  # 지금 무엇이 검증 가능한 상태인지 한 곳에서 판정한다 (SSOT).
+  detect:
+    runs-on: ubuntu-latest
+    outputs:
+      hasWorkspace: ${{ steps.probe.outputs.hasWorkspace }}
+    steps:
+      - uses: actions/checkout@v5
+      - id: probe
+        run: |
+          if [ -f Cargo.toml ]; then
+            echo "hasWorkspace=true" >> "$GITHUB_OUTPUT"
+            echo "Rust 워크스페이스 있음. cargo 게이트가 돈다." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "hasWorkspace=false" >> "$GITHUB_OUTPUT"
+            echo "**Cargo.toml 없음 (부트스트랩 단계). cargo 게이트는 건너뛴다. 이 표면은 검증되지 않았다.**" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
   # 계약 게이트. 외부 프로세스 없이 도는 것만. PR 마다 전부 돈다.
   contract:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
       - uses: actions/setup-python@v6
         with:
           python-version: "3.13"
@@ -37,26 +60,53 @@ jobs:
         run: python -X utf8 tests/audit/checkSilentFail.py --selftest
       - name: silent failure 금지
         run: python -X utf8 tests/audit/checkSilentFail.py
-      - name: AI 귀속 금지 (push 범위)
-        run: python -X utf8 tests/audit/checkNoAiMarkers.py --check-range ${{ github.event.pull_request.base.sha || github.event.before }} ${{ github.sha }}
+      - name: AI 귀속 금지 (staged 대신 push 범위 전체)
+        run: python -X utf8 tests/audit/checkNoAiMarkers.py --check-push
 
-  # Rust 계약. Cargo.toml 이 생기는 순간부터 실질적으로 돈다.
+  # Rust 계약. `Cargo.toml` 이 생기는 순간부터 실질적으로 돈다.
   rust:
+    needs: detect
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+      - name: 부트스트랩 알림
+        if: needs.detect.outputs.hasWorkspace != 'true'
+        run: |
+          echo "::notice title=cargo 게이트 SKIP::Cargo.toml 없음. fmt/clippy/test/shear 가 돌지 않았다."
+          echo "**cargo 게이트 SKIP.** fmt, clippy, test, shear 가 돌지 않았다." >> "$GITHUB_STEP_SUMMARY"
       - name: 툴체인 (rust-toolchain.toml 이 판본을 고정한다)
+        if: needs.detect.outputs.hasWorkspace == 'true'
         run: rustup show
       - uses: Swatinem/rust-cache@v2
+        if: needs.detect.outputs.hasWorkspace == 'true'
       - name: cargo fmt
+        if: needs.detect.outputs.hasWorkspace == 'true'
         run: cargo fmt --all --check
       - name: cargo clippy
+        if: needs.detect.outputs.hasWorkspace == 'true'
         run: cargo clippy --all-targets --all-features -- -D warnings
       - name: cargo test
+        if: needs.detect.outputs.hasWorkspace == 'true'
         run: cargo test --all
+      # 의존성 부패 게이트. cargo-shear 를 고른 이유:
+      # 셋 중 유일하게 `[workspace.dependencies]` 미사용 항목을 잡고 (버전 SSOT 가 거기 산다),
+      # stable 에서 돌고, 컴파일하지 않는 AST 파싱이라 한 플랫폼에서 돌려도 cfg 분기까지 덮는다.
+      # cargo-udeps 는 2026 년에도 nightly 전용 + 유지보수 모드, machete 는 정규식이라
+      # use 중첩 4 단 한계가 있고 workspace 표를 못 본다.
+      # 장기 답은 Cargo 자체 lint (`cargo::unused_dependencies`, `unused_workspace_dependencies`) 이지만
+      # 2026-07 기준 nightly 전용이다 (rust-lang/cargo#12235). 안정화되면 이 단계를 지운다.
+      - uses: cargo-bins/cargo-binstall@main
+        if: needs.detect.outputs.hasWorkspace == 'true'
+      - name: cargo shear (미사용 의존성)
+        if: needs.detect.outputs.hasWorkspace == 'true'
+        run: |
+          cargo binstall --no-confirm cargo-shear
+          cargo shear
 
   # 크로스 플랫폼. `어디서나 같은 방법` 축. Windows 잡은 WSL 없이 돈다.
   crossPlatform:
+    needs: detect
+    if: needs.detect.outputs.hasWorkspace == 'true'
     strategy:
       fail-fast: false
       matrix:

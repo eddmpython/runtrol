@@ -43,6 +43,9 @@ GATES: dict[str, tuple[str, list[str]]] = {
     ),
     "cargoTest": ("cargo test", ["cargo", "test", "--all"]),
     "audit": ("저장소 계약 게이트 (tests/audit)", ["cargo", "test", "-p", "runtrol-audit"]),
+    # 의존성 부패. `[workspace.dependencies]` 미사용 항목까지 잡는 것이 cargo-shear 를 고른 이유다
+    # (버전 SSOT 가 거기 살기 때문). 설치돼 있지 않으면 건너뛴다고 밝히고 건너뛴다.
+    "cargoShear": ("미사용 의존성 (cargo-shear)", ["cargo", "shear"]),
 }
 
 SUITES: dict[str, tuple[str, ...]] = {
@@ -50,7 +53,7 @@ SUITES: dict[str, tuple[str, ...]] = {
     "preflight": tuple(GATES),
 }
 
-CARGO_GATES = frozenset({"cargoFmt", "cargoClippy", "cargoTest", "audit"})
+CARGO_GATES = frozenset({"cargoFmt", "cargoClippy", "cargoTest", "audit", "cargoShear"})
 
 
 def hasCargoWorkspace() -> bool:
@@ -72,6 +75,8 @@ def skipReasonFor(name: str) -> str | None:
             return "Cargo.toml 없음 (부트스트랩 단계)"
     if name == "audit" and not hasAuditCrate():
         return "tests/audit crate 없음"
+    if name == "cargoShear" and shutil.which("cargo-shear") is None:
+        return "cargo-shear 미설치 (cargo binstall cargo-shear)"
     return None
 
 
