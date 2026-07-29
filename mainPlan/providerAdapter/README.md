@@ -90,6 +90,43 @@ Claude 세션 삭제는 unlink 가 아니라 **7 일 휴지통으로 rename** �
 | PWA 전송, 인증, fan-out, 재연결 링버퍼 | PWA 에 대해 아무것도 |
 | backpressure 와 세션당 예산 | 없음 |
 
+## 실물 검증 (2026-07-30, `tests/_attempts/providerProbe/`)
+
+설계를 문서로만 두지 않고 두 CLI 에 **직접 붙여서** 확인했다. 미해결이던 급소가 풀렸다.
+
+### 급소 해소 . Claude 는 API key 없이 돈다
+
+| 질문 | 결과 |
+|---|---|
+| ACP 의 Claude 어댑터가 Agent SDK 를 경유해 API key 를 요구하는데, "이미 인증된 구독 세션" 과 충돌하는가 | **충돌하지 않는다.** 어댑터를 안 쓰면 된다 |
+| `claude -p --output-format stream-json` 이 구독 인증만으로 도는가 | **된다.** `system/init` 이 `apiKeySource: none` 을 보고했다 |
+
+`ANTHROPIC_API_KEY` 를 제거한 환경에서 성공했다. **공식 바이너리 spawn 경로는 살아있다.**
+
+### 확정된 계약
+
+| 설계 주장 | 실측 |
+|---|---|
+| runtrol 이 세션 id 를 발급한다 (`native_id == runtrol_id`) | **확인.** `--session-id` 가 그대로 파일명이자 `result.session_id` |
+| `system/init.capabilities` 가 feature detection 채널이다 | **확인.** `tools` · `skills` · `agents` · `mcp_servers` · `plugins` · `capabilities` · `claude_code_version` 전부 온다. 버전 문자열 추론 불필요 |
+| Codex 세션 목록을 CLI 호출 없이 얻는다 | **확인.** `thread/list` **607 ms** 에 jsonl 경로 · cwd · git branch · cliVersion · preview · name 까지 |
+| Codex 모델은 완전 발견 가능하다 | **확인.** `model/list` **16 ms**, 7 개, `displayName`·`description`·`supportedReasoningEfforts` 동반 |
+| 구독 인증을 알 수 있다 | **확인.** `account/read` 54 ms -> `{"type":"chatgpt","planType":"pro"}` |
+| 프로토콜 규모 | **확인.** ClientRequest 126 · ServerNotification 70 · ServerRequest 11 |
+
+### 발견 사다리가 옳았음이 실증됐다
+
+Claude 세션 파일 경로 규칙을 **첫 시도에 틀리게 추측했다.**
+
+```
+내 예상: C-Users-MSI-...-tests-_attempts-providerProbe
+실제:    C--Users-MSI-...-tests--attempts-providerProbe
+```
+
+실제 규칙은 `:` `\` `/` `_` `.` 를 **전부** `-` 로 치환이다. 설계가 "경로를 계산하지 말고 uuid 로 검색하라" 고 한 것이 맞았다. **하드코딩했으면 첫날부터 틀렸다.**
+
+같은 계열: Codex 응답 배열 키가 `items` 가 아니라 **`data`** 다. 이것도 추측이 틀렸고 스키마를 읽어 고쳤다.
+
 ## 실측 근거 (2026-07-29~30, 이 기계)
 
 - `codex app-server generate-json-schema --experimental` 실행 확인: `ClientRequest` 126 개, `ServerNotification` 70 개, `ServerRequest` (server to client) 11 개
