@@ -1,0 +1,64 @@
+#!/bin/sh
+# runtrol pre-commit. CLAUDE.md 강행규칙의 git 층 강제.
+#
+# 빠른 것만 여기서 돈다. cargo clippy 와 cargo test 는 느려서 pre-push 와 CI 가 맡는다.
+# 여기서 막는 것은 되돌리기 어려운 것들이다: AI 기여자 흔적 (이력 오염), 폴더 규약 위반,
+# 삼켜진 실패, 포맷 불일치.
+
+if [ -x .venv/Scripts/python.exe ]; then
+  PYTHON=.venv/Scripts/python.exe
+elif [ -x .venv/bin/python ]; then
+  PYTHON=.venv/bin/python
+elif command -v python3 >/dev/null 2>&1; then
+  PYTHON=$(command -v python3)
+elif command -v python >/dev/null 2>&1; then
+  PYTHON=$(command -v python)
+else
+  echo "[pre-commit] Python interpreter not found." >&2
+  exit 1
+fi
+
+# 1) AI 기여자 흔적 차단 (커밋 메시지·본문)
+"$PYTHON" -X utf8 tests/audit/checkNoAiMarkers.py --check-staged || exit $?
+
+# 2) 폴더 규약
+"$PYTHON" -X utf8 tests/audit/noScriptsDir.py || exit $?
+"$PYTHON" -X utf8 tests/audit/workspaceHygiene.py || exit $?
+
+# 3) 검출기가 살아있는지부터 확인한다. 실패할 수 없는 게이트는 통과 도장일 뿐이다.
+"$PYTHON" -X utf8 tests/audit/checkSilentFail.py --selftest >/dev/null || {
+  echo "[pre-commit] checkSilentFail 검출기 자체가 고장났다. --selftest 를 직접 돌려 고쳐라." >&2
+  exit 1
+}
+
+# 4) staged 소스: silent failure + 포맷
+STAGED=$(git diff --cached --name-only --diff-filter=ACM \
+  | grep -E '\.(rs|ts|tsx|js|mjs|py)$' \
+  | grep -vE '^(tests/_attempts|target|node_modules)/' \
+  | tr '\n' ' ')
+
+if [ -n "$STAGED" ]; then
+  "$PYTHON" -X utf8 tests/audit/checkSilentFail.py $STAGED || {
+    echo "" >&2
+    echo "[checkSilentFail] 삼켜진 실패. 룰 SSOT: CLAUDE.md \`에러를 삼키지 않는다\`." >&2
+    exit 1
+  }
+fi
+
+STAGED_RS=$(git diff --cached --name-only --diff-filter=ACM \
+  | grep -E '\.rs$' \
+  | grep -vE '^(tests/_attempts|target)/' \
+  | tr '\n' ' ')
+
+if [ -n "$STAGED_RS" ]; then
+  if command -v rustfmt >/dev/null 2>&1; then
+    rustfmt --check --edition 2024 $STAGED_RS || {
+      echo "" >&2
+      echo "[rustfmt] 포맷 불일치. 재포맷 후 재커밋:" >&2
+      echo "  cargo fmt --all" >&2
+      exit 1
+    }
+  else
+    echo "[pre-commit] rustfmt 없음. 포맷 검사를 건너뛴다 (CI 가 잡는다)." >&2
+  fi
+fi

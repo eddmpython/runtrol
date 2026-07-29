@@ -1,0 +1,35 @@
+# 텍스트는 저장소 안에서 LF 로 정규화한다. Windows 체크아웃에서도 게이트가 같은 바이트를 본다.
+* text=auto eol=lf
+
+*.rs      text eol=lf
+*.toml    text eol=lf
+*.md      text eol=lf
+*.json    text eol=lf
+*.yml     text eol=lf
+*.yaml    text eol=lf
+*.ts      text eol=lf
+*.tsx     text eol=lf
+*.js      text eol=lf
+*.mjs     text eol=lf
+*.css     text eol=lf
+*.html    text eol=lf
+*.py      text eol=lf
+*.sh      text eol=lf
+
+# PowerShell 은 CRLF 를 기대하는 실행 경로가 있다
+*.ps1     text eol=crlf
+*.cmd     text eol=crlf
+
+# git hook 은 sh 로 실행되므로 LF 강제
+.githooks/* text eol=lf
+
+# 바이너리
+*.png     binary
+*.jpg     binary
+*.ico     binary
+*.woff2   binary
+*.wasm    binary
+
+# lock 파일은 diff 소음이므로 리뷰에서 접는다
+Cargo.lock      linguist-generated=true -diff
+package-lock.json linguist-generated=true -diff

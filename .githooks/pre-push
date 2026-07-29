@@ -1,0 +1,17 @@
+#!/bin/sh
+if [ -x .venv/Scripts/python.exe ]; then
+  PYTHON=.venv/Scripts/python.exe
+elif [ -x .venv/bin/python ]; then
+  PYTHON=.venv/bin/python
+elif command -v python3 >/dev/null 2>&1; then
+  PYTHON=$(command -v python3)
+elif command -v python >/dev/null 2>&1; then
+  PYTHON=$(command -v python)
+else
+  echo "[ai-policy] Python interpreter not found." >&2
+  exit 1
+fi
+
+# push 범위 전체 (조상 커밋 포함) 의 메시지 + 파일 내용에서 AI 기여자 흔적 차단.
+# git push 는 HEAD 하나가 아니라 origin..HEAD 범위 전체를 올린다.
+"$PYTHON" -X utf8 tests/audit/checkNoAiMarkers.py --check-push || exit $?

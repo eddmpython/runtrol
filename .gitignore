@@ -1,0 +1,72 @@
+# git 추적 정책. 모든 줄은 왜 추적하지 않는지를 동행한다 (CLAUDE.md `git 추적 정책`).
+# 광범위 패턴이 잡으면 안 되는 것은 "제외하면 안 됨" 을 명시한다.
+
+# L-local. 강행규칙·세션 규약·게이트 harness. 룰의 권위는 CLAUDE.md 와 memory 에 있고
+# 이것들은 운영자 기계의 작업 사본이다. 기여자는 README 와 docs 로 충분하다.
+.claude/
+.codex/
+CLAUDE.md
+AGENTS.md
+PLAN.md
+TODO.md
+.agent/
+.agents/
+
+# 에디터 개인 설정. 프로젝트 계약이 아니라 각자의 도구 취향이다.
+.vscode/
+.idea/
+
+# Rust 빌드 산출물. 재현 가능하므로 저장소에 둘 이유가 없다.
+# Cargo.lock 은 제외하면 안 됨 (바이너리를 배포하는 프로젝트라 재현 빌드가 릴리즈 서명의 전제다).
+target/
+**/*.rs.bk
+*.pdb
+
+# Node 빌드 산출물 (PWA·랜딩). package-lock.json 은 제외하면 안 됨 (같은 이유).
+node_modules/
+dist/
+.vite/
+.astro/
+*.tsbuildinfo
+
+# Python. 게이트 harness 전용이고 재생성된다.
+.venv/
+__pycache__/
+*.py[cod]
+.ruff_cache/
+
+# 스크래치. repo 트리 안 임시 산출물 금지. `/.tmp/` 는 7 일 부패 검출 대상이다.
+/.tmp/
+/tmp_*
+*.log
+
+# 졸업 게이트 작업장. 검증 전 실험이라 본진 승격 전까지 추적하지 않는다.
+tests/_attempts/
+
+# 비밀. runtrol 은 모델 API 키를 보유하지 않지만 (자식 CLI 가 자기 인증을 소유한다)
+# 실수를 막는 마지막 방어선으로 둔다. 첫 방어선은 커밋 전 `git diff --cached` 확인이다.
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+*.p12
+
+# 사용자 런타임 상태. 기기마다 다르고 페어링 키가 들어간다. 절대 공유되면 안 된다.
+/runtrol.toml
+/pairing/
+/.runtrol/
+
+# 릴리즈 아티팩트. 정본은 GitHub Releases 다. 저장소는 바이너리를 들지 않는다.
+/release/
+*.exe
+*.msi
+*.nsis
+*.dmg
+*.AppImage
+*.sig
+
+# OS 부스러기.
+.DS_Store
+Thumbs.db
+Desktop.ini
