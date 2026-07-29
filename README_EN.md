@@ -24,14 +24,14 @@ A 10 means the complete journey has been repeatedly verified in a real environme
 | Instant response | 0/10 | Not built. | The list appears with no wait, a conversation opens the moment it is tapped, and neither scrolling nor typing stutters when long output pours in. There is no moment where the user perceives loading. |
 | Reach my PC sessions from my phone | 0/10 | Not built. | Pair the phone to the PC once, and from then on, away from the desk, send new instructions into sessions running on that PC and watch the output live. Neither the plan tier nor the auth method of a provider account blocks this. |
 | Provider extensibility | 0/10 | Not built. No adapter boundary yet. | When a new CLI appears, one adapter is added and the PC screen, the phone screen, and the controls stay the same. The user notices a new provider only as a longer list. |
-| No conversation passthrough | 0/10 | Not built. | The user's prompts and the model's responses travel only between the user's PC and the provider. No path exists by which runtrol stores that content or sends it to a third destination. |
+| No conversation passthrough | 0/10 | Not built. | The user's prompts and the model's responses travel only between the PC and the provider, and between the user's own devices. runtrol stores no copy of that content, and no server in between ever receives it in a readable form. |
 | Approve from the phone | 0/10 | Not built. | When an agent stops in front of a dangerous action, it appears on the phone, and allowing or denying there resumes the PC session immediately. |
 | Survive disconnection | 0/10 | Not built. | The PC session does not die when the phone locks, the network drops, or runtrol restarts, and on return the output from that interval continues without a gap. |
 | Cost of running | 0/10 | Not built. | Leave it on all day and the user never notices it is there. Not in the battery, not in the fan, not in the task manager. |
 | Same method everywhere | 0/10 | Not built. | Install and operation are the same on Windows, macOS, and Linux. A Windows user never needs to know what WSL or tmux is. |
 | Current without asking | 0/10 | Not built. | The app and the installed agent CLIs stay current on their own, and if an update breaks a session it has already rolled back before the user touches anything. There is no moment where the user thinks about versions. |
 | Automatic model detection | 0/10 | Not built. | The models this account can actually use appear in the list as they are, and a new model appears without runtrol being changed. |
-| Sessions do not trample each other | 0/10 | Not built. | Run several sessions at once and they do not overwrite each other's files, and the phone shows which session changed what. |
+| Sessions do not trample each other | 0/10 | Not built. | Which session is touching which folder is always distinguishable, starting a second session into the same folder warns before it happens, and when a provider offers isolation (worktrees) it is available right on the start screen. |
 | Freedom to leave | 0/10 | Not built. | Delete runtrol and the sessions and history remain each CLI's own, continuing the original way. There is no data runtrol holds hostage. |
 
 Which gate backs which axis is defined in [docs/northStarEvidence.md](docs/northStarEvidence.md).

@@ -28,12 +28,13 @@
 | 대화 무통과 | `egressContract` | contract | allowlist 밖 목적지로 소켓이 안 열린다. 프롬프트·응답 본문이 runtrol 의 디스크나 로그에 안 남는다. **벤더 세션 파일을 여는 코드가 없다**는 정적 검사 포함 |
 | 폰에서 승인 | `approvalRoundtripSmoke` | smoke | 실제 permission prompt 가 폰 표면에 도달하고, 폰의 응답이 세션을 재개시킨다 |
 | 끊겨도 살아남기 | `resilienceFaultInjection` | smoke | 네트워크 차단, 데몬 강제 종료, 폰 재연결 각각에서 세션이 살아남고 **출력 손실 0** |
-| 상주 비용 | `idleFootprintRatchet` | bench | idle RSS 와 CPU 상한. **내려가기만 하는 ratchet** |
+| 상주 비용 | `idleFootprintRatchet` | bench | idle RSS 와 CPU 상한. **내려가기만 하는 ratchet.** 기준은 데몬 단독이고 (상주하는 것은 데몬이다), GUI 창 열림은 별도 예산으로 병기한다 |
 | 어디서나 같은 방법 | `crossPlatformMatrix` | smoke | 같은 종단 스모크가 Windows·macOS·Linux 러너에서 전부 green. **Windows 잡은 WSL 없이 돈다** |
 | 알아서 최신 | `cliUpdateRehearsal` | smoke | 구버전 -> 업데이트 -> 세션 정상 -> 고의로 깨진 버전 -> 자동 롤백 |
 | 알아서 최신 | `appUpdateRehearsal` | smoke | 런처가 GitHub Releases 에서 서명된 업데이트를 받아 설치하고, 서명이 안 맞으면 거부한다 |
 | 모델 자동 인식 | `modelDetectionSmoke` | smoke | 실물 CLI 에서 모델 목록을 얻는다. **소스에 모델 이름 리터럴이 없다**는 정적 검사 포함 |
-| 세션끼리 안 밟기 | `concurrentSessionIsolation` | smoke | 같은 레포에서 N 개 세션이 동시에 파일을 고쳐도 서로의 변경을 잃지 않는다 |
+| 세션끼리 안 밟기 | `sessionOverlapGuard` | smoke | cwd 겹침이 목록에 구분돼 보이고, 같은 폴더에 두 번째 세션을 시작하면 경고가 선행하며, provider 가 내주는 워크트리 시작 옵션이 그대로 노출된다. **격리를 runtrol 이 직접 구현하는 것은 얇음 위반이라 하지 않는다** (겹침을 보이게 하고 provider 의 수단을 노출하는 것까지가 경계) |
+| (전 축 공통) | `readmeParity` | contract | 4 개 언어 README 의 축 수·점수·총점이 한국어 정본과 일치한다. 언어판이 낡으면 red |
 | 떠날 자유 | `uninstallLeavesNoTrace` | smoke | runtrol 제거 후 `claude --resume` 과 `codex resume` 이 그 세션들을 그대로 연다 |
 | 폰에서 내 PC 세션 잇기 | `iosInstallAndPush` | **operator** | iOS 홈화면 설치 + Web Push 수신. 실기기 필요. **점수에서 뺀다** |
 
@@ -46,6 +47,19 @@
 | `argumentEscaping` | Windows `.cmd` 실행 인자 이스케이프 (BatBadBut CVE-2024-24576) |
 | `configReadOnly` | provider 설정 파일에 **쓰는** 코드가 없다 |
 | `orphanReaping` | 데몬을 죽이면 자식 CLI 프로세스가 남지 않는다 |
+
+## 게이트가 어디서 도는가 (실행 환경의 정직성)
+
+실물 CLI 게이트에는 **hosted CI 가 풀 수 없는 제약**이 있다. 두 CLI 의 구독 인증 (OAuth) 은 사람 로그인이 필요하고, 그 세션 자격을 CI 비밀로 실어 나르는 것은 하지 않는다. 실물 턴은 돈과 rate limit 도 쓴다 (한 턴 $0.03 수준 실측). 이 제약을 숨기지 않고 실행 층을 가른다.
+
+| 층 | 어디서 | 언제 | 무엇 |
+|---|---|---|---|
+| contract | hosted CI (GitHub Actions) | PR 마다 | 정적 검사 · mock 스모크 |
+| smoke (실물) | **self-hosted runner (운영자 PC)** | 스케줄 (야간) | 실물 CLI · 실물 브라우저 |
+| bench | self-hosted runner | 스케줄 | ratchet 실측 |
+| operator | 사람 손 | 수시 | 실기기. 점수 제외 |
+
+채점 규칙과의 접점: 8 점 (실물) 은 self-hosted 스케줄 실행 링크로 인정한다. **self-hosted 러너가 멈춰 게이트가 한 주 못 돌면 채점 규칙 4 번 (skip = 그 주 5 점 상한) 이 그대로 적용된다.** 러너가 죽은 채로 점수를 유지하는 길은 없다.
 
 ## 등록 규약
 

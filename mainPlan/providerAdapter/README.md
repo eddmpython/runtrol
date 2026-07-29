@@ -90,6 +90,14 @@ Claude 세션 삭제는 unlink 가 아니라 **7 일 휴지통으로 rename** �
 | PWA 전송, 인증, fan-out, 재연결 링버퍼 | PWA 에 대해 아무것도 |
 | backpressure 와 세션당 예산 | 없음 |
 
+### 8. 소비 표면 최소화 . 드리프트 위험은 소비한 표면에 비례한다
+
+이 카테고리의 1 번 사인은 CLI 드리프트다 (omnara, agentapi #207). 드리프트에 노출되는 면적은 **우리가 바인딩한 메서드 수**이지 벤더가 내주는 메서드 수가 아니다. Codex app-server 는 요청 126 개를 내주지만 runtrol 이 묶이는 것은 10 여 개다.
+
+- **바인딩 목록은 한 파일에 명시한다.** Codex (실측 확인분): `initialize` · `thread/list` · `thread/start` · `thread/resume` · `thread/archive` · `thread/delete` · `turn/start` · `turn/interrupt` · `model/list` · `account/read` · `experimentalFeature/list` + 승인 서버요청 3 종 (`item/commandExecution/requestApproval` · `item/fileChange/requestApproval` · `item/permissions/requestApproval`) + 소비하는 알림 (delta · completed · tokenUsage · `rate_limit` · error 계열)
+- 그 밖의 모든 메시지는 `Unmapped` / `Raw` 로 통과시킨다. 새 기능이 필요해질 때만 목록에 한 줄 늘린다
+- **`agentSurfaceDrift` 게이트도 이 목록만 경보한다.** 벤더가 우리가 안 쓰는 메서드를 늘리는 것은 정보이지 red 가 아니다. 안 그러면 벤더 릴리즈마다 소음 red 가 나고, 소음 red 는 게이트를 죽인다
+
 ## 실물 검증 (2026-07-30, `tests/_attempts/providerProbe/`)
 
 설계를 문서로만 두지 않고 두 CLI 에 **직접 붙여서** 확인했다. 미해결이던 급소가 풀렸다.
