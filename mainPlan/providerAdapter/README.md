@@ -166,11 +166,37 @@ Claude 세션 파일 경로 규칙을 **첫 시도에 틀리게 추측했다.**
 - ACP 를 말하는 3 번째 provider 를 TOML 하나로 붙이는 것이 실측으로 증명됨
 - `rm -rf $RUNTROL_HOME` 수용 테스트 통과
 
-## 운영자 결정 대기 3 건
+## 승인 동등성 . 해소됐다 (단 문서에 없는 플래그에 기댄다)
 
-1. Claude 승인 (permission prompt) 을 Codex 와 동등하게 다룰 것인가, 아니면 Claude 는 승인 전달을 v2 로 미룰 것인가
-2. PWA 와이어를 raw ACP 로 낼 것인가, runtrol 봉투로 감쌀 것인가
-3. 세션 삭제의 의미. 휴지통 7 일이 맞는가, 아니면 CLI 에 위임하고 runtrol 은 목록에서만 숨길 것인가
+r1 에서 "Claude 는 승인 전달을 v2 로 미룰 것인가" 가 열려 있었다. **닫혔다.**
+
+`claude --permission-prompt-tool <tool>` 가 실재하고, `control_request{subtype:"can_use_tool"}` 을 같은 stdio 채널로 보낸다. 즉 **Codex 와 동등한 승인 왕복이 가능하다.**
+
+**직접 대조 실험으로 확인** (2026-07-30, 턴 비용 0):
+
+| 명령 | 결과 |
+|---|---|
+| `claude --help \| grep permission` | `--permission-mode` 만 나온다. **`--permission-prompt-tool` 은 없다** |
+| `claude -p --permission-prompt-tool` | `error: option '--permission-prompt-tool <tool>' argument missing` |
+| `claude -p --totally-fake-flag-xyz` | `error: unknown option '--totally-fake-flag-xyz'` |
+
+앞선 검증 시도 하나는 **무효였다.** `--permission-prompt-tool stdio --output-format bogus` 로 확인하려 했는데, 대조군(가짜 플래그)도 똑같이 `--output-format` 에서 먼저 죽었다. **인자 검증이 미지 옵션 검출보다 먼저 일어난다.** 플래그를 단독으로 줘야 갈린다. 대조군 없이 결론을 냈으면 틀린 근거로 설계를 세웠다.
+
+**위험**: 문서에 없는 플래그는 체인지로그 없이 사라진다. 완화 둘.
+
+1. **Claude drift 게이트가 runtrol 이 넘기는 모든 플래그를 재파싱한다** (위 방식이면 턴 비용 0 이다. `--help` 파싱이 아니라 실제 파서에 물어보는 것이 핵심)
+2. capability probe 가 실패하면 세션 시작 시점의 permission mode 로 **강등하고 그 사실을 알린다** (`Notice{TierDowngraded}`). 조용히 낮추지 않는다
+
+## 승인의 비대칭 하나는 못 닫았다
+
+**Codex 의 `item/fileChange/requestApproval` 은 diff 를 싣지 않는다.** 무엇을 바꾸는지 별도 조회로 이어붙여야 하고, 그 조회가 비면 **거부만 가능하게** 만든다.
+
+이유: **이름 없는 행위에 대한 동의는 동의가 아니다.** 6 인치 화면에서 "무언가를 수정합니다" 에 허용을 누르게 하는 것은 승인 UI 가 아니라 승인 연극이다. `securityPosture` 의 승인 요건과 같은 규칙이다.
+
+## 운영자 결정 대기 2 건
+
+1. PWA 와이어를 raw ACP 로 낼 것인가, runtrol 봉투로 감쌀 것인가
+2. 세션 삭제의 의미. 휴지통 7 일이 맞는가, 아니면 CLI 에 위임하고 runtrol 은 목록에서만 숨길 것인가
 
 ## 원본
 
