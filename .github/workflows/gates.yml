@@ -1,0 +1,79 @@
+# 게이트 정본. 로컬 러너가 이 파일의 `run:` 을 읽어 그대로 실행하므로,
+# CI 에 새 단계가 들어오면 로컬도 자동으로 는다 (손으로 쓴 목록은 반드시 빠뜨린다).
+#
+# 실행 층이 갈려 있는 이유는 `docs/northStarEvidence.md` 를 본다:
+# 두 CLI 의 구독 인증(OAuth)은 사람 로그인이 필요해 hosted 러너에 실을 수 없고,
+# 실물 턴은 돈과 rate limit 을 쓴다. 그래서 실물 게이트는 self-hosted 스케줄이다.
+
+name: gates
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: gates-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # 계약 게이트. 외부 프로세스 없이 도는 것만. PR 마다 전부 돈다.
+  contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - name: 폴더 규약
+        run: python -X utf8 tests/audit/noScriptsDir.py
+      - name: 워크스페이스 위생
+        run: python -X utf8 tests/audit/workspaceHygiene.py
+      - name: silent failure 검출기 자체 검증
+        run: python -X utf8 tests/audit/checkSilentFail.py --selftest
+      - name: silent failure 금지
+        run: python -X utf8 tests/audit/checkSilentFail.py
+      - name: AI 귀속 금지 (push 범위)
+        run: python -X utf8 tests/audit/checkNoAiMarkers.py --check-range ${{ github.event.pull_request.base.sha || github.event.before }} ${{ github.sha }}
+
+  # Rust 계약. Cargo.toml 이 생기는 순간부터 실질적으로 돈다.
+  rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: 툴체인 (rust-toolchain.toml 이 판본을 고정한다)
+        run: rustup show
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo fmt
+        run: cargo fmt --all --check
+      - name: cargo clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+      - name: cargo test
+        run: cargo test --all
+
+  # 크로스 플랫폼. `어디서나 같은 방법` 축. Windows 잡은 WSL 없이 돈다.
+  crossPlatform:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo test
+        run: cargo test --all
+
+  # 실물 CLI 게이트. hosted 러너에서 돌 수 없다 (구독 OAuth + 비용).
+  # self-hosted 러너가 붙으면 `if` 를 제거한다. 그때까지는 무엇이 검증되지 않는지가 화면에 남는다.
+  liveProviders:
+    if: false
+    runs-on: [self-hosted, runtrol-live]
+    steps:
+      - uses: actions/checkout@v5
+      - name: 실물 provider 스모크 (미구현. 등록만 해 둔다)
+        run: echo "M0 에서 채운다. tests/audit/ 로 졸업한 실물 스모크가 여기 온다."

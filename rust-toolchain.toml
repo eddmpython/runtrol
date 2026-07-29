@@ -1,0 +1,6 @@
+# 툴체인을 저장소가 고정한다. 기여자와 CI 와 운영자가 같은 컴파일러를 쓴다.
+# 판본을 올릴 때는 `cargo fmt`/`clippy` 결과가 바뀔 수 있으므로 게이트를 함께 돌린다.
+[toolchain]
+channel = "1.97.0"
+components = ["rustfmt", "clippy"]
+profile = "minimal"
