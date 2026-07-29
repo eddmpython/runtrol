@@ -1,4 +1,7 @@
-# provider 저작자가 프로그래밍하는 어휘. 이름·경로·manifest 스키마·이벤트·트레이트·오류.
+# The vocabulary a driver author programs against: identifiers, paths, time, errors.
+#
+# Dependencies here are a promise, not a convenience: every one of them lands in the build of every
+# third-party driver. No runtime, no database, no platform bindings.
 [package]
 name = "runtrol-provider"
 version = "0.0.0"
@@ -10,6 +13,19 @@ authors.workspace = true
 publish = false
 
 [dependencies]
+# Identifiers cross the wire and land in a manifest, so they carry their own encoding rather than
+# leaving each consumer to invent one.
+serde = { workspace = true, features = ["std", "derive"] }
+# UUIDv7 for session and approval identifiers: 16 bytes that sort by mint time.
+uuid = { workspace = true, features = ["std", "v7"] }
+# UTF-8 paths. runtrol's own surfaces are UTF-8 throughout, and carrying a lossy copy beside the
+# real bytes would give one path two spellings.
+camino = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+# Asserts that the wire encoding of the types above is the encoding the wire expects.
+serde_json = { workspace = true, features = ["std"] }
 
 [lints]
 workspace = true

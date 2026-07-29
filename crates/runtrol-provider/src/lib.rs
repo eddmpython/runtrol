@@ -1,10 +1,32 @@
-//! provider 계약. 이 crate 만이 제3자 provider 저작자에게 semver 안정 표면이다.
+//! The vocabulary a coding-CLI driver programs against.
 //!
-//! M0 골격. 구현은 이니셔티브 순서대로 채운다.
+//! This crate is the only one a driver author outside this repository depends on. Its public surface
+//! is a promise, so it is kept small enough to read in one sitting, and it carries no runtime, no
+//! database, and no platform bindings.
+//!
+//! # What lives here
+//!
+//! Values that cross the seam between runtrol and a provider, and nothing that acts on them:
+//!
+//! - [`id`] every identifier runtrol mints or relays
+//! - [`path`] the one path type that crosses the seam
+//! - [`time`] wall clock time, and why the monotonic clock has no type
+//! - [`error`] the error taxonomy a driver returns
+//!
+//! # What deliberately does not live here yet
+//!
+//! The behavioural contract, meaning the traits a driver implements, arrives together with its first
+//! implementation. A trait with no implementor is a guess about a shape that the implementor gets to
+//! decide, and this repository does not carry guesses forward as debt.
 
-/// 골격 단계의 자리표시자.
-///
-/// 이것이 존재하는 이유는 의존 방향 표를 먼저 세우기 위해서다. 선언만 하고 참조하지 않는
-/// 내부 의존은 `cargo shear` 가 미사용으로 잡으므로, 참조가 실재하게 만든다.
-/// 각 crate 의 실제 표면이 서면 이 함수는 삭제된다.
-pub fn placeholder() {}
+pub mod error;
+pub mod id;
+pub mod path;
+pub mod time;
+
+pub use error::ProviderError;
+pub use id::{
+    ApprovalId, IdError, NativeSessionId, OptionId, ProviderId, SessionId, ToolCallId, TurnId,
+};
+pub use path::{AbsPath, PathError};
+pub use time::WallMs;

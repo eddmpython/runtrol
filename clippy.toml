@@ -17,6 +17,14 @@ disallowed-types = [
     { path = "std::sync::Mutex", reason = "async 문맥에서 await 를 건너 잠긴다. tokio::sync::Mutex 를 쓴다" },
 ]
 
+# Domain terms that `clippy::doc_markdown` mistakes for identifiers. Only real terms of art belong
+# here: adding a word silences the lint for the whole workspace, so a genuine unbackticked type name
+# would stop being reported.
+doc-valid-idents = [
+    "UUIDv7",  # the identifier version, not a Rust item
+    "..",      # keeps clippy's own default list, which this key would otherwise replace
+]
+
 # **주의 (실측)**: 아래 hatch 들은 `#[test]` 함수와 `#[cfg(test)]` 모듈만 덮는다.
 # 통합 테스트 파일의 자유 헬퍼 함수는 여전히 걸린다. 그때는 지역 `#[expect]` 를 쓴다.
 allow-unwrap-in-tests = true
