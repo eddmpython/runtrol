@@ -51,8 +51,14 @@ runtrol 이 저장하는 것: 세션·어댑터 행 수백~수천 개 + 단조 �
 
 **durability 를 갈라 쓴다** (sled 에서 이주한 qsv 가 쓴 방식과 같다):
 
-- 고빈도 이벤트 로그: `Durability::None` 또는 `Eventual`
-- 세션 메타데이터: `Immediate`
+- 커서 테이블 (고빈도): `Durability::None`
+- 그 밖의 전부: `Durability::Immediate`
+
+**정정 (2026-07-30 실측)**: 이 문서는 원래 `Durability::Eventual` 을 대안으로 적었다. **redb 4.x 에 그 값은 없다.** 2.6.3 에 있었고 체인지로그 한 줄 없이 제거됐다. 4.1.0 은 `None` 과 `Immediate` 둘뿐이며 `set_durability` 가 이제 `Result<(), SetDurabilityError>` 를 반환한다. **중간 등급에 숨을 자리가 없으므로** 각 테이블이 둘 중 하나를 명시적으로 고른다.
+
+기억이 아니라 컴파일로 확인한 것들: 16 바이트 키 + 작은 이진값에 대한 커스텀 `Key`/`Value` 구현, 튜플 키, `retain`, `set_cache_size(usize)`, **기본 캐시 1 GiB 를 소스 `db.rs:1126` 에서 확인**, `#[cfg(test)]` 밖에서 배경 스레드 0.
+
+**그리고 토폴로지를 제약하는 사실 하나**: `FileBackend` 이 배타적 `try_lock` 을 잡는다. **데몬이 DB 를 들고 있으면 CLI 프로세스는 읽을 수 없다** (Windows·macOS·Linux 전부 `DatabaseError::DatabaseAlreadyOpen`). 그래서 CLI 는 저장소를 직접 읽지 않고 **반드시 데몬에 물어본다.** 취향이 아니라 강제다.
 
 로그 절단은 `Table::retain()` / `extract_if()`. 미출시 4.2.0 에서 각각 30~100 배, 18~65 배 빨라진다.
 

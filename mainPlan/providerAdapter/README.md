@@ -8,6 +8,21 @@
 
 ## 최상위 결정
 
+### 0. 실측이 반박한 r1 결정 둘 (2026-07-30)
+
+**(a) `linkme::distributed_slice` 를 쓰지 않는다.** r1 설계가 provider 등록 기법으로 골랐는데, **crate 경계를 넘으면 조용히 빈 슬라이스를 반환한다.** 바이너리가 의존하지만 참조하지 않는 등록 crate 는 아무것도 기여하지 않는다 (debug 와 `lto=true, strip=true` release 둘 다). `use reg as _;` 를 넣거나 그 crate 의 함수를 하나 부르면 전부 나타난다.
+
+즉 **바이너리가 이미 그 crate 를 지목할 때만 동작하는 기법**이고, 그 조건이면 평범한 `pub const` 표가 엄격히 낫다: 같은 비용, 마법 없음, 그리고 **드라이버 누락이 빈 목록이 아니라 컴파일 에러가 된다.**
+
+조용히 빈 레지스트리는 CLAUDE.md 가 금지한 실패 계열 (`조용한 실패`) 그 자체다. **드라이버 목록은 `runtrol-drivers/src/kinds.rs` 의 `pub const` 표 하나다.**
+
+**(b) `agent-client-protocol` crate 를 기본 의존으로 넣지 않는다.** **ACP 어휘 채택은 유효하다** (우리 이벤트 enum 의 모양이고 비용이 0 이다). 하지만 crate 2.0.0 은 다르다.
+
+- `async-io`·`async-process`·`blocking` 을 무조건 의존한다 -> **tokio 옆에 두 번째 리액터와 두 번째 blocking 풀**
+- `serde_json/preserve_order` 를 켠다 -> cargo feature 통합이 **워크스페이스 전체**에 적용되어 `serde_json::Map` 이 조용히 `IndexMap` 으로 바뀌고 `indexmap`·`hashbrown` 이 전역으로 딸려온다
+
+M0 완료 조건에 이 crate 가 필요한 것은 없다. 와이어 타입이 필요해지면 **`agent-client-protocol-schema` 만** 의존하고, 본 crate 는 M1 의 off-by-default feature 로 미룬다.
+
 ### 1. ACP 를 채택한다. 발명하지 않는다
 
 ACP 는 이미 runtrol 어휘의 약 90% 를 표준화했다: `session/new|load|resume|list|delete|close|prompt|cancel|set_mode|set_config_option`, `session/update`, `session/request_permission`, `fs/*`, `terminal/*`, `elicitation/*`. Rust SDK 가 crates.io 에 있다.
