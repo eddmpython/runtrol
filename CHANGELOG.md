@@ -21,3 +21,14 @@ decisions with their measured evidence, and the gate harness. No product code ex
   or source reading that produced it.
 - Contract gates that run before any product code exists: workspace hygiene, forbidden
   folder names, silent failure detection with a self test, and AI attribution blocking.
+- A scoreboard that computes rather than declares. Each axis score is derived from a base
+  evidence tier, additives that only attach once the evidence is real and complete, and caps
+  for gates that skipped or that nothing runs. The README in all four languages is held to
+  the computed board, so a translated copy cannot keep yesterday's number.
+
+### Changed
+
+- Modularity, clean code, security, hygiene, and budget are named gates on a pass or fail
+  board instead of prose. They are deliberately not worth points: a floor rule at 7 out of 10
+  is a floor rule being broken, and a total that rises without the user receiving anything is
+  the inflation the scoreboard exists to prevent.

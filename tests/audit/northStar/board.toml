@@ -1,0 +1,265 @@
+# North Star board. What is scored, what it currently scores, and what evidence is claimed for it.
+#
+# This file holds machine facts only: the axis name in each of the four README languages, the
+# evidence a score is computed from, and which gates back which axis. The prose for what a gate
+# asserts lives in `docs/northStarEvidence.md`. `board.py` checks that the two name sets are
+# identical in both directions, so neither file can grow an entry the other never heard of.
+#
+# Two kinds of thing live here and they never mix:
+#
+#   axis    scored 0~10 and summed into the board total. one per outcome a user can feel.
+#   floor   binary. modularity, clean code, security, hygiene, budget. red blocks a merge and is
+#           never worth a fraction of a point, because a floor rule at 7/10 is a floor rule being
+#           broken. splitting these into named gates is how they get finer, not by scoring them.
+#
+# A third kind is deliberately absent. Innovation gets no number: it is the axis list itself
+# ("manage several AI agents in one place"), so a separate score would count it twice, and no gate
+# can assert it. Whether it still holds is a kill criterion in `docs/positioning.md`.
+#
+# Editing rules, all of them enforced by `board.py`:
+#   - a tier above `manual` names gates that exist as files and are reachable from a runner
+#   - additives attach only at the top tier, and each one needs a gate of a matching kind
+#   - a `planned` floor must not exist as a file yet. building it flips the status in that commit
+
+# ----------------------------------------------------------------------------------------------
+# Scored axes. Order is the order the README tables print them in, and `readmeParity` holds all
+# four languages to it.
+# ----------------------------------------------------------------------------------------------
+
+[[axis]]
+key = "oneSessionList"
+tier = "none"
+additives = []
+caps = []
+name = { ko = "하나의 세션 목록", en = "One session list", zh = "统一的会话列表", ja = "一つのセッション一覧" }
+gate = [{ name = "sessionLifecycleSmoke", kind = "smoke" }]
+
+[[axis]]
+key = "instantResponse"
+tier = "none"
+additives = []
+caps = []
+name = { ko = "즉시 반응", en = "Instant response", zh = "即时响应", ja = "即座の反応" }
+gate = [
+    { name = "interactionLatencyBudget", kind = "bench" },
+    { name = "scrollUnderLoadSmoke", kind = "smoke" },
+]
+
+[[axis]]
+key = "phoneReachesPc"
+tier = "none"
+additives = []
+caps = []
+name = { ko = "폰에서 내 PC 세션 잇기", en = "Reach my PC sessions from my phone", zh = "用手机接续电脑上的会话", ja = "スマホから自分の PC のセッションへ" }
+gate = [
+    { name = "phoneDrivesPcSmoke", kind = "smoke" },
+    { name = "iosInstallAndPush", kind = "operator" },
+]
+
+[[axis]]
+key = "providerExtensibility"
+tier = "none"
+additives = []
+caps = []
+name = { ko = "공급자 확장성", en = "Provider extensibility", zh = "供应商可扩展性", ja = "プロバイダー拡張性" }
+gate = [
+    { name = "providerContract", kind = "contract" },
+    { name = "agentSurfaceDrift", kind = "smoke" },
+]
+
+[[axis]]
+key = "noConversationPassthrough"
+tier = "none"
+additives = []
+caps = []
+name = { ko = "대화 무통과", en = "No conversation passthrough", zh = "对话不经过", ja = "会話を通さない" }
+gate = [{ name = "egressContract", kind = "contract" }]
+
+[[axis]]
+key = "approveFromPhone"
+tier = "none"
+additives = []
+caps = []
+name = { ko = "폰에서 승인", en = "Approve from the phone", zh = "在手机上批准", ja = "スマホで承認" }
+gate = [{ name = "approvalRoundtripSmoke", kind = "smoke" }]
+
+[[axis]]
+key = "surviveDisconnection"
+tier = "none"
+additives = []
+caps = []
+name = { ko = "끊겨도 살아남기", en = "Survive disconnection", zh = "断了也活着", ja = "切れても生き残る" }
+gate = [{ name = "resilienceFaultInjection", kind = "smoke" }]
+
+[[axis]]
+key = "costOfRunning"
+tier = "none"
+additives = []
+caps = []
+name = { ko = "상주 비용", en = "Cost of running", zh = "常驻成本", ja = "常駐コスト" }
+gate = [{ name = "idleFootprintRatchet", kind = "bench" }]
+
+[[axis]]
+key = "sameMethodEverywhere"
+tier = "none"
+additives = []
+caps = []
+name = { ko = "어디서나 같은 방법", en = "Same method everywhere", zh = "到哪都一样", ja = "どこでも同じやり方" }
+gate = [{ name = "crossPlatformMatrix", kind = "smoke" }]
+
+[[axis]]
+key = "currentWithoutAsking"
+tier = "none"
+additives = []
+caps = []
+name = { ko = "알아서 최신", en = "Current without asking", zh = "自动保持最新", ja = "勝手に最新" }
+gate = [
+    { name = "cliUpdateRehearsal", kind = "smoke" },
+    { name = "appUpdateRehearsal", kind = "smoke" },
+]
+
+[[axis]]
+key = "automaticModelDetection"
+tier = "none"
+additives = []
+caps = []
+name = { ko = "모델 자동 인식", en = "Automatic model detection", zh = "自动识别模型", ja = "モデル自動認識" }
+gate = [{ name = "modelDetectionSmoke", kind = "smoke" }]
+
+[[axis]]
+key = "sessionsDoNotTrample"
+tier = "none"
+additives = []
+caps = []
+name = { ko = "세션끼리 안 밟기", en = "Sessions do not trample each other", zh = "会话之间不互踩", ja = "セッション同士が踏まない" }
+gate = [{ name = "sessionOverlapGuard", kind = "smoke" }]
+
+[[axis]]
+key = "freedomToLeave"
+tier = "none"
+additives = []
+caps = []
+name = { ko = "떠날 자유", en = "Freedom to leave", zh = "离开的自由", ja = "去る自由" }
+gate = [{ name = "uninstallLeavesNoTrace", kind = "smoke" }]
+
+# ----------------------------------------------------------------------------------------------
+# Floor gates. Binary, never scored, never summed. `status = "built"` means a runner invokes it
+# today. `status = "planned"` means it is specified and does not exist, and `board.py` goes red if
+# a planned gate quietly appears as a file without the status being flipped.
+#
+# The categories are what "modularity" and "clean code" look like once they are made checkable:
+# not a fraction of a point each, but a named gate per rule, green or red.
+# ----------------------------------------------------------------------------------------------
+
+[[floor]]
+category = "modularity"
+name = "dependencyDirection"
+status = "built"
+file = "dependencyDirection.rs"
+
+[[floor]]
+category = "modularity"
+name = "noScriptsDir"
+status = "built"
+file = "noScriptsDir.py"
+
+[[floor]]
+category = "modularity"
+name = "providerIsolation"
+status = "planned"
+
+[[floor]]
+category = "modularity"
+name = "workspaceLints"
+status = "planned"
+
+[[floor]]
+category = "cleanCode"
+name = "cargoFmt"
+status = "built"
+
+[[floor]]
+category = "cleanCode"
+name = "cargoClippy"
+status = "built"
+
+[[floor]]
+category = "cleanCode"
+name = "checkSilentFail"
+status = "built"
+file = "checkSilentFail.py"
+
+[[floor]]
+category = "cleanCode"
+name = "silentFailSelftest"
+status = "built"
+
+[[floor]]
+category = "cleanCode"
+name = "cargoShear"
+status = "built"
+
+[[floor]]
+category = "security"
+name = "cargoDeny"
+status = "built"
+
+[[floor]]
+category = "security"
+name = "scopeGrantability"
+status = "planned"
+
+[[floor]]
+category = "security"
+name = "rebindingDefenses"
+status = "planned"
+
+[[floor]]
+category = "security"
+name = "argumentEscaping"
+status = "planned"
+
+[[floor]]
+category = "security"
+name = "configReadOnly"
+status = "planned"
+
+[[floor]]
+category = "hygiene"
+name = "workspaceHygiene"
+status = "built"
+file = "workspaceHygiene.py"
+
+[[floor]]
+category = "hygiene"
+name = "gateCoverage"
+status = "built"
+file = "gateCoverage.py"
+
+[[floor]]
+category = "hygiene"
+name = "checkNoAiMarkers"
+status = "built"
+file = "checkNoAiMarkers.py"
+
+[[floor]]
+category = "scoreboard"
+name = "northStarBoard"
+status = "built"
+file = "northStar/board.py"
+
+[[floor]]
+category = "scoreboard"
+name = "readmeParity"
+status = "built"
+file = "northStar/readmeParity.py"
+
+[[floor]]
+category = "budget"
+name = "memoryBudget"
+status = "planned"
+
+[[floor]]
+category = "budget"
+name = "orphanReaping"
+status = "planned"

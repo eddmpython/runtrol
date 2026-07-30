@@ -38,23 +38,60 @@ Which gate backs which axis is defined in [docs/northStarEvidence.md](docs/north
 
 ### Scoring rubric
 
-| Score | Meaning |
-|---:|---|
-| **0** | Nothing. No code, no gate. |
-| **3** | Someone saw it work by hand once on a dev machine. No automated gate. |
-| **5** | A gate runs in CI but against fakes. Mock CLI, stub provider, simulated phone. |
-| **8** | An end-to-end gate runs in CI against real CLI binaries, a real browser, real pairing. But one provider or one OS, happy path only. |
-| **10** | The same gate runs across two or more providers and two or more operating systems including Windows, includes fault injection and a regression ratchet, and has been repeatedly verified in real use. |
+A score is not a rung somebody picks. It is computed as **a base tier plus additives, pushed down by
+caps**. The source is [tests/audit/northStar/board.toml](tests/audit/northStar/board.toml), the
+`northStarBoard` gate computes it, and the `readmeParity` gate holds all four README languages to
+what it computed.
+
+**Base tier.** Exactly one holds per axis, and it is a ceiling.
+
+| Base tier | Score | What has to be true |
+|---|---:|---|
+| `none` | 0 | No gate asserts this axis |
+| `manual` | 3 | Someone watched it work by hand. No gate is registered in a runner. Demo videos, screenshots, and "I ran it and it worked" all land here |
+| `mock` | 5 | A registered gate runs, but against fakes. Mock CLI, stub provider, simulated phone |
+| `realOneKind` | 6 | It runs against the real counterpart, but only one kind of gate exists: static (`contract`) or live (`smoke`, `bench`) |
+| `realBothKinds` | 7 | The real counterpart, with a static gate and a live gate both registered |
+
+**Additives.** They attach only at `realBothKinds`, each one needs a gate of a matching kind, and
+holding all four lands exactly on 10.
+
+| Additive | Score | What has to be true |
+|---|---:|---|
+| `multiProvider` | +1 | The same gate is green against two or more providers |
+| `multiOs` | +1 | The same gate is green on two or more operating systems, Windows included |
+| `faultInjection` | +0.5 | The gate carries fault injection (kill the daemon, cut the network) and stays green |
+| `ratchet` | +0.5 | A regression ratchet goes red the moment the measured number gets worse |
+
+**Caps.** They push down over anything claimed above them.
+
+| Cap | Result | What has to be true |
+|---|---:|---|
+| `skipped` | 5 | The gate skipped in the last run. A skip is not a pass |
+| `flaky` | 5 | The gate passed on a retry |
+| `unregistered` | 0 | The gate file exists and no runner invokes it. Identical to having no gate |
 
 Rules that keep the score from inflating:
 
-1. **However finished the implementation looks, without a gate that runs automatically in CI the ceiling is 3.** Demo videos, screenshots, and "I ran it and it worked" are a 3. No exceptions.
-2. Paths a human must run by hand are marked as operator gates and **excluded from the total**.
-3. **A gate that runs only against fakes has a ceiling of 5.** Calling a mock the real thing is score inflation.
-4. If a gate is skipped or passes on a flaky retry, that axis cannot exceed 5 that week.
-5. A pull request that raises a score must include **the gate name and a link to the CI run**. Prose is not a score.
-6. Scores move in steps of 0.5. A number like 8.7 is not precision, it is self deception.
-7. **Nothing prevents an axis from going down.** If a provider changes its surface and a gate goes red, the score goes down. This table is today's state, not yesterday's boast.
+1. **However finished the implementation looks, without a gate a runner actually invokes the ceiling is `manual` (3).** No exceptions.
+2. `operator` gates, the ones needing a real device or a real account, are **excluded from the total**.
+3. A pull request that raises a score includes **the gate name and a link to the CI run**, and edits `board.toml` in the same commit. Prose is not a score.
+4. Scores move in steps of 0.5. A number like 8.7 is not precision, it is self deception.
+5. **Nothing prevents an axis from going down.** If a provider changes its surface and a gate goes red, the score goes down. This table is today's state, not yesterday's boast.
+6. **A ceiling is set by a missing kind of gate, not by a missing run.** An axis with only one kind cannot pass 6 however green it runs. Twelve of the thirteen axes are in that state today, and `northStarBoard` prints each ceiling next to its score.
+
+### What gets a score and what does not
+
+Three layers, never mixed. Mixing them is how a total goes up while the user receives nothing.
+
+| Layer | What goes in it | How it shows |
+|---|---|---|
+| **Scored axes** | Outcomes a user can feel (the thirteen above) | 0 through 10, summed to /130 |
+| **Floor gates** | Modularity, clean code, security, hygiene, budget | **Not a score.** Green or red, and red does not merge |
+| **Kill criteria** | Innovation, positioning | **No number.** Decided only by the kill criteria in [docs/positioning.md](docs/positioning.md) |
+
+- **Why modularity and clean code get no partial credit.** They are floor rules. "Clean code 7/10" means "being broken by 3", which is not a score, it is red. They get finer by being split into named gates instead (`dependencyDirection`, `providerIsolation`, `checkSilentFail`, `cargoClippy`, and the rest). The full list is in [docs/northStarEvidence.md](docs/northStarEvidence.md).
+- **Why innovation gets no number.** The innovation is the thirteen axes themselves ("manage several AI agents in one place"). A separate score would count the same thing twice, and no gate can assert it, which is rule 3. Whether the innovation still holds is what the kill criteria decide.
 
 ## First principle: user convenience
 
@@ -117,6 +154,7 @@ If those axes are not nailed down by gates, using Rust means nothing.
 | [`docs/`](docs/README.md) | Operational documentation, source of truth | |
 | [`mainPlan/`](mainPlan/README.md) | What is to be built (initiatives; on completion the knowledge is promoted to `docs/` and the folder is deleted) | |
 | [`tests/audit/`](tests/audit/) | Contract gates | |
+| [`tests/audit/northStar/`](tests/audit/northStar/) | The scoreboard engine. Computes the numbers in the table above and holds the four languages to them | |
 
 ## Development
 

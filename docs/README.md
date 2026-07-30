@@ -10,6 +10,6 @@
 |---|---|
 | [positioning.md](positioning.md) | 왜 runtrol 이 존재하는가. 경쟁 지형, 고른 자리와 그 이유, 접어야 할 조건 (kill criteria) |
 | [frontendStack.md](frontendStack.md) | Astryx + StyleX. 랜딩·PWA·데스크톱 세 표면이 공유하는 컴포넌트 층과 테마 계약 |
-| [northStarEvidence.md](northStarEvidence.md) | `README.md` 북극성 표의 각 축이 어떤 실행 게이트에 기대는가. 축과 게이트 대응의 정본 |
+| [northStarEvidence.md](northStarEvidence.md) | 게이트가 무엇을 단언하는가의 정본. 어느 축에 붙고 몇 점인지는 [`tests/audit/northStar/board.toml`](../tests/audit/northStar/board.toml) 이 정본이고 `northStarBoard` 게이트가 계산한다 |
 
 코드가 서면 여기가 는다.

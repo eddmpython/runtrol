@@ -1,7 +1,7 @@
 """Gate: a gate that lives in this repository is a gate that runs.
 
-There are three ways for a check to exist and never execute, and every one of them has already
-happened somewhere:
+There are four ways for a check to exist and never execute, and every one of them has already
+happened here:
 
 1. A `tests/audit/*.rs` file that nobody registered as a `[[test]]`. The audit package sets
    `autotests = false`, so an unregistered file is not compiled, not run, and not reported. It looks
@@ -11,8 +11,11 @@ happened somewhere:
 3. A check that one runner has and the other does not. Local green then means something different
    from CI green, and whichever direction the gap points, somebody is trusting a result that was
    never produced.
+4. A gate in a subdirectory, invisible to a scan that only looks at the top level. This one caught
+   this very file: `tests/audit/northStar/` arrived with four unregistered scripts in it and the
+   inventory below reported OK, because the glob it used stopped at the first directory level.
 
-This file closes all three. It is deliberately blunt: anything uncovered must be named in a ledger
+This file closes all four. It is deliberately blunt: anything uncovered must be named in a ledger
 below with a reason, so skipping a check becomes a visible decision instead of an oversight.
 
 Usage::
@@ -35,10 +38,15 @@ AUDIT = ROOT / "tests" / "audit"
 WORKFLOW = ROOT / ".github" / "workflows" / "gates.yml"
 GITHOOKS = ROOT / ".githooks"
 
-# Python files under `tests/audit/` that are not gates. Each needs a reason, because the default
-# answer to "why does this script never run" is that somebody forgot to wire it up.
+# Python files under `tests/audit/` that are not gates, keyed by path relative to that directory.
+# Each needs a reason, because the default answer to "why does this script never run" is that
+# somebody forgot to wire it up.
 NOT_A_GATE: dict[str, str] = {
     "preflight.py": "the runner itself. it invokes the gates rather than being one",
+    "northStar/rubric.py": "the scoring rules as pure data and arithmetic. northStar/board.py is "
+    "the gate that applies them",
+    "northStar/registry.py": "loads board.toml and holds it against the tree. imported by both "
+    "northStar gates rather than run on its own",
 }
 
 # Preflight gates that intentionally have no counterpart step in the workflow.
@@ -84,29 +92,43 @@ def rustGatesAreRegistered() -> list[str]:
 
     declared = set(re.findall(r'^\s*path\s*=\s*"([^"]+)"', text, re.MULTILINE))
     problems: list[str] = []
-    for source in sorted(AUDIT.glob("*.rs")):
-        if source.name not in declared:
+    for relative in auditSources(".rs"):
+        if relative not in declared:
+            stem = relative.rsplit("/", maxsplit=1)[-1].removesuffix(".rs")
             problems.append(
-                f"tests/audit/{source.name} is not a `[[test]]` in tests/audit/Cargo.toml. "
+                f"tests/audit/{relative} is not a `[[test]]` in tests/audit/Cargo.toml. "
                 f"with `autotests = false` it is never compiled and never run. add:\n"
-                f'    [[test]]\n    name = "{source.stem}"\n    path = "{source.name}"'
+                f'    [[test]]\n    name = "{stem}"\n    path = "{relative}"'
             )
     return problems
 
 
 def pythonGatesHaveARunner() -> list[str]:
-    """Every `tests/audit/*.py` is invoked by preflight, by the workflow, or by a git hook."""
+    """Every `tests/audit/**/*.py` is invoked by preflight, by the workflow, or by a git hook."""
     haystack = runnerText()
     problems: list[str] = []
-    for script in sorted(AUDIT.glob("*.py")):
-        if script.name in NOT_A_GATE:
+    for relative in auditSources(".py"):
+        if relative in NOT_A_GATE:
             continue
-        if script.name not in haystack:
+        if relative not in haystack:
             problems.append(
-                f"tests/audit/{script.name} is never invoked. add it to preflight's GATES, to "
+                f"tests/audit/{relative} is never invoked. add it to preflight's GATES, to "
                 f".github/workflows/gates.yml, or to NOT_A_GATE in this file with a reason"
             )
     return problems
+
+
+def auditSources(suffix: str) -> list[str]:
+    """Gate sources under `tests/audit/`, as paths relative to it, caches excluded.
+
+    Recursive on purpose. A top level glob was what let `tests/audit/northStar/` arrive with four
+    scripts in it and this inventory still print OK.
+    """
+    return sorted(
+        path.relative_to(AUDIT).as_posix()
+        for path in AUDIT.rglob(f"*{suffix}")
+        if path.is_file() and "__pycache__" not in path.parts
+    )
 
 
 def preflightGatesRunInCi() -> list[str]:
@@ -145,7 +167,7 @@ def ciStepsRunInPreflight() -> list[str]:
     signatures = list(preflightSignatures().values())
     problems: list[str] = []
 
-    invoked = set(re.findall(r"tests/audit/[A-Za-z0-9_]+\.py", workflow))
+    invoked = set(re.findall(r"tests/audit/(?:[A-Za-z0-9_]+/)*[A-Za-z0-9_]+\.py", workflow))
     invoked |= {f"cargo {sub}" for sub in re.findall(r"\bcargo ([a-z][a-z-]*)", workflow)}
 
     for invocation in sorted(invoked):
@@ -230,8 +252,8 @@ def main() -> int:
             print(f"  - {problem}", file=sys.stderr)
         return 2
 
-    rust = len(list(AUDIT.glob("*.rs")))
-    python = len([p for p in AUDIT.glob("*.py") if p.name not in NOT_A_GATE])
+    rust = len(auditSources(".rs"))
+    python = len([relative for relative in auditSources(".py") if relative not in NOT_A_GATE])
     print(f"[gateCoverage] OK. {rust} rust and {python} python gates all reachable from a runner.")
     if LOCAL_ONLY or CI_ONLY:
         print(f"  declared exceptions: {len(LOCAL_ONLY)} local-only, {len(CI_ONLY)} ci-only.")

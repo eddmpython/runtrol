@@ -38,6 +38,9 @@ GATES: dict[str, tuple[str, list[str]]] = {
     "checkSilentFail": ("silent failure 금지", [*PY, f"{HOOKS}/checkSilentFail.py"]),
     # 게이트가 저장소에 있는 것과 도는 것은 다른 말이다. 이 게이트가 그 차이를 감시한다.
     "gateCoverage": ("게이트 러너 커버리지", [*PY, f"{HOOKS}/gateCoverage.py"]),
+    # 북극성 점수는 사람이 타이핑하는 숫자가 아니라 board.toml 에서 계산된다.
+    "northStarBoard": ("북극성 점수판 (증거 구조)", [*PY, f"{HOOKS}/northStar/board.py"]),
+    "readmeParity": ("4 개 언어 README 점수판 대조", [*PY, f"{HOOKS}/northStar/readmeParity.py"]),
     "cargoFmt": ("cargo fmt --check", ["cargo", "fmt", "--all", "--check"]),
     "cargoClippy": (
         "cargo clippy (경고 = 실패)",
@@ -60,6 +63,8 @@ SUITES: dict[str, tuple[str, ...]] = {
         "silentFailSelftest",
         "checkSilentFail",
         "gateCoverage",
+        "northStarBoard",
+        "readmeParity",
         "cargoFmt",
         "cargoClippy",
     ),

@@ -68,6 +68,12 @@ jobs:
       # 서로를 검사하므로, 어느 한쪽에만 추가된 게이트는 red 가 된다.
       - name: 게이트 러너 커버리지
         run: python -X utf8 tests/audit/gateCoverage.py
+      # 북극성 점수는 board.toml 에서 계산된다. 증거가 없는 숫자와, 네 언어 README 가
+      # 서로 다른 점수판을 인쇄하는 상태를 여기서 막는다.
+      - name: 북극성 점수판
+        run: python -X utf8 tests/audit/northStar/board.py
+      - name: README 점수판 대조 (4 개 언어)
+        run: python -X utf8 tests/audit/northStar/readmeParity.py
       # `--check-push` 는 git pre-push 의 stdin 프로토콜을 읽으므로 CI 에서는 쓸 수 없다
       # (입력이 없으면 아무것도 검사하지 않고 조용히 통과한다). CI 는 범위를 명시한다.
       # PR 은 base..head, push 는 before..sha. 새 브랜치의 before 는 0 이라 그때는 HEAD 만 본다.
