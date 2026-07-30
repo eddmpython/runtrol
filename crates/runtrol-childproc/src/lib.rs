@@ -13,17 +13,23 @@
 //!   hand-rolled version would be the wrong direction on the one surface where being wrong is remote code
 //!   execution.
 //!
-//! # What arrives next
+//! - [`contain`] makes a daemon that dies take its children with it, rather than leaving a coding agent
+//!   running against the operator's files with nobody watching. What each platform can actually promise
+//!   differs, and the type says which one you got instead of implying the strongest.
 //!
-//! Containment: a job object on Windows and a process group elsewhere, so that a daemon which dies takes
-//! its children with it rather than leaving a coding agent running against the operator's files. That is
-//! the part of this crate that needs `unsafe`, and it lands with its own lint override rather than one
-//! written ahead of the code that needs it.
+//! # Why this is a crate
+//!
+//! [`contain`] needs `unsafe`: a job object on Windows, and two system calls between fork and exec on Unix.
+//! The workspace sets `unsafe_code = "forbid"`, and `forbid` cannot be relaxed from inside a module, so the
+//! only way to allow it in one place and machine-forbid it everywhere else is a crate with its own lint
+//! table.
 
 pub mod argv;
+pub mod contain;
 pub mod error;
 pub mod resolve;
 
 pub use argv::{MAX_ARGUMENT_LEN, check_all, check_one};
+pub use contain::{Containment, Strength};
 pub use error::SpawnError;
 pub use resolve::{LauncherKept, Program, ProgramKind, resolve};

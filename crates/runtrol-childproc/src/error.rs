@@ -56,6 +56,19 @@ pub enum SpawnError {
         depth: usize,
     },
 
+    /// Containment could not be established, or could not be enforced.
+    ///
+    /// Not recoverable and not worth working around. Starting an agent that cannot be contained is the
+    /// outcome the containment module exists to prevent, so the daemon refuses to start rather than running
+    /// with the guarantee quietly absent.
+    #[error("cannot contain child processes while {doing}: {detail}")]
+    Containment {
+        /// What runtrol was doing.
+        doing: &'static str,
+        /// What the platform said.
+        detail: String,
+    },
+
     /// The filesystem refused a path.
     #[error("cannot read {path:?}: {detail}")]
     Io {

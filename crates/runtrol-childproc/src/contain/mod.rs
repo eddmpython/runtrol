@@ -1,0 +1,202 @@
+//! When runtrol dies, the coding agents it started die with it.
+//!
+//! This is the crate's reason for existing. A supervised agent has been granted write access to the
+//! operator's project, and an orphan that keeps running after runtrol is gone is writing to files nobody
+//! is watching. There is no version of that which is acceptable, so containment is established before any
+//! child is started rather than cleaned up afterwards.
+//!
+//! # What each platform can actually promise
+//!
+//! The promise is not the same everywhere, and pretending it is would be the more comfortable lie.
+//! [`Containment::strength`] says which one the operator got, so a surface can show it rather than imply a
+//! guarantee the platform does not make.
+//!
+//! - **Windows.** [`Strength::EvenIfKilled`]. A job object with kill-on-close holds every descendant, and
+//!   the kernel enforces it when the last handle closes. That happens whether runtrol exits cleanly, panics,
+//!   or is killed outright.
+//! - **Linux.** [`Strength::EvenIfKilled`]. Each child asks the kernel to signal it when its parent dies,
+//!   which covers the unclean case, and a process group covers the clean one.
+//! - **macOS and other Unix.** [`Strength::CleanShutdownOnly`]. There is no parent-death signal and no job
+//!   object. A process group handles every shutdown runtrol can see coming; a `SIGKILL` of the daemon
+//!   cannot be intercepted, so children survive it. Stated rather than hidden, and the answer is an orphan
+//!   sweep at the next startup, which needs the storage crate and arrives with it.
+//!
+//! # Holding it is what makes it work
+//!
+//! [`Containment`] is a guard. Holding the value is what holds the containment, and dropping it is the kill
+//! switch: on Windows the job's last handle closes and the kernel terminates everything inside. So the
+//! daemon establishes one at startup and keeps it for the process lifetime.
+//!
+//! That also makes it the mechanism behind the one capability the security posture requires to work without
+//! any permission at all: killing every session from anywhere. [`Containment::terminate_all`] is that,
+//! and it consults nothing.
+//!
+//! # Establishing this cannot be unit tested, and finding that out was the point
+//!
+//! The first version of the tests below called [`Containment::establish`] and let the guard drop. On Windows
+//! that assigns the **test process** to the kill-on-close job, so the drop closed the job's last handle and
+//! the kernel terminated the test runner. The test did not fail; it vanished mid-run.
+//!
+//! Which is the mechanism working exactly as designed, and it means establishing containment is a
+//! process-lifetime action that no in-process test can exercise. So the unit tests here cover only what has no
+//! side effects, [`Containment::platform_strength`] exists so a caller can ask what this platform promises
+//! without establishing anything, and the guarantee itself is proven by `tests/containment.rs`, which drives a
+//! real helper process and kills it the hard way.
+
+#[cfg(windows)]
+mod windows;
+#[cfg(windows)]
+use windows as platform;
+
+#[cfg(unix)]
+mod unix;
+#[cfg(unix)]
+use unix as platform;
+
+use std::process::Command;
+
+use crate::error::SpawnError;
+
+/// What containment this platform can actually enforce.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Strength {
+    /// Children die even if runtrol is killed without warning.
+    EvenIfKilled,
+    /// Children die on any shutdown runtrol can see coming, and survive one it cannot.
+    ///
+    /// The gap is real and cannot be closed from inside the process being killed. What closes it is
+    /// noticing the orphans on the next start.
+    CleanShutdownOnly {
+        /// Why this platform cannot promise more.
+        why: &'static str,
+    },
+}
+
+impl Strength {
+    /// Whether an unclean kill of runtrol leaves agents running.
+    ///
+    /// The question a surface asks before deciding whether to warn the operator.
+    #[must_use]
+    pub const fn survives_an_unclean_kill(&self) -> bool {
+        matches!(self, Self::CleanShutdownOnly { .. })
+    }
+}
+
+/// A guarantee that children die with this process.
+///
+/// Hold it for as long as children should live. Dropping it is deliberate and destructive: see the module
+/// documentation.
+#[derive(Debug)]
+pub struct Containment {
+    /// The platform's own mechanism.
+    inner: platform::Containment,
+}
+
+impl Containment {
+    /// Establish containment for this process and everything it starts.
+    ///
+    /// Called once, at startup, before any child exists. Calling it later would leave whatever was already
+    /// running outside the containment on some platforms, which is the kind of partial guarantee that reads
+    /// as a full one.
+    ///
+    /// # Errors
+    ///
+    /// [`SpawnError::Containment`] when the platform refuses. Not recoverable and not worth working around:
+    /// starting agents that cannot be contained is the outcome this whole module exists to prevent, so the
+    /// daemon refuses to start rather than running with the guarantee quietly absent.
+    pub fn establish() -> Result<Self, SpawnError> {
+        Ok(Self {
+            inner: platform::Containment::establish()?,
+        })
+    }
+
+    /// What this platform can enforce, without establishing anything.
+    ///
+    /// Free of side effects, unlike [`Self::establish`], so a surface can tell the operator what they are
+    /// going to get before anything is set up, and a test can check the classification without terminating
+    /// itself.
+    #[must_use]
+    pub const fn platform_strength() -> Strength {
+        platform::Containment::platform_strength()
+    }
+
+    /// What this containment actually enforces.
+    #[must_use]
+    pub const fn strength(&self) -> Strength {
+        Self::platform_strength()
+    }
+
+    /// Prepare a command so its child is inside this containment.
+    ///
+    /// Must be called on every command before it is spawned. On the platform where containment is
+    /// inherited this does nothing, and it is still called, so that no call site has to know which platform
+    /// needs what.
+    pub fn prepare(&self, command: &mut Command) {
+        self.inner.prepare(command);
+    }
+
+    /// Kill every contained process now.
+    ///
+    /// The panic button. The security posture requires killing every session to work from anywhere with no
+    /// permission at all, and this consults nothing: no ledger, no scope, no configuration. The worst thing
+    /// a hostile caller can achieve through it is stopping work, which is the safe direction.
+    ///
+    /// # Errors
+    ///
+    /// [`SpawnError::Containment`] when the platform's own call fails. Reported rather than swallowed: an
+    /// operator who pressed the panic button has to know whether it worked.
+    pub fn terminate_all(&self) -> Result<(), SpawnError> {
+        self.inner.terminate_all()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Nothing here calls `establish`. On Windows that puts the test process itself into a kill-on-close job,
+    // and letting the guard drop terminates the runner: measured, and the reason `platform_strength` exists.
+    // The guarantee is proven in `tests/containment.rs`, which has a process it is allowed to kill.
+
+    #[test]
+    fn this_platform_declares_what_it_can_enforce() {
+        let strength = Containment::platform_strength();
+        if cfg!(any(windows, target_os = "linux")) {
+            assert_eq!(
+                strength,
+                Strength::EvenIfKilled,
+                "this platform has a kernel mechanism for the unclean case"
+            );
+            assert!(!strength.survives_an_unclean_kill());
+        } else {
+            assert!(
+                matches!(strength, Strength::CleanShutdownOnly { .. }),
+                "no parent-death signal and no job object here, and saying so is the point"
+            );
+            assert!(strength.survives_an_unclean_kill());
+        }
+    }
+
+    #[test]
+    fn the_weaker_promise_says_why() {
+        // An operator told "children might survive" needs the reason, or the warning is noise.
+        let weak = Strength::CleanShutdownOnly {
+            why: "no parent-death signal on this platform",
+        };
+        match weak {
+            Strength::CleanShutdownOnly { why } => assert!(!why.is_empty()),
+            Strength::EvenIfKilled => {
+                panic!("constructed the weaker promise, got the stronger one")
+            }
+        }
+    }
+
+    #[test]
+    fn only_the_weaker_promise_admits_orphans() {
+        assert!(!Strength::EvenIfKilled.survives_an_unclean_kill());
+        assert!(
+            Strength::CleanShutdownOnly { why: "any reason" }.survives_an_unclean_kill(),
+            "the whole point of the weaker variant is that it admits the gap"
+        );
+    }
+}

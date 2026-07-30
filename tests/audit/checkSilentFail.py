@@ -20,7 +20,7 @@ Rust 규칙:
     emptyErrArm     `Err(_) => {}`           . 오류 갈래가 비어 있다
     unwrap          `.unwrap()` `.expect(`   . 비테스트 코드의 패닉 경로
     allowMustUse    `#[allow(unused_must_use)]`
-    unsafeNoSafety  `unsafe {` 앞 3 줄에 `SAFETY:` 없음
+    unsafeNoSafety  `unsafe {` 바로 위 연속 주석 블록에 `SAFETY:` 없음
 
     `#[cfg(test)]` 모듈 안, `tests/` 아래, `build.rs` 는 unwrap 규칙에서 면제된다.
 
@@ -87,9 +87,27 @@ def _hasOkComment(lines: list[str], index: int) -> bool:
 
 
 def _hasSafetyComment(lines: list[str], index: int) -> bool:
-    """`unsafe` 라인 또는 바로 앞 LOOKBACK 줄에 `SAFETY:` 근거가 있는가."""
-    start = max(0, index - LOOKBACK)
-    return any(SAFETY_MARKER.search(lines[i]) for i in range(start, index + 1))
+    """`unsafe` 바로 위에 붙은 주석 블록 안에 `SAFETY:` 근거가 있는가.
+
+    고정 줄 수가 아니라 **연속 주석 블록**을 본다. 앞 3 줄만 보던 판은 근거가 길수록
+    불리했다 (4 줄로 제대로 논증하면 게이트가 근거 없음으로 판정). 근거의 길이를
+    벌주는 게이트는 짧고 무의미한 근거를 유도한다.
+
+    블록은 코드나 빈 줄에서 끊긴다. 그래서 코드를 건너뛴 위쪽의 `SAFETY:` 는 여전히
+    인정되지 않는다. 인접성은 지키고 길이 제한만 없앤다.
+    """
+    if SAFETY_MARKER.search(lines[index]):
+        return True
+    cursor = index - 1
+    while cursor >= 0:
+        stripped = lines[cursor].strip()
+        if not stripped.startswith("//"):
+            # 주석 블록의 끝. 여기서 멈추므로 코드 위쪽의 근거는 잡히지 않는다.
+            return False
+        if SAFETY_MARKER.search(lines[cursor]):
+            return True
+        cursor -= 1
+    return False
 
 
 def _testRegions(lines: list[str]) -> list[tuple[int, int]]:
@@ -255,6 +273,28 @@ SELFTEST_CASES: tuple[tuple[str, str, int], ...] = (
         0,
     ),
     ("unsafeNoSafety.rs", "fn main() {\n    unsafe { ptr.read() };\n}\n", 1),
+    # 근거가 길어도 인정된다. 앞 3 줄만 보던 판은 이 픽스처에서 오검출을 냈다.
+    (
+        "unsafeLongSafety.rs",
+        "fn main() {\n"
+        "    // SAFETY: line one of the argument,\n"
+        "    // line two,\n"
+        "    // line three,\n"
+        "    // line four.\n"
+        "    unsafe { ptr.read() };\n"
+        "}\n",
+        0,
+    ),
+    # 코드를 건너뛴 위쪽의 근거는 인정되지 않는다. 인접성은 그대로다.
+    (
+        "unsafeDetachedSafety.rs",
+        "fn main() {\n"
+        "    // SAFETY: this argument is about something else entirely.\n"
+        "    let value = compute();\n"
+        "    unsafe { ptr.read() };\n"
+        "}\n",
+        1,
+    ),
     ("unsafeWithSafety.rs", "fn main() {\n    // SAFETY: ptr 는 바로 위에서 non-null 로 검증됐다.\n    unsafe { ptr.read() };\n}\n", 0),
     ("emptyCatch.ts", "try { risky(); } catch (e) {}\n", 1),
 )

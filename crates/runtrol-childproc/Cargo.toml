@@ -23,5 +23,52 @@ runtrol-provider = { workspace = true }
 which = { workspace = true, features = ["real-sys"] }
 thiserror = { workspace = true }
 
-[lints]
-workspace = true
+# Job objects. The kill-on-close job is what makes "runtrol dies, its children die" a kernel guarantee
+# rather than a best effort.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_JobObjects",
+    "Win32_System_Threading",
+] }
+
+# Two system calls between fork and exec. `libc` rather than a safe wrapper: the code inside `pre_exec` is
+# restricted to async-signal-safe calls, and a direct system call is exactly that, while a wrapper's
+# allocation or locking would not be.
+[target.'cfg(unix)'.dependencies]
+libc = { workspace = true }
+
+# **Not `[lints] workspace = true`.** This crate is the one place `unsafe` is allowed, and the workspace
+# table sets `unsafe_code = "forbid"`, which cannot be relaxed from inside the crate that inherits it
+# (measured: cargo hard-errors on mixing inheritance with an override). So the table is written out here with
+# `deny` instead of `forbid`, and every `unsafe` block carries a safety argument. Which crates do this is
+# pinned by `tests/audit/workspaceLints.rs`.
+[lints.rust]
+unsafe_code = "deny"
+let_underscore_drop = "deny"
+unused_must_use = "deny"
+unreachable_pub = "warn"
+missing_docs = "warn"
+
+[lints.clippy]
+all = { level = "deny", priority = -1 }
+pedantic = { level = "warn", priority = -2 }
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+unreachable = "deny"
+dbg_macro = "deny"
+print_stdout = "deny"
+indexing_slicing = "deny"
+let_underscore_must_use = "deny"
+unwrap_in_result = "deny"
+disallowed_methods = "deny"
+disallowed_types = "deny"
+disallowed_macros = "deny"
+self_named_module_files = "deny"
+# **Deliberately absent: `print_stderr`.** `Drop` has no error channel, and a failed containment teardown is
+# something an operator debugging a stray agent has to be able to see. Panicking there would replace one
+# problem with a worse one, and swallowing it would hide the only evidence.
