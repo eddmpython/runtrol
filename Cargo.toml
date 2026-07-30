@@ -42,6 +42,9 @@ serde_json = { version = "1.0.151", default-features = false }
 
 # 식별자·경로·오류.
 uuid = { version = "1.24.0", default-features = false }
+# OS 난수. `uuid` 가 부르는 그 crate 를 직접 부른다 (UUIDv7 의 상위 난수 비트는 같은 밀리초 안에서
+# 단조 증가하므로 난수원으로 쓸 수 없다. 실측).
+getrandom = "0.4.3"
 camino = "1.2.5"
 thiserror = "2.0.19"
 

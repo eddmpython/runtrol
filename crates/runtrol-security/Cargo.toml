@@ -1,4 +1,8 @@
-# 스코프 타입 벽, PC 현장 증거, workspace 루트 정규화.
+# The scope wall, the presence witness, and workspace root approval.
+#
+# A leaf on purpose. This crate must not depend on the kernel, so that kernel internals cannot weaken
+# the wall and so that a future remote transport can depend on the wall without depending on the
+# kernel. `tests/audit/dependencyDirection.rs` enforces it.
 [package]
 name = "runtrol-security"
 version = "0.0.0"
@@ -11,6 +15,14 @@ publish = false
 
 [dependencies]
 runtrol-provider = { workspace = true }
+# Device and workspace root identifiers. UUIDv7 so both sort by the time they were created, which is
+# also the order an audit listing wants to read.
+uuid = { workspace = true, features = ["std", "v7"] }
+# Randomness for presence challenge phrases. Named directly rather than drawn from a UUID: measured
+# on uuid 1.24, `now_v7` is monotonic within a millisecond, so its high random bits do not change and
+# a phrase drawn from them repeats. This is the crate uuid itself calls.
+getrandom = { workspace = true }
+thiserror = { workspace = true }
 
 [lints]
 workspace = true

@@ -230,7 +230,10 @@ dependencies = [
 name = "runtrol-security"
 version = "0.0.0"
 dependencies = [
+ "getrandom",
  "runtrol-provider",
+ "thiserror",
+ "uuid",
 ]
 
 [[package]]
