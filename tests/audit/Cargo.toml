@@ -16,10 +16,17 @@ autotests = false
 
 [dev-dependencies]
 cargo_metadata = { workspace = true }
+# Asking the operating system what a process holds. The budget is a number this gate measures against, and a
+# process reporting on itself would report what its allocator believes rather than what it holds.
+runtrol-childproc = { workspace = true }
 
 [[test]]
 name = "dependencyDirection"
 path = "dependencyDirection.rs"
+
+[[test]]
+name = "memoryBudget"
+path = "memoryBudget.rs"
 
 # **주의 (실측)**: `[lints] workspace = true` 와 per-crate 재정의는 공존할 수 없다
 # (cargo hard error). 게이트 헬퍼는 자유 함수라서 clippy 의 `allow-*-in-tests` hatch 가

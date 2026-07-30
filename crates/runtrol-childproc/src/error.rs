@@ -83,6 +83,18 @@ pub enum SpawnError {
         after_ms: u64,
     },
 
+    /// A process could not be asked how much memory it is holding.
+    ///
+    /// Reported rather than answered with a zero. A budget gate that measured a process which had already ended
+    /// would pass forever while the thing it watches grows without limit.
+    #[error("cannot measure what process {pid} is holding: {detail}")]
+    Footprint {
+        /// Which process was asked about.
+        pid: u32,
+        /// What the platform said.
+        detail: String,
+    },
+
     /// This process's own handles could not be kept from travelling to what it starts.
     ///
     /// Reported rather than swallowed. What it prevents is a shell that waits forever with nothing to show

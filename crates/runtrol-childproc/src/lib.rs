@@ -27,12 +27,16 @@
 //! - [`run`] asks a program one question and reads the answer, under a deadline and a byte ceiling. The
 //!   long-lived conversation of a session is not this: it is a transport, and it belongs to a driver.
 //!
+//! - [`footprint`] how much memory a process is really holding, asked from outside. "memory efficient" is a
+//!   number with a gate behind it here, and a budget nobody can measure is a budget nobody is held to.
+//!
 //! - [`handoff`] stops this process's own handles from travelling to what it starts. Measured: without it, a
 //!   command that starts a daemon hands that daemon the shell's own pipe, and the shell waits forever.
 
 pub mod argv;
 pub mod contain;
 pub mod error;
+pub mod footprint;
 pub mod handoff;
 pub mod resolve;
 pub mod run;
@@ -40,6 +44,7 @@ pub mod run;
 pub use argv::{MAX_ARGUMENT_LEN, check_all, check_one};
 pub use contain::{Containment, Strength};
 pub use error::SpawnError;
+pub use footprint::resident_bytes;
 pub use handoff::keep_handles_to_ourselves;
 pub use resolve::{LauncherKept, Program, ProgramKind, resolve};
 pub use run::{MAX_OUTPUT_BYTES, Output, capture};

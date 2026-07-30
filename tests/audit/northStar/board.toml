@@ -278,7 +278,8 @@ file = "northStar/readmeParity.py"
 [[floor]]
 category = "budget"
 name = "memoryBudget"
-status = "planned"
+status = "built"
+file = "memoryBudget.rs"
 
 [[floor]]
 category = "budget"
