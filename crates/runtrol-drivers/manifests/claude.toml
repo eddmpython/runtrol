@@ -1,0 +1,44 @@
+# Compiled into the binary, so a fresh install has this provider with no file anywhere. An operator who needs
+# something different writes a file with the same id and it replaces this one entirely.
+#
+# Everything here is a fact about how to REACH the CLI. Nothing here says what it can do: its capabilities come
+# from its own startup frame, its models from its own store, its flags from its own argument parser. A key that
+# restated one of those would be stale the first time the vendor shipped a release.
+schema = 1
+id = "claude"
+display_name = "Claude Code"
+kind = "claude-stream-json"
+
+[bin]
+# Bare names, tried in this order. Measured on this machine: a package manager installs a launcher script in front
+# of the real program, and resolution unwraps it. The order is a preference and not a requirement.
+names = ["claude", "claude.cmd", "claude.exe"]
+
+[probe]
+version = { args = ["--version"], parse = "semver-anywhere" }
+# How to ask this CLI about a flag without letting it start work. Measured: with the print flag and no input, every
+# argument combination fails at parsing, which is exactly the state a flag question needs. Without this there is no
+# safe way to ask, and asking unsafely can cost the operator a turn they did not request.
+flags = { safe_with = ["-p"] }
+
+[transport]
+# The structured mode. Measured: without the verbose flag it refuses to stream structured output at all.
+argv = [
+    "--print",
+    "--input-format",
+    "stream-json",
+    "--output-format",
+    "stream-json",
+    "--verbose",
+]
+listen = "stdio"
+
+[models]
+# Tokens, never model identifiers. Measured: this CLI cannot enumerate its models. Asking it for one it does not
+# have answers with a bare error and no list, so there is nothing to discover and these four are what it accepts.
+# A surface shows them as aliases rather than as a catalogue, because that is what they are.
+aliases = ["opus", "sonnet", "haiku", "fable"]
+
+[update]
+# It updates itself. A hint only: whatever performs an update probes first and believes what it finds.
+hint = "self"

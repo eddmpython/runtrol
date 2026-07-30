@@ -43,6 +43,26 @@ pub(super) struct Containment {
     job: HANDLE,
 }
 
+// SAFETY: the only field is a Windows job object handle. A handle is a process-wide kernel reference and is not
+// thread affine, and every call this type makes on it (`SetInformationJobObject`, `AssignProcessToJobObject`,
+// `TerminateJobObject`, `CloseHandle`) is documented as safe to call from any thread. There is no interior
+// mutability, so sharing a reference hands out nothing that can be mutated.
+//
+// The auto traits are absent only because the handle is spelled as a raw pointer. Without this, one supervisor
+// value could not be held by a driver that a runtime moves between threads, and the alternative would be a
+// containment per driver, which is the partial guarantee this whole module exists to avoid.
+#[expect(
+    unsafe_code,
+    reason = "a kernel handle is thread safe and the raw pointer spelling is what hides that"
+)]
+unsafe impl Send for Containment {}
+
+#[expect(
+    unsafe_code,
+    reason = "a kernel handle is thread safe and the raw pointer spelling is what hides that"
+)]
+unsafe impl Sync for Containment {}
+
 impl Containment {
     /// Create the job, set kill-on-close, and put this process in it.
     #[expect(

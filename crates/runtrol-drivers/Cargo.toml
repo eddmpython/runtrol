@@ -27,7 +27,10 @@ tokio = { workspace = true, features = ["io-util", "sync", "process", "time"] }
 # The behavioural contract has async methods and is held as `dyn`.
 async-trait = { workspace = true }
 
+# The built-in manifests are compiled in as text and read by the same parser an operator file goes through, so the
+# tests that hold them to the schema need it here too.
 [dev-dependencies]
+toml = { workspace = true, features = ["std", "parse", "serde"] }
 tokio = { workspace = true, features = ["rt", "macros", "io-util", "sync"] }
 
 [lints]

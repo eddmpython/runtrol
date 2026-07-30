@@ -229,6 +229,15 @@ mod tests {
     }
 
     #[test]
+    fn a_containment_can_be_shared_by_whatever_starts_children() {
+        // One containment per process, held by every driver a runtime may move between threads. Without this a
+        // driver would need its own, and a containment per driver is the partial guarantee that reads as a full one.
+        fn needs_both<T: Send + Sync>() {}
+        needs_both::<Containment>();
+        needs_both::<std::sync::Arc<Containment>>();
+    }
+
+    #[test]
     fn a_containment_that_holds_nothing_says_so_rather_than_claiming_the_platform() {
         // The platform is capable of more, and this value is not doing it. A surface asking what the operator
         // gets has to be told about the value in hand, not about the machine.
