@@ -16,7 +16,11 @@
 //!
 //! Here, at the boundary, and not deeper. A request that arrives from somewhere other than this machine has to be
 //! refused before it reaches anything that can act, and the place a request arrives is the only place that knows where
-//! it came from. The wall itself lives in the security crate; this is where it is consulted.
+//! it came from. The wall itself lives in the security crate, the table of what each request needs lives in
+//! [`crate::scope`], and this is where the two are asked.
+//!
+//! Consulted **before** the request is read for anything else, and before the greeting is answered. A check that ran
+//! after some other branch had already acted would be a check on the way out.
 
 use std::sync::Arc;
 
@@ -28,6 +32,7 @@ use runtrol_ipc::wire::{ProviderLine, Request, Response, SessionLine, WireError}
 use runtrol_provider::{
     AbsPath, AgentCommand, CloseMode, ContentBlock, Disposition, OpenIntent, ProviderId, SessionId,
 };
+use runtrol_security::Caller;
 
 use crate::compose::Composed;
 
@@ -55,19 +60,38 @@ pub enum Reply {
 
 /// One connection's state.
 ///
-/// Small on purpose: what a connection knows is whether it has greeted, and nothing else. A connection that remembered
-/// which session the caller "meant" would be the second place that notion lives.
-#[derive(Debug, Default)]
+/// Small on purpose: what a connection knows is who is on it and whether they have greeted, and nothing else. A
+/// connection that remembered which session the caller "meant" would be the second place that notion lives.
+#[derive(Debug)]
 pub struct Conversation {
+    /// Who is on the other end.
+    ///
+    /// Decided when the connection was accepted, from which endpoint it arrived on, and never afterwards. There is
+    /// deliberately no way to set this from a request: a caller that could say who it was would say whatever got it
+    /// the most authority.
+    caller: Caller,
     /// The wire format has been agreed.
     greeted: bool,
 }
 
 impl Conversation {
-    /// A connection that has said nothing yet.
+    /// A connection from somebody at the machine, which has said nothing yet.
+    ///
+    /// The only constructor today, because the local endpoint is the only way in. A remote transport arrives with
+    /// its own constructor taking the device it authenticated, and until then there is no way to build a
+    /// conversation that claims to be one.
     #[must_use]
-    pub const fn new() -> Self {
-        Self { greeted: false }
+    pub const fn at_the_machine() -> Self {
+        Self {
+            caller: Caller::AtTheMachine,
+            greeted: false,
+        }
+    }
+
+    /// Who is on the other end.
+    #[must_use]
+    pub const fn caller(&self) -> &Caller {
+        &self.caller
     }
 
     /// Whether the wire format has been agreed.
@@ -86,6 +110,12 @@ pub async fn answer(
     sessions: &mut SessionManager,
     request: Request,
 ) -> Reply {
+    // Before anything else looks at the request. A wall consulted after some other branch has acted is a wall on
+    // the way out, and the thing it was supposed to prevent has already happened.
+    if let Err(refusal) = crate::scope::allowed(&conversation.caller, &request, &composed.granted) {
+        return Reply::One(refuse(&refusal.to_string()));
+    }
+
     // The greeting is the one request that may arrive first, and everything else is refused until it has.
     if let Request::Hello { wire } = request {
         return match runtrol_ipc::wire::agree(wire) {
@@ -358,7 +388,7 @@ mod tests {
         // the failure that produces is a command landing where the operator did not intend.
         let (composed, path) = composed_for("ungreeted");
         let mut sessions = SessionManager::new();
-        let mut conversation = Conversation::new();
+        let mut conversation = Conversation::at_the_machine();
         assert!(!conversation.greeted());
 
         match answer(&mut conversation, &composed, &mut sessions, Request::List).await {
@@ -378,7 +408,7 @@ mod tests {
     async fn the_greeting_answers_with_every_provider_this_build_knows() {
         let (composed, path) = composed_for("greeting");
         let mut sessions = SessionManager::new();
-        let mut conversation = Conversation::new();
+        let mut conversation = Conversation::at_the_machine();
 
         match answer(
             &mut conversation,
@@ -405,7 +435,7 @@ mod tests {
     async fn a_caller_speaking_another_wire_format_is_told_both_numbers() {
         let (composed, path) = composed_for("mismatch");
         let mut sessions = SessionManager::new();
-        let mut conversation = Conversation::new();
+        let mut conversation = Conversation::at_the_machine();
 
         match answer(
             &mut conversation,
@@ -446,7 +476,7 @@ mod tests {
     async fn a_command_for_a_session_that_is_not_live_is_refused_by_name() {
         let (composed, path) = composed_for("absent");
         let mut sessions = SessionManager::new();
-        let mut conversation = Conversation::new();
+        let mut conversation = Conversation::at_the_machine();
         greet(&mut conversation, &composed, &mut sessions).await;
 
         let absent = SessionId::now();
@@ -480,7 +510,7 @@ mod tests {
     async fn a_provider_nobody_declared_is_refused_rather_than_started() {
         let (composed, path) = composed_for("noprovider");
         let mut sessions = SessionManager::new();
-        let mut conversation = Conversation::new();
+        let mut conversation = Conversation::at_the_machine();
         greet(&mut conversation, &composed, &mut sessions).await;
 
         match answer(
@@ -515,7 +545,7 @@ mod tests {
         // agent somewhere nobody chose.
         let (composed, path) = composed_for("noworkspace");
         let mut sessions = SessionManager::new();
-        let mut conversation = Conversation::new();
+        let mut conversation = Conversation::at_the_machine();
         greet(&mut conversation, &composed, &mut sessions).await;
 
         let provider = composed
@@ -551,7 +581,7 @@ mod tests {
     async fn listing_with_nothing_running_is_an_empty_list_and_not_a_failure() {
         let (composed, path) = composed_for("emptylist");
         let mut sessions = SessionManager::new();
-        let mut conversation = Conversation::new();
+        let mut conversation = Conversation::at_the_machine();
         greet(&mut conversation, &composed, &mut sessions).await;
 
         match answer(&mut conversation, &composed, &mut sessions, Request::List).await {
@@ -567,7 +597,7 @@ mod tests {
         // achieve, and this daemon holds a containment that deliberately holds nothing.
         let (composed, path) = composed_for("panic");
         let mut sessions = SessionManager::new();
-        let mut conversation = Conversation::new();
+        let mut conversation = Conversation::at_the_machine();
         greet(&mut conversation, &composed, &mut sessions).await;
 
         match answer(

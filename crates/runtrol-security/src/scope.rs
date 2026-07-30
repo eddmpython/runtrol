@@ -95,6 +95,30 @@ pub enum DeviceScope {
 }
 
 impl DeviceScope {
+    /// Every scope that names nothing, in a stable order.
+    ///
+    /// The two scopes that carry a value (a workspace root, a provider) are absent: there is no such thing as
+    /// "every workspace", and a list that invented one would be a list of things nobody granted.
+    ///
+    /// Published because a caller that has to handle all of them needs something to iterate, and a copy written
+    /// at the call site is a copy that falls behind the type. A test next to the definition holds the two
+    /// together.
+    pub const EVERY_PLAIN: &'static [Self] = &[
+        Self::SessionList,
+        Self::SessionOutputRead,
+        Self::SessionInputWrite,
+        Self::SessionStart,
+        Self::SessionStop,
+        Self::SessionResume,
+        Self::SessionDelete,
+        Self::ApprovalRespondLow,
+        Self::ApprovalRespondHigh,
+        Self::ConfigRead,
+        Self::AuditRead,
+        Self::ModeDefault,
+        Self::ModeAcceptEdits,
+    ];
+
     /// A stable name, for messages and for the audit record.
     ///
     /// Written by hand rather than derived from the variant name, because these strings appear in
@@ -223,7 +247,18 @@ mod tests {
     }
 
     /// Every device scope, so the exhaustive matches above cannot be satisfied by a subset.
+    ///
+    /// The ones carrying a value are built here because they need one; the rest come from
+    /// [`DeviceScope::EVERY_PLAIN`], so a scope added to the type is in this list without anybody remembering.
     fn every_device_scope() -> Vec<DeviceScope> {
+        let mut all: Vec<DeviceScope> = DeviceScope::EVERY_PLAIN.to_vec();
+        all.push(DeviceScope::Workspace(a_root()));
+        all.push(DeviceScope::Provider(a_provider()));
+        all
+    }
+
+    /// The previous hand-written list, kept as the thing `EVERY_PLAIN` is checked against.
+    fn every_device_scope_by_hand() -> Vec<DeviceScope> {
         vec![
             DeviceScope::SessionList,
             DeviceScope::SessionOutputRead,
@@ -241,6 +276,25 @@ mod tests {
             DeviceScope::Workspace(a_root()),
             DeviceScope::Provider(a_provider()),
         ]
+    }
+
+    #[test]
+    fn the_published_list_of_scopes_is_the_whole_list() {
+        // `EVERY_PLAIN` is what a caller iterates to check it handles all of them. A list that quietly fell
+        // behind the type would make every such caller look complete while missing the newest scope.
+        //
+        // Compared by name rather than by value: the two scopes that carry one are built with a fresh identifier
+        // on each side, so comparing values would compare the identifiers and answer a different question.
+        let published: Vec<&str> = DeviceScope::EVERY_PLAIN
+            .iter()
+            .map(DeviceScope::name)
+            .collect();
+        let by_hand: Vec<&str> = every_device_scope_by_hand()
+            .iter()
+            .filter(|scope| !matches!(scope, DeviceScope::Workspace(_) | DeviceScope::Provider(_)))
+            .map(DeviceScope::name)
+            .collect();
+        assert_eq!(published, by_hand);
     }
 
     fn every_local_scope() -> Vec<LocalScope> {

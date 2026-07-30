@@ -53,6 +53,13 @@ pub struct Composed {
     pub containment: Arc<Containment>,
     /// Which providers exist, and what this build can do about each.
     pub registry: ProviderRegistry,
+    /// Who has been granted what.
+    ///
+    /// Empty at every start, which is what "default deny" means when nothing has paired yet: a device this daemon
+    /// has never heard of holds nothing, and the only call that adds authority takes a witness that somebody was
+    /// at the machine. Persisting grants across restarts arrives with the pairing surface that creates them; until
+    /// then, an empty ledger is the honest state rather than a placeholder, because there is nothing to load.
+    pub granted: runtrol_security::GrantLedger,
     /// The table that turns a kind into a driver.
     ///
     /// Kept because building a driver is deferred: it needs a resolved program, which needs a probe, which happens when
@@ -84,6 +91,7 @@ impl Composed {
             home,
             containment,
             registry,
+            granted: runtrol_security::GrantLedger::new(),
             kinds: builtin.kinds,
         })
     }
@@ -109,6 +117,7 @@ impl Composed {
             home,
             containment: Arc::new(Containment::without_any()),
             registry,
+            granted: runtrol_security::GrantLedger::new(),
             kinds: builtin.kinds,
         })
     }

@@ -20,6 +20,7 @@
 //!
 //! # Layout
 //!
+//! - [`caller`] who is asking, established by where a request arrived rather than by what it says
 //! - [`scope`] the two walls, and every permission name in the product
 //! - [`presence`] the unforgeable proof that somebody was at the machine for this decision
 //! - [`grant`] who holds what, and the two authorities that never need holding
@@ -27,6 +28,7 @@
 //! - [`id`] the identifiers this crate owns
 //! - [`error`] why authority was refused
 
+pub mod caller;
 pub mod error;
 pub mod grant;
 pub mod id;
@@ -34,6 +36,7 @@ pub mod presence;
 pub mod scope;
 pub mod workspace;
 
+pub use caller::Caller;
 pub use error::SecurityError;
 pub use grant::{GrantLedger, LocalAuthorization};
 pub use id::{DeviceId, WorkspaceRootId};

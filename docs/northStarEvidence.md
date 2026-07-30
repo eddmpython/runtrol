@@ -60,6 +60,7 @@
 | `cargoShear` | 미사용 의존성이 없다. `[workspace.dependencies]` 의 죽은 항목까지 (버전 SSOT 가 거기 산다) |
 | `cargoDeny` | 공급망 advisory 와 `deny.toml` 의 기각 원장. 원장을 문서로만 두면 다음 사람은 읽지 않는다 |
 | `noTranscriptCopy` | 대화를 담을 수 있는 타입이 저장소 crate 에 나타나지 않는다. 담을 수 있는 타입은 어휘에서 발견한다 (`Opaque` 필드를 가진 것 전부) 이므로 내일 생기는 타입도 그날부터 대상이다 |
+| `scopeWall` | 모든 요청에 누가 할 수 있는지 규칙이 있고, 포괄 갈래가 거부하며, 벽이 디스패처의 다른 무엇보다 먼저 물어진다. 컴파일러는 crate 경계 너머로 빠진 요청을 말해주지 못한다 |
 | `scopeGrantability` | 부여 불가 스코프 (`device.pair` · `config.write` · `approval.auto`) 를 원격에서 부여하려는 코드가 **컴파일되지 않는다** |
 | `rebindingDefenses` | Host allowlist, Origin 기본 거부, 쿠키 인증 부재, CORS wildcard 부재를 실제 요청으로 확인 |
 | `argumentEscaping` | Windows `.cmd` 실행 인자 이스케이프 (BatBadBut CVE-2024-24576) |

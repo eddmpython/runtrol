@@ -118,7 +118,11 @@ pub async fn serve(composed: Composed, mut listener: Listener) -> Result<(), Ser
 /// Reads a request, asks the one task that owns the sessions, and writes back what it says. A connection that goes
 /// away simply ends: it is not a failure the daemon has to act on.
 async fn converse(mut connection: Connection, asking: mpsc::Sender<Asked>) {
-    let mut conversation = Conversation::new();
+    // Every connection today arrives on the local endpoint, which is inside a directory only the operator can
+    // enter and refuses anything off this machine. That is what makes this the right answer rather than an
+    // assumption: a remote transport arrives with its own way of saying who authenticated, and there is no way to
+    // build a conversation that claims to be one until it does.
+    let mut conversation = Conversation::at_the_machine();
 
     loop {
         let frame = match connection.recv().await {

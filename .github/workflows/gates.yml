@@ -80,6 +80,12 @@ jobs:
         run: python -X utf8 tests/audit/noTranscriptCopy.py --selftest
       - name: 대화 사본을 갖지 않는다
         run: python -X utf8 tests/audit/noTranscriptCopy.py
+      # 요청마다 누가 할 수 있는지 규칙이 있고 벽이 먼저 물어진다. 컴파일러는 crate 경계 너머로
+      # 빠진 요청을 말해주지 못한다.
+      - name: 스코프 벽 검출기 자체 검증
+        run: python -X utf8 tests/audit/scopeWall.py --selftest
+      - name: 모든 요청에 권한 규칙이 있다
+        run: python -X utf8 tests/audit/scopeWall.py
       # 저장소에 있으나 도는 러너가 없는 게이트를 잡는다. 이 단계와 preflight 의 GATES 표가
       # 서로를 검사하므로, 어느 한쪽에만 추가된 게이트는 red 가 된다.
       - name: 게이트 러너 커버리지

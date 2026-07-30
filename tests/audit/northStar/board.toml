@@ -221,6 +221,15 @@ category = "security"
 name = "scopeGrantability"
 status = "planned"
 
+# Default deny at the boundary, as something a machine checks. A floor rather than an axis: a remote caller being
+# denied by default is not worth a fraction of a point, it is the condition for the product being allowed to reach
+# across the internet at all.
+[[floor]]
+category = "security"
+name = "scopeWall"
+status = "built"
+file = "scopeWall.py"
+
 [[floor]]
 category = "security"
 name = "rebindingDefenses"

@@ -9,15 +9,18 @@
 //! # Layout
 //!
 //! - [`compose`] establishing containment, finding the home, and reading which providers exist
+//! - [`scope`] what each request needs before anybody is allowed to make it
 //! - [`dispatch`] one request in, one answer out
 //! - [`serve`] one owner of the sessions, and a task for every connection beside it
 
 pub mod compose;
 pub mod dispatch;
+pub mod scope;
 pub mod serve;
 
 pub use compose::{ComposeError, Composed};
 pub use dispatch::{Conversation, Reply, answer};
+pub use scope::{Needed, WallRefusal, allowed, needed};
 pub use serve::{ServeError, serve};
 
 /// Where a daemon for this home listens.
@@ -37,8 +40,7 @@ pub fn endpoint(home: Option<&str>) -> Result<String, ComposeError> {
     Ok(home.paths().endpoint().address().to_owned())
 }
 
-// Declared in this crate's manifest and enforced by `tests/audit/dependencyDirection.rs`. The session rows and the scope
-// checks at the boundary arrive in the next step; until they do, these lines are what make the declaration real, because
-// `cargo shear` reports a dependency nothing names.
-use runtrol_security as _;
+// Declared in this crate's manifest and enforced by `tests/audit/dependencyDirection.rs`. The session rows arrive with
+// the listing that joins them; until they do, this line is what makes the declaration real, because `cargo shear`
+// reports a dependency nothing names.
 use runtrol_store as _;

@@ -60,6 +60,10 @@ GATES: dict[str, tuple[str, list[str]]] = {
         [*PY, f"{HOOKS}/noTranscriptCopy.py", "--selftest"],
     ),
     "noTranscriptCopy": ("대화 사본을 갖지 않는다", [*PY, f"{HOOKS}/noTranscriptCopy.py"]),
+    # 요청마다 누가 할 수 있는지 규칙이 있고, 벽이 다른 무엇보다 먼저 물어진다. 컴파일러는 crate
+    # 경계 너머로 빠진 요청을 말해주지 못한다.
+    "scopeWallSelftest": ("스코프 벽 검출기 자체 검증", [*PY, f"{HOOKS}/scopeWall.py", "--selftest"]),
+    "scopeWall": ("모든 요청에 권한 규칙이 있다", [*PY, f"{HOOKS}/scopeWall.py"]),
     # 게이트가 저장소에 있는 것과 도는 것은 다른 말이다. 이 게이트가 그 차이를 감시한다.
     "gateCoverage": ("게이트 러너 커버리지", [*PY, f"{HOOKS}/gateCoverage.py"]),
     # 북극성 점수는 사람이 타이핑하는 숫자가 아니라 board.toml 에서 계산된다.
@@ -100,6 +104,8 @@ SUITES: dict[str, tuple[str, ...]] = {
         "workspaceLints",
         "noTranscriptCopySelftest",
         "noTranscriptCopy",
+        "scopeWallSelftest",
+        "scopeWall",
         "gateCoverage",
         "northStarBoard",
         "readmeParity",
