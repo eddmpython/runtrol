@@ -190,15 +190,26 @@ pub struct Listener {
 impl Listener {
     /// Start listening at `address`.
     ///
+    /// # Why this is asynchronous when it never waits
+    ///
+    /// Because an endpoint has to be registered with the runtime's own reader the moment it exists, on both
+    /// platforms, and a program that creates one anywhere else stops with a message about a reactor rather than
+    /// anything to do with runtrol. Measured: a daemon whose endpoint was created just outside its runtime started,
+    /// stopped instantly, and the command that started it waited the full ten seconds before saying so.
+    ///
+    /// Being asynchronous is how that requirement is stated in a form the compiler holds, rather than a sentence
+    /// somebody has to have read. An earlier version of this said it was synchronous "because neither platform waits
+    /// to create an endpoint", which was true about waiting and silent about the thing that actually matters.
+    ///
     /// # Errors
     ///
     /// [`TransportError::Bind`] when the platform refuses. Not worked around: a daemon that cannot be reached is a
     /// daemon nothing can use, and starting anyway would leave the operator with a process that does nothing.
-    ///
-    /// Not asynchronous, because neither platform waits to create an endpoint. Connecting is a different matter: one of
-    /// them waits there, so [`connect`] is asynchronous and this is not. Making both of them look the same would have
-    /// meant one of them saying it waits when it does not.
-    pub fn bind(address: &str) -> Result<Self, TransportError> {
+    #[expect(
+        clippy::unused_async,
+        reason = "an endpoint has to be created on the runtime, and this is how that is required rather than remembered"
+    )]
+    pub async fn bind(address: &str) -> Result<Self, TransportError> {
         Ok(Self {
             inner: platform::Listener::bind(address)?,
             address: address.to_owned(),
@@ -354,25 +365,69 @@ mod platform {
             })
     }
 
+    /// What the platform says when every instance of a pipe already has a client.
+    ///
+    /// `ERROR_PIPE_BUSY`. Named here as a number because it is the whole of what this file needs from the platform's
+    /// error definitions, and one integer is not worth a dependency on the definitions of thousands.
+    const ALL_INSTANCES_TAKEN: i32 = 231;
+
+    /// How long to keep trying while every instance is taken.
+    ///
+    /// The daemon creates the next instance immediately after handing over the current one, so the window is the gap
+    /// between those two moments and is measured in microseconds when nothing else is happening. This is generous
+    /// against a loaded machine and still short enough that a daemon which has genuinely stopped accepting is
+    /// reported rather than waited on forever.
+    const WHILE_BUSY: core::time::Duration = core::time::Duration::from_secs(2);
+
+    /// How long to wait before asking again.
+    const BETWEEN_TRIES: core::time::Duration = core::time::Duration::from_millis(20);
+
     /// Connect to the daemon's pipe.
     ///
-    /// Opening one does not wait. The other platform's connect does, and the same reasoning as above applies.
-    #[expect(
-        clippy::unused_async,
-        reason = "one signature for both platforms keeps the cfg out of the caller"
-    )]
+    /// # Why this waits rather than reporting that the daemon is busy
+    ///
+    /// A pipe instance serves one client. The daemon creates the next one as soon as it has handed over the current
+    /// one, but there is a moment in between, and a second caller arriving in that moment is told every instance is
+    /// taken. That is not a failure of anything: nothing is wrong, the daemon is up, and asking again works.
+    ///
+    /// Reporting it would put the retry in every caller, which means an operator running one command while another
+    /// is starting would see an error that means nothing to them and goes away by itself. Waiting is the documented
+    /// answer to this condition and it belongs in the one place that knows what the condition is.
     pub(super) async fn connect(address: &str) -> Result<Stream, TransportError> {
-        match ClientOptions::new().open(address) {
-            Ok(client) => Ok(Stream::Client(client)),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                Err(TransportError::NotListening {
-                    address: address.to_owned(),
-                })
+        let give_up_at = tokio::time::Instant::now() + WHILE_BUSY;
+        loop {
+            match ClientOptions::new().open(address) {
+                Ok(client) => return Ok(Stream::Client(client)),
+
+                // Nothing is listening. The one answer a caller acts on, by starting a daemon.
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    return Err(TransportError::NotListening {
+                        address: address.to_owned(),
+                    });
+                }
+
+                // Every instance has a client and the next one has not appeared yet. Said out loud only if it goes
+                // on long enough to mean something other than a moment between two clients.
+                Err(error) if error.raw_os_error() == Some(ALL_INSTANCES_TAKEN) => {
+                    if tokio::time::Instant::now() >= give_up_at {
+                        return Err(TransportError::Connect {
+                            address: address.to_owned(),
+                            detail: format!(
+                                "every instance has been taken for {} seconds, so the daemon is up and not accepting",
+                                WHILE_BUSY.as_secs()
+                            ),
+                        });
+                    }
+                    tokio::time::sleep(BETWEEN_TRIES).await;
+                }
+
+                Err(error) => {
+                    return Err(TransportError::Connect {
+                        address: address.to_owned(),
+                        detail: error.to_string(),
+                    });
+                }
             }
-            Err(error) => Err(TransportError::Connect {
-                address: address.to_owned(),
-                detail: error.to_string(),
-            }),
         }
     }
 }
@@ -464,7 +519,7 @@ mod tests {
     #[tokio::test]
     async fn a_frame_sent_at_one_end_arrives_whole_at_the_other() {
         let address = an_address("roundtrip");
-        let mut listener = Listener::bind(&address).expect("the endpoint binds");
+        let mut listener = Listener::bind(&address).await.expect("the endpoint binds");
         assert_eq!(listener.address(), address);
 
         let serving = tokio::spawn(async move {
@@ -485,11 +540,39 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_second_caller_arriving_before_the_first_is_accepted_still_gets_in() {
+        // An operator running one command while another is starting. On one platform a pipe instance serves exactly
+        // one client, so the second caller arrives at a moment when every instance is taken and the next has not been
+        // made yet. Nothing is wrong when that happens, and reporting it would show an error that means nothing and
+        // goes away by itself.
+        let address = an_address("two-at-once");
+        let mut listener = Listener::bind(&address).await.expect("the endpoint binds");
+
+        // The daemon's side, waiting. It cannot run until this test waits for something, which is what puts the
+        // second caller in the moment being reproduced.
+        let serving = tokio::spawn(async move {
+            let first = listener.accept().await.expect("the first caller arrives");
+            let second = listener.accept().await.expect("the second caller arrives");
+            (first, second)
+        });
+
+        // Neither of these waits for anything when it succeeds, so nothing has been accepted by the time the second
+        // one asks. That is the moment: one endpoint, one caller already on it, and the next not made yet.
+        let first = connect(&address).await.expect("the first caller gets in");
+        let second = connect(&address)
+            .await
+            .expect("a caller arriving before the daemon has accepted still gets in");
+
+        let served = serving.await.expect("the daemon's side finished");
+        drop((first, second, served));
+    }
+
+    #[tokio::test]
     async fn several_frames_written_together_are_read_one_at_a_time() {
         // A read delivers whatever has arrived, which may be three frames. Waiting for more bytes before handing over
         // the ones in hand would stall on the last of them.
         let address = an_address("several");
-        let mut listener = Listener::bind(&address).expect("binds");
+        let mut listener = Listener::bind(&address).await.expect("binds");
 
         let serving = tokio::spawn(async move {
             let mut connection = listener.accept().await.expect("a client arrives");
@@ -532,7 +615,7 @@ mod tests {
     async fn the_other_end_going_away_is_the_end_and_not_a_failure() {
         // A command surface that stopped is not an error the daemon has to act on.
         let address = an_address("hangup");
-        let mut listener = Listener::bind(&address).expect("binds");
+        let mut listener = Listener::bind(&address).await.expect("binds");
 
         let serving = tokio::spawn(async move {
             let mut connection = listener.accept().await.expect("a client arrives");
@@ -552,7 +635,7 @@ mod tests {
     #[tokio::test]
     async fn a_frame_larger_than_this_build_carries_is_refused_at_the_sender() {
         let address = an_address("toolarge");
-        let mut listener = Listener::bind(&address).expect("binds");
+        let mut listener = Listener::bind(&address).await.expect("binds");
         let serving = tokio::spawn(async move { listener.accept().await.map(|_| ()) });
 
         let mut client = connect(&address).await.expect("the daemon is there");

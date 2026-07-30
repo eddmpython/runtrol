@@ -183,10 +183,14 @@ pub struct Endpoint(String);
 
 #[cfg(unix)]
 impl Endpoint {
-    /// The socket file to bind or connect to.
+    /// Where to listen or connect, as the transport takes it.
+    ///
+    /// One accessor on both platforms even though what it names is different on each. The alternative is every
+    /// caller writing the same branch on the platform, and a branch repeated at every call site is a rule nobody
+    /// owns: what an endpoint is belongs here, and everywhere else it is an address.
     #[must_use]
-    pub const fn socket_path(&self) -> &AbsPath {
-        &self.0
+    pub fn address(&self) -> &str {
+        self.0.as_str()
     }
 
     /// The socket file for a home directory.
@@ -210,9 +214,11 @@ impl Endpoint {
 
 #[cfg(windows)]
 impl Endpoint {
-    /// The full pipe name to create or connect to.
+    /// Where to listen or connect, as the transport takes it.
+    ///
+    /// One accessor on both platforms even though what it names is different on each. See the Unix half for why.
     #[must_use]
-    pub fn pipe_name(&self) -> &str {
+    pub fn address(&self) -> &str {
         &self.0
     }
 
@@ -345,7 +351,8 @@ mod tests {
     fn the_socket_lives_in_the_home_directory() {
         let root = abs("state/runtrol");
         let layout = Layout::resolve(root.clone()).expect("resolve");
-        let socket = layout.endpoint().socket_path();
+        // Checked as the text the transport is given, because that is what an endpoint is once it leaves here.
+        let socket = AbsPath::new(layout.endpoint().address()).expect("the address is a path here");
         assert!(socket.is_under(&root));
         assert_eq!(socket.file_name(), Some(SOCKET));
     }
@@ -371,7 +378,7 @@ mod tests {
         // A path separator past the prefix would name a directory in the pipe namespace, which is
         // not what a listener accepts.
         let layout = Layout::resolve(abs("state/runtrol")).expect("resolve");
-        let name = layout.endpoint().pipe_name();
+        let name = layout.endpoint().address();
         let tail = name
             .strip_prefix(r"\\.\pipe\")
             .expect("a local pipe name must carry the local namespace prefix");
