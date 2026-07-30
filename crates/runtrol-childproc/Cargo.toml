@@ -29,12 +29,14 @@ tokio = { workspace = true, features = ["process", "time"] }
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt", "macros"] }
 
-# Job objects. The kill-on-close job is what makes "runtrol dies, its children die" a kernel guarantee
-# rather than a best effort.
+# Job objects, and the handles this process passes on. The kill-on-close job is what makes "runtrol dies, its
+# children die" a kernel guarantee rather than a best effort; the console handles are what a started daemon
+# must not be given a copy of.
 [target.'cfg(windows)'.dependencies]
 windows-sys = { workspace = true, features = [
     "Win32_Foundation",
     "Win32_Security",
+    "Win32_System_Console",
     "Win32_System_JobObjects",
     "Win32_System_Threading",
 ] }

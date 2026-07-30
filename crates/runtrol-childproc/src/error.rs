@@ -83,6 +83,16 @@ pub enum SpawnError {
         after_ms: u64,
     },
 
+    /// This process's own handles could not be kept from travelling to what it starts.
+    ///
+    /// Reported rather than swallowed. What it prevents is a shell that waits forever with nothing to show
+    /// for it, which is the hardest kind of defect for an operator to attribute to anything.
+    #[error("cannot keep runtrol's own handles from being passed on: {detail}")]
+    Handoff {
+        /// What the platform said.
+        detail: String,
+    },
+
     /// The filesystem refused a path.
     #[error("cannot read {path:?}: {detail}")]
     Io {
