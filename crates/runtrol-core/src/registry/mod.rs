@@ -126,7 +126,7 @@ impl ProviderRegistry {
         built_in: &[&str],
         beside_executable: Option<&AbsPath>,
         operator: Option<&AbsPath>,
-        kinds: KindTable,
+        kinds: &KindTable,
     ) -> Self {
         let mut scan = Scan::default();
         for text in built_in {
@@ -231,7 +231,7 @@ mod tests {
 
     fn registry(manifests: &[String]) -> ProviderRegistry {
         let texts: Vec<&str> = manifests.iter().map(String::as_str).collect();
-        ProviderRegistry::build(&texts, None, None, KindTable::new(TABLE))
+        ProviderRegistry::build(&texts, None, None, &KindTable::new(TABLE))
     }
 
     #[test]
@@ -316,14 +316,14 @@ mod tests {
     #[test]
     fn a_build_with_no_drivers_serves_nothing_and_says_so() {
         let declared = text("anything", "example-structured");
-        let empty = ProviderRegistry::build(&[&declared], None, None, KindTable::EMPTY);
+        let empty = ProviderRegistry::build(&[&declared], None, None, &KindTable::empty());
         assert_eq!(empty.len(), 1, "the declaration is still there");
         assert_eq!(empty.usable().count(), 0, "and nothing can serve it");
     }
 
     #[test]
     fn a_registry_with_nothing_at_all_is_empty_rather_than_a_failure() {
-        let nothing = ProviderRegistry::build(&[], None, None, KindTable::EMPTY);
+        let nothing = ProviderRegistry::build(&[], None, None, &KindTable::empty());
         assert!(nothing.is_empty());
         assert_eq!(nothing.all().count(), 0);
     }

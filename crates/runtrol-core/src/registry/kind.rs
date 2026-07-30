@@ -47,19 +47,23 @@ impl KindEntry {
 
 /// Every kind a build knows about.
 ///
-/// Borrowed rather than owned: the entries are `const` data in whatever crate ships drivers, and the kernel
-/// only ever looks things up in them.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+/// Owns its entries. The crate that ships drivers cannot see this type (that missing edge is what makes "adding a
+/// provider does not touch the kernel" checkable), so the table is assembled at boot by whoever can see both. Requiring
+/// the entries to live forever would have forced that assembly to either duplicate every kind string or leak, and both
+/// are worse than one small allocation once per start.
+#[derive(Clone, PartialEq, Eq, Debug, Default)]
 pub struct KindTable {
     /// The entries, in the order the driver crate declares them.
-    entries: &'static [KindEntry],
+    entries: Vec<KindEntry>,
 }
 
 impl KindTable {
-    /// Wrap a driver crate's table.
+    /// Take a driver crate's table.
     #[must_use]
-    pub const fn new(entries: &'static [KindEntry]) -> Self {
-        Self { entries }
+    pub fn new(entries: impl Into<Vec<KindEntry>>) -> Self {
+        Self {
+            entries: entries.into(),
+        }
     }
 
     /// An empty table, for a build with no drivers wired in yet.
@@ -67,7 +71,10 @@ impl KindTable {
     /// Not a fallback and never a default anywhere: an empty table answers every lookup with "unknown",
     /// which is correct for a build that ships no drivers and wrong for one that does. Composing the real
     /// table is the daemon's job, and this exists so the kernel's own tests can run without one.
-    pub const EMPTY: Self = Self::new(&[]);
+    #[must_use]
+    pub fn empty() -> Self {
+        Self::new(Vec::new())
+    }
 
     /// What this build can do about a kind.
     #[must_use]
@@ -86,19 +93,19 @@ impl KindTable {
     }
 
     /// Every kind in the table.
-    pub fn kinds(&self) -> impl Iterator<Item = &'static str> {
+    pub fn kinds(&self) -> impl Iterator<Item = &str> {
         self.entries.iter().map(|entry| entry.kind)
     }
 
     /// How many kinds the table declares.
     #[must_use]
-    pub const fn len(&self) -> usize {
+    pub fn len(&self) -> usize {
         self.entries.len()
     }
 
     /// Whether the table declares nothing.
     #[must_use]
-    pub const fn is_empty(&self) -> bool {
+    pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
 }
@@ -148,8 +155,8 @@ mod tests {
         // The mechanism behind "adding a provider does not touch the kernel". The table comes from outside;
         // this file has nowhere to put a provider's name. A gate asserts the same thing across the crate,
         // and this is the unit-level statement of it.
-        assert!(KindTable::EMPTY.is_empty());
-        assert_eq!(KindTable::EMPTY.kinds().count(), 0);
+        assert!(KindTable::empty().is_empty());
+        assert_eq!(KindTable::empty().kinds().count(), 0);
     }
 
     #[test]
@@ -186,7 +193,7 @@ mod tests {
         // A build with no drivers must not appear to serve everything. This is why the empty table is
         // never a default anywhere: it is an honest answer for a build that ships nothing.
         assert_eq!(
-            KindTable::EMPTY.lookup(&kind("example-structured")),
+            KindTable::empty().lookup(&kind("example-structured")),
             KindStatus::Unknown
         );
     }

@@ -1,4 +1,4 @@
-# 로컬 소켓 표면, 요청 디스패치, 경계에서의 스코프 강제, 구성 조립.
+# The daemon: the composition root, the local listener, and request dispatch.
 [package]
 name = "runtrol-daemon"
 version = "0.0.0"
@@ -17,6 +17,9 @@ runtrol-store = { workspace = true }
 runtrol-ipc = { workspace = true }
 runtrol-core = { workspace = true }
 runtrol-drivers = { workspace = true }
+
+thiserror = { workspace = true }
+
 
 [lints]
 workspace = true
