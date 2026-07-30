@@ -29,5 +29,11 @@ thiserror = { workspace = true }
 # Payloads are relayed verbatim, so the crate that emits them needs the raw-value pass-through.
 serde_json = { workspace = true, features = ["std", "raw_value"] }
 
+[dev-dependencies]
+# The manifest schema lives here and only means anything as TOML, so its own tests read TOML. A
+# development dependency rather than a real one: parsing files is the loader's job, in the kernel, and a
+# third-party driver author must not inherit a parser to use the vocabulary.
+toml = { workspace = true, features = ["std", "parse", "display", "serde"] }
+
 [lints]
 workspace = true

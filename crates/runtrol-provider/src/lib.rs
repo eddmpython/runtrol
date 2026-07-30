@@ -13,6 +13,7 @@
 //! - [`time`] wall clock time, and why the monotonic clock has no type
 //! - [`error`] the error taxonomy a driver returns
 //! - [`event`] the normalized event vocabulary, and the rule for what runtrol may read
+//! - [`manifest`] what a provider declares about itself, and the rule that keeps it small
 //!
 //! # What deliberately does not live here yet
 //!
@@ -23,6 +24,7 @@
 pub mod error;
 pub mod event;
 pub mod id;
+pub mod manifest;
 pub mod path;
 pub mod time;
 
@@ -36,6 +38,10 @@ pub use event::{
 pub use id::{
     ApprovalId, IdError, MessageId, NativeSessionId, OptionId, ProviderId, SessionId, ToolCallId,
     TurnId,
+};
+pub use manifest::{
+    BinSpec, FallbackSpec, Kind, MANIFEST_SCHEMA, Manifest, ManifestError, ModelAliases, ProbeSpec,
+    TransportSpec, UpdateHint, UpdateSpec, VersionParse, VersionProbe,
 };
 pub use path::{AbsPath, PathError};
 pub use time::WallMs;

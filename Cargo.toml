@@ -42,6 +42,8 @@ bytes = "1.12.1"
 # 직렬화. serde_json 의 preserve_order 는 절대 켜지 않는다 (워크스페이스 전역 오염).
 serde = { version = "1.0.229", default-features = false }
 serde_json = { version = "1.0.151", default-features = false }
+# Provider manifests. `preserve_order` 는 켜지 않는다 (indexmap 이 전역으로 딸려온다).
+toml = { version = "1.1.4", default-features = false }
 
 # 식별자·경로·오류.
 uuid = { version = "1.24.0", default-features = false }

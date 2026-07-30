@@ -10,15 +10,20 @@
 //!
 //! - [`home`] where runtrol keeps its own files, and every path inside that directory
 //! - [`events`] the single point a driver's output enters a session, and the bounds it travels under
+//! - [`registry`] which providers exist, and the seam that keeps their names out of this crate
 
 pub mod events;
 pub mod home;
+pub mod registry;
 
 pub use events::{
     CursorRegression, Delivery, FanOut, Published, Reach, ReplayRing, Sequencer, SessionHub,
     SubscriberId, Subscription,
 };
 pub use home::{Endpoint, HomeError, Layout, RuntrolHome};
+pub use registry::{
+    KindEntry, KindStatus, KindTable, Origin, Provider, ProviderRegistry, RegistryError,
+};
 
 // These edges are declared in this crate's manifest and enforced by
 // `tests/audit/dependencyDirection.rs`. Until the modules that use them arrive, these lines are what
