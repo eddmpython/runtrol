@@ -9,9 +9,15 @@
 //! # Layout
 //!
 //! - [`home`] where runtrol keeps its own files, and every path inside that directory
+//! - [`events`] the single point a driver's output enters a session, and the bounds it travels under
 
+pub mod events;
 pub mod home;
 
+pub use events::{
+    CursorRegression, Delivery, FanOut, Published, Reach, ReplayRing, Sequencer, SessionHub,
+    SubscriberId, Subscription,
+};
 pub use home::{Endpoint, HomeError, Layout, RuntrolHome};
 
 // These edges are declared in this crate's manifest and enforced by

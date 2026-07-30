@@ -16,6 +16,13 @@ runtrol-childproc = { workspace = true }
 runtrol-store = { workspace = true }
 
 thiserror = { workspace = true }
+# `sync` only. The fan-out needs bounded channels and nothing else: no reactor, no timer, no OS thread.
+tokio = { workspace = true, features = ["sync"] }
+
+[dev-dependencies]
+# The daemon awaits a subscription, so one test proves that path. The bounds themselves are proved
+# synchronously, which is why this is the only place a runtime is needed.
+tokio = { workspace = true, features = ["rt", "macros"] }
 
 [lints]
 workspace = true

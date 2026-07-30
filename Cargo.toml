@@ -54,6 +54,10 @@ thiserror = "2.0.19"
 # 프로세스. PATH 조회는 손으로 쓰지 않는다 (PATHEXT 순서·인용된 PATH 항목·Unix 실행 비트).
 which = { version = "8.0.4", default-features = false }
 
+# 런타임. feature 는 여기서 켜지 않는다. 멤버가 자기가 쓰는 것만 얹는다
+# (01-runtime-measurements.md: 필요 없는 feature 는 코드와 OS 스레드를 산다).
+tokio = { version = "1.53.1", default-features = false }
+
 # 저장소. 배경 스레드가 없어서 골랐다 (03-storage-decision.md). 4.1 이 바닥이다
 # (4.0 에 -68% RSS region allocator 수정이 없고, 4.0 이전은 가변폭 튜플 인코딩이 다르다).
 redb = "4.1.0"

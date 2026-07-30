@@ -226,6 +226,44 @@ impl EventBody {
         }
     }
 
+    /// How many bytes of provider payload this frame holds.
+    ///
+    /// The number the replay ring and the fan-out budget are counted in. Counting bytes is not reading
+    /// them: this reaches into an [`Opaque`] for its length and never for its contents.
+    ///
+    /// Only the opaque payloads count, because they are the only part a provider can make arbitrarily
+    /// large. The envelope is a fixed width, and the small text fields beside it are bounded by the
+    /// provider text limit, so a budget that tracked them would be tracking a constant.
+    ///
+    /// The match is exhaustive on purpose. A variant added here without an entry is a compile error rather
+    /// than a payload that silently counts as nothing, which is how a bounded buffer stops being bounded.
+    #[must_use]
+    pub fn payload_bytes(&self) -> usize {
+        match self {
+            Self::Attached(attached) => attached.payload.len(),
+            Self::Notice(notice) => notice.payload.len(),
+            Self::UserMessageChunk(chunk)
+            | Self::AgentMessageChunk(chunk)
+            | Self::AgentThoughtChunk(chunk) => chunk.content.len(),
+            Self::ToolCall(frame) | Self::ToolCallUpdate(frame) => frame.payload.len(),
+            Self::Plan(payload)
+            | Self::AvailableCommandsUpdate(payload)
+            | Self::ConfigOptionUpdate(payload)
+            | Self::SessionInfoUpdate(payload)
+            | Self::CurrentModeUpdate { payload, .. } => payload.len(),
+            Self::UsageUpdate(usage) => usage.detail.len(),
+            Self::RateLimitUpdate(limit) => limit.detail.len(),
+            Self::ApprovalRequested(request) => request.subject.len(),
+            Self::Unmapped(unmapped) => unmapped.payload.len(),
+            // runtrol's own frames. Every field is fixed width or bounded, so there is nothing here a
+            // provider can grow.
+            Self::Turn(_)
+            | Self::Detached(_)
+            | Self::Lagged { .. }
+            | Self::ApprovalWithdrawn { .. } => 0,
+        }
+    }
+
     /// Whether this frame is worth waking a phone for.
     ///
     /// Deliberately short, and it is the union of exactly three things: a human is being asked something,
@@ -305,6 +343,60 @@ mod tests {
             "the widest body should be a chunk, not something boxable"
         );
         assert!(size_of::<Attached>() > size_of::<EventBody>());
+    }
+
+    #[test]
+    fn a_payload_is_counted_wherever_it_rides() {
+        // A bounded buffer is only bounded if it can see the size of what it holds. Every variant that
+        // carries provider bytes has to report them, whichever field they arrive in.
+        let text = r#"{"type":"text","text":"hello"}"#;
+        let carriers = vec![
+            EventBody::AgentMessageChunk(a_chunk(false)),
+            EventBody::ToolCall(ToolCallFrame {
+                tool_call_id: ToolCallId::new("toolu_01").expect("valid id"),
+                kind: None,
+                status: None,
+                delta: false,
+                payload: Opaque::owned(text.to_owned()),
+            }),
+            EventBody::Plan(Opaque::owned(text.to_owned())),
+            EventBody::CurrentModeUpdate {
+                mode_id: "plan".into(),
+                payload: Opaque::owned(text.to_owned()),
+            },
+            EventBody::Unmapped(Unmapped {
+                tag: "whatever".into(),
+                turn: None,
+                payload: Opaque::owned(text.to_owned()),
+                unknown_to_binding: true,
+            }),
+        ];
+        for body in carriers {
+            assert_eq!(
+                body.payload_bytes(),
+                text.len(),
+                "{body:?} does not report the bytes it holds"
+            );
+        }
+    }
+
+    #[test]
+    fn a_frame_runtrol_originates_holds_no_provider_bytes() {
+        assert_eq!(
+            EventBody::Lagged {
+                last_delivered_seq: 4,
+                resume_from: 900,
+            }
+            .payload_bytes(),
+            0
+        );
+        assert_eq!(
+            EventBody::Turn(TurnEvent::Started {
+                turn: crate::id::TurnId::first(0)
+            })
+            .payload_bytes(),
+            0
+        );
     }
 
     #[test]
