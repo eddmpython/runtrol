@@ -12,11 +12,13 @@
 //! - [`events`] the single point a driver's output enters a session, and the bounds it travels under
 //! - [`registry`] which providers exist, and the seam that keeps their names out of this crate
 //! - [`probe`] what each installed CLI actually is, asked rather than assumed, and remembered
+//! - [`session`] the two names a session has, the one place its state may change, and the tiers
 
 pub mod events;
 pub mod home;
 pub mod probe;
 pub mod registry;
+pub mod session;
 
 pub use events::{
     CursorRegression, Delivery, FanOut, Published, Reach, ReplayRing, Sequencer, SessionHub,
@@ -27,6 +29,7 @@ pub use probe::{BinFacts, Flags, ProbeCache, ProbeError, probe};
 pub use registry::{
     KindEntry, KindStatus, KindTable, Origin, Provider, ProviderRegistry, RegistryError,
 };
+pub use session::{CloseReason, FailureCode, Identity, Lifecycle, Observed, SessionState, Tier};
 
 // These edges are declared in this crate's manifest and enforced by
 // `tests/audit/dependencyDirection.rs`. Until the modules that use them arrive, these lines are what
