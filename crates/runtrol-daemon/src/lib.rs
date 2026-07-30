@@ -9,14 +9,16 @@
 //! # Layout
 //!
 //! - [`compose`] establishing containment, finding the home, and reading which providers exist
+//! - [`dispatch`] one request in, one answer out
 
 pub mod compose;
+pub mod dispatch;
 
 pub use compose::{ComposeError, Composed};
+pub use dispatch::{Conversation, Reply, answer};
 
-// Declared in this crate's manifest and enforced by `tests/audit/dependencyDirection.rs`. The listener, the session
-// rows, and the scope checks at the boundary arrive in the next step; until they do, these lines are what make the
-// declaration real, because `cargo shear` reports a dependency nothing names.
-use runtrol_ipc as _;
+// Declared in this crate's manifest and enforced by `tests/audit/dependencyDirection.rs`. The session rows and the scope
+// checks at the boundary arrive in the next step; until they do, these lines are what make the declaration real, because
+// `cargo shear` reports a dependency nothing names.
 use runtrol_security as _;
 use runtrol_store as _;

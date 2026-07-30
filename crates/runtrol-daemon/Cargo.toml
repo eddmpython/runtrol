@@ -20,6 +20,10 @@ runtrol-drivers = { workspace = true }
 
 thiserror = { workspace = true }
 
+[dev-dependencies]
+# Dispatch is asynchronous because opening a session is, so its tests need somewhere for that to run.
+tokio = { workspace = true, features = ["rt", "macros"] }
+
 
 [lints]
 workspace = true

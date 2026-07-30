@@ -88,6 +88,31 @@ impl Composed {
         })
     }
 
+    /// Assemble everything except the containment.
+    ///
+    /// The containment cannot be established in a test: on one platform it puts the calling process into the group it
+    /// is about to kill, which terminates the runner. Measured, and the reason the guarantee is proven by an integration
+    /// test with a process it is allowed to kill.
+    ///
+    /// So this exists, and what it hands back is honest about what it is: a containment that holds nothing, which
+    /// reports the weaker promise and refuses to claim a kill it did not perform. Everything else composing does is the
+    /// same code.
+    ///
+    /// # Errors
+    ///
+    /// [`ComposeError::Home`] when runtrol's directory cannot be established.
+    #[cfg(test)]
+    pub(crate) fn for_tests(home: &str, builtin: Builtin) -> Result<Self, ComposeError> {
+        let home = RuntrolHome::open_at(home)?;
+        let registry = load(&home, builtin);
+        Ok(Self {
+            home,
+            containment: Arc::new(Containment::without_any()),
+            registry,
+            kinds: builtin.kinds,
+        })
+    }
+
     /// What this build can do about a kind, by the name a manifest spells.
     #[must_use]
     pub fn driver_for(&self, kind: &str) -> Option<&'static DriverKind> {

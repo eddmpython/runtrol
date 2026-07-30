@@ -25,7 +25,7 @@ pub use events::{
     SubscriberId, Subscription,
 };
 pub use home::{Endpoint, HomeError, Layout, RuntrolHome};
-pub use probe::{BinFacts, Flags, ProbeCache, ProbeError, probe};
+pub use probe::{BinFacts, Flags, ProbeCache, ProbeError, locate, probe};
 pub use registry::{
     KindEntry, KindStatus, KindTable, Origin, Provider, ProviderRegistry, RegistryError,
 };

@@ -204,7 +204,16 @@ pub async fn probe(
 }
 
 /// Try the manifest's candidate names on the operator's search path.
-fn locate(manifest: &Manifest) -> Result<Program, ProbeError> {
+/// Try the manifest's candidate names on the operator's search path.
+///
+/// Public because a driver needs the answer and must not work it out again: resolution unwraps the launchers a package
+/// manager installs, and a second reading of the manifest's candidate order is a second chance to pick a different
+/// program than the one that was probed.
+///
+/// # Errors
+///
+/// [`ProbeError::NotInstalled`] when none of the candidates resolves, naming every one that was tried.
+pub fn locate(manifest: &Manifest) -> Result<Program, ProbeError> {
     locate_with(manifest, resolve)
 }
 
