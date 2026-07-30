@@ -255,6 +255,7 @@ dependencies = [
 name = "runtrol-core"
 version = "0.0.0"
 dependencies = [
+ "async-trait",
  "runtrol-childproc",
  "runtrol-provider",
  "runtrol-security",
@@ -291,13 +292,16 @@ dependencies = [
  "serde_json",
  "thiserror",
  "tokio",
+ "toml",
 ]
 
 [[package]]
 name = "runtrol-ipc"
 version = "0.0.0"
 dependencies = [
+ "bytes",
  "runtrol-provider",
+ "thiserror",
 ]
 
 [[package]]

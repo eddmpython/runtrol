@@ -1,4 +1,4 @@
-# CLI 와 데몬 사이의 프레임 형식과 양쪽 전송 끝단.
+# The frame format runtrol speaks to itself, and both ends of the local connection.
 [package]
 name = "runtrol-ipc"
 version = "0.0.0"
@@ -11,6 +11,11 @@ publish = false
 
 [dependencies]
 runtrol-provider = { workspace = true }
+
+# Shared buffers. A payload read off the wire is a slice of what arrived, not a copy of it: every event a watcher sees
+# crosses this crate, and copying each one would put a copy of every message on the path the design keeps copy free.
+bytes = { workspace = true }
+thiserror = { workspace = true }
 
 [lints]
 workspace = true
