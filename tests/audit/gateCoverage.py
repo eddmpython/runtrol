@@ -47,6 +47,8 @@ NOT_A_GATE: dict[str, str] = {
     "the gate that applies them",
     "northStar/registry.py": "loads board.toml and holds it against the tree. imported by both "
     "northStar gates rather than run on its own",
+    "rustSource.py": "reading Rust source the way a gate has to. imported by the gates that scan "
+    "source rather than run on its own, and its selftest runs inside theirs",
 }
 
 # Preflight gates that intentionally have no counterpart step in the workflow.

@@ -88,6 +88,18 @@ pub enum ManifestError {
         why: &'static str,
     },
 
+    /// A declared secret directory is not a plain path under the home.
+    ///
+    /// The wall refuses any workspace overlapping these, so an entry that reached outside the home would be a
+    /// manifest deciding what the wall protects rather than saying where its own login lives.
+    #[error("secret path {path:?} {why}")]
+    SecretPath {
+        /// The path as written.
+        path: String,
+        /// Why it was refused.
+        why: &'static str,
+    },
+
     /// An identifier in the file is not one runtrol accepts.
     #[error(transparent)]
     Id(#[from] IdError),
@@ -219,6 +231,9 @@ pub struct Manifest {
     /// Where to degrade to when the primary surface is unusable.
     #[serde(default)]
     pub fallback: Option<FallbackSpec>,
+    /// Where this CLI keeps its own login.
+    #[serde(default)]
+    pub secrets: SecretPaths,
 }
 
 impl Manifest {
@@ -246,6 +261,7 @@ impl Manifest {
         }
         self.bin.validate()?;
         self.models.validate()?;
+        self.secrets.validate()?;
         Ok(())
     }
 }
@@ -407,6 +423,56 @@ pub enum Listen {
     /// Uniform across platforms and needs no socket to clean up, which is why it is the only one so far.
     #[default]
     Stdio,
+}
+
+/// Where a provider keeps its own login.
+///
+/// # Why this is declared and not discovered
+///
+/// Because there is nothing to ask. A CLI does not report where it stores its credentials, and guessing from its
+/// name is how a wall comes to protect a directory nobody uses while leaving the real one open. This is the case
+/// the manifest exists for: not discoverable, and the cost of being wrong is a credential.
+///
+/// # What it is for
+///
+/// runtrol never holds a provider's credential. That promise is worth nothing if runtrol will happily approve a
+/// workspace that lets an agent read one, so the scope wall refuses any root overlapping these. A provider added
+/// by shipping a manifest is therefore covered the moment it exists, with nothing in the security crate to edit,
+/// which is the whole reason this is a manifest key rather than a list somewhere in that crate.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SecretPaths {
+    /// Directories relative to the operator's home, written with `/` as the separator.
+    #[serde(default)]
+    pub under_home: Vec<Box<str>>,
+}
+
+impl SecretPaths {
+    /// Refuse anything that is not a plain relative directory under the home.
+    ///
+    /// An absolute path, a parent step, or an empty entry would each let a manifest name a directory outside the
+    /// operator's home, which is a manifest deciding what the wall protects rather than declaring where its own
+    /// login lives.
+    fn validate(&self) -> Result<(), ManifestError> {
+        for entry in &self.under_home {
+            let refuse = |why: &'static str| ManifestError::SecretPath {
+                path: entry.to_string(),
+                why,
+            };
+            if entry.is_empty() {
+                return Err(refuse("an empty path names the home directory itself"));
+            }
+            if entry.starts_with(['/', '\\']) || entry.contains(':') {
+                return Err(refuse("this has to be relative to the home directory"));
+            }
+            if entry.split(['/', '\\']).any(|part| part == "..") {
+                return Err(refuse(
+                    "a step upwards would name something outside the home directory",
+                ));
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Model alias tokens.

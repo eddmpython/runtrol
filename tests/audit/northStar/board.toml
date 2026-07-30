@@ -166,7 +166,8 @@ file = "noScriptsDir.py"
 [[floor]]
 category = "modularity"
 name = "providerIsolation"
-status = "planned"
+status = "built"
+file = "providerIsolation.py"
 
 [[floor]]
 category = "modularity"

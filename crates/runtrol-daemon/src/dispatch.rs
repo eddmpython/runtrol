@@ -167,12 +167,13 @@ pub async fn answer(
         },
 
         Request::Close { session, now } => {
+            // The vocabulary's own answer, not one driver's. Reaching into a driver for it would give every
+            // other provider that driver's patience, and adding a second one would change how long the first is
+            // waited for depending on which import somebody wrote.
             let how = if now {
                 CloseMode::Kill
             } else {
-                CloseMode::Graceful {
-                    grace_ms: runtrol_drivers::claude::DEFAULT_GRACE_MS,
-                }
+                CloseMode::graceful()
             };
             match sessions.close(session) {
                 Ok(agent) => Reply::Stopping { agent, how },

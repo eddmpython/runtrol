@@ -46,11 +46,6 @@ use tokio::process::{Child, ChildStdin};
 use crate::claude::map::{self, Frame};
 use crate::framing::{LineError, Lines};
 
-/// How long a graceful close waits before the process is stopped anyway.
-///
-/// Only used when the caller does not say. A caller that has an opinion passes one.
-pub const DEFAULT_GRACE_MS: u64 = 5_000;
-
 /// A live session: one child process, its input, and its output.
 pub struct ClaudeAgent {
     /// Which provider this is.

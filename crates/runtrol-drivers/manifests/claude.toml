@@ -39,6 +39,12 @@ listen = "stdio"
 # A surface shows them as aliases rather than as a catalogue, because that is what they are.
 aliases = ["opus", "sonnet", "haiku", "fable"]
 
+[secrets]
+# Where this CLI keeps its own login. Not discoverable: a CLI does not report this, and guessing from its name is
+# how a wall comes to protect a directory nobody uses. runtrol never holds a provider credential, and the scope
+# wall refuses any workspace that would let an agent read one either.
+under_home = [".claude"]
+
 [update]
 # It updates itself. A hint only: whatever performs an update probes first and believes what it finds.
 hint = "self"

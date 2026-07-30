@@ -126,6 +126,32 @@ pub enum CloseMode {
     Kill,
 }
 
+impl CloseMode {
+    /// How long a session is given to finish when nobody said.
+    ///
+    /// # Why the number lives with the vocabulary
+    ///
+    /// Because it is not a fact about any one CLI. It is how long runtrol is willing to wait, and a caller that
+    /// borrowed one driver's answer would be giving every other provider that driver's patience: adding a second
+    /// one would silently change how long the first was waited for, or would not, depending on which import
+    /// somebody happened to write.
+    ///
+    /// A caller with an opinion passes its own. This is the answer for the ones that have none.
+    #[must_use]
+    pub const fn graceful() -> Self {
+        Self::Graceful {
+            grace_ms: DEFAULT_GRACE_MS,
+        }
+    }
+}
+
+/// How long a session is given to finish when nobody said, in milliseconds.
+///
+/// Measured against these CLIs: closing their input is what asks them to stop, and the ones here take single-digit
+/// milliseconds to act on it. This is generous against a machine under load and short enough that an operator who
+/// asked for a session to end is not left watching.
+pub const DEFAULT_GRACE_MS: u64 = 5_000;
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -40,6 +40,13 @@ GATES: dict[str, tuple[str, list[str]]] = {
     "workspaceHygiene": ("루트 allowlist + 스크래치 부패", [*PY, f"{HOOKS}/workspaceHygiene.py"]),
     "silentFailSelftest": ("silent failure 검출기 자체 검증", [*PY, f"{HOOKS}/checkSilentFail.py", "--selftest"]),
     "checkSilentFail": ("silent failure 금지", [*PY, f"{HOOKS}/checkSilentFail.py"]),
+    # provider 이름이 드라이버 밖에 나타나면 그 자체가 설계 결함이다. 자체 검증이 먼저 도는 이유는
+    # 게이트가 통과를 보이기 전에 실패할 수 있는지부터 확인해야 하기 때문이다.
+    "providerIsolationSelftest": (
+        "provider 격리 검출기 자체 검증",
+        [*PY, f"{HOOKS}/providerIsolation.py", "--selftest"],
+    ),
+    "providerIsolation": ("provider 이름은 드라이버 밖에 없다", [*PY, f"{HOOKS}/providerIsolation.py"]),
     # 게이트가 저장소에 있는 것과 도는 것은 다른 말이다. 이 게이트가 그 차이를 감시한다.
     "gateCoverage": ("게이트 러너 커버리지", [*PY, f"{HOOKS}/gateCoverage.py"]),
     # 북극성 점수는 사람이 타이핑하는 숫자가 아니라 board.toml 에서 계산된다.
@@ -74,6 +81,8 @@ SUITES: dict[str, tuple[str, ...]] = {
         "workspaceHygiene",
         "silentFailSelftest",
         "checkSilentFail",
+        "providerIsolationSelftest",
+        "providerIsolation",
         "gateCoverage",
         "northStarBoard",
         "readmeParity",

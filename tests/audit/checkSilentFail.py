@@ -51,6 +51,8 @@ import re
 import sys
 from pathlib import Path
 
+import rustSource
+
 ROOT = Path(__file__).resolve().parents[2]
 OK_MARKER = re.compile(r"(?://|#)\s*ok:")
 SAFETY_MARKER = re.compile(r"//\s*SAFETY:")
@@ -75,23 +77,6 @@ WEB_RULES: tuple[tuple[str, re.Pattern[str], str], ...] = (
 )
 
 PY_OK_MARKER = "# ok:"
-
-# Rust 소스에서 리터럴과 줄 주석을 지운다. brace 깊이 추적이 그것들에 속지 않게 한다.
-#
-# **raw string 을 먼저 지운다.** 보통 문자열 규칙만 있던 판은 `r#"{"id":1}"#` 안에서 `"{"` 를
-# 문자열로 잘라내고 남은 중괄호를 코드로 셌다. 그러면 `#[cfg(test)]` 블록의 끝을 실제보다
-# 앞으로 잡고, 그 뒤의 테스트 코드가 프로덕션 코드로 오검출된다. 실제로 그렇게 났다.
-#
-# char 리터럴도 지운다 (`'{'` 는 한 글자짜리 중괄호다). 정확히 세 글자만 매치하므로
-# `&'static str` 같은 lifetime 은 건드리지 않는다.
-RUST_NOISE = re.compile(
-    r"r(#+)\".*?\"\1"  # raw string, hash 개수를 역참조로 맞춘다
-    r'|r"[^"]*"'  # hash 없는 raw string
-    r'|"(?:\\.|[^"\\])*"'  # 보통 문자열
-    r"|'(?:\\.|[^'\\])'"  # char 리터럴
-    r"|//.*$"  # 줄 주석
-)
-
 
 def _hasOkComment(lines: list[str], index: int) -> bool:
     """위반 라인 또는 바로 앞 LOOKBACK 줄에 `ok:` 주석이 있는가."""
@@ -123,42 +108,10 @@ def _hasSafetyComment(lines: list[str], index: int) -> bool:
     return False
 
 
-def _testRegions(lines: list[str]) -> list[tuple[int, int]]:
-    """`#[cfg(test)]` 로 시작하는 블록의 (시작, 끝) 라인 인덱스 구간 목록.
-
-    brace 깊이로 끝을 찾는다. 문자열과 줄 주석은 지우고 센다. 여는 중괄호를 만나기 전에
-    다음 아이템이 오면 (attribute 가 함수 하나에만 붙은 경우) 그 아이템 하나만 구간이 된다.
-    """
-    regions: list[tuple[int, int]] = []
-    i = 0
-    while i < len(lines):
-        if "#[cfg(test)]" not in lines[i]:
-            i += 1
-            continue
-        depth = 0
-        opened = False
-        j = i
-        while j < len(lines):
-            cleaned = RUST_NOISE.sub("", lines[j])
-            depth += cleaned.count("{") - cleaned.count("}")
-            if cleaned.count("{"):
-                opened = True
-            if opened and depth <= 0:
-                break
-            j += 1
-        regions.append((i, min(j, len(lines) - 1)))
-        i = j + 1
-    return regions
-
-
-def _inRegions(index: int, regions: list[tuple[int, int]]) -> bool:
-    return any(start <= index <= end for start, end in regions)
-
-
 def lintRust(rel: str, source: str, unwrapExempt: bool) -> list[str]:
     """단일 Rust 파일의 위반 목록."""
     lines = source.splitlines()
-    testRegions = _testRegions(lines)
+    testRegions = rustSource.testRegions(lines)
     violations: list[str] = []
 
     for index, line in enumerate(lines):
@@ -172,7 +125,7 @@ def lintRust(rel: str, source: str, unwrapExempt: bool) -> list[str]:
             if pattern.search(line):
                 violations.append(f"  - {rel}:{index + 1} [{ruleName}] {why}")
 
-        if RUST_UNWRAP.search(line) and not unwrapExempt and not _inRegions(index, testRegions):
+        if RUST_UNWRAP.search(line) and not unwrapExempt and not rustSource.inRegions(index, testRegions):
             violations.append(f"  - {rel}:{index + 1} [unwrap] 비테스트 코드의 패닉 경로. `?` 또는 명시 처리로 바꿔라.")
 
         if RUST_UNSAFE.search(line) and not _hasSafetyComment(lines, index):

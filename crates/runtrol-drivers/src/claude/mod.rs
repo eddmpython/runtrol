@@ -22,7 +22,7 @@ pub mod bound;
 pub mod map;
 pub mod provider;
 
-pub use agent::{ClaudeAgent, DEFAULT_GRACE_MS};
+pub use agent::ClaudeAgent;
 pub use bound::{BoundFlag, BoundFrame, CONTROL, FLAGS, FRAMES, TERMINAL};
 pub use map::{Ended, Frame, MapError, Startup};
 pub use provider::ClaudeProvider;

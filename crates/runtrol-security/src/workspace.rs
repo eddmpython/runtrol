@@ -36,7 +36,7 @@ pub struct DeniedPath {
     pub why: &'static str,
 }
 
-/// Directories inside the operator's home that no workspace root may overlap.
+/// Directories inside the operator's home that no workspace root may overlap, whatever this build drives.
 ///
 /// Every entry is a place a coding agent could read a credential from or write one to. The list is
 /// not exhaustive and cannot be: a tool released next month will put a token somewhere new. It covers
@@ -44,6 +44,13 @@ pub struct DeniedPath {
 ///
 /// Not configurable. A deny list the operator can edit is a deny list a prompt injection can talk
 /// them into editing, and the whole point of these entries is that they hold when judgement fails.
+///
+/// # What is not here
+///
+/// Where each provider keeps its own login. That is declared by the provider's manifest and reaches this list
+/// through [`DenyList::new`], so a provider added by shipping a manifest is protected with nothing in this crate
+/// to edit. The three coding CLIs named below are the exception and say why at the line: they are protected even
+/// on a build that cannot drive them, because an agent runtrol did start can read another CLI's credentials.
 const DENIED_UNDER_HOME: &[DeniedPath] = &[
     DeniedPath {
         under_home: ".ssh",
@@ -100,14 +107,20 @@ const DENIED_UNDER_HOME: &[DeniedPath] = &[
     // The coding CLIs runtrol supervises keep their own subscription credentials here. runtrol never
     // holds a provider credential, and it must not approve a workspace that would let an agent read
     // one either.
+    // provider-name: a credential directory, not a provider this crate knows about. Every provider's own
+    // login arrives from its manifest instead, so nothing here has to change to cover a new one. These three
+    // stay because the agent that reads them is not the one they belong to: a session runtrol did start can
+    // walk into another CLI's directory, whether or not this build can drive that CLI.
     DeniedPath {
         under_home: ".claude",
         why: "a coding CLI's own login, which runtrol deliberately never holds",
     },
+    // provider-name: see above.
     DeniedPath {
         under_home: ".codex",
         why: "a coding CLI's own login, which runtrol deliberately never holds",
     },
+    // provider-name: see above.
     DeniedPath {
         under_home: ".gemini",
         why: "a coding CLI's own login, which runtrol deliberately never holds",
@@ -122,7 +135,11 @@ const DENIED_UNDER_HOME: &[DeniedPath] = &[
 #[derive(Clone, Debug)]
 pub struct DenyList {
     /// Resolved denied paths, paired with the reason for each.
-    entries: Vec<(AbsPath, &'static str)>,
+    ///
+    /// The reason is owned rather than borrowed, because some of these come from a provider's manifest and a
+    /// manifest is read at runtime. One representation for both sources: two would mean two ways to be a denied
+    /// path, and the one nobody thought about would be the one missing from a check.
+    entries: Vec<(AbsPath, Box<str>)>,
 }
 
 impl DenyList {
@@ -139,24 +156,35 @@ impl DenyList {
     ///
     /// # Errors
     ///
-    /// [`PathError`] when an entry of [`DENIED_UNDER_HOME`] cannot be joined onto `home`, which means a
-    /// constant in this file is malformed.
+    /// [`PathError`] when an entry cannot be joined onto `home`, which means either a constant in this file
+    /// or a provider manifest is malformed.
     ///
     /// Fallible on purpose. The alternative is skipping the entry that failed, and a deny list with a
     /// silently missing row is a hole exactly where holes are worst. A list that cannot be built in
     /// full stops the daemon from starting, which the operator sees and can act on.
-    pub fn new(home: &AbsPath, state_dir: &AbsPath) -> Result<Self, PathError> {
-        let mut entries: Vec<(AbsPath, &'static str)> =
-            Vec::with_capacity(DENIED_UNDER_HOME.len() + 1);
+    pub fn new(home: &AbsPath, state_dir: &AbsPath, declared: &[&str]) -> Result<Self, PathError> {
+        let mut entries: Vec<(AbsPath, Box<str>)> =
+            Vec::with_capacity(DENIED_UNDER_HOME.len() + declared.len() + 1);
 
         entries.push((
             resolve_or_keep(state_dir),
-            "runtrol's own state, including the record of what you have permitted",
+            "runtrol's own state, including the record of what you have permitted".into(),
         ));
 
         for denied in DENIED_UNDER_HOME {
             let path = home.join(denied.under_home)?;
-            entries.push((resolve_or_keep(&path), denied.why));
+            entries.push((resolve_or_keep(&path), denied.why.into()));
+        }
+
+        // Where each installed provider keeps its own login, as its manifest declared. Adding a provider is
+        // therefore adding a file, with nothing in this crate to change: the failure this closes is a wall that
+        // protects the CLIs somebody thought of and silently misses the one shipped last week.
+        for under_home in declared {
+            let path = home.join(under_home)?;
+            entries.push((
+                resolve_or_keep(&path),
+                "a coding CLI's own login, which runtrol deliberately never holds".into(),
+            ));
         }
 
         Ok(Self { entries })
@@ -166,11 +194,11 @@ impl DenyList {
     ///
     /// Checks containment both ways, which is the whole rule.
     #[must_use]
-    pub fn overlap(&self, candidate: &AbsPath) -> Option<(&AbsPath, &'static str)> {
+    pub fn overlap(&self, candidate: &AbsPath) -> Option<(&AbsPath, &str)> {
         self.entries
             .iter()
             .find(|(denied, _)| candidate.is_under(denied) || denied.is_under(candidate))
-            .map(|(denied, why)| (denied, *why))
+            .map(|(denied, why)| (denied, &**why))
     }
 
     /// How many directories are denied.
@@ -236,7 +264,7 @@ impl WorkspaceRoot {
             return Err(SecurityError::WorkspaceDenied {
                 candidate: path.clone(),
                 denied: denied.clone(),
-                why,
+                why: why.into(),
             });
         }
 
@@ -311,7 +339,9 @@ mod tests {
 
         fn deny_list(&self) -> DenyList {
             let state = self.dir("state");
-            DenyList::new(&self.root, &state).expect("the deny list constants must all be joinable")
+            // Nothing declared: this fixture is about the constants, and what a manifest adds has its own test.
+            DenyList::new(&self.root, &state, &[])
+                .expect("the deny list constants must all be joinable")
         }
     }
 
@@ -436,6 +466,49 @@ mod tests {
         let home = Home::make("count");
         assert_eq!(home.deny_list().len(), DENIED_UNDER_HOME.len() + 1);
         assert!(!home.deny_list().is_empty());
+    }
+
+    #[test]
+    fn a_directory_a_manifest_declared_is_refused_the_same_as_a_constant() {
+        // The reason this is a manifest key. A provider added by shipping a file has to be protected with
+        // nothing in this crate to edit, or the wall covers the CLIs somebody thought of and silently misses the
+        // one released last week.
+        let home = Home::make("declared");
+        let secret = home.dir(".somethingnew");
+        let state = home.dir("state");
+
+        let without = DenyList::new(&home.root, &state, &[]).expect("built");
+        assert!(
+            WorkspaceRoot::approve(secret.as_str(), &without).is_ok(),
+            "this test needs a directory the constants do not already deny"
+        );
+
+        let with = DenyList::new(&home.root, &state, &[".somethingnew"]).expect("built");
+        match WorkspaceRoot::approve(secret.as_str(), &with) {
+            Err(SecurityError::WorkspaceDenied { why, .. }) => {
+                assert!(why.contains("own login"), "{why}");
+            }
+            other => panic!("a declared secret directory must be refused, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_declared_path_is_denied_in_both_directions_like_every_other_entry() {
+        // Coming from a manifest must not make an entry weaker than a constant. The direction that matters is
+        // the second one: approving a parent of a credential directory is the mistake people actually make.
+        let home = Home::make("declaredBothWays");
+        drop(home.dir("work/.somethingnew"));
+        let state = home.dir("state");
+        let deny = DenyList::new(&home.root, &state, &["work/.somethingnew"]).expect("built");
+
+        let parent = home.dir("work");
+        assert!(
+            matches!(
+                WorkspaceRoot::approve(parent.as_str(), &deny),
+                Err(SecurityError::WorkspaceDenied { .. })
+            ),
+            "a root containing a declared secret directory has to be refused"
+        );
     }
 
     #[test]

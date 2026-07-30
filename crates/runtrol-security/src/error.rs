@@ -91,7 +91,11 @@ pub enum SecurityError {
         /// The denied path it overlaps, canonical where it exists.
         denied: AbsPath,
         /// Why that path is denied.
-        why: &'static str,
+        ///
+        /// Owned, because some denied paths come from a provider's manifest and a manifest is read at runtime.
+        /// The operator sees this sentence verbatim, so it travels with the failure rather than being looked up
+        /// again by whoever renders it.
+        why: Box<str>,
     },
 
     /// A path was offered as a workspace but is not a directory that exists.

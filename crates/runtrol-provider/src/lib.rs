@@ -34,7 +34,9 @@ pub mod path;
 pub mod time;
 
 pub use agent::{Agent, Provider};
-pub use command::{AgentCommand, CloseMode, ContentBlock, Disposition, OpenIntent, Produced};
+pub use command::{
+    AgentCommand, CloseMode, ContentBlock, DEFAULT_GRACE_MS, Disposition, OpenIntent, Produced,
+};
 pub use error::ProviderError;
 pub use event::{
     AgentEvent, ApprovalKind, ApprovalOption, ApprovalRequest, Attached, BlockedOn, CapabilitySet,
@@ -48,7 +50,7 @@ pub use id::{
 };
 pub use manifest::{
     BinSpec, FallbackSpec, FlagProbe, Kind, MANIFEST_SCHEMA, Manifest, ManifestError, ModelAliases,
-    ProbeSpec, TransportSpec, UpdateHint, UpdateSpec, VersionParse, VersionProbe,
+    ProbeSpec, SecretPaths, TransportSpec, UpdateHint, UpdateSpec, VersionParse, VersionProbe,
 };
 pub use path::{AbsPath, PathError};
 pub use time::WallMs;
