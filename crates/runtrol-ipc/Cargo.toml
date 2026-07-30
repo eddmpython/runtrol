@@ -16,6 +16,10 @@ runtrol-provider = { workspace = true }
 # crosses this crate, and copying each one would put a copy of every message on the path the design keeps copy free.
 bytes = { workspace = true }
 thiserror = { workspace = true }
+# The request and response vocabulary. JSON because both ends of this connection are runtrol's own processes and a
+# readable wire is worth more here than a compact one: an operator debugging why their command did nothing can look.
+serde = { workspace = true, features = ["std", "derive"] }
+serde_json = { workspace = true, features = ["std", "raw_value"] }
 
 [lints]
 workspace = true

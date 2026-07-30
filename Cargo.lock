@@ -301,6 +301,8 @@ version = "0.0.0"
 dependencies = [
  "bytes",
  "runtrol-provider",
+ "serde",
+ "serde_json",
  "thiserror",
 ]
 

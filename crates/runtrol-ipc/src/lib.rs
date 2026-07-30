@@ -15,12 +15,10 @@
 //! # Layout
 //!
 //! - [`frame`] the length-prefixed frame, its bound, and the version both sides check
+//! - [`wire`] what the command surface asks and what the daemon answers
 
 pub mod frame;
+pub mod wire;
 
 pub use frame::{Decoded, FrameError, MAX_FRAME, WIRE_VERSION, check_version, decode, encode};
-
-// The vocabulary is this crate's declared dependency and enforced by `tests/audit/dependencyDirection.rs`. The framing
-// below is bytes and needs none of it; the request and response types that do arrive in their own step. Until then this
-// line is what makes the declaration real, because `cargo shear` reports a dependency nothing names.
-use runtrol_provider as _;
+pub use wire::{ProviderLine, Request, Response, SessionLine, WireError, agree};

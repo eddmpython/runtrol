@@ -8,7 +8,7 @@
 use core::fmt;
 
 use bytes::Bytes;
-use serde::{Serialize, Serializer};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 /// The provider's own JSON, byte for byte.
 ///
@@ -119,6 +119,21 @@ impl Serialize for Opaque {
         let mut raw = ser.serialize_struct(RAW_JSON_TOKEN, 1)?;
         raw.serialize_field(RAW_JSON_TOKEN, self.as_str())?;
         raw.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for Opaque {
+    /// Read a payload back as the bytes it was written as.
+    ///
+    /// The other half of the pass-through. Without it a payload could cross runtrol's own wire and not be readable at
+    /// the far end, which would leave the command surface unable to receive an event at all.
+    ///
+    /// Taken as a raw value rather than through a JSON model, for the same reason writing is: round-tripping through a
+    /// model would be reading it, and it would silently normalize key order and number formatting that the provider
+    /// chose and that a subscriber may be comparing against the provider's own store.
+    fn deserialize<D: Deserializer<'de>>(de: D) -> Result<Self, D::Error> {
+        let raw = <&serde_json::value::RawValue as Deserialize>::deserialize(de)?;
+        Ok(Self(Bytes::copy_from_slice(raw.get().as_bytes())))
     }
 }
 
