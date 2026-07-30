@@ -11,6 +11,11 @@ publish = false
 
 [dependencies]
 runtrol-provider = { workspace = true }
+# Chosen for having no background threads at all, which is what keeps the idle budget honest. 4.1 is the
+# floor: 4.0 lacks the region-allocator fix that cut resident memory by 68 percent, and anything before 4.0
+# encodes variable-width tuples differently.
+redb = { workspace = true }
+thiserror = { workspace = true }
 
 [lints]
 workspace = true
