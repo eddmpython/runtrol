@@ -30,7 +30,7 @@ pub use registry::{
     KindEntry, KindStatus, KindTable, Origin, Provider, ProviderRegistry, RegistryError,
 };
 pub use session::{
-    CloseReason, FailureCode, Identity, Lifecycle, LiveSession, Observed, SessionError,
+    CloseReason, FailureCode, Identity, Lifecycle, LiveSession, Observed, Pumped, SessionError,
     SessionManager, SessionState, Tier,
 };
 

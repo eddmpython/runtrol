@@ -40,6 +40,17 @@ pub enum Reply {
     /// A separate shape because watching is not a question with an answer: it is the connection changing what it is for,
     /// and a dispatcher that pretended otherwise would have to answer once and then keep writing.
     Watching(Box<Subscription>),
+    /// The session is closed, and its process is still being stopped.
+    ///
+    /// A separate shape because stopping is a wait, and the answer is not known until it is over. Handing the wait out
+    /// is what keeps one session being closed from stopping every other session's output for as long as it takes: by
+    /// the time this is returned the sessions are already correct, and all that is left is a process.
+    Stopping {
+        /// The driver, with nothing left holding it.
+        agent: Box<dyn runtrol_provider::Agent>,
+        /// How much time the process is given.
+        how: CloseMode,
+    },
 }
 
 /// One connection's state.
@@ -163,8 +174,8 @@ pub async fn answer(
                     grace_ms: runtrol_drivers::claude::DEFAULT_GRACE_MS,
                 }
             };
-            match sessions.close(session, how).await {
-                Ok(()) => Reply::One(Response::Done),
+            match sessions.close(session) {
+                Ok(agent) => Reply::Stopping { agent, how },
                 Err(error) => Reply::One(from_session_error(&error)),
             }
         }
@@ -313,7 +324,7 @@ fn from_session_error(error: &SessionError) -> Response {
 }
 
 /// A refusal with a message and no claim about retrying.
-fn refuse(message: &str) -> Response {
+pub(crate) fn refuse(message: &str) -> Response {
     Response::Failed(WireError::plain(message))
 }
 
@@ -604,6 +615,7 @@ mod tests {
         match reply {
             Reply::One(response) => format!("{response:?}"),
             Reply::Watching(_) => "a subscription".to_owned(),
+            Reply::Stopping { how, .. } => format!("a process still stopping, {how:?}"),
         }
     }
 }

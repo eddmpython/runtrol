@@ -9,16 +9,17 @@
 //!
 //! # What the manager does not own
 //!
-//! The runtime. Pumping a session is a step rather than a loop, so the daemon decides how many run at once and the
-//! kernel decides what one event means. A task spawned in here would put a runtime configuration in the one place the
-//! memory contract says it must not be.
+//! The runtime. Pumping a session is a step rather than a loop, and waiting on every session is one call the daemon
+//! races against its own listener, so the daemon decides when anything runs and the kernel decides what one event
+//! means. A task spawned in here would put a runtime configuration in the one place the memory contract says it must
+//! not be.
 
 pub mod manager;
 pub mod mint;
 pub mod state;
 pub mod tier;
 
-pub use manager::{LiveSession, SessionError, SessionManager};
+pub use manager::{LiveSession, Pumped, SessionError, SessionManager};
 pub use mint::Identity;
 pub use state::{CloseReason, FailureCode, Lifecycle, Observed, Refused, SessionState};
 pub use tier::{Admit, HotSession, MAX_HOT, NoRoom, Tier};

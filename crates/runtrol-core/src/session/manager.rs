@@ -7,12 +7,24 @@
 //! # Why pumping is a step and not a loop
 //!
 //! [`SessionManager::pump_once`] reads one event, numbers it, applies it to the session's state, and returns. It does
-//! not spawn a task and it does not loop, because owning the runtime is the daemon's job: the daemon decides how many
-//! sessions are pumped concurrently, and the kernel decides what one event means. Putting a task in here would put a
-//! runtime configuration in the kernel, which is the one place the memory contract says it must not be.
+//! not spawn a task and it does not loop, because owning the runtime is the daemon's job: the daemon decides when a
+//! session is pumped and what that is raced against, and the kernel decides what one event means. Putting a task in
+//! here would put a runtime configuration in the kernel, which is the one place the memory contract says it must not
+//! be.
 //!
 //! It also makes the whole thing testable. A session is driven one event at a time against a scripted driver, and
 //! every rule below is checked without a process, a socket, or a clock.
+//!
+//! # Why waiting on every session is one call and not one task each
+//!
+//! [`SessionManager::pump_any`] waits until any live session speaks, then applies that one event. A task per session
+//! is the other way to do this, and it costs the thing that makes the rest of this file true: the state of every
+//! session would move on a different thread from the one that reads it, so the map, the numbering and the tier bound
+//! would each need a lock, and "the kernel decides what one event means" would become "some task decided, and the
+//! kernel found out later".
+//!
+//! One caller, one owner, no locks. What it asks of a driver is written into [`Agent::next`]: a session that has
+//! nothing to say yet is set aside, so being set aside must cost that driver nothing.
 //!
 //! # What a failure does
 //!
@@ -20,11 +32,14 @@
 //! session to a state the operator can see and resume from, and each one also leaves the event stream with a notice
 //! saying so. A failure that was only returned to a caller would be a failure the operator never hears about.
 
+use core::ops::Bound;
+use core::pin::pin;
+use core::task::Poll;
 use std::collections::BTreeMap;
 
 use runtrol_provider::{
     Agent, AgentCommand, CloseMode, Disposition, EventBody, Level, Notice, NoticeCode, Opaque,
-    OpenIntent, Provider, ProviderError, ProviderId, SessionId, WallMs,
+    OpenIntent, Produced, Provider, ProviderError, ProviderId, SessionId, WallMs,
 };
 
 use crate::events::{Published, SessionHub, Subscription};
@@ -67,10 +82,24 @@ struct Live {
     state: SessionState,
 }
 
+/// One event, and which session produced it.
+#[derive(Debug)]
+pub struct Pumped {
+    /// Whose event it was.
+    pub session: SessionId,
+    /// What was published, or `None` when that session's stream ended.
+    pub published: Option<Published>,
+}
+
 /// Every session that has a process, and the rules about how many may.
 pub struct SessionManager {
     /// The live ones, ordered by name so a listing is stable.
     live: BTreeMap<SessionId, Live>,
+    /// Which session spoke last, so the next round of listening starts past it.
+    ///
+    /// Kept as a name rather than a position: a position would move under a session that ended, and this is asked
+    /// about by exclusion, so it does not have to name a session that is still live.
+    after: Option<SessionId>,
 }
 
 impl SessionManager {
@@ -79,6 +108,7 @@ impl SessionManager {
     pub const fn new() -> Self {
         Self {
             live: BTreeMap::new(),
+            after: None,
         }
     }
 
@@ -208,8 +238,77 @@ impl SessionManager {
             .live
             .get_mut(&session)
             .ok_or(SessionError::NotLive { session })?;
+        let spoke = live.agent.next().await;
+        Ok(self.apply(session, spoke))
+    }
 
-        match live.agent.next().await {
+    /// Wait until any live session speaks, and let that event change what runtrol believes.
+    ///
+    /// Every live session is asked in turn, starting after the one that spoke last so that a talkative session
+    /// cannot keep a quiet one from ever being heard. The first that has something ready is the one applied.
+    ///
+    /// # This does not finish while nothing is live
+    ///
+    /// With no live sessions there is nothing that could speak, so this waits. That is what a caller racing it
+    /// against its listener wants: an arm that never fires rather than one that fires constantly and turns an idle
+    /// daemon into a spin. Anything awaiting it alone would wait forever, which is why it is written here.
+    pub async fn pump_any(&mut self) -> Pumped {
+        let (session, spoke) = self.hear_one().await;
+        // The next round starts after this one, which is the whole of the fairness rule.
+        self.after = Some(session);
+        Pumped {
+            session,
+            published: self.apply(session, spoke),
+        }
+    }
+
+    /// The first live session with something ready, and what it said.
+    ///
+    /// Each session is asked with no waiting in between. A session that is not ready is set aside, which the
+    /// [`Agent::next`] contract requires to cost it nothing, and asked again when something wakes this.
+    async fn hear_one(&mut self) -> (SessionId, Option<Result<Produced, ProviderError>>) {
+        let live = &mut self.live;
+        let after = self.after;
+        core::future::poll_fn(|cx| {
+            // Everything past the one that spoke last, then everything up to and including it. Two passes over two
+            // ranges rather than one rotated pass, because rotating would mean borrowing the map twice at the same
+            // time. The one that spoke last is at the end of the second pass, so it is asked last and never
+            // skipped. Naming it by exclusion also means it does not have to still be live.
+            let past = match after {
+                Some(after) => (Bound::Excluded(after), Bound::Unbounded),
+                None => (Bound::Unbounded, Bound::Unbounded),
+            };
+            for (session, one) in live.range_mut(past) {
+                if let Poll::Ready(spoke) = pin!(one.agent.next()).poll(cx) {
+                    return Poll::Ready((*session, spoke));
+                }
+            }
+            if let Some(after) = after {
+                for (session, one) in live.range_mut(..=after) {
+                    if let Poll::Ready(spoke) = pin!(one.agent.next()).poll(cx) {
+                        return Poll::Ready((*session, spoke));
+                    }
+                }
+            }
+            Poll::Pending
+        })
+        .await
+    }
+
+    /// What one answer from a driver means for the session it came from.
+    ///
+    /// The one place an event changes anything. Both ways of pumping arrive here, so there is no second rule about
+    /// what a broken stream or an ended one does.
+    fn apply(
+        &mut self,
+        session: SessionId,
+        spoke: Option<Result<Produced, ProviderError>>,
+    ) -> Option<Published> {
+        // The session is here: both callers just read from it. Asked for rather than assumed, so that a future
+        // caller which does not hold that guarantee gets nothing rather than a panic.
+        let live = self.live.get_mut(&session)?;
+
+        match spoke {
             Some(Ok(produced)) => {
                 // The provider's own name may have arrived with this frame. The newest answer wins.
                 if let Some(native) = live.agent.native()
@@ -234,7 +333,7 @@ impl SessionManager {
                         );
                     }
                 }
-                Ok(Some(published))
+                Some(published)
             }
 
             Some(Err(error)) => {
@@ -254,7 +353,7 @@ impl SessionManager {
                     notice(NoticeCode::ProtocolViolation, Level::Error, &detail),
                 );
                 self.live.remove(&session);
-                Ok(Some(published))
+                Some(published)
             }
 
             None => {
@@ -263,7 +362,7 @@ impl SessionManager {
                 let at = WallMs::now();
                 drop(live.state.observe(Observed::Detached, at));
                 self.live.remove(&session);
-                Ok(None)
+                None
             }
         }
     }
@@ -287,19 +386,27 @@ impl SessionManager {
         live.agent.send(command).await.map_err(SessionError::from)
     }
 
-    /// End a session and take away its process.
+    /// End a session, and hand back the driver that still has to be stopped.
+    ///
+    /// # Why this does not do the stopping
+    ///
+    /// Because stopping is a wait. A graceful close gives the process time to finish, and this is the one call that
+    /// could take seconds; doing it here would hold the only owner of every session for that long, and every other
+    /// session's output would stop while one of them was being closed. Waiting belongs to whoever owns the runtime,
+    /// which is the daemon, and this returns as soon as the thing it does own has changed.
+    ///
+    /// The session is gone from this manager by the time this returns, whatever the caller then does with the driver.
+    /// Dropping it rather than closing it still stops the process, because a driver holds its child that way.
     ///
     /// # Errors
     ///
-    /// [`SessionError::NotLive`] when nothing is running under that name. A driver that failed to stop is reported
-    /// through [`SessionError::Provider`], because an operator who asked for a session to stop has to know whether it
-    /// did.
-    pub async fn close(&mut self, session: SessionId, how: CloseMode) -> Result<(), SessionError> {
+    /// [`SessionError::NotLive`] when nothing is running under that name.
+    pub fn close(&mut self, session: SessionId) -> Result<Box<dyn Agent>, SessionError> {
         let live = self
             .live
             .remove(&session)
             .ok_or(SessionError::NotLive { session })?;
-        live.agent.close(how).await.map_err(SessionError::from)
+        Ok(live.agent)
     }
 
     /// Take a session's process away without treating it as an ending.
@@ -723,6 +830,125 @@ mod tests {
         );
     }
 
+    /// A driver that never has anything ready, and never asks to be woken.
+    ///
+    /// Nothing waits on it alone. It is here so that a session which has nothing to say can be shown not to hold
+    /// up a session that does, which is the whole reason waiting on all of them is one call.
+    struct Silent(SessionId);
+
+    #[async_trait]
+    impl Agent for Silent {
+        fn session(&self) -> SessionId {
+            self.0
+        }
+
+        fn native(&self) -> Option<&str> {
+            None
+        }
+
+        async fn send(&mut self, _command: AgentCommand) -> Result<(), ProviderError> {
+            Ok(())
+        }
+
+        async fn next(&mut self) -> Option<Result<Produced, ProviderError>> {
+            core::future::pending().await
+        }
+
+        async fn close(self: Box<Self>, _how: CloseMode) -> Result<(), ProviderError> {
+            Ok(())
+        }
+    }
+
+    struct Quiet;
+
+    #[async_trait]
+    impl Provider for Quiet {
+        fn id(&self) -> ProviderId {
+            an_id()
+        }
+
+        async fn open(&self, intent: OpenIntent) -> Result<Box<dyn Agent>, ProviderError> {
+            Ok(Box::new(Silent(intent.session)))
+        }
+    }
+
+    #[tokio::test]
+    async fn a_session_with_nothing_to_say_does_not_hold_up_one_that_does() {
+        // The reason waiting on every session is one call. A supervisor that had to ask them in order would stop
+        // at the first quiet one, and every other session would go unheard until that one spoke.
+        let mut manager = SessionManager::new();
+        let quiet = SessionId::now();
+        manager
+            .start(&Quiet, an_intent(quiet))
+            .await
+            .expect("opens");
+        let talkative = SessionId::now();
+        manager
+            .start(&a_fake(vec![Step::Content]), an_intent(talkative))
+            .await
+            .expect("opens");
+
+        let heard = manager.pump_any().await;
+        assert_eq!(
+            heard.session, talkative,
+            "the session with something ready is the one that is heard"
+        );
+        assert!(heard.published.is_some());
+    }
+
+    #[tokio::test]
+    async fn no_session_is_heard_twice_before_every_other_one_is_heard_once() {
+        // Without this, a session producing a long stream keeps every other session silent for as long as it
+        // talks, and an operator watching a second session sees nothing at all.
+        let provider = a_fake(vec![Step::Content, Step::Content, Step::Content]);
+        let mut manager = SessionManager::new();
+        let mut names = Vec::new();
+        for _ in 0..3 {
+            let session = SessionId::now();
+            manager
+                .start(&provider, an_intent(session))
+                .await
+                .expect("opens");
+            names.push(session);
+        }
+
+        let mut heard = Vec::new();
+        for _ in 0..3 {
+            heard.push(manager.pump_any().await.session);
+        }
+        heard.sort_unstable();
+        let mut expected = names.clone();
+        expected.sort_unstable();
+        assert_eq!(
+            heard, expected,
+            "every session was heard once before any was heard twice"
+        );
+
+        // And the round after that starts over rather than sticking to the last one.
+        assert_eq!(
+            manager.pump_any().await.session,
+            *names.first().expect("one")
+        );
+    }
+
+    #[tokio::test]
+    async fn waiting_on_every_session_applies_the_same_rules_as_waiting_on_one() {
+        // Two ways of pumping and one rule about what an event means. A stream that ends has to take its session
+        // out of the live map whichever way it was heard.
+        let provider = a_fake(vec![Step::End]);
+        let mut manager = SessionManager::new();
+        let session = SessionId::now();
+        manager
+            .start(&provider, an_intent(session))
+            .await
+            .expect("opens");
+
+        let heard = manager.pump_any().await;
+        assert_eq!(heard.session, session);
+        assert!(heard.published.is_none(), "the stream is over");
+        assert!(!manager.is_live(session));
+    }
+
     #[tokio::test]
     async fn a_stream_that_ends_takes_the_session_out_of_the_live_map() {
         let provider = a_fake(vec![Step::Content, Step::End]);
@@ -915,16 +1141,75 @@ mod tests {
             .await
             .expect("opens");
 
-        manager
-            .close(session, CloseMode::Kill)
+        let stopping = manager.close(session).expect("closing works");
+        assert!(
+            !manager.is_live(session),
+            "the session is gone before anything waits for the process"
+        );
+        stopping
+            .close(CloseMode::Kill)
             .await
-            .expect("closing works");
-        assert!(!manager.is_live(session));
+            .expect("the driver stops");
 
-        match manager.close(session, CloseMode::Kill).await {
+        match manager.close(session) {
             Err(SessionError::NotLive { session: named }) => assert_eq!(named, session),
-            other => panic!("expected a refusal naming the session, got {other:?}"),
+            Ok(_) => panic!("a session that is gone cannot be closed again"),
+            Err(other) => panic!("expected a refusal naming the session, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn closing_does_not_make_anybody_wait_for_a_process_to_stop() {
+        // The reason this is not one call. A graceful close gives the process seconds to finish, and doing that here
+        // would hold the only owner of every session for that long: one session being closed would stop every other
+        // session's output. What this owns has changed by the time it returns.
+        struct Slow;
+
+        #[async_trait]
+        impl Agent for Slow {
+            fn session(&self) -> SessionId {
+                SessionId::now()
+            }
+            fn native(&self) -> Option<&str> {
+                None
+            }
+            async fn send(&mut self, _command: AgentCommand) -> Result<(), ProviderError> {
+                Ok(())
+            }
+            async fn next(&mut self) -> Option<Result<Produced, ProviderError>> {
+                core::future::pending().await
+            }
+            async fn close(self: Box<Self>, _how: CloseMode) -> Result<(), ProviderError> {
+                core::future::pending::<()>().await;
+                Ok(())
+            }
+        }
+
+        struct Sluggish;
+
+        #[async_trait]
+        impl Provider for Sluggish {
+            fn id(&self) -> ProviderId {
+                an_id()
+            }
+            async fn open(&self, _intent: OpenIntent) -> Result<Box<dyn Agent>, ProviderError> {
+                Ok(Box::new(Slow))
+            }
+        }
+
+        let mut manager = SessionManager::new();
+        let session = SessionId::now();
+        manager
+            .start(&Sluggish, an_intent(session))
+            .await
+            .expect("opens");
+
+        // A driver that never finishes stopping. Taking it away still returns, and what it returns is the wait
+        // somebody else is free to do.
+        let stopping = manager.close(session).expect("the session is taken away");
+        assert!(!manager.is_live(session));
+        assert_eq!(manager.hot(), 0);
+        drop(stopping);
     }
 
     #[tokio::test]
