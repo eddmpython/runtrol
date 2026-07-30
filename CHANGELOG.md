@@ -26,6 +26,10 @@ decisions with their measured evidence, and the gate harness. No product code ex
   for gates that skipped or that nothing runs. The README in all four languages is held to
   the computed board, so a translated copy cannot keep yesterday's number.
 
+- The logo, as vectors. A symbol, a wordmark, and three lockups in SVG, plus the favicon,
+  app icon, tray icon, and social card sizes that cannot be vectors. The mark keeps one
+  colour on light and dark backgrounds, so only the wordmark has a theme variant.
+
 ### Changed
 
 - Modularity, clean code, security, hygiene, and budget are named gates on a pass or fail

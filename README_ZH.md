@@ -149,6 +149,7 @@ Rust 不是目的，而是上表中三个轴的手段。
 | `crates/` | 产品（Rust）。守护进程、供应商适配器、传输、桌面应用 | 未创建 |
 | `pwa/` | 移动端 PWA | 未创建 |
 | `site/` | GitHub Pages 落地页 | 未创建 |
+| [`assets/brand/`](assets/brand/) | 标志。SVG 为正本，favicon、图标与社交卡片皆由其派生 | |
 | [`docs/`](docs/README.md) | 运营文档正本 | |
 | [`mainPlan/`](mainPlan/README.md) | 将要构建的东西（倡议；完成后知识提升到 `docs/` 并删除该文件夹） | |
 | [`tests/audit/`](tests/audit/) | 契约门禁 | |

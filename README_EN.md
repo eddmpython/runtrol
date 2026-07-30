@@ -151,6 +151,7 @@ If those axes are not nailed down by gates, using Rust means nothing.
 | `crates/` | The product (Rust). Daemon, provider adapters, transport, desktop app | Not created |
 | `pwa/` | Mobile PWA | Not created |
 | `site/` | GitHub Pages landing | Not created |
+| [`assets/brand/`](assets/brand/) | The logo. SVG is the source; favicons, icons, and social cards derive from it | |
 | [`docs/`](docs/README.md) | Operational documentation, source of truth | |
 | [`mainPlan/`](mainPlan/README.md) | What is to be built (initiatives; on completion the knowledge is promoted to `docs/` and the folder is deleted) | |
 | [`tests/audit/`](tests/audit/) | Contract gates | |

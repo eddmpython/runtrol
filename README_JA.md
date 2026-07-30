@@ -149,6 +149,7 @@ Rust は目的ではなく、上の表の三つの軸のための手段である
 | `crates/` | 製品（Rust）。デーモン、プロバイダーアダプター、トランスポート、デスクトップアプリ | 未作成 |
 | `pwa/` | モバイル PWA | 未作成 |
 | `site/` | GitHub Pages ランディング | 未作成 |
+| [`assets/brand/`](assets/brand/) | ロゴ。SVG が正本で、favicon・アイコン・ソーシャルカードはそこから派生する | |
 | [`docs/`](docs/README.md) | 運用ドキュメントの正本 | |
 | [`mainPlan/`](mainPlan/README.md) | これから作るもの（イニシアチブ。完了したら知識を `docs/` へ昇格しフォルダを削除する） | |
 | [`tests/audit/`](tests/audit/) | 契約ゲート | |

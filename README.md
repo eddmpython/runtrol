@@ -149,6 +149,7 @@ Rust 는 목적이 아니라 위 표의 세 축을 위한 수단이다.
 | `crates/` | 제품 (Rust). daemon, provider 어댑터, 전송, 데스크톱 앱 | 미생성 |
 | `pwa/` | 모바일 PWA | 미생성 |
 | `site/` | GitHub Pages 랜딩 | 미생성 |
+| [`assets/brand/`](assets/brand/) | 로고. SVG 가 정본, 파비콘·아이콘·소셜 카드는 파생 | |
 | [`docs/`](docs/README.md) | 운영문서 정본 | |
 | [`mainPlan/`](mainPlan/README.md) | 앞으로 지을 것 (이니셔티브. 완료되면 `docs/` 로 승격하고 지운다) | |
 | [`tests/audit/`](tests/audit/) | 계약 게이트 | |
