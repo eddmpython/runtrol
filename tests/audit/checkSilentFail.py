@@ -76,8 +76,21 @@ WEB_RULES: tuple[tuple[str, re.Pattern[str], str], ...] = (
 
 PY_OK_MARKER = "# ok:"
 
-# Rust 소스에서 문자열 리터럴과 줄 주석을 지운다. brace 깊이 추적이 그것들에 속지 않게 한다.
-RUST_NOISE = re.compile(r'"(?:\\.|[^"\\])*"|//.*$')
+# Rust 소스에서 리터럴과 줄 주석을 지운다. brace 깊이 추적이 그것들에 속지 않게 한다.
+#
+# **raw string 을 먼저 지운다.** 보통 문자열 규칙만 있던 판은 `r#"{"id":1}"#` 안에서 `"{"` 를
+# 문자열로 잘라내고 남은 중괄호를 코드로 셌다. 그러면 `#[cfg(test)]` 블록의 끝을 실제보다
+# 앞으로 잡고, 그 뒤의 테스트 코드가 프로덕션 코드로 오검출된다. 실제로 그렇게 났다.
+#
+# char 리터럴도 지운다 (`'{'` 는 한 글자짜리 중괄호다). 정확히 세 글자만 매치하므로
+# `&'static str` 같은 lifetime 은 건드리지 않는다.
+RUST_NOISE = re.compile(
+    r"r(#+)\".*?\"\1"  # raw string, hash 개수를 역참조로 맞춘다
+    r'|r"[^"]*"'  # hash 없는 raw string
+    r'|"(?:\\.|[^"\\])*"'  # 보통 문자열
+    r"|'(?:\\.|[^'\\])'"  # char 리터럴
+    r"|//.*$"  # 줄 주석
+)
 
 
 def _hasOkComment(lines: list[str], index: int) -> bool:
@@ -271,6 +284,32 @@ SELFTEST_CASES: tuple[tuple[str, str, int], ...] = (
         "unwrapTest.rs",
         "#[cfg(test)]\nmod tests {\n    #[test]\n    fn t() {\n        let v = maybe().unwrap();\n    }\n}\n",
         0,
+    ),
+    # **실제로 났던 오검출.** raw string 안의 이스케이프된 인용부호가 보통 문자열 규칙을 속여서
+    # 중괄호 하나가 코드로 세어졌고, `#[cfg(test)]` 블록의 끝이 실제보다 앞으로 잡혔다. 그 뒤의
+    # 테스트 코드가 프로덕션 패닉 경로로 신고됐다. 픽스처는 그 줄의 모양 그대로다.
+    (
+        "unwrapTestAfterRawStringWithEscape.rs",
+        "#[cfg(test)]\nmod tests {\n"
+        '    const ID: &str = r#"{"id":"a\\"b","result":null}"#;\n'
+        "    #[test]\n    fn t() {\n        let v = maybe().unwrap();\n    }\n}\n",
+        0,
+    ),
+    # char 리터럴은 반대 방향으로 틀린다. `'{'` 를 코드로 세면 블록이 닫히지 않고 파일 끝까지
+    # 늘어나서, 테스트 모듈 **뒤의** 프로덕션 코드가 면제된다. 놓치는 쪽이 더 위험하다.
+    (
+        "unwrapProdAfterCharLiteralInTests.rs",
+        "#[cfg(test)]\nmod tests {\n"
+        "    const OPEN: char = '{';\n"
+        "    #[test]\n    fn t() {}\n}\n"
+        "fn production() -> u32 {\n    maybe().unwrap()\n}\n",
+        1,
+    ),
+    # lifetime 은 char 리터럴이 아니다. 함께 지워버리면 다른 규칙에서 새 오검출이 난다.
+    (
+        "unwrapProdWithLifetime.rs",
+        "fn pick<'a>(x: &'a str) -> &'a str {\n    maybe().unwrap()\n}\n",
+        1,
     ),
     ("unsafeNoSafety.rs", "fn main() {\n    unsafe { ptr.read() };\n}\n", 1),
     # 근거가 길어도 인정된다. 앞 3 줄만 보던 판은 이 픽스처에서 오검출을 냈다.
