@@ -15,5 +15,7 @@ runtrol-security = { workspace = true }
 runtrol-childproc = { workspace = true }
 runtrol-store = { workspace = true }
 
+thiserror = { workspace = true }
+
 [lints]
 workspace = true

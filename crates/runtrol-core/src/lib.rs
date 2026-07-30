@@ -1,12 +1,23 @@
 //! The supervisor kernel. Session lifetime, tiers, and the event pipeline.
 //!
-//! Skeleton. This crate's own surface arrives in its own step, bottom up.
+//! This crate holds runtrol's own decisions: which sessions exist, which of them have a process
+//! attached, and in what order their events reach whoever is watching. It knows the shape of a
+//! provider through a trait and never by name, which is why it carries no dependency on the drivers.
+//! That one missing dependency edge is what makes "adding a provider does not touch the kernel" a
+//! fact a gate can check rather than an intention.
+//!
+//! # Layout
+//!
+//! - [`home`] where runtrol keeps its own files, and every path inside that directory
 
-// The dependency edges of this crate are already declared and already enforced by
-// `tests/audit/dependencyDirection.rs`. Until this crate has code that names them, these lines are
-// what make the declaration real: an unreferenced dependency is one `cargo shear` reports as dead,
-// and a dependency table that lists what nothing uses is the debt this repository refuses to carry.
+pub mod home;
+
+pub use home::{Endpoint, HomeError, Layout, RuntrolHome};
+
+// These edges are declared in this crate's manifest and enforced by
+// `tests/audit/dependencyDirection.rs`. Until the modules that use them arrive, these lines are what
+// make the declaration real: `cargo shear` reports a dependency nothing names, and a dependency table
+// listing what nothing uses is the debt this repository refuses to carry.
 use runtrol_childproc as _;
-use runtrol_provider as _;
 use runtrol_security as _;
 use runtrol_store as _;
