@@ -300,6 +300,41 @@ pub struct ProbeSpec {
     /// The version query.
     #[serde(default)]
     pub version: VersionProbe,
+    /// How to ask this CLI whether it knows a flag, without letting it start work.
+    #[serde(default)]
+    pub flags: Option<FlagProbe>,
+}
+
+/// How to ask a CLI about its own flags safely.
+///
+/// # Why this cannot be discovered
+///
+/// Everything else in a probe is discoverable by asking. This one is not, because asking is the thing being made
+/// safe: to find out whether a CLI knows a flag, the flag has to be offered to it, and offering a flag to a CLI
+/// that is willing to start work means starting work. A turn costs the operator money and, worse, appears in
+/// their session history as something they did not ask for.
+///
+/// So a manifest names the arguments that make this particular CLI refuse to do anything. Measured on one of
+/// them: with its print flag and no input, every argument combination fails at parsing, which is exactly the
+/// state a flag question needs.
+///
+/// # Why asking is worth the trouble at all
+///
+/// Measured on this machine, version 2.1.220 of one CLI: `--permission-prompt-tool` **exists and is absent from
+/// its own help output**. Confirmed with a control group, asking the parser rather than reading the text: the real
+/// flag answers "argument missing" and an invented one answers "unknown option".
+///
+/// A capability check that read help would conclude the flag is absent and quietly disable approval prompts, and
+/// the operator would never find out why their phone stopped asking them things. Reading help is the fallback
+/// rung; this is the accurate one.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct FlagProbe {
+    /// Arguments that make this CLI refuse to do any work.
+    ///
+    /// Every flag question is asked with these in front of it, so the answer is always a parse failure and never
+    /// a turn.
+    pub safe_with: Vec<Box<str>>,
 }
 
 /// The one question runtrol asks before anything else.

@@ -40,8 +40,8 @@ pub use id::{
     TurnId,
 };
 pub use manifest::{
-    BinSpec, FallbackSpec, Kind, MANIFEST_SCHEMA, Manifest, ManifestError, ModelAliases, ProbeSpec,
-    TransportSpec, UpdateHint, UpdateSpec, VersionParse, VersionProbe,
+    BinSpec, FallbackSpec, FlagProbe, Kind, MANIFEST_SCHEMA, Manifest, ManifestError, ModelAliases,
+    ProbeSpec, TransportSpec, UpdateHint, UpdateSpec, VersionParse, VersionProbe,
 };
 pub use path::{AbsPath, PathError};
 pub use time::WallMs;

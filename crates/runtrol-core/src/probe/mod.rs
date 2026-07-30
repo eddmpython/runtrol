@@ -285,6 +285,103 @@ async fn ask_flags(program: &Program, contained_by: &Containment) -> Flags {
     }
 }
 
+/// Two names no CLI has, for asking what a refusal looks like.
+///
+/// Two rather than one, because the method checks itself first. A parser that suggests a correction ("did you
+/// mean") answers two different invented names differently, and comparing against a single control would then
+/// report every absent flag as present. If the two controls do not agree, the technique does not work on this CLI
+/// and says so instead of guessing.
+const CONTROLS: [&str; 2] = [
+    "--runtrol-probe-absent-alpha",
+    "--runtrol-probe-absent-omega",
+];
+
+/// Ask a CLI's own argument parser which of `candidates` it knows.
+///
+/// Accurate where reading help is not. Measured on this machine: one CLI's `--permission-prompt-tool` exists and
+/// does not appear in its own help, so a capability check that read help would disable approval prompts and never
+/// say why.
+///
+/// Every question is asked with the manifest's safe arguments in front of it, so the CLI fails at parsing and
+/// never starts work. Without those there is no safe way to ask, which is why a manifest that does not declare
+/// them gets the honest answer rather than a risky one.
+///
+/// # Errors
+///
+/// [`ProbeError::Run`] when the CLI cannot be run at all. A CLI that runs and answers unusably produces
+/// [`Flags::Unknown`] rather than an error, because that is a limitation and not a failure.
+pub async fn confirm_flags(
+    manifest: &Manifest,
+    program: &Program,
+    candidates: &[&str],
+    contained_by: &Containment,
+) -> Result<Flags, ProbeError> {
+    let Some(probe) = manifest.probe.flags.as_ref() else {
+        return Ok(Flags::Unknown {
+            why: "this provider's manifest does not say how to ask it about a flag safely"
+                .to_owned(),
+        });
+    };
+    let safe: Vec<String> = probe.safe_with.iter().map(ToString::to_string).collect();
+
+    let mut refusals = Vec::with_capacity(CONTROLS.len());
+    for control in CONTROLS {
+        refusals.push(ask_about(program, &safe, control, contained_by).await?);
+    }
+    // `CONTROLS` has two entries and the loop pushed one answer each. Reporting the impossible as a limitation
+    // rather than a panic keeps a probe a probe.
+    let [first, second] = refusals.as_slice() else {
+        return Ok(Flags::Unknown {
+            why: "the control questions did not both produce an answer".to_owned(),
+        });
+    };
+    if first != second {
+        // The CLI's refusals are not comparable, so a difference from one of them means nothing.
+        return Ok(Flags::Unknown {
+            why: "this CLI answers two invented flags differently, so its refusals cannot be compared"
+                .to_owned(),
+        });
+    }
+
+    let mut known = std::collections::BTreeSet::new();
+    for candidate in candidates {
+        let answer = ask_about(program, &safe, candidate, contained_by).await?;
+        if answer != *first {
+            known.insert((*candidate).to_owned());
+        }
+    }
+    Ok(Flags::Observed(known))
+}
+
+/// Ask about one flag and return the answer with the flag's own name taken out of it.
+///
+/// The name is replaced rather than left in, because every answer mentions the flag it is about and two answers
+/// could never be equal otherwise.
+async fn ask_about(
+    program: &Program,
+    safe: &[String],
+    flag: &str,
+    contained_by: &Containment,
+) -> Result<String, ProbeError> {
+    /// What the flag's own name is replaced with before two answers are compared.
+    const PLACEHOLDER: &str = "<flag>";
+
+    let args = question_argv(safe, flag);
+    let output = capture(program, &args, QUESTION_DEADLINE, contained_by).await?;
+    Ok(output.text().replace(flag, PLACEHOLDER).trim().to_owned())
+}
+
+/// The arguments for one flag question.
+///
+/// The manifest's safe arguments come first and the flag last. What matters is that they are all there: they are
+/// what makes the CLI refuse to do anything, and a question asked without them can start a turn the operator did
+/// not ask for and will be billed for.
+fn question_argv(safe: &[String], flag: &str) -> Vec<String> {
+    let mut args: Vec<String> = safe.to_vec();
+    args.push(flag.to_owned());
+    args
+}
+
 /// Turn help output into a flag set, or into a reason there is none.
 ///
 /// Separated from the run so the classification can be exercised directly. The judgement it makes is the whole
@@ -739,6 +836,92 @@ Options:
         assert_eq!(reopened.len(), 1, "and it must have survived the restart");
 
         std::fs::remove_dir_all(root.as_std_path()).expect("clean up");
+    }
+
+    #[test]
+    fn a_flag_question_always_carries_the_arguments_that_make_the_cli_refuse() {
+        // Without them the CLI may be willing to work, and a probe that starts a turn costs the operator money and
+        // puts something in their history they did not ask for.
+        let safe = vec!["-p".to_owned(), "--quiet".to_owned()];
+        assert_eq!(
+            question_argv(&safe, "--candidate"),
+            vec!["-p", "--quiet", "--candidate"]
+        );
+        assert!(
+            question_argv(&[], "--candidate").len() == 1,
+            "nothing is added on its own"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_manifest_that_does_not_say_how_to_ask_gets_the_honest_answer() {
+        // Without the safe arguments there is no way to offer a flag to a CLI without risking that it starts
+        // work. Guessing would mean a probe that can cost the operator money.
+        let manifest: Manifest = toml::from_str(
+            "schema = 1\nid = \"nothing\"\ndisplay_name = \"Nothing\"\nkind = \"example\"\n[bin]\nnames = [\"cargo\"]\n",
+        )
+        .expect("the fixture parses");
+        let program = resolve("cargo").expect("the build tool is installed");
+
+        let answer = confirm_flags(
+            &manifest,
+            &program,
+            &["--version"],
+            &Containment::without_any(),
+        )
+        .await
+        .expect("no question was asked, so nothing could fail");
+        match answer {
+            Flags::Unknown { why } => assert!(why.contains("safely"), "{why}"),
+            other @ Flags::Observed(_) => {
+                panic!("expected an honest refusal to guess, got {other:?}")
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn asking_the_parser_finds_a_flag_that_help_does_not_mention() {
+        // The measurement this rung exists for. On this machine, version 2.1.220 of one CLI has
+        // `--permission-prompt-tool` and does not list it in its own help, so a capability check that read help
+        // would disable approval prompts and never say why.
+        //
+        // Skipped rather than failed when that CLI is not installed: this asserts something about a program
+        // runtrol does not ship, and a machine without it has nothing to be wrong about.
+        let Ok(program) = resolve("claude") else {
+            return;
+        };
+        let manifest: Manifest = toml::from_str(
+            "schema = 1\nid = \"claude\"\ndisplay_name = \"Claude Code\"\nkind = \"example\"\n[bin]\nnames = [\"claude\"]\n[probe]\nflags = { safe_with = [\"-p\"] }\n",
+        )
+        .expect("the fixture parses");
+
+        let answer = confirm_flags(
+            &manifest,
+            &program,
+            &[
+                "--permission-prompt-tool",
+                "--output-format",
+                "--session-id",
+                "--runtrol-certainly-not-a-flag",
+            ],
+            &Containment::without_any(),
+        )
+        .await
+        .expect("an installed CLI can be asked");
+
+        let Flags::Observed(known) = &answer else {
+            panic!("expected an observation, got {answer:?}");
+        };
+        assert!(
+            known.contains("--permission-prompt-tool"),
+            "the undocumented flag was not found: {known:?}"
+        );
+        assert!(known.contains("--output-format"), "{known:?}");
+        assert!(known.contains("--session-id"), "{known:?}");
+        assert!(
+            !known.contains("--runtrol-certainly-not-a-flag"),
+            "an invented flag was reported as present: {known:?}"
+        );
     }
 
     #[test]
