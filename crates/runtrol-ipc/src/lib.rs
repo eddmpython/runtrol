@@ -16,9 +16,12 @@
 //!
 //! - [`frame`] the length-prefixed frame, its bound, and the version both sides check
 //! - [`wire`] what the command surface asks and what the daemon answers
+//! - [`transport`] getting those frames between two processes on one machine
 
 pub mod frame;
+pub mod transport;
 pub mod wire;
 
 pub use frame::{Decoded, FrameError, MAX_FRAME, WIRE_VERSION, check_version, decode, encode};
+pub use transport::{Connection, Listener, TransportError, connect};
 pub use wire::{ProviderLine, Request, Response, SessionLine, WireError, agree};
