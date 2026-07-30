@@ -76,5 +76,12 @@ fn main() {
     // Block until killed. The containment guard stays alive for exactly as long as this process does, which is
     // the property under test.
     std::thread::sleep(SLEEP);
-    drop(containment);
+
+    // Reading the guard here is what keeps it alive to the end of `main`. `drop` would not: on the platform
+    // whose containment carries no resource there is no `Drop` to run, so the call says nothing and lints as
+    // pointless. Reading it is honest on both, and it stops a future edit from shortening the guard's scope
+    // without anybody noticing.
+    if containment.strength().survives_an_unclean_kill() {
+        eprintln!("this platform's containment does not cover an unclean kill");
+    }
 }

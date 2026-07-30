@@ -39,6 +39,14 @@ pub(super) struct Containment {
 
 impl Containment {
     /// Nothing to establish up front on this platform.
+    ///
+    /// Returns a `Result` it never fails with, so that both platforms present one signature. The other one
+    /// makes three kernel calls and any of them can refuse, and a caller that had to branch on which
+    /// platform it was compiled for would be the thing this shape exists to prevent.
+    #[expect(
+        clippy::unnecessary_wraps,
+        reason = "the fallible signature is the cross-platform contract, not an accident"
+    )]
     pub(super) const fn establish() -> Result<Self, SpawnError> {
         Ok(Self { _private: () })
     }
@@ -62,6 +70,11 @@ impl Containment {
                   async-signal-safe calls are allowed. the argument that this closure qualifies is at \
                   the block"
     )]
+    #[expect(
+        clippy::unused_self,
+        reason = "the receiver states the precondition (containment exists before a command is prepared) and \
+                  keeps both platforms' surfaces identical"
+    )]
     pub(super) fn prepare(&self, command: &mut Command) {
         // SAFETY: `pre_exec` runs in the forked child, between `fork` and `exec`, where the only calls
         // permitted are async-signal-safe ones. The closure below makes two direct system calls and nothing
@@ -71,11 +84,6 @@ impl Containment {
             command.pre_exec(|| {
                 // The child leads its own group, so signalling one session cannot reach another. Passing
                 // zero for both arguments means "this process, its own group".
-                #[expect(
-                    clippy::cast_possible_truncation,
-                    reason = "setpgid takes pid_t, and zero is the documented way to name the calling \
-                              process. no value is being narrowed"
-                )]
                 let grouped = libc::setpgid(0, 0);
                 if grouped != 0 {
                     return Err(std::io::Error::last_os_error());
@@ -107,6 +115,11 @@ impl Containment {
     /// supervisor's bookkeeping and does not exist until the kernel crate does. Returning an error rather
     /// than `Ok(())` is deliberate. `Ok` from a panic button that did nothing is the worst possible answer,
     /// because the operator would be told their agents were stopped when they are still writing files.
+    #[expect(
+        clippy::unused_self,
+        reason = "the receiver is the surface both platforms share, and this will read the tracked group \
+                  list once the supervisor keeps one"
+    )]
     pub(super) fn terminate_all(&self) -> Result<(), SpawnError> {
         Err(SpawnError::Containment {
             doing: "terminating every child group",

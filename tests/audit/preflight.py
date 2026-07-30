@@ -30,6 +30,10 @@ ROOT = Path(__file__).resolve().parents[2]
 PY = [sys.executable, "-X", "utf8"]
 HOOKS = "tests/audit"
 
+# 이 기계와 cfg 분기가 다른 대상 하나. 컴파일만 하므로 실행 환경이 필요 없고,
+# `#[cfg(unix)]` 쪽 코드가 로컬에서 검사된다는 것이 요점이다.
+CROSS_TARGET = "x86_64-unknown-linux-gnu" if sys.platform == "win32" else "x86_64-pc-windows-msvc"
+
 # 게이트 이름 -> (설명, 명령)
 GATES: dict[str, tuple[str, list[str]]] = {
     "noScriptsDir": ("`scripts/` 폴더 금지", [*PY, f"{HOOKS}/noScriptsDir.py"]),
@@ -45,6 +49,14 @@ GATES: dict[str, tuple[str, list[str]]] = {
     "cargoClippy": (
         "cargo clippy (경고 = 실패)",
         ["cargo", "clippy", "--all-targets", "--all-features", "--", "-D", "warnings"],
+    ),
+    # **다른 플랫폼의 cfg 분기를 로컬에서 본다.** 이것이 없으면 unix 전용 결함 (미사용 mut,
+    # 죽은 상수, 도달 불가 variant, cfg 로 갈라진 함수) 이 전부 CI 에서만 드러나고 수정이
+    # 두 번째 커밋으로 온다. 실제로 그렇게 됐고, 그래서 이 게이트가 있다.
+    # 대상이 설치돼 있지 않으면 건너뛴다고 밝히고 건너뛴다.
+    "clippyCrossCfg": (
+        "cargo clippy (다른 플랫폼 cfg 분기)",
+        ["cargo", "clippy", "--all-targets", "--target", CROSS_TARGET, "--", "-D", "warnings"],
     ),
     "cargoTest": ("cargo test", ["cargo", "test", "--all"]),
     "audit": ("저장소 계약 게이트 (tests/audit)", ["cargo", "test", "-p", "runtrol-audit"]),
@@ -72,7 +84,15 @@ SUITES: dict[str, tuple[str, ...]] = {
 }
 
 CARGO_GATES = frozenset(
-    {"cargoFmt", "cargoClippy", "cargoTest", "audit", "cargoShear", "cargoDeny"}
+    {
+        "cargoFmt",
+        "cargoClippy",
+        "clippyCrossCfg",
+        "cargoTest",
+        "audit",
+        "cargoShear",
+        "cargoDeny",
+    }
 )
 
 
@@ -99,7 +119,21 @@ def skipReasonFor(name: str) -> str | None:
         return "cargo-shear 미설치 (cargo binstall cargo-shear)"
     if name == "cargoDeny" and shutil.which("cargo-deny") is None:
         return "cargo-deny 미설치 (cargo binstall cargo-deny)"
+    if name == "clippyCrossCfg" and not hasCrossTarget():
+        return f"{CROSS_TARGET} 미설치 (rustup target add {CROSS_TARGET})"
     return None
+
+
+def hasCrossTarget() -> bool:
+    """교차 cfg 검사 대상이 설치돼 있는가."""
+    proc = subprocess.run(
+        ["rustup", "target", "list", "--installed"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return CROSS_TARGET in proc.stdout
 
 
 def runGate(name: str) -> int:

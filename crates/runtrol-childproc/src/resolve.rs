@@ -56,6 +56,9 @@ const MAX_LAUNCHER_DEPTH: usize = 4;
 ///
 /// A generated launcher is a few hundred bytes. Anything larger is not the template this recognizes, and
 /// reading an arbitrary file into memory to look for a pattern is not something to do without a bound.
+///
+/// Not gated to the platform that reads launchers, even though only that platform does: the message for
+/// [`LauncherKept::TooLarge`] quotes this limit, and that message is part of the cross-platform surface.
 const MAX_LAUNCHER_BYTES: u64 = 8 * 1024;
 
 /// Why a launcher was run as it is rather than unwrapped.
@@ -212,20 +215,21 @@ pub fn resolve(program: &str) -> Result<Program, SpawnError> {
     let mut via: Vec<AbsPath> = Vec::new();
 
     for _ in 0..MAX_LAUNCHER_DEPTH {
-        if !is_batch_file(&path) {
-            return Ok(finish(path, leading, via, None));
-        }
         match unwrap_launcher(&path) {
-            Ok(unwrapped) => {
+            Unwrap::NotALauncher => return Ok(finish(path, leading, via, None)),
+            Unwrap::Kept(kept) => return Ok(finish(path, leading, via, Some(kept))),
+            Unwrap::To {
+                target,
+                leading: prefix,
+            } => {
                 via.push(path.clone());
-                path = unwrapped.target;
+                path = target;
                 // The launcher's own arguments come before anything already collected: an outer launcher
                 // runs an inner one, so its arguments sit further left on the final command line.
-                let mut combined = unwrapped.leading;
+                let mut combined = prefix;
                 combined.extend(leading);
                 leading = combined;
             }
-            Err(kept) => return Ok(finish(path, leading, via, Some(kept))),
         }
     }
 
@@ -301,22 +305,71 @@ fn searched_description() -> String {
     }
 }
 
-/// What a launcher actually runs.
+/// What resolution found when it looked at a path.
+///
+/// Three answers rather than two, because "this is not a launcher" and "this is a launcher runtrol has to run
+/// as it is" mean different things to the operator: the first is normal and the second costs a process.
+///
+/// Tri-state rather than a `Result` plus a separate is-it-a-launcher question, so the resolution loop reads
+/// identically on every platform. An earlier version asked the two separately and put a `#[cfg(windows)]`
+/// inside the loop, which left the Unix build declaring mutability it never used and constants nothing read.
+/// Platform-only warnings are the defect this shape removes, and CI on two other platforms is what showed it.
+///
+/// Two of the three states exist only where launchers do. The expectation is applied per platform rather
+/// than unconditionally, because on the platform that does construct them an unconditional one would itself
+/// be an unfulfilled expectation, which is denied.
+#[cfg_attr(
+    unix,
+    expect(
+        dead_code,
+        reason = "this is the cross-platform contract of the resolution loop. only the platform with batch                   launchers reaches the other two states, and keeping one shape is what lets the loop read                   identically everywhere"
+    )
+)]
 #[derive(Debug, PartialEq, Eq)]
-struct Unwrapped {
-    /// The program the launcher invokes.
-    target: AbsPath,
-    /// The arguments the launcher passes before the caller's own.
-    leading: Vec<String>,
+enum Unwrap {
+    /// Nothing to unwrap. Run the path as it is, and there is nothing to report.
+    NotALauncher,
+    /// Unwrapped to something else.
+    To {
+        /// The program the launcher invokes.
+        target: AbsPath,
+        /// The arguments the launcher passes before the caller's own.
+        leading: Vec<String>,
+    },
+    /// A launcher that has to be run as it is, for a named reason.
+    Kept(LauncherKept),
 }
 
-/// Read a launcher and work out what it runs.
+/// Unwrap a launcher, or say there is nothing to unwrap.
+#[cfg(windows)]
+fn unwrap_launcher(path: &AbsPath) -> Unwrap {
+    if !is_batch_file(path) {
+        return Unwrap::NotALauncher;
+    }
+    match read_launcher(path) {
+        Ok(unwrapped) => unwrapped,
+        Err(kept) => Unwrap::Kept(kept),
+    }
+}
+
+/// Nothing to unwrap on this platform.
+///
+/// A package manager on Unix installs a symbolic link or a shell wrapper rather than a batch launcher, and a
+/// symbolic link is already followed by the canonicalisation every resolution does. So the shortcut this
+/// module exists for is unnecessary here rather than missing.
+#[cfg(unix)]
+const fn unwrap_launcher(_path: &AbsPath) -> Unwrap {
+    Unwrap::NotALauncher
+}
+
+/// Read a batch launcher and work out what it runs.
 ///
 /// # Errors
 ///
 /// [`LauncherKept`] naming why the launcher has to be run as it is. Not a failure of the spawn: every
 /// variant means "slower, and correct".
-fn unwrap_launcher(path: &AbsPath) -> Result<Unwrapped, LauncherKept> {
+#[cfg(windows)]
+fn read_launcher(path: &AbsPath) -> Result<Unwrap, LauncherKept> {
     let metadata =
         std::fs::metadata(path.as_std_path()).map_err(|error| LauncherKept::Unreadable {
             detail: error.to_string(),
@@ -366,10 +419,16 @@ fn unwrap_launcher(path: &AbsPath) -> Result<Unwrapped, LauncherKept> {
         leading.push(expand(&token, &directory, &text)?);
     }
 
-    Ok(Unwrapped { target, leading })
+    Ok(Unwrap::To { target, leading })
 }
 
-/// Whether this path is a Windows batch launcher.
+/// Whether this path is a batch launcher worth unwrapping.
+///
+/// Windows only, and the tests for it are too. Everything below the launcher reader parses batch syntax,
+/// backslash separators included, so it is not portable and this file no longer pretends it is: on Linux the
+/// unwrapping produced a path with a backslash in the middle of a filename, failed to resolve it, and
+/// reported a missing target. CI on the other two platforms is what surfaced that.
+#[cfg(windows)]
 fn is_batch_file(path: &AbsPath) -> bool {
     let Some(name) = path.file_name() else {
         return false;
@@ -384,6 +443,7 @@ fn is_batch_file(path: &AbsPath) -> bool {
 ///
 /// A generated launcher quotes the program and each of its arguments, so reading only quoted tokens steps
 /// over the shell bookkeeping around them without needing to understand any of it.
+#[cfg(windows)]
 fn quoted_tokens(line: &str) -> Vec<String> {
     let mut tokens = Vec::new();
     let mut current: Option<String> = None;
@@ -408,6 +468,7 @@ fn quoted_tokens(line: &str) -> Vec<String> {
 ///
 /// [`LauncherKept::UnexpandableVariable`] for anything else, and
 /// [`LauncherKept::InterpreterMissing`] when the interpreter it names cannot be found.
+#[cfg(windows)]
 fn expand(token: &str, directory: &AbsPath, script: &str) -> Result<String, LauncherKept> {
     // The template captures its own directory with a trailing separator, so it writes `<dir>\name` and the
     // naive expansion doubles the separator. Harmless to the OS, and it makes every path runtrol logs look
@@ -434,6 +495,7 @@ fn expand(token: &str, directory: &AbsPath, script: &str) -> Result<String, Laun
 /// # Errors
 ///
 /// [`LauncherKept::InterpreterMissing`] when neither a bundled interpreter nor one on `PATH` exists.
+#[cfg(windows)]
 fn interpreter(directory: &AbsPath, script: &str) -> Result<String, LauncherKept> {
     let base = directory.as_str().trim_end_matches(['\\', '/']);
 
@@ -497,6 +559,7 @@ mod tests {
         }
     }
 
+    #[cfg(windows)]
     /// The launcher shape observed on this machine for a native binary.
     fn native_launcher(target: &str) -> String {
         format!(
@@ -505,6 +568,7 @@ mod tests {
         )
     }
 
+    #[cfg(windows)]
     /// The launcher shape observed on this machine for an interpreted entry point.
     fn interpreted_launcher(script: &str) -> String {
         format!(
@@ -516,6 +580,7 @@ mod tests {
         )
     }
 
+    #[cfg(windows)]
     #[test]
     fn a_launcher_pointing_at_a_native_binary_is_unwrapped() {
         // The measured saving is 219 ms and one process, on every session start.
@@ -523,14 +588,22 @@ mod tests {
         let target = fixture.write("real.exe", "stand-in");
         let launcher = fixture.write("tool.cmd", &native_launcher("real.exe"));
 
-        let unwrapped = unwrap_launcher(&launcher).expect("the template must be recognized");
-        assert_eq!(unwrapped.target, target);
-        assert!(
-            unwrapped.leading.is_empty(),
-            "a native launcher passes no arguments of its own"
-        );
+        match unwrap_launcher(&launcher) {
+            Unwrap::To {
+                target: found,
+                leading,
+            } => {
+                assert_eq!(found, target);
+                assert!(
+                    leading.is_empty(),
+                    "a native launcher passes no arguments of its own"
+                );
+            }
+            other => panic!("the template must be recognized, got {other:?}"),
+        }
     }
 
+    #[cfg(windows)]
     #[test]
     fn a_launcher_pointing_at_an_interpreter_keeps_the_script_as_a_leading_argument() {
         let fixture = Fixture::make("interpreted");
@@ -538,21 +611,25 @@ mod tests {
         fixture.write("entry.js", "// stand-in script");
         let launcher = fixture.write("tool.cmd", &interpreted_launcher("entry.js"));
 
-        let unwrapped = unwrap_launcher(&launcher).expect("the template must be recognized");
+        let unwrapped = match unwrap_launcher(&launcher) {
+            Unwrap::To { target, leading } => (target, leading),
+            other => panic!("the template must be recognized, got {other:?}"),
+        };
         assert_eq!(
-            unwrapped.target, bundled,
+            unwrapped.0, bundled,
             "the bundled interpreter wins over whatever is on PATH: a different version would run the \
              operator's code"
         );
-        assert_eq!(unwrapped.leading.len(), 1);
+        assert_eq!(unwrapped.1.len(), 1);
         assert!(
             unwrapped
-                .leading
+                .1
                 .first()
                 .is_some_and(|argument| argument.ends_with("entry.js"))
         );
     }
 
+    #[cfg(windows)]
     #[test]
     fn an_interpreted_program_says_a_process_is_still_in_the_chain() {
         let fixture = Fixture::make("interpreted-kind");
@@ -569,6 +646,7 @@ mod tests {
         );
     }
 
+    #[cfg(windows)]
     #[test]
     fn an_unrecognized_launcher_is_kept_and_says_why() {
         // The failure direction that matters, and it must be visible rather than felt. A template change
@@ -578,7 +656,7 @@ mod tests {
 
         assert_eq!(
             unwrap_launcher(&launcher),
-            Err(LauncherKept::NoTemplateMarker)
+            Unwrap::Kept(LauncherKept::NoTemplateMarker)
         );
 
         let program = resolve(launcher.as_str()).expect("still runnable");
@@ -591,28 +669,31 @@ mod tests {
         );
     }
 
+    #[cfg(windows)]
     #[test]
     fn a_launcher_pointing_at_nothing_is_kept_and_names_what_was_missing() {
         let fixture = Fixture::make("dangling");
         let launcher = fixture.write("tool.cmd", &native_launcher("absent.exe"));
         match unwrap_launcher(&launcher) {
-            Err(LauncherKept::TargetMissing { named }) => {
+            Unwrap::Kept(LauncherKept::TargetMissing { named }) => {
                 assert!(named.ends_with("absent.exe"), "{named}");
             }
             other => panic!("expected a missing target, got {other:?}"),
         }
     }
 
+    #[cfg(windows)]
     #[test]
     fn a_launcher_naming_itself_is_kept_rather_than_looped() {
         let fixture = Fixture::make("selfref");
         let launcher = fixture.write("tool.cmd", &native_launcher("tool.cmd"));
         assert_eq!(
             unwrap_launcher(&launcher),
-            Err(LauncherKept::SelfReferential)
+            Unwrap::Kept(LauncherKept::SelfReferential)
         );
     }
 
+    #[cfg(windows)]
     #[test]
     fn a_variable_runtrol_cannot_expand_is_named_rather_than_half_expanded() {
         // A half-expanded path points somewhere real and wrong, which is worse than no shortcut.
@@ -622,20 +703,21 @@ mod tests {
             "@ECHO off\r\nSET dp0=%~dp0\r\n\"%SOMETHING_ELSE%\\real.exe\" %*\r\n",
         );
         match unwrap_launcher(&launcher) {
-            Err(LauncherKept::UnexpandableVariable { token }) => {
+            Unwrap::Kept(LauncherKept::UnexpandableVariable { token }) => {
                 assert_eq!(token, "%SOMETHING_ELSE%\\real.exe");
             }
             other => panic!("expected an unexpandable variable, got {other:?}"),
         }
     }
 
+    #[cfg(windows)]
     #[test]
     fn an_oversized_file_is_not_read_looking_for_a_pattern() {
         let fixture = Fixture::make("huge");
         let padding = "rem padding\r\n".repeat(1024);
         let launcher = fixture.write("tool.cmd", &format!("SET dp0=%~dp0\r\n{padding}"));
         match unwrap_launcher(&launcher) {
-            Err(LauncherKept::TooLarge { bytes }) => assert!(bytes > MAX_LAUNCHER_BYTES),
+            Unwrap::Kept(LauncherKept::TooLarge { bytes }) => assert!(bytes > MAX_LAUNCHER_BYTES),
             other => panic!("expected a size refusal, got {other:?}"),
         }
     }
@@ -644,7 +726,7 @@ mod tests {
     fn a_native_executable_is_not_treated_as_a_launcher() {
         let fixture = Fixture::make("plain");
         let program = fixture.write("real.exe", "stand-in");
-        assert!(!is_batch_file(&program));
+        assert_eq!(unwrap_launcher(&program), Unwrap::NotALauncher);
 
         let resolved = resolve(program.as_str()).expect("resolvable");
         assert_eq!(resolved.kind(), ProgramKind::Native);
@@ -653,6 +735,7 @@ mod tests {
         assert!(resolved.via().is_empty());
     }
 
+    #[cfg(windows)]
     #[test]
     fn batch_extensions_are_recognized_whatever_the_case() {
         let fixture = Fixture::make("case");
@@ -664,6 +747,7 @@ mod tests {
         }
     }
 
+    #[cfg(windows)]
     #[test]
     fn quoted_tokens_skip_the_shell_bookkeeping_around_them() {
         // The measured interpreted launcher has `endLocal`, a `goto`, and a `title` on the same line as the
@@ -696,6 +780,7 @@ mod tests {
         ));
     }
 
+    #[cfg(windows)]
     #[test]
     fn resolving_records_what_it_skipped() {
         let fixture = Fixture::make("chain");
@@ -708,6 +793,7 @@ mod tests {
         assert_eq!(program.kind(), ProgramKind::Native);
     }
 
+    #[cfg(windows)]
     #[test]
     fn a_chain_of_launchers_terminates() {
         // A cycle between two launchers must not be followed forever.

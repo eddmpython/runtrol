@@ -53,6 +53,10 @@ NOT_A_GATE: dict[str, str] = {
 LOCAL_ONLY: dict[str, str] = {
     "audit": "the workflow's `cargo test --all` already compiles and runs the audit package, "
     "because it is a workspace member. this entry exists so a local run can target it alone",
+    "clippyCrossCfg": "the workflow runs this gate too, and it has to name a different target: each "
+    "runner cross-compiles toward the platform it is not, so the local command targets linux and the "
+    "linux runner targets windows. the gate is present on both sides; only the argument differs, which "
+    "is why an exact-command comparison cannot see it",
 }
 
 # Workflow invocations that intentionally have no counterpart preflight gate.

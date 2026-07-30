@@ -110,6 +110,13 @@ jobs:
       - name: cargo clippy
         if: needs.detect.outputs.hasWorkspace == 'true'
         run: cargo clippy --all-targets --all-features -- -D warnings
+      # 다른 플랫폼의 cfg 분기를 이 잡에서도 본다. 로컬 preflight 와 같은 게이트다
+      # (`tests/audit/gateCoverage.py` 가 두 목록의 일치를 강제한다).
+      - name: cargo clippy (다른 플랫폼 cfg 분기)
+        if: needs.detect.outputs.hasWorkspace == 'true'
+        run: |
+          rustup target add x86_64-pc-windows-msvc
+          cargo clippy --all-targets --target x86_64-pc-windows-msvc -- -D warnings
       - name: cargo test
         if: needs.detect.outputs.hasWorkspace == 'true'
         run: cargo test --all
