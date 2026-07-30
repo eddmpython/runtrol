@@ -36,6 +36,8 @@ GATES: dict[str, tuple[str, list[str]]] = {
     "workspaceHygiene": ("루트 allowlist + 스크래치 부패", [*PY, f"{HOOKS}/workspaceHygiene.py"]),
     "silentFailSelftest": ("silent failure 검출기 자체 검증", [*PY, f"{HOOKS}/checkSilentFail.py", "--selftest"]),
     "checkSilentFail": ("silent failure 금지", [*PY, f"{HOOKS}/checkSilentFail.py"]),
+    # 게이트가 저장소에 있는 것과 도는 것은 다른 말이다. 이 게이트가 그 차이를 감시한다.
+    "gateCoverage": ("게이트 러너 커버리지", [*PY, f"{HOOKS}/gateCoverage.py"]),
     "cargoFmt": ("cargo fmt --check", ["cargo", "fmt", "--all", "--check"]),
     "cargoClippy": (
         "cargo clippy (경고 = 실패)",
@@ -46,14 +48,27 @@ GATES: dict[str, tuple[str, list[str]]] = {
     # 의존성 부패. `[workspace.dependencies]` 미사용 항목까지 잡는 것이 cargo-shear 를 고른 이유다
     # (버전 SSOT 가 거기 살기 때문). 설치돼 있지 않으면 건너뛴다고 밝히고 건너뛴다.
     "cargoShear": ("미사용 의존성 (cargo-shear)", ["cargo", "shear"]),
+    # 공급망 + 기각한 crate 의 기계 기억 (`deny.toml`). 제3자 의존이 들어오는 순간부터
+    # 이것이 돌지 않으면 원장은 읽히지 않는 문서일 뿐이다.
+    "cargoDeny": ("공급망·기각 원장 (cargo-deny)", ["cargo", "deny", "check"]),
 }
 
 SUITES: dict[str, tuple[str, ...]] = {
-    "lint": ("noScriptsDir", "workspaceHygiene", "silentFailSelftest", "checkSilentFail", "cargoFmt", "cargoClippy"),
+    "lint": (
+        "noScriptsDir",
+        "workspaceHygiene",
+        "silentFailSelftest",
+        "checkSilentFail",
+        "gateCoverage",
+        "cargoFmt",
+        "cargoClippy",
+    ),
     "preflight": tuple(GATES),
 }
 
-CARGO_GATES = frozenset({"cargoFmt", "cargoClippy", "cargoTest", "audit", "cargoShear"})
+CARGO_GATES = frozenset(
+    {"cargoFmt", "cargoClippy", "cargoTest", "audit", "cargoShear", "cargoDeny"}
+)
 
 
 def hasCargoWorkspace() -> bool:
@@ -77,6 +92,8 @@ def skipReasonFor(name: str) -> str | None:
         return "tests/audit crate 없음"
     if name == "cargoShear" and shutil.which("cargo-shear") is None:
         return "cargo-shear 미설치 (cargo binstall cargo-shear)"
+    if name == "cargoDeny" and shutil.which("cargo-deny") is None:
+        return "cargo-deny 미설치 (cargo binstall cargo-deny)"
     return None
 
 

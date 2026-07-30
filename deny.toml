@@ -35,6 +35,12 @@ allow-registry = ["https://github.com/rust-lang/crates.io-index"]
 multiple-versions = "warn"
 # 와일드카드 버전은 재현 빌드를 깨뜨린다. 릴리즈 서명의 전제다.
 wildcards = "deny"
+# Exempt this workspace's own `{ path = ... }` edges. They read as wildcards because they carry no
+# version, and for a third-party crate that would indeed break a reproducible build. For a path
+# dependency inside one repository the resolution is pinned by the commit itself, so denying it would
+# only teach everyone to write a version number that means nothing. Every member is `publish = false`,
+# which is the condition cargo-deny requires before granting this.
+allow-wildcard-paths = true
 
 # 기각 원장. 각 항목의 근거는 mainPlan 문서에 있다.
 [[bans.deny]]

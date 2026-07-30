@@ -1,5 +1,9 @@
-# 게이트 정본. 로컬 러너가 이 파일의 `run:` 을 읽어 그대로 실행하므로,
-# CI 에 새 단계가 들어오면 로컬도 자동으로 는다 (손으로 쓴 목록은 반드시 빠뜨린다).
+# CI 쪽 게이트 목록. **로컬 러너는 이 파일을 읽지 않는다.**
+#
+# (이전 판의 이 주석은 로컬이 이 파일을 읽는다고 적어 두었으나 사실이 아니었다.
+#  `tests/audit/preflight.py` 는 자기 `GATES` 표를 갖는다. 두 목록이 갈라지면 한쪽 green 이
+#  다른 쪽 green 과 다른 뜻이 되므로, 두 목록이 일치하는지를 `tests/audit/gateCoverage.py` 가
+#  게이트로 강제한다. 즉 정본은 두 개이고 그 일치가 기계 검사 대상이다.)
 #
 # 실행 층이 갈려 있는 이유는 `docs/northStarEvidence.md` 를 본다:
 # 두 CLI 의 구독 인증(OAuth)은 사람 로그인이 필요해 hosted 러너에 실을 수 없고,
@@ -60,6 +64,10 @@ jobs:
         run: python -X utf8 tests/audit/checkSilentFail.py --selftest
       - name: silent failure 금지
         run: python -X utf8 tests/audit/checkSilentFail.py
+      # 저장소에 있으나 도는 러너가 없는 게이트를 잡는다. 이 단계와 preflight 의 GATES 표가
+      # 서로를 검사하므로, 어느 한쪽에만 추가된 게이트는 red 가 된다.
+      - name: 게이트 러너 커버리지
+        run: python -X utf8 tests/audit/gateCoverage.py
       # `--check-push` 는 git pre-push 의 stdin 프로토콜을 읽으므로 CI 에서는 쓸 수 없다
       # (입력이 없으면 아무것도 검사하지 않고 조용히 통과한다). CI 는 범위를 명시한다.
       # PR 은 base..head, push 는 before..sha. 새 브랜치의 before 는 0 이라 그때는 HEAD 만 본다.
@@ -113,6 +121,13 @@ jobs:
         run: |
           cargo binstall --no-confirm cargo-shear
           cargo shear
+      # 공급망 + `deny.toml` 의 기각 원장. 원장을 문서로만 두면 다음 사람은 읽지 않는다.
+      # advisory DB 를 git 으로 가져오므로 네트워크가 필요하다.
+      - name: cargo deny (공급망·기각 원장)
+        if: needs.detect.outputs.hasWorkspace == 'true'
+        run: |
+          cargo binstall --no-confirm cargo-deny
+          cargo deny check
 
   # 크로스 플랫폼. `어디서나 같은 방법` 축. Windows 잡은 WSL 없이 돈다.
   crossPlatform:
