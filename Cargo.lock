@@ -272,8 +272,11 @@ dependencies = [
 name = "runtrol-drivers"
 version = "0.0.0"
 dependencies = [
+ "bytes",
  "runtrol-childproc",
  "runtrol-provider",
+ "thiserror",
+ "tokio",
 ]
 
 [[package]]

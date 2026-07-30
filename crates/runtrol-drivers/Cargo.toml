@@ -13,5 +13,16 @@ publish = false
 runtrol-provider = { workspace = true }
 runtrol-childproc = { workspace = true }
 
+# Shared line buffers. A payload relayed to three watchers must cost three pointers, which means the line it
+# came from has to be shareable rather than copied.
+bytes = { workspace = true }
+thiserror = { workspace = true }
+# Reading a child's output. `io-util` is the buffered reader; the process itself is started by the crate that
+# owns child processes.
+tokio = { workspace = true, features = ["io-util"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt", "macros", "io-util"] }
+
 [lints]
 workspace = true
