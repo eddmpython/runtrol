@@ -1,10 +1,33 @@
-//! The command surface a person types.
+//! What a person types, and what they get back.
 //!
-//! Skeleton. This crate's own surface arrives in its own step, bottom up.
+//! # This crate cannot open the database, and that is enforced rather than promised
+//!
+//! Its dependency list is the vocabulary and the wire, and nothing else. It cannot see storage, the kernel, or a
+//! driver, so "the command surface asks the daemon" is a fact the compiler holds. If this lived inside the binary it
+//! would see all of those through the binary's own dependency list, and the rule would be a comment.
+//!
+//! It is also true for a second reason that has nothing to do with discipline: the database takes an exclusive lock, so
+//! a second opener is refused. Two ways of being right about the same thing.
+//!
+//! # Layout
+//!
+//! Four things happen between a person typing and a person reading, and each is its own file because each can be wrong
+//! on its own:
+//!
+//! - [`words`] what was typed becomes a request, and nothing is guessed
+//! - [`link`] a daemon is reached, and started if there is none
+//! - [`ask`] one request goes out and the answers come back
+//! - [`lines`] an answer becomes the lines a person reads
+//!
+//! The two ends of that ([`words`] and [`lines`]) touch nothing at all, which is why both are checked here without a
+//! daemon, a socket, or a session.
 
-// The dependency edges of this crate are already declared and already enforced by
-// `tests/audit/dependencyDirection.rs`. Until this crate has code that names them, these lines are
-// what make the declaration real: an unreferenced dependency is one `cargo shear` reports as dead,
-// and a dependency table that lists what nothing uses is the debt this repository refuses to carry.
-use runtrol_ipc as _;
-use runtrol_provider as _;
+pub mod ask;
+pub mod lines;
+pub mod link;
+pub mod words;
+
+pub use ask::{Failed, ask};
+pub use lines::render;
+pub use link::{DAEMON_ARGUMENT, Unreachable, reach};
+pub use words::{Misunderstood, understand};

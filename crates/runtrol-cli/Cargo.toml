@@ -1,4 +1,4 @@
-# 사람이 타이핑한 명령을 파싱해 데몬에 묻고 답을 렌더한다.
+# The command surface: what a person types becomes a request, and an answer becomes what they read.
 [package]
 name = "runtrol-cli"
 version = "0.0.0"
@@ -12,6 +12,17 @@ publish = false
 [dependencies]
 runtrol-provider = { workspace = true }
 runtrol-ipc = { workspace = true }
+
+thiserror = { workspace = true }
+# The requests and answers on the connection. This crate carries them and never decides what they mean.
+serde_json = { workspace = true }
+# Reaching a daemon waits: for the one that was just started to begin answering, and for a pipe instance to be
+# replaced. `time` is that waiting, and `rt` is what an asynchronous connection needs to be driven at all.
+tokio = { workspace = true, features = ["rt", "time"] }
+
+[dev-dependencies]
+# Reaching a daemon is asynchronous, so its tests need somewhere for that to run.
+tokio = { workspace = true, features = ["rt", "macros", "time"] }
 
 [lints]
 workspace = true
