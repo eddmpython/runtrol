@@ -24,12 +24,17 @@
 //! only way to allow it in one place and machine-forbid it everywhere else is a crate with its own lint
 //! table.
 
+//! - [`run`] asks a program one question and reads the answer, under a deadline and a byte ceiling. The
+//!   long-lived conversation of a session is not this: it is a transport, and it belongs to a driver.
+
 pub mod argv;
 pub mod contain;
 pub mod error;
 pub mod resolve;
+pub mod run;
 
 pub use argv::{MAX_ARGUMENT_LEN, check_all, check_one};
 pub use contain::{Containment, Strength};
 pub use error::SpawnError;
 pub use resolve::{LauncherKept, Program, ProgramKind, resolve};
+pub use run::{MAX_OUTPUT_BYTES, Output, capture};

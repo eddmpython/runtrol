@@ -3,7 +3,7 @@
 use runtrol_provider::AbsPath;
 
 /// Starting or supervising a child process failed.
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum SpawnError {
     /// No executable by that name exists on this machine.
@@ -67,6 +67,20 @@ pub enum SpawnError {
         doing: &'static str,
         /// What the platform said.
         detail: String,
+    },
+
+    /// A program runtrol asked a question did not answer in time.
+    ///
+    /// Only for a one-shot question, never for a session. A turn has no timeout by design, because deciding
+    /// a turn ended because nothing arrived would be reporting an outcome runtrol does not know. Asking a CLI
+    /// its version is the opposite case: there is a right answer, it arrives in milliseconds when it arrives
+    /// at all, and waiting forever would hang whatever asked.
+    #[error("{path} did not answer within {after_ms} ms")]
+    Timeout {
+        /// The program that was asked.
+        path: AbsPath,
+        /// How long it was given.
+        after_ms: u64,
     },
 
     /// The filesystem refused a path.

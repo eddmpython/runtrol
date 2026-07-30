@@ -330,9 +330,13 @@ impl Default for VersionProbe {
 ///
 /// Named in the manifest rather than assumed, so that adding a second strategy does not silently change
 /// how every manifest already on disk is read.
+///
+/// Exhaustive, unlike [`Listen`]. The rule is who matches on it: a driver written outside this repository
+/// legitimately serves some transports and not others, so [`Listen`] must be able to grow without breaking
+/// one. Nothing outside runtrol reads a version, so a new strategy here has to be a compile error in the
+/// kernel rather than a wildcard arm nobody notices.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
-#[non_exhaustive]
 pub enum VersionParse {
     /// Take the first thing anywhere in the output that looks like a version.
     ///
@@ -423,9 +427,11 @@ pub struct UpdateSpec {
 ///
 /// A hint and not an instruction. Whatever performs an update probes first and believes what it finds; this
 /// only says where to look, which is a fact about how the CLI was installed rather than about its version.
+///
+/// Exhaustive for the same reason as [`VersionParse`]: only runtrol's own updater reads it, so a new channel
+/// has to be a compile error rather than a case that silently does nothing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
-#[non_exhaustive]
 pub enum UpdateHint {
     /// The provider updates itself.
     ///

@@ -11,9 +11,11 @@
 //! - [`home`] where runtrol keeps its own files, and every path inside that directory
 //! - [`events`] the single point a driver's output enters a session, and the bounds it travels under
 //! - [`registry`] which providers exist, and the seam that keeps their names out of this crate
+//! - [`probe`] what each installed CLI actually is, asked rather than assumed, and remembered
 
 pub mod events;
 pub mod home;
+pub mod probe;
 pub mod registry;
 
 pub use events::{
@@ -21,6 +23,7 @@ pub use events::{
     SubscriberId, Subscription,
 };
 pub use home::{Endpoint, HomeError, Layout, RuntrolHome};
+pub use probe::{BinFacts, Flags, ProbeCache, ProbeError, probe};
 pub use registry::{
     KindEntry, KindStatus, KindTable, Origin, Provider, ProviderRegistry, RegistryError,
 };

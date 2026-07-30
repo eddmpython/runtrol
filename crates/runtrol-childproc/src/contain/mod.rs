@@ -88,11 +88,41 @@ impl Strength {
 /// documentation.
 #[derive(Debug)]
 pub struct Containment {
-    /// The platform's own mechanism.
-    inner: platform::Containment,
+    /// The platform's own mechanism, or nothing.
+    inner: Inner,
+}
+
+/// What is actually holding the children.
+#[derive(Debug)]
+enum Inner {
+    /// The platform's mechanism.
+    Platform(platform::Containment),
+    /// Nothing.
+    Nothing,
 }
 
 impl Containment {
+    /// A containment that holds nothing.
+    ///
+    /// For a caller that runs a child and deliberately adds no group to it: asking an installed CLI its
+    /// version needs no job object, because the answer arrives in milliseconds and the run is killed when its
+    /// handle is dropped. A command that only asks questions and never starts a session is the case this
+    /// exists for.
+    ///
+    /// It is also the only containment a test can hold. [`Self::establish`] puts the calling process into the
+    /// group it is about to kill, so a test that established one would terminate its own runner (measured,
+    /// and the reason [`Self::platform_strength`] exists).
+    ///
+    /// What is given up is stated rather than implied: [`Self::strength`] reports that an unclean kill leaves
+    /// children running, and [`Self::terminate_all`] refuses rather than reporting a success it did not
+    /// achieve.
+    #[must_use]
+    pub const fn without_any() -> Self {
+        Self {
+            inner: Inner::Nothing,
+        }
+    }
+
     /// Establish containment for this process and everything it starts.
     ///
     /// Called once, at startup, before any child exists. Calling it later would leave whatever was already
@@ -106,7 +136,7 @@ impl Containment {
     /// daemon refuses to start rather than running with the guarantee quietly absent.
     pub fn establish() -> Result<Self, SpawnError> {
         Ok(Self {
-            inner: platform::Containment::establish()?,
+            inner: Inner::Platform(platform::Containment::establish()?),
         })
     }
 
@@ -121,9 +151,19 @@ impl Containment {
     }
 
     /// What this containment actually enforces.
+    ///
+    /// Not the same question as [`Self::platform_strength`]: one that holds nothing enforces nothing, whatever
+    /// the platform is capable of, and a surface asking what the operator is going to get has to be told the
+    /// truth about the value it is holding.
     #[must_use]
     pub const fn strength(&self) -> Strength {
-        Self::platform_strength()
+        match &self.inner {
+            Inner::Platform(_) => Self::platform_strength(),
+            Inner::Nothing => Strength::CleanShutdownOnly {
+                why: "this containment holds nothing. a child dies when the handle to it is dropped, \
+                      and an unclean kill of runtrol leaves it running",
+            },
+        }
     }
 
     /// Prepare a command so its child is inside this containment.
@@ -132,7 +172,10 @@ impl Containment {
     /// inherited this does nothing, and it is still called, so that no call site has to know which platform
     /// needs what.
     pub fn prepare(&self, command: &mut Command) {
-        self.inner.prepare(command);
+        match &self.inner {
+            Inner::Platform(platform) => platform.prepare(command),
+            Inner::Nothing => {}
+        }
     }
 
     /// Kill every contained process now.
@@ -146,7 +189,15 @@ impl Containment {
     /// [`SpawnError::Containment`] when the platform's own call fails. Reported rather than swallowed: an
     /// operator who pressed the panic button has to know whether it worked.
     pub fn terminate_all(&self) -> Result<(), SpawnError> {
-        self.inner.terminate_all()
+        match &self.inner {
+            Inner::Platform(platform) => platform.terminate_all(),
+            // A panic button that did nothing must not report success. Same rule as the platform that
+            // cannot enforce this: the operator who pressed it has to know.
+            Inner::Nothing => Err(SpawnError::Containment {
+                doing: "terminating every child",
+                detail: "this containment holds nothing".to_owned(),
+            }),
+        }
     }
 }
 
@@ -175,6 +226,46 @@ mod tests {
             );
             assert!(strength.survives_an_unclean_kill());
         }
+    }
+
+    #[test]
+    fn a_containment_that_holds_nothing_says_so_rather_than_claiming_the_platform() {
+        // The platform is capable of more, and this value is not doing it. A surface asking what the operator
+        // gets has to be told about the value in hand, not about the machine.
+        let nothing = Containment::without_any();
+        match nothing.strength() {
+            Strength::CleanShutdownOnly { why } => {
+                assert!(why.contains("holds nothing"), "{why}");
+            }
+            other @ Strength::EvenIfKilled => {
+                panic!("expected the weaker promise, got {other:?}")
+            }
+        }
+        assert!(nothing.strength().survives_an_unclean_kill());
+    }
+
+    #[test]
+    fn a_panic_button_that_did_nothing_does_not_report_success() {
+        // The one capability the security posture requires to work from anywhere with no permission at all. An
+        // operator who pressed it and was told it worked, when it did not, is worse off than one told it failed.
+        let nothing = Containment::without_any();
+        match nothing.terminate_all() {
+            Err(SpawnError::Containment { doing, detail }) => {
+                assert!(doing.contains("terminating"), "{doing}");
+                assert!(detail.contains("holds nothing"), "{detail}");
+            }
+            other => panic!("expected a refusal, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_containment_that_holds_nothing_leaves_a_command_alone() {
+        // It is the absence of containment, not a different one. Preparing a command through it must add
+        // nothing, or the name would be a lie in the other direction.
+        let mut command = Command::new("does-not-matter");
+        Containment::without_any().prepare(&mut command);
+        assert_eq!(command.get_program(), "does-not-matter");
+        assert_eq!(command.get_args().count(), 0);
     }
 
     #[test]

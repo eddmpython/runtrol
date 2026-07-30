@@ -22,6 +22,12 @@ runtrol-provider = { workspace = true }
 # test-double-only surface and `which` itself does not exist.
 which = { workspace = true, features = ["real-sys"] }
 thiserror = { workspace = true }
+# Asking a CLI a question needs a child process and a deadline. `time` is what makes a hung CLI a reported
+# timeout instead of a hang in whatever asked.
+tokio = { workspace = true, features = ["process", "time"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt", "macros"] }
 
 # Job objects. The kill-on-close job is what makes "runtrol dies, its children die" a kernel guarantee
 # rather than a best effort.

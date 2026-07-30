@@ -20,11 +20,18 @@ thiserror = { workspace = true }
 tokio = { workspace = true, features = ["sync"] }
 # Provider manifests. Reading only: runtrol never writes one, so the writer half is left out.
 toml = { workspace = true, features = ["std", "parse", "serde"] }
+# The probe cache. JSON rather than the database, because a cache that cannot be read is simply absent and
+# does not deserve a schema migration or an exclusive lock.
+serde = { workspace = true, features = ["std", "derive"] }
+serde_json = { workspace = true, features = ["std"] }
 
 [dev-dependencies]
-# The daemon awaits a subscription, so one test proves that path. The bounds themselves are proved
-# synchronously, which is why this is the only place a runtime is needed.
+# The daemon awaits a subscription and a probe runs a child process, so those two paths are tested with a
+# runtime. Everything with a bound on it is proved synchronously, which is why this is the only place one is
+# needed.
 tokio = { workspace = true, features = ["rt", "macros"] }
+# The probe's own tests read a manifest, which only means anything as TOML.
+toml = { workspace = true, features = ["std", "parse", "serde"] }
 
 [lints]
 workspace = true
