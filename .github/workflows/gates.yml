@@ -75,6 +75,11 @@ jobs:
         run: python -X utf8 tests/audit/workspaceLints.py --selftest
       - name: crate 는 워크스페이스 lint 표를 따른다
         run: python -X utf8 tests/audit/workspaceLints.py
+      # 이 제품의 유일한 절대 규칙. 대화를 담을 수 있는 타입은 저장소 crate 에 나타나지 못한다.
+      - name: 대화 사본 검출기 자체 검증
+        run: python -X utf8 tests/audit/noTranscriptCopy.py --selftest
+      - name: 대화 사본을 갖지 않는다
+        run: python -X utf8 tests/audit/noTranscriptCopy.py
       # 저장소에 있으나 도는 러너가 없는 게이트를 잡는다. 이 단계와 preflight 의 GATES 표가
       # 서로를 검사하므로, 어느 한쪽에만 추가된 게이트는 red 가 된다.
       - name: 게이트 러너 커버리지

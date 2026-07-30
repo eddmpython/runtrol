@@ -53,6 +53,13 @@ GATES: dict[str, tuple[str, list[str]]] = {
         [*PY, f"{HOOKS}/workspaceLints.py", "--selftest"],
     ),
     "workspaceLints": ("crate 는 워크스페이스 lint 표를 따른다", [*PY, f"{HOOKS}/workspaceLints.py"]),
+    # 이 제품의 유일한 절대 규칙을 기계가 볼 수 있는 형태로 적은 것. 대화를 담을 수 있는 타입은
+    # 저장소 crate 에 나타나지 못한다.
+    "noTranscriptCopySelftest": (
+        "대화 사본 검출기 자체 검증",
+        [*PY, f"{HOOKS}/noTranscriptCopy.py", "--selftest"],
+    ),
+    "noTranscriptCopy": ("대화 사본을 갖지 않는다", [*PY, f"{HOOKS}/noTranscriptCopy.py"]),
     # 게이트가 저장소에 있는 것과 도는 것은 다른 말이다. 이 게이트가 그 차이를 감시한다.
     "gateCoverage": ("게이트 러너 커버리지", [*PY, f"{HOOKS}/gateCoverage.py"]),
     # 북극성 점수는 사람이 타이핑하는 숫자가 아니라 board.toml 에서 계산된다.
@@ -91,6 +98,8 @@ SUITES: dict[str, tuple[str, ...]] = {
         "providerIsolation",
         "workspaceLintsSelftest",
         "workspaceLints",
+        "noTranscriptCopySelftest",
+        "noTranscriptCopy",
         "gateCoverage",
         "northStarBoard",
         "readmeParity",

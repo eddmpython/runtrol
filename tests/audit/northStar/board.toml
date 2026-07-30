@@ -206,6 +206,16 @@ category = "security"
 name = "cargoDeny"
 status = "built"
 
+# The product's one absolute rule as something a machine checks. A floor and never an axis: keeping no copy of
+# anybody's conversation is not worth a fraction of a point, it is the condition for shipping at all. The
+# `noConversationPassthrough` axis is scored separately by `egressContract`, which is the wider claim about
+# sockets and logs; this is the narrow half that can be proven statically today.
+[[floor]]
+category = "security"
+name = "noTranscriptCopy"
+status = "built"
+file = "noTranscriptCopy.py"
+
 [[floor]]
 category = "security"
 name = "scopeGrantability"
