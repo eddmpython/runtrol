@@ -47,6 +47,12 @@ GATES: dict[str, tuple[str, list[str]]] = {
         [*PY, f"{HOOKS}/providerIsolation.py", "--selftest"],
     ),
     "providerIsolation": ("provider 이름은 드라이버 밖에 없다", [*PY, f"{HOOKS}/providerIsolation.py"]),
+    # 워크스페이스 lint 표를 벗어난 crate 는 아무 경고도 없이 규칙 밖에 산다.
+    "workspaceLintsSelftest": (
+        "lint 표 검출기 자체 검증",
+        [*PY, f"{HOOKS}/workspaceLints.py", "--selftest"],
+    ),
+    "workspaceLints": ("crate 는 워크스페이스 lint 표를 따른다", [*PY, f"{HOOKS}/workspaceLints.py"]),
     # 게이트가 저장소에 있는 것과 도는 것은 다른 말이다. 이 게이트가 그 차이를 감시한다.
     "gateCoverage": ("게이트 러너 커버리지", [*PY, f"{HOOKS}/gateCoverage.py"]),
     # 북극성 점수는 사람이 타이핑하는 숫자가 아니라 board.toml 에서 계산된다.
@@ -83,6 +89,8 @@ SUITES: dict[str, tuple[str, ...]] = {
         "checkSilentFail",
         "providerIsolationSelftest",
         "providerIsolation",
+        "workspaceLintsSelftest",
+        "workspaceLints",
         "gateCoverage",
         "northStarBoard",
         "readmeParity",

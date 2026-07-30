@@ -172,7 +172,8 @@ file = "providerIsolation.py"
 [[floor]]
 category = "modularity"
 name = "workspaceLints"
-status = "planned"
+status = "built"
+file = "workspaceLints.py"
 
 [[floor]]
 category = "cleanCode"

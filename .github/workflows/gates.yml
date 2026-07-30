@@ -70,6 +70,11 @@ jobs:
         run: python -X utf8 tests/audit/providerIsolation.py --selftest
       - name: provider 이름은 드라이버 밖에 없다
         run: python -X utf8 tests/audit/providerIsolation.py
+      # lint 표를 벗어난 crate 는 아무 경고도 없이 규칙 밖에 산다.
+      - name: lint 표 검출기 자체 검증
+        run: python -X utf8 tests/audit/workspaceLints.py --selftest
+      - name: crate 는 워크스페이스 lint 표를 따른다
+        run: python -X utf8 tests/audit/workspaceLints.py
       # 저장소에 있으나 도는 러너가 없는 게이트를 잡는다. 이 단계와 preflight 의 GATES 표가
       # 서로를 검사하므로, 어느 한쪽에만 추가된 게이트는 red 가 된다.
       - name: 게이트 러너 커버리지
