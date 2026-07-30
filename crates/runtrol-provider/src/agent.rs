@@ -82,6 +82,17 @@ pub trait Agent: Send + Sync {
     ///
     /// `None` means the session's stream is over, which is a fact and not an outcome: whether the turn that was
     /// running finished is answered by the events that came before, never by this returning.
+    ///
+    /// # Abandoning this must lose nothing
+    ///
+    /// This is a requirement on the implementation and not a note about the caller. One supervisor waits on every
+    /// session at once, which it can only do by asking each in turn and setting aside the ones that have nothing
+    /// to say yet. So dropping the returned future before it is ready has to leave the driver exactly where it
+    /// was: anything already taken from the provider belongs in the driver, never in the future.
+    ///
+    /// A driver that gets this wrong does not fail. It hands back a message with its middle missing, which is why
+    /// this is stated here rather than left to be discovered. Whatever the implementation waits on must lose
+    /// nothing when it is abandoned, and everything read before that must already be somewhere that survives.
     async fn next(&mut self) -> Option<Result<Produced, ProviderError>>;
 
     /// End the session.

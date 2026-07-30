@@ -29,6 +29,17 @@
 //! new resting size, which matters because eight sessions each keeping a ten-megabyte buffer would be more
 //! than twice the daemon's whole memory ceiling.
 //!
+//! # Why the half-read line is held here rather than on the stack
+//!
+//! Because the supervisor waits on several sessions at once, and waiting on several means polling each and
+//! setting the others aside until they speak. A reader whose half-read line lived in the future would lose those
+//! bytes every time it was set aside, and what the caller would see is not a failure: it is a message with its
+//! middle missing. Silent truncation is the worst outcome this file can produce, so the partial line lives in the
+//! reader, and being set aside costs nothing.
+//!
+//! It costs nothing at rest either. The buffer is handed out with the line rather than drained into it, so the
+//! field goes back to holding no allocation the moment a line is complete, and the paragraph above stays true.
+//!
 //! # Why lines come out as shared bytes
 //!
 //! Because the payloads inside them are relayed without being copied. A slice of a line becomes an opaque
@@ -92,6 +103,11 @@ pub struct Lines<R> {
     /// Recorded because the reader does not report it, and it is the number the memory claim rests on: the
     /// reader's own size must be a constant this file chose and never a function of the line bound.
     capacity: usize,
+    /// The line being assembled, between one call and the next.
+    ///
+    /// Here rather than on the stack so that abandoning a read loses nothing: see the module documentation. Handed
+    /// out whole when the line completes, which leaves this holding no allocation again.
+    partial: Vec<u8>,
     /// Set once a line has been refused. Nothing more comes out after that.
     poisoned: bool,
 }
@@ -102,6 +118,7 @@ impl<R: AsyncRead + Unpin> Lines<R> {
         Self {
             reader: BufReader::with_capacity(READ_BUFFER, source),
             capacity: READ_BUFFER,
+            partial: Vec::new(),
             poisoned: false,
         }
     }
@@ -130,6 +147,13 @@ impl<R: AsyncRead + Unpin> Lines<R> {
     /// A trailing carriage return is removed. One of these CLIs runs on a platform whose conventions add it,
     /// and a carriage return inside a JSON document is not something to pass on and hope.
     ///
+    /// # Abandoning this loses nothing
+    ///
+    /// Dropping the returned future before it is ready leaves the reader exactly where it was. The one thing it
+    /// waits on reads nothing when it is abandoned, and everything read before that is already in the reader
+    /// rather than in the future. This is what lets one supervisor wait on every session at once, and it is
+    /// checked by a test that abandons a read partway through a line.
+    ///
     /// # Errors
     ///
     /// [`LineError::TooLong`] when a line passes [`MAX_LINE`], [`LineError::Poisoned`] on any call after that,
@@ -154,10 +178,8 @@ impl<R: AsyncRead + Unpin> Lines<R> {
             return Err(LineError::Poisoned);
         }
 
-        // A fresh allocation per line, sized by the line. The reader keeps no line buffer, so the largest line
-        // ever seen does not become the size of every session's reader from then on.
-        let mut line: Vec<u8> = Vec::new();
-
+        // Whatever a previous, abandoned call had already assembled. Empty in the ordinary case, because a line
+        // that completed took its allocation with it.
         loop {
             // The borrow of the reader's buffer ends with this block, so what happens next may take the reader
             // mutably again. Deciding inside and acting outside is what keeps that legal without a copy.
@@ -173,22 +195,24 @@ impl<R: AsyncRead + Unpin> Lines<R> {
                 if available.is_empty() {
                     Step::Ended
                 } else {
+                    // Taking bytes out of the reader and putting them into the line happens with no waiting in
+                    // between, so there is no instant at which they are in neither place.
                     match available.iter().position(|byte| *byte == b'\n') {
                         None => {
                             let taken = available.len();
-                            if line.len().saturating_add(taken) > MAX_LINE {
-                                Step::TooLong(line.len().saturating_add(taken))
+                            if self.partial.len().saturating_add(taken) > MAX_LINE {
+                                Step::TooLong(self.partial.len().saturating_add(taken))
                             } else {
-                                line.extend_from_slice(available);
+                                self.partial.extend_from_slice(available);
                                 Step::Continues { consume: taken }
                             }
                         }
                         Some(at) => match available.get(..at) {
                             Some(head) => {
-                                if line.len().saturating_add(head.len()) > MAX_LINE {
-                                    Step::TooLong(line.len().saturating_add(head.len()))
+                                if self.partial.len().saturating_add(head.len()) > MAX_LINE {
+                                    Step::TooLong(self.partial.len().saturating_add(head.len()))
                                 } else {
-                                    line.extend_from_slice(head);
+                                    self.partial.extend_from_slice(head);
                                     // The newline is consumed with the line, so the next call starts at the
                                     // next record rather than on an empty one.
                                     Step::Complete {
@@ -208,17 +232,22 @@ impl<R: AsyncRead + Unpin> Lines<R> {
                 // End of the stream. A last line without a newline is still a line: a child that was killed
                 // mid-write produced something, and dropping it would lose the reason it stopped.
                 Step::Ended => {
-                    return if line.is_empty() {
+                    return if self.partial.is_empty() {
                         Ok(None)
                     } else {
-                        Ok(Some(line))
+                        Ok(Some(self.take_line()))
                     };
                 }
-                Step::TooLong(bytes) => return Err(self.refuse(bytes)),
+                // The refused line's bytes go with the refusal rather than staying held: a reader that will never
+                // produce anything again has no reason to keep what it refused.
+                Step::TooLong(bytes) => {
+                    self.partial = Vec::new();
+                    return Err(self.refuse(bytes));
+                }
                 Step::Continues { consume } => self.reader.consume(consume),
                 Step::Complete { consume } => {
                     self.reader.consume(consume);
-                    return Ok(Some(line));
+                    return Ok(Some(self.take_line()));
                 }
                 Step::Impossible => {
                     return Err(LineError::Io {
@@ -227,6 +256,22 @@ impl<R: AsyncRead + Unpin> Lines<R> {
                 }
             }
         }
+    }
+
+    /// Hand the assembled line out, leaving the reader holding nothing.
+    ///
+    /// Taken rather than copied, which is the whole memory argument: the allocation belongs to the line and goes
+    /// when the line does, so a ten-megabyte record leaves no ten-megabyte reader behind.
+    fn take_line(&mut self) -> Vec<u8> {
+        core::mem::take(&mut self.partial)
+    }
+
+    /// How many bytes of an unfinished line the reader is holding.
+    ///
+    /// Zero between lines, which is the observable form of the claim above.
+    #[must_use]
+    pub fn partial_bytes(&self) -> usize {
+        self.partial.len()
     }
 
     /// Refuse a line and stop reading for good.
@@ -295,6 +340,87 @@ mod tests {
             found.push(String::from_utf8_lossy(&line).into_owned());
         }
         Ok(found)
+    }
+
+    /// A stream that hands over exactly what the test has given it, and otherwise makes no progress.
+    ///
+    /// It never registers to be woken, which would be wrong for a stream something waits on. Nothing waits on this
+    /// one: every poll of it here is paired with a branch that is already ready, which is precisely the situation
+    /// being reproduced.
+    #[derive(Clone)]
+    struct Trickle(std::rc::Rc<core::cell::RefCell<Vec<u8>>>);
+
+    impl Trickle {
+        fn new() -> Self {
+            Self(std::rc::Rc::new(core::cell::RefCell::new(Vec::new())))
+        }
+
+        fn feed(&self, bytes: &[u8]) {
+            self.0.borrow_mut().extend_from_slice(bytes);
+        }
+    }
+
+    impl tokio::io::AsyncRead for Trickle {
+        fn poll_read(
+            self: core::pin::Pin<&mut Self>,
+            _cx: &mut core::task::Context<'_>,
+            buf: &mut tokio::io::ReadBuf<'_>,
+        ) -> core::task::Poll<std::io::Result<()>> {
+            let mut held = self.0.borrow_mut();
+            if held.is_empty() {
+                return core::task::Poll::Pending;
+            }
+            let take = held.len().min(buf.remaining());
+            buf.put_slice(held.get(..take).unwrap_or_default());
+            held.drain(..take);
+            core::task::Poll::Ready(Ok(()))
+        }
+    }
+
+    #[tokio::test]
+    async fn abandoning_a_read_partway_through_a_line_loses_nothing() {
+        // The supervisor waits on every session at once, which means polling each reader and setting the others
+        // aside. If the half-read line lived in the abandoned future, what came back next would be the tail of a
+        // message presented as a whole message. That is silent truncation, and it is worse than any failure.
+        let source = Trickle::new();
+        let mut lines = Lines::new(source.clone());
+
+        source.feed(br#"{"text":"hello"#);
+        tokio::select! {
+            biased;
+            early = lines.next() => panic!("the line is not finished yet: {early:?}"),
+            // Set aside, exactly as a supervisor does when a different session speaks first.
+            () = std::future::ready(()) => {}
+        }
+
+        source.feed(b" world\"}\n");
+        let line = lines
+            .next()
+            .await
+            .expect("readable")
+            .expect("the line completes");
+        assert_eq!(
+            String::from_utf8_lossy(&line),
+            r#"{"text":"hello world"}"#,
+            "the bytes read before this call was set aside have to still be here"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_finished_line_leaves_the_reader_holding_nothing() {
+        // The observable form of the memory claim: the big allocation belongs to the line, so a reader between
+        // lines is holding no part of one.
+        let source = Trickle::new();
+        let mut lines = Lines::new(source.clone());
+        source.feed(b"{\"a\":1}\n");
+
+        assert_eq!(lines.partial_bytes(), 0, "nothing has been read yet");
+        lines.next().await.expect("readable").expect("a line");
+        assert_eq!(
+            lines.partial_bytes(),
+            0,
+            "the line took its allocation with it"
+        );
     }
 
     #[tokio::test]
