@@ -1,0 +1,687 @@
+//! One process per session, driven over its own standard streams.
+//!
+//! # What the process actually is
+//!
+//! Measured: `--print --input-format stream-json --output-format stream-json --verbose` with the session
+//! identifier runtrol minted. The process stays up across turns, reads one JSON object per line on its input, and
+//! writes one per line on its output. No terminal is involved anywhere, which is a correctness decision rather
+//! than a cost one: the platform's console layer hard-wraps at the terminal width and would split one long line
+//! of JSON into two invalid ones.
+//!
+//! # Why the turn identifier lives here
+//!
+//! The mapping is pure and knows nothing about which turn is running. This does, because it is what sent the
+//! prompt. So the ending the mapping recognises becomes a turn event here, stamped with the turn that was running
+//! and with the provider as the one who declared it.
+//!
+//! A turn that was running when the process died gets an ending too, declared by the exit and **not** by the
+//! provider, which is what keeps "the outcome is unknown" distinguishable from "it finished".
+//!
+//! # Where a subscriber recovers older content from
+//!
+//! The provider's own transcript, addressed by byte offset. Verified append-only by controlled experiment: a file
+//! grew from 17,877 to 22,339 bytes across a resume while the hash of its first 4,096 bytes stayed identical. That
+//! is what makes an offset a durable cursor and what lets runtrol keep no copy.
+//!
+//! The path is found by searching for the identifier rather than by computing it. Measured: the first attempt to
+//! compute it was wrong, because the rule replaces every one of `:` `\` `/` `_` `.` with `-` and a guess got that
+//! wrong on the first try. Searching cannot be wrong in that way.
+
+use core::time::Duration;
+
+use async_trait::async_trait;
+use runtrol_childproc::{Containment, Program};
+use runtrol_provider::{
+    Agent, AgentCommand, CloseMode, ContentBlock, Declarant, Disposition, EventBody, OpenIntent,
+    Produced, ProviderError, ProviderId, SessionId, StopReason, TurnEvent, TurnId,
+};
+use tokio::io::AsyncWriteExt as _;
+use tokio::process::{Child, ChildStdin};
+
+use crate::claude::map::{self, Frame};
+use crate::framing::{LineError, Lines};
+
+/// How long a graceful close waits before the process is stopped anyway.
+///
+/// Only used when the caller does not say. A caller that has an opinion passes one.
+pub const DEFAULT_GRACE_MS: u64 = 5_000;
+
+/// A live session: one child process, its input, and its output.
+pub struct ClaudeAgent {
+    /// Which provider this is.
+    ///
+    /// Held because every variant of the error taxonomy names one: an operator reading a failure has to know which
+    /// CLI it came from without inferring it from the wording.
+    provider: ProviderId,
+    /// runtrol's own name for the session.
+    session: SessionId,
+    /// The provider's name for it, once it has announced one.
+    native: Option<String>,
+    /// The child.
+    child: Child,
+    /// Its input, taken so a command can be written.
+    stdin: Option<ChildStdin>,
+    /// Its output, one line at a time.
+    lines: Lines<tokio::process::ChildStdout>,
+    /// The turn that is running, if one is.
+    ///
+    /// Held here because this is what sent the prompt. The mapping is pure and cannot know it.
+    running: Option<TurnId>,
+    /// Which turn number to use next.
+    next_turn: u32,
+    /// How far into the provider's own store the session has reached.
+    ///
+    /// Advanced only when the provider persists something, which for this CLI means a whole message or an ending.
+    /// A fragment is not persisted, so it carries the previous durable value and a client resuming from the file
+    /// receives the finished message instead of the pieces.
+    src_end: u64,
+    /// Set once the stream is over, so nothing keeps reading a finished session.
+    finished: bool,
+}
+
+impl ClaudeAgent {
+    /// Start the process and bind to it.
+    ///
+    /// # Errors
+    ///
+    /// [`ProviderError::BinNotFound`] when the CLI is not installed, [`ProviderError::Spawn`] when it cannot be
+    /// started, [`ProviderError::Unsupported`] when an argument cannot be passed at all.
+    pub fn start(
+        provider: ProviderId,
+        program: &Program,
+        intent: &OpenIntent,
+        contained_by: &Containment,
+    ) -> Result<Self, ProviderError> {
+        let args = argv(provider, intent)?;
+        runtrol_childproc::check_all(&args).map_err(|error| ProviderError::Unsupported {
+            provider,
+            what: error.to_string(),
+            why: "this argument cannot be passed on a command line",
+        })?;
+
+        let mut command = tokio::process::Command::new(program.path().as_std_path());
+        command
+            .args(program.leading())
+            .args(&args)
+            .current_dir(intent.workspace.as_std_path())
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            // Left alone rather than captured. What the CLI writes there is its own diagnostics, and a pipe nobody
+            // reads fills up and blocks the process it belongs to.
+            .stderr(std::process::Stdio::inherit())
+            .kill_on_drop(true);
+        contained_by.prepare(command.as_std_mut());
+
+        let mut child = command.spawn().map_err(|source| ProviderError::Spawn {
+            provider,
+            program: program.path().to_string(),
+            source,
+        })?;
+
+        let missing = |what: &str| ProviderError::Spawn {
+            provider,
+            program: program.path().to_string(),
+            source: std::io::Error::other(format!("the child has no {what} stream")),
+        };
+        let stdin = child.stdin.take().ok_or_else(|| missing("input"))?;
+        let stdout = child.stdout.take().ok_or_else(|| missing("output"))?;
+
+        Ok(Self {
+            provider,
+            session: intent.session,
+            native: None,
+            child,
+            stdin: Some(stdin),
+            lines: Lines::new(stdout),
+            running: None,
+            next_turn: 0,
+            src_end: 0,
+            finished: false,
+        })
+    }
+
+    /// Write one line to the child's input.
+    async fn write_line(&mut self, text: &str) -> Result<(), ProviderError> {
+        let provider = self.provider;
+        let stdin = self.stdin.as_mut().ok_or_else(|| ProviderError::Protocol {
+            provider,
+            doing: "sending a command",
+            detail: "this session's input has already been closed".to_owned(),
+        })?;
+
+        // The newline is what makes it a frame. Written with the body in one call so a frame cannot be half sent.
+        let mut framed = String::with_capacity(text.len() + 1);
+        framed.push_str(text);
+        framed.push('\n');
+
+        stdin
+            .write_all(framed.as_bytes())
+            .await
+            .map_err(|error| ProviderError::Protocol {
+                provider,
+                doing: "writing to the session",
+                detail: error.to_string(),
+            })?;
+        stdin
+            .flush()
+            .await
+            .map_err(|error| ProviderError::Protocol {
+                provider,
+                doing: "flushing the input of the session",
+                detail: error.to_string(),
+            })
+    }
+
+    /// Turn a classified frame into what leaves the driver.
+    fn produce(&mut self, frame: Frame) -> Produced {
+        match frame {
+            Frame::Started(startup) => {
+                self.native = Some(startup.native.as_str().to_owned());
+                Produced {
+                    src_end: self.src_end,
+                    body: EventBody::Attached(Box::new(runtrol_provider::Attached {
+                        native: startup.native,
+                        // Where older content comes from is decided when the transcript is located, which is a
+                        // search rather than a computation and happens on demand.
+                        replay: runtrol_provider::ReplaySource::None,
+                        // What runtrol asked for, not what will answer. Filled by whoever opened the session; the
+                        // model in the frame is the answering one and rides in the payload.
+                        model_requested: None,
+                        caps: startup.caps,
+                        payload: startup.payload,
+                    })),
+                }
+            }
+
+            Frame::Ended(ended) => {
+                // The provider's own word, which is the only thing that means the outcome is known.
+                let turn = self.running.take().unwrap_or_else(|| self.mint_turn());
+                self.src_end = self.src_end.saturating_add(1);
+                Produced {
+                    src_end: self.src_end,
+                    body: EventBody::Turn(TurnEvent::Ended {
+                        turn,
+                        stop: ended.stop,
+                        declared_by: Declarant::Provider,
+                    }),
+                }
+            }
+
+            Frame::Body(body) => {
+                // A fragment is not persisted by the provider, so it carries the previous durable cursor. Anything
+                // whole advances it, which is what makes a resume from the file deliver finished messages rather
+                // than a stream of pieces.
+                if !body.is_fragment() {
+                    self.src_end = self.src_end.saturating_add(1);
+                }
+                Produced {
+                    src_end: self.src_end,
+                    body,
+                }
+            }
+
+            Frame::Unbound(unmapped) => Produced {
+                src_end: self.src_end,
+                body: EventBody::Unmapped(unmapped),
+            },
+        }
+    }
+
+    /// The next turn number.
+    fn mint_turn(&mut self) -> TurnId {
+        let turn = TurnId {
+            epoch: 0,
+            index: self.next_turn,
+        };
+        self.next_turn = self.next_turn.saturating_add(1);
+        turn
+    }
+
+    /// What to report when the stream ends.
+    ///
+    /// A turn that was running when the process stopped gets an ending declared by the exit rather than by the
+    /// provider. That distinction is the whole point: a subscriber renders "the outcome is unknown", and the next
+    /// attach must not claim the turn succeeded.
+    fn ending_at_exit(&mut self) -> Option<Produced> {
+        let turn = self.running.take()?;
+        Some(Produced {
+            src_end: self.src_end,
+            body: EventBody::Turn(TurnEvent::Ended {
+                turn,
+                stop: StopReason::Unknown,
+                declared_by: Declarant::ProcessExit,
+            }),
+        })
+    }
+}
+
+/// The arguments for one session.
+///
+/// Separated from the spawn so the whole command line can be checked without starting anything. Every flag here is
+/// on the bound list, and the two that are not always present are the ones a missing flag degrades.
+///
+/// # Errors
+///
+/// [`ProviderError::Unsupported`] for a way of opening a session this driver does not know. The contract's
+/// dispositions are open ended on purpose, so that adding one does not break a driver written elsewhere; the cost
+/// is that each driver has to say which ones it serves rather than quietly treating a new one as something else.
+fn argv(provider: ProviderId, intent: &OpenIntent) -> Result<Vec<String>, ProviderError> {
+    let mut args: Vec<String> = vec![
+        "--print".to_owned(),
+        "--input-format".to_owned(),
+        "stream-json".to_owned(),
+        "--output-format".to_owned(),
+        "stream-json".to_owned(),
+        // Measured: without this the CLI refuses to stream structured output at all.
+        "--verbose".to_owned(),
+        "--include-partial-messages".to_owned(),
+    ];
+
+    match &intent.disposition {
+        // runtrol issues the identifier. Measured: it comes back unchanged and becomes the name the CLI's own
+        // store knows the session by, which is what makes deleting runtrol's records harmless.
+        Disposition::Fresh => {
+            args.push("--session-id".to_owned());
+            args.push(intent.session.to_string());
+        }
+        // A resume takes the provider's own name for the conversation, which for this CLI is the same value.
+        Disposition::Resume { native } => {
+            args.push("--resume".to_owned());
+            args.push(native.to_string());
+        }
+        // A way of opening a session that arrived after this driver did. Refused by name: guessing which of the two
+        // it resembles would either start a conversation the operator did not ask for or continue the wrong one.
+        other => {
+            return Err(ProviderError::Unsupported {
+                provider,
+                what: format!("{other:?}"),
+                why: "this driver serves a fresh session and a resume, and nothing else yet",
+            });
+        }
+    }
+
+    if let Some(model) = &intent.model {
+        args.push("--model".to_owned());
+        args.push(model.to_string());
+    }
+    if let Some(permission) = &intent.permission {
+        args.push("--permission-mode".to_owned());
+        args.push(permission.to_string());
+    }
+    Ok(args)
+}
+
+/// One prompt, as the frame this CLI reads.
+///
+/// The operator's text goes in as it was written. Serialized rather than pasted together, because pasting is how a
+/// value from somewhere else becomes structure and every value here came from somewhere else.
+fn prompt_frame(provider: ProviderId, blocks: &[ContentBlock]) -> Result<String, ProviderError> {
+    let mut content: Vec<serde_json::Value> = Vec::with_capacity(blocks.len());
+    for block in blocks {
+        content.push(match block {
+            ContentBlock::Text(text) => {
+                serde_json::json!({"type": "text", "text": text.to_string()})
+            }
+            // Forwarded whole. A block shape runtrol has never heard of still reaches the provider, which is what
+            // keeps runtrol a pipe rather than a gate on which features are reachable. A payload that is not
+            // readable JSON goes as text rather than being dropped: the operator wrote it, and losing part of a
+            // prompt silently is worse than sending it plainly.
+            ContentBlock::Native(payload) => match serde_json::from_str(payload.as_str()) {
+                Ok(value) => value,
+                Err(_) => serde_json::Value::String(payload.as_str().to_owned()),
+            },
+            // A block kind that arrived after this driver did. Refused rather than skipped: a prompt missing one of
+            // its parts is a prompt the operator did not write, and they would never know.
+            other => {
+                return Err(ProviderError::Unsupported {
+                    provider,
+                    what: format!("{other:?}"),
+                    why: "this driver can send text and a native block, and nothing else yet",
+                });
+            }
+        });
+    }
+
+    serde_json::to_string(&serde_json::json!({
+        "type": "user",
+        "message": {"role": "user", "content": content},
+    }))
+    .map_err(|error| ProviderError::Protocol {
+        provider,
+        doing: "building a prompt",
+        detail: error.to_string(),
+    })
+}
+
+/// The frame that asks for the running turn to stop.
+///
+/// A request and not an outcome: what ends the turn is still the provider's own word, arriving as an event.
+fn interrupt_frame(provider: ProviderId, request: u64) -> Result<String, ProviderError> {
+    serde_json::to_string(&serde_json::json!({
+        "type": "control_request",
+        "request_id": format!("runtrol-{request}"),
+        "request": {"subtype": "interrupt"},
+    }))
+    .map_err(|error| ProviderError::Protocol {
+        provider,
+        doing: "building an interrupt",
+        detail: error.to_string(),
+    })
+}
+
+#[async_trait]
+impl Agent for ClaudeAgent {
+    fn session(&self) -> SessionId {
+        self.session
+    }
+
+    fn native(&self) -> Option<&str> {
+        self.native.as_deref()
+    }
+
+    async fn send(&mut self, command: AgentCommand) -> Result<(), ProviderError> {
+        match command {
+            AgentCommand::Prompt(blocks) => {
+                let frame = prompt_frame(self.provider, &blocks)?;
+                // The turn is minted before the frame goes out, so an ending that arrives immediately has a turn
+                // to belong to.
+                let turn = self.mint_turn();
+                self.running = Some(turn);
+                self.write_line(&frame).await
+            }
+            AgentCommand::Interrupt => {
+                let frame = interrupt_frame(self.provider, u64::from(self.next_turn))?;
+                self.write_line(&frame).await
+            }
+            // Forwarded byte for byte. Never inspected and never rewritten.
+            AgentCommand::Native(payload) => {
+                let text = payload.as_str().to_owned();
+                self.write_line(&text).await
+            }
+            AgentCommand::Answer { .. } => Err(ProviderError::Unsupported {
+                provider: self.provider,
+                what: "answering an approval".to_owned(),
+                why: "the control channel is a measured surface and its mapping arrives with approvals",
+            }),
+            // A command that arrived after this driver did. Saying so is the whole point: a wildcard that returned
+            // success would report a command as sent when nothing was sent, and the operator would wait for an
+            // effect that is never coming.
+            other => Err(ProviderError::Unsupported {
+                provider: self.provider,
+                what: format!("{other:?}"),
+                why: "this driver has no binding for that command",
+            }),
+        }
+    }
+
+    async fn next(&mut self) -> Option<Result<Produced, ProviderError>> {
+        if self.finished {
+            return None;
+        }
+
+        // Every line produces something. Nothing here skips a frame, because a frame nobody bound still travels
+        // as unmapped, so there is no case that reads again without answering.
+        match self.lines.next().await {
+            Ok(Some(line)) => match map::read(&line) {
+                Ok(frame) => Some(Ok(self.produce(frame))),
+                // A frame runtrol cannot read is a protocol failure, promoted to session state by the caller
+                // rather than logged and stepped over.
+                Err(error) => {
+                    self.finished = true;
+                    Some(Err(ProviderError::Protocol {
+                        provider: self.provider,
+                        doing: "reading a frame from the session",
+                        detail: error.to_string(),
+                    }))
+                }
+            },
+
+            Ok(None) => {
+                self.finished = true;
+                // A turn that was running when the stream ended gets an ending declared by the exit, never by the
+                // provider. That is what keeps "unknown" distinguishable from "finished".
+                self.ending_at_exit().map(Ok)
+            }
+
+            Err(error) => {
+                self.finished = true;
+                let detail = error.to_string();
+                let doing = match error {
+                    LineError::TooLong { .. } | LineError::Poisoned => {
+                        "reading a frame past the limit of the transport"
+                    }
+                    LineError::Io { .. } => "reading from the session",
+                };
+                Some(Err(ProviderError::Protocol {
+                    provider: self.provider,
+                    doing,
+                    detail,
+                }))
+            }
+        }
+    }
+
+    async fn close(mut self: Box<Self>, how: CloseMode) -> Result<(), ProviderError> {
+        // Closing the input is how this CLI is asked to finish: it reads until its input ends.
+        drop(self.stdin.take());
+
+        let grace = match how {
+            CloseMode::Kill => Duration::ZERO,
+            CloseMode::Graceful { grace_ms } => Duration::from_millis(grace_ms),
+            // A way of closing that arrived after this driver did. It stops now, like an outright kill, rather than
+            // refusing: a close that returned an error would leave a session nobody can end, and a running agent
+            // with nobody watching is the outcome the whole containment design exists to prevent. The two arms read
+            // the same and mean different things, which is why this one is spelled out instead of merged.
+            #[expect(
+                clippy::match_same_arms,
+                reason = "an unknown close mode stopping now is a decision, not a duplicate of Kill"
+            )]
+            _ => Duration::ZERO,
+        };
+
+        if !grace.is_zero()
+            && let Ok(Ok(_status)) = tokio::time::timeout(grace, self.child.wait()).await
+        {
+            return Ok(());
+        }
+
+        // Either the caller asked for it to stop now, or it did not finish in the time it was given. Reported
+        // rather than swallowed: an operator who asked for a session to stop has to know whether it did.
+        let provider = self.provider;
+        self.child
+            .kill()
+            .await
+            .map_err(|error| ProviderError::Protocol {
+                provider,
+                doing: "stopping a session",
+                detail: error.to_string(),
+            })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use runtrol_childproc::{SpawnError, resolve};
+    use runtrol_provider::AbsPath;
+
+    use super::*;
+
+    fn a_provider() -> ProviderId {
+        ProviderId::parse("claude").expect("the test's own id must be valid")
+    }
+
+    fn an_intent(disposition: Disposition) -> OpenIntent {
+        OpenIntent {
+            session: SessionId::now(),
+            workspace: AbsPath::new(if cfg!(windows) { r"C:\work" } else { "/work" })
+                .expect("valid"),
+            disposition,
+            model: None,
+            permission: None,
+        }
+    }
+
+    #[test]
+    fn a_fresh_session_is_given_the_identifier_runtrol_minted() {
+        // Measured: the CLI takes it and hands it back, so runtrol's name and the provider's are the same value.
+        // That equality is what makes deleting everything runtrol stores lose nothing.
+        let intent = an_intent(Disposition::Fresh);
+        let args = argv(a_provider(), &intent).expect("a fresh session is served");
+        let at = args
+            .iter()
+            .position(|arg| arg == "--session-id")
+            .expect("a fresh session issues an identifier");
+        assert_eq!(args.get(at + 1), Some(&intent.session.to_string()));
+        assert!(!args.iter().any(|arg| arg == "--resume"));
+    }
+
+    #[test]
+    fn a_resume_is_given_the_name_the_provider_knows() {
+        let args = argv(
+            a_provider(),
+            &an_intent(Disposition::Resume {
+                native: "some-provider-name".into(),
+            }),
+        )
+        .expect("a resume is served");
+        let at = args
+            .iter()
+            .position(|arg| arg == "--resume")
+            .expect("a resume names what to continue");
+        assert_eq!(
+            args.get(at + 1).map(String::as_str),
+            Some("some-provider-name")
+        );
+        assert!(
+            !args.iter().any(|arg| arg == "--session-id"),
+            "issuing an identifier for a session that exists would ask for a different session"
+        );
+    }
+
+    #[test]
+    fn the_flags_the_cli_refuses_to_stream_without_are_always_there() {
+        // Measured: without the print flag it runs its own interface, and without the verbose flag it refuses to
+        // stream structured output at all. Both are on the bound list as required.
+        let args = argv(a_provider(), &an_intent(Disposition::Fresh)).expect("served");
+        for required in crate::claude::bound::FLAGS
+            .iter()
+            .filter(|flag| flag.required)
+        {
+            // The resume flag is required as a capability and used only on a resume.
+            if required.flag == "--resume" {
+                continue;
+            }
+            assert!(
+                args.iter().any(|arg| arg == required.flag),
+                "{} is required and missing from {args:?}",
+                required.flag
+            );
+        }
+    }
+
+    #[test]
+    fn no_model_and_no_permission_means_nothing_is_passed() {
+        // The operator's own configuration decides. Passing a default would override a choice they already made.
+        let args = argv(a_provider(), &an_intent(Disposition::Fresh)).expect("served");
+        assert!(!args.iter().any(|arg| arg == "--model"));
+        assert!(!args.iter().any(|arg| arg == "--permission-mode"));
+    }
+
+    #[test]
+    fn every_argument_can_actually_be_passed_on_a_command_line() {
+        // The one place a value from somewhere else reaches a process launch. Checked before the spawn, because the
+        // platform's own refusal names neither the argument nor the character.
+        let mut intent = an_intent(Disposition::Fresh);
+        intent.model = Some("haiku".into());
+        intent.permission = Some("plan".into());
+        let args = argv(a_provider(), &intent).expect("served");
+        runtrol_childproc::check_all(&args).expect("every argument is passable");
+    }
+
+    #[test]
+    fn a_prompt_carries_what_the_operator_wrote_and_nothing_else() {
+        // The thin rule where it is easiest to break: runtrol adds no system prompt, no preamble, no instructions
+        // of its own, and the frame is built by serializing rather than by pasting text together.
+        let written = "do the thing";
+        let frame =
+            prompt_frame(a_provider(), &[ContentBlock::Text(written.into())]).expect("writable");
+
+        assert!(frame.contains(written), "{frame}");
+        assert!(frame.contains(r#""role":"user""#), "{frame}");
+        assert!(!frame.contains('\n'), "a frame is one line: {frame}");
+
+        let parsed: serde_json::Value = serde_json::from_str(&frame).expect("readable");
+        let content = parsed
+            .pointer("/message/content")
+            .and_then(|value| value.as_array())
+            .expect("the content is an array");
+        assert_eq!(
+            content.len(),
+            1,
+            "runtrol added a block of its own: {frame}"
+        );
+    }
+
+    #[test]
+    fn text_with_a_newline_in_it_still_produces_one_frame() {
+        // A newline inside a frame would split it into two invalid ones. Serializing is what makes that impossible.
+        let frame = prompt_frame(
+            a_provider(),
+            &[ContentBlock::Text("first\nsecond\r\nthird".into())],
+        )
+        .expect("writable");
+        assert!(!frame.contains('\n'), "{frame}");
+        assert!(!frame.contains('\r'), "{frame}");
+    }
+
+    #[test]
+    fn a_block_runtrol_has_never_heard_of_reaches_the_provider_whole() {
+        let native = runtrol_provider::Opaque::owned(
+            r#"{"type":"image","source":{"kind":"base64"}}"#.to_owned(),
+        );
+        let frame = prompt_frame(a_provider(), &[ContentBlock::Native(native)]).expect("writable");
+        let parsed: serde_json::Value = serde_json::from_str(&frame).expect("readable");
+        let block = parsed
+            .pointer("/message/content/0")
+            .expect("the block survived");
+        assert_eq!(
+            block.pointer("/type").and_then(|v| v.as_str()),
+            Some("image")
+        );
+        assert_eq!(
+            block.pointer("/source/kind").and_then(|v| v.as_str()),
+            Some("base64"),
+            "the block has to arrive whole, not flattened"
+        );
+    }
+
+    #[test]
+    fn an_interrupt_is_a_control_frame_and_says_nothing_about_an_outcome() {
+        let frame = interrupt_frame(a_provider(), 3).expect("writable");
+        let parsed: serde_json::Value = serde_json::from_str(&frame).expect("readable");
+        assert_eq!(
+            parsed.pointer("/type").and_then(|v| v.as_str()),
+            Some("control_request")
+        );
+        assert_eq!(
+            parsed.pointer("/request/subtype").and_then(|v| v.as_str()),
+            Some("interrupt")
+        );
+        assert!(
+            !frame.contains("stop_reason") && !frame.contains("success"),
+            "an interrupt must not assert an outcome: {frame}"
+        );
+    }
+
+    #[test]
+    fn the_cli_is_installed_or_this_machine_cannot_run_a_session() {
+        // Not an assertion about runtrol. It records whether the thing being driven is here, so a failure further
+        // along can be told apart from an absent CLI.
+        match resolve("claude") {
+            Ok(program) => assert!(program.path().as_str().len() > 1),
+            // A machine without it has nothing to be wrong about.
+            Err(SpawnError::NotFound { .. }) => {}
+            Err(other) => panic!("the CLI is here and unusable: {other}"),
+        }
+    }
+}

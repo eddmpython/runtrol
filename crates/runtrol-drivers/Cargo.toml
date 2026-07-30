@@ -23,7 +23,9 @@ serde = { workspace = true, features = ["std", "derive"] }
 serde_json = { workspace = true, features = ["std", "raw_value"] }
 # Reading a child's output. `io-util` is the buffered reader; the process itself is started by the crate that
 # owns child processes.
-tokio = { workspace = true, features = ["io-util", "sync"] }
+tokio = { workspace = true, features = ["io-util", "sync", "process", "time"] }
+# The behavioural contract has async methods and is held as `dyn`.
+async-trait = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt", "macros", "io-util", "sync"] }

@@ -17,8 +17,10 @@
 //! tools, its skills and its agents. Nothing here infers a capability from a version string, because nothing
 //! has to.
 
+pub mod agent;
 pub mod bound;
 pub mod map;
 
+pub use agent::{ClaudeAgent, DEFAULT_GRACE_MS};
 pub use bound::{BoundFlag, BoundFrame, CONTROL, FLAGS, FRAMES, TERMINAL};
 pub use map::{Ended, Frame, MapError, Startup};

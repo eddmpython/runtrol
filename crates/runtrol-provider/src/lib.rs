@@ -14,13 +14,18 @@
 //! - [`error`] the error taxonomy a driver returns
 //! - [`event`] the normalized event vocabulary, and the rule for what runtrol may read
 //! - [`manifest`] what a provider declares about itself, and the rule that keeps it small
+//! - [`command`] what a driver is told to do, and what it hands back
+//! - [`agent`] the two traits a driver implements
 //!
-//! # What deliberately does not live here yet
+//! # The behavioural contract arrived with its first implementation
 //!
-//! The behavioural contract, meaning the traits a driver implements, arrives together with its first
-//! implementation. A trait with no implementor is a guess about a shape that the implementor gets to
-//! decide, and this repository does not carry guesses forward as debt.
+//! [`agent`] was deliberately absent until a driver existed to implement it. A trait with no implementor is a
+//! guess about a shape the implementor gets to decide, and the guess would have been wrong: the recorded design
+//! said a turn ends on one frame and the CLI ends it on another, which is exactly the kind of thing only running
+//! it tells you.
 
+pub mod agent;
+pub mod command;
 pub mod error;
 pub mod event;
 pub mod id;
@@ -28,6 +33,8 @@ pub mod manifest;
 pub mod path;
 pub mod time;
 
+pub use agent::{Agent, Provider};
+pub use command::{AgentCommand, CloseMode, ContentBlock, Disposition, OpenIntent, Produced};
 pub use error::ProviderError;
 pub use event::{
     AgentEvent, ApprovalKind, ApprovalOption, ApprovalRequest, Attached, BlockedOn, CapabilitySet,
