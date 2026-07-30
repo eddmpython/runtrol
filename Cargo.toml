@@ -36,6 +36,9 @@ authors = ["eddmpython"]
 # 리뷰 가능한 이유가 동행한다. 오늘 라이브 인덱스에 대해 해소를 확인한 판본 목록은
 # `.claude/discussion/r2/crateTopology.md` 0 절에 남아 있다.
 [workspace.dependencies]
+# 공유 버퍼. 이벤트 payload 는 복사하지 않고 refcount 로 팬아웃한다 (04-memory-contract.md).
+bytes = "1.12.1"
+
 # 직렬화. serde_json 의 preserve_order 는 절대 켜지 않는다 (워크스페이스 전역 오염).
 serde = { version = "1.0.229", default-features = false }
 serde_json = { version = "1.0.151", default-features = false }

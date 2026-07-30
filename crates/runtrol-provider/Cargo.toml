@@ -21,11 +21,13 @@ uuid = { workspace = true, features = ["std", "v7"] }
 # UTF-8 paths. runtrol's own surfaces are UTF-8 throughout, and carrying a lossy copy beside the
 # real bytes would give one path two spellings.
 camino = { workspace = true }
+# Shared buffers for event payloads. Cloning an event for a second subscriber must be a refcount bump,
+# not a copy, or the daemon's memory grows with the number of watchers rather than with the work.
+bytes = { workspace = true }
 thiserror = { workspace = true }
 
-[dev-dependencies]
-# Asserts that the wire encoding of the types above is the encoding the wire expects.
-serde_json = { workspace = true, features = ["std"] }
+# Payloads are relayed verbatim, so the crate that emits them needs the raw-value pass-through.
+serde_json = { workspace = true, features = ["std", "raw_value"] }
 
 [lints]
 workspace = true

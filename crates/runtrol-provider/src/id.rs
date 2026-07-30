@@ -189,6 +189,15 @@ provider_text_id! {
 }
 
 provider_text_id! {
+    /// The provider's own identifier for one logical message.
+    ///
+    /// ACP calls it `messageId`. It groups a run of incremental fragments into the message they build
+    /// up, which is the only reason runtrol looks at it: a subscriber needs to know whether a fragment
+    /// continues the previous one or starts a new one.
+    MessageId = "message id"
+}
+
+provider_text_id! {
     /// The provider's own identifier for one tool call.
     ///
     /// A Codex `itemId` or a Claude `tool_use_id`. Used to attach later updates to the call they
