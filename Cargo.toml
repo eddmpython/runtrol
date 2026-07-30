@@ -51,6 +51,9 @@ getrandom = "0.4.3"
 camino = "1.2.5"
 thiserror = "2.0.19"
 
+# 프로세스. PATH 조회는 손으로 쓰지 않는다 (PATHEXT 순서·인용된 PATH 항목·Unix 실행 비트).
+which = { version = "8.0.4", default-features = false }
+
 # 게이트 전용 (dev).
 cargo_metadata = "0.23.1"
 

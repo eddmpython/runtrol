@@ -1,4 +1,8 @@
-# OS 자식 프로세스 수명. job object·process group·argv 이스케이프·고아 회수.
+# Child process lifetime: what to run, what may be passed to it, and how it dies.
+#
+# This is where `unsafe` will be allowed once containment lands, which is the reason it is a crate rather
+# than a module: the workspace sets `unsafe_code = "forbid"`, and `forbid` cannot be relaxed from inside.
+# The override arrives with the code that needs it, not before.
 [package]
 name = "runtrol-childproc"
 version = "0.0.0"
@@ -11,6 +15,13 @@ publish = false
 
 [dependencies]
 runtrol-provider = { workspace = true }
+# Program lookup the way a shell does it. Not hand written: PATHEXT ordering, quoted PATH entries, and the
+# executable bit on Unix are each easy to get subtly wrong, and getting them wrong means running the wrong
+# program.
+# `real-sys` is what supplies the actual filesystem lookup; without it the crate compiles to a
+# test-double-only surface and `which` itself does not exist.
+which = { workspace = true, features = ["real-sys"] }
+thiserror = { workspace = true }
 
 [lints]
 workspace = true

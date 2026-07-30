@@ -21,7 +21,9 @@ disallowed-types = [
 # here: adding a word silences the lint for the whole workspace, so a genuine unbackticked type name
 # would stop being reported.
 doc-valid-idents = [
-    "UUIDv7",  # the identifier version, not a Rust item
+    "UUIDv7",         # the identifier version, not a Rust item
+    "BatBadBut",      # the published name of CVE-2024-24576
+    "CVE-2024-24576", # a vulnerability identifier
     "..",      # keeps clippy's own default list, which this key would otherwise replace
 ]
 
