@@ -173,7 +173,9 @@ pub fn read(line: &Bytes) -> Result<Frame, MapError> {
     match (kind, envelope.subtype) {
         ("system", Some("init")) => Ok(Frame::Started(Box::new(startup(line, &envelope)?))),
 
-        (terminal, Some(sub)) if terminal == TERMINAL.kind && Some(sub) == TERMINAL.subtype => {
+        // Whatever its subtype, this frame ends the turn. The subtype says how, which `ended` reads: binding the
+        // pair instead would leave a turn that ended some other way running forever.
+        (terminal, _) if terminal == TERMINAL.kind => {
             Ok(Frame::Ended(Box::new(ended(line, &envelope))))
         }
 
@@ -244,10 +246,20 @@ fn ended(line: &Bytes, envelope: &Envelope<'_>) -> Ended {
         Some("max_tokens") => StopReason::MaxTokens,
         Some("refusal") => StopReason::Refusal,
         _ if failed => StopReason::Failed,
-        // Measured: on a successful turn this field can be absent, and the frame's own subtype is what says it
-        // succeeded. Treating the absence as failure would report every clean turn as broken.
-        None => StopReason::EndTurn,
-        // A token runtrol has no binding for. Named as not understood rather than guessed at.
+        // The frame declared success and did not say why it stopped. Its own subtype is the answer, and it is the
+        // only thing here that is allowed to mean a turn finished.
+        None if envelope.subtype == Some("success") => StopReason::EndTurn,
+        // No reason given and nothing saying it succeeded. Not understanding why something stopped is not the same
+        // as being told it finished, and rendering the second for the first is how an operator comes to trust a
+        // completion that never happened.
+        // These two read the same and mean different things: one is a frame that gave no reason at all, the other
+        // gave one this build has no binding for. Spelled apart so that giving either its own answer later is an
+        // edit rather than an untangling.
+        #[expect(
+            clippy::match_same_arms,
+            reason = "no reason given and a reason not understood are different facts that share an answer today"
+        )]
+        None => StopReason::Unknown,
         Some(_) => StopReason::Unknown,
     };
     Ended {
@@ -383,10 +395,27 @@ mod tests {
         ))
     }
 
-    /// The terminal frame, with the field set observed on 2.1.220.
-    fn recorded_terminal(extra: &str) -> Bytes {
+    /// The terminal frame, copied from one a session runtrol started and prompted actually produced.
+    ///
+    /// Copied rather than composed. A hand-written version of this frame named a kind the CLI does not send, every
+    /// test here agreed with it, and the defect only surfaced when the product was run: the ending came out of the
+    /// far end as something runtrol had no binding for. Shortened only where a field's content is long.
+    fn recorded_terminal() -> Bytes {
         line(&format!(
-            r#"{{"type":"message","subtype":"success","session_id":"{SESSION}","uuid":"b-uuid","is_error":false,"result":"ok","num_turns":1,"total_cost_usd":0.0012,"duration_ms":2100,"duration_api_ms":1800,"ttft_ms":700,"usage":{{"input_tokens":12,"output_tokens":3}},"modelUsage":{{}},"permission_denials":[],"terminal_reason":"end_turn"{extra}}}"#
+            r#"{{"type":"result","subtype":"success","is_error":false,"duration_api_ms":4602,"num_turns":1,"stop_reason":"end_turn","session_id":"{SESSION}","total_cost_usd":0.0917765,"usage":{{"input_tokens":2,"output_tokens":5}},"modelUsage":{{}},"permission_denials":[],"terminal_reason":"completed","result":"PONG","ttft_ms":3459,"duration_ms":3640,"uuid":"9f17c389-eeb6-4a74-bc1f-850d45d6b9aa"}}"#
+        ))
+    }
+
+    /// The captured frame with the three fields runtrol decides on set to something else.
+    ///
+    /// Written as a modification rather than as another frame, so that what a variant differs by is visible and
+    /// nothing here can drift into being a second, invented shape.
+    fn terminal_saying(subtype: &str, stop_reason: Option<&str>, is_error: bool) -> Bytes {
+        let stop = stop_reason.map_or_else(String::new, |reason| {
+            format!(r#","stop_reason":"{reason}""#)
+        });
+        line(&format!(
+            r#"{{"type":"result","subtype":"{subtype}","session_id":"{SESSION}","is_error":{is_error},"result":"PONG"{stop}}}"#
         ))
     }
 
@@ -434,14 +463,13 @@ mod tests {
     }
 
     #[test]
-    fn the_turn_ends_on_the_frame_the_cli_actually_sends() {
-        // The measurement that refuted the design note. It said `result`; the CLI sends `message`/`success` and
-        // `result` is a field inside it. A driver written from the note would never see a turn end and the
-        // operator would watch a finished turn spin forever.
-        match read(&recorded_terminal("")).expect("readable") {
+    fn the_frame_the_product_received_is_the_one_that_ends_a_turn() {
+        // The whole reason this file exists. Watched coming out of a real session: an ending that is not
+        // recognised leaves the turn running forever and nothing anywhere says why.
+        match read(&recorded_terminal()).expect("readable") {
             Frame::Ended(ended) => {
-                assert!(!ended.failed);
                 assert_eq!(ended.stop, StopReason::EndTurn);
+                assert!(!ended.failed);
                 assert!(ended.stop.is_success());
             }
             other => panic!("expected an ending, got {other:?}"),
@@ -449,27 +477,32 @@ mod tests {
     }
 
     #[test]
-    fn the_frame_the_design_note_described_is_not_treated_as_an_ending() {
-        // If it ever appears, it is something new and travels as unmapped. Binding it as well would mean two
-        // frames could end one turn, and a late one would reopen a closed turn.
-        let note_said = line(&format!(
-            r#"{{"type":"result","subtype":"success","session_id":"{SESSION}","is_error":false}}"#
-        ));
-        match read(&note_said).expect("readable") {
-            Frame::Unbound(unmapped) => {
-                assert_eq!(&*unmapped.tag, "result/success");
-                assert!(unmapped.unknown_to_binding);
+    fn a_turn_that_ended_some_other_way_still_ends() {
+        // Only `success` has been observed. Binding the pair rather than the kind would mean any other subtype
+        // ends nothing, and the case where an operator most needs to be told would be the one that goes silent.
+        let other_way = terminal_saying("error_during_execution", None, true);
+        match read(&other_way).expect("readable") {
+            Frame::Ended(ended) => {
+                assert!(ended.failed);
+                assert!(!ended.stop.is_success());
             }
-            other => panic!("expected an unmapped frame, got {other:?}"),
+            other => panic!("a turn that ended badly has to end: {other:?}"),
         }
     }
 
     #[test]
-    fn a_missing_stop_reason_on_a_successful_ending_is_not_read_as_failure() {
-        // Measured: the field can be absent on a clean turn, and the frame's own subtype is what says it
-        // succeeded. Treating the absence as failure would report every clean turn as broken.
-        match read(&recorded_terminal("")).expect("readable") {
+    fn a_missing_stop_reason_is_answered_by_the_subtype_and_never_assumed() {
+        // A frame that declared success and did not say why it stopped is a finished turn. One that says neither
+        // is not, and reading it as success is how an operator comes to trust a completion that never happened.
+        match read(&terminal_saying("success", None, false)).expect("readable") {
             Frame::Ended(ended) => assert_eq!(ended.stop, StopReason::EndTurn),
+            other => panic!("expected an ending, got {other:?}"),
+        }
+        match read(&terminal_saying("something_new", None, false)).expect("readable") {
+            Frame::Ended(ended) => {
+                assert_eq!(ended.stop, StopReason::Unknown);
+                assert!(!ended.stop.is_success());
+            }
             other => panic!("expected an ending, got {other:?}"),
         }
     }
@@ -478,7 +511,7 @@ mod tests {
     fn a_stop_reason_runtrol_does_not_know_is_named_as_not_understood() {
         // Not understanding a reason is not the same as being given one. Rendering an unknown token as success is
         // how an operator comes to trust a completion that never happened.
-        let odd = recorded_terminal(r#","stop_reason":"something_new_from_the_vendor""#);
+        let odd = terminal_saying("success", Some("something_new_from_the_vendor"), false);
         match read(&odd).expect("readable") {
             Frame::Ended(ended) => {
                 assert_eq!(ended.stop, StopReason::Unknown);
@@ -490,9 +523,7 @@ mod tests {
 
     #[test]
     fn a_failed_ending_says_so_and_is_not_success() {
-        let failed = line(&format!(
-            r#"{{"type":"message","subtype":"success","session_id":"{SESSION}","is_error":true}}"#
-        ));
+        let failed = terminal_saying("success", None, true);
         match read(&failed).expect("readable") {
             Frame::Ended(ended) => {
                 assert!(ended.failed);

@@ -6,28 +6,30 @@
 //!
 //! # Measured on this machine, version 2.1.220
 //!
-//! One turn through `-p --input-format stream-json --output-format stream-json --verbose`, with the frames it
-//! produced in order:
+//! One turn, captured from a session runtrol itself started and prompted, with the frames it produced in order:
 //!
 //! | `type` | `subtype` | what it is |
 //! |---|---|---|
 //! | `system` | `init` | the session started, with its capability list |
 //! | `system` | `status` | progress that is not conversation |
-//! | `system` | `thinking_tokens` | a running estimate, four times in one short turn |
 //! | `rate_limit_event` | | where the account stands, pushed without being asked |
 //! | `stream_event` | | a fragment, with the real kind nested one level down |
 //! | `assistant` | | a whole message |
-//! | `message` | `success` | **the turn ended** |
+//! | `result` | `success` | **the turn ended**, with the answer in a `result` field |
 //!
-//! # The measurement that refuted the design note
+//! # This frame has now been got wrong twice, and how it was caught the second time
 //!
-//! The recorded design said the terminal frame is `type: "result"`. On 2.1.220 it is
-//! **`type: "message"` with `subtype: "success"`**. There is no `result` frame at all; `result` is a *field*
-//! inside the terminal frame.
+//! A recorded design note said `result`. A reading of a capture then said `message`/`success`, and this file was
+//! changed to match it. That reading was wrong: the frame is `type: "result"` with `subtype: "success"`, and
+//! `result` is also a *field* inside it, which is what the misreading confused it with.
 //!
-//! A driver written from the note would never see a turn end. The session would sit at "running" forever, the
-//! operator would watch a finished turn spin, and nothing anywhere would say why. This is the exact failure the
-//! bound-surface discipline exists to catch, caught by running the thing instead of reading about it.
+//! Nothing caught it until the product was run. A session was started, prompted, and watched, and the ending came
+//! out of the far end tagged `result/success` and marked as something runtrol has no binding for. The turn had
+//! finished and runtrol did not know, which is precisely the failure this file exists to prevent.
+//!
+//! The lesson is not about this frame. It is that a fixture written by hand proves only that the code agrees with
+//! whoever wrote the fixture: the tests below were green throughout, because they were written against the same
+//! misreading. The fixtures here are now copied from frames the product actually received.
 //!
 //! # Why the terminal frame is named twice
 //!
@@ -47,11 +49,19 @@ pub struct BoundFrame {
 
 /// The frame that ends a turn.
 ///
-/// Measured, not documented. See the module notes: the design said `result` and the CLI says this.
+/// # Why no subtype, when the one that was measured is `success`
+///
+/// Because the subtype says *how* the turn ended, not *whether* it did. Binding the pair would mean a turn that
+/// ended any other way ends nothing at all: the frame would travel as unmapped, the session would sit at running
+/// forever, and the one case where an operator most needs to be told is the one that would go silent. So the kind
+/// is what ends a turn, and the subtype is read alongside `is_error` and `stop_reason` to say how.
+///
+/// `success` is the only subtype observed here. That is a fact about one turn on one machine, not a claim that
+/// there are no others, and binding the kind is what makes the difference harmless.
 pub const TERMINAL: BoundFrame = BoundFrame {
-    kind: "message",
-    subtype: Some("success"),
-    means: "the turn ended, and its outcome is in this frame",
+    kind: "result",
+    subtype: None,
+    means: "the turn ended. the subtype and the error flag say how, and the answer is a field inside it",
 };
 
 /// Every frame runtrol binds. Everything else is relayed whole and unread.
@@ -198,15 +208,18 @@ mod tests {
     }
 
     #[test]
-    fn the_terminal_frame_is_the_one_that_was_measured_and_not_the_one_that_was_written_down() {
-        // The design note said `result`. The CLI says `message`/`success`, and `result` is a field inside it. A
-        // driver written from the note would never see a turn end, and the operator would watch a finished turn
-        // spin forever with nothing saying why.
-        assert_eq!(TERMINAL.kind, "message");
-        assert_eq!(TERMINAL.subtype, Some("success"));
+    fn the_terminal_frame_is_the_one_the_product_received() {
+        // Copied from a session runtrol started, prompted, and watched, after a hand-written fixture had this
+        // wrong and every test agreed with it. A driver that misses this never sees a turn end, and the operator
+        // watches a finished turn spin with nothing saying why.
+        assert_eq!(TERMINAL.kind, "result");
+        assert_eq!(
+            TERMINAL.subtype, None,
+            "the subtype says how a turn ended, not whether it did, so a turn that ended badly must still end"
+        );
         assert!(
-            !FRAMES.iter().any(|frame| frame.kind == "result"),
-            "the frame the note described does not exist and must not be bound"
+            !FRAMES.iter().any(|frame| frame.kind == "message"),
+            "there is no frame of that kind, and binding one would be binding the misreading again"
         );
     }
 

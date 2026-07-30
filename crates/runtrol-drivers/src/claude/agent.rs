@@ -14,6 +14,11 @@
 //! prompt. So the ending the mapping recognises becomes a turn event here, stamped with the turn that was running
 //! and with the provider as the one who declared it.
 //!
+//! The beginning is the same fact from the other end, and it comes from here for the same reason: nothing in the
+//! stream announces a turn starting, so the only thing that knows one has is whatever wrote the prompt. Measured:
+//! without it, runtrol showed a session as idle for the whole of a turn it was running, and an operator watching
+//! a list would have seen nothing happening while the agent worked.
+//!
 //! A turn that was running when the process died gets an ending too, declared by the exit and **not** by the
 //! provider, which is what keeps "the outcome is unknown" distinguishable from "it finished".
 //!
@@ -75,6 +80,12 @@ pub struct ClaudeAgent {
     /// A fragment is not persisted, so it carries the previous durable value and a client resuming from the file
     /// receives the finished message instead of the pieces.
     src_end: u64,
+    /// An event runtrol itself produced, waiting to be handed over.
+    ///
+    /// One slot, because the only thing that goes in it is a turn beginning and a turn cannot begin twice without
+    /// ending in between. A queue here would be a place events could pile up unbounded, which is the shape this
+    /// whole design exists to avoid.
+    announced: Option<Produced>,
     /// Set once the stream is over, so nothing keeps reading a finished session.
     finished: bool,
 }
@@ -136,6 +147,7 @@ impl ClaudeAgent {
             running: None,
             next_turn: 0,
             src_end: 0,
+            announced: None,
             finished: false,
         })
     }
@@ -387,7 +399,17 @@ impl Agent for ClaudeAgent {
                 // to belong to.
                 let turn = self.mint_turn();
                 self.running = Some(turn);
-                self.write_line(&frame).await
+                self.write_line(&frame).await?;
+
+                // Said out loud, because nothing in the stream announces a turn starting and this is the only
+                // thing that knows one has. Announced after the write rather than before: a prompt that could not
+                // be sent did not start anything, and reporting one would show an operator a turn running that
+                // never was.
+                self.announced = Some(Produced {
+                    src_end: self.src_end,
+                    body: EventBody::Turn(TurnEvent::Started { turn }),
+                });
+                Ok(())
             }
             AgentCommand::Interrupt => {
                 let frame = interrupt_frame(self.provider, u64::from(self.next_turn))?;
@@ -415,6 +437,11 @@ impl Agent for ClaudeAgent {
     }
 
     async fn next(&mut self) -> Option<Result<Produced, ProviderError>> {
+        // What runtrol itself has to say comes first, and taking it is not a wait, so a caller that sets this
+        // aside partway through loses nothing.
+        if let Some(announced) = self.announced.take() {
+            return Some(Ok(announced));
+        }
         if self.finished {
             return None;
         }
