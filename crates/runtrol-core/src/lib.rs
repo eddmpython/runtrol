@@ -29,7 +29,10 @@ pub use probe::{BinFacts, Flags, ProbeCache, ProbeError, probe};
 pub use registry::{
     KindEntry, KindStatus, KindTable, Origin, Provider, ProviderRegistry, RegistryError,
 };
-pub use session::{CloseReason, FailureCode, Identity, Lifecycle, Observed, SessionState, Tier};
+pub use session::{
+    CloseReason, FailureCode, Identity, Lifecycle, LiveSession, Observed, SessionError,
+    SessionManager, SessionState, Tier,
+};
 
 // These edges are declared in this crate's manifest and enforced by
 // `tests/audit/dependencyDirection.rs`. Until the modules that use them arrive, these lines are what

@@ -1,24 +1,24 @@
 //! What a session is, before anything can start one.
 //!
-//! Three things that answer to nothing outside this module:
+//! Three facts that hold whatever the provider is, and the one entry point that puts them together:
 //!
 //! - [`mint`] the two names a session has, and which of them runtrol owns
 //! - [`state`] the one place a session's state may change
 //! - [`tier`] how many sessions may cost a child process, and which one gives way
+//! - [`manager`] the one entry point the daemon calls, which puts the three together
 //!
-//! # Why starting and listing are not here yet
+//! # What the manager does not own
 //!
-//! Starting a session means driving a provider, and listing one means reading a provider's own store. Both need
-//! the behavioural contract a driver implements, and that contract arrives with its first implementation: a
-//! trait with no implementor is a guess about a shape the implementor gets to decide.
-//!
-//! What is here is everything that is true regardless of which provider it is, which is exactly the part that
-//! can be finished and proved first.
+//! The runtime. Pumping a session is a step rather than a loop, so the daemon decides how many run at once and the
+//! kernel decides what one event means. A task spawned in here would put a runtime configuration in the one place the
+//! memory contract says it must not be.
 
+pub mod manager;
 pub mod mint;
 pub mod state;
 pub mod tier;
 
+pub use manager::{LiveSession, SessionError, SessionManager};
 pub use mint::Identity;
 pub use state::{CloseReason, FailureCode, Lifecycle, Observed, Refused, SessionState};
 pub use tier::{Admit, HotSession, MAX_HOT, NoRoom, Tier};

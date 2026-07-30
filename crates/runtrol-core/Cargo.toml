@@ -26,6 +26,8 @@ serde = { workspace = true, features = ["std", "derive"] }
 serde_json = { workspace = true, features = ["std"] }
 
 [dev-dependencies]
+# One test implements the driver contract from a script, which needs the macro that makes that contract `dyn`-able.
+async-trait = { workspace = true }
 # The daemon awaits a subscription and a probe runs a child process, so those two paths are tested with a
 # runtime. Everything with a bound on it is proved synchronously, which is why this is the only place one is
 # needed.
