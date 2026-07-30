@@ -7,7 +7,9 @@
 //! # Layout
 //!
 //! - [`framing`] getting bytes to and from a child in the shapes these CLIs speak
+//! - [`claude`] the driver for the CLI that runs one process per session, and its measured surface
 
+pub mod claude;
 pub mod framing;
 
 pub use framing::{FrameError, Incoming, LineError, Lines, Pending, RequestId};
