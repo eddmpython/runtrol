@@ -17,12 +17,16 @@ runtrol-childproc = { workspace = true }
 # came from has to be shareable rather than copied.
 bytes = { workspace = true }
 thiserror = { workspace = true }
+# Protocol envelopes. `raw_value` is what lets a payload stay a slice of the line it arrived on instead of being
+# rebuilt into a tree runtrol would then have to re-encode.
+serde = { workspace = true, features = ["std", "derive"] }
+serde_json = { workspace = true, features = ["std", "raw_value"] }
 # Reading a child's output. `io-util` is the buffered reader; the process itself is started by the crate that
 # owns child processes.
-tokio = { workspace = true, features = ["io-util"] }
+tokio = { workspace = true, features = ["io-util", "sync"] }
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["rt", "macros", "io-util"] }
+tokio = { workspace = true, features = ["rt", "macros", "io-util", "sync"] }
 
 [lints]
 workspace = true

@@ -10,7 +10,7 @@
 
 pub mod framing;
 
-pub use framing::{LineError, Lines};
+pub use framing::{FrameError, Incoming, LineError, Lines, Pending, RequestId};
 
 // This edge is declared in this crate's manifest and enforced by `tests/audit/dependencyDirection.rs`. Until
 // the module that starts a child arrives, this line is what makes the declaration real: `cargo shear` reports a

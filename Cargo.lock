@@ -275,6 +275,8 @@ dependencies = [
  "bytes",
  "runtrol-childproc",
  "runtrol-provider",
+ "serde",
+ "serde_json",
  "thiserror",
  "tokio",
 ]

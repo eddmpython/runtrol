@@ -17,6 +17,8 @@
 //! So a child's output is read as a pipe and never through a console, and the design is arranged so nothing
 //! ever wants a terminal.
 
+pub mod jsonrpc;
 pub mod ndjson;
 
+pub use jsonrpc::{FrameError, Incoming, Pending, RequestId, WireError};
 pub use ndjson::{LineError, Lines, MAX_LINE, READ_BUFFER};
