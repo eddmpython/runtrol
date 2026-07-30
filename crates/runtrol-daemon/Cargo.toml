@@ -19,10 +19,17 @@ runtrol-core = { workspace = true }
 runtrol-drivers = { workspace = true }
 
 thiserror = { workspace = true }
+# The requests and answers that cross the connection. The daemon reads and writes them; what they mean is the
+# vocabulary crate's, and this only carries them.
+serde_json = { workspace = true }
+# Serving is one task that owns the sessions and one task per connection, racing what they wait on against each
+# other. That needs a runtime, channels, and a way to race: this is where the daemon owns them, which is what keeps
+# the kernel free of any runtime decision at all.
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "sync", "time"] }
 
 [dev-dependencies]
-# Dispatch is asynchronous because opening a session is, so its tests need somewhere for that to run.
-tokio = { workspace = true, features = ["rt", "macros"] }
+# Serving is checked end to end against a real endpoint, so its tests need the runtime started for them.
+tokio = { workspace = true, features = ["rt", "macros", "time"] }
 
 
 [lints]

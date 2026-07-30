@@ -10,12 +10,32 @@
 //!
 //! - [`compose`] establishing containment, finding the home, and reading which providers exist
 //! - [`dispatch`] one request in, one answer out
+//! - [`serve`] one owner of the sessions, and a task for every connection beside it
 
 pub mod compose;
 pub mod dispatch;
+pub mod serve;
 
 pub use compose::{ComposeError, Composed};
 pub use dispatch::{Conversation, Reply, answer};
+pub use serve::{ServeError, serve};
+
+/// Where a daemon for this home listens.
+///
+/// Asked for rather than worked out, so that the two ends of the local connection cannot derive it differently. The
+/// daemon decides where it listens; everything else asks. Establishing containment is not part of answering this,
+/// which is what lets a command surface ask without becoming something that owns child processes.
+///
+/// # Errors
+///
+/// [`ComposeError::Home`] when runtrol's directory cannot be established.
+pub fn endpoint(home: Option<&str>) -> Result<String, ComposeError> {
+    let home = match home {
+        Some(chosen) => runtrol_core::RuntrolHome::open_at(chosen)?,
+        None => runtrol_core::RuntrolHome::open()?,
+    };
+    Ok(home.paths().endpoint().address().to_owned())
+}
 
 // Declared in this crate's manifest and enforced by `tests/audit/dependencyDirection.rs`. The session rows and the scope
 // checks at the boundary arrive in the next step; until they do, these lines are what make the declaration real, because
