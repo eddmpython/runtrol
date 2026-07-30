@@ -220,8 +220,12 @@ dependencies = [
 name = "runtrol"
 version = "0.0.0"
 dependencies = [
+ "runtrol-childproc",
  "runtrol-cli",
  "runtrol-daemon",
+ "runtrol-drivers",
+ "runtrol-ipc",
+ "tokio",
 ]
 
 [[package]]
@@ -249,6 +253,9 @@ version = "0.0.0"
 dependencies = [
  "runtrol-ipc",
  "runtrol-provider",
+ "serde_json",
+ "thiserror",
+ "tokio",
 ]
 
 [[package]]
@@ -278,6 +285,9 @@ dependencies = [
  "runtrol-provider",
  "runtrol-security",
  "runtrol-store",
+ "serde_json",
+ "thiserror",
+ "tokio",
 ]
 
 [[package]]

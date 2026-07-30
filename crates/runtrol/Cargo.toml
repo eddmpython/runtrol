@@ -1,8 +1,8 @@
-# 단일 바이너리. argv 디스패치만 한다.
+# The one executable. It picks a personality from argv and does nothing else.
 #
-# 왜 얇은 bin 을 따로 두는가: bin 은 필연적으로 모든 것을 링크하므로, 그 자체가 계층 위반의
-# 예외가 된다. 그 예외를 한 곳에 40 줄로 가두면 의존 방향 게이트가 나머지 전부를 엄격히 볼 수 있다.
-# 그리고 daemon 과 cli 를 lib 으로 두면 통합 테스트가 그것들을 링크할 수 있다 (bin 은 못 한다).
+# Why the binary is kept thin: it necessarily links everything, so it is itself the exception to the layering. Keeping
+# that exception in one short file is what lets the dependency-direction gate be strict about all the rest. Keeping the
+# daemon and the command surface as libraries is also what lets an integration test link them, which a binary cannot.
 [package]
 name = "runtrol"
 version = "0.0.0"
@@ -20,6 +20,16 @@ path = "src/main.rs"
 [dependencies]
 runtrol-cli = { workspace = true }
 runtrol-daemon = { workspace = true }
+# What this process passes on to anything it starts. A process-wide setting, so it belongs to the program.
+runtrol-childproc = { workspace = true }
+# Which providers this build can drive. The daemon takes the table rather than finding it, so the one place that says
+# what a build can do is the place a build is assembled.
+runtrol-drivers = { workspace = true }
+# Where the daemon listens. Binding belongs to whoever is being a daemon, which is this file and nothing else.
+runtrol-ipc = { workspace = true }
+# Both personalities are asynchronous, and each wants a runtime of its own shape. Built here because an attribute on
+# `main` can only say one thing.
+tokio = { workspace = true, features = ["rt", "rt-multi-thread"] }
 
 [lints]
 workspace = true
