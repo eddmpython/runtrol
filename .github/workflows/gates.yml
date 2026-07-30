@@ -122,17 +122,21 @@ jobs:
       # 2026-07 기준 nightly 전용이다 (rust-lang/cargo#12235). 안정화되면 이 단계를 지운다.
       - uses: cargo-bins/cargo-binstall@main
         if: needs.detect.outputs.hasWorkspace == 'true'
+      # **`--force` 는 필수다 (실측).** 캐시가 cargo 의 설치 원장 (`.crates2.json`) 은 복원하면서
+      # `~/.cargo/bin` 의 실제 바이너리는 복원하지 않는 상태가 실제로 나왔다. 그러면 binstall 이
+      # 원장을 읽고 "already installed" 로 건너뛰고, 다음 줄이 `no such command: shear` 로 죽는다.
+      # `--force` 는 원장을 믿지 않고 항상 설치하므로 이 계열이 통째로 사라진다 (몇 초 비용).
       - name: cargo shear (미사용 의존성)
         if: needs.detect.outputs.hasWorkspace == 'true'
         run: |
-          cargo binstall --no-confirm cargo-shear
+          cargo binstall --no-confirm --force cargo-shear
           cargo shear
       # 공급망 + `deny.toml` 의 기각 원장. 원장을 문서로만 두면 다음 사람은 읽지 않는다.
       # advisory DB 를 git 으로 가져오므로 네트워크가 필요하다.
       - name: cargo deny (공급망·기각 원장)
         if: needs.detect.outputs.hasWorkspace == 'true'
         run: |
-          cargo binstall --no-confirm cargo-deny
+          cargo binstall --no-confirm --force cargo-deny
           cargo deny check
 
   # 크로스 플랫폼. `어디서나 같은 방법` 축. Windows 잡은 WSL 없이 돈다.
