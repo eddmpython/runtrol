@@ -23,11 +23,17 @@ target/
 *.pdb
 
 # Node 빌드 산출물 (PWA·랜딩). package-lock.json 은 제외하면 안 됨 (같은 이유).
+#
+# **`dist/` 는 산출물 이름이지 소스 이름이 아니다.** 데스크톱 창의 화면 소스를 거기 두었다가 통째로
+# 무시당했고, 저장소만 클론한 사람은 창을 만들 수 없는 상태였다. 소스는 `ui/` 에 산다.
 node_modules/
 dist/
 .vite/
 .astro/
 *.tsbuildinfo
+
+# 데스크톱 셸이 빌드 때 만드는 권한 스키마. tauri.conf.json 에서 재생성되므로 저장소에 둘 이유가 없다.
+crates/runtrol-gui/gen/
 
 # Python. 게이트 harness 전용이고 재생성된다.
 .venv/

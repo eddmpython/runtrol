@@ -1,0 +1,228 @@
+/* Quiet on purpose. The component layer this will sit on describes itself as restrained and minimal so the
+   content stays the focus, and this holds that line until it arrives. Nothing here is a design; it is the
+   least that lets the list be read. */
+
+:root {
+  color-scheme: light dark;
+  --edge: color-mix(in srgb, currentColor 14%, transparent);
+  --quiet: color-mix(in srgb, currentColor 55%, transparent);
+  --raised: color-mix(in srgb, currentColor 6%, transparent);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  height: 100vh;
+  display: grid;
+  grid-template-columns: 280px 1fr;
+  font-family: system-ui, sans-serif;
+  font-size: 14px;
+}
+
+#side {
+  border-right: 1px solid var(--edge);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+#side header {
+  padding: 12px 14px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border-bottom: 1px solid var(--edge);
+}
+
+h1 {
+  font-size: 15px;
+  margin: 0;
+  flex: 1;
+}
+
+button {
+  font: inherit;
+  padding: 5px 10px;
+  border: 1px solid var(--edge);
+  border-radius: 6px;
+  background: var(--raised);
+  color: inherit;
+  cursor: pointer;
+}
+
+button:hover {
+  background: color-mix(in srgb, currentColor 12%, transparent);
+}
+
+/* The list scrolls and nothing else does, so the place to start a session never moves off screen. */
+#sessions {
+  list-style: none;
+  margin: 0;
+  padding: 6px;
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
+}
+
+#sessions li {
+  padding: 8px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+#sessions li:hover {
+  background: var(--raised);
+}
+
+#sessions li[aria-selected="true"] {
+  background: color-mix(in srgb, currentColor 12%, transparent);
+}
+
+/* A provider is a badge on a row, never a tab. Splitting the list by provider is exactly what every vendor's
+   own app already does, and having one list is the whole point of this one. */
+.badge {
+  font-size: 11px;
+  padding: 1px 6px;
+  border: 1px solid var(--edge);
+  border-radius: 999px;
+  color: var(--quiet);
+  flex: none;
+}
+
+.dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--quiet);
+  flex: none;
+}
+
+.dot[data-doing="busy"] {
+  background: #d08b28;
+}
+
+.dot[data-stuck="true"] {
+  outline: 2px solid #c25a4a;
+  outline-offset: 1px;
+}
+
+.rowName {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+#empty,
+.note {
+  color: var(--quiet);
+  padding: 0 14px;
+}
+
+#main {
+  padding: 20px;
+  overflow-y: auto;
+}
+
+#nothing {
+  color: var(--quiet);
+}
+
+#detail header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+dl {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 6px 16px;
+  margin: 0 0 18px;
+}
+
+dt {
+  color: var(--quiet);
+}
+
+dd {
+  margin: 0;
+  font-family: ui-monospace, Consolas, monospace;
+  overflow-wrap: anywhere;
+}
+
+.actions {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 18px;
+}
+
+dialog {
+  border: 1px solid var(--edge);
+  border-radius: 10px;
+  padding: 18px;
+  min-width: 380px;
+  color: inherit;
+  background: Canvas;
+}
+
+dialog h2 {
+  margin: 0 0 14px;
+  font-size: 15px;
+}
+
+dialog label {
+  display: block;
+  margin: 10px 0 4px;
+  color: var(--quiet);
+}
+
+dialog select,
+dialog input {
+  font: inherit;
+  width: 100%;
+  padding: 6px 8px;
+  border: 1px solid var(--edge);
+  border-radius: 6px;
+  background: Canvas;
+  color: inherit;
+}
+
+dialog menu {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin: 18px 0 0;
+  padding: 0;
+}
+
+/* What the daemon said, in its own words. It stays until it is replaced, because a message that disappears on
+   a timer is a message the operator missed. */
+#said {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  max-width: 460px;
+  padding: 10px 12px;
+  border: 1px solid var(--edge);
+  border-radius: 8px;
+  background: Canvas;
+  box-shadow: 0 6px 20px rgb(0 0 0 / 18%);
+}
+
+#said[data-kind="broken"] {
+  border-color: #c25a4a;
+}
+
+#said button {
+  margin-left: 10px;
+  padding: 2px 8px;
+}

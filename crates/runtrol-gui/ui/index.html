@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <title>runtrol</title>
+    <link rel="stylesheet" href="app.css" />
+  </head>
+  <body>
+    <!-- The list is on the left and it does not move. A fixed place is what lets muscle memory form, and it is
+         the first thing the operator named as what makes an app comfortable to manage sessions in. -->
+    <aside id="side">
+      <header>
+        <h1>runtrol</h1>
+        <!-- Always in the same place, so starting costs nothing to find. -->
+        <button id="new" type="button">새 세션</button>
+      </header>
+      <ul id="sessions" aria-live="polite"></ul>
+      <p id="empty" hidden>세션이 없다. 위에서 하나 시작한다.</p>
+    </aside>
+
+    <main id="main">
+      <div id="nothing">
+        <p>왼쪽에서 세션을 고른다.</p>
+      </div>
+      <section id="detail" hidden>
+        <header>
+          <span class="badge" id="detailProvider"></span>
+          <span class="dot" id="detailDot"></span>
+          <span id="detailDoing"></span>
+        </header>
+        <dl>
+          <dt>runtrol</dt>
+          <dd id="detailSession"></dd>
+          <dt>대화</dt>
+          <dd id="detailNative"></dd>
+        </dl>
+        <div class="actions">
+          <button id="closeSession" type="button">닫기</button>
+        </div>
+        <p class="note">대화 표면은 아직 없다. 이 창이 지금 답하는 것은 한 목록이다.</p>
+      </section>
+    </main>
+
+    <!-- A start needs a provider and a place to work, and nothing else. Neither model nor permission is asked
+         for here: the provider's own settings decide, and offering a default would override a choice the
+         operator already made in the CLI. -->
+    <dialog id="starter">
+      <form method="dialog">
+        <h2>새 세션</h2>
+        <label for="provider">공급자</label>
+        <select id="provider"></select>
+        <label for="workspace">작업 폴더</label>
+        <input id="workspace" type="text" spellcheck="false" />
+        <menu>
+          <button value="cancel" type="submit">취소</button>
+          <button value="start" id="confirmStart" type="submit">시작</button>
+        </menu>
+      </form>
+    </dialog>
+
+    <!-- Whatever the daemon said, in its own words. Never a spinner and never a guess. -->
+    <div id="said" role="status" hidden></div>
+
+    <script src="app.js"></script>
+  </body>
+</html>
