@@ -24,12 +24,16 @@ use runtrol_childproc::{Containment, Program};
 use runtrol_provider::{Provider, ProviderId};
 
 use crate::claude::ClaudeProvider;
+use crate::codex::CodexProvider;
 
 /// The manifests compiled into this binary.
 ///
 /// Text rather than parsed values, because the loader owns parsing and there is exactly one parser. A built-in that
 /// went in already parsed would be a second reading of the schema, and two readings drift.
-pub const MANIFESTS: &[&str] = &[include_str!("../manifests/claude.toml")];
+pub const MANIFESTS: &[&str] = &[
+    include_str!("../manifests/claude.toml"),
+    include_str!("../manifests/codex.toml"),
+];
 
 /// Builds a driver for one kind.
 ///
@@ -80,8 +84,8 @@ pub struct DriverContext {
 
 /// Every kind this build knows about.
 ///
-/// The three unserved entries are live code with a test each, not scaffolding: they are the difference between an
-/// honest "not in this build" and a misleading "unknown kind".
+/// The unserved entries are live code with a test each, not scaffolding: they are the difference between an honest
+/// "not in this build" and a misleading "unknown kind".
 pub const KINDS: &[DriverKind] = &[
     DriverKind {
         kind: "claude-stream-json",
@@ -89,14 +93,14 @@ pub const KINDS: &[DriverKind] = &[
         unavailable: None,
     },
     DriverKind {
+        kind: "codex-app-server",
+        make: Some(make_codex),
+        unavailable: None,
+    },
+    DriverKind {
         kind: "acp",
         make: None,
         unavailable: Some("this build has no generic driver for that protocol"),
-    },
-    DriverKind {
-        kind: "codex-app-server",
-        make: None,
-        unavailable: Some("the driver for that protocol is not in this build yet"),
     },
     DriverKind {
         kind: "exec-oneshot",
@@ -110,9 +114,18 @@ pub const KINDS: &[DriverKind] = &[
     },
 ];
 
-/// Build the driver for the one kind this build serves.
+/// Build the driver for the CLI that runs one process per session.
 fn make_claude(context: &DriverContext) -> Box<dyn Provider> {
     Box::new(ClaudeProvider::new(
+        context.provider,
+        context.program.clone(),
+        Arc::clone(&context.contained_by),
+    ))
+}
+
+/// Build the driver for the CLI whose sessions share one daemon.
+fn make_codex(context: &DriverContext) -> Box<dyn Provider> {
+    Box::new(CodexProvider::new(
         context.provider,
         context.program.clone(),
         Arc::clone(&context.contained_by),

@@ -543,6 +543,57 @@ pub fn write_answer<R: Serialize>(id: &RequestId, result: &R) -> Result<String, 
     })
 }
 
+/// One outgoing refusal of a question the provider asked.
+#[derive(Clone, PartialEq, Eq, Debug, Serialize)]
+struct OutgoingRefusal<'call> {
+    /// The protocol version.
+    jsonrpc: &'static str,
+    /// Which question is being refused.
+    id: serde_json::Value,
+    /// Why.
+    error: RefusalBody<'call>,
+}
+
+/// The body of a refusal.
+#[derive(Clone, PartialEq, Eq, Debug, Serialize)]
+struct RefusalBody<'call> {
+    /// runtrol's own code.
+    code: i64,
+    /// runtrol's own message.
+    message: &'call str,
+}
+
+/// Refuse a question the provider asked.
+///
+/// # Why this exists rather than leaving the question alone
+///
+/// A provider that multiplexes every session over one connection waits on each question it asks. One left
+/// unanswered stalls that daemon, and therefore every session on it, with nothing anywhere saying why. So a
+/// question runtrol will not serve is refused out loud.
+///
+/// Infallible on purpose: this is the answer of last resort, and a refusal that could itself fail to be
+/// written would leave the caller with nothing to send. Both fields are runtrol's own, so there is nothing
+/// here that can fail to serialize.
+#[must_use]
+pub fn write_error(id: &RequestId, code: i64, message: &str) -> String {
+    let refusal = OutgoingRefusal {
+        jsonrpc: VERSION,
+        id: id.to_wire(),
+        error: RefusalBody { code, message },
+    };
+    // A structure of a number, a short string and an identifier runtrol already validated. `to_string` on it
+    // can only fail on a type that refuses to serialize, and none of these is one.
+    serde_json::to_string(&refusal).unwrap_or_else(|_| {
+        // Built by hand rather than left empty, so the provider still receives a well formed refusal for the
+        // question it asked. The identifier is a number or a string runtrol bounded, and the message is a
+        // literal, so this is a valid frame.
+        format!(
+            r#"{{"jsonrpc":"{VERSION}","id":{},"error":{{"code":{code},"message":"refused"}}}}"#,
+            id.to_wire()
+        )
+    })
+}
+
 /// Write a report for the provider, expecting no answer.
 ///
 /// # Errors
@@ -921,6 +972,36 @@ mod tests {
             read(&line(&reported)).expect("readable"),
             Incoming::Report { .. }
         ));
+    }
+
+    #[test]
+    fn a_question_runtrol_will_not_serve_is_refused_out_loud() {
+        // A question left unanswered stalls a daemon that multiplexes every session, so there is no case
+        // where saying nothing is acceptable. The refusal has to read back as an answer to the same question.
+        let written = write_error(&RequestId::Number(7), -32_601, "runtrol has no binding");
+        assert!(!written.contains('\n'), "{written}");
+        match read(&line(&written)).expect("readable") {
+            Incoming::Answer { id, outcome } => {
+                assert_eq!(id, RequestId::Number(7));
+                match outcome {
+                    Err(failure) => {
+                        assert_eq!(failure.code, -32_601);
+                        assert!(failure.message.contains("no binding"));
+                    }
+                    Ok(_) => panic!("a refusal must not read as success"),
+                }
+            }
+            other => panic!("expected an answer, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_refusal_of_a_textual_question_names_the_same_question() {
+        let written = write_error(&RequestId::Text("req-42".into()), -1, "no");
+        match read(&line(&written)).expect("readable") {
+            Incoming::Answer { id, .. } => assert_eq!(id.to_string(), "req-42"),
+            other => panic!("expected an answer, got {other:?}"),
+        }
     }
 
     #[test]

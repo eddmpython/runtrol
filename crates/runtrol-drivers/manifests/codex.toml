@@ -1,0 +1,44 @@
+# Compiled into the binary, so a fresh install has this provider with no file anywhere. An operator who needs
+# something different writes a file with the same id and it replaces this one entirely.
+#
+# Everything here is a fact about how to REACH the CLI. Nothing here says what it can do: its models come from
+# its own `model/list`, its account from its own `account/read`, its protocol from the schema it generates. A
+# key that restated one of those would be stale the first time the vendor shipped a release.
+schema = 1
+id = "codex"
+display_name = "Codex"
+kind = "codex-app-server"
+
+[bin]
+# Bare names, tried in this order. Measured on this machine: a package manager installs a launcher script in
+# front of the real program, and resolution unwraps it. The order is a preference and not a requirement.
+names = ["codex", "codex.cmd", "codex.exe"]
+
+[probe]
+version = { args = ["--version"], parse = "semver-anywhere" }
+# How to ask this CLI about a flag without letting it start work. The subcommand that generates its protocol
+# schema reads nothing and starts no conversation, so a flag question costs no turn and no tokens.
+flags = { safe_with = ["app-server", "generate-json-schema"] }
+
+[transport]
+# The daemon. Measured: it multiplexes every conversation over one pair of standard streams, which is what
+# makes N sessions cost one child.
+argv = ["app-server", "--stdio"]
+listen = "stdio"
+
+# No `[models]` block. Measured: this CLI enumerates its own models in 16 milliseconds and reports a display
+# name, a description and the reasoning efforts each one accepts. Writing any of that here would be a copy that
+# goes stale on the vendor's next release, and the discovery ladder exists precisely so it does not have to.
+
+[secrets]
+# Where this CLI keeps its own login. Not discoverable: a CLI does not report this, and guessing from its name
+# is how a wall comes to protect a directory nobody uses. runtrol never holds a provider credential, and the
+# scope wall refuses any workspace that would let an agent read one either.
+#
+# Measured, and this one is load bearing: the daemon asks its client to refresh an authentication token. The
+# driver answers that it will not, every time, and tells the operator.
+under_home = [".codex"]
+
+[update]
+# It updates itself. A hint only: whatever performs an update probes first and believes what it finds.
+hint = "self"

@@ -22,8 +22,10 @@ thiserror = { workspace = true }
 serde = { workspace = true, features = ["std", "derive"] }
 serde_json = { workspace = true, features = ["std", "raw_value"] }
 # Reading a child's output. `io-util` is the buffered reader; the process itself is started by the crate that
-# owns child processes.
-tokio = { workspace = true, features = ["io-util", "sync", "process", "time"] }
+# owns child processes. `rt` is for one background task: the CLI whose sessions share a daemon needs a reader
+# that sorts frames for every session at once, and there is nobody else to run it (a session cannot, because
+# it would then only read while somebody was asking it for events).
+tokio = { workspace = true, features = ["io-util", "sync", "process", "time", "rt"] }
 # The behavioural contract has async methods and is held as `dyn`.
 async-trait = { workspace = true }
 

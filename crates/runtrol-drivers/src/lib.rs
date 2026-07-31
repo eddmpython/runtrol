@@ -8,6 +8,7 @@
 //!
 //! - [`framing`] getting bytes to and from a child in the shapes these CLIs speak
 //! - [`claude`] the driver for the CLI that runs one process per session, and its measured surface
+//! - [`codex`] the driver for the CLI whose sessions share one daemon, and its measured surface
 //! - [`kinds`] the kind table and the manifests compiled into this binary
 //!
 //! # The whole public surface is one function and two tables
@@ -16,6 +17,7 @@
 //! parses the one and reads the other, and neither the kernel nor this crate needs to know about the other's shape.
 
 pub mod claude;
+pub mod codex;
 pub mod framing;
 pub mod kinds;
 
