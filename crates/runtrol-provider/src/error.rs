@@ -132,7 +132,10 @@ pub enum ProviderError {
     ///
     /// The request was well formed and the provider declined it. Carried separately from a protocol
     /// violation because there is nothing to fix in runtrol.
-    #[error("{provider}: refused to {doing}: {detail}")]
+    // `while` rather than `to`, because every other variant that names what runtrol was doing reads it as a
+    // gerund and drivers write one. "refused to resuming a conversation" is what the other wording produced
+    // the first time this variant was used in anger.
+    #[error("{provider}: refused while {doing}: {detail}")]
     NativeRefused {
         /// Which provider.
         provider: ProviderId,

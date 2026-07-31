@@ -158,7 +158,11 @@ fn commanding(words: &[String]) -> impl FnOnce(&tokio::runtime::Runtime) -> Exit
         };
 
         match runtime.block_on(runtrol_cli::ask(&address, &executable, request, say)) {
-            Ok(()) => ExitCode::SUCCESS,
+            Ok(runtrol_cli::Outcome::Carried) => ExitCode::SUCCESS,
+            // The daemon answered and the answer was no. Already written for the operator by the surface, so
+            // nothing more is said here; what changes is the status, because a command that did not do what it
+            // was asked must not report that it did to whatever ran it.
+            Ok(runtrol_cli::Outcome::Refused) => ExitCode::FAILURE,
             Err(failure) => {
                 report(&failure.to_string());
                 ExitCode::FAILURE

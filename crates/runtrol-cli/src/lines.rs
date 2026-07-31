@@ -9,6 +9,12 @@
 
 use runtrol_ipc::wire::Response;
 
+/// What a listing prints where a conversation's own name would go, before the provider has said one.
+///
+/// A placeholder rather than an empty column, so that the number of fields on a line is the same whatever state a
+/// session is in. Anything reading this surface can then split on whitespace without special cases.
+pub const NOT_NAMED_YET: &str = "-";
+
 /// Turn an answer into the lines a person reads.
 ///
 /// One line each, so a listing is something another program can read too. A surface only a person can read is a surface
@@ -43,8 +49,13 @@ pub fn render(response: &Response) -> Vec<String> {
                     ""
                 };
                 let tier = if one.hot { "running" } else { "idle" };
+                // The provider's own name for the conversation, which is the one argument a resume takes. It was on the
+                // wire and not on this surface, which meant a listing showed a session and withheld the only thing
+                // needed to pick it back up. A session the provider has not named yet prints a placeholder rather than
+                // an empty column, so the shape of a line never depends on how far along a session is.
+                let native = one.native.as_deref().unwrap_or(NOT_NAMED_YET);
                 format!(
-                    "{}  {}  {}  {}{stuck}",
+                    "{}  {}  {}  {}  {native}{stuck}",
                     one.session, one.provider, tier, one.doing
                 )
             })
@@ -173,6 +184,44 @@ mod tests {
             payload.to_owned(),
         )));
         assert_eq!(lines, vec![payload]);
+    }
+
+    #[test]
+    fn a_listing_shows_the_name_a_resume_takes() {
+        // The axis says start, resume and delete all happen from the one list. A resume takes the provider's own name
+        // for the conversation, so a listing that shows a session and withholds that name shows a session nobody can
+        // pick back up. It was on the wire and missing from this surface.
+        let response = Response::Sessions(vec![runtrol_ipc::wire::SessionLine {
+            session: SessionId::now(),
+            provider: "codex".into(),
+            native: Some("019fb614-c96e-7ce0-9d37-c0cc962e30c6".into()),
+            hot: true,
+            doing: "idle".into(),
+            looks_stuck: false,
+        }]);
+        let line = render(&response).first().cloned().expect("one line");
+        assert!(
+            line.contains("019fb614-c96e-7ce0-9d37-c0cc962e30c6"),
+            "a resume cannot be typed from this line: {line}"
+        );
+    }
+
+    #[test]
+    fn a_session_the_provider_has_not_named_keeps_the_same_shape() {
+        // A placeholder rather than an empty column, so anything reading this surface can split on whitespace without
+        // caring how far along a session is.
+        let response = Response::Sessions(vec![runtrol_ipc::wire::SessionLine {
+            session: SessionId::now(),
+            provider: "claude".into(),
+            native: None,
+            hot: false,
+            doing: "detached".into(),
+            looks_stuck: false,
+        }]);
+        let line = render(&response).first().cloned().expect("one line");
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        assert_eq!(fields.len(), 5, "{line}");
+        assert_eq!(fields.last(), Some(&NOT_NAMED_YET), "{line}");
     }
 
     #[test]

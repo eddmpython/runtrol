@@ -27,7 +27,7 @@ pub mod lines;
 pub mod link;
 pub mod words;
 
-pub use ask::{Failed, ask};
-pub use lines::render;
+pub use ask::{Failed, Outcome, ask};
+pub use lines::{NOT_NAMED_YET, render};
 pub use link::{DAEMON_ARGUMENT, Unreachable, reach};
 pub use words::{Misunderstood, understand};

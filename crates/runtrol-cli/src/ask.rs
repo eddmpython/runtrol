@@ -65,6 +65,31 @@ pub enum Failed {
     },
 }
 
+/// What the daemon did about a request, once its answer has been written.
+///
+/// # Why a refusal is an answer here and a failure to whoever ran the command
+///
+/// A refusal is not a failure of the connection, of this build, or of the daemon: the request arrived, was
+/// understood, and was declined, and the operator is told why in the daemon's own words. So it is not a
+/// [`Failed`].
+///
+/// It is still not success. Whoever ran the command reads an exit status, and a command that did not do what
+/// it was asked to do must not report that it did. Measured: a resume of a conversation the provider refuses
+/// to continue printed the refusal and exited zero, so anything scripted around it saw a resume that worked.
+/// # Why this is exhaustive
+///
+/// Every request is answered, and an answer either carries the request out or declines it. There is no third
+/// thing at this seam, and leaving room for one would make every caller invent a policy for a case that cannot
+/// arrive. If a third ever does exist, the one place that has to decide what it means should stop compiling
+/// rather than quietly fold it into success.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Outcome {
+    /// The daemon carried the request out.
+    Carried,
+    /// The daemon answered, and the answer was that it would not.
+    Refused,
+}
+
 /// Ask a daemon one thing, and hand back what a person reads.
 ///
 /// `runtrol` is the executable a daemon is started from when none is running. Named by the caller and never inferred:
@@ -77,13 +102,14 @@ pub enum Failed {
 /// # Errors
 ///
 /// [`Failed`] when no daemon could be reached, when the connection broke, or when the daemon said nothing. A request
-/// the daemon refused is not a failure here: a refusal is an answer, and it goes to `write` like any other.
+/// the daemon refused is not a failure here: a refusal is an answer, it goes to `write` like any other, and it comes
+/// back as [`Outcome::Refused`] so that whoever ran the command can exit accordingly.
 pub async fn ask<Write>(
     address: &str,
     runtrol: &std::path::Path,
     request: Request,
     mut write: Write,
-) -> Result<(), Failed>
+) -> Result<Outcome, Failed>
 where
     Write: FnMut(&str),
 {
@@ -114,7 +140,7 @@ where
         Err(Failed::NoAnswer) if stopping_everything => {
             write("the daemon stopped, which is what stopping everything on this machine does");
             write("run any command to start a fresh one, and a listing will show nothing running");
-            return Ok(());
+            return Ok(Outcome::Carried);
         }
         Err(other) => return Err(other),
     };
@@ -122,15 +148,21 @@ where
         write(&line);
     }
 
+    // Written first and reported second. The operator reads the daemon's own words either way; what changes is
+    // the status the command exits with, and a refusal must not exit as though the work was done.
+    if matches!(answer, Response::Failed(_)) {
+        return Ok(Outcome::Refused);
+    }
+
     if !watching {
-        return Ok(());
+        return Ok(Outcome::Carried);
     }
 
     // A view of the session from here on. It ends when the session's stream does, or when the operator stops this
     // command, and neither of those is a failure.
     loop {
         let Some(frame) = connection.recv().await? else {
-            return Ok(());
+            return Ok(Outcome::Carried);
         };
         let event: Response =
             serde_json::from_slice(&frame).map_err(|error| Failed::Unreadable {
@@ -234,6 +266,67 @@ mod tests {
             Err(Failed::NoAnswer) => {}
             other => panic!("silence about any other request is a failure, got {other:?}"),
         }
+    }
+
+    /// A daemon that greets and then refuses whatever it is asked, the way the real one answers a request a
+    /// provider declined.
+    async fn a_daemon_that_refuses(name: &str) -> String {
+        let address = if cfg!(windows) {
+            format!(r"\\.\pipe\runtrol-test-ask-{name}-{}", std::process::id())
+        } else {
+            let dir =
+                std::env::temp_dir().join(format!("runtrol-ask-{name}-{}", std::process::id()));
+            std::fs::create_dir_all(&dir).expect("create the scratch directory");
+            dir.join("runtrol.sock").to_string_lossy().into_owned()
+        };
+
+        let mut listener = runtrol_ipc::transport::Listener::bind(&address)
+            .await
+            .expect("the endpoint binds");
+        drop(tokio::spawn(async move {
+            while let Ok(mut connection) = listener.accept().await {
+                let welcome = serde_json::to_vec(&Response::Welcome {
+                    wire: runtrol_ipc::WIRE_VERSION,
+                    providers: Vec::new(),
+                })
+                .expect("writable");
+                if connection.recv().await.is_ok() {
+                    drop(connection.send(&welcome).await);
+                }
+                let refusal = serde_json::to_vec(&Response::Failed(runtrol_ipc::wire::WireError {
+                    message: "no rollout found for that conversation".into(),
+                    retryable: false,
+                    needs_the_operator: false,
+                }))
+                .expect("writable");
+                if connection.recv().await.is_ok() {
+                    drop(connection.send(&refusal).await);
+                }
+            }
+        }));
+        address
+    }
+
+    #[tokio::test]
+    async fn a_refusal_is_written_for_the_operator_and_reported_as_not_carried_out() {
+        // Both halves matter and they are different audiences. A person reads the daemon's own words; whatever
+        // ran the command reads a status. Measured before this existed: a resume the provider refused printed
+        // the refusal and exited zero, so anything scripted around it saw a resume that had worked.
+        let address = a_daemon_that_refuses("refusal").await;
+        let unreachable = std::path::Path::new("this-program-does-not-exist-and-that-is-the-point");
+
+        let mut said = Vec::new();
+        let outcome = ask(&address, unreachable, Request::List, |line: &str| {
+            said.push(line.to_owned());
+        })
+        .await
+        .expect("a refusal is an answer, not a broken connection");
+
+        assert_eq!(outcome, Outcome::Refused);
+        assert!(
+            said.iter().any(|line| line.contains("no rollout")),
+            "the daemon's own words have to reach the operator: {said:?}"
+        );
     }
 
     #[test]
