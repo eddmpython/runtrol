@@ -4,7 +4,9 @@
 
 [한국어](README.md) | English | [中文](README_ZH.md) | [日本語](README_JA.md)
 
-> Status: **design stage.** There is no code. Every score below is 0, and that is the honest current state.
+> Status: **the core is up.** Sessions from both providers appear in one list, and start, close and resume run
+> against the real CLIs. Most scores below are 0 because no gate asserts those axes yet, not because there is
+> no code.
 
 ## North Star
 
@@ -14,13 +16,13 @@ At the desk it is an app; away from the desk it is a phone. The same session, th
 However many providers there are, there is one list. Whatever the operating system, the method is the same.
 The conversation travels only between the user's PC and the provider. runtrol does not get in between.**
 
-The current total is **0/140, average 0.0/10**. There is no code in the repository, so every axis is 0.
+The current total is **6/140, average 0.4/10**. Exactly one axis has a gate standing behind it so far.
 A 10 means the complete journey has been repeatedly verified in a real environment.
 **A score is backed by a gate that actually runs in CI. A path that is not executed automatically does not count, no matter how implemented it looks.**
 
 | North Star | Score | Today | Target state |
 |---|---:|---|---|
-| One session list | 0/10 | Not built. | Whether the provider is Claude Code, Codex, or whatever comes next, every session alive on this PC appears in one list, and start, resume, and delete all happen there. |
+| One session list | 6/10 | Sessions from two real CLIs appear in one list, start and close work, and the listing carries the name a resume takes (`sessionLifecycleSmoke`, no tokens spent). A resume that succeeds is still outside the gate: it needs a conversation with a turn in it. The ceiling is 6 because no static contract gate backs this axis. | Whether the provider is Claude Code, Codex, or whatever comes next, every session alive on this PC appears in one list, and start, resume, and delete all happen there. |
 | Instant response | 0/10 | Not built. | The list appears with no wait, a conversation opens the moment it is tapped, and neither scrolling nor typing stutters when long output pours in. There is no moment where the user perceives loading. |
 | Reach my PC sessions from my phone | 0/10 | Not built. | Pair the phone to the PC once, and from then on, away from the desk, send new instructions into sessions running on that PC and watch the output live. Neither the plan tier nor the auth method of a provider account blocks this. |
 | Provider extensibility | 0/10 | Not built. No adapter boundary yet. | When a new CLI appears, one adapter is added and the PC screen, the phone screen, and the controls stay the same. The user notices a new provider only as a longer list. |

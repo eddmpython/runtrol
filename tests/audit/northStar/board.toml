@@ -28,7 +28,11 @@
 
 [[axis]]
 key = "oneSessionList"
-tier = "none"
+# The real CLIs, driven end to end by the executable an operator runs, on every preflight. One kind of gate and
+# no more: what is missing to go past six is a static contract check on the listing surface, not more runs of
+# this one. What the live gate does not reach (a resume that succeeds, which needs a conversation with a turn
+# in it) is stated in `docs/northStarEvidence.md` and said out loud by the gate on every run.
+tier = "realOneKind"
 additives = []
 caps = []
 name = { ko = "하나의 세션 목록", en = "One session list", zh = "统一的会话列表", ja = "一つのセッション一覧" }

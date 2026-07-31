@@ -83,6 +83,18 @@ GATES: dict[str, tuple[str, list[str]]] = {
         ["cargo", "clippy", "--all-targets", "--target", CROSS_TARGET, "--", "-D", "warnings"],
     ),
     "cargoTest": ("cargo test", ["cargo", "test", "--all"]),
+    # 북극성 `하나의 세션 목록` 축을 떠받치는 유일한 게이트. 실물 CLI 를 몰고 세션을 시작·목록·닫기·
+    # 재개까지 돌린다. 프롬프트를 보내지 않으므로 토큰도 rate limit 도 쓰지 않고, 그래서 야간이 아니라
+    # 매 preflight 에 돌 수 있다. 자체 검증이 먼저 도는 이유는 통과를 보이기 전에 실패할 수 있는지부터
+    # 확인해야 하기 때문이다.
+    "sessionLifecycleSmokeSelftest": (
+        "세션 생애주기 게이트 자체 검증",
+        [*PY, f"{HOOKS}/sessionLifecycleSmoke.py", "--selftest"],
+    ),
+    "sessionLifecycleSmoke": (
+        "세션 시작·목록·닫기·재개 (실물 CLI)",
+        [*PY, f"{HOOKS}/sessionLifecycleSmoke.py"],
+    ),
     "audit": ("저장소 계약 게이트 (tests/audit)", ["cargo", "test", "-p", "runtrol-audit"]),
     # 의존성 부패. `[workspace.dependencies]` 미사용 항목까지 잡는 것이 cargo-shear 를 고른 이유다
     # (버전 SSOT 가 거기 살기 때문). 설치돼 있지 않으면 건너뛴다고 밝히고 건너뛴다.

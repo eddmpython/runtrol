@@ -25,7 +25,7 @@
 
 | 게이트 | 무엇을 단언하는가 |
 |---|---|
-| `sessionLifecycleSmoke` | 시작 -> 목록 등장 -> 재개 -> 삭제 -> 목록에서 사라짐이 두 provider 에서 동일하게 성립 |
+| `sessionLifecycleSmoke` | 실물 CLI 를 몰아서: 시작 -> **두 provider 가 한 목록에** -> 목록이 재개에 필요한 이름을 싣는다 -> 닫기 -> 목록에서 사라짐. 프롬프트를 보내지 않으므로 토큰·rate limit 0 이고 그래서 매 preflight 에 돈다. **닿지 못하는 절반을 매 실행마다 말한다**: 턴이 한 번도 없던 대화는 provider 저장소에 없어서 재개할 수 없다 (한쪽은 이름을 안 주고, 한쪽은 `no rollout` 으로 거절한다. 둘 다 실측). 그래서 이 게이트가 지키는 것은 **성공한 재개가 아니라 실패한 재개가 이름을 갖고 거절되는 것** (조용히 새 대화를 시작해 재개인 척하지 않는 것) 이다. 성공한 재개는 턴 하나가 필요해 이 게이트 밖이다. provider 이름은 박지 않고 manifest 에서 발견한다 |
 | `interactionLatencyBudget` | 목록 첫 페인트, 대화 열기, 첫 토큰 도달, 입력 반응의 p95 상한. **내려가기만 하는 ratchet** |
 | `scrollUnderLoadSmoke` | 초당 수천 줄이 쏟아지는 동안 스크롤과 입력이 프레임 예산 안에 머문다 |
 | `phoneDrivesPcSmoke` | headless 브라우저의 실물 PWA 가 실물 데몬을 통해 실물 `claude`/`codex` 세션에 프롬프트를 넣고 출력을 받는다 |
@@ -83,11 +83,16 @@
 | 층 | 어디서 | 언제 | 무엇 |
 |---|---|---|---|
 | contract | hosted CI (GitHub Actions) | PR 마다 | 정적 검사 · mock 스모크 |
-| smoke (실물) | **self-hosted runner (운영자 PC)** | 스케줄 (야간) | 실물 CLI · 실물 브라우저 |
-| bench | self-hosted runner | 스케줄 | ratchet 실측 |
+| smoke (토큰 0) | **운영자 PC 의 preflight** | 커밋 전 매번 | 실물 CLI. 턴을 쓰지 않는 것 |
+| smoke (턴 소모) | self-hosted runner | 스케줄 (미구성) | 실물 턴이 필요한 것 |
+| bench | self-hosted runner | 스케줄 (미구성) | ratchet 실측 |
 | operator | 사람 손 | 수시 | 실기기. 점수 제외 |
 
-채점 규칙과의 접점: 기반 층 `realOneKind`·`realBothKinds` 는 self-hosted 스케줄 실행 링크로 인정한다. **self-hosted 러너가 멈춰 게이트가 한 주 못 돌면 `skipped` 상한 (그 주 5 점) 이 그대로 적용된다.** 러너가 죽은 채로 점수를 유지하는 길은 없다.
+**실물 CLI 게이트가 hosted CI 에서 못 도는 이유는 인증이다.** 두 CLI 모두 사람의 구독 로그인으로 인증하고, 그 자격을 CI 비밀로 실어 나르는 것은 runtrol 이 설계 전체를 걸고 거부해온 일이다. 그래서 그 로그인이 사는 곳, 즉 운영자 PC 에서 돈다 (`gateCoverage.py` 의 `LOCAL_ONLY` 에 이유와 함께 선언).
+
+**토큰을 쓰는 게이트와 안 쓰는 게이트를 가른다.** 프롬프트를 보내지 않는 실물 게이트는 돈도 rate limit 도 쓰지 않으므로 야간이 아니라 커밋 전 매번 돈다 (`sessionLifecycleSmoke` 가 그것이다). 실물 턴이 필요한 게이트는 그럴 수 없고, **그 층의 self-hosted 러너는 아직 없다.** 없는 것을 있는 것처럼 적지 않는다: 그 층에 기대는 축은 오늘 그만큼 검증되지 않았다.
+
+채점 규칙과의 접점: 기반 층 `realOneKind`·`realBothKinds` 는 실제로 도는 실행으로만 인정한다. **게이트가 건너뛰면 `skipped` 상한 (5 점) 이 그대로 적용된다.** 러너가 죽은 채로, 또는 CLI 가 설치되지 않은 채로 점수를 유지하는 길은 없다.
 
 ## 등록 규약
 

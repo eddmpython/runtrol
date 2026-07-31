@@ -55,6 +55,13 @@ NOT_A_GATE: dict[str, str] = {
 LOCAL_ONLY: dict[str, str] = {
     "audit": "the workflow's `cargo test --all` already compiles and runs the audit package, "
     "because it is a workspace member. this entry exists so a local run can target it alone",
+    "sessionLifecycleSmoke": "it drives the real coding CLIs, and both of them authenticate as a person "
+    "with a subscription login that cannot be carried in a CI secret. a hosted runner would either skip it "
+    "(coverage that is not there) or need a credential runtrol has spent its whole design refusing to hold. "
+    "it runs where those logins live, which is the operator's own preflight",
+    "sessionLifecycleSmokeSelftest": "the same script with a flag. it needs no CLI and could run in CI, but "
+    "it proves the gate above can fail, and a proof that runs where the thing it proves does not is a proof "
+    "of nothing",
     "clippyCrossCfg": "the workflow runs this gate too, and it has to name a different target: each "
     "runner cross-compiles toward the platform it is not, so the local command targets linux and the "
     "linux runner targets windows. the gate is present on both sides; only the argument differs, which "
