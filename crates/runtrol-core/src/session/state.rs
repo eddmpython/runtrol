@@ -244,6 +244,19 @@ impl Lifecycle {
 
             // Turns. Only a bound session has them, and only the turn that is running can end.
             (Self::Idle, Observed::TurnStarted { turn }) => Ok(Self::Busy { turn }),
+
+            // The turn that is already running, said again. One provider acknowledges a submission and then
+            // separately reports that work began, which is two facts about one turn and not two turns: the
+            // vocabulary keeps them apart precisely because the acknowledgement is not a beginning.
+            //
+            // Found by running the product. A session driven by that provider reported a protocol violation on
+            // every single turn, because the second frame arrived at a session the first had already made
+            // busy. A **different** turn beginning while one runs is still refused below, which is the case
+            // this has to stay distinguishable from.
+            (Self::Busy { turn: running }, Observed::TurnStarted { turn }) if *running == turn => {
+                Ok(Self::Busy { turn })
+            }
+
             (Self::Busy { turn: running }, Observed::TurnEnded { turn }) => {
                 if *running == turn {
                     Ok(Self::Idle)
@@ -422,6 +435,35 @@ mod tests {
 
         state.observe(Observed::Detached, now()).expect("let go");
         assert_eq!(state.lifecycle(), &Lifecycle::Detached);
+    }
+
+    #[test]
+    fn the_running_turn_may_be_reported_as_beginning_more_than_once() {
+        // One provider acknowledges a submission and then separately reports that work began. Those are two
+        // facts about one turn, and the vocabulary keeps them apart precisely because an acknowledgement is
+        // not a beginning, so both arrive here as the same observation about the same turn.
+        //
+        // Found by running the product rather than by reading it: every turn on that provider reported a
+        // protocol violation, because the second frame reached a session the first had already made busy.
+        let running = Lifecycle::Busy { turn: turn(3) };
+        assert_eq!(
+            running
+                .after(Observed::TurnStarted { turn: turn(3) }, now())
+                .expect("the turn that is running may be said to begin again"),
+            Lifecycle::Busy { turn: turn(3) },
+            "and it is still the same turn afterwards"
+        );
+    }
+
+    #[test]
+    fn a_second_turn_cannot_begin_while_one_is_running() {
+        // The case the rule above has to stay distinguishable from. A different turn beginning means either
+        // two turns at once or a turn that was never ended, and treating it as ordinary would lose the first.
+        let running = Lifecycle::Busy { turn: turn(3) };
+        let refusal = running
+            .after(Observed::TurnStarted { turn: turn(4) }, now())
+            .expect_err("a different turn beginning must be refused");
+        assert!(refusal.to_string().contains("starting a turn"), "{refusal}");
     }
 
     #[test]
