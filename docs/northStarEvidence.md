@@ -41,6 +41,7 @@
 | `appUpdateRehearsal` | 런처가 GitHub Releases 에서 서명된 업데이트를 받아 설치하고, 서명이 안 맞으면 거부한다 |
 | `modelDetectionSmoke` | 실물 CLI 에서 모델 목록을 얻는다. **소스에 모델 이름 리터럴이 없다**는 정적 검사 포함 |
 | `sessionOverlapGuard` | cwd 겹침이 목록에 구분돼 보이고, 같은 폴더에 두 번째 세션을 시작하면 경고가 선행하며, provider 가 내주는 워크트리 시작 옵션이 그대로 노출된다. **격리를 runtrol 이 직접 구현하는 것은 얇음 위반이라 하지 않는다** (겹침을 보이게 하고 provider 의 수단을 노출하는 것까지가 경계) |
+| `crossConsultSmoke` | 토글 켬 -> 두 CLI 가 서로를 자기 공식 설정 명령 (MCP 등록) 으로 배선 -> 한 CLI 가 턴 중에 다른 CLI 의 의견을 실제로 받아옴 -> 토글 끔 -> 설정 원상복구. **본문은 runtrol 을 지나지 않고, 설정 파일을 직접 쓰지 않는다** (배선은 CLI 공식 명령만. `configReadOnly` 바닥 게이트와 양립하는 것이 곧 설계다) |
 | `uninstallLeavesNoTrace` | runtrol 제거 후 `claude --resume` 과 `codex resume` 이 그 세션들을 그대로 연다 |
 
 ### 바닥 게이트 (점수가 아니다. green/red 뿐이다)

@@ -25,6 +25,7 @@
 | [desktopGui](desktopGui/) | 활성 설계 | PC 앞의 로컬 GUI. **GPT 앱의 편의를 가져오되 그 메모리는 안 가져온다.** `즉시 반응` 축이 여기 산다. GUI 스택은 프로토타입 실측 후 결정. |
 | [pwaConnection](pwaConnection/) | 설계 | **origin 과 transport 를 분리한다.** 불변 HTTPS origin 하나 + 4 단 전송 사다리 + Noise E2E + 데몬 직접 Web Push. |
 | [pwaSurface](pwaSurface/) | 대기 | PWA 자체. 연결 계층이 선 뒤에 짓는다. |
+| [crossConsult](crossConsult/) | 대기 | 토글 하나로 두 CLI 가 서로를 공식 표면 (MCP) 으로 등록해 AI 끼리 자문한다. 배선은 CLI 공식 명령만, 본문은 여전히 무통과. M1 뒤에 얹는다. |
 | [landingSite](landingSite/) | 설계 | GitHub Pages 한 장. 로고·설명·다운로드 둘·우측 상단 SNS (xlpod 방식). **프론트 "astryx 방식" 이 운영자 확인 대기.** |
 
 ## 3. 배포와 최신성
@@ -43,7 +44,7 @@
 
 | 폴더 | 상태 | 한 줄 |
 |---|---|---|
-| [northStarEvidence](northStarEvidence/) | 활성 | 북극성 13 축 각각을 떠받치는 게이트를 실물로 세운다. **게이트 없는 축은 3 점이 상한이다.** |
+| [northStarEvidence](northStarEvidence/) | 활성 | 북극성 14 축 각각을 떠받치는 게이트를 실물로 세운다. **게이트 없는 축은 3 점이 상한이다.** |
 
 ## 빌드 순서 (마일스톤)
 

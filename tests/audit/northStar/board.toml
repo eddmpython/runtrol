@@ -135,6 +135,14 @@ name = { ko = "세션끼리 안 밟기", en = "Sessions do not trample each othe
 gate = [{ name = "sessionOverlapGuard", kind = "smoke" }]
 
 [[axis]]
+key = "agentsConsultEachOther"
+tier = "none"
+additives = []
+caps = []
+name = { ko = "AI 끼리 서로 자문", en = "Agents consult each other", zh = "AI 互相咨询", ja = "AI 同士が相談し合う" }
+gate = [{ name = "crossConsultSmoke", kind = "smoke" }]
+
+[[axis]]
 key = "freedomToLeave"
 tier = "none"
 additives = []

@@ -14,7 +14,7 @@ At the desk it is an app; away from the desk it is a phone. The same session, th
 However many providers there are, there is one list. Whatever the operating system, the method is the same.
 The conversation travels only between the user's PC and the provider. runtrol does not get in between.**
 
-The current total is **0/130, average 0.0/10**. There is no code in the repository, so every axis is 0.
+The current total is **0/140, average 0.0/10**. There is no code in the repository, so every axis is 0.
 A 10 means the complete journey has been repeatedly verified in a real environment.
 **A score is backed by a gate that actually runs in CI. A path that is not executed automatically does not count, no matter how implemented it looks.**
 
@@ -32,6 +32,7 @@ A 10 means the complete journey has been repeatedly verified in a real environme
 | Current without asking | 0/10 | Not built. | The app and the installed agent CLIs stay current on their own, and if an update breaks a session it has already rolled back before the user touches anything. There is no moment where the user thinks about versions. |
 | Automatic model detection | 0/10 | Not built. | The models this account can actually use appear in the list as they are, and a new model appears without runtrol being changed. |
 | Sessions do not trample each other | 0/10 | Not built. | Which session is touching which folder is always distinguishable, starting a second session into the same folder warns before it happens, and when a provider offers isolation (worktrees) it is available right on the start screen. |
+| Agents consult each other | 0/10 | Not built. | One toggle registers two CLIs with each other over their official surface (MCP), so one agent asks another for an opinion mid-turn and gets it back. The wiring is made only through each CLI's own official commands (no direct config-file writes), conversation bodies still never pass through runtrol, and the user never needs to learn what MCP is. |
 | Freedom to leave | 0/10 | Not built. | Delete runtrol and the sessions and history remain each CLI's own, continuing the original way. There is no data runtrol holds hostage. |
 
 Which gate backs which axis is defined in [docs/northStarEvidence.md](docs/northStarEvidence.md).
@@ -78,7 +79,7 @@ Rules that keep the score from inflating:
 3. A pull request that raises a score includes **the gate name and a link to the CI run**, and edits `board.toml` in the same commit. Prose is not a score.
 4. Scores move in steps of 0.5. A number like 8.7 is not precision, it is self deception.
 5. **Nothing prevents an axis from going down.** If a provider changes its surface and a gate goes red, the score goes down. This table is today's state, not yesterday's boast.
-6. **A ceiling is set by a missing kind of gate, not by a missing run.** An axis with only one kind cannot pass 6 however green it runs. Twelve of the thirteen axes are in that state today, and `northStarBoard` prints each ceiling next to its score.
+6. **A ceiling is set by a missing kind of gate, not by a missing run.** An axis with only one kind cannot pass 6 however green it runs. Thirteen of the fourteen axes are in that state today, and `northStarBoard` prints each ceiling next to its score.
 
 ### What gets a score and what does not
 
@@ -86,12 +87,12 @@ Three layers, never mixed. Mixing them is how a total goes up while the user rec
 
 | Layer | What goes in it | How it shows |
 |---|---|---|
-| **Scored axes** | Outcomes a user can feel (the thirteen above) | 0 through 10, summed to /130 |
+| **Scored axes** | Outcomes a user can feel (the fourteen above) | 0 through 10, summed to /140 |
 | **Floor gates** | Modularity, clean code, security, hygiene, budget | **Not a score.** Green or red, and red does not merge |
 | **Kill criteria** | Innovation, positioning | **No number.** Decided only by the kill criteria in [docs/positioning.md](docs/positioning.md) |
 
 - **Why modularity and clean code get no partial credit.** They are floor rules. "Clean code 7/10" means "being broken by 3", which is not a score, it is red. They get finer by being split into named gates instead (`dependencyDirection`, `providerIsolation`, `checkSilentFail`, `cargoClippy`, and the rest). The full list is in [docs/northStarEvidence.md](docs/northStarEvidence.md).
-- **Why innovation gets no number.** The innovation is the thirteen axes themselves ("manage several AI agents in one place"). A separate score would count the same thing twice, and no gate can assert it, which is rule 3. Whether the innovation still holds is what the kill criteria decide.
+- **Why innovation gets no number.** The innovation is the fourteen axes themselves ("manage several AI agents in one place"). A separate score would count the same thing twice, and no gate can assert it, which is rule 3. Whether the innovation still holds is what the kill criteria decide.
 
 ## First principle: user convenience
 
