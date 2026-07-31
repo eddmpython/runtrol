@@ -78,9 +78,27 @@ GATES: dict[str, tuple[str, list[str]]] = {
     # 죽은 상수, 도달 불가 variant, cfg 로 갈라진 함수) 이 전부 CI 에서만 드러나고 수정이
     # 두 번째 커밋으로 온다. 실제로 그렇게 됐고, 그래서 이 게이트가 있다.
     # 대상이 설치돼 있지 않으면 건너뛴다고 밝히고 건너뛴다.
+    # 데스크톱 셸을 링크하는 두 crate 는 뺀다. 다른 플랫폼용으로 **컴파일조차** 되지 않기 때문이다:
+    # Tauri 의 Linux 백엔드는 dbus·gtk·webkit2gtk 개발 라이브러리를 요구하고, Windows 기계에는 없다.
+    # 게이트의 목적은 우리가 쓴 cfg 분기를 보는 것이고, 그 분기를 가진 crate (runtrol-childproc 의
+    # job object 와 process group 이 대표다) 는 전부 그대로 검사된다. 이 둘에는 cfg 분기가 없다.
     "clippyCrossCfg": (
         "cargo clippy (다른 플랫폼 cfg 분기)",
-        ["cargo", "clippy", "--all-targets", "--target", CROSS_TARGET, "--", "-D", "warnings"],
+        [
+            "cargo",
+            "clippy",
+            "--all-targets",
+            "--workspace",
+            "--exclude",
+            "runtrol-gui",
+            "--exclude",
+            "runtrol",
+            "--target",
+            CROSS_TARGET,
+            "--",
+            "-D",
+            "warnings",
+        ],
     ),
     "cargoTest": ("cargo test", ["cargo", "test", "--all"]),
     # 북극성 `하나의 세션 목록` 축을 떠받치는 유일한 게이트. 실물 CLI 를 몰고 세션을 시작·목록·닫기·

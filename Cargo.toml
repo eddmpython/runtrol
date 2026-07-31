@@ -15,6 +15,7 @@ members = [
     "crates/runtrol-drivers",
     "crates/runtrol-daemon",
     "crates/runtrol-cli",
+    "crates/runtrol-gui",
     "crates/runtrol",
     "tests/audit",
 ]
@@ -72,6 +73,11 @@ redb = "4.1.0"
 windows-sys = "0.61.2"
 libc = "0.2"
 
+# 데스크톱 셸. `tests/_attempts/desktopShell` 실측으로 골랐다 (mainPlan/desktopGui): 초당 3,000 줄에서
+# 프레임 예산을 지키고 (egui p95 106ms 대 14ms), 한글 IME 를 통과하며, 랜딩·PWA 와 컴포넌트 층을 공유한다.
+tauri = "2"
+tauri-build = "2"
+
 # 게이트 전용 (dev).
 cargo_metadata = "0.23.1"
 
@@ -85,6 +91,7 @@ runtrol-core = { path = "crates/runtrol-core" }
 runtrol-drivers = { path = "crates/runtrol-drivers" }
 runtrol-daemon = { path = "crates/runtrol-daemon" }
 runtrol-cli = { path = "crates/runtrol-cli" }
+runtrol-gui = { path = "crates/runtrol-gui" }
 
 # lint 표. 멤버는 `[lints] workspace = true` 로 상속한다.
 # **주의 (실측)**: `[lints] workspace = true` 와 per-crate 재정의는 공존할 수 없다

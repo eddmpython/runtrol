@@ -9,6 +9,33 @@ all-features = true
 [advisories]
 version = 2
 yanked = "deny"
+# 아래는 전부 **데스크톱 셸 (Tauri v2) 이 데려온 것**이고 우리가 고를 수 있는 것이 아니다. 셸 선택의
+# 대가로 기록한다 (mainPlan/desktopGui/README.md "채택의 대가"). 하나하나 이유 없이 넣지 않는다.
+#
+# 이것은 게이트를 약하게 만드는 것이 아니라 게이트가 알려준 값을 장부에 적는 것이다. 취약점 (vulnerability)
+# 은 하나도 없다. 전부 unmaintained 표시이고, 대부분 Linux 백엔드 전용이라 Windows 빌드에 없다.
+# 새 취약점은 여전히 red 가 된다.
+ignore = [
+    # gtk-rs 의 GTK3 바인딩 열 개. Tauri 의 Linux 백엔드가 쓰고 Windows 빌드에는 들어오지 않는다.
+    # upstream 이 GTK4 로 옮기기 전에는 우리가 할 수 있는 것이 없고, Linux 배포는 아직 없다 (README "준비 중").
+    { id = "RUSTSEC-2024-0411", reason = "gtk3 바인딩. Tauri Linux 백엔드 전용, upstream 대기" },
+    { id = "RUSTSEC-2024-0412", reason = "gtk3 바인딩. 위와 같음" },
+    { id = "RUSTSEC-2024-0413", reason = "gtk3 바인딩. 위와 같음" },
+    { id = "RUSTSEC-2024-0414", reason = "gtk3 바인딩. 위와 같음" },
+    { id = "RUSTSEC-2024-0415", reason = "gtk3 바인딩. 위와 같음" },
+    { id = "RUSTSEC-2024-0416", reason = "gtk3 바인딩. 위와 같음" },
+    { id = "RUSTSEC-2024-0417", reason = "gtk3 바인딩. 위와 같음" },
+    { id = "RUSTSEC-2024-0418", reason = "gtk3 바인딩. 위와 같음" },
+    { id = "RUSTSEC-2024-0419", reason = "gtk3 바인딩. 위와 같음" },
+    { id = "RUSTSEC-2024-0420", reason = "gtk3 바인딩. 위와 같음" },
+    # 매크로·유니코드 보조 crate. 빌드 시점에만 쓰이거나 데이터 표이고, 취약점이 아니라 유지보수 중단 표시다.
+    { id = "RUSTSEC-2024-0370", reason = "proc-macro-error. tauri 매크로 체인이 데려온다. 빌드 시점 전용" },
+    { id = "RUSTSEC-2025-0075", reason = "unic-* 유니코드 표. tauri 가 데려온다" },
+    { id = "RUSTSEC-2025-0080", reason = "unic-* 유니코드 표. 위와 같음" },
+    { id = "RUSTSEC-2025-0081", reason = "unic-* 유니코드 표. 위와 같음" },
+    { id = "RUSTSEC-2025-0098", reason = "unic-* 유니코드 표. 위와 같음" },
+    { id = "RUSTSEC-2025-0100", reason = "unic-* 유니코드 표. 위와 같음" },
+]
 
 [licenses]
 version = 2
@@ -20,6 +47,10 @@ allow = [
     "BSD-2-Clause",
     "BSD-3-Clause",
     "ISC",
+    # 파일 단위 카피레프트다. **바이너리에 넣어 MIT 로 배포하는 데 제약이 없고**, 의무는 그 파일들을
+    # 고쳤을 때 그 파일의 소스를 공개하는 것뿐이다. 우리는 고치지 않는다.
+    # 데스크톱 셸이 데려온다 (cssparser · selectors · dtoa-short · option-ext, 전부 Tauri 경유).
+    "MPL-2.0",
     "Unicode-3.0",
     "Zlib",
 ]
@@ -82,6 +113,13 @@ use-instead = "rustls"
 [[bans.deny]]
 name = "dirs"
 reason = "2025-02 GitHub archive 됨. dirs-sys 가 windows-sys 0.59 를 핀해 tokio 의 0.61 과 트리가 갈라진다. 경로 해소는 우리가 소유한다 (약 40 줄)"
+# **금지는 그대로다.** 우리가 직접 의존하는 것은 여전히 막힌다. 예외는 하나, 데스크톱 셸이다:
+# tauri 가 직접 의존하고 우리가 고를 수 없다. 이렇게 적으면 다른 어떤 경로로 들어오는 것도 계속 red 다.
+# 원래 금지 이유 중 "경로 해소는 우리가 소유한다" 는 손대지 않았고, 버전 갈라짐은 multiple-versions 가 본다.
+#
+# 세 부모를 전부 적는다. 게이트가 하나라도 빠지면 "이 부모는 wrapper 로 표시되지 않았다" 고 알려주므로,
+# 셸이 다른 경로로 이것을 데려오기 시작하면 그때 다시 red 가 된다. 목록을 좁게 유지하는 것이 요점이다.
+wrappers = ["tauri", "tauri-build", "wry"]
 
 [[bans.deny]]
 name = "directories"

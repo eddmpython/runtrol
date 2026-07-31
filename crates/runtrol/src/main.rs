@@ -24,11 +24,19 @@ use std::process::ExitCode;
 enum Personality {
     /// Serve, until stopped.
     Daemon,
+    /// Open the window.
+    Window,
     /// Ask the daemon something and print the answer.
     Command(Vec<String>),
     /// Say what the words could have been.
     Usage(String),
 }
+
+/// The word that opens the window.
+///
+/// Spelled here beside the daemon's word rather than inferred from how the program was invoked, for the same
+/// reason: a renamed file behaving differently is a surprise nobody asked for.
+const WINDOW_ARGUMENT: &str = "gui";
 
 fn main() -> ExitCode {
     // Before anything could be started. Whether this program's own handles may travel to what it starts is a property
@@ -43,6 +51,9 @@ fn main() -> ExitCode {
     let words: Vec<String> = std::env::args().skip(1).collect();
     match choose(&words) {
         Personality::Daemon => run(serving()),
+        // No runtime is built for this one. The window's own toolkit owns the main thread and brings a runtime
+        // with it, and wrapping it in a second would be two schedulers for one process.
+        Personality::Window => showing(),
         Personality::Command(words) => run(commanding(&words)),
         Personality::Usage(message) => {
             report(&message);
@@ -55,12 +66,13 @@ fn main() -> ExitCode {
 fn choose(words: &[String]) -> Personality {
     match words.first().map(String::as_str) {
         None => Personality::Usage(
-            "runtrol <command>. try: list, start, resume, say, stop, watch, close, panic"
+            "runtrol <command>. try: gui, list, start, resume, say, stop, watch, close, panic"
                 .to_owned(),
         ),
         // Spelled as a subcommand rather than inferred from how the program was invoked. Inferring it from the
         // executable's own name would mean a renamed file behaving differently, which is a surprise nobody asked for.
         Some(word) if word == runtrol_cli::DAEMON_ARGUMENT => Personality::Daemon,
+        Some(word) if word == WINDOW_ARGUMENT => Personality::Window,
         Some(_) => Personality::Command(words.to_vec()),
     }
 }
@@ -112,6 +124,41 @@ fn serving() -> impl FnOnce(&tokio::runtime::Runtime) -> ExitCode {
                 report(&format!("runtrol stopped serving: {error}"));
                 ExitCode::FAILURE
             }
+        }
+    }
+}
+
+/// Be the window.
+///
+/// Where the daemon listens and which program starts one are decided here and handed over, the same two values
+/// the command surface is given and for the same reason: a library that worked out "whatever process this is"
+/// would run the test runner inside a test.
+fn showing() -> ExitCode {
+    let address = match runtrol_daemon::endpoint(None) {
+        Ok(address) => address,
+        Err(error) => {
+            report(&format!(
+                "cannot tell where runtrol keeps its files: {error}"
+            ));
+            return ExitCode::FAILURE;
+        }
+    };
+    let executable = match std::env::current_exe() {
+        Ok(executable) => executable,
+        Err(error) => {
+            report(&format!("cannot tell where runtrol itself is: {error}"));
+            return ExitCode::FAILURE;
+        }
+    };
+
+    match runtrol_gui::run(runtrol_gui::Reaching {
+        address,
+        runtrol: executable,
+    }) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            report(&format!("runtrol could not open its window: {error}"));
+            ExitCode::FAILURE
         }
     }
 }
