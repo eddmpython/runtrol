@@ -86,6 +86,10 @@ jobs:
         run: python -X utf8 tests/audit/scopeWall.py --selftest
       - name: 모든 요청에 권한 규칙이 있다
         run: python -X utf8 tests/audit/scopeWall.py
+      - name: Provider config write gate selftest
+        run: python -X utf8 tests/audit/configReadOnly.py --selftest
+      - name: Provider configuration stays read-only
+        run: python -X utf8 tests/audit/configReadOnly.py
       # 저장소에 있으나 도는 러너가 없는 게이트를 잡는다. 이 단계와 preflight 의 GATES 표가
       # 서로를 검사하므로, 어느 한쪽에만 추가된 게이트는 red 가 된다.
       - name: 게이트 러너 커버리지

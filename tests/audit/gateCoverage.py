@@ -70,6 +70,9 @@ LOCAL_ONLY: dict[str, str] = {
     "authenticate as a person, so this runs in the operator's local preflight and never carries credentials "
     "into hosted CI",
     "modelDetectionSmokeSelftest": "the injected failures belong beside the local live gate they prove",
+    "agentSurfaceDrift": "it asks installed coding CLIs for their current schema and argument parser surface, "
+    "which requires the operator's own installation and belongs beside the other live provider gates",
+    "agentSurfaceDriftSelftest": "the injected failures belong beside the local live drift gate they prove",
 }
 
 # Workflow invocations that intentionally have no counterpart preflight gate.

@@ -64,6 +64,11 @@ GATES: dict[str, tuple[str, list[str]]] = {
     # 경계 너머로 빠진 요청을 말해주지 못한다.
     "scopeWallSelftest": ("스코프 벽 검출기 자체 검증", [*PY, f"{HOOKS}/scopeWall.py", "--selftest"]),
     "scopeWall": ("모든 요청에 권한 규칙이 있다", [*PY, f"{HOOKS}/scopeWall.py"]),
+    "configReadOnlySelftest": (
+        "provider config write gate selftest",
+        [*PY, f"{HOOKS}/configReadOnly.py", "--selftest"],
+    ),
+    "configReadOnly": ("provider configuration stays read-only", [*PY, f"{HOOKS}/configReadOnly.py"]),
     "orphanReapingSelftest": (
         "자식 회수 게이트 자체 검증",
         [*PY, f"{HOOKS}/orphanReaping.py", "--selftest"],
@@ -130,6 +135,14 @@ GATES: dict[str, tuple[str, list[str]]] = {
     "modelDetectionSmoke": (
         "실물 CLI 모델 자동 인식",
         [*PY, f"{HOOKS}/modelDetectionSmoke.py"],
+    ),
+    "agentSurfaceDriftSelftest": (
+        "provider surface drift gate selftest",
+        [*PY, f"{HOOKS}/agentSurfaceDrift.py", "--selftest"],
+    ),
+    "agentSurfaceDrift": (
+        "installed provider surfaces still match their bindings",
+        [*PY, f"{HOOKS}/agentSurfaceDrift.py"],
     ),
     "audit": ("저장소 계약 게이트 (tests/audit)", ["cargo", "test", "-p", "runtrol-audit"]),
     # 의존성 부패. `[workspace.dependencies]` 미사용 항목까지 잡는 것이 cargo-shear 를 고른 이유다

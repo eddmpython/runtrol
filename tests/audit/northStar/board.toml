@@ -62,7 +62,7 @@ gate = [
 
 [[axis]]
 key = "providerExtensibility"
-tier = "none"
+tier = "realBothKinds"
 additives = []
 caps = []
 name = { ko = "공급자 확장성", en = "Provider extensibility", zh = "供应商可扩展性", ja = "プロバイダー拡張性" }
@@ -257,7 +257,8 @@ file = "argumentEscaping.rs"
 [[floor]]
 category = "security"
 name = "configReadOnly"
-status = "planned"
+status = "built"
+file = "configReadOnly.py"
 
 [[floor]]
 category = "hygiene"
