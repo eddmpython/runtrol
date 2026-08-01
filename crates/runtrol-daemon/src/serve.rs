@@ -276,8 +276,7 @@ async fn serve_sessions(
                 AgentReturned::Abandoned(lease) => sessions.abandon_agent(lease),
             },
 
-            // Events reach whoever is watching through the session's own fan-out, so there is nothing to do with
-            // what comes back. What this arm is for is that the reading happens at all.
+            // Events reach watchers through the session's own fan-out. This arm keeps the provider stream moving.
             pumped = sessions.pump_any() => {
                 if let Some(published) = pumped.published {
                     if let Err(error) = crate::dispatch::persist_live(&composed, &sessions, pumped.session) {
@@ -292,6 +291,7 @@ async fn serve_sessions(
                     ) {
                         break Err(error.into());
                     }
+                    release_rejected_transient(published);
                 }
             }
 
@@ -302,6 +302,17 @@ async fn serve_sessions(
     connections.abort_all();
     while connections.join_next().await.is_some() {}
     outcome
+}
+
+fn release_rejected_transient(published: runtrol_core::events::Published) {
+    let payload_bytes = published.event.body.payload_bytes();
+    drop(published);
+    let Some(goal_bytes) = core::num::NonZeroUsize::new(payload_bytes) else {
+        return;
+    };
+    if goal_bytes.get() > runtrol_core::events::MAX_LIVE_PAYLOAD_BYTES {
+        runtrol_childproc::release_unused_memory(goal_bytes);
+    }
 }
 
 /// Release an unanswered reservation without exposing an extra live process during displaced cleanup.

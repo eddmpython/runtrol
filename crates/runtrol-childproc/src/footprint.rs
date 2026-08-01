@@ -25,6 +25,8 @@
 //! without more `unsafe` than the number is worth, so it asks the tool that ships with the system. Each is the
 //! cheapest correct answer on its own platform, and none of them pretends to be the others.
 
+use std::num::NonZeroUsize;
+
 use crate::error::SpawnError;
 
 /// How much memory a process is holding, in bytes.
@@ -38,6 +40,16 @@ use crate::error::SpawnError;
 /// asked about, or this platform has no way to ask that this crate can reach.
 pub fn resident_bytes(pid: u32) -> Result<u64, SpawnError> {
     platform::resident_bytes(pid)
+}
+
+/// Return allocator pages that are no longer owned after an exceptional large transient allocation.
+///
+/// The ordinary allocator policy remains untouched. This boundary exists for a provider frame near the bounded input
+/// limit that is deliberately rejected from live retention: macOS otherwise keeps the freed large block resident for
+/// the daemon lifetime. Other platforms release or reuse that memory within their measured residual budget, so this
+/// is a no-op there.
+pub fn release_unused_memory(goal_bytes: NonZeroUsize) {
+    platform::release_unused_memory(goal_bytes);
 }
 
 #[cfg(windows)]
@@ -109,6 +121,8 @@ mod platform {
         }
         Ok(counters.WorkingSetSize as u64)
     }
+
+    pub(super) const fn release_unused_memory(_goal_bytes: super::NonZeroUsize) {}
 }
 
 #[cfg(target_os = "linux")]
@@ -169,38 +183,79 @@ mod platform {
 
         Ok(resident.saturating_mul(page_bytes()))
     }
+
+    pub(super) const fn release_unused_memory(_goal_bytes: super::NonZeroUsize) {}
 }
 
-#[cfg(not(any(windows, target_os = "linux")))]
+#[cfg(target_os = "macos")]
+mod platform {
+    use std::num::NonZeroUsize;
+
+    use crate::error::SpawnError;
+
+    #[expect(
+        unsafe_code,
+        reason = "the pinned libc crate does not expose this stable macOS allocator symbol"
+    )]
+    unsafe extern "C" {
+        fn malloc_zone_pressure_relief(
+            zone: *mut libc::malloc_zone_t,
+            goal: libc::size_t,
+        ) -> libc::size_t;
+    }
+
+    pub(super) fn resident_bytes(pid: u32) -> Result<u64, SpawnError> {
+        super::resident_from_ps(pid)
+    }
+
+    #[expect(
+        unsafe_code,
+        reason = "asking the system allocator to release free pages is a platform call with no safe wrapper"
+    )]
+    pub(super) fn release_unused_memory(goal_bytes: NonZeroUsize) {
+        let _released =
+            // SAFETY: null selects all zones; the call only releases pages the allocator already considers free.
+            unsafe { malloc_zone_pressure_relief(core::ptr::null_mut(), goal_bytes.get()) };
+    }
+}
+
+#[cfg(all(not(windows), not(target_os = "linux"), not(target_os = "macos")))]
 mod platform {
     use crate::error::SpawnError;
 
     pub(super) fn resident_bytes(pid: u32) -> Result<u64, SpawnError> {
-        // The tool that ships with the system, which answers in kibibytes. Reaching for the platform's own call
-        // would need more `unsafe` than one number is worth, and a wrong answer here is worse than no answer:
-        // a budget gate that measures the wrong thing is a budget gate that passes while the product grows.
-        let asked = std::process::Command::new("ps")
-            .args(["-o", "rss=", "-p", &pid.to_string()])
-            .output()
-            .map_err(|error| SpawnError::Footprint {
-                pid,
-                detail: format!("ps: {error}"),
-            })?;
-
-        let text = String::from_utf8_lossy(&asked.stdout);
-        let kibibytes = text
-            .trim()
-            .parse::<u64>()
-            .map_err(|_| SpawnError::Footprint {
-                pid,
-                detail: format!(
-                    "ps answered {:?}, which is not a number of kibibytes",
-                    text.trim()
-                ),
-            })?;
-
-        Ok(kibibytes.saturating_mul(1024))
+        super::resident_from_ps(pid)
     }
+
+    pub(super) const fn release_unused_memory(_goal_bytes: super::NonZeroUsize) {}
+}
+
+#[cfg(not(any(windows, target_os = "linux")))]
+fn resident_from_ps(pid: u32) -> Result<u64, SpawnError> {
+    // The tool that ships with the system, which answers in kibibytes. Reaching for the platform's own call
+    // would need more `unsafe` than one number is worth, and a wrong answer here is worse than no answer:
+    // a budget gate that measures the wrong thing is a budget gate that passes while the product grows.
+    let asked = std::process::Command::new("ps")
+        .args(["-o", "rss=", "-p", &pid.to_string()])
+        .output()
+        .map_err(|error| SpawnError::Footprint {
+            pid,
+            detail: format!("ps: {error}"),
+        })?;
+
+    let text = String::from_utf8_lossy(&asked.stdout);
+    let kibibytes = text
+        .trim()
+        .parse::<u64>()
+        .map_err(|_| SpawnError::Footprint {
+            pid,
+            detail: format!(
+                "ps answered {:?}, which is not a number of kibibytes",
+                text.trim()
+            ),
+        })?;
+
+    Ok(kibibytes.saturating_mul(1024))
 }
 
 #[cfg(test)]

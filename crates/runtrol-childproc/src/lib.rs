@@ -53,7 +53,7 @@ pub use console::hide_if_private;
 pub use console_window::hide_console_window;
 pub use contain::{Containment, Strength};
 pub use error::SpawnError;
-pub use footprint::resident_bytes;
+pub use footprint::{release_unused_memory, resident_bytes};
 pub use handoff::keep_handles_to_ourselves;
 pub use resolve::{LauncherKept, Program, ProgramKind, resolve};
 pub use run::{MAX_OUTPUT_BYTES, Output, capture};
