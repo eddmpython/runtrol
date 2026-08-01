@@ -261,6 +261,12 @@ file = "pairingLifecycle.rs"
 
 [[floor]]
 category = "security"
+name = "approvalAuthorization"
+status = "built"
+file = "approvalAuthorization.rs"
+
+[[floor]]
+category = "security"
 name = "argumentEscaping"
 status = "built"
 file = "argumentEscaping.rs"

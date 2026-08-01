@@ -38,9 +38,11 @@ use core::task::Poll;
 use std::collections::BTreeMap;
 
 use runtrol_provider::{
-    AbsPath, Agent, AgentCommand, CloseMode, Disposition, EventBody, Level, Notice, NoticeCode,
-    Opaque, OpenIntent, Produced, Provider, ProviderError, ProviderId, SessionId, WallMs,
+    AbsPath, Agent, AgentCommand, ApprovalId, CloseMode, Disposition, EventBody, Level, Notice,
+    NoticeCode, Opaque, OpenIntent, OptionId, Produced, Provider, ProviderError, ProviderId,
+    RiskClass, SessionId, WallMs,
 };
+use runtrol_security::{Caller, DeviceScope, GrantLedger, SecurityError};
 
 use crate::events::{Published, SessionHub, SessionView};
 use crate::session::mint::Identity;
@@ -68,6 +70,53 @@ pub enum SessionError {
     /// your machine", or "it broke", and those are three different next moves.
     #[error(transparent)]
     Provider(#[from] ProviderError),
+
+    /// The provider has no pending approval by this name.
+    #[error("approval {approval} is not pending for session {session}")]
+    ApprovalNotPending {
+        /// The session that was asked.
+        session: SessionId,
+        /// The approval that was asked.
+        approval: ApprovalId,
+    },
+
+    /// The answer names an older or different view of the approval subject.
+    #[error("approval {approval} subject changed before it was answered")]
+    ApprovalSubjectChanged {
+        /// The approval whose digest did not match.
+        approval: ApprovalId,
+    },
+
+    /// The provider did not offer this option for the pending approval.
+    #[error("approval {approval} did not offer option {option}")]
+    ApprovalOptionNotOffered {
+        /// The pending approval.
+        approval: ApprovalId,
+        /// The unknown option.
+        option: OptionId,
+    },
+
+    /// The option exists but cannot be chosen by this answerer.
+    #[error("approval {approval} option {option} is unavailable: {why}")]
+    ApprovalOptionUnavailable {
+        /// The pending approval.
+        approval: ApprovalId,
+        /// The blocked option.
+        option: OptionId,
+        /// Why choosing it would violate the consent or authority contract.
+        why: &'static str,
+    },
+
+    /// The pending approval deadline has passed.
+    #[error("approval {approval} has expired")]
+    ApprovalExpired {
+        /// The expired approval.
+        approval: ApprovalId,
+    },
+
+    /// The caller does not hold the authority the pending approval requires.
+    #[error(transparent)]
+    Security(#[from] SecurityError),
 }
 
 /// One live session: its driver, its event hub, its names, and what it is doing.
@@ -393,6 +442,79 @@ impl SessionManager {
             .get_mut(&session)
             .ok_or(SessionError::NotLive { session })?;
         live.agent.send(command).await.map_err(SessionError::from)
+    }
+
+    /// Answer a provider approval after binding the choice to the request the driver still holds.
+    ///
+    /// Risk never arrives as input to this method. It is taken from the pending request, and a standing option raises
+    /// the required authority even if the action itself is low risk. The provider-native response remains private to
+    /// the driver and is removed only after [`Agent::send`] succeeds.
+    ///
+    /// # Errors
+    ///
+    /// Refuses a missing or expired approval, a stale subject digest, an option the provider did not offer, an option
+    /// made unavailable by incomplete consent or authority, a missing device scope, or a provider write failure.
+    pub async fn answer_approval(
+        &mut self,
+        caller: &Caller,
+        ledger: &GrantLedger,
+        session: SessionId,
+        approval: ApprovalId,
+        option: OptionId,
+        subject_digest: [u8; 32],
+    ) -> Result<(), SessionError> {
+        let live = self
+            .live
+            .get_mut(&session)
+            .ok_or(SessionError::NotLive { session })?;
+
+        let required_scope = {
+            let request = live
+                .agent
+                .approval(approval)
+                .ok_or(SessionError::ApprovalNotPending { session, approval })?;
+            if request.subject_digest != subject_digest {
+                return Err(SessionError::ApprovalSubjectChanged { approval });
+            }
+            if WallMs::now() >= request.expires_at {
+                return Err(SessionError::ApprovalExpired { approval });
+            }
+
+            let chosen = request
+                .options
+                .iter()
+                .find(|candidate| candidate.id == option)
+                .ok_or(SessionError::ApprovalOptionNotOffered { approval, option })?;
+            let may_answer_high = caller.may(DeviceScope::ApprovalRespondHigh, ledger).is_ok();
+            if let Some(why) = request
+                .offerable(may_answer_high)
+                .into_iter()
+                .find(|offered| offered.option.id == option)
+                .and_then(|offered| offered.unavailable)
+            {
+                return Err(SessionError::ApprovalOptionUnavailable {
+                    approval,
+                    option,
+                    why,
+                });
+            }
+
+            if request.risk == RiskClass::High || chosen.kind.commits_beyond_this_action() {
+                DeviceScope::ApprovalRespondHigh
+            } else {
+                DeviceScope::ApprovalRespondLow
+            }
+        };
+
+        caller.may(required_scope, ledger)?;
+        live.agent
+            .send(AgentCommand::Answer {
+                id: approval,
+                option,
+                subject_digest,
+            })
+            .await
+            .map_err(SessionError::from)
     }
 
     /// End a session, and hand back the driver that still has to be stopped.

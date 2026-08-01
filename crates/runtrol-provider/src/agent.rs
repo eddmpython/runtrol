@@ -31,7 +31,8 @@ use async_trait::async_trait;
 use crate::catalog::ModelCatalog;
 use crate::command::{AgentCommand, CloseMode, OpenIntent, Produced};
 use crate::error::ProviderError;
-use crate::id::{ProviderId, SessionId};
+use crate::event::ApprovalRequest;
+use crate::id::{ApprovalId, ProviderId, SessionId};
 
 /// One coding CLI, as runtrol talks to it.
 ///
@@ -82,6 +83,15 @@ pub trait Agent: Send + Sync {
     /// `None` before the provider has announced it. The newest answer wins: a resume can produce a new name and a
     /// fork always does, and a resume command has to be given the one that names the conversation now.
     fn native(&self) -> Option<&str>;
+
+    /// A provider approval that is still waiting for this session, if there is one by this name.
+    ///
+    /// The driver owns this state together with the provider-native response for each option. The supervisor only
+    /// borrows the normalized request long enough to bind an answer to the exact subject and authority it requires.
+    /// A default keeps drivers that do not expose approvals source compatible and honestly reports no pending prompt.
+    fn approval(&self, _id: ApprovalId) -> Option<&ApprovalRequest> {
+        None
+    }
 
     /// Hand a command to the provider.
     ///

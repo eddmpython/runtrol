@@ -29,7 +29,7 @@
 //! to their machine. Those are on the value, so a client cannot get them wrong by branching on a number whose meaning
 //! lives somewhere else.
 
-use runtrol_provider::{ModelCatalog, Opaque, ProviderError, SessionId};
+use runtrol_provider::{ApprovalId, ModelCatalog, Opaque, OptionId, ProviderError, SessionId};
 use serde::{Deserialize, Serialize};
 
 use crate::frame::WIRE_VERSION;
@@ -85,6 +85,18 @@ pub enum Request {
         session: SessionId,
         /// What they wrote, carried and never rewritten.
         text: Box<str>,
+    },
+
+    /// Choose one option from a provider approval that is still pending.
+    AnswerApproval {
+        /// Which session owns the approval.
+        session: SessionId,
+        /// The runtrol approval identifier shown with the request.
+        approval: ApprovalId,
+        /// The exact provider-offered option the operator chose.
+        option: OptionId,
+        /// The digest shown with the subject, binding the answer to that exact content.
+        subject_digest: [u8; 32],
     },
 
     /// Stop the turn that is running.
@@ -276,12 +288,19 @@ mod tests {
         // No current session and no selected provider. Two processes holding "the one you meant" is two places for that
         // to disagree, and the way it goes wrong is a command landing on a session the operator was not looking at.
         let session = SessionId::now();
+        let approval = ApprovalId::now();
         let about = [
             Request::Prompt {
                 session,
                 text: "do the thing".into(),
             },
             Request::Interrupt { session },
+            Request::AnswerApproval {
+                session,
+                approval,
+                option: OptionId(0),
+                subject_digest: [1; 32],
+            },
             Request::Watch { session },
             Request::Close {
                 session,
@@ -314,6 +333,7 @@ mod tests {
     #[test]
     fn a_request_reads_back_as_what_it_was() {
         let session = SessionId::now();
+        let approval = ApprovalId::now();
         for request in [
             Request::Hello { wire: WIRE_VERSION },
             Request::List,
@@ -334,6 +354,12 @@ mod tests {
             Request::Prompt {
                 session,
                 text: "hello".into(),
+            },
+            Request::AnswerApproval {
+                session,
+                approval,
+                option: OptionId(2),
+                subject_digest: [3; 32],
             },
             Request::StopEverything,
         ] {
@@ -356,6 +382,34 @@ mod tests {
         match round_trip_request(&request) {
             Request::Prompt { text, .. } => assert_eq!(&*text, written),
             other => panic!("expected a prompt, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn an_approval_answer_keeps_the_exact_subject_binding() {
+        let session = SessionId::now();
+        let approval = ApprovalId::now();
+        let digest = core::array::from_fn(|index| u8::try_from(index).expect("the index fits"));
+        let request = Request::AnswerApproval {
+            session,
+            approval,
+            option: OptionId(17),
+            subject_digest: digest,
+        };
+
+        match round_trip_request(&request) {
+            Request::AnswerApproval {
+                session: read_session,
+                approval: read_approval,
+                option,
+                subject_digest,
+            } => {
+                assert_eq!(read_session, session);
+                assert_eq!(read_approval, approval);
+                assert_eq!(option, OptionId(17));
+                assert_eq!(subject_digest, digest);
+            }
+            other => panic!("expected an approval answer, got {other:?}"),
         }
     }
 

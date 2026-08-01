@@ -107,6 +107,10 @@ impl Conversation {
 /// Answer one request.
 ///
 /// Takes the assembled daemon and the sessions, because a request is about one or the other and usually both.
+#[expect(
+    clippy::too_many_lines,
+    reason = "one exhaustive request table keeps every scope-checked wire operation visible in one place"
+)]
 pub async fn answer(
     conversation: &mut Conversation,
     composed: &Composed,
@@ -195,6 +199,28 @@ pub async fn answer(
         Request::Interrupt { session } => {
             Reply::One(send(sessions, session, AgentCommand::Interrupt).await)
         }
+
+        Request::AnswerApproval {
+            session,
+            approval,
+            option,
+            subject_digest,
+        } => Reply::One(
+            match sessions
+                .answer_approval(
+                    conversation.caller(),
+                    &composed.granted,
+                    session,
+                    approval,
+                    option,
+                    subject_digest,
+                )
+                .await
+            {
+                Ok(()) => Response::Done,
+                Err(error) => from_session_error(&error),
+            },
+        ),
 
         Request::Watch { session } => match sessions.subscribe(session) {
             Ok(watching) => Reply::Watching(Box::new(watching)),

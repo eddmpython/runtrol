@@ -20,10 +20,11 @@ cargo_metadata = { workspace = true }
 # Asking the operating system what a process holds. The budget is a number this gate measures against, and a
 # process reporting on itself would report what its allocator believes rather than what it holds.
 runtrol-childproc = { workspace = true }
+runtrol-core = { workspace = true }
 runtrol-provider = { workspace = true }
 runtrol-security = { workspace = true }
 runtrol-transport = { path = "../../crates/runtrol-transport" }
-tokio = { workspace = true, features = ["io-util", "macros", "net", "rt"] }
+tokio = { workspace = true, features = ["io-util", "macros", "net", "rt", "sync"] }
 
 [[test]]
 name = "dependencyDirection"
@@ -52,6 +53,10 @@ path = "egressContract.rs"
 [[test]]
 name = "pairingLifecycle"
 path = "pairingLifecycle.rs"
+
+[[test]]
+name = "approvalAuthorization"
+path = "approvalAuthorization.rs"
 
 [[test]]
 name = "noConsoleFlash"

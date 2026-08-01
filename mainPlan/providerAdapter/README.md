@@ -1,6 +1,6 @@
 # providerAdapter
 
-상태: 진행 중. 범용 ACP v1 자식 프로세스 경로와 manifest 전용 등록은 구현 및 자동 검증 완료.
+상태: 진행 중. 범용 ACP v1 자식 프로세스 경로, manifest 전용 등록, subject digest 와 실제 위험도에 결박된 승인 응답 코어 경로는 구현 및 자동 검증 완료. Provider-native 승인 요청과 선택지 매핑은 남아 있다.
 
 ## 한 문장 정의
 

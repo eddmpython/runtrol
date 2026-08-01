@@ -33,6 +33,12 @@ pub enum Needed {
     /// A device must hold this scope. Somebody at the machine always may.
     Scope(DeviceScope),
 
+    /// Answering needs either low or high approval authority at the boundary.
+    ///
+    /// The pending provider request decides which one is sufficient after this wall. Risk is deliberately absent
+    /// from the wire, so a caller cannot lower the required authority by changing request data.
+    ApprovalResponse,
+
     /// Anyone may, and the sentence says why that is safe.
     ///
     /// Carried rather than implied, because "no permission" is the one answer that has to justify itself, and a
@@ -63,6 +69,7 @@ pub fn needed(request: &Request) -> Needed {
         Request::Start { .. } => Needed::Scope(DeviceScope::SessionStart),
         Request::Resume { .. } => Needed::Scope(DeviceScope::SessionResume),
         Request::Prompt { .. } => Needed::Scope(DeviceScope::SessionInputWrite),
+        Request::AnswerApproval { .. } => Needed::ApprovalResponse,
         Request::Watch { .. } => Needed::Scope(DeviceScope::SessionOutputRead),
         // Both take work away from a turn that is running, so both need the same thing. Written apart rather
         // than merged: they are different requests that agree today, and merging them would hide the day one of
@@ -100,6 +107,13 @@ pub fn allowed(
         Needed::Scope(scope) => caller
             .may(scope, ledger)
             .map_err(|source| WallRefusal::Denied { source }),
+        Needed::ApprovalResponse => match caller.may(DeviceScope::ApprovalRespondLow, ledger) {
+            Ok(()) => Ok(()),
+            Err(low) => match caller.may(DeviceScope::ApprovalRespondHigh, ledger) {
+                Ok(()) => Ok(()),
+                Err(_) => Err(WallRefusal::Denied { source: low }),
+            },
+        },
         Needed::Unknown => Err(WallRefusal::Unknown),
     }
 }
@@ -125,7 +139,7 @@ pub enum WallRefusal {
 
 #[cfg(test)]
 mod tests {
-    use runtrol_provider::SessionId;
+    use runtrol_provider::{ApprovalId, OptionId, SessionId};
     use runtrol_security::{DeviceId, GrantRequest, LocalConsole, PresenceChallenge};
 
     use super::*;
@@ -157,6 +171,12 @@ mod tests {
             Request::Prompt {
                 session: SessionId::now(),
                 text: "hello".into(),
+            },
+            Request::AnswerApproval {
+                session: SessionId::now(),
+                approval: ApprovalId::now(),
+                option: OptionId(0),
+                subject_digest: [0; 32],
             },
             Request::Interrupt {
                 session: SessionId::now(),
@@ -200,7 +220,7 @@ mod tests {
                     assert!(!why.is_empty(), "{request:?} is open and does not say why");
                     assert!(allowed(&caller, &request, &ledger).is_ok());
                 }
-                Needed::Scope(_) => assert!(
+                Needed::Scope(_) | Needed::ApprovalResponse => assert!(
                     allowed(&caller, &request, &ledger).is_err(),
                     "{request:?} was allowed to a device that holds nothing"
                 ),
