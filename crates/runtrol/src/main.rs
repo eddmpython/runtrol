@@ -49,7 +49,16 @@ fn main() -> ExitCode {
     }
 
     let words: Vec<String> = std::env::args().skip(1).collect();
-    match choose(&words) {
+    let personality = choose(&words);
+    if matches!(personality, Personality::Window)
+        && let Err(error) = runtrol_childproc::hide_if_private()
+    {
+        report(&format!(
+            "runtrol cannot prepare its desktop window: {error}"
+        ));
+        return ExitCode::FAILURE;
+    }
+    match personality {
         Personality::Daemon => run(serving()),
         // No runtime is built for this one. The window's own toolkit owns the main thread and brings a runtime
         // with it, and wrapping it in a second would be two schedulers for one process.

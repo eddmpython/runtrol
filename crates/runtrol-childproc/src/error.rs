@@ -105,6 +105,16 @@ pub enum SpawnError {
         detail: String,
     },
 
+    /// Windows could not decide whether the current console belongs only to the desktop process.
+    ///
+    /// The window stays visible on failure. Hiding a shared terminal would be worse than leaving one extra
+    /// console on screen, and the caller reports the reason in that still-visible console.
+    #[error("cannot decide whether runtrol's desktop console is private: {detail}")]
+    ConsolePresentation {
+        /// What Windows reported.
+        detail: String,
+    },
+
     /// The filesystem refused a path.
     #[error("cannot read {path:?}: {detail}")]
     Io {
