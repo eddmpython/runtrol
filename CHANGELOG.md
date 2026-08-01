@@ -23,8 +23,8 @@ its measured architecture, and the gate harness.
   denies the real hidden stdio tool request, requires the provider's `end_turn`, and proves the
   denied file and provider child process are absent afterward.
 
-- North Star with a scored checklist. Every axis began at 0, and a score now counts only
-  while its evidence gate actually runs in CI.
+- North Star with a scored checklist. Every axis began at 0. Manual evidence can establish
+  the manual tier, while every higher score requires its evidence gate to run in hosted CI.
 - Architecture decisions across eight initiatives, each recorded with the measurement
   or source reading that produced it.
 - Contract gates introduced before product code: workspace hygiene, forbidden
