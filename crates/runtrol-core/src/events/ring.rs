@@ -128,6 +128,14 @@ impl ReplayRing {
         }
     }
 
+    /// Every frame still held, oldest first.
+    ///
+    /// Cloning these frames shares their provider payload allocations. A caller gets a bounded view without
+    /// materializing a transcript or copying its content bytes.
+    pub fn frames(&self) -> impl Iterator<Item = &AgentEvent> {
+        self.frames.iter()
+    }
+
     /// The frames after `after`, oldest first.
     ///
     /// Yields only what the ring still holds. Whether that is the whole gap is [`ReplayRing::reach`]'s

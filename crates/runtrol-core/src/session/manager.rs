@@ -42,7 +42,7 @@ use runtrol_provider::{
     Opaque, OpenIntent, Produced, Provider, ProviderError, ProviderId, SessionId, WallMs,
 };
 
-use crate::events::{Published, SessionHub, Subscription};
+use crate::events::{Published, SessionHub, SessionView};
 use crate::session::mint::Identity;
 use crate::session::state::{FailureCode, Observed, SessionState};
 use crate::session::tier::{Admit, HotSession, Tier};
@@ -145,17 +145,17 @@ impl SessionManager {
             .map(AsRef::as_ref)
     }
 
-    /// Watch a live session.
+    /// Watch a live session, beginning with the bounded recent replay window.
     ///
     /// # Errors
     ///
     /// [`SessionError::NotLive`] when nothing is running under that name.
-    pub fn subscribe(&mut self, session: SessionId) -> Result<Subscription, SessionError> {
+    pub fn subscribe(&mut self, session: SessionId) -> Result<SessionView, SessionError> {
         let live = self
             .live
             .get_mut(&session)
             .ok_or(SessionError::NotLive { session })?;
-        Ok(live.hub.subscribe())
+        Ok(live.hub.view())
     }
 
     /// Start a session, or continue one.

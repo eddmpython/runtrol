@@ -29,6 +29,8 @@ pub mod fanout;
 pub mod ring;
 pub mod seq;
 
+use std::collections::VecDeque;
+
 use runtrol_provider::{AgentEvent, EventBody, Level, Notice, NoticeCode, Opaque, SessionId};
 
 pub use fanout::{Delivery, FanOut, QUEUE_BYTES, QUEUE_FRAMES, SubscriberId, Subscription};
@@ -50,6 +52,34 @@ pub struct Published {
     /// Already turned into a notice frame by the time this is returned. Reported here as well because the
     /// caller may want to count it, and because a value nobody can miss is better than a log line.
     pub regression: Option<CursorRegression>,
+}
+
+/// A bounded recent view followed by the live stream of one session.
+///
+/// The replay holds only the session hub's existing bounded ring and shares every provider payload allocation.
+/// It is a latency window, not a transcript copy. Once drained, reads continue from the live subscription that
+/// was installed before the snapshot was taken, so no frame can land between the two.
+#[derive(Debug)]
+pub struct SessionView {
+    /// Frames already held by the bounded replay ring, oldest first.
+    replay: VecDeque<AgentEvent>,
+    /// Frames published after this view was opened.
+    live: Subscription,
+}
+
+impl SessionView {
+    /// Wait for the next replayed or live frame, or `None` once the session is gone.
+    pub async fn recv(&mut self) -> Option<AgentEvent> {
+        match self.replay.pop_front() {
+            Some(event) => Some(event),
+            None => self.live.recv().await,
+        }
+    }
+
+    /// Take the next replayed or live frame when one is immediately available.
+    pub fn try_recv(&mut self) -> Option<AgentEvent> {
+        self.replay.pop_front().or_else(|| self.live.try_recv())
+    }
 }
 
 /// Every event of one session, in order, on its way out.
@@ -121,7 +151,19 @@ impl SessionHub {
         self.seq.attach()
     }
 
-    /// Add a watcher.
+    /// Open a bounded recent view and then keep watching live frames.
+    ///
+    /// The live subscription is installed before the replay snapshot is taken. The manager is single-owned, so
+    /// nothing can publish in between, and every frame belongs to exactly one side of that boundary.
+    pub fn view(&mut self) -> SessionView {
+        let live = self.fanout.subscribe();
+        let replay = self.ring.frames().cloned().collect();
+        SessionView { replay, live }
+    }
+
+    /// Add a watcher without replaying the recent window.
+    ///
+    /// Used by focused kernel tests and callers that already hold an exact cursor.
     pub fn subscribe(&mut self) -> Subscription {
         self.fanout.subscribe()
     }

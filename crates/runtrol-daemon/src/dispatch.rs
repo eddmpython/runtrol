@@ -26,7 +26,7 @@ use std::sync::Arc;
 
 use runtrol_core::registry::KindStatus;
 use runtrol_core::session::SessionError;
-use runtrol_core::{SessionManager, Subscription};
+use runtrol_core::{SessionManager, SessionView};
 use runtrol_drivers::DriverContext;
 use runtrol_ipc::wire::{ProviderLine, Request, Response, SessionLine, WireError};
 use runtrol_provider::{
@@ -44,7 +44,7 @@ pub enum Reply {
     ///
     /// A separate shape because watching is not a question with an answer: it is the connection changing what it is for,
     /// and a dispatcher that pretended otherwise would have to answer once and then keep writing.
-    Watching(Box<Subscription>),
+    Watching(Box<SessionView>),
     /// The session is closed, and its process is still being stopped.
     ///
     /// A separate shape because stopping is a wait, and the answer is not known until it is over. Handing the wait out

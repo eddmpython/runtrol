@@ -22,7 +22,7 @@ pub mod session;
 
 pub use events::{
     CursorRegression, Delivery, FanOut, Published, Reach, ReplayRing, Sequencer, SessionHub,
-    SubscriberId, Subscription,
+    SessionView, SubscriberId, Subscription,
 };
 pub use home::{Endpoint, HomeError, Layout, RuntrolHome};
 pub use probe::{BinFacts, Flags, ProbeCache, ProbeError, locate, probe};

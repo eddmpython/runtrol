@@ -203,7 +203,7 @@ async fn converse(mut connection: Connection, asking: mpsc::Sender<Asked>) {
 ///
 /// The event goes out as the provider wrote it. Encoded here and read by nobody in between: this is the last hop a
 /// conversation takes inside runtrol, and the whole of what happens to it is being put in an envelope.
-async fn relay(connection: &mut Connection, mut watching: runtrol_core::Subscription) {
+async fn relay(connection: &mut Connection, mut watching: runtrol_core::SessionView) {
     while let Some(event) = watching.recv().await {
         let encoded = match serde_json::to_string(&event) {
             Ok(encoded) => Opaque::owned(encoded),
