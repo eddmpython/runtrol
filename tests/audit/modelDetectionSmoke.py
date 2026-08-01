@@ -31,6 +31,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
@@ -42,6 +43,8 @@ CRATES = ROOT / "crates"
 DRIVERS = CRATES / "runtrol-drivers"
 MANIFESTS = DRIVERS / "manifests"
 COMMAND_TIMEOUT_S = 120.0
+DAEMON_START_TIMEOUT_S = 10.0
+DAEMON_STOP_TIMEOUT_S = 2.0
 EXPECTED_ENV = "RUNTROL_MODEL_GATE_EXPECTED"
 OPERATOR_HOME_ENV = "RUNTROL_MODEL_GATE_OPERATOR_HOME"
 CREDENTIAL_ENV = (
@@ -140,6 +143,16 @@ def credentialFreeEnvironment(source: dict[str, str] | None = None) -> dict[str,
     return environment
 
 
+def gateEnvironment(home: Path, source: dict[str, str] | None = None) -> dict[str, str]:
+    """Build the one credential-free environment shared by this gate's daemon and commands."""
+    environment = credentialFreeEnvironment(source)
+    environment["RUNTROL_HOME"] = str(home)
+    if operator_home := environment.get(OPERATOR_HOME_ENV):
+        environment["HOME"] = operator_home
+        environment["USERPROFILE"] = operator_home
+    return environment
+
+
 def options(argv: list[str]) -> tuple[bool, bool, bool]:
     """Read the gate modes and reject misspelled or conflicting options instead of ignoring them."""
     known = {"--selftest", "--require-all", "--seed-fixtures"}
@@ -220,13 +233,10 @@ def run(
     *,
     runner=subprocess.run,
     source_environment: dict[str, str] | None = None,
+    timeout_s: float = COMMAND_TIMEOUT_S,
 ) -> str:
     """Run one command against the gate's isolated daemon."""
-    environment = credentialFreeEnvironment(source_environment)
-    environment["RUNTROL_HOME"] = str(home)
-    if operator_home := environment.get(OPERATOR_HOME_ENV):
-        environment["HOME"] = operator_home
-        environment["USERPROFILE"] = operator_home
+    environment = gateEnvironment(home, source_environment)
     try:
         proc = runner(
             [str(binary), *words],
@@ -236,15 +246,111 @@ def run(
             text=True,
             encoding="utf-8",
             errors="replace",
-            timeout=COMMAND_TIMEOUT_S,
+            timeout=timeout_s,
             check=False,
         )
     except subprocess.TimeoutExpired as expired:
-        raise Failed(f"`runtrol {' '.join(words)}` did not answer in {COMMAND_TIMEOUT_S:.0f} s") from expired
+        raise Failed(f"`runtrol {' '.join(words)}` did not answer in {timeout_s:.0f} s") from expired
     said = (proc.stdout or "").strip() or (proc.stderr or "").strip()
     if proc.returncode != 0:
         raise Failed(f"`runtrol {' '.join(words)}` failed: {said}")
     return said
+
+
+def daemonOutput(daemon: subprocess.Popen[str]) -> str:
+    """Read diagnostics only after a daemon has exited, when communicate cannot block."""
+    stdout, stderr = daemon.communicate()
+    return (stderr or stdout or "daemon exited without output").strip()
+
+
+def requireOwnedDaemon(daemon: subprocess.Popen[str], when: str) -> None:
+    """Refuse a result if the exact daemon this gate owns has been replaced or has exited."""
+    if daemon.poll() is not None:
+        raise Failed(f"the owned daemon exited {when}: {daemonOutput(daemon)}")
+
+
+def stopDaemon(
+    daemon: subprocess.Popen[str],
+    *,
+    timeout_s: float = DAEMON_STOP_TIMEOUT_S,
+) -> None:
+    """Terminate exactly the daemon process this gate started and prove that it exited."""
+    if daemon.poll() is not None:
+        return
+    try:
+        daemon.terminate()
+        try:
+            daemon.wait(timeout=timeout_s)
+        except subprocess.TimeoutExpired:
+            daemon.kill()
+            try:
+                daemon.wait(timeout=timeout_s)
+            except subprocess.TimeoutExpired as error:
+                raise Failed("the isolated daemon remained alive after terminate and kill") from error
+    except OSError as error:
+        raise Failed(f"could not stop the isolated daemon process: {error}") from error
+    if daemon.poll() is None:
+        raise Failed("the isolated daemon reported no exit after terminate and kill")
+
+
+def startDaemon(
+    binary: Path,
+    home: Path,
+    *,
+    popen=subprocess.Popen,
+    runner=subprocess.run,
+    source_environment: dict[str, str] | None = None,
+    ready_marker: Path | None = None,
+    timeout_s: float = DAEMON_START_TIMEOUT_S,
+) -> subprocess.Popen[str]:
+    """Start one owned daemon and require a real command round trip before model discovery."""
+    environment = gateEnvironment(home, source_environment)
+    try:
+        daemon = popen(
+            [str(binary), "daemon"],
+            cwd=ROOT,
+            env=environment,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+    except OSError as error:
+        raise Failed(f"could not start the isolated daemon process: {error}") from error
+
+    marker = ready_marker or home / ("runtrol.redb" if sys.platform == "win32" else "runtrol.sock")
+    deadline = time.monotonic() + timeout_s
+    try:
+        while not marker.exists():
+            if daemon.poll() is not None:
+                raise Failed(f"the isolated daemon exited before readiness: {daemonOutput(daemon)}")
+            if time.monotonic() >= deadline:
+                raise Failed(f"the isolated daemon created no endpoint within {timeout_s:.0f} s")
+            time.sleep(0.025)
+
+        # The Windows database exists just before its named pipe is bound. A successful List round trip proves the
+        # endpoint, greeting, request, and response are all live instead of relying on that earlier filesystem fact.
+        # Give the pipe bind one scheduling turn first so the readiness command never needs the CLI's auto-start path.
+        if sys.platform == "win32":
+            time.sleep(0.1)
+        run(
+            binary,
+            home,
+            ["list"],
+            runner=runner,
+            source_environment=source_environment,
+            timeout_s=timeout_s,
+        )
+        requireOwnedDaemon(daemon, "during readiness")
+        return daemon
+    except Failed as starting:
+        try:
+            stopDaemon(daemon)
+        except Failed as stopping:
+            raise Failed(f"{starting}; cleanup also failed: {stopping}") from starting
+        raise
 
 
 def parseDiscovery(text: str) -> Discovery:
@@ -360,6 +466,26 @@ def safeRemove(path: Path) -> None:
     shutil.rmtree(resolved, ignore_errors=False)
 
 
+def cleanupDaemonHome(
+    daemon: subprocess.Popen[str] | None,
+    home: Path,
+    *,
+    stopper=stopDaemon,
+    remover=safeRemove,
+) -> Failed | None:
+    """Remove the home only after the owned daemon is proven stopped."""
+    if daemon is not None:
+        try:
+            stopper(daemon)
+        except (Failed, OSError) as error:
+            return Failed(f"could not stop the gate's daemon: {error}")
+    try:
+        remover(home)
+    except (Failed, OSError) as error:
+        return Failed(f"could not remove the gate's temporary home: {error}")
+    return None
+
+
 def main(require_all: bool = False) -> int:
     """Discover models from every installed provider and check source isolation."""
     if shutil.which("cargo") is None:
@@ -406,9 +532,14 @@ def main(require_all: bool = False) -> int:
     home = Path(tempfile.mkdtemp(prefix="runtrolModelGate"))
     discovered_ids: set[str] = set()
     failure: Failed | None = None
+    daemon: subprocess.Popen[str] | None = None
     try:
+        daemon = startDaemon(binary, home)
         for spec in present:
-            discovery = parseDiscovery(run(binary, home, ["models", spec.identifier]))
+            requireOwnedDaemon(daemon, f"before discovering {spec.identifier} models")
+            answer = run(binary, home, ["models", spec.identifier])
+            requireOwnedDaemon(daemon, f"after discovering {spec.identifier} models")
+            discovery = parseDiscovery(answer)
             verify(spec, discovery)
             missing_expected = [
                 choice for choice in expected.get(spec.identifier, ()) if choice not in discovery.choices
@@ -430,14 +561,8 @@ def main(require_all: bool = False) -> int:
     except Failed as caught:
         failure = caught
     finally:
-        try:
-            run(binary, home, ["panic"])
-        except Failed as stopping:
-            failure = failure or Failed(f"could not stop the gate's daemon: {stopping}")
-        try:
-            safeRemove(home)
-        except (Failed, OSError) as removing:
-            failure = failure or Failed(f"could not remove the gate's temporary home: {removing}")
+        cleanup_failure = cleanupDaemonHome(daemon, home)
+        failure = failure or cleanup_failure
 
     if failure:
         print(f"[modelDetectionSmoke] {failure}", file=sys.stderr)
@@ -463,10 +588,53 @@ def selftest() -> int:
         problems.append(f"credential-free child environment was incomplete: leaked={leaked!r}")
 
     subprocess_calls: list[tuple[list[str], dict[str, object]]] = []
+    popen_calls: list[tuple[list[str], dict[str, object]]] = []
 
     def fakeRunner(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
         subprocess_calls.append((command, kwargs))
         return subprocess.CompletedProcess(command, 0, stdout="fixture output\n", stderr="")
+
+    class FakeDaemon:
+        def __init__(
+            self,
+            *,
+            timeout_once: bool = False,
+            never_stops: bool = False,
+            returncode: int | None = None,
+            stderr: str = "",
+        ) -> None:
+            self.returncode = returncode
+            self.stderr = stderr
+            self.timeout_once = timeout_once
+            self.never_stops = never_stops
+            self.terminated = False
+            self.killed = False
+            self.waits = 0
+
+        def poll(self) -> int | None:
+            return self.returncode
+
+        def terminate(self) -> None:
+            self.terminated = True
+
+        def kill(self) -> None:
+            self.killed = True
+
+        def wait(self, timeout: float) -> int:
+            self.waits += 1
+            if self.never_stops or (self.timeout_once and self.waits == 1):
+                raise subprocess.TimeoutExpired("fixture-daemon", timeout)
+            self.returncode = -1
+            return self.returncode
+
+        def communicate(self) -> tuple[str, str]:
+            return "", self.stderr
+
+    owned_daemon = FakeDaemon()
+
+    def fakePopen(command: list[str], **kwargs: object) -> FakeDaemon:
+        popen_calls.append((command, kwargs))
+        return owned_daemon
 
     fixture_binary = Path(__file__).resolve()
     fixture_home = Path("fixture-runtrol-home")
@@ -483,6 +651,15 @@ def selftest() -> int:
             runner=fakeRunner,
             source_environment=credential_fixture,
         )
+        started = startDaemon(
+            fixture_binary,
+            fixture_home,
+            popen=fakePopen,
+            runner=fakeRunner,
+            source_environment=credential_fixture,
+            ready_marker=fixture_binary,
+        )
+        stopDaemon(started)
     except (Failed, OSError) as error:
         problems.append(f"fake subprocess boundary did not complete: {error}")
     else:
@@ -494,11 +671,12 @@ def selftest() -> int:
         expected_calls = (
             (["cargo", "build", "-p", "runtrol"], expected_build_environment),
             ([str(fixture_binary), "models", "fixture"], expected_run_environment),
+            ([str(fixture_binary), "list"], expected_run_environment),
         )
-        if built != fixture_binary or said != "fixture output":
+        if built != fixture_binary or said != "fixture output" or started is not owned_daemon:
             problems.append("fake subprocess results were not propagated")
         if len(subprocess_calls) != len(expected_calls):
-            problems.append(f"expected two fake subprocess calls, got {len(subprocess_calls)}")
+            problems.append(f"expected three fake subprocess calls, got {len(subprocess_calls)}")
         else:
             for index, ((command, kwargs), (expected_command, expected_environment)) in enumerate(
                 zip(subprocess_calls, expected_calls, strict=True), start=1
@@ -507,6 +685,93 @@ def selftest() -> int:
                     problems.append(f"fake subprocess call {index} received the wrong command")
                 if kwargs.get("env") != expected_environment:
                     problems.append(f"fake subprocess call {index} did not receive the credential-free environment")
+        if len(popen_calls) != 1:
+            problems.append(f"expected one fake daemon start, got {len(popen_calls)}")
+        else:
+            command, kwargs = popen_calls[0]
+            if command != [str(fixture_binary), "daemon"]:
+                problems.append("the fake daemon start received the wrong command")
+            if kwargs.get("env") != expected_run_environment:
+                problems.append("the fake daemon did not receive the command's credential-free environment")
+        if not owned_daemon.terminated or owned_daemon.killed or owned_daemon.poll() is None:
+            problems.append("a normally stopping owned daemon was not terminated and reaped exactly once")
+
+    slow_daemon = FakeDaemon(timeout_once=True)
+    try:
+        stopDaemon(slow_daemon)
+    except Failed as error:
+        problems.append(f"a daemon that stopped after kill was refused: {error}")
+    if not slow_daemon.terminated or not slow_daemon.killed or slow_daemon.poll() is None:
+        problems.append("a daemon that ignored terminate was not killed and reaped")
+
+    stubborn_daemon = FakeDaemon(never_stops=True)
+    try:
+        stopDaemon(stubborn_daemon)
+    except Failed as error:
+        if "remained alive after terminate and kill" not in str(error):
+            problems.append(f"an unstoppable daemon failure lost its reason: {error}")
+    else:
+        problems.append("an unstoppable daemon was reported as stopped")
+
+    exited_daemon = FakeDaemon(returncode=9, stderr="fixture startup failure")
+
+    def exitedPopen(_command: list[str], **_kwargs: object) -> FakeDaemon:
+        return exited_daemon
+
+    try:
+        startDaemon(
+            fixture_binary,
+            fixture_home,
+            popen=exitedPopen,
+            runner=fakeRunner,
+            source_environment=credential_fixture,
+            ready_marker=Path("fixture-readiness-marker-that-does-not-exist"),
+        )
+    except Failed as error:
+        if "fixture startup failure" not in str(error):
+            problems.append(f"an early daemon exit lost its diagnostics: {error}")
+    else:
+        problems.append("a daemon that exited before readiness was accepted")
+
+    failed_cleanup_order: list[str] = []
+
+    def failingStop(_daemon: FakeDaemon) -> None:
+        failed_cleanup_order.append("stop")
+        raise Failed("fixture stop failure")
+
+    def forbiddenRemove(_home: Path) -> None:
+        failed_cleanup_order.append("remove")
+
+    cleanup_failure = cleanupDaemonHome(
+        FakeDaemon(),
+        fixture_home,
+        stopper=failingStop,
+        remover=forbiddenRemove,
+    )
+    if failed_cleanup_order != ["stop"]:
+        problems.append(f"home removal was attempted after daemon cleanup failed: {failed_cleanup_order!r}")
+    if cleanup_failure is None or "fixture stop failure" not in str(cleanup_failure):
+        problems.append("daemon cleanup failure was not returned while preserving its home")
+
+    completed_cleanup_order: list[str] = []
+
+    def recordingStop(_daemon: FakeDaemon) -> None:
+        completed_cleanup_order.append("stop")
+
+    def recordingRemove(_home: Path) -> None:
+        completed_cleanup_order.append("remove")
+
+    cleanup_failure = cleanupDaemonHome(
+        FakeDaemon(),
+        fixture_home,
+        stopper=recordingStop,
+        remover=recordingRemove,
+    )
+    if completed_cleanup_order != ["stop", "remove"]:
+        problems.append(f"successful cleanup ran out of order: {completed_cleanup_order!r}")
+    if cleanup_failure is not None:
+        problems.append(f"successful ordered cleanup was reported as failed: {cleanup_failure}")
+
     known = parseDiscovery("runtime-model-42  Runtime Model 42  (default)")
     if known != Discovery("known", ("runtime-model-42",), None):
         problems.append("a valid enumerated model was not read")
