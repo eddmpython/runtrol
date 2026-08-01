@@ -146,6 +146,43 @@ textarea {
   gap: 9px;
 }
 
+.conversation-meta,
+.conversation-metrics {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+}
+
+.conversation-meta {
+  justify-content: flex-end;
+}
+
+.conversation-metrics {
+  overflow: hidden;
+}
+
+.metric {
+  display: block;
+  max-width: 310px;
+  overflow: hidden;
+  padding: 4px 8px;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  color: var(--color-text-secondary);
+  background: var(--color-background-secondary);
+  font-size: 11px;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.metric[data-reached="true"] {
+  border-color: var(--color-warning);
+  color: var(--color-text-primary);
+  background: color-mix(in srgb, var(--color-warning) 12%, transparent);
+}
+
 .conversation-title h1 {
   min-width: 0;
   margin: 0;
@@ -279,6 +316,10 @@ textarea {
 
   .conversation-status span:last-child,
   .composer-context {
+    display: none;
+  }
+
+  .conversation-metrics .metric:not([data-reached="true"]) {
     display: none;
   }
 }

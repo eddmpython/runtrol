@@ -157,6 +157,12 @@ jobs:
       - name: 초당 3,000 프레임에서 스크롤과 입력
         if: needs.detect.outputs.hasWorkspace == 'true'
         run: python -X utf8 tests/audit/scrollUnderLoadSmoke.py
+      - name: 데스크톱 편의 계약 게이트 자체 검증
+        if: needs.detect.outputs.hasWorkspace == 'true'
+        run: python -X utf8 tests/audit/desktopConvenienceSmoke.py --selftest
+      - name: 마지막 공급자와 사용량 및 한도 표시
+        if: needs.detect.outputs.hasWorkspace == 'true'
+        run: python -X utf8 tests/audit/desktopConvenienceSmoke.py
       - name: cargo fmt
         if: needs.detect.outputs.hasWorkspace == 'true'
         run: cargo fmt --all --check

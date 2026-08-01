@@ -1,4 +1,4 @@
-import type { ConversationItem } from "./domain";
+import type { ConversationItem, LimitWindow, RateLimitGauge, UsageGauge } from "./domain";
 
 const MAX_VISIBLE_ITEMS = 400;
 const MAX_VISIBLE_CHARACTERS = 256 * 1024;
@@ -22,6 +22,42 @@ function record(value: unknown): UnknownRecord | null {
 
 function string(value: unknown): string {
   return typeof value === "string" ? value : "";
+}
+
+function finiteNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function limitWindow(value: unknown): LimitWindow | null {
+  const source = record(value);
+  const usedPercent = finiteNumber(source?.used_percent);
+  if (!source || usedPercent === null) {
+    return null;
+  }
+  return {
+    usedPercent,
+    resetsAt: finiteNumber(source.resets_at),
+    windowMinutes: finiteNumber(source.window_minutes),
+  };
+}
+
+function usageGauge(body: UnknownRecord): UsageGauge {
+  const rawCost = record(body.cost);
+  const amount = finiteNumber(rawCost?.amount);
+  const currency = string(rawCost?.currency);
+  return {
+    used: finiteNumber(body.used),
+    size: finiteNumber(body.size),
+    cost: amount === null || !currency ? null : { amount, currency },
+  };
+}
+
+function rateLimitGauge(body: UnknownRecord): RateLimitGauge {
+  return {
+    primary: limitWindow(body.primary),
+    secondary: limitWindow(body.secondary),
+    reached: body.reached === true,
+  };
 }
 
 function textFromParts(value: unknown): string {
@@ -79,7 +115,14 @@ function turnText(body: UnknownRecord): string {
   return `턴 끝 · ${string(body.stop) || "상태 없음"}${qualifier}`;
 }
 
-export function frameToItem(frame: string): { item: ConversationItem; isDelta: boolean } {
+export type PendingFrame = {
+  item: ConversationItem | null;
+  isDelta: boolean;
+  usage?: UsageGauge;
+  rateLimit?: RateLimitGauge;
+};
+
+export function frameToItem(frame: string): PendingFrame {
   let parsed: UnknownRecord | null = null;
   try {
     parsed = record(JSON.parse(frame));
@@ -101,6 +144,12 @@ export function frameToItem(frame: string): { item: ConversationItem; isDelta: b
       item: item("meta", "", `알림 · ${string(body.code) || "내용 없음"}`),
       isDelta: false,
     };
+  }
+  if (event === "usageUpdate") {
+    return { item: null, isDelta: false, usage: usageGauge(body) };
+  }
+  if (event === "rateLimitUpdate") {
+    return { item: null, isDelta: false, rateLimit: rateLimitGauge(body) };
   }
 
   const known = PRESENTATION[event];
@@ -153,11 +202,6 @@ export function appendFrame(
   return bounded([...current, next]);
 }
 
-export type PendingFrame = {
-  item: ConversationItem;
-  isDelta: boolean;
-};
-
 export function appendFrames(
   current: readonly ConversationItem[],
   pending: readonly PendingFrame[],
@@ -168,6 +212,9 @@ export function appendFrames(
 
   const next = [...current];
   for (const frame of pending) {
+    if (!frame.item) {
+      continue;
+    }
     const last = next.at(-1);
     if (
       frame.isDelta

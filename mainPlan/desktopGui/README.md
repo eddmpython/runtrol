@@ -25,6 +25,8 @@
 
 **GPT 앱에 없는 것도 하나 더한다: 사용량과 한도가 보인다.** rate limit 대기는 이 카테고리 사용자의 일상 스트레스인데 (첫 probe 에서 71.8 초 대기 실측) 두 CLI 모두 그것을 구조화해 내준다 (`rate_limit_event` · `account/rateLimits/read`). 숨겨진 대기를 보이게 만드는 것이 편의다. "왜 안 되지" 가 "한도 리셋까지 12 분" 으로 바뀐다.
 
+구현 상태 (2026-08-01): 새 세션 창은 성공적으로 시작한 마지막 공급자를 로컬 기본값으로 기억하며, 공급자를 다시 고르지 않아도 시작할 수 있다. `UsageUpdate` 와 `RateLimitUpdate` 는 대화 행으로 섞지 않고 헤더의 문맥 사용량과 단기 및 장기 한도로 표시한다. 한도 도달과 공급자가 준 재설정 시각도 그대로 보인다. production bundle 의 이 동작은 `desktopConvenienceSmoke` 가 실물 브라우저에서 누르고 확인한다.
+
 ## GPT 앱에서 안 가져올 것
 
 - **메모리 증가.** 운영자가 지목한 유일한 불만이다. 대화가 쌓일수록 무거워지는 것은 **전체를 메모리에 들기 때문**이고, runtrol 은 애초에 사본을 안 갖는다 ([../coreRuntime/04-memory-contract.md](../coreRuntime/04-memory-contract.md)). 이 축이 우리가 이길 자리다

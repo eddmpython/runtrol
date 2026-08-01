@@ -100,6 +100,14 @@ GATES: dict[str, tuple[str, list[str]]] = {
         "초당 3,000 프레임에서 스크롤과 입력",
         [*PY, f"{HOOKS}/scrollUnderLoadSmoke.py"],
     ),
+    "desktopConvenienceSmokeSelftest": (
+        "데스크톱 편의 계약 게이트 자체 검증",
+        [*PY, f"{HOOKS}/desktopConvenienceSmoke.py", "--selftest"],
+    ),
+    "desktopConvenienceSmoke": (
+        "마지막 공급자와 사용량 및 한도 표시",
+        [*PY, f"{HOOKS}/desktopConvenienceSmoke.py"],
+    ),
     "cargoFmt": ("cargo fmt --check", ["cargo", "fmt", "--all", "--check"]),
     "cargoClippy": (
         "cargo clippy (경고 = 실패)",
@@ -202,6 +210,8 @@ SUITES: dict[str, tuple[str, ...]] = {
         "interactionLatencyBudget",
         "scrollUnderLoadSmokeSelftest",
         "scrollUnderLoadSmoke",
+        "desktopConvenienceSmokeSelftest",
+        "desktopConvenienceSmoke",
         "cargoFmt",
         "cargoClippy",
     ),

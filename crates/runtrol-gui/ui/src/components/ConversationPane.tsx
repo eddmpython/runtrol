@@ -12,7 +12,13 @@ import {
   Text,
 } from "@astryxdesign/core";
 import { memo, useSyncExternalStore } from "react";
-import type { ConversationItem, SessionRow } from "../domain";
+import type {
+  ConversationItem,
+  LimitWindow,
+  RateLimitGauge,
+  SessionRow,
+  UsageGauge,
+} from "../domain";
 import type { ConversationFeed } from "../frames";
 import { AgentIcon, CloseIcon } from "../icons";
 
@@ -21,6 +27,8 @@ type ConversationPaneProps = {
   feed: ConversationFeed;
   draft: string;
   sending: boolean;
+  usage: UsageGauge | null;
+  rateLimit: RateLimitGauge | null;
   brandLight: string;
   brandDark: string;
   onDraftChange: (value: string) => void;
@@ -30,6 +38,59 @@ type ConversationPaneProps = {
 };
 
 const MAX_RENDERED_ITEMS = 48;
+const counts = new Intl.NumberFormat("ko-KR", { maximumFractionDigits: 2 });
+
+function usageText(usage: UsageGauge): string {
+  const context = usage.used !== null && usage.size !== null
+    ? `문맥 ${counts.format(usage.used)} / ${counts.format(usage.size)} 토큰`
+    : usage.used !== null
+      ? `문맥 ${counts.format(usage.used)} 토큰 사용`
+      : usage.size !== null
+        ? `문맥 한도 ${counts.format(usage.size)} 토큰`
+        : "문맥 사용량 수치 없음";
+  return usage.cost
+    ? `${context} · ${counts.format(usage.cost.amount)} ${usage.cost.currency}`
+    : context;
+}
+
+function resetText(resetsAt: number | null): string {
+  if (resetsAt === null) {
+    return "";
+  }
+  const remainingMinutes = Math.ceil((resetsAt - Date.now()) / 60_000);
+  if (remainingMinutes <= 0) {
+    return " · 재설정 시각 지남";
+  }
+  if (remainingMinutes < 60) {
+    return ` · ${remainingMinutes}분 후 재설정`;
+  }
+  if (remainingMinutes < 24 * 60) {
+    const hours = Math.floor(remainingMinutes / 60);
+    const minutes = remainingMinutes % 60;
+    return ` · ${hours}시간${minutes ? ` ${minutes}분` : ""} 후 재설정`;
+  }
+  return ` · ${new Intl.DateTimeFormat("ko-KR", {
+    month: "numeric",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(new Date(resetsAt))} 재설정`;
+}
+
+function windowText(label: string, window: LimitWindow | null): string | null {
+  return window
+    ? `${label} ${counts.format(window.usedPercent)}%${resetText(window.resetsAt)}`
+    : null;
+}
+
+function rateLimitText(rateLimit: RateLimitGauge): string {
+  const windows = [
+    windowText("단기", rateLimit.primary),
+    windowText("장기", rateLimit.secondary),
+  ].filter((entry): entry is string => Boolean(entry));
+  const detail = windows.length > 0 ? windows.join(" · ") : "한도 수치 없음";
+  return rateLimit.reached ? `한도 도달 · ${detail}` : detail;
+}
 
 const Message = memo(function Message({ item }: { item: ConversationItem }) {
   if (item.side === "meta") {
@@ -66,6 +127,8 @@ export function ConversationPane({
   feed,
   draft,
   sending,
+  usage,
+  rateLimit,
   brandLight,
   brandDark,
   onDraftChange,
@@ -95,13 +158,32 @@ export function ConversationPane({
           <Text type="large" weight="semibold" as="h1" maxLines={1}>{row.folder}</Text>
           <Badge label={row.provider} variant="neutral" />
         </div>
-        <div className="conversation-status">
-          <StatusDot
-            variant={row.looksStuck ? "warning" : row.hot ? "success" : "neutral"}
-            label={statusLabel}
-            isPulsing={row.hot && row.doing !== "idle"}
-          />
-          <Text type="supporting">{statusLabel}</Text>
+        <div className="conversation-meta">
+          <div className="conversation-metrics">
+            {usage ? (
+              <span className="metric" data-testid="usage-status" title="현재 문맥 사용량">
+                {usageText(usage)}
+              </span>
+            ) : null}
+            {rateLimit ? (
+              <span
+                className="metric"
+                data-reached={rateLimit.reached}
+                data-testid="rate-limit-status"
+                title="공급자 계정 한도"
+              >
+                {rateLimitText(rateLimit)}
+              </span>
+            ) : null}
+          </div>
+          <div className="conversation-status">
+            <StatusDot
+              variant={row.looksStuck ? "warning" : row.hot ? "success" : "neutral"}
+              label={statusLabel}
+              isPulsing={row.hot && row.doing !== "idle"}
+            />
+            <Text type="supporting">{statusLabel}</Text>
+          </div>
         </div>
       </header>
       <div className="conversation-body">

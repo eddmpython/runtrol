@@ -82,6 +82,7 @@ function mockBridge() {
   window.__RUNTROL_PERF__ = {
     emit,
     frame,
+    startedWith: null,
     async flood(session, seconds, perSecond) {
       const intervals = [];
       const inputLatencies = [];
@@ -170,7 +171,20 @@ function mockBridge() {
           return { outcome: "ok", value: null };
         }
         if (command === "providers") {
-          return { outcome: "ok", value: [] };
+          return {
+            outcome: "ok",
+            value: [
+              { id: "provider-a", displayName: "Provider A", usable: true, whyNot: null },
+              { id: "provider-b", displayName: "Provider B", usable: true, whyNot: null },
+            ],
+          };
+        }
+        if (command === "models") {
+          return { outcome: "ok", value: { kind: "unknown", why: "fixture has no model catalogue" } };
+        }
+        if (command === "start") {
+          window.__RUNTROL_PERF__.startedWith = args;
+          return { outcome: "ok", value: "started-from-gui" };
         }
         if (command === "prompt" || command === "close") {
           return { outcome: "ok", value: null };
@@ -281,10 +295,76 @@ async function scroll(page, url) {
   return page.evaluate(() => window.__RUNTROL_PERF__.flood("gate-000", 3, 3_000));
 }
 
+async function startWithoutChoosingProvider(page, workspace) {
+  await page.getByRole("button", { name: "새 세션" }).click();
+  await page.getByLabel("작업 폴더").fill(workspace);
+  await page.getByRole("button", { name: "시작", exact: true }).click();
+  await waitFor(page, () => window.__RUNTROL_PERF__.startedWith !== null);
+  return page.evaluate(() => window.__RUNTROL_PERF__.startedWith);
+}
+
+async function convenience(page, url) {
+  await page.goto(url, { waitUntil: "domcontentloaded" });
+  await page.getByTestId("session-gate-000").waitFor();
+  const first = await startWithoutChoosingProvider(page, "C:/work/first");
+  const defaultProvider = first.provider === "provider-a";
+  const providerRememberedAfterStart = await page.evaluate(
+    () => localStorage.getItem("runtrol.lastProvider") === "provider-a",
+  );
+
+  await page.evaluate(() => localStorage.setItem("runtrol.lastProvider", "provider-b"));
+  await page.goto(url, { waitUntil: "domcontentloaded" });
+  await page.getByTestId("session-gate-000").waitFor();
+  const remembered = await startWithoutChoosingProvider(page, "C:/work/remembered");
+  const rememberedProvider = remembered.provider === "provider-b";
+
+  await page.goto(url, { waitUntil: "domcontentloaded" });
+  await page.getByTestId("session-gate-000").waitFor();
+  await page.evaluate(() => {
+    const now = Date.now();
+    window.__RUNTROL_PERF__.emit("session-frame", {
+      session: "gate-000",
+      frame: JSON.stringify({
+        body: {
+          event: "usageUpdate",
+          used: 1024,
+          size: 272000,
+          cost: null,
+          detail: null,
+        },
+      }),
+    });
+    window.__RUNTROL_PERF__.emit("session-frame", {
+      session: "gate-000",
+      frame: JSON.stringify({
+        body: {
+          event: "rateLimitUpdate",
+          primary: { used_percent: 87, resets_at: now + 720000, window_minutes: 300 },
+          secondary: { used_percent: 12, resets_at: null, window_minutes: 10080 },
+          reached: true,
+          detail: null,
+        },
+      }),
+    });
+  });
+  await page.getByTestId("usage-status").waitFor();
+  await page.getByTestId("rate-limit-status").waitFor();
+  const usageText = await page.getByTestId("usage-status").textContent();
+  const rateText = await page.getByTestId("rate-limit-status").textContent();
+  return {
+    defaultProvider,
+    providerRememberedAfterStart,
+    rememberedProvider,
+    usageVisible: usageText?.includes("1,024") && usageText.includes("272,000"),
+    rateLimitVisible: rateText?.includes("87%") && rateText.includes("12%"),
+    quotaReachedVisible: rateText?.includes("한도 도달"),
+  };
+}
+
 async function main() {
   const mode = process.argv[2];
-  if (!new Set(["interaction", "scroll"]).has(mode)) {
-    throw new Error("usage: node tests/performance.mjs interaction|scroll");
+  if (!new Set(["interaction", "scroll", "convenience"]).has(mode)) {
+    throw new Error("usage: node tests/performance.mjs interaction|scroll|convenience");
   }
   await access(join(DIST, "index.html"));
   const browserPath = await executable();
@@ -300,7 +380,11 @@ async function main() {
     page.on("console", (message) => process.stderr.write(`[browser console] ${message.text()}\n`));
     page.on("pageerror", (error) => process.stderr.write(`[browser error] ${error.message}\n`));
     await page.addInitScript(mockBridge);
-    const metrics = mode === "interaction" ? await interaction(page, url) : await scroll(page, url);
+    const metrics = mode === "interaction"
+      ? await interaction(page, url)
+      : mode === "scroll"
+        ? await scroll(page, url)
+        : await convenience(page, url);
     process.stdout.write(`${JSON.stringify({ mode, browserPath, ...metrics })}\n`);
   } finally {
     await browser?.close();

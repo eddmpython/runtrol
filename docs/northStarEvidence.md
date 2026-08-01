@@ -28,6 +28,7 @@
 | `sessionLifecycleSmoke` | 실물 CLI 를 몰아서: 시작 -> **두 provider 가 한 목록에** -> 목록이 재개에 필요한 이름을 싣는다 -> 닫기 -> 목록에서 사라짐. 프롬프트를 보내지 않으므로 토큰·rate limit 0 이고 그래서 매 preflight 에 돈다. **닿지 못하는 절반을 매 실행마다 말한다**: 턴이 한 번도 없던 대화는 provider 저장소에 없어서 재개할 수 없다 (한쪽은 이름을 안 주고, 한쪽은 `no rollout` 으로 거절한다. 둘 다 실측). 그래서 이 게이트가 지키는 것은 **성공한 재개가 아니라 실패한 재개가 이름을 갖고 거절되는 것** (조용히 새 대화를 시작해 재개인 척하지 않는 것) 이다. 성공한 재개는 턴 하나가 필요해 이 게이트 밖이다. provider 이름은 박지 않고 manifest 에서 발견한다 |
 | `interactionLatencyBudget` | 실물 Edge 또는 Chrome 이 production bundle 을 열고 목록 첫 페인트, 저장된 꼬리 표시, 입력 반응의 상한을 지킨다. 전송 상대는 mock 이므로 5 점 층이다. 수치는 **내려가기만 하는 ratchet** |
 | `scrollUnderLoadSmoke` | 실물 브라우저에 provider 모양 원시 프레임을 초당 3,000 개 넣고 처리량, p95 프레임, 입력 지연, DOM 창 상한을 함께 판정한다. 전송 상대는 mock 이므로 provider 시간은 섞이지 않는다 |
+| `desktopConvenienceSmoke` | 실물 브라우저의 production bundle 에서 공급자를 고르지 않고 세션을 시작하고, 마지막 공급자가 다음 시작의 기본값이 되는지 확인한다. 드라이버가 이미 내는 문맥 사용량과 계정 한도 프레임도 별도 사본 없이 화면에 보이는지 판정한다 |
 | `phoneDrivesPcSmoke` | headless 브라우저의 실물 PWA 가 실물 데몬을 통해 실물 `claude`/`codex` 세션에 프롬프트를 넣고 출력을 받는다 |
 | `iosInstallAndPush` | iOS 홈화면 설치 + Web Push 수신. 실기기 필요. **점수에서 뺀다** |
 | `providerContract` | 모든 어댑터가 같은 trait 계약을 통과. **코어에 provider 고유명사 분기가 없다**는 정적 검사 포함 |

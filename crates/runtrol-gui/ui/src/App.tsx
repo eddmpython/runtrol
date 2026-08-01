@@ -10,9 +10,11 @@ import type {
   Notice,
   ModelCatalog,
   OfferedProvider,
+  RateLimitGauge,
   SessionListing,
   SessionRow,
   ThemeMode,
+  UsageGauge,
 } from "./domain";
 import { ConversationFeed } from "./frames";
 import type { PendingFrame } from "./frames";
@@ -21,6 +23,7 @@ import { ConversationPane } from "./components/ConversationPane";
 import { NoticeCard } from "./components/NoticeCard";
 import { SessionRail } from "./components/SessionRail";
 import { StartSessionDialog } from "./components/StartSessionDialog";
+import { preferredProvider, rememberProvider } from "./preferences";
 
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -44,6 +47,8 @@ export function App() {
   const [workspace, setWorkspace] = useState("");
   const [starting, setStarting] = useState(false);
   const [sending, setSending] = useState(false);
+  const [usage, setUsage] = useState<UsageGauge | null>(null);
+  const [rateLimit, setRateLimit] = useState<RateLimitGauge | null>(null);
 
   const selectedRef = useRef<string | null>(null);
   const rowsRef = useRef<SessionRow[]>([]);
@@ -119,6 +124,8 @@ export function App() {
     selectedRef.current = session;
     setSelected(session);
     feed.clear();
+    setUsage(null);
+    setRateLimit(null);
     if (row && !row.hot) {
       if (!resumeCold) {
         feed.status("세션을 다시 눌러 공급자 원본에 연결할 수 있다");
@@ -199,6 +206,14 @@ export function App() {
         return;
       }
       feed.append(data.frames);
+      for (const frame of data.frames) {
+        if (frame.usage) {
+          setUsage(frame.usage);
+        }
+        if (frame.rateLimit) {
+          setRateLimit(frame.rateLimit);
+        }
+      }
     };
 
     async function begin() {
@@ -267,8 +282,7 @@ export function App() {
       return;
     }
     setProviders(offered);
-    const firstProvider = offered.find((entry) => entry.usable)?.id ?? "";
-    setProvider(firstProvider);
+    setProvider(preferredProvider(offered, selectedRow?.provider));
     setModel("");
     setModels(null);
     if (!workspace && selectedRow) {
@@ -316,6 +330,7 @@ export function App() {
       if (!session) {
         return;
       }
+      rememberProvider(provider);
       setStartOpen(false);
       await refresh();
       await openSession(session);
@@ -391,6 +406,8 @@ export function App() {
           feed={feed}
           draft={draft}
           sending={sending}
+          usage={usage}
+          rateLimit={rateLimit}
           brandLight={brandLight}
           brandDark={brandDark}
           onDraftChange={setDraft}

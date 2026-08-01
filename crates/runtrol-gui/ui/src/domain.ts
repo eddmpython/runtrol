@@ -57,6 +57,24 @@ export type ConversationItem = {
   messageId: string | null;
 };
 
+export type UsageGauge = {
+  used: number | null;
+  size: number | null;
+  cost: { amount: number; currency: string } | null;
+};
+
+export type LimitWindow = {
+  usedPercent: number;
+  resetsAt: number | null;
+  windowMinutes: number | null;
+};
+
+export type RateLimitGauge = {
+  primary: LimitWindow | null;
+  secondary: LimitWindow | null;
+  reached: boolean;
+};
+
 export type FrameEnvelope = {
   session: string;
   frame: string;
