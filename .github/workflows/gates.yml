@@ -156,24 +156,6 @@ jobs:
       - name: 데스크톱 프런트엔드
         if: needs.detect.outputs.hasWorkspace == 'true'
         run: python -X utf8 tests/audit/frontendBuild.py
-      - name: 데스크톱 상호작용 예산 게이트 자체 검증
-        if: needs.detect.outputs.hasWorkspace == 'true'
-        run: python -X utf8 tests/audit/interactionLatencyBudget.py --selftest
-      - name: 실물 브라우저 데스크톱 상호작용 예산
-        if: needs.detect.outputs.hasWorkspace == 'true'
-        run: python -X utf8 tests/audit/interactionLatencyBudget.py
-      - name: 출력 폭주 게이트 자체 검증
-        if: needs.detect.outputs.hasWorkspace == 'true'
-        run: python -X utf8 tests/audit/scrollUnderLoadSmoke.py --selftest
-      - name: 초당 3,000 프레임에서 스크롤과 입력
-        if: needs.detect.outputs.hasWorkspace == 'true'
-        run: python -X utf8 tests/audit/scrollUnderLoadSmoke.py
-      - name: 데스크톱 편의 계약 게이트 자체 검증
-        if: needs.detect.outputs.hasWorkspace == 'true'
-        run: python -X utf8 tests/audit/desktopConvenienceSmoke.py --selftest
-      - name: 마지막 공급자와 사용량 및 한도 표시
-        if: needs.detect.outputs.hasWorkspace == 'true'
-        run: python -X utf8 tests/audit/desktopConvenienceSmoke.py
       - name: cargo fmt
         if: needs.detect.outputs.hasWorkspace == 'true'
         run: cargo fmt --all --check
@@ -257,9 +239,33 @@ jobs:
         run: npm --prefix crates/runtrol-gui/ui ci
       - name: 데스크톱 프런트엔드
         run: python -X utf8 tests/audit/frontendBuild.py
+      - name: 데스크톱 상호작용 예산 게이트 자체 검증
+        if: matrix.os == 'windows-latest'
+        run: python -X utf8 tests/audit/interactionLatencyBudget.py --selftest
+      - name: 실물 브라우저 데스크톱 상호작용 예산
+        if: matrix.os == 'windows-latest'
+        run: python -X utf8 tests/audit/interactionLatencyBudget.py
+      - name: 출력 폭주 게이트 자체 검증
+        if: matrix.os == 'windows-latest'
+        run: python -X utf8 tests/audit/scrollUnderLoadSmoke.py --selftest
+      - name: 초당 3,000 프레임에서 스크롤과 입력
+        if: matrix.os == 'windows-latest'
+        run: python -X utf8 tests/audit/scrollUnderLoadSmoke.py
+      - name: 데스크톱 편의 계약 게이트 자체 검증
+        if: matrix.os == 'windows-latest'
+        run: python -X utf8 tests/audit/desktopConvenienceSmoke.py --selftest
+      - name: 마지막 공급자와 사용량 및 한도 표시
+        if: matrix.os == 'windows-latest'
+        run: python -X utf8 tests/audit/desktopConvenienceSmoke.py
       - name: memory budget gate product binary
         run: cargo build -p runtrol --bin runtrol
       - name: cargo test
+        if: matrix.os != 'macos-latest'
+        run: cargo test --all
+      - name: cargo test with short socket path
+        if: matrix.os == 'macos-latest'
+        env:
+          TMPDIR: /tmp
         run: cargo test --all
 
   # 실물 CLI 게이트. hosted 러너에서 돌 수 없다 (구독 OAuth + 비용).
