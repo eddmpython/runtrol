@@ -31,7 +31,8 @@
 //! the transport; the scope wall that reads where a request came from belongs at the dispatch boundary, which is where
 //! it goes. This file gets frames to that boundary and answers back.
 
-use core::future::Future;
+use core::future::{Future, pending};
+use core::pin::Pin;
 use core::time::Duration;
 use std::sync::Arc;
 
@@ -70,6 +71,38 @@ pub const MAX_BLOCKING_PROVIDER_OPERATIONS: usize = runtrol_core::session::MAX_H
 /// normal catalogue response, while deliberately bounding multi-page enumeration rather than adding every internal
 /// page timeout together. It also bounds a child that stops reading stdin or a driver that never returns.
 pub const MODEL_PREPARATION_BUDGET_MS: u64 = 300_000;
+
+const ALLOCATOR_RELIEF_DELAY: Duration = Duration::from_millis(250);
+
+struct AllocatorRelief {
+    deadline: Option<Pin<Box<tokio::time::Sleep>>>,
+}
+
+impl AllocatorRelief {
+    const fn new() -> Self {
+        Self { deadline: None }
+    }
+
+    fn schedule(&mut self) {
+        let deadline = tokio::time::Instant::now() + ALLOCATOR_RELIEF_DELAY;
+        match self.deadline.as_mut() {
+            Some(timer) => timer.as_mut().reset(deadline),
+            None => self.deadline = Some(Box::pin(tokio::time::sleep_until(deadline))),
+        }
+    }
+
+    async fn wait(&mut self) {
+        match self.deadline.as_mut() {
+            Some(timer) => timer.as_mut().await,
+            None => pending::<()>().await,
+        }
+    }
+
+    fn release(&mut self) {
+        self.deadline = None;
+        runtrol_childproc::release_unused_memory();
+    }
+}
 
 /// The daemon could not keep serving.
 #[derive(Debug, thiserror::Error)]
@@ -203,6 +236,7 @@ async fn serve_sessions(
     // process slots are bounded separately by MAX_HOT.
     let discovering = Arc::new(Mutex::new(()));
     let mut connections = JoinSet::new();
+    let mut allocator_relief = AllocatorRelief::new();
 
     let outcome = loop {
         tokio::select! {
@@ -291,9 +325,11 @@ async fn serve_sessions(
                     ) {
                         break Err(error.into());
                     }
-                    release_rejected_transient(published);
+                    schedule_rejected_transient(published, &mut allocator_relief);
                 }
             }
+
+            () = allocator_relief.wait() => allocator_relief.release(),
 
             Some(_finished) = connections.join_next(), if !connections.is_empty() => {}
         }
@@ -304,14 +340,14 @@ async fn serve_sessions(
     outcome
 }
 
-fn release_rejected_transient(published: runtrol_core::events::Published) {
+fn schedule_rejected_transient(
+    published: runtrol_core::events::Published,
+    allocator_relief: &mut AllocatorRelief,
+) {
     let payload_bytes = published.event.body.payload_bytes();
     drop(published);
-    let Some(goal_bytes) = core::num::NonZeroUsize::new(payload_bytes) else {
-        return;
-    };
-    if goal_bytes.get() > runtrol_core::events::MAX_LIVE_PAYLOAD_BYTES {
-        runtrol_childproc::release_unused_memory(goal_bytes);
+    if payload_bytes > runtrol_core::events::MAX_LIVE_PAYLOAD_BYTES {
+        allocator_relief.schedule();
     }
 }
 

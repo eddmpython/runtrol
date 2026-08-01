@@ -25,8 +25,6 @@
 //! without more `unsafe` than the number is worth, so it asks the tool that ships with the system. Each is the
 //! cheapest correct answer on its own platform, and none of them pretends to be the others.
 
-use std::num::NonZeroUsize;
-
 use crate::error::SpawnError;
 
 /// How much memory a process is holding, in bytes.
@@ -48,8 +46,8 @@ pub fn resident_bytes(pid: u32) -> Result<u64, SpawnError> {
 /// limit that is deliberately rejected from live retention: macOS otherwise keeps the freed large block resident for
 /// the daemon lifetime. Other platforms release or reuse that memory within their measured residual budget, so this
 /// is a no-op there.
-pub fn release_unused_memory(goal_bytes: NonZeroUsize) {
-    platform::release_unused_memory(goal_bytes);
+pub fn release_unused_memory() {
+    platform::release_unused_memory();
 }
 
 #[cfg(windows)]
@@ -122,7 +120,7 @@ mod platform {
         Ok(counters.WorkingSetSize as u64)
     }
 
-    pub(super) const fn release_unused_memory(_goal_bytes: super::NonZeroUsize) {}
+    pub(super) const fn release_unused_memory() {}
 }
 
 #[cfg(target_os = "linux")]
@@ -184,13 +182,11 @@ mod platform {
         Ok(resident.saturating_mul(page_bytes()))
     }
 
-    pub(super) const fn release_unused_memory(_goal_bytes: super::NonZeroUsize) {}
+    pub(super) const fn release_unused_memory() {}
 }
 
 #[cfg(target_os = "macos")]
 mod platform {
-    use std::num::NonZeroUsize;
-
     use crate::error::SpawnError;
 
     #[expect(
@@ -212,10 +208,10 @@ mod platform {
         unsafe_code,
         reason = "asking the system allocator to release free pages is a platform call with no safe wrapper"
     )]
-    pub(super) fn release_unused_memory(goal_bytes: NonZeroUsize) {
+    pub(super) fn release_unused_memory() {
         let _released =
             // SAFETY: null selects all zones; the call only releases pages the allocator already considers free.
-            unsafe { malloc_zone_pressure_relief(core::ptr::null_mut(), goal_bytes.get()) };
+            unsafe { malloc_zone_pressure_relief(core::ptr::null_mut(), 0) };
     }
 }
 
@@ -227,7 +223,7 @@ mod platform {
         super::resident_from_ps(pid)
     }
 
-    pub(super) const fn release_unused_memory(_goal_bytes: super::NonZeroUsize) {}
+    pub(super) const fn release_unused_memory() {}
 }
 
 #[cfg(not(any(windows, target_os = "linux")))]
