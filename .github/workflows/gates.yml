@@ -324,8 +324,9 @@ jobs:
       - name: Seed provider-owned model cache fixture
         env:
           PROVIDER_HOME: ${{ runner.temp }}/runtrol-model-detection-home
+          CODEX_HOME: ${{ runner.temp }}/runtrol-model-detection-codex
         run: |
-          mkdir -p "$PROVIDER_HOME"
+          mkdir -p "$PROVIDER_HOME" "$CODEX_HOME"
           printf '%s\n' '{"additionalModelOptionsCache":[{"value":"runtrol-hosted-cache-sentinel","label":"Hosted cache sentinel","description":"Hosted read-only discovery proof"}]}' > "$PROVIDER_HOME/.claude.json"
       - name: Provider surface drift gate selftest
         run: python -X utf8 tests/audit/agentSurfaceDrift.py --selftest
