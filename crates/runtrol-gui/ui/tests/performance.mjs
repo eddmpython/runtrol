@@ -246,8 +246,12 @@ async function waitFor(page, predicate, timeoutMs = 5_000) {
 }
 
 async function interaction(page, url) {
+  // Browser startup and product paint are different costs. Warm the renderer once, then take enough samples for
+  // p95 to tolerate one scheduler outlier without turning the gate into a hosted-runner lottery.
+  await page.goto(url, { waitUntil: "domcontentloaded" });
+  await page.getByTestId("session-gate-002").waitFor();
   const listPaintMs = [];
-  for (let run = 0; run < 5; run += 1) {
+  for (let run = 0; run < 20; run += 1) {
     await page.goto(url, { waitUntil: "domcontentloaded" });
     await page.getByTestId("session-gate-002").waitFor();
     listPaintMs.push(await page.evaluate(() => performance.now()));

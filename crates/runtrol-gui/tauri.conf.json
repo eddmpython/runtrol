@@ -10,7 +10,10 @@
     "frontendDist": "ui/dist"
   },
   "bundle": {
-    "icon": ["../../assets/brand/favicon.ico"]
+    "icon": [
+      "../../assets/brand/icon-512.png",
+      "../../assets/brand/favicon.ico"
+    ]
   },
   "app": {
     "withGlobalTauri": true,
