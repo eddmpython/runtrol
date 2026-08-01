@@ -59,7 +59,7 @@ const DEBUG_BUDGET: u64 = 20 * 1024 * 1024;
 ///
 /// It establishes containment, reads its manifests and binds an endpoint. Measuring during that is measuring the
 /// start rather than the resting state.
-const SETTLE: Duration = Duration::from_millis(1_500);
+const SETTLE: Duration = Duration::from_secs(5);
 
 /// How long to wait for the endpoint to appear before giving up on the daemon.
 const START_WITHIN: Duration = Duration::from_secs(20);
