@@ -32,11 +32,10 @@ const REAP_BUDGET: Duration = Duration::from_secs(10);
 fn killing_the_parent_kills_the_child() {
     let helper = env!("CARGO_BIN_EXE_containedParent");
 
-    let mut parent = Command::new(helper)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("the helper binary must start");
+    let mut command = Command::new(helper);
+    command.stdout(Stdio::piped()).stderr(Stdio::piped());
+    runtrol_childproc::hide_console_window(&mut command);
+    let mut parent = command.spawn().expect("the helper binary must start");
 
     let stdout = parent.stdout.take().expect("stdout was piped");
     let mut lines = BufReader::new(stdout).lines();
@@ -102,9 +101,10 @@ fn wait_until_gone(pid: u32) -> bool {
 /// would cost, and this runs a handful of times in one test, so the cheaper thing to get right wins.
 #[cfg(windows)]
 fn is_alive(pid: u32) -> bool {
-    let output = Command::new("tasklist")
-        .args(["/FI", &format!("PID eq {pid}"), "/NH"])
-        .output();
+    let mut command = Command::new("tasklist");
+    command.args(["/FI", &format!("PID eq {pid}"), "/NH"]);
+    runtrol_childproc::hide_console_window(&mut command);
+    let output = command.output();
     match output {
         // `tasklist` prints an informational line rather than failing when nothing matches, so presence is
         // decided by whether the id itself comes back.

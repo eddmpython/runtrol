@@ -54,6 +54,10 @@ name = "pairingLifecycle"
 path = "pairingLifecycle.rs"
 
 [[test]]
+name = "noConsoleFlash"
+path = "noConsoleFlash.rs"
+
+[[test]]
 name = "providerContract"
 path = "providerContract.rs"
 

@@ -110,13 +110,15 @@ fn the_binary() -> Option<(PathBuf, bool)> {
 
 /// Start an idle daemon in a home of its own.
 fn start(binary: &Path, home: &Path) -> Option<Idle> {
-    let started = Command::new(binary)
+    let mut command = Command::new(binary);
+    command
         .arg("daemon")
         .env("RUNTROL_HOME", home)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn();
+        .stderr(Stdio::null());
+    runtrol_childproc::hide_console_window(&mut command);
+    let started = command.spawn();
     let Ok(child) = started else {
         return None;
     };

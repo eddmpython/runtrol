@@ -7,7 +7,7 @@ mod windows {
     use std::process::Command;
     use std::sync::atomic::{AtomicU64, Ordering};
 
-    use runtrol_childproc::check_all;
+    use runtrol_childproc::{check_all, hide_console_window};
 
     struct Scratch(PathBuf);
 
@@ -56,7 +56,10 @@ mod windows {
         ];
         for attack in attacks {
             check_all(&[&attack])?;
-            let output = Command::new(&script).arg(&attack).output()?;
+            let mut command = Command::new(&script);
+            command.arg(&attack);
+            hide_console_window(&mut command);
+            let output = command.output()?;
             assert!(output.status.success(), "fixture failed for {attack:?}");
             assert!(
                 !marker.exists(),

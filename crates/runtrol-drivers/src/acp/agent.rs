@@ -93,6 +93,7 @@ impl AcpAgent {
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::inherit())
             .kill_on_drop(true);
+        runtrol_childproc::hide_console_window(command.as_std_mut());
         contained_by.prepare(command.as_std_mut());
 
         let mut child = command.spawn().map_err(|source| ProviderError::Spawn {

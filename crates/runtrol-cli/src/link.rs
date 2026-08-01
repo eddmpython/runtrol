@@ -122,12 +122,12 @@ fn start(runtrol: &Path) -> Result<(), Unreachable> {
 fn detach(command: &mut std::process::Command) {
     use std::os::windows::process::CommandExt as _;
 
-    /// Do not attach to the console this command is running in.
-    const DETACHED_PROCESS: u32 = 0x0000_0008;
+    /// Run the background daemon without creating or inheriting a console window.
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
     /// And do not receive what somebody types at it.
     const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
 
-    command.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP);
+    command.creation_flags(CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP);
 }
 
 /// Let go of the terminal that started this command.

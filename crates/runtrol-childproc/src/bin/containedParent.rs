@@ -57,6 +57,7 @@ fn main() {
     command.stdin(Stdio::null());
     command.stdout(Stdio::null());
     command.stderr(Stdio::null());
+    runtrol_childproc::hide_console_window(&mut command);
     containment.prepare(&mut command);
 
     let child = match command.spawn() {

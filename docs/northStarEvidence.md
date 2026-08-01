@@ -72,6 +72,7 @@
 | `workspaceHygiene` | 루트 allowlist + `.tmp/` 7 일 부패 검출. stray log/tmp/trace 0 |
 | `gateCoverage` | 저장소에 있는 게이트를 러너가 전부 부른다. 로컬 목록과 CI 목록이 서로를 검사한다 |
 | `checkNoAiMarkers` | 커밋·태그·PR·주석에 AI 기여자 표식과 벤더명이 없다. 공개 artifact 는 주체 중립이다 |
+| `noConsoleFlash` | Windows 데스크톱이 실행하는 provider 세션, 탐색 probe, 분리 daemon 이 콘솔 창을 만들지 않는다. 실제 자식 프로세스의 console handle 부재와 모든 제품 spawn 경계의 공통 정책 적용을 함께 확인한다 |
 | `northStarBoard` | 점수판의 모든 숫자가 `board.toml` 에서 계산되고, 그 근거 게이트가 실재하며 러너가 부른다 |
 | `readmeParity` | 4 개 언어 README 가 같은 축·같은 점수·같은 채점 규칙을 인쇄한다. 언어판이 낡으면 red |
 | `memoryBudget` | daemon idle RSS 와 세션당 증분 상한. 예산을 올리는 것은 운영자 승인 사항이다 |

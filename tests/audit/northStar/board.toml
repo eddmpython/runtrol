@@ -290,6 +290,12 @@ status = "built"
 file = "checkNoAiMarkers.py"
 
 [[floor]]
+category = "hygiene"
+name = "noConsoleFlash"
+status = "built"
+file = "noConsoleFlash.rs"
+
+[[floor]]
 category = "scoreboard"
 name = "northStarBoard"
 status = "built"

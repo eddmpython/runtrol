@@ -107,6 +107,7 @@ pub async fn capture(
         // The child must not outlive the answer. Without this the process is reaped only when the handle is
         // dropped, and a timeout would leave it running.
         .kill_on_drop(true);
+    crate::hide_console_window(command.as_std_mut());
     contained_by.prepare(command.as_std_mut());
 
     let child = command.spawn().map_err(|error| SpawnError::Io {
