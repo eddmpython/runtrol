@@ -1,6 +1,6 @@
 # 북극성 증거 등록부
 
-**게이트가 무엇을 단언하는가의 정본이다.** 어느 게이트가 어느 축에 붙는지, 그 축이 지금 몇 점인지는 여기가 아니라 [`tests/audit/northStar/board.toml`](../tests/audit/northStar/board.toml) 이 정본이고, `northStarBoard` 게이트가 계산한다. 두 곳의 게이트 이름 집합이 어긋나면 red 다 (양방향).
+**게이트가 무엇을 단언하는가의 정본이다.** 어느 게이트가 어느 축에 붙는지, 그 축이 지금 몇 점인지는 여기가 아니라 [`tests/audit/northStar/board.toml`](../tests/audit/northStar/board.toml) 이 정본이고, `northStarBoard` 게이트가 계산한다. 두 곳의 게이트 이름 집합이 어긋나면 red 다 (양방향). manual 층을 넘는 점수에는 활성 hosted CI 작업이 실제로 호출하는 게이트만 들어간다.
 
 산문 증거는 썩는다. 이름 붙인 스모크는 이름이 바뀌고, 지워지고, 러너에 등록되지 않은 채로 남는데 축은 계속 그것을 근거로 점수를 주장한다. 그래서 **기계가 읽는 것 (축 대응·종류·점수) 과 사람이 읽는 것 (무엇을 단언하는가) 을 갈라 두고**, 둘의 대응을 게이트가 강제한다.
 
@@ -74,7 +74,7 @@
 | `gateCoverage` | 저장소에 있는 게이트를 러너가 전부 부른다. 로컬 목록과 CI 목록이 서로를 검사한다 |
 | `checkNoAiMarkers` | 커밋·태그·PR·주석에 AI 기여자 표식과 벤더명이 없다. 공개 artifact 는 주체 중립이다 |
 | `noConsoleFlash` | Windows 데스크톱이 실행하는 provider 세션, 탐색 probe, 분리 daemon 이 콘솔 창을 만들지 않는다. 실제 자식 프로세스의 console handle 부재와 모든 제품 spawn 경계의 공통 정책 적용을 함께 확인한다 |
-| `northStarBoard` | 점수판의 모든 숫자가 `board.toml` 에서 계산되고, 그 근거 게이트가 실재하며 러너가 부른다 |
+| `northStarBoard` | 점수판의 모든 숫자가 `board.toml` 에서 계산되고, 근거 게이트가 활성 hosted CI 작업에서 실행된다. `if: false` 작업과 로컬 전용 게이트는 점수에서 빠진다 |
 | `readmeParity` | 4 개 언어 README 가 같은 축·같은 점수·같은 채점 규칙을 인쇄한다. 언어판이 낡으면 red |
 | `memoryBudget` | daemon idle RSS 와 세션당 증분 상한. 예산을 올리는 것은 운영자 승인 사항이다 |
 | `orphanReaping` | 데몬을 죽이면 자식 CLI 프로세스가 남지 않는다 |
@@ -88,23 +88,27 @@
 | 층 | 어디서 | 언제 | 무엇 |
 |---|---|---|---|
 | contract | hosted CI (GitHub Actions) | PR 마다 | 정적 검사 · mock 스모크 |
-| smoke (토큰 0) | **운영자 PC 의 preflight** | 커밋 전 매번 | 실물 CLI. 턴을 쓰지 않는 것 |
+| smoke (토큰 0) | **운영자 PC 의 preflight** | 커밋 전 매번 | 실물 CLI. manual 층의 근거이며 자동화 근거로는 세지 않는다 |
 | smoke (턴 소모) | self-hosted runner | 스케줄 (미구성) | 실물 턴이 필요한 것 |
 | bench | self-hosted runner | 스케줄 (미구성) | ratchet 실측 |
 | operator | 사람 손 | 수시 | 실기기. 점수 제외 |
 
-**실물 CLI 게이트가 hosted CI 에서 못 도는 이유는 인증이다.** 두 CLI 모두 사람의 구독 로그인으로 인증하고, 그 자격을 CI 비밀로 실어 나르는 것은 runtrol 이 설계 전체를 걸고 거부해온 일이다. 그래서 그 로그인이 사는 곳, 즉 운영자 PC 에서 돈다 (`gateCoverage.py` 의 `LOCAL_ONLY` 에 이유와 함께 선언).
+**실물 CLI 게이트가 hosted CI 에서 못 도는 이유는 인증이다.** 두 CLI 모두 사람의 구독 로그인으로 인증하고, 그 자격을 CI 비밀로 실어 나르는 것은 runtrol 이 설계 전체를 걸고 거부해온 일이다. 그래서 그 로그인이 사는 곳, 즉 운영자 PC 에서 돈다 (`gateCoverage.py` 의 `LOCAL_ONLY` 에 이유와 함께 선언). 로컬 실행은 제품 진단과 manual 층의 근거지만 자동화 점수의 근거는 아니다.
 
 **토큰을 쓰는 게이트와 안 쓰는 게이트를 가른다.** 프롬프트를 보내지 않는 실물 게이트는 돈도 rate limit 도 쓰지 않으므로 야간이 아니라 커밋 전 매번 돈다 (`sessionLifecycleSmoke` 가 그것이다). 실물 턴이 필요한 게이트는 그럴 수 없고, **그 층의 self-hosted 러너는 아직 없다.** 없는 것을 있는 것처럼 적지 않는다: 그 층에 기대는 축은 오늘 그만큼 검증되지 않았다.
 
-채점 규칙과의 접점: 기반 층 `realOneKind`·`realBothKinds` 는 실제로 도는 실행으로만 인정한다. **게이트가 건너뛰면 `skipped` 상한 (5 점) 이 그대로 적용된다.** 러너가 죽은 채로, 또는 CLI 가 설치되지 않은 채로 점수를 유지하는 길은 없다.
+### 활성 CI 판정
+
+`gateCoverage.activeWorkflowText` 는 workflow 의 활성 job 과 step 만 남긴다. literal `if: false` 아래 명령은 파일에 적혀 있어도 실행이 아니므로 제거한다. Python 게이트는 그 활성 명령에서 직접 찾고, Rust 계약 게이트는 활성 `cargo test --all` 과 `tests/audit/Cargo.toml` 의 명시된 test target 을 함께 대조한다.
+
+로컬 preflight 목록과 CI 목록의 대응은 `gateCoverage` 가 별도로 검사한다. 목적이 다르기 때문에 둘을 합쳐 점수 근거로 쓰지 않는다. 점수는 현재 커밋의 활성 CI 구조를 나타내고, 그 게이트가 red 면 workflow 전체가 red 다. 외부 CI 의 재시도나 과거 실행 상태를 저장소 점수 공식에 복제하지 않는다.
 
 ## 등록 규약
 
 1. **기반 층 `realBothKinds` 는 static 게이트와 live 게이트를 둘 다 요구한다.** 한 종류뿐인 축은 천장이 6 이고, 그것은 실행을 더 해서가 아니라 없는 종류를 지어야 풀린다.
 2. **`board.toml` 이 이름을 대는 게이트는 이 문서에 설명이 있어야 하고, 그 반대도 성립해야 한다.** 어긋나면 `northStarBoard` 가 red 다.
-3. **기반 층이 `manual` 을 넘으면 게이트 파일이 실재하고 러너가 불러야 한다.** 파일은 있는데 아무도 안 부르면 그것은 증거가 아니라 `unregistered` 상한 (0 점) 이다.
+3. **기반 층이 `manual` 을 넘으면 게이트 파일이 실재하고 활성 hosted CI 작업이 불러야 한다.** 로컬 전용이거나 `if: false` 작업 아래 있으면 점수 근거가 아니다.
 4. `operator` 종류는 총점 계산에서 빠지고, 그 사실이 `README.md` 에 보인다.
 5. **가산은 최상 기반 층에서만 붙고, 각 가산은 그에 맞는 종류의 게이트를 요구한다.** `ratchet` 은 bench 없이, `faultInjection` 은 smoke 없이 주장할 수 없다.
-6. **새 게이트는 통과를 보기 전에 실패할 수 있는지부터 확인한다.** 잡아야 할 결함을 일부러 심어 red 를 본다.
+6. **새 게이트는 통과를 보기 전에 실패할 수 있는지부터 확인한다.** `gateCoverage`, `northStarBoard`, `readmeParity` 도 각각 `--selftest` 에서 실행 누락, 비활성 증거, README drift 를 주입해 red 를 확인한다.
 7. 바닥 게이트를 짓는 커밋은 `board.toml` 의 `planned` 를 `built` 로 같이 뒤집는다. 안 뒤집으면 red 다 (점수판이 자신을 과소평가하는 것도 부정확이다).

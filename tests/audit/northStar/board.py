@@ -87,5 +87,61 @@ def number(value: float) -> str:
     return f"{value:g}"
 
 
+def selftest() -> int:
+    """Prove that a built but inactive gate cannot support a score or a built floor."""
+    gate = registry.Gate(name="localOnlySmoke", kind="smoke")
+    axis = registry.Axis(
+        key="injected",
+        names={language: "Injected" for language in registry.LANGUAGES},
+        tier="realOneKind",
+        additives=(),
+        gates=(gate,),
+    )
+    injected = registry.Board(axes=(axis,), floors=())
+    inactive = registry.axisClaimsAreBacked(injected, activeNames=set(), stems={gate.name})
+    active = registry.axisClaimsAreBacked(injected, activeNames={gate.name}, stems={gate.name})
+    manualAxis = registry.Axis(
+        key="manual",
+        names=axis.names,
+        tier="manual",
+        additives=(),
+        gates=(gate,),
+    )
+    manual = registry.axisClaimsAreBacked(
+        registry.Board(axes=(manualAxis,), floors=()),
+        activeNames=set(),
+        stems={gate.name},
+    )
+
+    floor = registry.Floor(category="injected", name="localOnlyFloor", status="built", file=None)
+    floorProblems = registry.floorsMatchTheTree(
+        registry.Board(axes=(axis,), floors=(floor,)),
+        activeNames=set(),
+        stems={gate.name},
+    )
+    if not inactive or active or manual or not floorProblems:
+        print("[northStarBoard --selftest] inactive CI evidence supported a score or floor.", file=sys.stderr)
+        return 2
+
+    unscored = registry.Axis(
+        key="understated",
+        names=axis.names,
+        tier="none",
+        additives=(),
+        gates=(gate,),
+    )
+    understated = registry.axisClaimsAreBacked(
+        registry.Board(axes=(unscored,), floors=()),
+        activeNames={gate.name},
+        stems={gate.name},
+    )
+    if not any("claims tier `none`" in problem for problem in understated):
+        print("[northStarBoard --selftest] active evidence could be omitted from the score.", file=sys.stderr)
+        return 2
+
+    print("[northStarBoard --selftest] OK. inactive evidence cannot claim automation and active evidence cannot be omitted.")
+    return 0
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(selftest() if "--selftest" in sys.argv[1:] else main())

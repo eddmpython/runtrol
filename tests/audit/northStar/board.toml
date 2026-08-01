@@ -17,7 +17,7 @@
 # can assert it. Whether it still holds is a kill criterion in `docs/positioning.md`.
 #
 # Editing rules, all of them enforced by `board.py`:
-#   - a tier above `manual` names gates that exist as files and are reachable from a runner
+#   - a tier above `manual` names gates that exist as files and run in active hosted CI
 #   - additives attach only at the top tier, and each one needs a gate of a matching kind
 #   - a `planned` floor must not exist as a file yet. building it flips the status in that commit
 
@@ -28,13 +28,10 @@
 
 [[axis]]
 key = "oneSessionList"
-# The real CLIs, driven end to end by the executable an operator runs, on every preflight. One kind of gate and
-# no more: what is missing to go past six is a static contract check on the listing surface, not more runs of
-# this one. What the live gate does not reach (a resume that succeeds, which needs a conversation with a turn
-# in it) is stated in `docs/northStarEvidence.md` and said out loud by the gate on every run.
-tier = "realOneKind"
+# The local preflight drives the real CLIs, but hosted CI cannot carry either subscription login.
+# Local-only execution is useful diagnosis and supports only the manual tier until a CI runner is active.
+tier = "manual"
 additives = []
-caps = []
 name = { ko = "하나의 세션 목록", en = "One session list", zh = "统一的会话列表", ja = "一つのセッション一覧" }
 gate = [{ name = "sessionLifecycleSmoke", kind = "smoke" }]
 
@@ -42,7 +39,6 @@ gate = [{ name = "sessionLifecycleSmoke", kind = "smoke" }]
 key = "instantResponse"
 tier = "mock"
 additives = []
-caps = []
 name = { ko = "즉시 반응", en = "Instant response", zh = "即时响应", ja = "即座の反応" }
 gate = [
     { name = "interactionLatencyBudget", kind = "bench" },
@@ -54,7 +50,6 @@ gate = [
 key = "phoneReachesPc"
 tier = "none"
 additives = []
-caps = []
 name = { ko = "폰에서 내 PC 세션 잇기", en = "Reach my PC sessions from my phone", zh = "用手机接续电脑上的会话", ja = "スマホから自分の PC のセッションへ" }
 gate = [
     { name = "phoneDrivesPcSmoke", kind = "smoke" },
@@ -63,9 +58,10 @@ gate = [
 
 [[axis]]
 key = "providerExtensibility"
-tier = "realBothKinds"
+# Hosted CI compiles the public contract and completes a turn against an ACP fixture. The real CLI
+# drift smoke remains local-only, so the active counterpart is still a mock.
+tier = "mock"
 additives = []
-caps = []
 name = { ko = "공급자 확장성", en = "Provider extensibility", zh = "供应商可扩展性", ja = "プロバイダー拡張性" }
 gate = [
     { name = "providerContract", kind = "contract" },
@@ -79,7 +75,6 @@ key = "noConversationPassthrough"
 # smoke is the missing gate kind, so this axis cannot pass six yet.
 tier = "realOneKind"
 additives = []
-caps = []
 name = { ko = "대화 무통과", en = "No conversation passthrough", zh = "对话不经过", ja = "会話を通さない" }
 gate = [{ name = "egressContract", kind = "contract" }]
 
@@ -87,7 +82,6 @@ gate = [{ name = "egressContract", kind = "contract" }]
 key = "approveFromPhone"
 tier = "none"
 additives = []
-caps = []
 name = { ko = "폰에서 승인", en = "Approve from the phone", zh = "在手机上批准", ja = "スマホで承認" }
 gate = [{ name = "approvalRoundtripSmoke", kind = "smoke" }]
 
@@ -95,7 +89,6 @@ gate = [{ name = "approvalRoundtripSmoke", kind = "smoke" }]
 key = "surviveDisconnection"
 tier = "none"
 additives = []
-caps = []
 name = { ko = "끊겨도 살아남기", en = "Survive disconnection", zh = "断了也活着", ja = "切れても生き残る" }
 gate = [{ name = "resilienceFaultInjection", kind = "smoke" }]
 
@@ -103,7 +96,6 @@ gate = [{ name = "resilienceFaultInjection", kind = "smoke" }]
 key = "costOfRunning"
 tier = "none"
 additives = []
-caps = []
 name = { ko = "상주 비용", en = "Cost of running", zh = "常驻成本", ja = "常駐コスト" }
 gate = [{ name = "idleFootprintRatchet", kind = "bench" }]
 
@@ -111,7 +103,6 @@ gate = [{ name = "idleFootprintRatchet", kind = "bench" }]
 key = "sameMethodEverywhere"
 tier = "none"
 additives = []
-caps = []
 name = { ko = "어디서나 같은 방법", en = "Same method everywhere", zh = "到哪都一样", ja = "どこでも同じやり方" }
 gate = [{ name = "crossPlatformMatrix", kind = "smoke" }]
 
@@ -119,7 +110,6 @@ gate = [{ name = "crossPlatformMatrix", kind = "smoke" }]
 key = "currentWithoutAsking"
 tier = "none"
 additives = []
-caps = []
 name = { ko = "알아서 최신", en = "Current without asking", zh = "自动保持最新", ja = "勝手に最新" }
 gate = [
     { name = "cliUpdateRehearsal", kind = "smoke" },
@@ -128,9 +118,10 @@ gate = [
 
 [[axis]]
 key = "automaticModelDetection"
-tier = "realOneKind"
+# The real-CLI smoke runs only on the operator machine. It supports only the manual tier until an
+# active CI job can run without putting the subscription credential in a CI secret.
+tier = "manual"
 additives = []
-caps = []
 name = { ko = "모델 자동 인식", en = "Automatic model detection", zh = "自动识别模型", ja = "モデル自動認識" }
 gate = [{ name = "modelDetectionSmoke", kind = "smoke" }]
 
@@ -138,7 +129,6 @@ gate = [{ name = "modelDetectionSmoke", kind = "smoke" }]
 key = "sessionsDoNotTrample"
 tier = "none"
 additives = []
-caps = []
 name = { ko = "세션끼리 안 밟기", en = "Sessions do not trample each other", zh = "会话之间不互踩", ja = "セッション同士が踏まない" }
 gate = [{ name = "sessionOverlapGuard", kind = "smoke" }]
 
@@ -146,7 +136,6 @@ gate = [{ name = "sessionOverlapGuard", kind = "smoke" }]
 key = "agentsConsultEachOther"
 tier = "none"
 additives = []
-caps = []
 name = { ko = "AI 끼리 서로 자문", en = "Agents consult each other", zh = "AI 互相咨询", ja = "AI 同士が相談し合う" }
 gate = [{ name = "crossConsultSmoke", kind = "smoke" }]
 
@@ -154,12 +143,11 @@ gate = [{ name = "crossConsultSmoke", kind = "smoke" }]
 key = "freedomToLeave"
 tier = "none"
 additives = []
-caps = []
 name = { ko = "떠날 자유", en = "Freedom to leave", zh = "离开的自由", ja = "去る自由" }
 gate = [{ name = "uninstallLeavesNoTrace", kind = "smoke" }]
 
 # ----------------------------------------------------------------------------------------------
-# Floor gates. Binary, never scored, never summed. `status = "built"` means a runner invokes it
+# Floor gates. Binary, never scored, never summed. `status = "built"` means hosted CI invokes it
 # today. `status = "planned"` means it is specified and does not exist, and `board.py` goes red if
 # a planned gate quietly appears as a file without the status being flipped.
 #

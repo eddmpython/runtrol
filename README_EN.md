@@ -18,23 +18,23 @@ At the desk it is an app; away from the desk it is a phone. The same session, th
 However many providers there are, there is one list. Whatever the operating system, the method is the same.
 The conversation travels only between the user's PC and the provider. runtrol does not get in between.**
 
-The current total is **30/140, average 2.1/10**. Five axes have gates standing behind them so far.
+The current total is **22/140, average 1.6/10**. Three axes have active CI gates, and two local-only axes remain at the manual tier.
 A 10 means the complete journey has been repeatedly verified in a real environment.
-**A score is backed by a gate that actually runs in CI. A path that is not executed automatically does not count, no matter how implemented it looks.**
+**A score above the manual tier is backed by a gate that actually runs in CI. A path that is not executed automatically cannot pass 3, no matter how implemented it looks.**
 
 | North Star | Score | Today | Target state |
 |---|---:|---|---|
-| One session list | 6/10 | Sessions from two real CLIs appear in one list, start and close work, and the listing carries the name a resume takes (`sessionLifecycleSmoke`, no tokens spent). A resume that succeeds is still outside the gate: it needs a conversation with a turn in it. The ceiling is 6 because no static contract gate backs this axis. | Whether the provider is Claude Code, Codex, or whatever comes next, every session alive on this PC appears in one list, and start, resume, and delete all happen there. |
+| One session list | 3/10 | `sessionLifecycleSmoke` starts, closes, and resumes sessions from two real CLIs in the local preflight, but hosted CI has neither subscription login. It therefore cannot pass the manual tier. | Whether the provider is Claude Code, Codex, or whatever comes next, every session alive on this PC appears in one list, and start, resume, and delete all happen there. |
 | Instant response | 5/10 | A real browser measures the production bundle, enforcing ratchets for the list, opening a conversation, and typing while processing 3,000 raw frames per second. The transport counterpart is a mock, so the axis remains at this tier. | The list appears with no wait, a conversation opens the moment it is tapped, and neither scrolling nor typing stutters when long output pours in. There is no moment where the user perceives loading. |
 | Reach my PC sessions from my phone | 0/10 | Not built. | Pair the phone to the PC once, and from then on, away from the desk, send new instructions into sessions running on that PC and watch the output live. Neither the plan tier nor the auth method of a provider account blocks this. |
-| Provider extensibility | 7/10 | An outside driver compiles against the public traits alone (`providerContract`), and the current schemas and argument parsers of both installed CLIs are checked against the binding lists (`agentSurfaceDrift`). One external TOML file also discovers a separate ACP process and completes a full turn (`genericAcpSmoke`). That last peer is a fixture, so it does not count as a real-provider additive. | When a new CLI appears, one adapter is added and the PC screen, the phone screen, and the controls stay the same. The user notices a new provider only as a longer list. |
+| Provider extensibility | 5/10 | Hosted CI checks the public outside-driver contract (`providerContract`) and completes a full turn against an ACP fixture registered by one external TOML file (`genericAcpSmoke`). The installed real-CLI surface check (`agentSurfaceDrift`) is local-only, so this axis does not pass the mock tier. | When a new CLI appears, one adapter is added and the PC screen, the phone screen, and the controls stay the same. The user notices a new provider only as a longer list. |
 | No conversation passthrough | 6/10 | An exact egress allowlist on real loopback sockets and the production Noise IK and IKpsk1 boundary run in `egressContract`. A prompt sample never appears in plaintext in the relay capture or diagnostics, transport has no disk or logging API, and drivers and storage know no provider transcript path. The ceiling is 6 until a live phone and relay gate exists. | The user's prompts and the model's responses travel only between the PC and the provider, and between the user's own devices. runtrol stores no copy of that content, and no server in between ever receives it in a readable form. |
 | Approve from the phone | 0/10 | Not built. | When an agent stops in front of a dangerous action, it appears on the phone, and allowing or denying there resumes the PC session immediately. |
 | Survive disconnection | 0/10 | Not built. | The PC session does not die when the phone locks, the network drops, or runtrol restarts, and on return the output from that interval continues without a gap. |
 | Cost of running | 0/10 | Not built. | Leave it on all day and the user never notices it is there. Not in the battery, not in the fan, not in the task manager. |
 | Same method everywhere | 0/10 | Not built. | Install and operation are the same on Windows, macOS, and Linux. A Windows user never needs to know what WSL or tmux is. |
 | Current without asking | 0/10 | Not built. | The app and the installed agent CLIs stay current on their own, and if an update breaks a session it has already rolled back before the user touches anything. There is no moment where the user thinks about versions. |
-| Automatic model detection | 6/10 | Every preflight asks two real CLIs. An enumerable CLI returns the current account's models, while a CLI that cannot enumerate returns stable manifest aliases and states that limitation (`modelDetectionSmoke`, no tokens spent). The gate also checks that discovered model identifiers are not source literals outside drivers. The ceiling is 6 because no separate static contract gate backs this axis. | The models this account can actually use appear in the list as they are, and a new model appears without runtrol being changed. |
+| Automatic model detection | 3/10 | `modelDetectionSmoke` checks installed real CLIs and account-specific models in the local preflight, but it does not run automatically in hosted CI. It therefore cannot pass the manual tier. | The models this account can actually use appear in the list as they are, and a new model appears without runtrol being changed. |
 | Sessions do not trample each other | 0/10 | Not built. | Which session is touching which folder is always distinguishable, starting a second session into the same folder warns before it happens, and when a provider offers isolation (worktrees) it is available right on the start screen. |
 | Agents consult each other | 0/10 | Not built. | One toggle registers two CLIs with each other over their official surface (MCP), so one agent asks another for an opinion mid-turn and gets it back. The wiring is made only through each CLI's own official commands (no direct config-file writes), conversation bodies still never pass through runtrol, and the user never needs to learn what MCP is. |
 | Freedom to leave | 0/10 | Not built. | Delete runtrol and the sessions and history remain each CLI's own, continuing the original way. There is no data runtrol holds hostage. |
@@ -43,8 +43,8 @@ Which gate backs which axis is defined in [docs/northStarEvidence.md](docs/north
 
 ### Scoring rubric
 
-A score is not a rung somebody picks. It is computed as **a base tier plus additives, pushed down by
-caps**. The source is [tests/audit/northStar/board.toml](tests/audit/northStar/board.toml), the
+A score is not a rung somebody picks. It is computed as **a base tier plus additives**. The source
+is [tests/audit/northStar/board.toml](tests/audit/northStar/board.toml), the
 `northStarBoard` gate computes it, and the `readmeParity` gate holds all four README languages to
 what it computed.
 
@@ -53,7 +53,7 @@ what it computed.
 | Base tier | Score | What has to be true |
 |---|---:|---|
 | `none` | 0 | No gate asserts this axis |
-| `manual` | 3 | Someone watched it work by hand. No gate is registered in a runner. Demo videos, screenshots, and "I ran it and it worked" all land here |
+| `manual` | 3 | Someone watched it work by hand. No gate is active in hosted CI. Demo videos, screenshots, and "I ran it and it worked" all land here |
 | `mock` | 5 | A registered gate runs, but against fakes. Mock CLI, stub provider, simulated phone |
 | `realOneKind` | 6 | It runs against the real counterpart, but only one kind of gate exists: static (`contract`) or live (`smoke`, `bench`) |
 | `realBothKinds` | 7 | The real counterpart, with a static gate and a live gate both registered |
@@ -67,14 +67,6 @@ holding all four lands exactly on 10.
 | `multiOs` | +1 | The same gate is green on two or more operating systems, Windows included |
 | `faultInjection` | +0.5 | The gate carries fault injection (kill the daemon, cut the network) and stays green |
 | `ratchet` | +0.5 | A regression ratchet goes red the moment the measured number gets worse |
-
-**Caps.** They push down over anything claimed above them.
-
-| Cap | Result | What has to be true |
-|---|---:|---|
-| `skipped` | 5 | The gate skipped in the last run. A skip is not a pass |
-| `flaky` | 5 | The gate passed on a retry |
-| `unregistered` | 0 | The gate file exists and no runner invokes it. Identical to having no gate |
 
 Rules that keep the score from inflating:
 

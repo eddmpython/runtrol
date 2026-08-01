@@ -75,9 +75,21 @@ GATES: dict[str, tuple[str, list[str]]] = {
     ),
     "orphanReaping": ("부모 강제 종료 뒤 자식 회수", [*PY, f"{HOOKS}/orphanReaping.py"]),
     # 게이트가 저장소에 있는 것과 도는 것은 다른 말이다. 이 게이트가 그 차이를 감시한다.
+    "gateCoverageSelftest": (
+        "게이트 러너 커버리지 자체 검증",
+        [*PY, f"{HOOKS}/gateCoverage.py", "--selftest"],
+    ),
     "gateCoverage": ("게이트 러너 커버리지", [*PY, f"{HOOKS}/gateCoverage.py"]),
     # 북극성 점수는 사람이 타이핑하는 숫자가 아니라 board.toml 에서 계산된다.
+    "northStarBoardSelftest": (
+        "북극성 점수판 자체 검증",
+        [*PY, f"{HOOKS}/northStar/board.py", "--selftest"],
+    ),
     "northStarBoard": ("북극성 점수판 (증거 구조)", [*PY, f"{HOOKS}/northStar/board.py"]),
+    "readmeParitySelftest": (
+        "4 개 언어 README 대조 자체 검증",
+        [*PY, f"{HOOKS}/northStar/readmeParity.py", "--selftest"],
+    ),
     "readmeParity": ("4 개 언어 README 점수판 대조", [*PY, f"{HOOKS}/northStar/readmeParity.py"]),
     "frontendBuildSelftest": (
         "프런트엔드 빌드 게이트 자체 검증",
@@ -201,8 +213,11 @@ SUITES: dict[str, tuple[str, ...]] = {
         "scopeWall",
         "orphanReapingSelftest",
         "orphanReaping",
+        "gateCoverageSelftest",
         "gateCoverage",
+        "northStarBoardSelftest",
         "northStarBoard",
+        "readmeParitySelftest",
         "readmeParity",
         "frontendBuildSelftest",
         "frontendBuild",

@@ -112,7 +112,7 @@ def totalsMatch(board: registry.Board, filename: str, text: str) -> list[str]:
 
 
 def rubricMatches(filename: str, text: str) -> list[str]:
-    """Every tier, additive, and cap, worth the same in every language.
+    """Every tier and additive, worth the same in every language.
 
     A README may describe the rubric at whatever length reads well in its language. What it may not
     do is put a different number next to a rule than the engine scores with.
@@ -120,7 +120,6 @@ def rubricMatches(filename: str, text: str) -> list[str]:
     expected = {
         **{name: points for name, (points, _) in rubric.TIERS.items()},
         **{name: points for name, (points, _) in rubric.ADDITIVES.items()},
-        **{name: points for name, (points, _) in rubric.CAPS.items()},
     }
     printed = {name: float(value) for name, value in RUBRIC_ROW.findall(text)}
 
@@ -140,5 +139,28 @@ def number(value: float) -> str:
     return f"{value:g}"
 
 
+def selftest() -> int:
+    """Prove that score, total, and rubric drift each make the parity gate red."""
+    board = registry.load()
+    rows = [
+        f"| {axis.names['ko']} | {number(board.scoreOf(axis).value)}/10 | today | target |"
+        for axis in board.axes
+    ]
+    wrongRows = list(rows)
+    wrongRows[0] = re.sub(r"\d+(?:\.\d+)?/10", "9.5/10", wrongRows[0], count=1)
+
+    injected = {
+        "axis score": axisTableMatches(board, "ko", "fixture.md", "\n".join(wrongRows)),
+        "totals": totalsMatch(board, "fixture.md", "no totals here"),
+        "rubric": rubricMatches("fixture.md", "no rubric here"),
+    }
+    missed = [name for name, problems in injected.items() if not problems]
+    if missed:
+        print(f"[readmeParity --selftest] injected drift was missed: {', '.join(missed)}", file=sys.stderr)
+        return 2
+    print("[readmeParity --selftest] OK. score, total, and rubric drift all make the gate red.")
+    return 0
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(selftest() if "--selftest" in sys.argv[1:] else main())

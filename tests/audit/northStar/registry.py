@@ -59,7 +59,6 @@ class Axis:
     names: dict[str, str]
     tier: str
     additives: tuple[str, ...]
-    caps: tuple[str, ...]
     gates: tuple[Gate, ...]
 
     def declaredKinds(self) -> frozenset[str]:
@@ -98,7 +97,7 @@ class Board:
 
     def scoreOf(self, axis: Axis) -> rubric.Score:
         """The axis score. Ceiling comes from declared kinds, so a planned gate still shows up."""
-        return rubric.scoreOf(axis.tier, axis.additives, axis.caps, axis.declaredKinds())
+        return rubric.scoreOf(axis.tier, axis.additives, axis.declaredKinds())
 
     def gateNames(self) -> set[str]:
         """Every gate name the board mentions, axis gates and floor gates together."""
@@ -115,7 +114,6 @@ def load() -> Board:
             names=dict(entry.get("name", {})),
             tier=entry["tier"],
             additives=tuple(entry.get("additives", [])),
-            caps=tuple(entry.get("caps", [])),
             gates=tuple(Gate(name=gate["name"], kind=gate["kind"]) for gate in entry.get("gate", [])),
         )
         for entry in data.get("axis", [])
@@ -185,46 +183,48 @@ def axesAreWellFormed(board: Board) -> list[str]:
     return found
 
 
-def axisClaimsAreBacked(board: Board) -> list[str]:
-    """A tier is a claim about gates that run. Check it against gates that exist and are invoked.
+def axisClaimsAreBacked(
+    board: Board,
+    activeNames: set[str] | None = None,
+    stems: set[str] | None = None,
+) -> list[str]:
+    """A tier is a claim about gates that run in active hosted CI.
 
-    The rubric is asked about *active* kinds (built and reachable) rather than declared ones, so an
-    axis cannot claim a tier on the strength of a gate that is still only an idea. Declared kinds
-    still set the ceiling, because a plan is worth showing as a plan.
+    A local-only preflight and a workflow job under ``if: false`` are useful diagnostics, but they
+    are not published evidence. Declared kinds still set the ceiling, because a plan is worth
+    showing as a plan.
     """
     found: list[str] = []
-    haystack = runnerHaystack()
-    stems = auditStems()
+    if activeNames is None:
+        activeNames = activeCiGateNames()
+    if stems is None:
+        stems = auditStems()
 
     for axis in board.axes:
         active: set[str] = set()
         for gate in axis.gates:
             built = gate.name in stems
-            reachable = gate.name in haystack
-            if built and not reachable:
-                found.append(
-                    f"axis `{axis.key}` counts gate `{gate.name}`, whose file exists and which no "
-                    f"runner invokes. that is the `unregistered` cap, not evidence"
-                )
-            if built and reachable:
+            if built and gate.name in activeNames:
                 active.add(gate.kind)
 
-        found += [f"axis `{axis.key}`: {problem}" for problem in rubric.problemsFor(axis.tier, axis.additives, axis.caps, frozenset(active))]
+        found += [f"axis `{axis.key}`: {problem}" for problem in rubric.problemsFor(axis.tier, axis.additives, frozenset(active))]
 
-        if axis.tier == "manual" and active:
+        if axis.tier in {"none", "manual"} and active:
             found.append(
-                f"axis `{axis.key}` claims tier `manual`, which means nobody automated it, and "
-                f"{', '.join(sorted(active))} gates are registered and running for it"
+                f"axis `{axis.key}` claims tier `{axis.tier}`, and "
+                f"{', '.join(sorted(active))} gates are active in hosted CI for it"
             )
 
     return found
 
 
-def floorsMatchTheTree(board: Board) -> list[str]:
-    """`built` floors run today. `planned` floors do not exist yet, and saying so stays true."""
+def floorsMatchTheTree(board: Board, activeNames: set[str] | None = None, stems: set[str] | None = None) -> list[str]:
+    """`built` floors run in hosted CI. `planned` floors do not exist yet."""
     found: list[str] = []
-    haystack = runnerHaystack()
-    stems = auditStems()
+    if activeNames is None:
+        activeNames = activeCiGateNames()
+    if stems is None:
+        stems = auditStems()
 
     found += duplicates([floor.name for floor in board.floors], "floor name")
 
@@ -234,10 +234,10 @@ def floorsMatchTheTree(board: Board) -> list[str]:
             continue
 
         if floor.status == "built":
-            if floor.name not in haystack:
+            if floor.name not in activeNames:
                 found.append(
-                    f"floor `{floor.name}` is marked built and no runner invokes it. register it in "
-                    f"preflight's GATES, in the workflow, or in a git hook, or mark it planned"
+                    f"floor `{floor.name}` is marked built and no active hosted CI job invokes it. "
+                    f"activate it in the workflow or mark it planned"
                 )
             if floor.file and not (AUDIT / floor.file).is_file():
                 found.append(f"floor `{floor.name}` names tests/audit/{floor.file}, which does not exist")
@@ -245,7 +245,7 @@ def floorsMatchTheTree(board: Board) -> list[str]:
 
         if floor.file:
             found.append(f"floor `{floor.name}` is marked planned and names a file. a planned gate has no file yet")
-        if floor.name in stems or floor.name in haystack:
+        if floor.name in stems or floor.name in activeNames:
             found.append(
                 f"floor `{floor.name}` is marked planned and now exists in the tree or in a runner. "
                 f"flip it to built in the commit that builds it, so the board stops understating itself"
@@ -302,19 +302,9 @@ def auditFiles() -> list[Path]:
     ]
 
 
-def runnerHaystack() -> str:
-    """Every text a gate can be named in and actually be run by, concatenated.
-
-    Coarse on purpose: this is only ever searched for whole gate names, which are specific enough
-    that a substring hit means the gate is wired up. Comments are stripped first, because the audit
-    manifest mentions gates that do not exist yet and a comment is not an invocation.
-    """
+def activeCiGateNames() -> set[str]:
+    """The workflow-derived eligibility set, owned by the runner coverage gate."""
     sys.path.insert(0, str(AUDIT))
     import gateCoverage  # noqa: PLC0415  (deliberate: reachability has one owner and this is it)
-    import preflight  # noqa: PLC0415
 
-    parts = [gateCoverage.runnerText(), "\n".join(preflight.GATES)]
-    manifest = AUDIT / "Cargo.toml"
-    if manifest.is_file():
-        parts.append(gateCoverage.stripComments(manifest.read_text(encoding="utf-8")))
-    return "\n".join(parts)
+    return gateCoverage.activeCiGateNames()

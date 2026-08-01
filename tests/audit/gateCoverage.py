@@ -159,7 +159,7 @@ def preflightGatesRunInCi() -> list[str]:
     A gate that only runs locally makes local green stronger than CI green, which means a pull
     request can merge without it.
     """
-    workflow = workflowText()
+    workflow = activeWorkflowText()
     if workflow is None:
         return [f"{WORKFLOW.relative_to(ROOT)} is missing. it is the CI side of every gate"]
 
@@ -182,7 +182,7 @@ def ciStepsRunInPreflight() -> list[str]:
     This is the direction that bites hardest: CI catching something a local run cannot means the
     author learns about it after pushing, and the fix arrives as a second commit.
     """
-    workflow = workflowText()
+    workflow = activeWorkflowText()
     if workflow is None:
         return []
 
@@ -232,6 +232,103 @@ def workflowText() -> str | None:
     return stripComments(WORKFLOW.read_text(encoding="utf-8"))
 
 
+def activeWorkflowText() -> str | None:
+    """Only commands in CI jobs and steps that are not statically disabled.
+
+    A command under ``if: false`` is documentation, not execution. Keeping it in the runner
+    haystack made the North Star board award points to a job that GitHub Actions could never run.
+    This parser is intentionally narrow: it handles the two places a literal false can disable a
+    workflow command, and leaves dynamic conditions to Actions.
+    """
+    text = workflowText()
+    if text is None:
+        return None
+    return activeWorkflowTextFrom(text)
+
+
+def activeWorkflowTextFrom(text: str) -> str:
+    """Filter statically disabled jobs and steps from already comment-free workflow text."""
+    lines = text.splitlines()
+    jobsStart = next((index for index, line in enumerate(lines) if line == "jobs:"), None)
+    if jobsStart is None:
+        return ""
+
+    active: list[str] = []
+    index = jobsStart + 1
+    while index < len(lines):
+        if not re.match(r"^  [A-Za-z0-9_-]+:\s*$", lines[index]):
+            index += 1
+            continue
+
+        end = index + 1
+        while end < len(lines) and not re.match(r"^  [A-Za-z0-9_-]+:\s*$", lines[end]):
+            end += 1
+        block = lines[index:end]
+        disabledJob = any(isLiteralFalse(line, 4) for line in block)
+        if not disabledJob:
+            active.extend(withoutDisabledSteps(block))
+        index = end
+    return "\n".join(active)
+
+
+def withoutDisabledSteps(block: list[str]) -> list[str]:
+    """Remove list items below ``steps`` whose direct ``if`` is literal false."""
+    kept: list[str] = []
+    index = 0
+    while index < len(block):
+        if not re.match(r"^      - ", block[index]):
+            kept.append(block[index])
+            index += 1
+            continue
+
+        end = index + 1
+        while end < len(block) and not re.match(r"^      - ", block[end]):
+            end += 1
+        step = block[index:end]
+        if not any(isLiteralFalse(line, 8) for line in step):
+            kept.extend(step)
+        index = end
+    return kept
+
+
+def isLiteralFalse(line: str, indentation: int) -> bool:
+    """Whether one YAML mapping entry disables its containing block unconditionally."""
+    prefix = " " * indentation
+    return re.fullmatch(rf"{prefix}if:\s*(?:false|\$\{{\{{\s*false\s*\}}\}})\s*", line, re.IGNORECASE) is not None
+
+
+def activeCiGateNames() -> set[str]:
+    """Gate names whose command is reachable from an active hosted CI job.
+
+    Python gates and command gates are matched against their concrete preflight command. Rust
+    audit gates are reached together by ``cargo test --all`` and are read from the audit manifest,
+    because their individual names do not appear in the workflow.
+    """
+    workflow = activeWorkflowText()
+    if workflow is None:
+        return set()
+
+    active = {
+        name
+        for name, signature in preflightSignatures().items()
+        if signature in workflow
+    }
+    active.update(Path(path).stem for path in re.findall(r"tests/audit/(?:[A-Za-z0-9_]+/)*[A-Za-z0-9_]+\.py", workflow))
+    if re.search(r"\bcargo\s+test\s+--all\b", workflow):
+        active.update(declaredRustGateNames())
+    return active
+
+
+def declaredRustGateNames() -> set[str]:
+    """Rust gate names registered in the explicit audit manifest."""
+    manifest = AUDIT / "Cargo.toml"
+    if not manifest.is_file():
+        return set()
+    text = manifest.read_text(encoding="utf-8")
+    paths = re.findall(r'^\s*path\s*=\s*"([^"]+\.rs)"', text, re.MULTILINE)
+    return {Path(path).stem for path in paths}
+
+
 def stripComments(text: str) -> str:
     """Drop `#` comments, keeping only what a shell or YAML parser would act on.
 
@@ -255,7 +352,7 @@ def runnerText() -> str:
     Searching the source would have passed for the wrong reason.
     """
     parts: list[str] = list(preflightSignatures().values())
-    workflow = workflowText()
+    workflow = activeWorkflowText()
     if workflow is not None:
         parts.append(workflow)
     if GITHOOKS.is_dir():
@@ -263,6 +360,37 @@ def runnerText() -> str:
             if hook.is_file():
                 parts.append(stripComments(hook.read_text(encoding="utf-8")))
     return "\n".join(parts)
+
+
+def selftest() -> int:
+    """Prove that commands in disabled jobs and steps cannot become CI evidence."""
+    fixture = """jobs:
+  active:
+    runs-on: ubuntu-latest
+    steps:
+      - run: python active.py
+      - name: disabled step
+        if: false
+        run: python disabled-step.py
+  disabled:
+    if: false
+    runs-on: ubuntu-latest
+    steps:
+      - run: python disabled-job.py
+  dynamic:
+    if: needs.detect.outputs.hasWorkspace == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - run: python dynamic.py
+"""
+    filtered = activeWorkflowTextFrom(fixture)
+    expected = ("active.py", "dynamic.py")
+    forbidden = ("disabled-step.py", "disabled-job.py")
+    if not all(name in filtered for name in expected) or any(name in filtered for name in forbidden):
+        print("[gateCoverage --selftest] disabled workflow blocks entered the active runner set.", file=sys.stderr)
+        return 2
+    print("[gateCoverage --selftest] OK. disabled jobs and steps cannot count as CI execution.")
+    return 0
 
 
 def main() -> int:
@@ -283,4 +411,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(selftest() if "--selftest" in sys.argv[1:] else main())
