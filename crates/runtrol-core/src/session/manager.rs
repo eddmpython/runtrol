@@ -40,7 +40,7 @@ use std::collections::BTreeMap;
 use runtrol_provider::{
     AbsPath, Agent, AgentCommand, ApprovalId, CloseMode, Disposition, EventBody, Level, Notice,
     NoticeCode, Opaque, OpenIntent, OptionId, Produced, Provider, ProviderError, ProviderId,
-    RiskClass, SessionId, WallMs,
+    RiskClass, SessionId, WallMs, WatchCursor,
 };
 use runtrol_security::{Caller, DeviceScope, GrantLedger, SecurityError};
 
@@ -382,12 +382,16 @@ impl SessionManager {
     /// # Errors
     ///
     /// [`SessionError::NotLive`] when nothing is running under that name.
-    pub fn subscribe(&mut self, session: SessionId) -> Result<SessionView, SessionError> {
+    pub fn subscribe(
+        &mut self,
+        session: SessionId,
+        requested: Option<WatchCursor>,
+    ) -> Result<SessionView, SessionError> {
         let live = self
             .live
             .get_mut(&session)
             .ok_or(SessionError::NotLive { session })?;
-        Ok(live.hub.view())
+        Ok(live.hub.view(requested))
     }
 
     /// Start a session, or continue one.
@@ -1207,9 +1211,18 @@ fn observation_of(body: &EventBody) -> Option<Observed> {
 #[cfg(test)]
 mod tests {
     use async_trait::async_trait;
-    use runtrol_provider::{AbsPath, Declarant, Produced, StopReason, TurnEvent, TurnId};
+    use runtrol_provider::{
+        AbsPath, AgentEvent, Declarant, Produced, StopReason, TurnEvent, TurnId,
+    };
 
     use super::*;
+
+    fn watch_event(item: crate::events::WatchItem) -> AgentEvent {
+        match item {
+            crate::events::WatchItem::Event(event) => event.event().clone(),
+            crate::events::WatchItem::Lagged(cursor) => panic!("unexpected lag at {cursor:?}"),
+        }
+    }
 
     /// What a scripted driver answers next.
     ///
@@ -1784,7 +1797,7 @@ mod tests {
             .expect("opens");
 
         let mut watcher = manager
-            .subscribe(session)
+            .subscribe(session, None)
             .expect("a live session can be watched");
         for _ in 0..3 {
             manager.pump_once(session).await.expect("published");
@@ -1792,7 +1805,7 @@ mod tests {
 
         let mut positions = Vec::new();
         while let Some(frame) = watcher.try_recv() {
-            positions.push(frame.seq);
+            positions.push(watch_event(frame).seq);
         }
         assert_eq!(positions, vec![0, 1, 2], "dense and in order");
     }
@@ -1807,7 +1820,7 @@ mod tests {
             .start(&provider, an_intent(session))
             .await
             .expect("opens");
-        let mut watcher = manager.subscribe(session).expect("watchable");
+        let mut watcher = manager.subscribe(session, None).expect("watchable");
 
         let published = manager
             .pump_once(session)
@@ -1985,7 +1998,7 @@ mod tests {
             .start(&provider, an_intent(session))
             .await
             .expect("opens");
-        let mut watcher = manager.subscribe(session).expect("watchable");
+        let mut watcher = manager.subscribe(session, None).expect("watchable");
 
         manager
             .pump_once(session)
@@ -1995,7 +2008,7 @@ mod tests {
 
         let mut frames = Vec::new();
         while let Some(frame) = watcher.try_recv() {
-            frames.push(frame);
+            frames.push(watch_event(frame));
         }
         let refusal = frames
             .iter()
@@ -2258,7 +2271,7 @@ mod tests {
             Err(SessionError::NotLive { .. })
         ));
         assert!(matches!(
-            manager.subscribe(absent),
+            manager.subscribe(absent, None),
             Err(SessionError::NotLive { .. })
         ));
         assert_eq!(manager.state(absent), None);

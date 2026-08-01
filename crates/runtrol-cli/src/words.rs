@@ -9,7 +9,7 @@
 //! daemon, a socket, or a session.
 
 use runtrol_ipc::wire::Request;
-use runtrol_provider::{ApprovalId, OptionId, SessionId};
+use runtrol_provider::{ApprovalId, OptionId, SessionId, StreamId, WatchCursor};
 
 /// What somebody typed could not be understood.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -43,6 +43,13 @@ pub enum Misunderstood {
     /// A session was named in a way runtrol cannot read.
     #[error("{typed:?} is not a session name runtrol issued")]
     NotASession {
+        /// What they typed.
+        typed: String,
+    },
+
+    /// A watch cursor was not the exact stream, epoch, and next sequence boundary.
+    #[error("{typed:?} is not a watch cursor (expected STREAM:EPOCH:SEQ)")]
+    NotAWatchCursor {
         /// What they typed.
         typed: String,
     },
@@ -152,9 +159,28 @@ pub fn understand(words: &[String], here: &str) -> Result<Request, Misunderstood
             session: session_of(rest, 0, "stop")?,
         }),
 
-        "watch" => Ok(Request::Watch {
-            session: session_of(rest, 0, "watch")?,
-        }),
+        "watch" => {
+            if let Some(typed) = rest.get(3) {
+                return Err(Misunderstood::Extra {
+                    command: "watch",
+                    typed: typed.clone(),
+                });
+            }
+            let after = match rest.get(1) {
+                None => None,
+                Some(flag) if flag == "--after" => Some(watch_cursor_of(rest, 2)?),
+                Some(typed) => {
+                    return Err(Misunderstood::Extra {
+                        command: "watch",
+                        typed: typed.clone(),
+                    });
+                }
+            };
+            Ok(Request::Watch {
+                session: session_of(rest, 0, "watch")?,
+                after,
+            })
+        }
 
         "close" => Ok(Request::Close {
             session: session_of(rest, 0, "close")?,
@@ -198,6 +224,26 @@ fn session_of(
 fn approval_of(rest: &[String], at: usize) -> Result<ApprovalId, Misunderstood> {
     let typed = word(rest, at, "answer", "which approval")?;
     typed.parse().map_err(|_| Misunderstood::NotAnApproval {
+        typed: typed.to_owned(),
+    })
+}
+
+fn watch_cursor_of(rest: &[String], at: usize) -> Result<WatchCursor, Misunderstood> {
+    let typed = word(rest, at, "watch", "a cursor after --after")?;
+    let mut parts = typed.split(':');
+    let parsed = match (parts.next(), parts.next(), parts.next(), parts.next()) {
+        (Some(stream), Some(epoch), Some(seq), None) => {
+            let stream = stream.parse::<StreamId>();
+            let epoch = epoch.parse::<u32>();
+            let seq = seq.parse::<u64>();
+            match (stream, epoch, seq) {
+                (Ok(stream), Ok(epoch), Ok(seq)) => Some(WatchCursor { stream, epoch, seq }),
+                _ => None,
+            }
+        }
+        _ => None,
+    };
+    parsed.ok_or_else(|| Misunderstood::NotAWatchCursor {
         typed: typed.to_owned(),
     })
 }
@@ -388,6 +434,47 @@ mod tests {
         {
             Request::Close { now, .. } => assert!(now),
             other => panic!("expected a close, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn watch_carries_an_exact_optional_next_expected_cursor() {
+        let session = SessionId::now();
+        let stream = StreamId::now();
+        let line = format!("watch {session} --after {stream}:4:19");
+        match understand(&typed(&line), here()).expect("understandable") {
+            Request::Watch {
+                session: named,
+                after: Some(after),
+            } => {
+                assert_eq!(named, session);
+                assert_eq!(after.stream, stream);
+                assert_eq!(after.epoch, 4);
+                assert_eq!(after.seq, 19);
+            }
+            other => panic!("expected a cursor watch, got {other:?}"),
+        }
+
+        match understand(&typed(&format!("watch {session}")), here()).expect("understandable") {
+            Request::Watch { after: None, .. } => {}
+            other => panic!("expected an initial watch, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn malformed_or_ambiguous_watch_cursors_are_refused() {
+        let session = SessionId::now();
+        for line in [
+            format!("watch {session} --after"),
+            format!("watch {session} --after not-a-cursor"),
+            format!("watch {session} --after {}:epoch:1", StreamId::now()),
+            format!("watch {session} cursor-without-flag"),
+            format!("watch {session} --after {}:0:1 extra", StreamId::now()),
+        ] {
+            assert!(
+                understand(&typed(&line), here()).is_err(),
+                "accepted {line:?}"
+            );
         }
     }
 

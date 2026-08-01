@@ -183,6 +183,7 @@ mod tests {
             },
             Request::Watch {
                 session: SessionId::now(),
+                after: None,
             },
             Request::Close {
                 session: SessionId::now(),

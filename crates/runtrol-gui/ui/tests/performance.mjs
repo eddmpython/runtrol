@@ -46,6 +46,12 @@ async function executable() {
 function mockBridge() {
   const frameEvent = "session-frame";
   const listeners = new Map();
+  let nextView = 0;
+  let activeWatch = null;
+  let pendingReplay = null;
+  let holdNextWatch = false;
+  const pendingWatches = new Map();
+  const stoppedIntents = [];
   const sessions = Array.from({ length: 240 }, (_, index) => ({
     session: `gate-${String(index).padStart(3, "0")}`,
     provider: index % 2 === 0 ? "provider-a" : "provider-b",
@@ -57,7 +63,17 @@ function mockBridge() {
     looksStuck: false,
   }));
 
-  const emit = (event, payload) => {
+  const emit = (event, rawPayload) => {
+    let payload = rawPayload;
+    if (event === frameEvent && payload.view === undefined) {
+      if (!activeWatch || payload.session !== activeWatch.session) return;
+      activeWatch.cursor = { ...activeWatch.cursor, seq: activeWatch.cursor.seq + 1 };
+      payload = {
+        ...payload,
+        view: activeWatch.view,
+        nextExpected: activeWatch.cursor,
+      };
+    }
     for (const handler of listeners.get(event) ?? []) {
       handler({ payload });
     }
@@ -83,6 +99,22 @@ function mockBridge() {
     emit,
     frame,
     startedWith: null,
+    watchRequests: [],
+    currentWatch: () => activeWatch ? structuredClone(activeWatch) : null,
+    holdNextWatch() {
+      holdNextWatch = true;
+    },
+    pendingIntent: () => pendingWatches.keys().next().value ?? null,
+    stoppedIntents: () => [...stoppedIntents],
+    emitOver(lagged = false) {
+      if (!activeWatch) return;
+      emit("session-over", {
+        session: activeWatch.session,
+        view: activeWatch.view,
+        nextExpected: activeWatch.cursor,
+        lagged,
+      });
+    },
     async flood(session, seconds, perSecond) {
       const intervals = [];
       const inputLatencies = [];
@@ -167,7 +199,52 @@ function mockBridge() {
           return { outcome: "ok", value: { sessions, warnings: [] } };
         }
         if (command === "watch") {
-          replay(args.session);
+          window.__RUNTROL_PERF__.watchRequests.push({
+            session: args.session,
+            intent: args.intent,
+            after: args.after ?? null,
+          });
+          if (holdNextWatch) {
+            holdNextWatch = false;
+            return new Promise((resolve) => {
+              pendingWatches.set(args.intent, { resolve });
+            });
+          }
+          nextView += 1;
+          const startsAt = args.after ?? { stream: `mock-stream-${nextView}`, epoch: 0, seq: 0 };
+          activeWatch = {
+            session: args.session,
+            intent: args.intent,
+            view: nextView,
+            cursor: startsAt,
+          };
+          pendingReplay = args.session;
+          return {
+            outcome: "ok",
+            value: { view: nextView, startsAt, liveAt: startsAt, gap: null },
+          };
+        }
+        if (command === "continue_watch") {
+          if (activeWatch?.view !== args.view) {
+            return { outcome: "broken", message: "stale view" };
+          }
+          const session = pendingReplay;
+          pendingReplay = null;
+          if (session) replay(session);
+          return { outcome: "ok", value: null };
+        }
+        if (command === "stop_watch" || command === "unwatch") {
+          const pending = pendingWatches.get(args.intent);
+          if (pending) {
+            pendingWatches.delete(args.intent);
+            stoppedIntents.push(args.intent);
+            pending.resolve({ outcome: "ok", value: null });
+          }
+          if (command === "unwatch" || activeWatch?.intent === args.intent) {
+            if (activeWatch) stoppedIntents.push(activeWatch.intent);
+            activeWatch = null;
+            pendingReplay = null;
+          }
           return { outcome: "ok", value: null };
         }
         if (command === "providers") {
@@ -365,10 +442,68 @@ async function convenience(page, url) {
   };
 }
 
+async function reconnect(page, url) {
+  await page.goto(url, { waitUntil: "domcontentloaded" });
+  await page.getByTestId("session-gate-000").waitFor();
+  await waitFor(page, () => document.body.textContent?.includes("saved tail gate-000"));
+  const expected = await page.evaluate(() => {
+    const before = window.__RUNTROL_PERF__.currentWatch();
+    window.__RUNTROL_PERF__.emit("session-frame", {
+      session: "gate-000",
+      frame: window.__RUNTROL_PERF__.frame("gate-000", "drain one", "drain-one"),
+    });
+    window.__RUNTROL_PERF__.emit("session-frame", {
+      session: "gate-000",
+      frame: window.__RUNTROL_PERF__.frame("gate-000", "drain two", "drain-two"),
+    });
+    const target = window.__RUNTROL_PERF__.currentWatch().cursor;
+    window.__RUNTROL_PERF__.emitOver(true);
+    return { oldView: before.view, target };
+  });
+  await waitFor(page, () => (
+    document.body.textContent?.includes("drain one")
+    && document.body.textContent?.includes("drain two")
+    && window.__RUNTROL_PERF__.watchRequests.length >= 2
+  ));
+  const result = await page.evaluate((oldView) => {
+    const requestsBefore = window.__RUNTROL_PERF__.watchRequests.length;
+    const current = window.__RUNTROL_PERF__.currentWatch();
+    window.__RUNTROL_PERF__.emit("session-over", {
+      session: "gate-000",
+      view: oldView,
+      nextExpected: current.cursor,
+      lagged: true,
+    });
+    return { requestsBefore, request: window.__RUNTROL_PERF__.watchRequests.at(-1) };
+  }, expected.oldView);
+  await new Promise((resolveWait) => setTimeout(resolveWait, 400));
+  const requestsAfter = await page.evaluate(() => window.__RUNTROL_PERF__.watchRequests.length);
+  await page.evaluate(() => {
+    window.__RUNTROL_PERF__.holdNextWatch();
+    document.querySelector('[data-testid="session-gate-002"]')?.click();
+  });
+  await waitFor(page, () => window.__RUNTROL_PERF__.pendingIntent() !== null);
+  const pendingIntent = await page.evaluate(() => window.__RUNTROL_PERF__.pendingIntent());
+  await page.evaluate(() => {
+    document.querySelector('[data-testid="session-gate-003"]')?.click();
+  });
+  await waitFor(page, () => window.__RUNTROL_PERF__.currentWatch()?.session === "gate-003");
+  const pendingWatchCancelled = await page.evaluate(
+    (intent) => window.__RUNTROL_PERF__.stoppedIntents().includes(intent),
+    pendingIntent,
+  );
+  return {
+    drainedBeforeReconnect: true,
+    reconnectCursorExact: JSON.stringify(result.request.after) === JSON.stringify(expected.target),
+    staleOverIgnored: requestsAfter === result.requestsBefore,
+    pendingWatchCancelled,
+  };
+}
+
 async function main() {
   const mode = process.argv[2];
-  if (!new Set(["interaction", "scroll", "convenience"]).has(mode)) {
-    throw new Error("usage: node tests/performance.mjs interaction|scroll|convenience");
+  if (!new Set(["interaction", "scroll", "convenience", "reconnect"]).has(mode)) {
+    throw new Error("usage: node tests/performance.mjs interaction|scroll|convenience|reconnect");
   }
   await access(join(DIST, "index.html"));
   const browserPath = await executable();
@@ -388,7 +523,9 @@ async function main() {
       ? await interaction(page, url)
       : mode === "scroll"
         ? await scroll(page, url)
-        : await convenience(page, url);
+        : mode === "convenience"
+          ? await convenience(page, url)
+          : await reconnect(page, url);
     process.stdout.write(`${JSON.stringify({ mode, browserPath, ...metrics })}\n`);
   } finally {
     await browser?.close();

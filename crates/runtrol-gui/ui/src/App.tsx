@@ -15,6 +15,9 @@ import type {
   SessionRow,
   ThemeMode,
   UsageGauge,
+  WatchCursor,
+  WatchOver,
+  WatchStarted,
 } from "./domain";
 import { ConversationFeed } from "./frames";
 import type { PendingFrame } from "./frames";
@@ -27,6 +30,35 @@ import { preferredProvider, rememberProvider } from "./preferences";
 
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+const FRAME_QUEUE_FRAMES = 64;
+const FRAME_QUEUE_CHARACTERS = 16 * 1024 * 1024 + 64 * 1024;
+
+type ActiveWatch = {
+  session: string;
+  selection: number;
+  intent: number | null;
+  view: number | null;
+  cursor: WatchCursor | null;
+  retries: number;
+  over: WatchOver | null;
+};
+
+type ParsedFrameBatch = {
+  session: string;
+  view: number;
+  frames: Array<{ pending: PendingFrame; nextExpected: WatchCursor }>;
+};
+
+function follows(cursor: WatchCursor, next: WatchCursor): boolean {
+  return cursor.stream === next.stream
+    && cursor.epoch === next.epoch
+    && next.seq === cursor.seq + 1;
+}
+
+function sameCursor(left: WatchCursor, right: WatchCursor): boolean {
+  return left.stream === right.stream && left.epoch === right.epoch && left.seq === right.seq;
 }
 
 export function App() {
@@ -56,9 +88,16 @@ export function App() {
   const refreshingRef = useRef(false);
   const firstDrawRef = useRef(true);
   const startedAtRef = useRef(performance.now());
-  const frameQueueRef = useRef<string[]>([]);
+  const frameQueueRef = useRef<FrameEnvelope[]>([]);
+  const frameQueueCharactersRef = useRef(0);
   const frameFlushRef = useRef<number | null>(null);
   const frameWorkerRef = useRef<Worker | null>(null);
+  const frameWorkerBusyRef = useRef(false);
+  const selectionRef = useRef(0);
+  const nextWatchIntentRef = useRef(0);
+  const watchRef = useRef<ActiveWatch | null>(null);
+  const retryTimerRef = useRef<number | null>(null);
+  const watchSessionRef = useRef<(session: string, selection: number, reconnect: boolean) => void>(() => {});
 
   useEffect(() => applyTheme(theme), [theme]);
 
@@ -71,56 +110,206 @@ export function App() {
     });
   }, []);
 
+  const applyAnswer = useCallback(<T,>(answer: Answered<T>): T | undefined => {
+    if (answer.outcome === "ok") {
+      setReachable(true);
+      return answer.value;
+    }
+    if (answer.outcome === "refused") {
+      setReachable(true);
+      const where = answer.needsTheOperator ? " (이 기계 앞에서 해결해야 한다)" : "";
+      const again = answer.retryable ? " (다시 해 보면 될 수 있다)" : "";
+      setNotice({ kind: "refused", message: `${answer.message}${where}${again}` });
+      return undefined;
+    }
+    setReachable(false);
+    setNotice({ kind: "broken", message: answer.message });
+    return undefined;
+  }, []);
+
   const ask = useCallback(async <T,>(command: string, args?: Record<string, unknown>): Promise<T | undefined> => {
     try {
-      const answer = await invoke<Answered<T>>(command, args);
-      if (answer.outcome === "ok") {
-        setReachable(true);
-        return answer.value;
-      }
-      if (answer.outcome === "refused") {
-        setReachable(true);
-        const where = answer.needsTheOperator ? " (이 기계 앞에서 해결해야 한다)" : "";
-        const again = answer.retryable ? " (다시 해 보면 될 수 있다)" : "";
-        setNotice({ kind: "refused", message: `${answer.message}${where}${again}` });
-        return undefined;
-      }
-      setReachable(false);
-      setNotice({ kind: "broken", message: answer.message });
-      return undefined;
+      return applyAnswer(await invoke<Answered<T>>(command, args));
     } catch (error) {
       setReachable(false);
       setNotice({ kind: "broken", message: messageOf(error) });
       return undefined;
     }
+  }, [applyAnswer]);
+
+  const askForSelection = useCallback(async <T,>(
+    selection: number,
+    command: string,
+    args?: Record<string, unknown>,
+  ): Promise<Answered<T> | null> => {
+    try {
+      const answer = await invoke<Answered<T>>(command, args);
+      return watchRef.current?.selection === selection ? answer : null;
+    } catch (error) {
+      if (watchRef.current?.selection !== selection) {
+        return null;
+      }
+      return { outcome: "broken", message: messageOf(error) };
+    }
   }, []);
 
-  const watchSession = useCallback(async (session: string) => {
-    const watched = await ask<null>("watch", { session });
-    trace(`watching ${session} ${watched === undefined ? "refused" : "ok"}`);
-  }, [ask, trace]);
+  const scheduleReconnect = useCallback((session: string, selection: number) => {
+    const active = watchRef.current;
+    if (!active || active.session !== session || active.selection !== selection) {
+      return;
+    }
+    const previousIntent = active.intent;
+    active.intent = null;
+    active.view = null;
+    if (previousIntent !== null) {
+      void invoke<Answered<null>>("stop_watch", { intent: previousIntent });
+    }
+    active.retries += 1;
+    if (retryTimerRef.current !== null) {
+      window.clearTimeout(retryTimerRef.current);
+    }
+    const delay = Math.min(5_000, 250 * 2 ** Math.min(active.retries - 1, 5));
+    retryTimerRef.current = window.setTimeout(() => {
+      retryTimerRef.current = null;
+      watchSessionRef.current(session, selection, true);
+    }, delay);
+  }, []);
 
-  const enqueueFrame = useCallback((frame: string) => {
-    frameQueueRef.current.push(frame);
-    if (frameFlushRef.current !== null) {
+  const finishWatchOver = useCallback((watched: ActiveWatch) => {
+    const over = watched.over;
+    if (!over || !watched.cursor || !sameCursor(watched.cursor, over.nextExpected)) {
+      return;
+    }
+    feed.status(over.lagged
+      ? "화면이 출력 속도를 따라가지 못해 다시 연결한다"
+      : "출력 연결이 끝나 마지막으로 그린 위치에서 다시 연결한다");
+    trace(`stream over view=${over.view}`);
+    scheduleReconnect(watched.session, watched.selection);
+  }, [feed, scheduleReconnect, trace]);
+
+  const watchSession = useCallback(async (session: string, selection: number, reconnect: boolean) => {
+    const active = watchRef.current;
+    if (!active || active.session !== session || active.selection !== selection) {
+      return;
+    }
+    const after = reconnect ? active.cursor : null;
+    nextWatchIntentRef.current += 1;
+    const intent = nextWatchIntentRef.current;
+    active.intent = intent;
+    const answer = await askForSelection<WatchStarted | null>(selection, "watch", {
+      session,
+      after,
+      intent,
+    });
+    const current = watchRef.current;
+    if (
+      !answer
+      || !current
+      || current.session !== session
+      || current.selection !== selection
+      || current.intent !== intent
+    ) {
+      void invoke<Answered<null>>("stop_watch", { intent });
+      return;
+    }
+    const started = applyAnswer(answer);
+    if (!started) {
+      if (answer.outcome === "broken" || (answer.outcome === "refused" && answer.retryable)) {
+        scheduleReconnect(session, selection);
+      }
+      return;
+    }
+    current.view = started.view;
+    current.cursor = started.startsAt;
+    current.over = null;
+    if (started.gap) {
+      feed.status("연결이 끊긴 동안 보관 한계를 넘은 출력이 있어 빈 구간을 표시한다");
+      current.cursor = started.liveAt;
+    }
+    const continued = await askForSelection<null>(selection, "continue_watch", { view: started.view });
+    if (!continued || applyAnswer(continued) === undefined) {
+      scheduleReconnect(session, selection);
+      return;
+    }
+    trace(`watching ${session} view=${started.view}`);
+  }, [applyAnswer, askForSelection, feed, scheduleReconnect, trace]);
+  watchSessionRef.current = (session, selection, reconnect) => {
+    void watchSession(session, selection, reconnect);
+  };
+
+  const scheduleFrameFlush = useCallback(() => {
+    if (frameFlushRef.current !== null || frameWorkerBusyRef.current) {
       return;
     }
     frameFlushRef.current = window.requestAnimationFrame(() => {
       frameFlushRef.current = null;
-      const frames = frameQueueRef.current;
+      if (frameWorkerBusyRef.current) {
+        return;
+      }
+      const queued = frameQueueRef.current;
       frameQueueRef.current = [];
-      const session = selectedRef.current;
-      if (session && frames.length > 0) {
-        frameWorkerRef.current?.postMessage({ session, frames });
+      frameQueueCharactersRef.current = 0;
+      const active = watchRef.current;
+      if (!active || active.view === null) {
+        return;
+      }
+      const frames = queued
+        .filter((frame) => frame.session === active.session && frame.view === active.view)
+        .map(({ frame, nextExpected }) => ({ frame, nextExpected }));
+      if (frames.length > 0) {
+        frameWorkerBusyRef.current = true;
+        frameWorkerRef.current?.postMessage({
+          session: active.session,
+          view: active.view,
+          frames,
+        });
       }
     });
   }, []);
 
-  const openSession = useCallback(async (session: string, resumeCold = true) => {
-    const row = rowsRef.current.find((entry) => entry.session === session);
-    if (selectedRef.current === session && row?.hot) {
+  const enqueueFrame = useCallback((envelope: FrameEnvelope) => {
+    const active = watchRef.current;
+    const nextCharacters = frameQueueCharactersRef.current + envelope.frame.length;
+    if (
+      frameQueueRef.current.length >= FRAME_QUEUE_FRAMES
+      || nextCharacters > FRAME_QUEUE_CHARACTERS
+    ) {
+      frameQueueRef.current = [];
+      frameQueueCharactersRef.current = 0;
+      if (active) {
+        scheduleReconnect(active.session, active.selection);
+      }
       return;
     }
+    frameQueueRef.current.push(envelope);
+    frameQueueCharactersRef.current = nextCharacters;
+    scheduleFrameFlush();
+  }, [scheduleFrameFlush, scheduleReconnect]);
+
+  const openSession = useCallback(async (session: string, resumeCold = true) => {
+    const row = rowsRef.current.find((entry) => entry.session === session);
+    if (selectedRef.current === session && row?.hot && watchRef.current?.view !== null) {
+      return;
+    }
+    const previousIntent = watchRef.current?.intent;
+    if (previousIntent !== null && previousIntent !== undefined) {
+      void invoke<Answered<null>>("stop_watch", { intent: previousIntent });
+    }
+    selectionRef.current += 1;
+    const selection = selectionRef.current;
+    if (retryTimerRef.current !== null) {
+      window.clearTimeout(retryTimerRef.current);
+      retryTimerRef.current = null;
+    }
+    watchRef.current = {
+      session,
+      selection,
+      intent: null,
+      view: null,
+      cursor: null,
+      retries: 0,
+      over: null,
+    };
     selectedRef.current = session;
     setSelected(session);
     feed.clear();
@@ -135,22 +324,30 @@ export function App() {
         setNotice({ kind: "broken", message: "공급자가 아직 이 세션에 원본 식별자를 붙이지 않았다." });
         return;
       }
-      const resumed = await ask<string>("resume", {
+      const resumedAnswer = await askForSelection<string>(selection, "resume", {
         provider: row.provider,
         native: row.native,
         workspace: row.workspace,
       });
+      if (!resumedAnswer) {
+        return;
+      }
+      const resumed = applyAnswer(resumedAnswer);
       if (!resumed) {
         return;
       }
+      if (watchRef.current?.selection !== selection) {
+        return;
+      }
+      watchRef.current.session = resumed;
       selectedRef.current = resumed;
       setSelected(resumed);
       feed.clear();
-      await watchSession(resumed);
+      await watchSession(resumed, selection, false);
       return;
     }
-    await watchSession(session);
-  }, [ask, feed, watchSession]);
+    await watchSession(session, selection, false);
+  }, [applyAnswer, askForSelection, feed, watchSession]);
 
   const refresh = useCallback(async () => {
     if (refreshingRef.current) {
@@ -171,6 +368,16 @@ export function App() {
       }
       const current = selectedRef.current;
       if (current && !nextRows.some((row) => row.session === current)) {
+        const intent = watchRef.current?.intent;
+        if (intent !== null && intent !== undefined) {
+          void invoke<Answered<null>>("stop_watch", { intent });
+        }
+        if (retryTimerRef.current !== null) {
+          window.clearTimeout(retryTimerRef.current);
+          retryTimerRef.current = null;
+        }
+        selectionRef.current += 1;
+        watchRef.current = null;
         selectedRef.current = null;
         setSelected(null);
         feed.clear();
@@ -201,39 +408,76 @@ export function App() {
     let unlisten: Array<() => void> = [];
     const parser = new Worker(new URL("./frameWorker.ts", import.meta.url), { type: "module" });
     frameWorkerRef.current = parser;
-    parser.onmessage = ({ data }: MessageEvent<{ session: string; frames: PendingFrame[] }>) => {
-      if (data.session !== selectedRef.current) {
+    parser.onmessage = ({ data }: MessageEvent<ParsedFrameBatch>) => {
+      frameWorkerBusyRef.current = false;
+      scheduleFrameFlush();
+      const watched = watchRef.current;
+      if (!watched || watched.session !== data.session || watched.view !== data.view || !watched.cursor) {
         return;
       }
-      feed.append(data.frames);
+      let cursor = watched.cursor;
+      const accepted: PendingFrame[] = [];
+      let discontinuity = false;
       for (const frame of data.frames) {
-        if (frame.usage) {
-          setUsage(frame.usage);
+        if (!follows(cursor, frame.nextExpected)) {
+          discontinuity = true;
+          break;
         }
-        if (frame.rateLimit) {
-          setRateLimit(frame.rateLimit);
+        accepted.push(frame.pending);
+        cursor = frame.nextExpected;
+      }
+      if (accepted.length > 0) {
+        feed.append(accepted);
+        watched.cursor = cursor;
+        watched.retries = 0;
+        for (const frame of accepted) {
+          if (frame.usage) {
+            setUsage(frame.usage);
+          }
+          if (frame.rateLimit) {
+            setRateLimit(frame.rateLimit);
+          }
         }
+        finishWatchOver(watched);
+      }
+      if (discontinuity) {
+        feed.status("출력 순서가 이어지지 않아 마지막으로 그린 위치에서 다시 연결한다");
+        scheduleReconnect(watched.session, watched.selection);
+      }
+    };
+    parser.onerror = () => {
+      frameWorkerBusyRef.current = false;
+      const watched = watchRef.current;
+      if (watched) {
+        feed.status("출력 표시 작업자가 멈춰 마지막으로 그린 위치에서 다시 연결한다");
+        scheduleReconnect(watched.session, watched.selection);
       }
     };
 
     async function begin() {
       try {
-        const listeners = await Promise.all([
-          listen<FrameEnvelope>(FRAME_EVENT, ({ payload }) => {
-            if (payload.session !== selectedRef.current) {
+        const listeners: Array<() => void> = [];
+        try {
+          listeners.push(await listen<FrameEnvelope>(FRAME_EVENT, ({ payload }) => {
+            const watched = watchRef.current;
+            if (!watched || payload.session !== watched.session || payload.view !== watched.view) {
               return;
             }
-            enqueueFrame(payload.frame);
+            enqueueFrame(payload);
             trace("frame queued");
-          }),
-          listen<string>(OVER_EVENT, ({ payload }) => {
-            if (payload !== selectedRef.current) {
+          }));
+          listeners.push(await listen<WatchOver>(OVER_EVENT, ({ payload }) => {
+            const watched = watchRef.current;
+            if (!watched || payload.session !== watched.session || payload.view !== watched.view) {
               return;
             }
-            feed.status("이 세션의 흐름이 끝났다");
-            trace("stream over");
-          }),
-        ]);
+            watched.over = payload;
+            finishWatchOver(watched);
+          }));
+        } catch (error) {
+          listeners.forEach((stop) => stop());
+          throw error;
+        }
         if (!active) {
           listeners.forEach((stop) => stop());
           return;
@@ -263,13 +507,25 @@ export function App() {
         frameFlushRef.current = null;
       }
       frameQueueRef.current = [];
+      frameQueueCharactersRef.current = 0;
+      frameWorkerBusyRef.current = false;
+      if (retryTimerRef.current !== null) {
+        window.clearTimeout(retryTimerRef.current);
+        retryTimerRef.current = null;
+      }
       parser.terminate();
       if (frameWorkerRef.current === parser) {
         frameWorkerRef.current = null;
       }
+      const intent = watchRef.current?.intent;
+      if (intent !== null && intent !== undefined) {
+        void invoke<Answered<null>>("stop_watch", { intent });
+      }
+      selectionRef.current += 1;
+      watchRef.current = null;
       unlisten.forEach((stop) => stop());
     };
-  }, [enqueueFrame, feed, refresh, trace]);
+  }, [enqueueFrame, feed, finishWatchOver, refresh, scheduleFrameFlush, scheduleReconnect, trace]);
 
   const selectedRow = useMemo(
     () => rows.find((row) => row.session === selected) ?? null,
@@ -355,18 +611,36 @@ export function App() {
 
   const closeSession = useCallback(async () => {
     const session = selectedRef.current;
-    if (!session) {
+    const selection = watchRef.current?.selection;
+    if (!session || selection === undefined) {
       return;
     }
-    const closed = await ask<null>("close", { session, now: false });
+    const closedAnswer = await askForSelection<null>(selection, "close", { session, now: false });
+    if (!closedAnswer) {
+      return;
+    }
+    const closed = applyAnswer(closedAnswer);
     if (closed === undefined) {
       return;
     }
+    const watched = watchRef.current;
+    if (!watched || watched.session !== session || watched.selection !== selection) {
+      return;
+    }
+    if (watched.intent !== null) {
+      void invoke<Answered<null>>("stop_watch", { intent: watched.intent });
+    }
+    if (retryTimerRef.current !== null) {
+      window.clearTimeout(retryTimerRef.current);
+      retryTimerRef.current = null;
+    }
+    selectionRef.current += 1;
+    watchRef.current = null;
     selectedRef.current = null;
     setSelected(null);
     feed.clear();
     await refresh();
-  }, [ask, feed, refresh]);
+  }, [applyAnswer, askForSelection, feed, refresh]);
 
   const selectSession = useCallback((session: string) => {
     void openSession(session);

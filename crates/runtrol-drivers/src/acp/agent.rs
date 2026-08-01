@@ -8,8 +8,8 @@ use bytes::Bytes;
 use runtrol_childproc::{Containment, Program};
 use runtrol_provider::{
     Agent, AgentCommand, Attached, CapabilitySet, CloseMode, ContentBlock, Declarant, Disposition,
-    EventBody, NativeSessionId, Opaque, OpenIntent, Produced, ProviderError, ProviderId,
-    ReplaySource, SessionId, StopReason, TurnEvent, TurnId,
+    EventBody, NativeSessionId, Opaque, OpenIntent, Produced, ProviderError, ProviderId, SessionId,
+    StopReason, TurnEvent, TurnId,
 };
 use tokio::io::AsyncWriteExt as _;
 use tokio::process::{Child, ChildStdin};
@@ -238,7 +238,6 @@ impl AcpAgent {
             src_end: 0,
             body: EventBody::Attached(Box::new(Attached {
                 native: opened.1,
-                replay: ReplaySource::None,
                 model_requested: None,
                 caps,
                 payload,

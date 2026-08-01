@@ -6,28 +6,25 @@
 //!
 //! # What overflows, and what is thrown away
 //!
-//! **The subscriber's position is thrown away. Its data is not.** When a queue fills, that subscriber gets
-//! one frame saying where it had reached and which cursor to resume the provider's own store from, and its
-//! queue is not grown by one byte.
-//!
-//! This is only safe because runtrol does not own the data. The provider's transcript is the record, so a
-//! dropped position costs a positioned read and costs no content at all. It is the clearest place in the
-//! product where being thin buys correctness rather than costing it: a design that kept its own copy would
-//! have to choose between dropping content and running out of memory.
+//! When a queue fills, that subscriber receives one frame naming the exact next event it needed and is retired. It
+//! reconnects with that boundary. The bounded replay ring either fills the gap or the next acknowledgement reports
+//! that it cannot. Delivery never resumes silently after skipped events, and runtrol never reads a transcript.
 //!
 //! # Why the bound is two numbers and one reserved slot
 //!
-//! [`QUEUE_FRAMES`] bounds the envelopes and [`QUEUE_BYTES`] bounds the payloads, for the same reason the
-//! replay ring needs both. The channel is built one slot deeper than the frame bound, and that slot is
+//! [`QUEUE_FRAMES`] bounds the envelopes and [`QUEUE_BYTES`] bounds ordinary queued payloads, for the same reason the
+//! replay ring needs both. One event may itself be larger than that byte budget, so an otherwise empty subscriber
+//! may hold exactly one event up to [`MAX_LIVE_PAYLOAD_BYTES`]. The channel is built one slot deeper than the frame
+//! bound, and that slot is
 //! never used for data: it is where the lag frame goes. Without it, the one frame that has to reach a
 //! stalled subscriber would be the one frame there is no room for.
 //!
 //! # Where the numbers sit against the memory contract
 //!
-//! The contract budgets 20 KiB per subscriber in steady state, which is what a reader keeping up actually
-//! holds. These bounds are the ceiling for one that has stopped: 64 envelopes plus 256 KiB of payload, or
-//! about 264 KiB. Four stalled subscribers is roughly a megabyte, which the contract's "eight hot sessions
-//! and four subscribers at 18 MB" line absorbs. The test below holds that arithmetic.
+//! The retained-byte counter includes both the normalized provider payload and the complete wire encoding. An
+//! ordinary stalled subscriber therefore holds no more than 256 KiB. A caught-up subscriber may hold one larger
+//! event, but never one whose provider payload exceeds 1 MiB. The live-process gate measures the resulting daemon
+//! RSS against the platform's hard ceiling instead of relying on an estimate here.
 //!
 //! # Cloning a frame is not copying a payload
 //!
@@ -38,14 +35,23 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use runtrol_provider::{AgentEvent, EventBody};
+use runtrol_provider::{AgentEvent, WatchCursor};
 use tokio::sync::mpsc;
+
+use super::WatchEvent;
 
 /// How many frames one subscriber may have waiting.
 pub const QUEUE_FRAMES: usize = 64;
 
-/// How many bytes of provider payload one subscriber may have waiting.
+/// How many retained event bytes one subscriber may have waiting.
 pub const QUEUE_BYTES: usize = 256 * 1024;
+
+/// The largest single provider payload admitted for live delivery.
+///
+/// A provider line can be larger, but retaining both its normalized event and complete wire encoding would violate the
+/// daemon's live memory ceiling. Such a frame produces an explicit reconnect gap instead of an unbounded memory
+/// spike.
+pub const MAX_LIVE_PAYLOAD_BYTES: usize = 1024 * 1024;
 
 /// Which subscriber, for reporting and for tests. Never leaves the process.
 /// Two subscriptions never share one, and the number is never reused within a session.
@@ -62,8 +68,6 @@ pub struct Delivery {
     pub delivered: usize,
     /// Subscribers told they had fallen behind, on this frame.
     pub lagged: usize,
-    /// Subscribers that were already behind and stayed behind.
-    pub still_behind: usize,
     /// Subscribers whose receiver was gone, and which were removed.
     pub departed: usize,
 }
@@ -77,12 +81,23 @@ pub struct Subscription {
     /// Which subscriber this is.
     id: SubscriberId,
     /// The queue.
-    rx: mpsc::Receiver<AgentEvent>,
+    rx: mpsc::Receiver<SubscriptionItem>,
     /// Payload bytes waiting, shared with the sending side.
     ///
     /// The sender adds when a frame goes in and this side subtracts when one comes out, so the budget
     /// reflects what is actually held rather than what was ever sent.
     queued: Arc<AtomicUsize>,
+    /// Frames waiting in the channel or held by the connection writer.
+    held_frames: Arc<AtomicUsize>,
+}
+
+/// One item on a watcher's bounded live queue.
+#[derive(Debug)]
+pub enum SubscriptionItem {
+    /// A provider event that retained its original dense position.
+    Event(WatchEvent),
+    /// Delivery stopped before this exact boundary and reconnect is required.
+    Lagged(WatchCursor),
 }
 
 impl Subscription {
@@ -93,24 +108,23 @@ impl Subscription {
     }
 
     /// Wait for the next frame, or `None` once the session is gone.
-    pub async fn recv(&mut self) -> Option<AgentEvent> {
-        let event = self.rx.recv().await?;
-        self.release(&event);
-        Some(event)
+    pub async fn recv(&mut self) -> Option<SubscriptionItem> {
+        self.rx.recv().await
     }
 
     /// Take a frame if one is waiting.
     ///
     /// The bounds are exercised through this, which is why this module needs no runtime to prove they hold.
-    pub fn try_recv(&mut self) -> Option<AgentEvent> {
+    #[expect(
+        clippy::manual_ok_err,
+        reason = "Result::ok is forbidden because it usually hides failures, while both non-item states are this poll's documented None answer"
+    )]
+    pub fn try_recv(&mut self) -> Option<SubscriptionItem> {
+        // Empty means nothing is waiting; disconnected means nothing ever will be again. Neither is a failure being
+        // discarded: both are the answer to a poll. A caller that needs to tell them apart awaits `recv`, which
+        // returns `None` only for the second.
         match self.rx.try_recv() {
-            Ok(event) => {
-                self.release(&event);
-                Some(event)
-            }
-            // Empty means nothing is waiting; disconnected means nothing ever will be again. Neither is a
-            // failure being discarded: both are the answer to a poll. A caller that needs to tell them
-            // apart awaits `recv`, which returns `None` only for the second.
+            Ok(item) => Some(item),
             Err(mpsc::error::TryRecvError::Empty | mpsc::error::TryRecvError::Disconnected) => None,
         }
     }
@@ -121,9 +135,10 @@ impl Subscription {
         self.queued.load(Ordering::Acquire)
     }
 
-    /// Give back the budget a frame was holding.
-    fn release(&self, event: &AgentEvent) {
-        self.queued.fetch_sub(frame_bytes(event), Ordering::AcqRel);
+    /// How many frames are waiting or currently being written.
+    #[must_use]
+    pub fn queued_frames(&self) -> usize {
+        self.held_frames.load(Ordering::Acquire)
     }
 }
 
@@ -134,15 +149,13 @@ impl Subscription {
 #[derive(Debug)]
 struct Subscriber {
     /// The queue.
-    tx: mpsc::Sender<AgentEvent>,
+    tx: mpsc::Sender<SubscriptionItem>,
     /// Payload bytes waiting, shared with the receiving side.
     queued: Arc<AtomicUsize>,
-    /// The last position that got in.
-    last_delivered_seq: u64,
-    /// The cursor of the last frame that got in, which is where recovery starts.
-    last_delivered_src_end: u64,
-    /// This subscriber has been told it fell behind and has not caught up yet.
-    behind: bool,
+    /// Frames waiting or currently being written.
+    held_frames: Arc<AtomicUsize>,
+    /// The next dense event this subscriber must receive.
+    next_expected: WatchCursor,
 }
 
 /// Every watcher of one session.
@@ -165,23 +178,28 @@ impl FanOut {
     }
 
     /// Add a watcher and hand back its receiving end.
-    pub fn subscribe(&mut self) -> Subscription {
+    pub fn subscribe(&mut self, live_at: WatchCursor) -> Subscription {
         // One slot deeper than the frame bound. The extra slot is never used for data, so there is always
         // room for the frame that tells a stalled subscriber it stalled.
         let (tx, rx) = mpsc::channel(QUEUE_FRAMES + 1);
         let queued = Arc::new(AtomicUsize::new(0));
+        let held_frames = Arc::new(AtomicUsize::new(0));
         let id = SubscriberId(self.next_id);
         self.next_id = self.next_id.wrapping_add(1);
 
         self.subscribers.push(Subscriber {
             tx,
             queued: Arc::clone(&queued),
-            last_delivered_seq: 0,
-            last_delivered_src_end: 0,
-            behind: false,
+            held_frames: Arc::clone(&held_frames),
+            next_expected: live_at,
         });
 
-        Subscription { id, rx, queued }
+        Subscription {
+            id,
+            rx,
+            queued,
+            held_frames,
+        }
     }
 
     /// How many watchers there are.
@@ -196,19 +214,45 @@ impl FanOut {
         self.subscribers.is_empty()
     }
 
+    /// End every existing subscription at an attachment boundary.
+    pub fn close(&mut self) {
+        self.subscribers.clear();
+    }
+
     /// Give the frame to every watcher that can take it, and tell the rest they fell behind.
     pub fn publish(&mut self, event: &AgentEvent) -> Delivery {
         let mut report = Delivery::default();
+
+        if self.subscribers.is_empty() {
+            return report;
+        }
+
+        if event.body.payload_bytes() > MAX_LIVE_PAYLOAD_BYTES {
+            self.subscribers.retain_mut(|subscriber| {
+                if subscriber.tx.is_closed() {
+                    report.departed += 1;
+                } else {
+                    subscriber.fall_behind();
+                    report.lagged += 1;
+                }
+                false
+            });
+            return report;
+        }
+
+        let shared = WatchEvent::encode(event.clone());
 
         self.subscribers.retain_mut(|subscriber| {
             if subscriber.tx.is_closed() {
                 report.departed += 1;
                 return false;
             }
-            match subscriber.offer(event) {
+            match subscriber.offer(&shared) {
                 Offered::Took => report.delivered += 1,
-                Offered::FellBehind => report.lagged += 1,
-                Offered::StillBehind => report.still_behind += 1,
+                Offered::FellBehind => {
+                    report.lagged += 1;
+                    return false;
+                }
             }
             true
         });
@@ -224,79 +268,58 @@ enum Offered {
     Took,
     /// The queue was full, and the subscriber was told so on this frame.
     FellBehind,
-    /// The subscriber was already behind and has not drained yet.
-    StillBehind,
 }
 
 impl Subscriber {
     /// Offer one frame, within the bounds.
-    fn offer(&mut self, event: &AgentEvent) -> Offered {
-        // A subscriber that has drained what it was given is caught up again, whatever it missed. What it
-        // missed is the provider's file's business now, and the lag frame told it where to look.
-        if self.behind && self.is_drained() {
-            self.behind = false;
-        }
-        if self.behind {
-            return Offered::StillBehind;
+    fn offer(&mut self, frame: &WatchEvent) -> Offered {
+        let event = frame.event();
+        if event.epoch != self.next_expected.epoch || event.seq != self.next_expected.seq {
+            return self.fall_behind();
         }
 
-        if self.has_room_for(event) {
-            match self.tx.try_send(event.clone()) {
+        if self.has_room_for(frame) {
+            let leased = frame.queued(Arc::clone(&self.queued), Arc::clone(&self.held_frames));
+            match self.tx.try_send(SubscriptionItem::Event(leased)) {
                 Ok(()) => {
-                    self.queued.fetch_add(frame_bytes(event), Ordering::AcqRel);
-                    self.last_delivered_seq = event.seq;
-                    self.last_delivered_src_end = event.src_end;
+                    self.next_expected.epoch = event.epoch;
+                    self.next_expected.seq = event.seq.wrapping_add(1);
                     return Offered::Took;
                 }
                 // The receiving end went away between the closed check and here, or the channel filled
                 // from another publish. Either way this subscriber did not get the frame, and saying so is
                 // the same answer as any other overflow.
-                Err(_) => return self.fall_behind(event),
+                Err(_) => return self.fall_behind(),
             }
         }
-        self.fall_behind(event)
+        self.fall_behind()
     }
 
     /// Whether the frame fits inside both bounds.
-    fn has_room_for(&self, event: &AgentEvent) -> bool {
+    fn has_room_for(&self, frame: &WatchEvent) -> bool {
         // Capacity counts the reserved slot, which data may not use.
-        let used_frames = self.tx.max_capacity().saturating_sub(self.tx.capacity());
+        let used_frames = self.held_frames.load(Ordering::Acquire);
         let waiting_bytes = self.queued.load(Ordering::Acquire);
-        used_frames < QUEUE_FRAMES
-            && waiting_bytes.saturating_add(frame_bytes(event)) <= QUEUE_BYTES
+        let bytes = frame_bytes(frame);
+        if bytes > QUEUE_BYTES {
+            return used_frames == 0
+                && frame.event().body.payload_bytes() <= MAX_LIVE_PAYLOAD_BYTES;
+        }
+        used_frames < QUEUE_FRAMES && waiting_bytes.saturating_add(bytes) <= QUEUE_BYTES
     }
 
-    /// Whether everything this subscriber was given has been taken.
-    fn is_drained(&self) -> bool {
-        self.tx.capacity() == self.tx.max_capacity()
-    }
-
-    /// Tell the subscriber where it had reached, and stop growing its queue.
+    /// Tell the subscriber where it had reached, then retire it.
     ///
     /// The lag frame stands in the place of the frame that did not fit, so it carries that frame's
     /// position: the subscriber then knows the gap runs from what it last received up to here.
-    fn fall_behind(&mut self, event: &AgentEvent) -> Offered {
-        let notice = AgentEvent {
-            session: event.session,
-            epoch: event.epoch,
-            seq: event.seq,
-            at: event.at,
-            src_end: event.src_end,
-            body: EventBody::Lagged {
-                last_delivered_seq: self.last_delivered_seq,
-                resume_from: self.last_delivered_src_end,
-            },
-        };
-        self.behind = true;
-
-        match self.tx.try_send(notice) {
-            // The reserved slot took it, and it carries no payload, so no budget is spent.
-            Ok(()) => Offered::FellBehind,
-            // The receiver is gone, or has not drained since the last lag frame. In both cases it already
-            // has everything it needs: either it is not listening, or the frame telling it to recover is
-            // still sitting in its queue unread.
-            Err(_) => Offered::StillBehind,
-        }
+    fn fall_behind(&mut self) -> Offered {
+        // The reserved slot takes it unless the receiver went away between the closed check and this send. The sender
+        // is retired either way, and the control item carries no provider payload budget.
+        drop(
+            self.tx
+                .try_send(SubscriptionItem::Lagged(self.next_expected)),
+        );
+        Offered::FellBehind
     }
 }
 
@@ -304,13 +327,13 @@ impl Subscriber {
 ///
 /// Defined once, because the sending side adds it and the receiving side subtracts it. Two spellings of
 /// this would drift, and the drift would show up as a queue that believes it is permanently full.
-fn frame_bytes(event: &AgentEvent) -> usize {
-    event.body.payload_bytes()
+fn frame_bytes(frame: &WatchEvent) -> usize {
+    frame.retained_bytes()
 }
 
 #[cfg(test)]
 mod tests {
-    use runtrol_provider::{Opaque, SessionId};
+    use runtrol_provider::{EventBody, Opaque, SessionId};
 
     use super::*;
     use crate::events::seq::Sequencer;
@@ -318,6 +341,7 @@ mod tests {
     /// A publisher that stamps real positions, so lag reports carry real numbers.
     struct Source {
         session: SessionId,
+        stream: runtrol_provider::StreamId,
         seq: Sequencer,
     }
 
@@ -325,6 +349,7 @@ mod tests {
         fn new() -> Self {
             Self {
                 session: SessionId::now(),
+                stream: runtrol_provider::StreamId::now(),
                 seq: Sequencer::new(),
             }
         }
@@ -341,16 +366,31 @@ mod tests {
                 )
                 .0
         }
+
+        fn live_at(&self) -> WatchCursor {
+            WatchCursor {
+                stream: self.stream,
+                epoch: self.seq.epoch(),
+                seq: self.seq.next_seq(),
+            }
+        }
+    }
+
+    fn delivered(item: SubscriptionItem) -> AgentEvent {
+        match item {
+            SubscriptionItem::Event(event) => event.event().clone(),
+            SubscriptionItem::Lagged(cursor) => panic!("unexpected lag at {cursor:?}"),
+        }
     }
 
     #[test]
     fn the_ceiling_for_stalled_subscribers_fits_the_memory_contract() {
-        // The contract's "eight hot sessions and four subscribers" line is 18 MB. Four subscribers that
-        // have all stopped reading have to fit inside it with room to spare, or the bound is decorative.
-        const FOUR_SUBSCRIBERS_LINE: usize = 18 * 1024 * 1024;
+        // Four subscribers that have all stopped reading have to leave ample room below the daemon hard ceiling,
+        // or the queue bound is decorative.
+        const HOT_INCREMENT_BUDGET: usize = 10 * 1024 * 1024;
         let ceiling = 4 * (QUEUE_FRAMES * size_of::<AgentEvent>() + QUEUE_BYTES);
         assert!(
-            ceiling < FOUR_SUBSCRIBERS_LINE / 2,
+            ceiling < HOT_INCREMENT_BUDGET / 2,
             "four stalled subscribers would hold {ceiling} bytes"
         );
     }
@@ -359,15 +399,21 @@ mod tests {
     fn every_watcher_gets_the_frame() {
         let mut source = Source::new();
         let mut fanout = FanOut::new();
-        let mut first = fanout.subscribe();
-        let mut second = fanout.subscribe();
+        let mut first = fanout.subscribe(source.live_at());
+        let mut second = fanout.subscribe(source.live_at());
 
         let event = source.frame(16);
         let report = fanout.publish(&event);
 
         assert_eq!(report.delivered, 2);
-        assert_eq!(first.try_recv().map(|frame| frame.seq), Some(event.seq));
-        assert_eq!(second.try_recv().map(|frame| frame.seq), Some(event.seq));
+        assert_eq!(
+            first.try_recv().map(delivered).map(|frame| frame.seq),
+            Some(event.seq)
+        );
+        assert_eq!(
+            second.try_recv().map(delivered).map(|frame| frame.seq),
+            Some(event.seq)
+        );
     }
 
     #[test]
@@ -376,12 +422,12 @@ mod tests {
         // to a dozen watchers starts costing a dozen copies of every message.
         let mut source = Source::new();
         let mut fanout = FanOut::new();
-        let mut first = fanout.subscribe();
-        let mut second = fanout.subscribe();
+        let mut first = fanout.subscribe(source.live_at());
+        let mut second = fanout.subscribe(source.live_at());
 
         fanout.publish(&source.frame(4096));
-        let one = first.try_recv().expect("delivered");
-        let other = second.try_recv().expect("delivered");
+        let one = delivered(first.try_recv().expect("delivered"));
+        let other = delivered(second.try_recv().expect("delivered"));
 
         let (EventBody::Plan { payload: left }, EventBody::Plan { payload: right }) =
             (&one.body, &other.body)
@@ -399,7 +445,7 @@ mod tests {
     fn a_subscriber_that_stops_reading_is_bounded_by_frames() {
         let mut source = Source::new();
         let mut fanout = FanOut::new();
-        let subscription = fanout.subscribe();
+        let subscription = fanout.subscribe(source.live_at());
 
         // Tiny payloads, so the frame bound is the one that has to bite.
         let mut lagged = 0;
@@ -423,7 +469,7 @@ mod tests {
         // Few frames, each large. A frame bound alone would let this grow to sixty-four large payloads.
         let mut source = Source::new();
         let mut fanout = FanOut::new();
-        let subscription = fanout.subscribe();
+        let subscription = fanout.subscribe(source.live_at());
 
         for _ in 0..16 {
             fanout.publish(&source.frame(QUEUE_BYTES / 4));
@@ -437,12 +483,70 @@ mod tests {
     }
 
     #[test]
-    fn the_lag_frame_says_where_the_gap_starts_and_where_to_recover_from() {
-        // This frame is the entire reason dropping a position is safe. Without both numbers the subscriber
-        // knows only that it lost something, which is a silent hole with extra steps.
+    fn one_large_event_reaches_a_live_watcher_without_becoming_an_unbounded_queue() {
         let mut source = Source::new();
         let mut fanout = FanOut::new();
-        let mut subscription = fanout.subscribe();
+        let mut subscription = fanout.subscribe(source.live_at());
+
+        let large = source.frame(QUEUE_BYTES + 1);
+        assert_eq!(fanout.publish(&large).delivered, 1);
+        assert!(subscription.queued_bytes() > QUEUE_BYTES);
+        assert!(subscription.queued_bytes() <= 2 * MAX_LIVE_PAYLOAD_BYTES);
+
+        let second = source.frame(QUEUE_BYTES + 1);
+        assert_eq!(fanout.publish(&second).lagged, 1);
+        let delivered_large = delivered(subscription.try_recv().expect("large event delivered"));
+        assert_eq!(delivered_large.seq, large.seq);
+        assert!(matches!(
+            subscription.try_recv(),
+            Some(SubscriptionItem::Lagged(_))
+        ));
+    }
+
+    #[test]
+    fn an_event_being_written_still_holds_its_queue_permit() {
+        let mut source = Source::new();
+        let mut fanout = FanOut::new();
+        let mut subscription = fanout.subscribe(source.live_at());
+
+        let first = source.frame(QUEUE_BYTES + 1);
+        assert_eq!(fanout.publish(&first).delivered, 1);
+        let writing = subscription.try_recv().expect("the writer took the event");
+        assert_eq!(subscription.queued_frames(), 1);
+        assert!(subscription.queued_bytes() > QUEUE_BYTES);
+
+        let second = source.frame(QUEUE_BYTES + 1);
+        assert_eq!(fanout.publish(&second).lagged, 1);
+        drop(writing);
+        assert_eq!(subscription.queued_frames(), 0);
+        assert_eq!(subscription.queued_bytes(), 0);
+    }
+
+    #[test]
+    fn an_oversize_payload_is_rejected_before_live_wire_encoding() {
+        let mut source = Source::new();
+        let mut fanout = FanOut::new();
+        let mut subscription = fanout.subscribe(source.live_at());
+
+        let oversize = source.frame(MAX_LIVE_PAYLOAD_BYTES + 1);
+        let report = fanout.publish(&oversize);
+
+        assert_eq!(report.delivered, 0);
+        assert_eq!(report.lagged, 1);
+        assert_eq!(subscription.queued_bytes(), 0);
+        assert_eq!(subscription.queued_frames(), 0);
+        assert!(matches!(
+            subscription.try_recv(),
+            Some(SubscriptionItem::Lagged(_))
+        ));
+        assert_eq!(fanout.len(), 0);
+    }
+
+    #[test]
+    fn the_lag_frame_names_the_exact_next_boundary() {
+        let mut source = Source::new();
+        let mut fanout = FanOut::new();
+        let mut subscription = fanout.subscribe(source.live_at());
 
         let mut last_taken = None;
         for _ in 0..(QUEUE_FRAMES * 2) {
@@ -453,41 +557,27 @@ mod tests {
         }
         let last_taken = last_taken.expect("early frames must have been delivered");
 
-        let mut frames = Vec::new();
-        while let Some(frame) = subscription.try_recv() {
-            frames.push(frame);
-        }
-        let lag = frames
-            .iter()
-            .find(|frame| matches!(frame.body, EventBody::Lagged { .. }))
-            .expect("the subscriber must be told it fell behind");
-
-        match lag.body {
-            EventBody::Lagged {
-                last_delivered_seq,
-                resume_from,
-            } => {
-                assert_eq!(
-                    last_delivered_seq, last_taken.seq,
-                    "the gap starts after the last frame that actually arrived"
-                );
-                assert_eq!(
-                    resume_from, last_taken.src_end,
-                    "recovery starts at that frame's cursor in the provider's own store"
-                );
+        let mut lag = None;
+        while let Some(item) = subscription.try_recv() {
+            if let SubscriptionItem::Lagged(next_expected) = item {
+                lag = Some(next_expected);
             }
-            ref other => panic!("expected lag, got {other:?}"),
         }
-        assert_eq!(lag.session, last_taken.session);
+        assert_eq!(
+            lag.expect("the subscriber must be told it fell behind"),
+            WatchCursor {
+                stream: source.stream,
+                epoch: last_taken.epoch,
+                seq: last_taken.seq.wrapping_add(1),
+            }
+        );
     }
 
     #[test]
-    fn a_subscriber_that_catches_up_starts_receiving_again() {
-        // Falling behind is a moment, not a sentence. A subscriber that drains has to come back, or a
-        // phone that was briefly on a bad link never recovers without reconnecting.
+    fn a_lagged_subscriber_must_reconnect_before_live_delivery_resumes() {
         let mut source = Source::new();
         let mut fanout = FanOut::new();
-        let mut subscription = fanout.subscribe();
+        let mut subscription = fanout.subscribe(source.live_at());
 
         for _ in 0..(QUEUE_FRAMES * 2) {
             fanout.publish(&source.frame(1));
@@ -496,19 +586,17 @@ mod tests {
         assert_eq!(subscription.queued_bytes(), 0);
 
         let resumed = source.frame(1);
-        assert_eq!(fanout.publish(&resumed).delivered, 1);
-        assert_eq!(
-            subscription.try_recv().map(|frame| frame.seq),
-            Some(resumed.seq)
-        );
+        assert_eq!(fanout.publish(&resumed).delivered, 0);
+        assert!(subscription.try_recv().is_none());
+        assert_eq!(fanout.len(), 0, "the lagged sender was retired");
     }
 
     #[test]
     fn a_watcher_that_went_away_is_forgotten() {
         let mut source = Source::new();
         let mut fanout = FanOut::new();
-        let subscription = fanout.subscribe();
-        let mut staying = fanout.subscribe();
+        let subscription = fanout.subscribe(source.live_at());
+        let mut staying = fanout.subscribe(source.live_at());
         drop(subscription);
 
         let report = fanout.publish(&source.frame(8));
@@ -532,11 +620,11 @@ mod tests {
         // carries the shape.
         let mut source = Source::new();
         let mut fanout = FanOut::new();
-        let mut subscription = fanout.subscribe();
+        let mut subscription = fanout.subscribe(source.live_at());
 
         let event = source.frame(8);
         fanout.publish(&event);
-        let received = subscription.recv().await.expect("a frame was published");
+        let received = delivered(subscription.recv().await.expect("a frame was published"));
         assert_eq!(received.seq, event.seq);
         assert_eq!(
             subscription.queued_bytes(),

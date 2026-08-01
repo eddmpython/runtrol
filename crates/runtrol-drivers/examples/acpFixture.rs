@@ -24,8 +24,14 @@ struct SessionMarker {
 
 enum Mode {
     Version,
-    Serve(Option<PathBuf>),
-    Resume { state: PathBuf, native: String },
+    Serve {
+        state: Option<PathBuf>,
+        reply_bytes: Option<usize>,
+    },
+    Resume {
+        state: PathBuf,
+        native: String,
+    },
 }
 
 fn main() -> ExitCode {
@@ -34,7 +40,7 @@ fn main() -> ExitCode {
     };
     let result = match mode {
         Mode::Version => writeln!(std::io::stdout().lock(), "acp-fixture 1.0.0").map_err(|_| ()),
-        Mode::Serve(state) => serve(state.as_deref()),
+        Mode::Serve { state, reply_bytes } => serve(state.as_deref(), reply_bytes),
         Mode::Resume { state, native } => resume(&state, &native),
     };
     match result {
@@ -47,9 +53,20 @@ fn mode() -> Result<Mode, ()> {
     let words = std::env::args().skip(1).collect::<Vec<_>>();
     match words.as_slice() {
         [flag] if flag == "--version" => Ok(Mode::Version),
-        [] => Ok(Mode::Serve(None)),
-        [state_flag, state] if state_flag == "--state" => {
-            Ok(Mode::Serve(Some(PathBuf::from(state))))
+        [] => Ok(Mode::Serve {
+            state: None,
+            reply_bytes: None,
+        }),
+        [state_flag, state] if state_flag == "--state" => Ok(Mode::Serve {
+            state: Some(PathBuf::from(state)),
+            reply_bytes: None,
+        }),
+        [reply_flag, reply_bytes] if reply_flag == "--reply-bytes" => {
+            let reply_bytes = reply_bytes.parse::<usize>().map_err(|_| ())?;
+            Ok(Mode::Serve {
+                state: None,
+                reply_bytes: Some(reply_bytes),
+            })
         }
         [state_flag, state, resume_flag, native]
             if state_flag == "--state" && resume_flag == "--resume" =>
@@ -63,7 +80,7 @@ fn mode() -> Result<Mode, ()> {
     }
 }
 
-fn serve(state: Option<&Path>) -> Result<(), ()> {
+fn serve(state: Option<&Path>, reply_bytes: Option<usize>) -> Result<(), ()> {
     let input = std::io::stdin();
     let mut output = std::io::stdout().lock();
     let mut lines = input.lock().lines();
@@ -141,20 +158,7 @@ fn serve(state: Option<&Path>) -> Result<(), ()> {
                     }
                     None => 1,
                 };
-                notify(
-                    &mut output,
-                    &json!({
-                        "sessionId": session,
-                        "update": {
-                            "sessionUpdate": "agent_message_chunk",
-                            "content": {
-                                "type": "text",
-                                "text": format!("fixture reply {completed_turns}")
-                            },
-                            "messageId": "fixture-message"
-                        }
-                    }),
-                )?;
+                notify_reply(&mut output, session, completed_turns, reply_bytes)?;
                 answer(
                     &mut output,
                     id.as_ref().ok_or(())?,
@@ -166,6 +170,29 @@ fn serve(state: Option<&Path>) -> Result<(), ()> {
         }
     }
     Ok(())
+}
+
+fn notify_reply(
+    output: &mut impl Write,
+    session: &str,
+    completed_turns: u64,
+    reply_bytes: Option<usize>,
+) -> Result<(), ()> {
+    let reply = reply_bytes.map_or_else(
+        || format!("fixture reply {completed_turns}"),
+        |bytes| "x".repeat(bytes),
+    );
+    notify(
+        output,
+        &json!({
+            "sessionId": session,
+            "update": {
+                "sessionUpdate": "agent_message_chunk",
+                "content": {"type": "text", "text": reply},
+                "messageId": "fixture-message"
+            }
+        }),
+    )
 }
 
 fn read_marker(path: &Path) -> Result<SessionMarker, ()> {

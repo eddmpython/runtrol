@@ -44,13 +44,14 @@ pub use command::{
 pub use error::ProviderError;
 pub use event::{
     AgentEvent, ApprovalKind, ApprovalOption, ApprovalRequest, Attached, BlockedOn, CapabilitySet,
-    Chunk, Cost, Declarant, DetachReason, Detached, EventBody, FileId, Level, Notice, NoticeCode,
-    OfferedOption, Opaque, PermissionOptionKind, RateLimit, ReplaySource, RiskClass, StopReason,
-    ToolCallFrame, ToolCallStatus, ToolKind, TurnEvent, Unmapped, Usage, Window, WithdrawnReason,
+    Chunk, Cost, Declarant, DetachReason, Detached, EventBody, Level, Notice, NoticeCode,
+    OfferedOption, Opaque, PermissionOptionKind, RateLimit, RiskClass, StopReason, ToolCallFrame,
+    ToolCallStatus, ToolKind, TurnEvent, Unmapped, Usage, WatchCursor, WatchGap, Window,
+    WithdrawnReason,
 };
 pub use id::{
-    ApprovalId, IdError, MessageId, NativeSessionId, OptionId, ProviderId, SessionId, ToolCallId,
-    TurnId,
+    ApprovalId, IdError, MessageId, NativeSessionId, OptionId, ProviderId, SessionId, StreamId,
+    ToolCallId, TurnId,
 };
 pub use manifest::{
     BinSpec, FallbackSpec, FlagProbe, Kind, MANIFEST_SCHEMA, Manifest, ManifestError, ModelAliases,

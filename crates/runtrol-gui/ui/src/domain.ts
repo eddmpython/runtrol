@@ -78,7 +78,34 @@ export type RateLimitGauge = {
 
 export type FrameEnvelope = {
   session: string;
+  view: number;
+  nextExpected: WatchCursor;
   frame: string;
+};
+
+export type WatchCursor = {
+  stream: string;
+  epoch: number;
+  seq: number;
+};
+
+export type WatchGap = {
+  requested: WatchCursor;
+  liveAt: WatchCursor;
+};
+
+export type WatchStarted = {
+  view: number;
+  startsAt: WatchCursor;
+  liveAt: WatchCursor;
+  gap: WatchGap | null;
+};
+
+export type WatchOver = {
+  session: string;
+  view: number;
+  nextExpected: WatchCursor;
+  lagged: boolean;
 };
 
 export type Notice = {

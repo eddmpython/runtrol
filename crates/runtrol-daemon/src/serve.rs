@@ -41,7 +41,7 @@ use runtrol_core::{
 };
 use runtrol_ipc::transport::{Connection, Listener, TransportError};
 use runtrol_ipc::wire::{Request, Response, WireError};
-use runtrol_provider::{AgentCommand, CloseMode, Opaque, ProviderError, SessionId};
+use runtrol_provider::{AgentCommand, CloseMode, ProviderError, SessionId};
 use tokio::sync::{Mutex, mpsc, oneshot};
 use tokio::task::JoinSet;
 
@@ -185,8 +185,15 @@ impl Drop for AgentGuard {
 /// [`ServeError::Transport`] when the endpoint cannot be created or cannot keep accepting. Not worked around: a
 /// daemon nothing can reach is a daemon that does nothing, and staying up would hide that from the operator.
 pub async fn serve(composed: Composed, mut listener: Listener) -> Result<(), ServeError> {
+    serve_sessions(composed, &mut listener, SessionManager::new()).await
+}
+
+async fn serve_sessions(
+    composed: Composed,
+    listener: &mut Listener,
+    mut sessions: SessionManager,
+) -> Result<(), ServeError> {
     let composed = Arc::new(composed);
-    let mut sessions = SessionManager::new();
     let (asking, mut asked) = mpsc::channel::<Asked>(ASKED_QUEUE);
     let (reserving, mut reservations) = mpsc::unbounded_channel::<ReservationAsked>();
     let (returning, mut returned) = mpsc::unbounded_channel::<AgentReturned>();
@@ -540,7 +547,13 @@ async fn converse(
                 // The acknowledgement is the subscription boundary. Without it, a caller can only sleep and guess
                 // whether its Watch request arrived before the next prompt, which loses the very event it watches for
                 // on a slow machine.
-                if write(&mut connection, &Response::Watching).await.is_err() {
+                let start = watching.start();
+                let acknowledged = Response::Watching {
+                    starts_at: start.starts_at,
+                    live_at: start.live_at,
+                    gap: start.gap.map(Box::new),
+                };
+                if write(&mut connection, &acknowledged).await.is_err() {
                     return;
                 }
                 relay(&mut connection, *watching).await;
@@ -700,19 +713,53 @@ async fn finish_connection_cleanup(
 /// The event goes out as the provider wrote it. Encoded here and read by nobody in between: this is the last hop a
 /// conversation takes inside runtrol, and the whole of what happens to it is being put in an envelope.
 async fn relay(connection: &mut Connection, mut watching: runtrol_core::SessionView) {
-    while let Some(event) = watching.recv().await {
-        let encoded = match serde_json::to_string(&event) {
-            Ok(encoded) => Opaque::owned(encoded),
+    let stream = watching.start().live_at.stream;
+    while let Some(item) = watching.recv().await {
+        let event = match item {
+            runtrol_core::WatchItem::Event(event) => event,
+            runtrol_core::WatchItem::Lagged(next_expected) => {
+                drop(write(connection, &Response::Lagged { next_expected }).await);
+                return;
+            }
+        };
+        let encoded = match event.wire() {
+            Ok(encoded) => encoded,
             // An event this build cannot write is a defect in this build, and it is about one event rather than
             // about the session. Said out loud in place of that event, because a watcher that silently skipped one
             // would show a conversation with a hole in it and no sign that anything was missing.
             Err(error) => {
-                let detail = format!("cannot serialize {} event: {error}", event.body.wire_name());
+                let detail = format!(
+                    "cannot serialize {} event: {error}",
+                    event.event().body.wire_name()
+                );
                 drop(write(connection, &refuse(&detail)).await);
                 return;
             }
         };
-        if write(connection, &Response::Event(encoded)).await.is_err() {
+        let positioned = event.event();
+        let next_expected = runtrol_provider::WatchCursor {
+            stream,
+            epoch: positioned.epoch,
+            seq: positioned.seq.wrapping_add(1),
+        };
+        let edges = match runtrol_ipc::event_response_edges(next_expected) {
+            Ok(edges) => edges,
+            Err(error) => {
+                drop(
+                    write(
+                        connection,
+                        &refuse(&format!("cannot serialize an event cursor: {error}")),
+                    )
+                    .await,
+                );
+                return;
+            }
+        };
+        if connection
+            .send_parts(&[edges.prefix(), encoded.as_str().as_bytes(), edges.suffix()])
+            .await
+            .is_err()
+        {
             return;
         }
     }
@@ -738,7 +785,7 @@ async fn write(connection: &mut Connection, response: &Response) -> Result<(), T
 #[cfg(test)]
 mod tests {
     use async_trait::async_trait;
-    use runtrol_provider::{Agent, AgentCommand, Produced, ProviderError};
+    use runtrol_provider::{Agent, AgentCommand, Opaque, Produced, ProviderError};
 
     use super::*;
 
@@ -886,6 +933,10 @@ mod tests {
 
     impl Running {
         async fn start(name: &str) -> Self {
+            Self::start_with_sessions(name, SessionManager::new()).await
+        }
+
+        async fn start_with_sessions(name: &str, sessions: SessionManager) -> Self {
             let root = std::env::temp_dir().join(format!("runtrol-serve-{name}"));
             if root.exists() {
                 std::fs::remove_dir_all(&root).expect("clear the previous run");
@@ -897,10 +948,13 @@ mod tests {
             let composed = crate::compose::Composed::for_tests(&home, runtrol_drivers::builtin())
                 .expect("a fresh home composes");
             let address = composed.home.paths().endpoint().address().to_owned();
-            let listener = Listener::bind(&address)
+            let mut listener = Listener::bind(&address)
                 .await
                 .expect("the endpoint is free");
-            let serving = tokio::spawn(serve(composed, listener));
+            let serving =
+                tokio::spawn(
+                    async move { serve_sessions(composed, &mut listener, sessions).await },
+                );
             Self {
                 address,
                 home,
@@ -930,6 +984,30 @@ mod tests {
             .expect("the connection holds")
             .expect("every request produces an answer");
         serde_json::from_slice(&answer).expect("the answer is readable")
+    }
+
+    async fn receive(connection: &mut Connection) -> Response {
+        let answer = connection
+            .recv()
+            .await
+            .expect("the connection holds")
+            .expect("the watch remains open");
+        serde_json::from_slice(&answer).expect("the event answer is readable")
+    }
+
+    async fn greeted_caller(running: &Running) -> Connection {
+        let mut caller = running.caller().await;
+        assert!(matches!(
+            ask(
+                &mut caller,
+                &Request::Hello {
+                    wire: runtrol_ipc::WIRE_VERSION,
+                },
+            )
+            .await,
+            Response::Welcome { .. }
+        ));
+        caller
     }
 
     #[tokio::test]
@@ -1010,6 +1088,107 @@ mod tests {
             }
             other => panic!("expected a listing, got {other:?}"),
         }
+        running.stop();
+    }
+
+    #[tokio::test]
+    async fn a_real_endpoint_acknowledges_replays_and_resumes_at_the_exact_cursor() {
+        let session = SessionId::now();
+        let mut sessions = SessionManager::new();
+        attach_test_agent(
+            &mut sessions,
+            session,
+            Box::new(ReadyEvent {
+                session,
+                ready: true,
+            }),
+        );
+        let running = Running::start_with_sessions("watch-cursor", sessions).await;
+
+        let mut first = greeted_caller(&running).await;
+        let start = ask(
+            &mut first,
+            &Request::Watch {
+                session,
+                after: None,
+            },
+        )
+        .await;
+        let starts_at = match start {
+            Response::Watching {
+                starts_at,
+                gap: None,
+                ..
+            } => starts_at,
+            other => panic!("expected a watch acknowledgement, got {other:?}"),
+        };
+        let next_expected = match receive(&mut first).await {
+            Response::Event {
+                payload,
+                next_expected,
+            } => {
+                assert!(payload.as_str().contains("\"seq\":0"));
+                assert_eq!(starts_at.seq, 0);
+                next_expected
+            }
+            other => panic!("expected one replayed event, got {other:?}"),
+        };
+        drop(first);
+
+        let mut exact = greeted_caller(&running).await;
+        match ask(
+            &mut exact,
+            &Request::Watch {
+                session,
+                after: Some(next_expected),
+            },
+        )
+        .await
+        {
+            Response::Watching {
+                starts_at,
+                live_at,
+                gap: None,
+            } => {
+                assert_eq!(starts_at, next_expected);
+                assert_eq!(live_at, next_expected);
+            }
+            other => panic!("expected an exact reconnect acknowledgement, got {other:?}"),
+        }
+        assert!(
+            tokio::time::timeout(Duration::from_millis(50), exact.recv())
+                .await
+                .is_err(),
+            "an exact reconnect must not duplicate the replayed event"
+        );
+        drop(exact);
+
+        let mut mismatched = greeted_caller(&running).await;
+        let wrong_stream = runtrol_provider::WatchCursor {
+            stream: runtrol_provider::StreamId::now(),
+            ..next_expected
+        };
+        match ask(
+            &mut mismatched,
+            &Request::Watch {
+                session,
+                after: Some(wrong_stream),
+            },
+        )
+        .await
+        {
+            Response::Watching {
+                starts_at,
+                live_at,
+                gap: Some(gap),
+            } => {
+                assert_eq!(starts_at, live_at);
+                assert_eq!(gap.requested, wrong_stream);
+                assert_eq!(gap.live_at, live_at);
+            }
+            other => panic!("expected a visible stream gap, got {other:?}"),
+        }
+
         running.stop();
     }
 

@@ -310,16 +310,57 @@ pub const FRAME_EVENT: &str = "session-frame";
 pub const OVER_EVENT: &str = "session-over";
 
 /// One frame from a session, on its way to the page.
-///
-/// The provider's own bytes, untouched. runtrol does not lay a conversation out, reorder it, or summarize it,
-/// so what the page receives is what the provider wrote, with only the session it belongs to attached.
 #[derive(Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 struct Frame {
-    /// Which session it belongs to, so a page that has moved on can ignore it.
     session: String,
-    /// The provider's own frame, as text.
-    frame: String,
+    view: u64,
+    next_expected: runtrol_provider::WatchCursor,
+    #[serde(rename = "frame")]
+    content: String,
+}
+
+/// Why a watch reader stopped and the exact cursor safe for reconnect.
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WatchOver {
+    session: String,
+    view: u64,
+    next_expected: runtrol_provider::WatchCursor,
+    lagged: bool,
+}
+
+/// An installed watch whose reader is still gated behind [`continue_watch`].
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WatchStarted {
+    view: u64,
+    starts_at: runtrol_provider::WatchCursor,
+    live_at: runtrol_provider::WatchCursor,
+    gap: Option<VisibleWatchGap>,
+}
+
+#[derive(Clone, Copy, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct VisibleWatchGap {
+    requested: runtrol_provider::WatchCursor,
+    live_at: runtrol_provider::WatchCursor,
+}
+
+impl From<runtrol_provider::WatchGap> for VisibleWatchGap {
+    fn from(gap: runtrol_provider::WatchGap) -> Self {
+        Self {
+            requested: gap.requested,
+            live_at: gap.live_at,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct WatchBoundary {
+    starts_at: runtrol_provider::WatchCursor,
+    live_at: runtrol_provider::WatchCursor,
+    gap: Option<runtrol_provider::WatchGap>,
 }
 
 /// Watch a session, replacing whatever was being watched.
@@ -330,113 +371,313 @@ struct Frame {
 /// provider's output for a panel nobody is looking at, which is the cost the memory contract exists to refuse.
 /// Whoever wants two conversations at once opens two windows, and the daemon serves both the same way.
 #[tauri::command]
-async fn watch(app: tauri::AppHandle, session: String) -> Answered<()> {
+async fn watch(
+    app: tauri::AppHandle,
+    session: String,
+    after: Option<runtrol_provider::WatchCursor>,
+    intent: u64,
+) -> Answered<Option<WatchStarted>> {
     let Some(parsed) = parse_session(&session) else {
         return Answered::Broken {
             message: "that is not a session identifier".to_owned(),
         };
     };
     let reaching = reaching(&app);
+    let (revision, mut cancelled) = begin_watching(&app, intent).await;
 
-    // Stopped before the next one starts, so there is never a moment with two views open.
-    stop_watching(&app).await;
-
-    let greeted = ask::greet(&reaching.address, &reaching.runtrol).await;
+    let greeted = tokio::select! {
+        result = ask::greet(&reaching.address, &reaching.runtrol) => result,
+        result = &mut cancelled => {
+            drop(result);
+            return Answered::Ok { value: None };
+        }
+    };
     let mut connection = match greeted {
         Ok(connection) => connection,
-        Err(failed) => return Answered::broken(&failed),
+        Err(failed) => {
+            clear_pending(&app, intent, revision).await;
+            return Answered::broken(&failed);
+        }
     };
     // The explicit acknowledgment separates an installed subscription from an idle provider. Returning before
     // it arrives would let the page claim it is watching even when the daemon rejected or lost the request.
-    let acknowledged = ask::exchange(&mut connection, &Request::Watch { session: parsed }).await;
-    if let Err(answer) = require_watching(acknowledged) {
-        return answer;
-    }
+    let request = Request::Watch {
+        session: parsed,
+        after,
+    };
+    let acknowledged = tokio::select! {
+        result = ask::exchange(&mut connection, &request) => result,
+        result = &mut cancelled => {
+            drop(result);
+            return Answered::Ok { value: None };
+        }
+    };
+    let boundary = match require_watching(acknowledged) {
+        Ok(boundary) => boundary,
+        Err(answer) => {
+            clear_pending(&app, intent, revision).await;
+            return *answer;
+        }
+    };
 
     let handle = app.clone();
     let watching = session.clone();
-    let task = tauri::async_runtime::spawn(async move {
-        loop {
-            // Spelled as a match on purpose: the two arms are different facts. One is a frame, and the other
-            // is the view being over, which the page has to be told about because a view that stops without
-            // saying so looks exactly like a session that went quiet.
-            #[expect(
-                clippy::single_match_else,
-                reason = "the ending arm is a decision, not a fallthrough"
-            )]
-            match connection.recv().await {
-                Ok(Some(bytes)) => {
-                    // The daemon puts each event in a `Response::Event` envelope. The page wants what the
-                    // provider wrote, not runtrol's envelope around it, so the envelope is opened here and
-                    // nothing inside it is read.
-                    let text = match serde_json::from_slice::<Response>(&bytes) {
-                        Ok(Response::Event(payload)) => payload.as_str().to_owned(),
-                        // Anything else on a connection that has become a view is worth showing rather than
-                        // dropping: it is the daemon saying something about the session.
-                        Ok(other) => {
-                            format!("{{\"body\":{{\"event\":\"daemon\",\"said\":{other:?}}}}}")
-                        }
-                        Err(_) => String::from_utf8_lossy(&bytes).into_owned(),
-                    };
-                    // Pushed as it arrived. A window that parsed this to decide what to send would be reading
-                    // a conversation, which is the one thing runtrol does not do.
-                    let sent = handle.emit(
-                        FRAME_EVENT,
-                        Frame {
-                            session: watching.clone(),
-                            frame: text,
-                        },
-                    );
-                    // Whether a frame left this side, and whether the toolkit took it. The page reports what
-                    // it received; without this, a frame that never arrived and a frame that arrived and was
-                    // not drawn look identical from outside.
-                    trace(format!(
-                        "relayed a frame to the page: {}",
-                        if sent.is_ok() { "taken" } else { "refused" }
-                    ));
-                }
-                // The stream ended, or it broke. Either way the view is over and the page is told, because a
-                // view that stops without saying so looks exactly like a session that went quiet.
-                Ok(None) | Err(_) => {
-                    drop(handle.emit(OVER_EVENT, watching.clone()));
-                    return;
-                }
-            }
-        }
-    });
+    let (release, released) = tokio::sync::oneshot::channel();
+    let task = tauri::async_runtime::spawn(relay_watch(
+        handle, connection, watching, revision, boundary, released,
+    ));
 
-    *tauri::Manager::state::<Watching>(&app).0.lock().await = Some(task);
-    Answered::Ok { value: () }
+    let watching = tauri::Manager::state::<Watching>(&app);
+    let mut state = watching.0.lock().await;
+    if state.revision != revision
+        || !state
+            .pending
+            .as_ref()
+            .is_some_and(|pending| pending.intent == intent && pending.revision == revision)
+    {
+        task.abort();
+        return Answered::Ok { value: None };
+    }
+    drop(state.pending.take());
+    state.current = Some(WatchTask {
+        intent,
+        view: revision,
+        release: Some(release),
+        task,
+    });
+    Answered::Ok {
+        value: Some(WatchStarted {
+            view: revision,
+            starts_at: boundary.starts_at,
+            live_at: boundary.live_at,
+            gap: boundary.gap.map(VisibleWatchGap::from),
+        }),
+    }
+}
+
+async fn relay_watch(
+    handle: tauri::AppHandle,
+    mut connection: runtrol_ipc::Connection,
+    session: String,
+    view: u64,
+    boundary: WatchBoundary,
+    released: tokio::sync::oneshot::Receiver<()>,
+) {
+    if released.await.is_err() {
+        return;
+    }
+    let mut next_expected = boundary.starts_at;
+    while let Ok(Some(bytes)) = connection.recv().await {
+        let Ok(response) = serde_json::from_slice::<Response>(&bytes) else {
+            break;
+        };
+        match response {
+            Response::Event {
+                payload,
+                next_expected: after_event,
+            } => {
+                let sent = handle.emit(
+                    FRAME_EVENT,
+                    Frame {
+                        session: session.clone(),
+                        view,
+                        next_expected: after_event,
+                        content: payload.as_str().to_owned(),
+                    },
+                );
+                trace(format!(
+                    "relayed a frame to the page: {}",
+                    if sent.is_ok() { "taken" } else { "refused" }
+                ));
+                if sent.is_err() {
+                    break;
+                }
+                next_expected = after_event;
+            }
+            Response::Lagged {
+                next_expected: lagged_at,
+            } => {
+                drop(handle.emit(
+                    OVER_EVENT,
+                    WatchOver {
+                        session,
+                        view,
+                        next_expected: lagged_at,
+                        lagged: true,
+                    },
+                ));
+                return;
+            }
+            _ => break,
+        }
+    }
+    drop(handle.emit(
+        OVER_EVENT,
+        WatchOver {
+            session,
+            view,
+            next_expected,
+            lagged: false,
+        },
+    ));
 }
 
 /// Accept only the response that installs a watch before any provider event can be relayed.
-fn require_watching(answer: Result<Response, Failed>) -> Result<(), Answered<()>> {
+fn require_watching(
+    answer: Result<Response, Failed>,
+) -> Result<WatchBoundary, Box<Answered<Option<WatchStarted>>>> {
     match answer {
-        Ok(Response::Watching) => Ok(()),
-        Ok(Response::Failed(error)) => Err(Answered::refused(&error)),
-        Ok(other) => Err(Answered::unreadable(&other)),
-        Err(failed) => Err(Answered::broken(&failed)),
+        Ok(Response::Watching {
+            starts_at,
+            live_at,
+            gap,
+        }) => Ok(WatchBoundary {
+            starts_at,
+            live_at,
+            gap: gap.map(|gap| *gap),
+        }),
+        Ok(Response::Failed(error)) => Err(Box::new(Answered::refused(&error))),
+        Ok(other) => Err(Box::new(Answered::unreadable(&other))),
+        Err(failed) => Err(Box::new(Answered::broken(&failed))),
     }
+}
+
+/// Release the current reader only after the page has applied its acknowledgement.
+#[tauri::command]
+async fn continue_watch(app: tauri::AppHandle, view: u64) -> Answered<()> {
+    let watching = tauri::Manager::state::<Watching>(&app);
+    let mut state = watching.0.lock().await;
+    let Some(current) = state.current.as_mut() else {
+        return Answered::Broken {
+            message: "that watch was superseded before it could start".to_owned(),
+        };
+    };
+    if current.view != view {
+        return Answered::Broken {
+            message: "that watch was superseded before it could start".to_owned(),
+        };
+    }
+    let Some(release) = current.release.take() else {
+        return Answered::Broken {
+            message: "that watch reader was already released".to_owned(),
+        };
+    };
+    if release.send(()).is_err() {
+        return Answered::Broken {
+            message: "that watch reader ended before it could start".to_owned(),
+        };
+    }
+    Answered::Ok { value: () }
 }
 
 /// Stop watching, if anything was.
 #[tauri::command]
-async fn unwatch(app: tauri::AppHandle) {
+async fn unwatch(app: tauri::AppHandle) -> Answered<()> {
     stop_watching(&app).await;
+    Answered::Ok { value: () }
+}
+
+/// Stop one exact view without letting a stale page action cancel its replacement.
+#[tauri::command]
+async fn stop_watch(app: tauri::AppHandle, intent: u64) -> Answered<()> {
+    let watching = tauri::Manager::state::<Watching>(&app);
+    let mut state = watching.0.lock().await;
+    let pending_matches = state
+        .pending
+        .as_ref()
+        .is_some_and(|pending| pending.intent == intent);
+    let current_matches = state
+        .current
+        .as_ref()
+        .is_some_and(|current| current.intent == intent);
+    if pending_matches || current_matches {
+        state.revision = state.revision.wrapping_add(1);
+        if pending_matches
+            && let Some(pending) = state.pending.take()
+            && pending.cancel.send(()).is_err()
+        {
+            // The pending command already ended, so there is no connection left for this cancellation to own.
+        }
+        if current_matches && let Some(current) = state.current.take() {
+            current.task.abort();
+        }
+    }
+    Answered::Ok { value: () }
 }
 
 /// The task pushing frames at the page, when there is one.
 #[derive(Default)]
-struct Watching(tauri::async_runtime::Mutex<Option<tauri::async_runtime::JoinHandle<()>>>);
+struct Watching(tauri::async_runtime::Mutex<WatchState>);
+
+#[derive(Default)]
+struct WatchState {
+    revision: u64,
+    pending: Option<PendingWatch>,
+    current: Option<WatchTask>,
+}
+
+struct PendingWatch {
+    intent: u64,
+    revision: u64,
+    cancel: tokio::sync::oneshot::Sender<()>,
+}
+
+struct WatchTask {
+    intent: u64,
+    view: u64,
+    release: Option<tokio::sync::oneshot::Sender<()>>,
+    task: tauri::async_runtime::JoinHandle<()>,
+}
+
+async fn begin_watching(
+    app: &tauri::AppHandle,
+    intent: u64,
+) -> (u64, tokio::sync::oneshot::Receiver<()>) {
+    let watching = tauri::Manager::state::<Watching>(app);
+    let mut state = watching.0.lock().await;
+    state.revision = state.revision.wrapping_add(1);
+    if let Some(previous) = state.pending.take()
+        && previous.cancel.send(()).is_err()
+    {
+        // The superseded command already ended, so there is no connection left for this cancellation to own.
+    }
+    if let Some(previous) = state.current.take() {
+        previous.task.abort();
+    }
+    let revision = state.revision;
+    let (cancel, cancelled) = tokio::sync::oneshot::channel();
+    state.pending = Some(PendingWatch {
+        intent,
+        revision,
+        cancel,
+    });
+    (revision, cancelled)
+}
+
+async fn clear_pending(app: &tauri::AppHandle, intent: u64, revision: u64) {
+    let watching = tauri::Manager::state::<Watching>(app);
+    let mut state = watching.0.lock().await;
+    if state
+        .pending
+        .as_ref()
+        .is_some_and(|pending| pending.intent == intent && pending.revision == revision)
+    {
+        drop(state.pending.take());
+    }
+}
 
 /// End the current view and let its connection go.
 async fn stop_watching(app: &tauri::AppHandle) {
-    let held = tauri::Manager::state::<Watching>(app).0.lock().await.take();
-    if let Some(task) = held {
-        // Aborted rather than asked to finish. The daemon notices the connection go and drops the subscription
-        // on its side, which is the only thing that has to happen; waiting for a frame that may never come
-        // would make switching sessions depend on the provider saying something.
-        task.abort();
+    let watching = tauri::Manager::state::<Watching>(app);
+    let mut state = watching.0.lock().await;
+    state.revision = state.revision.wrapping_add(1);
+    if let Some(pending) = state.pending.take()
+        && pending.cancel.send(()).is_err()
+    {
+        // The command already ended, so there is no connection left for this cancellation to own.
+    }
+    if let Some(current) = state.current.take() {
+        current.task.abort();
     }
 }
 
@@ -504,7 +745,18 @@ pub fn run(reaching: Reaching) -> Result<(), tauri::Error> {
         .manage(reaching)
         .manage(Watching::default())
         .invoke_handler(tauri::generate_handler![
-            sessions, providers, models, start, resume, close, prompt, watch, unwatch, tracing,
+            sessions,
+            providers,
+            models,
+            start,
+            resume,
+            close,
+            prompt,
+            watch,
+            continue_watch,
+            stop_watch,
+            unwatch,
+            tracing,
             trace
         ])
         .run(tauri::generate_context!())
@@ -555,11 +807,26 @@ mod tests {
 
     #[test]
     fn a_watch_waits_for_the_exact_subscription_acknowledgment() {
-        assert!(require_watching(Ok(Response::Watching)).is_ok());
+        let cursor = runtrol_provider::WatchCursor {
+            stream: runtrol_provider::StreamId::now(),
+            epoch: 0,
+            seq: 1,
+        };
+        assert!(
+            require_watching(Ok(Response::Watching {
+                starts_at: cursor,
+                live_at: cursor,
+                gap: None,
+            }))
+            .is_ok()
+        );
 
         let payload = runtrol_provider::Opaque::owned(r#"{"body":{"event":"turn"}}"#.to_owned());
-        let unexpected = require_watching(Ok(Response::Event(payload)))
-            .expect_err("an event cannot stand in for the watch acknowledgment");
+        let unexpected = require_watching(Ok(Response::Event {
+            payload,
+            next_expected: cursor,
+        }))
+        .expect_err("an event cannot stand in for the watch acknowledgment");
         let encoded = serde_json::to_string(&unexpected).expect("serializable");
         assert!(encoded.contains(r#""outcome":"broken""#), "{encoded}");
     }

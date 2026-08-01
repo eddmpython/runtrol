@@ -3,11 +3,8 @@
 //! A subscriber whose connection drops for a moment should not have to go anywhere to catch up. That is
 //! what this holds: the last few frames, so a reconnect inside the window is served from memory.
 //!
-//! Anything older is served from the provider's own store, by positioned read. That is not a compromise,
-//! it is measured: a positioned 64 KiB read costs 1.1 ms and 64 KiB, while materializing the same
-//! transcript costs 173 ms and 145 MB. The ring is small **because** the provider's file is the record and
-//! runtrol keeps no copy of it. Thinness buying a bound, at the one place a slow reader could otherwise
-//! make the daemon grow without limit.
+//! Anything older is reported as a visible gap. runtrol neither reads a provider transcript nor pretends it can fill
+//! that gap. The provider remains the transcript owner, while this ring remains only a small latency window.
 //!
 //! # The two bounds, and why one is not enough
 //!
@@ -21,13 +18,12 @@
 //!
 //! # Why the ring is emptied on a reattach
 //!
-//! Positions restart at zero in a new epoch, so a ring holding two epochs could not answer "what came
-//! after position 12" at all. A subscriber that reconnects across a reattach is served from the provider's
-//! store, which is what the attach frame's replay source is for.
+//! Positions restart at zero in a new epoch, so a ring holding two epochs could not answer which frame follows a
+//! cursor. The watch acknowledgement reports that boundary change as a gap.
 
 use std::collections::VecDeque;
 
-use runtrol_provider::AgentEvent;
+use runtrol_provider::{AgentEvent, StreamId, WatchCursor};
 
 /// How many frames the ring holds.
 ///
@@ -50,21 +46,23 @@ pub enum Reach {
     UpToDate,
     /// The ring holds every frame after that position.
     Held,
-    /// The gap begins before the ring does.
-    ///
-    /// The subscriber reads the provider's own store from this cursor to close it. The frames the ring
-    /// still holds pick up from there.
-    Gap {
-        /// The cursor to resume reading the provider's store from.
-        resume_from: u64,
-    },
+    /// The requested boundary is outside the bounded window or crosses a deliberately unretained frame.
+    Gap,
+}
+
+/// One bounded replay entry.
+#[derive(Clone, Debug)]
+enum RingEntry {
+    Event(AgentEvent),
+    /// A payload larger than the complete byte budget was relayed live but not retained here.
+    Lost(WatchCursor),
 }
 
 /// The last few frames of one session, bounded twice.
 #[derive(Clone, Debug, Default)]
 pub struct ReplayRing {
     /// Oldest first.
-    frames: VecDeque<AgentEvent>,
+    entries: VecDeque<RingEntry>,
     /// Provider payload bytes currently held, kept as a running total rather than summed on demand.
     bytes: usize,
 }
@@ -74,29 +72,36 @@ impl ReplayRing {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            frames: VecDeque::with_capacity(RING_FRAMES),
+            entries: VecDeque::with_capacity(RING_FRAMES),
             bytes: 0,
         }
     }
 
     /// Add a frame, evicting from the old end until both bounds hold again.
     ///
-    /// The newest frame is always kept, even when it alone exceeds the byte budget. A ring that could
-    /// refuse the latest frame would answer "you are up to date" while holding nothing, and the worst case
-    /// is bounded anyway: a single frame cannot exceed the transport's own maximum line length, which the
-    /// driver's framing enforces before a frame ever reaches here.
-    pub fn push(&mut self, event: AgentEvent) {
-        self.bytes = self.bytes.saturating_add(event.body.payload_bytes());
-        self.frames.push_back(event);
+    /// A single payload larger than the byte budget is never retained. A fixed-width loss marker replaces it so a
+    /// reconnect cannot mistake an empty ring for complete coverage.
+    pub fn push(&mut self, stream: StreamId, event: AgentEvent) {
+        let payload = event.body.payload_bytes();
+        if payload > RING_BYTES {
+            self.clear();
+            self.entries.push_back(RingEntry::Lost(WatchCursor {
+                stream,
+                epoch: event.epoch,
+                seq: event.seq,
+            }));
+            return;
+        }
 
-        while self.frames.len() > RING_FRAMES || (self.bytes > RING_BYTES && self.frames.len() > 1)
-        {
-            match self.frames.pop_front() {
-                Some(evicted) => {
+        self.bytes = self.bytes.saturating_add(payload);
+        self.entries.push_back(RingEntry::Event(event));
+
+        while self.entries.len() > RING_FRAMES || self.bytes > RING_BYTES {
+            match self.entries.pop_front() {
+                Some(RingEntry::Event(evicted)) => {
                     self.bytes = self.bytes.saturating_sub(evicted.body.payload_bytes());
                 }
-                // The loop condition requires at least two frames, so the queue cannot be empty here.
-                // Breaking rather than asserting keeps a supervisor supervising.
+                Some(RingEntry::Lost(_)) => {}
                 None => break,
             }
         }
@@ -104,27 +109,34 @@ impl ReplayRing {
 
     /// Forget everything, because positions are about to restart.
     pub fn clear(&mut self) {
-        self.frames.clear();
+        self.entries.clear();
         self.bytes = 0;
     }
 
-    /// What can be done for a subscriber that last saw `after`.
+    /// What can be done for a subscriber asking for `requested` at the current live boundary.
     #[must_use]
-    pub fn reach(&self, after: u64) -> Reach {
-        let Some(oldest) = self.frames.front() else {
-            // Nothing here. A subscriber cannot be behind a ring that holds nothing, and a caller that
-            // wants a resume point for an empty ring is asking about a session with no frames yet.
+    pub fn reach(&self, requested: WatchCursor, live_at: WatchCursor) -> Reach {
+        if requested.stream != live_at.stream
+            || requested.epoch != live_at.epoch
+            || requested.seq > live_at.seq
+        {
+            return Reach::Gap;
+        }
+        if requested.seq == live_at.seq {
             return Reach::UpToDate;
-        };
+        }
+        if self.entries.iter().any(|entry| {
+            matches!(entry, RingEntry::Lost(lost) if lost.stream == requested.stream
+                && lost.epoch == requested.epoch && lost.seq >= requested.seq)
+        }) {
+            return Reach::Gap;
+        }
 
-        match self.frames.back() {
-            Some(newest) if newest.seq <= after => Reach::UpToDate,
-            // The frame the subscriber needs next is the one after `after`. It is here only if the oldest
-            // frame is that one or earlier.
-            _ if oldest.seq <= after.saturating_add(1) => Reach::Held,
-            _ => Reach::Gap {
-                resume_from: oldest.src_end,
-            },
+        match self.frames().next() {
+            Some(oldest) if oldest.epoch == requested.epoch && oldest.seq <= requested.seq => {
+                Reach::Held
+            }
+            Some(_) | None => Reach::Gap,
         }
     }
 
@@ -132,40 +144,45 @@ impl ReplayRing {
     ///
     /// Cloning these frames shares their provider payload allocations. A caller gets a bounded view without
     /// materializing a transcript or copying its content bytes.
-    pub fn frames(&self) -> impl Iterator<Item = &AgentEvent> {
-        self.frames.iter()
+    #[must_use]
+    pub fn frames(&self) -> impl DoubleEndedIterator<Item = &AgentEvent> {
+        self.entries.iter().filter_map(|entry| match entry {
+            RingEntry::Event(event) => Some(event),
+            RingEntry::Lost(_) => None,
+        })
     }
 
     /// The frames after `after`, oldest first.
     ///
     /// Yields only what the ring still holds. Whether that is the whole gap is [`ReplayRing::reach`]'s
     /// question, and a caller that skips asking it serves a silent hole.
-    pub fn frames_after(&self, after: u64) -> impl Iterator<Item = &AgentEvent> {
-        self.frames.iter().filter(move |frame| frame.seq > after)
+    pub fn frames_from(&self, cursor: WatchCursor) -> impl Iterator<Item = &AgentEvent> {
+        self.frames()
+            .filter(move |frame| frame.epoch == cursor.epoch && frame.seq >= cursor.seq)
     }
 
     /// The oldest position still held.
     #[must_use]
     pub fn oldest_seq(&self) -> Option<u64> {
-        self.frames.front().map(|frame| frame.seq)
+        self.frames().next().map(|frame| frame.seq)
     }
 
     /// The newest position held.
     #[must_use]
     pub fn newest_seq(&self) -> Option<u64> {
-        self.frames.back().map(|frame| frame.seq)
+        self.frames().next_back().map(|frame| frame.seq)
     }
 
     /// How many frames are held.
     #[must_use]
     pub fn len(&self) -> usize {
-        self.frames.len()
+        self.entries.len()
     }
 
     /// Whether the ring is empty.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.frames.is_empty()
+        self.entries.is_empty()
     }
 
     /// How many bytes of provider payload are held.
@@ -177,7 +194,7 @@ impl ReplayRing {
 
 #[cfg(test)]
 mod tests {
-    use runtrol_provider::{EventBody, Opaque, SessionId};
+    use runtrol_provider::{EventBody, Opaque, SessionId, StreamId};
 
     use super::*;
     use crate::events::seq::Sequencer;
@@ -189,16 +206,31 @@ mod tests {
         }
     }
 
+    struct Filled {
+        ring: ReplayRing,
+        stream: StreamId,
+        live_at: WatchCursor,
+    }
+
     /// A ring filled through the sequencer, so positions are the real ones.
-    fn filled(count: usize, payload: usize) -> ReplayRing {
+    fn filled(count: usize, payload: usize) -> Filled {
         let session = SessionId::now();
+        let stream = StreamId::now();
         let mut seq = Sequencer::new();
         let mut ring = ReplayRing::new();
         for index in 0..count {
             let cursor = (u64::try_from(index).expect("a test pushes few frames") + 1) * 100;
-            ring.push(seq.stamp(session, cursor, sized(payload)).0);
+            ring.push(stream, seq.stamp(session, cursor, sized(payload)).0);
         }
-        ring
+        Filled {
+            ring,
+            stream,
+            live_at: WatchCursor {
+                stream,
+                epoch: seq.epoch(),
+                seq: seq.next_seq(),
+            },
+        }
     }
 
     #[test]
@@ -217,7 +249,7 @@ mod tests {
     fn the_frame_bound_holds_however_small_the_frames_are() {
         // A byte budget alone would admit thousands of tiny frames whose envelopes cost more than their
         // payloads.
-        let ring = filled(RING_FRAMES * 4, 1);
+        let ring = filled(RING_FRAMES * 4, 1).ring;
         assert_eq!(ring.len(), RING_FRAMES);
         assert!(ring.payload_bytes() <= RING_BYTES);
     }
@@ -225,7 +257,7 @@ mod tests {
     #[test]
     fn the_byte_bound_holds_however_few_the_frames_are() {
         // A frame budget alone would admit sixty-four large frames and blow the memory contract.
-        let ring = filled(8, RING_BYTES / 4);
+        let ring = filled(8, RING_BYTES / 4).ring;
         assert!(
             ring.payload_bytes() <= RING_BYTES,
             "{} bytes held",
@@ -235,92 +267,172 @@ mod tests {
     }
 
     #[test]
-    fn a_single_frame_over_budget_is_still_served() {
-        // Refusing it would leave the ring reporting that a subscriber is up to date while holding
-        // nothing. The worst case is one frame, which the transport's line bound already limits.
-        let ring = filled(1, RING_BYTES * 2);
+    fn a_single_frame_over_budget_becomes_a_fixed_loss_marker() {
+        let filled = filled(1, RING_BYTES * 2);
+        let ring = filled.ring;
         assert_eq!(ring.len(), 1);
-        assert!(ring.payload_bytes() > RING_BYTES);
+        assert_eq!(ring.payload_bytes(), 0);
+        assert_eq!(
+            ring.frames().count(),
+            0,
+            "the oversized payload is not retained"
+        );
+        assert_eq!(
+            ring.reach(
+                WatchCursor {
+                    stream: filled.stream,
+                    epoch: 0,
+                    seq: 0,
+                },
+                filled.live_at,
+            ),
+            Reach::Gap
+        );
+    }
+
+    #[test]
+    fn a_payload_at_the_exact_byte_bound_is_retained() {
+        let filled = filled(1, RING_BYTES);
+        assert_eq!(filled.ring.payload_bytes(), RING_BYTES);
+        assert_eq!(filled.ring.frames().count(), 1);
+    }
+
+    #[test]
+    fn replay_resumes_immediately_after_an_oversize_barrier() {
+        let session = SessionId::now();
+        let stream = StreamId::now();
+        let mut seq = Sequencer::new();
+        let mut ring = ReplayRing::new();
+        ring.push(stream, seq.stamp(session, 1, sized(RING_BYTES + 1)).0);
+        ring.push(stream, seq.stamp(session, 2, sized(8)).0);
+        let live_at = WatchCursor {
+            stream,
+            epoch: 0,
+            seq: 2,
+        };
+
+        assert_eq!(
+            ring.reach(WatchCursor { seq: 0, ..live_at }, live_at),
+            Reach::Gap
+        );
+        let after_loss = WatchCursor { seq: 1, ..live_at };
+        assert_eq!(ring.reach(after_loss, live_at), Reach::Held);
+        assert_eq!(
+            ring.frames_from(after_loss)
+                .map(|event| event.seq)
+                .collect::<Vec<_>>(),
+            vec![1]
+        );
     }
 
     #[test]
     fn eviction_keeps_the_running_byte_total_honest() {
         // The total is incremental, so an eviction that forgot to subtract would leave the ring believing
         // it is permanently full and serving one frame at a time forever.
-        let ring = filled(RING_FRAMES * 2, 4);
-        let held: usize = ring
-            .frames
-            .iter()
-            .map(|frame| frame.body.payload_bytes())
-            .sum();
+        let ring = filled(RING_FRAMES * 2, 4).ring;
+        let held: usize = ring.frames().map(|frame| frame.body.payload_bytes()).sum();
         assert!(held > 0, "the ring should be holding something");
         assert_eq!(ring.payload_bytes(), held);
     }
 
     #[test]
     fn a_reader_inside_the_window_is_served_from_memory() {
-        let ring = filled(4, 8);
-        assert_eq!(ring.reach(1), Reach::Held);
-        let served: Vec<u64> = ring.frames_after(1).map(|frame| frame.seq).collect();
+        let filled = filled(4, 8);
+        let requested = WatchCursor {
+            stream: filled.stream,
+            epoch: 0,
+            seq: 2,
+        };
+        assert_eq!(filled.ring.reach(requested, filled.live_at), Reach::Held);
+        let served: Vec<u64> = filled
+            .ring
+            .frames_from(requested)
+            .map(|frame| frame.seq)
+            .collect();
         assert_eq!(served, vec![2, 3]);
     }
 
     #[test]
     fn a_reader_at_the_newest_frame_is_told_there_is_nothing_to_do() {
-        let ring = filled(4, 8);
-        let newest = ring.newest_seq().expect("frames were pushed");
-        assert_eq!(ring.reach(newest), Reach::UpToDate);
-        assert_eq!(ring.frames_after(newest).count(), 0);
+        let filled = filled(4, 8);
+        assert_eq!(
+            filled.ring.reach(filled.live_at, filled.live_at),
+            Reach::UpToDate
+        );
+        assert_eq!(filled.ring.frames_from(filled.live_at).count(), 0);
     }
 
     #[test]
-    fn a_reader_older_than_the_window_is_sent_to_the_providers_store() {
-        // The ring is a latency window. Past it, the answer is a cursor into the provider's own file,
-        // because runtrol has no copy to offer.
-        let ring = filled(RING_FRAMES * 2, 4);
-        let oldest = ring.oldest_seq().expect("frames were pushed");
-        match ring.reach(0) {
-            Reach::Gap { resume_from } => {
-                let first = ring
-                    .frames_after(oldest - 1)
-                    .next()
-                    .expect("the oldest frame is held");
-                assert_eq!(
-                    resume_from, first.src_end,
-                    "the resume point is where the ring's own oldest frame begins"
-                );
-            }
-            other => panic!("expected a gap, got {other:?}"),
-        }
+    fn a_reader_older_than_the_window_gets_an_explicit_gap() {
+        let filled = filled(RING_FRAMES * 2, 4);
+        let requested = WatchCursor {
+            stream: filled.stream,
+            epoch: 0,
+            seq: 0,
+        };
+        assert_eq!(filled.ring.reach(requested, filled.live_at), Reach::Gap);
     }
 
     #[test]
     fn the_frame_immediately_before_the_window_still_counts_as_held() {
-        // Off by one here would send a subscriber that lost exactly nothing to the provider's file, on
-        // every single reconnect.
-        let ring = filled(RING_FRAMES + 3, 4);
-        let oldest = ring.oldest_seq().expect("frames were pushed");
+        // Off by one here would report a gap to a subscriber that lost exactly nothing on every reconnect.
+        let filled = filled(RING_FRAMES + 3, 4);
+        let oldest = filled.ring.oldest_seq().expect("frames were pushed");
         assert!(oldest >= 2, "the fixture must leave room to look behind it");
+        let held = WatchCursor {
+            stream: filled.stream,
+            epoch: 0,
+            seq: oldest,
+        };
         assert_eq!(
-            ring.reach(oldest - 1),
+            filled.ring.reach(held, filled.live_at),
             Reach::Held,
-            "the next frame this subscriber needs is the oldest one held"
+            "the oldest retained frame is a reachable next boundary"
         );
-        assert!(matches!(ring.reach(oldest - 2), Reach::Gap { .. }));
+        assert_eq!(
+            filled.ring.reach(
+                WatchCursor {
+                    seq: oldest - 1,
+                    ..held
+                },
+                filled.live_at,
+            ),
+            Reach::Gap
+        );
     }
 
     #[test]
-    fn an_empty_ring_asks_nobody_to_recover_anything() {
+    fn an_empty_ring_distinguishes_live_past_and_future_boundaries() {
         let ring = ReplayRing::new();
+        let stream = StreamId::now();
+        let live_at = WatchCursor {
+            stream,
+            epoch: 4,
+            seq: 0,
+        };
         assert!(ring.is_empty());
-        assert_eq!(ring.reach(0), Reach::UpToDate);
+        assert_eq!(ring.reach(live_at, live_at), Reach::UpToDate);
+        assert_eq!(
+            ring.reach(
+                WatchCursor {
+                    stream: StreamId::now(),
+                    ..live_at
+                },
+                live_at,
+            ),
+            Reach::Gap
+        );
+        assert_eq!(
+            ring.reach(WatchCursor { seq: 1, ..live_at }, live_at),
+            Reach::Gap
+        );
         assert_eq!(ring.oldest_seq(), None);
         assert_eq!(ring.payload_bytes(), 0);
     }
 
     #[test]
     fn clearing_forgets_positions_that_are_about_to_restart() {
-        let mut ring = filled(4, 8);
+        let mut ring = filled(4, 8).ring;
         ring.clear();
         assert!(ring.is_empty());
         assert_eq!(ring.payload_bytes(), 0);

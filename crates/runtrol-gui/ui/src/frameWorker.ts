@@ -1,19 +1,34 @@
 import { frameToItem } from "./frames";
+import type { WatchCursor } from "./domain";
+
+type QueuedFrame = {
+  frame: string;
+  nextExpected: WatchCursor;
+};
 
 type FrameBatch = {
   session: string;
-  frames: string[];
+  view: number;
+  frames: QueuedFrame[];
 };
 
 type ParsedBatch = {
   session: string;
-  frames: ReturnType<typeof frameToItem>[];
+  view: number;
+  frames: Array<{
+    pending: ReturnType<typeof frameToItem>;
+    nextExpected: WatchCursor;
+  }>;
 };
 
 self.onmessage = ({ data }: MessageEvent<FrameBatch>) => {
   const parsed: ParsedBatch = {
     session: data.session,
-    frames: data.frames.map(frameToItem),
+    view: data.view,
+    frames: data.frames.map(({ frame, nextExpected }) => ({
+      pending: frameToItem(frame),
+      nextExpected,
+    })),
   };
   self.postMessage(parsed);
 };

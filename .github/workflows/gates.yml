@@ -248,6 +248,16 @@ jobs:
       - name: 초당 3,000 프레임에서 스크롤과 입력
         if: matrix.os == 'windows-latest'
         run: python -X utf8 tests/audit/scrollUnderLoadSmoke.py
+      - name: 재접속 연속성 게이트 자체 검증
+        if: matrix.os == 'windows-latest'
+        run: python -X utf8 tests/audit/reconnectContinuitySmoke.py --selftest
+      - name: 마지막 프레임과 재접속 커서 연속성
+        if: matrix.os == 'windows-latest'
+        run: python -X utf8 tests/audit/reconnectContinuitySmoke.py
+      - name: 실시간 메모리 계약 자체 검증
+        run: python -X utf8 tests/audit/liveMemoryBudget.py --selftest
+      - name: hot 세션과 구독자 4개 RSS 상한
+        run: python -X utf8 tests/audit/liveMemoryBudget.py
       - name: 데스크톱 편의 계약 게이트 자체 검증
         if: matrix.os == 'windows-latest'
         run: python -X utf8 tests/audit/desktopConvenienceSmoke.py --selftest

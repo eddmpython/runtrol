@@ -13,7 +13,7 @@
 //! | Which session and turn is this | session id, epoch, turn id, tool call id, parent |
 //! | Is the turn over, and who said so | terminal signal, stop reason, declarant |
 //! | Does a human have to answer, and by when | approval id, options, option kinds, deadline, digest |
-//! | Where can a subscriber restart from | the source cursor |
+//! | Where can a subscriber restart from | stream incarnation, attach epoch, dense sequence |
 //! | Should the phone buzz | notice level and code, failed tool status, blocked turn |
 //! | Is the session healthy or degraded | notice code, retryable, exit status, detach reason |
 //! | Is the account blocked on a quota | usage gauge, rate limit windows |
@@ -23,7 +23,7 @@
 //!
 //! # The four planes
 //!
-//! - **Supervisor.** runtrol's own vocabulary: attaching, turn lifecycle, notices, detaching, lag.
+//! - **Supervisor.** runtrol's own vocabulary: attaching, turn lifecycle, notices, detaching.
 //! - **Content.** The standard's session-update variants, one for one, payloads untouched.
 //! - **Consent.** Approvals, which the two providers shape differently enough to need their own plane.
 //! - **Nothing was dropped.** [`Unmapped`], which is what makes vendor drift a non-event.
@@ -44,16 +44,16 @@ pub use approval::{
     ApprovalKind, ApprovalOption, ApprovalRequest, OfferedOption, PermissionOptionKind, RiskClass,
     WithdrawnReason,
 };
-pub use attach::{Attached, CapabilitySet, DetachReason, Detached, FileId, ReplaySource};
+pub use attach::{Attached, CapabilitySet, DetachReason, Detached};
 pub use content::{Chunk, Cost, RateLimit, ToolCallFrame, ToolCallStatus, ToolKind, Usage, Window};
 pub use notice::{Level, Notice, NoticeCode};
 pub use opaque::Opaque;
 pub use turn::{BlockedOn, Declarant, StopReason, TurnEvent};
 pub use unmapped::Unmapped;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
-use crate::id::{ApprovalId, MessageId, SessionId};
+use crate::id::{ApprovalId, MessageId, SessionId, StreamId};
 use crate::time::WallMs;
 
 /// One event, as it enters the session hub.
@@ -82,17 +82,61 @@ pub struct AgentEvent {
     /// runtrol's clock, not the provider's, because a provider's timestamps are not monotone across a
     /// daemon restart and this field is used for ordering.
     pub at: WallMs,
-    /// How far into the provider's own store this event corresponds to.
+    /// How far into the provider's own event source this event corresponds to.
     ///
-    /// Monotone within an epoch. The unit is the driver's business: a byte offset into an append-only
-    /// transcript, or whatever a bound range method counts. The core compares this and never interprets
-    /// it, and that is what keeps provider-specific branching out of the core.
+    /// Monotone within an epoch. The unit is the driver's business. The core compares this diagnostic position and
+    /// never interprets it, which keeps provider-specific branching out of the core.
     ///
     /// A fragment carries the same value as the previous durable frame, because fragments are not
     /// persisted by the provider.
     pub src_end: u64,
     /// What happened.
     pub body: EventBody,
+}
+
+impl AgentEvent {
+    /// Build one positioned event.
+    #[must_use]
+    pub fn new(
+        session: SessionId,
+        epoch: u32,
+        seq: u64,
+        at: WallMs,
+        src_end: u64,
+        body: EventBody,
+    ) -> Self {
+        Self {
+            session,
+            epoch,
+            seq,
+            at,
+            src_end,
+            body,
+        }
+    }
+}
+
+/// The next event a watcher expects inside one live attachment.
+///
+/// This is a boundary rather than the last delivered event. Sequence zero therefore names a valid empty stream, and
+/// reconnect arithmetic never has to add one or give a special meaning to the largest integer.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct WatchCursor {
+    /// The live hub incarnation. A daemon restart creates a new value even when epoch and sequence restart at zero.
+    pub stream: StreamId,
+    /// Which driver attachment owns the sequence.
+    pub epoch: u32,
+    /// The next dense sequence number the watcher needs.
+    pub seq: u64,
+}
+
+/// A requested watch boundary that the bounded replay window cannot reach.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct WatchGap {
+    /// The boundary the watcher requested.
+    pub requested: WatchCursor,
+    /// The first boundary from which live delivery can continue now.
+    pub live_at: WatchCursor,
 }
 
 /// What happened, across the four planes.
@@ -112,19 +156,6 @@ pub enum EventBody {
     Notice(Box<Notice>),
     /// The driver is no longer bound.
     Detached(Detached),
-    /// A subscriber's queue overflowed.
-    ///
-    /// Its **position** was dropped; its data was not. The frame carries what it needs to recover from the
-    /// provider's own store, which is only possible because runtrol keeps no copy of the data. Thinness
-    /// buying correctness, at the one point where a slow phone would otherwise be able to exhaust the
-    /// daemon's memory.
-    Lagged {
-        /// The last position that reached the subscriber.
-        last_delivered_seq: u64,
-        /// Where to resume from in the provider's own store.
-        resume_from: u64,
-    },
-
     // ---- content plane: the standard vocabulary, one variant per discriminator ----
     /// Something the operator said.
     UserMessageChunk(Chunk),
@@ -201,7 +232,6 @@ impl EventBody {
             Self::Turn(_) => "turn",
             Self::Notice(_) => "notice",
             Self::Detached(_) => "detached",
-            Self::Lagged { .. } => "lagged",
             Self::UserMessageChunk(_) => "userMessageChunk",
             Self::AgentMessageChunk(_) => "agentMessageChunk",
             Self::AgentThoughtChunk(_) => "agentThoughtChunk",
@@ -299,10 +329,7 @@ impl EventBody {
             Self::Unmapped(unmapped) => unmapped.payload.len(),
             // runtrol's own frames. Every field is fixed width or bounded, so there is nothing here a
             // provider can grow.
-            Self::Turn(_)
-            | Self::Detached(_)
-            | Self::Lagged { .. }
-            | Self::ApprovalWithdrawn { .. } => 0,
+            Self::Turn(_) | Self::Detached(_) | Self::ApprovalWithdrawn { .. } => 0,
         }
     }
 
@@ -335,14 +362,7 @@ mod tests {
     use crate::id::ToolCallId;
 
     fn an_event(body: EventBody) -> AgentEvent {
-        AgentEvent {
-            session: SessionId::now(),
-            epoch: 0,
-            seq: 0,
-            at: WallMs::now(),
-            src_end: 0,
-            body,
-        }
+        AgentEvent::new(SessionId::now(), 0, 0, WallMs::now(), 0, body)
     }
 
     fn a_chunk(delta: bool) -> Chunk {
@@ -427,14 +447,6 @@ mod tests {
     #[test]
     fn a_frame_runtrol_originates_holds_no_provider_bytes() {
         assert_eq!(
-            EventBody::Lagged {
-                last_delivered_seq: 4,
-                resume_from: 900,
-            }
-            .payload_bytes(),
-            0
-        );
-        assert_eq!(
             EventBody::Turn(TurnEvent::Started {
                 turn: crate::id::TurnId::first(0)
             })
@@ -456,13 +468,6 @@ mod tests {
             !EventBody::Turn(TurnEvent::Started {
                 turn: crate::id::TurnId::first(0)
             })
-            .is_content()
-        );
-        assert!(
-            !EventBody::Lagged {
-                last_delivered_seq: 4,
-                resume_from: 900,
-            }
             .is_content()
         );
         assert!(
@@ -561,25 +566,5 @@ mod tests {
         }));
         let printed = format!("{event:?}");
         assert!(!printed.contains("private"), "leaked: {printed}");
-    }
-
-    #[test]
-    fn lag_drops_a_position_and_names_where_to_resume() {
-        // The data is not dropped. It cannot be: runtrol does not own it, so recovering it means reading
-        // the provider's own store from the offset this frame carries.
-        let lagged = EventBody::Lagged {
-            last_delivered_seq: 41,
-            resume_from: 18_204,
-        };
-        match lagged {
-            EventBody::Lagged {
-                last_delivered_seq,
-                resume_from,
-            } => {
-                assert_eq!(last_delivered_seq, 41);
-                assert!(resume_from > 0, "a resume point into the provider's store");
-            }
-            other => panic!("expected lag, got {other:?}"),
-        }
     }
 }

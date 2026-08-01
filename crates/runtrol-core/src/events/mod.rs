@@ -30,12 +30,114 @@ pub mod ring;
 pub mod seq;
 
 use std::collections::VecDeque;
+use std::sync::Arc;
 
-use runtrol_provider::{AgentEvent, EventBody, Level, Notice, NoticeCode, Opaque, SessionId};
+use runtrol_provider::{
+    AgentEvent, EventBody, Level, Notice, NoticeCode, Opaque, SessionId, StreamId, WatchCursor,
+    WatchGap,
+};
 
-pub use fanout::{Delivery, FanOut, QUEUE_BYTES, QUEUE_FRAMES, SubscriberId, Subscription};
+pub use fanout::{
+    Delivery, FanOut, MAX_LIVE_PAYLOAD_BYTES, QUEUE_BYTES, QUEUE_FRAMES, SubscriberId,
+    Subscription, SubscriptionItem,
+};
 pub use ring::{RING_BYTES, RING_FRAMES, Reach, ReplayRing};
 pub use seq::{CursorRegression, Sequencer};
+
+/// One positioned event and its complete wire encoding, shared across live watchers.
+///
+/// The provider event stays lean because every hot session retains many of them. This wrapper exists only at a watch
+/// boundary, where one encoding is shared by every subscriber instead of being rebuilt per connection.
+pub struct WatchEvent {
+    inner: Arc<WatchEventInner>,
+    lease: Option<QueueLease>,
+}
+
+struct QueueLease {
+    bytes: Arc<std::sync::atomic::AtomicUsize>,
+    frames: Arc<std::sync::atomic::AtomicUsize>,
+    held: usize,
+}
+
+impl Drop for QueueLease {
+    fn drop(&mut self) {
+        use std::sync::atomic::Ordering;
+
+        self.bytes.fetch_sub(self.held, Ordering::AcqRel);
+        self.frames.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+impl core::fmt::Debug for WatchEvent {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("WatchEvent")
+            .field("event", &self.inner.event)
+            .field("leased", &self.lease.is_some())
+            .finish_non_exhaustive()
+    }
+}
+
+#[derive(Debug)]
+struct WatchEventInner {
+    event: AgentEvent,
+    wire: Result<Opaque, Box<str>>,
+}
+
+impl WatchEvent {
+    fn encode(event: AgentEvent) -> Self {
+        let wire = serde_json::to_string(&event)
+            .map(Opaque::owned)
+            .map_err(|error| error.to_string().into_boxed_str());
+        Self {
+            inner: Arc::new(WatchEventInner { event, wire }),
+            lease: None,
+        }
+    }
+
+    /// The positioned event envelope.
+    #[must_use]
+    pub fn event(&self) -> &AgentEvent {
+        &self.inner.event
+    }
+
+    /// The complete event bytes, or the serialization defect recorded when this shared event was built.
+    ///
+    /// # Errors
+    ///
+    /// When this build could not serialize its own positioned event envelope.
+    pub fn wire(&self) -> Result<&Opaque, &str> {
+        self.inner.wire.as_ref().map_err(Box::as_ref)
+    }
+
+    fn retained_bytes(&self) -> usize {
+        let wire = match &self.inner.wire {
+            Ok(wire) => wire.len(),
+            Err(error) => error.len(),
+        };
+        self.inner.event.body.payload_bytes().saturating_add(wire)
+    }
+
+    fn queued(
+        &self,
+        bytes: Arc<std::sync::atomic::AtomicUsize>,
+        frames: Arc<std::sync::atomic::AtomicUsize>,
+    ) -> Self {
+        use std::sync::atomic::Ordering;
+
+        let held = self.retained_bytes();
+        bytes.fetch_add(held, Ordering::AcqRel);
+        frames.fetch_add(1, Ordering::AcqRel);
+        Self {
+            inner: Arc::clone(&self.inner),
+            lease: Some(QueueLease {
+                bytes,
+                frames,
+                held,
+            }),
+        }
+    }
+}
 
 /// What one publish produced.
 #[derive(Clone, Debug)]
@@ -61,25 +163,65 @@ pub struct Published {
 /// was installed before the snapshot was taken, so no frame can land between the two.
 #[derive(Debug)]
 pub struct SessionView {
+    /// The acknowledgement sent before replay or live events.
+    start: WatchStart,
     /// Frames already held by the bounded replay ring, oldest first.
-    replay: VecDeque<AgentEvent>,
+    replay: VecDeque<WatchEvent>,
     /// Frames published after this view was opened.
     live: Subscription,
 }
 
 impl SessionView {
+    /// The boundary and any visible gap for this watch.
+    #[must_use]
+    pub const fn start(&self) -> WatchStart {
+        self.start
+    }
+
     /// Wait for the next replayed or live frame, or `None` once the session is gone.
-    pub async fn recv(&mut self) -> Option<AgentEvent> {
+    pub async fn recv(&mut self) -> Option<WatchItem> {
         match self.replay.pop_front() {
-            Some(event) => Some(event),
-            None => self.live.recv().await,
+            Some(event) => Some(WatchItem::Event(event)),
+            None => self.live.recv().await.map(WatchItem::from),
         }
     }
 
     /// Take the next replayed or live frame when one is immediately available.
-    pub fn try_recv(&mut self) -> Option<AgentEvent> {
-        self.replay.pop_front().or_else(|| self.live.try_recv())
+    pub fn try_recv(&mut self) -> Option<WatchItem> {
+        self.replay
+            .pop_front()
+            .map(WatchItem::Event)
+            .or_else(|| self.live.try_recv().map(WatchItem::from))
     }
+}
+
+/// One event or control boundary delivered to a watch connection.
+#[derive(Debug)]
+pub enum WatchItem {
+    /// A provider event at its original dense position.
+    Event(WatchEvent),
+    /// The subscriber stopped before this boundary and must reconnect.
+    Lagged(WatchCursor),
+}
+
+impl From<SubscriptionItem> for WatchItem {
+    fn from(item: SubscriptionItem) -> Self {
+        match item {
+            SubscriptionItem::Event(event) => Self::Event(event),
+            SubscriptionItem::Lagged(cursor) => Self::Lagged(cursor),
+        }
+    }
+}
+
+/// What a watch knows at the exact subscription boundary.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct WatchStart {
+    /// The first event this view will deliver, or `live_at` when no replay is pending.
+    pub starts_at: WatchCursor,
+    /// The first event that would be live after the replay snapshot.
+    pub live_at: WatchCursor,
+    /// Why the requested boundary could not be replayed, when it could not.
+    pub gap: Option<WatchGap>,
 }
 
 /// Every event of one session, in order, on its way out.
@@ -90,6 +232,8 @@ impl SessionView {
 pub struct SessionHub {
     /// Which session.
     session: SessionId,
+    /// This hub incarnation, distinct across close/reopen and daemon restart.
+    stream: StreamId,
     /// Position and cursor assignment.
     seq: Sequencer,
     /// The reconnect window.
@@ -104,6 +248,7 @@ impl SessionHub {
     pub fn new(session: SessionId) -> Self {
         Self {
             session,
+            stream: StreamId::now(),
             seq: Sequencer::new(),
             ring: ReplayRing::new(),
             fanout: FanOut::new(),
@@ -120,6 +265,16 @@ impl SessionHub {
     #[must_use]
     pub const fn epoch(&self) -> u32 {
         self.seq.epoch()
+    }
+
+    /// The exact next boundary for a new live subscriber.
+    #[must_use]
+    pub const fn live_at(&self) -> WatchCursor {
+        WatchCursor {
+            stream: self.stream,
+            epoch: self.seq.epoch(),
+            seq: self.seq.next_seq(),
+        }
     }
 
     /// How far into the provider's own store this attach has reached.
@@ -143,10 +298,10 @@ impl SessionHub {
     /// Begin a new attach.
     ///
     /// Positions restart, so the window is emptied with them: frames from two attaches cannot be ordered
-    /// against each other, and a window holding both could not answer what came after a given position. A
-    /// subscriber reconnecting across this boundary recovers from the provider's own store, which is what
-    /// the attach frame's replay source is for.
+    /// against each other, and a window holding both could not answer what came after a given position. Existing
+    /// subscriptions end immediately so every watcher receives a new acknowledgement for the new epoch.
     pub fn attach(&mut self) -> u32 {
+        self.fanout.close();
         self.ring.clear();
         self.seq.attach()
     }
@@ -155,17 +310,61 @@ impl SessionHub {
     ///
     /// The live subscription is installed before the replay snapshot is taken. The manager is single-owned, so
     /// nothing can publish in between, and every frame belongs to exactly one side of that boundary.
-    pub fn view(&mut self) -> SessionView {
-        let live = self.fanout.subscribe();
-        let replay = self.ring.frames().cloned().collect();
-        SessionView { replay, live }
+    pub fn view(&mut self, requested: Option<WatchCursor>) -> SessionView {
+        let live_at = self.live_at();
+        let live = self.fanout.subscribe(live_at);
+        let (replay, starts_at, gap) = match requested {
+            None => {
+                let replay: VecDeque<_> = self
+                    .ring
+                    .frames()
+                    .cloned()
+                    .map(WatchEvent::encode)
+                    .collect();
+                let starts_at = replay.front().map_or(live_at, |frame| WatchCursor {
+                    stream: self.stream,
+                    epoch: frame.event().epoch,
+                    seq: frame.event().seq,
+                });
+                (replay, starts_at, None)
+            }
+            Some(cursor) => match self.ring.reach(cursor, live_at) {
+                Reach::UpToDate => (VecDeque::new(), live_at, None),
+                Reach::Held => (
+                    self.ring
+                        .frames_from(cursor)
+                        .cloned()
+                        .map(WatchEvent::encode)
+                        .collect(),
+                    cursor,
+                    None,
+                ),
+                Reach::Gap => (
+                    VecDeque::new(),
+                    live_at,
+                    Some(WatchGap {
+                        requested: cursor,
+                        live_at,
+                    }),
+                ),
+            },
+        };
+        SessionView {
+            start: WatchStart {
+                starts_at,
+                live_at,
+                gap,
+            },
+            replay,
+            live,
+        }
     }
 
     /// Add a watcher without replaying the recent window.
     ///
     /// Used by focused kernel tests and callers that already hold an exact cursor.
     pub fn subscribe(&mut self) -> Subscription {
-        self.fanout.subscribe()
+        self.fanout.subscribe(self.live_at())
     }
 
     /// Stamp a frame, keep it in the window, and give it to every watcher.
@@ -191,7 +390,7 @@ impl SessionHub {
     /// Put a stamped frame in the window and out to the watchers.
     fn emit(&mut self, event: AgentEvent) -> Delivery {
         let delivery = self.fanout.publish(&event);
-        self.ring.push(event);
+        self.ring.push(self.stream, event);
         delivery
     }
 
@@ -221,6 +420,20 @@ impl SessionHub {
 mod tests {
     use super::*;
 
+    fn subscription_event(item: SubscriptionItem) -> AgentEvent {
+        match item {
+            SubscriptionItem::Event(event) => event.event().clone(),
+            SubscriptionItem::Lagged(cursor) => panic!("unexpected lag at {cursor:?}"),
+        }
+    }
+
+    fn watch_event(item: WatchItem) -> AgentEvent {
+        match item {
+            WatchItem::Event(event) => event.event().clone(),
+            WatchItem::Lagged(cursor) => panic!("unexpected lag at {cursor:?}"),
+        }
+    }
+
     fn a_body(payload: &str) -> EventBody {
         EventBody::Plan {
             payload: Opaque::owned(payload.to_owned()),
@@ -238,7 +451,7 @@ mod tests {
 
         let mut positions = Vec::new();
         while let Some(frame) = watcher.try_recv() {
-            positions.push(frame.seq);
+            positions.push(subscription_event(frame).seq);
         }
         assert_eq!(positions, vec![0, 1, 2, 3]);
     }
@@ -254,10 +467,33 @@ mod tests {
         assert_eq!(hub.ring().len(), 1);
         assert_eq!(hub.ring().newest_seq(), Some(published.event.seq));
         assert_eq!(
-            watcher.try_recv().map(|frame| frame.src_end),
+            watcher
+                .try_recv()
+                .map(subscription_event)
+                .map(|frame| frame.src_end),
             Some(700),
             "the watcher gets the same cursor the window kept"
         );
+    }
+
+    #[test]
+    fn the_complete_wire_event_is_encoded_once_before_fan_out() {
+        let mut hub = SessionHub::new(SessionId::now());
+        let mut first = hub.subscribe();
+        let mut second = hub.subscribe();
+        hub.publish(1, a_body(r#"{"large":"shared"}"#));
+
+        let one = match first.try_recv().expect("first watcher") {
+            SubscriptionItem::Event(event) => event,
+            SubscriptionItem::Lagged(cursor) => panic!("unexpected lag at {cursor:?}"),
+        };
+        let two = match second.try_recv().expect("second watcher") {
+            SubscriptionItem::Event(event) => event,
+            SubscriptionItem::Lagged(cursor) => panic!("unexpected lag at {cursor:?}"),
+        };
+        let one_wire = one.wire().expect("serializable").bytes();
+        let two_wire = two.wire().expect("serializable").bytes();
+        assert_eq!(one_wire.as_ptr(), two_wire.as_ptr());
     }
 
     #[test]
@@ -284,7 +520,7 @@ mod tests {
 
         let mut frames = Vec::new();
         while let Some(frame) = watcher.try_recv() {
-            frames.push(frame);
+            frames.push(subscription_event(frame));
         }
         let notice = frames
             .iter()
@@ -311,7 +547,7 @@ mod tests {
 
         let mut positions = Vec::new();
         while let Some(frame) = watcher.try_recv() {
-            positions.push(frame.seq);
+            positions.push(subscription_event(frame).seq);
         }
         assert_eq!(positions, vec![0, 1, 2], "the notice is frame two");
     }
@@ -319,12 +555,14 @@ mod tests {
     #[test]
     fn a_reattach_moves_the_epoch_and_empties_the_window() {
         let mut hub = SessionHub::new(SessionId::now());
+        let before = hub.live_at();
         hub.publish(500, a_body("{}"));
         assert_eq!(hub.ring().len(), 1);
 
         let epoch = hub.attach();
 
         assert_eq!(epoch, 1);
+        assert_eq!(hub.live_at().stream, before.stream);
         assert!(
             hub.ring().is_empty(),
             "positions restarted, so the old ones cannot be answered for"
@@ -338,19 +576,75 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn a_reattach_drains_then_ends_every_old_subscription() {
+        let mut hub = SessionHub::new(SessionId::now());
+        let mut watcher = hub.subscribe();
+        hub.publish(10, a_body("{}"));
+
+        hub.attach();
+
+        assert!(matches!(
+            watcher.recv().await,
+            Some(SubscriptionItem::Event(_))
+        ));
+        assert!(watcher.recv().await.is_none());
+        assert_eq!(hub.watchers(), 0);
+    }
+
+    #[test]
+    fn replay_and_live_delivery_meet_once_at_the_ack_boundary() {
+        let mut hub = SessionHub::new(SessionId::now());
+        for cursor in 1..=4 {
+            hub.publish(cursor, a_body("{}"));
+        }
+        let requested = WatchCursor {
+            seq: 2,
+            ..hub.live_at()
+        };
+        let mut view = hub.view(Some(requested));
+        assert_eq!(view.start().starts_at, requested);
+        assert_eq!(view.start().live_at.seq, 4);
+        assert!(view.start().gap.is_none());
+
+        hub.publish(5, a_body("{}"));
+        let delivered = (0..3)
+            .map(|_| watch_event(view.try_recv().expect("replay and live frame")).seq)
+            .collect::<Vec<_>>();
+        assert_eq!(delivered, vec![2, 3, 4]);
+        assert!(view.try_recv().is_none());
+    }
+
     #[test]
     fn a_watcher_that_joins_late_is_told_what_it_can_recover() {
-        // The hub does not replay into a new subscription by itself. It answers what is recoverable, and
-        // the caller decides between the window and the provider's own store.
         let mut hub = SessionHub::new(SessionId::now());
         for index in 0..(RING_FRAMES * 2) {
             let cursor = u64::try_from(index).expect("a test publishes few frames") * 10 + 10;
             hub.publish(cursor, a_body("{}"));
         }
 
-        assert!(matches!(hub.ring().reach(0), Reach::Gap { .. }));
-        let newest = hub.ring().newest_seq().expect("frames were published");
-        assert_eq!(hub.ring().reach(newest), Reach::UpToDate);
+        let old = WatchCursor {
+            seq: 0,
+            ..hub.live_at()
+        };
+        let gap = hub.view(Some(old));
+        assert!(gap.start().gap.is_some());
+
+        let live_at = hub.live_at();
+        let current = hub.view(Some(live_at));
+        assert_eq!(current.start().gap, None);
+        assert_eq!(current.start().live_at, live_at);
+    }
+
+    #[test]
+    fn a_new_hub_never_accepts_the_previous_hubs_cursor() {
+        let session = SessionId::now();
+        let first = SessionHub::new(session).live_at();
+        let mut reopened = SessionHub::new(session);
+
+        let view = reopened.view(Some(first));
+        assert_eq!(view.start().gap.map(|gap| gap.requested), Some(first));
+        assert_ne!(view.start().live_at.stream, first.stream);
     }
 
     #[test]
@@ -364,8 +658,8 @@ mod tests {
 
     #[test]
     fn a_hub_with_nobody_watching_still_keeps_its_window() {
-        // A session runs whether or not anyone is looking. The window is what lets somebody look later
-        // without going to the provider's file for the last second of output.
+        // A session runs whether or not anyone is looking. The bounded window lets somebody look later without
+        // turning runtrol into another transcript owner.
         let mut hub = SessionHub::new(SessionId::now());
         assert_eq!(hub.watchers(), 0);
         hub.publish(10, a_body("{}"));

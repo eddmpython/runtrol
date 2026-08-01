@@ -30,7 +30,7 @@ use bytes::{BufMut as _, Bytes};
 /// One byte, sent once when a connection opens. Not per frame: a version on every frame would pay for the whole
 /// conversation to answer a question that is settled at hello, and it would let one connection change meaning
 /// halfway through, which nothing should be able to do.
-pub const WIRE_VERSION: u8 = 5;
+pub const WIRE_VERSION: u8 = 6;
 
 /// How many bytes of payload one frame may carry.
 ///

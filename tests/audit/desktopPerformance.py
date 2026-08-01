@@ -1,4 +1,4 @@
-"""Shared launcher for the two real-browser desktop performance gates."""
+"""Shared launcher for the real-browser desktop behavior gates."""
 
 from __future__ import annotations
 

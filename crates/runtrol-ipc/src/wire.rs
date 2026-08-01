@@ -29,7 +29,9 @@
 //! to their machine. Those are on the value, so a client cannot get them wrong by branching on a number whose meaning
 //! lives somewhere else.
 
-use runtrol_provider::{ApprovalId, ModelCatalog, Opaque, OptionId, ProviderError, SessionId};
+use runtrol_provider::{
+    ApprovalId, ModelCatalog, Opaque, OptionId, ProviderError, SessionId, WatchCursor, WatchGap,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::frame::WIRE_VERSION;
@@ -111,6 +113,9 @@ pub enum Request {
     Watch {
         /// Which session.
         session: SessionId,
+        /// The next event the caller expects, or no cursor for the bounded initial view.
+        #[serde(default)]
+        after: Option<WatchCursor>,
     },
 
     /// End a session.
@@ -161,16 +166,73 @@ pub enum Response {
     Done,
 
     /// A watch subscription is installed and all later answers on this connection are events.
-    Watching,
+    Watching {
+        /// The first event this response stream will deliver, or `live_at` when replay is empty.
+        starts_at: WatchCursor,
+        /// The exact boundary between bounded replay and the installed live subscription.
+        live_at: WatchCursor,
+        /// The requested boundary could not be served from the bounded window.
+        gap: Option<Box<WatchGap>>,
+    },
 
-    /// One event, already encoded.
+    /// One event, already encoded, with the next exact reconnect boundary.
     ///
     /// Encoded once by the daemon and handed to every watcher, so three watchers cost one encode. Also the last hop a
     /// conversation takes, and nothing here reads it.
-    Event(Opaque),
+    Event {
+        /// The original provider event envelope and opaque payload.
+        payload: Opaque,
+        /// The first dense event not included in this response.
+        next_expected: WatchCursor,
+    },
+
+    /// This watch was retired after its bounded queue filled.
+    Lagged {
+        /// The first dense event the watcher did not receive.
+        next_expected: WatchCursor,
+    },
 
     /// It did not work.
     Failed(WireError),
+}
+
+/// The small fixed edges around an already encoded event payload.
+///
+/// Keeping the provider-sized payload as its own slice lets the transport write it without allocating a second full
+/// response and then a third framed copy. This type lives beside [`Response`] so the split wire spelling has one owner.
+#[derive(Debug)]
+pub struct EventResponseEdges {
+    suffix: Vec<u8>,
+}
+
+impl EventResponseEdges {
+    /// Bytes before the raw event payload.
+    #[must_use]
+    pub const fn prefix(&self) -> &'static [u8] {
+        br#"{"say":"event","with":{"payload":"#
+    }
+
+    /// Bytes after the raw event payload.
+    #[must_use]
+    pub fn suffix(&self) -> &[u8] {
+        &self.suffix
+    }
+}
+
+/// Encode only the cursor-sized suffix of an event response.
+///
+/// # Errors
+///
+/// When this build cannot serialize its own reconnect cursor.
+pub fn event_response_edges(
+    next_expected: WatchCursor,
+) -> Result<EventResponseEdges, serde_json::Error> {
+    let cursor = serde_json::to_vec(&next_expected)?;
+    let mut suffix = Vec::with_capacity(cursor.len() + 20);
+    suffix.extend_from_slice(br#","next_expected":"#);
+    suffix.extend_from_slice(&cursor);
+    suffix.extend_from_slice(b"}}");
+    Ok(EventResponseEdges { suffix })
 }
 
 /// One provider, as a listing shows it.
@@ -304,7 +366,10 @@ mod tests {
                 option: OptionId(0),
                 subject_digest: [1; 32],
             },
-            Request::Watch { session },
+            Request::Watch {
+                session,
+                after: None,
+            },
             Request::Close {
                 session,
                 now: false,
@@ -376,6 +441,39 @@ mod tests {
     }
 
     #[test]
+    fn watch_reads_an_absent_or_exact_next_expected_cursor() {
+        let session = SessionId::now();
+        let old_shape = format!(r#"{{"ask":"watch","with":{{"session":"{session}"}}}}"#);
+        match serde_json::from_str::<Request>(&old_shape)
+            .expect("an omitted cursor remains readable")
+        {
+            Request::Watch { after: None, .. } => {}
+            other => panic!("expected an initial watch, got {other:?}"),
+        }
+
+        let after = WatchCursor {
+            stream: runtrol_provider::StreamId::now(),
+            epoch: 7,
+            seq: 91,
+        };
+        let encoded = serde_json::to_string(&Request::Watch {
+            session,
+            after: Some(after),
+        })
+        .expect("writable");
+        match serde_json::from_str::<Request>(&encoded).expect("readable") {
+            Request::Watch {
+                session: read_session,
+                after: Some(read_after),
+            } => {
+                assert_eq!(read_session, session);
+                assert_eq!(read_after, after);
+            }
+            other => panic!("expected a cursor watch, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn a_prompt_carries_what_the_operator_wrote_and_nothing_added() {
         let written = "first line\nsecond line";
         let request = Request::Prompt {
@@ -422,13 +520,27 @@ mod tests {
         // into a model so it can add a field to it, and buffering a payload is the re-reading the design avoids. The
         // failure is loud rather than quiet, which is the better way to find out.
         let payload = r#"{"z":1,"a":[2,3],"nested":{"k":"v"}}"#;
-        let encoded = serde_json::to_string(&Response::Event(Opaque::owned(payload.to_owned())))
-            .expect("a tag beside the content lets a payload through");
+        let next_expected = WatchCursor {
+            stream: runtrol_provider::StreamId::now(),
+            epoch: 2,
+            seq: 9,
+        };
+        let encoded = serde_json::to_string(&Response::Event {
+            payload: Opaque::owned(payload.to_owned()),
+            next_expected,
+        })
+        .expect("a tag beside the content lets a payload through");
         assert!(encoded.contains(payload), "byte for byte: {encoded}");
 
         let back: Response = serde_json::from_str(&encoded).expect("and it reads back");
         match back {
-            Response::Event(read) => assert_eq!(read.as_str(), payload),
+            Response::Event {
+                payload: read,
+                next_expected: read_next,
+            } => {
+                assert_eq!(read.as_str(), payload);
+                assert_eq!(read_next, next_expected);
+            }
             other => panic!("expected an event, got {other:?}"),
         }
     }
@@ -439,7 +551,14 @@ mod tests {
         // cost one encode rather than three.
         let event =
             Opaque::owned(r#"{"event":"agentMessageChunk","content":{"text":"hello"}}"#.to_owned());
-        let response = Response::Event(event);
+        let response = Response::Event {
+            payload: event,
+            next_expected: WatchCursor {
+                stream: runtrol_provider::StreamId::now(),
+                epoch: 0,
+                seq: 1,
+            },
+        };
         let encoded = serde_json::to_string(&response).expect("writable");
 
         assert!(
@@ -451,6 +570,75 @@ mod tests {
             !printed.contains("hello"),
             "and it must not reach a log line: {printed}"
         );
+    }
+
+    #[test]
+    fn split_event_edges_are_the_exact_response_wire_shape() {
+        let payload = Opaque::owned(r#"{"text":"kept raw"}"#.to_owned());
+        let next_expected = WatchCursor {
+            stream: runtrol_provider::StreamId::now(),
+            epoch: 4,
+            seq: 19,
+        };
+        let whole = serde_json::to_vec(&Response::Event {
+            payload: payload.clone(),
+            next_expected,
+        })
+        .expect("writable");
+        let edges = event_response_edges(next_expected).expect("cursor is writable");
+        let split = [edges.prefix(), payload.as_str().as_bytes(), edges.suffix()].concat();
+
+        assert_eq!(split, whole);
+        assert!(matches!(
+            serde_json::from_slice::<Response>(&split).expect("readable"),
+            Response::Event { .. }
+        ));
+    }
+
+    #[test]
+    fn watch_acknowledgements_and_lag_controls_round_trip_every_cursor() {
+        let requested = WatchCursor {
+            stream: runtrol_provider::StreamId::now(),
+            epoch: 3,
+            seq: 8,
+        };
+        let live_at = WatchCursor {
+            seq: 21,
+            ..requested
+        };
+        let watching = Response::Watching {
+            starts_at: live_at,
+            live_at,
+            gap: Some(Box::new(WatchGap { requested, live_at })),
+        };
+        match serde_json::from_slice::<Response>(
+            &serde_json::to_vec(&watching).expect("watch acknowledgement is writable"),
+        )
+        .expect("watch acknowledgement is readable")
+        {
+            Response::Watching {
+                starts_at,
+                live_at: read_live,
+                gap: Some(gap),
+            } => {
+                assert_eq!(starts_at, live_at);
+                assert_eq!(read_live, live_at);
+                assert_eq!(*gap, WatchGap { requested, live_at });
+            }
+            other => panic!("expected a watch acknowledgement, got {other:?}"),
+        }
+
+        let lagged = Response::Lagged {
+            next_expected: requested,
+        };
+        match serde_json::from_slice::<Response>(
+            &serde_json::to_vec(&lagged).expect("lag control is writable"),
+        )
+        .expect("lag control is readable")
+        {
+            Response::Lagged { next_expected } => assert_eq!(next_expected, requested),
+            other => panic!("expected a lag control, got {other:?}"),
+        }
     }
 
     #[test]

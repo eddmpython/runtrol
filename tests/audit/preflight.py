@@ -112,6 +112,22 @@ GATES: dict[str, tuple[str, list[str]]] = {
         "초당 3,000 프레임에서 스크롤과 입력",
         [*PY, f"{HOOKS}/scrollUnderLoadSmoke.py"],
     ),
+    "reconnectContinuitySmokeSelftest": (
+        "재접속 연속성 게이트 자체 검증",
+        [*PY, f"{HOOKS}/reconnectContinuitySmoke.py", "--selftest"],
+    ),
+    "reconnectContinuitySmoke": (
+        "마지막 프레임과 재접속 커서 연속성",
+        [*PY, f"{HOOKS}/reconnectContinuitySmoke.py"],
+    ),
+    "liveMemoryBudgetSelftest": (
+        "실시간 메모리 계약 자체 검증",
+        [*PY, f"{HOOKS}/liveMemoryBudget.py", "--selftest"],
+    ),
+    "liveMemoryBudget": (
+        "hot 세션과 구독자 4개 RSS 상한",
+        [*PY, f"{HOOKS}/liveMemoryBudget.py"],
+    ),
     "desktopConvenienceSmokeSelftest": (
         "데스크톱 편의 계약 게이트 자체 검증",
         [*PY, f"{HOOKS}/desktopConvenienceSmoke.py", "--selftest"],
@@ -253,6 +269,10 @@ SUITES: dict[str, tuple[str, ...]] = {
         "interactionLatencyBudget",
         "scrollUnderLoadSmokeSelftest",
         "scrollUnderLoadSmoke",
+        "reconnectContinuitySmokeSelftest",
+        "reconnectContinuitySmoke",
+        "liveMemoryBudgetSelftest",
+        "liveMemoryBudget",
         "desktopConvenienceSmokeSelftest",
         "desktopConvenienceSmoke",
         "cargoFmt",
@@ -300,9 +320,9 @@ def skipReasonFor(name: str) -> str | None:
             return "cargo 없음"
         if not hasCargoWorkspace():
             return "Cargo.toml 없음 (부트스트랩 단계)"
-    if name in {"frontendBuild", "interactionLatencyBudget", "scrollUnderLoadSmoke"} and shutil.which("npm") is None:
+    if name in {"frontendBuild", "interactionLatencyBudget", "scrollUnderLoadSmoke", "reconnectContinuitySmoke"} and shutil.which("npm") is None:
         return "npm 없음"
-    if name in {"interactionLatencyBudget", "scrollUnderLoadSmoke"} and shutil.which("node") is None:
+    if name in {"interactionLatencyBudget", "scrollUnderLoadSmoke", "reconnectContinuitySmoke"} and shutil.which("node") is None:
         return "node 없음"
     if name == "audit" and not hasAuditCrate():
         return "tests/audit crate 없음"

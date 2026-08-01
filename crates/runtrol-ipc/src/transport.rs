@@ -135,6 +135,56 @@ impl Connection {
             })
     }
 
+    /// Send one frame assembled from already encoded slices without copying them into another full-size buffer.
+    ///
+    /// # Errors
+    ///
+    /// [`TransportError::Frame`] when the combined payload is past [`MAX_FRAME`], [`TransportError::Io`] when the
+    /// write fails.
+    pub async fn send_parts(&mut self, parts: &[&[u8]]) -> Result<(), TransportError> {
+        let length = parts.iter().try_fold(0_usize, |total, part| {
+            total.checked_add(part.len()).ok_or(FrameError::TooLarge {
+                bytes: usize::MAX,
+                max: MAX_FRAME,
+            })
+        })?;
+        if length > MAX_FRAME {
+            return Err(FrameError::TooLarge {
+                bytes: length,
+                max: MAX_FRAME,
+            }
+            .into());
+        }
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "length <= MAX_FRAME, which is well under u32::MAX"
+        )]
+        let header = (length as u32).to_be_bytes();
+        self.stream
+            .write_all(&header)
+            .await
+            .map_err(|error| TransportError::Io {
+                doing: "sending a frame header",
+                detail: error.to_string(),
+            })?;
+        for part in parts {
+            self.stream
+                .write_all(part)
+                .await
+                .map_err(|error| TransportError::Io {
+                    doing: "sending a frame payload",
+                    detail: error.to_string(),
+                })?;
+        }
+        self.stream
+            .flush()
+            .await
+            .map_err(|error| TransportError::Io {
+                doing: "flushing a frame",
+                detail: error.to_string(),
+            })
+    }
+
     /// Receive one frame, or `None` once the other end is gone.
     ///
     /// # Errors
@@ -537,6 +587,24 @@ mod tests {
         assert_eq!(&*answer, b"{\"ask\":\"list\"}");
 
         serving.await.expect("the server finished");
+    }
+
+    #[tokio::test]
+    async fn frame_parts_cross_without_a_full_size_staging_buffer() {
+        let address = an_address("parts");
+        let mut listener = Listener::bind(&address).await.expect("the endpoint binds");
+        let serving = tokio::spawn(async move {
+            let mut connection = listener.accept().await.expect("a client arrives");
+            connection.recv().await.expect("readable").expect("a frame")
+        });
+
+        let mut client = connect(&address).await.expect("the daemon is there");
+        client
+            .send_parts(&[b"first", b"-", b"second"])
+            .await
+            .expect("parts are writable");
+        let received = serving.await.expect("the server finished");
+        assert_eq!(&*received, b"first-second");
     }
 
     #[tokio::test]

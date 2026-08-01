@@ -410,6 +410,57 @@ impl<'de> Deserialize<'de> for SessionId {
     }
 }
 
+/// One live session hub incarnation.
+///
+/// A fresh value is minted whenever a hub is created. It is distinct from [`SessionId`] because it names a volatile
+/// event stream, not a conversation or storage key.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct StreamId(Uuid);
+
+impl StreamId {
+    /// Mint a new stream incarnation.
+    #[must_use]
+    pub fn now() -> Self {
+        Self(Uuid::now_v7())
+    }
+}
+
+impl fmt::Display for StreamId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0.as_hyphenated())
+    }
+}
+
+impl fmt::Debug for StreamId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "StreamId({})", self.0.as_hyphenated())
+    }
+}
+
+impl FromStr for StreamId {
+    type Err = IdError;
+
+    fn from_str(text: &str) -> Result<Self, IdError> {
+        Uuid::parse_str(text).map(Self).map_err(|_| IdError::Shape {
+            what: "stream id",
+            why: "must be a UUID",
+        })
+    }
+}
+
+impl Serialize for StreamId {
+    fn serialize<S: Serializer>(&self, ser: S) -> Result<S::Ok, S::Error> {
+        ser.serialize_str(&self.0.as_hyphenated().to_string())
+    }
+}
+
+impl<'de> Deserialize<'de> for StreamId {
+    fn deserialize<D: Deserializer<'de>>(de: D) -> Result<Self, D::Error> {
+        let text = String::deserialize(de)?;
+        text.parse().map_err(serde::de::Error::custom)
+    }
+}
+
 /// runtrol's identifier for one turn of a conversation.
 ///
 /// Minted by runtrol rather than taken from the provider because the providers disagree: one hands
@@ -652,6 +703,17 @@ mod tests {
         let parsed: SessionId = id.to_string().parse().expect("display must be parseable");
         assert_eq!(id, parsed);
         assert_eq!(id, SessionId::from_bytes(*id.as_bytes()));
+    }
+
+    #[test]
+    fn stream_ids_are_distinct_from_sessions_and_round_trip() {
+        let stream = StreamId::now();
+        let parsed: StreamId = stream
+            .to_string()
+            .parse()
+            .expect("display must be parseable");
+        assert_eq!(parsed, stream);
+        assert_ne!(stream.to_string(), SessionId::now().to_string());
     }
 
     #[test]

@@ -27,8 +27,8 @@ use bytes::Bytes;
 use runtrol_provider::{
     Agent, AgentCommand, ApprovalId, ApprovalRequest, Attached, CapabilitySet, CloseMode,
     ContentBlock, Declarant, Disposition, EventBody, Level, NativeSessionId, Notice, NoticeCode,
-    Opaque, OpenIntent, Produced, ProviderError, ProviderId, ReplaySource, SessionId, StopReason,
-    TurnEvent, TurnId, WallMs, WithdrawnReason,
+    Opaque, OpenIntent, Produced, ProviderError, ProviderId, SessionId, StopReason, TurnEvent,
+    TurnId, WallMs, WithdrawnReason,
 };
 use serde::Deserialize;
 use serde_json::value::RawValue;
@@ -170,7 +170,6 @@ impl CodexAgent {
                     native: named,
                     // Where older content comes from is the provider's own store, addressed by a cursor this
                     // driver counts rather than by a file this driver reads.
-                    replay: ReplaySource::None,
                     model_requested: intent.model.clone(),
                     // This CLI declares what it can do once per connection rather than once per conversation,
                     // and a capability list copied onto every session would be the same fact repeated with

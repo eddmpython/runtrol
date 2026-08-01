@@ -523,7 +523,7 @@ pub(crate) fn answer_prepared(
             Err(error) => Reply::One(from_session_error(&error)),
         },
 
-        Request::Watch { session } => match sessions.subscribe(session) {
+        Request::Watch { session, after } => match sessions.subscribe(session, after) {
             Ok(watching) => Reply::Watching(Box::new(watching)),
             Err(error) => Reply::One(refuse(&error.to_string())),
         },
@@ -1257,7 +1257,10 @@ mod tests {
                 text: "anything".into(),
             },
             Request::Interrupt { session: absent },
-            Request::Watch { session: absent },
+            Request::Watch {
+                session: absent,
+                after: None,
+            },
             Request::Close {
                 session: absent,
                 now: true,

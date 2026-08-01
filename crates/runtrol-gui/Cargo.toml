@@ -24,6 +24,7 @@ tauri = { workspace = true }
 serde = { workspace = true, features = ["std", "derive"] }
 serde_json = { workspace = true, features = ["std"] }
 thiserror = { workspace = true }
+tokio = { workspace = true, features = ["macros", "sync"] }
 
 [lints]
 workspace = true

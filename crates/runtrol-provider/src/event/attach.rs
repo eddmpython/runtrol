@@ -8,7 +8,6 @@ use serde::Serialize;
 
 use crate::event::Opaque;
 use crate::id::{NativeSessionId, TurnId};
-use crate::path::AbsPath;
 
 /// A driver has bound to a provider session and work can flow.
 ///
@@ -18,8 +17,6 @@ use crate::path::AbsPath;
 pub struct Attached {
     /// The provider's own identifier for this session.
     pub native: NativeSessionId,
-    /// How a subscriber recovers content older than the replay ring.
-    pub replay: ReplaySource,
     /// The model runtrol asked for.
     ///
     /// Not the model that answered. Those differ: one CLI reported `claude-opus-5[1m]` at startup while
@@ -31,53 +28,6 @@ pub struct Attached {
     pub caps: CapabilitySet,
     /// The provider's whole startup object, verbatim.
     pub payload: Opaque,
-}
-
-/// Where content older than the replay ring can be read from.
-///
-/// runtrol keeps no transcript, so a subscriber that falls far behind is served from the provider's own
-/// store. This enum is what makes that possible without the core knowing which provider it is talking
-/// to: the core compares cursors, and only the driver knows what the numbers count.
-#[derive(Debug, Clone, Serialize)]
-#[serde(tag = "kind", rename_all = "camelCase")]
-pub enum ReplaySource {
-    /// An append-only file, addressed by byte offset.
-    ///
-    /// Verified append-only by controlled experiment: one CLI's transcript grew from 17,877 to 22,339
-    /// bytes across a resume while the hash of its first 4,096 bytes stayed identical. That is what makes
-    /// a byte offset a durable cursor rather than a guess, and it is why a positioned 64 KiB read (1.1 ms,
-    /// 64 KiB of memory) can replace materializing the file (173 ms, 145 MB).
-    File {
-        /// Where the provider keeps it.
-        path: AbsPath,
-        /// Identity of the file, so a rotation or truncation is detected rather than misread.
-        file_id: FileId,
-    },
-    /// A provider method serves the range.
-    ///
-    /// The cursor counts whatever that method counts. Preferred where it works, because it does not
-    /// depend on a path the vendor may move.
-    Protocol {
-        /// The bound method name.
-        method: &'static str,
-    },
-    /// Nothing survives past the ring.
-    ///
-    /// A subscriber asking for older content is told what was lost, explicitly, rather than handed a
-    /// silent gap.
-    None,
-}
-
-/// Enough of a file's identity to notice it was replaced.
-///
-/// Compared, never interpreted. A cursor into a file that has been rotated or truncated points at
-/// different content, and reading it anyway would serve one session's bytes as another's.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-pub struct FileId {
-    /// Size when the identity was taken.
-    pub len: u64,
-    /// Modification time in milliseconds, when the platform reports one.
-    pub modified_ms: Option<u64>,
 }
 
 /// Capability tokens a provider announced about itself.

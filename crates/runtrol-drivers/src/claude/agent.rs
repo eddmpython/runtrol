@@ -200,7 +200,6 @@ impl ClaudeAgent {
                         native: startup.native,
                         // Where older content comes from is decided when the transcript is located, which is a
                         // search rather than a computation and happens on demand.
-                        replay: runtrol_provider::ReplaySource::None,
                         // What runtrol asked for, not what will answer. Filled by whoever opened the session; the
                         // model in the frame is the answering one and rides in the payload.
                         model_requested: None,

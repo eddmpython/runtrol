@@ -113,11 +113,18 @@ pub fn render(response: &Response) -> Vec<String> {
 
         Response::Done => vec!["done".to_owned()],
 
-        Response::Watching => vec!["watching".to_owned()],
+        Response::Watching { live_at, gap, .. } => {
+            render_watching(*live_at, gap.as_deref().copied())
+        }
 
         // As the provider wrote it. Reformatting would be this surface reading a conversation, which is the one thing
         // runtrol does not do.
-        Response::Event(payload) => vec![payload.as_str().to_owned()],
+        Response::Event { payload, .. } => vec![payload.as_str().to_owned()],
+
+        Response::Lagged { next_expected } => vec![format!(
+            "watch lagged  reconnect after {}:{}:{}",
+            next_expected.stream, next_expected.epoch, next_expected.seq
+        )],
 
         Response::Failed(failure) => {
             let mut lines = vec![failure.message.to_string()];
@@ -135,9 +142,29 @@ pub fn render(response: &Response) -> Vec<String> {
     }
 }
 
+fn render_watching(
+    live_at: runtrol_provider::WatchCursor,
+    gap: Option<runtrol_provider::WatchGap>,
+) -> Vec<String> {
+    let boundary = format!("{}:{}:{}", live_at.stream, live_at.epoch, live_at.seq);
+    let mut lines = vec![format!("watching  {boundary}")];
+    if let Some(gap) = gap {
+        lines.push(format!(
+            "watch gap  requested {}:{}:{}  live {}:{}:{}",
+            gap.requested.stream,
+            gap.requested.epoch,
+            gap.requested.seq,
+            gap.live_at.stream,
+            gap.live_at.epoch,
+            gap.live_at.seq
+        ));
+    }
+    lines
+}
+
 #[cfg(test)]
 mod tests {
-    use runtrol_provider::{ModelCatalog, ModelChoice, SessionId};
+    use runtrol_provider::{ModelCatalog, ModelChoice, SessionId, StreamId, WatchCursor, WatchGap};
 
     use super::*;
 
@@ -200,7 +227,32 @@ mod tests {
 
     #[test]
     fn a_watch_acknowledgement_names_the_subscription_boundary() {
-        assert_eq!(render(&Response::Watching), vec!["watching"]);
+        let live_at = WatchCursor {
+            stream: StreamId::now(),
+            epoch: 3,
+            seq: 8,
+        };
+        assert_eq!(
+            render(&Response::Watching {
+                starts_at: live_at,
+                live_at,
+                gap: None,
+            }),
+            vec![format!(
+                "watching  {}:{}:{}",
+                live_at.stream, live_at.epoch, live_at.seq
+            )]
+        );
+        let requested = WatchCursor { seq: 2, ..live_at };
+        let lines = render(&Response::Watching {
+            starts_at: live_at,
+            live_at,
+            gap: Some(Box::new(WatchGap { requested, live_at })),
+        });
+        assert_eq!(lines.len(), 2);
+        let gap_line = lines.get(1).expect("one explicit gap line");
+        assert!(gap_line.contains("watch gap"));
+        assert!(gap_line.contains(&requested.seq.to_string()));
     }
 
     #[test]
@@ -294,9 +346,14 @@ mod tests {
     #[test]
     fn an_event_is_printed_as_the_provider_wrote_it() {
         let payload = r#"{"z":1,"a":[2,3]}"#;
-        let lines = render(&Response::Event(runtrol_provider::Opaque::owned(
-            payload.to_owned(),
-        )));
+        let lines = render(&Response::Event {
+            payload: runtrol_provider::Opaque::owned(payload.to_owned()),
+            next_expected: WatchCursor {
+                stream: StreamId::now(),
+                epoch: 0,
+                seq: 1,
+            },
+        });
         assert_eq!(lines, vec![payload]);
     }
 

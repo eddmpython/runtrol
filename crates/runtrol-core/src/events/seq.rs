@@ -7,15 +7,14 @@
 //! assign it, because one provider line can become three frames and two drivers can serve one session
 //! across a reattach, and neither situation has an answer a driver could give.
 //!
-//! `src_end` is how far into the provider's own store the session has reached. It is the cursor a client
-//! recovers from when it falls out of the replay window, so it has to be monotone: a cursor that went
-//! backwards would serve the same content twice, and a client comparing it to its own position would
-//! conclude it had somehow read the future.
+//! `src_end` is how far into the provider's own event source the session has reached. It is diagnostic ordering
+//! metadata, so it has to be monotone: a cursor that went backwards would make two events claim an impossible
+//! source order.
 //!
 //! # Why a regression is kept and reported rather than trusted or hidden
 //!
 //! A driver that reports a cursor behind one it already reported is misbehaving. Two wrong answers are
-//! available. Trusting it breaks recovery for every subscriber. Ignoring it silently means the operator's
+//! available. Trusting it breaks source ordering for every subscriber. Ignoring it silently means the operator's
 //! session degrades with nothing anywhere saying why, and the driver's bug survives to production. So the
 //! previous value is kept, and the regression comes back as a value the caller must handle.
 
@@ -115,14 +114,14 @@ impl Sequencer {
             None
         };
 
-        let event = AgentEvent {
+        let event = AgentEvent::new(
             session,
-            epoch: self.epoch,
-            seq: self.next,
-            at: WallMs::now(),
-            src_end: self.src_end,
+            self.epoch,
+            self.next,
+            WallMs::now(),
+            self.src_end,
             body,
-        };
+        );
 
         // Unreachable at any rate a real provider produces: at a million frames a second this takes
         // longer than the species has existed. Wrapping is chosen over a panic for the same reason as
