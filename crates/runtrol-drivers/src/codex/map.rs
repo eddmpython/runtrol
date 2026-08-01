@@ -233,6 +233,21 @@ pub fn read(method: &str, params: Option<&Bytes>) -> Result<Frame, MapError> {
 
         "item/started" => Ok(item_frame(method, body, parsed.item, false)),
         "item/completed" => Ok(item_frame(method, body, parsed.item, true)),
+        "item/fileChange/patchUpdated" => Ok(match tool_call_id(parsed.item_id) {
+            Some(tool_call_id) => Frame::Body(EventBody::ToolCallUpdate(ToolCallFrame {
+                tool_call_id,
+                kind: Some(ToolKind::Edit),
+                status: Some(ToolCallStatus::InProgress),
+                delta: true,
+                payload: whole(body),
+            })),
+            None => Frame::Unbound(Unmapped {
+                tag: method.into(),
+                turn: None,
+                payload: whole(body),
+                unknown_to_binding: false,
+            }),
+        }),
 
         "thread/tokenUsage/updated" => Ok(Frame::Body(EventBody::UsageUpdate(Box::new(usage(
             body,

@@ -25,14 +25,16 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use bytes::Bytes;
 use runtrol_provider::{
-    Agent, AgentCommand, Attached, CapabilitySet, CloseMode, ContentBlock, Declarant, Disposition,
-    EventBody, Level, NativeSessionId, Notice, NoticeCode, Opaque, OpenIntent, Produced,
-    ProviderError, ProviderId, ReplaySource, SessionId, StopReason, TurnEvent, TurnId,
+    Agent, AgentCommand, ApprovalId, ApprovalRequest, Attached, CapabilitySet, CloseMode,
+    ContentBlock, Declarant, Disposition, EventBody, Level, NativeSessionId, Notice, NoticeCode,
+    Opaque, OpenIntent, Produced, ProviderError, ProviderId, ReplaySource, SessionId, StopReason,
+    TurnEvent, TurnId, WallMs, WithdrawnReason,
 };
 use serde::Deserialize;
 use serde_json::value::RawValue;
 
-use crate::codex::bound::{Answer, INTERRUPT};
+use crate::codex::approval::{ApprovalBook, ApprovalBuildError};
+use crate::codex::bound::{Answer, DECLINE_RESULT, INTERRUPT};
 use crate::codex::conn::{Connection, Delivery, Inbox};
 use crate::codex::map::{self, Frame};
 
@@ -77,6 +79,8 @@ pub struct CodexAgent {
     announced: Option<Produced>,
     /// How many lines the connection had failed to read when this session last said so.
     said_unreadable: u64,
+    /// Provider questions still waiting for a human, plus the bounded file payload join.
+    approvals: ApprovalBook,
     /// Set once the stream is over, so nothing keeps reading a finished session.
     finished: bool,
 }
@@ -176,6 +180,7 @@ impl CodexAgent {
                 })),
             }),
             said_unreadable: 0,
+            approvals: ApprovalBook::new(),
             finished: false,
         })
     }
@@ -202,6 +207,7 @@ impl CodexAgent {
             }
 
             Frame::Ended(ended) => {
+                self.approvals.clear_items();
                 let turn = self.turn_for(&ended.native_turn);
                 // The provider's own word, which is the only thing that means the outcome is known.
                 if self
@@ -332,6 +338,25 @@ impl CodexAgent {
             )
             .await
             .map(|_answer| ())
+    }
+
+    async fn expire_one(&mut self) -> Option<Result<Produced, ProviderError>> {
+        let native = self.approvals.due(WallMs::now())?;
+        if let Err(error) = self
+            .conn
+            .answer(&native.request, &native.result, "expiring an approval")
+            .await
+        {
+            return Some(Err(error));
+        }
+        self.approvals.complete(native.approval);
+        Some(Ok(Produced {
+            src_end: self.src_end,
+            body: EventBody::ApprovalWithdrawn {
+                id: native.approval,
+                why: WithdrawnReason::Expired,
+            },
+        }))
     }
 }
 
@@ -484,6 +509,10 @@ impl Agent for CodexAgent {
         Some(&self.native)
     }
 
+    fn approval(&self, id: ApprovalId) -> Option<&ApprovalRequest> {
+        self.approvals.get(id)
+    }
+
     async fn send(&mut self, command: AgentCommand) -> Result<(), ProviderError> {
         match command {
             AgentCommand::Prompt(blocks) => {
@@ -546,11 +575,23 @@ impl Agent for CodexAgent {
             // identifier, and the connection reports it as an answer nobody asked for.
             AgentCommand::Native(payload) => self.conn.send_verbatim(payload.as_str()).await,
 
-            AgentCommand::Answer { .. } => Err(ProviderError::Unsupported {
-                provider: self.provider,
-                what: "answering an approval".to_owned(),
-                why: "approvals are declined until they can reach a person, and the operator is told each time",
-            }),
+            AgentCommand::Answer {
+                id,
+                option,
+                subject_digest,
+            } => {
+                let native =
+                    self.approvals
+                        .answer(id, option, subject_digest)
+                        .map_err(|error| {
+                            approval_error(self.provider, "answering an approval", &error)
+                        })?;
+                self.conn
+                    .answer(&native.request, &native.result, "answering an approval")
+                    .await?;
+                self.approvals.complete(native.approval);
+                Ok(())
+            }
 
             // A command that arrived after this driver did. Saying so is the whole point: a wildcard that
             // returned success would report a command as sent when nothing was sent, and the operator would
@@ -576,8 +617,27 @@ impl Agent for CodexAgent {
             return None;
         }
 
-        match self.inbox.next().await {
+        let delivery = loop {
+            if let Some(expired) = self.expire_one().await {
+                return Some(expired);
+            }
+            match self.approvals.wait(WallMs::now()) {
+                Some(wait) => {
+                    // The timeout is not a dropped failure. It is the approval deadline becoming due, and the
+                    // next loop iteration sends the retained rejection and publishes the expiry.
+                    if let Ok(delivery) = tokio::time::timeout(wait, self.inbox.next()).await {
+                        break delivery;
+                    }
+                }
+                None => break self.inbox.next().await,
+            }
+        };
+
+        match delivery {
             Some(Delivery::Report { method, params }) => {
+                if let Some(params) = &params {
+                    self.approvals.observe(&method, params);
+                }
                 match map::read(&method, params.as_ref()) {
                     Ok(frame) => Some(Ok(self.produce(frame))),
                     // A frame runtrol cannot read is a protocol failure for this session, promoted to session
@@ -598,6 +658,29 @@ impl Agent for CodexAgent {
                 src_end: self.src_end,
                 body: answered_notice(&method, how),
             })),
+
+            Some(Delivery::Question { id, method, params }) => {
+                let turn = self.running.as_ref().map(|running| running.turn);
+                match self.approvals.open(id.clone(), &method, params, turn) {
+                    Ok(request) => Some(Ok(Produced {
+                        src_end: self.src_end,
+                        body: EventBody::ApprovalRequested(Box::new(request)),
+                    })),
+                    Err(error) => {
+                        let answered = self
+                            .conn
+                            .answer(&id, DECLINE_RESULT, "declining an unreadable approval")
+                            .await;
+                        match answered {
+                            Ok(()) => Some(Ok(Produced {
+                                src_end: self.src_end,
+                                body: approval_notice(&method, &error),
+                            })),
+                            Err(write) => Some(Err(write)),
+                        }
+                    }
+                }
+            }
 
             None => {
                 self.finished = true;
@@ -621,6 +704,18 @@ impl Agent for CodexAgent {
         };
 
         let agent = &mut *self;
+
+        for native in agent.approvals.rejections() {
+            agent
+                .conn
+                .answer(
+                    &native.request,
+                    &native.result,
+                    "declining an approval while closing",
+                )
+                .await?;
+            agent.approvals.complete(native.approval);
+        }
 
         // A turn that is still running is given the time it was granted to end on its own, and asked to stop
         // when it does not. Unsubscribing while it runs would leave the daemon working with nobody watching.
@@ -652,6 +747,29 @@ impl Agent for CodexAgent {
         agent.inbox.close().await;
         unsubscribed.map(|_answer| ())
     }
+}
+
+fn approval_error(
+    provider: ProviderId,
+    doing: &'static str,
+    error: &ApprovalBuildError,
+) -> ProviderError {
+    ProviderError::Protocol {
+        provider,
+        doing,
+        detail: error.to_string(),
+    }
+}
+
+fn approval_notice(method: &str, error: &ApprovalBuildError) -> EventBody {
+    EventBody::Notice(Box::new(Notice {
+        level: Level::Error,
+        code: NoticeCode::ProtocolViolation,
+        retryable: false,
+        payload: Opaque::owned(format!(
+            r#"{{"approvalDeclined":"{method}","why":"{error}"}}"#
+        )),
+    }))
 }
 
 #[cfg(test)]

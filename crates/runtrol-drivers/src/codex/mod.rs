@@ -23,6 +23,7 @@
 //! distinguishes the receipt from the beginning from the ending because of this.
 
 pub mod agent;
+mod approval;
 pub mod bound;
 pub mod conn;
 pub mod map;

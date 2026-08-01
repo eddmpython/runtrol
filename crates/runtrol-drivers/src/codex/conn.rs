@@ -82,6 +82,15 @@ pub enum Delivery {
         /// The provider's own parameters, unread.
         params: Option<Bytes>,
     },
+    /// A provider approval that must wait for this session's human answer.
+    Question {
+        /// The provider's JSON-RPC request identifier.
+        id: RequestId,
+        /// Which approval method was asked.
+        method: Box<str>,
+        /// The provider's parameters, shared and unread until the session binds the consent fields.
+        params: Option<Bytes>,
+    },
     /// A question the provider asked, which runtrol answered on the spot.
     ///
     /// Relayed so the session can tell the operator. An approval that was declined and never mentioned is
@@ -368,6 +377,34 @@ impl Connection {
         self.write_line(frame, "forwarding a frame").await
     }
 
+    /// Answer one provider-originated JSON-RPC question with a private native result.
+    ///
+    /// # Errors
+    ///
+    /// [`ProviderError::Protocol`] when the retained result is no longer readable or the provider input cannot be
+    /// written. The caller keeps the approval pending unless this succeeds.
+    pub async fn answer(
+        &self,
+        id: &RequestId,
+        result: &str,
+        doing: &'static str,
+    ) -> Result<(), ProviderError> {
+        let raw =
+            serde_json::from_str::<&serde_json::value::RawValue>(result).map_err(|error| {
+                ProviderError::Protocol {
+                    provider: self.provider,
+                    doing,
+                    detail: format!("the retained approval answer is unreadable: {error}"),
+                }
+            })?;
+        let frame = jsonrpc::write_answer(id, raw).map_err(|error| ProviderError::Protocol {
+            provider: self.provider,
+            doing,
+            detail: error.to_string(),
+        })?;
+        self.write_line(&frame, doing).await
+    }
+
     /// Write one line to the child's input.
     async fn write_line(&self, text: &str, doing: &'static str) -> Result<(), ProviderError> {
         write_line(&self.stdin, text)
@@ -521,6 +558,10 @@ async fn sort(
         }
 
         Incoming::Question { id, method, params } => {
+            if route_approval(routes, &id, &method, params.as_ref()).await {
+                return;
+            }
+
             let how = answer_question(stdin, &id, &method).await;
             if let Some(thread) = thread_of(params.as_ref()) {
                 deliver(
@@ -540,13 +581,41 @@ async fn sort(
             // rather than being attached to whichever one happened to be first.
             Some(false) => broadcast(routes, &Delivery::Report { method, params }).await,
             _ => match thread_of(params.as_ref()) {
-                Some(thread) => deliver(routes, &thread, Delivery::Report { method, params }).await,
+                Some(thread) => {
+                    let _delivered =
+                        deliver(routes, &thread, Delivery::Report { method, params }).await;
+                }
                 // A notification that names no conversation and is not one of the account-wide ones. There is
                 // no session it belongs to, so it is counted where a test can see it.
                 None => routes.lock().await.undeliverable += 1,
             },
         },
     }
+}
+
+/// Route a recognized provider approval without answering it at the shared reader.
+async fn route_approval(
+    routes: &Mutex<Routes>,
+    id: &RequestId,
+    method: &str,
+    params: Option<&Bytes>,
+) -> bool {
+    if !bound::is_approval(method) {
+        return false;
+    }
+    let Some(thread) = thread_of(params) else {
+        return false;
+    };
+    deliver(
+        routes,
+        &thread,
+        Delivery::Question {
+            id: id.clone(),
+            method: method.into(),
+            params: params.cloned(),
+        },
+    )
+    .await
 }
 
 /// Answer a question the provider asked.
@@ -584,23 +653,25 @@ async fn answer_question(
 }
 
 /// Put a frame in one conversation's queue.
-async fn deliver(routes: &Mutex<Routes>, thread: &str, delivery: Delivery) {
+async fn deliver(routes: &Mutex<Routes>, thread: &str, delivery: Delivery) -> bool {
     let mut table = routes.lock().await;
     let Some(route) = table.live.get(thread) else {
         table.undeliverable += 1;
-        return;
+        return false;
     };
     // Never waits. Making the reader wait for one full queue would stop every other session on the
     // connection, so the frame is dropped and counted, and the session reports the count.
     match route.tx.try_send(delivery) {
-        Ok(()) => {}
+        Ok(()) => true,
         Err(mpsc::error::TrySendError::Full(_)) => {
             route.dropped.fetch_add(1, Ordering::Relaxed);
+            false
         }
         // The session let go of its queue without deregistering. Removing the route is what stops the same
         // frame being counted forever.
         Err(mpsc::error::TrySendError::Closed(_)) => {
             table.live.remove(thread);
+            false
         }
     }
 }
@@ -711,6 +782,33 @@ mod tests {
                 }
                 other => panic!("a session missed account state: {other:?}"),
             }
+        }
+    }
+
+    #[tokio::test]
+    async fn an_approval_reaches_its_session_without_being_answered_by_the_reader() {
+        let routes: Arc<Mutex<Routes>> = Arc::new(Mutex::new(Routes::default()));
+        let mut inbox = a_route(&routes, "t-1").await;
+        let body = params(
+            r#"{"threadId":"t-1","turnId":"u","itemId":"i","startedAtMs":1,"command":"cargo test"}"#,
+        );
+
+        assert!(
+            route_approval(
+                &routes,
+                &RequestId::Number(77),
+                "item/commandExecution/requestApproval",
+                Some(&body),
+            )
+            .await
+        );
+        match inbox.next().await {
+            Some(Delivery::Question { id, method, params }) => {
+                assert_eq!(id, RequestId::Number(77));
+                assert_eq!(&*method, "item/commandExecution/requestApproval");
+                assert_eq!(params.as_ref(), Some(&body));
+            }
+            other => panic!("the approval route delivered {other:?}"),
         }
     }
 

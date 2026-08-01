@@ -28,6 +28,7 @@ serde_json = { workspace = true, features = ["std", "raw_value"] }
 tokio = { workspace = true, features = ["io-util", "sync", "process", "time", "rt"] }
 # The behavioural contract has async methods and is held as `dyn`.
 async-trait = { workspace = true }
+sha2 = { workspace = true }
 
 # The built-in manifests are compiled in as text and read by the same parser an operator file goes through, so the
 # tests that hold them to the schema need it here too.

@@ -14,13 +14,11 @@
 //! deliberately, and anything absent from it is answered with a protocol error saying runtrol has no binding.
 //! Silence is never an option here.
 //!
-//! # Why an approval is declined rather than left open
+//! # Why an approval still has a fallback answer
 //!
-//! Routing an approval to a person is [`crate::codex`]'s next piece of work and is not in this build. Until it
-//! is, an approval that arrived would either hang the daemon or be answered. It is answered with a decline,
-//! which is the same posture the product takes everywhere else: a capability nobody approved does not run.
-//!
-//! The operator is told. A decline that nobody hears is indistinguishable from the agent choosing not to act.
+//! A recognized approval is routed to its session and waits for a bounded human response. If the session is gone,
+//! its queue is full, or its parameters cannot be represented honestly, the reader must still answer. It declines
+//! in those failure paths so one abandoned question cannot stall the daemon shared by every session.
 
 /// A method runtrol calls on the provider.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -141,6 +139,11 @@ pub const NOTICES: &[BoundNotice] = &[
         means: "a piece of the turn finished, and this is what the provider persists",
     },
     BoundNotice {
+        method: "item/fileChange/patchUpdated",
+        per_thread: true,
+        means: "the current file patch used to make a later approval subject complete",
+    },
+    BoundNotice {
         method: "thread/tokenUsage/updated",
         per_thread: true,
         means: "how much of the context window is in use",
@@ -193,6 +196,9 @@ pub const DECISION_FIELD: &str = "decision";
 /// The declining value of an approval decision.
 pub const DECISION_DECLINE: &str = "decline";
 
+/// The complete native result used when a routed approval must fail closed.
+pub const DECLINE_RESULT: &str = r#"{"decision":"decline"}"#;
+
 /// Every request runtrol answers deliberately.
 ///
 /// Anything not here is still answered, with a protocol error. That is the whole point of the list: it says
@@ -201,12 +207,12 @@ pub const REQUESTS: &[BoundRequest] = &[
     BoundRequest {
         method: "item/commandExecution/requestApproval",
         answer: Answer::Decline,
-        because: "routing an approval to a person is not in this build, and a command nobody approved does not run",
+        because: "a routed approval falls back to decline if its session cannot receive or represent it safely",
     },
     BoundRequest {
         method: "item/fileChange/requestApproval",
         answer: Answer::Decline,
-        because: "the same, and this one cannot even be shown honestly yet: the request carries no diff",
+        because: "the same, and a missing file-change join may be refused but never approved blind",
     },
     BoundRequest {
         method: "account/chatgptAuthTokens/refresh",
@@ -231,6 +237,15 @@ pub fn answer_for(method: &str) -> Option<Answer> {
         .iter()
         .find(|request| request.method == method)
         .map(|request| request.answer)
+}
+
+/// Whether a provider question is a human approval this driver can route.
+#[must_use]
+pub fn is_approval(method: &str) -> bool {
+    matches!(
+        method,
+        "item/commandExecution/requestApproval" | "item/fileChange/requestApproval"
+    )
 }
 
 /// Whether a notification names the conversation it belongs to.

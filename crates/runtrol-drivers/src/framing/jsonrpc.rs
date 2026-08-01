@@ -489,7 +489,7 @@ struct OutgoingRequest<'call, P> {
 
 /// One outgoing answer to a question the provider asked.
 #[derive(Clone, PartialEq, Eq, Debug, Serialize)]
-struct OutgoingAnswer<'call, R> {
+struct OutgoingAnswer<'call, R: ?Sized> {
     /// The protocol version.
     jsonrpc: &'static str,
     /// Which question is being answered.
@@ -535,7 +535,10 @@ pub fn write_question<P: Serialize>(
 /// # Errors
 ///
 /// [`FrameError::NotWritable`] when the answer cannot be written as JSON.
-pub fn write_answer<R: Serialize>(id: &RequestId, result: &R) -> Result<String, FrameError> {
+pub fn write_answer<R: Serialize + ?Sized>(
+    id: &RequestId,
+    result: &R,
+) -> Result<String, FrameError> {
     to_line(&OutgoingAnswer {
         jsonrpc: VERSION,
         id: id.to_wire(),
