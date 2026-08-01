@@ -305,7 +305,9 @@ fn item_frame(method: &str, body: &Bytes, raw: Option<&RawValue>, durable: bool)
         Some("userMessage") => Frame::Body(EventBody::UserMessageChunk(chunk())),
         Some("agentMessage") => Frame::Body(EventBody::AgentMessageChunk(chunk())),
         Some("reasoning") => Frame::Body(EventBody::AgentThoughtChunk(chunk())),
-        Some("plan") => Frame::Body(EventBody::Plan(whole(body))),
+        Some("plan") => Frame::Body(EventBody::Plan {
+            payload: whole(body),
+        }),
 
         Some(
             kind @ ("commandExecution" | "fileChange" | "mcpToolCall" | "dynamicToolCall"

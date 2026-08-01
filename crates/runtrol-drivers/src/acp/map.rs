@@ -104,26 +104,25 @@ pub(super) fn update(line: &Bytes, params: &Bytes, native: &str) -> Result<Event
     )?;
 
     match tagged.session_update {
-        "user_message_chunk" => chunk(notification.update, params, EventBody::UserMessageChunk),
-        "agent_message_chunk" => chunk(notification.update, params, EventBody::AgentMessageChunk),
-        "agent_thought_chunk" => chunk(notification.update, params, EventBody::AgentThoughtChunk),
-        "tool_call" => tool(notification.update, params, false),
-        "tool_call_update" => tool(notification.update, params, true),
-        "plan" => Ok(EventBody::Plan(opaque(params, notification.update)?)),
-        "available_commands_update" => Ok(EventBody::AvailableCommandsUpdate(opaque(
-            params,
-            notification.update,
-        )?)),
-        "current_mode_update" => current_mode(notification.update, params),
-        "config_option_update" => Ok(EventBody::ConfigOptionUpdate(opaque(
-            params,
-            notification.update,
-        )?)),
-        "session_info_update" => Ok(EventBody::SessionInfoUpdate(opaque(
-            params,
-            notification.update,
-        )?)),
-        "usage_update" => usage(notification.update, params),
+        "user_message_chunk" => chunk(notification.update, line, EventBody::UserMessageChunk),
+        "agent_message_chunk" => chunk(notification.update, line, EventBody::AgentMessageChunk),
+        "agent_thought_chunk" => chunk(notification.update, line, EventBody::AgentThoughtChunk),
+        "tool_call" => tool(notification.update, line, false),
+        "tool_call_update" => tool(notification.update, line, true),
+        "plan" => Ok(EventBody::Plan {
+            payload: opaque(line, notification.update)?,
+        }),
+        "available_commands_update" => Ok(EventBody::AvailableCommandsUpdate {
+            payload: opaque(line, notification.update)?,
+        }),
+        "current_mode_update" => current_mode(notification.update, line),
+        "config_option_update" => Ok(EventBody::ConfigOptionUpdate {
+            payload: opaque(line, notification.update)?,
+        }),
+        "session_info_update" => Ok(EventBody::SessionInfoUpdate {
+            payload: opaque(line, notification.update)?,
+        }),
+        "usage_update" => usage(notification.update, line),
         tag => Ok(EventBody::Unmapped(Unmapped {
             tag: tag.into(),
             turn: None,
@@ -334,6 +333,26 @@ mod tests {
         assert_eq!(
             frame.payload.as_str(),
             core::str::from_utf8(&line).expect("ASCII")
+        );
+    }
+
+    #[test]
+    fn a_nested_standard_update_remains_serializable_from_the_whole_frame() {
+        let line = Bytes::from_static(
+            br#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s-1","update":{"sessionUpdate":"available_commands_update","availableCommands":[{"name":"review","description":"Review changes","input":{"hint":"path"}}]}}}"#,
+        );
+        let params_text = core::str::from_utf8(&line)
+            .expect("ASCII")
+            .split_once(r#""params":"#)
+            .map(|(_, rest)| &rest[..rest.len() - 1])
+            .expect("params");
+        let params = line.slice_ref(params_text.as_bytes());
+        let body = update(&line, &params, "s-1").expect("standard update");
+        let encoded = serde_json::to_string(&body).expect("serializable update");
+        assert_eq!(
+            encoded,
+            r#"{"event":"availableCommandsUpdate","payload":{"sessionUpdate":"available_commands_update","availableCommands":[{"name":"review","description":"Review changes","input":{"hint":"path"}}]}}"#,
+            "the outer tag and exact nested provider object must cross without double encoding"
         );
     }
 }

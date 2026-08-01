@@ -58,8 +58,9 @@ gate = [
 
 [[axis]]
 key = "providerExtensibility"
-# Hosted CI compiles the public contract and completes a turn against an ACP fixture. The real CLI
-# drift smoke remains local-only, so the active counterpart is still a mock.
+# Hosted CI compiles the public contract, runs the generic fixture on three operating systems, and drives an
+# independently distributed ACP implementation against a local mock model. Scheduled unauthenticated probes cover
+# schema methods and parser flags only. The model counterpart and account-backed built-ins remain outside hosted CI.
 tier = "mock"
 additives = []
 name = { ko = "공급자 확장성", en = "Provider extensibility", zh = "供应商可扩展性", ja = "プロバイダー拡張性" }
@@ -67,6 +68,7 @@ gate = [
     { name = "providerContract", kind = "contract" },
     { name = "agentSurfaceDrift", kind = "smoke" },
     { name = "genericAcpSmoke", kind = "smoke" },
+    { name = "externalAcpSmoke", kind = "smoke" },
 ]
 
 [[axis]]
@@ -141,7 +143,9 @@ gate = [{ name = "crossConsultSmoke", kind = "smoke" }]
 
 [[axis]]
 key = "freedomToLeave"
-tier = "none"
+# The provider is a real child process and the whole product boundary is exercised, but the counterpart is
+# still the deterministic ACP fixture rather than an account-backed provider. That supports the mock tier.
+tier = "mock"
 additives = []
 name = { ko = "떠날 자유", en = "Freedom to leave", zh = "离开的自由", ja = "去る自由" }
 gate = [{ name = "uninstallLeavesNoTrace", kind = "smoke" }]

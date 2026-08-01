@@ -14,8 +14,8 @@
 
 | 폴더 | 상태 | 한 줄 |
 |---|---|---|
-| [providerAdapter](providerAdapter/) | 설계 | ACP 를 내부 어휘로 채택하고 발명하지 않는다. 등록은 언제나 TOML manifest, 코어는 kind 별 범용 드라이버를 낸다. ACP 를 말하는 4 번째 CLI 는 TOML 10 줄, Rust 0 줄. |
 | [coreRuntime](coreRuntime/) | 설계 | daemon 위상, 세션 상태 기계, **메모리 계약 숫자 확정** (유휴 6MB, 천장 48MB), backpressure, 고아 회수. 런타임·Windows I/O·저장소 결정이 전부 실측 근거다. |
+| [providerAdapter](providerAdapter/) | 활성 | provider-neutral trait, built-in driver 둘, 범용 ACP v1, 독립 ACP 구현 호환과 native session 소유권. 실제 hidden stdio 승인 왕복 증거가 마지막 차단 조건이다. |
 | [providerDiscovery](providerDiscovery/) | 설계 | 모델·플래그·버전을 하드코딩 없이 아는 사다리와 version-keyed 캐시. 표면 drift 감지가 같은 뿌리다. |
 
 ## 2. 사용자 표면
@@ -69,7 +69,7 @@
 (4) 이니셔티브 폴더가 삭제됐다
 는 뜻이다.
 
-**첫 사례**: `positioningDecision` 이 2026-07-30 에 [docs/positioning.md](../docs/positioning.md) 로 승격되고 삭제됐다.
+**완료 사례**: `positioningDecision` 은 2026-07-30 에 [docs/positioning.md](../docs/positioning.md) 로 승격되고 삭제됐다.
 
 ## 이 판을 지배하는 사실 (r1 조사)
 

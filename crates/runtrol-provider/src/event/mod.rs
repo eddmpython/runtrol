@@ -137,9 +137,15 @@ pub enum EventBody {
     /// A tool call progressing or finishing.
     ToolCallUpdate(ToolCallFrame),
     /// The agent's plan.
-    Plan(Opaque),
+    Plan {
+        /// The provider's plan object, untouched.
+        payload: Opaque,
+    },
     /// The commands this session offers.
-    AvailableCommandsUpdate(Opaque),
+    AvailableCommandsUpdate {
+        /// The provider's command catalogue update, untouched.
+        payload: Opaque,
+    },
     /// The agent switched mode.
     CurrentModeUpdate {
         /// Which mode, by the provider's own name for it.
@@ -148,9 +154,15 @@ pub enum EventBody {
         payload: Opaque,
     },
     /// A configuration option changed.
-    ConfigOptionUpdate(Opaque),
+    ConfigOptionUpdate {
+        /// The provider's configuration option update, untouched.
+        payload: Opaque,
+    },
     /// Session metadata changed.
-    SessionInfoUpdate(Opaque),
+    SessionInfoUpdate {
+        /// The provider's session information update, untouched.
+        payload: Opaque,
+    },
     /// How much of the context window is in use.
     UsageUpdate(Box<Usage>),
 
@@ -178,6 +190,36 @@ pub enum EventBody {
 }
 
 impl EventBody {
+    /// The stable envelope discriminator used on runtrol's own event wire.
+    ///
+    /// This never reads an opaque provider payload. It exists so a serialization failure can name the envelope that
+    /// failed without formatting conversation content.
+    #[must_use]
+    pub const fn wire_name(&self) -> &'static str {
+        match self {
+            Self::Attached(_) => "attached",
+            Self::Turn(_) => "turn",
+            Self::Notice(_) => "notice",
+            Self::Detached(_) => "detached",
+            Self::Lagged { .. } => "lagged",
+            Self::UserMessageChunk(_) => "userMessageChunk",
+            Self::AgentMessageChunk(_) => "agentMessageChunk",
+            Self::AgentThoughtChunk(_) => "agentThoughtChunk",
+            Self::ToolCall(_) => "toolCall",
+            Self::ToolCallUpdate(_) => "toolCallUpdate",
+            Self::Plan { .. } => "plan",
+            Self::AvailableCommandsUpdate { .. } => "availableCommandsUpdate",
+            Self::CurrentModeUpdate { .. } => "currentModeUpdate",
+            Self::ConfigOptionUpdate { .. } => "configOptionUpdate",
+            Self::SessionInfoUpdate { .. } => "sessionInfoUpdate",
+            Self::UsageUpdate(_) => "usageUpdate",
+            Self::RateLimitUpdate(_) => "rateLimitUpdate",
+            Self::ApprovalRequested(_) => "approvalRequested",
+            Self::ApprovalWithdrawn { .. } => "approvalWithdrawn",
+            Self::Unmapped(_) => "unmapped",
+        }
+    }
+
     /// Whether this frame is conversation content rather than supervision.
     ///
     /// The question a subscriber asks to decide whether to render into the conversation or into the status
@@ -191,11 +233,11 @@ impl EventBody {
                 | Self::AgentThoughtChunk(_)
                 | Self::ToolCall(_)
                 | Self::ToolCallUpdate(_)
-                | Self::Plan(_)
-                | Self::AvailableCommandsUpdate(_)
+                | Self::Plan { .. }
+                | Self::AvailableCommandsUpdate { .. }
                 | Self::CurrentModeUpdate { .. }
-                | Self::ConfigOptionUpdate(_)
-                | Self::SessionInfoUpdate(_)
+                | Self::ConfigOptionUpdate { .. }
+                | Self::SessionInfoUpdate { .. }
                 | Self::UsageUpdate(_)
         )
     }
@@ -246,10 +288,10 @@ impl EventBody {
             | Self::AgentMessageChunk(chunk)
             | Self::AgentThoughtChunk(chunk) => chunk.content.len(),
             Self::ToolCall(frame) | Self::ToolCallUpdate(frame) => frame.payload.len(),
-            Self::Plan(payload)
-            | Self::AvailableCommandsUpdate(payload)
-            | Self::ConfigOptionUpdate(payload)
-            | Self::SessionInfoUpdate(payload)
+            Self::Plan { payload }
+            | Self::AvailableCommandsUpdate { payload }
+            | Self::ConfigOptionUpdate { payload }
+            | Self::SessionInfoUpdate { payload }
             | Self::CurrentModeUpdate { payload, .. } => payload.len(),
             Self::UsageUpdate(usage) => usage.detail.len(),
             Self::RateLimitUpdate(limit) => limit.detail.len(),
@@ -359,7 +401,9 @@ mod tests {
                 delta: false,
                 payload: Opaque::owned(text.to_owned()),
             }),
-            EventBody::Plan(Opaque::owned(text.to_owned())),
+            EventBody::Plan {
+                payload: Opaque::owned(text.to_owned()),
+            },
             EventBody::CurrentModeUpdate {
                 mode_id: "plan".into(),
                 payload: Opaque::owned(text.to_owned()),
@@ -402,7 +446,12 @@ mod tests {
     #[test]
     fn content_and_supervision_are_distinguishable() {
         assert!(EventBody::AgentMessageChunk(a_chunk(false)).is_content());
-        assert!(EventBody::Plan(Opaque::none()).is_content());
+        assert!(
+            EventBody::Plan {
+                payload: Opaque::none(),
+            }
+            .is_content()
+        );
         assert!(
             !EventBody::Turn(TurnEvent::Started {
                 turn: crate::id::TurnId::first(0)
@@ -432,7 +481,12 @@ mod tests {
     fn fragments_are_distinguishable_from_whole_messages() {
         assert!(EventBody::AgentMessageChunk(a_chunk(true)).is_fragment());
         assert!(!EventBody::AgentMessageChunk(a_chunk(false)).is_fragment());
-        assert!(!EventBody::Plan(Opaque::none()).is_fragment());
+        assert!(
+            !EventBody::Plan {
+                payload: Opaque::none(),
+            }
+            .is_fragment()
+        );
     }
 
     #[test]
@@ -464,7 +518,12 @@ mod tests {
     fn a_notification_does_not_fire_for_ordinary_progress() {
         // A phone that buzzes on every fragment is a phone with notifications disabled.
         assert!(!EventBody::AgentMessageChunk(a_chunk(true)).deserves_a_notification());
-        assert!(!EventBody::Plan(Opaque::none()).deserves_a_notification());
+        assert!(
+            !EventBody::Plan {
+                payload: Opaque::none(),
+            }
+            .deserves_a_notification()
+        );
         assert!(
             !EventBody::Detached(Detached {
                 reason: DetachReason::Requested,

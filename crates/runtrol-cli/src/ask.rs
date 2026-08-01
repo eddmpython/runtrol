@@ -171,7 +171,15 @@ where
         for line in crate::lines::render(&event) {
             write(&line);
         }
+        if let Some(outcome) = streaming_outcome(&event) {
+            return Ok(outcome);
+        }
     }
+}
+
+/// A stream failure ends a watch as a refused command after its diagnostic has been written.
+fn streaming_outcome(response: &Response) -> Option<Outcome> {
+    matches!(response, Response::Failed(_)).then_some(Outcome::Refused)
 }
 
 /// Send one request and read the one answer to it.
@@ -193,6 +201,17 @@ async fn exchange(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_failure_mid_watch_is_not_reported_as_a_successful_stream_end() {
+        let failure = Response::Failed(runtrol_ipc::wire::WireError {
+            message: "one event could not cross the wire".into(),
+            retryable: false,
+            needs_the_operator: false,
+        });
+        assert_eq!(streaming_outcome(&failure), Some(Outcome::Refused));
+        assert_eq!(streaming_outcome(&Response::Done), None);
+    }
 
     #[test]
     fn a_daemon_that_says_nothing_is_told_apart_from_one_that_refuses() {

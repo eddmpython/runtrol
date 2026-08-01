@@ -17,7 +17,7 @@ The security boundary and default-deny settings are documented in [SECURITY.md](
 无论有多少供应商，列表只有一个；无论操作系统是什么，方法都一样。
 对话只在用户的电脑与供应商之间往返。runtrol 不介入其中。**
 
-当前总分为 **22/140，平均 1.6/10**。三个轴由启用的 CI 门禁支撑，另有两个仅本地运行的轴停留在 manual 层。
+当前总分为 **27/140，平均 1.9/10**。四个轴由启用的 CI 门禁支撑，另有两个仅本地运行的轴停留在 manual 层。
 10 分意味着完整旅程已在真实环境中被反复验证。
 **超过 manual 层的分数必须由 CI 中真正运行的门禁支撑。不会自动执行的路径，无论看起来实现得多完整，都不能超过 3 分。**
 
@@ -26,7 +26,7 @@ The security boundary and default-deny settings are documented in [SECURITY.md](
 | 统一的会话列表 | 3/10 | `sessionLifecycleSmoke` 会在本地 preflight 中对两个真实 CLI 执行启动、关闭与恢复，但 hosted CI 没有这两个订阅登录。因此它不能超过 manual 层。 | 无论供应商是 Claude Code、Codex 还是之后出现的任何一个，此刻在我电脑上存活的会话都出现在一个列表里，启动、恢复、删除都在那里完成。 |
 | 即时响应 | 5/10 | 使用真实浏览器测量 production bundle，对列表、打开会话和输入延迟执行棘轮限制，同时处理每秒 3,000 个原始帧。传输对端仍是 mock，因此该轴停留在此层级。 | 列表毫无等待地出现，对话在按下的瞬间打开，长输出倾泻而下时滚动与输入也不卡顿。用户不存在感知到加载的时刻。 |
 | 用手机接续电脑上的会话 | 0/10 | 未实现。 | 手机与电脑配对一次，之后即使离开座位，也能向那台电脑上正在运行的会话发送新指令并实时查看输出。供应商账户的等级或认证方式不会阻断这一体验。 |
-| 供应商可扩展性 | 5/10 | hosted CI 检查外部驱动的公开契约（`providerContract`），并让一个外部 TOML 注册的 ACP fixture 完成整个回合（`genericAcpSmoke`）。已安装真实 CLI 的表面对照（`agentSurfaceDrift`）只在本地运行，因此本轴不超过 mock 层。 | 出现新的 CLI 时只需增加一个适配器，电脑界面、手机界面与操作方式保持不变。用户只会感到列表变长了。 |
+| 供应商可扩展性 | 5/10 | hosted CI 检查外部驱动公开契约、三个操作系统上的通用 ACP fixture，以及独立发布 ACP 实现的两轮对话与 native load。该独立实现连接的是本地 mock model endpoint。定时 CI 只核对当前真实 CLI 的无认证 schema method 与 parser flag probe，不宣称覆盖完整 event 和 control frame 表面。 | 出现新的 CLI 时只需增加一个适配器，电脑界面、手机界面与操作方式保持不变。用户只会感到列表变长了。 |
 | 对话不经过 | 6/10 | `egressContract` 在真实回环套接字上运行精确的出站白名单和 production Noise IK、IKpsk1 边界。提示词样本不会以明文出现在中继捕获或诊断信息中，transport 没有磁盘或日志 API，驱动与存储也不知道供应商 transcript 路径。尚无连接真实手机与中继的 live 门禁，所以天花板是 6。 | 用户的提示词与模型的回复只在电脑与供应商之间、以及用户自己的设备之间往返。runtrol 不保存其内容，中间的任何服务器都不会以可读的形式收到它。 |
 | 在手机上批准 | 0/10 | 未实现。 | 代理在危险操作前停下时会出现在手机上，在手机上允许或拒绝后，电脑上的会话立即继续。 |
 | 断了也活着 | 0/10 | 未实现。 | 手机锁屏、网络中断或 runtrol 重启，电脑上的会话都不会死；回来时这段时间的输出会毫无遗漏地接上。 |
@@ -36,7 +36,7 @@ The security boundary and default-deny settings are documented in [SECURITY.md](
 | 自动识别模型 | 3/10 | `modelDetectionSmoke` 在本地 preflight 中检查已安装的真实 CLI 与账户模型，但不会在 hosted CI 中自动运行。因此它不能超过 manual 层。 | 当前账户实际可用的模型原样出现在列表中，出现新模型时无需修改 runtrol 就会显示。 |
 | 会话之间不互踩 | 0/10 | 未实现。 | 哪个会话在哪个文件夹改了什么始终可以区分；第二个会话将要触碰同一文件夹时，在开始前就会收到警告；供应商提供隔离手段（worktree）时，可直接在开始界面使用。 |
 | AI 互相咨询 | 0/10 | 未实现。 | 一个开关让两个 CLI 通过各自的官方表面（MCP）相互注册，一个 AI 在回合中直接获取另一个 AI 的意见。接线只通过各 CLI 自己的官方命令完成（不直接写配置文件），对话内容依然不经过 runtrol，用户不需要知道 MCP 是什么。 |
-| 离开的自由 | 0/10 | 未实现。 | 删除 runtrol 后，会话与记录仍属于各个 CLI，按原来的方式继续。不存在被 runtrol 扣作人质的数据。 |
+| 离开的自由 | 5/10 | `uninstallLeavesNoTrace` 在 runtrol home 之外保存供应商状态并完成一个回合，删除整个 home 后由新 daemon 加载同一个原生会话并完成第二个回合。对端是 ACP fixture，因此处于 mock 层。 | 删除 runtrol 后，会话与记录仍属于各个 CLI，按原来的方式继续。不存在被 runtrol 扣作人质的数据。 |
 
 哪个门禁支撑哪个轴，以 [docs/northStarEvidence.md](docs/northStarEvidence.md) 为准。
 

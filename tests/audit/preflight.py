@@ -164,6 +164,22 @@ GATES: dict[str, tuple[str, list[str]]] = {
         "외부 TOML 공급자의 ACP 자식 프로세스 턴",
         [*PY, f"{HOOKS}/genericAcpSmoke.py"],
     ),
+    "externalAcpSmokeSelftest": (
+        "독립 ACP 구현 게이트 자체 검증",
+        [*PY, f"{HOOKS}/externalAcpSmoke.py", "--selftest"],
+    ),
+    "externalAcpSmoke": (
+        "독립 설치 ACP 구현의 두 턴과 native load",
+        [*PY, f"{HOOKS}/externalAcpSmoke.py", "--require-external"],
+    ),
+    "uninstallLeavesNoTraceSelftest": (
+        "제거 독립성 게이트 자체 검증",
+        [*PY, f"{HOOKS}/uninstallLeavesNoTrace.py", "--selftest"],
+    ),
+    "uninstallLeavesNoTrace": (
+        "runtrol home 삭제 뒤 provider 세션 재개",
+        [*PY, f"{HOOKS}/uninstallLeavesNoTrace.py"],
+    ),
     # 북극성 `하나의 세션 목록` 축을 떠받치는 유일한 게이트. 실물 CLI 를 몰고 세션을 시작·목록·닫기·
     # 재개까지 돌린다. 프롬프트를 보내지 않으므로 토큰도 rate limit 도 쓰지 않고, 그래서 야간이 아니라
     # 매 preflight 에 돌 수 있다. 자체 검증이 먼저 도는 이유는 통과를 보이기 전에 실패할 수 있는지부터
@@ -246,6 +262,10 @@ CARGO_GATES = frozenset(
         "cargoTest",
         "genericAcpSmokeSelftest",
         "genericAcpSmoke",
+        "externalAcpSmokeSelftest",
+        "externalAcpSmoke",
+        "uninstallLeavesNoTraceSelftest",
+        "uninstallLeavesNoTrace",
         "audit",
         "cargoShear",
         "cargoDeny",
@@ -282,6 +302,8 @@ def skipReasonFor(name: str) -> str | None:
         return "cargo-deny 미설치 (cargo binstall cargo-deny)"
     if name == "clippyCrossCfg" and not hasCrossTarget():
         return f"{CROSS_TARGET} 미설치 (rustup target add {CROSS_TARGET})"
+    if name == "externalAcpSmoke" and shutil.which("opencode") is None:
+        return "독립 ACP CLI 미설치 (npm install --global opencode-ai@1.2.27)"
     return None
 
 

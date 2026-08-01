@@ -1,20 +1,21 @@
-"""Gate: every provider surface runtrol binds still exists on the installed CLIs.
+"""Gate: every unauthenticated provider probe runtrol declares still matches the installed CLIs.
 
-The bound surface is read from each driver's `bound.rs`; method and flag names are never copied
-into this gate. For a schema-producing CLI, the generated request, notification, and server-request
-schemas are compared with those bindings. For a CLI without a schema, every bound flag is asked of
-its real argument parser with the manifest's safe arguments and two invented control flags.
+The probe surface is read from each driver's `bound.rs`; method and flag names are never copied into this gate.
+For a schema-producing CLI, generated methods are compared with bound methods. For a CLI without a schema, every
+bound flag is asked of its real argument parser with the manifest's safe arguments and two invented control flags.
+Event and control frames that require an authenticated turn are outside this gate.
 
-New vendor methods are information and do not fail this gate. Only removal of a surface runtrol
-actually consumes is drift that can break a user.
+New vendor methods are information and do not fail this gate. Removal of a probed method or flag is red.
 
 Usage::
 
     python -X utf8 tests/audit/agentSurfaceDrift.py
+    python -X utf8 tests/audit/agentSurfaceDrift.py --require-all
     python -X utf8 tests/audit/agentSurfaceDrift.py --selftest
 
 Exit codes:
-    0 every installed supported CLI still exposes its bound surface, or none is installed with a loud skip
+    0 every installed supported CLI still passes its declared method or flag probe, or none is installed with a loud skip
+      unless --require-all was passed
     2 a bound surface disappeared, a probe was unreadable, or the selftest cannot detect an injected defect
 """
 
@@ -40,7 +41,7 @@ METHOD = re.compile(r'\bmethod:\s*"(?P<name>[A-Za-z0-9/]+)"')
 
 
 class Failed(Exception):
-    """A bound provider surface no longer exists or could not be inspected."""
+    """A declared provider probe no longer matches or could not be executed."""
 
 
 def manifests() -> list[dict[str, Any]]:
@@ -167,36 +168,51 @@ def flagSurface(program: str, provider: str, driver: str, manifest: dict[str, An
     print(f"  {provider}: all {len(bound)} bound flags remain accepted by its parser")
 
 
-def exercise() -> int:
+def requireCoverage(expected: set[str], checked: set[str]) -> None:
+    """Refuse a hosted run that did not execute every built-in probe strategy."""
+    if not expected:
+        raise Failed("no built-in provider declares a drift probe")
+    missing = sorted(expected - checked)
+    if missing:
+        raise Failed(f"required built-in probe strategies were not executed: {', '.join(missing)}")
+
+
+def exercise(require_all: bool = False) -> int:
     """Probe every installed built-in whose driver has a drift strategy."""
-    checked = 0
+    expected: set[str] = set()
+    checked: set[str] = set()
     absent: list[str] = []
     unsupported: list[str] = []
     for manifest in manifests():
         provider = str(manifest["id"])
+        kind = str(manifest["kind"])
+        driver = kind.removesuffix("-app-server").removesuffix("-stream-json")
+        if not kind.endswith(("-app-server", "-stream-json")):
+            unsupported.append(f"{provider} ({kind})")
+            continue
+
+        expected.add(provider)
         program = installed(list((manifest.get("bin") or {}).get("names") or []))
         if program is None:
             absent.append(provider)
             continue
-        kind = str(manifest["kind"])
-        driver = kind.removesuffix("-app-server").removesuffix("-stream-json")
+
         if kind.endswith("-app-server"):
             schemaSurface(program, provider, driver)
-        elif kind.endswith("-stream-json"):
-            flagSurface(program, provider, driver, manifest)
         else:
-            unsupported.append(f"{provider} ({kind})")
-            continue
-        checked += 1
+            flagSurface(program, provider, driver, manifest)
+        checked.add(provider)
 
     if unsupported:
         print(f"  no drift strategy for: {', '.join(unsupported)}")
     if absent:
         print(f"  not installed: {', '.join(absent)}")
+    if require_all:
+        requireCoverage(expected, checked)
     if checked == 0:
         print("[agentSurfaceDrift] SKIP: no installed provider has a drift strategy.")
         return 0
-    print(f"[agentSurfaceDrift] OK. {checked} installed provider surface(s) remain compatible.")
+    print(f"[agentSurfaceDrift] OK. {len(checked)} installed provider probe strategy(s) passed.")
     return 0
 
 
@@ -213,6 +229,11 @@ def selftest() -> int:
             "unstable controls",
             lambda: classifyFlags("fixture", {"--a"}, ["first", "second"], {"--a": "known"}),
         ),
+        (
+            "required provider was not inspected",
+            lambda: requireCoverage({"first", "second"}, {"first"}),
+        ),
+        ("no drift probe was declared", lambda: requireCoverage(set(), set())),
     ]
     for name, defect in cases:
         caught = False
@@ -232,6 +253,11 @@ def selftest() -> int:
     if methodEnums(sample) != {"thread/start", "vendor/new"}:
         problems.append("method discriminators were not read from a schema tree")
 
+    try:
+        requireCoverage({"first", "second"}, {"first", "second"})
+    except Failed:
+        problems.append("complete required provider coverage was refused")
+
     if problems:
         print("[agentSurfaceDrift --selftest] the gate cannot detect what it claims to.", file=sys.stderr)
         for problem in problems:
@@ -243,10 +269,15 @@ def selftest() -> int:
 
 def main(argv: list[str]) -> int:
     """Run the selftest or the real provider probes."""
+    known = {"--selftest", "--require-all"}
+    unknown = sorted(set(argv) - known)
+    if unknown:
+        print(f"[agentSurfaceDrift] FAIL: unknown option(s): {', '.join(unknown)}", file=sys.stderr)
+        return 2
     if "--selftest" in argv:
         return selftest()
     try:
-        return exercise()
+        return exercise(require_all="--require-all" in argv)
     except (Failed, subprocess.TimeoutExpired) as error:
         print(f"[agentSurfaceDrift] FAIL: {error}", file=sys.stderr)
         return 2

@@ -224,7 +224,8 @@ async fn relay(connection: &mut Connection, mut watching: runtrol_core::SessionV
             // about the session. Said out loud in place of that event, because a watcher that silently skipped one
             // would show a conversation with a hole in it and no sign that anything was missing.
             Err(error) => {
-                drop(write(connection, &refuse(&error.to_string())).await);
+                let detail = format!("cannot serialize {} event: {error}", event.body.wire_name());
+                drop(write(connection, &refuse(&detail)).await);
                 return;
             }
         };

@@ -4,26 +4,66 @@
 //! one, so the gate can prove the generic driver without a credential, network call, token, or provider name.
 
 use std::io::{BufRead as _, Write};
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use serde_json::{Value, json};
 
-fn main() -> ExitCode {
-    if std::env::args().skip(1).any(|word| word == "--version") {
-        let mut output = std::io::stdout().lock();
-        return match writeln!(output, "acp-fixture 1.0.0") {
-            Ok(()) => ExitCode::SUCCESS,
-            Err(_) => ExitCode::FAILURE,
-        };
-    }
+const NATIVE_SESSION: &str = "fixture-session";
 
-    match serve() {
+/// Provider-owned session metadata used only when a gate asks for persistence.
+///
+/// This is deliberately not a transcript. It records only the provider's native session identifier and how many
+/// turns reached provider-declared completion, which is enough to prove that deleting runtrol's home did not delete
+/// the provider's session state.
+#[derive(serde::Deserialize, serde::Serialize)]
+struct SessionMarker {
+    native: String,
+    completed_turns: u64,
+}
+
+enum Mode {
+    Version,
+    Serve(Option<PathBuf>),
+    Resume { state: PathBuf, native: String },
+}
+
+fn main() -> ExitCode {
+    let Ok(mode) = mode() else {
+        return ExitCode::FAILURE;
+    };
+    let result = match mode {
+        Mode::Version => writeln!(std::io::stdout().lock(), "acp-fixture 1.0.0").map_err(|_| ()),
+        Mode::Serve(state) => serve(state.as_deref()),
+        Mode::Resume { state, native } => resume(&state, &native),
+    };
+    match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(()) => ExitCode::FAILURE,
     }
 }
 
-fn serve() -> Result<(), ()> {
+fn mode() -> Result<Mode, ()> {
+    let words = std::env::args().skip(1).collect::<Vec<_>>();
+    match words.as_slice() {
+        [flag] if flag == "--version" => Ok(Mode::Version),
+        [] => Ok(Mode::Serve(None)),
+        [state_flag, state] if state_flag == "--state" => {
+            Ok(Mode::Serve(Some(PathBuf::from(state))))
+        }
+        [state_flag, state, resume_flag, native]
+            if state_flag == "--state" && resume_flag == "--resume" =>
+        {
+            Ok(Mode::Resume {
+                state: PathBuf::from(state),
+                native: native.clone(),
+            })
+        }
+        _ => Err(()),
+    }
+}
+
+fn serve(state: Option<&Path>) -> Result<(), ()> {
     let input = std::io::stdin();
     let mut output = std::io::stdout().lock();
     let mut lines = input.lock().lines();
@@ -56,25 +96,61 @@ fn serve() -> Result<(), ()> {
                 client_question(&mut output)?;
                 let refusal = lines.next().ok_or(())?.map_err(|_| ())?;
                 require_refusal(&refusal)?;
+                if let Some(path) = state {
+                    write_marker(
+                        path,
+                        &SessionMarker {
+                            native: NATIVE_SESSION.to_owned(),
+                            completed_turns: 0,
+                        },
+                    )?;
+                }
                 answer(
                     &mut output,
                     id.as_ref().ok_or(())?,
-                    &json!({"sessionId": "fixture-session"}),
+                    &json!({"sessionId": NATIVE_SESSION}),
                 )?;
             }
-            "session/load" => answer(&mut output, id.as_ref().ok_or(())?, &json!({}))?,
+            "session/load" => {
+                let requested = frame
+                    .pointer("/params/sessionId")
+                    .and_then(Value::as_str)
+                    .ok_or(())?;
+                if let Some(path) = state {
+                    let marker = read_marker(path)?;
+                    if marker.native != requested || marker.completed_turns == 0 {
+                        return Err(());
+                    }
+                }
+                answer(&mut output, id.as_ref().ok_or(())?, &json!({}))?;
+            }
             "session/prompt" => {
                 let session = frame
                     .pointer("/params/sessionId")
                     .and_then(Value::as_str)
                     .ok_or(())?;
+                let completed_turns = match state {
+                    Some(path) => {
+                        let mut marker = read_marker(path)?;
+                        if marker.native != session {
+                            return Err(());
+                        }
+                        marker.completed_turns = marker.completed_turns.checked_add(1).ok_or(())?;
+                        write_marker(path, &marker)?;
+                        marker.completed_turns
+                    }
+                    None => 1,
+                };
                 notify(
                     &mut output,
                     &json!({
                         "sessionId": session,
                         "update": {
                             "sessionUpdate": "agent_message_chunk",
-                            "content": {"type": "text", "text": "fixture reply"},
+                            "content": {
+                                "type": "text",
+                                "text": format!("fixture reply {completed_turns}")
+                            },
                             "messageId": "fixture-message"
                         }
                     }),
@@ -90,6 +166,28 @@ fn serve() -> Result<(), ()> {
         }
     }
     Ok(())
+}
+
+fn read_marker(path: &Path) -> Result<SessionMarker, ()> {
+    let encoded = std::fs::read(path).map_err(|_| ())?;
+    serde_json::from_slice(&encoded).map_err(|_| ())
+}
+
+fn write_marker(path: &Path, marker: &SessionMarker) -> Result<(), ()> {
+    let encoded = serde_json::to_vec(marker).map_err(|_| ())?;
+    std::fs::write(path, encoded).map_err(|_| ())
+}
+
+fn resume(path: &Path, native: &str) -> Result<(), ()> {
+    let marker = read_marker(path)?;
+    if marker.native != native || marker.completed_turns == 0 {
+        return Err(());
+    }
+    let mut output = std::io::stdout().lock();
+    write_frame(
+        &mut output,
+        &json!({"native": marker.native, "completedTurns": marker.completed_turns}),
+    )
 }
 
 fn client_question(output: &mut impl Write) -> Result<(), ()> {

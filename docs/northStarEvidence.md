@@ -31,9 +31,10 @@
 | `desktopConvenienceSmoke` | 실물 브라우저의 production bundle 에서 공급자를 고르지 않고 세션을 시작하고, 마지막 공급자가 다음 시작의 기본값이 되는지 확인한다. 드라이버가 이미 내는 문맥 사용량과 계정 한도 프레임도 별도 사본 없이 화면에 보이는지 판정한다 |
 | `phoneDrivesPcSmoke` | headless 브라우저의 실물 PWA 가 실물 데몬을 통해 실물 `claude`/`codex` 세션에 프롬프트를 넣고 출력을 받는다 |
 | `iosInstallAndPush` | iOS 홈화면 설치 + Web Push 수신. 실기기 필요. **점수에서 뺀다** |
-| `providerContract` | 모든 어댑터가 같은 trait 계약을 통과. **코어에 provider 고유명사 분기가 없다**는 정적 검사 포함 |
-| `agentSurfaceDrift` | 최신 CLI 를 받아 생성 스키마와 저장 스키마를 대조. 공급자가 표면을 바꾸면 사용자보다 먼저 red |
-| `genericAcpSmoke` | 공급자 코드 없이 외부 TOML 만 놓고 별도 ACP v1 실행 파일을 발견한다. 실물 데몬과 CLI 표면을 거쳐 시작 -> 프롬프트 -> 스트림 -> 공급자 선언 종료 -> 데몬 재시작 뒤 load 까지 완주한다. fixture 이므로 공급자 실물 가산에는 세지 않는다 |
+| `providerContract` | 저장소 밖 구현이 공개 `Provider` 와 `Agent` trait 를 구현하고 native command 를 처리하며 미지 event 를 `Unmapped` 로 보존할 수 있다. 코어의 provider 고유명사 격리는 별도 `providerIsolation` 게이트가 맡는다 |
+| `agentSurfaceDrift` | scheduled hosted CI 가 최신 실물 CLI 를 무인증으로 설치하고, schema provider 의 바인딩 메서드와 stream-json provider 의 바인딩 플래그를 실제 생성 스키마와 인자 파서에 대조한다. built-in probe 전략 하나라도 실행되지 않으면 red 다. 인증과 턴이 필요한 event 및 control frame 호환성은 이 게이트의 주장이 아니다 |
+| `genericAcpSmoke` | 공급자 코드 없이 외부 TOML 만 놓고 별도 ACP v1 실행 파일을 발견한다. 실물 데몬과 CLI 표면을 거쳐 시작 -> 프롬프트 -> 스트림 -> 공급자 선언 종료 -> load 를 Windows, macOS, Linux 에서 완주한다. fixture 이므로 공급자 실물 가산에는 세지 않는다 |
+| `externalAcpSmoke` | 저장소 밖에서 독립 배포되는 ACP CLI 를 고정 판본으로 설치하고 외부 TOML 만으로 연결한다. 로컬 결정론 model endpoint 를 사용해 실물 데몬과 CLI 표면에서 두 번의 스트림과 공급자 선언 종료, daemon 재시작, 같은 native session load 를 완주한다. model 상대는 mock 이고 공급자 구현은 실물이다 |
 | `egressContract` | production 송신 정책으로 정확히 허용한 IP 와 port 만 실물 루프백 소켓에 연결된다. production `Noise_IK_25519_AESGCM_SHA256` 세션과 `Noise_IKpsk1_25519_AESGCM_SHA256` 페어링이 고정 static key, 링크 종류, relay origin, peer id 를 인증하며 변조와 잘못된 key, PSK, prologue 를 거절한다. 65,519 byte 경계 분할, `varint(len) || ciphertext`, REKEY 뒤 왕복까지 돈다. relay capture 와 `Debug` 에 prompt 표본이 평문으로 없고 transport 에 disk 또는 log API 가 없으며, **driver 와 store 에 벤더 세션 경로가 없다**는 정적 검사 포함 |
 | `approvalRoundtripSmoke` | 실제 permission prompt 가 폰 표면에 도달하고, 폰의 응답이 세션을 재개시킨다 |
 | `resilienceFaultInjection` | 네트워크 차단, 데몬 강제 종료, 폰 재연결 각각에서 세션이 살아남고 **출력 손실 0** |
@@ -44,7 +45,7 @@
 | `modelDetectionSmoke` | 실물 CLI 에서 모델 목록을 얻는다. **소스에 모델 이름 리터럴이 없다**는 정적 검사 포함 |
 | `sessionOverlapGuard` | cwd 겹침이 목록에 구분돼 보이고, 같은 폴더에 두 번째 세션을 시작하면 경고가 선행하며, provider 가 내주는 워크트리 시작 옵션이 그대로 노출된다. **격리를 runtrol 이 직접 구현하는 것은 얇음 위반이라 하지 않는다** (겹침을 보이게 하고 provider 의 수단을 노출하는 것까지가 경계) |
 | `crossConsultSmoke` | 토글 켬 -> 두 CLI 가 서로를 자기 공식 설정 명령 (MCP 등록) 으로 배선 -> 한 CLI 가 턴 중에 다른 CLI 의 의견을 실제로 받아옴 -> 토글 끔 -> 설정 원상복구. **본문은 runtrol 을 지나지 않고, 설정 파일을 직접 쓰지 않는다** (배선은 CLI 공식 명령만. `configReadOnly` 바닥 게이트와 양립하는 것이 곧 설계다) |
-| `uninstallLeavesNoTrace` | runtrol 제거 후 `claude --resume` 과 `codex resume` 이 그 세션들을 그대로 연다 |
+| `uninstallLeavesNoTrace` | 공급자 소유 marker 를 `RUNTROL_HOME` 밖에 둔 채 한 턴을 끝내고 데몬 종료와 home 전체 삭제 뒤 runtrol 이 없는 상태에서 공급자 실행 파일로 같은 원생 세션을 직접 재개한다. 이어서 선택적 재설치와 manifest 재선언 뒤 같은 원생 세션을 load 해 두 번째 턴을 끝내며, Windows, macOS, Linux 에서 돈다. marker 는 transcript 가 아니라 native id 와 완료 횟수만 가진 fixture 상태다 |
 
 ### 바닥 게이트 (점수가 아니다. green/red 뿐이다)
 

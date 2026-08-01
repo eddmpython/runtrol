@@ -215,7 +215,9 @@ mod tests {
         // next driver across a reattach, and would have to reason about turning one line into three events.
         let produced = Produced {
             src_end: 4_096,
-            body: EventBody::Plan(Opaque::none()),
+            body: EventBody::Plan {
+                payload: Opaque::none(),
+            },
         };
         assert_eq!(produced.src_end, 4_096);
         let printed = format!("{produced:?}");

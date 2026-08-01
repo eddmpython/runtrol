@@ -4,6 +4,9 @@ The fixture is deliberately a separate executable. This drives the same manifest
 daemon, process containment, JSON-RPC transport, session manager, CLI command surface, and event watcher an
 operator uses. It needs no provider credential and spends no token.
 
+This gate exercises fresh and loaded sessions under one runtrol home. Daemon restart, deletion of that home,
+and provider-owned state survival belong to ``uninstallLeavesNoTrace.py``.
+
 Usage::
 
     python -X utf8 tests/audit/genericAcpSmoke.py

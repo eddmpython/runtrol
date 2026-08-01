@@ -18,7 +18,7 @@ The security boundary and default-deny settings are documented in [SECURITY.md](
 プロバイダーがいくつあってもリストは一つ、OS が何であっても方法は同じ。
 会話はユーザーの PC とプロバイダーの間だけを往復する。runtrol はその間に割り込まない。**
 
-現在の合計は **22/140、平均 1.6/10** である。有効な CI ゲートが立つ軸は三つで、ローカル専用の二軸は manual 層に留まる。
+現在の合計は **27/140、平均 1.9/10** である。有効な CI ゲートが立つ軸は四つで、ローカル専用の二軸は manual 層に留まる。
 10 点は、実際の環境で完結した道筋が繰り返し検証された状態を指す。
 **manual 層を超えるスコアの根拠は CI で実際に動くゲートである。自動実行されない経路は、どれほど実装済みに見えても 3 点を超えない。**
 
@@ -27,7 +27,7 @@ The security boundary and default-deny settings are documented in [SECURITY.md](
 | 一つのセッション一覧 | 3/10 | `sessionLifecycleSmoke` はローカル preflight で二つの実物 CLI の開始、終了、再開を動かすが、hosted CI にはその購読ログインがない。したがって manual 層を超えない。 | プロバイダーが Claude Code でも Codex でも、その次の何かでも、いま自分の PC で生きているセッションが一つの一覧に並び、開始・再開・削除がそこで完結する。 |
 | 即座の反応 | 5/10 | 実ブラウザで production bundle を測り、一覧、会話を開く操作、入力遅延の ratchet を守りながら毎秒 3,000 個の raw frame を処理する。transport の相手は mock なので、この tier に留まる。 | 一覧が待ち時間なく現れ、会話は押した瞬間に開き、長い出力が流れてもスクロールと入力が途切れない。ユーザーが読み込みを意識する瞬間が存在しない。 |
 | スマホから自分の PC のセッションへ | 0/10 | 未実装。 | スマートフォンを PC に一度つないでおけば、席を離れた後もその PC で動いているセッションに新しい指示を入れ、出力をリアルタイムで見られる。プロバイダーアカウントのプランや認証方式がこの体験を妨げない。 |
-| プロバイダー拡張性 | 5/10 | hosted CI は外部ドライバーの公開契約（`providerContract`）を検査し、外部 TOML が登録した ACP fixture でターン全体を完走する（`genericAcpSmoke`）。実物 CLI の表面照合（`agentSurfaceDrift`）はローカル専用なので mock 層を超えない。 | 新しい CLI が出たらアダプターを一つ足すだけで、PC 画面もスマホ画面も操作方法もそのまま。ユーザーはプロバイダーが増えたことを一覧が長くなったこととしてだけ知る。 |
+| プロバイダー拡張性 | 5/10 | hosted CI は外部ドライバーの公開契約、三つの OS 上の汎用 ACP fixture、独立配布 ACP 実装による二つの turn と native load を検証する。その model endpoint はローカル mock である。scheduled CI が照合するのは最新の実物 CLI に対する認証不要の schema method と parser flag probe だけで、event と control frame の全表面は主張しない。 | 新しい CLI が出たらアダプターを一つ足すだけで、PC 画面もスマホ画面も操作方法もそのまま。ユーザーはプロバイダーが増えたことを一覧が長くなったこととしてだけ知る。 |
 | 会話を通さない | 6/10 | `egressContract` は実物の loopback socket で正確な送信 allowlist と production Noise IK、IKpsk1 境界を動かす。prompt の標本は relay capture や診断文字列に平文で現れず、transport は disk と log の API を持たず、driver と storage は provider の transcript path を知らない。実物のスマートフォンと relay を結ぶ live gate がないため、天井は 6 である。 | ユーザーのプロンプトとモデルの応答は、PC とプロバイダーの間、そしてユーザー自身のデバイスの間だけを往復する。runtrol はその本文を保存せず、途中のどのサーバーも読める形でそれを受け取らない。 |
 | スマホで承認 | 0/10 | 未実装。 | エージェントが危険な操作の前で止まるとスマートフォンに表示され、そこで許可または拒否すると PC のセッションがただちに続く。 |
 | 切れても生き残る | 0/10 | 未実装。 | スマートフォンがロックされても、ネットワークが切れても、runtrol を再起動しても PC のセッションは死なず、戻ればその間の出力が漏れなく続く。 |
@@ -37,7 +37,7 @@ The security boundary and default-deny settings are documented in [SECURITY.md](
 | モデル自動認識 | 3/10 | `modelDetectionSmoke` はローカル preflight でインストール済みの実物 CLI とアカウント別モデルを検査するが、hosted CI では自動実行されない。したがって manual 層を超えない。 | いまこのアカウントで実際に使えるモデルがそのまま一覧に出て、新しいモデルが出ても runtrol を直さずに現れる。 |
 | セッション同士が踏まない | 0/10 | 未実装。 | どのセッションがどのフォルダで何を変えているかが常に区別でき、二つ目のセッションが同じフォルダに触れそうなときは開始前に警告され、プロバイダーが隔離手段（ワークツリー）を出しているなら開始画面でそのまま使える。 |
 | AI 同士が相談し合う | 0/10 | 未実装。 | トグル一つで二つの CLI が互いを公式表面（MCP）で登録し、一方の AI がターン中にもう一方の意見を直接受け取る。配線は各 CLI 自身の公式コマンドだけで作り（設定ファイルを直接書かない）、会話本文は依然として runtrol を通らない。ユーザーは MCP という概念を知らなくていい。 |
-| 去る自由 | 0/10 | 未実装。 | runtrol を消してもセッションと記録は各 CLI のものとしてそのまま残り、元のやり方で続けられる。runtrol が人質に取るデータがない。 |
+| 去る自由 | 5/10 | `uninstallLeavesNoTrace` は runtrol home の外にプロバイダー状態を置いて一つのターンを終え、home 全体を削除した後、新しい daemon で同じ native session を読み込み二つ目のターンを終える。相手は ACP fixture なので mock 層である。 | runtrol を消してもセッションと記録は各 CLI のものとしてそのまま残り、元のやり方で続けられる。runtrol が人質に取るデータがない。 |
 
 どのゲートがどの軸を支えるかは [docs/northStarEvidence.md](docs/northStarEvidence.md) が正本である。
 

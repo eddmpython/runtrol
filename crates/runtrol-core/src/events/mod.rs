@@ -222,7 +222,9 @@ mod tests {
     use super::*;
 
     fn a_body(payload: &str) -> EventBody {
-        EventBody::Plan(Opaque::owned(payload.to_owned()))
+        EventBody::Plan {
+            payload: Opaque::owned(payload.to_owned()),
+        }
     }
 
     #[test]

@@ -792,7 +792,9 @@ mod tests {
     fn content() -> Produced {
         Produced {
             src_end: 1,
-            body: EventBody::Plan(Opaque::none()),
+            body: EventBody::Plan {
+                payload: Opaque::none(),
+            },
         }
     }
 
@@ -1403,7 +1405,12 @@ mod tests {
     fn only_the_turns_own_frames_say_anything_about_the_state() {
         // Most events are content, and content must not move a session. Getting this wrong is how a message ends a
         // turn.
-        assert!(observation_of(&EventBody::Plan(Opaque::none())).is_none());
+        assert!(
+            observation_of(&EventBody::Plan {
+                payload: Opaque::none(),
+            })
+            .is_none()
+        );
         assert!(matches!(
             observation_of(&turn_started(0).body),
             Some(Observed::TurnStarted { .. })

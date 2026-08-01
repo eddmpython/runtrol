@@ -183,7 +183,9 @@ mod tests {
             Ok(Box::new(Scripted {
                 session: intent.session,
                 native: None,
-                remaining: vec![EventBody::Plan(Opaque::none())],
+                remaining: vec![EventBody::Plan {
+                    payload: Opaque::none(),
+                }],
                 sent: Vec::new(),
             }))
         }
@@ -255,7 +257,9 @@ mod tests {
         let mut agent = Scripted {
             session: SessionId::now(),
             native: None,
-            remaining: vec![EventBody::Plan(Opaque::none())],
+            remaining: vec![EventBody::Plan {
+                payload: Opaque::none(),
+            }],
             sent: Vec::new(),
         };
         agent

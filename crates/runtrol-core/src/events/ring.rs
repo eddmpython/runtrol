@@ -184,7 +184,9 @@ mod tests {
 
     /// A frame whose payload is a given number of bytes.
     fn sized(payload: usize) -> EventBody {
-        EventBody::Plan(Opaque::owned("x".repeat(payload)))
+        EventBody::Plan {
+            payload: Opaque::owned("x".repeat(payload)),
+        }
     }
 
     /// A ring filled through the sequencer, so positions are the real ones.

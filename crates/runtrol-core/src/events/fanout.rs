@@ -335,7 +335,9 @@ mod tests {
                 .stamp(
                     self.session,
                     cursor,
-                    EventBody::Plan(Opaque::owned("x".repeat(payload))),
+                    EventBody::Plan {
+                        payload: Opaque::owned("x".repeat(payload)),
+                    },
                 )
                 .0
         }
@@ -381,7 +383,9 @@ mod tests {
         let one = first.try_recv().expect("delivered");
         let other = second.try_recv().expect("delivered");
 
-        let (EventBody::Plan(left), EventBody::Plan(right)) = (&one.body, &other.body) else {
+        let (EventBody::Plan { payload: left }, EventBody::Plan { payload: right }) =
+            (&one.body, &other.body)
+        else {
             panic!("the fixture publishes a plan frame");
         };
         assert_eq!(

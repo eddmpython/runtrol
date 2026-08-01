@@ -146,7 +146,9 @@ mod tests {
     use super::*;
 
     fn a_body() -> EventBody {
-        EventBody::Plan(Opaque::owned(r#"{"steps":[]}"#.to_owned()))
+        EventBody::Plan {
+            payload: Opaque::owned(r#"{"steps":[]}"#.to_owned()),
+        }
     }
 
     #[test]

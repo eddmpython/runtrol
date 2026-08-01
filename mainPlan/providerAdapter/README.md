@@ -1,6 +1,6 @@
 # providerAdapter
 
-Status: in progress. The generic ACP v1 child path, manifest-only registration, risk-bound approval authorization, Codex native approvals, and Claude hidden stdio approvals are implemented and automatically verified. The paid Claude live approval smoke and the phone approval surface remain.
+Status: in progress. The generic ACP v1 child path, manifest-only registration, independently distributed ACP compatibility, risk-bound approval authorization, both built-in native approval mappings, direct provider resume after removing runtrol, and unauthenticated surface probes are implemented and automatically verified. A real hidden stdio approval request and response against the installed CLI remains the deletion blocker. The current account's weekly limit prevented that turn on 2026-08-01. The phone surface belongs to `pwaSurface`, not this initiative.
 
 ## 한 문장 정의
 
@@ -176,10 +176,11 @@ Claude 세션 파일 경로 규칙을 **첫 시도에 틀리게 추측했다.**
 
 ## 완료 판정
 
-- `providerContract` 게이트: 모든 어댑터가 같은 trait 계약을 통과하고, **코어에 provider 고유명사 분기가 없다**는 정적 검사 포함
-- `agentSurfaceDrift` 게이트: 최신 CLI 를 받아 생성 스키마와 저장 스키마를 대조. 공급자가 표면을 바꾸면 사용자보다 먼저 red
-- ACP 를 말하는 3 번째 provider 를 TOML 하나로 붙이는 것이 실측으로 증명됨
-- `rm -rf $RUNTROL_HOME` 수용 테스트 통과
+- `providerContract` 는 저장소 밖 구현이 공개 trait 를 구현하고 native command 와 `Unmapped` 보존을 수행할 수 있음을 검사한다. 코어의 고유명사 격리는 별도 `providerIsolation` 게이트가 맡는다
+- `agentSurfaceDrift` 는 무인증으로 확인 가능한 schema provider 메서드와 stream-json provider 플래그만 대조한다. 인증이 필요한 event 및 control frame 은 이 게이트가 증명하지 않는다
+- `genericAcpSmoke` 는 범용 ACP fixture 를 Windows, macOS, Linux 에서 검증하고, `externalAcpSmoke` 는 독립 배포된 실제 ACP 구현을 외부 TOML 하나로 붙여 두 턴, daemon 재시작, 같은 native load 를 검증한다
+- `uninstallLeavesNoTrace` 는 home 삭제 뒤 runtrol 이 전혀 없는 상태에서 fixture 공급자 실행 파일로 직접 native resume 한 다음 선택적 재설치까지 검증한다
+- 남은 삭제 조건: 실제 설치 CLI 가 보내는 hidden `control_request` 수신, runtrol 의 명시적 거부 응답, provider 선언 turn 종료, 대상 파일 미생성을 한 여정에서 실측한다
 
 ## 승인 동등성 . 해소됐다 (단 문서에 없는 플래그에 기댄다)
 
