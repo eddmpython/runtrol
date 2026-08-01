@@ -10,16 +10,24 @@ and refactoring that no user can observe do not belong here.
 
 ## [Unreleased]
 
-Design phase. No release yet. The repository holds the North Star, the architecture
-decisions with their measured evidence, and the gate harness. No product code exists.
+Core implementation phase. No release yet. The repository holds the working supervisor,
+its measured architecture, and the gate harness.
 
 ### Added
 
-- North Star with a scored checklist. Every axis starts at 0 because nothing is built,
-  and a score only counts when a gate actually runs in CI.
+- A provider-neutral `runtrol answer` command that binds an approval choice to its session,
+  approval identifier, option, and exact subject digest.
+- A watch subscription acknowledgement, so callers know the event boundary is installed
+  before sending work that may immediately ask for approval.
+- A hosted-safe real Claude Code approval journey. It uses a local deterministic model endpoint,
+  denies the real hidden stdio tool request, requires the provider's `end_turn`, and proves the
+  denied file and provider child process are absent afterward.
+
+- North Star with a scored checklist. Every axis began at 0, and a score now counts only
+  while its evidence gate actually runs in CI.
 - Architecture decisions across eight initiatives, each recorded with the measurement
   or source reading that produced it.
-- Contract gates that run before any product code exists: workspace hygiene, forbidden
+- Contract gates introduced before product code: workspace hygiene, forbidden
   folder names, silent failure detection with a self test, and AI attribution blocking.
 - A scoreboard that computes rather than declares. Each axis score is derived from a base
   evidence tier, additives that only attach once the evidence is real and complete, and caps

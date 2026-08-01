@@ -1,6 +1,6 @@
 # desktopGui
 
-상태: 활성. `coreRuntime` 과 `providerAdapter` 위에 선다. **셸은 Tauri v2 로 확정됐다** (실측, 아래).
+상태: 활성. `coreRuntime` 과 공개 provider adapter 경계 위에 선다. **셸은 Tauri v2 로 확정됐다** (실측, 아래).
 
 ## 한 문장 정의
 

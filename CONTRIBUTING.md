@@ -35,7 +35,7 @@ Almost always the provider CLI already exposes a structured surface for it.
 - New capabilities graduate through `tests/_attempts/<category>/` before entering `crates/`:
   prove the concept against the real CLI first, then modularize, then clean, then land.
 - **The easiest first contribution is a provider manifest.** A CLI that speaks ACP registers
-  with about ten lines of TOML and zero Rust (see `mainPlan/providerAdapter/`).
+  with about ten lines of TOML and zero Rust (see `docs/providerArchitecture.md`).
 
 ## Gates
 

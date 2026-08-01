@@ -346,23 +346,11 @@ async fn watch(app: tauri::AppHandle, session: String) -> Answered<()> {
         Ok(connection) => connection,
         Err(failed) => return Answered::broken(&failed),
     };
-    // **Watching is not a question with an answer.** The daemon writes nothing when it accepts one: the
-    // connection simply becomes a view, and the next thing on it is the session's first event. Asking for an
-    // answer here would block until the agent happened to say something, which for an idle session is never,
-    // and the window would sit there looking like it had failed to subscribe.
-    let asked = serde_json::to_vec(&Request::Watch { session: parsed });
-    let frame = match asked {
-        Ok(frame) => frame,
-        Err(error) => {
-            return Answered::Broken {
-                message: error.to_string(),
-            };
-        }
-    };
-    if let Err(error) = connection.send(&frame).await {
-        return Answered::Broken {
-            message: error.to_string(),
-        };
+    // The explicit acknowledgment separates an installed subscription from an idle provider. Returning before
+    // it arrives would let the page claim it is watching even when the daemon rejected or lost the request.
+    let acknowledged = ask::exchange(&mut connection, &Request::Watch { session: parsed }).await;
+    if let Err(answer) = require_watching(acknowledged) {
+        return answer;
     }
 
     let handle = app.clone();
@@ -419,6 +407,16 @@ async fn watch(app: tauri::AppHandle, session: String) -> Answered<()> {
 
     *tauri::Manager::state::<Watching>(&app).0.lock().await = Some(task);
     Answered::Ok { value: () }
+}
+
+/// Accept only the response that installs a watch before any provider event can be relayed.
+fn require_watching(answer: Result<Response, Failed>) -> Result<(), Answered<()>> {
+    match answer {
+        Ok(Response::Watching) => Ok(()),
+        Ok(Response::Failed(error)) => Err(Answered::refused(&error)),
+        Ok(other) => Err(Answered::unreadable(&other)),
+        Err(failed) => Err(Answered::broken(&failed)),
+    }
 }
 
 /// Stop watching, if anything was.
@@ -553,5 +551,16 @@ mod tests {
         assert!(parse_session("not-a-session").is_none());
         let minted = runtrol_provider::SessionId::now();
         assert_eq!(parse_session(&minted.to_string()), Some(minted));
+    }
+
+    #[test]
+    fn a_watch_waits_for_the_exact_subscription_acknowledgment() {
+        assert!(require_watching(Ok(Response::Watching)).is_ok());
+
+        let payload = runtrol_provider::Opaque::owned(r#"{"body":{"event":"turn"}}"#.to_owned());
+        let unexpected = require_watching(Ok(Response::Event(payload)))
+            .expect_err("an event cannot stand in for the watch acknowledgment");
+        let encoded = serde_json::to_string(&unexpected).expect("serializable");
+        assert!(encoded.contains(r#""outcome":"broken""#), "{encoded}");
     }
 }

@@ -76,7 +76,7 @@ Windows 의 loopback TCP 에는 **OS ACL 이 없다.** 모든 사용자 세션�
 
 ### 3.2. Claude 승인 경로는 문서에 없는 플래그다
 
-`claude --permission-prompt-tool <tool>` 가 `control_request{subtype:"can_use_tool"}` 을 stdio 로 보낸다. 이것으로 Codex 와 동등한 승인이 가능하다 (근거와 대조 실험은 [providerAdapter](../providerAdapter/README.md) 참조).
+`claude --permission-prompt-tool <tool>` 가 `control_request{subtype:"can_use_tool"}` 을 stdio 로 보낸다. 이것으로 Codex 와 동등한 승인이 가능하다. 실물 CLI 거부 왕복 증거는 [provider architecture](../../docs/providerArchitecture.md) 가 정본이다.
 
 **보안 관점의 함의**: 승인 경로가 **문서화되지 않은 표면**에 걸려 있다. 벤더가 조용히 없애면 승인 전달이 죽는데, 그때 **조용히 권한 모드로 강등되면 안 된다.** 강등은 반드시 사용자에게 보이고 (`Notice{TierDowngraded}`), 강등된 상태에서 원격이 위험 작업을 시작할 수 없다. 즉 **기능이 사라질 때 열리는 방향이 아니라 닫히는 방향으로 실패한다.**
 

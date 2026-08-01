@@ -99,6 +99,8 @@ pub fn render(response: &Response) -> Vec<String> {
 
         Response::Done => vec!["done".to_owned()],
 
+        Response::Watching => vec!["watching".to_owned()],
+
         // As the provider wrote it. Reformatting would be this surface reading a conversation, which is the one thing
         // runtrol does not do.
         Response::Event(payload) => vec![payload.as_str().to_owned()],
@@ -180,6 +182,11 @@ mod tests {
             )),
             vec!["no sessions"]
         );
+    }
+
+    #[test]
+    fn a_watch_acknowledgement_names_the_subscription_boundary() {
+        assert_eq!(render(&Response::Watching), vec!["watching"]);
     }
 
     #[test]

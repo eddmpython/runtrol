@@ -26,7 +26,7 @@ The security boundary and default-deny settings are documented in [SECURITY.md](
 | 统一的会话列表 | 3/10 | `sessionLifecycleSmoke` 会在本地 preflight 中对两个真实 CLI 执行启动、关闭与恢复，但 hosted CI 没有这两个订阅登录。因此它不能超过 manual 层。 | 无论供应商是 Claude Code、Codex 还是之后出现的任何一个，此刻在我电脑上存活的会话都出现在一个列表里，启动、恢复、删除都在那里完成。 |
 | 即时响应 | 5/10 | 使用真实浏览器测量 production bundle，对列表、打开会话和输入延迟执行棘轮限制，同时处理每秒 3,000 个原始帧。传输对端仍是 mock，因此该轴停留在此层级。 | 列表毫无等待地出现，对话在按下的瞬间打开，长输出倾泻而下时滚动与输入也不卡顿。用户不存在感知到加载的时刻。 |
 | 用手机接续电脑上的会话 | 0/10 | 未实现。 | 手机与电脑配对一次，之后即使离开座位，也能向那台电脑上正在运行的会话发送新指令并实时查看输出。供应商账户的等级或认证方式不会阻断这一体验。 |
-| 供应商可扩展性 | 5/10 | hosted CI 检查外部驱动公开契约、三个操作系统上的通用 ACP fixture，以及独立发布 ACP 实现的两轮对话与 native load。该独立实现连接的是本地 mock model endpoint。定时 CI 只核对当前真实 CLI 的无认证 schema method 与 parser flag probe，不宣称覆盖完整 event 和 control frame 表面。 | 出现新的 CLI 时只需增加一个适配器，电脑界面、手机界面与操作方式保持不变。用户只会感到列表变长了。 |
+| 供应商可扩展性 | 5/10 | hosted CI 检查外部驱动公开契约、三个操作系统上的通用 ACP fixture、独立发布 ACP 实现的两轮对话与 native load，以及真实 Claude Code 的隐藏审批拒绝往返。model endpoint 均为本地 mock。定时 CI 会用当前 CLI 重复 parser probe 与同一审批旅程，但不宣称覆盖账户模型行为或完整 event 表面。 | 出现新的 CLI 时只需增加一个适配器，电脑界面、手机界面与操作方式保持不变。用户只会感到列表变长了。 |
 | 对话不经过 | 6/10 | `egressContract` 在真实回环套接字上运行精确的出站白名单和 production Noise IK、IKpsk1 边界。提示词样本不会以明文出现在中继捕获或诊断信息中，transport 没有磁盘或日志 API，驱动与存储也不知道供应商 transcript 路径。尚无连接真实手机与中继的 live 门禁，所以天花板是 6。 | 用户的提示词与模型的回复只在电脑与供应商之间、以及用户自己的设备之间往返。runtrol 不保存其内容，中间的任何服务器都不会以可读的形式收到它。 |
 | 在手机上批准 | 0/10 | 未实现。 | 代理在危险操作前停下时会出现在手机上，在手机上允许或拒绝后，电脑上的会话立即继续。 |
 | 断了也活着 | 0/10 | 未实现。 | 手机锁屏、网络中断或 runtrol 重启，电脑上的会话都不会死；回来时这段时间的输出会毫无遗漏地接上。 |

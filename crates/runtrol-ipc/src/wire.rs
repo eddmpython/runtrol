@@ -160,6 +160,9 @@ pub enum Response {
     /// Done, with nothing to say about it.
     Done,
 
+    /// A watch subscription is installed and all later answers on this connection are events.
+    Watching,
+
     /// One event, already encoded.
     ///
     /// Encoded once by the daemon and handed to every watcher, so three watchers cost one encode. Also the last hop a

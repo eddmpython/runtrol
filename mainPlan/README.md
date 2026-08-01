@@ -15,8 +15,7 @@
 | 폴더 | 상태 | 한 줄 |
 |---|---|---|
 | [coreRuntime](coreRuntime/) | 설계 | daemon 위상, 세션 상태 기계, **메모리 계약 숫자 확정** (유휴 6MB, 천장 48MB), backpressure, 고아 회수. 런타임·Windows I/O·저장소 결정이 전부 실측 근거다. |
-| [providerAdapter](providerAdapter/) | 활성 | provider-neutral trait, built-in driver 둘, 범용 ACP v1, 독립 ACP 구현 호환과 native session 소유권. 실제 hidden stdio 승인 왕복 증거가 마지막 차단 조건이다. |
-| [providerDiscovery](providerDiscovery/) | 설계 | 모델·플래그·버전을 하드코딩 없이 아는 사다리와 version-keyed 캐시. 표면 drift 감지가 같은 뿌리다. |
+| [providerDiscovery](providerDiscovery/) | 활성 | 모델·플래그·버전을 하드코딩 없이 아는 사다리와 version-keyed 캐시. 표면 drift 감지가 같은 뿌리다. |
 
 ## 2. 사용자 표면
 

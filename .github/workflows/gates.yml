@@ -278,6 +278,14 @@ jobs:
         env:
           TMPDIR: ${{ matrix.os == 'macos-latest' && '/tmp' || runner.temp }}
         run: python -X utf8 tests/audit/externalAcpSmoke.py --require-external
+      - name: 실물 Claude Code 고정 판본 설치
+        run: npm install --global @anthropic-ai/claude-code@2.1.220
+      - name: 실물 Claude hidden approval 게이트 자체 검증
+        run: python -X utf8 tests/audit/claudeApprovalSmoke.py --selftest
+      - name: 실물 Claude hidden approval 거부 왕복
+        env:
+          TMPDIR: ${{ matrix.os == 'macos-latest' && '/tmp' || runner.temp }}
+        run: python -X utf8 tests/audit/claudeApprovalSmoke.py --require-external
       - name: 제거 독립성 게이트 자체 검증
         run: python -X utf8 tests/audit/uninstallLeavesNoTrace.py --selftest
       - name: runtrol home 삭제 뒤 provider 세션 재개
@@ -285,12 +293,12 @@ jobs:
           TMPDIR: ${{ matrix.os == 'macos-latest' && '/tmp' || runner.temp }}
         run: python -X utf8 tests/audit/uninstallLeavesNoTrace.py
 
-  # These provider probes do not need an account. Schema generation and parser probes start no turn,
-  # carry no credential, and fail when a built-in probe strategy was not actually executed.
+  # Parser probes need no account or turn. The approval journey runs the current real CLI against a local
+  # deterministic Messages endpoint, carries only a non-secret sentinel, and spends no hosted model token.
   providerDrift:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
@@ -299,12 +307,21 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: "24"
+      - name: Linux desktop shell dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+      - uses: Swatinem/rust-cache@v2
       - name: Install latest provider CLIs without credentials
         run: npm install --global @anthropic-ai/claude-code @openai/codex
       - name: Provider surface drift gate selftest
         run: python -X utf8 tests/audit/agentSurfaceDrift.py --selftest
       - name: Built-in unauthenticated provider probes remain compatible
         run: python -X utf8 tests/audit/agentSurfaceDrift.py --require-all
+      - name: Real Claude hidden approval gate selftest
+        run: python -X utf8 tests/audit/claudeApprovalSmoke.py --selftest
+      - name: Current real Claude hidden approval denial round trip
+        run: python -X utf8 tests/audit/claudeApprovalSmoke.py --require-external
 
   # 실물 CLI 게이트. hosted 러너에서 돌 수 없다 (구독 OAuth + 비용).
   # self-hosted 러너가 붙으면 `if` 를 제거한다. 그때까지는 무엇이 검증되지 않는지가 화면에 남는다.

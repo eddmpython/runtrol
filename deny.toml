@@ -91,7 +91,7 @@ use-instead = "redb"
 
 [[bans.deny]]
 name = "linkme"
-reason = "crate 경계를 넘으면 조용히 빈 슬라이스를 반환한다 (실측). 조용한 실패는 CLAUDE.md 금지 사항. mainPlan/providerAdapter/README.md 0 절"
+reason = "crate 경계를 넘으면 조용히 빈 슬라이스를 반환한다 (실측). 조용한 실패는 CLAUDE.md 금지 사항. docs/providerArchitecture.md 의 명시적 driver registry 원칙"
 
 [[bans.deny]]
 name = "enum_dispatch"

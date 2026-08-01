@@ -172,6 +172,14 @@ GATES: dict[str, tuple[str, list[str]]] = {
         "독립 설치 ACP 구현의 두 턴과 native load",
         [*PY, f"{HOOKS}/externalAcpSmoke.py", "--require-external"],
     ),
+    "claudeApprovalSmokeSelftest": (
+        "실물 Claude hidden approval 게이트 자체 검증",
+        [*PY, f"{HOOKS}/claudeApprovalSmoke.py", "--selftest"],
+    ),
+    "claudeApprovalSmoke": (
+        "실물 Claude hidden approval 거부 왕복",
+        [*PY, f"{HOOKS}/claudeApprovalSmoke.py", "--require-external"],
+    ),
     "uninstallLeavesNoTraceSelftest": (
         "제거 독립성 게이트 자체 검증",
         [*PY, f"{HOOKS}/uninstallLeavesNoTrace.py", "--selftest"],
@@ -264,6 +272,8 @@ CARGO_GATES = frozenset(
         "genericAcpSmoke",
         "externalAcpSmokeSelftest",
         "externalAcpSmoke",
+        "claudeApprovalSmokeSelftest",
+        "claudeApprovalSmoke",
         "uninstallLeavesNoTraceSelftest",
         "uninstallLeavesNoTrace",
         "audit",
@@ -304,6 +314,8 @@ def skipReasonFor(name: str) -> str | None:
         return f"{CROSS_TARGET} 미설치 (rustup target add {CROSS_TARGET})"
     if name == "externalAcpSmoke" and shutil.which("opencode") is None:
         return "독립 ACP CLI 미설치 (npm install --global opencode-ai@1.2.27)"
+    if name == "claudeApprovalSmoke" and shutil.which("claude") is None:
+        return "Claude Code 미설치 (npm install --global @anthropic-ai/claude-code@2.1.220)"
     return None
 
 

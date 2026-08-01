@@ -1,6 +1,6 @@
 # providerDiscovery
 
-상태: 대기 (`providerAdapter` 선행).
+상태: 활성. provider adapter 경계는 `docs/providerArchitecture.md` 로 승격됐다.
 
 ## 한 문장 정의
 

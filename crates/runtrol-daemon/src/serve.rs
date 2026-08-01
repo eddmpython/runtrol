@@ -193,6 +193,12 @@ async fn converse(mut connection: Connection, asking: mpsc::Sender<Asked>) {
             // whoever is on the other end goes away, and either way it does not go back to reading requests: a
             // caller that wants both opens two connections, which costs it nothing and keeps this unambiguous.
             Reply::Watching(watching) => {
+                // The acknowledgement is the subscription boundary. Without it, a caller can only sleep and guess
+                // whether its Watch request arrived before the next prompt, which loses the very event it watches for
+                // on a slow machine.
+                if write(&mut connection, &Response::Watching).await.is_err() {
+                    return;
+                }
                 relay(&mut connection, *watching).await;
                 return;
             }

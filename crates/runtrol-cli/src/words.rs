@@ -9,14 +9,14 @@
 //! daemon, a socket, or a session.
 
 use runtrol_ipc::wire::Request;
-use runtrol_provider::SessionId;
+use runtrol_provider::{ApprovalId, OptionId, SessionId};
 
 /// What somebody typed could not be understood.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum Misunderstood {
     /// Nothing was typed.
-    #[error("no command. try: list, models, start, resume, say, stop, watch, close, panic")]
+    #[error("no command. try: list, models, start, resume, say, answer, stop, watch, close, panic")]
     Nothing,
 
     /// The command is not one runtrol has.
@@ -24,7 +24,7 @@ pub enum Misunderstood {
     /// Names what was typed, because the operator's next move is to correct it and a message that does not repeat it
     /// makes them guess what runtrol thought they said.
     #[error(
-        "no command called {typed:?}. try: list, models, start, resume, say, stop, watch, close, panic"
+        "no command called {typed:?}. try: list, models, start, resume, say, answer, stop, watch, close, panic"
     )]
     NoSuchCommand {
         /// What they typed.
@@ -44,6 +44,36 @@ pub enum Misunderstood {
     #[error("{typed:?} is not a session name runtrol issued")]
     NotASession {
         /// What they typed.
+        typed: String,
+    },
+
+    /// An approval was named in a way runtrol cannot read.
+    #[error("{typed:?} is not an approval name runtrol issued")]
+    NotAnApproval {
+        /// What was typed.
+        typed: String,
+    },
+
+    /// An approval option was not a non-negative 32-bit integer.
+    #[error("{typed:?} is not an approval option number")]
+    NotAnOption {
+        /// What was typed.
+        typed: String,
+    },
+
+    /// A subject digest was not the exact 32-byte value shown with the approval.
+    #[error("{typed:?} is not a 64-character hexadecimal subject digest")]
+    NotASubjectDigest {
+        /// What was typed.
+        typed: String,
+    },
+
+    /// A command received a word beyond its complete shape.
+    #[error("{command} does not accept extra word {typed:?}")]
+    Extra {
+        /// Which command was complete before this word.
+        command: &'static str,
+        /// The first extra word.
         typed: String,
     },
 }
@@ -103,6 +133,21 @@ pub fn understand(words: &[String], here: &str) -> Result<Request, Misunderstood
             })
         }
 
+        "answer" => {
+            if let Some(typed) = rest.get(4) {
+                return Err(Misunderstood::Extra {
+                    command: "answer",
+                    typed: typed.clone(),
+                });
+            }
+            Ok(Request::AnswerApproval {
+                session: session_of(rest, 0, "answer")?,
+                approval: approval_of(rest, 1)?,
+                option: option_of(rest, 2)?,
+                subject_digest: subject_digest_of(rest, 3)?,
+            })
+        }
+
         "stop" => Ok(Request::Interrupt {
             session: session_of(rest, 0, "stop")?,
         }),
@@ -150,6 +195,47 @@ fn session_of(
     })
 }
 
+fn approval_of(rest: &[String], at: usize) -> Result<ApprovalId, Misunderstood> {
+    let typed = word(rest, at, "answer", "which approval")?;
+    typed.parse().map_err(|_| Misunderstood::NotAnApproval {
+        typed: typed.to_owned(),
+    })
+}
+
+fn option_of(rest: &[String], at: usize) -> Result<OptionId, Misunderstood> {
+    let typed = word(rest, at, "answer", "which option")?;
+    typed
+        .parse::<u32>()
+        .map(OptionId)
+        .map_err(|_| Misunderstood::NotAnOption {
+            typed: typed.to_owned(),
+        })
+}
+
+fn subject_digest_of(rest: &[String], at: usize) -> Result<[u8; 32], Misunderstood> {
+    let typed = word(rest, at, "answer", "the subject digest")?;
+    if typed.len() != 64 {
+        return Err(Misunderstood::NotASubjectDigest {
+            typed: typed.to_owned(),
+        });
+    }
+    let mut digest = [0_u8; 32];
+    for (index, pair) in typed.as_bytes().chunks_exact(2).enumerate() {
+        let pair = str::from_utf8(pair).map_err(|_| Misunderstood::NotASubjectDigest {
+            typed: typed.to_owned(),
+        })?;
+        let slot = digest
+            .get_mut(index)
+            .ok_or_else(|| Misunderstood::NotASubjectDigest {
+                typed: typed.to_owned(),
+            })?;
+        *slot = u8::from_str_radix(pair, 16).map_err(|_| Misunderstood::NotASubjectDigest {
+            typed: typed.to_owned(),
+        })?;
+    }
+    Ok(digest)
+}
+
 #[cfg(test)]
 mod tests {
     use runtrol_ipc::wire::Request;
@@ -175,6 +261,7 @@ mod tests {
             "start",
             "resume claude",
             "say",
+            "answer",
             "stop",
             "watch",
             "close",
@@ -245,6 +332,47 @@ mod tests {
         match understand(&typed("models example"), here()).expect("understandable") {
             Request::Models { provider } => assert_eq!(&*provider, "example"),
             other => panic!("expected model discovery, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn an_approval_answer_carries_every_boundary_value_exactly() {
+        let session = SessionId::now();
+        let approval = ApprovalId::now();
+        let digest = [0xab_u8; 32];
+        let line = format!("answer {session} {approval} 7 {}", "ab".repeat(32));
+        match understand(&typed(&line), here()).expect("understandable") {
+            Request::AnswerApproval {
+                session: named_session,
+                approval: named_approval,
+                option,
+                subject_digest,
+            } => {
+                assert_eq!(named_session, session);
+                assert_eq!(named_approval, approval);
+                assert_eq!(option, OptionId(7));
+                assert_eq!(subject_digest, digest);
+            }
+            other => panic!("expected an approval answer, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn malformed_approval_answers_are_refused_without_guessing() {
+        let session = SessionId::now();
+        let approval = ApprovalId::now();
+        for line in [
+            format!("answer {session}"),
+            format!("answer {session} not-an-approval 0 {}", "00".repeat(32)),
+            format!("answer {session} {approval} no {}", "00".repeat(32)),
+            format!("answer {session} {approval} 0 short"),
+            format!("answer {session} {approval} 0 {}", "zz".repeat(32)),
+            format!("answer {session} {approval} 0 {} extra", "00".repeat(32)),
+        ] {
+            assert!(
+                understand(&typed(&line), here()).is_err(),
+                "accepted {line:?}"
+            );
         }
     }
 

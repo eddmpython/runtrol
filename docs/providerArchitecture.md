@@ -45,6 +45,14 @@ Drivers map only the protocol surface runtrol consumes. Unknown notifications ar
 
 Approval responses are bound to the pending provider request, subject digest, offered choices, structural risk, and expiry. An incomplete subject cannot be approved. Provider-specific approval framing stays inside its driver.
 
+The terminal command surface answers the provider-neutral boundary as `runtrol answer <session> <approval> <option> <subject-digest-hex>`. It never accepts a provider decision word. The stream-json built-in starts Claude Code with `--permission-prompt-tool stdio`; its `control_request/can_use_tool` and native `control_response` shapes remain private to that driver. A watch receives an explicit subscription acknowledgement before events, so a caller never sleeps and guesses whether an approval can still be missed.
+
+## Remote wire boundary
+
+The PWA wire uses a runtrol transport envelope, not raw ACP. The envelope owns the session identifier, append-only event offset, idempotent RPC identifier, authorization scope, and reconnect boundary that every driver needs. Its event field carries the provider-neutral event bytes already produced by the driver without interpreting or rewriting their content.
+
+ACP remains one driver protocol behind that boundary. Exposing it as the remote wire would make non-ACP drivers imitate ACP, couple phone authentication and replay to one provider protocol, and move transport responsibilities into the adapter layer.
+
 ## Verification
 
 The active gates establish separate claims:
@@ -54,8 +62,9 @@ The active gates establish separate claims:
 - `approvalAuthorization` checks request, subject, option, risk, authority, and expiry binding after a driver creates a pending approval.
 - `genericAcpSmoke` drives a deterministic external manifest fixture through the product daemon, CLI surface, child process, streamed turn, completion, and load path.
 - `externalAcpSmoke` installs an independently distributed ACP implementation and drives two deterministic streamed turns around daemon restart and native load. The model endpoint is a local mock, while the ACP implementation is the real external executable.
+- `claudeApprovalSmoke` runs an installed Claude Code process through the production stream-json driver against a loopback Messages endpoint. The real CLI emits its hidden `can_use_tool` request, consumes an explicit `rejectOnce` answer through the normal daemon boundary, makes the follow-up model request, declares `end_turn`, and leaves the denied target file absent. The model endpoint is deterministic and mock; the provider process and approval wire are real.
 - `uninstallLeavesNoTrace` stores fixture state outside `RUNTROL_HOME`, removes the runtrol home, resumes directly through the provider executable while runtrol is absent, then loads the same native session after reinstallation.
 - `agentSurfaceDrift` compares the schema-provider methods and stream-json provider flags that can be probed without an account. Scheduled hosted CI installs current CLIs and requires each built-in probe strategy to run.
-- The generic ACP and uninstall journeys run on Windows, macOS, and Linux.
+- The generic ACP, external ACP, Claude approval, and uninstall journeys run on Windows, macOS, and Linux.
 
-Real account turns remain operator evidence because hosted CI receives no provider credential. They are not counted as hosted automation.
+Real account turns remain operator evidence because hosted CI receives no provider credential. The Claude approval gate proves the installed CLI wire against a mock model, not account-backed model behavior, and the North Star tier remains `mock`.
