@@ -37,30 +37,41 @@ pub fn render(response: &Response) -> Vec<String> {
             })
             .collect(),
 
-        Response::Sessions(lines) if lines.is_empty() => vec!["no sessions".to_owned()],
-
-        Response::Sessions(lines) => lines
-            .iter()
-            .map(|one| {
-                // Both together and never one alone: a session can look stuck and have a turn running, and showing only
-                // the first would read as a completion runtrol never saw.
-                let stuck = if one.looks_stuck {
-                    "  (looks stuck)"
-                } else {
-                    ""
-                };
-                let tier = if one.hot { "running" } else { "idle" };
-                // The provider's own name for the conversation, which is the one argument a resume takes. It was on the
-                // wire and not on this surface, which meant a listing showed a session and withheld the only thing
-                // needed to pick it back up. A session the provider has not named yet prints a placeholder rather than
-                // an empty column, so the shape of a line never depends on how far along a session is.
-                let native = one.native.as_deref().unwrap_or(NOT_NAMED_YET);
-                format!(
-                    "{}  {}  {}  {}  {native}{stuck}",
-                    one.session, one.provider, tier, one.doing
-                )
-            })
-            .collect(),
+        Response::Sessions(listing) => {
+            let mut rendered = listing
+                .sessions
+                .iter()
+                .map(|one| {
+                    // Both together and never one alone: a session can look stuck and have a turn running, and showing only
+                    // the first would read as a completion runtrol never saw.
+                    let stuck = if one.looks_stuck {
+                        "  (looks stuck)"
+                    } else {
+                        ""
+                    };
+                    let tier = if one.hot { "running" } else { "idle" };
+                    // The provider's own name for the conversation, which is the one argument a resume takes. It was on the
+                    // wire and not on this surface, which meant a listing showed a session and withheld the only thing
+                    // needed to pick it back up. A session the provider has not named yet prints a placeholder rather than
+                    // an empty column, so the shape of a line never depends on how far along a session is.
+                    let native = one.native.as_deref().unwrap_or(NOT_NAMED_YET);
+                    format!(
+                        "{}  {}  {}  {}  {native}{stuck}",
+                        one.session, one.provider, tier, one.doing
+                    )
+                })
+                .collect::<Vec<_>>();
+            if rendered.is_empty() {
+                rendered.push("no sessions".to_owned());
+            }
+            rendered.extend(
+                listing
+                    .warnings
+                    .iter()
+                    .map(|warning| format!("warning  {warning}")),
+            );
+            rendered
+        }
 
         Response::Models(ModelCatalog::Known { models }) if models.is_empty() => {
             vec!["no models reported".to_owned()]
@@ -142,15 +153,18 @@ mod tests {
     fn a_session_that_looks_stuck_is_shown_as_running_and_stuck() {
         // Showing only the first would read as a completion runtrol never saw; showing only the second would hide that
         // work is still going.
-        let response = Response::Sessions(vec![runtrol_ipc::wire::SessionLine {
-            session: SessionId::now(),
-            provider: "claude".into(),
-            native: None,
-            workspace: "C:\\work".into(),
-            hot: true,
-            doing: "busy".into(),
-            looks_stuck: true,
-        }]);
+        let response = Response::Sessions(runtrol_ipc::wire::SessionListing {
+            sessions: vec![runtrol_ipc::wire::SessionLine {
+                session: SessionId::now(),
+                provider: "claude".into(),
+                native: None,
+                workspace: "C:\\work".into(),
+                hot: true,
+                doing: "busy".into(),
+                looks_stuck: true,
+            }],
+            warnings: Vec::new(),
+        });
         let lines = render(&response);
         let line = lines.first().expect("one line");
         assert!(line.contains("busy"), "{line}");
@@ -160,7 +174,12 @@ mod tests {
     #[test]
     fn an_empty_list_says_so_rather_than_printing_nothing() {
         // Printing nothing is indistinguishable from a command that failed silently.
-        assert_eq!(render(&Response::Sessions(vec![])), vec!["no sessions"]);
+        assert_eq!(
+            render(&Response::Sessions(
+                runtrol_ipc::wire::SessionListing::default()
+            )),
+            vec!["no sessions"]
+        );
     }
 
     #[test]
@@ -248,15 +267,18 @@ mod tests {
         // The axis says start, resume and delete all happen from the one list. A resume takes the provider's own name
         // for the conversation, so a listing that shows a session and withholds that name shows a session nobody can
         // pick back up. It was on the wire and missing from this surface.
-        let response = Response::Sessions(vec![runtrol_ipc::wire::SessionLine {
-            session: SessionId::now(),
-            provider: "codex".into(),
-            native: Some("019fb614-c96e-7ce0-9d37-c0cc962e30c6".into()),
-            workspace: "C:\\work".into(),
-            hot: true,
-            doing: "idle".into(),
-            looks_stuck: false,
-        }]);
+        let response = Response::Sessions(runtrol_ipc::wire::SessionListing {
+            sessions: vec![runtrol_ipc::wire::SessionLine {
+                session: SessionId::now(),
+                provider: "codex".into(),
+                native: Some("019fb614-c96e-7ce0-9d37-c0cc962e30c6".into()),
+                workspace: "C:\\work".into(),
+                hot: true,
+                doing: "idle".into(),
+                looks_stuck: false,
+            }],
+            warnings: Vec::new(),
+        });
         let line = render(&response).first().cloned().expect("one line");
         assert!(
             line.contains("019fb614-c96e-7ce0-9d37-c0cc962e30c6"),
@@ -268,15 +290,18 @@ mod tests {
     fn a_session_the_provider_has_not_named_keeps_the_same_shape() {
         // A placeholder rather than an empty column, so anything reading this surface can split on whitespace without
         // caring how far along a session is.
-        let response = Response::Sessions(vec![runtrol_ipc::wire::SessionLine {
-            session: SessionId::now(),
-            provider: "claude".into(),
-            native: None,
-            workspace: "C:\\work".into(),
-            hot: false,
-            doing: "detached".into(),
-            looks_stuck: false,
-        }]);
+        let response = Response::Sessions(runtrol_ipc::wire::SessionListing {
+            sessions: vec![runtrol_ipc::wire::SessionLine {
+                session: SessionId::now(),
+                provider: "claude".into(),
+                native: None,
+                workspace: "C:\\work".into(),
+                hot: false,
+                doing: "detached".into(),
+                looks_stuck: false,
+            }],
+            warnings: Vec::new(),
+        });
         let line = render(&response).first().cloned().expect("one line");
         let fields: Vec<&str> = line.split_whitespace().collect();
         assert_eq!(fields.len(), 5, "{line}");
@@ -286,26 +311,29 @@ mod tests {
     #[test]
     fn a_listing_prints_one_session_per_line() {
         // So another program can read it too. A surface only a person can read is a surface nothing can build on.
-        let response = Response::Sessions(vec![
-            runtrol_ipc::wire::SessionLine {
-                session: SessionId::now(),
-                provider: "claude".into(),
-                native: None,
-                workspace: "C:\\work".into(),
-                hot: true,
-                doing: "idle".into(),
-                looks_stuck: false,
-            },
-            runtrol_ipc::wire::SessionLine {
-                session: SessionId::now(),
-                provider: "claude".into(),
-                native: None,
-                workspace: "C:\\work".into(),
-                hot: false,
-                doing: "detached".into(),
-                looks_stuck: false,
-            },
-        ]);
+        let response = Response::Sessions(runtrol_ipc::wire::SessionListing {
+            sessions: vec![
+                runtrol_ipc::wire::SessionLine {
+                    session: SessionId::now(),
+                    provider: "claude".into(),
+                    native: None,
+                    workspace: "C:\\work".into(),
+                    hot: true,
+                    doing: "idle".into(),
+                    looks_stuck: false,
+                },
+                runtrol_ipc::wire::SessionLine {
+                    session: SessionId::now(),
+                    provider: "claude".into(),
+                    native: None,
+                    workspace: "C:\\work".into(),
+                    hot: false,
+                    doing: "detached".into(),
+                    looks_stuck: false,
+                },
+            ],
+            warnings: Vec::new(),
+        });
         let lines = render(&response);
         assert_eq!(lines.len(), 2);
         for line in &lines {

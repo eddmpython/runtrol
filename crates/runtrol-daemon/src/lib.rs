@@ -39,8 +39,3 @@ pub fn endpoint(home: Option<&str>) -> Result<String, ComposeError> {
     };
     Ok(home.paths().endpoint().address().to_owned())
 }
-
-// Declared in this crate's manifest and enforced by `tests/audit/dependencyDirection.rs`. The session rows arrive with
-// the listing that joins them; until they do, this line is what makes the declaration real, because `cargo shear`
-// reports a dependency nothing names.
-use runtrol_store as _;

@@ -133,8 +133,8 @@ pub enum Response {
         providers: Vec<ProviderLine>,
     },
 
-    /// The sessions, in the order the daemon lists them.
-    Sessions(Vec<SessionLine>),
+    /// The sessions and any damaged rows the daemon could not read.
+    Sessions(SessionListing),
 
     /// The model choices one provider can honestly offer now.
     Models(ModelCatalog),
@@ -172,6 +172,15 @@ pub struct ProviderLine {
     /// A sentence rather than a flag, because "this build has no driver for that protocol" and "nothing declares that
     /// kind" send the operator in different directions.
     pub why_not: Option<Box<str>>,
+}
+
+/// A session listing that can report one damaged row without hiding every readable row.
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub struct SessionListing {
+    /// Readable sessions, oldest first.
+    pub sessions: Vec<SessionLine>,
+    /// Named storage failures that were skipped.
+    pub warnings: Vec<Box<str>>,
 }
 
 /// One session, as a listing shows it.

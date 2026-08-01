@@ -25,6 +25,7 @@ use runtrol_childproc::Containment;
 use runtrol_core::registry::{KindEntry, KindTable, ProviderRegistry};
 use runtrol_core::{HomeError, RuntrolHome};
 use runtrol_drivers::{Builtin, DriverKind};
+use runtrol_store::Store;
 
 /// The daemon could not be assembled.
 #[derive(Debug, thiserror::Error)]
@@ -40,12 +41,18 @@ pub enum ComposeError {
     /// runtrol's own directory could not be established.
     #[error(transparent)]
     Home(#[from] HomeError),
+
+    /// The session-pointer store could not be opened or trusted.
+    #[error(transparent)]
+    Store(#[from] runtrol_store::StoreError),
 }
 
 /// Everything a running daemon holds.
 pub struct Composed {
     /// runtrol's own directory, and every path inside it.
     pub home: RuntrolHome,
+    /// The minimal session-pointer database. It has no type capable of holding conversation content.
+    pub store: Store,
     /// The guarantee that children die with this process.
     ///
     /// Shared, because every driver hands it to every child it starts, and held for the process lifetime because
@@ -87,8 +94,10 @@ impl Composed {
         };
 
         let registry = load(&home, builtin);
+        let store = Store::open(home.paths().database())?;
         Ok(Self {
             home,
+            store,
             containment,
             registry,
             granted: runtrol_security::GrantLedger::new(),
@@ -113,8 +122,10 @@ impl Composed {
     pub(crate) fn for_tests(home: &str, builtin: Builtin) -> Result<Self, ComposeError> {
         let home = RuntrolHome::open_at(home)?;
         let registry = load(&home, builtin);
+        let store = Store::open(home.paths().database())?;
         Ok(Self {
             home,
+            store,
             containment: Arc::new(Containment::without_any()),
             registry,
             granted: runtrol_security::GrantLedger::new(),

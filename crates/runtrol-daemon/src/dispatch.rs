@@ -22,18 +22,20 @@
 //! Consulted **before** the request is read for anything else, and before the greeting is answered. A check that ran
 //! after some other branch had already acted would be a check on the way out.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use runtrol_core::registry::KindStatus;
 use runtrol_core::session::SessionError;
 use runtrol_core::{SessionManager, SessionView};
 use runtrol_drivers::DriverContext;
-use runtrol_ipc::wire::{ProviderLine, Request, Response, SessionLine, WireError};
+use runtrol_ipc::wire::{ProviderLine, Request, Response, SessionLine, SessionListing, WireError};
 use runtrol_provider::{
-    AbsPath, AgentCommand, CloseMode, ContentBlock, Disposition, OpenIntent, Provider, ProviderId,
-    SessionId,
+    AbsPath, AgentCommand, CloseMode, ContentBlock, Disposition, NativeSessionId, OpenIntent,
+    Provider, ProviderId, SessionId, WallMs,
 };
 use runtrol_security::Caller;
+use runtrol_store::{SessionRow as StoredSession, StoreError};
 
 use crate::compose::Composed;
 
@@ -142,7 +144,7 @@ pub async fn answer(
         // Answered above, and matched here so that adding a request cannot fall through to a wildcard that does nothing.
         Request::Hello { .. } => Reply::One(refuse("the wire format is already agreed")),
 
-        Request::List => Reply::One(Response::Sessions(list(sessions))),
+        Request::List => Reply::One(list(composed, sessions)),
 
         Request::Models { provider } => Reply::One(models(composed, &provider).await),
 
@@ -208,8 +210,13 @@ pub async fn answer(
             } else {
                 CloseMode::graceful()
             };
+            let removed = match composed.store.remove_session(session) {
+                Ok(removed) => removed,
+                Err(error) => return Reply::One(refuse(&error.to_string())),
+            };
             match sessions.close(session) {
                 Ok(agent) => Reply::Stopping { agent, how },
+                Err(SessionError::NotLive { .. }) if removed => Reply::One(Response::Done),
                 Err(error) => Reply::One(from_session_error(&error)),
             }
         }
@@ -256,7 +263,25 @@ async fn open(
     };
 
     match sessions.start(driver.as_ref(), intent).await {
-        Ok(session) => Response::Started { session },
+        Ok(session) => match persist_live(composed, sessions, session) {
+            Ok(()) => Response::Started { session },
+            Err(error) => {
+                let stopping = match sessions.close(session) {
+                    Ok(agent) => agent.close(CloseMode::Kill).await.err(),
+                    Err(close_error) => {
+                        return refuse(&format!(
+                            "{error}; the unrecorded session also could not be detached: {close_error}"
+                        ));
+                    }
+                };
+                match stopping {
+                    Some(close_error) => refuse(&format!(
+                        "{error}; the unrecorded session also could not be stopped: {close_error}"
+                    )),
+                    None => refuse(&error.to_string()),
+                }
+            }
+        },
         Err(error) => from_session_error(&error),
     }
 }
@@ -335,19 +360,103 @@ async fn send(
 /// Live ones only for now. The rest come from the providers' own stores and from runtrol's rows, and joining those needs
 /// a driver that can read a provider's session store: measured at 4.4 milliseconds against 39.9 seconds for asking the
 /// CLI, which is why that join is a file read and not a question. That reader arrives with the driver that owns it.
-fn list(sessions: &SessionManager) -> Vec<SessionLine> {
-    sessions
-        .live_sessions()
-        .map(|one| SessionLine {
-            session: one.session,
-            provider: one.provider.as_str().into(),
-            native: one.native.map(Into::into),
-            workspace: one.workspace.as_str().into(),
-            hot: one.tier.has_a_process(),
-            doing: one.state.lifecycle().name().into(),
-            looks_stuck: one.state.looks_stuck(),
-        })
-        .collect()
+fn list(composed: &Composed, sessions: &SessionManager) -> Response {
+    let stored = match composed.store.list_sessions() {
+        Ok(stored) => stored,
+        Err(error) => return refuse(&error.to_string()),
+    };
+    let mut joined = BTreeMap::new();
+    for (session, row) in stored.sessions {
+        if row.archived {
+            continue;
+        }
+        joined.insert(
+            session,
+            SessionLine {
+                session,
+                provider: row.provider.as_str().into(),
+                native: Some(row.native.as_str().into()),
+                workspace: row.cwd.as_str().into(),
+                hot: false,
+                doing: "detached".into(),
+                looks_stuck: false,
+            },
+        );
+    }
+    for one in sessions.live_sessions() {
+        joined.insert(
+            one.session,
+            SessionLine {
+                session: one.session,
+                provider: one.provider.as_str().into(),
+                native: one.native.map(Into::into),
+                workspace: one.workspace.as_str().into(),
+                hot: one.tier.has_a_process(),
+                doing: one.state.lifecycle().name().into(),
+                looks_stuck: one.state.looks_stuck(),
+            },
+        );
+    }
+    Response::Sessions(SessionListing {
+        sessions: joined.into_values().collect(),
+        warnings: stored
+            .unreadable
+            .into_iter()
+            .map(|(session, error)| {
+                format!("stored session {session} is unreadable: {error}").into()
+            })
+            .collect(),
+    })
+}
+
+/// Persist the minimal pointer for one live session once its provider has named it.
+///
+/// No conversation value can enter this function: [`StoredSession`] has no field capable of holding one.
+pub(crate) fn persist_live(
+    composed: &Composed,
+    sessions: &SessionManager,
+    session: SessionId,
+) -> Result<(), StoreError> {
+    let Some(live) = sessions.live_session(session) else {
+        return Ok(());
+    };
+    let Some(native) = live.native else {
+        return Ok(());
+    };
+    let native = NativeSessionId::new(native).map_err(|_| StoreError::Codec {
+        field: "native id",
+        why: "the live provider identifier is not storable",
+    })?;
+
+    let prior_session = composed.store.find_by_native(live.provider, &native)?;
+    let prior_row = match prior_session {
+        Some(prior) => composed.store.get_session(prior)?,
+        None => composed.store.get_session(session)?,
+    };
+    if let Some(prior) = prior_session
+        && prior != session
+    {
+        composed.store.remove_session(prior)?;
+    }
+
+    let now = WallMs::now();
+    composed.store.put_session(
+        session,
+        &StoredSession {
+            provider: live.provider,
+            native,
+            cwd: live.workspace.clone(),
+            label: prior_row.as_ref().and_then(|row| row.label.clone()),
+            created_at: prior_row.as_ref().map_or(now, |row| row.created_at),
+            last_seen_at: live.state.last_seen(),
+            pinned: prior_row.as_ref().is_some_and(|row| row.pinned),
+            archived: false,
+            forked_from: prior_row.and_then(|row| row.forked_from),
+            // The shared-daemon driver has no per-session process identity. A stale PID would be worse than
+            // `None`, and hotness is joined from the live manager while this daemon is running.
+            live: None,
+        },
+    )
 }
 
 /// Every provider this build knows about, usable or not.
@@ -403,8 +512,10 @@ mod tests {
         (composed, text)
     }
 
-    fn clean(path: &str) {
-        drop(std::fs::remove_dir_all(path));
+    fn clean(composed: crate::compose::Composed, path: &str) {
+        // The store owns an exclusive file handle. Release it before removing the scratch home, especially on Windows.
+        drop(composed);
+        std::fs::remove_dir_all(path).expect("remove the scratch home");
     }
 
     #[tokio::test]
@@ -426,7 +537,7 @@ mod tests {
             }
             other => panic!("expected a refusal, got {}", shape(&other)),
         }
-        clean(&path);
+        clean(composed, &path);
     }
 
     #[tokio::test]
@@ -453,7 +564,7 @@ mod tests {
             other => panic!("expected a welcome, got {}", shape(&other)),
         }
         assert!(conversation.greeted());
-        clean(&path);
+        clean(composed, &path);
     }
 
     #[tokio::test]
@@ -494,7 +605,7 @@ mod tests {
             !conversation.greeted(),
             "a connection that did not agree must not count as greeted"
         );
-        clean(&path);
+        clean(composed, &path);
     }
 
     #[tokio::test]
@@ -528,7 +639,7 @@ mod tests {
                 other => panic!("expected a refusal, got {}", shape(&other)),
             }
         }
-        clean(&path);
+        clean(composed, &path);
     }
 
     #[tokio::test]
@@ -561,7 +672,7 @@ mod tests {
             other => panic!("expected a refusal, got {}", shape(&other)),
         }
         assert_eq!(sessions.hot(), 0, "nothing was started");
-        clean(&path);
+        clean(composed, &path);
     }
 
     #[tokio::test]
@@ -599,7 +710,7 @@ mod tests {
             other => panic!("expected a refusal, got {}", shape(&other)),
         }
         assert_eq!(sessions.hot(), 0);
-        clean(&path);
+        clean(composed, &path);
     }
 
     #[tokio::test]
@@ -610,10 +721,86 @@ mod tests {
         greet(&mut conversation, &composed, &mut sessions).await;
 
         match answer(&mut conversation, &composed, &mut sessions, Request::List).await {
-            Reply::One(Response::Sessions(lines)) => assert!(lines.is_empty()),
+            Reply::One(Response::Sessions(listing)) => {
+                assert!(listing.sessions.is_empty());
+                assert!(listing.warnings.is_empty());
+            }
             other => panic!("expected a listing, got {}", shape(&other)),
         }
-        clean(&path);
+        clean(composed, &path);
+    }
+
+    #[tokio::test]
+    async fn a_stored_session_is_listed_cold_and_can_be_removed_without_a_process() {
+        // A daemon restart begins with an empty live manager. The durable pointer must still appear, and closing that
+        // cold row removes only runtrol's pointer rather than requiring a process that no longer exists.
+        let (composed, path) = composed_for("storedlist");
+        let mut sessions = SessionManager::new();
+        let mut conversation = Conversation::at_the_machine();
+        greet(&mut conversation, &composed, &mut sessions).await;
+
+        let session = SessionId::now();
+        let provider = ProviderId::parse("stored-provider").expect("valid provider id");
+        let native = NativeSessionId::new("provider-session-1").expect("valid native id");
+        let workspace = AbsPath::canonicalize(&path).expect("the scratch home exists");
+        let now = WallMs::now();
+        composed
+            .store
+            .put_session(
+                session,
+                &StoredSession {
+                    provider,
+                    native: native.clone(),
+                    cwd: workspace.clone(),
+                    label: None,
+                    created_at: now,
+                    last_seen_at: now,
+                    pinned: false,
+                    archived: false,
+                    forked_from: None,
+                    live: None,
+                },
+            )
+            .expect("store the pointer");
+
+        match answer(&mut conversation, &composed, &mut sessions, Request::List).await {
+            Reply::One(Response::Sessions(listing)) => {
+                assert!(listing.warnings.is_empty());
+                let [line] = listing.sessions.as_slice() else {
+                    panic!("expected one stored session, got {:?}", listing.sessions);
+                };
+                assert_eq!(line.session, session);
+                assert_eq!(line.provider.as_ref(), provider.as_str());
+                assert_eq!(line.native.as_deref(), Some(native.as_str()));
+                assert_eq!(line.workspace.as_ref(), workspace.as_str());
+                assert!(!line.hot);
+                assert_eq!(line.doing.as_ref(), "detached");
+            }
+            other => panic!("expected a listing, got {}", shape(&other)),
+        }
+
+        assert!(matches!(
+            answer(
+                &mut conversation,
+                &composed,
+                &mut sessions,
+                Request::Close {
+                    session,
+                    now: false
+                },
+            )
+            .await,
+            Reply::One(Response::Done)
+        ));
+        assert!(
+            composed
+                .store
+                .get_session(session)
+                .expect("the store remains readable")
+                .is_none(),
+            "closing a cold row removes its pointer"
+        );
+        clean(composed, &path);
     }
 
     #[tokio::test]
@@ -645,7 +832,7 @@ mod tests {
                 shape(&other)
             ),
         }
-        clean(&path);
+        clean(composed, &path);
     }
 
     /// Agree a wire format, so the rest of a test can ask for something.

@@ -24,4 +24,4 @@ pub mod wire;
 
 pub use frame::{Decoded, FrameError, MAX_FRAME, WIRE_VERSION, check_version, decode, encode};
 pub use transport::{Connection, Listener, TransportError, connect};
-pub use wire::{ProviderLine, Request, Response, SessionLine, WireError, agree};
+pub use wire::{ProviderLine, Request, Response, SessionLine, SessionListing, WireError, agree};

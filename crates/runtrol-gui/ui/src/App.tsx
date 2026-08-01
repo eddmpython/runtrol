@@ -11,6 +11,7 @@ import type {
   Notice,
   ModelCatalog,
   OfferedProvider,
+  SessionListing,
   SessionRow,
   ThemeMode,
 } from "./domain";
@@ -45,6 +46,7 @@ export function App() {
   const [sending, setSending] = useState(false);
 
   const selectedRef = useRef<string | null>(null);
+  const rowsRef = useRef<SessionRow[]>([]);
   const tracingRef = useRef(false);
   const refreshingRef = useRef(false);
   const firstDrawRef = useRef(true);
@@ -85,16 +87,44 @@ export function App() {
     }
   }, []);
 
-  const openSession = useCallback(async (session: string) => {
-    if (selectedRef.current === session) {
+  const watchSession = useCallback(async (session: string) => {
+    const watched = await ask<null>("watch", { session });
+    trace(`watching ${session} ${watched === undefined ? "refused" : "ok"}`);
+  }, [ask, trace]);
+
+  const openSession = useCallback(async (session: string, resumeCold = true) => {
+    const row = rowsRef.current.find((entry) => entry.session === session);
+    if (selectedRef.current === session && row?.hot) {
       return;
     }
     selectedRef.current = session;
     setSelected(session);
     setItems([]);
-    const watched = await ask<null>("watch", { session });
-    trace(`watching ${session} ${watched === undefined ? "refused" : "ok"}`);
-  }, [ask, trace]);
+    if (row && !row.hot) {
+      if (!resumeCold) {
+        setItems((current) => appendStatus(current, "세션을 다시 눌러 공급자 원본에 연결할 수 있다"));
+        return;
+      }
+      if (!row.native) {
+        setNotice({ kind: "broken", message: "공급자가 아직 이 세션에 원본 식별자를 붙이지 않았다." });
+        return;
+      }
+      const resumed = await ask<string>("resume", {
+        provider: row.provider,
+        native: row.native,
+        workspace: row.workspace,
+      });
+      if (!resumed) {
+        return;
+      }
+      selectedRef.current = resumed;
+      setSelected(resumed);
+      setItems([]);
+      await watchSession(resumed);
+      return;
+    }
+    await watchSession(session);
+  }, [ask, watchSession]);
 
   const refresh = useCallback(async () => {
     if (refreshingRef.current) {
@@ -103,11 +133,16 @@ export function App() {
     refreshingRef.current = true;
     const askedAt = performance.now();
     try {
-      const nextRows = await ask<SessionRow[]>("sessions");
-      if (!nextRows) {
+      const listing = await ask<SessionListing>("sessions");
+      if (!listing) {
         return;
       }
+      const nextRows = listing.sessions;
+      rowsRef.current = nextRows;
       setRows(nextRows);
+      if (listing.warnings.length > 0) {
+        setNotice({ kind: "warning", message: listing.warnings.join("\n") });
+      }
       const current = selectedRef.current;
       if (current && !nextRows.some((row) => row.session === current)) {
         selectedRef.current = null;
@@ -127,7 +162,7 @@ export function App() {
       const opening = firstDrawRef.current;
       firstDrawRef.current = false;
       if (opening && !selectedRef.current && nextRows.length > 0) {
-        await openSession(nextRows[0].session);
+        await openSession(nextRows[0].session, nextRows[0].hot);
       }
     } finally {
       refreshingRef.current = false;

@@ -29,7 +29,7 @@ use runtrol_ipc::wire::{Request, Response};
 use tauri::{Emitter as _, Manager as _};
 
 pub use ask::Failed;
-pub use view::{Offered, Row};
+pub use view::{ListedRows, Offered, Row};
 
 /// What the window needs to reach its daemon, decided once at startup.
 ///
@@ -163,13 +163,13 @@ fn reaching(app: &tauri::AppHandle) -> Reaching {
 /// The north star axis, as one call. Nothing here groups by provider: a provider is a badge on a row, not a
 /// tab, because a list that splits by provider is the thing every vendor's own app already does.
 #[tauri::command]
-async fn sessions(app: tauri::AppHandle) -> Answered<Vec<Row>> {
+async fn sessions(app: tauri::AppHandle) -> Answered<ListedRows> {
     let reaching = reaching(&app);
     let asked = ask::once(&reaching.address, &reaching.runtrol, Request::List).await;
     match asked {
         Err(failed) => Answered::broken(&failed),
-        Ok(Response::Sessions(lines)) => Answered::Ok {
-            value: lines.iter().map(Row::from).collect(),
+        Ok(Response::Sessions(listing)) => Answered::Ok {
+            value: ListedRows::from(&listing),
         },
         Ok(Response::Failed(error)) => Answered::refused(&error),
         Ok(other) => Answered::unreadable(&other),

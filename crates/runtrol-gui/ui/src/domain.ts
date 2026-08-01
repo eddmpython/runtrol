@@ -19,6 +19,11 @@ export type SessionRow = {
   looksStuck: boolean;
 };
 
+export type SessionListing = {
+  sessions: SessionRow[];
+  warnings: string[];
+};
+
 export type OfferedProvider = {
   id: string;
   displayName: string;
@@ -58,7 +63,7 @@ export type FrameEnvelope = {
 };
 
 export type Notice = {
-  kind: "refused" | "broken";
+  kind: "warning" | "refused" | "broken";
   message: string;
 };
 

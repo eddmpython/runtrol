@@ -53,6 +53,10 @@ pub enum ServeError {
     /// The endpoint could not be created or kept.
     #[error(transparent)]
     Transport(#[from] TransportError),
+
+    /// Minimal session metadata could not be persisted.
+    #[error(transparent)]
+    Store(#[from] runtrol_store::StoreError),
 }
 
 /// One request, from a connection that is waiting for the answer.
@@ -107,7 +111,16 @@ pub async fn serve(composed: Composed, mut listener: Listener) -> Result<(), Ser
             // Events reach whoever is watching through the session's own fan-out, so there is nothing to do with
             // what comes back. What this arm is for is that the reading happens at all.
             pumped = sessions.pump_any() => {
-                drop(pumped);
+                if let Some(published) = pumped.published {
+                    crate::dispatch::persist_live(&composed, &sessions, pumped.session)?;
+                    composed.store.put_cursor(
+                        pumped.session,
+                        runtrol_store::Cursor {
+                            src_end: published.event.src_end,
+                            seq: published.event.seq,
+                        },
+                    )?;
+                }
             }
         }
     }
@@ -317,7 +330,10 @@ mod tests {
         assert!(matches!(welcome, Response::Welcome { .. }), "{welcome:?}");
 
         match ask(&mut caller, &Request::List).await {
-            Response::Sessions(lines) => assert!(lines.is_empty(), "nothing has been started"),
+            Response::Sessions(listing) => {
+                assert!(listing.sessions.is_empty(), "nothing has been started");
+                assert!(listing.warnings.is_empty(), "a fresh store has no warnings");
+            }
             other => panic!("expected a listing, got {other:?}"),
         }
         running.stop();

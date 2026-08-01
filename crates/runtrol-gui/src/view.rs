@@ -11,8 +11,29 @@
 //! said travels straight from the provider to the surface as the provider wrote it, and never through a struct
 //! in this file.
 
-use runtrol_ipc::wire::SessionLine;
+use runtrol_ipc::wire::{SessionLine, SessionListing};
 use serde::Serialize;
+
+/// A session list plus any stored rows that could not be read.
+///
+/// Readable rows remain usable when one stored row is damaged, while the warning keeps that damage visible.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ListedRows {
+    /// Every readable session.
+    pub sessions: Vec<Row>,
+    /// Storage damage that did not prevent the other rows from being read.
+    pub warnings: Vec<String>,
+}
+
+impl From<&SessionListing> for ListedRows {
+    fn from(listing: &SessionListing) -> Self {
+        Self {
+            sessions: listing.sessions.iter().map(Row::from).collect(),
+            warnings: listing.warnings.iter().map(ToString::to_string).collect(),
+        }
+    }
+}
 
 /// One session, as a row on the screen.
 #[derive(Clone, Debug, Serialize)]

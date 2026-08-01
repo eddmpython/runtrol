@@ -1,8 +1,9 @@
-"""Gate: a session starts, is listed, is let go of, and is picked back up. Against the real CLIs.
+"""Gate: sessions start, survive a daemon restart, and are picked back up. Against the real CLIs.
 
 This is the north star axis `oneSessionList` as something a machine checks. Everything else about that axis
-is a claim until this runs: that a session appears where the operator looks, that the listing carries what a
-resume needs, and that resuming reaches the same conversation rather than a new one.
+is a claim until this runs: that a session appears where the operator looks, that a daemon restart leaves its
+minimal pointer intact, that the listing carries what a resume needs, and that resuming reaches the same
+conversation rather than a new one.
 
 Why it costs nothing to run
 ---------------------------
@@ -248,6 +249,31 @@ def isSessionId(text: str) -> bool:
     return re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", text) is not None
 
 
+def assertRestarted(
+    started: dict[str, str], names: dict[str, str | None], restarted: list[Listed]
+) -> None:
+    """Require every storable pointer, and only a storable pointer, to survive a daemon restart."""
+    for provider, session in started.items():
+        native = names[provider]
+        row = rowFor(restarted, session)
+        if native is None:
+            if row is not None:
+                raise Failed(
+                    f"{provider} had no provider conversation name before restart and came back as resumable"
+                )
+            continue
+        if row is None:
+            raise Failed(f"{provider} session {session} disappeared across the daemon restart")
+        if row.native != native:
+            raise Failed(
+                f"{provider} session {session} was {native} before restart and {row.native} after it"
+            )
+        if row.tier != "idle" or row.doing != "detached":
+            raise Failed(
+                f"{provider} session {session} came back as {row.tier}/{row.doing}, not idle/detached"
+            )
+
+
 def exercise(binary: Path, home: Path, workspace: Path, providers: list[str]) -> None:
     """Drive the whole lifecycle for every provider, and hold the surface to it.
 
@@ -273,21 +299,28 @@ def exercise(binary: Path, home: Path, workspace: Path, providers: list[str]) ->
             raise Failed(f"{session} was started on {provider} and the listing says {row.provider}")
     print(f"  one listing holds all {len(started)} of them")
 
+    names: dict[str, str | None] = {}
+    for provider, session in started.items():
+        names[provider] = nameOf(binary, home, session, provider)
+
+    # Stop the daemon and every child it contains, then let `list` start a fresh daemon over the same home. This is
+    # intentionally between discovery and resume: a memory-only list would now be empty, while a transcript copy
+    # would violate the product's thinness. The only acceptable survivor is the provider/native/workspace pointer.
+    run(binary, home, ["panic"])
+    restarted = parseListing(run(binary, home, ["list"]))
+    assertRestarted(started, names, restarted)
+    print("  named session pointers survived a full daemon restart and came back detached")
+
     unreached: list[str] = []
     for provider, session in started.items():
-        native = nameOf(binary, home, session, provider)
-
-        run(binary, home, ["close", session])
-        after = parseListing(run(binary, home, ["list"]))
-        if rowFor(after, session) is not None:
-            raise Failed(f"{provider} session {session} was closed and the listing still has it")
+        native = names[provider]
 
         if native is None:
             # This provider has no conversation until its first turn, so there is nothing to pick back up and
             # the listing said so. Recorded rather than passed over: the tempting "fix" is to print the
             # identifier runtrol issued, which would invite a resume of something that does not exist.
             unreached.append(provider)
-            print(f"  {provider}: started, listed, closed. names a conversation only once one exists")
+            print(f"  {provider}: started and listed. names a conversation only once one exists")
             continue
 
         ok, said = attempt(binary, home, ["resume", provider, native, str(workspace)])
@@ -306,7 +339,10 @@ def exercise(binary: Path, home: Path, workspace: Path, providers: list[str]) ->
                     f"{said!r}"
                 )
             unreached.append(provider)
-            print(f"  {provider}: started, listed, closed. refuses to continue a conversation with no turns")
+            run(binary, home, ["close", session])
+            print(
+                f"  {provider}: persisted across restart, then refused to continue a conversation with no turns"
+            )
             continue
 
         resumed = said
@@ -323,7 +359,7 @@ def exercise(binary: Path, home: Path, workspace: Path, providers: list[str]) ->
                 f"{provider} was asked to continue {native} and came back naming {back.native}, which is a "
                 f"different conversation"
             )
-        print(f"  {provider}: closed, resumed as {resumed}, still {native}")
+        print(f"  {provider}: survived restart, resumed as {resumed}, still {native}")
 
         run(binary, home, ["close", resumed])
 
@@ -382,9 +418,7 @@ def main(argv: list[str]) -> int:
 
     if absent:
         print(f"  not exercised (not installed): {', '.join(absent)}")
-    print(
-        f"[sessionLifecycleSmoke] OK. {len(present)} provider(s) started, listed together, and closed."
-    )
+    print(f"[sessionLifecycleSmoke] OK. {len(present)} provider(s) started and survived a daemon restart.")
     return 0
 
 
@@ -434,12 +468,44 @@ def selftest() -> int:
     if isSessionId("done") or not isSessionId("019fb610-7a0f-7ea2-91d1-f459220692cb"):
         problems.append("a session identifier is not told apart from any other word")
 
+    session = "019fb610-7a0f-7ea2-91d1-f459220692cb"
+    started = {"driver": session}
+    restart_defects = [
+        ("a named session disappeared across restart", {"driver": "thread_abc"}, []),
+        (
+            "a different native conversation came back",
+            {"driver": "thread_abc"},
+            parseListing(f"{session}  driver  idle  detached  thread_other"),
+        ),
+        (
+            "a restarted session claimed to be running",
+            {"driver": "thread_abc"},
+            parseListing(f"{session}  driver  running  idle  thread_abc"),
+        ),
+        (
+            "an unnamed session came back as resumable",
+            {"driver": None},
+            parseListing(f"{session}  driver  idle  detached  thread_invented"),
+        ),
+    ]
+    for what, names, restarted in restart_defects:
+        caught = False
+        try:
+            assertRestarted(started, names, restarted)
+        except Failed:
+            caught = True
+        if not caught:
+            problems.append(f"{what} was accepted")
+
     if problems:
         print("[sessionLifecycleSmoke --selftest] the gate cannot catch what it claims to.", file=sys.stderr)
         for problem in problems:
             print(f"  - {problem}", file=sys.stderr)
         return 2
-    print(f"[sessionLifecycleSmoke --selftest] OK. {len(cases) + 4} injected defects all caught.")
+    print(
+        f"[sessionLifecycleSmoke --selftest] OK. "
+        f"{len(cases) + len(restart_defects) + 4} injected defects all caught."
+    )
     return 0
 
 

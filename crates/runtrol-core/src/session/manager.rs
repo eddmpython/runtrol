@@ -459,6 +459,20 @@ impl SessionManager {
             state: &live.state,
         })
     }
+
+    /// One live session by its runtrol identifier.
+    #[must_use]
+    pub fn live_session(&self, session: SessionId) -> Option<LiveSession<'_>> {
+        let live = self.live.get(&session)?;
+        Some(LiveSession {
+            session,
+            provider: live.identity.provider(),
+            native: live.identity.native().map(AsRef::as_ref),
+            workspace: &live.workspace,
+            tier: Tier::Hot,
+            state: &live.state,
+        })
+    }
 }
 
 impl Default for SessionManager {
