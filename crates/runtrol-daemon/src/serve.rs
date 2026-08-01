@@ -16,8 +16,8 @@
 //!
 //! The owner task holds the sessions while it answers, so a provider process wait there would stop every session's
 //! output. Probes, model discovery, process open, and process cleanup therefore run in connection tasks. The owner
-//! only reserves or commits a process slot and performs the bounded command writes that require mutable access to a
-//! live agent. [`Reply::Stopping`] and [`Reply::Cleaning`] hand every cleanup wait back out.
+//! only reserves or commits a process slot and synchronously hands an agent to its connection for a command write.
+//! [`Reply::Sending`], [`Reply::Stopping`] and [`Reply::Cleaning`] hand every provider wait back out.
 //!
 //! An operator watching one session while closing another is the case this is for, and it is what the tests here
 //! check: a slow close does not stop a running session's events.
@@ -33,17 +33,20 @@
 
 use std::sync::Arc;
 
-use runtrol_core::{OpenReservation, ReservedOpen, SessionError, SessionManager};
+use runtrol_core::{
+    AgentLease, ClosingReservation, OpenReservation, ReservedOpen, SessionError, SessionManager,
+    TakenAgent,
+};
 use runtrol_ipc::transport::{Connection, Listener, TransportError};
 use runtrol_ipc::wire::{Request, Response};
-use runtrol_provider::{CloseMode, Opaque, SessionId};
+use runtrol_provider::{AgentCommand, CloseMode, Opaque, ProviderError, SessionId};
 use tokio::sync::{Mutex, mpsc, oneshot};
 use tokio::task::JoinSet;
 
 use crate::compose::Composed;
 use crate::dispatch::{
-    Cleanup, Conversation, Discovered, Prepared, Reply, answer_prepared, complete_prepare_for,
-    discover, needs_driver, refuse,
+    Cleanup, CleanupReservation, Conversation, Discovered, Prepared, Reply, answer_prepared,
+    complete_prepare_for, discover, needs_driver, refuse,
 };
 
 /// How many answered requests may be waiting to reach the one task that answers them.
@@ -90,25 +93,35 @@ enum ReservationAsked {
         session: SessionId,
         answered: oneshot::Sender<Result<ReservedOpen, SessionError>>,
     },
-    Cancel(OpenReservation),
+    CancelOpen(OpenReservation),
+    ReleaseClosing(ClosingReservation),
 }
 
 /// Cancels a pending slot if connection preparation is abandoned.
 struct ReservationGuard {
-    reservation: Option<OpenReservation>,
+    reservation: Option<CleanupReservation>,
     cancelling: mpsc::UnboundedSender<ReservationAsked>,
 }
 
 impl ReservationGuard {
     fn take(mut self) -> Option<OpenReservation> {
-        self.reservation.take()
+        match self.reservation.take() {
+            Some(CleanupReservation::Open(reservation)) => Some(reservation),
+            Some(CleanupReservation::Closing(_)) | None => None,
+        }
     }
 }
 
 impl Drop for ReservationGuard {
     fn drop(&mut self) {
         if let Some(reservation) = self.reservation.take() {
-            drop(self.cancelling.send(ReservationAsked::Cancel(reservation)));
+            let message = match reservation {
+                CleanupReservation::Open(reservation) => ReservationAsked::CancelOpen(reservation),
+                CleanupReservation::Closing(reservation) => {
+                    ReservationAsked::ReleaseClosing(reservation)
+                }
+            };
+            drop(self.cancelling.send(message));
         }
     }
 }
@@ -119,6 +132,35 @@ struct Answered {
     conversation: Conversation,
     /// What to do about the request.
     reply: Reply,
+}
+
+enum AgentReturned {
+    Finished {
+        lease: AgentLease,
+        agent: Box<dyn runtrol_provider::Agent>,
+        outcome: Result<(), ProviderError>,
+        answered: oneshot::Sender<Response>,
+    },
+    Abandoned(AgentLease),
+}
+
+struct AgentGuard {
+    lease: Option<AgentLease>,
+    returning: mpsc::UnboundedSender<AgentReturned>,
+}
+
+impl AgentGuard {
+    fn take(mut self) -> Option<AgentLease> {
+        self.lease.take()
+    }
+}
+
+impl Drop for AgentGuard {
+    fn drop(&mut self) {
+        if let Some(lease) = self.lease.take() {
+            drop(self.returning.send(AgentReturned::Abandoned(lease)));
+        }
+    }
 }
 
 /// Serve until the endpoint fails.
@@ -132,6 +174,7 @@ pub async fn serve(composed: Composed, mut listener: Listener) -> Result<(), Ser
     let mut sessions = SessionManager::new();
     let (asking, mut asked) = mpsc::channel::<Asked>(ASKED_QUEUE);
     let (reserving, mut reservations) = mpsc::unbounded_channel::<ReservationAsked>();
+    let (returning, mut returned) = mpsc::unbounded_channel::<AgentReturned>();
     // ProbeCache replaces one file atomically but is deliberately not a database. Serializing discovery keeps two
     // connections from publishing stale snapshots over each other while leaving unrelated requests and event pumping
     // completely independent of a cold probe.
@@ -150,6 +193,7 @@ pub async fn serve(composed: Composed, mut listener: Listener) -> Result<(), Ser
                     connection,
                     asking.clone(),
                     reserving.clone(),
+                    returning.clone(),
                     Arc::clone(&composed),
                     Arc::clone(&discovering),
                 ));
@@ -166,7 +210,8 @@ pub async fn serve(composed: Composed, mut listener: Listener) -> Result<(), Ser
                         );
                     }
                 }
-                ReservationAsked::Cancel(reservation) => sessions.cancel_open(reservation),
+                ReservationAsked::CancelOpen(reservation) => sessions.cancel_open(reservation),
+                ReservationAsked::ReleaseClosing(reservation) => sessions.release_closing(reservation),
             },
 
             Some(ask) = asked.recv() => {
@@ -179,7 +224,7 @@ pub async fn serve(composed: Composed, mut listener: Listener) -> Result<(), Ser
                     request,
                     prepared,
                     reservation,
-                ).await;
+                );
                 // The connection stopped while its request was being answered. Nothing to report and nowhere to
                 // report it: the caller is gone, and the sessions already record everything the request did.
                 deliver_answer(
@@ -187,8 +232,26 @@ pub async fn serve(composed: Composed, mut listener: Listener) -> Result<(), Ser
                     Answered { conversation, reply },
                     &mut connections,
                     &reserving,
+                    &mut sessions,
                 );
             }
+
+            Some(returned_agent) = returned.recv() => match returned_agent {
+                AgentReturned::Finished { lease, agent, outcome, answered } => {
+                    let response = match sessions.return_agent(lease, agent) {
+                        Ok(()) => match outcome {
+                            Ok(()) => Response::Done,
+                            Err(error) => Response::Failed(runtrol_ipc::wire::WireError::from_provider(&error)),
+                        },
+                        Err(agent) => {
+                            drop(agent);
+                            refuse("the session no longer accepts its completed provider command")
+                        }
+                    };
+                    drop(answered.send(response));
+                }
+                AgentReturned::Abandoned(lease) => sessions.abandon_agent(lease),
+            },
 
             // Events reach whoever is watching through the session's own fan-out, so there is nothing to do with
             // what comes back. What this arm is for is that the reading happens at all.
@@ -236,7 +299,7 @@ fn abandon_reserved(
     let cancelling = cancelling.clone();
     tasks.spawn(async move {
         let releasing = ReservationGuard {
-            reservation: Some(reservation),
+            reservation: Some(CleanupReservation::Open(reservation)),
             cancelling,
         };
         drop(displaced.close(CloseMode::Graceful { grace_ms: 0 }).await);
@@ -250,15 +313,17 @@ fn deliver_answer(
     answer: Answered,
     tasks: &mut JoinSet<()>,
     cancelling: &mpsc::UnboundedSender<ReservationAsked>,
+    sessions: &mut SessionManager,
 ) {
     if let Err(abandoned) = answered.send(answer) {
-        abandon_reply(tasks, cancelling, abandoned.reply);
+        abandon_reply(tasks, cancelling, sessions, abandoned.reply);
     }
 }
 
 fn abandon_reply(
     tasks: &mut JoinSet<()>,
     cancelling: &mpsc::UnboundedSender<ReservationAsked>,
+    sessions: &mut SessionManager,
     reply: Reply,
 ) {
     match reply {
@@ -266,7 +331,13 @@ fn abandon_reply(
             agent,
             how,
             reservation,
-        } => spawn_abandoned_cleanup(tasks, cancelling, agent, how, Some(reservation)),
+        } => spawn_abandoned_cleanup(
+            tasks,
+            cancelling,
+            agent,
+            how,
+            Some(CleanupReservation::Closing(reservation)),
+        ),
         Reply::Cleaning { agents, .. } => {
             for Cleanup {
                 agent,
@@ -277,6 +348,11 @@ fn abandon_reply(
                 spawn_abandoned_cleanup(tasks, cancelling, agent, how, reservation);
             }
         }
+        Reply::Sending { taken, .. } => {
+            let TakenAgent { agent, lease } = taken;
+            drop(agent);
+            sessions.abandon_agent(lease);
+        }
         Reply::One(_) | Reply::Watching(_) => {}
     }
 }
@@ -286,7 +362,7 @@ fn spawn_abandoned_cleanup(
     cancelling: &mpsc::UnboundedSender<ReservationAsked>,
     agent: Box<dyn runtrol_provider::Agent>,
     how: CloseMode,
-    reservation: Option<OpenReservation>,
+    reservation: Option<CleanupReservation>,
 ) {
     let cancelling = cancelling.clone();
     tasks.spawn(async move {
@@ -311,6 +387,7 @@ async fn converse(
     mut connection: Connection,
     asking: mpsc::Sender<Asked>,
     reserving: mpsc::UnboundedSender<ReservationAsked>,
+    returning: mpsc::UnboundedSender<AgentReturned>,
     composed: Arc<Composed>,
     discovering: Arc<Mutex<()>>,
 ) {
@@ -379,7 +456,7 @@ async fn converse(
                 displaced,
             } = reserved;
             let guard = ReservationGuard {
-                reservation: Some(reservation),
+                reservation: Some(CleanupReservation::Open(reservation)),
                 cancelling: reserving.clone(),
             };
             if let Some(displaced) = displaced {
@@ -401,8 +478,8 @@ async fn converse(
             discovered,
             reservation
                 .as_ref()
-                .and_then(|guard| guard.reservation)
-                .map(OpenReservation::session),
+                .and_then(|guard| guard.reservation.as_ref())
+                .map(CleanupReservation::session),
         )
         .await;
         let (answered, hearing) = oneshot::channel();
@@ -452,7 +529,7 @@ async fn converse(
                 reservation,
             } => {
                 let releasing = ReservationGuard {
-                    reservation: Some(reservation),
+                    reservation: Some(CleanupReservation::Closing(reservation)),
                     cancelling: reserving.clone(),
                 };
                 let outcome = match agent.close(how).await {
@@ -471,7 +548,58 @@ async fn converse(
                     return;
                 }
             }
+
+            Reply::Sending { taken, command } => {
+                let Some(response) = perform_agent_command(taken, command, returning.clone()).await
+                else {
+                    return;
+                };
+                if write(&mut connection, &response).await.is_err() {
+                    return;
+                }
+            }
         }
+    }
+}
+
+/// Perform one provider command outside the session owner, then offer the agent back to it.
+#[expect(
+    clippy::manual_ok_err,
+    reason = "the equivalent Result::ok is forbidden because channel loss must stay visible here"
+)]
+async fn perform_agent_command(
+    taken: TakenAgent,
+    command: AgentCommand,
+    returning: mpsc::UnboundedSender<AgentReturned>,
+) -> Option<Response> {
+    let TakenAgent {
+        agent: handed_agent,
+        lease,
+    } = taken;
+    let guard = AgentGuard {
+        lease: Some(lease),
+        returning: returning.clone(),
+    };
+    // Declared after the guard so cancellation or panic drops the process owner before the guard tells the session
+    // owner that its bounded slot may be released. Rust drops locals in reverse declaration order.
+    let mut agent = handed_agent;
+    let outcome = agent.send(command).await;
+    let lease = guard.take()?;
+    let (answered, hearing) = oneshot::channel();
+    if returning
+        .send(AgentReturned::Finished {
+            lease,
+            agent,
+            outcome,
+            answered,
+        })
+        .is_err()
+    {
+        return None;
+    }
+    match hearing.await {
+        Ok(response) => Some(response),
+        Err(_owner_stopped) => None,
     }
 }
 
@@ -566,6 +694,105 @@ mod tests {
         started: oneshot::Sender<()>,
         release: oneshot::Receiver<()>,
         panic_after_release: bool,
+    }
+
+    struct PendingSend {
+        session: SessionId,
+        started: Option<oneshot::Sender<()>>,
+        release: Option<oneshot::Receiver<()>>,
+        panic_after_start: bool,
+    }
+
+    #[async_trait]
+    impl Agent for PendingSend {
+        fn session(&self) -> SessionId {
+            self.session
+        }
+
+        fn native(&self) -> Option<&str> {
+            None
+        }
+
+        async fn send(&mut self, _command: AgentCommand) -> Result<(), ProviderError> {
+            if let Some(started) = self.started.take() {
+                let _started = started.send(());
+            }
+            assert!(!self.panic_after_start, "scripted provider command panic");
+            if let Some(release) = self.release.take() {
+                drop(release.await);
+            }
+            Ok(())
+        }
+
+        async fn next(&mut self) -> Option<Result<Produced, ProviderError>> {
+            core::future::pending().await
+        }
+
+        async fn close(self: Box<Self>, _how: CloseMode) -> Result<(), ProviderError> {
+            Ok(())
+        }
+    }
+
+    struct ReadyEvent {
+        session: SessionId,
+        ready: bool,
+    }
+
+    #[async_trait]
+    impl Agent for ReadyEvent {
+        fn session(&self) -> SessionId {
+            self.session
+        }
+
+        fn native(&self) -> Option<&str> {
+            None
+        }
+
+        async fn send(&mut self, _command: AgentCommand) -> Result<(), ProviderError> {
+            Ok(())
+        }
+
+        async fn next(&mut self) -> Option<Result<Produced, ProviderError>> {
+            if self.ready {
+                self.ready = false;
+                Some(Ok(Produced {
+                    src_end: 1,
+                    body: runtrol_provider::EventBody::Plan {
+                        payload: Opaque::none(),
+                    },
+                }))
+            } else {
+                core::future::pending().await
+            }
+        }
+
+        async fn close(self: Box<Self>, _how: CloseMode) -> Result<(), ProviderError> {
+            Ok(())
+        }
+    }
+
+    fn attach_test_agent(sessions: &mut SessionManager, session: SessionId, agent: Box<dyn Agent>) {
+        let reserved = sessions.reserve_open(session).expect("one process slot");
+        let intent = runtrol_provider::OpenIntent {
+            session,
+            workspace: runtrol_provider::AbsPath::new(if cfg!(windows) {
+                r"C:\work"
+            } else {
+                "/work"
+            })
+            .expect("valid test path"),
+            disposition: runtrol_provider::Disposition::Fresh,
+            model: None,
+            permission: None,
+        };
+        sessions
+            .attach_opened(
+                reserved.reservation,
+                runtrol_provider::ProviderId::parse("test").expect("valid provider"),
+                &intent,
+                agent,
+            )
+            .expect("the test process attaches");
     }
 
     #[async_trait]
@@ -789,6 +1016,171 @@ mod tests {
         running.stop();
     }
 
+    #[tokio::test]
+    async fn a_pending_provider_write_does_not_block_another_event_or_owner_request() {
+        let mut sessions = SessionManager::new();
+        let command_session = SessionId::now();
+        let event_session = SessionId::now();
+        let (started, starting) = oneshot::channel();
+        let (release, releasing) = oneshot::channel();
+        attach_test_agent(
+            &mut sessions,
+            command_session,
+            Box::new(PendingSend {
+                session: command_session,
+                started: Some(started),
+                release: Some(releasing),
+                panic_after_start: false,
+            }),
+        );
+        attach_test_agent(
+            &mut sessions,
+            event_session,
+            Box::new(ReadyEvent {
+                session: event_session,
+                ready: true,
+            }),
+        );
+
+        let taken = sessions
+            .take_agent(command_session)
+            .expect("the command is handed to its connection");
+        let (returning, mut returned) = mpsc::unbounded_channel();
+        let command = tokio::spawn(perform_agent_command(
+            taken,
+            AgentCommand::Interrupt,
+            returning,
+        ));
+        tokio::time::timeout(core::time::Duration::from_secs(2), starting)
+            .await
+            .expect("provider command start did not time out")
+            .expect("provider command started");
+
+        assert!(matches!(
+            sessions.take_agent(command_session),
+            Err(SessionError::AgentInFlight { session }) if session == command_session
+        ));
+        let pumped = tokio::time::timeout(
+            core::time::Duration::from_secs(2),
+            sessions.pump_once(event_session),
+        )
+        .await
+        .expect("another event pump did not time out")
+        .expect("the other session remains live");
+        assert!(pumped.is_some(), "the other session's event was published");
+
+        let mut reservations = Vec::new();
+        for _ in 0..runtrol_core::session::MAX_HOT - 2 {
+            reservations.push(
+                sessions
+                    .reserve_open(SessionId::now())
+                    .expect("an unrelated owner request progresses"),
+            );
+        }
+        assert!(matches!(
+            sessions.reserve_open(SessionId::now()),
+            Err(SessionError::OpeningCapacityReserved)
+        ));
+
+        release.send(()).expect("the provider command may finish");
+        let returned_agent =
+            tokio::time::timeout(core::time::Duration::from_secs(2), returned.recv())
+                .await
+                .expect("provider return did not time out")
+                .expect("the provider returned its agent");
+        let AgentReturned::Finished {
+            lease,
+            agent,
+            outcome,
+            answered,
+        } = returned_agent
+        else {
+            panic!("a completed provider command was expected");
+        };
+        assert!(outcome.is_ok());
+        assert!(
+            sessions.return_agent(lease, agent).is_ok(),
+            "the owner restores the exact agent"
+        );
+        answered
+            .send(Response::Done)
+            .expect("the worker is waiting");
+        assert!(matches!(
+            tokio::time::timeout(core::time::Duration::from_secs(2), command)
+                .await
+                .expect("command completion did not time out")
+                .expect("command task completed"),
+            Some(Response::Done)
+        ));
+
+        for reserved in reservations {
+            sessions.cancel_open(reserved.reservation);
+        }
+    }
+
+    #[tokio::test]
+    async fn a_cancelled_or_panicking_provider_command_never_reattaches_its_agent() {
+        for panic_after_start in [false, true] {
+            let mut sessions = SessionManager::new();
+            let session = SessionId::now();
+            let (started, starting) = oneshot::channel();
+            let (_release, releasing) = oneshot::channel();
+            attach_test_agent(
+                &mut sessions,
+                session,
+                Box::new(PendingSend {
+                    session,
+                    started: Some(started),
+                    release: Some(releasing),
+                    panic_after_start,
+                }),
+            );
+            let taken = sessions
+                .take_agent(session)
+                .expect("the agent is handed out");
+            let (returning, mut returned) = mpsc::unbounded_channel();
+            let command = tokio::spawn(perform_agent_command(
+                taken,
+                AgentCommand::Interrupt,
+                returning,
+            ));
+            tokio::time::timeout(core::time::Duration::from_secs(2), starting)
+                .await
+                .expect("provider command start did not time out")
+                .expect("provider command started");
+            let joined = if panic_after_start {
+                tokio::time::timeout(core::time::Duration::from_secs(2), command)
+                    .await
+                    .expect("panicking command join did not time out")
+            } else {
+                command.abort();
+                tokio::time::timeout(core::time::Duration::from_secs(2), command)
+                    .await
+                    .expect("cancelled command join did not time out")
+            };
+            if panic_after_start {
+                assert!(joined.expect_err("the command panics").is_panic());
+            } else {
+                assert!(joined.expect_err("the command is cancelled").is_cancelled());
+            }
+
+            let abandoned =
+                tokio::time::timeout(core::time::Duration::from_secs(2), returned.recv())
+                    .await
+                    .expect("abandoned handoff did not time out")
+                    .expect("the guard reports its abandoned lease");
+            let AgentReturned::Abandoned(lease) = abandoned else {
+                panic!("an abandoned provider command was expected");
+            };
+            sessions.abandon_agent(lease);
+            assert!(!sessions.is_live(session));
+            assert!(
+                sessions.reserve_open(SessionId::now()).is_ok(),
+                "cleanup returns the process slot"
+            );
+        }
+    }
+
     #[test]
     fn abandoning_connection_preparation_requests_reservation_cancellation() {
         let mut sessions = SessionManager::new();
@@ -797,11 +1189,11 @@ mod tests {
             .expect("one bounded slot");
         let (cancelling, mut cancelled) = mpsc::unbounded_channel();
         drop(ReservationGuard {
-            reservation: Some(reserved.reservation),
+            reservation: Some(CleanupReservation::Open(reserved.reservation)),
             cancelling,
         });
 
-        let ReservationAsked::Cancel(reservation) = cancelled
+        let ReservationAsked::CancelOpen(reservation) = cancelled
             .try_recv()
             .expect("dropping preparation reports its reservation")
         else {
@@ -842,20 +1234,26 @@ mod tests {
         let mut tasks = JoinSet::new();
 
         abandon_reserved(&mut sessions, &mut tasks, &cancelling, abandoned);
-        closing.await.expect("cleanup started");
+        tokio::time::timeout(core::time::Duration::from_secs(2), closing)
+            .await
+            .expect("cleanup start did not time out")
+            .expect("cleanup started");
         assert!(matches!(
             sessions.reserve_open(SessionId::now()),
             Err(SessionError::OpeningCapacityReserved)
         ));
 
         release.send(()).expect("cleanup may finish");
-        tasks
-            .join_next()
+        tokio::time::timeout(core::time::Duration::from_secs(2), tasks.join_next())
             .await
+            .expect("cleanup task join did not time out")
             .expect("cleanup task joined")
             .expect("cleanup task completed");
-        let ReservationAsked::Cancel(reservation) =
-            cancelled.recv().await.expect("cleanup releases its slot")
+        let ReservationAsked::CancelOpen(reservation) =
+            tokio::time::timeout(core::time::Duration::from_secs(2), cancelled.recv())
+                .await
+                .expect("slot release did not time out")
+                .expect("cleanup releases its slot")
         else {
             panic!("a cancellation message was expected");
         };
@@ -863,8 +1261,13 @@ mod tests {
         assert!(sessions.reserve_open(SessionId::now()).is_ok());
     }
 
+    enum DroppedCleanup {
+        Stopping,
+        Cleaning,
+    }
+
     async fn dropped_answer_holds_slot_until_cleanup(
-        make_reply: impl FnOnce(Box<dyn Agent>, OpenReservation) -> Reply,
+        kind: DroppedCleanup,
         panic_after_release: bool,
     ) {
         let mut sessions = SessionManager::new();
@@ -885,78 +1288,102 @@ mod tests {
             release: released,
             panic_after_release,
         });
+        let reply = match kind {
+            DroppedCleanup::Stopping => {
+                let intent = runtrol_provider::OpenIntent {
+                    session: reserved.session(),
+                    workspace: runtrol_provider::AbsPath::new(if cfg!(windows) {
+                        r"C:\work"
+                    } else {
+                        "/work"
+                    })
+                    .expect("valid test path"),
+                    disposition: runtrol_provider::Disposition::Fresh,
+                    model: None,
+                    permission: None,
+                };
+                sessions
+                    .attach_opened(
+                        reserved,
+                        runtrol_provider::ProviderId::parse("test").expect("valid provider"),
+                        &intent,
+                        agent,
+                    )
+                    .expect("the cleanup fixture attaches");
+                let closing = sessions
+                    .close(intent.session)
+                    .expect("the cleanup fixture starts closing");
+                Reply::Stopping {
+                    agent: closing.agent,
+                    how: CloseMode::Kill,
+                    reservation: closing.reservation,
+                }
+            }
+            DroppedCleanup::Cleaning => Reply::Cleaning {
+                response: Response::Done,
+                agents: vec![Cleanup {
+                    agent,
+                    how: CloseMode::Kill,
+                    reservation: Some(CleanupReservation::Open(reserved)),
+                }],
+            },
+        };
         let answer = Answered {
             conversation: Conversation::at_the_machine(),
-            reply: make_reply(agent, reserved),
+            reply,
         };
         let (answered, hearing) = oneshot::channel();
         drop(hearing);
         let (cancelling, mut cancelled) = mpsc::unbounded_channel();
         let mut tasks = JoinSet::new();
 
-        deliver_answer(answered, answer, &mut tasks, &cancelling);
-        closing.await.expect("abandoned reply cleanup started");
+        deliver_answer(answered, answer, &mut tasks, &cancelling, &mut sessions);
+        tokio::time::timeout(core::time::Duration::from_secs(2), closing)
+            .await
+            .expect("abandoned cleanup start did not time out")
+            .expect("abandoned reply cleanup started");
         assert!(matches!(
             sessions.reserve_open(SessionId::now()),
             Err(SessionError::OpeningCapacityReserved)
         ));
 
         release.send(()).expect("cleanup may finish");
-        let joined = tasks.join_next().await.expect("cleanup task joined");
+        let joined = tokio::time::timeout(core::time::Duration::from_secs(2), tasks.join_next())
+            .await
+            .expect("cleanup task join did not time out")
+            .expect("cleanup task joined");
         if panic_after_release {
             assert!(joined.is_err(), "the scripted cleanup had to panic");
         } else {
             joined.expect("cleanup task completed");
         }
-        let ReservationAsked::Cancel(reservation) =
-            cancelled.recv().await.expect("cleanup releases its slot")
-        else {
-            panic!("a cancellation message was expected");
-        };
-        sessions.cancel_open(reservation);
+        let released = tokio::time::timeout(core::time::Duration::from_secs(2), cancelled.recv())
+            .await
+            .expect("cleanup slot release did not time out")
+            .expect("cleanup releases its slot");
+        match released {
+            ReservationAsked::CancelOpen(reservation) => sessions.cancel_open(reservation),
+            ReservationAsked::ReleaseClosing(reservation) => {
+                sessions.release_closing(reservation);
+            }
+            ReservationAsked::Reserve { .. } => panic!("a slot release was expected"),
+        }
         assert!(sessions.reserve_open(SessionId::now()).is_ok());
     }
 
     #[tokio::test]
     async fn a_dropped_stopping_answer_keeps_its_slot_until_cleanup() {
-        dropped_answer_holds_slot_until_cleanup(
-            |agent, reservation| Reply::Stopping {
-                agent,
-                how: CloseMode::Kill,
-                reservation,
-            },
-            false,
-        )
-        .await;
+        dropped_answer_holds_slot_until_cleanup(DroppedCleanup::Stopping, false).await;
     }
 
     #[tokio::test]
     async fn a_dropped_cleaning_answer_keeps_its_slot_until_cleanup() {
-        dropped_answer_holds_slot_until_cleanup(
-            |agent, reservation| Reply::Cleaning {
-                response: Response::Done,
-                agents: vec![Cleanup {
-                    agent,
-                    how: CloseMode::Kill,
-                    reservation: Some(reservation),
-                }],
-            },
-            false,
-        )
-        .await;
+        dropped_answer_holds_slot_until_cleanup(DroppedCleanup::Cleaning, false).await;
     }
 
     #[tokio::test]
     async fn a_panicking_abandoned_cleanup_still_releases_its_slot() {
-        dropped_answer_holds_slot_until_cleanup(
-            |agent, reservation| Reply::Stopping {
-                agent,
-                how: CloseMode::Kill,
-                reservation,
-            },
-            true,
-        )
-        .await;
+        dropped_answer_holds_slot_until_cleanup(DroppedCleanup::Stopping, true).await;
     }
 
     #[test]

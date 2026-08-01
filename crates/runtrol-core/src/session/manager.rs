@@ -35,7 +35,7 @@
 use core::ops::Bound;
 use core::pin::pin;
 use core::task::Poll;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use runtrol_provider::{
     AbsPath, Agent, AgentCommand, ApprovalId, CloseMode, Disposition, EventBody, Level, Notice,
@@ -86,6 +86,21 @@ pub enum SessionError {
         /// The session whose reservation was missing.
         session: SessionId,
     },
+
+    /// The session's agent is temporarily owned by an in-flight provider command.
+    #[error("session {session} is carrying out another provider command")]
+    AgentInFlight {
+        /// The session whose agent is in flight.
+        session: SessionId,
+    },
+
+    /// No new opaque slot generation can be minted without reusing an old one.
+    #[error("process-slot reservation generation is exhausted")]
+    ReservationGenerationExhausted,
+
+    /// No new agent handoff generation can be minted without reusing an old one.
+    #[error("agent handoff generation is exhausted")]
+    AgentLeaseGenerationExhausted,
 
     /// Every session with a process is busy, so starting another would have to interrupt one.
     #[error(transparent)]
@@ -149,7 +164,7 @@ pub enum SessionError {
 /// One live session: its driver, its event hub, its names, and what it is doing.
 struct Live {
     /// The driver.
-    agent: Box<dyn Agent>,
+    agent: Option<Box<dyn Agent>>,
     /// Where its events are numbered and fanned out.
     hub: SessionHub,
     /// Its two names.
@@ -180,17 +195,45 @@ pub struct AttachedSession {
 }
 
 /// A reserved process slot, consumed when its opened process is attached.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct OpenReservation {
     session: SessionId,
+    generation: u64,
+}
+
+/// Opaque proof that a closing process still occupies its bounded slot.
+#[derive(Debug, PartialEq, Eq)]
+pub struct ClosingReservation {
+    session: SessionId,
+    generation: u64,
+}
+
+impl ClosingReservation {
+    /// Which session still owns the slot.
+    #[must_use]
+    pub const fn session(&self) -> SessionId {
+        self.session
+    }
 }
 
 impl OpenReservation {
     /// Which session owns the slot.
     #[must_use]
-    pub const fn session(self) -> SessionId {
+    pub const fn session(&self) -> SessionId {
         self.session
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ReservationState {
+    Opening,
+    Closing,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct HeldReservation {
+    generation: u64,
+    state: ReservationState,
 }
 
 /// The result of reserving a process slot.
@@ -206,7 +249,22 @@ pub struct ClosingSession {
     /// The process to stop outside the session owner.
     pub agent: Box<dyn Agent>,
     /// The slot to release only after the process has stopped.
-    pub reservation: OpenReservation,
+    pub reservation: ClosingReservation,
+}
+
+/// Opaque ownership proof for an agent temporarily moved out for provider I/O.
+#[derive(Debug, PartialEq, Eq)]
+pub struct AgentLease {
+    session: SessionId,
+    generation: u64,
+}
+
+/// An agent and the proof required to return it to its live session.
+pub struct TakenAgent {
+    /// The provider agent to use outside the session owner.
+    pub agent: Box<dyn Agent>,
+    /// The opaque proof used to restore or abandon it.
+    pub lease: AgentLease,
 }
 
 /// A process that could not be admitted, together with the refusal.
@@ -240,7 +298,13 @@ pub struct SessionManager {
     /// The live ones, ordered by name so a listing is stable.
     live: BTreeMap<SessionId, Live>,
     /// Slots promised to connection tasks that have not attached their process yet.
-    opening: BTreeSet<SessionId>,
+    opening: BTreeMap<SessionId, HeldReservation>,
+    /// Generation for the next opaque process-slot reservation.
+    next_reservation: u64,
+    /// Generation for the next temporary agent handoff.
+    next_agent_lease: u64,
+    /// Agents temporarily moved out for provider I/O.
+    in_flight: BTreeMap<SessionId, u64>,
     /// Which session spoke last, so the next round of listening starts past it.
     ///
     /// Kept as a name rather than a position: a position would move under a session that ended, and this is asked
@@ -268,9 +332,21 @@ impl SessionManager {
     pub const fn new() -> Self {
         Self {
             live: BTreeMap::new(),
-            opening: BTreeSet::new(),
+            opening: BTreeMap::new(),
+            next_reservation: 0,
+            next_agent_lease: 0,
+            in_flight: BTreeMap::new(),
             after: None,
         }
+    }
+
+    /// Force the next process-slot generation allocation to fail in integration tests.
+    ///
+    /// This fault-injection seam is not compiled unless the internal `test-support` feature is enabled.
+    #[cfg(feature = "test-support")]
+    #[doc(hidden)]
+    pub fn exhaust_reservation_generations_for_tests(&mut self) {
+        self.next_reservation = u64::MAX;
     }
 
     /// How many sessions have a process.
@@ -330,21 +406,29 @@ impl SessionManager {
         provider: &dyn Provider,
         intent: OpenIntent,
     ) -> Result<SessionId, SessionError> {
-        let reserved = self.reserve_open(intent.session)?;
+        let ReservedOpen {
+            reservation,
+            displaced,
+        } = self.reserve_open(intent.session)?;
         let mut opening = OpeningGuard {
             manager: self,
-            reservation: Some(reserved.reservation),
+            reservation: Some(reservation),
         };
-        if let Some(displaced) = reserved.displaced {
+        if let Some(displaced) = displaced {
             drop(displaced.close(CloseMode::Graceful { grace_ms: 0 }).await);
         }
         let agent = match provider.open(intent.clone()).await {
             Ok(agent) => agent,
             Err(error) => return Err(error.into()),
         };
+        let Some(reservation) = opening.reservation.take() else {
+            return Err(SessionError::OpenNotReserved {
+                session: intent.session,
+            });
+        };
         match opening
             .manager
-            .attach_opened(reserved.reservation, provider.id(), &intent, agent)
+            .attach_opened(reservation, provider.id(), &intent, agent)
         {
             Ok(attached) => {
                 opening.reservation = None;
@@ -370,9 +454,14 @@ impl SessionManager {
     /// Refuses a duplicate session identifier, a tier containing only busy sessions, or capacity already promised to
     /// other opening requests.
     pub fn reserve_open(&mut self, session: SessionId) -> Result<ReservedOpen, SessionError> {
-        if self.live.contains_key(&session) || self.opening.contains(&session) {
+        if self.live.contains_key(&session) || self.opening.contains_key(&session) {
             return Err(SessionError::AlreadyLive { session });
         }
+        let generation = self.allocate_reservation_generation()?;
+        let reservation = OpenReservation {
+            session,
+            generation,
+        };
 
         let occupied = self.live.len() + self.opening.len();
         let displaced = if occupied < MAX_HOT {
@@ -383,20 +472,40 @@ impl SessionManager {
             match self.admit()? {
                 Admit::Straight => None,
                 Admit::Evicting { session: victim } => {
-                    self.live.remove(&victim).map(|live| live.agent)
+                    self.live.remove(&victim).and_then(|live| live.agent)
                 }
             }
         };
-        self.opening.insert(session);
+        self.opening.insert(
+            session,
+            HeldReservation {
+                generation,
+                state: ReservationState::Opening,
+            },
+        );
         Ok(ReservedOpen {
-            reservation: OpenReservation { session },
+            reservation,
             displaced,
         })
     }
 
     /// Release a slot whose provider open was abandoned or failed.
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "an opaque ownership proof is deliberately consumed even though its fields are scalar"
+    )]
     pub fn cancel_open(&mut self, reservation: OpenReservation) {
-        self.opening.remove(&reservation.session);
+        let OpenReservation {
+            session,
+            generation,
+        } = reservation;
+        let expected = HeldReservation {
+            generation,
+            state: ReservationState::Opening,
+        };
+        if self.opening.get(&session) == Some(&expected) {
+            self.opening.remove(&session);
+        }
     }
 
     /// Admit a process that a provider already opened.
@@ -408,6 +517,10 @@ impl SessionManager {
     ///
     /// Returns both the refusal and the still-open process when the reservation, process identity or disposition does
     /// not match. The caller remains responsible for stopping that process.
+    #[allow(
+        clippy::result_large_err,
+        reason = "the refusal must return both the live process and its opaque reservation; whether the layout crosses the lint threshold is target-dependent"
+    )]
     pub fn attach_opened(
         &mut self,
         reservation: OpenReservation,
@@ -416,8 +529,13 @@ impl SessionManager {
         agent: Box<dyn Agent>,
     ) -> Result<AttachedSession, AttachError> {
         let session = intent.session;
-        let held = self.opening.contains(&reservation.session);
-        if reservation.session != session || !held {
+        let expected = HeldReservation {
+            generation: reservation.generation,
+            state: ReservationState::Opening,
+        };
+        if reservation.session != session
+            || self.opening.get(&reservation.session) != Some(&expected)
+        {
             return Err(AttachError {
                 error: SessionError::OpenNotReserved { session },
                 agent,
@@ -479,7 +597,7 @@ impl SessionManager {
         self.live.insert(
             session,
             Live {
-                agent,
+                agent: Some(agent),
                 hub: SessionHub::new(session),
                 identity,
                 workspace,
@@ -507,7 +625,11 @@ impl SessionManager {
             .live
             .get_mut(&session)
             .ok_or(SessionError::NotLive { session })?;
-        let spoke = live.agent.next().await;
+        let agent = live
+            .agent
+            .as_mut()
+            .ok_or(SessionError::AgentInFlight { session })?;
+        let spoke = agent.next().await;
         Ok(self.apply(session, spoke))
     }
 
@@ -548,13 +670,19 @@ impl SessionManager {
                 None => (Bound::Unbounded, Bound::Unbounded),
             };
             for (session, one) in live.range_mut(past) {
-                if let Poll::Ready(spoke) = pin!(one.agent.next()).poll(cx) {
+                let Some(agent) = one.agent.as_mut() else {
+                    continue;
+                };
+                if let Poll::Ready(spoke) = pin!(agent.next()).poll(cx) {
                     return Poll::Ready((*session, spoke));
                 }
             }
             if let Some(after) = after {
                 for (session, one) in live.range_mut(..=after) {
-                    if let Poll::Ready(spoke) = pin!(one.agent.next()).poll(cx) {
+                    let Some(agent) = one.agent.as_mut() else {
+                        continue;
+                    };
+                    if let Poll::Ready(spoke) = pin!(agent.next()).poll(cx) {
                         return Poll::Ready((*session, spoke));
                     }
                 }
@@ -580,7 +708,7 @@ impl SessionManager {
         match spoke {
             Some(Ok(produced)) => {
                 // The provider's own name may have arrived with this frame. The newest answer wins.
-                if let Some(native) = live.agent.native()
+                if let Some(native) = live.agent.as_ref().and_then(|agent| agent.native())
                     && let Ok(parsed) = runtrol_provider::NativeSessionId::new(native)
                 {
                     live.identity.observe_native(parsed);
@@ -652,7 +780,158 @@ impl SessionManager {
             .live
             .get_mut(&session)
             .ok_or(SessionError::NotLive { session })?;
-        live.agent.send(command).await.map_err(SessionError::from)
+        let agent = live
+            .agent
+            .as_mut()
+            .ok_or(SessionError::AgentInFlight { session })?;
+        agent.send(command).await.map_err(SessionError::from)
+    }
+
+    /// Move one agent out so provider I/O can run without holding the session owner.
+    ///
+    /// # Errors
+    ///
+    /// Refuses a session that is absent or already carrying out a provider command.
+    pub fn take_agent(&mut self, session: SessionId) -> Result<TakenAgent, SessionError> {
+        let live = self
+            .live
+            .get(&session)
+            .ok_or(SessionError::NotLive { session })?;
+        if live.agent.is_none() {
+            return Err(SessionError::AgentInFlight { session });
+        }
+        let generation = self.allocate_agent_lease_generation()?;
+        let Some(live) = self.live.get_mut(&session) else {
+            return Err(SessionError::NotLive { session });
+        };
+        let Some(agent) = live.agent.take() else {
+            return Err(SessionError::AgentInFlight { session });
+        };
+        self.in_flight.insert(session, generation);
+        Ok(TakenAgent {
+            agent,
+            lease: AgentLease {
+                session,
+                generation,
+            },
+        })
+    }
+
+    /// Restore an agent after its provider command finishes.
+    ///
+    /// # Errors
+    ///
+    /// Returns the agent when the opaque lease is stale or its session no longer accepts the handoff.
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "an opaque ownership proof is deliberately consumed even though its fields are scalar"
+    )]
+    pub fn return_agent(
+        &mut self,
+        lease: AgentLease,
+        agent: Box<dyn Agent>,
+    ) -> Result<(), Box<dyn Agent>> {
+        let AgentLease {
+            session,
+            generation,
+        } = lease;
+        if self.in_flight.get(&session) != Some(&generation) {
+            return Err(agent);
+        }
+        let Some(live) = self.live.get_mut(&session) else {
+            self.in_flight.remove(&session);
+            return Err(agent);
+        };
+        if live.agent.is_some() {
+            return Err(agent);
+        }
+        live.agent = Some(agent);
+        self.in_flight.remove(&session);
+        Ok(())
+    }
+
+    /// Forget a placeholder whose externally owned agent was dropped.
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "an opaque ownership proof is deliberately consumed even though its fields are scalar"
+    )]
+    pub fn abandon_agent(&mut self, lease: AgentLease) {
+        let AgentLease {
+            session,
+            generation,
+        } = lease;
+        if self.in_flight.get(&session) == Some(&generation) {
+            self.in_flight.remove(&session);
+            self.live.remove(&session);
+        }
+    }
+
+    /// Validate an approval and move its agent out for provider I/O.
+    ///
+    /// # Errors
+    ///
+    /// Refuses the same stale, expired, unavailable or unauthorized answers as [`Self::answer_approval`], plus a
+    /// session already carrying out another provider command.
+    pub fn take_for_answer_approval(
+        &mut self,
+        caller: &Caller,
+        ledger: &GrantLedger,
+        session: SessionId,
+        approval: ApprovalId,
+        option: OptionId,
+        subject_digest: [u8; 32],
+    ) -> Result<(TakenAgent, AgentCommand), SessionError> {
+        let live = self
+            .live
+            .get(&session)
+            .ok_or(SessionError::NotLive { session })?;
+        let agent = live
+            .agent
+            .as_ref()
+            .ok_or(SessionError::AgentInFlight { session })?;
+        let request = agent
+            .approval(approval)
+            .ok_or(SessionError::ApprovalNotPending { session, approval })?;
+        if request.subject_digest != subject_digest {
+            return Err(SessionError::ApprovalSubjectChanged { approval });
+        }
+        if WallMs::now() >= request.expires_at {
+            return Err(SessionError::ApprovalExpired { approval });
+        }
+        let chosen = request
+            .options
+            .iter()
+            .find(|candidate| candidate.id == option)
+            .ok_or(SessionError::ApprovalOptionNotOffered { approval, option })?;
+        let may_answer_high = caller.may(DeviceScope::ApprovalRespondHigh, ledger).is_ok();
+        if let Some(why) = request
+            .offerable(may_answer_high)
+            .into_iter()
+            .find(|offered| offered.option.id == option)
+            .and_then(|offered| offered.unavailable)
+        {
+            return Err(SessionError::ApprovalOptionUnavailable {
+                approval,
+                option,
+                why,
+            });
+        }
+        let required_scope =
+            if request.risk == RiskClass::High || chosen.kind.commits_beyond_this_action() {
+                DeviceScope::ApprovalRespondHigh
+            } else {
+                DeviceScope::ApprovalRespondLow
+            };
+        caller.may(required_scope, ledger)?;
+        let taken = self.take_agent(session)?;
+        Ok((
+            taken,
+            AgentCommand::Answer {
+                id: approval,
+                option,
+                subject_digest,
+            },
+        ))
     }
 
     /// Answer a provider approval after binding the choice to the request the driver still holds.
@@ -682,6 +961,8 @@ impl SessionManager {
         let required_scope = {
             let request = live
                 .agent
+                .as_ref()
+                .ok_or(SessionError::AgentInFlight { session })?
                 .approval(approval)
                 .ok_or(SessionError::ApprovalNotPending { session, approval })?;
             if request.subject_digest != subject_digest {
@@ -719,6 +1000,8 @@ impl SessionManager {
 
         caller.may(required_scope, ledger)?;
         live.agent
+            .as_mut()
+            .ok_or(SessionError::AgentInFlight { session })?
             .send(AgentCommand::Answer {
                 id: approval,
                 option,
@@ -739,7 +1022,7 @@ impl SessionManager {
     ///
     /// The session is gone from this manager by the time this returns, whatever the caller then does with the driver.
     /// Its process slot remains reserved until the caller finishes cleanup and passes the returned reservation to
-    /// [`SessionManager::cancel_open`]. Dropping the agent rather than closing it still stops the process, because a
+    /// [`SessionManager::release_closing`]. Dropping the agent rather than closing it still stops the process, because a
     /// driver holds its child that way, but the reservation must still be released explicitly.
     ///
     /// # Errors
@@ -748,13 +1031,71 @@ impl SessionManager {
     pub fn close(&mut self, session: SessionId) -> Result<ClosingSession, SessionError> {
         let live = self
             .live
+            .get(&session)
+            .ok_or(SessionError::NotLive { session })?;
+        if live.agent.is_none() {
+            return Err(SessionError::AgentInFlight { session });
+        }
+        let generation = self.allocate_reservation_generation()?;
+        let mut live = self
+            .live
             .remove(&session)
             .ok_or(SessionError::NotLive { session })?;
-        self.opening.insert(session);
+        let Some(agent) = live.agent.take() else {
+            self.live.insert(session, live);
+            return Err(SessionError::AgentInFlight { session });
+        };
+        self.opening.insert(
+            session,
+            HeldReservation {
+                generation,
+                state: ReservationState::Closing,
+            },
+        );
         Ok(ClosingSession {
-            agent: live.agent,
-            reservation: OpenReservation { session },
+            agent,
+            reservation: ClosingReservation {
+                session,
+                generation,
+            },
         })
+    }
+
+    /// Release a closing slot after its process cleanup completes.
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "an opaque ownership proof is deliberately consumed even though its fields are scalar"
+    )]
+    pub fn release_closing(&mut self, reservation: ClosingReservation) {
+        let ClosingReservation {
+            session,
+            generation,
+        } = reservation;
+        let expected = HeldReservation {
+            generation,
+            state: ReservationState::Closing,
+        };
+        if self.opening.get(&session) == Some(&expected) {
+            self.opening.remove(&session);
+        }
+    }
+
+    fn allocate_reservation_generation(&mut self) -> Result<u64, SessionError> {
+        let generation = self.next_reservation;
+        self.next_reservation = self
+            .next_reservation
+            .checked_add(1)
+            .ok_or(SessionError::ReservationGenerationExhausted)?;
+        Ok(generation)
+    }
+
+    fn allocate_agent_lease_generation(&mut self) -> Result<u64, SessionError> {
+        let generation = self.next_agent_lease;
+        self.next_agent_lease = self
+            .next_agent_lease
+            .checked_add(1)
+            .ok_or(SessionError::AgentLeaseGenerationExhausted)?;
+        Ok(generation)
     }
 
     /// Whether another session may have a process, and what gives way if so.
@@ -765,7 +1106,7 @@ impl SessionManager {
             .map(|(session, live)| HotSession {
                 session: *session,
                 last_seen: live.state.last_seen(),
-                busy: live.state.lifecycle().turn().is_some(),
+                busy: live.agent.is_none() || live.state.lifecycle().turn().is_some(),
             })
             .collect();
         crate::session::tier::admit(&held)
@@ -1125,6 +1466,131 @@ mod tests {
         let cancelled = reservations.pop().expect("one reservation").reservation;
         manager.cancel_open(cancelled);
         assert!(manager.reserve_open(SessionId::now()).is_ok());
+    }
+
+    #[test]
+    fn a_stale_open_reservation_cannot_release_a_new_closing_lease() {
+        let mut manager = SessionManager::new();
+        let session = SessionId::now();
+        let old = manager.reserve_open(session).expect("one opening lease");
+        let stale = OpenReservation {
+            session: old.reservation.session,
+            generation: old.reservation.generation,
+        };
+        manager.cancel_open(old.reservation);
+
+        let current = manager.reserve_open(session).expect("a new opening lease");
+        let intent = an_intent(session);
+        manager
+            .attach_opened(current.reservation, an_id(), &intent, an_agent(session))
+            .expect("the process attaches");
+        let closing = manager.close(session).expect("the process starts closing");
+
+        manager.cancel_open(stale);
+        assert!(matches!(
+            manager.reserve_open(session),
+            Err(SessionError::AlreadyLive { session: held }) if held == session
+        ));
+
+        drop(closing.agent);
+        manager.release_closing(closing.reservation);
+        assert!(manager.reserve_open(session).is_ok());
+    }
+
+    #[test]
+    fn exhausted_reservation_generations_do_not_change_admission_state() {
+        let mut opening = SessionManager::new();
+        opening.next_reservation = u64::MAX;
+        assert!(matches!(
+            opening.reserve_open(SessionId::now()),
+            Err(SessionError::ReservationGenerationExhausted)
+        ));
+        assert_eq!(opening.hot(), 0);
+        assert!(opening.opening.is_empty());
+
+        let mut closing = SessionManager::new();
+        let session = SessionId::now();
+        let reserved = closing.reserve_open(session).expect("one opening lease");
+        closing
+            .attach_opened(
+                reserved.reservation,
+                an_id(),
+                &an_intent(session),
+                an_agent(session),
+            )
+            .expect("the process attaches");
+        closing.next_reservation = u64::MAX;
+        assert!(matches!(
+            closing.close(session),
+            Err(SessionError::ReservationGenerationExhausted)
+        ));
+        assert!(closing.is_live(session), "failed close kept its process");
+        assert!(closing.opening.is_empty());
+    }
+
+    #[test]
+    fn an_agent_handoff_is_exclusive_and_can_be_restored_or_abandoned() {
+        let mut manager = SessionManager::new();
+        let session = SessionId::now();
+        let reserved = manager.reserve_open(session).expect("one opening lease");
+        manager
+            .attach_opened(
+                reserved.reservation,
+                an_id(),
+                &an_intent(session),
+                an_agent(session),
+            )
+            .expect("the process attaches");
+
+        let taken = manager
+            .take_agent(session)
+            .expect("the first command owns it");
+        assert!(matches!(
+            manager.take_agent(session),
+            Err(SessionError::AgentInFlight { session: busy }) if busy == session
+        ));
+        assert!(matches!(
+            manager.close(session),
+            Err(SessionError::AgentInFlight { session: busy }) if busy == session
+        ));
+        assert!(
+            manager.return_agent(taken.lease, taken.agent).is_ok(),
+            "the exact lease restores its agent"
+        );
+
+        let taken = manager
+            .take_agent(session)
+            .expect("it can be handed out again");
+        manager.abandon_agent(taken.lease);
+        drop(taken.agent);
+        assert!(!manager.is_live(session));
+    }
+
+    #[test]
+    fn exhausted_agent_handoff_generations_leave_the_agent_attached() {
+        let mut manager = SessionManager::new();
+        let session = SessionId::now();
+        let reserved = manager.reserve_open(session).expect("one opening lease");
+        manager
+            .attach_opened(
+                reserved.reservation,
+                an_id(),
+                &an_intent(session),
+                an_agent(session),
+            )
+            .expect("the process attaches");
+        manager.next_agent_lease = u64::MAX;
+
+        assert!(matches!(
+            manager.take_agent(session),
+            Err(SessionError::AgentLeaseGenerationExhausted)
+        ));
+        assert!(manager.is_live(session));
+        assert!(manager.in_flight.is_empty());
+        assert!(
+            manager.close(session).is_ok(),
+            "the agent remained attached"
+        );
     }
 
     #[test]
@@ -1685,7 +2151,7 @@ mod tests {
             .close(CloseMode::Kill)
             .await
             .expect("the driver stops");
-        manager.cancel_open(stopping.reservation);
+        manager.release_closing(stopping.reservation);
 
         match manager.close(session) {
             Err(SessionError::NotLive { session: named }) => assert_eq!(named, session),
@@ -1717,7 +2183,7 @@ mod tests {
         ));
 
         drop(closing.agent);
-        manager.cancel_open(closing.reservation);
+        manager.release_closing(closing.reservation);
         assert!(
             manager.reserve_open(SessionId::now()).is_ok(),
             "the slot returns only after cleanup"
@@ -1776,7 +2242,7 @@ mod tests {
         assert!(!manager.is_live(session));
         assert_eq!(manager.hot(), 0);
         drop(stopping.agent);
-        manager.cancel_open(stopping.reservation);
+        manager.release_closing(stopping.reservation);
     }
 
     #[tokio::test]

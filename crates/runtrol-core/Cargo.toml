@@ -9,6 +9,9 @@ repository.workspace = true
 authors.workspace = true
 publish = false
 
+[features]
+test-support = []
+
 [dependencies]
 runtrol-provider = { workspace = true }
 runtrol-security = { workspace = true }

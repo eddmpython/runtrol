@@ -27,7 +27,7 @@ use std::sync::Arc;
 
 use runtrol_core::registry::KindStatus;
 use runtrol_core::session::SessionError;
-use runtrol_core::{OpenReservation, SessionManager, SessionView};
+use runtrol_core::{ClosingReservation, OpenReservation, SessionManager, SessionView, TakenAgent};
 use runtrol_drivers::DriverContext;
 use runtrol_ipc::wire::{ProviderLine, Request, Response, SessionLine, SessionListing, WireError};
 use runtrol_provider::{
@@ -59,7 +59,7 @@ pub(crate) enum Reply {
         /// How much time the process is given.
         how: CloseMode,
         /// The bounded slot to release after the process has stopped.
-        reservation: OpenReservation,
+        reservation: ClosingReservation,
     },
     /// Session state is already committed, while detached processes still need to be stopped.
     Cleaning {
@@ -67,6 +67,13 @@ pub(crate) enum Reply {
         response: Response,
         /// Processes no longer owned by the session manager.
         agents: Vec<Cleanup>,
+    },
+    /// Provider stdin work moved out of the single session owner.
+    Sending {
+        /// The temporarily detached provider agent.
+        taken: TakenAgent,
+        /// The exact command to write.
+        command: AgentCommand,
     },
 }
 
@@ -77,7 +84,21 @@ pub(crate) struct Cleanup {
     /// How to stop it.
     pub(crate) how: CloseMode,
     /// The bounded slot to release after this process has stopped, when it has one.
-    pub(crate) reservation: Option<OpenReservation>,
+    pub(crate) reservation: Option<CleanupReservation>,
+}
+
+pub(crate) enum CleanupReservation {
+    Open(OpenReservation),
+    Closing(ClosingReservation),
+}
+
+impl CleanupReservation {
+    pub(crate) fn session(&self) -> SessionId {
+        match self {
+            Self::Open(reservation) => reservation.session(),
+            Self::Closing(reservation) => reservation.session(),
+        }
+    }
 }
 
 /// The provider request shape a prepared result is bound to.
@@ -237,20 +258,20 @@ async fn answer(
     )
     .await;
     let reservation = reserved.map(|one| one.reservation);
-    let (reply, reservations) = finish_cleanup(
-        answer_prepared(
-            conversation,
-            composed,
-            sessions,
-            request,
-            prepared,
-            reservation,
-        )
-        .await,
-    )
+    let (reply, reservations) = finish_cleanup(answer_prepared(
+        conversation,
+        composed,
+        sessions,
+        request,
+        prepared,
+        reservation,
+    ))
     .await;
     for reservation in reservations {
-        sessions.cancel_open(reservation);
+        match reservation {
+            CleanupReservation::Open(reservation) => sessions.cancel_open(reservation),
+            CleanupReservation::Closing(reservation) => sessions.release_closing(reservation),
+        }
     }
     reply
 }
@@ -407,7 +428,7 @@ pub(crate) const fn needs_driver(request: &Request) -> bool {
     clippy::too_many_lines,
     reason = "one exhaustive request table keeps every scope-checked wire operation visible in one place"
 )]
-pub(crate) async fn answer_prepared(
+pub(crate) fn answer_prepared(
     conversation: &mut Conversation,
     composed: &Composed,
     sessions: &mut SessionManager,
@@ -477,40 +498,30 @@ pub(crate) async fn answer_prepared(
             reservation,
         ),
 
-        Request::Prompt { session, text } => Reply::One(
-            send(
-                sessions,
-                session,
-                AgentCommand::Prompt(vec![ContentBlock::Text(text)]),
-            )
-            .await,
+        Request::Prompt { session, text } => send(
+            sessions,
+            session,
+            AgentCommand::Prompt(vec![ContentBlock::Text(text)]),
         ),
 
-        Request::Interrupt { session } => {
-            Reply::One(send(sessions, session, AgentCommand::Interrupt).await)
-        }
+        Request::Interrupt { session } => send(sessions, session, AgentCommand::Interrupt),
 
         Request::AnswerApproval {
             session,
             approval,
             option,
             subject_digest,
-        } => Reply::One(
-            match sessions
-                .answer_approval(
-                    conversation.caller(),
-                    &composed.granted,
-                    session,
-                    approval,
-                    option,
-                    subject_digest,
-                )
-                .await
-            {
-                Ok(()) => Response::Done,
-                Err(error) => from_session_error(&error),
-            },
-        ),
+        } => match sessions.take_for_answer_approval(
+            conversation.caller(),
+            &composed.granted,
+            session,
+            approval,
+            option,
+            subject_digest,
+        ) {
+            Ok((taken, command)) => Reply::Sending { taken, command },
+            Err(error) => Reply::One(from_session_error(&error)),
+        },
 
         Request::Watch { session } => match sessions.subscribe(session) {
             Ok(watching) => Reply::Watching(Box::new(watching)),
@@ -526,17 +537,27 @@ pub(crate) async fn answer_prepared(
             } else {
                 CloseMode::graceful()
             };
-            let removed = match composed.store.remove_session(session) {
-                Ok(removed) => removed,
-                Err(error) => return Reply::One(refuse(&error.to_string())),
-            };
             match sessions.close(session) {
-                Ok(closing) => Reply::Stopping {
-                    agent: closing.agent,
-                    how,
-                    reservation: closing.reservation,
+                Ok(closing) => match composed.store.remove_session(session) {
+                    Ok(_) => Reply::Stopping {
+                        agent: closing.agent,
+                        how,
+                        reservation: closing.reservation,
+                    },
+                    Err(error) => Reply::Cleaning {
+                        response: refuse(&error.to_string()),
+                        agents: vec![Cleanup {
+                            agent: closing.agent,
+                            how: CloseMode::Kill,
+                            reservation: Some(CleanupReservation::Closing(closing.reservation)),
+                        }],
+                    },
                 },
-                Err(SessionError::NotLive { .. }) if removed => Reply::One(Response::Done),
+                Err(SessionError::NotLive { .. }) => match composed.store.remove_session(session) {
+                    Ok(true) => Reply::One(Response::Done),
+                    Ok(false) => Reply::One(from_session_error(&SessionError::NotLive { session })),
+                    Err(error) => Reply::One(refuse(&error.to_string())),
+                },
                 Err(error) => Reply::One(from_session_error(&error)),
             }
         }
@@ -607,7 +628,7 @@ fn open(
                 agents: vec![Cleanup {
                     agent,
                     how: CloseMode::Kill,
-                    reservation: Some(reservation),
+                    reservation: Some(CleanupReservation::Open(reservation)),
                 }],
             };
         }
@@ -622,7 +643,7 @@ fn open(
                 agents.push(Cleanup {
                     agent: closing.agent,
                     how: CloseMode::Kill,
-                    reservation: Some(closing.reservation),
+                    reservation: Some(CleanupReservation::Closing(closing.reservation)),
                 });
                 refuse(&error.to_string())
             }
@@ -748,7 +769,7 @@ fn hold_until_cleaned(
     if let Reply::Cleaning { agents, .. } = &mut reply
         && let Some(cleanup) = agents.first_mut()
     {
-        cleanup.reservation = Some(reservation);
+        cleanup.reservation = Some(CleanupReservation::Open(reservation));
         return reply;
     }
     sessions.cancel_open(reservation);
@@ -757,7 +778,7 @@ fn hold_until_cleaned(
 
 /// Stop processes handed out by the owner when using the direct dispatcher convenience path.
 #[cfg(test)]
-async fn finish_cleanup(reply: Reply) -> (Reply, Vec<OpenReservation>) {
+async fn finish_cleanup(reply: Reply) -> (Reply, Vec<CleanupReservation>) {
     let Reply::Cleaning {
         mut response,
         agents,
@@ -889,14 +910,10 @@ fn checked_flags(
 }
 
 /// Hand a command to a live session.
-async fn send(
-    sessions: &mut SessionManager,
-    session: SessionId,
-    command: AgentCommand,
-) -> Response {
-    match sessions.send(session, command).await {
-        Ok(()) => Response::Done,
-        Err(error) => from_session_error(&error),
+fn send(sessions: &mut SessionManager, session: SessionId, command: AgentCommand) -> Reply {
+    match sessions.take_agent(session) {
+        Ok(taken) => Reply::Sending { taken, command },
+        Err(error) => Reply::One(from_session_error(&error)),
     }
 }
 
@@ -1040,7 +1057,35 @@ pub(crate) fn refuse(message: &str) -> Response {
 
 #[cfg(test)]
 mod tests {
+    use async_trait::async_trait;
+    use runtrol_provider::{Produced, ProviderError};
+
     use super::*;
+
+    struct IdleAgent(SessionId);
+
+    #[async_trait]
+    impl Agent for IdleAgent {
+        fn session(&self) -> SessionId {
+            self.0
+        }
+
+        fn native(&self) -> Option<&str> {
+            None
+        }
+
+        async fn send(&mut self, _command: AgentCommand) -> Result<(), ProviderError> {
+            Ok(())
+        }
+
+        async fn next(&mut self) -> Option<Result<Produced, ProviderError>> {
+            core::future::pending().await
+        }
+
+        async fn close(self: Box<Self>, _how: CloseMode) -> Result<(), ProviderError> {
+            Ok(())
+        }
+    }
 
     fn composed_for(name: &str) -> (crate::compose::Composed, String) {
         let root = std::env::temp_dir().join(format!("runtrol-dispatch-{name}"));
@@ -1061,6 +1106,51 @@ mod tests {
         // The store owns an exclusive file handle. Release it before removing the scratch home, especially on Windows.
         drop(composed);
         std::fs::remove_dir_all(path).expect("remove the scratch home");
+    }
+
+    fn attach_and_store(
+        composed: &Composed,
+        sessions: &mut SessionManager,
+        session: SessionId,
+        path: &str,
+    ) {
+        let provider = ProviderId::parse("stored-provider").expect("valid provider id");
+        let workspace = AbsPath::canonicalize(path).expect("the scratch home exists");
+        let intent = OpenIntent {
+            session,
+            workspace: workspace.clone(),
+            disposition: Disposition::Fresh,
+            model: None,
+            permission: None,
+        };
+        let reserved = sessions.reserve_open(session).expect("one process slot");
+        sessions
+            .attach_opened(
+                reserved.reservation,
+                provider,
+                &intent,
+                Box::new(IdleAgent(session)),
+            )
+            .expect("the test process attaches");
+        let now = WallMs::now();
+        composed
+            .store
+            .put_session(
+                session,
+                &StoredSession {
+                    provider,
+                    native: NativeSessionId::new("provider-session-1").expect("valid native id"),
+                    cwd: workspace,
+                    label: None,
+                    created_at: now,
+                    last_seen_at: now,
+                    pinned: false,
+                    archived: false,
+                    forked_from: None,
+                    live: None,
+                },
+            )
+            .expect("store the pointer");
     }
 
     #[tokio::test]
@@ -1349,6 +1439,84 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_close_refused_while_an_agent_is_in_flight_keeps_the_stored_session() {
+        let (composed, path) = composed_for("close-in-flight-row");
+        let mut sessions = SessionManager::new();
+        let mut conversation = Conversation::at_the_machine();
+        greet(&mut conversation, &composed, &mut sessions).await;
+        let session = SessionId::now();
+        attach_and_store(&composed, &mut sessions, session, &path);
+        let taken = sessions
+            .take_agent(session)
+            .expect("a provider command owns the agent");
+
+        let reply = answer(
+            &mut conversation,
+            &composed,
+            &mut sessions,
+            Request::Close { session, now: true },
+        )
+        .await;
+        assert!(
+            matches!(reply, Reply::One(Response::Failed(_))),
+            "an in-flight close must be refused"
+        );
+        assert!(
+            composed
+                .store
+                .get_session(session)
+                .expect("the store remains readable")
+                .is_some(),
+            "a refused close must not delete its durable pointer"
+        );
+
+        sessions.abandon_agent(taken.lease);
+        drop(taken.agent);
+        clean(composed, &path);
+    }
+
+    #[tokio::test]
+    async fn a_close_refused_by_reservation_generation_exhaustion_keeps_the_stored_session() {
+        let (composed, path) = composed_for("close-generation-row");
+        let mut sessions = SessionManager::new();
+        let mut conversation = Conversation::at_the_machine();
+        greet(&mut conversation, &composed, &mut sessions).await;
+        let session = SessionId::now();
+        attach_and_store(&composed, &mut sessions, session, &path);
+        sessions.exhaust_reservation_generations_for_tests();
+
+        let reply = answer(
+            &mut conversation,
+            &composed,
+            &mut sessions,
+            Request::Close {
+                session,
+                now: false,
+            },
+        )
+        .await;
+        assert!(
+            matches!(reply, Reply::One(Response::Failed(_))),
+            "generation exhaustion must refuse the close"
+        );
+        assert!(
+            sessions.is_live(session),
+            "the manager kept the live process"
+        );
+        assert!(
+            composed
+                .store
+                .get_session(session)
+                .expect("the store remains readable")
+                .is_some(),
+            "a refused close must not delete its durable pointer"
+        );
+
+        drop(sessions);
+        clean(composed, &path);
+    }
+
+    #[tokio::test]
     async fn the_panic_button_consults_nothing_and_reports_what_happened() {
         // It has to work from anywhere with no permission at all. What it must not do is report a success it did not
         // achieve, and this daemon holds a containment that deliberately holds nothing.
@@ -1472,8 +1640,7 @@ mod tests {
                 result: Ok(ModelCatalog::unknown("test catalogue")),
             },
             None,
-        )
-        .await;
+        );
 
         match reply {
             Reply::One(Response::Failed(error)) => {
@@ -1501,8 +1668,7 @@ mod tests {
                 result: Ok(ModelCatalog::unknown("test catalogue")),
             },
             None,
-        )
-        .await;
+        );
         assert!(
             matches!(reply, Reply::One(Response::Failed(_))),
             "a model result was accepted as an opened session"
@@ -1535,6 +1701,7 @@ mod tests {
             Reply::Watching(_) => "a subscription".to_owned(),
             Reply::Stopping { how, .. } => format!("a process still stopping, {how:?}"),
             Reply::Cleaning { agents, .. } => format!("{} processes still stopping", agents.len()),
+            Reply::Sending { .. } => "a provider command in flight".to_owned(),
         }
     }
 }

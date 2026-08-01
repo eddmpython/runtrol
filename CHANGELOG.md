@@ -24,8 +24,9 @@ its measured architecture, and the gate harness.
   denied file and provider child process are absent afterward.
 - Lazy production probes that hand the exact inspected program to its driver, include interpreted entry
   files in cache identity, bound captured output before allocation, run outside the session event owner,
-  refuse missing required flags, and never silently drop an explicit optional choice. Model calls and process
-  opens also stay outside the event owner, while cancellation-safe leases enforce the real child-process bound.
+  refuse missing required flags, and never silently drop an explicit optional choice. Model calls, process opens,
+  and command writes also stay outside the event owner, while guarded reservations keep opening and cleanup work
+  counted against the bounded session-process slots.
 - Credential-free hosted model discovery. Codex enumerates its live protocol catalogue, while Claude
   exposes stable aliases plus an honest partial catalogue from provider-owned read-only state. Hosted CI
   proves that file-backed path through an isolated sentinel and scans all production source for leaks.

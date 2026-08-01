@@ -213,6 +213,7 @@ jobs:
   crossPlatform:
     needs: detect
     if: needs.detect.outputs.hasWorkspace == 'true'
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:

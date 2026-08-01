@@ -46,7 +46,10 @@ REFUSAL = "Needed::Unknown"
 
 # The call that asks the wall, and the function it has to be first inside.
 ASKS_THE_WALL = re.compile(r"crate::scope::allowed\(|scope::allowed\(")
-THE_BOUNDARY = "pub async fn answer("
+THE_BOUNDARY_NAME = "answer_prepared"
+THE_BOUNDARY = re.compile(
+    rf"^\s*pub\(crate\)\s+(?:async\s+)?fn\s+{THE_BOUNDARY_NAME}\s*\("
+)
 
 
 def variantsOf(path: Path, enum: str) -> list[str]:
@@ -111,9 +114,9 @@ def wildcardRefuses(path: Path) -> bool:
 def askedFirst(path: Path) -> str | None:
     """What the boundary does before it asks the wall, when it does anything."""
     lines = path.read_text(encoding="utf-8").splitlines()
-    start = next((index for index, line in enumerate(lines) if THE_BOUNDARY in line), None)
+    start = next((index for index, line in enumerate(lines) if THE_BOUNDARY.search(line)), None)
     if start is None:
-        return f"`{THE_BOUNDARY}` is not in this file, so this gate is watching the wrong function"
+        return f"`{THE_BOUNDARY_NAME}` is not in this file, so this gate is watching the wrong function"
 
     for index in range(start + 1, len(lines)):
         cleaned = rustSource.withoutComments(lines[index]).strip()
@@ -183,7 +186,7 @@ def selftest() -> int:
     allows = "pub fn needed(request: &Request) -> Needed {\n    match request {\n        _ => Needed::Anyone(\"\"),\n    }\n}\n"
     refuses = "pub fn needed(request: &Request) -> Needed {\n    match request {\n        _ => Needed::Unknown,\n    }\n}\n"
     late = (
-        "pub async fn answer(\n"
+        "pub(crate) fn answer_prepared(\n"
         "    conversation: &mut Conversation,\n"
         ") -> Reply {\n"
         "    if let Request::Hello { wire } = request {\n"
@@ -195,7 +198,7 @@ def selftest() -> int:
         "}\n"
     )
     early = (
-        "pub async fn answer(\n"
+        "pub(crate) async fn answer_prepared(\n"
         "    conversation: &mut Conversation,\n"
         ") -> Reply {\n"
         "    if let Err(refusal) = crate::scope::allowed(&conversation.caller, &request, &ledger) {\n"

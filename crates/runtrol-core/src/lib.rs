@@ -33,9 +33,9 @@ pub use registry::{
     KindEntry, KindStatus, KindTable, Origin, Provider, ProviderRegistry, RegistryError,
 };
 pub use session::{
-    AttachError, AttachedSession, CloseReason, ClosingSession, FailureCode, Identity, Lifecycle,
-    LiveSession, Observed, OpenReservation, Pumped, ReservedOpen, SessionError, SessionManager,
-    SessionState, Tier,
+    AgentLease, AttachError, AttachedSession, CloseReason, ClosingReservation, ClosingSession,
+    FailureCode, Identity, Lifecycle, LiveSession, Observed, OpenReservation, Pumped, ReservedOpen,
+    SessionError, SessionManager, SessionState, TakenAgent, Tier,
 };
 
 // These edges are declared in this crate's manifest and enforced by
