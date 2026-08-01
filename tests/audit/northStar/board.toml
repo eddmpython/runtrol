@@ -248,7 +248,8 @@ file = "scopeWall.py"
 [[floor]]
 category = "security"
 name = "rebindingDefenses"
-status = "planned"
+status = "built"
+file = "rebindingDefenses.rs"
 
 [[floor]]
 category = "security"

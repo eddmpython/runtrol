@@ -7,6 +7,8 @@
 > 状态：**内核已经跑起来。** 两个供应商的会话出现在同一个列表里，启动、关闭、恢复都对着真实 CLI 运行。
 > 下面多数分数为 0，不是因为没有代码，而是因为还没有门禁去断言那些轴。
 
+The security boundary and default-deny settings are documented in [SECURITY.md](SECURITY.md).
+
 ## 北极星
 
 **runtrol 帮助同时使用多个编码代理 CLI（如 Claude Code 与 Codex）的开发者，

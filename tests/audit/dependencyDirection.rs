@@ -27,6 +27,9 @@ const ALLOWED_EDGES: &[(&str, &[&str])] = &[
     ("runtrol-childproc", &["runtrol-provider"]),
     ("runtrol-store", &["runtrol-provider"]),
     ("runtrol-ipc", &["runtrol-provider"]),
+    // L1. Browser-reachable transport. It may establish a remote caller through the scope wall, but cannot
+    // reach the kernel, a driver, storage, or the local presence challenge.
+    ("runtrol-transport", &["runtrol-security"]),
     // L2. The kernel. **It cannot see the drivers** (see FORBIDDEN_TRANSITIVE below).
     (
         "runtrol-core",
@@ -106,6 +109,21 @@ const FORBIDDEN_TRANSITIVE: &[(&str, &str, &str)] = &[
         "runtrol-security",
         "runtrol-core",
         "the scope wall has to be a leaf. nothing inside the kernel can weaken it, and a future remote transport can depend on the wall without depending on the kernel",
+    ),
+    (
+        "runtrol-transport",
+        "runtrol-core",
+        "a remote frame boundary establishes a device caller but cannot supervise sessions or mint local presence",
+    ),
+    (
+        "runtrol-transport",
+        "runtrol-drivers",
+        "a remote transport carries provider-independent frames and cannot know a provider implementation",
+    ),
+    (
+        "runtrol-transport",
+        "runtrol-store",
+        "a remote transport stores neither sessions nor a copy of conversation data",
     ),
     (
         "runtrol-cli",

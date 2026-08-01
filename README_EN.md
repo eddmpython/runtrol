@@ -8,6 +8,8 @@
 > against the real CLIs. Most scores below are 0 because no gate asserts those axes yet, not because there is
 > no code.
 
+The security boundary and default-deny settings are documented in [SECURITY.md](SECURITY.md).
+
 ## North Star
 
 **runtrol helps developers who run several coding agent CLIs, such as Claude Code and Codex,

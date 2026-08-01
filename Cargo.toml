@@ -11,6 +11,7 @@ members = [
     "crates/runtrol-childproc",
     "crates/runtrol-store",
     "crates/runtrol-ipc",
+    "crates/runtrol-transport",
     "crates/runtrol-core",
     "crates/runtrol-drivers",
     "crates/runtrol-daemon",
@@ -65,6 +66,12 @@ async-trait = "0.1.91"
 # (01-runtime-measurements.md: 필요 없는 feature 는 코드와 OS 스레드를 산다).
 tokio = { version = "1.53.1", default-features = false }
 
+# Phone-facing HTTP. The guard wraps the connection before routing, so Host, Origin, browser metadata, and
+# authentication are checked for every route including errors and upgrades.
+hyper = { version = "1.11.0", default-features = false }
+hyper-util = { version = "0.1.20", default-features = false }
+http-body-util = { version = "0.1.4", default-features = false }
+
 # 저장소. 배경 스레드가 없어서 골랐다 (03-storage-decision.md). 4.1 이 바닥이다
 # (4.0 에 -68% RSS region allocator 수정이 없고, 4.0 이전은 가변폭 튜플 인코딩이 다르다).
 redb = "4.1.0"
@@ -87,6 +94,7 @@ runtrol-security = { path = "crates/runtrol-security" }
 runtrol-childproc = { path = "crates/runtrol-childproc" }
 runtrol-store = { path = "crates/runtrol-store" }
 runtrol-ipc = { path = "crates/runtrol-ipc" }
+runtrol-transport = { path = "crates/runtrol-transport" }
 runtrol-core = { path = "crates/runtrol-core" }
 runtrol-drivers = { path = "crates/runtrol-drivers" }
 runtrol-daemon = { path = "crates/runtrol-daemon" }

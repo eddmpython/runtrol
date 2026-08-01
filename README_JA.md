@@ -8,6 +8,8 @@
 > CLI に対して動く。以下のスコアの多くが 0 なのは、コードがないからではなく、その軸を断言するゲートがまだない
 > からである。
 
+The security boundary and default-deny settings are documented in [SECURITY.md](SECURITY.md).
+
 ## 北極星
 
 **runtrol は、Claude Code や Codex のようなコーディングエージェント CLI を複数使う開発者が、

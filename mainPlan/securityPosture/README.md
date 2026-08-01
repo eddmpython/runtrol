@@ -1,6 +1,6 @@
 # securityPosture
 
-상태: 대기 (`positioningDecision` 선행). 설계는 완료.
+상태: 진행 중. Scope grantability, default-deny dispatch, argument escaping, read-only provider configuration, and browser rebinding defenses are enforced by gates. Egress and remote approval work remain.
 
 ## 한 문장 정의
 

@@ -1,0 +1,23 @@
+# Phone-facing transports. Security admission wraps a connection before any route sees a request.
+[package]
+name = "runtrol-transport"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[dependencies]
+runtrol-security = { workspace = true }
+
+bytes = { workspace = true }
+thiserror = { workspace = true }
+hyper = { workspace = true, features = ["http1", "server"] }
+hyper-util = { workspace = true, features = ["tokio"] }
+http-body-util = { workspace = true }
+tokio = { workspace = true, features = ["net"] }
+
+[lints]
+workspace = true

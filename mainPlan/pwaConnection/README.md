@@ -1,6 +1,6 @@
 # pwaConnection
 
-상태: 대기 (`positioningDecision` 선행). 설계는 완료.
+상태: 진행 중. Phone-facing HTTP admission and rebinding defenses are implemented. Relay, Noise, pairing, and push remain.
 
 운영자가 첫 지시에서 "pwa 와 연결할 아이디어가 아직없다. 똑똑한 방법이 있을까 고민중이다" 라고 한 그 자리다. 이 문서가 그 답이다.
 

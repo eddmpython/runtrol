@@ -21,7 +21,9 @@ cargo_metadata = { workspace = true }
 # process reporting on itself would report what its allocator believes rather than what it holds.
 runtrol-childproc = { workspace = true }
 runtrol-provider = { workspace = true }
-tokio = { workspace = true, features = ["macros", "rt"] }
+runtrol-security = { workspace = true }
+runtrol-transport = { path = "../../crates/runtrol-transport" }
+tokio = { workspace = true, features = ["io-util", "macros", "net", "rt"] }
 
 [[test]]
 name = "dependencyDirection"
@@ -38,6 +40,10 @@ path = "scopeGrantability.rs"
 [[test]]
 name = "argumentEscaping"
 path = "argumentEscaping.rs"
+
+[[test]]
+name = "rebindingDefenses"
+path = "rebindingDefenses.rs"
 
 [[test]]
 name = "providerContract"
