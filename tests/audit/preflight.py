@@ -151,6 +151,10 @@ GATES: dict[str, tuple[str, list[str]]] = {
             "warnings",
         ],
     ),
+    "cargoBuild": (
+        "memory budget gate product binary",
+        ["cargo", "build", "-p", "runtrol", "--bin", "runtrol"],
+    ),
     "cargoTest": ("cargo test", ["cargo", "test", "--all"]),
     "genericAcpSmokeSelftest": (
         "범용 ACP 게이트 자체 검증",
@@ -238,6 +242,7 @@ CARGO_GATES = frozenset(
         "cargoFmt",
         "cargoClippy",
         "clippyCrossCfg",
+        "cargoBuild",
         "cargoTest",
         "genericAcpSmokeSelftest",
         "genericAcpSmoke",

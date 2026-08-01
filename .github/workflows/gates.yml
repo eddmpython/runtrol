@@ -182,6 +182,9 @@ jobs:
         run: |
           rustup target add x86_64-pc-windows-msvc
           cargo clippy --all-targets --target x86_64-pc-windows-msvc -- -D warnings
+      - name: memory budget gate product binary
+        if: needs.detect.outputs.hasWorkspace == 'true'
+        run: cargo build -p runtrol --bin runtrol
       - name: cargo test
         if: needs.detect.outputs.hasWorkspace == 'true'
         run: cargo test --all
@@ -244,6 +247,8 @@ jobs:
         run: npm --prefix crates/runtrol-gui/ui ci
       - name: 데스크톱 프런트엔드
         run: python -X utf8 tests/audit/frontendBuild.py
+      - name: memory budget gate product binary
+        run: cargo build -p runtrol --bin runtrol
       - name: cargo test
         run: cargo test --all
 

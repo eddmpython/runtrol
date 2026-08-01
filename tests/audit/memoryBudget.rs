@@ -161,8 +161,8 @@ fn an_idle_daemon_stays_inside_its_budget() {
         // Said out loud. A gate that skipped quietly would be a gate that reports green on a machine where it
         // never ran, which is worse than not having it.
         panic!(
-            "the runtrol binary is not built next to this test. run `cargo build` first, or `cargo test --all` \
-             which builds it"
+            "the runtrol binary is not built next to this test. run \
+             `cargo build -p runtrol --bin runtrol` before the audit test"
         );
     };
 
