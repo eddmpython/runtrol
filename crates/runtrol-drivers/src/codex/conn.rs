@@ -39,16 +39,17 @@ use core::time::Duration;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use async_trait::async_trait;
 use bytes::Bytes;
 use runtrol_childproc::{Containment, Program};
 use runtrol_provider::{ProviderError, ProviderId};
 use serde::Deserialize;
-use tokio::io::AsyncWriteExt as _;
+use tokio::io::{AsyncWrite, AsyncWriteExt as _};
 use tokio::process::{Child, ChildStdin, ChildStdout};
 use tokio::sync::{Mutex, mpsc};
 
 use crate::codex::bound::{
-    self, Answer, DECISION_DECLINE, DECISION_FIELD, HANDSHAKE, UNBOUND_REQUEST_CODE,
+    self, Answer, DECISION_DECLINE, DECISION_FIELD, HANDSHAKE, INITIALIZED, UNBOUND_REQUEST_CODE,
     UNBOUND_REQUEST_MESSAGE,
 };
 use crate::framing::jsonrpc::{self, Incoming, Pending, RequestId, WireError};
@@ -187,12 +188,30 @@ pub struct Connection {
     child: Mutex<Child>,
 }
 
+/// The two ordered protocol operations that make a connection ready for ordinary calls.
+///
+/// Kept as a narrow injection seam so the lifecycle order can be tested without starting a provider process.
+#[async_trait]
+trait InitializationIo: Sync {
+    async fn request_initialize(&self, client: &str, version: &str) -> Result<(), ProviderError>;
+    async fn notify_initialized(&self) -> Result<(), ProviderError>;
+}
+
+/// Complete the protocol lifecycle before exposing an I/O object to its first ordinary call.
+async fn initialize_connection<I: InitializationIo>(
+    io: &I,
+    client: &str,
+    version: &str,
+) -> Result<(), ProviderError> {
+    io.request_initialize(client, version).await?;
+    io.notify_initialized().await
+}
+
 impl Connection {
     /// Start the daemon and complete its handshake.
     ///
-    /// Returns once the provider has answered [`HANDSHAKE`], which is the point from which anything else may
-    /// be asked of it. Measured: no follow-up notification is required, and a probe that sent only this and
-    /// went straight to starting a conversation worked.
+    /// Returns once the provider has answered [`HANDSHAKE`] and runtrol has sent the required
+    /// [`INITIALIZED`] acknowledgement. Nothing else may be asked before both steps complete.
     ///
     /// # Errors
     ///
@@ -232,15 +251,7 @@ impl Connection {
 
         // The one call that has to happen before anything else. Its answer is read for nothing: what matters
         // is that it came, because that is what says the daemon is speaking this protocol.
-        connection
-            .call(
-                HANDSHAKE,
-                &serde_json::json!({
-                    "clientInfo": {"name": client, "version": version},
-                }),
-                "opening the connection",
-            )
-            .await?;
+        initialize_connection(&connection, client, version).await?;
 
         Ok(connection)
     }
@@ -416,6 +427,11 @@ impl Connection {
             })
     }
 
+    /// Acknowledge the successful initialize answer without minting an identifier or waiting for an answer.
+    async fn write_initialized(&self) -> Result<(), ProviderError> {
+        write_initialized(&self.stdin, self.provider).await
+    }
+
     /// Stop the process now.
     ///
     /// Only for the case where the connection is being abandoned and the caller wants the exit reported.
@@ -435,6 +451,25 @@ impl Connection {
                 doing: "stopping the provider daemon",
                 source,
             })
+    }
+}
+
+#[async_trait]
+impl InitializationIo for Connection {
+    async fn request_initialize(&self, client: &str, version: &str) -> Result<(), ProviderError> {
+        self.call(
+            HANDSHAKE,
+            &serde_json::json!({
+                "clientInfo": {"name": client, "version": version},
+            }),
+            "opening the connection",
+        )
+        .await
+        .map(|_answer| ())
+    }
+
+    async fn notify_initialized(&self) -> Result<(), ProviderError> {
+        self.write_initialized().await
     }
 }
 
@@ -476,7 +511,30 @@ fn spawn(
 }
 
 /// Write one line, with its newline, in a single call.
-async fn write_line(stdin: &Mutex<ChildStdin>, text: &str) -> Result<(), std::io::Error> {
+async fn write_initialized<W: AsyncWrite + Unpin>(
+    stdin: &Mutex<W>,
+    provider: ProviderId,
+) -> Result<(), ProviderError> {
+    let frame = jsonrpc::write_report(INITIALIZED, &serde_json::json!({})).map_err(|error| {
+        ProviderError::Protocol {
+            provider,
+            doing: "acknowledging provider initialization",
+            detail: error.to_string(),
+        }
+    })?;
+    write_line(stdin, &frame)
+        .await
+        .map_err(|error| ProviderError::Protocol {
+            provider,
+            doing: "acknowledging provider initialization",
+            detail: error.to_string(),
+        })
+}
+
+async fn write_line<W: AsyncWrite + Unpin>(
+    stdin: &Mutex<W>,
+    text: &str,
+) -> Result<(), std::io::Error> {
     // The newline is what makes it a frame. Written with the body in one call so a frame cannot be half sent,
     // which on a shared stream would corrupt every session rather than one.
     let mut framed = String::with_capacity(text.len() + 1);
@@ -696,7 +754,41 @@ async fn broadcast(routes: &Mutex<Routes>, delivery: &Delivery) {
 
 #[cfg(test)]
 mod tests {
+    use tokio::io::AsyncReadExt as _;
+
     use super::*;
+
+    #[derive(Default)]
+    struct ScriptedInitialization {
+        steps: Mutex<Vec<&'static str>>,
+    }
+
+    #[async_trait]
+    impl InitializationIo for ScriptedInitialization {
+        async fn request_initialize(
+            &self,
+            client: &str,
+            version: &str,
+        ) -> Result<(), ProviderError> {
+            assert_eq!(client, "fixture-client");
+            assert_eq!(version, "fixture-version");
+            self.steps.lock().await.push("initialize request");
+            tokio::task::yield_now().await;
+            self.steps.lock().await.push("initialize response");
+            Ok(())
+        }
+
+        async fn notify_initialized(&self) -> Result<(), ProviderError> {
+            self.steps.lock().await.push("initialized notification");
+            Ok(())
+        }
+    }
+
+    impl ScriptedInitialization {
+        async fn first_follow_up(&self) {
+            self.steps.lock().await.push("model/list request");
+        }
+    }
 
     fn params(text: &str) -> Bytes {
         Bytes::copy_from_slice(text.as_bytes())
@@ -718,6 +810,52 @@ mod tests {
             dropped,
             routes: Arc::clone(routes),
         }
+    }
+
+    #[tokio::test]
+    async fn no_follow_up_call_precedes_the_complete_initialization_lifecycle() {
+        let scripted = ScriptedInitialization::default();
+
+        initialize_connection(&scripted, "fixture-client", "fixture-version")
+            .await
+            .expect("the scripted lifecycle completes");
+        scripted.first_follow_up().await;
+
+        assert_eq!(
+            *scripted.steps.lock().await,
+            [
+                "initialize request",
+                "initialize response",
+                "initialized notification",
+                "model/list request",
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn initialization_acknowledgement_is_one_idless_notification() {
+        let (writer, mut reader) = tokio::io::duplex(1024);
+        let writer = Mutex::new(writer);
+
+        write_initialized(
+            &writer,
+            ProviderId::parse("fixture").expect("valid provider id"),
+        )
+        .await
+        .expect("the acknowledgement is writable");
+        let mut bytes = [0_u8; 1024];
+        let read = tokio::time::timeout(Duration::from_secs(2), reader.read(&mut bytes))
+            .await
+            .expect("the acknowledgement read did not time out")
+            .expect("the acknowledgement is readable");
+        let frame = bytes
+            .get(..read)
+            .expect("the reported read length fits the destination buffer");
+        let text = core::str::from_utf8(frame).expect("the frame is UTF-8");
+        assert_eq!(
+            text,
+            "{\"jsonrpc\":\"2.0\",\"method\":\"initialized\",\"params\":{}}\n"
+        );
     }
 
     #[test]

@@ -2,10 +2,10 @@
 //!
 //! # What was measured, and when
 //!
-//! Everything here comes from running version 0.145.0 on this machine and from the protocol schema it
-//! generates, rather than from reading about it. The surface it offers (126 methods runtrol may call, 70
-//! notifications, 11 questions it asks back), the latencies, and the shape of an ending. See [`bound`] for the
-//! list runtrol binds and [`map`] for what it does with each.
+//! Everything here comes from running version 0.146.0 on this machine and from the protocol schema it
+//! generates, rather than from reading about it. The surface it offers (127 requests runtrol may call, one
+//! lifecycle notification it sends, 70 notifications it receives, and 11 questions it asks back), the latencies,
+//! and the shape of an ending. See [`bound`] for the list runtrol binds and [`map`] for what it does with each.
 //!
 //! # The three facts that shape the whole driver
 //!
@@ -30,7 +30,10 @@ pub mod map;
 pub mod provider;
 
 pub use agent::CodexAgent;
-pub use bound::{Answer, BoundCall, BoundNotice, BoundRequest, CALLS, NOTICES, REQUESTS, TERMINAL};
+pub use bound::{
+    Answer, BoundCall, BoundNotice, BoundReport, BoundRequest, CALLS, NOTICES, REPORTS, REQUESTS,
+    TERMINAL,
+};
 pub use conn::{Connection, Delivery, INBOX_DEPTH, Inbox};
 pub use map::{Ended, Frame, MapError};
 pub use provider::CodexProvider;

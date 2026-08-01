@@ -14,6 +14,7 @@ Usage::
     python -X utf8 tests/audit/modelDetectionSmoke.py
     python -X utf8 tests/audit/modelDetectionSmoke.py --require-all
     python -X utf8 tests/audit/modelDetectionSmoke.py --selftest
+    python -X utf8 tests/audit/modelDetectionSmoke.py --seed-fixtures
 
 Exit codes:
     0 every installed provider answered honestly, or none was installed and the skip was stated
@@ -43,6 +44,14 @@ MANIFESTS = DRIVERS / "manifests"
 COMMAND_TIMEOUT_S = 120.0
 EXPECTED_ENV = "RUNTROL_MODEL_GATE_EXPECTED"
 OPERATOR_HOME_ENV = "RUNTROL_MODEL_GATE_OPERATOR_HOME"
+CREDENTIAL_ENV = (
+    "OPENAI_API_KEY",
+    "CODEX_API_KEY",
+    "CODEX_ACCESS_TOKEN",
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_TOKEN",
+)
 
 
 class Failed(Exception):
@@ -123,39 +132,103 @@ def expectedChoices() -> dict[str, tuple[str, ...]]:
     return decodeExpected(os.environ.get(EXPECTED_ENV))
 
 
-def options(argv: list[str]) -> tuple[bool, bool]:
-    """Read the two gate modes and reject misspelled options instead of ignoring them."""
-    known = {"--selftest", "--require-all"}
+def credentialFreeEnvironment(source: dict[str, str] | None = None) -> dict[str, str]:
+    """Copy a child environment while removing every credential variable this gate knows how to forbid."""
+    environment = dict(os.environ if source is None else source)
+    for name in CREDENTIAL_ENV:
+        environment.pop(name, None)
+    return environment
+
+
+def options(argv: list[str]) -> tuple[bool, bool, bool]:
+    """Read the gate modes and reject misspelled or conflicting options instead of ignoring them."""
+    known = {"--selftest", "--require-all", "--seed-fixtures"}
     unknown = sorted(set(argv) - known)
     if unknown:
         raise Failed(f"unknown option(s): {', '.join(unknown)}")
-    return "--selftest" in argv, "--require-all" in argv
+    selftest_mode = "--selftest" in argv
+    seed_mode = "--seed-fixtures" in argv
+    if selftest_mode and seed_mode:
+        raise Failed("--selftest and --seed-fixtures cannot be combined")
+    if seed_mode and "--require-all" in argv:
+        raise Failed("--seed-fixtures and --require-all cannot be combined")
+    return selftest_mode, "--require-all" in argv, seed_mode
 
 
-def buildBinary() -> Path:
+def seedFixtures() -> int:
+    """Create provider-owned, credential-free state at the exact native paths the gate will pass through."""
+    operator_home = os.environ.get(OPERATOR_HOME_ENV)
+    codex_home = os.environ.get("CODEX_HOME")
+    expected = expectedChoices()
+    claude_choices = expected.get("claude")
+    if not operator_home or not codex_home or not claude_choices:
+        raise Failed(
+            f"--seed-fixtures requires {OPERATOR_HOME_ENV}, CODEX_HOME, and a claude choice in {EXPECTED_ENV}"
+        )
+
+    operator = Path(operator_home)
+    codex = Path(codex_home)
+    cache = {
+        "additionalModelOptionsCache": [
+            {
+                "value": choice,
+                "label": "Hosted cache sentinel",
+                "description": "Hosted read-only discovery proof",
+            }
+            for choice in claude_choices
+        ]
+    }
+    try:
+        operator.mkdir(parents=True, exist_ok=True)
+        codex.mkdir(parents=True, exist_ok=True)
+        (operator / ".claude.json").write_text(
+            json.dumps(cache, separators=(",", ":")) + "\n",
+            encoding="utf-8",
+            newline="\n",
+        )
+    except OSError as error:
+        raise Failed(f"could not seed native provider homes: {error}") from error
+    print(f"[modelDetectionSmoke --seed-fixtures] OK. native provider homes exist under {operator.parent}.")
+    return 0
+
+
+def buildBinary(
+    *,
+    runner=subprocess.run,
+    source_environment: dict[str, str] | None = None,
+    binary_path: Path | None = None,
+) -> Path:
     """Build and return the executable this gate drives."""
-    subprocess.run(
+    runner(
         ["cargo", "build", "-p", "runtrol"],
         cwd=ROOT,
+        env=credentialFreeEnvironment(source_environment),
         check=True,
         capture_output=True,
         text=True,
     )
-    binary = ROOT / "target" / "debug" / ("runtrol.exe" if sys.platform == "win32" else "runtrol")
+    binary = binary_path or ROOT / "target" / "debug" / ("runtrol.exe" if sys.platform == "win32" else "runtrol")
     if not binary.is_file():
         raise Failed(f"cargo built without error and {binary.relative_to(ROOT)} is absent")
     return binary
 
 
-def run(binary: Path, home: Path, words: list[str]) -> str:
+def run(
+    binary: Path,
+    home: Path,
+    words: list[str],
+    *,
+    runner=subprocess.run,
+    source_environment: dict[str, str] | None = None,
+) -> str:
     """Run one command against the gate's isolated daemon."""
-    environment = dict(os.environ)
+    environment = credentialFreeEnvironment(source_environment)
     environment["RUNTROL_HOME"] = str(home)
-    if operator_home := os.environ.get(OPERATOR_HOME_ENV):
+    if operator_home := environment.get(OPERATOR_HOME_ENV):
         environment["HOME"] = operator_home
         environment["USERPROFILE"] = operator_home
     try:
-        proc = subprocess.run(
+        proc = runner(
             [str(binary), *words],
             cwd=ROOT,
             env=environment,
@@ -381,6 +454,59 @@ def main(require_all: bool = False) -> int:
 def selftest() -> int:
     """Inject malformed output and a leaked literal before trusting the green path."""
     problems: list[str] = []
+    credential_fixture = {name: f"secret-{name}" for name in CREDENTIAL_ENV}
+    credential_fixture["PATH"] = "fixture-path"
+    credential_fixture[OPERATOR_HOME_ENV] = "fixture-operator-home"
+    scrubbed = credentialFreeEnvironment(credential_fixture)
+    leaked = sorted(set(CREDENTIAL_ENV) & set(scrubbed))
+    if leaked or scrubbed.get("PATH") != "fixture-path":
+        problems.append(f"credential-free child environment was incomplete: leaked={leaked!r}")
+
+    subprocess_calls: list[tuple[list[str], dict[str, object]]] = []
+
+    def fakeRunner(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        subprocess_calls.append((command, kwargs))
+        return subprocess.CompletedProcess(command, 0, stdout="fixture output\n", stderr="")
+
+    fixture_binary = Path(__file__).resolve()
+    fixture_home = Path("fixture-runtrol-home")
+    try:
+        built = buildBinary(
+            runner=fakeRunner,
+            source_environment=credential_fixture,
+            binary_path=fixture_binary,
+        )
+        said = run(
+            fixture_binary,
+            fixture_home,
+            ["models", "fixture"],
+            runner=fakeRunner,
+            source_environment=credential_fixture,
+        )
+    except (Failed, OSError) as error:
+        problems.append(f"fake subprocess boundary did not complete: {error}")
+    else:
+        expected_build_environment = credentialFreeEnvironment(credential_fixture)
+        expected_run_environment = dict(expected_build_environment)
+        expected_run_environment["RUNTROL_HOME"] = str(fixture_home)
+        expected_run_environment["HOME"] = "fixture-operator-home"
+        expected_run_environment["USERPROFILE"] = "fixture-operator-home"
+        expected_calls = (
+            (["cargo", "build", "-p", "runtrol"], expected_build_environment),
+            ([str(fixture_binary), "models", "fixture"], expected_run_environment),
+        )
+        if built != fixture_binary or said != "fixture output":
+            problems.append("fake subprocess results were not propagated")
+        if len(subprocess_calls) != len(expected_calls):
+            problems.append(f"expected two fake subprocess calls, got {len(subprocess_calls)}")
+        else:
+            for index, ((command, kwargs), (expected_command, expected_environment)) in enumerate(
+                zip(subprocess_calls, expected_calls, strict=True), start=1
+            ):
+                if command != expected_command:
+                    problems.append(f"fake subprocess call {index} received the wrong command")
+                if kwargs.get("env") != expected_environment:
+                    problems.append(f"fake subprocess call {index} did not receive the credential-free environment")
     known = parseDiscovery("runtime-model-42  Runtime Model 42  (default)")
     if known != Discovery("known", ("runtime-model-42",), None):
         problems.append("a valid enumerated model was not read")
@@ -462,8 +588,16 @@ def selftest() -> int:
 
 if __name__ == "__main__":
     try:
-        selftest_mode, require_all = options(sys.argv[1:])
+        selftest_mode, require_all, seed_mode = options(sys.argv[1:])
     except Failed as error:
         print(f"[modelDetectionSmoke] {error}", file=sys.stderr)
         raise SystemExit(2) from None
-    raise SystemExit(selftest() if selftest_mode else main(require_all=require_all))
+    if selftest_mode:
+        raise SystemExit(selftest())
+    if seed_mode:
+        try:
+            raise SystemExit(seedFixtures())
+        except Failed as error:
+            print(f"[modelDetectionSmoke] {error}", file=sys.stderr)
+            raise SystemExit(2) from None
+    raise SystemExit(main(require_all=require_all))

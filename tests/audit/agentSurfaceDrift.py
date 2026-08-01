@@ -37,7 +37,20 @@ MANIFESTS = DRIVERS / "manifests"
 TIMEOUT_S = 120.0
 CONTROLS = ("--runtrol-drift-absent-alpha", "--runtrol-drift-absent-omega")
 FLAG = re.compile(r'\bflag:\s*"(?P<name>--[a-z0-9-]+)"')
-METHOD = re.compile(r'\bmethod:\s*"(?P<name>[A-Za-z0-9/]+)"')
+STRING_CONST = re.compile(
+    r'\bpub\s+const\s+(?P<name>[A-Z][A-Z0-9_]*)\s*:\s*&str\s*=\s*"(?P<value>[A-Za-z0-9/]+)"\s*;'
+)
+METHOD_FIELD = re.compile(r"\bmethod\s*:")
+METHOD_VALUE = re.compile(
+    r'\bmethod\s*:\s*(?:"(?P<literal>(?:\\.|[^"\\])*)"|(?P<constant>[A-Z][A-Z0-9_]*))\s*,'
+)
+METHOD_NAME = re.compile(r"[A-Za-z0-9/]+")
+DIRECTIONAL_SURFACES = (
+    ("CALLS", "ClientRequest.json", "client requests"),
+    ("REPORTS", "ClientNotification.json", "client notifications"),
+    ("NOTICES", "ServerNotification.json", "server notifications"),
+    ("REQUESTS", "ServerRequest.json", "server requests"),
+)
 
 
 class Failed(Exception):
@@ -85,6 +98,42 @@ def methodEnums(value: Any) -> set[str]:
     return found
 
 
+def boundMethodsByDirection(source: str) -> dict[str, set[str]]:
+    """Resolve each bound array, including method names referenced through string constants."""
+    constants = {match["name"]: match["value"] for match in STRING_CONST.finditer(source)}
+    surfaces: dict[str, set[str]] = {}
+    for binding, _schema, direction in DIRECTIONAL_SURFACES:
+        array = re.search(
+            rf"\bpub\s+const\s+{binding}\s*:[^=]+?=\s*&\[(?P<body>.*?)\];",
+            source,
+            flags=re.DOTALL,
+        )
+        if array is None:
+            raise Failed(f"bound.rs has no readable {binding} array for {direction}")
+        body = array["body"]
+        fields = list(METHOD_FIELD.finditer(body))
+        entries = list(METHOD_VALUE.finditer(body))
+        if [field.start() for field in fields] != [entry.start() for entry in entries]:
+            raise Failed(f"{binding} has a method entry that cannot be interpreted")
+        methods: set[str] = set()
+        for match in entries:
+            literal = match["literal"]
+            if literal is not None:
+                if METHOD_NAME.fullmatch(literal) is None:
+                    raise Failed(f"{binding} has a quoted method with an invalid format")
+                methods.add(literal)
+                continue
+            constant = match["constant"]
+            resolved = constants.get(constant)
+            if resolved is None:
+                raise Failed(f"{binding} references unresolved method constant {constant}")
+            methods.add(resolved)
+        if not methods:
+            raise Failed(f"{binding} declares no methods for {direction}")
+        surfaces[binding] = methods
+    return surfaces
+
+
 def requireAll(provider: str, bound: set[str], offered: set[str], surface: str) -> None:
     """Fail when a method or flag runtrol consumes is absent, while permitting vendor additions."""
     missing = sorted(bound - offered)
@@ -92,12 +141,23 @@ def requireAll(provider: str, bound: set[str], offered: set[str], surface: str) 
         raise Failed(f"{provider} removed bound {surface}: {', '.join(missing)}")
 
 
+def requireDirectional(
+    provider: str,
+    bound: dict[str, set[str]],
+    offered: dict[str, set[str]],
+) -> list[str]:
+    """Compare each JSON-RPC direction independently so a method in the wrong direction cannot satisfy a binding."""
+    summaries: list[str] = []
+    for binding, _name, direction in DIRECTIONAL_SURFACES:
+        requireAll(provider, bound[binding], offered[binding], direction)
+        summaries.append(f"{direction} {len(bound[binding])}/{len(offered[binding])}")
+    return summaries
+
+
 def schemaSurface(program: str, provider: str, driver: str) -> None:
-    """Generate the current schema and compare all three JSON-RPC directions."""
+    """Generate the current schema and compare every JSON-RPC method direction runtrol binds."""
     source = boundSource(driver)
-    bound = set(METHOD.findall(source))
-    if not bound:
-        raise Failed(f"{driver}/bound.rs declares no methods")
+    bound = boundMethodsByDirection(source)
 
     with tempfile.TemporaryDirectory(prefix="runtrolDriftSchema") as output:
         result = subprocess.run(
@@ -114,16 +174,16 @@ def schemaSurface(program: str, provider: str, driver: str) -> None:
             said = (result.stdout or "") + (result.stderr or "")
             raise Failed(f"{provider} schema generation failed: {said.strip()}")
 
-        offered: set[str] = set()
-        for name in ("ClientRequest.json", "ServerNotification.json", "ServerRequest.json"):
+        offered: dict[str, set[str]] = {}
+        for binding, name, _direction in DIRECTIONAL_SURFACES:
             path = Path(output) / name
             try:
-                offered.update(methodEnums(json.loads(path.read_text(encoding="utf-8"))))
+                offered[binding] = methodEnums(json.loads(path.read_text(encoding="utf-8")))
             except (OSError, json.JSONDecodeError) as error:
                 raise Failed(f"{provider} generated unreadable {name}: {error}") from error
 
-    requireAll(provider, bound, offered, "JSON-RPC methods")
-    print(f"  {provider}: {len(bound)} bound methods still exist in {len(offered)} generated methods")
+    summaries = requireDirectional(provider, bound, offered)
+    print(f"  {provider}: " + ", ".join(summaries))
 
 
 def askFlag(program: str, safe: list[str], flag: str) -> str:
@@ -219,8 +279,58 @@ def exercise(require_all: bool = False) -> int:
 def selftest() -> int:
     """Inject removed methods, removed flags, and unstable controls before trusting a green probe."""
     problems: list[str] = []
+    sample_bound = """
+pub const HANDSHAKE: &str = "initialize";
+pub const READY: &str = "initialized";
+pub const CALLS: &[BoundCall] = &[
+    BoundCall { method: HANDSHAKE, means: "fixture" },
+];
+pub const REPORTS: &[BoundReport] = &[
+    BoundReport { method: READY, means: "fixture" },
+];
+pub const NOTICES: &[BoundNotice] = &[
+    BoundNotice { method: "turn/completed", means: "fixture" },
+];
+pub const REQUESTS: &[BoundRequest] = &[
+    BoundRequest { method: "approval/request", means: "fixture" },
+];
+"""
+    parsed = boundMethodsByDirection(sample_bound)
+    expected_bound = {
+        "CALLS": {"initialize"},
+        "REPORTS": {"initialized"},
+        "NOTICES": {"turn/completed"},
+        "REQUESTS": {"approval/request"},
+    }
+    if parsed != expected_bound:
+        problems.append(f"directional bound methods were not resolved: {parsed!r}")
+
+    wrong_direction = {
+        "CALLS": {"initialized"},
+        "REPORTS": {"initialize"},
+        "NOTICES": {"turn/completed"},
+        "REQUESTS": {"approval/request"},
+    }
     cases = [
         ("removed method", lambda: requireAll("fixture", {"a", "b"}, {"a"}, "methods")),
+        (
+            "methods offered only in the wrong direction",
+            lambda: requireDirectional("fixture", expected_bound, wrong_direction),
+        ),
+        (
+            "unresolved method constant",
+            lambda: boundMethodsByDirection(sample_bound.replace("method: READY", "method: ABSENT")),
+        ),
+        (
+            "unreadable quoted method beside a readable method",
+            lambda: boundMethodsByDirection(
+                sample_bound.replace(
+                    'BoundCall { method: HANDSHAKE, means: "fixture" },',
+                    'BoundCall { method: "initialize", means: "fixture" },\n'
+                    '    BoundCall { method: "future.method", means: "fixture" },',
+                )
+            ),
+        ),
         (
             "removed flag",
             lambda: classifyFlags("fixture", {"--a"}, ["absent", "absent"], {"--a": "absent"}),
@@ -252,6 +362,8 @@ def selftest() -> int:
     }
     if methodEnums(sample) != {"thread/start", "vendor/new"}:
         problems.append("method discriminators were not read from a schema tree")
+    if not any(name == "ClientNotification.json" for _binding, name, _direction in DIRECTIONAL_SURFACES):
+        problems.append("client notifications were omitted from schema drift coverage")
 
     try:
         requireCoverage({"first", "second"}, {"first", "second"})

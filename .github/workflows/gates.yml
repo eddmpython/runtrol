@@ -283,10 +283,27 @@ jobs:
         run: npm install --global @anthropic-ai/claude-code@2.1.220
       - name: 실물 Codex 고정 판본 설치
         run: npm install --global @openai/codex@0.146.0
+      - name: 고정 판본 credential-free 모델 fixture 준비
+        env:
+          CODEX_HOME: ${{ runner.temp }}/runtrol-pinned-model-detection-codex
+          RUNTROL_MODEL_GATE_OPERATOR_HOME: ${{ runner.temp }}/runtrol-pinned-model-detection-home
+          RUNTROL_MODEL_GATE_EXPECTED: '{"claude":["runtrol-pinned-cache-sentinel"]}'
+        run: python -X utf8 tests/audit/modelDetectionSmoke.py --seed-fixtures
       - name: provider surface drift 게이트 자체 검증
         run: python -X utf8 tests/audit/agentSurfaceDrift.py --selftest
       - name: 실물 provider CLI 표면은 고정 판본과 호환
         run: python -X utf8 tests/audit/agentSurfaceDrift.py --require-all
+      - name: 고정 판본 모델 인식 게이트 자체 검증
+        env:
+          CODEX_HOME: ${{ runner.temp }}/runtrol-pinned-model-detection-codex
+        run: python -X utf8 tests/audit/modelDetectionSmoke.py --selftest
+      - name: 고정 판본 provider는 credential 없이 모델을 인식
+        env:
+          CODEX_HOME: ${{ runner.temp }}/runtrol-pinned-model-detection-codex
+          RUNTROL_MODEL_GATE_OPERATOR_HOME: ${{ runner.temp }}/runtrol-pinned-model-detection-home
+          RUNTROL_MODEL_GATE_EXPECTED: '{"claude":["runtrol-pinned-cache-sentinel"]}'
+          TMPDIR: ${{ matrix.os == 'macos-latest' && '/tmp' || runner.temp }}
+        run: python -X utf8 tests/audit/modelDetectionSmoke.py --require-all
       - name: 실물 Claude hidden approval 게이트 자체 검증
         run: python -X utf8 tests/audit/claudeApprovalSmoke.py --selftest
       - name: 실물 Claude hidden approval 거부 왕복
@@ -304,8 +321,12 @@ jobs:
   # deterministic Messages endpoint, carries only a non-secret sentinel, and spends no hosted model token.
   providerDrift:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
@@ -315,6 +336,7 @@ jobs:
         with:
           node-version: "24"
       - name: Linux desktop shell dependencies
+        if: matrix.os == 'ubuntu-latest'
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
@@ -323,11 +345,10 @@ jobs:
         run: npm install --global @anthropic-ai/claude-code @openai/codex
       - name: Seed provider-owned model cache fixture
         env:
-          PROVIDER_HOME: ${{ runner.temp }}/runtrol-model-detection-home
           CODEX_HOME: ${{ runner.temp }}/runtrol-model-detection-codex
-        run: |
-          mkdir -p "$PROVIDER_HOME" "$CODEX_HOME"
-          printf '%s\n' '{"additionalModelOptionsCache":[{"value":"runtrol-hosted-cache-sentinel","label":"Hosted cache sentinel","description":"Hosted read-only discovery proof"}]}' > "$PROVIDER_HOME/.claude.json"
+          RUNTROL_MODEL_GATE_OPERATOR_HOME: ${{ runner.temp }}/runtrol-model-detection-home
+          RUNTROL_MODEL_GATE_EXPECTED: '{"claude":["runtrol-hosted-cache-sentinel"]}'
+        run: python -X utf8 tests/audit/modelDetectionSmoke.py --seed-fixtures
       - name: Provider surface drift gate selftest
         run: python -X utf8 tests/audit/agentSurfaceDrift.py --selftest
       - name: Built-in unauthenticated provider probes remain compatible
@@ -335,20 +356,17 @@ jobs:
       - name: Model discovery gate selftest
         env:
           CODEX_HOME: ${{ runner.temp }}/runtrol-model-detection-codex
-        run: >-
-          env -u OPENAI_API_KEY -u CODEX_API_KEY -u ANTHROPIC_API_KEY
-          -u ANTHROPIC_AUTH_TOKEN -u CLAUDE_CODE_OAUTH_TOKEN
-          python -X utf8 tests/audit/modelDetectionSmoke.py --selftest
+        run: python -X utf8 tests/audit/modelDetectionSmoke.py --selftest
       - name: Every built-in provider discovers models without credentials
         env:
           CODEX_HOME: ${{ runner.temp }}/runtrol-model-detection-codex
           RUNTROL_MODEL_GATE_OPERATOR_HOME: ${{ runner.temp }}/runtrol-model-detection-home
           RUNTROL_MODEL_GATE_EXPECTED: '{"claude":["runtrol-hosted-cache-sentinel"]}'
-        run: >-
-          env -u OPENAI_API_KEY -u CODEX_API_KEY -u ANTHROPIC_API_KEY
-          -u ANTHROPIC_AUTH_TOKEN -u CLAUDE_CODE_OAUTH_TOKEN
-          python -X utf8 tests/audit/modelDetectionSmoke.py --require-all
+          TMPDIR: ${{ matrix.os == 'macos-latest' && '/tmp' || runner.temp }}
+        run: python -X utf8 tests/audit/modelDetectionSmoke.py --require-all
       - name: Real Claude hidden approval gate selftest
         run: python -X utf8 tests/audit/claudeApprovalSmoke.py --selftest
       - name: Current real Claude hidden approval denial round trip
+        env:
+          TMPDIR: ${{ matrix.os == 'macos-latest' && '/tmp' || runner.temp }}
         run: python -X utf8 tests/audit/claudeApprovalSmoke.py --require-external

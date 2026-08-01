@@ -1,9 +1,9 @@
 //! THE surface runtrol binds on this CLI, and nothing else.
 //!
 //! Drift exposure is proportional to what a wrapper consumes, not to what a vendor ships. Measured from the
-//! generated schema on this machine: **126 methods runtrol may call, 70 notifications it may receive, and 11
-//! requests the provider makes of runtrol.** The three lists below are what runtrol actually depends on, so the
-//! answer to "what breaks if the vendor changes something" is one file long.
+//! generated schema on this machine: **127 requests runtrol may call, one lifecycle notification it sends, 70
+//! notifications it may receive, and 11 requests the provider makes of runtrol.** The four lists below are what
+//! runtrol actually depends on, so the answer to "what breaks if the vendor changes something" is one file long.
 //!
 //! # Every request the provider makes gets an answer, including the ones runtrol cannot serve
 //!
@@ -32,9 +32,28 @@ pub struct BoundCall {
 /// The method that opens the connection.
 ///
 /// Measured: it is answered in roughly four seconds on a cold start, and nothing else may be called before it.
-/// No follow-up notification is required, which was measured rather than assumed: a probe that sent only this
-/// and went straight to starting a thread worked.
 pub const HANDSHAKE: &str = "initialize";
+
+/// A client-to-provider notification runtrol sends without expecting an answer.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct BoundReport {
+    /// The method name.
+    pub method: &'static str,
+    /// What runtrol uses it for, for a person reading this list.
+    pub means: &'static str,
+}
+
+/// Acknowledge the successful handshake before making any other call.
+///
+/// The app-server lifecycle requires this notification after the `initialize` answer. Sending it before the answer
+/// races initialization, and omitting it leaves later calls outside the initialized protocol state.
+pub const INITIALIZED: &str = "initialized";
+
+/// Every client notification runtrol sends.
+pub const REPORTS: &[BoundReport] = &[BoundReport {
+    method: INITIALIZED,
+    means: "acknowledge the initialize answer before runtrol makes any other provider call",
+}];
 
 /// The method that ends a turn early.
 ///
@@ -270,6 +289,11 @@ mod tests {
         // died.
         assert!(CALLS.len() <= 12, "the call list grew to {}", CALLS.len());
         assert!(
+            REPORTS.len() <= 2,
+            "the client notification list grew to {}",
+            REPORTS.len()
+        );
+        assert!(
             NOTICES.len() <= 16,
             "the notification list grew to {}",
             NOTICES.len()
@@ -323,6 +347,15 @@ mod tests {
                 assert_ne!(call.method, other.method, "{} is bound twice", call.method);
             }
         }
+        for (index, report) in REPORTS.iter().enumerate() {
+            for other in REPORTS.iter().skip(index + 1) {
+                assert_ne!(
+                    report.method, other.method,
+                    "{} is bound twice",
+                    report.method
+                );
+            }
+        }
         for (index, notice) in NOTICES.iter().enumerate() {
             for other in NOTICES.iter().skip(index + 1) {
                 assert_ne!(
@@ -350,6 +383,10 @@ mod tests {
         for call in CALLS {
             assert!(call.means.len() > 20, "{call:?} says nothing");
             assert!(!call.method.is_empty());
+        }
+        for report in REPORTS {
+            assert!(report.means.len() > 20, "{report:?} says nothing");
+            assert!(!report.method.is_empty());
         }
         for notice in NOTICES {
             assert!(notice.means.len() > 20, "{notice:?} says nothing");
