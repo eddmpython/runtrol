@@ -2657,6 +2657,7 @@ dependencies = [
  "runtrol-core",
  "runtrol-provider",
  "runtrol-security",
+ "runtrol-store",
  "runtrol-transport",
  "tokio",
 ]
@@ -2711,6 +2712,7 @@ dependencies = [
  "runtrol-provider",
  "runtrol-security",
  "runtrol-store",
+ "runtrol-transport",
  "serde_json",
  "thiserror 2.0.19",
  "tokio",

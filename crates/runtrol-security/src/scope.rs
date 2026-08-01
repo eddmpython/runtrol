@@ -169,7 +169,47 @@ impl DeviceScope {
             | Self::Provider(_) => false,
         }
     }
+
+    /// Rebuild one scope from the stable text written after local approval.
+    ///
+    /// Unknown text is refused instead of ignored. Silently dropping one scope during restoration would make the
+    /// operator's approved grant differ from the grant the daemon enforces.
+    ///
+    /// # Errors
+    ///
+    /// [`StoredScopeError`] when the text is not one of the published stable forms.
+    pub fn from_stored(text: &str) -> Result<Self, StoredScopeError> {
+        let plain = Self::EVERY_PLAIN
+            .iter()
+            .find(|scope| scope.name() == text)
+            .copied();
+        if let Some(scope) = plain {
+            return Ok(scope);
+        }
+        if let Some(root) = wrapped(text, "workspace")
+            && let Some(root) = WorkspaceRootId::parse(root)
+        {
+            return Ok(Self::Workspace(root));
+        }
+        if let Some(provider) = wrapped(text, "provider")
+            && let Ok(provider) = ProviderId::parse(provider)
+        {
+            return Ok(Self::Provider(provider));
+        }
+        Err(StoredScopeError)
+    }
 }
+
+fn wrapped<'a>(text: &'a str, kind: &str) -> Option<&'a str> {
+    text.strip_prefix(kind)?
+        .strip_prefix('(')?
+        .strip_suffix(')')
+}
+
+/// A stored device scope is not one this build can enforce.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+#[error("stored device scope is not recognized by this build")]
+pub struct StoredScopeError;
 
 impl fmt::Display for DeviceScope {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -359,6 +399,33 @@ mod tests {
             DeviceScope::Provider(a_provider()).to_string(),
             "provider(codex)"
         );
+    }
+
+    #[test]
+    fn every_scope_round_trips_through_its_stored_text() {
+        for scope in every_device_scope() {
+            let stored = scope.to_string();
+            assert_eq!(DeviceScope::from_stored(&stored), Ok(scope), "{stored}");
+        }
+    }
+
+    #[test]
+    fn unknown_or_malformed_stored_scopes_are_refused() {
+        for stored in [
+            "",
+            "session.future",
+            "workspace()",
+            "workspace(not-a-uuid)",
+            "provider()",
+            "provider(Codex)",
+            "provider(codex))",
+        ] {
+            assert_eq!(
+                DeviceScope::from_stored(stored),
+                Err(StoredScopeError),
+                "{stored}"
+            );
+        }
     }
 
     #[test]

@@ -1,16 +1,10 @@
 //! Who holds what, and the two things that never need holding.
 //!
 //! The ledger is default-deny in the only way that counts: [`GrantLedger::holds`] answers `false` for
-//! a device it has never seen, and the only function that adds authority requires a
-//! [`PcPresence`]. There is no code path from a remote request to an entry in this table.
-//!
-//! # Not stored, on purpose
-//!
-//! The ledger lives in memory and does not survive a restart. That is a real limitation and it fails
-//! in the safe direction: a restarted daemon has granted nobody anything, so every device starts at
-//! deny and the operator re-approves at the machine. Persistence arrives with the storage crate, and
-//! it arrives as a deliberate design step rather than as a convenience, because a grant table on disk
-//! is a grant table an agent might reach.
+//! a device it has never seen. Runtime authority can only be added by [`GrantLedger::grant`], which requires
+//! exact [`PcPresence`]. Startup may reconstruct the same approved rows through [`GrantLedger::from_persisted`];
+//! that constructor is called before any remote listener exists and there is no method that can apply a persisted
+//! row to a running ledger.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -53,6 +47,27 @@ impl GrantLedger {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Reconstruct grants previously written after exact PC presence.
+    ///
+    /// This is a constructor, not a mutating restore method. Assembly calls it before opening a remote listener,
+    /// so a remote request cannot use persistence as a second grant path. Duplicate scopes collapse to the same
+    /// set representation used by live grants.
+    #[must_use]
+    pub fn from_persisted(grants: impl IntoIterator<Item = (DeviceId, Vec<DeviceScope>)>) -> Self {
+        let granted = grants
+            .into_iter()
+            .filter_map(|(device, scopes)| {
+                let scopes: BTreeSet<DeviceScope> = scopes.into_iter().collect();
+                if scopes.is_empty() {
+                    None
+                } else {
+                    Some((device, scopes))
+                }
+            })
+            .collect();
+        Self { granted }
     }
 
     /// Give a device the scopes the operator approved.
@@ -400,5 +415,22 @@ mod tests {
         ledger.grant(device, &scopes, &witness).expect("granted");
         assert_eq!(ledger.scopes_of(device), ledger.scopes_of(device));
         assert_eq!(ledger.scopes_of(device).len(), 3);
+    }
+
+    #[test]
+    fn persisted_grants_are_reconstructed_without_creating_an_empty_device() {
+        let granted = DeviceId::now();
+        let empty = DeviceId::now();
+        let ledger = GrantLedger::from_persisted([
+            (
+                granted,
+                vec![DeviceScope::SessionList, DeviceScope::SessionList],
+            ),
+            (empty, Vec::new()),
+        ]);
+
+        assert!(ledger.holds(granted, DeviceScope::SessionList));
+        assert_eq!(ledger.scopes_of(granted).len(), 1);
+        assert!(!ledger.devices().contains(&empty));
     }
 }

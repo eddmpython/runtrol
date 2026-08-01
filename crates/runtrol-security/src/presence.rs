@@ -92,6 +92,46 @@ const WORDS: &[&str] = &[
     "flint",
 ];
 
+/// Validated operator-facing identity labels shared by pairing and durable device restoration.
+///
+/// The text is untrusted even after it came from an authenticated device. Construction rejects controls, bidi
+/// overrides, blank labels, and text beyond the local prompt bounds before any label reaches a diagnostic or UI.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct DeviceLabels {
+    name: Box<str>,
+    platform: Box<str>,
+}
+
+impl DeviceLabels {
+    /// Validate device identity labels.
+    ///
+    /// # Errors
+    ///
+    /// [`SecurityError::InvalidPairingIdentity`] when a label cannot safely enter the local surface.
+    pub fn new(name: impl AsRef<str>, platform: impl AsRef<str>) -> Result<Self, SecurityError> {
+        Ok(Self {
+            name: checked_label("device name", name.as_ref(), DEVICE_NAME_MAX_CHARS)?,
+            platform: checked_label(
+                "device platform",
+                platform.as_ref(),
+                DEVICE_PLATFORM_MAX_CHARS,
+            )?,
+        })
+    }
+
+    /// Operator-facing device name.
+    #[must_use]
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Operator-facing platform.
+    #[must_use]
+    pub fn platform(&self) -> &str {
+        &self.platform
+    }
+}
+
 /// A pairing proposal rendered on the PC and bound to the witness it creates.
 ///
 /// The attempt identifier prevents one fresh witness from approving a second simultaneous offer from the same
@@ -101,8 +141,7 @@ const WORDS: &[&str] = &[
 pub struct PairingIdentity {
     attempt_id: [u8; 16],
     static_key: [u8; 32],
-    name: Box<str>,
-    platform: Box<str>,
+    labels: DeviceLabels,
 }
 
 impl PairingIdentity {
@@ -118,17 +157,10 @@ impl PairingIdentity {
         name: impl AsRef<str>,
         platform: impl AsRef<str>,
     ) -> Result<Self, SecurityError> {
-        let name = checked_label("device name", name.as_ref(), DEVICE_NAME_MAX_CHARS)?;
-        let platform = checked_label(
-            "device platform",
-            platform.as_ref(),
-            DEVICE_PLATFORM_MAX_CHARS,
-        )?;
         Ok(Self {
             attempt_id,
             static_key,
-            name,
-            platform,
+            labels: DeviceLabels::new(name, platform)?,
         })
     }
 
@@ -147,13 +179,13 @@ impl PairingIdentity {
     /// Operator-facing device name.
     #[must_use]
     pub fn name(&self) -> &str {
-        &self.name
+        self.labels.name()
     }
 
     /// Operator-facing platform.
     #[must_use]
     pub fn platform(&self) -> &str {
-        &self.platform
+        self.labels.platform()
     }
 }
 
@@ -214,7 +246,8 @@ impl fmt::Display for GrantRequest {
                 write!(
                     f,
                     "pair device '{}' on {} with key ",
-                    identity.name, identity.platform
+                    identity.name(),
+                    identity.platform()
                 )?;
                 for byte in identity.static_key.iter().take(8) {
                     write!(f, "{byte:02x}")?;

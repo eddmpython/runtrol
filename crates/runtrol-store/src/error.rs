@@ -75,6 +75,18 @@ pub enum StoreError {
         why: &'static str,
     },
 
+    /// A paired-device authorization row could not be decoded.
+    ///
+    /// Unlike one malformed session pointer, this stops startup. Continuing would silently change who holds what,
+    /// so the operator must repair or revoke the damaged device row before a remote listener can exist.
+    #[error("a stored device authorization row is malformed at {field}: {why}")]
+    DeviceCodec {
+        /// Which field the decoder stopped at.
+        field: &'static str,
+        /// What was wrong.
+        why: &'static str,
+    },
+
     /// The storage engine failed while runtrol was doing something specific.
     ///
     /// `doing` is required. An engine error without the operation that produced it tells the operator that
@@ -92,13 +104,16 @@ pub enum StoreError {
 impl StoreError {
     /// Whether the operator has to do something before runtrol can start.
     ///
-    /// Every schema refusal and a lock conflict need a person. A decode failure of one row does not: the
-    /// rest of the list is still readable, which is why it is not in this set.
+    /// Every schema refusal, a lock conflict, and damaged authorization need a person. A decode failure of one
+    /// session row does not: the rest of that list is still readable, which is why only the device codec is here.
     #[must_use]
     pub const fn needs_the_operator(&self) -> bool {
         matches!(
             self,
-            Self::AlreadyOpen { .. } | Self::SchemaTooNew { .. } | Self::SchemaTooOld { .. }
+            Self::AlreadyOpen { .. }
+                | Self::SchemaTooNew { .. }
+                | Self::SchemaTooOld { .. }
+                | Self::DeviceCodec { .. }
         )
     }
 }

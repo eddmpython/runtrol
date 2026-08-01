@@ -28,7 +28,7 @@ async fn send(request: impl FnOnce(u16) -> String) -> Seen {
     let port = listener.local_addr().expect("it has an address").port();
     let device = DeviceId::now();
     let token = AccessToken::parse(TOKEN).expect("the fixture token is strong and canonical");
-    let server = PhoneHttp::loopback(port, [ORIGIN], [DeviceCredential::new(device, token)])
+    let server = PhoneHttp::loopback(port, [ORIGIN], [DeviceCredential::new(device, &token)])
         .expect("the policy is valid");
     let calls = Arc::new(AtomicUsize::new(0));
     let called = Arc::clone(&calls);

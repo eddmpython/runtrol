@@ -28,10 +28,14 @@ impl DeviceId {
         Self(Uuid::now_v7())
     }
 
-    /// Rebuild from stored bytes.
+    /// Rebuild from stored UUIDv7 bytes.
     #[must_use]
-    pub const fn from_bytes(bytes: [u8; 16]) -> Self {
-        Self(Uuid::from_bytes(bytes))
+    pub const fn from_bytes(bytes: [u8; 16]) -> Option<Self> {
+        if is_uuid_v7(&bytes) {
+            Some(Self(Uuid::from_bytes(bytes)))
+        } else {
+            None
+        }
     }
 
     /// The 16 bytes, big-endian.
@@ -68,16 +72,29 @@ impl WorkspaceRootId {
         Self(Uuid::now_v7())
     }
 
-    /// Rebuild from stored bytes.
+    /// Rebuild from stored UUIDv7 bytes.
     #[must_use]
-    pub const fn from_bytes(bytes: [u8; 16]) -> Self {
-        Self(Uuid::from_bytes(bytes))
+    pub const fn from_bytes(bytes: [u8; 16]) -> Option<Self> {
+        if is_uuid_v7(&bytes) {
+            Some(Self(Uuid::from_bytes(bytes)))
+        } else {
+            None
+        }
     }
 
     /// The 16 bytes, big-endian.
     #[must_use]
     pub const fn as_bytes(&self) -> &[u8; 16] {
         self.0.as_bytes()
+    }
+
+    /// Rebuild a workspace root identifier from its canonical stored text.
+    #[must_use]
+    pub fn parse(text: &str) -> Option<Self> {
+        match Uuid::parse_str(text) {
+            Ok(id) => Self::from_bytes(*id.as_bytes()),
+            Err(_) => None,
+        }
     }
 }
 
@@ -93,6 +110,10 @@ impl fmt::Debug for WorkspaceRootId {
     }
 }
 
+const fn is_uuid_v7(bytes: &[u8; 16]) -> bool {
+    bytes[6] & 0xF0 == 0x70 && bytes[8] & 0xC0 == 0x80
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -106,9 +127,18 @@ mod tests {
     #[test]
     fn identifiers_round_trip_through_bytes() {
         let device = DeviceId::now();
-        assert_eq!(device, DeviceId::from_bytes(*device.as_bytes()));
+        assert_eq!(Some(device), DeviceId::from_bytes(*device.as_bytes()));
         let root = WorkspaceRootId::now();
-        assert_eq!(root, WorkspaceRootId::from_bytes(*root.as_bytes()));
+        assert_eq!(Some(root), WorkspaceRootId::from_bytes(*root.as_bytes()));
+        assert_eq!(DeviceId::from_bytes([0; 16]), None);
+        assert_eq!(WorkspaceRootId::from_bytes([0; 16]), None);
+    }
+
+    #[test]
+    fn workspace_roots_round_trip_through_canonical_text() {
+        let root = WorkspaceRootId::now();
+        assert_eq!(WorkspaceRootId::parse(&root.to_string()), Some(root));
+        assert_eq!(WorkspaceRootId::parse("not-a-root"), None);
     }
 
     #[test]

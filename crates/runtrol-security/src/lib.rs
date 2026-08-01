@@ -6,7 +6,8 @@
 //!
 //! - **An authenticated remote request is still denied by default.** A phone may shrink its authority
 //!   and never grow it. [`GrantLedger::holds`] answers `false` for anything it has not been told, and
-//!   the only function that adds authority takes a [`PcPresence`].
+//!   live grants take [`PcPresence`], while startup reconstruction accepts only rows loaded before a remote listener
+//!   exists.
 //! - **Some things are structurally ungrantable.** Pairing a device, writing configuration, answering
 //!   approvals automatically, and bypassing a provider's permission prompt are [`LocalScope`] values.
 //!   There is no conversion from [`LocalScope`] to [`DeviceScope`], so handing one to a grant does not
@@ -40,6 +41,8 @@ pub use caller::Caller;
 pub use error::SecurityError;
 pub use grant::{GrantLedger, LocalAuthorization};
 pub use id::{DeviceId, WorkspaceRootId};
-pub use presence::{GrantRequest, LocalConsole, PairingIdentity, PcPresence, PresenceChallenge};
-pub use scope::{DeviceScope, LocalScope};
+pub use presence::{
+    DeviceLabels, GrantRequest, LocalConsole, PairingIdentity, PcPresence, PresenceChallenge,
+};
+pub use scope::{DeviceScope, LocalScope, StoredScopeError};
 pub use workspace::{DeniedPath, DenyList, WorkspaceRoot};

@@ -14,5 +14,8 @@ pub use crypto::{
     PendingPairing, PublicKey, ResponderHandshake, SessionBinding, StaticKeypair,
 };
 pub use egress::{ApprovedDestination, EgressError, EgressPolicy};
-pub use http::{AccessToken, DeviceCredential, PhoneBody, PhoneHttp, PhoneHttpError, response};
+pub use http::{
+    AccessToken, CredentialFingerprint, DeviceCredential, PhoneBody, PhoneHttp, PhoneHttpError,
+    response,
+};
 pub use hyper::StatusCode;

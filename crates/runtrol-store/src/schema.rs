@@ -32,6 +32,9 @@ pub const SCHEMA_VERSION: u8 = 1;
 /// Type name for [`SessionKey`], version included.
 const T_SESSION_KEY: &str = "runtrol::SessionKey@1";
 
+/// Type name for [`DeviceKey`], version included.
+const T_DEVICE_KEY: &str = "runtrol::DeviceKey@1";
+
 /// Key of the `meta` entry holding the schema version.
 pub const META_SCHEMA_VERSION: &str = "schema_version";
 
@@ -46,6 +49,11 @@ pub const META: TableDefinition<'static, &str, &[u8]> = TableDefinition::new("me
 
 /// The session pointers runtrol owns. Roughly 200 bytes each, and never a transcript.
 pub const SESSIONS: TableDefinition<'static, SessionKey, &[u8]> = TableDefinition::new("sessions");
+
+/// Paired device identities and the exact remotely grantable authority approved at the PC.
+///
+/// Rows contain public identity material and a bearer-token fingerprint, never the bearer token itself.
+pub const DEVICES: TableDefinition<'static, DeviceKey, &[u8]> = TableDefinition::new("devices");
 
 /// Provider identifier and native session identifier, to the runtrol session.
 ///
@@ -138,6 +146,73 @@ impl Key for SessionKey {
     }
 }
 
+/// A paired device's primary key: the raw bytes of its locally minted identifier.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+pub struct DeviceKey([u8; 16]);
+
+impl DeviceKey {
+    /// Rebuild a device key from the locally minted identifier bytes.
+    #[must_use]
+    pub const fn from_bytes(bytes: [u8; 16]) -> Self {
+        Self(bytes)
+    }
+
+    /// Return the locally minted identifier bytes.
+    #[must_use]
+    pub const fn to_bytes(self) -> [u8; 16] {
+        self.0
+    }
+
+    /// The lowest possible key, for opening a range scan.
+    pub const FIRST: Self = Self([0; 16]);
+
+    /// The highest possible key, for closing a range scan.
+    pub const LAST: Self = Self([0xFF; 16]);
+}
+
+impl Value for DeviceKey {
+    type SelfType<'a>
+        = Self
+    where
+        Self: 'a;
+    type AsBytes<'a>
+        = [u8; 16]
+    where
+        Self: 'a;
+
+    fn fixed_width() -> Option<usize> {
+        Some(16)
+    }
+
+    fn from_bytes<'a>(data: &'a [u8]) -> Self
+    where
+        Self: 'a,
+    {
+        let mut bytes = [0_u8; 16];
+        for (slot, byte) in bytes.iter_mut().zip(data) {
+            *slot = *byte;
+        }
+        Self(bytes)
+    }
+
+    fn as_bytes<'a, 'b: 'a>(value: &'a Self) -> [u8; 16]
+    where
+        Self: 'b,
+    {
+        value.0
+    }
+
+    fn type_name() -> TypeName {
+        TypeName::new(T_DEVICE_KEY)
+    }
+}
+
+impl Key for DeviceKey {
+    fn compare(left: &[u8], right: &[u8]) -> Ordering {
+        left.cmp(right)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -151,6 +226,10 @@ mod tests {
         assert!(
             T_SESSION_KEY.ends_with(&suffix),
             "{T_SESSION_KEY} does not carry schema version {SCHEMA_VERSION}"
+        );
+        assert!(
+            T_DEVICE_KEY.ends_with(&suffix),
+            "{T_DEVICE_KEY} does not carry schema version {SCHEMA_VERSION}"
         );
     }
 
@@ -206,5 +285,17 @@ mod tests {
         // roughly 200 bytes per session contract.
         assert_eq!(<SessionKey as Value>::fixed_width(), Some(16));
         assert_eq!(size_of::<SessionKey>(), 16);
+    }
+
+    #[test]
+    fn a_device_key_round_trips_and_stays_fixed_width() {
+        let bytes = [0xA5; 16];
+        let key = DeviceKey::from_bytes(bytes);
+        assert_eq!(key.to_bytes(), bytes);
+
+        let encoded = <DeviceKey as Value>::as_bytes(&key);
+        assert_eq!(<DeviceKey as Value>::from_bytes(&encoded), key);
+        assert_eq!(<DeviceKey as Value>::fixed_width(), Some(16));
+        assert_eq!(size_of::<DeviceKey>(), 16);
     }
 }

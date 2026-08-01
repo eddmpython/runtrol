@@ -348,6 +348,14 @@ mod tests {
             .needs_the_operator(),
             "one unreadable row leaves the rest of the list readable"
         );
+        assert!(
+            StoreError::DeviceCodec {
+                field: "scope",
+                why: "not valid UTF-8",
+            }
+            .needs_the_operator(),
+            "damaged authority must stop remote startup"
+        );
     }
 
     #[test]

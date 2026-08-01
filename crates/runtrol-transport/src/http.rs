@@ -29,12 +29,15 @@ use hyper::service::service_fn;
 use hyper::{HeaderMap, Method, Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
 use runtrol_security::{Caller, DeviceId};
+use sha2::{Digest as _, Sha256};
 use tokio::net::TcpStream;
+use zeroize::{Zeroize, ZeroizeOnDrop};
 
 const PROTOCOL_HEADER: &str = "x-runtrol-proto";
 const PROTOCOL_VERSION: &str = "1";
 const TOKEN_BYTES: usize = 32;
 const TOKEN_HEX: usize = TOKEN_BYTES * 2;
+const TOKEN_FINGERPRINT_DOMAIN: &[u8] = b"runtrol/http-credential/1";
 
 /// A response body on the phone-facing HTTP plane.
 ///
@@ -46,6 +49,7 @@ pub type PhoneBody = BoxBody<Bytes, Infallible>;
 /// It deliberately implements neither `Debug` nor `Display`. A diagnostic can name the device but has no reason to
 /// print the secret that proves it. The canonical representation is 32 bytes encoded as 64 lowercase hexadecimal
 /// characters.
+#[derive(Zeroize, ZeroizeOnDrop)]
 pub struct AccessToken([u8; TOKEN_BYTES]);
 
 impl AccessToken {
@@ -55,50 +59,77 @@ impl AccessToken {
     ///
     /// [`PhoneHttpError::InvalidToken`] when the text is not exactly 64 lowercase hexadecimal characters.
     pub fn parse(encoded: &str) -> Result<Self, PhoneHttpError> {
-        if encoded.len() != TOKEN_HEX {
-            return Err(PhoneHttpError::InvalidToken);
-        }
-        let mut bytes = [0_u8; TOKEN_BYTES];
-        for (slot, pair) in bytes.iter_mut().zip(encoded.as_bytes().chunks_exact(2)) {
-            let &[high_byte, low_byte] = pair else {
-                return Err(PhoneHttpError::InvalidToken);
-            };
-            let Some(high) = hex_nibble(high_byte) else {
-                return Err(PhoneHttpError::InvalidToken);
-            };
-            let Some(low) = hex_nibble(low_byte) else {
-                return Err(PhoneHttpError::InvalidToken);
-            };
-            *slot = (high << 4) | low;
-        }
-        Ok(Self(bytes))
+        decode_token(encoded.as_bytes()).map(Self)
+    }
+
+    /// Derive the non-secret value stored for this credential.
+    #[must_use]
+    pub fn fingerprint(&self) -> CredentialFingerprint {
+        let mut hasher = Sha256::new();
+        hasher.update(TOKEN_FINGERPRINT_DOMAIN);
+        hasher.update(self.0);
+        CredentialFingerprint(hasher.finalize().into())
+    }
+}
+
+/// The one-way value stored for a device bearer credential.
+///
+/// A database disclosure does not reveal a bearer token. Tokens carry 256 random bits, and the domain-separated
+/// SHA-256 image is compared in constant time after an incoming canonical token is decoded.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct CredentialFingerprint([u8; TOKEN_BYTES]);
+
+impl CredentialFingerprint {
+    /// Rebuild a fingerprint from its stored bytes.
+    #[must_use]
+    pub const fn from_bytes(bytes: [u8; TOKEN_BYTES]) -> Self {
+        Self(bytes)
+    }
+
+    /// Return the bytes safe to persist in the device authorization row.
+    #[must_use]
+    pub const fn to_bytes(self) -> [u8; TOKEN_BYTES] {
+        self.0
     }
 
     fn matches_encoded(&self, encoded: &[u8]) -> bool {
-        if encoded.len() != TOKEN_HEX {
-            return false;
-        }
+        let candidate = match decode_token(encoded) {
+            Ok(bytes) => AccessToken(bytes).fingerprint(),
+            Err(_) => return false,
+        };
 
-        // Accumulate every comparison instead of returning at the first mismatch. Length is public and fixed; once
-        // it agrees, a wrong byte does not reveal how much of the credential was right.
         let mut mismatch = 0_u8;
-        for (byte, pair) in self.0.iter().zip(encoded.chunks_exact(2)) {
-            let &[high_byte, low_byte] = pair else {
-                mismatch |= 1;
-                continue;
-            };
-            let Some(high) = hex_nibble(high_byte) else {
-                mismatch |= 1;
-                continue;
-            };
-            let Some(low) = hex_nibble(low_byte) else {
-                mismatch |= 1;
-                continue;
-            };
-            mismatch |= *byte ^ ((high << 4) | low);
+        for (stored, offered) in self.0.iter().zip(candidate.0) {
+            mismatch |= *stored ^ offered;
         }
         mismatch == 0
     }
+}
+
+impl core::fmt::Debug for CredentialFingerprint {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str("CredentialFingerprint(..)")
+    }
+}
+
+fn decode_token(encoded: &[u8]) -> Result<[u8; TOKEN_BYTES], PhoneHttpError> {
+    if encoded.len() != TOKEN_HEX {
+        return Err(PhoneHttpError::InvalidToken);
+    }
+    let mut bytes = [0_u8; TOKEN_BYTES];
+    for (slot, pair) in bytes.iter_mut().zip(encoded.chunks_exact(2)) {
+        let &[high_byte, low_byte] = pair else {
+            return Err(PhoneHttpError::InvalidToken);
+        };
+        let Some(high) = hex_nibble(high_byte) else {
+            return Err(PhoneHttpError::InvalidToken);
+        };
+        let Some(low) = hex_nibble(low_byte) else {
+            return Err(PhoneHttpError::InvalidToken);
+        };
+        *slot = (high << 4) | low;
+    }
+    Ok(bytes)
 }
 
 /// One credential and the paired device identity it establishes.
@@ -107,14 +138,26 @@ impl AccessToken {
 /// [`Caller`] extension before the handler can see the request.
 pub struct DeviceCredential {
     device: DeviceId,
-    token: AccessToken,
+    fingerprint: CredentialFingerprint,
 }
 
 impl DeviceCredential {
     /// Bind `token` to the device created by pairing.
     #[must_use]
-    pub const fn new(device: DeviceId, token: AccessToken) -> Self {
-        Self { device, token }
+    pub fn new(device: DeviceId, token: &AccessToken) -> Self {
+        Self {
+            device,
+            fingerprint: token.fingerprint(),
+        }
+    }
+
+    /// Rebuild a credential binding from its non-secret stored fingerprint.
+    #[must_use]
+    pub const fn from_fingerprint(device: DeviceId, fingerprint: CredentialFingerprint) -> Self {
+        Self {
+            device,
+            fingerprint,
+        }
     }
 }
 
@@ -285,7 +328,7 @@ impl Policy {
         let Some(credential) = self
             .credentials
             .iter()
-            .find(|credential| credential.token.matches_encoded(encoded))
+            .find(|credential| credential.fingerprint.matches_encoded(encoded))
         else {
             return Decision::Refuse {
                 status: StatusCode::UNAUTHORIZED,
@@ -464,12 +507,29 @@ mod tests {
     fn tokens_are_fixed_strength_and_canonical() {
         let canonical = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
         let token = AccessToken::parse(canonical).expect("canonical");
-        assert!(token.matches_encoded(canonical.as_bytes()));
-        assert!(!token.matches_encoded(
+        let fingerprint = token.fingerprint();
+        assert!(fingerprint.matches_encoded(canonical.as_bytes()));
+        assert!(!fingerprint.matches_encoded(
             "1123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".as_bytes()
         ));
         assert!(AccessToken::parse("short").is_err());
         assert!(AccessToken::parse(&canonical.to_ascii_uppercase()).is_err());
+    }
+
+    #[test]
+    fn persisted_fingerprints_restore_credentials_without_storing_tokens() {
+        let encoded = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        let token = AccessToken::parse(encoded).expect("canonical");
+        let stored = token.fingerprint().to_bytes();
+        let restored = CredentialFingerprint::from_bytes(stored);
+        let credential = DeviceCredential::from_fingerprint(DeviceId::now(), restored);
+
+        assert!(credential.fingerprint.matches_encoded(encoded.as_bytes()));
+        assert_eq!(
+            format!("{:?}", credential.fingerprint),
+            "CredentialFingerprint(..)"
+        );
+        assert!(!format!("{:?}", credential.fingerprint).contains("012345"));
     }
 
     #[test]

@@ -56,6 +56,7 @@ const ALLOWED_EDGES: &[(&str, &[&str])] = &[
             "runtrol-ipc",
             "runtrol-core",
             "runtrol-drivers",
+            "runtrol-transport",
         ],
     ),
     // L3. The command surface asks the daemon. It never opens storage itself, which the exclusive lock

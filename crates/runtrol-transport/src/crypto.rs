@@ -42,6 +42,12 @@ pub const MAX_TRANSPORT_FRAME: usize = 16 * 1024 * 1024 + 64 * 1024;
 pub struct PublicKey([u8; 32]);
 
 impl PublicKey {
+    /// Rebuild a public key from its stored bytes.
+    #[must_use]
+    pub const fn from_bytes(bytes: [u8; 32]) -> Self {
+        Self(bytes)
+    }
+
     /// Return the canonical X25519 public bytes.
     #[must_use]
     pub const fn to_bytes(self) -> [u8; 32] {

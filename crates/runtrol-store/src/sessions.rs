@@ -335,7 +335,7 @@ impl Store {
     }
 
     /// Begin a write whose result must survive a power cut.
-    fn begin_durable_write(
+    pub(crate) fn begin_durable_write(
         &self,
         doing: &'static str,
     ) -> Result<redb::WriteTransaction, StoreError> {

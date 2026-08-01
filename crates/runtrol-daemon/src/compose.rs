@@ -25,7 +25,10 @@ use runtrol_childproc::Containment;
 use runtrol_core::registry::{KindEntry, KindTable, ProviderRegistry};
 use runtrol_core::{HomeError, RuntrolHome};
 use runtrol_drivers::{Builtin, DriverKind};
-use runtrol_store::Store;
+use runtrol_provider::WallMs;
+use runtrol_security::{DeviceId, DeviceLabels, DeviceScope, GrantLedger};
+use runtrol_store::{DeviceRow, Store};
+use runtrol_transport::{CredentialFingerprint, PublicKey};
 
 /// The daemon could not be assembled.
 #[derive(Debug, thiserror::Error)]
@@ -45,6 +48,37 @@ pub enum ComposeError {
     /// The session-pointer store could not be opened or trusted.
     #[error(transparent)]
     Store(#[from] runtrol_store::StoreError),
+
+    /// A stored key is not a locally minted device identifier.
+    #[error("a stored device identifier is not a locally minted UUIDv7")]
+    StoredDeviceId,
+
+    /// Stored device authority could not be reconstructed exactly.
+    ///
+    /// The untrusted stored value is not echoed. Starting with a silently shortened or relabelled grant would make
+    /// the enforced authority differ from what the operator approved.
+    #[error("stored device {device} cannot be restored: {why}")]
+    StoredDevice {
+        /// The locally minted device identifier whose row was refused.
+        device: DeviceId,
+        /// The stable validation rule that failed.
+        why: &'static str,
+    },
+}
+
+/// One paired device restored before a remote listener can exist.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PairedDevice {
+    /// The locally minted identity used by the scope ledger.
+    pub id: DeviceId,
+    /// The authenticated Noise peer pinned during pairing.
+    pub remote_static_key: PublicKey,
+    /// The non-secret image used to authenticate its bearer credential.
+    pub credential_fingerprint: CredentialFingerprint,
+    /// Validated labels safe for local display.
+    pub labels: DeviceLabels,
+    /// When exact PC presence approved the pairing.
+    pub paired_at: WallMs,
 }
 
 /// Everything a running daemon holds.
@@ -60,13 +94,10 @@ pub struct Composed {
     pub containment: Arc<Containment>,
     /// Which providers exist, and what this build can do about each.
     pub registry: ProviderRegistry,
-    /// Who has been granted what.
-    ///
-    /// Empty at every start, which is what "default deny" means when nothing has paired yet: a device this daemon
-    /// has never heard of holds nothing, and the only call that adds authority takes a witness that somebody was
-    /// at the machine. Persisting grants across restarts arrives with the pairing surface that creates them; until
-    /// then, an empty ledger is the honest state rather than a placeholder, because there is nothing to load.
-    pub granted: runtrol_security::GrantLedger,
+    /// Who has been granted what, reconstructed from durable rows before any remote listener exists.
+    pub granted: GrantLedger,
+    /// Paired Noise and HTTP identities, reconstructed beside the grant ledger from the same durable rows.
+    pub paired_devices: Vec<PairedDevice>,
     /// The table that turns a kind into a driver.
     ///
     /// Kept because building a driver is deferred: it needs a resolved program, which needs a probe, which happens when
@@ -95,12 +126,14 @@ impl Composed {
 
         let registry = load(&home, builtin);
         let store = Store::open(home.paths().database())?;
+        let (granted, paired_devices) = restore_device_authority(&store)?;
         Ok(Self {
             home,
             store,
             containment,
             registry,
-            granted: runtrol_security::GrantLedger::new(),
+            granted,
+            paired_devices,
             kinds: builtin.kinds,
         })
     }
@@ -123,12 +156,14 @@ impl Composed {
         let home = RuntrolHome::open_at(home)?;
         let registry = load(&home, builtin);
         let store = Store::open(home.paths().database())?;
+        let (granted, paired_devices) = restore_device_authority(&store)?;
         Ok(Self {
             home,
             store,
             containment: Arc::new(Containment::without_any()),
             registry,
-            granted: runtrol_security::GrantLedger::new(),
+            granted,
+            paired_devices,
             kinds: builtin.kinds,
         })
     }
@@ -138,6 +173,62 @@ impl Composed {
     pub fn driver_for(&self, kind: &str) -> Option<&'static DriverKind> {
         self.kinds.iter().find(|entry| entry.kind == kind)
     }
+}
+
+fn restore_device_authority(
+    store: &Store,
+) -> Result<(GrantLedger, Vec<PairedDevice>), ComposeError> {
+    let listed = store.list_devices()?;
+    if let Some((_, error)) = listed.unreadable.into_iter().next() {
+        return Err(ComposeError::Store(error));
+    }
+
+    let mut grants = Vec::with_capacity(listed.devices.len());
+    let mut devices = Vec::with_capacity(listed.devices.len());
+    for (key, row) in listed.devices {
+        let Some(device) = DeviceId::from_bytes(key.to_bytes()) else {
+            return Err(ComposeError::StoredDeviceId);
+        };
+        let DeviceRow {
+            remote_static_key,
+            credential_fingerprint,
+            name,
+            platform,
+            scopes: stored_scopes,
+            paired_at,
+        } = row;
+        if remote_static_key.iter().all(|byte| *byte == 0) {
+            return Err(ComposeError::StoredDevice {
+                device,
+                why: "the Noise public key is zero",
+            });
+        }
+        let labels =
+            DeviceLabels::new(&name, &platform).map_err(|_| ComposeError::StoredDevice {
+                device,
+                why: "the display labels are invalid",
+            })?;
+        let mut scopes = Vec::with_capacity(stored_scopes.len());
+        for stored in stored_scopes {
+            scopes.push(DeviceScope::from_stored(&stored).map_err(|_| {
+                ComposeError::StoredDevice {
+                    device,
+                    why: "a scope is unknown to this build",
+                }
+            })?);
+        }
+
+        grants.push((device, scopes));
+        devices.push(PairedDevice {
+            id: device,
+            remote_static_key: PublicKey::from_bytes(remote_static_key),
+            credential_fingerprint: CredentialFingerprint::from_bytes(credential_fingerprint),
+            labels,
+            paired_at,
+        });
+    }
+
+    Ok((GrantLedger::from_persisted(grants), devices))
 }
 
 /// Read the providers this machine declares.
@@ -171,6 +262,24 @@ fn load(home: &RuntrolHome, builtin: Builtin) -> ProviderRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn stored_device_row(name: &str, scopes: Vec<Box<str>>) -> DeviceRow {
+        let key = runtrol_transport::StaticKeypair::generate()
+            .expect("device key")
+            .public_key();
+        let token = runtrol_transport::AccessToken::parse(
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        )
+        .expect("canonical token");
+        DeviceRow {
+            remote_static_key: key.to_bytes(),
+            credential_fingerprint: token.fingerprint().to_bytes(),
+            name: name.into(),
+            platform: "Android".into(),
+            scopes,
+            paired_at: WallMs::from_millis(1_767_225_600_000),
+        }
+    }
 
     /// A directory of this test's own, removed when the test ends.
     struct Scratch {
@@ -347,6 +456,65 @@ mod tests {
         match theirs.kind {
             runtrol_core::KindStatus::Unavailable { why } => assert!(!why.is_empty()),
             ref other => panic!("expected a named unavailability, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn composing_restores_device_identity_credential_and_grants() {
+        let scratch = Scratch::make("restore-device");
+        let first =
+            Composed::for_tests(&scratch.root, runtrol_drivers::builtin()).expect("first assembly");
+        let device = DeviceId::now();
+        let row = stored_device_row(
+            "Pixel 9",
+            vec!["session.list".into(), "session.list".into()],
+        );
+        let expected_fingerprint = row.credential_fingerprint;
+        first
+            .store
+            .put_device(
+                runtrol_store::DeviceKey::from_bytes(*device.as_bytes()),
+                &row,
+            )
+            .expect("device stored");
+        drop(first);
+
+        let restored = Composed::for_tests(&scratch.root, runtrol_drivers::builtin())
+            .expect("restored assembly");
+        assert!(restored.granted.holds(device, DeviceScope::SessionList));
+        assert_eq!(restored.granted.scopes_of(device).len(), 1);
+        assert_eq!(restored.paired_devices.len(), 1);
+        let paired = restored.paired_devices.first().expect("restored device");
+        assert_eq!(paired.id, device);
+        assert_eq!(paired.labels.name(), "Pixel 9");
+        assert_eq!(
+            paired.credential_fingerprint.to_bytes(),
+            expected_fingerprint
+        );
+    }
+
+    #[test]
+    fn composing_refuses_unknown_stored_authority() {
+        let scratch = Scratch::make("unknown-device-scope");
+        let first =
+            Composed::for_tests(&scratch.root, runtrol_drivers::builtin()).expect("first assembly");
+        let device = DeviceId::now();
+        first
+            .store
+            .put_device(
+                runtrol_store::DeviceKey::from_bytes(*device.as_bytes()),
+                &stored_device_row("phone", vec!["session.future".into()]),
+            )
+            .expect("device stored");
+        drop(first);
+
+        match Composed::for_tests(&scratch.root, runtrol_drivers::builtin()) {
+            Err(ComposeError::StoredDevice {
+                device: refused,
+                why: "a scope is unknown to this build",
+            }) => assert_eq!(refused, device),
+            Err(other) => panic!("expected stored-scope refusal, got {other}"),
+            Ok(_) => panic!("unknown authority must not reach a running daemon"),
         }
     }
 

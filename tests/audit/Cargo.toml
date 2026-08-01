@@ -23,6 +23,7 @@ runtrol-childproc = { workspace = true }
 runtrol-core = { workspace = true }
 runtrol-provider = { workspace = true }
 runtrol-security = { workspace = true }
+runtrol-store = { workspace = true }
 runtrol-transport = { path = "../../crates/runtrol-transport" }
 tokio = { workspace = true, features = ["io-util", "macros", "net", "rt", "sync"] }
 
