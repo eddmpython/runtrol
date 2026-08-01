@@ -1,12 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AppShell, Theme } from "@astryxdesign/core";
-import { neutralTheme } from "@astryxdesign/theme-neutral";
+import { neutralTheme } from "@astryxdesign/theme-neutral/built";
 import brandLight from "../../../../assets/brand/lockup-light.svg";
 import brandDark from "../../../../assets/brand/lockup-dark.svg";
 import { FRAME_EVENT, OVER_EVENT, REFRESH_MS, invoke, listen } from "./bridge";
 import type {
   Answered,
-  ConversationItem,
   FrameEnvelope,
   Notice,
   ModelCatalog,
@@ -15,7 +14,8 @@ import type {
   SessionRow,
   ThemeMode,
 } from "./domain";
-import { appendFrame, appendStatus, frameToItem } from "./frames";
+import { ConversationFeed } from "./frames";
+import type { PendingFrame } from "./frames";
 import { applyTheme, initialTheme } from "./theme";
 import { ConversationPane } from "./components/ConversationPane";
 import { NoticeCard } from "./components/NoticeCard";
@@ -29,7 +29,7 @@ function messageOf(error: unknown): string {
 export function App() {
   const [rows, setRows] = useState<SessionRow[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
-  const [items, setItems] = useState<ConversationItem[]>([]);
+  const [feed] = useState(() => new ConversationFeed());
   const [query, setQuery] = useState("");
   const [draft, setDraft] = useState("");
   const [reachable, setReachable] = useState(true);
@@ -51,6 +51,9 @@ export function App() {
   const refreshingRef = useRef(false);
   const firstDrawRef = useRef(true);
   const startedAtRef = useRef(performance.now());
+  const frameQueueRef = useRef<string[]>([]);
+  const frameFlushRef = useRef<number | null>(null);
+  const frameWorkerRef = useRef<Worker | null>(null);
 
   useEffect(() => applyTheme(theme), [theme]);
 
@@ -92,6 +95,22 @@ export function App() {
     trace(`watching ${session} ${watched === undefined ? "refused" : "ok"}`);
   }, [ask, trace]);
 
+  const enqueueFrame = useCallback((frame: string) => {
+    frameQueueRef.current.push(frame);
+    if (frameFlushRef.current !== null) {
+      return;
+    }
+    frameFlushRef.current = window.requestAnimationFrame(() => {
+      frameFlushRef.current = null;
+      const frames = frameQueueRef.current;
+      frameQueueRef.current = [];
+      const session = selectedRef.current;
+      if (session && frames.length > 0) {
+        frameWorkerRef.current?.postMessage({ session, frames });
+      }
+    });
+  }, []);
+
   const openSession = useCallback(async (session: string, resumeCold = true) => {
     const row = rowsRef.current.find((entry) => entry.session === session);
     if (selectedRef.current === session && row?.hot) {
@@ -99,10 +118,10 @@ export function App() {
     }
     selectedRef.current = session;
     setSelected(session);
-    setItems([]);
+    feed.clear();
     if (row && !row.hot) {
       if (!resumeCold) {
-        setItems((current) => appendStatus(current, "세션을 다시 눌러 공급자 원본에 연결할 수 있다"));
+        feed.status("세션을 다시 눌러 공급자 원본에 연결할 수 있다");
         return;
       }
       if (!row.native) {
@@ -119,12 +138,12 @@ export function App() {
       }
       selectedRef.current = resumed;
       setSelected(resumed);
-      setItems([]);
+      feed.clear();
       await watchSession(resumed);
       return;
     }
     await watchSession(session);
-  }, [ask, watchSession]);
+  }, [ask, feed, watchSession]);
 
   const refresh = useCallback(async () => {
     if (refreshingRef.current) {
@@ -147,7 +166,7 @@ export function App() {
       if (current && !nextRows.some((row) => row.session === current)) {
         selectedRef.current = null;
         setSelected(null);
-        setItems([]);
+        feed.clear();
       }
 
       const drawnAt = performance.now();
@@ -167,12 +186,20 @@ export function App() {
     } finally {
       refreshingRef.current = false;
     }
-  }, [ask, openSession, trace]);
+  }, [ask, feed, openSession, trace]);
 
   useEffect(() => {
     let active = true;
     let timer: number | undefined;
     let unlisten: Array<() => void> = [];
+    const parser = new Worker(new URL("./frameWorker.ts", import.meta.url), { type: "module" });
+    frameWorkerRef.current = parser;
+    parser.onmessage = ({ data }: MessageEvent<{ session: string; frames: PendingFrame[] }>) => {
+      if (data.session !== selectedRef.current) {
+        return;
+      }
+      feed.append(data.frames);
+    };
 
     async function begin() {
       try {
@@ -181,15 +208,14 @@ export function App() {
             if (payload.session !== selectedRef.current) {
               return;
             }
-            const next = frameToItem(payload.frame);
-            setItems((current) => appendFrame(current, next.item, next.isDelta));
-            trace(`frame ${next.item.side}`);
+            enqueueFrame(payload.frame);
+            trace("frame queued");
           }),
           listen<string>(OVER_EVENT, ({ payload }) => {
             if (payload !== selectedRef.current) {
               return;
             }
-            setItems((current) => appendStatus(current, "이 세션의 흐름이 끝났다"));
+            feed.status("이 세션의 흐름이 끝났다");
             trace("stream over");
           }),
         ]);
@@ -217,9 +243,18 @@ export function App() {
       if (timer !== undefined) {
         window.clearInterval(timer);
       }
+      if (frameFlushRef.current !== null) {
+        window.cancelAnimationFrame(frameFlushRef.current);
+        frameFlushRef.current = null;
+      }
+      frameQueueRef.current = [];
+      parser.terminate();
+      if (frameWorkerRef.current === parser) {
+        frameWorkerRef.current = null;
+      }
       unlisten.forEach((stop) => stop());
     };
-  }, [refresh, trace]);
+  }, [enqueueFrame, feed, refresh, trace]);
 
   const selectedRow = useMemo(
     () => rows.find((row) => row.session === selected) ?? null,
@@ -314,9 +349,21 @@ export function App() {
     }
     selectedRef.current = null;
     setSelected(null);
-    setItems([]);
+    feed.clear();
     await refresh();
-  }, [ask, refresh]);
+  }, [ask, feed, refresh]);
+
+  const selectSession = useCallback((session: string) => {
+    void openSession(session);
+  }, [openSession]);
+
+  const showStart = useCallback(() => {
+    void openStart();
+  }, [openStart]);
+
+  const toggleTheme = useCallback(() => {
+    setTheme((current) => current === "dark" ? "light" : "dark");
+  }, []);
 
   return (
     <Theme theme={neutralTheme} mode={theme}>
@@ -333,15 +380,15 @@ export function App() {
             reachable={reachable}
             theme={theme}
             onQueryChange={setQuery}
-            onSelect={(session) => void openSession(session)}
-            onStart={() => void openStart()}
-            onToggleTheme={() => setTheme((current) => current === "dark" ? "light" : "dark")}
+            onSelect={selectSession}
+            onStart={showStart}
+            onToggleTheme={toggleTheme}
           />
         }
       >
         <ConversationPane
           row={selectedRow}
-          items={items}
+          feed={feed}
           draft={draft}
           sending={sending}
           brandLight={brandLight}
@@ -349,7 +396,7 @@ export function App() {
           onDraftChange={setDraft}
           onSend={(text) => void send(text)}
           onClose={() => void closeSession()}
-          onStart={() => void openStart()}
+          onStart={showStart}
         />
         <StartSessionDialog
           isOpen={startOpen}

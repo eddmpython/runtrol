@@ -11,12 +11,14 @@ import {
   StatusDot,
   Text,
 } from "@astryxdesign/core";
+import { memo, useSyncExternalStore } from "react";
 import type { ConversationItem, SessionRow } from "../domain";
+import type { ConversationFeed } from "../frames";
 import { AgentIcon, CloseIcon } from "../icons";
 
 type ConversationPaneProps = {
   row: SessionRow | null;
-  items: readonly ConversationItem[];
+  feed: ConversationFeed;
   draft: string;
   sending: boolean;
   brandLight: string;
@@ -27,7 +29,9 @@ type ConversationPaneProps = {
   onStart: () => void;
 };
 
-function Message({ item }: { item: ConversationItem }) {
+const MAX_RENDERED_ITEMS = 48;
+
+const Message = memo(function Message({ item }: { item: ConversationItem }) {
   if (item.side === "meta") {
     return <ChatSystemMessage>{item.text}</ChatSystemMessage>;
   }
@@ -42,11 +46,24 @@ function Message({ item }: { item: ConversationItem }) {
       </ChatMessageBubble>
     </ChatMessage>
   );
+});
+
+function ConversationMessages({ feed, isStreaming }: { feed: ConversationFeed; isStreaming: boolean }) {
+  const items = useSyncExternalStore(feed.subscribe, feed.snapshot);
+  const renderedItems = items.slice(-MAX_RENDERED_ITEMS);
+  if (renderedItems.length === 0) {
+    return null;
+  }
+  return (
+    <ChatMessageList density="balanced" gap={3} isStreaming={isStreaming}>
+      {renderedItems.map((entry) => <Message key={entry.key} item={entry} />)}
+    </ChatMessageList>
+  );
 }
 
 export function ConversationPane({
   row,
-  items,
+  feed,
   draft,
   sending,
   brandLight,
@@ -72,7 +89,7 @@ export function ConversationPane({
 
   const statusLabel = row.looksStuck ? `${row.doing}, 응답이 없다` : row.doing;
   return (
-    <section className="conversation" aria-label={`${row.folder} 세션`}>
+    <section className="conversation" aria-label={`${row.folder} 세션`} data-testid="conversation-pane">
       <header className="conversation-header">
         <div className="conversation-title">
           <Text type="large" weight="semibold" as="h1" maxLines={1}>{row.folder}</Text>
@@ -123,11 +140,7 @@ export function ConversationPane({
             />
           }
         >
-          {items.length > 0 ? (
-            <ChatMessageList density="balanced" gap={3} isStreaming={row.hot && row.doing !== "idle"}>
-              {items.map((entry) => <Message key={entry.key} item={entry} />)}
-            </ChatMessageList>
-          ) : null}
+          <ConversationMessages feed={feed} isStreaming={row.hot && row.doing !== "idle"} />
         </ChatLayout>
       </div>
     </section>

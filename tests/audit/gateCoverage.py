@@ -49,6 +49,8 @@ NOT_A_GATE: dict[str, str] = {
     "northStar gates rather than run on its own",
     "rustSource.py": "reading Rust source the way a gate has to. imported by the gates that scan "
     "source rather than run on its own, and its selftest runs inside theirs",
+    "desktopPerformance.py": "shared production-build and browser launcher imported by the two desktop "
+    "performance gates",
 }
 
 # Preflight gates that intentionally have no counterpart step in the workflow.

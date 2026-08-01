@@ -16,14 +16,14 @@ At the desk it is an app; away from the desk it is a phone. The same session, th
 However many providers there are, there is one list. Whatever the operating system, the method is the same.
 The conversation travels only between the user's PC and the provider. runtrol does not get in between.**
 
-The current total is **19/140, average 1.4/10**. Three axes have gates standing behind them so far.
+The current total is **24/140, average 1.7/10**. Four axes have gates standing behind them so far.
 A 10 means the complete journey has been repeatedly verified in a real environment.
 **A score is backed by a gate that actually runs in CI. A path that is not executed automatically does not count, no matter how implemented it looks.**
 
 | North Star | Score | Today | Target state |
 |---|---:|---|---|
 | One session list | 6/10 | Sessions from two real CLIs appear in one list, start and close work, and the listing carries the name a resume takes (`sessionLifecycleSmoke`, no tokens spent). A resume that succeeds is still outside the gate: it needs a conversation with a turn in it. The ceiling is 6 because no static contract gate backs this axis. | Whether the provider is Claude Code, Codex, or whatever comes next, every session alive on this PC appears in one list, and start, resume, and delete all happen there. |
-| Instant response | 0/10 | Not built. | The list appears with no wait, a conversation opens the moment it is tapped, and neither scrolling nor typing stutters when long output pours in. There is no moment where the user perceives loading. |
+| Instant response | 5/10 | A real browser measures the production bundle, enforcing ratchets for the list, opening a conversation, and typing while processing 3,000 raw frames per second. The transport counterpart is a mock, so the axis remains at this tier. | The list appears with no wait, a conversation opens the moment it is tapped, and neither scrolling nor typing stutters when long output pours in. There is no moment where the user perceives loading. |
 | Reach my PC sessions from my phone | 0/10 | Not built. | Pair the phone to the PC once, and from then on, away from the desk, send new instructions into sessions running on that PC and watch the output live. Neither the plan tier nor the auth method of a provider account blocks this. |
 | Provider extensibility | 7/10 | An outside driver compiles against the public traits alone (`providerContract`), and the current schemas and argument parsers of both installed CLIs are checked against the binding lists (`agentSurfaceDrift`). A live proof that one TOML file adds a generic ACP provider remains. | When a new CLI appears, one adapter is added and the PC screen, the phone screen, and the controls stay the same. The user notices a new provider only as a longer list. |
 | No conversation passthrough | 0/10 | Not built. | The user's prompts and the model's responses travel only between the PC and the provider, and between the user's own devices. runtrol stores no copy of that content, and no server in between ever receives it in a readable form. |

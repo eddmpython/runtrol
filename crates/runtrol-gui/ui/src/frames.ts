@@ -2,6 +2,7 @@ import type { ConversationItem } from "./domain";
 
 const MAX_VISIBLE_ITEMS = 400;
 const MAX_VISIBLE_CHARACTERS = 256 * 1024;
+const MAX_STREAM_CHUNK_CHARACTERS = 1024;
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -138,7 +139,12 @@ export function appendFrame(
   isDelta: boolean,
 ): ConversationItem[] {
   const last = current.at(-1);
-  if (isDelta && next.messageId && last?.messageId === next.messageId) {
+  if (
+    isDelta
+    && next.messageId
+    && last?.messageId === next.messageId
+    && last.text.length + next.text.length <= MAX_STREAM_CHUNK_CHARACTERS
+  ) {
     return bounded([
       ...current.slice(0, -1),
       { ...last, text: `${last.text}${next.text}` },
@@ -147,6 +153,67 @@ export function appendFrame(
   return bounded([...current, next]);
 }
 
+export type PendingFrame = {
+  item: ConversationItem;
+  isDelta: boolean;
+};
+
+export function appendFrames(
+  current: readonly ConversationItem[],
+  pending: readonly PendingFrame[],
+): ConversationItem[] {
+  if (pending.length === 0) {
+    return [...current];
+  }
+
+  const next = [...current];
+  for (const frame of pending) {
+    const last = next.at(-1);
+    if (
+      frame.isDelta
+      && frame.item.messageId
+      && last?.messageId === frame.item.messageId
+      && last.text.length + frame.item.text.length <= MAX_STREAM_CHUNK_CHARACTERS
+    ) {
+      next[next.length - 1] = { ...last, text: `${last.text}${frame.item.text}` };
+    } else {
+      next.push(frame.item);
+    }
+  }
+  return bounded(next);
+}
+
 export function appendStatus(current: readonly ConversationItem[], text: string): ConversationItem[] {
   return bounded([...current, item("meta", "", text)]);
+}
+
+export class ConversationFeed {
+  private current: readonly ConversationItem[] = [];
+  private readonly listeners = new Set<() => void>();
+
+  readonly subscribe = (listener: () => void): (() => void) => {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  };
+
+  readonly snapshot = (): readonly ConversationItem[] => this.current;
+
+  clear(): void {
+    this.replace([]);
+  }
+
+  append(frames: readonly PendingFrame[]): void {
+    this.replace(appendFrames(this.current, frames));
+  }
+
+  status(text: string): void {
+    this.replace(appendStatus(this.current, text));
+  }
+
+  private replace(next: readonly ConversationItem[]): void {
+    this.current = next;
+    for (const listener of this.listeners) {
+      listener();
+    }
+  }
 }

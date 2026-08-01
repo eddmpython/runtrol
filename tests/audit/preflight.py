@@ -84,6 +84,22 @@ GATES: dict[str, tuple[str, list[str]]] = {
         [*PY, f"{HOOKS}/frontendBuild.py", "--selftest"],
     ),
     "frontendBuild": ("데스크톱 프런트엔드 타입 검사 + 번들", [*PY, f"{HOOKS}/frontendBuild.py"]),
+    "interactionLatencyBudgetSelftest": (
+        "데스크톱 상호작용 예산 게이트 자체 검증",
+        [*PY, f"{HOOKS}/interactionLatencyBudget.py", "--selftest"],
+    ),
+    "interactionLatencyBudget": (
+        "실물 브라우저 데스크톱 상호작용 예산",
+        [*PY, f"{HOOKS}/interactionLatencyBudget.py"],
+    ),
+    "scrollUnderLoadSmokeSelftest": (
+        "출력 폭주 게이트 자체 검증",
+        [*PY, f"{HOOKS}/scrollUnderLoadSmoke.py", "--selftest"],
+    ),
+    "scrollUnderLoadSmoke": (
+        "초당 3,000 프레임에서 스크롤과 입력",
+        [*PY, f"{HOOKS}/scrollUnderLoadSmoke.py"],
+    ),
     "cargoFmt": ("cargo fmt --check", ["cargo", "fmt", "--all", "--check"]),
     "cargoClippy": (
         "cargo clippy (경고 = 실패)",
@@ -174,6 +190,10 @@ SUITES: dict[str, tuple[str, ...]] = {
         "readmeParity",
         "frontendBuildSelftest",
         "frontendBuild",
+        "interactionLatencyBudgetSelftest",
+        "interactionLatencyBudget",
+        "scrollUnderLoadSmokeSelftest",
+        "scrollUnderLoadSmoke",
         "cargoFmt",
         "cargoClippy",
     ),
@@ -210,8 +230,10 @@ def skipReasonFor(name: str) -> str | None:
             return "cargo 없음"
         if not hasCargoWorkspace():
             return "Cargo.toml 없음 (부트스트랩 단계)"
-    if name == "frontendBuild" and shutil.which("npm") is None:
+    if name in {"frontendBuild", "interactionLatencyBudget", "scrollUnderLoadSmoke"} and shutil.which("npm") is None:
         return "npm 없음"
+    if name in {"interactionLatencyBudget", "scrollUnderLoadSmoke"} and shutil.which("node") is None:
+        return "node 없음"
     if name == "audit" and not hasAuditCrate():
         return "tests/audit crate 없음"
     if name == "cargoShear" and shutil.which("cargo-shear") is None:

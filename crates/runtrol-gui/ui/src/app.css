@@ -167,6 +167,10 @@ textarea {
 }
 
 .verbatim {
+  display: block;
+  contain: content;
+  content-visibility: auto;
+  contain-intrinsic-size: auto 96px;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   line-height: 1.58;

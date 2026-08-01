@@ -8,6 +8,7 @@ import {
   StatusDot,
   TextInput,
 } from "@astryxdesign/core";
+import { memo } from "react";
 import type { SessionRow, ThemeMode } from "../domain";
 import { FolderIcon, MoonIcon, PlusIcon, SearchIcon, SunIcon } from "../icons";
 
@@ -37,7 +38,7 @@ function shortName(row: SessionRow): string {
   return (row.native ?? row.session).slice(0, row.native ? 22 : 8);
 }
 
-export function SessionRail({
+export const SessionRail = memo(function SessionRail({
   rows,
   selected,
   query,
@@ -152,4 +153,4 @@ export function SessionRail({
       )}
     </SideNav>
   );
-}
+});

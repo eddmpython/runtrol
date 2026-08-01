@@ -40,7 +40,7 @@ gate = [{ name = "sessionLifecycleSmoke", kind = "smoke" }]
 
 [[axis]]
 key = "instantResponse"
-tier = "none"
+tier = "mock"
 additives = []
 caps = []
 name = { ko = "즉시 반응", en = "Instant response", zh = "即时响应", ja = "即座の反応" }
