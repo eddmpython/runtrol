@@ -131,6 +131,50 @@ def command(binary: Path, env: dict[str, str], words: list[str]) -> str:
     return said
 
 
+def startDaemon(binary: Path, env: dict[str, str], home: Path) -> subprocess.Popen[str]:
+    """Start this gate's daemon explicitly and wait until its endpoint is ready."""
+    daemon = subprocess.Popen(
+        [str(binary), "daemon"],
+        cwd=ROOT,
+        env=env,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    ready = home / ("runtrol.redb" if sys.platform == "win32" else "runtrol.sock")
+    deadline = time.monotonic() + TURN_WAIT_S
+    while time.monotonic() < deadline:
+        if daemon.poll() is not None:
+            stdout, stderr = daemon.communicate()
+            detail = (stderr or stdout or "daemon exited without output").strip()
+            raise Failed(f"the isolated daemon exited before it was ready: {detail}")
+        if ready.exists():
+            # The database opens just before the named pipe is bound on Windows. Give that final bind one scheduling
+            # turn so the first command never races the daemon and starts a second copy.
+            if sys.platform == "win32":
+                time.sleep(0.1)
+            return daemon
+        time.sleep(0.025)
+    daemon.terminate()
+    daemon.wait(timeout=2.0)
+    raise Failed("the isolated daemon did not become ready")
+
+
+def stopDaemon(daemon: subprocess.Popen[str]) -> None:
+    """Stop exactly the daemon this gate started, on every platform."""
+    if daemon.poll() is not None:
+        return
+    daemon.terminate()
+    try:
+        daemon.wait(timeout=2.0)
+    except subprocess.TimeoutExpired:
+        daemon.kill()
+        daemon.wait(timeout=2.0)
+
+
 def exercise() -> None:
     """Drive discovery, start, prompt, streamed output, completion, and cleanup."""
     binary, fixture = build()
@@ -140,6 +184,7 @@ def exercise() -> None:
         workspace.mkdir()
         manifest(home, fixture)
         env = environment(home, fixture)
+        daemon = startDaemon(binary, env, home)
         watcher: subprocess.Popen[str] | None = None
         try:
             catalogue = command(binary, env, ["models", PROVIDER])
@@ -178,7 +223,7 @@ def exercise() -> None:
             watched = (stdout or "") + "\n" + (stderr or "")
             verifyWatch(watched)
 
-            command(binary, env, ["panic"])
+            command(binary, env, ["close", session, "--now"])
             resumed = command(
                 binary,
                 env,
@@ -198,10 +243,7 @@ def exercise() -> None:
                 except subprocess.TimeoutExpired:
                     watcher.kill()
                     watcher.wait(timeout=2.0)
-            try:
-                command(binary, env, ["panic"])
-            except (Failed, subprocess.TimeoutExpired) as error:
-                raise Failed(f"the isolated daemon did not clean up: {error}") from error
+            stopDaemon(daemon)
 
 
 def main(argv: list[str]) -> int:
