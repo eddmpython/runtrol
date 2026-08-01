@@ -25,6 +25,7 @@ use runtrol_provider::{
 use serde::Deserialize;
 use serde_json::value::RawValue;
 
+use crate::claude::approval::{self, IncomingApproval};
 use crate::claude::bound::TERMINAL;
 
 /// A frame could not be classified.
@@ -51,6 +52,13 @@ pub enum MapError {
         /// Why it was refused.
         detail: String,
     },
+
+    /// A control request could not be correlated or safely represented.
+    #[error("the control request is not usable: {detail}")]
+    BadControl {
+        /// Why it was refused, without any provider payload.
+        detail: String,
+    },
 }
 
 /// What a frame turned out to be.
@@ -65,8 +73,30 @@ pub enum Frame {
     Body(EventBody),
     /// The turn ended, by the provider's own declaration.
     Ended(Box<Ended>),
+    /// The provider is waiting for a human choice.
+    Approval(Box<IncomingApproval>),
+    /// The provider withdrew a human choice.
+    ApprovalCancelled(ControlCancellation),
+    /// A control request runtrol cannot serve, which must receive an error rather than hang.
+    UnsupportedControl(UnsupportedControl),
+    /// A reply to a control request runtrol sent, consumed by the stateful driver boundary.
+    ControlResponse,
     /// Nothing runtrol binds, carried through whole.
     Unbound(Unmapped),
+}
+
+/// A provider cancellation addressed by its private request handle.
+#[derive(Clone, Debug)]
+pub struct ControlCancellation {
+    pub(super) native_request: Box<str>,
+    pub(super) payload: Opaque,
+}
+
+/// A provider question outside the control surface runtrol serves.
+#[derive(Clone, Debug)]
+pub struct UnsupportedControl {
+    pub(super) native_request: Box<str>,
+    pub(super) subtype: Box<str>,
 }
 
 /// What the startup frame said.
@@ -121,6 +151,9 @@ struct Envelope<'line> {
     /// A whole message.
     #[serde(default, borrow)]
     message: Option<&'line RawValue>,
+    /// A question on the stdio control channel.
+    #[serde(default, borrow)]
+    request: Option<&'line RawValue>,
     /// The tool call a subagent's output belongs under.
     #[serde(default)]
     parent_tool_use_id: Option<&'line str>,
@@ -194,6 +227,23 @@ pub fn read(line: &Bytes) -> Result<Frame, MapError> {
             },
         )))),
 
+        ("control_request", _) => control_request(line, &envelope),
+
+        ("control_cancel_request", _) => {
+            let native_request =
+                approval::bounded_request_id(envelope.request_id).map_err(|error| {
+                    MapError::BadControl {
+                        detail: error.to_string(),
+                    }
+                })?;
+            Ok(Frame::ApprovalCancelled(ControlCancellation {
+                native_request,
+                payload: whole_line(line),
+            }))
+        }
+
+        ("control_response", _) => Ok(Frame::ControlResponse),
+
         // Progress that is not conversation. Reported so a subscriber can show that something is happening,
         // without runtrol claiming to know what.
         ("system", Some(_)) => Ok(Frame::Body(EventBody::Notice(Box::new(Notice {
@@ -210,6 +260,43 @@ pub fn read(line: &Bytes) -> Result<Frame, MapError> {
             unknown_to_binding: true,
         })),
     }
+}
+
+/// Bind one provider question on the hidden stdio control channel.
+fn control_request(line: &Bytes, envelope: &Envelope<'_>) -> Result<Frame, MapError> {
+    let request = envelope.request.ok_or_else(|| MapError::BadControl {
+        detail: "the frame carried no request body".to_owned(),
+    })?;
+    let parsed = serde_json::from_str::<ControlKind<'_>>(request.get()).map_err(|_| {
+        MapError::BadControl {
+            detail: "the request body was not readable".to_owned(),
+        }
+    })?;
+    if parsed.subtype == Some("can_use_tool") {
+        let incoming =
+            IncomingApproval::read(line, envelope.request_id, Some(request)).map_err(|error| {
+                MapError::BadControl {
+                    detail: error.to_string(),
+                }
+            })?;
+        return Ok(Frame::Approval(Box::new(incoming)));
+    }
+
+    let native_request = approval::bounded_request_id(envelope.request_id).map_err(|error| {
+        MapError::BadControl {
+            detail: error.to_string(),
+        }
+    })?;
+    Ok(Frame::UnsupportedControl(UnsupportedControl {
+        native_request,
+        subtype: parsed.subtype.unwrap_or("unknown").into(),
+    }))
+}
+
+#[derive(Deserialize)]
+struct ControlKind<'line> {
+    #[serde(default)]
+    subtype: Option<&'line str>,
 }
 
 /// The startup frame.
@@ -757,19 +844,35 @@ mod tests {
     }
 
     #[test]
-    fn the_control_channel_is_recorded_as_a_surface_and_not_as_a_mapping() {
-        // Measured, so it belongs in the surface list. Not mapped into events yet, so it is kept apart: a list
-        // claiming otherwise would be a binding that exists on paper and nowhere else.
-        //
-        // This goes red on the day the mapping learns them, which is the day they move up into the frame list.
-        for frame in crate::claude::bound::CONTROL {
-            let text = format!(r#"{{"type":"{}","session_id":"{SESSION}"}}"#, frame.kind);
-            match read(&line(&text)).expect("readable") {
-                Frame::Unbound(unmapped) => assert_eq!(&*unmapped.tag, frame.kind),
-                other => panic!(
-                    "{frame:?} is now mapped as {other:?}. move it into FRAMES and delete this test"
-                ),
-            }
-        }
+    fn the_control_channel_has_a_fail_closed_mapping() {
+        let approval = line(
+            r#"{"type":"control_request","request_id":"req-1","request":{"subtype":"can_use_tool","input":{"command":"cargo test"}}}"#,
+        );
+        assert!(matches!(
+            read(&approval).expect("readable"),
+            Frame::Approval(_)
+        ));
+
+        let unsupported = line(
+            r#"{"type":"control_request","request_id":"req-2","request":{"subtype":"oauth_token_refresh"}}"#,
+        );
+        assert!(matches!(
+            read(&unsupported).expect("readable"),
+            Frame::UnsupportedControl(_)
+        ));
+
+        let cancelled = line(r#"{"type":"control_cancel_request","request_id":"req-1"}"#);
+        assert!(matches!(
+            read(&cancelled).expect("readable"),
+            Frame::ApprovalCancelled(_)
+        ));
+
+        let response = line(
+            r#"{"type":"control_response","response":{"subtype":"success","request_id":"runtrol-1","response":{}}}"#,
+        );
+        assert!(matches!(
+            read(&response).expect("readable"),
+            Frame::ControlResponse
+        ));
     }
 }

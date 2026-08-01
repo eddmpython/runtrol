@@ -99,9 +99,9 @@ pub const FRAMES: &[BoundFrame] = &[
 /// Measured: a `control_request` is answered with a `control_response` **before any session starts**, so the
 /// channel is alive without a turn. That is how an interrupt is acknowledged and how an approval reaches a person.
 ///
-/// Kept apart from [`FRAMES`] because nothing maps these into events yet, and a list that claimed otherwise would
-/// be a binding that exists on paper and nowhere else. The mapping arrives with approvals; on that day these move
-/// up, and a test below goes red to say so.
+/// Kept apart from [`FRAMES`] because requests on this channel require an answer, not only a one-way event mapping.
+/// The driver binds approval requests and cancellations, consumes responses to its own requests, and fails closed
+/// on every other provider question.
 pub const CONTROL: &[BoundFrame] = &[
     BoundFrame {
         kind: "control_request",
@@ -112,6 +112,11 @@ pub const CONTROL: &[BoundFrame] = &[
         kind: "control_response",
         subtype: None,
         means: "an answer on the control channel, which is how an interrupt is acknowledged",
+    },
+    BoundFrame {
+        kind: "control_cancel_request",
+        subtype: None,
+        means: "the CLI withdrawing a provider question before runtrol answered it",
     },
 ];
 
@@ -176,8 +181,8 @@ pub const FLAGS: &[BoundFlag] = &[
     // approval prompts, which is why the probe asks the parser instead.
     BoundFlag {
         flag: "--permission-prompt-tool",
-        required: false,
-        without_it: "approvals cannot be brokered, and the session runs at its starting permission mode",
+        required: true,
+        without_it: "approvals cannot be brokered, so a remote session cannot start safely",
     },
     BoundFlag {
         flag: "--model",
@@ -288,9 +293,6 @@ mod tests {
         assert!(required.contains(&"--print"));
         assert!(required.contains(&"--verbose"));
         assert!(required.contains(&"--session-id"));
-        assert!(
-            !required.contains(&"--permission-prompt-tool"),
-            "an undocumented flag must never be required, because it can disappear without a changelog"
-        );
+        assert!(required.contains(&"--permission-prompt-tool"));
     }
 }

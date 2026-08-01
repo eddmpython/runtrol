@@ -18,6 +18,7 @@
 //! has to.
 
 pub mod agent;
+mod approval;
 pub mod bound;
 pub mod map;
 pub mod provider;

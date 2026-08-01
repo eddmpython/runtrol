@@ -33,16 +33,19 @@
 //! wrong on the first try. Searching cannot be wrong in that way.
 
 use core::time::Duration;
+use std::collections::VecDeque;
 
 use async_trait::async_trait;
 use runtrol_childproc::{Containment, Program};
 use runtrol_provider::{
-    Agent, AgentCommand, CloseMode, ContentBlock, Declarant, Disposition, EventBody, OpenIntent,
-    Produced, ProviderError, ProviderId, SessionId, StopReason, TurnEvent, TurnId,
+    Agent, AgentCommand, ApprovalId, ApprovalRequest, CloseMode, ContentBlock, Declarant,
+    Disposition, EventBody, Level, Notice, NoticeCode, Opaque, OpenIntent, Produced, ProviderError,
+    ProviderId, SessionId, StopReason, TurnEvent, TurnId, WallMs, WithdrawnReason,
 };
 use tokio::io::AsyncWriteExt as _;
 use tokio::process::{Child, ChildStdin};
 
+use crate::claude::approval::{self, ApprovalBook, ApprovalBuildError, NativeAnswer};
 use crate::claude::map::{self, Frame};
 use crate::framing::{LineError, Lines};
 
@@ -77,10 +80,13 @@ pub struct ClaudeAgent {
     src_end: u64,
     /// An event runtrol itself produced, waiting to be handed over.
     ///
-    /// One slot, because the only thing that goes in it is a turn beginning and a turn cannot begin twice without
-    /// ending in between. A queue here would be a place events could pile up unbounded, which is the shape this
-    /// whole design exists to avoid.
-    announced: Option<Produced>,
+    /// Bounded by one local turn announcement plus the bounded pending approval book.
+    ///
+    /// A terminal frame can withdraw every pending approval before it reports the turn ending. The queue cannot
+    /// exceed that fixed set, and provider conversation content never enters it.
+    announced: VecDeque<Produced>,
+    /// Provider-native approval questions waiting for a human.
+    approvals: ApprovalBook,
     /// Set once the stream is over, so nothing keeps reading a finished session.
     finished: bool,
 }
@@ -143,7 +149,8 @@ impl ClaudeAgent {
             running: None,
             next_turn: 0,
             src_end: 0,
-            announced: None,
+            announced: VecDeque::new(),
+            approvals: ApprovalBook::new(),
             finished: false,
         })
     }
@@ -228,6 +235,21 @@ impl ClaudeAgent {
                 }
             }
 
+            Frame::Approval(_)
+            | Frame::ApprovalCancelled(_)
+            | Frame::UnsupportedControl(_)
+            | Frame::ControlResponse => Produced {
+                src_end: self.src_end,
+                body: EventBody::Notice(Box::new(Notice {
+                    level: Level::Error,
+                    code: NoticeCode::ProtocolViolation,
+                    retryable: false,
+                    payload: Opaque::owned(
+                        r#"{"controlFrame":"was not handled at the control boundary"}"#.to_owned(),
+                    ),
+                })),
+            },
+
             Frame::Unbound(unmapped) => Produced {
                 src_end: self.src_end,
                 body: EventBody::Unmapped(unmapped),
@@ -261,6 +283,125 @@ impl ClaudeAgent {
             }),
         })
     }
+
+    /// Send one retained provider-native answer.
+    async fn write_answer(
+        &mut self,
+        native: &NativeAnswer,
+        doing: &'static str,
+    ) -> Result<(), ProviderError> {
+        let frame = native.frame().map_err(|error| ProviderError::Protocol {
+            provider: self.provider,
+            doing,
+            detail: error.to_string(),
+        })?;
+        self.write_line(&frame).await
+    }
+
+    /// Refuse the oldest approval whose deadline has passed.
+    async fn expire_one(&mut self) -> Option<Result<Produced, ProviderError>> {
+        let native = self.approvals.due(WallMs::now())?;
+        if let Err(error) = self.write_answer(&native, "expiring an approval").await {
+            return Some(Err(error));
+        }
+        self.approvals.complete(native.approval);
+        Some(Ok(Produced {
+            src_end: self.src_end,
+            body: EventBody::ApprovalWithdrawn {
+                id: native.approval,
+                why: WithdrawnReason::Expired,
+            },
+        }))
+    }
+
+    /// Remove every pending approval and queue an explicit withdrawal for each one.
+    fn withdraw_all(&mut self, why: WithdrawnReason) {
+        for id in self.approvals.take_all() {
+            self.announced.push_back(Produced {
+                src_end: self.src_end,
+                body: EventBody::ApprovalWithdrawn { id, why },
+            });
+        }
+    }
+
+    /// Handle the stateful control frames around the otherwise pure event mapping.
+    async fn handle_frame(&mut self, frame: Frame) -> Result<Produced, ProviderError> {
+        match frame {
+            Frame::Approval(incoming) => {
+                let native_request = incoming.native_request().to_owned();
+                let turn = self.running;
+                match self.approvals.open(*incoming, turn) {
+                    Ok(request) => Ok(Produced {
+                        src_end: self.src_end,
+                        body: EventBody::ApprovalRequested(Box::new(request)),
+                    }),
+                    Err(error) => {
+                        let frame = approval::deny_frame(&native_request).map_err(|write| {
+                            ProviderError::Protocol {
+                                provider: self.provider,
+                                doing: "declining an unreadable approval",
+                                detail: write.to_string(),
+                            }
+                        })?;
+                        self.write_line(&frame).await?;
+                        Ok(Produced {
+                            src_end: self.src_end,
+                            body: approval_notice(&error),
+                        })
+                    }
+                }
+            }
+
+            Frame::ApprovalCancelled(cancelled) => {
+                match self.approvals.cancel(&cancelled.native_request) {
+                    Some(id) => Ok(Produced {
+                        src_end: self.src_end,
+                        body: EventBody::ApprovalWithdrawn {
+                            id,
+                            why: WithdrawnReason::ProviderCancelled,
+                        },
+                    }),
+                    None => Ok(Produced {
+                        src_end: self.src_end,
+                        body: EventBody::Unmapped(runtrol_provider::Unmapped {
+                            tag: "control_cancel_request".into(),
+                            turn: self.running,
+                            payload: cancelled.payload,
+                            unknown_to_binding: false,
+                        }),
+                    }),
+                }
+            }
+
+            Frame::UnsupportedControl(control) => {
+                let frame = approval::error_frame(&control.native_request).map_err(|error| {
+                    ProviderError::Protocol {
+                        provider: self.provider,
+                        doing: "refusing an unsupported control request",
+                        detail: error.to_string(),
+                    }
+                })?;
+                self.write_line(&frame).await?;
+                Ok(Produced {
+                    src_end: self.src_end,
+                    body: unsupported_control_notice(&control.subtype),
+                })
+            }
+
+            Frame::Ended(ended) => {
+                self.withdraw_all(WithdrawnReason::TurnGone);
+                let ending = self.produce(Frame::Ended(ended));
+                if let Some(withdrawn) = self.announced.pop_front() {
+                    self.announced.push_back(ending);
+                    Ok(withdrawn)
+                } else {
+                    Ok(ending)
+                }
+            }
+
+            other => Ok(self.produce(other)),
+        }
+    }
 }
 
 /// The arguments for one session.
@@ -283,6 +424,9 @@ fn argv(provider: ProviderId, intent: &OpenIntent) -> Result<Vec<String>, Provid
         // Measured: without this the CLI refuses to stream structured output at all.
         "--verbose".to_owned(),
         "--include-partial-messages".to_owned(),
+        // Measured on 2.1.220 by asking the parser: hidden from help, but this is the stdio approval channel.
+        "--permission-prompt-tool".to_owned(),
+        "stdio".to_owned(),
     ];
 
     match &intent.disposition {
@@ -387,6 +531,10 @@ impl Agent for ClaudeAgent {
         self.native.as_deref()
     }
 
+    fn approval(&self, id: ApprovalId) -> Option<&ApprovalRequest> {
+        self.approvals.get(id)
+    }
+
     async fn send(&mut self, command: AgentCommand) -> Result<(), ProviderError> {
         match command {
             AgentCommand::Prompt(blocks) => {
@@ -401,7 +549,7 @@ impl Agent for ClaudeAgent {
                 // thing that knows one has. Announced after the write rather than before: a prompt that could not
                 // be sent did not start anything, and reporting one would show an operator a turn running that
                 // never was.
-                self.announced = Some(Produced {
+                self.announced.push_back(Produced {
                     src_end: self.src_end,
                     body: EventBody::Turn(TurnEvent::Started { turn }),
                 });
@@ -416,11 +564,21 @@ impl Agent for ClaudeAgent {
                 let text = payload.as_str().to_owned();
                 self.write_line(&text).await
             }
-            AgentCommand::Answer { .. } => Err(ProviderError::Unsupported {
-                provider: self.provider,
-                what: "answering an approval".to_owned(),
-                why: "the control channel is a measured surface and its mapping arrives with approvals",
-            }),
+            AgentCommand::Answer {
+                id,
+                option,
+                subject_digest,
+            } => {
+                let native =
+                    self.approvals
+                        .answer(id, option, subject_digest)
+                        .map_err(|error| {
+                            approval_error(self.provider, "answering an approval", &error)
+                        })?;
+                self.write_answer(&native, "answering an approval").await?;
+                self.approvals.complete(native.approval);
+                Ok(())
+            }
             // A command that arrived after this driver did. Saying so is the whole point: a wildcard that returned
             // success would report a command as sent when nothing was sent, and the operator would wait for an
             // effect that is never coming.
@@ -433,58 +591,86 @@ impl Agent for ClaudeAgent {
     }
 
     async fn next(&mut self) -> Option<Result<Produced, ProviderError>> {
-        // What runtrol itself has to say comes first, and taking it is not a wait, so a caller that sets this
-        // aside partway through loses nothing.
-        if let Some(announced) = self.announced.take() {
-            return Some(Ok(announced));
-        }
-        if self.finished {
-            return None;
-        }
+        'next_event: loop {
+            // What runtrol itself has to say comes first, and taking it is not a wait, so a caller that sets this
+            // aside partway through loses nothing.
+            if let Some(announced) = self.announced.pop_front() {
+                return Some(Ok(announced));
+            }
+            if self.finished {
+                return None;
+            }
 
-        // Every line produces something. Nothing here skips a frame, because a frame nobody bound still travels
-        // as unmapped, so there is no case that reads again without answering.
-        match self.lines.next().await {
-            Ok(Some(line)) => match map::read(&line) {
-                Ok(frame) => Some(Ok(self.produce(frame))),
-                // A frame runtrol cannot read is a protocol failure, promoted to session state by the caller
-                // rather than logged and stepped over.
+            let line = loop {
+                if let Some(expired) = self.expire_one().await {
+                    return Some(expired);
+                }
+                match self.approvals.wait(WallMs::now()) {
+                    Some(wait) => {
+                        if let Ok(line) = tokio::time::timeout(wait, self.lines.next()).await {
+                            break line;
+                        }
+                        // The read is cancel-safe. The next pass sends the retained rejection before reading again.
+                    }
+                    None => break self.lines.next().await,
+                }
+            };
+
+            // Every provider question receives either an exact native answer or a fail-closed error. Ordinary frames
+            // still produce one event each, including frames nobody has bound yet.
+            return match line {
+                Ok(Some(line)) => match map::read(&line) {
+                    Ok(Frame::ControlResponse) => continue 'next_event,
+                    Ok(frame) => Some(self.handle_frame(frame).await),
+                    // A frame runtrol cannot read is a protocol failure, promoted to session state by the caller
+                    // rather than logged and stepped over.
+                    Err(error) => {
+                        self.finished = true;
+                        Some(Err(ProviderError::Protocol {
+                            provider: self.provider,
+                            doing: "reading a frame from the session",
+                            detail: error.to_string(),
+                        }))
+                    }
+                },
+
+                Ok(None) => {
+                    self.finished = true;
+                    // A turn that was running when the stream ended gets an ending declared by the exit, never by the
+                    // provider. That is what keeps "unknown" distinguishable from "finished".
+                    self.withdraw_all(WithdrawnReason::TurnGone);
+                    if let Some(ending) = self.ending_at_exit() {
+                        self.announced.push_back(ending);
+                    }
+                    self.announced.pop_front().map(Ok)
+                }
+
                 Err(error) => {
                     self.finished = true;
+                    let detail = error.to_string();
+                    let doing = match error {
+                        LineError::TooLong { .. } | LineError::Poisoned => {
+                            "reading a frame past the limit of the transport"
+                        }
+                        LineError::Io { .. } => "reading from the session",
+                    };
                     Some(Err(ProviderError::Protocol {
                         provider: self.provider,
-                        doing: "reading a frame from the session",
-                        detail: error.to_string(),
+                        doing,
+                        detail,
                     }))
                 }
-            },
-
-            Ok(None) => {
-                self.finished = true;
-                // A turn that was running when the stream ended gets an ending declared by the exit, never by the
-                // provider. That is what keeps "unknown" distinguishable from "finished".
-                self.ending_at_exit().map(Ok)
-            }
-
-            Err(error) => {
-                self.finished = true;
-                let detail = error.to_string();
-                let doing = match error {
-                    LineError::TooLong { .. } | LineError::Poisoned => {
-                        "reading a frame past the limit of the transport"
-                    }
-                    LineError::Io { .. } => "reading from the session",
-                };
-                Some(Err(ProviderError::Protocol {
-                    provider: self.provider,
-                    doing,
-                    detail,
-                }))
-            }
+            };
         }
     }
 
     async fn close(mut self: Box<Self>, how: CloseMode) -> Result<(), ProviderError> {
+        for native in self.approvals.rejections() {
+            self.write_answer(&native, "declining an approval while closing")
+                .await?;
+            self.approvals.complete(native.approval);
+        }
+
         // Closing the input is how this CLI is asked to finish: it reads until its input ends.
         drop(self.stdin.take());
 
@@ -520,6 +706,54 @@ impl Agent for ClaudeAgent {
                 detail: error.to_string(),
             })
     }
+}
+
+fn approval_error(
+    provider: ProviderId,
+    doing: &'static str,
+    error: &ApprovalBuildError,
+) -> ProviderError {
+    ProviderError::Protocol {
+        provider,
+        doing,
+        detail: error.to_string(),
+    }
+}
+
+fn approval_notice(error: &ApprovalBuildError) -> EventBody {
+    let payload = serde_json::to_string(&serde_json::json!({
+        "approvalDeclined": true,
+        "why": error.to_string(),
+    }))
+    .unwrap_or_else(|_| r#"{"approvalDeclined":true}"#.to_owned());
+    EventBody::Notice(Box::new(Notice {
+        level: Level::Error,
+        code: NoticeCode::ProtocolViolation,
+        retryable: false,
+        payload: Opaque::owned(payload),
+    }))
+}
+
+fn unsupported_control_notice(subtype: &str) -> EventBody {
+    let credential = matches!(subtype, "oauth_token_refresh" | "host_auth_token_refresh");
+    let payload = serde_json::to_string(&serde_json::json!({
+        "controlRequestRefused": subtype,
+    }))
+    .unwrap_or_else(|_| r#"{"controlRequestRefused":true}"#.to_owned());
+    EventBody::Notice(Box::new(Notice {
+        level: if credential {
+            Level::Warn
+        } else {
+            Level::Error
+        },
+        code: if credential {
+            NoticeCode::CredentialRequestRefused
+        } else {
+            NoticeCode::ProtocolViolation
+        },
+        retryable: false,
+        payload: Opaque::owned(payload),
+    }))
 }
 
 #[cfg(test)]

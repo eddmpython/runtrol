@@ -1,6 +1,6 @@
 # securityPosture
 
-상태: 진행 중. Scope grantability, default-deny dispatch, argument escaping, read-only provider configuration, browser rebinding defenses, exact egress allowlisting, the end-to-end Noise boundary, exact PC-bound pairing approval, risk-bound remote approval authorization, and Codex provider-native approval mapping are implemented and verified. Claude approval mapping and the phone surface remain.
+Status: in progress. Scope grantability, default-deny dispatch, argument escaping, read-only provider configuration, browser rebinding defenses, exact egress allowlisting, the end-to-end Noise boundary, exact PC-bound pairing approval, risk-bound remote approval authorization, and both provider-native approval mappings are implemented and verified. The paid Claude live approval smoke and the phone surface remain.
 
 ## 한 문장 정의
 
