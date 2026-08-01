@@ -46,6 +46,10 @@ name = "rebindingDefenses"
 path = "rebindingDefenses.rs"
 
 [[test]]
+name = "egressContract"
+path = "egressContract.rs"
+
+[[test]]
 name = "providerContract"
 path = "providerContract.rs"
 

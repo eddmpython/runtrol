@@ -72,6 +72,15 @@ hyper = { version = "1.11.0", default-features = false }
 hyper-util = { version = "0.1.20", default-features = false }
 http-body-util = { version = "0.1.4", default-features = false }
 
+# End-to-end phone channel. The negotiated suite is AES-GCM only. `snow` 0.10.0's AES resolver gets its shared
+# `KeyInit` import behind the ChaCha feature, so that feature is also required for this release to compile even
+# though no protocol parameter selects it. A 128-bit QR secret is domain-separated into Noise's required 32-byte
+# PSK and secret buffers clear on drop.
+snow = { version = "0.10.0", default-features = false, features = ["use-aes-gcm", "use-chacha20poly1305", "use-sha2", "use-curve25519", "use-getrandom"] }
+hkdf = { version = "0.12.4", default-features = false }
+sha2 = { version = "0.10.9", default-features = false }
+zeroize = { version = "1.9.0", features = ["zeroize_derive"] }
+
 # 저장소. 배경 스레드가 없어서 골랐다 (03-storage-decision.md). 4.1 이 바닥이다
 # (4.0 에 -68% RSS region allocator 수정이 없고, 4.0 이전은 가변폭 튜플 인코딩이 다르다).
 redb = "4.1.0"

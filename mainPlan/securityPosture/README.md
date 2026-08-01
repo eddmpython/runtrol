@@ -1,6 +1,6 @@
 # securityPosture
 
-상태: 진행 중. Scope grantability, default-deny dispatch, argument escaping, read-only provider configuration, and browser rebinding defenses are enforced by gates. Egress and remote approval work remain.
+상태: 진행 중. Scope grantability, default-deny dispatch, argument escaping, read-only provider configuration, browser rebinding defenses, exact egress allowlisting, and the end-to-end Noise boundary are enforced by gates. Remote approval work remains.
 
 ## 한 문장 정의
 
@@ -94,7 +94,7 @@ Windows 의 loopback TCP 에는 **OS ACL 이 없다.** 모든 사용자 세션�
 ## 완료 판정
 
 - 스코프 셋이 타입으로 표현되고, 부여 불가 스코프가 **컴파일 에러**임을 테스트가 단언
-- `egressContract` 게이트: allowlist 밖 목적지로 소켓이 안 열림
+- `egressContract` 게이트: allowlist 밖 목적지로 소켓이 안 열리고, relay 에는 Noise ciphertext 만 보임
 - rebinding / CSRF 방어가 테스트다 (주석이 아니라)
 - BatBadBut 인자 이스케이프 게이트
 - 기본값 표가 `SECURITY.md` 로 승격됨

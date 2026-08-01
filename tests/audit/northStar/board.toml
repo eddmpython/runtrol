@@ -75,7 +75,9 @@ gate = [
 
 [[axis]]
 key = "noConversationPassthrough"
-tier = "none"
+# A real loopback socket and the production Noise boundary run under one contract gate. A live phone and relay
+# smoke is the missing gate kind, so this axis cannot pass six yet.
+tier = "realOneKind"
 additives = []
 caps = []
 name = { ko = "대화 무통과", en = "No conversation passthrough", zh = "对话不经过", ja = "会話を通さない" }

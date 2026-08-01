@@ -4,7 +4,15 @@
 //! exists for the browser-reachable plane, where loopback is not authentication and every request is hostile until
 //! its Host, Origin, browser metadata, protocol marker, and device credential have all been checked.
 
+pub mod crypto;
+pub mod egress;
 pub mod http;
 
+pub use crypto::{
+    Channel, CryptoError, EncryptedRecord, InitiatorHandshake, LinkKind, MAX_NOISE_PLAINTEXT,
+    MAX_TRANSPORT_FRAME, PairingSecret, PublicKey, ResponderHandshake, SessionBinding,
+    StaticKeypair,
+};
+pub use egress::{ApprovedDestination, EgressError, EgressPolicy};
 pub use http::{AccessToken, DeviceCredential, PhoneBody, PhoneHttp, PhoneHttpError, response};
 pub use hyper::StatusCode;

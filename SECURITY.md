@@ -38,6 +38,8 @@ the relay, pairing, and PWA work can only be connected behind the rules below.
 | State-changing browser fetch metadata | `same-origin` or `none` required | No |
 | WebSocket authentication | Before the HTTP 101 response | No |
 | Unknown, duplicate, or malformed security header | Deny | No |
+| Outbound phone destination | Empty exact IP and port allowlist | No |
+| Relay payload | Fresh Noise IK ciphertext for every link | No |
 | Remote workspace | A PC-registered workspace root only | No |
 | Provider credentials | Owned by the child CLI | No |
 
@@ -46,6 +48,15 @@ duplicates, requires an explicit HTTPS Origin, requires the non-simple protocol 
 from an Authorization bearer credential, and removes Cookie before any handler runs. Every response removes
 `Set-Cookie`, wildcard or handler-supplied CORS origin values, and `Access-Control-Allow-Credentials`. It then adds
 only the exact configured origin and `Vary: Origin`.
+
+The phone channel uses `Noise_IK_25519_AESGCM_SHA256` with pinned X25519 static keys. Its prologue binds the link
+kind, relay origin, and peer identity so a captured relay handshake cannot move to a direct link. Pairing uses
+`Noise_IKpsk1_25519_AESGCM_SHA256`; a domain-separated HKDF expands the 128-bit QR value into Noise's 32-byte PSK.
+Messages are capped at 65,519 plaintext bytes, larger frames are bounded and chunked, and the channel rekeys after
+2^24 messages or 15 minutes. Secret key material clears on drop and has no diagnostic representation.
+
+Outbound TCP requires an exact IP address and port minted by an immutable `EgressPolicy`. The operating-system
+connect call exists only inside that policy and an empty policy denies every destination.
 
 `Sec-Fetch-Site` is a CSRF control, not a DNS rebinding control. After rebinding, a browser can still report
 `same-origin`. Exact Host validation is the control that stops rebinding.
@@ -67,6 +78,11 @@ device identity, malicious Host rejection, missing and unknown Origin rejection,
 protocol header, cookie non-authentication, exact CORS preflight behavior, and authentication before WebSocket
 upgrade. Scope grantability, request authorization coverage, process argument escaping, transcript-copy absence,
 and provider configuration read-only behavior are separate merge-blocking gates.
+
+The `egressContract` gate dials real allowed and refused loopback destinations, completes production Noise session
+and pairing handshakes, crosses the Noise chunk boundary, round-trips length-prefixed ciphertext, rotates keys, and
+injects wrong keys, PSKs, link bindings, and ciphertext corruption. It also checks that transport has no disk or
+logging API and that drivers and storage name no provider-owned transcript path.
 
 ## Reporting a vulnerability
 

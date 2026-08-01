@@ -34,7 +34,7 @@
 | `providerContract` | 모든 어댑터가 같은 trait 계약을 통과. **코어에 provider 고유명사 분기가 없다**는 정적 검사 포함 |
 | `agentSurfaceDrift` | 최신 CLI 를 받아 생성 스키마와 저장 스키마를 대조. 공급자가 표면을 바꾸면 사용자보다 먼저 red |
 | `genericAcpSmoke` | 공급자 코드 없이 외부 TOML 만 놓고 별도 ACP v1 실행 파일을 발견한다. 실물 데몬과 CLI 표면을 거쳐 시작 -> 프롬프트 -> 스트림 -> 공급자 선언 종료 -> 데몬 재시작 뒤 load 까지 완주한다. fixture 이므로 공급자 실물 가산에는 세지 않는다 |
-| `egressContract` | allowlist 밖 목적지로 소켓이 안 열린다. 프롬프트·응답 본문이 runtrol 의 디스크나 로그에 안 남는다. **벤더 세션 파일을 여는 코드가 없다**는 정적 검사 포함 |
+| `egressContract` | production 송신 정책으로 정확히 허용한 IP 와 port 만 실물 루프백 소켓에 연결된다. production `Noise_IK_25519_AESGCM_SHA256` 세션과 `Noise_IKpsk1_25519_AESGCM_SHA256` 페어링이 고정 static key, 링크 종류, relay origin, peer id 를 인증하며 변조와 잘못된 key, PSK, prologue 를 거절한다. 65,519 byte 경계 분할, `varint(len) || ciphertext`, REKEY 뒤 왕복까지 돈다. relay capture 와 `Debug` 에 prompt 표본이 평문으로 없고 transport 에 disk 또는 log API 가 없으며, **driver 와 store 에 벤더 세션 경로가 없다**는 정적 검사 포함 |
 | `approvalRoundtripSmoke` | 실제 permission prompt 가 폰 표면에 도달하고, 폰의 응답이 세션을 재개시킨다 |
 | `resilienceFaultInjection` | 네트워크 차단, 데몬 강제 종료, 폰 재연결 각각에서 세션이 살아남고 **출력 손실 0** |
 | `idleFootprintRatchet` | idle RSS 와 CPU 상한. **내려가기만 하는 ratchet.** 기준은 데몬 단독이고 (상주하는 것은 데몬이다), GUI 창 열림은 별도 예산으로 병기한다 |
