@@ -26,7 +26,7 @@ pub mod view;
 use std::path::PathBuf;
 
 use runtrol_ipc::wire::{Request, Response};
-use tauri::Manager as _;
+use tauri::{Emitter as _, Manager as _};
 
 pub use ask::Failed;
 pub use view::{Offered, Row};
@@ -238,6 +238,183 @@ async fn resume(
     started(&reaching(&app), request).await
 }
 
+/// Send what the operator wrote.
+///
+/// Relayed and never rewritten. There is nowhere in this path for runtrol to add a word of its own, and the
+/// text reaches the provider as it was typed.
+#[tauri::command]
+async fn prompt(app: tauri::AppHandle, session: String, text: String) -> Answered<()> {
+    let Some(session) = parse_session(&session) else {
+        return Answered::Broken {
+            message: "that is not a session identifier".to_owned(),
+        };
+    };
+    let reaching = reaching(&app);
+    let asked = ask::once(
+        &reaching.address,
+        &reaching.runtrol,
+        Request::Prompt {
+            session,
+            text: text.into(),
+        },
+    )
+    .await;
+    match asked {
+        Err(failed) => Answered::broken(&failed),
+        Ok(Response::Done) => Answered::Ok { value: () },
+        Ok(Response::Failed(error)) => Answered::refused(&error),
+        Ok(other) => Answered::unreadable(&other),
+    }
+}
+
+/// The name of the event the window pushes each frame out on.
+///
+/// One name for every session, with the session on the frame, rather than a name per session. The page decides
+/// what it is looking at, and a stream of names would make that decision twice.
+///
+/// # No dot in the name
+///
+/// The toolkit refuses an event name containing one, and it refuses it by returning an error from the send
+/// rather than by failing to start. Measured: every frame was relayed and every one was refused, while the
+/// page sat there showing an empty conversation with nothing anywhere saying why.
+pub const FRAME_EVENT: &str = "session-frame";
+
+/// The name of the event that says a view has ended.
+pub const OVER_EVENT: &str = "session-over";
+
+/// One frame from a session, on its way to the page.
+///
+/// The provider's own bytes, untouched. runtrol does not lay a conversation out, reorder it, or summarize it,
+/// so what the page receives is what the provider wrote, with only the session it belongs to attached.
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Frame {
+    /// Which session it belongs to, so a page that has moved on can ignore it.
+    session: String,
+    /// The provider's own frame, as text.
+    frame: String,
+}
+
+/// Watch a session, replacing whatever was being watched.
+///
+/// # Why only one at a time
+///
+/// The window shows one conversation. A second subscription would hold a second connection and a second
+/// provider's output for a panel nobody is looking at, which is the cost the memory contract exists to refuse.
+/// Whoever wants two conversations at once opens two windows, and the daemon serves both the same way.
+#[tauri::command]
+async fn watch(app: tauri::AppHandle, session: String) -> Answered<()> {
+    let Some(parsed) = parse_session(&session) else {
+        return Answered::Broken {
+            message: "that is not a session identifier".to_owned(),
+        };
+    };
+    let reaching = reaching(&app);
+
+    // Stopped before the next one starts, so there is never a moment with two views open.
+    stop_watching(&app).await;
+
+    let greeted = ask::greet(&reaching.address, &reaching.runtrol).await;
+    let mut connection = match greeted {
+        Ok(connection) => connection,
+        Err(failed) => return Answered::broken(&failed),
+    };
+    // **Watching is not a question with an answer.** The daemon writes nothing when it accepts one: the
+    // connection simply becomes a view, and the next thing on it is the session's first event. Asking for an
+    // answer here would block until the agent happened to say something, which for an idle session is never,
+    // and the window would sit there looking like it had failed to subscribe.
+    let asked = serde_json::to_vec(&Request::Watch { session: parsed });
+    let frame = match asked {
+        Ok(frame) => frame,
+        Err(error) => {
+            return Answered::Broken {
+                message: error.to_string(),
+            };
+        }
+    };
+    if let Err(error) = connection.send(&frame).await {
+        return Answered::Broken {
+            message: error.to_string(),
+        };
+    }
+
+    let handle = app.clone();
+    let watching = session.clone();
+    let task = tauri::async_runtime::spawn(async move {
+        loop {
+            // Spelled as a match on purpose: the two arms are different facts. One is a frame, and the other
+            // is the view being over, which the page has to be told about because a view that stops without
+            // saying so looks exactly like a session that went quiet.
+            #[expect(
+                clippy::single_match_else,
+                reason = "the ending arm is a decision, not a fallthrough"
+            )]
+            match connection.recv().await {
+                Ok(Some(bytes)) => {
+                    // The daemon puts each event in a `Response::Event` envelope. The page wants what the
+                    // provider wrote, not runtrol's envelope around it, so the envelope is opened here and
+                    // nothing inside it is read.
+                    let text = match serde_json::from_slice::<Response>(&bytes) {
+                        Ok(Response::Event(payload)) => payload.as_str().to_owned(),
+                        // Anything else on a connection that has become a view is worth showing rather than
+                        // dropping: it is the daemon saying something about the session.
+                        Ok(other) => {
+                            format!("{{\"body\":{{\"event\":\"daemon\",\"said\":{other:?}}}}}")
+                        }
+                        Err(_) => String::from_utf8_lossy(&bytes).into_owned(),
+                    };
+                    // Pushed as it arrived. A window that parsed this to decide what to send would be reading
+                    // a conversation, which is the one thing runtrol does not do.
+                    let sent = handle.emit(
+                        FRAME_EVENT,
+                        Frame {
+                            session: watching.clone(),
+                            frame: text,
+                        },
+                    );
+                    // Whether a frame left this side, and whether the toolkit took it. The page reports what
+                    // it received; without this, a frame that never arrived and a frame that arrived and was
+                    // not drawn look identical from outside.
+                    trace(format!(
+                        "relayed a frame to the page: {}",
+                        if sent.is_ok() { "taken" } else { "refused" }
+                    ));
+                }
+                // The stream ended, or it broke. Either way the view is over and the page is told, because a
+                // view that stops without saying so looks exactly like a session that went quiet.
+                Ok(None) | Err(_) => {
+                    drop(handle.emit(OVER_EVENT, watching.clone()));
+                    return;
+                }
+            }
+        }
+    });
+
+    *tauri::Manager::state::<Watching>(&app).0.lock().await = Some(task);
+    Answered::Ok { value: () }
+}
+
+/// Stop watching, if anything was.
+#[tauri::command]
+async fn unwatch(app: tauri::AppHandle) {
+    stop_watching(&app).await;
+}
+
+/// The task pushing frames at the page, when there is one.
+#[derive(Default)]
+struct Watching(tauri::async_runtime::Mutex<Option<tauri::async_runtime::JoinHandle<()>>>);
+
+/// End the current view and let its connection go.
+async fn stop_watching(app: &tauri::AppHandle) {
+    let held = tauri::Manager::state::<Watching>(app).0.lock().await.take();
+    if let Some(task) = held {
+        // Aborted rather than asked to finish. The daemon notices the connection go and drops the subscription
+        // on its side, which is the only thing that has to happen; waiting for a frame that may never come
+        // would make switching sessions depend on the provider saying something.
+        task.abort();
+    }
+}
+
 /// Stop following a session. **Not a delete**: the conversation stays with its provider.
 #[tauri::command]
 async fn close(app: tauri::AppHandle, session: String, now: bool) -> Answered<()> {
@@ -300,8 +477,9 @@ pub fn run(reaching: Reaching) -> Result<(), tauri::Error> {
             Ok(())
         })
         .manage(reaching)
+        .manage(Watching::default())
         .invoke_handler(tauri::generate_handler![
-            sessions, providers, start, resume, close, tracing, trace
+            sessions, providers, start, resume, close, prompt, watch, unwatch, tracing, trace
         ])
         .run(tauri::generate_context!())
 }

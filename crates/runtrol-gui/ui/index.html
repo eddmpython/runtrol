@@ -6,44 +6,74 @@
     <link rel="stylesheet" href="app.css" />
   </head>
   <body>
-    <!-- The list is on the left and it does not move. A fixed place is what lets muscle memory form, and it is
-         the first thing the operator named as what makes an app comfortable to manage sessions in. -->
+    <!-- The shape is the one the operator named as the best desktop app of this kind: a fixed left rail of
+         conversations grouped by the folder they belong to, a quiet centre, and the input as a card at the
+         bottom. What is deliberately not copied is any item for a feature runtrol does not have. An empty
+         menu entry is worse than an absent one. -->
     <aside id="side">
-      <header>
-        <h1>runtrol</h1>
-        <!-- Always in the same place, so starting costs nothing to find. -->
-        <button id="new" type="button">새 세션</button>
+      <header id="sideTop">
+        <picture>
+          <source srcset="brand/lockup-dark.svg" media="(prefers-color-scheme: dark)" />
+          <img src="brand/lockup-light.svg" alt="runtrol" height="17" />
+        </picture>
       </header>
-      <ul id="sessions" aria-live="polite"></ul>
-      <p id="empty" hidden>세션이 없다. 위에서 하나 시작한다.</p>
+
+      <nav id="rail">
+        <button id="new" type="button" class="railItem">
+          <span class="ico" aria-hidden="true">+</span>
+          <span>새 세션</span>
+        </button>
+      </nav>
+
+      <div id="groups"></div>
+      <p id="empty" class="hint" hidden>아직 세션이 없다. 위에서 하나 시작한다.</p>
+
+      <footer id="sideFoot">
+        <span class="dot" id="daemonDot"></span>
+        <span id="daemonWord">데몬</span>
+      </footer>
     </aside>
 
     <main id="main">
-      <div id="nothing">
-        <p>왼쪽에서 세션을 고른다.</p>
-      </div>
-      <section id="detail" hidden>
-        <header>
-          <span class="badge" id="detailProvider"></span>
-          <span class="dot" id="detailDot"></span>
-          <span id="detailDoing"></span>
-        </header>
-        <dl>
-          <dt>runtrol</dt>
-          <dd id="detailSession"></dd>
-          <dt>대화</dt>
-          <dd id="detailNative"></dd>
-        </dl>
-        <div class="actions">
-          <button id="closeSession" type="button">닫기</button>
-        </div>
-        <p class="note">대화 표면은 아직 없다. 이 창이 지금 답하는 것은 한 목록이다.</p>
+      <!-- Nothing selected. A mark and one line, the way the app the operator pointed at does it. -->
+      <section id="nothing">
+        <picture>
+          <source srcset="brand/lockup-dark.svg" media="(prefers-color-scheme: dark)" />
+          <img src="brand/lockup-light.svg" alt="" height="26" />
+        </picture>
+        <p>무엇을 시킬까요?</p>
       </section>
+
+      <section id="detail" hidden>
+        <div id="talk"></div>
+      </section>
+
+      <!-- The composer, as a card. The row above the text is what the app the operator pointed at puts there:
+           which project this belongs to. Here it names the session's own folder, and starting a new session
+           is where a folder gets chosen. -->
+      <form id="composer" hidden>
+        <div id="composerTop">
+          <span class="ico" aria-hidden="true">▸</span>
+          <span id="composerFolder"></span>
+          <span class="badge" id="composerProvider"></span>
+          <span class="grow"></span>
+          <span class="quiet" id="composerState"></span>
+        </div>
+        <textarea
+          id="toSay"
+          rows="1"
+          spellcheck="false"
+          placeholder="무엇이든 요청해 보세요"
+        ></textarea>
+        <div id="composerBottom">
+          <button id="closeSession" type="button" class="ghost" title="이 세션 닫기">닫기</button>
+          <span class="grow"></span>
+          <span class="quiet" id="composerNative"></span>
+          <button id="send" type="submit" class="primary">보내기</button>
+        </div>
+      </form>
     </main>
 
-    <!-- A start needs a provider and a place to work, and nothing else. Neither model nor permission is asked
-         for here: the provider's own settings decide, and offering a default would override a choice the
-         operator already made in the CLI. -->
     <dialog id="starter">
       <form method="dialog">
         <h2>새 세션</h2>
@@ -52,13 +82,12 @@
         <label for="workspace">작업 폴더</label>
         <input id="workspace" type="text" spellcheck="false" />
         <menu>
-          <button value="cancel" type="submit">취소</button>
-          <button value="start" id="confirmStart" type="submit">시작</button>
+          <button value="cancel" type="submit" class="ghost">취소</button>
+          <button value="start" id="confirmStart" type="submit" class="primary">시작</button>
         </menu>
       </form>
     </dialog>
 
-    <!-- Whatever the daemon said, in its own words. Never a spinner and never a guess. -->
     <div id="said" role="status" hidden></div>
 
     <script src="app.js"></script>

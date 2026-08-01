@@ -318,6 +318,7 @@ fn list(sessions: &SessionManager) -> Vec<SessionLine> {
             session: one.session,
             provider: one.provider.as_str().into(),
             native: one.native.map(Into::into),
+            workspace: one.workspace.as_str().into(),
             hot: one.tier.has_a_process(),
             doing: one.state.lifecycle().name().into(),
             looks_stuck: one.state.looks_stuck(),

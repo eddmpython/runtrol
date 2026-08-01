@@ -174,6 +174,12 @@ pub struct SessionLine {
     pub provider: Box<str>,
     /// The provider's own name, once it has announced one.
     pub native: Option<Box<str>>,
+    /// Where the agent works.
+    ///
+    /// On the wire because a surface has to be able to say which session is touching which folder, which is
+    /// the whole of the `sessions do not trample each other` axis. It is deliberately **not** on the terminal
+    /// listing: that surface is whitespace-splittable by contract, and a path can contain spaces.
+    pub workspace: Box<str>,
     /// How much of it exists: whether it has a process right now.
     pub hot: bool,
     /// What it is doing, in one word.
@@ -413,6 +419,7 @@ mod tests {
             session: SessionId::now(),
             provider: "claude".into(),
             native: Some("some-name".into()),
+            workspace: r"C:\work\dartlab".into(),
             hot: true,
             doing: "busy".into(),
             looks_stuck: true,

@@ -27,6 +27,13 @@ pub struct Row {
     /// `None` before the provider has named it, which for one of the two CLIs is until its first turn. The
     /// page shows a row either way; what it cannot offer is continuing a conversation that does not exist yet.
     pub native: Option<String>,
+    /// Where the agent works, in full.
+    pub workspace: String,
+    /// The last part of that path, which is what a person calls the project.
+    ///
+    /// Computed here rather than in the page, because splitting a path is platform knowledge and a page that
+    /// did it would get one separator right and the other wrong.
+    pub folder: String,
     /// Whether it has a process right now.
     pub hot: bool,
     /// What it is doing, in one word.
@@ -44,10 +51,25 @@ impl From<&SessionLine> for Row {
             session: line.session.to_string(),
             provider: line.provider.to_string(),
             native: line.native.as_ref().map(ToString::to_string),
+            workspace: line.workspace.to_string(),
+            folder: folder_of(&line.workspace),
             hot: line.hot,
             doing: line.doing.to_string(),
             looks_stuck: line.looks_stuck,
         }
+    }
+}
+
+/// The last part of a path, which is what a person calls the project.
+///
+/// Both separators are cut, because a daemon and a window do not have to be on the same platform for a path to
+/// arrive with the other one in it, and a root with nothing after it keeps the whole path rather than becoming
+/// an empty heading.
+fn folder_of(workspace: &str) -> String {
+    let trimmed = workspace.trim_end_matches(['/', '\\']);
+    match trimmed.rsplit(['/', '\\']).next() {
+        Some(last) if !last.is_empty() => last.to_owned(),
+        _ => workspace.to_owned(),
     }
 }
 
@@ -90,6 +112,7 @@ mod tests {
             session: SessionId::now(),
             provider: "codex".into(),
             native: native.map(Into::into),
+            workspace: r"C:\work\dartlab".into(),
             hot: true,
             doing: "idle".into(),
             looks_stuck: false,
@@ -123,16 +146,34 @@ mod tests {
             "session",
             "provider",
             "native",
+            "workspace",
+            "folder",
             "hot",
             "doing",
             "looksStuck",
         ] {
             assert!(encoded.contains(field), "{encoded}");
         }
+        // Counted as keys rather than as punctuation. Counting colons was the first attempt and a Windows path
+        // carries one of its own, so the check failed on the value instead of on the shape.
+        let parsed: serde_json::Map<String, serde_json::Value> =
+            serde_json::from_str(&encoded).expect("an object");
         assert_eq!(
-            encoded.matches(':').count(),
-            6,
-            "a row grew a field, and the only fields it may have are these six: {encoded}"
+            parsed.len(),
+            8,
+            "a row grew a field, and the only fields it may have are these eight: {encoded}"
         );
+    }
+
+    #[test]
+    fn the_project_name_is_the_last_part_of_the_path() {
+        // What the sidebar groups by. Both separators are cut, because the daemon and the window do not have
+        // to be on the same platform for a path to arrive with the other one in it.
+        assert_eq!(folder_of(r"C:\work\dartlab"), "dartlab");
+        assert_eq!(folder_of("/home/me/work/dartlab/"), "dartlab");
+        assert_eq!(folder_of("dartlab"), "dartlab");
+        // A root with nothing after it keeps the whole path rather than becoming an empty heading.
+        assert_eq!(folder_of("/"), "/");
+        assert_eq!(folder_of(""), "");
     }
 }

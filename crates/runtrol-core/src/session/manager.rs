@@ -38,8 +38,8 @@ use core::task::Poll;
 use std::collections::BTreeMap;
 
 use runtrol_provider::{
-    Agent, AgentCommand, CloseMode, Disposition, EventBody, Level, Notice, NoticeCode, Opaque,
-    OpenIntent, Produced, Provider, ProviderError, ProviderId, SessionId, WallMs,
+    AbsPath, Agent, AgentCommand, CloseMode, Disposition, EventBody, Level, Notice, NoticeCode,
+    Opaque, OpenIntent, Produced, Provider, ProviderError, ProviderId, SessionId, WallMs,
 };
 
 use crate::events::{Published, SessionHub, Subscription};
@@ -78,6 +78,11 @@ struct Live {
     hub: SessionHub,
     /// Its two names.
     identity: Identity,
+    /// Where the agent works.
+    ///
+    /// Kept because a listing has to say it. Which session is touching which folder is the whole of the
+    /// `sessions do not trample each other` axis, and a surface that cannot show it cannot warn about it.
+    workspace: AbsPath,
     /// What it is doing.
     state: SessionState,
 }
@@ -200,6 +205,9 @@ impl SessionManager {
             }
         };
 
+        // Kept before the intent is handed over, because opening consumes it and a listing still has to be able
+        // to say which folder this session works in.
+        let workspace = intent.workspace.clone();
         let agent = provider.open(intent).await?;
         let mut state = SessionState::new(WallMs::now());
         // Binding happened: the driver answered. Recorded through the transition table like everything else, so there
@@ -214,6 +222,7 @@ impl SessionManager {
                 agent,
                 hub: SessionHub::new(session),
                 identity,
+                workspace,
                 state,
             },
         );
@@ -445,6 +454,7 @@ impl SessionManager {
             session: *session,
             provider: live.identity.provider(),
             native: live.identity.native().map(AsRef::as_ref),
+            workspace: &live.workspace,
             tier: Tier::Hot,
             state: &live.state,
         })
@@ -466,6 +476,8 @@ pub struct LiveSession<'manager> {
     pub provider: ProviderId,
     /// The provider's own name, once it has announced one.
     pub native: Option<&'manager str>,
+    /// Where the agent works.
+    pub workspace: &'manager AbsPath,
     /// How much of it exists. Always the hot tier here, by definition.
     pub tier: Tier,
     /// What it is doing.

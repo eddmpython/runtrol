@@ -35,6 +35,10 @@ dist/
 # 데스크톱 셸이 빌드 때 만드는 권한 스키마. tauri.conf.json 에서 재생성되므로 저장소에 둘 이유가 없다.
 crates/runtrol-gui/gen/
 
+# 창 안으로 복사해 온 브랜드 자산. 정본은 `assets/brand/` 하나이고, 로고 사본을 두 곳에 두면
+# 마크를 다시 그리는 날 한쪽만 바뀐다. 빌드가 매번 가져온다.
+crates/runtrol-gui/ui/brand/
+
 # Python. 게이트 harness 전용이고 재생성된다.
 .venv/
 __pycache__/
