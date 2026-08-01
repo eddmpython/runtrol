@@ -23,6 +23,7 @@ use std::sync::Arc;
 use runtrol_childproc::{Containment, Program};
 use runtrol_provider::{ModelAliases, Provider, ProviderId};
 
+use crate::acp::AcpProvider;
 use crate::claude::ClaudeProvider;
 use crate::codex::CodexProvider;
 
@@ -78,6 +79,11 @@ pub struct DriverContext {
     pub models: ModelAliases,
     /// The program to run, already resolved and with its launchers unwrapped.
     pub program: Program,
+    /// Arguments the manifest declares for opening the structured transport.
+    ///
+    /// Kept as data all the way to the generic driver. A protocol driver that supplied its own launcher flags
+    /// would turn adding a provider into a code change, which is the boundary this context exists to avoid.
+    pub transport_argv: Vec<Box<str>>,
     /// The containment every child joins.
     ///
     /// Shared rather than owned, because there is one containment per process and dropping it is the kill switch.
@@ -101,8 +107,8 @@ pub const KINDS: &[DriverKind] = &[
     },
     DriverKind {
         kind: "acp",
-        make: None,
-        unavailable: Some("this build has no generic driver for that protocol"),
+        make: Some(make_acp),
+        unavailable: None,
     },
     DriverKind {
         kind: "exec-oneshot",
@@ -132,6 +138,17 @@ fn make_codex(context: &DriverContext) -> Box<dyn Provider> {
         context.provider,
         context.program.clone(),
         Arc::clone(&context.contained_by),
+    ))
+}
+
+/// Build the provider-neutral ACP driver.
+fn make_acp(context: &DriverContext) -> Box<dyn Provider> {
+    Box::new(AcpProvider::new(
+        context.provider,
+        context.program.clone(),
+        Arc::clone(&context.contained_by),
+        context.models.clone(),
+        context.transport_argv.clone(),
     ))
 }
 

@@ -173,6 +173,12 @@ jobs:
       - name: cargo test
         if: needs.detect.outputs.hasWorkspace == 'true'
         run: cargo test --all
+      - name: 범용 ACP 게이트 자체 검증
+        if: needs.detect.outputs.hasWorkspace == 'true'
+        run: python -X utf8 tests/audit/genericAcpSmoke.py --selftest
+      - name: 외부 TOML 공급자의 ACP 자식 프로세스 턴
+        if: needs.detect.outputs.hasWorkspace == 'true'
+        run: python -X utf8 tests/audit/genericAcpSmoke.py
       - name: 자식 회수 게이트 자체 검증
         if: needs.detect.outputs.hasWorkspace == 'true'
         run: python -X utf8 tests/audit/orphanReaping.py --selftest

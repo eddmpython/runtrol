@@ -16,6 +16,7 @@
 //! [`builtin`] hands back what this build ships: the manifest text and the kind table. Whoever composes the build
 //! parses the one and reads the other, and neither the kernel nor this crate needs to know about the other's shape.
 
+pub mod acp;
 pub mod claude;
 pub mod codex;
 pub mod framing;

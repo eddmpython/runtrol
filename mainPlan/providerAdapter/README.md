@@ -1,6 +1,6 @@
 # providerAdapter
 
-상태: 대기 (`positioningDecision` 선행). 설계는 완료, 착수는 운영자 go.
+상태: 진행 중. 범용 ACP v1 자식 프로세스 경로와 manifest 전용 등록은 구현 및 자동 검증 완료.
 
 ## 한 문장 정의
 
@@ -21,7 +21,7 @@
 - `async-io`·`async-process`·`blocking` 을 무조건 의존한다 -> **tokio 옆에 두 번째 리액터와 두 번째 blocking 풀**
 - `serde_json/preserve_order` 를 켠다 -> cargo feature 통합이 **워크스페이스 전체**에 적용되어 `serde_json::Map` 이 조용히 `IndexMap` 으로 바뀌고 `indexmap`·`hashbrown` 이 전역으로 딸려온다
 
-M0 완료 조건에 이 crate 가 필요한 것은 없다. 와이어 타입이 필요해지면 **`agent-client-protocol-schema` 만** 의존하고, 본 crate 는 M1 의 off-by-default feature 로 미룬다.
+2026-08-01 재확인에서 `agent-client-protocol-schema` 1.6.0 자체도 `serde_json/preserve_order` 를 무조건 켠다는 사실을 확인했다. 따라서 SDK 와 schema crate 모두 의존하지 않는다. 안정 ACP v1 의 메서드 이름과 감독 결정에 필요한 최소 필드만 `runtrol-drivers::acp::wire` 에 좁게 바인딩하고, content 와 미지 프레임은 원본 byte slice 로 통과시킨다.
 
 ### 1. ACP 를 채택한다. 발명하지 않는다
 
@@ -32,7 +32,7 @@ ACP 는 이미 runtrol 어휘의 약 90% 를 표준화했다: `session/new|load|
 | ACP 메서드 이름과 `SessionUpdate` 모양 | **채택.** 내부 + PWA 어휘 |
 | Codex 진입 전송으로서의 ACP | 건너뜀. `app-server` 가 상위집합이다 |
 | Claude Code 진입 전송으로서의 ACP | 1급으로는 건너뜀. manifest 전용 대안으로 허용 |
-| `agent-client-protocol` Rust crate | **채택.** `kind = "acp"` 범용 드라이버용 |
+| `agent-client-protocol` 및 schema Rust crate | **기각.** 둘 다 현재 `serde_json/preserve_order` 를 전역 활성화한다. 안정 ACP v1 와이어 어휘만 좁게 바인딩 |
 | Codex `app-server` JSON Schema 생성기 | **채택.** 빌드 시점 + probe 시점 산출물 |
 | Claude `system/init.capabilities` 배열 | **채택.** feature detection 채널 |
 | vibe-kanban `CodingAgent` enum | **기각. 안티 요구사항이다** |

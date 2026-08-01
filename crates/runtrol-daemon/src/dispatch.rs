@@ -339,6 +339,7 @@ fn driver(composed: &Composed, provider: &str) -> Result<Box<dyn Provider>, Resp
         provider: id,
         models: declared.manifest.models.clone(),
         program,
+        transport_argv: declared.manifest.transport.argv.clone(),
         contained_by: Arc::clone(&composed.containment),
     }))
 }

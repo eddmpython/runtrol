@@ -132,6 +132,14 @@ GATES: dict[str, tuple[str, list[str]]] = {
         ],
     ),
     "cargoTest": ("cargo test", ["cargo", "test", "--all"]),
+    "genericAcpSmokeSelftest": (
+        "범용 ACP 게이트 자체 검증",
+        [*PY, f"{HOOKS}/genericAcpSmoke.py", "--selftest"],
+    ),
+    "genericAcpSmoke": (
+        "외부 TOML 공급자의 ACP 자식 프로세스 턴",
+        [*PY, f"{HOOKS}/genericAcpSmoke.py"],
+    ),
     # 북극성 `하나의 세션 목록` 축을 떠받치는 유일한 게이트. 실물 CLI 를 몰고 세션을 시작·목록·닫기·
     # 재개까지 돌린다. 프롬프트를 보내지 않으므로 토큰도 rate limit 도 쓰지 않고, 그래서 야간이 아니라
     # 매 preflight 에 돌 수 있다. 자체 검증이 먼저 도는 이유는 통과를 보이기 전에 실패할 수 있는지부터
@@ -206,6 +214,8 @@ CARGO_GATES = frozenset(
         "cargoClippy",
         "clippyCrossCfg",
         "cargoTest",
+        "genericAcpSmokeSelftest",
+        "genericAcpSmoke",
         "audit",
         "cargoShear",
         "cargoDeny",

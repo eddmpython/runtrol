@@ -32,6 +32,7 @@
 | `iosInstallAndPush` | iOS 홈화면 설치 + Web Push 수신. 실기기 필요. **점수에서 뺀다** |
 | `providerContract` | 모든 어댑터가 같은 trait 계약을 통과. **코어에 provider 고유명사 분기가 없다**는 정적 검사 포함 |
 | `agentSurfaceDrift` | 최신 CLI 를 받아 생성 스키마와 저장 스키마를 대조. 공급자가 표면을 바꾸면 사용자보다 먼저 red |
+| `genericAcpSmoke` | 공급자 코드 없이 외부 TOML 만 놓고 별도 ACP v1 실행 파일을 발견한다. 실물 데몬과 CLI 표면을 거쳐 시작 -> 프롬프트 -> 스트림 -> 공급자 선언 종료 -> 데몬 재시작 뒤 load 까지 완주한다. fixture 이므로 공급자 실물 가산에는 세지 않는다 |
 | `egressContract` | allowlist 밖 목적지로 소켓이 안 열린다. 프롬프트·응답 본문이 runtrol 의 디스크나 로그에 안 남는다. **벤더 세션 파일을 여는 코드가 없다**는 정적 검사 포함 |
 | `approvalRoundtripSmoke` | 실제 permission prompt 가 폰 표면에 도달하고, 폰의 응답이 세션을 재개시킨다 |
 | `resilienceFaultInjection` | 네트워크 차단, 데몬 강제 종료, 폰 재연결 각각에서 세션이 살아남고 **출력 손실 0** |

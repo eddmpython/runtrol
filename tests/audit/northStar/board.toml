@@ -69,6 +69,7 @@ name = { ko = "공급자 확장성", en = "Provider extensibility", zh = "供应
 gate = [
     { name = "providerContract", kind = "contract" },
     { name = "agentSurfaceDrift", kind = "smoke" },
+    { name = "genericAcpSmoke", kind = "smoke" },
 ]
 
 [[axis]]
