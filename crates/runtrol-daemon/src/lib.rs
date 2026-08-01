@@ -20,7 +20,7 @@ pub mod serve;
 
 pub use compose::{ComposeError, Composed};
 pub use scope::{Needed, WallRefusal, allowed, needed};
-pub use serve::{ServeError, serve};
+pub use serve::{MAX_BLOCKING_PROVIDER_OPERATIONS, MODEL_PREPARATION_BUDGET_MS, ServeError, serve};
 
 /// Where a daemon for this home listens.
 ///

@@ -31,6 +31,8 @@
 //! the transport; the scope wall that reads where a request came from belongs at the dispatch boundary, which is where
 //! it goes. This file gets frames to that boundary and answers back.
 
+use core::future::Future;
+use core::time::Duration;
 use std::sync::Arc;
 
 use runtrol_core::{
@@ -38,15 +40,15 @@ use runtrol_core::{
     TakenAgent,
 };
 use runtrol_ipc::transport::{Connection, Listener, TransportError};
-use runtrol_ipc::wire::{Request, Response};
+use runtrol_ipc::wire::{Request, Response, WireError};
 use runtrol_provider::{AgentCommand, CloseMode, Opaque, ProviderError, SessionId};
 use tokio::sync::{Mutex, mpsc, oneshot};
 use tokio::task::JoinSet;
 
 use crate::compose::Composed;
 use crate::dispatch::{
-    Cleanup, CleanupReservation, Conversation, Discovered, Prepared, Reply, answer_prepared,
-    complete_prepare_for, discover, needs_driver, refuse,
+    Cleanup, CleanupReservation, Conversation, Discovered, Prepared, PreparedKind, Reply,
+    answer_prepared, complete_prepare_for, discover, needs_driver, refuse,
 };
 
 /// How many answered requests may be waiting to reach the one task that answers them.
@@ -55,6 +57,19 @@ use crate::dispatch::{
 /// without limit. A connection that finds it full waits, which is the correct thing for it to do: it has nothing else
 /// to be doing until its request is answered.
 pub const ASKED_QUEUE: usize = 64;
+
+/// Blocking provider pipe operations the daemon can admit at once on Windows.
+///
+/// Every hot process may have one stdout read and one stdin write in flight. Discovery and model preparation share
+/// one gate and add at most one stdout/stderr pair or model connection pair.
+pub const MAX_BLOCKING_PROVIDER_OPERATIONS: usize = runtrol_core::session::MAX_HOT * 2 + 2;
+
+/// Longest model discovery may hold the global provider preparation gate.
+///
+/// A cold discovery may issue thirteen sequential probes at fifteen seconds each. The remaining allowance covers a
+/// normal catalogue response, while deliberately bounding multi-page enumeration rather than adding every internal
+/// page timeout together. It also bounds a child that stops reading stdin or a driver that never returns.
+pub const MODEL_PREPARATION_BUDGET_MS: u64 = 300_000;
 
 /// The daemon could not keep serving.
 #[derive(Debug, thiserror::Error)]
@@ -175,9 +190,10 @@ pub async fn serve(composed: Composed, mut listener: Listener) -> Result<(), Ser
     let (asking, mut asked) = mpsc::channel::<Asked>(ASKED_QUEUE);
     let (reserving, mut reservations) = mpsc::unbounded_channel::<ReservationAsked>();
     let (returning, mut returned) = mpsc::unbounded_channel::<AgentReturned>();
-    // ProbeCache replaces one file atomically but is deliberately not a database. Serializing discovery keeps two
-    // connections from publishing stale snapshots over each other while leaving unrelated requests and event pumping
-    // completely independent of a cold probe.
+    // ProbeCache replaces one file atomically but is deliberately not a database. Serializing provider preparation
+    // keeps two connections from publishing stale snapshots over each other and bounds temporary provider processes.
+    // A Models request holds this gate through its provider call. Opens release it after discovery because their
+    // process slots are bounded separately by MAX_HOT.
     let discovering = Arc::new(Mutex::new(()));
     let mut connections = JoinSet::new();
 
@@ -467,21 +483,31 @@ async fn converse(
             None
         };
 
-        let discovered = if needs_driver(&request) {
-            let _single_writer = discovering.lock().await;
-            discover(&conversation, &composed, &request).await
+        let mut preparation_gate = if needs_driver(&request) {
+            Some(discovering.lock().await)
         } else {
-            Discovered::None
+            None
         };
-        let prepared = complete_prepare_for(
-            &request,
-            discovered,
-            reservation
-                .as_ref()
-                .and_then(|guard| guard.reservation.as_ref())
-                .map(CleanupReservation::session),
-        )
-        .await;
+        let reserved_session = reservation
+            .as_ref()
+            .and_then(|guard| guard.reservation.as_ref())
+            .map(CleanupReservation::session);
+        let prepared = if let Request::Models { provider } = &request {
+            let preparing = async {
+                let discovered = discover(&conversation, &composed, &request).await;
+                complete_prepare_for(&request, discovered, reserved_session).await
+            };
+            finish_model_preparation(provider, preparing, model_preparation_budget()).await
+        } else {
+            let discovered = if preparation_gate.is_some() {
+                discover(&conversation, &composed, &request).await
+            } else {
+                Discovered::None
+            };
+            drop(preparation_gate.take());
+            complete_prepare_for(&request, discovered, reserved_session).await
+        };
+        drop(preparation_gate);
         let (answered, hearing) = oneshot::channel();
         let ask = Asked {
             conversation,
@@ -560,6 +586,33 @@ async fn converse(
             }
         }
     }
+}
+
+/// Finish a model catalogue without allowing one provider to monopolize preparation forever.
+async fn finish_model_preparation<F>(provider: &str, preparing: F, within: Duration) -> Prepared
+where
+    F: Future<Output = Prepared>,
+{
+    match tokio::time::timeout(within, preparing).await {
+        Ok(prepared) => prepared,
+        Err(_elapsed) => Prepared::Invalid {
+            kind: PreparedKind::Models,
+            provider: provider.into(),
+            response: Response::Failed(WireError {
+                message: format!(
+                    "model discovery for {provider} did not finish within {} milliseconds",
+                    within.as_millis()
+                )
+                .into(),
+                retryable: true,
+                needs_the_operator: false,
+            }),
+        },
+    }
+}
+
+const fn model_preparation_budget() -> Duration {
+    Duration::from_millis(MODEL_PREPARATION_BUDGET_MS)
 }
 
 /// Perform one provider command outside the session owner, then offer the agent back to it.
@@ -877,6 +930,61 @@ mod tests {
             .expect("the connection holds")
             .expect("every request produces an answer");
         serde_json::from_slice(&answer).expect("the answer is readable")
+    }
+
+    #[tokio::test]
+    async fn a_stuck_model_provider_releases_global_preparation() {
+        struct DropSignal(Option<oneshot::Sender<()>>);
+
+        impl Drop for DropSignal {
+            fn drop(&mut self) {
+                if let Some(dropped) = self.0.take() {
+                    let _dropped = dropped.send(());
+                }
+            }
+        }
+
+        let gate = Arc::new(Mutex::new(()));
+        let first_gate = Arc::clone(&gate);
+        let (held, holding) = oneshot::channel();
+        let (dropped, dropping) = oneshot::channel();
+        let first = tokio::spawn(async move {
+            let _guard = first_gate.lock().await;
+            held.send(()).expect("the test observes the held gate");
+            let preparing = async move {
+                let _cleanup = DropSignal(Some(dropped));
+                core::future::pending::<Prepared>().await
+            };
+            finish_model_preparation("fixture", preparing, Duration::from_millis(25)).await
+        });
+        holding.await.expect("the first preparation holds the gate");
+
+        let second_gate = Arc::clone(&gate);
+        let second = tokio::spawn(async move {
+            let _guard = second_gate.lock().await;
+        });
+
+        let prepared = first.await.expect("the bounded preparation task finishes");
+        match prepared {
+            Prepared::Invalid {
+                kind: PreparedKind::Models,
+                provider,
+                response: Response::Failed(error),
+            } => {
+                assert_eq!(&*provider, "fixture");
+                assert!(error.retryable);
+                assert!(!error.needs_the_operator);
+                assert!(error.message.contains("did not finish"));
+            }
+            _ => panic!("the stuck model preparation must become a bound refusal"),
+        }
+        dropping
+            .await
+            .expect("timeout drops provider preparation before releasing its gate");
+        tokio::time::timeout(Duration::from_secs(1), second)
+            .await
+            .expect("the next preparation acquired the released gate")
+            .expect("the next preparation task finishes");
     }
 
     #[tokio::test]

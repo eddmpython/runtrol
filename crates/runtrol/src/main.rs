@@ -38,6 +38,18 @@ enum Personality {
 /// reason: a renamed file behaving differently is a surprise nobody asked for.
 const WINDOW_ARGUMENT: &str = "gui";
 
+/// Blocking pipe operations admitted by the daemon at one time on Windows.
+///
+/// Each hot process can have one stdout read and one stdin write in flight. Provider preparation is serialized and
+/// adds at most one stdout/stderr probe pair or one model connection pair.
+const ADMITTED_PROVIDER_PIPE_OPERATIONS: usize = runtrol_daemon::MAX_BLOCKING_PROVIDER_OPERATIONS;
+
+/// The maximum number of blocking workers this I/O supervisor may create.
+///
+/// Six workers above the admitted provider pipe operations leave progress capacity for filesystem and resolver work
+/// without restoring Tokio's implicit 512-thread ceiling.
+const MAX_BLOCKING_THREADS: usize = ADMITTED_PROVIDER_PIPE_OPERATIONS + 6;
+
 fn main() -> ExitCode {
     // Before anything could be started. Whether this program's own handles may travel to what it starts is a property
     // of the process, so it is set once here rather than argued about at each spawn. Measured: without it, a command
@@ -94,16 +106,21 @@ fn run<Work>(work: Work) -> ExitCode
 where
     Work: FnOnce(&tokio::runtime::Runtime) -> ExitCode,
 {
-    match tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
-    {
+    match supervisor_runtime() {
         Ok(runtime) => work(&runtime),
         Err(error) => {
             report(&format!("runtrol cannot start: {error}"));
             ExitCode::FAILURE
         }
     }
+}
+
+/// Build the runtime shared by command and daemon personalities.
+fn supervisor_runtime() -> std::io::Result<tokio::runtime::Runtime> {
+    tokio::runtime::Builder::new_current_thread()
+        .max_blocking_threads(MAX_BLOCKING_THREADS)
+        .enable_all()
+        .build()
 }
 
 /// Be the daemon.
@@ -250,7 +267,18 @@ fn report(message: &str) {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(windows)]
+    use std::io::Write;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, mpsc};
+    use std::time::Duration;
+
     use super::*;
+
+    #[cfg(windows)]
+    const PIPE_FIXTURE_ENV: &str = "RUNTROL_WINDOWS_PIPE_FIXTURE";
+    #[cfg(windows)]
+    const PIPE_FIXTURE_READY: &str = "runtrol-pipe-fixture-ready";
 
     fn typed(line: &str) -> Vec<String> {
         line.split_whitespace().map(str::to_owned).collect()
@@ -294,5 +322,283 @@ mod tests {
             Personality::Command(passed) => assert_eq!(passed, words),
             _ => panic!("expected a command"),
         }
+    }
+
+    #[test]
+    fn the_supervisor_runtime_has_one_async_thread() {
+        let runtime = supervisor_runtime().expect("the product runtime builds");
+
+        assert_eq!(
+            runtime.handle().runtime_flavor(),
+            tokio::runtime::RuntimeFlavor::CurrentThread
+        );
+        assert_eq!(ADMITTED_PROVIDER_PIPE_OPERATIONS, 18);
+        assert_eq!(MAX_BLOCKING_THREADS, 24);
+    }
+
+    #[test]
+    fn admitted_provider_pipes_leave_blocking_progress_capacity() {
+        let runtime = supervisor_runtime().expect("the product runtime builds");
+        let release = Arc::new(AtomicBool::new(false));
+        let (started, starts) = mpsc::channel();
+        let mut occupied = Vec::new();
+
+        for _ in 0..ADMITTED_PROVIDER_PIPE_OPERATIONS {
+            let release = Arc::clone(&release);
+            let started = started.clone();
+            occupied.push(runtime.spawn_blocking(move || {
+                started.send(()).expect("the test still observes starts");
+                while !release.load(Ordering::Acquire) {
+                    std::thread::park_timeout(Duration::from_millis(10));
+                }
+            }));
+        }
+        drop(started);
+
+        let all_admitted_started = (0..ADMITTED_PROVIDER_PIPE_OPERATIONS)
+            .all(|_| starts.recv_timeout(Duration::from_secs(2)).is_ok());
+        let (spare_started, spare_starts) = mpsc::channel();
+        for _ in ADMITTED_PROVIDER_PIPE_OPERATIONS..MAX_BLOCKING_THREADS {
+            let release = Arc::clone(&release);
+            let spare_started = spare_started.clone();
+            occupied.push(runtime.spawn_blocking(move || {
+                spare_started
+                    .send(())
+                    .expect("the test still observes spare starts");
+                while !release.load(Ordering::Acquire) {
+                    std::thread::park_timeout(Duration::from_millis(10));
+                }
+            }));
+        }
+        drop(spare_started);
+        let spare_progressed = all_admitted_started
+            && (ADMITTED_PROVIDER_PIPE_OPERATIONS..MAX_BLOCKING_THREADS)
+                .all(|_| spare_starts.recv_timeout(Duration::from_secs(2)).is_ok());
+
+        release.store(true, Ordering::Release);
+        runtime.block_on(async {
+            for worker in occupied {
+                worker.await.expect("an occupied worker exits cleanly");
+            }
+        });
+
+        assert!(
+            all_admitted_started,
+            "every provider pipe operation admitted by the daemon must get a worker"
+        );
+        assert!(
+            spare_progressed,
+            "provider pipe saturation must leave every reserved progress worker available"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn silent_pipe_fixture() {
+        if std::env::var_os(PIPE_FIXTURE_ENV).is_none() {
+            return;
+        }
+        let mut output = std::io::stdout();
+        writeln!(output, "{PIPE_FIXTURE_READY}").expect("the fixture marker is writable");
+        output.flush().expect("the fixture marker is visible");
+        loop {
+            std::thread::park();
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the fault injection keeps child, pipe, worker, and cleanup lifetimes in one visible scope"
+    )]
+    fn windows_provider_pipes_leave_exact_progress_capacity() {
+        use std::process::Stdio;
+
+        use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+
+        struct Fixture {
+            children: Vec<tokio::process::Child>,
+            release: Arc<AtomicBool>,
+        }
+
+        impl Drop for Fixture {
+            fn drop(&mut self) {
+                self.release.store(true, Ordering::Release);
+                for child in &mut self.children {
+                    drop(child.start_kill());
+                }
+            }
+        }
+
+        fn child(stderr: Stdio) -> tokio::process::Child {
+            let executable = std::env::current_exe().expect("the test executable has a path");
+            let mut command = tokio::process::Command::new(executable);
+            command
+                .arg("--exact")
+                .arg("tests::silent_pipe_fixture")
+                .arg("--nocapture")
+                .env(PIPE_FIXTURE_ENV, "1")
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(stderr)
+                .kill_on_drop(true);
+            runtrol_childproc::hide_console_window(command.as_std_mut());
+            command.spawn().expect("the silent pipe fixture starts")
+        }
+
+        let runtime = supervisor_runtime().expect("the product runtime builds");
+        runtime.block_on(async {
+            let release = Arc::new(AtomicBool::new(false));
+            let mut fixture = Fixture {
+                children: Vec::new(),
+                release: Arc::clone(&release),
+            };
+            let mut pipe_tasks = Vec::new();
+            let mut pipe_ready = Vec::new();
+            let blocked_write = Arc::new(vec![0_u8; 4 * 1024 * 1024]);
+
+            for _ in 0..(ADMITTED_PROVIDER_PIPE_OPERATIONS - 2) / 2 {
+                let mut process = child(Stdio::null());
+                let mut stdin = process.stdin.take().expect("hot stdin is piped");
+                let stdout = process.stdout.take().expect("hot stdout is piped");
+                let blocked_write = Arc::clone(&blocked_write);
+                pipe_tasks.push(tokio::spawn(async move {
+                    drop(stdin.write_all(&blocked_write).await);
+                }));
+                let (ready, readiness) = tokio::sync::oneshot::channel();
+                pipe_tasks.push(tokio::spawn(async move {
+                    let mut stdout = BufReader::new(stdout);
+                    let mut line = String::new();
+                    loop {
+                        match stdout.read_line(&mut line).await {
+                            Ok(0) | Err(_) => return,
+                            Ok(_) if line.contains(PIPE_FIXTURE_READY) => break,
+                            Ok(_) => line.clear(),
+                        }
+                    }
+                    let _ready = ready.send(());
+                    let mut byte = [0_u8; 1];
+                    drop(stdout.read(&mut byte).await);
+                }));
+                pipe_ready.push(readiness);
+                fixture.children.push(process);
+            }
+
+            let mut preparation = child(Stdio::piped());
+            drop(preparation.stdin.take());
+            let stdout = preparation
+                .stdout
+                .take()
+                .expect("preparation stdout is piped");
+            let mut stderr = preparation
+                .stderr
+                .take()
+                .expect("preparation stderr is piped");
+            let (ready, readiness) = tokio::sync::oneshot::channel();
+            pipe_tasks.push(tokio::spawn(async move {
+                let mut stdout = BufReader::new(stdout);
+                let mut line = String::new();
+                loop {
+                    match stdout.read_line(&mut line).await {
+                        Ok(0) | Err(_) => return,
+                        Ok(_) if line.contains(PIPE_FIXTURE_READY) => break,
+                        Ok(_) => line.clear(),
+                    }
+                }
+                let _ready = ready.send(());
+                let mut byte = [0_u8; 1];
+                drop(stdout.read(&mut byte).await);
+            }));
+            pipe_ready.push(readiness);
+            pipe_tasks.push(tokio::spawn(async move {
+                let mut byte = [0_u8; 1];
+                drop(stderr.read(&mut byte).await);
+            }));
+            fixture.children.push(preparation);
+
+            for readiness in pipe_ready {
+                tokio::time::timeout(Duration::from_secs(2), readiness)
+                    .await
+                    .expect("a fixture announced readiness")
+                    .expect("a fixture kept its stdout open");
+            }
+            tokio::time::sleep(Duration::from_millis(250)).await;
+            let mut sentinels = Vec::new();
+            let mut starts = Vec::new();
+            for _ in ADMITTED_PROVIDER_PIPE_OPERATIONS..MAX_BLOCKING_THREADS {
+                let release = Arc::clone(&release);
+                let (started, start) = tokio::sync::oneshot::channel();
+                sentinels.push(tokio::task::spawn_blocking(move || {
+                    let _started = started.send(());
+                    while !release.load(Ordering::Acquire) {
+                        std::thread::park_timeout(Duration::from_millis(10));
+                    }
+                }));
+                starts.push(start);
+            }
+
+            let mut all_spares_started = true;
+            for start in starts {
+                if tokio::time::timeout(Duration::from_secs(2), start)
+                    .await
+                    .is_err()
+                {
+                    all_spares_started = false;
+                }
+            }
+
+            let seventh_release = Arc::clone(&release);
+            let (seventh_started, mut seventh_start) = tokio::sync::oneshot::channel();
+            let seventh = tokio::task::spawn_blocking(move || {
+                let _started = seventh_started.send(());
+                while !seventh_release.load(Ordering::Acquire) {
+                    std::thread::park_timeout(Duration::from_millis(10));
+                }
+            });
+            let seventh_was_queued =
+                tokio::time::timeout(Duration::from_millis(250), &mut seventh_start)
+                    .await
+                    .is_err();
+
+            let released_child = fixture
+                .children
+                .first_mut()
+                .expect("the fixture has hot children");
+            drop(released_child.start_kill());
+            let seventh_progressed = if seventh_was_queued {
+                tokio::time::timeout(Duration::from_secs(2), seventh_start)
+                    .await
+                    .is_ok()
+            } else {
+                false
+            };
+
+            release.store(true, Ordering::Release);
+            for child in &mut fixture.children {
+                drop(child.start_kill());
+                drop(child.wait().await);
+            }
+            for task in pipe_tasks {
+                drop(task.await);
+            }
+            for sentinel in sentinels {
+                sentinel.await.expect("a spare sentinel exits");
+            }
+            seventh.await.expect("the queued sentinel exits");
+
+            assert!(
+                all_spares_started,
+                "all six progress workers must start beside eighteen provider pipe operations"
+            );
+            assert!(
+                seventh_was_queued,
+                "a twenty-fifth blocking operation must wait at the configured ceiling"
+            );
+            assert!(
+                seventh_progressed,
+                "a queued blocking operation must start when one provider pipe closes"
+            );
+        });
     }
 }

@@ -51,6 +51,12 @@ pub trait Provider: Send + Sync + 'static {
     /// # Errors
     ///
     /// Any [`ProviderError`] produced while asking the provider's own discovery surface.
+    ///
+    /// # Cancellation
+    ///
+    /// Dropping this future must synchronously begin cleanup of every resource the query created. A driver must not
+    /// detach a task or process that can outlive the future. Child processes must use kill-on-drop containment and a
+    /// reader task must remain owned by a value dropped with this future.
     async fn models(&self) -> Result<ModelCatalog, ProviderError> {
         Ok(ModelCatalog::unknown(
             "this driver does not provide model discovery",

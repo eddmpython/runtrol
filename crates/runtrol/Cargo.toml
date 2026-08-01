@@ -30,7 +30,7 @@ runtrol-drivers = { workspace = true }
 runtrol-ipc = { workspace = true }
 # Both personalities are asynchronous, and each wants a runtime of its own shape. Built here because an attribute on
 # `main` can only say one thing.
-tokio = { workspace = true, features = ["rt", "rt-multi-thread"] }
+tokio = { workspace = true, features = ["io-util", "process", "rt", "sync", "time"] }
 
 [lints]
 workspace = true

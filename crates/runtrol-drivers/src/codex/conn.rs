@@ -29,10 +29,9 @@
 //!
 //! # Lifetime
 //!
-//! Sessions hold the connection and nothing else does. The reader task holds only the pieces it reads and
-//! writes, so when the last session goes away the connection drops, the child is killed by its own
-//! `kill_on_drop`, the stream ends, and the reader stops on its own. No shutdown handshake, and no way to
-//! leave an `app-server` running with nobody attached.
+//! Sessions hold the connection and nothing else does. The connection owns its reader task handle, so when the last
+//! session goes away it aborts that task and the child's `kill_on_drop` stops the process. No shutdown handshake, and
+//! no way to leave an `app-server` or detached reader running with nobody attached.
 
 use core::sync::atomic::{AtomicU64, Ordering};
 use core::time::Duration;
@@ -183,9 +182,17 @@ pub struct Connection {
     unreadable: Arc<AtomicU64>,
     /// The child.
     ///
-    /// Held so that dropping the connection stops the process. Never awaited on: the reader task notices the
-    /// stream ending on its own.
+    /// Held so that dropping the connection stops the process. Never awaited on: Drop first aborts the owned reader
+    /// and then this handle's kill-on-drop closes the process side of both pipes.
     child: Mutex<Child>,
+    /// The stdout reader, owned rather than detached so cancellation cannot leave a task behind.
+    reader: tokio::task::JoinHandle<()>,
+}
+
+impl Drop for Connection {
+    fn drop(&mut self) {
+        self.reader.abort();
+    }
 }
 
 /// The two ordered protocol operations that make a connection ready for ordinary calls.
@@ -232,7 +239,7 @@ impl Connection {
         let routes: Arc<Mutex<Routes>> = Arc::new(Mutex::new(Routes::default()));
         let unreadable = Arc::new(AtomicU64::new(0));
 
-        tokio::spawn(read_forever(
+        let reader = tokio::spawn(read_forever(
             Lines::new(stdout),
             Arc::clone(&stdin),
             Arc::clone(&pending),
@@ -247,6 +254,7 @@ impl Connection {
             routes,
             unreadable,
             child: Mutex::new(child),
+            reader,
         };
 
         // The one call that has to happen before anything else. Its answer is read for nothing: what matters
