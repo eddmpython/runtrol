@@ -59,6 +59,7 @@ pub fn needed(request: &Request) -> Needed {
         }
 
         Request::List => Needed::Scope(DeviceScope::SessionList),
+        Request::Models { .. } => Needed::Scope(DeviceScope::ConfigRead),
         Request::Start { .. } => Needed::Scope(DeviceScope::SessionStart),
         Request::Resume { .. } => Needed::Scope(DeviceScope::SessionResume),
         Request::Prompt { .. } => Needed::Scope(DeviceScope::SessionInputWrite),
@@ -139,6 +140,9 @@ mod tests {
                 wire: runtrol_ipc::WIRE_VERSION,
             },
             Request::List,
+            Request::Models {
+                provider: "example".into(),
+            },
             Request::Start {
                 provider: "example".into(),
                 workspace: "/work".into(),

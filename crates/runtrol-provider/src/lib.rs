@@ -25,6 +25,7 @@
 //! it tells you.
 
 pub mod agent;
+pub mod catalog;
 pub mod command;
 pub mod error;
 pub mod event;
@@ -34,6 +35,9 @@ pub mod path;
 pub mod time;
 
 pub use agent::{Agent, Provider};
+pub use catalog::{
+    MAX_MODEL_CHOICES, MAX_REASONING_CHOICES, ModelCatalog, ModelChoice, ReasoningChoice,
+};
 pub use command::{
     AgentCommand, CloseMode, ContentBlock, DEFAULT_GRACE_MS, Disposition, OpenIntent, Produced,
 };

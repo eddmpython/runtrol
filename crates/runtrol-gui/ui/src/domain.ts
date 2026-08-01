@@ -26,6 +26,24 @@ export type OfferedProvider = {
   whyNot: string | null;
 };
 
+export type ReasoningChoice = {
+  id: string;
+  description: string;
+};
+
+export type ModelChoice = {
+  id: string;
+  displayName: string;
+  description: string;
+  isDefault: boolean;
+  reasoningEfforts: ReasoningChoice[];
+};
+
+export type ModelCatalog =
+  | { kind: "known"; models: ModelChoice[] }
+  | { kind: "aliases"; aliases: string[]; why: string }
+  | { kind: "unknown"; why: string };
+
 export type ConversationItem = {
   key: number;
   side: "mine" | "theirs" | "thought" | "meta";

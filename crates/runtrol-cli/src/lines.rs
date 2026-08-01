@@ -8,6 +8,7 @@
 //! conversation, which is the one thing runtrol does not do.
 
 use runtrol_ipc::wire::Response;
+use runtrol_provider::ModelCatalog;
 
 /// What a listing prints where a conversation's own name would go, before the provider has said one.
 ///
@@ -61,6 +62,28 @@ pub fn render(response: &Response) -> Vec<String> {
             })
             .collect(),
 
+        Response::Models(ModelCatalog::Known { models }) if models.is_empty() => {
+            vec!["no models reported".to_owned()]
+        }
+
+        Response::Models(ModelCatalog::Known { models }) => models
+            .iter()
+            .map(|model| {
+                let default = if model.is_default { "  (default)" } else { "" };
+                format!("{}  {}{default}", model.id, model.display_name)
+            })
+            .collect(),
+
+        Response::Models(ModelCatalog::Aliases { aliases, why }) => {
+            let mut lines = vec![format!("aliases only: {why}")];
+            lines.extend(aliases.iter().map(|alias| format!("alias  {alias}")));
+            lines
+        }
+
+        Response::Models(ModelCatalog::Unknown { why }) => {
+            vec![format!("model catalogue unknown: {why}")]
+        }
+
         Response::Started { session } => vec![session.to_string()],
 
         Response::Done => vec!["done".to_owned()],
@@ -87,7 +110,7 @@ pub fn render(response: &Response) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use runtrol_provider::SessionId;
+    use runtrol_provider::{ModelCatalog, ModelChoice, SessionId};
 
     use super::*;
 
@@ -138,6 +161,39 @@ mod tests {
     fn an_empty_list_says_so_rather_than_printing_nothing() {
         // Printing nothing is indistinguishable from a command that failed silently.
         assert_eq!(render(&Response::Sessions(vec![])), vec!["no sessions"]);
+    }
+
+    #[test]
+    fn discovered_models_are_one_choice_per_line() {
+        let lines = render(&Response::Models(ModelCatalog::Known {
+            models: vec![ModelChoice {
+                id: "runtime-choice".into(),
+                display_name: "Runtime Choice".into(),
+                description: "reported now".into(),
+                is_default: true,
+                reasoning_efforts: Vec::new(),
+            }],
+        }));
+        assert_eq!(lines, vec!["runtime-choice  Runtime Choice  (default)"]);
+    }
+
+    #[test]
+    fn aliases_and_unknown_catalogues_say_what_they_are() {
+        let aliases = render(&Response::Models(ModelCatalog::Aliases {
+            aliases: vec!["fast".into()],
+            why: "aliases only".into(),
+        }));
+        assert!(
+            aliases
+                .first()
+                .is_some_and(|line| line.starts_with("aliases only:"))
+        );
+        assert!(aliases.get(1).is_some_and(|line| line == "alias  fast"));
+
+        let unknown = render(&Response::Models(ModelCatalog::unknown(
+            "no discovery surface",
+        )));
+        assert!(unknown.first().is_some_and(|line| line.contains("unknown")));
     }
 
     #[test]

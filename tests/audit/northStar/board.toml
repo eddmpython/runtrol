@@ -124,7 +124,7 @@ gate = [
 
 [[axis]]
 key = "automaticModelDetection"
-tier = "none"
+tier = "realOneKind"
 additives = []
 caps = []
 name = { ko = "모델 자동 인식", en = "Automatic model detection", zh = "自动识别模型", ja = "モデル自動認識" }
@@ -231,7 +231,8 @@ file = "noTranscriptCopy.py"
 [[floor]]
 category = "security"
 name = "scopeGrantability"
-status = "planned"
+status = "built"
+file = "scopeGrantability.rs"
 
 # Default deny at the boundary, as something a machine checks. A floor rather than an axis: a remote caller being
 # denied by default is not worth a fraction of a point, it is the condition for the product being allowed to reach
@@ -250,7 +251,8 @@ status = "planned"
 [[floor]]
 category = "security"
 name = "argumentEscaping"
-status = "planned"
+status = "built"
+file = "argumentEscaping.rs"
 
 [[floor]]
 category = "security"
@@ -296,4 +298,5 @@ file = "memoryBudget.rs"
 [[floor]]
 category = "budget"
 name = "orphanReaping"
-status = "planned"
+status = "built"
+file = "orphanReaping.py"

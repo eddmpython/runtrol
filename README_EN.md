@@ -16,7 +16,7 @@ At the desk it is an app; away from the desk it is a phone. The same session, th
 However many providers there are, there is one list. Whatever the operating system, the method is the same.
 The conversation travels only between the user's PC and the provider. runtrol does not get in between.**
 
-The current total is **6/140, average 0.4/10**. Exactly one axis has a gate standing behind it so far.
+The current total is **12/140, average 0.9/10**. Two axes have gates standing behind them so far.
 A 10 means the complete journey has been repeatedly verified in a real environment.
 **A score is backed by a gate that actually runs in CI. A path that is not executed automatically does not count, no matter how implemented it looks.**
 
@@ -32,7 +32,7 @@ A 10 means the complete journey has been repeatedly verified in a real environme
 | Cost of running | 0/10 | Not built. | Leave it on all day and the user never notices it is there. Not in the battery, not in the fan, not in the task manager. |
 | Same method everywhere | 0/10 | Not built. | Install and operation are the same on Windows, macOS, and Linux. A Windows user never needs to know what WSL or tmux is. |
 | Current without asking | 0/10 | Not built. | The app and the installed agent CLIs stay current on their own, and if an update breaks a session it has already rolled back before the user touches anything. There is no moment where the user thinks about versions. |
-| Automatic model detection | 0/10 | Not built. | The models this account can actually use appear in the list as they are, and a new model appears without runtrol being changed. |
+| Automatic model detection | 6/10 | Every preflight asks two real CLIs. An enumerable CLI returns the current account's models, while a CLI that cannot enumerate returns stable manifest aliases and states that limitation (`modelDetectionSmoke`, no tokens spent). The gate also checks that discovered model identifiers are not source literals outside drivers. The ceiling is 6 because no separate static contract gate backs this axis. | The models this account can actually use appear in the list as they are, and a new model appears without runtrol being changed. |
 | Sessions do not trample each other | 0/10 | Not built. | Which session is touching which folder is always distinguishable, starting a second session into the same folder warns before it happens, and when a provider offers isolation (worktrees) it is available right on the start screen. |
 | Agents consult each other | 0/10 | Not built. | One toggle registers two CLIs with each other over their official surface (MCP), so one agent asks another for an opinion mid-turn and gets it back. The wiring is made only through each CLI's own official commands (no direct config-file writes), conversation bodies still never pass through runtrol, and the user never needs to learn what MCP is. |
 | Freedom to leave | 0/10 | Not built. | Delete runtrol and the sessions and history remain each CLI's own, continuing the original way. There is no data runtrol holds hostage. |

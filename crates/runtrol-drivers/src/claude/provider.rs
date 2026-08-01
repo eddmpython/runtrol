@@ -8,7 +8,9 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use runtrol_childproc::{Containment, Program};
-use runtrol_provider::{Agent, OpenIntent, Provider, ProviderError, ProviderId};
+use runtrol_provider::{
+    Agent, ModelAliases, ModelCatalog, OpenIntent, Provider, ProviderError, ProviderId,
+};
 
 use crate::claude::agent::ClaudeAgent;
 
@@ -26,6 +28,8 @@ pub struct ClaudeProvider {
     ///
     /// Shared, because there is one per process and holding it is what holds the guarantee.
     contained_by: Arc<Containment>,
+    /// Stable aliases from the manifest, because this CLI exposes no enumerable model catalogue.
+    models: ModelAliases,
 }
 
 impl ClaudeProvider {
@@ -33,11 +37,17 @@ impl ClaudeProvider {
     ///
     /// Starts nothing. A provider is a way to open sessions, not a session.
     #[must_use]
-    pub const fn new(id: ProviderId, program: Program, contained_by: Arc<Containment>) -> Self {
+    pub const fn new(
+        id: ProviderId,
+        program: Program,
+        contained_by: Arc<Containment>,
+        models: ModelAliases,
+    ) -> Self {
         Self {
             id,
             program,
             contained_by,
+            models,
         }
     }
 
@@ -52,6 +62,19 @@ impl ClaudeProvider {
 impl Provider for ClaudeProvider {
     fn id(&self) -> ProviderId {
         self.id
+    }
+
+    async fn models(&self) -> Result<ModelCatalog, ProviderError> {
+        if self.models.aliases.is_empty() {
+            return Ok(ModelCatalog::unknown(
+                "this CLI does not expose an enumerable model catalogue",
+            ));
+        }
+        Ok(ModelCatalog::Aliases {
+            aliases: self.models.aliases.clone(),
+            why: "this CLI exposes stable aliases but does not enumerate account-specific models"
+                .into(),
+        })
     }
 
     async fn open(&self, intent: OpenIntent) -> Result<Box<dyn Agent>, ProviderError> {
@@ -90,6 +113,7 @@ mod tests {
             a_provider_id(),
             a_resolved_program(),
             Arc::new(Containment::without_any()),
+            ModelAliases::default(),
         );
         assert_eq!(driver.id().as_str(), "claude");
         assert!(driver.program().path().as_std_path().exists());
@@ -103,8 +127,31 @@ mod tests {
             a_provider_id(),
             a_resolved_program(),
             Arc::new(Containment::without_any()),
+            ModelAliases::default(),
         ));
         assert_eq!(held.id().as_str(), "claude");
+    }
+
+    #[tokio::test]
+    async fn model_aliases_are_reported_without_starting_the_cli() {
+        let driver = ClaudeProvider::new(
+            a_provider_id(),
+            a_resolved_program(),
+            Arc::new(Containment::without_any()),
+            ModelAliases {
+                aliases: vec!["fast".into(), "deep".into()],
+            },
+        );
+        match driver.models().await.expect("aliases need no process") {
+            ModelCatalog::Aliases { aliases, why } => {
+                assert_eq!(
+                    aliases,
+                    vec![Box::<str>::from("fast"), Box::<str>::from("deep")]
+                );
+                assert!(why.contains("does not enumerate"), "{why}");
+            }
+            other => panic!("expected aliases, got {other:?}"),
+        }
     }
 
     #[tokio::test]
@@ -115,6 +162,7 @@ mod tests {
             a_provider_id(),
             a_resolved_program(),
             Arc::new(Containment::without_any()),
+            ModelAliases::default(),
         );
         let intent = OpenIntent {
             session: SessionId::now(),

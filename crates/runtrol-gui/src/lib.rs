@@ -208,15 +208,42 @@ async fn providers(app: tauri::AppHandle) -> Answered<Vec<Offered>> {
     }
 }
 
+/// Current model choices for one provider, discovered by its driver.
+#[tauri::command]
+async fn models(
+    app: tauri::AppHandle,
+    provider: String,
+) -> Answered<runtrol_provider::ModelCatalog> {
+    let reaching = reaching(&app);
+    let asked = ask::once(
+        &reaching.address,
+        &reaching.runtrol,
+        Request::Models {
+            provider: provider.into(),
+        },
+    )
+    .await;
+    match asked {
+        Err(failed) => Answered::broken(&failed),
+        Ok(Response::Models(catalogue)) => Answered::Ok { value: catalogue },
+        Ok(Response::Failed(error)) => Answered::refused(&error),
+        Ok(other) => Answered::unreadable(&other),
+    }
+}
+
 /// Start a session.
 #[tauri::command]
-async fn start(app: tauri::AppHandle, provider: String, workspace: String) -> Answered<String> {
+async fn start(
+    app: tauri::AppHandle,
+    provider: String,
+    workspace: String,
+    model: Option<String>,
+) -> Answered<String> {
     let request = Request::Start {
         provider: provider.into(),
         workspace: workspace.into(),
-        // Neither is decided here. The provider's own settings choose, which is the honest default: runtrol
-        // has no opinion about which model somebody wants.
-        model: None,
+        // An absent choice means the provider's own setting. The window never invents a default.
+        model: model.filter(|value| !value.is_empty()).map(Into::into),
         permission: None,
     };
     started(&reaching(&app), request).await
@@ -479,7 +506,8 @@ pub fn run(reaching: Reaching) -> Result<(), tauri::Error> {
         .manage(reaching)
         .manage(Watching::default())
         .invoke_handler(tauri::generate_handler![
-            sessions, providers, start, resume, close, prompt, watch, unwatch, tracing, trace
+            sessions, providers, models, start, resume, close, prompt, watch, unwatch, tracing,
+            trace
         ])
         .run(tauri::generate_context!())
 }

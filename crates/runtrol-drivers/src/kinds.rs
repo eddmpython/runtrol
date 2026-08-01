@@ -21,7 +21,7 @@
 use std::sync::Arc;
 
 use runtrol_childproc::{Containment, Program};
-use runtrol_provider::{Provider, ProviderId};
+use runtrol_provider::{ModelAliases, Provider, ProviderId};
 
 use crate::claude::ClaudeProvider;
 use crate::codex::CodexProvider;
@@ -74,6 +74,8 @@ impl core::fmt::Debug for DriverKind {
 pub struct DriverContext {
     /// Which provider this driver is being built for.
     pub provider: ProviderId,
+    /// Stable model aliases declared by this provider, when its CLI cannot enumerate a catalogue.
+    pub models: ModelAliases,
     /// The program to run, already resolved and with its launchers unwrapped.
     pub program: Program,
     /// The containment every child joins.
@@ -120,6 +122,7 @@ fn make_claude(context: &DriverContext) -> Box<dyn Provider> {
         context.provider,
         context.program.clone(),
         Arc::clone(&context.contained_by),
+        context.models.clone(),
     ))
 }
 

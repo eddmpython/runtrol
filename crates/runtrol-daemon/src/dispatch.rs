@@ -30,7 +30,8 @@ use runtrol_core::{SessionManager, SessionView};
 use runtrol_drivers::DriverContext;
 use runtrol_ipc::wire::{ProviderLine, Request, Response, SessionLine, WireError};
 use runtrol_provider::{
-    AbsPath, AgentCommand, CloseMode, ContentBlock, Disposition, OpenIntent, ProviderId, SessionId,
+    AbsPath, AgentCommand, CloseMode, ContentBlock, Disposition, OpenIntent, Provider, ProviderId,
+    SessionId,
 };
 use runtrol_security::Caller;
 
@@ -143,6 +144,8 @@ pub async fn answer(
 
         Request::List => Reply::One(Response::Sessions(list(sessions))),
 
+        Request::Models { provider } => Reply::One(models(composed, &provider).await),
+
         Request::Start {
             provider,
             workspace,
@@ -235,51 +238,15 @@ async fn open(
     model: Option<Box<str>>,
     permission: Option<Box<str>>,
 ) -> Response {
-    let Ok(id) = ProviderId::parse(provider) else {
-        return refuse(&format!(
-            "{provider:?} is not a provider name runtrol accepts"
-        ));
-    };
-    let Some(declared) = composed.registry.get(id) else {
-        return refuse(&format!("no provider called {provider}"));
-    };
-    match declared.kind {
-        KindStatus::Available => {}
-        KindStatus::Unavailable { why } => return refuse(why),
-        KindStatus::Unknown => {
-            return refuse(&format!(
-                "{provider} names a kind nothing in this build declares"
-            ));
-        }
-    }
-
-    let Some(entry) = composed.driver_for(declared.manifest.kind.as_str()) else {
-        return refuse("this build has no driver for that kind");
-    };
-    let Some(make) = entry.make else {
-        return refuse(
-            entry
-                .unavailable
-                .unwrap_or("this build cannot serve that kind"),
-        );
-    };
-
-    // Resolution belongs to the probe, so the driver runs the same program the probe examined.
-    let program = match runtrol_core::locate(&declared.manifest) {
-        Ok(program) => program,
-        Err(error) => return refuse(&error.to_string()),
+    let driver = match driver(composed, provider) {
+        Ok(driver) => driver,
+        Err(response) => return response,
     };
     let Ok(workspace) = AbsPath::canonicalize(workspace) else {
         return refuse(&format!(
             "{workspace:?} is not a directory runtrol can work in"
         ));
     };
-
-    let driver = make(&DriverContext {
-        provider: id,
-        program,
-        contained_by: Arc::clone(&composed.containment),
-    });
     let intent = OpenIntent {
         session: SessionId::now(),
         workspace,
@@ -292,6 +259,63 @@ async fn open(
         Ok(session) => Response::Started { session },
         Err(error) => from_session_error(&error),
     }
+}
+
+/// Ask one provider driver for its current model choices.
+async fn models(composed: &Composed, provider: &str) -> Response {
+    let driver = match driver(composed, provider) {
+        Ok(driver) => driver,
+        Err(response) => return response,
+    };
+    match driver.models().await {
+        Ok(catalogue) => Response::Models(catalogue),
+        Err(error) => Response::Failed(WireError::from_provider(&error)),
+    }
+}
+
+/// Build one declared and available driver, with runtime resolution owned by the probe.
+fn driver(composed: &Composed, provider: &str) -> Result<Box<dyn Provider>, Response> {
+    let Ok(id) = ProviderId::parse(provider) else {
+        return Err(refuse(&format!(
+            "{provider:?} is not a provider name runtrol accepts"
+        )));
+    };
+    let Some(declared) = composed.registry.get(id) else {
+        return Err(refuse(&format!("no provider called {provider}")));
+    };
+    match declared.kind {
+        KindStatus::Available => {}
+        KindStatus::Unavailable { why } => return Err(refuse(why)),
+        KindStatus::Unknown => {
+            return Err(refuse(&format!(
+                "{provider} names a kind nothing in this build declares"
+            )));
+        }
+    }
+
+    let Some(entry) = composed.driver_for(declared.manifest.kind.as_str()) else {
+        return Err(refuse("this build has no driver for that kind"));
+    };
+    let Some(make) = entry.make else {
+        return Err(refuse(
+            entry
+                .unavailable
+                .unwrap_or("this build cannot serve that kind"),
+        ));
+    };
+
+    // Resolution belongs to the probe, so the driver runs the same program the probe examined.
+    let program = match runtrol_core::locate(&declared.manifest) {
+        Ok(program) => program,
+        Err(error) => return Err(refuse(&error.to_string())),
+    };
+
+    Ok(make(&DriverContext {
+        provider: id,
+        models: declared.manifest.models.clone(),
+        program,
+        contained_by: Arc::clone(&composed.containment),
+    }))
 }
 
 /// Hand a command to a live session.

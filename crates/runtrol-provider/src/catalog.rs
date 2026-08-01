@@ -1,0 +1,100 @@
+//! The model choices a provider can honestly offer at runtime.
+//!
+//! Model identifiers are deliberately absent from manifests and core code. A driver either asks its CLI for
+//! the current account-specific catalogue, offers stable alias tokens declared by the provider manifest, or
+//! says why no catalogue can be known. These values are metadata for starting a session, never conversation
+//! content.
+
+use serde::{Deserialize, Serialize};
+
+/// The most model choices one discovery response may carry.
+///
+/// A provider response is untrusted input. The wire already has a byte bound, but a separate item bound keeps
+/// a catalogue made of tiny entries from turning into an unbounded allocation and render loop.
+pub const MAX_MODEL_CHOICES: usize = 256;
+
+/// The most reasoning choices one model may carry.
+pub const MAX_REASONING_CHOICES: usize = 32;
+
+/// The current model information a driver can honestly provide.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+#[non_exhaustive]
+pub enum ModelCatalog {
+    /// The provider enumerated its current model catalogue.
+    Known {
+        /// Choices in the provider's own order.
+        models: Vec<ModelChoice>,
+    },
+    /// The provider cannot enumerate models, but declares stable alias tokens.
+    Aliases {
+        /// Tokens accepted where a model identifier would otherwise go.
+        aliases: Vec<Box<str>>,
+        /// Why these are aliases rather than an enumerated catalogue.
+        why: Box<str>,
+    },
+    /// The driver cannot truthfully name any choices.
+    Unknown {
+        /// Why discovery is unavailable.
+        why: Box<str>,
+    },
+}
+
+impl ModelCatalog {
+    /// An honest answer for a driver with no discovery binding.
+    #[must_use]
+    pub fn unknown(why: impl Into<Box<str>>) -> Self {
+        Self::Unknown { why: why.into() }
+    }
+}
+
+/// One model the provider currently offers.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelChoice {
+    /// The exact value to send back when starting a session.
+    pub id: Box<str>,
+    /// The provider's current human-readable name.
+    pub display_name: Box<str>,
+    /// The provider's current description.
+    pub description: Box<str>,
+    /// Whether the provider marks this as its default.
+    pub is_default: bool,
+    /// Reasoning choices supported by this model, if the provider reports them.
+    pub reasoning_efforts: Vec<ReasoningChoice>,
+}
+
+/// One reasoning-effort choice reported by a provider.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReasoningChoice {
+    /// The exact value the provider accepts.
+    pub id: Box<str>,
+    /// The provider's current description.
+    pub description: Box<str>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_wire_shape_says_whether_choices_are_known_aliases_or_unknown() {
+        let answers = [
+            ModelCatalog::Known { models: Vec::new() },
+            ModelCatalog::Aliases {
+                aliases: vec!["fast".into()],
+                why: "the CLI exposes aliases only".into(),
+            },
+            ModelCatalog::unknown("the CLI exposes no discovery surface"),
+        ];
+
+        let encoded = answers
+            .iter()
+            .map(|answer| serde_json::to_string(answer).expect("serializable"))
+            .collect::<Vec<_>>();
+        for (answer, kind) in encoded.iter().zip(["known", "aliases", "unknown"]) {
+            assert!(answer.contains(&format!(r#""kind":"{kind}""#)), "{answer}");
+        }
+    }
+}

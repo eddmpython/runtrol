@@ -29,7 +29,7 @@
 //! to their machine. Those are on the value, so a client cannot get them wrong by branching on a number whose meaning
 //! lives somewhere else.
 
-use runtrol_provider::{Opaque, ProviderError, SessionId};
+use runtrol_provider::{ModelCatalog, Opaque, ProviderError, SessionId};
 use serde::{Deserialize, Serialize};
 
 use crate::frame::WIRE_VERSION;
@@ -50,6 +50,12 @@ pub enum Request {
 
     /// Every session this machine has.
     List,
+
+    /// Discover the current model choices for one provider.
+    Models {
+        /// Which provider to ask. The driver owns how discovery works.
+        provider: Box<str>,
+    },
 
     /// Begin a conversation that does not exist yet.
     Start {
@@ -129,6 +135,9 @@ pub enum Response {
 
     /// The sessions, in the order the daemon lists them.
     Sessions(Vec<SessionLine>),
+
+    /// The model choices one provider can honestly offer now.
+    Models(ModelCatalog),
 
     /// A session was started or resumed.
     Started {
@@ -299,6 +308,9 @@ mod tests {
         for request in [
             Request::Hello { wire: WIRE_VERSION },
             Request::List,
+            Request::Models {
+                provider: "claude".into(),
+            },
             Request::Start {
                 provider: "claude".into(),
                 workspace: "/work".into(),

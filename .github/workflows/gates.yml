@@ -157,6 +157,12 @@ jobs:
       - name: cargo test
         if: needs.detect.outputs.hasWorkspace == 'true'
         run: cargo test --all
+      - name: 자식 회수 게이트 자체 검증
+        if: needs.detect.outputs.hasWorkspace == 'true'
+        run: python -X utf8 tests/audit/orphanReaping.py --selftest
+      - name: 부모 강제 종료 뒤 자식 회수
+        if: needs.detect.outputs.hasWorkspace == 'true'
+        run: python -X utf8 tests/audit/orphanReaping.py
       # 의존성 부패 게이트. cargo-shear 를 고른 이유:
       # 셋 중 유일하게 `[workspace.dependencies]` 미사용 항목을 잡고 (버전 SSOT 가 거기 산다),
       # stable 에서 돌고, 컴파일하지 않는 AST 파싱이라 한 플랫폼에서 돌려도 cfg 분기까지 덮는다.
@@ -214,5 +220,7 @@ jobs:
     runs-on: [self-hosted, runtrol-live]
     steps:
       - uses: actions/checkout@v5
-      - name: 실물 provider 스모크 (미구현. 등록만 해 둔다)
-        run: echo "M0 에서 채운다. tests/audit/ 로 졸업한 실물 스모크가 여기 온다."
+      - name: 모델 자동 인식 게이트 자체 검증
+        run: python -X utf8 tests/audit/modelDetectionSmoke.py --selftest
+      - name: 실물 CLI 모델 자동 인식
+        run: python -X utf8 tests/audit/modelDetectionSmoke.py

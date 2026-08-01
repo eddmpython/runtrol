@@ -64,6 +64,11 @@ GATES: dict[str, tuple[str, list[str]]] = {
     # 경계 너머로 빠진 요청을 말해주지 못한다.
     "scopeWallSelftest": ("스코프 벽 검출기 자체 검증", [*PY, f"{HOOKS}/scopeWall.py", "--selftest"]),
     "scopeWall": ("모든 요청에 권한 규칙이 있다", [*PY, f"{HOOKS}/scopeWall.py"]),
+    "orphanReapingSelftest": (
+        "자식 회수 게이트 자체 검증",
+        [*PY, f"{HOOKS}/orphanReaping.py", "--selftest"],
+    ),
+    "orphanReaping": ("부모 강제 종료 뒤 자식 회수", [*PY, f"{HOOKS}/orphanReaping.py"]),
     # 게이트가 저장소에 있는 것과 도는 것은 다른 말이다. 이 게이트가 그 차이를 감시한다.
     "gateCoverage": ("게이트 러너 커버리지", [*PY, f"{HOOKS}/gateCoverage.py"]),
     # 북극성 점수는 사람이 타이핑하는 숫자가 아니라 board.toml 에서 계산된다.
@@ -118,6 +123,14 @@ GATES: dict[str, tuple[str, list[str]]] = {
         "세션 시작·목록·닫기·재개 (실물 CLI)",
         [*PY, f"{HOOKS}/sessionLifecycleSmoke.py"],
     ),
+    "modelDetectionSmokeSelftest": (
+        "모델 자동 인식 게이트 자체 검증",
+        [*PY, f"{HOOKS}/modelDetectionSmoke.py", "--selftest"],
+    ),
+    "modelDetectionSmoke": (
+        "실물 CLI 모델 자동 인식",
+        [*PY, f"{HOOKS}/modelDetectionSmoke.py"],
+    ),
     "audit": ("저장소 계약 게이트 (tests/audit)", ["cargo", "test", "-p", "runtrol-audit"]),
     # 의존성 부패. `[workspace.dependencies]` 미사용 항목까지 잡는 것이 cargo-shear 를 고른 이유다
     # (버전 SSOT 가 거기 살기 때문). 설치돼 있지 않으면 건너뛴다고 밝히고 건너뛴다.
@@ -141,6 +154,8 @@ SUITES: dict[str, tuple[str, ...]] = {
         "noTranscriptCopy",
         "scopeWallSelftest",
         "scopeWall",
+        "orphanReapingSelftest",
+        "orphanReaping",
         "gateCoverage",
         "northStarBoard",
         "readmeParity",

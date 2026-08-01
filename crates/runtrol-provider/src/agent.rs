@@ -28,6 +28,7 @@
 
 use async_trait::async_trait;
 
+use crate::catalog::ModelCatalog;
 use crate::command::{AgentCommand, CloseMode, OpenIntent, Produced};
 use crate::error::ProviderError;
 use crate::id::{ProviderId, SessionId};
@@ -40,6 +41,20 @@ use crate::id::{ProviderId, SessionId};
 pub trait Provider: Send + Sync + 'static {
     /// Which provider this is.
     fn id(&self) -> ProviderId;
+
+    /// Discover the model choices this provider can truthfully offer now.
+    ///
+    /// A default keeps an older third-party driver honest when used with a newer runtrol: it reports that the
+    /// binding is absent instead of fabricating a list or preventing the driver from opening sessions.
+    ///
+    /// # Errors
+    ///
+    /// Any [`ProviderError`] produced while asking the provider's own discovery surface.
+    async fn models(&self) -> Result<ModelCatalog, ProviderError> {
+        Ok(ModelCatalog::unknown(
+            "this driver does not provide model discovery",
+        ))
+    }
 
     /// Open a session and bind to it.
     ///

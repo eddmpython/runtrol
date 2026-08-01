@@ -16,7 +16,7 @@ use runtrol_provider::SessionId;
 #[non_exhaustive]
 pub enum Misunderstood {
     /// Nothing was typed.
-    #[error("no command. try: list, start, resume, say, stop, watch, close, panic")]
+    #[error("no command. try: list, models, start, resume, say, stop, watch, close, panic")]
     Nothing,
 
     /// The command is not one runtrol has.
@@ -24,7 +24,7 @@ pub enum Misunderstood {
     /// Names what was typed, because the operator's next move is to correct it and a message that does not repeat it
     /// makes them guess what runtrol thought they said.
     #[error(
-        "no command called {typed:?}. try: list, start, resume, say, stop, watch, close, panic"
+        "no command called {typed:?}. try: list, models, start, resume, say, stop, watch, close, panic"
     )]
     NoSuchCommand {
         /// What they typed.
@@ -66,6 +66,10 @@ pub fn understand(words: &[String], here: &str) -> Result<Request, Misunderstood
 
     match command.as_str() {
         "list" => Ok(Request::List),
+
+        "models" => Ok(Request::Models {
+            provider: word(rest, 0, "models", "which provider")?.into(),
+        }),
 
         "start" => Ok(Request::Start {
             provider: word(rest, 0, "start", "which provider")?.into(),
@@ -167,6 +171,7 @@ mod tests {
         // again. Every one of these could have been guessed at, and none of them is.
         for line in [
             "",
+            "models",
             "start",
             "resume claude",
             "say",
@@ -232,6 +237,14 @@ mod tests {
                 assert_eq!(&*workspace, here());
             }
             other => panic!("expected a start, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn model_discovery_names_the_provider_and_nothing_else() {
+        match understand(&typed("models example"), here()).expect("understandable") {
+            Request::Models { provider } => assert_eq!(&*provider, "example"),
+            other => panic!("expected model discovery, got {other:?}"),
         }
     }
 

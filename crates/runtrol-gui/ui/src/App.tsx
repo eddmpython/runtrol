@@ -9,6 +9,7 @@ import type {
   ConversationItem,
   FrameEnvelope,
   Notice,
+  ModelCatalog,
   OfferedProvider,
   SessionRow,
   ThemeMode,
@@ -36,6 +37,9 @@ export function App() {
   const [startOpen, setStartOpen] = useState(false);
   const [providers, setProviders] = useState<OfferedProvider[]>([]);
   const [provider, setProvider] = useState("");
+  const [model, setModel] = useState("");
+  const [models, setModels] = useState<ModelCatalog | null>(null);
+  const [modelsLoading, setModelsLoading] = useState(false);
   const [workspace, setWorkspace] = useState("");
   const [starting, setStarting] = useState(false);
   const [sending, setSending] = useState(false);
@@ -193,12 +197,38 @@ export function App() {
       return;
     }
     setProviders(offered);
-    setProvider(offered.find((entry) => entry.usable)?.id ?? "");
+    const firstProvider = offered.find((entry) => entry.usable)?.id ?? "";
+    setProvider(firstProvider);
+    setModel("");
+    setModels(null);
     if (!workspace && selectedRow) {
       setWorkspace(selectedRow.workspace);
     }
     setStartOpen(true);
   }, [ask, selectedRow, workspace]);
+
+  useEffect(() => {
+    if (!startOpen || !provider) {
+      setModels(null);
+      setModelsLoading(false);
+      return;
+    }
+    let active = true;
+    setModel("");
+    setModels(null);
+    setModelsLoading(true);
+    void ask<ModelCatalog>("models", { provider }).then((catalogue) => {
+      if (active && catalogue) {
+        setModels(catalogue);
+      }
+      if (active) {
+        setModelsLoading(false);
+      }
+    });
+    return () => {
+      active = false;
+    };
+  }, [ask, provider, startOpen]);
 
   const startSession = useCallback(async () => {
     const where = workspace.trim();
@@ -208,7 +238,11 @@ export function App() {
     }
     setStarting(true);
     try {
-      const session = await ask<string>("start", { provider, workspace: where });
+      const session = await ask<string>("start", {
+        provider,
+        workspace: where,
+        model: model || null,
+      });
       if (!session) {
         return;
       }
@@ -218,7 +252,7 @@ export function App() {
     } finally {
       setStarting(false);
     }
-  }, [ask, openSession, provider, refresh, workspace]);
+  }, [ask, model, openSession, provider, refresh, workspace]);
 
   const send = useCallback(async (text: string) => {
     const session = selectedRef.current;
@@ -286,10 +320,14 @@ export function App() {
           isOpen={startOpen}
           providers={providers}
           provider={provider}
+          model={model}
+          models={models}
+          modelsLoading={modelsLoading}
           workspace={workspace}
           starting={starting}
           onOpenChange={setStartOpen}
           onProviderChange={setProvider}
+          onModelChange={setModel}
           onWorkspaceChange={setWorkspace}
           onStart={() => void startSession()}
         />

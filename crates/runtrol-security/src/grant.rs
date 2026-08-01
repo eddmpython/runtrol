@@ -69,6 +69,16 @@ impl GrantLedger {
     ///
     /// [`SecurityError::WitnessExpired`] for a stale witness, [`SecurityError::WitnessMismatch`] when
     /// the witness approved something else.
+    ///
+    /// A local-only capability cannot be put in the device grant at all:
+    ///
+    /// ```compile_fail
+    /// use runtrol_security::{DeviceId, GrantLedger, LocalScope, PcPresence};
+    ///
+    /// fn attempt(ledger: &mut GrantLedger, device: DeviceId, witness: &PcPresence) {
+    ///     ledger.grant(device, &[LocalScope::ConfigWrite], witness);
+    /// }
+    /// ```
     pub fn grant(
         &mut self,
         device: DeviceId,
