@@ -296,6 +296,7 @@ CARGO_GATES = frozenset(
         "claudeApprovalSmoke",
         "uninstallLeavesNoTraceSelftest",
         "uninstallLeavesNoTrace",
+        "liveMemoryBudget",
         "audit",
         "cargoShear",
         "cargoDeny",

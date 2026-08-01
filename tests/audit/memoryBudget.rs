@@ -32,11 +32,12 @@
 //! Each build still gets its own, because an optimized one is a different program and holding both to one number
 //! means either a debug budget nobody can meet or a release budget that permits anything.
 //!
-//! # What is not here yet
+//! # What belongs to the live gate
 //!
-//! The per-session increment. Measuring it means starting a real session, which means a real CLI, which is not
-//! on every machine this runs on. It arrives with the session smoke gate that already has to solve that, and
-//! saying so here is better than a number measured against nothing.
+//! Per-session and subscriber increments need a real provider process and real watch connections. The separate
+//! `liveMemoryBudget.py` gate measures one hot fixture session, four watchers, complete admitted delivery, near-input-
+//! limit rejection, peak RSS, and released residual memory. Keeping that journey separate leaves this test a precise
+//! idle ratchet instead of making one result ambiguously cover two process states.
 
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};

@@ -257,6 +257,8 @@ jobs:
       - name: 실시간 메모리 계약 자체 검증
         run: python -X utf8 tests/audit/liveMemoryBudget.py --selftest
       - name: hot 세션과 구독자 4개 RSS 상한
+        env:
+          TMPDIR: ${{ matrix.os == 'macos-latest' && '/tmp' || runner.temp }}
         run: python -X utf8 tests/audit/liveMemoryBudget.py
       - name: 데스크톱 편의 계약 게이트 자체 검증
         if: matrix.os == 'windows-latest'
