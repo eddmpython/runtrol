@@ -126,6 +126,21 @@ jobs:
         run: rustup show
       - uses: Swatinem/rust-cache@v2
         if: needs.detect.outputs.hasWorkspace == 'true'
+      - uses: actions/setup-node@v5
+        if: needs.detect.outputs.hasWorkspace == 'true'
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: crates/runtrol-gui/ui/package-lock.json
+      - name: 데스크톱 프런트엔드 의존성
+        if: needs.detect.outputs.hasWorkspace == 'true'
+        run: npm --prefix crates/runtrol-gui/ui ci
+      - name: 프런트엔드 빌드 게이트 자체 검증
+        if: needs.detect.outputs.hasWorkspace == 'true'
+        run: python -X utf8 tests/audit/frontendBuild.py --selftest
+      - name: 데스크톱 프런트엔드
+        if: needs.detect.outputs.hasWorkspace == 'true'
+        run: python -X utf8 tests/audit/frontendBuild.py
       - name: cargo fmt
         if: needs.detect.outputs.hasWorkspace == 'true'
         run: cargo fmt --all --check
@@ -180,6 +195,15 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: crates/runtrol-gui/ui/package-lock.json
+      - name: 데스크톱 프런트엔드 의존성
+        run: npm --prefix crates/runtrol-gui/ui ci
+      - name: 데스크톱 프런트엔드
+        run: python -X utf8 tests/audit/frontendBuild.py
       - name: cargo test
         run: cargo test --all
 

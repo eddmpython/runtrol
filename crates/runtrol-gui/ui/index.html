@@ -1,95 +1,13 @@
 <!doctype html>
 <html lang="ko">
   <head>
-    <meta charset="utf-8" />
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light dark" />
     <title>runtrol</title>
-    <link rel="stylesheet" href="app.css" />
   </head>
   <body>
-    <!-- The shape is the one the operator named as the best desktop app of this kind: a fixed left rail of
-         conversations grouped by the folder they belong to, a quiet centre, and the input as a card at the
-         bottom. What is deliberately not copied is any item for a feature runtrol does not have. An empty
-         menu entry is worse than an absent one. -->
-    <aside id="side">
-      <header id="sideTop">
-        <picture>
-          <source srcset="brand/lockup-dark.svg" media="(prefers-color-scheme: dark)" />
-          <img src="brand/lockup-light.svg" alt="runtrol" height="17" />
-        </picture>
-      </header>
-
-      <nav id="rail">
-        <button id="new" type="button" class="railItem">
-          <span class="ico" aria-hidden="true">+</span>
-          <span>새 세션</span>
-        </button>
-      </nav>
-
-      <div id="groups"></div>
-      <p id="empty" class="hint" hidden>아직 세션이 없다. 위에서 하나 시작한다.</p>
-
-      <footer id="sideFoot">
-        <span class="dot" id="daemonDot"></span>
-        <span id="daemonWord">데몬</span>
-      </footer>
-    </aside>
-
-    <main id="main">
-      <!-- Nothing selected. A mark and one line, the way the app the operator pointed at does it. -->
-      <section id="nothing">
-        <picture>
-          <source srcset="brand/lockup-dark.svg" media="(prefers-color-scheme: dark)" />
-          <img src="brand/lockup-light.svg" alt="" height="26" />
-        </picture>
-        <p>무엇을 시킬까요?</p>
-      </section>
-
-      <section id="detail" hidden>
-        <div id="talk"></div>
-      </section>
-
-      <!-- The composer, as a card. The row above the text is what the app the operator pointed at puts there:
-           which project this belongs to. Here it names the session's own folder, and starting a new session
-           is where a folder gets chosen. -->
-      <form id="composer" hidden>
-        <div id="composerTop">
-          <span class="ico" aria-hidden="true">▸</span>
-          <span id="composerFolder"></span>
-          <span class="badge" id="composerProvider"></span>
-          <span class="grow"></span>
-          <span class="quiet" id="composerState"></span>
-        </div>
-        <textarea
-          id="toSay"
-          rows="1"
-          spellcheck="false"
-          placeholder="무엇이든 요청해 보세요"
-        ></textarea>
-        <div id="composerBottom">
-          <button id="closeSession" type="button" class="ghost" title="이 세션 닫기">닫기</button>
-          <span class="grow"></span>
-          <span class="quiet" id="composerNative"></span>
-          <button id="send" type="submit" class="primary">보내기</button>
-        </div>
-      </form>
-    </main>
-
-    <dialog id="starter">
-      <form method="dialog">
-        <h2>새 세션</h2>
-        <label for="provider">공급자</label>
-        <select id="provider"></select>
-        <label for="workspace">작업 폴더</label>
-        <input id="workspace" type="text" spellcheck="false" />
-        <menu>
-          <button value="cancel" type="submit" class="ghost">취소</button>
-          <button value="start" id="confirmStart" type="submit" class="primary">시작</button>
-        </menu>
-      </form>
-    </dialog>
-
-    <div id="said" role="status" hidden></div>
-
-    <script src="app.js"></script>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

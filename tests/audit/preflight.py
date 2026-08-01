@@ -69,6 +69,11 @@ GATES: dict[str, tuple[str, list[str]]] = {
     # 북극성 점수는 사람이 타이핑하는 숫자가 아니라 board.toml 에서 계산된다.
     "northStarBoard": ("북극성 점수판 (증거 구조)", [*PY, f"{HOOKS}/northStar/board.py"]),
     "readmeParity": ("4 개 언어 README 점수판 대조", [*PY, f"{HOOKS}/northStar/readmeParity.py"]),
+    "frontendBuildSelftest": (
+        "프런트엔드 빌드 게이트 자체 검증",
+        [*PY, f"{HOOKS}/frontendBuild.py", "--selftest"],
+    ),
+    "frontendBuild": ("데스크톱 프런트엔드 타입 검사 + 번들", [*PY, f"{HOOKS}/frontendBuild.py"]),
     "cargoFmt": ("cargo fmt --check", ["cargo", "fmt", "--all", "--check"]),
     "cargoClippy": (
         "cargo clippy (경고 = 실패)",
@@ -139,6 +144,8 @@ SUITES: dict[str, tuple[str, ...]] = {
         "gateCoverage",
         "northStarBoard",
         "readmeParity",
+        "frontendBuildSelftest",
+        "frontendBuild",
         "cargoFmt",
         "cargoClippy",
     ),
@@ -175,6 +182,8 @@ def skipReasonFor(name: str) -> str | None:
             return "cargo 없음"
         if not hasCargoWorkspace():
             return "Cargo.toml 없음 (부트스트랩 단계)"
+    if name == "frontendBuild" and shutil.which("npm") is None:
+        return "npm 없음"
     if name == "audit" and not hasAuditCrate():
         return "tests/audit crate 없음"
     if name == "cargoShear" and shutil.which("cargo-shear") is None:

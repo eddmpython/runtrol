@@ -4,7 +4,10 @@
   "version": "0.0.0",
   "identifier": "dev.runtrol.desktop",
   "build": {
-    "frontendDist": "ui"
+    "beforeBuildCommand": "npm --prefix ui run build",
+    "beforeDevCommand": "npm --prefix ui run dev",
+    "devUrl": "http://127.0.0.1:1420",
+    "frontendDist": "ui/dist"
   },
   "bundle": {
     "icon": ["../../assets/brand/favicon.ico"]
