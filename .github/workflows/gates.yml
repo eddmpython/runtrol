@@ -168,7 +168,7 @@ jobs:
         if: needs.detect.outputs.hasWorkspace == 'true'
         run: |
           rustup target add x86_64-pc-windows-msvc
-          cargo clippy --all-targets --target x86_64-pc-windows-msvc -- -D warnings
+          cargo clippy --all-targets --workspace --exclude runtrol-gui --exclude runtrol --target x86_64-pc-windows-msvc -- -D warnings
       - name: memory budget gate product binary
         if: needs.detect.outputs.hasWorkspace == 'true'
         run: cargo build -p runtrol --bin runtrol
