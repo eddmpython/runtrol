@@ -5,9 +5,9 @@
 #  다른 쪽 green 과 다른 뜻이 되므로, 두 목록이 일치하는지를 `tests/audit/gateCoverage.py` 가
 #  게이트로 강제한다. 즉 정본은 두 개이고 그 일치가 기계 검사 대상이다.)
 #
-# 실행 층이 갈려 있는 이유는 `docs/northStarEvidence.md` 를 본다:
-# 두 CLI 의 구독 인증(OAuth)은 사람 로그인이 필요해 hosted 러너에 실을 수 없고,
-# 실물 턴은 돈과 rate limit 을 쓴다. 그래서 실물 게이트는 self-hosted 스케줄이다.
+# 실행 층이 갈려 있는 이유는 `docs/northStarEvidence.md` 를 본다. 계정 기반 턴은 사람의 구독
+# 인증이 필요해 hosted 러너에 실을 수 없다. 자격증명이 필요 없는 CLI 자기기술과 loopback 여정은
+# hosted 러너에서 고정 판본과 최신 판본으로 검증한다.
 #
 # **부트스트랩 규약**: `Cargo.toml` 이 아직 없으면 cargo 단계는 건너뛴다. 단
 # 조용히 건너뛰지 않고 "이 표면은 검증되지 않았다" 를 로그와 요약에 남긴다
@@ -280,6 +280,12 @@ jobs:
         run: python -X utf8 tests/audit/externalAcpSmoke.py --require-external
       - name: 실물 Claude Code 고정 판본 설치
         run: npm install --global @anthropic-ai/claude-code@2.1.220
+      - name: 실물 Codex 고정 판본 설치
+        run: npm install --global @openai/codex@0.146.0
+      - name: provider surface drift 게이트 자체 검증
+        run: python -X utf8 tests/audit/agentSurfaceDrift.py --selftest
+      - name: 실물 provider CLI 표면은 고정 판본과 호환
+        run: python -X utf8 tests/audit/agentSurfaceDrift.py --require-all
       - name: 실물 Claude hidden approval 게이트 자체 검증
         run: python -X utf8 tests/audit/claudeApprovalSmoke.py --selftest
       - name: 실물 Claude hidden approval 거부 왕복
@@ -314,23 +320,33 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Install latest provider CLIs without credentials
         run: npm install --global @anthropic-ai/claude-code @openai/codex
+      - name: Seed provider-owned model cache fixture
+        env:
+          PROVIDER_HOME: ${{ runner.temp }}/runtrol-model-detection-home
+        run: |
+          mkdir -p "$PROVIDER_HOME"
+          printf '%s\n' '{"additionalModelOptionsCache":[{"value":"runtrol-hosted-cache-sentinel","label":"Hosted cache sentinel","description":"Hosted read-only discovery proof"}]}' > "$PROVIDER_HOME/.claude.json"
       - name: Provider surface drift gate selftest
         run: python -X utf8 tests/audit/agentSurfaceDrift.py --selftest
       - name: Built-in unauthenticated provider probes remain compatible
         run: python -X utf8 tests/audit/agentSurfaceDrift.py --require-all
+      - name: Model discovery gate selftest
+        env:
+          CODEX_HOME: ${{ runner.temp }}/runtrol-model-detection-codex
+        run: >-
+          env -u OPENAI_API_KEY -u CODEX_API_KEY -u ANTHROPIC_API_KEY
+          -u ANTHROPIC_AUTH_TOKEN -u CLAUDE_CODE_OAUTH_TOKEN
+          python -X utf8 tests/audit/modelDetectionSmoke.py --selftest
+      - name: Every built-in provider discovers models without credentials
+        env:
+          CODEX_HOME: ${{ runner.temp }}/runtrol-model-detection-codex
+          RUNTROL_MODEL_GATE_OPERATOR_HOME: ${{ runner.temp }}/runtrol-model-detection-home
+          RUNTROL_MODEL_GATE_EXPECTED: '{"claude":["runtrol-hosted-cache-sentinel"]}'
+        run: >-
+          env -u OPENAI_API_KEY -u CODEX_API_KEY -u ANTHROPIC_API_KEY
+          -u ANTHROPIC_AUTH_TOKEN -u CLAUDE_CODE_OAUTH_TOKEN
+          python -X utf8 tests/audit/modelDetectionSmoke.py --require-all
       - name: Real Claude hidden approval gate selftest
         run: python -X utf8 tests/audit/claudeApprovalSmoke.py --selftest
       - name: Current real Claude hidden approval denial round trip
         run: python -X utf8 tests/audit/claudeApprovalSmoke.py --require-external
-
-  # 실물 CLI 게이트. hosted 러너에서 돌 수 없다 (구독 OAuth + 비용).
-  # self-hosted 러너가 붙으면 `if` 를 제거한다. 그때까지는 무엇이 검증되지 않는지가 화면에 남는다.
-  liveProviders:
-    if: false
-    runs-on: [self-hosted, runtrol-live]
-    steps:
-      - uses: actions/checkout@v5
-      - name: 모델 자동 인식 게이트 자체 검증
-        run: python -X utf8 tests/audit/modelDetectionSmoke.py --selftest
-      - name: 실물 CLI 모델 자동 인식
-        run: python -X utf8 tests/audit/modelDetectionSmoke.py

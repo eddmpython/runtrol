@@ -209,7 +209,7 @@ def exercise(require_all: bool = False) -> int:
         print(f"  not installed: {', '.join(absent)}")
     if require_all:
         requireCoverage(expected, checked)
-    if checked == 0:
+    if not checked:
         print("[agentSurfaceDrift] SKIP: no installed provider has a drift strategy.")
         return 0
     print(f"[agentSurfaceDrift] OK. {len(checked)} installed provider probe strategy(s) passed.")

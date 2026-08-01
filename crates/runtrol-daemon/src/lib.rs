@@ -19,7 +19,6 @@ pub mod scope;
 pub mod serve;
 
 pub use compose::{ComposeError, Composed};
-pub use dispatch::{Conversation, Reply, answer};
 pub use scope::{Needed, WallRefusal, allowed, needed};
 pub use serve::{ServeError, serve};
 

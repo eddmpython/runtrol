@@ -18,6 +18,7 @@
 //! Answering "unknown kind" there would send the operator hunting for a typo they did not make. So an entry carries
 //! either something that serves it or a sentence saying why this build does not.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use runtrol_childproc::{Containment, Program};
@@ -42,6 +43,17 @@ pub const MANIFESTS: &[&str] = &[
 /// session needs one, which is what keeps boot free of process work.
 pub type MakeDriver = fn(&DriverContext) -> Box<dyn Provider>;
 
+/// One CLI flag a driver consumes, and the honest outcome when it is absent.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct DriverFlag {
+    /// The exact flag offered to the provider's own parser.
+    pub flag: &'static str,
+    /// Whether this driver cannot provide its protocol without the flag.
+    pub required: bool,
+    /// What becomes unavailable when the flag is absent.
+    pub without_it: &'static str,
+}
+
 /// What this build can do about one kind.
 #[derive(Clone, Copy)]
 pub struct DriverKind {
@@ -49,6 +61,8 @@ pub struct DriverKind {
     pub kind: &'static str,
     /// Builds the driver, when this build has one.
     pub make: Option<MakeDriver>,
+    /// Flags this driver actually passes to its CLI.
+    pub flags: &'static [DriverFlag],
     /// Why this build cannot serve it, when it cannot.
     ///
     /// A sentence an operator reads, not a code. The difference between "this build has no generic driver for that
@@ -62,6 +76,7 @@ impl core::fmt::Debug for DriverKind {
         f.debug_struct("DriverKind")
             .field("kind", &self.kind)
             .field("served", &self.make.is_some())
+            .field("flags", &self.flags)
             .field("unavailable", &self.unavailable)
             .finish()
     }
@@ -84,6 +99,10 @@ pub struct DriverContext {
     /// Kept as data all the way to the generic driver. A protocol driver that supplied its own launcher flags
     /// would turn adding a provider into a code change, which is the boundary this context exists to avoid.
     pub transport_argv: Vec<Box<str>>,
+    /// Bound flags the installed CLI's own parser confirmed.
+    pub available_flags: BTreeSet<Box<str>>,
+    /// Optional bound flags the parser did not confirm, paired with the exact consequence the driver declared.
+    pub unavailable_flags: BTreeMap<Box<str>, &'static str>,
     /// The containment every child joins.
     ///
     /// Shared rather than owned, because there is one containment per process and dropping it is the kill switch.
@@ -98,26 +117,31 @@ pub const KINDS: &[DriverKind] = &[
     DriverKind {
         kind: "claude-stream-json",
         make: Some(make_claude),
+        flags: crate::claude::FLAGS,
         unavailable: None,
     },
     DriverKind {
         kind: "codex-app-server",
         make: Some(make_codex),
+        flags: &[],
         unavailable: None,
     },
     DriverKind {
         kind: "acp",
         make: Some(make_acp),
+        flags: &[],
         unavailable: None,
     },
     DriverKind {
         kind: "exec-oneshot",
         make: None,
+        flags: &[],
         unavailable: Some("one process per turn is not a transport this build serves"),
     },
     DriverKind {
         kind: "pty",
         make: None,
+        flags: &[],
         unavailable: Some("a terminal transport is not built into this binary"),
     },
 ];
@@ -129,6 +153,8 @@ fn make_claude(context: &DriverContext) -> Box<dyn Provider> {
         context.program.clone(),
         Arc::clone(&context.contained_by),
         context.models.clone(),
+        context.available_flags.clone(),
+        context.unavailable_flags.clone(),
     ))
 }
 

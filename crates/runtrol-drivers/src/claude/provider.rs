@@ -4,6 +4,7 @@
 //! nothing, which is what lets a build assemble every provider at boot without putting a second of process starts
 //! in front of the operator's first list.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -13,6 +14,7 @@ use runtrol_provider::{
 };
 
 use crate::claude::agent::ClaudeAgent;
+use crate::claude::models::ClaudeModels;
 
 /// The driver for the CLI that runs one process per session.
 #[derive(Debug)]
@@ -28,8 +30,12 @@ pub struct ClaudeProvider {
     ///
     /// Shared, because there is one per process and holding it is what holds the guarantee.
     contained_by: Arc<Containment>,
-    /// Stable aliases from the manifest, because this CLI exposes no enumerable model catalogue.
-    models: ModelAliases,
+    /// Stable aliases plus exact options read from provider-owned state on each discovery request.
+    models: ClaudeModels,
+    /// Bound flags confirmed by this installed CLI's own parser.
+    available_flags: BTreeSet<Box<str>>,
+    /// Optional bound flags not confirmed by the parser and what their absence means.
+    unavailable_flags: BTreeMap<Box<str>, &'static str>,
 }
 
 impl ClaudeProvider {
@@ -37,17 +43,21 @@ impl ClaudeProvider {
     ///
     /// Starts nothing. A provider is a way to open sessions, not a session.
     #[must_use]
-    pub const fn new(
+    pub fn new(
         id: ProviderId,
         program: Program,
         contained_by: Arc<Containment>,
         models: ModelAliases,
+        available_flags: BTreeSet<Box<str>>,
+        unavailable_flags: BTreeMap<Box<str>, &'static str>,
     ) -> Self {
         Self {
             id,
             program,
             contained_by,
-            models,
+            models: ClaudeModels::from_environment(models),
+            available_flags,
+            unavailable_flags,
         }
     }
 
@@ -65,15 +75,11 @@ impl Provider for ClaudeProvider {
     }
 
     async fn models(&self) -> Result<ModelCatalog, ProviderError> {
-        if self.models.aliases.is_empty() {
-            return Ok(ModelCatalog::unknown(
-                "this CLI does not expose an enumerable model catalogue",
-            ));
-        }
-        Ok(ModelCatalog::Aliases {
-            aliases: self.models.aliases.clone(),
-            why: "this CLI exposes stable aliases but does not enumerate account-specific models"
-                .into(),
+        let found = self.models.discover();
+        Ok(ModelCatalog::Partial {
+            aliases: found.aliases,
+            models: found.models,
+            why: found.why,
         })
     }
 
@@ -82,7 +88,14 @@ impl Provider for ClaudeProvider {
         // yet is answered by events, not by this returning: the startup frame arrives on the stream like everything
         // else, and waiting for it here would make opening a session depend on a frame that a broken CLI never
         // sends.
-        let agent = ClaudeAgent::start(self.id, &self.program, &intent, &self.contained_by)?;
+        let agent = ClaudeAgent::start(
+            self.id,
+            &self.program,
+            &intent,
+            &self.contained_by,
+            &self.available_flags,
+            &self.unavailable_flags,
+        )?;
         Ok(Box::new(agent))
     }
 }
@@ -105,6 +118,13 @@ mod tests {
         resolve(exe).expect("the test binary resolves")
     }
 
+    fn all_flags() -> BTreeSet<Box<str>> {
+        crate::claude::FLAGS
+            .iter()
+            .map(|flag| Box::<str>::from(flag.flag))
+            .collect()
+    }
+
     #[test]
     fn building_a_driver_starts_nothing() {
         // A build assembles every provider at boot. If constructing one started a process, a fresh start would put
@@ -114,6 +134,8 @@ mod tests {
             a_resolved_program(),
             Arc::new(Containment::without_any()),
             ModelAliases::default(),
+            all_flags(),
+            BTreeMap::new(),
         );
         assert_eq!(driver.id().as_str(), "claude");
         assert!(driver.program().path().as_std_path().exists());
@@ -128,6 +150,8 @@ mod tests {
             a_resolved_program(),
             Arc::new(Containment::without_any()),
             ModelAliases::default(),
+            all_flags(),
+            BTreeMap::new(),
         ));
         assert_eq!(held.id().as_str(), "claude");
     }
@@ -141,16 +165,22 @@ mod tests {
             ModelAliases {
                 aliases: vec!["fast".into(), "deep".into()],
             },
+            all_flags(),
+            BTreeMap::new(),
         );
         match driver.models().await.expect("aliases need no process") {
-            ModelCatalog::Aliases { aliases, why } => {
+            ModelCatalog::Partial {
+                aliases,
+                models: _,
+                why,
+            } => {
                 assert_eq!(
                     aliases,
                     vec![Box::<str>::from("fast"), Box::<str>::from("deep")]
                 );
                 assert!(why.contains("does not enumerate"), "{why}");
             }
-            other => panic!("expected aliases, got {other:?}"),
+            other => panic!("expected a partial catalogue, got {other:?}"),
         }
     }
 
@@ -163,6 +193,8 @@ mod tests {
             a_resolved_program(),
             Arc::new(Containment::without_any()),
             ModelAliases::default(),
+            all_flags(),
+            BTreeMap::new(),
         );
         let intent = OpenIntent {
             session: SessionId::now(),

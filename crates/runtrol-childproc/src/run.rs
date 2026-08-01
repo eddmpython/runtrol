@@ -24,6 +24,7 @@
 
 use core::time::Duration;
 
+use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::process::Command;
 
 use crate::argv;
@@ -110,13 +111,21 @@ pub async fn capture(
     crate::hide_console_window(command.as_std_mut());
     contained_by.prepare(command.as_std_mut());
 
-    let child = command.spawn().map_err(|error| SpawnError::Io {
+    let mut child = command.spawn().map_err(|error| SpawnError::Io {
         path: program.path().to_string(),
         detail: error.to_string(),
     })?;
+    let stdout = child.stdout.take().ok_or_else(|| SpawnError::Io {
+        path: program.path().to_string(),
+        detail: "the captured standard output pipe was not created".to_owned(),
+    })?;
+    let stderr = child.stderr.take().ok_or_else(|| SpawnError::Io {
+        path: program.path().to_string(),
+        detail: "the captured standard error pipe was not created".to_owned(),
+    })?;
 
-    match tokio::time::timeout(within, child.wait_with_output()).await {
-        Ok(Ok(output)) => Ok(collect(output)),
+    match tokio::time::timeout(within, collect(child, stdout, stderr)).await {
+        Ok(Ok(output)) => Ok(output),
         Ok(Err(error)) => Err(SpawnError::Io {
             path: program.path().to_string(),
             detail: error.to_string(),
@@ -130,25 +139,45 @@ pub async fn capture(
     }
 }
 
-/// Cut both streams to the byte bound and note whether anything was lost.
-fn collect(output: std::process::Output) -> Output {
-    let truncated =
-        output.stdout.len() > MAX_OUTPUT_BYTES || output.stderr.len() > MAX_OUTPUT_BYTES;
-    Output {
-        code: output.status.code(),
-        stdout: cut(output.stdout),
-        stderr: cut(output.stderr),
-        truncated,
-    }
+/// Wait for a child while draining both pipes concurrently into bounded buffers.
+async fn collect(
+    mut child: tokio::process::Child,
+    stdout: tokio::process::ChildStdout,
+    stderr: tokio::process::ChildStderr,
+) -> std::io::Result<Output> {
+    let (status, stdout, stderr) =
+        tokio::join!(child.wait(), read_bounded(stdout), read_bounded(stderr));
+    let (stdout, stdout_truncated) = stdout?;
+    let (stderr, stderr_truncated) = stderr?;
+    Ok(Output {
+        code: status?.code(),
+        stdout,
+        stderr,
+        truncated: stdout_truncated || stderr_truncated,
+    })
 }
 
-/// Keep at most [`MAX_OUTPUT_BYTES`], from the start.
+/// Drain one stream while keeping at most [`MAX_OUTPUT_BYTES`] from its start.
 ///
 /// From the start because a version banner and a flag list are both at the beginning of what these programs
-/// print, and because keeping the end would mean holding the whole thing to find it.
-fn cut(mut bytes: Vec<u8>) -> Vec<u8> {
-    bytes.truncate(MAX_OUTPUT_BYTES);
-    bytes
+/// print. Bytes beyond the ceiling are still drained so a full child pipe cannot stop the process from exiting, but
+/// they are never appended to the retained buffer.
+async fn read_bounded(mut reader: impl AsyncRead + Unpin) -> std::io::Result<(Vec<u8>, bool)> {
+    const READ_CHUNK_BYTES: usize = 8 * 1024;
+
+    let mut kept = Vec::with_capacity(READ_CHUNK_BYTES.min(MAX_OUTPUT_BYTES));
+    let mut chunk = vec![0_u8; READ_CHUNK_BYTES];
+    let mut truncated = false;
+    loop {
+        let read = reader.read(&mut chunk).await?;
+        if read == 0 {
+            return Ok((kept, truncated));
+        }
+        let remaining = MAX_OUTPUT_BYTES.saturating_sub(kept.len());
+        let take = remaining.min(read);
+        kept.extend(chunk.iter().take(take).copied());
+        truncated |= take < read;
+    }
 }
 
 #[cfg(test)]
@@ -232,40 +261,35 @@ mod tests {
         }
     }
 
-    #[test]
-    fn the_byte_bound_cuts_and_says_it_cut() {
+    #[tokio::test]
+    async fn the_byte_bound_applies_before_excess_output_is_retained() {
         // A program in a bad state can print a great deal, and the daemon's whole idle budget is
         // single-digit megabytes.
         let long = vec![b'x'; MAX_OUTPUT_BYTES * 2];
-        let output = collect(std::process::Output {
-            status: std::process::ExitStatus::default(),
-            stdout: long,
-            stderr: Vec::new(),
-        });
-        assert_eq!(output.stdout.len(), MAX_OUTPUT_BYTES);
-        assert!(output.truncated, "truncation has to be visible");
+        let (kept, truncated) = read_bounded(long.as_slice()).await.expect("read bytes");
+        assert_eq!(kept.len(), MAX_OUTPUT_BYTES);
+        assert!(truncated, "truncation has to be visible");
     }
 
-    #[test]
-    fn output_that_fits_is_not_marked_truncated() {
-        let output = collect(std::process::Output {
-            status: std::process::ExitStatus::default(),
-            stdout: b"version 1.2.3".to_vec(),
-            stderr: Vec::new(),
-        });
-        assert!(!output.truncated);
-        assert_eq!(output.text(), "version 1.2.3");
+    #[tokio::test]
+    async fn output_that_fits_is_not_marked_truncated() {
+        let (kept, truncated) = read_bounded(&b"version 1.2.3"[..])
+            .await
+            .expect("read bytes");
+        assert!(!truncated);
+        assert_eq!(kept, b"version 1.2.3");
     }
 
     #[test]
     fn both_streams_are_read_because_the_clis_disagree_about_which_one_to_use() {
         // Measured: some of these programs print their version to standard error. A probe reading only
         // standard output would find nothing and conclude the CLI was broken.
-        let output = collect(std::process::Output {
-            status: std::process::ExitStatus::default(),
+        let output = Output {
+            code: Some(0),
             stdout: b"out".to_vec(),
             stderr: b"err".to_vec(),
-        });
+            truncated: false,
+        };
         assert!(output.text().contains("out"));
         assert!(output.text().contains("err"));
     }
@@ -273,11 +297,12 @@ mod tests {
     #[test]
     fn output_that_is_not_utf8_survives_as_bytes_and_is_readable_lossily() {
         // A lossy conversion at capture time would put a replacement character inside a version string.
-        let output = collect(std::process::Output {
-            status: std::process::ExitStatus::default(),
+        let output = Output {
+            code: Some(0),
             stdout: vec![0xFF, 0xFE, b'1', b'.', b'0'],
             stderr: Vec::new(),
-        });
+            truncated: false,
+        };
         assert_eq!(output.stdout.first(), Some(&0xFF));
         assert!(output.text().contains("1.0"));
     }

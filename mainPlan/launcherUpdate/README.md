@@ -59,7 +59,7 @@ clipscout 과 다른 점: **runtrol 은 자기 자신과 자식 CLI 를 둘 다 
 | 층 | 채널 | 실패 시 |
 |---|---|---|
 | **runtrol 앱** | GitHub Releases + minisign | 설치 안 함, 다음 주기 재시도 |
-| **provider CLI** (`claude`·`codex`) | 채널을 **감지한다** (npm global · `codex update` · 네이티브 설치기). 가정하지 않는다 | **자동 롤백** ([../providerDiscovery/](../providerDiscovery/README.md)) |
+| **provider CLI** (`claude`·`codex`) | 채널을 **감지한다** (npm global · `codex update` · 네이티브 설치기). 가정하지 않는다 | **자동 롤백**. 읽기 전용 발견 계약은 [provider discovery](../../docs/providerDiscovery.md) |
 
 **provider CLI 쪽이 더 위험하다.** 벤더가 패치 하나로 표면을 바꾸는 것이 이 카테고리의 1 번 사인이기 때문이다 (agentapi #207, claude-code-router #1601, happy #1543). 그래서:
 

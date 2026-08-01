@@ -27,12 +27,12 @@ use std::sync::Arc;
 
 use runtrol_core::registry::KindStatus;
 use runtrol_core::session::SessionError;
-use runtrol_core::{SessionManager, SessionView};
+use runtrol_core::{OpenReservation, SessionManager, SessionView};
 use runtrol_drivers::DriverContext;
 use runtrol_ipc::wire::{ProviderLine, Request, Response, SessionLine, SessionListing, WireError};
 use runtrol_provider::{
-    AbsPath, AgentCommand, CloseMode, ContentBlock, Disposition, NativeSessionId, OpenIntent,
-    Provider, ProviderId, SessionId, WallMs,
+    AbsPath, Agent, AgentCommand, CloseMode, ContentBlock, Disposition, ModelCatalog,
+    NativeSessionId, OpenIntent, Provider, ProviderId, SessionId, WallMs,
 };
 use runtrol_security::Caller;
 use runtrol_store::{SessionRow as StoredSession, StoreError};
@@ -40,7 +40,7 @@ use runtrol_store::{SessionRow as StoredSession, StoreError};
 use crate::compose::Composed;
 
 /// What a request produced.
-pub enum Reply {
+pub(crate) enum Reply {
     /// One answer, and the connection is free for the next request.
     One(Response),
     /// The caller is now watching a session.
@@ -58,6 +58,105 @@ pub enum Reply {
         agent: Box<dyn runtrol_provider::Agent>,
         /// How much time the process is given.
         how: CloseMode,
+        /// The bounded slot to release after the process has stopped.
+        reservation: OpenReservation,
+    },
+    /// Session state is already committed, while detached processes still need to be stopped.
+    Cleaning {
+        /// The answer to write after cleanup.
+        response: Response,
+        /// Processes no longer owned by the session manager.
+        agents: Vec<Cleanup>,
+    },
+}
+
+/// One process wait handed out by the single session owner.
+pub(crate) struct Cleanup {
+    /// The process to stop.
+    pub(crate) agent: Box<dyn Agent>,
+    /// How to stop it.
+    pub(crate) how: CloseMode,
+    /// The bounded slot to release after this process has stopped, when it has one.
+    pub(crate) reservation: Option<OpenReservation>,
+}
+
+/// The provider request shape a prepared result is bound to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PreparedKind {
+    /// Model discovery.
+    Models,
+    /// A fresh session.
+    Start,
+    /// A resumed session.
+    Resume,
+}
+
+/// A driver constructed while the probe cache is exclusively held.
+pub(crate) enum Discovered {
+    /// This request needs no provider work.
+    None,
+    /// The provider name was not valid, but the refusal is still bound to the request that produced it.
+    Invalid {
+        /// The request shape.
+        kind: PreparedKind,
+        /// The exact invalid provider text.
+        provider: Box<str>,
+        /// The refusal produced for it.
+        response: Response,
+    },
+    /// A valid provider identifier and the driver construction result.
+    Driver {
+        /// The request shape.
+        kind: PreparedKind,
+        /// The parsed provider identifier.
+        provider: ProviderId,
+        /// The constructed driver or discovery refusal.
+        driver: Result<Box<dyn Provider>, Response>,
+    },
+}
+
+/// A session process opened before the single session owner receives it.
+pub(crate) struct Opened {
+    intent: OpenIntent,
+    agent: Box<dyn Agent>,
+}
+
+/// Process work completed before the single session owner receives a request.
+///
+/// Probing a cold provider can take seconds. Keeping that wait outside the owner lets existing sessions continue to
+/// publish events while a connection discovers the exact program it will use.
+pub(crate) enum Prepared {
+    /// This request needs no provider process work.
+    None,
+    /// A refusal produced before a provider identifier could be formed.
+    Invalid {
+        /// The request shape.
+        kind: PreparedKind,
+        /// The exact invalid provider text.
+        provider: Box<str>,
+        /// The refusal produced for it.
+        response: Response,
+    },
+    /// Model discovery completed for this exact provider.
+    Models {
+        /// The provider whose models were queried.
+        provider: ProviderId,
+        /// The completed model result.
+        result: Result<ModelCatalog, Response>,
+    },
+    /// A fresh session process was opened for this exact provider.
+    Start {
+        /// The provider whose process was opened.
+        provider: ProviderId,
+        /// The opened process or refusal.
+        result: Result<Opened, Response>,
+    },
+    /// A resumed session process was opened for this exact provider.
+    Resume {
+        /// The provider whose process was opened.
+        provider: ProviderId,
+        /// The opened process or refusal.
+        result: Result<Opened, Response>,
     },
 }
 
@@ -66,7 +165,7 @@ pub enum Reply {
 /// Small on purpose: what a connection knows is who is on it and whether they have greeted, and nothing else. A
 /// connection that remembered which session the caller "meant" would be the second place that notion lives.
 #[derive(Debug)]
-pub struct Conversation {
+pub(crate) struct Conversation {
     /// Who is on the other end.
     ///
     /// Decided when the connection was accepted, from which endpoint it arrived on, and never afterwards. There is
@@ -84,7 +183,7 @@ impl Conversation {
     /// its own constructor taking the device it authenticated, and until then there is no way to build a
     /// conversation that claims to be one.
     #[must_use]
-    pub const fn at_the_machine() -> Self {
+    pub(crate) const fn at_the_machine() -> Self {
         Self {
             caller: Caller::AtTheMachine,
             greeted: false,
@@ -93,13 +192,13 @@ impl Conversation {
 
     /// Who is on the other end.
     #[must_use]
-    pub const fn caller(&self) -> &Caller {
+    pub(crate) const fn caller(&self) -> &Caller {
         &self.caller
     }
 
     /// Whether the wire format has been agreed.
     #[must_use]
-    pub const fn greeted(&self) -> bool {
+    pub(crate) const fn greeted(&self) -> bool {
         self.greeted
     }
 }
@@ -107,15 +206,214 @@ impl Conversation {
 /// Answer one request.
 ///
 /// Takes the assembled daemon and the sessions, because a request is about one or the other and usually both.
-#[expect(
-    clippy::too_many_lines,
-    reason = "one exhaustive request table keeps every scope-checked wire operation visible in one place"
-)]
-pub async fn answer(
+#[cfg(test)]
+async fn answer(
     conversation: &mut Conversation,
     composed: &Composed,
     sessions: &mut SessionManager,
     request: Request,
+) -> Reply {
+    let reserved = if matches!(request, Request::Start { .. } | Request::Resume { .. })
+        && conversation.greeted
+        && crate::scope::allowed(&conversation.caller, &request, &composed.granted).is_ok()
+    {
+        let session = SessionId::now();
+        match sessions.reserve_open(session) {
+            Ok(reserved) => Some(reserved),
+            Err(error) => return Reply::One(from_session_error(&error)),
+        }
+    } else {
+        None
+    };
+    let mut reserved = reserved;
+    if let Some(displaced) = reserved.as_mut().and_then(|one| one.displaced.take()) {
+        drop(displaced.close(CloseMode::Graceful { grace_ms: 0 }).await);
+    }
+    let discovered = discover(conversation, composed, &request).await;
+    let prepared = complete_prepare_for(
+        &request,
+        discovered,
+        reserved.as_ref().map(|one| one.reservation.session()),
+    )
+    .await;
+    let reservation = reserved.map(|one| one.reservation);
+    let (reply, reservations) = finish_cleanup(
+        answer_prepared(
+            conversation,
+            composed,
+            sessions,
+            request,
+            prepared,
+            reservation,
+        )
+        .await,
+    )
+    .await;
+    for reservation in reservations {
+        sessions.cancel_open(reservation);
+    }
+    reply
+}
+
+/// Construct a driver while the probe cache has one writer.
+pub(crate) async fn discover(
+    conversation: &Conversation,
+    composed: &Composed,
+    request: &Request,
+) -> Discovered {
+    if !needs_driver(request)
+        || !conversation.greeted
+        || crate::scope::allowed(&conversation.caller, request, &composed.granted).is_err()
+    {
+        return Discovered::None;
+    }
+
+    let Some((kind, provider)) = (match request {
+        Request::Models { provider } => Some((PreparedKind::Models, provider.as_ref())),
+        Request::Start { provider, .. } => Some((PreparedKind::Start, provider.as_ref())),
+        Request::Resume { provider, .. } => Some((PreparedKind::Resume, provider.as_ref())),
+        _ => None,
+    }) else {
+        return Discovered::None;
+    };
+    let Ok(id) = ProviderId::parse(provider) else {
+        return Discovered::Invalid {
+            kind,
+            provider: provider.into(),
+            response: refuse(&format!(
+                "{provider:?} is not a provider name runtrol accepts"
+            )),
+        };
+    };
+    Discovered::Driver {
+        kind,
+        provider: id,
+        driver: driver(composed, id, provider).await,
+    }
+}
+
+/// Finish provider work for an optional slot reserved by the session owner.
+pub(crate) async fn complete_prepare_for(
+    request: &Request,
+    discovered: Discovered,
+    session: Option<SessionId>,
+) -> Prepared {
+    let (kind, provider, driver) = match discovered {
+        Discovered::None => return Prepared::None,
+        Discovered::Invalid {
+            kind,
+            provider,
+            response,
+        } => {
+            return Prepared::Invalid {
+                kind,
+                provider,
+                response,
+            };
+        }
+        Discovered::Driver {
+            kind,
+            provider,
+            driver,
+        } => (kind, provider, driver),
+    };
+
+    let driver = match driver {
+        Ok(driver) => driver,
+        Err(response) => {
+            return match kind {
+                PreparedKind::Models => Prepared::Models {
+                    provider,
+                    result: Err(response),
+                },
+                PreparedKind::Start => Prepared::Start {
+                    provider,
+                    result: Err(response),
+                },
+                PreparedKind::Resume => Prepared::Resume {
+                    provider,
+                    result: Err(response),
+                },
+            };
+        }
+    };
+
+    match (kind, request) {
+        (PreparedKind::Models, Request::Models { .. }) => Prepared::Models {
+            provider,
+            result: driver
+                .models()
+                .await
+                .map_err(|error| Response::Failed(WireError::from_provider(&error))),
+        },
+        (
+            PreparedKind::Start,
+            Request::Start {
+                workspace,
+                model,
+                permission,
+                ..
+            },
+        ) => Prepared::Start {
+            provider,
+            result: open_driver(
+                driver.as_ref(),
+                session,
+                workspace,
+                Disposition::Fresh,
+                model.clone(),
+                permission.clone(),
+            )
+            .await,
+        },
+        (
+            PreparedKind::Resume,
+            Request::Resume {
+                native, workspace, ..
+            },
+        ) => Prepared::Resume {
+            provider,
+            result: open_driver(
+                driver.as_ref(),
+                session,
+                workspace,
+                Disposition::Resume {
+                    native: native.clone(),
+                },
+                None,
+                None,
+            )
+            .await,
+        },
+        _ => Prepared::Invalid {
+            kind,
+            provider: provider.as_str().into(),
+            response: refuse("provider preparation was paired with a different request shape"),
+        },
+    }
+}
+
+/// Whether a request needs provider discovery before it reaches the session owner.
+#[must_use]
+pub(crate) const fn needs_driver(request: &Request) -> bool {
+    matches!(
+        request,
+        Request::Models { .. } | Request::Start { .. } | Request::Resume { .. }
+    )
+}
+
+/// Answer one request after any slow provider discovery has completed elsewhere.
+#[expect(
+    clippy::too_many_lines,
+    reason = "one exhaustive request table keeps every scope-checked wire operation visible in one place"
+)]
+pub(crate) async fn answer_prepared(
+    conversation: &mut Conversation,
+    composed: &Composed,
+    sessions: &mut SessionManager,
+    request: Request,
+    prepared: Prepared,
+    reservation: Option<OpenReservation>,
 ) -> Reply {
     // Before anything else looks at the request. A wall consulted after some other branch has acted is a wall on
     // the way out, and the thing it was supposed to prevent has already happened.
@@ -150,41 +448,33 @@ pub async fn answer(
 
         Request::List => Reply::One(list(composed, sessions)),
 
-        Request::Models { provider } => Reply::One(models(composed, &provider).await),
+        Request::Models { provider } => models(&provider, prepared),
 
         Request::Start {
             provider,
-            workspace,
-            model,
-            permission,
-        } => Reply::One(
-            open(
-                composed,
-                sessions,
-                &provider,
-                &workspace,
-                Disposition::Fresh,
-                model,
-                permission,
-            )
-            .await,
+            workspace: _,
+            model: _,
+            permission: _,
+        } => open(
+            composed,
+            sessions,
+            &provider,
+            PreparedKind::Start,
+            prepared,
+            reservation,
         ),
 
         Request::Resume {
             provider,
-            native,
-            workspace,
-        } => Reply::One(
-            open(
-                composed,
-                sessions,
-                &provider,
-                &workspace,
-                Disposition::Resume { native },
-                None,
-                None,
-            )
-            .await,
+            native: _,
+            workspace: _,
+        } => open(
+            composed,
+            sessions,
+            &provider,
+            PreparedKind::Resume,
+            prepared,
+            reservation,
         ),
 
         Request::Prompt { session, text } => Reply::One(
@@ -241,7 +531,11 @@ pub async fn answer(
                 Err(error) => return Reply::One(refuse(&error.to_string())),
             };
             match sessions.close(session) {
-                Ok(agent) => Reply::Stopping { agent, how },
+                Ok(closing) => Reply::Stopping {
+                    agent: closing.agent,
+                    how,
+                    reservation: closing.reservation,
+                },
                 Err(SessionError::NotLive { .. }) if removed => Reply::One(Response::Done),
                 Err(error) => Reply::One(from_session_error(&error)),
             }
@@ -261,76 +555,242 @@ pub async fn answer(
     }
 }
 
-/// Open a session, fresh or continuing.
-async fn open(
+/// Commit a session process that was opened by its connection task.
+fn open(
     composed: &Composed,
     sessions: &mut SessionManager,
-    provider: &str,
+    requested_provider: &str,
+    requested_kind: PreparedKind,
+    prepared: Prepared,
+    reservation: Option<OpenReservation>,
+) -> Reply {
+    let prepared = match bound(prepared, requested_kind, requested_provider) {
+        Ok(prepared) => prepared,
+        Err(reply) => {
+            if let Some(reservation) = reservation {
+                return hold_until_cleaned(reply, reservation, sessions);
+            }
+            return reply;
+        }
+    };
+    let (provider, result) = match prepared {
+        Prepared::Start { provider, result } | Prepared::Resume { provider, result } => {
+            (provider, result)
+        }
+        Prepared::Invalid { response, .. } => {
+            if let Some(reservation) = reservation {
+                sessions.cancel_open(reservation);
+            }
+            return Reply::One(response);
+        }
+        other => return mismatched(other),
+    };
+    let Opened { intent, agent } = match result {
+        Ok(opened) => opened,
+        Err(response) => {
+            if let Some(reservation) = reservation {
+                sessions.cancel_open(reservation);
+            }
+            return Reply::One(response);
+        }
+    };
+    let Some(reservation) = reservation else {
+        return cleanup_opened(Opened { intent, agent });
+    };
+
+    let attached = match sessions.attach_opened(reservation, provider, &intent, agent) {
+        Ok(attached) => attached,
+        Err(error) => {
+            let (error, agent, reservation) = error.into_parts();
+            return Reply::Cleaning {
+                response: from_session_error(&error),
+                agents: vec![Cleanup {
+                    agent,
+                    how: CloseMode::Kill,
+                    reservation: Some(reservation),
+                }],
+            };
+        }
+    };
+    let mut agents = Vec::new();
+    let response = match persist_live(composed, sessions, attached.session) {
+        Ok(()) => Response::Started {
+            session: attached.session,
+        },
+        Err(error) => match sessions.close(attached.session) {
+            Ok(closing) => {
+                agents.push(Cleanup {
+                    agent: closing.agent,
+                    how: CloseMode::Kill,
+                    reservation: Some(closing.reservation),
+                });
+                refuse(&error.to_string())
+            }
+            Err(close_error) => refuse(&format!(
+                "{error}; the unrecorded session also could not be detached: {close_error}"
+            )),
+        },
+    };
+    if agents.is_empty() {
+        Reply::One(response)
+    } else {
+        Reply::Cleaning { response, agents }
+    }
+}
+
+/// Build and open one driver process outside the single session owner.
+async fn open_driver(
+    driver: &dyn Provider,
+    session: Option<SessionId>,
     workspace: &str,
     disposition: Disposition,
     model: Option<Box<str>>,
     permission: Option<Box<str>>,
-) -> Response {
-    let driver = match driver(composed, provider) {
-        Ok(driver) => driver,
-        Err(response) => return response,
-    };
+) -> Result<Opened, Response> {
     let Ok(workspace) = AbsPath::canonicalize(workspace) else {
-        return refuse(&format!(
+        return Err(refuse(&format!(
             "{workspace:?} is not a directory runtrol can work in"
-        ));
+        )));
     };
     let intent = OpenIntent {
-        session: SessionId::now(),
+        session: session.unwrap_or_else(SessionId::now),
         workspace,
         disposition,
         model,
         permission,
     };
-
-    match sessions.start(driver.as_ref(), intent).await {
-        Ok(session) => match persist_live(composed, sessions, session) {
-            Ok(()) => Response::Started { session },
-            Err(error) => {
-                let stopping = match sessions.close(session) {
-                    Ok(agent) => agent.close(CloseMode::Kill).await.err(),
-                    Err(close_error) => {
-                        return refuse(&format!(
-                            "{error}; the unrecorded session also could not be detached: {close_error}"
-                        ));
-                    }
-                };
-                match stopping {
-                    Some(close_error) => refuse(&format!(
-                        "{error}; the unrecorded session also could not be stopped: {close_error}"
-                    )),
-                    None => refuse(&error.to_string()),
-                }
-            }
-        },
-        Err(error) => from_session_error(&error),
+    match driver.open(intent.clone()).await {
+        Ok(agent) => Ok(Opened { intent, agent }),
+        Err(error) => Err(Response::Failed(WireError::from_provider(&error))),
     }
 }
 
-/// Ask one provider driver for its current model choices.
-async fn models(composed: &Composed, provider: &str) -> Response {
-    let driver = match driver(composed, provider) {
-        Ok(driver) => driver,
-        Err(response) => return response,
+/// Return a prepared model answer after verifying its request binding.
+fn models(requested_provider: &str, prepared: Prepared) -> Reply {
+    let prepared = match bound(prepared, PreparedKind::Models, requested_provider) {
+        Ok(prepared) => prepared,
+        Err(reply) => return reply,
     };
-    match driver.models().await {
-        Ok(catalogue) => Response::Models(catalogue),
-        Err(error) => Response::Failed(WireError::from_provider(&error)),
+    match prepared {
+        Prepared::Models { result, .. } => Reply::One(match result {
+            Ok(catalogue) => Response::Models(catalogue),
+            Err(response) => response,
+        }),
+        Prepared::Invalid { response, .. } => Reply::One(response),
+        other => mismatched(other),
     }
+}
+
+/// Verify that provider process work cannot be replayed against a different request.
+fn bound(
+    prepared: Prepared,
+    requested_kind: PreparedKind,
+    requested_provider: &str,
+) -> Result<Prepared, Reply> {
+    let matches = match &prepared {
+        Prepared::None => false,
+        Prepared::Invalid { kind, provider, .. } => {
+            *kind == requested_kind && provider.as_ref() == requested_provider
+        }
+        Prepared::Models { provider, .. } => {
+            requested_kind == PreparedKind::Models && provider.as_str() == requested_provider
+        }
+        Prepared::Start { provider, .. } => {
+            requested_kind == PreparedKind::Start && provider.as_str() == requested_provider
+        }
+        Prepared::Resume { provider, .. } => {
+            requested_kind == PreparedKind::Resume && provider.as_str() == requested_provider
+        }
+    };
+    if matches {
+        Ok(prepared)
+    } else {
+        Err(mismatched(prepared))
+    }
+}
+
+fn mismatched(prepared: Prepared) -> Reply {
+    let response = refuse("provider preparation does not belong to this request");
+    match prepared {
+        Prepared::Start {
+            result: Ok(opened), ..
+        }
+        | Prepared::Resume {
+            result: Ok(opened), ..
+        } => cleanup_opened_with(response, opened),
+        _ => Reply::One(response),
+    }
+}
+
+fn cleanup_opened(opened: Opened) -> Reply {
+    cleanup_opened_with(
+        refuse("an opened process reached the session owner without a reservation"),
+        opened,
+    )
+}
+
+fn cleanup_opened_with(response: Response, opened: Opened) -> Reply {
+    Reply::Cleaning {
+        response,
+        agents: vec![Cleanup {
+            agent: opened.agent,
+            how: CloseMode::Kill,
+            reservation: None,
+        }],
+    }
+}
+
+fn hold_until_cleaned(
+    mut reply: Reply,
+    reservation: OpenReservation,
+    sessions: &mut SessionManager,
+) -> Reply {
+    if let Reply::Cleaning { agents, .. } = &mut reply
+        && let Some(cleanup) = agents.first_mut()
+    {
+        cleanup.reservation = Some(reservation);
+        return reply;
+    }
+    sessions.cancel_open(reservation);
+    reply
+}
+
+/// Stop processes handed out by the owner when using the direct dispatcher convenience path.
+#[cfg(test)]
+async fn finish_cleanup(reply: Reply) -> (Reply, Vec<OpenReservation>) {
+    let Reply::Cleaning {
+        mut response,
+        agents,
+    } = reply
+    else {
+        return (reply, Vec::new());
+    };
+    let mut failures = Vec::new();
+    let mut reservations = Vec::new();
+    for cleanup in agents {
+        if let Err(error) = cleanup.agent.close(cleanup.how).await {
+            failures.push(error.to_string());
+        }
+        reservations.extend(cleanup.reservation);
+    }
+    if !failures.is_empty()
+        && let Response::Failed(error) = &response
+    {
+        response = refuse(&format!(
+            "{}; cleanup also failed: {}",
+            error.message,
+            failures.join("; ")
+        ));
+    }
+    (Reply::One(response), reservations)
 }
 
 /// Build one declared and available driver, with runtime resolution owned by the probe.
-fn driver(composed: &Composed, provider: &str) -> Result<Box<dyn Provider>, Response> {
-    let Ok(id) = ProviderId::parse(provider) else {
-        return Err(refuse(&format!(
-            "{provider:?} is not a provider name runtrol accepts"
-        )));
-    };
+async fn driver(
+    composed: &Composed,
+    id: ProviderId,
+    provider: &str,
+) -> Result<Box<dyn Provider>, Response> {
     let Some(declared) = composed.registry.get(id) else {
         return Err(refuse(&format!("no provider called {provider}")));
     };
@@ -355,19 +815,77 @@ fn driver(composed: &Composed, provider: &str) -> Result<Box<dyn Provider>, Resp
         ));
     };
 
-    // Resolution belongs to the probe, so the driver runs the same program the probe examined.
-    let program = match runtrol_core::locate(&declared.manifest) {
-        Ok(program) => program,
+    let mut cache = runtrol_core::ProbeCache::open(composed.home.paths().probe_cache());
+    let bound_flags = entry.flags.iter().map(|flag| flag.flag).collect::<Vec<_>>();
+    // Resolution belongs to the probe, and the returned value is the exact program handed to the driver. Resolving
+    // again here would let a PATH change select a different executable from the one whose version and flags were read.
+    let (program, probed) = match runtrol_core::probe_program(
+        &declared.manifest,
+        &bound_flags,
+        &mut cache,
+        &composed.containment,
+    )
+    .await
+    {
+        Ok(probed) => probed,
         Err(error) => return Err(refuse(&error.to_string())),
     };
+    if let Err(error) = cache.save() {
+        return Err(refuse(&error.to_string()));
+    }
+
+    let checked = checked_flags(provider, entry, probed.flags)?;
 
     Ok(make(&DriverContext {
         provider: id,
         models: declared.manifest.models.clone(),
         program,
         transport_argv: declared.manifest.transport.argv.clone(),
+        available_flags: checked.available,
+        unavailable_flags: checked.unavailable,
         contained_by: Arc::clone(&composed.containment),
     }))
+}
+
+/// Turn one parser observation into the exact optional surface a driver may use.
+#[derive(Debug)]
+struct CheckedFlags {
+    available: std::collections::BTreeSet<Box<str>>,
+    unavailable: BTreeMap<Box<str>, &'static str>,
+}
+
+fn checked_flags(
+    provider: &str,
+    driver: &runtrol_drivers::DriverKind,
+    observed: runtrol_core::Flags,
+) -> Result<CheckedFlags, Response> {
+    let available: std::collections::BTreeSet<Box<str>> = match observed {
+        runtrol_core::Flags::Observed(flags) => flags.into_iter().map(Into::into).collect(),
+        runtrol_core::Flags::Unknown { why } if driver.flags.iter().any(|flag| flag.required) => {
+            return Err(refuse(&format!(
+                "{provider} could not confirm the flags its driver requires: {why}"
+            )));
+        }
+        runtrol_core::Flags::Unknown { .. } => std::collections::BTreeSet::default(),
+    };
+    for required in driver.flags.iter().filter(|flag| flag.required) {
+        if !available.contains(required.flag) {
+            return Err(refuse(&format!(
+                "{provider} does not accept required flag {}: {}",
+                required.flag, required.without_it
+            )));
+        }
+    }
+    let unavailable = driver
+        .flags
+        .iter()
+        .filter(|flag| !flag.required && !available.contains(flag.flag))
+        .map(|flag| (Box::<str>::from(flag.flag), flag.without_it))
+        .collect();
+    Ok(CheckedFlags {
+        available,
+        unavailable,
+    })
 }
 
 /// Hand a command to a live session.
@@ -862,6 +1380,136 @@ mod tests {
         clean(composed, &path);
     }
 
+    #[test]
+    fn a_missing_required_driver_flag_is_refused_with_its_consequence() {
+        let driver = runtrol_drivers::kinds::lookup("claude-stream-json").expect("built-in kind");
+        let observed = runtrol_core::Flags::Observed(
+            driver
+                .flags
+                .iter()
+                .filter(|flag| flag.flag != "--permission-prompt-tool")
+                .map(|flag| flag.flag.to_owned())
+                .collect(),
+        );
+
+        match checked_flags("fixture", driver, observed) {
+            Err(Response::Failed(failure)) => {
+                assert!(failure.message.contains("--permission-prompt-tool"));
+                assert!(failure.message.contains("approvals cannot be brokered"));
+            }
+            other => panic!("a required flag was accepted: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_missing_optional_driver_flag_is_left_out_of_the_available_set() {
+        let driver = runtrol_drivers::kinds::lookup("claude-stream-json").expect("built-in kind");
+        let observed = runtrol_core::Flags::Observed(
+            driver
+                .flags
+                .iter()
+                .filter(|flag| flag.flag != "--include-partial-messages")
+                .map(|flag| flag.flag.to_owned())
+                .collect(),
+        );
+
+        let checked = checked_flags("fixture", driver, observed).expect("required flags remain");
+        assert!(!checked.available.contains("--include-partial-messages"));
+        assert_eq!(
+            checked
+                .unavailable
+                .get("--include-partial-messages")
+                .copied(),
+            Some("a message appears all at once instead of as it is written")
+        );
+    }
+
+    #[test]
+    fn an_unknown_parser_result_only_refuses_required_flags() {
+        let optional = runtrol_drivers::DriverKind {
+            kind: "fixture",
+            make: None,
+            flags: &[runtrol_drivers::kinds::DriverFlag {
+                flag: "--optional",
+                required: false,
+                without_it: "the optional feature remains unavailable to this session",
+            }],
+            unavailable: Some("a test fixture with no implementation"),
+        };
+        let checked = checked_flags(
+            "fixture",
+            &optional,
+            runtrol_core::Flags::Unknown {
+                why: "the parser said nothing".to_owned(),
+            },
+        )
+        .expect("an optional-only driver can degrade explicitly");
+
+        assert!(checked.available.is_empty());
+        assert_eq!(
+            checked.unavailable.get("--optional").copied(),
+            Some("the optional feature remains unavailable to this session")
+        );
+    }
+
+    #[tokio::test]
+    async fn prepared_provider_work_cannot_be_replayed_for_another_provider() {
+        let (composed, path) = composed_for("prepared-binding");
+        let mut sessions = SessionManager::new();
+        let mut conversation = Conversation::at_the_machine();
+        greet(&mut conversation, &composed, &mut sessions).await;
+        let prepared_for = ProviderId::parse("prepared-for").expect("valid test provider");
+
+        let reply = answer_prepared(
+            &mut conversation,
+            &composed,
+            &mut sessions,
+            Request::Models {
+                provider: "asked-for".into(),
+            },
+            Prepared::Models {
+                provider: prepared_for,
+                result: Ok(ModelCatalog::unknown("test catalogue")),
+            },
+            None,
+        )
+        .await;
+
+        match reply {
+            Reply::One(Response::Failed(error)) => {
+                assert!(
+                    error.message.contains("does not belong"),
+                    "{}",
+                    error.message
+                );
+            }
+            other => panic!("expected a fail-closed refusal, got {}", shape(&other)),
+        }
+
+        let reply = answer_prepared(
+            &mut conversation,
+            &composed,
+            &mut sessions,
+            Request::Start {
+                provider: prepared_for.as_str().into(),
+                workspace: std::env::temp_dir().to_string_lossy().into_owned().into(),
+                model: None,
+                permission: None,
+            },
+            Prepared::Models {
+                provider: prepared_for,
+                result: Ok(ModelCatalog::unknown("test catalogue")),
+            },
+            None,
+        )
+        .await;
+        assert!(
+            matches!(reply, Reply::One(Response::Failed(_))),
+            "a model result was accepted as an opened session"
+        );
+        clean(composed, &path);
+    }
+
     /// Agree a wire format, so the rest of a test can ask for something.
     async fn greet(
         conversation: &mut Conversation,
@@ -886,6 +1534,7 @@ mod tests {
             Reply::One(response) => format!("{response:?}"),
             Reply::Watching(_) => "a subscription".to_owned(),
             Reply::Stopping { how, .. } => format!("a process still stopping, {how:?}"),
+            Reply::Cleaning { agents, .. } => format!("{} processes still stopping", agents.len()),
         }
     }
 }

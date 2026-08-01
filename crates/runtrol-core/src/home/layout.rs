@@ -17,7 +17,7 @@
 //! | the database file | `runtrol-store`, the only code that opens it |
 //! | `providers/` | the manifest loader, last in the discovery order and therefore able to shadow |
 //! | `trash/` | a driver deleting a provider session file, which renames rather than unlinks |
-//! | the probe cache | the version-keyed cache of what each installed CLI can do |
+//! | the probe cache | the binary-identity cache of what each installed CLI can do |
 //! | the endpoint | the daemon binds it, the CLI connects to it |
 //!
 //! Deliberately absent: a log directory. Where runtrol's own diagnostics go has not been decided,

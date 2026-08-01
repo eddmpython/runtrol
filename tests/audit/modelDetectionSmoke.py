@@ -4,23 +4,26 @@ The manifests decide which providers exist and how their executables are found. 
 declared in its manifest must return those aliases honestly. A provider without aliases must enumerate at least
 one current model through its own runtime surface. No prompt is sent, so this spends no tokens or rate limit.
 
-Every enumerated model identifier is then searched for as a string literal outside the driver crate. Finding one
-means a current model has leaked into core, IPC, CLI, or GUI source and will go stale there.
+Every enumerated model identifier is then searched for as a string literal throughout production source. Finding one
+means a current model has leaked into code instead of remaining runtime data and will go stale there.
 
 Everything runs under a temporary `RUNTROL_HOME`. The gate stops that home's daemon before removing the directory.
 
 Usage::
 
     python -X utf8 tests/audit/modelDetectionSmoke.py
+    python -X utf8 tests/audit/modelDetectionSmoke.py --require-all
     python -X utf8 tests/audit/modelDetectionSmoke.py --selftest
 
 Exit codes:
     0 every installed provider answered honestly, or none was installed and the skip was stated
-    2 discovery failed, its shape was dishonest, or a discovered identifier is hardcoded outside drivers
+    2 discovery failed, required provider coverage was absent, its shape was dishonest, or a discovered identifier
+      is hardcoded in production source
 """
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
@@ -38,6 +41,8 @@ CRATES = ROOT / "crates"
 DRIVERS = CRATES / "runtrol-drivers"
 MANIFESTS = DRIVERS / "manifests"
 COMMAND_TIMEOUT_S = 120.0
+EXPECTED_ENV = "RUNTROL_MODEL_GATE_EXPECTED"
+OPERATOR_HOME_ENV = "RUNTROL_MODEL_GATE_OPERATOR_HOME"
 
 
 class Failed(Exception):
@@ -80,6 +85,53 @@ def installed(spec: ProviderSpec) -> bool:
     return any(shutil.which(name) is not None for name in spec.executables)
 
 
+def requireCoverage(expected: set[str], present: set[str]) -> None:
+    """Refuse a required run that did not resolve every shipped provider CLI."""
+    if not expected:
+        raise Failed("no shipped provider declares model discovery")
+    missing = sorted(expected - present)
+    if missing:
+        raise Failed(f"required provider CLIs are not installed: {', '.join(missing)}")
+
+
+def decodeExpected(raw: str | None) -> dict[str, tuple[str, ...]]:
+    """Decode provider-specific sentinels a hosted gate placed in provider-owned state."""
+    if raw is None:
+        return {}
+    try:
+        decoded = json.loads(raw)
+    except json.JSONDecodeError as error:
+        raise Failed(f"{EXPECTED_ENV} is not valid JSON: {error.msg}") from error
+    if not isinstance(decoded, dict):
+        raise Failed(f"{EXPECTED_ENV} must be a JSON object")
+    expected: dict[str, tuple[str, ...]] = {}
+    for provider, choices in decoded.items():
+        if (
+            not isinstance(provider, str)
+            or not provider
+            or not isinstance(choices, list)
+            or not choices
+            or any(not isinstance(choice, str) or not choice for choice in choices)
+        ):
+            raise Failed(f"{EXPECTED_ENV} contains an unreadable provider expectation")
+        expected[provider] = tuple(choices)
+    return expected
+
+
+def expectedChoices() -> dict[str, tuple[str, ...]]:
+    """Read hosted expectations without making them part of the product contract."""
+    return decodeExpected(os.environ.get(EXPECTED_ENV))
+
+
+def options(argv: list[str]) -> tuple[bool, bool]:
+    """Read the two gate modes and reject misspelled options instead of ignoring them."""
+    known = {"--selftest", "--require-all"}
+    unknown = sorted(set(argv) - known)
+    if unknown:
+        raise Failed(f"unknown option(s): {', '.join(unknown)}")
+    return "--selftest" in argv, "--require-all" in argv
+
+
 def buildBinary() -> Path:
     """Build and return the executable this gate drives."""
     subprocess.run(
@@ -99,6 +151,9 @@ def run(binary: Path, home: Path, words: list[str]) -> str:
     """Run one command against the gate's isolated daemon."""
     environment = dict(os.environ)
     environment["RUNTROL_HOME"] = str(home)
+    if operator_home := os.environ.get(OPERATOR_HOME_ENV):
+        environment["HOME"] = operator_home
+        environment["USERPROFILE"] = operator_home
     try:
         proc = subprocess.run(
             [str(binary), *words],
@@ -133,6 +188,25 @@ def parseDiscovery(text: str) -> Discovery:
             raise Failed(f"alias discovery has an unreadable shape: {text!r}")
         return Discovery("aliases", aliases, why)
 
+    if first.startswith("partial catalogue:"):
+        why = first.removeprefix("partial catalogue:").strip()
+        choices: list[str] = []
+        for line in lines[1:]:
+            if line.startswith("alias  "):
+                identifier = line.removeprefix("alias  ")
+            elif line.startswith("model  "):
+                identifier, separator, _label = line.removeprefix("model  ").partition("  ")
+                if not separator:
+                    raise Failed(f"partial model line has an unreadable shape: {line!r}")
+            else:
+                raise Failed(f"partial discovery has an unreadable line: {line!r}")
+            if not identifier or any(ch.isspace() for ch in identifier):
+                raise Failed(f"partial discovery has an unreadable choice: {line!r}")
+            choices.append(identifier)
+        if not why or not choices:
+            raise Failed(f"partial discovery has an unreadable shape: {text!r}")
+        return Discovery("partial", tuple(choices), why)
+
     if first.startswith("model catalogue unknown:"):
         why = first.removeprefix("model catalogue unknown:").strip()
         if not why or len(lines) != 1:
@@ -162,10 +236,10 @@ def productionText(path: Path) -> str:
 
 
 def literalOffences(identifiers: set[str], roots: tuple[Path, ...] | None = None) -> list[str]:
-    """Current model identifiers written as exact string literals outside drivers."""
+    """Current model identifiers written as exact production string literals."""
     if not identifiers:
         return []
-    search_roots = roots or tuple(path for path in sorted(CRATES.iterdir()) if path != DRIVERS)
+    search_roots = roots or tuple(sorted(CRATES.iterdir()))
     patterns = {
         identifier: re.compile(rf"(?:\"{re.escape(identifier)}\"|'{re.escape(identifier)}')")
         for identifier in identifiers
@@ -186,13 +260,15 @@ def literalOffences(identifiers: set[str], roots: tuple[Path, ...] | None = None
 def verify(spec: ProviderSpec, discovery: Discovery) -> None:
     """Hold a runtime answer against what the provider manifest can honestly promise."""
     if spec.aliases:
-        if discovery.kind != "aliases":
+        if discovery.kind not in {"aliases", "partial"}:
             raise Failed(f"{spec.identifier} declares aliases and answered as {discovery.kind}")
-        if discovery.choices != spec.aliases:
+        if discovery.choices[: len(spec.aliases)] != spec.aliases:
             raise Failed(
                 f"{spec.identifier} declared aliases {spec.aliases!r} and the runtime surface returned "
                 f"{discovery.choices!r}"
             )
+        if discovery.kind == "aliases" and discovery.choices != spec.aliases:
+            raise Failed(f"{spec.identifier} returned undeclared choices as aliases")
         return
 
     if discovery.kind != "known" or not discovery.choices:
@@ -211,15 +287,42 @@ def safeRemove(path: Path) -> None:
     shutil.rmtree(resolved, ignore_errors=False)
 
 
-def main() -> int:
+def main(require_all: bool = False) -> int:
     """Discover models from every installed provider and check source isolation."""
     if shutil.which("cargo") is None:
+        if require_all:
+            print(
+                "[modelDetectionSmoke] cargo is required to exercise every shipped provider.",
+                file=sys.stderr,
+            )
+            return 2
         print("[modelDetectionSmoke] SKIP: cargo is not installed, so there is no binary to drive.")
         return 0
 
     shipped = shippedProviders()
+    try:
+        expected = expectedChoices()
+    except Failed as error:
+        print(f"[modelDetectionSmoke] {error}", file=sys.stderr)
+        return 2
+    unknown_expected = sorted(set(expected) - {spec.identifier for spec in shipped})
+    if unknown_expected:
+        print(
+            f"[modelDetectionSmoke] {EXPECTED_ENV} names unshipped providers: {', '.join(unknown_expected)}",
+            file=sys.stderr,
+        )
+        return 2
     present = [spec for spec in shipped if installed(spec)]
     absent = [spec.identifier for spec in shipped if spec not in present]
+    if require_all:
+        try:
+            requireCoverage(
+                {spec.identifier for spec in shipped},
+                {spec.identifier for spec in present},
+            )
+        except Failed as error:
+            print(f"[modelDetectionSmoke] {error}", file=sys.stderr)
+            return 2
     if not present:
         print(
             "[modelDetectionSmoke] SKIP: no shipped provider CLI is installed. model discovery is unverified here."
@@ -234,7 +337,18 @@ def main() -> int:
         for spec in present:
             discovery = parseDiscovery(run(binary, home, ["models", spec.identifier]))
             verify(spec, discovery)
-            discovered_ids.update(discovery.choices if discovery.kind == "known" else ())
+            missing_expected = [
+                choice for choice in expected.get(spec.identifier, ()) if choice not in discovery.choices
+            ]
+            if missing_expected:
+                raise Failed(
+                    f"{spec.identifier} did not return expected provider-owned choice(s): "
+                    + ", ".join(missing_expected)
+                )
+            if discovery.kind == "known":
+                discovered_ids.update(discovery.choices)
+            elif discovery.kind == "partial":
+                discovered_ids.update(discovery.choices[len(spec.aliases) :])
             print(f"  {spec.identifier}: {discovery.kind}, {len(discovery.choices)} choice(s)")
 
         offences = literalOffences(discovered_ids)
@@ -259,7 +373,7 @@ def main() -> int:
         print(f"  not exercised (not installed): {', '.join(absent)}")
     print(
         f"[modelDetectionSmoke] OK. {len(present)} installed provider(s), "
-        f"{len(discovered_ids)} runtime model identifier(s), none hardcoded outside drivers."
+        f"{len(discovered_ids)} runtime model identifier(s), none hardcoded in production source."
     )
     return 0
 
@@ -273,6 +387,11 @@ def selftest() -> int:
     aliases = parseDiscovery("aliases only: no enumerable catalogue\nalias  fast\nalias  deep")
     if aliases.choices != ("fast", "deep"):
         problems.append("valid aliases were not read")
+    partial = parseDiscovery(
+        "partial catalogue: provider-owned cache only\nalias  fast\nmodel  runtime-model-42  Runtime Model"
+    )
+    if partial != Discovery("partial", ("fast", "runtime-model-42"), "provider-owned cache only"):
+        problems.append("a valid partial catalogue was not read")
 
     for malformed in ("", "aliases only: \nalias  ", "identifier-without-a-label"):
         rejected = False
@@ -284,12 +403,46 @@ def selftest() -> int:
         if not rejected:
             problems.append(f"malformed discovery was accepted: {malformed!r}")
 
+    cases = [
+        (
+            "one required provider was not inspected",
+            lambda: requireCoverage({"first", "second"}, {"first"}),
+        ),
+        (
+            "all required providers were absent",
+            lambda: requireCoverage({"first", "second"}, set()),
+        ),
+        (
+            "no provider discovery was declared",
+            lambda: requireCoverage(set(), set()),
+        ),
+        ("an unknown option was accepted", lambda: options(["--requre-all"])),
+        ("a malformed hosted expectation was accepted", lambda: decodeExpected("[]")),
+        (
+            "an empty hosted expectation was accepted",
+            lambda: decodeExpected('{"fixture":[]}'),
+        ),
+    ]
+    for name, defect in cases:
+        caught = False
+        try:
+            defect()
+        except Failed:
+            caught = True
+        if not caught:
+            problems.append(name)
+
+    try:
+        requireCoverage({"first", "second"}, {"first", "second"})
+    except Failed:
+        problems.append("complete required provider coverage was refused")
+
     scratch = ROOT / ".tmp" / "modelDetectionSelftest.rs"
     scratch.parent.mkdir(exist_ok=True)
     try:
         scratch.write_text('const MODEL: &str = "runtime-model-42";\n', encoding="utf-8", newline="\n")
         if not literalOffences({"runtime-model-42"}, (scratch,)):
-            problems.append("a current model identifier outside drivers was not caught")
+            problems.append("a current model identifier in production source was not caught")
         scratch.write_text('const MODEL: &str = "discovered-at-runtime";\n', encoding="utf-8", newline="\n")
         if literalOffences({"runtime-model-42"}, (scratch,)):
             problems.append("an unrelated runtime value was reported as a model literal")
@@ -300,9 +453,17 @@ def selftest() -> int:
         print(f"[modelDetectionSmoke --selftest] {problem}", file=sys.stderr)
     if problems:
         return 2
-    print("[modelDetectionSmoke --selftest] OK. malformed output and leaked literals were caught.")
+    print(
+        "[modelDetectionSmoke --selftest] OK. malformed output, missing coverage, unknown options, "
+        "and leaked literals were caught."
+    )
     return 0
 
 
 if __name__ == "__main__":
-    raise SystemExit(selftest() if "--selftest" in sys.argv else main())
+    try:
+        selftest_mode, require_all = options(sys.argv[1:])
+    except Failed as error:
+        print(f"[modelDetectionSmoke] {error}", file=sys.stderr)
+        raise SystemExit(2) from None
+    raise SystemExit(selftest() if selftest_mode else main(require_all=require_all))

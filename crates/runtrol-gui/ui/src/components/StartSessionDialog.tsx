@@ -53,7 +53,16 @@ export function StartSessionDialog({
   const usable = providers.some((entry) => entry.usable);
   const modelOptions = [
     { value: PROVIDER_DEFAULT, label: "공급자 기본값" },
-    ...(models?.kind === "known"
+    ...(models?.kind === "partial"
+      ? models.aliases
+          .map((alias) => ({ value: alias, label: alias }))
+          .concat(
+            models.models.map((entry) => ({
+              value: entry.id,
+              label: entry.isDefault ? `${entry.displayName} (기본)` : entry.displayName,
+            })),
+          )
+      : models?.kind === "known"
       ? models.models.map((entry) => ({
           value: entry.id,
           label: entry.isDefault ? `${entry.displayName} (기본)` : entry.displayName,
@@ -64,7 +73,7 @@ export function StartSessionDialog({
   ];
   const modelNote = modelsLoading
     ? "CLI에서 현재 모델 정보를 확인하는 중이다."
-    : models?.kind === "aliases"
+    : models?.kind === "aliases" || models?.kind === "partial"
       ? models.why
       : models?.kind === "unknown"
         ? models.why

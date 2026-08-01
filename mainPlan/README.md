@@ -15,7 +15,6 @@
 | 폴더 | 상태 | 한 줄 |
 |---|---|---|
 | [coreRuntime](coreRuntime/) | 설계 | daemon 위상, 세션 상태 기계, **메모리 계약 숫자 확정** (유휴 6MB, 천장 48MB), backpressure, 고아 회수. 런타임·Windows I/O·저장소 결정이 전부 실측 근거다. |
-| [providerDiscovery](providerDiscovery/) | 활성 | 모델·플래그·버전을 하드코딩 없이 아는 사다리와 version-keyed 캐시. 표면 drift 감지가 같은 뿌리다. |
 
 ## 2. 사용자 표면
 
@@ -75,6 +74,6 @@
 - **벤더가 이미 냈다.** Anthropic Remote Control, OpenAI Codex Remote, GitHub Copilot CLI, Amp. 전부 무료 번들이거나 구독 포함. **그래서 "원격 조종" 은 우리 자리가 아니다. "여러 개를 한 곳에" 가 우리 자리다.**
 - **상용 레이어는 무덤이다.** vibe-kanban (27.5k star, Rust) 폐업, terragon 폐업, crystal deprecated, omnara v1 deprecated.
 - **성숙한 Rust 네이티브 세션 매니저 + 모바일 클라이언트는 존재하지 않는다.**
-- **omnara v1 의 사인이 곧 최대 위험이다**: "CLI 를 감싸는 래퍼로 지었는데 CLI 가 끊임없이 바뀌어 유지가 불가능해졌다." -> `providerDiscovery` 의 발견 사다리와 drift 게이트가 직접 대응이다.
+- **omnara v1 의 사인이 곧 최대 위험이다**: "CLI 를 감싸는 래퍼로 지었는데 CLI 가 끊임없이 바뀌어 유지가 불가능해졌다." -> [provider discovery](../docs/providerDiscovery.md) 의 발견 사다리와 drift 게이트가 직접 대응이다.
 - **사용자는 릴레이 없는 모드를 원한다** (Happy 이슈 `local network only mode`).
 - **claude-squad 는 Windows 를 못 한다** (creack/pty 미지원). tmux 기반 OSS 전반의 약점이다.

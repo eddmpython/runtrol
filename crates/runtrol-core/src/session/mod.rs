@@ -19,7 +19,10 @@ pub mod mint;
 pub mod state;
 pub mod tier;
 
-pub use manager::{LiveSession, Pumped, SessionError, SessionManager};
+pub use manager::{
+    AttachError, AttachedSession, ClosingSession, LiveSession, OpenReservation, Pumped,
+    ReservedOpen, SessionError, SessionManager,
+};
 pub use mint::Identity;
 pub use state::{CloseReason, FailureCode, Lifecycle, Observed, Refused, SessionState};
 pub use tier::{Admit, HotSession, MAX_HOT, NoRoom, Tier};

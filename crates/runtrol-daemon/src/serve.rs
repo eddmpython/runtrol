@@ -14,13 +14,16 @@
 //!
 //! # Nothing one caller does may stop another
 //!
-//! The owner task holds the sessions while it answers, so any request that waits is a request that stops every
-//! session's output for as long as it waits. There is exactly one such request, and it is the reason
-//! [`Reply::Stopping`] exists: closing a session gives its process time to finish, and that wait is handed to the
-//! connection that asked for it. What the owner does is bounded by starting a process and writing a line.
+//! The owner task holds the sessions while it answers, so a provider process wait there would stop every session's
+//! output. Probes, model discovery, process open, and process cleanup therefore run in connection tasks. The owner
+//! only reserves or commits a process slot and performs the bounded command writes that require mutable access to a
+//! live agent. [`Reply::Stopping`] and [`Reply::Cleaning`] hand every cleanup wait back out.
 //!
 //! An operator watching one session while closing another is the case this is for, and it is what the tests here
 //! check: a slow close does not stop a running session's events.
+//!
+//! Connection and cleanup tasks live in one `JoinSet`. Every returned serve outcome aborts and reaps that set. Dropping
+//! the serve future drops the set and aborts its tasks; process containment remains the final child teardown boundary.
 //!
 //! # What is not decided here
 //!
@@ -30,14 +33,18 @@
 
 use std::sync::Arc;
 
-use runtrol_core::SessionManager;
+use runtrol_core::{OpenReservation, ReservedOpen, SessionError, SessionManager};
 use runtrol_ipc::transport::{Connection, Listener, TransportError};
 use runtrol_ipc::wire::{Request, Response};
-use runtrol_provider::Opaque;
-use tokio::sync::{mpsc, oneshot};
+use runtrol_provider::{CloseMode, Opaque, SessionId};
+use tokio::sync::{Mutex, mpsc, oneshot};
+use tokio::task::JoinSet;
 
 use crate::compose::Composed;
-use crate::dispatch::{Conversation, Reply, answer, refuse};
+use crate::dispatch::{
+    Cleanup, Conversation, Discovered, Prepared, Reply, answer_prepared, complete_prepare_for,
+    discover, needs_driver, refuse,
+};
 
 /// How many answered requests may be waiting to reach the one task that answers them.
 ///
@@ -69,8 +76,41 @@ struct Asked {
     conversation: Conversation,
     /// What was asked.
     request: Request,
+    /// Slow provider discovery completed by the connection task, outside the one session owner.
+    prepared: Prepared,
+    /// The bounded process slot reserved before an open, if this request opens one.
+    reservation: Option<ReservationGuard>,
     /// Where the answer goes.
     answered: oneshot::Sender<Answered>,
+}
+
+/// A connection asking the session owner for a bounded process slot.
+enum ReservationAsked {
+    Reserve {
+        session: SessionId,
+        answered: oneshot::Sender<Result<ReservedOpen, SessionError>>,
+    },
+    Cancel(OpenReservation),
+}
+
+/// Cancels a pending slot if connection preparation is abandoned.
+struct ReservationGuard {
+    reservation: Option<OpenReservation>,
+    cancelling: mpsc::UnboundedSender<ReservationAsked>,
+}
+
+impl ReservationGuard {
+    fn take(mut self) -> Option<OpenReservation> {
+        self.reservation.take()
+    }
+}
+
+impl Drop for ReservationGuard {
+    fn drop(&mut self) {
+        if let Some(reservation) = self.reservation.take() {
+            drop(self.cancelling.send(ReservationAsked::Cancel(reservation)));
+        }
+    }
 }
 
 /// One answer, going back to the connection that asked.
@@ -91,46 +131,189 @@ pub async fn serve(composed: Composed, mut listener: Listener) -> Result<(), Ser
     let composed = Arc::new(composed);
     let mut sessions = SessionManager::new();
     let (asking, mut asked) = mpsc::channel::<Asked>(ASKED_QUEUE);
+    let (reserving, mut reservations) = mpsc::unbounded_channel::<ReservationAsked>();
+    // ProbeCache replaces one file atomically but is deliberately not a database. Serializing discovery keeps two
+    // connections from publishing stale snapshots over each other while leaving unrelated requests and event pumping
+    // completely independent of a cold probe.
+    let discovering = Arc::new(Mutex::new(()));
+    let mut connections = JoinSet::new();
 
-    loop {
+    let outcome = loop {
         tokio::select! {
             arrived = listener.accept() => {
-                let connection = arrived?;
+                let connection = match arrived {
+                    Ok(connection) => connection,
+                    Err(error) => break Err(error.into()),
+                };
                 // The connection's own task. It reads, it writes, and it never touches a session.
-                drop(tokio::spawn(converse(connection, asking.clone())));
+                connections.spawn(converse(
+                    connection,
+                    asking.clone(),
+                    reserving.clone(),
+                    Arc::clone(&composed),
+                    Arc::clone(&discovering),
+                ));
             }
 
+            Some(reservation) = reservations.recv() => match reservation {
+                ReservationAsked::Reserve { session, answered } => {
+                    if let Err(Ok(abandoned)) = answered.send(sessions.reserve_open(session)) {
+                        abandon_reserved(
+                            &mut sessions,
+                            &mut connections,
+                            &reserving,
+                            abandoned,
+                        );
+                    }
+                }
+                ReservationAsked::Cancel(reservation) => sessions.cancel_open(reservation),
+            },
+
             Some(ask) = asked.recv() => {
-                let Asked { mut conversation, request, answered } = ask;
-                let reply = answer(&mut conversation, &composed, &mut sessions, request).await;
+                let Asked { mut conversation, request, prepared, reservation, answered } = ask;
+                let reservation = reservation.and_then(ReservationGuard::take);
+                let reply = answer_prepared(
+                    &mut conversation,
+                    &composed,
+                    &mut sessions,
+                    request,
+                    prepared,
+                    reservation,
+                ).await;
                 // The connection stopped while its request was being answered. Nothing to report and nowhere to
                 // report it: the caller is gone, and the sessions already record everything the request did.
-                drop(answered.send(Answered { conversation, reply }));
+                deliver_answer(
+                    answered,
+                    Answered { conversation, reply },
+                    &mut connections,
+                    &reserving,
+                );
             }
 
             // Events reach whoever is watching through the session's own fan-out, so there is nothing to do with
             // what comes back. What this arm is for is that the reading happens at all.
             pumped = sessions.pump_any() => {
                 if let Some(published) = pumped.published {
-                    crate::dispatch::persist_live(&composed, &sessions, pumped.session)?;
-                    composed.store.put_cursor(
+                    if let Err(error) = crate::dispatch::persist_live(&composed, &sessions, pumped.session) {
+                        break Err(error.into());
+                    }
+                    if let Err(error) = composed.store.put_cursor(
                         pumped.session,
                         runtrol_store::Cursor {
                             src_end: published.event.src_end,
                             seq: published.event.seq,
                         },
-                    )?;
+                    ) {
+                        break Err(error.into());
+                    }
                 }
             }
+
+            Some(_finished) = connections.join_next(), if !connections.is_empty() => {}
         }
+    };
+
+    connections.abort_all();
+    while connections.join_next().await.is_some() {}
+    outcome
+}
+
+/// Release an unanswered reservation without exposing an extra live process during displaced cleanup.
+fn abandon_reserved(
+    sessions: &mut SessionManager,
+    tasks: &mut JoinSet<()>,
+    cancelling: &mpsc::UnboundedSender<ReservationAsked>,
+    abandoned: ReservedOpen,
+) {
+    let ReservedOpen {
+        reservation,
+        displaced,
+    } = abandoned;
+    let Some(displaced) = displaced else {
+        sessions.cancel_open(reservation);
+        return;
+    };
+    let cancelling = cancelling.clone();
+    tasks.spawn(async move {
+        let releasing = ReservationGuard {
+            reservation: Some(reservation),
+            cancelling,
+        };
+        drop(displaced.close(CloseMode::Graceful { grace_ms: 0 }).await);
+        drop(releasing);
+    });
+}
+
+/// Deliver an answer or finish any process handoff whose connection disappeared first.
+fn deliver_answer(
+    answered: oneshot::Sender<Answered>,
+    answer: Answered,
+    tasks: &mut JoinSet<()>,
+    cancelling: &mpsc::UnboundedSender<ReservationAsked>,
+) {
+    if let Err(abandoned) = answered.send(answer) {
+        abandon_reply(tasks, cancelling, abandoned.reply);
     }
+}
+
+fn abandon_reply(
+    tasks: &mut JoinSet<()>,
+    cancelling: &mpsc::UnboundedSender<ReservationAsked>,
+    reply: Reply,
+) {
+    match reply {
+        Reply::Stopping {
+            agent,
+            how,
+            reservation,
+        } => spawn_abandoned_cleanup(tasks, cancelling, agent, how, Some(reservation)),
+        Reply::Cleaning { agents, .. } => {
+            for Cleanup {
+                agent,
+                how,
+                reservation,
+            } in agents
+            {
+                spawn_abandoned_cleanup(tasks, cancelling, agent, how, reservation);
+            }
+        }
+        Reply::One(_) | Reply::Watching(_) => {}
+    }
+}
+
+fn spawn_abandoned_cleanup(
+    tasks: &mut JoinSet<()>,
+    cancelling: &mpsc::UnboundedSender<ReservationAsked>,
+    agent: Box<dyn runtrol_provider::Agent>,
+    how: CloseMode,
+    reservation: Option<OpenReservation>,
+) {
+    let cancelling = cancelling.clone();
+    tasks.spawn(async move {
+        let releasing = reservation.map(|reservation| ReservationGuard {
+            reservation: Some(reservation),
+            cancelling,
+        });
+        drop(agent.close(how).await);
+        drop(releasing);
+    });
 }
 
 /// One connection, for as long as it lasts.
 ///
 /// Reads a request, asks the one task that owns the sessions, and writes back what it says. A connection that goes
 /// away simply ends: it is not a failure the daemon has to act on.
-async fn converse(mut connection: Connection, asking: mpsc::Sender<Asked>) {
+#[expect(
+    clippy::too_many_lines,
+    reason = "one connection lifecycle keeps reservation cancellation and request ownership visible together"
+)]
+async fn converse(
+    mut connection: Connection,
+    asking: mpsc::Sender<Asked>,
+    reserving: mpsc::UnboundedSender<ReservationAsked>,
+    composed: Arc<Composed>,
+    discovering: Arc<Mutex<()>>,
+) {
     // Every connection today arrives on the local endpoint, which is inside a directory only the operator can
     // enter and refuses anything off this machine. That is what makes this the right answer rather than an
     // assumption: a remote transport arrives with its own way of saying who authenticated, and there is no way to
@@ -166,10 +349,68 @@ async fn converse(mut connection: Connection, asking: mpsc::Sender<Asked>) {
             }
         };
 
+        let reservation = if matches!(request, Request::Start { .. } | Request::Resume { .. })
+            && conversation.greeted()
+            && crate::scope::allowed(conversation.caller(), &request, &composed.granted).is_ok()
+        {
+            let session = SessionId::now();
+            let (answered, hearing) = oneshot::channel();
+            if reserving
+                .send(ReservationAsked::Reserve { session, answered })
+                .is_err()
+            {
+                return;
+            }
+            let reserved = match hearing.await {
+                Ok(Ok(reserved)) => reserved,
+                Ok(Err(error)) => {
+                    if write(&mut connection, &refuse(&error.to_string()))
+                        .await
+                        .is_err()
+                    {
+                        return;
+                    }
+                    continue;
+                }
+                Err(_) => return,
+            };
+            let ReservedOpen {
+                reservation,
+                displaced,
+            } = reserved;
+            let guard = ReservationGuard {
+                reservation: Some(reservation),
+                cancelling: reserving.clone(),
+            };
+            if let Some(displaced) = displaced {
+                drop(displaced.close(CloseMode::Graceful { grace_ms: 0 }).await);
+            }
+            Some(guard)
+        } else {
+            None
+        };
+
+        let discovered = if needs_driver(&request) {
+            let _single_writer = discovering.lock().await;
+            discover(&conversation, &composed, &request).await
+        } else {
+            Discovered::None
+        };
+        let prepared = complete_prepare_for(
+            &request,
+            discovered,
+            reservation
+                .as_ref()
+                .and_then(|guard| guard.reservation)
+                .map(OpenReservation::session),
+        )
+        .await;
         let (answered, hearing) = oneshot::channel();
         let ask = Asked {
             conversation,
             request,
+            prepared,
+            reservation,
             answered,
         };
         if asking.send(ask).await.is_err() {
@@ -205,17 +446,72 @@ async fn converse(mut connection: Connection, asking: mpsc::Sender<Asked>) {
 
             // The wait the owner task handed over. Done here so that closing one session does not stop every other
             // session's output, and answered truthfully when it is over rather than optimistically before.
-            Reply::Stopping { agent, how } => {
+            Reply::Stopping {
+                agent,
+                how,
+                reservation,
+            } => {
+                let releasing = ReservationGuard {
+                    reservation: Some(reservation),
+                    cancelling: reserving.clone(),
+                };
                 let outcome = match agent.close(how).await {
                     Ok(()) => Response::Done,
                     Err(error) => refuse(&error.to_string()),
                 };
+                drop(releasing);
                 if write(&mut connection, &outcome).await.is_err() {
+                    return;
+                }
+            }
+
+            reply @ Reply::Cleaning { .. } => {
+                let response = finish_connection_cleanup(reply, &reserving).await;
+                if write(&mut connection, &response).await.is_err() {
                     return;
                 }
             }
         }
     }
+}
+
+async fn finish_connection_cleanup(
+    reply: Reply,
+    cancelling: &mpsc::UnboundedSender<ReservationAsked>,
+) -> Response {
+    let Reply::Cleaning {
+        mut response,
+        agents,
+    } = reply
+    else {
+        return refuse("connection cleanup received a reply with no process to stop");
+    };
+    let mut failures = Vec::new();
+    for Cleanup {
+        agent,
+        how,
+        reservation,
+    } in agents
+    {
+        let releasing = reservation.map(|reservation| ReservationGuard {
+            reservation: Some(reservation),
+            cancelling: cancelling.clone(),
+        });
+        if let Err(error) = agent.close(how).await {
+            failures.push(error.to_string());
+        }
+        drop(releasing);
+    }
+    if !failures.is_empty()
+        && let Response::Failed(error) = &response
+    {
+        response = refuse(&format!(
+            "{}; cleanup also failed: {}",
+            error.message,
+            failures.join("; ")
+        ));
+    }
+    response
 }
 
 /// Relay a session's events to whoever is watching, until one end stops.
@@ -260,7 +556,43 @@ async fn write(connection: &mut Connection, response: &Response) -> Result<(), T
 
 #[cfg(test)]
 mod tests {
+    use async_trait::async_trait;
+    use runtrol_provider::{Agent, AgentCommand, Produced, ProviderError};
+
     use super::*;
+
+    struct PendingClose {
+        session: SessionId,
+        started: oneshot::Sender<()>,
+        release: oneshot::Receiver<()>,
+        panic_after_release: bool,
+    }
+
+    #[async_trait]
+    impl Agent for PendingClose {
+        fn session(&self) -> SessionId {
+            self.session
+        }
+
+        fn native(&self) -> Option<&str> {
+            None
+        }
+
+        async fn send(&mut self, _command: AgentCommand) -> Result<(), ProviderError> {
+            Ok(())
+        }
+
+        async fn next(&mut self) -> Option<Result<Produced, ProviderError>> {
+            core::future::pending().await
+        }
+
+        async fn close(self: Box<Self>, _how: CloseMode) -> Result<(), ProviderError> {
+            let _sent = self.started.send(());
+            drop(self.release.await);
+            assert!(!self.panic_after_release, "scripted close panic");
+            Ok(())
+        }
+    }
 
     /// A daemon serving at its own endpoint, and the address to reach it at.
     ///
@@ -455,6 +787,176 @@ mod tests {
             Response::Sessions(_)
         ));
         running.stop();
+    }
+
+    #[test]
+    fn abandoning_connection_preparation_requests_reservation_cancellation() {
+        let mut sessions = SessionManager::new();
+        let reserved = sessions
+            .reserve_open(SessionId::now())
+            .expect("one bounded slot");
+        let (cancelling, mut cancelled) = mpsc::unbounded_channel();
+        drop(ReservationGuard {
+            reservation: Some(reserved.reservation),
+            cancelling,
+        });
+
+        let ReservationAsked::Cancel(reservation) = cancelled
+            .try_recv()
+            .expect("dropping preparation reports its reservation")
+        else {
+            panic!("a cancellation message was expected");
+        };
+        sessions.cancel_open(reservation);
+        for _ in 0..runtrol_core::session::MAX_HOT {
+            sessions
+                .reserve_open(SessionId::now())
+                .expect("the abandoned slot was returned");
+        }
+    }
+
+    #[tokio::test]
+    async fn an_unanswered_reservation_stays_occupied_while_displaced_cleanup_is_pending() {
+        let mut sessions = SessionManager::new();
+        let mut held = Vec::new();
+        for _ in 0..runtrol_core::session::MAX_HOT {
+            held.push(
+                sessions
+                    .reserve_open(SessionId::now())
+                    .expect("fills one bounded slot"),
+            );
+        }
+        let abandoned = held.pop().expect("one reserved slot");
+        let (started, closing) = oneshot::channel();
+        let (release, released) = oneshot::channel();
+        let abandoned = ReservedOpen {
+            reservation: abandoned.reservation,
+            displaced: Some(Box::new(PendingClose {
+                session: SessionId::now(),
+                started,
+                release: released,
+                panic_after_release: false,
+            })),
+        };
+        let (cancelling, mut cancelled) = mpsc::unbounded_channel();
+        let mut tasks = JoinSet::new();
+
+        abandon_reserved(&mut sessions, &mut tasks, &cancelling, abandoned);
+        closing.await.expect("cleanup started");
+        assert!(matches!(
+            sessions.reserve_open(SessionId::now()),
+            Err(SessionError::OpeningCapacityReserved)
+        ));
+
+        release.send(()).expect("cleanup may finish");
+        tasks
+            .join_next()
+            .await
+            .expect("cleanup task joined")
+            .expect("cleanup task completed");
+        let ReservationAsked::Cancel(reservation) =
+            cancelled.recv().await.expect("cleanup releases its slot")
+        else {
+            panic!("a cancellation message was expected");
+        };
+        sessions.cancel_open(reservation);
+        assert!(sessions.reserve_open(SessionId::now()).is_ok());
+    }
+
+    async fn dropped_answer_holds_slot_until_cleanup(
+        make_reply: impl FnOnce(Box<dyn Agent>, OpenReservation) -> Reply,
+        panic_after_release: bool,
+    ) {
+        let mut sessions = SessionManager::new();
+        let mut held = Vec::new();
+        for _ in 0..runtrol_core::session::MAX_HOT {
+            held.push(
+                sessions
+                    .reserve_open(SessionId::now())
+                    .expect("fills one bounded slot"),
+            );
+        }
+        let reserved = held.pop().expect("one reserved slot").reservation;
+        let (started, closing) = oneshot::channel();
+        let (release, released) = oneshot::channel();
+        let agent: Box<dyn Agent> = Box::new(PendingClose {
+            session: reserved.session(),
+            started,
+            release: released,
+            panic_after_release,
+        });
+        let answer = Answered {
+            conversation: Conversation::at_the_machine(),
+            reply: make_reply(agent, reserved),
+        };
+        let (answered, hearing) = oneshot::channel();
+        drop(hearing);
+        let (cancelling, mut cancelled) = mpsc::unbounded_channel();
+        let mut tasks = JoinSet::new();
+
+        deliver_answer(answered, answer, &mut tasks, &cancelling);
+        closing.await.expect("abandoned reply cleanup started");
+        assert!(matches!(
+            sessions.reserve_open(SessionId::now()),
+            Err(SessionError::OpeningCapacityReserved)
+        ));
+
+        release.send(()).expect("cleanup may finish");
+        let joined = tasks.join_next().await.expect("cleanup task joined");
+        if panic_after_release {
+            assert!(joined.is_err(), "the scripted cleanup had to panic");
+        } else {
+            joined.expect("cleanup task completed");
+        }
+        let ReservationAsked::Cancel(reservation) =
+            cancelled.recv().await.expect("cleanup releases its slot")
+        else {
+            panic!("a cancellation message was expected");
+        };
+        sessions.cancel_open(reservation);
+        assert!(sessions.reserve_open(SessionId::now()).is_ok());
+    }
+
+    #[tokio::test]
+    async fn a_dropped_stopping_answer_keeps_its_slot_until_cleanup() {
+        dropped_answer_holds_slot_until_cleanup(
+            |agent, reservation| Reply::Stopping {
+                agent,
+                how: CloseMode::Kill,
+                reservation,
+            },
+            false,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn a_dropped_cleaning_answer_keeps_its_slot_until_cleanup() {
+        dropped_answer_holds_slot_until_cleanup(
+            |agent, reservation| Reply::Cleaning {
+                response: Response::Done,
+                agents: vec![Cleanup {
+                    agent,
+                    how: CloseMode::Kill,
+                    reservation: Some(reservation),
+                }],
+            },
+            false,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn a_panicking_abandoned_cleanup_still_releases_its_slot() {
+        dropped_answer_holds_slot_until_cleanup(
+            |agent, reservation| Reply::Stopping {
+                agent,
+                how: CloseMode::Kill,
+                reservation,
+            },
+            true,
+        )
+        .await;
     }
 
     #[test]

@@ -25,13 +25,17 @@ pub use events::{
     SessionView, SubscriberId, Subscription,
 };
 pub use home::{Endpoint, HomeError, Layout, RuntrolHome};
-pub use probe::{BinFacts, Flags, ProbeCache, ProbeError, locate, probe};
+pub use probe::{
+    BinFacts, Flags, LeadingArgFacts, LeadingFileFacts, ProbeCache, ProbeError, locate, probe,
+    probe_program,
+};
 pub use registry::{
     KindEntry, KindStatus, KindTable, Origin, Provider, ProviderRegistry, RegistryError,
 };
 pub use session::{
-    CloseReason, FailureCode, Identity, Lifecycle, LiveSession, Observed, Pumped, SessionError,
-    SessionManager, SessionState, Tier,
+    AttachError, AttachedSession, CloseReason, ClosingSession, FailureCode, Identity, Lifecycle,
+    LiveSession, Observed, OpenReservation, Pumped, ReservedOpen, SessionError, SessionManager,
+    SessionState, Tier,
 };
 
 // These edges are declared in this crate's manifest and enforced by

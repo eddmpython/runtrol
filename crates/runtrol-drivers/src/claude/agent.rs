@@ -33,7 +33,7 @@
 //! wrong on the first try. Searching cannot be wrong in that way.
 
 use core::time::Duration;
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use async_trait::async_trait;
 use runtrol_childproc::{Containment, Program};
@@ -103,8 +103,10 @@ impl ClaudeAgent {
         program: &Program,
         intent: &OpenIntent,
         contained_by: &Containment,
+        available_flags: &BTreeSet<Box<str>>,
+        unavailable_flags: &BTreeMap<Box<str>, &'static str>,
     ) -> Result<Self, ProviderError> {
-        let args = argv(provider, intent)?;
+        let args = argv(provider, intent, available_flags, unavailable_flags)?;
         runtrol_childproc::check_all(&args).map_err(|error| ProviderError::Unsupported {
             provider,
             what: error.to_string(),
@@ -414,7 +416,12 @@ impl ClaudeAgent {
 /// [`ProviderError::Unsupported`] for a way of opening a session this driver does not know. The contract's
 /// dispositions are open ended on purpose, so that adding one does not break a driver written elsewhere; the cost
 /// is that each driver has to say which ones it serves rather than quietly treating a new one as something else.
-fn argv(provider: ProviderId, intent: &OpenIntent) -> Result<Vec<String>, ProviderError> {
+fn argv(
+    provider: ProviderId,
+    intent: &OpenIntent,
+    available_flags: &BTreeSet<Box<str>>,
+    unavailable_flags: &BTreeMap<Box<str>, &'static str>,
+) -> Result<Vec<String>, ProviderError> {
     let mut args: Vec<String> = vec![
         "--print".to_owned(),
         "--input-format".to_owned(),
@@ -423,11 +430,13 @@ fn argv(provider: ProviderId, intent: &OpenIntent) -> Result<Vec<String>, Provid
         "stream-json".to_owned(),
         // Measured: without this the CLI refuses to stream structured output at all.
         "--verbose".to_owned(),
-        "--include-partial-messages".to_owned(),
         // Measured on 2.1.220 by asking the parser: hidden from help, but this is the stdio approval channel.
         "--permission-prompt-tool".to_owned(),
         "stdio".to_owned(),
     ];
+    if available_flags.contains("--include-partial-messages") {
+        args.push("--include-partial-messages".to_owned());
+    }
 
     match &intent.disposition {
         // runtrol issues the identifier. Measured: it comes back unchanged and becomes the name the CLI's own
@@ -453,14 +462,38 @@ fn argv(provider: ProviderId, intent: &OpenIntent) -> Result<Vec<String>, Provid
     }
 
     if let Some(model) = &intent.model {
-        args.push("--model".to_owned());
-        args.push(model.to_string());
+        require_optional(provider, "--model", available_flags, unavailable_flags)?;
+        args.extend(["--model".to_owned(), model.to_string()]);
     }
     if let Some(permission) = &intent.permission {
-        args.push("--permission-mode".to_owned());
-        args.push(permission.to_string());
+        require_optional(
+            provider,
+            "--permission-mode",
+            available_flags,
+            unavailable_flags,
+        )?;
+        args.extend(["--permission-mode".to_owned(), permission.to_string()]);
     }
     Ok(args)
+}
+
+fn require_optional(
+    provider: ProviderId,
+    flag: &'static str,
+    available_flags: &BTreeSet<Box<str>>,
+    unavailable_flags: &BTreeMap<Box<str>, &'static str>,
+) -> Result<(), ProviderError> {
+    if available_flags.contains(flag) {
+        return Ok(());
+    }
+    Err(ProviderError::Unsupported {
+        provider,
+        what: format!("the requested session option needs {flag}"),
+        why: unavailable_flags
+            .get(flag)
+            .copied()
+            .unwrap_or("the installed CLI parser did not confirm that flag"),
+    })
 }
 
 /// One prompt, as the frame this CLI reads.
@@ -767,6 +800,13 @@ mod tests {
         ProviderId::parse("claude").expect("the test's own id must be valid")
     }
 
+    fn all_flags() -> BTreeSet<Box<str>> {
+        crate::claude::FLAGS
+            .iter()
+            .map(|flag| Box::<str>::from(flag.flag))
+            .collect()
+    }
+
     fn an_intent(disposition: Disposition) -> OpenIntent {
         OpenIntent {
             session: SessionId::now(),
@@ -783,7 +823,8 @@ mod tests {
         // Measured: the CLI takes it and hands it back, so runtrol's name and the provider's are the same value.
         // That equality is what makes deleting everything runtrol stores lose nothing.
         let intent = an_intent(Disposition::Fresh);
-        let args = argv(a_provider(), &intent).expect("a fresh session is served");
+        let args = argv(a_provider(), &intent, &all_flags(), &BTreeMap::new())
+            .expect("a fresh session is served");
         let at = args
             .iter()
             .position(|arg| arg == "--session-id")
@@ -799,6 +840,8 @@ mod tests {
             &an_intent(Disposition::Resume {
                 native: "some-provider-name".into(),
             }),
+            &all_flags(),
+            &BTreeMap::new(),
         )
         .expect("a resume is served");
         let at = args
@@ -819,7 +862,13 @@ mod tests {
     fn the_flags_the_cli_refuses_to_stream_without_are_always_there() {
         // Measured: without the print flag it runs its own interface, and without the verbose flag it refuses to
         // stream structured output at all. Both are on the bound list as required.
-        let args = argv(a_provider(), &an_intent(Disposition::Fresh)).expect("served");
+        let args = argv(
+            a_provider(),
+            &an_intent(Disposition::Fresh),
+            &all_flags(),
+            &BTreeMap::new(),
+        )
+        .expect("served");
         for required in crate::claude::bound::FLAGS
             .iter()
             .filter(|flag| flag.required)
@@ -839,9 +888,46 @@ mod tests {
     #[test]
     fn no_model_and_no_permission_means_nothing_is_passed() {
         // The operator's own configuration decides. Passing a default would override a choice they already made.
-        let args = argv(a_provider(), &an_intent(Disposition::Fresh)).expect("served");
+        let args = argv(
+            a_provider(),
+            &an_intent(Disposition::Fresh),
+            &all_flags(),
+            &BTreeMap::new(),
+        )
+        .expect("served");
         assert!(!args.iter().any(|arg| arg == "--model"));
         assert!(!args.iter().any(|arg| arg == "--permission-mode"));
+    }
+
+    #[test]
+    fn an_explicit_choice_is_refused_when_its_optional_flag_was_not_confirmed() {
+        let mut flags = all_flags();
+        flags.remove("--include-partial-messages");
+        flags.remove("--model");
+        flags.remove("--permission-mode");
+        let unavailable = [
+            (
+                Box::<str>::from("--model"),
+                "the requested model cannot be selected",
+            ),
+            (
+                Box::<str>::from("--permission-mode"),
+                "the requested permission posture cannot be selected",
+            ),
+        ]
+        .into_iter()
+        .collect();
+        for (model, permission, expected_flag) in [
+            (Some("operator-choice"), None, "--model"),
+            (None, Some("operator-permission"), "--permission-mode"),
+        ] {
+            let mut intent = an_intent(Disposition::Fresh);
+            intent.model = model.map(Into::into);
+            intent.permission = permission.map(Into::into);
+            let error = argv(a_provider(), &intent, &flags, &unavailable)
+                .expect_err("an explicit choice must not be silently dropped");
+            assert!(error.to_string().contains(expected_flag), "{error}");
+        }
     }
 
     #[test]
@@ -851,7 +937,7 @@ mod tests {
         let mut intent = an_intent(Disposition::Fresh);
         intent.model = Some("haiku".into());
         intent.permission = Some("plan".into());
-        let args = argv(a_provider(), &intent).expect("served");
+        let args = argv(a_provider(), &intent, &all_flags(), &BTreeMap::new()).expect("served");
         runtrol_childproc::check_all(&args).expect("every argument is passable");
     }
 

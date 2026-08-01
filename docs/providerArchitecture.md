@@ -25,7 +25,7 @@ A manifest may declare only facts needed to reach the process:
 - provider-owned credential directories used by the workspace wall
 - an update channel hint
 
-Capabilities, model catalogues, account state, and supported flags are discovered from the installed CLI at runtime. Probe policy and manifest linting belong to provider discovery, not to the adapter boundary.
+Capabilities, model catalogues, account state, and supported flags are discovered from the installed CLI at runtime. Probe policy, caching, model honesty, and loader-time manifest linting are defined in [provider discovery](providerDiscovery.md), not in the adapter boundary.
 
 ## Driver registry
 

@@ -43,7 +43,7 @@
 | `crossPlatformMatrix` | 같은 종단 스모크가 Windows·macOS·Linux 러너에서 전부 green. **Windows 잡은 WSL 없이 돈다** |
 | `cliUpdateRehearsal` | 구버전 -> 업데이트 -> 세션 정상 -> 고의로 깨진 버전 -> 자동 롤백 |
 | `appUpdateRehearsal` | 런처가 GitHub Releases 에서 서명된 업데이트를 받아 설치하고, 서명이 안 맞으면 거부한다 |
-| `modelDetectionSmoke` | 실물 CLI 에서 모델 목록을 얻는다. **소스에 모델 이름 리터럴이 없다**는 정적 검사 포함 |
+| `modelDetectionSmoke` | 자격증명을 제거한 hosted CI 에 최신 실물 CLI 를 설치하고 모든 built-in 실행을 강제한다. Codex 는 live `model/list`, Claude 는 격리한 provider-owned option cache sentinel 을 포함한 정직한 partial catalogue 를 반환해야 한다. 관측한 runtime model identifier 가 production source 에 리터럴로 있으면 red 다. 특정 계정의 사용 가능 모델은 주장하지 않는다 |
 | `sessionOverlapGuard` | cwd 겹침이 목록에 구분돼 보이고, 같은 폴더에 두 번째 세션을 시작하면 경고가 선행하며, provider 가 내주는 워크트리 시작 옵션이 그대로 노출된다. **격리를 runtrol 이 직접 구현하는 것은 얇음 위반이라 하지 않는다** (겹침을 보이게 하고 provider 의 수단을 노출하는 것까지가 경계) |
 | `crossConsultSmoke` | 토글 켬 -> 두 CLI 가 서로를 자기 공식 설정 명령 (MCP 등록) 으로 배선 -> 한 CLI 가 턴 중에 다른 CLI 의 의견을 실제로 받아옴 -> 토글 끔 -> 설정 원상복구. **본문은 runtrol 을 지나지 않고, 설정 파일을 직접 쓰지 않는다** (배선은 CLI 공식 명령만. `configReadOnly` 바닥 게이트와 양립하는 것이 곧 설계다) |
 | `uninstallLeavesNoTrace` | 공급자 소유 marker 를 `RUNTROL_HOME` 밖에 둔 채 한 턴을 끝내고 데몬 종료와 home 전체 삭제 뒤 runtrol 이 없는 상태에서 공급자 실행 파일로 같은 원생 세션을 직접 재개한다. 이어서 선택적 재설치와 manifest 재선언 뒤 같은 원생 세션을 load 해 두 번째 턴을 끝내며, Windows, macOS, Linux 에서 돈다. marker 는 transcript 가 아니라 native id 와 완료 횟수만 가진 fixture 상태다 |
@@ -85,19 +85,19 @@
 
 ## 게이트가 어디서 도는가 (실행 환경의 정직성)
 
-실물 CLI 게이트에는 **hosted CI 가 풀 수 없는 제약**이 있다. 두 CLI 의 구독 인증 (OAuth) 은 사람 로그인이 필요하고, 그 세션 자격을 CI 비밀로 실어 나르는 것은 하지 않는다. 실물 턴은 돈과 rate limit 도 쓴다 (한 턴 $0.03 수준 실측). 이 제약을 숨기지 않고 실행 층을 가른다.
+실물 CLI 게이트의 일부에는 **hosted CI 가 풀 수 없는 제약**이 있다. 계정 기반 턴의 구독 인증은 사람 로그인이 필요하고, 그 세션 자격을 CI 비밀로 실어 나르는 것은 하지 않는다. 반면 CLI 자기기술, credential-free model discovery, loopback model 여정은 hosted CI 에서 돈다. 이 경계를 숨기지 않고 실행 층을 가른다.
 
 | 층 | 어디서 | 언제 | 무엇 |
 |---|---|---|---|
-| contract | hosted CI (GitHub Actions) | PR 마다 | 정적 검사 · mock 스모크 |
-| smoke (토큰 0) | **운영자 PC 의 preflight** | 커밋 전 매번 | 실물 CLI. manual 층의 근거이며 자동화 근거로는 세지 않는다 |
+| contract | hosted CI (GitHub Actions) | PR 마다 | 정적 검사 · mock 스모크 · 고정 판본 credential-free 실물 CLI |
+| smoke (토큰 0) | hosted CI + 운영자 PC preflight | PR, schedule, 커밋 전 | parser/schema probe, model discovery, loopback provider wire. 계정 사용 가능성은 로컬에서만 관측 |
 | smoke (턴 소모) | self-hosted runner | 스케줄 (미구성) | 실물 턴이 필요한 것 |
 | bench | self-hosted runner | 스케줄 (미구성) | ratchet 실측 |
 | operator | 사람 손 | 수시 | 실기기. 점수 제외 |
 
-**실물 CLI 게이트가 hosted CI 에서 못 도는 이유는 인증이다.** 두 CLI 모두 사람의 구독 로그인으로 인증하고, 그 자격을 CI 비밀로 실어 나르는 것은 runtrol 이 설계 전체를 걸고 거부해온 일이다. 그래서 그 로그인이 사는 곳, 즉 운영자 PC 에서 돈다 (`gateCoverage.py` 의 `LOCAL_ONLY` 에 이유와 함께 선언). 로컬 실행은 제품 진단과 manual 층의 근거지만 자동화 점수의 근거는 아니다.
+**계정 기반 실물 턴이 hosted CI 에서 못 도는 이유는 인증이다.** 그 자격을 CI 비밀로 실어 나르는 것은 runtrol 이 설계 전체를 걸고 거부해온 일이다. 하지만 설치된 실행 파일이 스스로 말하는 version, parser, schema, model surface 와 loopback endpoint 에 대한 provider wire 는 자격증명 없이 자동 검증한다. 로컬 preflight 는 계정 상태까지 관측하지만 그 추가 관측만으로 hosted 점수를 올리지 않는다.
 
-**토큰을 쓰는 게이트와 안 쓰는 게이트를 가른다.** 프롬프트를 보내지 않는 실물 게이트는 돈도 rate limit 도 쓰지 않으므로 야간이 아니라 커밋 전 매번 돈다 (`sessionLifecycleSmoke` 가 그것이다). 실물 턴이 필요한 게이트는 그럴 수 없고, **그 층의 self-hosted 러너는 아직 없다.** 없는 것을 있는 것처럼 적지 않는다: 그 층에 기대는 축은 오늘 그만큼 검증되지 않았다.
+**토큰을 쓰는 게이트와 안 쓰는 게이트를 가른다.** 프롬프트를 보내지 않는 실물 게이트와 local deterministic endpoint 여정은 돈도 rate limit 도 쓰지 않으므로 hosted CI 에서 돈다. 계정 model 의 실제 응답이 필요한 게이트는 그럴 수 없고, **그 층의 self-hosted 러너는 아직 없다.** 없는 것을 있는 것처럼 적지 않는다: 그 층에 기대는 축은 오늘 그만큼 검증되지 않았다.
 
 ### 활성 CI 판정
 

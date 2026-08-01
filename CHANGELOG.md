@@ -22,6 +22,13 @@ its measured architecture, and the gate harness.
 - A hosted-safe real Claude Code approval journey. It uses a local deterministic model endpoint,
   denies the real hidden stdio tool request, requires the provider's `end_turn`, and proves the
   denied file and provider child process are absent afterward.
+- Lazy production probes that hand the exact inspected program to its driver, include interpreted entry
+  files in cache identity, bound captured output before allocation, run outside the session event owner,
+  refuse missing required flags, and never silently drop an explicit optional choice. Model calls and process
+  opens also stay outside the event owner, while cancellation-safe leases enforce the real child-process bound.
+- Credential-free hosted model discovery. Codex enumerates its live protocol catalogue, while Claude
+  exposes stable aliases plus an honest partial catalogue from provider-owned read-only state. Hosted CI
+  proves that file-backed path through an isolated sentinel and scans all production source for leaks.
 
 - North Star with a scored checklist. Every axis began at 0. Manual evidence can establish
   the manual tier, while every higher score requires its evidence gate to run in hosted CI.

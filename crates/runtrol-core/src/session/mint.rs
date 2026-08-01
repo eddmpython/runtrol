@@ -41,17 +41,23 @@ pub struct Identity {
 }
 
 impl Identity {
+    /// Use a session name that was minted before a provider process was opened.
+    #[must_use]
+    pub const fn assigned(provider: ProviderId, session: SessionId) -> Self {
+        Self {
+            provider,
+            session,
+            native: None,
+        }
+    }
+
     /// Mint a name for a session that does not exist yet.
     ///
     /// Time-ordered, so the raw bytes sort by when the session was made. That is what lets the session list
     /// come back in the order a person expects from a single range scan, with no index and no sorting.
     #[must_use]
     pub fn mint(provider: ProviderId) -> Self {
-        Self {
-            provider,
-            session: SessionId::now(),
-            native: None,
-        }
+        Self::assigned(provider, SessionId::now())
     }
 
     /// Take on a session runtrol has read about from a provider's own store.

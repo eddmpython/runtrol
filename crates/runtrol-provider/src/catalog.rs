@@ -33,6 +33,15 @@ pub enum ModelCatalog {
         /// Why these are aliases rather than an enumerated catalogue.
         why: Box<str>,
     },
+    /// Stable aliases plus exact options found in provider-owned state, without claiming a complete catalogue.
+    Partial {
+        /// Stable tokens accepted by the CLI.
+        aliases: Vec<Box<str>>,
+        /// Exact provider-recorded options, in provider order.
+        models: Vec<ModelChoice>,
+        /// Why this is not a complete account catalogue.
+        why: Box<str>,
+    },
     /// The driver cannot truthfully name any choices.
     Unknown {
         /// Why discovery is unavailable.
@@ -86,6 +95,11 @@ mod tests {
                 aliases: vec!["fast".into()],
                 why: "the CLI exposes aliases only".into(),
             },
+            ModelCatalog::Partial {
+                aliases: vec!["fast".into()],
+                models: Vec::new(),
+                why: "the CLI exposes only a partial catalogue".into(),
+            },
             ModelCatalog::unknown("the CLI exposes no discovery surface"),
         ];
 
@@ -93,7 +107,10 @@ mod tests {
             .iter()
             .map(|answer| serde_json::to_string(answer).expect("serializable"))
             .collect::<Vec<_>>();
-        for (answer, kind) in encoded.iter().zip(["known", "aliases", "unknown"]) {
+        for (answer, kind) in encoded
+            .iter()
+            .zip(["known", "aliases", "partial", "unknown"])
+        {
             assert!(answer.contains(&format!(r#""kind":"{kind}""#)), "{answer}");
         }
     }

@@ -24,7 +24,7 @@
 
 ## 배선 방법 (발견 사다리 적용)
 
-1. **명령 표면 발견.** `claude mcp --help` 류를 probe 해 등록·해제 명령의 존재와 문법을 런타임에 안다. 하드코딩 금지, version-keyed 캐시, drift 는 `agentSurfaceDrift` 계열로 감지.
+1. **명령 표면 발견.** `claude mcp --help` 류를 probe 해 등록·해제 명령의 존재와 문법을 런타임에 안다. 하드코딩 금지, [binary-identity cache](../../docs/providerDiscovery.md#probe-cache), drift 는 `agentSurfaceDrift` 계열로 감지.
 2. **공식 명령이 없는 provider 는 배선하지 않는다.** 파일 직접 쓰기로 우회하지 않는다 (정공법. `configReadOnly` 가 벽이다). 그 provider 의 토글은 "지원 안 됨 + 이유" 로 보인다.
 3. **등록 방향은 대칭이 기본.** A 가 B 를 부르고 B 가 A 를 부른다. 한쪽만 원하면 방향 선택.
 

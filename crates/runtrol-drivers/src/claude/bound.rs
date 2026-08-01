@@ -124,15 +124,7 @@ pub const CONTROL: &[BoundFrame] = &[
 ///
 /// Separate from the frame list because they drift separately and are confirmed differently: a frame is observed
 /// in a stream, and a flag is confirmed by asking the CLI's own argument parser.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub struct BoundFlag {
-    /// The flag.
-    pub flag: &'static str,
-    /// Whether a session can start at all without it.
-    pub required: bool,
-    /// What is lost when it is absent, for the notice an operator reads.
-    pub without_it: &'static str,
-}
+pub type BoundFlag = crate::kinds::DriverFlag;
 
 /// Every flag runtrol depends on.
 pub const FLAGS: &[BoundFlag] = &[
@@ -270,8 +262,8 @@ mod tests {
 
     #[test]
     fn every_flag_that_is_not_required_says_what_degrades() {
-        // A missing optional flag degrades a feature and announces it. That announcement is this text, so an
-        // optional flag without it would degrade silently.
+        // A missing optional flag degrades a feature. The driver uses this text when an explicit choice depends on
+        // that flag, so an option without it could be dropped without an actionable refusal.
         for flag in FLAGS.iter().filter(|flag| !flag.required) {
             assert!(
                 flag.without_it.len() > 20,

@@ -18,7 +18,7 @@ At the desk it is an app; away from the desk it is a phone. The same session, th
 However many providers there are, there is one list. Whatever the operating system, the method is the same.
 The conversation travels only between the user's PC and the provider. runtrol does not get in between.**
 
-The current total is **27/140, average 1.9/10**. Four axes have active CI gates, and two local-only axes remain at the manual tier.
+The current total is **30/140, average 2.1/10**. Five axes have active CI gates, and one local-only axis remains at the manual tier.
 A 10 means the complete journey has been repeatedly verified in a real environment.
 **A score above the manual tier is backed by a gate that actually runs in CI. A path that is not executed automatically cannot pass 3, no matter how implemented it looks.**
 
@@ -34,7 +34,7 @@ A 10 means the complete journey has been repeatedly verified in a real environme
 | Cost of running | 0/10 | Not built. | Leave it on all day and the user never notices it is there. Not in the battery, not in the fan, not in the task manager. |
 | Same method everywhere | 0/10 | Not built. | Install and operation are the same on Windows, macOS, and Linux. A Windows user never needs to know what WSL or tmux is. |
 | Current without asking | 0/10 | Not built. | The app and the installed agent CLIs stay current on their own, and if an update breaks a session it has already rolled back before the user touches anything. There is no moment where the user thinks about versions. |
-| Automatic model detection | 3/10 | `modelDetectionSmoke` checks installed real CLIs and account-specific models in the local preflight, but it does not run automatically in hosted CI. It therefore cannot pass the manual tier. | The models this account can actually use appear in the list as they are, and a new model appears without runtrol being changed. |
+| Automatic model detection | 6/10 | Hosted `modelDetectionSmoke --require-all` installs current real CLIs without credentials, checks Codex `model/list` and a Claude partial catalogue containing an isolated provider-owned option-cache sentinel, and rejects observed identifiers hardcoded in production source. It does not prove availability for a particular account, so one live gate kind caps the score at 6. | The models this account can actually use appear in the list as they are, and a new model appears without runtrol being changed. |
 | Sessions do not trample each other | 0/10 | Not built. | Which session is touching which folder is always distinguishable, starting a second session into the same folder warns before it happens, and when a provider offers isolation (worktrees) it is available right on the start screen. |
 | Agents consult each other | 0/10 | Not built. | One toggle registers two CLIs with each other over their official surface (MCP), so one agent asks another for an opinion mid-turn and gets it back. The wiring is made only through each CLI's own official commands (no direct config-file writes), conversation bodies still never pass through runtrol, and the user never needs to learn what MCP is. |
 | Freedom to leave | 5/10 | `uninstallLeavesNoTrace` completes a turn with provider state outside the runtrol home, removes the entire home, then loads the same native session under a new daemon and completes a second turn. The counterpart is an ACP fixture, so this is the mock tier. | Delete runtrol and the sessions and history remain each CLI's own, continuing the original way. There is no data runtrol holds hostage. |

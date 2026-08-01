@@ -121,9 +121,9 @@ gate = [
 
 [[axis]]
 key = "automaticModelDetection"
-# The real-CLI smoke runs only on the operator machine. It supports only the manual tier until an
-# active CI job can run without putting the subscription credential in a CI secret.
-tier = "manual"
+# Current real CLIs run without credentials in hosted CI. This proves one live discovery kind, while
+# account-backed availability remains local evidence and no separate static contract is registered.
+tier = "realOneKind"
 additives = []
 name = { ko = "모델 자동 인식", en = "Automatic model detection", zh = "自动识别模型", ja = "モデル自動認識" }
 gate = [{ name = "modelDetectionSmoke", kind = "smoke" }]

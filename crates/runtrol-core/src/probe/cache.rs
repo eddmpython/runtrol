@@ -25,7 +25,9 @@
 //! the new one. Editing in place would leave a third possibility.
 
 use std::collections::BTreeMap;
+use std::path::Path;
 
+use runtrol_childproc::Program;
 use runtrol_provider::{AbsPath, ProviderId, WallMs};
 use serde::{Deserialize, Serialize};
 
@@ -35,7 +37,27 @@ use crate::probe::{Flags, ProbeError};
 ///
 /// A file declaring anything else is not read. There is no migration, because there is nothing here worth
 /// migrating: the answer can always be asked for again.
-pub const CACHE_SCHEMA: u32 = 1;
+pub const CACHE_SCHEMA: u32 = 3;
+
+/// One leading argument that helps decide what code a resolved program actually runs.
+#[derive(Clone, PartialEq, Eq, Debug, Deserialize, Serialize)]
+pub struct LeadingArgFacts {
+    /// The argument exactly as it will be passed.
+    pub value: String,
+    /// The identity of the file it names, when it is an absolute path to a regular file.
+    pub file: Option<LeadingFileFacts>,
+}
+
+/// The filesystem identity of a file named by a leading program argument.
+#[derive(Clone, PartialEq, Eq, Debug, Deserialize, Serialize)]
+pub struct LeadingFileFacts {
+    /// The canonical file path.
+    pub path: AbsPath,
+    /// Its size in bytes.
+    pub size: u64,
+    /// Its modification time in milliseconds, when the platform reports one.
+    pub modified_ms: Option<u64>,
+}
 
 /// The identity of a program file, as the filesystem reports it.
 ///
@@ -51,6 +73,11 @@ pub struct BinFacts {
     /// `None` on a filesystem that does not keep one. An entry without it is still usable: the size alone
     /// catches most changes, and the alternative is refusing to cache anything on that filesystem.
     pub modified_ms: Option<u64>,
+    /// Arguments inserted by launcher resolution, including the identity of any file they name.
+    ///
+    /// An interpreted CLI runs the interpreter at [`Self::path`] but gets its actual implementation from a script in
+    /// this list. Both the literal arguments and those files therefore belong to the cache identity.
+    pub leading: Vec<LeadingArgFacts>,
 }
 
 impl BinFacts {
@@ -70,7 +97,34 @@ impl BinFacts {
             path: path.clone(),
             size: data.len(),
             modified_ms: millis_since_epoch(&data),
+            leading: Vec::new(),
         })
+    }
+
+    /// Ask the filesystem about every part of a resolved program that affects what it runs.
+    ///
+    /// The executable is always included. Every leading argument is retained literally, and an absolute argument
+    /// naming a regular file also carries that file's identity. This covers interpreter-plus-script launchers without
+    /// treating ordinary option values as paths.
+    ///
+    /// # Errors
+    ///
+    /// [`ProbeError::Stat`] when the executable itself cannot be examined.
+    pub fn of_program(program: &Program) -> Result<Self, ProbeError> {
+        Self::of_invocation(program.path(), program.leading())
+    }
+
+    /// Build the identity of an executable and the arguments launcher resolution put in front of probe arguments.
+    fn of_invocation(path: &AbsPath, leading: &[String]) -> Result<Self, ProbeError> {
+        let mut facts = Self::of(path)?;
+        facts.leading = leading
+            .iter()
+            .map(|value| LeadingArgFacts {
+                value: value.clone(),
+                file: leading_file(value),
+            })
+            .collect();
+        Ok(facts)
     }
 
     /// Whether this is the same file, unchanged.
@@ -78,6 +132,28 @@ impl BinFacts {
     pub fn same_as(&self, other: &Self) -> bool {
         self == other
     }
+}
+
+/// Stat one absolute regular-file argument, or leave an ordinary argument as a literal only.
+fn leading_file(value: &str) -> Option<LeadingFileFacts> {
+    let path = Path::new(value);
+    if !path.is_absolute() {
+        return None;
+    }
+    let Ok(canonical) = AbsPath::canonicalize(value) else {
+        return None;
+    };
+    let Ok(data) = std::fs::metadata(canonical.as_std_path()) else {
+        return None;
+    };
+    if !data.is_file() {
+        return None;
+    }
+    Some(LeadingFileFacts {
+        path: canonical,
+        size: data.len(),
+        modified_ms: millis_since_epoch(&data),
+    })
 }
 
 /// What one provider was found to be.
@@ -91,6 +167,11 @@ pub struct Entry {
     pub version: String,
     /// The flags its own argument parser accepts.
     pub flags: Flags,
+    /// The exact driver-owned flags that were offered to the parser.
+    ///
+    /// An empty list means the generic help surface was inspected. Keeping the question beside the answer prevents
+    /// a changed driver contract from reusing an observation about a different set of flags.
+    pub asked_flags: Vec<String>,
 }
 
 /// The cache file's contents.
@@ -331,6 +412,7 @@ mod tests {
             bin,
             version: version.to_owned(),
             flags: Flags::Observed(["--version".to_owned()].into_iter().collect()),
+            asked_flags: Vec::new(),
         }
     }
 
@@ -376,6 +458,38 @@ mod tests {
             cache.get(id("thing"), &after).is_none(),
             "and must not be served for the new one"
         );
+    }
+
+    #[test]
+    fn an_interpreted_program_invalidates_when_its_script_changes() {
+        let scratch = Scratch::make("interpreted-change");
+        let (interpreter, _) = scratch.program("interpreter.exe", "stable interpreter");
+        let (script, _) = scratch.program("entry.js", "first script");
+        let leading = vec![script.to_string()];
+        let before = BinFacts::of_invocation(&interpreter, &leading).expect("stat invocation");
+
+        let mut cache = ProbeCache::open(&scratch.cache_path());
+        cache.put(id("thing"), entry(before, "1.2.3"));
+        std::fs::write(script.as_std_path(), "a longer second script").expect("replace script");
+        let after =
+            BinFacts::of_invocation(&interpreter, &leading).expect("stat changed invocation");
+
+        assert!(
+            cache.get(id("thing"), &after).is_none(),
+            "an unchanged interpreter must not hide a changed program script"
+        );
+    }
+
+    #[test]
+    fn changed_launcher_arguments_are_part_of_program_identity() {
+        let scratch = Scratch::make("leading-change");
+        let (program, _) = scratch.program("thing.exe", "stable program");
+        let before = BinFacts::of_invocation(&program, &["--mode=first".to_owned()])
+            .expect("stat first invocation");
+        let after = BinFacts::of_invocation(&program, &["--mode=second".to_owned()])
+            .expect("stat second invocation");
+
+        assert!(!before.same_as(&after));
     }
 
     #[test]
@@ -543,6 +657,29 @@ mod tests {
         cache
             .save()
             .expect("saving again must succeed and do nothing");
+    }
+
+    #[test]
+    fn a_changed_answer_atomically_replaces_an_existing_cache_file() {
+        let scratch = Scratch::make("replace-existing");
+        let path = scratch.cache_path();
+        let (_, facts) = scratch.program("thing.exe", "a program");
+        let mut cache = ProbeCache::open(&path);
+        cache.put(id("thing"), entry(facts.clone(), "1.0.0"));
+        cache.save().expect("first answer is writable");
+
+        cache.put(id("thing"), entry(facts.clone(), "2.0.0"));
+        cache
+            .save()
+            .expect("an existing cache is atomically replaceable");
+
+        let reopened = ProbeCache::open(&path);
+        assert_eq!(
+            reopened
+                .get(id("thing"), &facts)
+                .map(|found| found.version.as_str()),
+            Some("2.0.0")
+        );
     }
 
     #[test]

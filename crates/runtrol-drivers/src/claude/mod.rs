@@ -21,6 +21,7 @@ pub mod agent;
 mod approval;
 pub mod bound;
 pub mod map;
+mod models;
 pub mod provider;
 
 pub use agent::ClaudeAgent;

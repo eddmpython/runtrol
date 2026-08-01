@@ -17,7 +17,7 @@ The security boundary and default-deny settings are documented in [SECURITY.md](
 无论有多少供应商，列表只有一个；无论操作系统是什么，方法都一样。
 对话只在用户的电脑与供应商之间往返。runtrol 不介入其中。**
 
-当前总分为 **27/140，平均 1.9/10**。四个轴由启用的 CI 门禁支撑，另有两个仅本地运行的轴停留在 manual 层。
+当前总分为 **30/140，平均 2.1/10**。五个轴由启用的 CI 门禁支撑，另有一个仅本地运行的轴停留在 manual 层。
 10 分意味着完整旅程已在真实环境中被反复验证。
 **超过 manual 层的分数必须由 CI 中真正运行的门禁支撑。不会自动执行的路径，无论看起来实现得多完整，都不能超过 3 分。**
 
@@ -33,7 +33,7 @@ The security boundary and default-deny settings are documented in [SECURITY.md](
 | 常驻成本 | 0/10 | 未实现。 | 整天开着，用户也察觉不到它的存在。电池、风扇、任务管理器里都看不见。 |
 | 到哪都一样 | 0/10 | 未实现。 | 在 Windows、macOS、Linux 上安装方式与操作方式相同。Windows 用户无需知道 WSL 或 tmux 是什么。 |
 | 自动保持最新 | 0/10 | 未实现。 | 应用与已安装的代理 CLI 会自行保持最新；若更新破坏了会话，在用户动手之前它已经回滚。用户不存在需要关心版本的时刻。 |
-| 自动识别模型 | 3/10 | `modelDetectionSmoke` 在本地 preflight 中检查已安装的真实 CLI 与账户模型，但不会在 hosted CI 中自动运行。因此它不能超过 manual 层。 | 当前账户实际可用的模型原样出现在列表中，出现新模型时无需修改 runtrol 就会显示。 |
+| 自动识别模型 | 6/10 | hosted `modelDetectionSmoke --require-all` 在无凭据环境中安装当前真实 CLI，检查 Codex 的 `model/list` 与包含隔离 provider-owned option cache sentinel 的 Claude partial catalogue，并拒绝在 production source 中硬编码观测 identifier。它不证明特定账户的实际可用性，因此一种 live gate 的上限为 6。 | 当前账户实际可用的模型原样出现在列表中，出现新模型时无需修改 runtrol 就会显示。 |
 | 会话之间不互踩 | 0/10 | 未实现。 | 哪个会话在哪个文件夹改了什么始终可以区分；第二个会话将要触碰同一文件夹时，在开始前就会收到警告；供应商提供隔离手段（worktree）时，可直接在开始界面使用。 |
 | AI 互相咨询 | 0/10 | 未实现。 | 一个开关让两个 CLI 通过各自的官方表面（MCP）相互注册，一个 AI 在回合中直接获取另一个 AI 的意见。接线只通过各 CLI 自己的官方命令完成（不直接写配置文件），对话内容依然不经过 runtrol，用户不需要知道 MCP 是什么。 |
 | 离开的自由 | 5/10 | `uninstallLeavesNoTrace` 在 runtrol home 之外保存供应商状态并完成一个回合，删除整个 home 后由新 daemon 加载同一个原生会话并完成第二个回合。对端是 ACP fixture，因此处于 mock 层。 | 删除 runtrol 后，会话与记录仍属于各个 CLI，按原来的方式继续。不存在被 runtrol 扣作人质的数据。 |

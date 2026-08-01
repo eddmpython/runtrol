@@ -47,6 +47,7 @@ export type ModelChoice = {
 export type ModelCatalog =
   | { kind: "known"; models: ModelChoice[] }
   | { kind: "aliases"; aliases: string[]; why: string }
+  | { kind: "partial"; aliases: string[]; models: ModelChoice[]; why: string }
   | { kind: "unknown"; why: string };
 
 export type ConversationItem = {

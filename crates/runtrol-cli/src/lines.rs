@@ -91,6 +91,20 @@ pub fn render(response: &Response) -> Vec<String> {
             lines
         }
 
+        Response::Models(ModelCatalog::Partial {
+            aliases,
+            models,
+            why,
+        }) => {
+            let mut lines = vec![format!("partial catalogue: {why}")];
+            lines.extend(aliases.iter().map(|alias| format!("alias  {alias}")));
+            lines.extend(models.iter().map(|model| {
+                let default = if model.is_default { "  (default)" } else { "" };
+                format!("model  {}  {}{default}", model.id, model.display_name)
+            }));
+            lines
+        }
+
         Response::Models(ModelCatalog::Unknown { why }) => {
             vec![format!("model catalogue unknown: {why}")]
         }
@@ -220,6 +234,23 @@ mod tests {
             "no discovery surface",
         )));
         assert!(unknown.first().is_some_and(|line| line.contains("unknown")));
+
+        let partial = render(&Response::Models(ModelCatalog::Partial {
+            aliases: vec!["fast".into()],
+            models: vec![ModelChoice {
+                id: "runtime-model".into(),
+                display_name: "Runtime Model".into(),
+                description: "provider-owned cache".into(),
+                is_default: false,
+                reasoning_efforts: Vec::new(),
+            }],
+            why: "partial discovery".into(),
+        }));
+        assert_eq!(partial.get(1).map(String::as_str), Some("alias  fast"));
+        assert_eq!(
+            partial.get(2).map(String::as_str),
+            Some("model  runtime-model  Runtime Model")
+        );
     }
 
     #[test]

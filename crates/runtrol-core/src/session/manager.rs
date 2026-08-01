@@ -35,7 +35,7 @@
 use core::ops::Bound;
 use core::pin::pin;
 use core::task::Poll;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use runtrol_provider::{
     AbsPath, Agent, AgentCommand, ApprovalId, CloseMode, Disposition, EventBody, Level, Notice,
@@ -47,7 +47,7 @@ use runtrol_security::{Caller, DeviceScope, GrantLedger, SecurityError};
 use crate::events::{Published, SessionHub, SessionView};
 use crate::session::mint::Identity;
 use crate::session::state::{FailureCode, Observed, SessionState};
-use crate::session::tier::{Admit, HotSession, Tier};
+use crate::session::tier::{Admit, HotSession, MAX_HOT, Tier};
 
 /// A session operation could not be carried out.
 #[derive(Debug, thiserror::Error)]
@@ -57,6 +57,33 @@ pub enum SessionError {
     #[error("no live session {session}")]
     NotLive {
         /// The session that was asked about.
+        session: SessionId,
+    },
+
+    /// A live session already uses the requested runtrol identifier.
+    #[error("session {session} is already live")]
+    AlreadyLive {
+        /// The duplicate identifier.
+        session: SessionId,
+    },
+
+    /// An opened process reported a different session from the intent it was given.
+    #[error("opened process reports session {actual}, not requested session {expected}")]
+    AgentSessionMismatch {
+        /// The session in the open intent.
+        expected: SessionId,
+        /// The session reported by the process.
+        actual: SessionId,
+    },
+
+    /// Every process slot is already live or reserved by an opening request.
+    #[error("every process slot is live or reserved by a session that is opening")]
+    OpeningCapacityReserved,
+
+    /// The opening request no longer owns a process slot.
+    #[error("session {session} has no pending open reservation")]
+    OpenNotReserved {
+        /// The session whose reservation was missing.
         session: SessionId,
     },
 
@@ -145,15 +172,94 @@ pub struct Pumped {
     pub published: Option<Published>,
 }
 
+/// A process that was admitted to the live session set.
+#[derive(Debug)]
+pub struct AttachedSession {
+    /// The session that is now live.
+    pub session: SessionId,
+}
+
+/// A reserved process slot, consumed when its opened process is attached.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct OpenReservation {
+    session: SessionId,
+}
+
+impl OpenReservation {
+    /// Which session owns the slot.
+    #[must_use]
+    pub const fn session(self) -> SessionId {
+        self.session
+    }
+}
+
+/// The result of reserving a process slot.
+pub struct ReservedOpen {
+    /// The reservation an attach must consume.
+    pub reservation: OpenReservation,
+    /// The idle process that must stop before a replacement is opened.
+    pub displaced: Option<Box<dyn Agent>>,
+}
+
+/// A detached process that continues to occupy its bounded slot until cleanup finishes.
+pub struct ClosingSession {
+    /// The process to stop outside the session owner.
+    pub agent: Box<dyn Agent>,
+    /// The slot to release only after the process has stopped.
+    pub reservation: OpenReservation,
+}
+
+/// A process that could not be admitted, together with the refusal.
+pub struct AttachError {
+    error: SessionError,
+    agent: Box<dyn Agent>,
+    reservation: OpenReservation,
+}
+
+impl core::fmt::Debug for AttachError {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("AttachError")
+            .field("error", &self.error)
+            .field("agent", &"open process")
+            .field("reservation", &self.reservation)
+            .finish()
+    }
+}
+
+impl AttachError {
+    /// Split the refusal from the process its caller still has to stop.
+    #[must_use]
+    pub fn into_parts(self) -> (SessionError, Box<dyn Agent>, OpenReservation) {
+        (self.error, self.agent, self.reservation)
+    }
+}
+
 /// Every session that has a process, and the rules about how many may.
 pub struct SessionManager {
     /// The live ones, ordered by name so a listing is stable.
     live: BTreeMap<SessionId, Live>,
+    /// Slots promised to connection tasks that have not attached their process yet.
+    opening: BTreeSet<SessionId>,
     /// Which session spoke last, so the next round of listening starts past it.
     ///
     /// Kept as a name rather than a position: a position would move under a session that ended, and this is asked
     /// about by exclusion, so it does not have to name a session that is still live.
     after: Option<SessionId>,
+}
+
+/// Returns an open reservation if its asynchronous convenience path is abandoned.
+struct OpeningGuard<'manager> {
+    manager: &'manager mut SessionManager,
+    reservation: Option<OpenReservation>,
+}
+
+impl Drop for OpeningGuard<'_> {
+    fn drop(&mut self) {
+        if let Some(reservation) = self.reservation.take() {
+            self.manager.cancel_open(reservation);
+        }
+    }
 }
 
 impl SessionManager {
@@ -162,6 +268,7 @@ impl SessionManager {
     pub const fn new() -> Self {
         Self {
             live: BTreeMap::new(),
+            opening: BTreeSet::new(),
             after: None,
         }
     }
@@ -223,41 +330,145 @@ impl SessionManager {
         provider: &dyn Provider,
         intent: OpenIntent,
     ) -> Result<SessionId, SessionError> {
-        let session = intent.session;
-        match self.admit()? {
-            Admit::Straight => {}
-            // Something has to give way first. Detaching rather than killing: the conversation is not runtrol's to
-            // end, and the operator picks it back up from the provider's own store.
-            Admit::Evicting { session: victim } => {
-                self.detach(victim, CloseMode::Graceful { grace_ms: 0 })
-                    .await;
+        let reserved = self.reserve_open(intent.session)?;
+        let mut opening = OpeningGuard {
+            manager: self,
+            reservation: Some(reserved.reservation),
+        };
+        if let Some(displaced) = reserved.displaced {
+            drop(displaced.close(CloseMode::Graceful { grace_ms: 0 }).await);
+        }
+        let agent = match provider.open(intent.clone()).await {
+            Ok(agent) => agent,
+            Err(error) => return Err(error.into()),
+        };
+        match opening
+            .manager
+            .attach_opened(reserved.reservation, provider.id(), &intent, agent)
+        {
+            Ok(attached) => {
+                opening.reservation = None;
+                Ok(attached.session)
             }
+            Err(error) => {
+                let (error, agent, reservation) = error.into_parts();
+                drop(agent.close(CloseMode::Kill).await);
+                opening.manager.cancel_open(reservation);
+                opening.reservation = None;
+                Err(error)
+            }
+        }
+    }
+
+    /// Reserve one bounded process slot before a provider is asked to open it.
+    ///
+    /// Any displaced idle process is removed synchronously and returned. The caller must stop it before opening the
+    /// replacement so the real process count never exceeds [`MAX_HOT`].
+    ///
+    /// # Errors
+    ///
+    /// Refuses a duplicate session identifier, a tier containing only busy sessions, or capacity already promised to
+    /// other opening requests.
+    pub fn reserve_open(&mut self, session: SessionId) -> Result<ReservedOpen, SessionError> {
+        if self.live.contains_key(&session) || self.opening.contains(&session) {
+            return Err(SessionError::AlreadyLive { session });
+        }
+
+        let occupied = self.live.len() + self.opening.len();
+        let displaced = if occupied < MAX_HOT {
+            None
+        } else if self.live.len() < MAX_HOT {
+            return Err(SessionError::OpeningCapacityReserved);
+        } else {
+            match self.admit()? {
+                Admit::Straight => None,
+                Admit::Evicting { session: victim } => {
+                    self.live.remove(&victim).map(|live| live.agent)
+                }
+            }
+        };
+        self.opening.insert(session);
+        Ok(ReservedOpen {
+            reservation: OpenReservation { session },
+            displaced,
+        })
+    }
+
+    /// Release a slot whose provider open was abandoned or failed.
+    pub fn cancel_open(&mut self, reservation: OpenReservation) {
+        self.opening.remove(&reservation.session);
+    }
+
+    /// Admit a process that a provider already opened.
+    ///
+    /// This operation contains no process wait. It consumes the earlier tier reservation and applies identity rules
+    /// and initial state transitions synchronously.
+    ///
+    /// # Errors
+    ///
+    /// Returns both the refusal and the still-open process when the reservation, process identity or disposition does
+    /// not match. The caller remains responsible for stopping that process.
+    pub fn attach_opened(
+        &mut self,
+        reservation: OpenReservation,
+        provider: ProviderId,
+        intent: &OpenIntent,
+        agent: Box<dyn Agent>,
+    ) -> Result<AttachedSession, AttachError> {
+        let session = intent.session;
+        let held = self.opening.contains(&reservation.session);
+        if reservation.session != session || !held {
+            return Err(AttachError {
+                error: SessionError::OpenNotReserved { session },
+                agent,
+                reservation,
+            });
+        }
+        if self.live.contains_key(&session) {
+            return Err(AttachError {
+                error: SessionError::AlreadyLive { session },
+                agent,
+                reservation,
+            });
+        }
+        let actual = agent.session();
+        if actual != session {
+            return Err(AttachError {
+                error: SessionError::AgentSessionMismatch {
+                    expected: session,
+                    actual,
+                },
+                agent,
+                reservation,
+            });
         }
 
         let identity = match &intent.disposition {
-            Disposition::Fresh => Identity::mint(provider.id()),
+            Disposition::Fresh => Identity::assigned(provider, session),
             // A resume already has both names. Nothing is minted, because minting would give the same conversation
             // a second identity and the operator would see it twice in one list.
             Disposition::Resume { native } => {
-                let mut identity = Identity::mint(provider.id());
+                let mut identity = Identity::assigned(provider, session);
                 if let Ok(native) = runtrol_provider::NativeSessionId::new(native) {
                     identity.observe_native(native);
                 }
                 identity
             }
             other => {
-                return Err(SessionError::Provider(ProviderError::Unsupported {
-                    provider: provider.id(),
-                    what: format!("{other:?}"),
-                    why: "the kernel has no rule for that way of opening a session yet",
-                }));
+                return Err(AttachError {
+                    error: SessionError::Provider(ProviderError::Unsupported {
+                        provider,
+                        what: format!("{other:?}"),
+                        why: "the kernel has no rule for that way of opening a session yet",
+                    }),
+                    agent,
+                    reservation,
+                });
             }
         };
 
-        // Kept before the intent is handed over, because opening consumes it and a listing still has to be able
-        // to say which folder this session works in.
         let workspace = intent.workspace.clone();
-        let agent = provider.open(intent).await?;
+        self.opening.remove(&reservation.session);
         let mut state = SessionState::new(WallMs::now());
         // Binding happened: the driver answered. Recorded through the transition table like everything else, so there
         // is still exactly one place a state may change.
@@ -275,7 +486,7 @@ impl SessionManager {
                 state,
             },
         );
-        Ok(session)
+        Ok(AttachedSession { session })
     }
 
     /// Read one event from a session and let it change what runtrol believes.
@@ -527,28 +738,23 @@ impl SessionManager {
     /// which is the daemon, and this returns as soon as the thing it does own has changed.
     ///
     /// The session is gone from this manager by the time this returns, whatever the caller then does with the driver.
-    /// Dropping it rather than closing it still stops the process, because a driver holds its child that way.
+    /// Its process slot remains reserved until the caller finishes cleanup and passes the returned reservation to
+    /// [`SessionManager::cancel_open`]. Dropping the agent rather than closing it still stops the process, because a
+    /// driver holds its child that way, but the reservation must still be released explicitly.
     ///
     /// # Errors
     ///
     /// [`SessionError::NotLive`] when nothing is running under that name.
-    pub fn close(&mut self, session: SessionId) -> Result<Box<dyn Agent>, SessionError> {
+    pub fn close(&mut self, session: SessionId) -> Result<ClosingSession, SessionError> {
         let live = self
             .live
             .remove(&session)
             .ok_or(SessionError::NotLive { session })?;
-        Ok(live.agent)
-    }
-
-    /// Take a session's process away without treating it as an ending.
-    ///
-    /// Used when the tier needs room. A failure to stop is not returned: the caller is starting a different session
-    /// and cannot act on it, and the containment holds the child either way. Nothing is silent, because the session it
-    /// belonged to is gone from the live map and its absence is what a listing shows.
-    async fn detach(&mut self, session: SessionId, how: CloseMode) {
-        if let Some(live) = self.live.remove(&session) {
-            drop(live.agent.close(how).await);
-        }
+        self.opening.insert(session);
+        Ok(ClosingSession {
+            agent: live.agent,
+            reservation: OpenReservation { session },
+        })
     }
 
     /// Whether another session may have a process, and what gives way if so.
@@ -789,6 +995,16 @@ mod tests {
         }
     }
 
+    fn an_agent(session: SessionId) -> Box<dyn Agent> {
+        Box::new(Scripted {
+            provider: an_id(),
+            session,
+            native: Some("native-name".to_owned()),
+            script: Vec::new(),
+            at: 0,
+        })
+    }
+
     fn content() -> Produced {
         Produced {
             src_end: 1,
@@ -858,6 +1074,174 @@ mod tests {
         }
         assert!(!manager.is_live(session));
         assert_eq!(manager.hot(), 0);
+    }
+
+    #[tokio::test]
+    async fn cancelling_the_async_start_convenience_releases_its_reservation() {
+        struct NeverOpens;
+
+        #[async_trait]
+        impl Provider for NeverOpens {
+            fn id(&self) -> ProviderId {
+                an_id()
+            }
+
+            async fn open(&self, _intent: OpenIntent) -> Result<Box<dyn Agent>, ProviderError> {
+                core::future::pending().await
+            }
+        }
+
+        let mut manager = SessionManager::new();
+        let cancelled = tokio::time::timeout(
+            core::time::Duration::from_millis(1),
+            manager.start(&NeverOpens, an_intent(SessionId::now())),
+        )
+        .await;
+        assert!(cancelled.is_err(), "the provider never opens");
+
+        for _ in 0..MAX_HOT {
+            manager
+                .reserve_open(SessionId::now())
+                .expect("the cancelled start returned its slot");
+        }
+    }
+
+    #[test]
+    fn cancelling_an_open_reservation_returns_its_bounded_slot() {
+        let mut manager = SessionManager::new();
+        let mut reservations = Vec::new();
+        for _ in 0..MAX_HOT {
+            reservations.push(
+                manager
+                    .reserve_open(SessionId::now())
+                    .expect("an unused bounded slot"),
+            );
+        }
+        assert!(matches!(
+            manager.reserve_open(SessionId::now()),
+            Err(SessionError::OpeningCapacityReserved)
+        ));
+
+        let cancelled = reservations.pop().expect("one reservation").reservation;
+        manager.cancel_open(cancelled);
+        assert!(manager.reserve_open(SessionId::now()).is_ok());
+    }
+
+    #[test]
+    fn attach_requires_the_reserved_session_and_preserves_the_exact_identity() {
+        let mut manager = SessionManager::new();
+        let session = SessionId::now();
+        let reserved = manager.reserve_open(session).expect("one bounded slot");
+        let intent = an_intent(session);
+
+        let attached = manager
+            .attach_opened(reserved.reservation, an_id(), &intent, an_agent(session))
+            .expect("the matching process attaches");
+        assert_eq!(attached.session, session);
+        let live = manager.live_session(session).expect("the session is live");
+        assert_eq!(live.session, session);
+        assert_eq!(live.provider, an_id());
+    }
+
+    #[test]
+    fn an_agent_for_another_session_is_returned_without_becoming_live() {
+        let mut manager = SessionManager::new();
+        let expected = SessionId::now();
+        let actual = SessionId::now();
+        let reserved = manager.reserve_open(expected).expect("one bounded slot");
+        let intent = an_intent(expected);
+
+        let error = manager
+            .attach_opened(reserved.reservation, an_id(), &intent, an_agent(actual))
+            .expect_err("a mismatched process must be refused");
+        let (error, agent, reservation) = error.into_parts();
+        assert!(matches!(
+            error,
+            SessionError::AgentSessionMismatch {
+                expected: named_expected,
+                actual: named_actual,
+            } if named_expected == expected && named_actual == actual
+        ));
+        assert_eq!(agent.session(), actual, "the caller gets the process back");
+        manager.cancel_open(reservation);
+        assert_eq!(manager.hot(), 0);
+        assert!(
+            manager.reserve_open(SessionId::now()).is_ok(),
+            "a rejected attach consumed and released its reservation"
+        );
+    }
+
+    #[test]
+    fn pairing_a_reservation_with_another_intent_releases_the_reserved_slot() {
+        let mut manager = SessionManager::new();
+        let reserved_for = SessionId::now();
+        let intent_for = SessionId::now();
+        let reserved = manager
+            .reserve_open(reserved_for)
+            .expect("one bounded slot");
+        let intent = an_intent(intent_for);
+
+        let error = manager
+            .attach_opened(reserved.reservation, an_id(), &intent, an_agent(intent_for))
+            .expect_err("the reservation is bound to its session");
+        let (error, agent, reservation) = error.into_parts();
+        assert!(matches!(
+            error,
+            SessionError::OpenNotReserved { session } if session == intent_for
+        ));
+        drop(agent);
+        manager.cancel_open(reservation);
+
+        let mut held = Vec::new();
+        for _ in 0..MAX_HOT {
+            held.push(
+                manager
+                    .reserve_open(SessionId::now())
+                    .expect("the mismatched reservation was released"),
+            );
+        }
+        assert_eq!(held.len(), MAX_HOT);
+    }
+
+    #[tokio::test]
+    async fn reserving_a_full_tier_hands_out_one_idle_process_before_open() {
+        let provider = a_fake(Vec::new());
+        let mut manager = SessionManager::new();
+        for _ in 0..MAX_HOT {
+            let session = SessionId::now();
+            manager
+                .start(&provider, an_intent(session))
+                .await
+                .expect("fills one slot");
+        }
+
+        let reserved = manager
+            .reserve_open(SessionId::now())
+            .expect("one idle session gives way");
+        assert!(reserved.displaced.is_some());
+        assert_eq!(manager.hot(), MAX_HOT - 1);
+        assert!(matches!(
+            manager.reserve_open(SessionId::now()),
+            Err(SessionError::OpeningCapacityReserved)
+        ));
+    }
+
+    #[tokio::test]
+    async fn a_duplicate_reservation_never_replaces_the_live_session() {
+        let provider = a_fake(Vec::new());
+        let mut manager = SessionManager::new();
+        let session = SessionId::now();
+        manager
+            .start(&provider, an_intent(session))
+            .await
+            .expect("the original session opens");
+
+        assert!(matches!(
+            manager.reserve_open(session),
+            Err(SessionError::AlreadyLive { session: duplicate }) if duplicate == session
+        ));
+        assert!(manager.is_live(session));
+        assert_eq!(manager.hot(), 1);
     }
 
     #[tokio::test]
@@ -1297,9 +1681,11 @@ mod tests {
             "the session is gone before anything waits for the process"
         );
         stopping
+            .agent
             .close(CloseMode::Kill)
             .await
             .expect("the driver stops");
+        manager.cancel_open(stopping.reservation);
 
         match manager.close(session) {
             Err(SessionError::NotLive { session: named }) => assert_eq!(named, session),
@@ -1309,16 +1695,46 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_closing_process_keeps_its_bounded_slot_until_cleanup_finishes() {
+        let provider = a_fake(Vec::new());
+        let mut manager = SessionManager::new();
+        let mut sessions = Vec::new();
+        for _ in 0..MAX_HOT {
+            let session = SessionId::now();
+            manager
+                .start(&provider, an_intent(session))
+                .await
+                .expect("fills one process slot");
+            sessions.push(session);
+        }
+
+        let closing = manager
+            .close(*sessions.first().expect("one live session"))
+            .expect("the process is handed out for cleanup");
+        assert!(matches!(
+            manager.reserve_open(SessionId::now()),
+            Err(SessionError::OpeningCapacityReserved)
+        ));
+
+        drop(closing.agent);
+        manager.cancel_open(closing.reservation);
+        assert!(
+            manager.reserve_open(SessionId::now()).is_ok(),
+            "the slot returns only after cleanup"
+        );
+    }
+
+    #[tokio::test]
     async fn closing_does_not_make_anybody_wait_for_a_process_to_stop() {
         // The reason this is not one call. A graceful close gives the process seconds to finish, and doing that here
         // would hold the only owner of every session for that long: one session being closed would stop every other
         // session's output. What this owns has changed by the time it returns.
-        struct Slow;
+        struct Slow(SessionId);
 
         #[async_trait]
         impl Agent for Slow {
             fn session(&self) -> SessionId {
-                SessionId::now()
+                self.0
             }
             fn native(&self) -> Option<&str> {
                 None
@@ -1342,8 +1758,8 @@ mod tests {
             fn id(&self) -> ProviderId {
                 an_id()
             }
-            async fn open(&self, _intent: OpenIntent) -> Result<Box<dyn Agent>, ProviderError> {
-                Ok(Box::new(Slow))
+            async fn open(&self, intent: OpenIntent) -> Result<Box<dyn Agent>, ProviderError> {
+                Ok(Box::new(Slow(intent.session)))
             }
         }
 
@@ -1359,7 +1775,8 @@ mod tests {
         let stopping = manager.close(session).expect("the session is taken away");
         assert!(!manager.is_live(session));
         assert_eq!(manager.hot(), 0);
-        drop(stopping);
+        drop(stopping.agent);
+        manager.cancel_open(stopping.reservation);
     }
 
     #[tokio::test]

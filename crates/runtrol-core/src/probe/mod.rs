@@ -47,7 +47,7 @@ use runtrol_childproc::{Containment, Program, SpawnError, capture, resolve};
 use runtrol_provider::{AbsPath, Manifest, VersionParse, WallMs};
 use serde::{Deserialize, Serialize};
 
-pub use cache::{BinFacts, CACHE_SCHEMA, Entry, ProbeCache};
+pub use cache::{BinFacts, CACHE_SCHEMA, Entry, LeadingArgFacts, LeadingFileFacts, ProbeCache};
 
 /// How long one question may take.
 ///
@@ -184,23 +184,53 @@ pub async fn probe(
     cache: &mut ProbeCache,
     contained_by: &Containment,
 ) -> Result<Entry, ProbeError> {
-    let program = locate(manifest)?;
-    let bin = BinFacts::of(program.path())?;
+    let (_, entry) = probe_program(manifest, &[], cache, contained_by).await?;
+    Ok(entry)
+}
 
-    if let Some(known) = cache.get(manifest.id, &bin) {
-        return Ok(known.clone());
+/// Resolve and probe one CLI, returning the exact program that was examined.
+///
+/// `bound_flags` belongs to the selected driver. Passing it here makes undocumented flags answer through the CLI's
+/// own parser and puts that exact observation in the binary-identity cache. An empty slice keeps the generic help
+/// fallback for drivers that declare no bound flag surface.
+///
+/// # Errors
+///
+/// Any [`ProbeError`] produced while resolving, examining, or asking the CLI.
+pub async fn probe_program(
+    manifest: &Manifest,
+    bound_flags: &[&str],
+    cache: &mut ProbeCache,
+    contained_by: &Containment,
+) -> Result<(Program, Entry), ProbeError> {
+    let program = locate(manifest)?;
+    let bin = BinFacts::of_program(&program)?;
+
+    if let Some(known) = cache.get(manifest.id, &bin)
+        && known
+            .asked_flags
+            .iter()
+            .map(String::as_str)
+            .eq(bound_flags.iter().copied())
+    {
+        return Ok((program, known.clone()));
     }
 
     let version = ask_version(manifest, &program, contained_by).await?;
-    let flags = ask_flags(&program, contained_by).await;
+    let flags = if bound_flags.is_empty() {
+        ask_flags(&program, contained_by).await
+    } else {
+        confirm_flags(manifest, &program, bound_flags, contained_by).await?
+    };
     let entry = Entry {
         probed_at: WallMs::now(),
         bin,
         version,
         flags,
+        asked_flags: bound_flags.iter().map(|flag| (*flag).to_owned()).collect(),
     };
     cache.put(manifest.id, entry.clone());
-    Ok(entry)
+    Ok((program, entry))
 }
 
 /// Try the manifest's candidate names on the operator's search path.
@@ -813,9 +843,14 @@ Options:
         let mut cache = ProbeCache::open(&cache_path);
         let contained_by = Containment::without_any();
 
-        let first = probe(&manifest, &mut cache, &contained_by)
+        let (program, mut first) = probe_program(&manifest, &[], &mut cache, &contained_by)
             .await
             .expect("an installed CLI must be probeable");
+        assert_eq!(
+            program.path(),
+            &first.bin.path,
+            "the caller must receive the exact resolved program whose identity was probed"
+        );
 
         assert!(
             find_version(&first.version).is_some(),
@@ -833,9 +868,11 @@ Options:
         );
         assert!(first.bin.size > 0, "the program has a size");
 
+        first.version = "9.9.9-remembered".to_owned();
+        cache.put(manifest.id, first.clone());
         cache.save().expect("the cache must be writable");
-        let reopened = ProbeCache::open(&cache_path);
-        let second = probe(&manifest, &mut cache, &contained_by)
+        let mut reopened = ProbeCache::open(&cache_path);
+        let (_, second) = probe_program(&manifest, &[], &mut reopened, &contained_by)
             .await
             .expect("the second ask must be answered");
         assert_eq!(
@@ -843,6 +880,21 @@ Options:
             "the second ask must be the remembered answer, not a second process"
         );
         assert_eq!(reopened.len(), 1, "and it must have survived the restart");
+
+        let mut stale = second.clone();
+        stale.bin.size = stale.bin.size.saturating_add(1);
+        stale.version = "9.9.9-stale".to_owned();
+        reopened.put(manifest.id, stale);
+        reopened.save().expect("the stale identity is writable");
+        let mut changed = ProbeCache::open(&cache_path);
+        let (_, third) = probe_program(&manifest, &[], &mut changed, &contained_by)
+            .await
+            .expect("a changed identity must be probed again");
+        assert_ne!(
+            third.version, "9.9.9-stale",
+            "an answer for a different binary identity must not be reused"
+        );
+        assert_eq!(third.bin, BinFacts::of(program.path()).expect("stat cargo"));
 
         std::fs::remove_dir_all(root.as_std_path()).expect("clean up");
     }

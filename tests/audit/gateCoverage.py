@@ -68,10 +68,6 @@ LOCAL_ONLY: dict[str, str] = {
     "runner cross-compiles toward the platform it is not, so the local command targets linux and the "
     "linux runner targets windows. the gate is present on both sides; only the argument differs, which "
     "is why an exact-command comparison cannot see it",
-    "modelDetectionSmoke": "it asks the installed coding CLIs for account-specific model choices. those CLIs "
-    "authenticate as a person, so this runs in the operator's local preflight and never carries credentials "
-    "into hosted CI",
-    "modelDetectionSmokeSelftest": "the injected failures belong beside the local live gate they prove",
 }
 
 # Workflow invocations that intentionally have no counterpart preflight gate.
