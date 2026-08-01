@@ -255,6 +255,12 @@ file = "rebindingDefenses.rs"
 
 [[floor]]
 category = "security"
+name = "pairingLifecycle"
+status = "built"
+file = "pairingLifecycle.rs"
+
+[[floor]]
+category = "security"
 name = "argumentEscaping"
 status = "built"
 file = "argumentEscaping.rs"

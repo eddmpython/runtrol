@@ -5,9 +5,10 @@
 //! `Noise_IKpsk1_25519_AESGCM_SHA256` pattern and expands its 128-bit QR value with domain-separated HKDF-SHA256.
 
 use std::fmt;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use hkdf::Hkdf;
+use runtrol_security::{DeviceId, GrantRequest, PairingIdentity, PcPresence};
 use sha2::Sha256;
 use snow::{Builder, HandshakeState, TransportState, params::NoiseParams};
 use zeroize::{Zeroize, ZeroizeOnDrop};
@@ -24,6 +25,8 @@ const RECORD_REKEY: u8 = 0x08;
 const CHUNK_HEADER_LEN: usize = 10;
 const REKEY_AFTER_MESSAGES: u64 = 1 << 24;
 const REKEY_AFTER_TIME: Duration = Duration::from_mins(15);
+const PAIRING_VALID_FOR: Duration = Duration::from_mins(2);
+const PAIRING_MAX_ATTEMPTS: u8 = 5;
 
 /// Maximum plaintext accepted by one Noise transport message.
 pub const MAX_NOISE_PLAINTEXT: usize = NOISE_MESSAGE_MAX - NOISE_TAG_LEN;
@@ -37,6 +40,14 @@ pub const MAX_TRANSPORT_FRAME: usize = 16 * 1024 * 1024 + 64 * 1024;
 /// An X25519 public key.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct PublicKey([u8; 32]);
+
+impl PublicKey {
+    /// Return the canonical X25519 public bytes.
+    #[must_use]
+    pub const fn to_bytes(self) -> [u8; 32] {
+        self.0
+    }
+}
 
 impl fmt::Debug for PublicKey {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -111,6 +122,325 @@ impl PairingSecret {
         qr_value.zeroize();
         result?;
         Ok(Self(expanded))
+    }
+}
+
+/// QR material shown only on the PC during a short-lived pairing offer.
+///
+/// The value clears on drop and has no `Debug` or `Display` implementation. [`Self::qr_value`] exists solely for
+/// the local UI to encode it in a fragment or QR image; it must never enter a request URL, log, or persistent row.
+#[derive(Zeroize, ZeroizeOnDrop)]
+pub struct PairingInvitation {
+    qr_value: [u8; 16],
+    expires_at_unix_ms: u64,
+}
+
+impl PairingInvitation {
+    /// Raw 128-bit value the local UI encodes into the pairing QR fragment.
+    #[must_use]
+    pub const fn qr_value(&self) -> &[u8; 16] {
+        &self.qr_value
+    }
+
+    /// Expand the QR value for a Rust initiator fixture or native client.
+    ///
+    /// Browser clients perform the same documented HKDF operation with `WebCrypto`.
+    ///
+    /// # Errors
+    ///
+    /// [`CryptoError::KeyDerivation`] if HKDF rejects the fixed output size.
+    pub fn noise_secret(&self) -> Result<PairingSecret, CryptoError> {
+        PairingSecret::from_qr(self.qr_value)
+    }
+
+    /// Wall-clock expiry carried in the QR so a client can refuse stale material before dialing.
+    #[must_use]
+    pub const fn expires_at_unix_ms(&self) -> u64 {
+        self.expires_at_unix_ms
+    }
+}
+
+enum PairingOfferState {
+    Active(PairingSecret),
+    Spent,
+    Locked,
+    Expired,
+}
+
+/// A 120-second, single-use, attempt-limited pairing offer owned by the PC.
+///
+/// A valid first Noise message consumes the PSK immediately, before local approval. This means denying a proposed
+/// device never leaves the photographed QR usable for another attempt.
+pub struct PairingOffer {
+    state: PairingOfferState,
+    attempt_id: [u8; 16],
+    failed_attempts: u8,
+    expires_at: Instant,
+}
+
+impl PairingOffer {
+    /// Generate a fresh QR invitation from the operating-system random source.
+    ///
+    /// # Errors
+    ///
+    /// [`CryptoError::RandomUnavailable`] if the OS random source fails, [`CryptoError::ClockUnavailable`] if the
+    /// QR wall-clock expiry cannot be represented, or [`CryptoError::KeyDerivation`] if HKDF fails.
+    pub fn generate() -> Result<(Self, PairingInvitation), CryptoError> {
+        let mut random = [0_u8; 32];
+        getrandom::fill(&mut random).map_err(|_| CryptoError::RandomUnavailable)?;
+        let mut qr_value = [0_u8; 16];
+        let mut attempt_id = [0_u8; 16];
+        let (qr_source, attempt_source) = random.split_at(16);
+        qr_value.copy_from_slice(qr_source);
+        attempt_id.copy_from_slice(attempt_source);
+        random.zeroize();
+
+        let secret = PairingSecret::from_qr(qr_value)?;
+        let now_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|_| CryptoError::ClockUnavailable)?
+            .as_millis();
+        let valid_ms = PAIRING_VALID_FOR.as_millis();
+        let expires_at_unix_ms = u64::try_from(
+            now_ms
+                .checked_add(valid_ms)
+                .ok_or(CryptoError::ClockUnavailable)?,
+        )
+        .map_err(|_| CryptoError::ClockUnavailable)?;
+
+        Ok((
+            Self {
+                state: PairingOfferState::Active(secret),
+                attempt_id,
+                failed_attempts: 0,
+                expires_at: Instant::now() + PAIRING_VALID_FOR,
+            },
+            PairingInvitation {
+                qr_value,
+                expires_at_unix_ms,
+            },
+        ))
+    }
+
+    /// Protocol lifetime for every generated offer.
+    #[must_use]
+    pub const fn valid_for() -> Duration {
+        PAIRING_VALID_FOR
+    }
+
+    /// Attempts left before the PSK is destroyed and the offer locks.
+    #[must_use]
+    pub const fn remaining_attempts(&self) -> u8 {
+        match self.state {
+            PairingOfferState::Active(_) => {
+                PAIRING_MAX_ATTEMPTS.saturating_sub(self.failed_attempts)
+            }
+            PairingOfferState::Spent | PairingOfferState::Locked | PairingOfferState::Expired => 0,
+        }
+    }
+
+    /// Whether a valid message one already consumed this offer.
+    #[must_use]
+    pub const fn is_spent(&self) -> bool {
+        matches!(self.state, PairingOfferState::Spent)
+    }
+
+    /// Authenticate one proposed device and hold message two until exact PC presence is supplied.
+    ///
+    /// Every failed Noise message consumes one of five attempts. A successful message consumes the QR secret at
+    /// once and returns a [`PendingPairing`] that cannot produce a channel without a matching [`PcPresence`].
+    ///
+    /// # Errors
+    ///
+    /// [`CryptoError::PairingExpired`], [`CryptoError::PairingLocked`], or [`CryptoError::PairingSpent`] for a
+    /// closed offer. Other cryptographic errors count toward the five-attempt limit.
+    pub fn receive(
+        &mut self,
+        local: &StaticKeypair,
+        first: &EncryptedRecord,
+    ) -> Result<PendingPairing, CryptoError> {
+        if Instant::now() >= self.expires_at {
+            self.state = PairingOfferState::Expired;
+            return Err(CryptoError::PairingExpired);
+        }
+        match self.state {
+            PairingOfferState::Spent => return Err(CryptoError::PairingSpent),
+            PairingOfferState::Locked => return Err(CryptoError::PairingLocked),
+            PairingOfferState::Expired => return Err(CryptoError::PairingExpired),
+            PairingOfferState::Active(_) => {}
+        }
+
+        let attempted = (|| {
+            let PairingOfferState::Active(secret) = &self.state else {
+                return Err(CryptoError::PairingSpent);
+            };
+            let mut state = Builder::new(noise_params(PAIRING_PATTERN)?)
+                .local_private_key(&local.private)?
+                .psk(1, &secret.0)?
+                .prologue(PAIRING_PROLOGUE)?
+                .build_responder()?;
+            let initiator_payload = read_handshake(&mut state, first)?;
+            let remote_public = remote_public(&state)?;
+            Ok((state, remote_public, initiator_payload))
+        })();
+
+        match attempted {
+            Ok((state, remote_public, initiator_payload)) => {
+                self.state = PairingOfferState::Spent;
+                Ok(PendingPairing {
+                    state,
+                    attempt_id: self.attempt_id,
+                    remote_public,
+                    initiator_payload,
+                })
+            }
+            Err(error) => {
+                self.failed_attempts = self.failed_attempts.saturating_add(1);
+                if self.failed_attempts >= PAIRING_MAX_ATTEMPTS {
+                    self.state = PairingOfferState::Locked;
+                }
+                Err(error)
+            }
+        }
+    }
+
+    #[cfg(test)]
+    fn expire_for_test(&mut self) {
+        self.expires_at = Instant::now();
+    }
+}
+
+/// A PSK-authenticated proposal waiting for the operator at the PC.
+///
+/// It implements no diagnostic formatting because the first handshake payload contains device-controlled pairing
+/// metadata. Dropping it denies the pairing and emits no Noise response.
+pub struct PendingPairing {
+    state: HandshakeState,
+    attempt_id: [u8; 16],
+    remote_public: PublicKey,
+    initiator_payload: Vec<u8>,
+}
+
+impl PendingPairing {
+    /// Static X25519 identity authenticated by the QR PSK.
+    #[must_use]
+    pub const fn remote_public_key(&self) -> PublicKey {
+        self.remote_public
+    }
+
+    /// Validate display labels and bind them to this exact attempt and static key.
+    ///
+    /// # Errors
+    ///
+    /// [`CryptoError::InvalidPairingIdentity`] when a label cannot safely enter the presence prompt.
+    pub fn identity(
+        &self,
+        name: impl AsRef<str>,
+        platform: impl AsRef<str>,
+    ) -> Result<PairingIdentity, CryptoError> {
+        PairingIdentity::new(
+            self.attempt_id,
+            self.remote_public.to_bytes(),
+            name,
+            platform,
+        )
+        .map_err(|_| CryptoError::InvalidPairingIdentity)
+    }
+
+    /// Build the exact local presence request this pending handshake can consume.
+    ///
+    /// # Errors
+    ///
+    /// [`CryptoError::PairingIdentityMismatch`] if the identity belongs to another offer or static key.
+    pub fn approval_request(
+        &self,
+        identity: &PairingIdentity,
+    ) -> Result<GrantRequest, CryptoError> {
+        if identity.attempt_id() != self.attempt_id
+            || identity.static_key() != self.remote_public.to_bytes()
+        {
+            return Err(CryptoError::PairingIdentityMismatch);
+        }
+        Ok(GrantRequest::PairDevice {
+            identity: identity.clone(),
+        })
+    }
+
+    /// Borrow the PSK-authenticated proposal payload for the local pairing UI.
+    #[must_use]
+    pub fn initiator_payload(&self) -> &[u8] {
+        &self.initiator_payload
+    }
+
+    /// Spend an exact fresh PC presence witness and emit Noise message two.
+    ///
+    /// The paired [`DeviceId`] is minted only after the witness matches. No remote input can mint an authorized
+    /// device or obtain a transport channel before this call succeeds.
+    ///
+    /// # Errors
+    ///
+    /// [`CryptoError::PairingIdentityMismatch`] for another proposal, [`CryptoError::PairingNeedsPcApproval`] for
+    /// a stale or mismatched witness, or [`CryptoError::Noise`] if message two cannot be written.
+    pub fn approve(
+        mut self,
+        identity: &PairingIdentity,
+        witness: &PcPresence,
+        response_payload: &[u8],
+    ) -> Result<ApprovedPairing, CryptoError> {
+        let request = self.approval_request(identity)?;
+        witness
+            .check(&request)
+            .map_err(|_| CryptoError::PairingNeedsPcApproval)?;
+        let reply = write_handshake(&mut self.state, response_payload)?;
+        let transport = self.state.into_transport_mode()?;
+        Ok(ApprovedPairing {
+            channel: Channel::new(transport),
+            reply,
+            device_id: DeviceId::now(),
+            remote_public: self.remote_public,
+            initiator_payload: self.initiator_payload,
+        })
+    }
+}
+
+/// A pairing that passed exact local presence and may now be persisted by the assembly layer.
+pub struct ApprovedPairing {
+    channel: Channel,
+    reply: EncryptedRecord,
+    device_id: DeviceId,
+    remote_public: PublicKey,
+    initiator_payload: Vec<u8>,
+}
+
+impl ApprovedPairing {
+    /// Locally minted identity to use for the device record and scope ledger.
+    #[must_use]
+    pub const fn device_id(&self) -> DeviceId {
+        self.device_id
+    }
+
+    /// Pinned remote static key to persist with the device record.
+    #[must_use]
+    pub const fn remote_public_key(&self) -> PublicKey {
+        self.remote_public
+    }
+
+    /// Noise message two to return to the approved initiator.
+    #[must_use]
+    pub const fn reply(&self) -> &EncryptedRecord {
+        &self.reply
+    }
+
+    /// Authenticated proposal metadata received in message one.
+    #[must_use]
+    pub fn initiator_payload(&self) -> &[u8] {
+        &self.initiator_payload
+    }
+
+    /// Consume the approval result and take the established transport channel.
+    #[must_use]
+    pub fn into_channel(self) -> Channel {
+        self.channel
     }
 }
 
@@ -617,6 +947,16 @@ fn verify_remote(state: &HandshakeState, expected: PublicKey) -> Result<(), Cryp
     }
 }
 
+fn remote_public(state: &HandshakeState) -> Result<PublicKey, CryptoError> {
+    let remote = state
+        .get_remote_static()
+        .ok_or(CryptoError::RemoteIdentity)?;
+    let bytes = remote
+        .try_into()
+        .map_err(|_| CryptoError::InvalidKeyLength)?;
+    Ok(PublicKey(bytes))
+}
+
 fn noise_params(pattern: &str) -> Result<NoiseParams, CryptoError> {
     pattern.parse().map_err(|_| CryptoError::Noise)
 }
@@ -652,6 +992,38 @@ pub enum CryptoError {
     #[error("pairing secret derivation failed")]
     KeyDerivation,
 
+    /// The operating system would not supply fresh pairing material.
+    #[error("cannot generate fresh pairing material")]
+    RandomUnavailable,
+
+    /// The pairing QR expiry cannot be represented safely.
+    #[error("cannot establish the pairing expiry clock")]
+    ClockUnavailable,
+
+    /// The 120-second pairing window has elapsed.
+    #[error("pairing offer expired")]
+    PairingExpired,
+
+    /// Five invalid first messages destroyed the offer.
+    #[error("pairing offer is locked after five failed attempts")]
+    PairingLocked,
+
+    /// A valid first message already consumed the one-time QR secret.
+    #[error("pairing offer was already spent")]
+    PairingSpent,
+
+    /// Untrusted display metadata cannot safely enter the local prompt.
+    #[error("pairing identity display metadata is invalid")]
+    InvalidPairingIdentity,
+
+    /// The displayed identity belongs to another pairing attempt or key.
+    #[error("pairing identity does not match the pending Noise peer")]
+    PairingIdentityMismatch,
+
+    /// Noise message two cannot be emitted without exact fresh PC presence.
+    #[error("pairing needs approval at the PC for this exact device")]
+    PairingNeedsPcApproval,
+
     /// A relay or direct-link binding was malformed.
     #[error("session link binding is invalid")]
     InvalidBinding,
@@ -677,5 +1049,24 @@ pub enum CryptoError {
 impl From<snow::Error> for CryptoError {
     fn from(_: snow::Error) -> Self {
         Self::Noise
+    }
+}
+
+#[cfg(test)]
+mod pairing_lifecycle_tests {
+    use super::*;
+
+    #[test]
+    fn an_expired_offer_destroys_its_secret_before_noise() {
+        let pc = StaticKeypair::generate().expect("pc key");
+        let (mut offer, _) = PairingOffer::generate().expect("offer");
+        offer.expire_for_test();
+        let shaped = EncryptedRecord::from_ciphertext(vec![0_u8; NOISE_TAG_LEN])
+            .expect("minimum record shape");
+        assert!(matches!(
+            offer.receive(&pc, &shaped),
+            Err(CryptoError::PairingExpired)
+        ));
+        assert_eq!(offer.remaining_attempts(), 0);
     }
 }

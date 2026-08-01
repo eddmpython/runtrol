@@ -125,4 +125,13 @@ pub enum SecurityError {
         /// The root the grant named.
         root: crate::id::WorkspaceRootId,
     },
+
+    /// An untrusted device name or platform cannot be shown safely in a presence prompt.
+    #[error("pairing {field} is invalid: {why}")]
+    InvalidPairingIdentity {
+        /// Which display field was refused.
+        field: &'static str,
+        /// The validation rule, without echoing untrusted text into diagnostics.
+        why: &'static str,
+    },
 }

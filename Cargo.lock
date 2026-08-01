@@ -2795,6 +2795,7 @@ name = "runtrol-transport"
 version = "0.0.0"
 dependencies = [
  "bytes",
+ "getrandom 0.4.3",
  "hkdf",
  "http-body-util",
  "hyper",

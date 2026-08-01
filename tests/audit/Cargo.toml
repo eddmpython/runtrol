@@ -50,6 +50,10 @@ name = "egressContract"
 path = "egressContract.rs"
 
 [[test]]
+name = "pairingLifecycle"
+path = "pairingLifecycle.rs"
+
+[[test]]
 name = "providerContract"
 path = "providerContract.rs"
 

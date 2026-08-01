@@ -30,6 +30,9 @@ use crate::error::SecurityError;
 use crate::id::DeviceId;
 use crate::scope::{DeviceScope, LocalScope};
 
+const DEVICE_NAME_MAX_CHARS: usize = 64;
+const DEVICE_PLATFORM_MAX_CHARS: usize = 32;
+
 /// How long a challenge stands open before it is a denial.
 ///
 /// Long enough to read the prompt and type a word, short enough that walking away from the machine
@@ -89,6 +92,71 @@ const WORDS: &[&str] = &[
     "flint",
 ];
 
+/// A pairing proposal rendered on the PC and bound to the witness it creates.
+///
+/// The attempt identifier prevents one fresh witness from approving a second simultaneous offer from the same
+/// static key. The key binds the displayed device to the authenticated Noise initiator. Names are untrusted display
+/// metadata and are validated before they can enter the local prompt.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct PairingIdentity {
+    attempt_id: [u8; 16],
+    static_key: [u8; 32],
+    name: Box<str>,
+    platform: Box<str>,
+}
+
+impl PairingIdentity {
+    /// Validate identity metadata learned through an authenticated pairing proposal.
+    ///
+    /// # Errors
+    ///
+    /// [`SecurityError::InvalidPairingIdentity`] when a label is blank, contains a control character, or is over
+    /// its display bound.
+    pub fn new(
+        attempt_id: [u8; 16],
+        static_key: [u8; 32],
+        name: impl AsRef<str>,
+        platform: impl AsRef<str>,
+    ) -> Result<Self, SecurityError> {
+        let name = checked_label("device name", name.as_ref(), DEVICE_NAME_MAX_CHARS)?;
+        let platform = checked_label(
+            "device platform",
+            platform.as_ref(),
+            DEVICE_PLATFORM_MAX_CHARS,
+        )?;
+        Ok(Self {
+            attempt_id,
+            static_key,
+            name,
+            platform,
+        })
+    }
+
+    /// The unique short-lived offer this display belongs to.
+    #[must_use]
+    pub const fn attempt_id(&self) -> [u8; 16] {
+        self.attempt_id
+    }
+
+    /// The authenticated initiator static key this display belongs to.
+    #[must_use]
+    pub const fn static_key(&self) -> [u8; 32] {
+        self.static_key
+    }
+
+    /// Operator-facing device name.
+    #[must_use]
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Operator-facing platform.
+    #[must_use]
+    pub fn platform(&self) -> &str {
+        &self.platform
+    }
+}
+
 /// What the operator is being asked to approve.
 ///
 /// A challenge renders this, and the resulting witness carries it, so the thing shown and the thing
@@ -107,6 +175,11 @@ pub enum GrantRequest {
         device: DeviceId,
         /// Exactly which scopes. Anything not listed here is not authorized by the witness.
         scopes: Vec<DeviceScope>,
+    },
+    /// Pair one Noise-authenticated device after showing its exact identity on this PC.
+    PairDevice {
+        /// Attempt, key, and display labels bound to this one decision.
+        identity: PairingIdentity,
     },
     /// Do one thing now that can never be delegated to a device.
     Local(LocalScope),
@@ -137,12 +210,61 @@ impl fmt::Display for GrantRequest {
                 }
                 Ok(())
             }
+            Self::PairDevice { identity } => {
+                write!(
+                    f,
+                    "pair device '{}' on {} with key ",
+                    identity.name, identity.platform
+                )?;
+                for byte in identity.static_key.iter().take(8) {
+                    write!(f, "{byte:02x}")?;
+                }
+                f.write_str("...")
+            }
             Self::Local(scope) => write!(f, "do one thing now, at this machine: {scope}"),
             Self::AddWorkspaceRoot { path } => {
                 write!(f, "allow work inside {path}")
             }
         }
     }
+}
+
+fn checked_label(
+    field: &'static str,
+    offered: &str,
+    max_chars: usize,
+) -> Result<Box<str>, SecurityError> {
+    let trimmed = offered.trim();
+    if trimmed.is_empty() {
+        return Err(SecurityError::InvalidPairingIdentity {
+            field,
+            why: "it is blank",
+        });
+    }
+    if trimmed.chars().any(unsafe_display_char) {
+        return Err(SecurityError::InvalidPairingIdentity {
+            field,
+            why: "it contains a control character",
+        });
+    }
+    if trimmed.chars().count() > max_chars {
+        return Err(SecurityError::InvalidPairingIdentity {
+            field,
+            why: "it is over the display limit",
+        });
+    }
+    Ok(trimmed.into())
+}
+
+const fn unsafe_display_char(character: char) -> bool {
+    character.is_control()
+        || matches!(
+            character,
+            '\u{200b}'..='\u{200f}'
+                | '\u{2028}'..='\u{202e}'
+                | '\u{2060}'..='\u{206f}'
+                | '\u{feff}'
+        )
 }
 
 /// A handle meaning "this process owns a surface the operator is physically at".

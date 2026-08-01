@@ -55,6 +55,11 @@ kind, relay origin, and peer identity so a captured relay handshake cannot move 
 Messages are capped at 65,519 plaintext bytes, larger frames are bounded and chunked, and the channel rekeys after
 2^24 messages or 15 minutes. Secret key material clears on drop and has no diagnostic representation.
 
+A pairing QR is valid for 120 seconds, is destroyed on the first authenticated message, and locks after five bad
+messages. Noise message two is withheld until a fresh PC presence witness names the exact attempt, authenticated
+static key, validated device name, and platform. Generic pairing authority or a witness for another attempt is not
+accepted. The device identifier is minted only after that witness matches.
+
 Outbound TCP requires an exact IP address and port minted by an immutable `EgressPolicy`. The operating-system
 connect call exists only inside that policy and an empty policy denies every destination.
 
@@ -83,6 +88,9 @@ The `egressContract` gate dials real allowed and refused loopback destinations, 
 and pairing handshakes, crosses the Noise chunk boundary, round-trips length-prefixed ciphertext, rotates keys, and
 injects wrong keys, PSKs, link bindings, and ciphertext corruption. It also checks that transport has no disk or
 logging API and that drivers and storage name no provider-owned transcript path.
+
+The `pairingLifecycle` gate proves the 120-second lifetime, single use, five-attempt lockout, prompt-injection
+defense, exact witness binding, and an encrypted round trip that becomes possible only after PC approval.
 
 ## Reporting a vulnerability
 

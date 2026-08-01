@@ -40,6 +40,6 @@ pub use caller::Caller;
 pub use error::SecurityError;
 pub use grant::{GrantLedger, LocalAuthorization};
 pub use id::{DeviceId, WorkspaceRootId};
-pub use presence::{GrantRequest, LocalConsole, PcPresence, PresenceChallenge};
+pub use presence::{GrantRequest, LocalConsole, PairingIdentity, PcPresence, PresenceChallenge};
 pub use scope::{DeviceScope, LocalScope};
 pub use workspace::{DeniedPath, DenyList, WorkspaceRoot};

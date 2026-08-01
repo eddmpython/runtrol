@@ -9,9 +9,9 @@ pub mod egress;
 pub mod http;
 
 pub use crypto::{
-    Channel, CryptoError, EncryptedRecord, InitiatorHandshake, LinkKind, MAX_NOISE_PLAINTEXT,
-    MAX_TRANSPORT_FRAME, PairingSecret, PublicKey, ResponderHandshake, SessionBinding,
-    StaticKeypair,
+    ApprovedPairing, Channel, CryptoError, EncryptedRecord, InitiatorHandshake, LinkKind,
+    MAX_NOISE_PLAINTEXT, MAX_TRANSPORT_FRAME, PairingInvitation, PairingOffer, PairingSecret,
+    PendingPairing, PublicKey, ResponderHandshake, SessionBinding, StaticKeypair,
 };
 pub use egress::{ApprovedDestination, EgressError, EgressPolicy};
 pub use http::{AccessToken, DeviceCredential, PhoneBody, PhoneHttp, PhoneHttpError, response};

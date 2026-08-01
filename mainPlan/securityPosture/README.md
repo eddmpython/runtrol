@@ -1,6 +1,6 @@
 # securityPosture
 
-상태: 진행 중. Scope grantability, default-deny dispatch, argument escaping, read-only provider configuration, browser rebinding defenses, exact egress allowlisting, and the end-to-end Noise boundary are enforced by gates. Remote approval work remains.
+상태: 진행 중. Scope grantability, default-deny dispatch, argument escaping, read-only provider configuration, browser rebinding defenses, exact egress allowlisting, the end-to-end Noise boundary, and exact PC-bound pairing approval are enforced by gates. Remote agent approval work remains.
 
 ## 한 문장 정의
 
