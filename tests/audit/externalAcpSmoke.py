@@ -416,15 +416,13 @@ def restartDaemon(
     env: dict[str, str],
     home: Path,
     first: subprocess.Popen[str],
+    session: str,
 ) -> subprocess.Popen[str]:
-    """Stop one daemon through the product surface and start a distinct serving process."""
-    acp.command(binary, env, ["panic"])
-    try:
-        first.wait(timeout=10.0)
-    except subprocess.TimeoutExpired as error:
-        first.kill()
-        first.wait(timeout=2.0)
-        raise Failed("the first daemon did not stop before restart") from error
+    """Close the external child, stop exactly one daemon, and start a distinct serving process."""
+    acp.command(binary, env, ["close", session, "--now"])
+    acp.stopDaemon(first)
+    if first.poll() is None:
+        raise Failed("the first daemon did not stop before restart")
     second = acp.startDaemon(binary, env, home)
     if second.poll() is not None:
         raise Failed("the restarted daemon exited before native load")
@@ -456,7 +454,7 @@ def exercise(external: str) -> None:
                 binary, env, started, model
             )
 
-            second = restartDaemon(binary, env, home, first)
+            second = restartDaemon(binary, env, home, first, started)
             resumed = acp.command(binary, env, ["resume", PROVIDER, native_before, str(workspace)])
             if acp.SESSION_RE.fullmatch(resumed) is None or resumed == started:
                 raise Failed(f"session/load returned no fresh runtrol session identifier: {resumed!r}")
