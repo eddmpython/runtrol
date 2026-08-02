@@ -179,6 +179,7 @@ function mockBridge() {
       const measured = intervals.slice(5);
       return {
         produced,
+        inputSamples: inputLatencies.length,
         frameP95Ms: pctl(measured, 0.95),
         frameMaxMs: pctl(measured, 1),
         inputP95Ms: pctl(inputLatencies, 0.95),
@@ -373,7 +374,10 @@ async function scroll(page, url) {
   await page.goto(url, { waitUntil: "domcontentloaded" });
   await page.getByTestId("session-gate-000").waitFor();
   await waitFor(page, () => document.body.textContent?.includes("saved tail gate-000"));
-  return page.evaluate(() => window.__RUNTROL_PERF__.flood("gate-000", 3, 3_000));
+  // Ten seconds yields about 100 independent input samples. The previous three-second run made p95 the second
+  // largest of only about 30 samples, so two unrelated hosted-runner scheduler stalls could fail an otherwise
+  // healthy 60 Hz journey. The latency limits stay fixed; the larger sample makes the percentile mean a rate.
+  return page.evaluate(() => window.__RUNTROL_PERF__.flood("gate-000", 10, 3_000));
 }
 
 async function startWithoutChoosingProvider(page, workspace) {

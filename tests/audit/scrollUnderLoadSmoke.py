@@ -12,13 +12,15 @@ Usage::
 
 from __future__ import annotations
 
+import json
 import sys
 from typing import Any
 
 from desktopPerformance import measurement, missingNumbers
 
 LIMITS = {
-    "producedMinimum": 8_800,
+    "producedMinimum": 29_300,
+    "inputSamplesMinimum": 90,
     "frameP95Ms": 24.0,
     "frameMaxMs": 120.0,
     "inputP95Ms": 50.0,
@@ -31,6 +33,7 @@ def problems(metrics: dict[str, Any]) -> list[str]:
     """Return every throughput, latency, or render-bound failure."""
     names = (
         "produced",
+        "inputSamples",
         "frameP95Ms",
         "frameMaxMs",
         "inputP95Ms",
@@ -42,7 +45,12 @@ def problems(metrics: dict[str, Any]) -> list[str]:
     produced = metrics.get("produced")
     if isinstance(produced, (int, float)) and produced < LIMITS["producedMinimum"]:
         found.append(f"produced {produced:.0f} frames is below {LIMITS['producedMinimum']}")
-    for name in names[1:]:
+    input_samples = metrics.get("inputSamples")
+    if isinstance(input_samples, (int, float)) and input_samples < LIMITS["inputSamplesMinimum"]:
+        found.append(
+            f"inputSamples {input_samples:.0f} is below {LIMITS['inputSamplesMinimum']}"
+        )
+    for name in names[2:]:
         value = metrics.get(name)
         limit = LIMITS[name]
         if isinstance(value, (int, float)) and value > limit:
@@ -54,6 +62,7 @@ def selftest() -> int:
     """Prove each independent load contract can make the gate red."""
     green = {
         "produced": LIMITS["producedMinimum"],
+        "inputSamples": LIMITS["inputSamplesMinimum"],
         "frameP95Ms": LIMITS["frameP95Ms"],
         "frameMaxMs": LIMITS["frameMaxMs"],
         "inputP95Ms": LIMITS["inputP95Ms"],
@@ -65,7 +74,7 @@ def selftest() -> int:
         return 2
     for name in tuple(green):
         fixture = dict(green)
-        fixture[name] += -1 if name == "produced" else 1
+        fixture[name] += -1 if name in {"produced", "inputSamples"} else 1
         if len(problems(fixture)) != 1:
             print(f"[scrollUnderLoadSmoke --selftest] FAIL. {name} failure escaped.", file=sys.stderr)
             return 2
@@ -86,13 +95,15 @@ def main(argv: list[str]) -> int:
     found = problems(metrics)
     if found:
         print("[scrollUnderLoadSmoke] FAIL. the loaded desktop missed its contract.", file=sys.stderr)
+        print(f"  metrics: {json.dumps(metrics, sort_keys=True)}", file=sys.stderr)
         for problem in found:
             print(f"  - {problem}", file=sys.stderr)
         return 2
     print(
         "[scrollUnderLoadSmoke] OK. "
         f"{metrics['produced']:.0f} frames, p95 {metrics['frameP95Ms']:.1f} ms, "
-        f"input p95 {metrics['inputP95Ms']:.1f} ms, {metrics['renderedMessages']:.0f} DOM messages."
+        f"input p95 {metrics['inputP95Ms']:.1f} ms over {metrics['inputSamples']:.0f} samples, "
+        f"{metrics['renderedMessages']:.0f} DOM messages."
     )
     return 0
 
