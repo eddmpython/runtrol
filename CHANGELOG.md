@@ -15,6 +15,17 @@ its measured architecture, and the gate harness.
 
 ### Added
 
+- A provider-neutral desktop application that keeps every discovered session in one list, opens hot
+  sessions from their bounded live tail, and uses the provider's native surface for cold resume.
+- Confirmed removal that deletes only the runtrol list pointer and leaves the provider-owned
+  conversation available through its original CLI.
+- A nonblocking composer with Korean IME commit protection, selection and copy support, and an
+  editable next draft while the previous prompt is still running.
+- Bounded live rendering that retains the newest reply tail and status under sustained output, with
+  measured interaction, frame-time, GUI memory, WebView process-tree, and cleanup contracts.
+- A single Windows product binary that embeds the desktop bundle, preserves an inherited shared
+  console, hides only its own private console, and leaves supervised sessions with the daemon when
+  the window closes.
 - A provider-neutral `runtrol answer` command that binds an approval choice to its session,
   approval identifier, option, and exact subject digest.
 - A watch subscription acknowledgement, so callers know the event boundary is installed

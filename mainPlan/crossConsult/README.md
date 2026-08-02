@@ -1,6 +1,6 @@
 # crossConsult
 
-상태: 대기. 선행은 `desktopGui` (M1, 토글이 살 표면) 와 두 실물 드라이버 (M0) 다.
+상태: 설계. 토글이 살 M1 표면은 [desktop GUI](../../docs/desktopGui.md), 두 실물 드라이버가 사는 M0 경계는 [provider architecture](../../docs/providerArchitecture.md) 로 완료됐으며 착수는 대기 중이다.
 
 ## 한 문장 정의
 

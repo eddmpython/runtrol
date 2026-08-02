@@ -24,7 +24,7 @@ runtrol-ipc = { workspace = true }
 # 데몬에 닿는 방법. 없으면 시작하는 것까지 이미 여기 있다 (재사용).
 runtrol-cli = { workspace = true }
 
-# 셸. tests/_attempts/desktopShell 실측으로 확정됐다 (mainPlan/desktopGui).
+# 셸. tests/_attempts/desktopShell 실측으로 확정됐다 (docs/desktopGui.md).
 tauri = { workspace = true }
 serde = { workspace = true, features = ["std", "derive"] }
 serde_json = { workspace = true, features = ["std"] }

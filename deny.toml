@@ -10,7 +10,7 @@ all-features = true
 version = 2
 yanked = "deny"
 # 아래는 전부 **데스크톱 셸 (Tauri v2) 이 데려온 것**이고 우리가 고를 수 있는 것이 아니다. 셸 선택의
-# 대가로 기록한다 (mainPlan/desktopGui/README.md "채택의 대가"). 하나하나 이유 없이 넣지 않는다.
+# 대가로 기록한다 (`docs/desktopGui.md` "Supply-chain cost"). 하나하나 이유 없이 넣지 않는다.
 #
 # 이것은 게이트를 약하게 만드는 것이 아니라 게이트가 알려준 값을 장부에 적는 것이다. 취약점 (vulnerability)
 # 은 하나도 없다. 전부 unmaintained 표시이고, 대부분 Linux 백엔드 전용이라 Windows 빌드에 없다.

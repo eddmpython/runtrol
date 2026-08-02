@@ -1,6 +1,6 @@
 # pwaConnection
 
-상태: 진행 중. Phone-facing HTTP admission, rebinding defenses, exact egress allowlisting, Noise IK session encryption, the 120-second single-use Noise IKpsk1 pairing lifecycle with exact PC approval, durable device authorization rows, and fail-closed daemon startup restoration are implemented. Relay service, the daemon remote listener, the PC Noise identity vault, the PWA client, and push remain.
+상태: 진행 중. Phone-facing HTTP admission, rebinding defenses, exact egress allowlisting, Noise IK session encryption, the 120-second single-use Noise IKpsk1 pairing lifecycle with exact PC approval, durable device authorization rows, fail-closed daemon startup restoration, and the Windows CurrentUser DPAPI PC Noise identity vault are implemented. Relay service, the daemon remote listener, non-Windows native identity protectors, the PWA client, and push remain.
 
 운영자가 첫 지시에서 "pwa 와 연결할 아이디어가 아직없다. 똑똑한 방법이 있을까 고민중이다" 라고 한 그 자리다. 이 문서가 그 답이다.
 

@@ -14,17 +14,16 @@
 
 | 폴더 | 상태 | 한 줄 |
 |---|---|---|
-| [desktopGui](desktopGui/) | 활성 설계 | PC 앞의 로컬 GUI. **GPT 앱의 편의를 가져오되 그 메모리는 안 가져온다.** `즉시 반응` 축이 여기 산다. GUI 스택은 프로토타입 실측 후 결정. |
 | [pwaConnection](pwaConnection/) | 활성 | **origin 과 transport 를 분리한다.** 불변 HTTPS origin 하나 + 4 단 전송 사다리 + Noise E2E + 데몬 직접 Web Push. |
 | [pwaSurface](pwaSurface/) | 대기 | PWA 자체. 연결 계층이 선 뒤에 짓는다. |
-| [crossConsult](crossConsult/) | 대기 | 토글 하나로 두 CLI 가 서로를 공식 표면 (MCP) 으로 등록해 AI 끼리 자문한다. 배선은 CLI 공식 명령만, 본문은 여전히 무통과. M1 뒤에 얹는다. |
+| [crossConsult](crossConsult/) | 설계 | 토글 하나로 두 CLI 가 서로를 공식 표면 (MCP) 으로 등록해 AI 끼리 자문한다. 배선은 CLI 공식 명령만, 본문은 여전히 무통과. |
 | [landingSite](landingSite/) | 설계 | GitHub Pages 한 장. 로고·설명·다운로드 둘·우측 상단 SNS (xlpod 방식). **프론트 "astryx 방식" 이 운영자 확인 대기.** |
 
 ## 2. 배포와 최신성
 
 | 폴더 | 상태 | 한 줄 |
 |---|---|---|
-| [launcherUpdate](launcherUpdate/) | 설계 | exe 는 런처 방식. **정본은 GitHub Releases**, minisign 서명, 관리자 권한 불필요, 작업 중이면 미룸. runtrol 자신과 provider CLI **두 층**을 갱신한다 (clipscout 방식 승계). |
+| [launcherUpdate](launcherUpdate/) | 활성 | **정본은 GitHub Releases**, 서명 검증, 관리자 권한 불필요. 앱 갱신은 설치기를 다시 돌리지 않고 **살아 있는 이미지를 원자적으로 교체한다** (실측 근거). provider 는 **확증된 채널에서만** 갱신하고 롤백 대상은 버전 순서로 고른다. |
 
 ## 3. 안전
 
@@ -38,9 +37,9 @@
 
 | 마일스톤 | 내용 | 완료의 정의 |
 |---|---|---|
-| **M0 코어 슬라이스** (지금) | `providerProbe` 졸업 -> Rust daemon 뼈대 + codex·claude 드라이버 + 세션 목록·시작·재개 | 두 provider 의 세션이 한 명령에 뜨고 이어진다 |
-| **M1 데스크톱 (dogfood)** | GUI 셸 결정 실측 -> 한 목록 + 대화 + 즉시 반응 | **운영자가 GPT 앱 대신 이것을 매일 쓴다** |
-| **M2 배포** | launcher + GitHub Releases + landing | 낯선 사람이 설치해서 쓴다 |
+| **M0 코어 슬라이스** (완료) | 공개 provider 경계 + Rust daemon + 세션 목록·시작·재개. 운영 정본은 [core runtime](../docs/coreRuntime.md) 이다 | 두 provider 의 세션이 한 명령에 뜨고 이어진다 |
+| **M1 데스크톱 (dogfood)** (제품 구현 완료, dogfood 판정 대기) | Tauri v2 + 한 목록 + 대화 + 즉시 반응. 운영 정본은 [desktop GUI](../docs/desktopGui.md) 다 | **운영자가 GPT 앱 대신 이것을 매일 쓴다** |
+| **M2 배포** | 서명된 갱신 + GitHub Releases + landing | 낯선 사람이 설치해서 쓴다 |
 | **M3 폰** | pwaConnection (릴레이 + E2E + push) -> pwaSurface -> 폰 승인 | 밖에서 폰으로 내 세션을 잇고 승인한다 |
 
 왜 이 순서인가.
@@ -61,7 +60,7 @@
 (4) 이니셔티브 폴더가 삭제됐다
 는 뜻이다.
 
-**완료 사례**: `positioningDecision` 은 2026-07-30 에 [docs/positioning.md](../docs/positioning.md) 로 승격되고 삭제됐다.
+**완료 사례**: `positioningDecision` 은 2026-07-30 에 [docs/positioning.md](../docs/positioning.md) 로, `desktopGui` 는 2026-08-02 에 [docs/desktopGui.md](../docs/desktopGui.md) 로 승격되고 삭제됐다.
 
 ## 이 판을 지배하는 사실 (r1 조사)
 
