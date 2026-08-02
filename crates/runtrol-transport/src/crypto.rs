@@ -10,7 +10,9 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use hkdf::Hkdf;
 use runtrol_security::{DeviceId, GrantRequest, PairingIdentity, PcPresence};
 use sha2::Sha256;
-use snow::{Builder, HandshakeState, TransportState, params::NoiseParams};
+use snow::params::{DHChoice, NoiseParams};
+use snow::resolvers::{CryptoResolver as _, DefaultResolver};
+use snow::{Builder, HandshakeState, TransportState};
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
 const SESSION_PATTERN: &str = "Noise_IK_25519_AESGCM_SHA256";
@@ -96,6 +98,30 @@ impl StaticKeypair {
             .map_err(|_| CryptoError::InvalidKeyLength)?;
         Ok(Self {
             private,
+            public: PublicKey(public),
+        })
+    }
+
+    /// Rebuild a long-lived identity from operating-system-protected private bytes.
+    ///
+    /// The input is borrowed so the caller can keep it in zeroizing storage. The returned keypair immediately owns
+    /// its own zeroizing copy and derives the public half through the same Curve25519 implementation Noise uses.
+    ///
+    /// # Errors
+    ///
+    /// [`CryptoError::Noise`] if the configured resolver has no Curve25519 implementation, or
+    /// [`CryptoError::InvalidKeyLength`] if that implementation returns a public key of another size.
+    pub fn from_private(private: &[u8; 32]) -> Result<Self, CryptoError> {
+        let mut dh = DefaultResolver
+            .resolve_dh(&DHChoice::Curve25519)
+            .ok_or(CryptoError::Noise)?;
+        dh.set(private);
+        let public = dh
+            .pubkey()
+            .try_into()
+            .map_err(|_| CryptoError::InvalidKeyLength)?;
+        Ok(Self {
+            private: *private,
             public: PublicKey(public),
         })
     }
@@ -1074,5 +1100,14 @@ mod pairing_lifecycle_tests {
             Err(CryptoError::PairingExpired)
         ));
         assert_eq!(offer.remaining_attempts(), 0);
+    }
+
+    #[test]
+    fn protected_private_bytes_rebuild_one_stable_public_identity() {
+        let private = [0x5A; 32];
+        let first = StaticKeypair::from_private(&private).expect("first identity");
+        let second = StaticKeypair::from_private(&private).expect("second identity");
+        assert_eq!(first.public_key(), second.public_key());
+        assert_ne!(first.public_key().to_bytes(), [0; 32]);
     }
 }

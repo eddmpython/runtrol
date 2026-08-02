@@ -18,6 +18,7 @@ runtrol-ipc = { workspace = true }
 runtrol-core = { workspace = true }
 runtrol-drivers = { workspace = true }
 runtrol-transport = { workspace = true }
+runtrol-vault = { workspace = true }
 
 thiserror = { workspace = true }
 # The requests and answers that cross the connection. The daemon reads and writes them; what they mean is the

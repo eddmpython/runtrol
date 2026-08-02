@@ -18,6 +18,7 @@
 //! | `providers/` | the manifest loader, last in the discovery order and therefore able to shadow |
 //! | `process-guards/` | child supervision, containing only bounded process identity records |
 //! | the probe cache | the binary-identity cache of what each installed CLI can do |
+//! | the machine identity vault | the per-user OS protector and Noise handshake assembly |
 //! | the endpoint | the daemon binds it, the CLI connects to it |
 //!
 //! Deliberately absent: a log directory. Where runtrol's own diagnostics go has not been decided,
@@ -50,6 +51,9 @@ const PROCESS_GUARDS: &str = "process-guards";
 /// What each installed CLI was found to support, keyed by its version.
 const PROBE_CACHE: &str = "probe.json";
 
+/// The operating-system-protected long-lived machine identity.
+const MACHINE_IDENTITY: &str = "machine-identity.vault";
+
 /// Directories runtrol creates when it opens a home.
 ///
 /// Created up front rather than on first write, so that `rm -rf $RUNTROL_HOME` followed by a start
@@ -69,6 +73,8 @@ pub struct Layout {
     process_guards: AbsPath,
     /// The probe cache file.
     probe_cache: AbsPath,
+    /// The operating-system-protected machine identity.
+    machine_identity: AbsPath,
     /// Where the daemon listens.
     endpoint: Endpoint,
 }
@@ -94,6 +100,7 @@ impl Layout {
             providers: entry(PROVIDERS)?,
             process_guards: entry(PROCESS_GUARDS)?,
             probe_cache: entry(PROBE_CACHE)?,
+            machine_identity: entry(MACHINE_IDENTITY)?,
             endpoint: Endpoint::of(&root)?,
             root,
         })
@@ -129,6 +136,12 @@ impl Layout {
         &self.probe_cache
     }
 
+    /// The operating-system-protected long-lived machine identity.
+    #[must_use]
+    pub const fn machine_identity(&self) -> &AbsPath {
+        &self.machine_identity
+    }
+
     /// Where the daemon listens and the CLI connects.
     #[must_use]
     pub const fn endpoint(&self) -> &Endpoint {
@@ -148,6 +161,7 @@ impl Layout {
             &self.providers,
             &self.process_guards,
             &self.probe_cache,
+            &self.machine_identity,
         ]
     }
 }

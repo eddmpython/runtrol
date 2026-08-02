@@ -1,8 +1,7 @@
 # Child process lifetime: what to run, what may be passed to it, and how it dies.
 #
-# This is where `unsafe` will be allowed once containment lands, which is the reason it is a crate rather
-# than a module: the workspace sets `unsafe_code = "forbid"`, and `forbid` cannot be relaxed from inside.
-# The override arrives with the code that needs it, not before.
+# **Not `[lints] workspace = true`.** This crate owns the process-control FFI, and the workspace table sets
+# `unsafe_code = "forbid"`, which cannot be relaxed from inside the crate that inherits it
 [package]
 name = "runtrol-childproc"
 version = "0.0.0"

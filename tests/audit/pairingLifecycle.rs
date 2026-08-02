@@ -263,3 +263,34 @@ fn persisted_grants_enter_only_through_daemon_assembly() {
         "persisted authority gained another production entry point"
     );
 }
+
+#[cfg(windows)]
+#[test]
+fn the_pc_noise_identity_survives_restart_only_as_a_dpapi_blob() {
+    let scratch = Scratch::make();
+    let vault_path = scratch
+        .root
+        .join("machine-identity.vault")
+        .expect("valid vault file name");
+    let first = runtrol_vault::MachineSecret::load_or_create(&vault_path)
+        .expect("create DPAPI-protected identity");
+    let raw = *first.as_bytes();
+    let public = StaticKeypair::from_private(first.as_bytes())
+        .expect("derive first PC identity")
+        .public_key();
+    let on_disk = std::fs::read(vault_path.as_std_path()).expect("read protected vault");
+    assert!(
+        !on_disk.windows(raw.len()).any(|window| window == raw),
+        "the PC private key appeared in the vault file"
+    );
+    drop(first);
+
+    let restored = runtrol_vault::MachineSecret::load_or_create(&vault_path)
+        .expect("restore DPAPI-protected identity");
+    assert_eq!(
+        StaticKeypair::from_private(restored.as_bytes())
+            .expect("derive restored PC identity")
+            .public_key(),
+        public
+    );
+}

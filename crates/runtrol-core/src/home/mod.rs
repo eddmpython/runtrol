@@ -19,11 +19,11 @@
 //!
 //! # What is not here
 //!
-//! No conversation, and nothing a person reads. This directory holds a pointer per session and
-//! runtrol's own bookkeeping. Deleting it costs the operator their labels and pins and nothing else,
-//! because every session it points at is still openable with the provider's own resume command. That
-//! property is what makes the directory safe to delete, and it is checked as an acceptance test
-//! rather than promised in prose.
+//! No conversation, and nothing a person reads. This directory holds a pointer per session, paired-device authority,
+//! the operating-system-protected machine identity, and runtrol's own bookkeeping. Deleting it costs labels, pins,
+//! and device pairings, but never a provider session or transcript: every session it pointed at remains openable with
+//! the provider's own resume command. That property is what makes the directory safe to delete, and it is checked as
+//! an acceptance test rather than promised in prose.
 
 pub mod layout;
 mod os;

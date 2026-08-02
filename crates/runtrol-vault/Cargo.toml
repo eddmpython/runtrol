@@ -1,0 +1,53 @@
+# Per-user operating-system protection for runtrol's own machine identity.
+[package]
+name = "runtrol-vault"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[dependencies]
+runtrol-provider = { workspace = true }
+getrandom = { workspace = true }
+thiserror = { workspace = true }
+zeroize = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_Security_Cryptography",
+] }
+
+# **Not `[lints] workspace = true`.** DPAPI exposes only a system-call interface, and the workspace table sets
+# `unsafe_code = "forbid"`, which cannot be relaxed by an inheriting crate. This crate therefore repeats the table
+# with `deny`, confines every unsafe block to `platform.rs`, and requires an adjacent safety argument for each one.
+[lints.rust]
+unsafe_code = "deny"
+let_underscore_drop = "deny"
+unused_must_use = "deny"
+unreachable_pub = "warn"
+missing_docs = "warn"
+
+[lints.clippy]
+all = { level = "deny", priority = -1 }
+pedantic = { level = "warn", priority = -2 }
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+unreachable = "deny"
+dbg_macro = "deny"
+print_stdout = "deny"
+# `LocalFree` has no recovery path in `Drop`. A non-null result is an invariant failure that must remain visible.
+print_stderr = "allow"
+indexing_slicing = "deny"
+let_underscore_must_use = "deny"
+unwrap_in_result = "deny"
+disallowed_methods = "deny"
+disallowed_types = "deny"
+disallowed_macros = "deny"
+self_named_module_files = "deny"

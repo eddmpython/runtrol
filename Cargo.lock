@@ -2659,6 +2659,7 @@ dependencies = [
  "runtrol-security",
  "runtrol-store",
  "runtrol-transport",
+ "runtrol-vault",
  "tokio",
 ]
 
@@ -2714,6 +2715,7 @@ dependencies = [
  "runtrol-security",
  "runtrol-store",
  "runtrol-transport",
+ "runtrol-vault",
  "serde_json",
  "thiserror 2.0.19",
  "tokio",
@@ -2811,6 +2813,17 @@ dependencies = [
  "snow",
  "thiserror 2.0.19",
  "tokio",
+ "zeroize",
+]
+
+[[package]]
+name = "runtrol-vault"
+version = "0.0.0"
+dependencies = [
+ "getrandom 0.4.3",
+ "runtrol-provider",
+ "thiserror 2.0.19",
+ "windows-sys 0.61.2",
  "zeroize",
 ]
 

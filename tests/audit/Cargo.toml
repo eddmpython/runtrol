@@ -25,6 +25,7 @@ runtrol-provider = { workspace = true }
 runtrol-security = { workspace = true }
 runtrol-store = { workspace = true }
 runtrol-transport = { path = "../../crates/runtrol-transport" }
+runtrol-vault = { workspace = true }
 tokio = { workspace = true, features = ["io-util", "macros", "net", "rt", "sync"] }
 
 [[test]]

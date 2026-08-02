@@ -30,6 +30,9 @@ const ALLOWED_EDGES: &[(&str, &[&str])] = &[
     // L1. Browser-reachable transport. It may establish a remote caller through the scope wall, but cannot
     // reach the kernel, a driver, storage, or the local presence challenge.
     ("runtrol-transport", &["runtrol-security"]),
+    // L1. Per-user machine secret protection. It knows only the path vocabulary and never transport, storage, or a
+    // conversation-capable type.
+    ("runtrol-vault", &["runtrol-provider"]),
     // L2. The kernel. **It cannot see the drivers** (see FORBIDDEN_TRANSITIVE below).
     (
         "runtrol-core",
@@ -57,6 +60,7 @@ const ALLOWED_EDGES: &[(&str, &[&str])] = &[
             "runtrol-core",
             "runtrol-drivers",
             "runtrol-transport",
+            "runtrol-vault",
         ],
     ),
     // L3. The command surface asks the daemon. It never opens storage itself, which the exclusive lock

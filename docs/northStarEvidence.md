@@ -68,7 +68,7 @@
 | `scopeWall` | 모든 요청에 누가 할 수 있는지 규칙이 있고, 포괄 갈래가 거부하며, 벽이 디스패처의 다른 무엇보다 먼저 물어진다. 컴파일러는 crate 경계 너머로 빠진 요청을 말해주지 못한다 |
 | `scopeGrantability` | 부여 불가 스코프 (`device.pair` · `config.write` · `approval.auto`) 를 원격에서 부여하려는 코드가 **컴파일되지 않는다** |
 | `rebindingDefenses` | Host allowlist, Origin 기본 거부, 쿠키 인증 부재, CORS wildcard 부재를 실제 요청으로 확인 |
-| `pairingLifecycle` | 128 bit QR PSK 가 120 초 뒤 만료되고, 다섯 번 실패하면 잠기며, 첫 유효 Noise 메시지에서 즉시 단일 사용 처리된다. Noise 로 인증된 static key 와 개별 attempt id, 검증된 기기명과 platform 을 PC prompt 와 witness 소비에 함께 결박한다. 일반 `device.pair` witness 나 다른 pairing witness 로는 message 2 와 channel 을 만들 수 없고, 정확한 현장 승인 뒤에만 locally minted device id 가 생긴다. 승인된 key, 단방향 credential fingerprint, scope 는 durable row 로 재개되며 bearer token 원문은 파일에 남지 않는다. persisted grant constructor 는 daemon assembly 와 자체 security test 이외의 production 진입점을 거부한다 |
+| `pairingLifecycle` | 128 bit QR PSK 가 120 초 뒤 만료되고, 다섯 번 실패하면 잠기며, 첫 유효 Noise 메시지에서 즉시 단일 사용 처리된다. Noise 로 인증된 static key 와 개별 attempt id, 검증된 기기명과 platform 을 PC prompt 와 witness 소비에 함께 결박한다. 일반 `device.pair` witness 나 다른 pairing witness 로는 message 2 와 channel 을 만들 수 없고, 정확한 현장 승인 뒤에만 locally minted device id 가 생긴다. 승인된 key, 단방향 credential fingerprint, scope 는 durable row 로 재개되며 bearer token 원문은 파일에 남지 않는다. Windows PC private key 는 CurrentUser DPAPI blob 으로만 남고 재시작 뒤 같은 public identity 를 복원한다. persisted grant constructor 는 daemon assembly 와 자체 security test 이외의 production 진입점을 거부한다 |
 | `approvalAuthorization` | 승인 응답은 드라이버가 실제로 보관한 대기 요청의 id, subject digest, 선택지, 만료 시각, 구조적 위험도에 결박된다. wire 에 위험도를 싣지 않으므로 원격 장치가 필요 권한을 낮출 수 없고, 불완전한 subject 와 권한 밖 선택지는 공급자에게 전달되지 않는다 |
 | `argumentEscaping` | Windows `.cmd` 실행 인자 이스케이프 (BatBadBut CVE-2024-24576) |
 | `configReadOnly` | provider 설정 파일에 **쓰는** 코드가 없다 |

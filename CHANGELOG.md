@@ -46,6 +46,11 @@ its measured architecture, and the gate harness.
   app icon, tray icon, and social card sizes that cannot be vectors. The mark keeps one
   colour on light and dark backgrounds, so only the wordmark has a theme variant.
 
+### Security
+
+- The PC pairing identity persists across restarts only as a Windows CurrentUser DPAPI blob, so the
+  raw Noise private key never rests on disk and other machine accounts cannot read it.
+
 ### Changed
 
 - Modularity, clean code, security, hygiene, and budget are named gates on a pass or fail
