@@ -56,6 +56,14 @@ const VERIFY_STOP_ALL: &str = "--verify-stop-all";
 #[cfg(unix)]
 const VERIFY_SPAWN_FAILURE: &str = "--verify-spawn-failure";
 
+/// Exercise session spawn and close after an update renamed a new build over the running image.
+#[cfg(unix)]
+const VERIFY_UPDATE_RENAME: &str = "--verify-update-rename";
+
+/// Marks the disposable copy of this binary that the update-rename verification renames over.
+#[cfg(unix)]
+const UPDATE_RENAME_COPY_ENV: &str = "RUNTROL_CONTAINMENT_UPDATE_RENAME_COPY";
+
 /// Long enough that the test finishes first, short enough that a stray copy cannot linger.
 const SLEEP: Duration = Duration::from_mins(1);
 
@@ -107,7 +115,11 @@ fn main() {
     if let Some(mode) = words.first().filter(|argument| {
         matches!(
             argument.as_str(),
-            VERIFY_EXIT_STATUS | VERIFY_EXPLICIT_STOP | VERIFY_STOP_ALL | VERIFY_SPAWN_FAILURE
+            VERIFY_EXIT_STATUS
+                | VERIFY_EXPLICIT_STOP
+                | VERIFY_STOP_ALL
+                | VERIFY_SPAWN_FAILURE
+                | VERIFY_UPDATE_RENAME
         )
     }) {
         let Some(directory) = words.get(1) else {
@@ -119,6 +131,7 @@ fn main() {
             VERIFY_EXPLICIT_STOP => verify_explicit_stop(directory),
             VERIFY_STOP_ALL => verify_stop_all(directory),
             VERIFY_SPAWN_FAILURE => verify_spawn_failure(directory),
+            VERIFY_UPDATE_RENAME => verify_update_rename(directory),
             _ => Err("the keeper verification mode was not recognized".to_owned()),
         };
         if let Err(error) = verified {
@@ -391,6 +404,98 @@ fn verify_spawn_failure(directory: &str) -> Result<(), String> {
             "provider spawn failure lost its diagnostic: {error}"
         ));
     }
+    verify_no_guard_records(directory)
+}
+
+/// Prove sessions still spawn and close after an update replaced the file behind this process.
+///
+/// Runs in two stages. The shared cargo test binary must stay where cargo put it, so the outer
+/// stage copies itself into a disposable name beside the guard directory and re-executes that copy.
+/// The copy performs the journey: one session before the update, then the launcherUpdate rename
+/// dance against its own image (hard link keeper, new build renamed over the running name), then a
+/// second session that must start and close exactly like the first. Before the identity redesign,
+/// the second spawn failed on Linux because the process re-found itself through a lookup that now
+/// names a deleted path (the confirmed "갱신했더니 세션이 안 열린다" defect).
+///
+/// On macOS there is no descriptor-based spawn path, so this journey proves the weaker fact that a
+/// same-content new build under the original name keeps sessions working; the deleted-lookup hazard
+/// itself is Linux-measured.
+#[cfg(unix)]
+fn verify_update_rename(directory: &str) -> Result<(), String> {
+    if std::env::var_os(UPDATE_RENAME_COPY_ENV).is_none() {
+        let own_path = std::env::current_exe()
+            .map_err(|error| format!("could not find the update-rename binary: {error}"))?;
+        let parent = Path::new(directory).parent().ok_or_else(|| {
+            "the guard directory has no parent for the disposable copy".to_owned()
+        })?;
+        let copy = parent.join("updateRenameCopy");
+        std::fs::copy(&own_path, &copy)
+            .map_err(|error| format!("could not copy the update-rename binary: {error}"))?;
+        let status = std::process::Command::new(&copy)
+            .args([VERIFY_UPDATE_RENAME, directory])
+            .env(UPDATE_RENAME_COPY_ENV, "1")
+            .stdin(Stdio::null())
+            .stdout(Stdio::inherit())
+            .stderr(Stdio::inherit())
+            .status()
+            .map_err(|error| format!("could not run the disposable update-rename copy: {error}"))?;
+        for stray in ["updateRenameCopy", "updateRenameCopy.inuse"] {
+            // The keeper link parallels the update design's inuse name; both are this stage's own
+            // scratch and a missing one only means the failing stage never created it.
+            if let Err(error) = std::fs::remove_file(parent.join(stray))
+                && error.kind() != std::io::ErrorKind::NotFound
+            {
+                return Err(format!(
+                    "could not remove the disposable copy {stray}: {error}"
+                ));
+            }
+        }
+        if !status.success() {
+            return Err(format!("the update-rename journey failed with {status}"));
+        }
+        return Ok(());
+    }
+
+    let (runtime, containment, own_path) = verification_context(directory)?;
+    let run_session = |label: &str| -> Result<(), String> {
+        let mut command = runtrol_childproc::TrackedCommand::new(&own_path);
+        command.args([EXIT_MODE, "0"]);
+        command.stdin(Stdio::null());
+        command.stdout(Stdio::null());
+        command.stderr(Stdio::inherit());
+        command.kill_on_drop(true);
+        let spawned = {
+            let _entered = runtime.enter();
+            command.spawn(&containment)
+        };
+        let (mut child, mut guard) =
+            spawned.map_err(|error| format!("could not start the {label} session: {error}"))?;
+        let status = runtime
+            .block_on(child.wait())
+            .map_err(|error| format!("could not read the {label} session status: {error}"))?;
+        if status.code() != Some(0) {
+            return Err(format!("the {label} session ended with {status}"));
+        }
+        guard
+            .complete()
+            .map_err(|error| format!("could not complete the {label} session guard: {error}"))
+    };
+
+    run_session("pre-update")?;
+
+    // The update dance from the launcherUpdate design, aimed at this running copy: keep the live
+    // image reachable through a keeper link, then rename a new build over the only public name.
+    let keeper = own_path.with_extension("inuse");
+    std::fs::hard_link(&own_path, &keeper)
+        .map_err(|error| format!("could not link the in-use image: {error}"))?;
+    let incoming = own_path.with_extension("incoming");
+    std::fs::copy(&own_path, &incoming)
+        .map_err(|error| format!("could not stage the new build: {error}"))?;
+    std::fs::rename(&incoming, &own_path).map_err(|error| {
+        format!("could not rename the new build over the running image: {error}")
+    })?;
+
+    run_session("post-update")?;
     verify_no_guard_records(directory)
 }
 

@@ -115,8 +115,10 @@ On Windows, all supervised descendants join a job object configured to terminate
 The kernel therefore removes them when the daemon exits normally, panics, or is killed without cleanup.
 
 On Unix, a small stable keeper leads one process group and starts the provider as its child. Before the provider is
-reported ready, the keeper durably activates a bounded guard containing its PID, kernel start identity, and executable
-identity. The daemon retains the other end of one private inherited control socket. An explicit success or bounded
+reported ready, the keeper durably activates a bounded guard containing its PID, kernel start identity, and boot
+identity. The executable is deliberately not part of that identity: an update replaces the file behind a live keeper
+without touching the process, so a lookup by name stops matching while the keeper is still the same process. The
+daemon retains the other end of one private inherited control socket. An explicit success or bounded
 error frame closes the launch handshake. The registry holds at most 64 records.
 
 Closing that control socket, including when the daemon is killed without cleanup, makes the live keeper signal its own

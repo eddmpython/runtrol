@@ -90,7 +90,7 @@
 | `liveMemoryBudget` | 실제 debug daemon 과 외부 ACP fixture 에 hot session 하나와 watcher 네 개를 연결한다. 900 KiB payload 의 완전 전달, baseline 대비 10 MiB 이하 peak 증가, Windows 및 macOS 48 MiB와 Linux 64 MiB total RSS, 종료 뒤 Windows 및 Linux 4 MiB와 macOS 5 MiB 이하 residual 을 검사한다. parser 입력 상한 아래의 15 MiB payload 는 live wire 에 싣지 않고 watcher 모두에게 explicit lag 를 내며, 같은 daemon 에서 session 을 세 번 연속 열어 거부한 뒤에도 residual 상한을 지켜야 한다 |
 | `reconnectContinuitySmoke` | production browser bundle 이 받아들인 frame 을 drain 한 뒤 exact cursor 로 재접속하고, stale generation 과 취소된 pending watch 가 새 view 에 섞이지 않는지 검사한다. 실제 network, daemon crash, phone 은 이 게이트의 주장이 아니다 |
 | `resilienceFaultInjection` | 실제 local IPC endpoint 를 끊은 동안 bounded ring 에 남은 fixture frame 이 exact cursor 뒤 한 번씩 replay 되는지 검사한다. 이어 daemon 을 강제 종료하고 같은 home 으로 재시작해 새 stream 의 explicit gap, provider-native identity 보존, 공식 resume 뒤 새 turn 을 확인한다. remote network, phone, transcript recovery, lossless history 는 주장하지 않는다 |
-| `orphanReaping` | Windows 에서는 job handle 종료 뒤 자식 tree 부재를 확인한다. Unix 에서는 stable keeper 가 private control EOF 를 감지해 숫자 PID 나 PGID 없이 자기 group 을 종료한다. 다음 supervisor 는 PID, kernel start identity, executable 을 재검증하며 numeric group 을 signal 하지 않고 non-zombie member 부재만 확인한다. 모호한 live group 은 거부한다. 환경 변수와 대화 데이터는 guard 에 들어가지 않는다 |
+| `orphanReaping` | Windows 에서는 job handle 종료 뒤 자식 tree 부재를 확인한다. Unix 에서는 stable keeper 가 private control EOF 를 감지해 숫자 PID 나 PGID 없이 자기 group 을 종료한다. 다음 supervisor 는 PID, kernel start identity, boot identity 를 재검증하며 numeric group 을 signal 하지 않고 non-zombie member 부재만 확인한다. 실행 파일은 신원이 아니다 (갱신이 live keeper 뒤의 파일을 바꾼다). 다른 세대로 보이는 기록은 지우지 않고 보존하며, 갱신이 running image 를 rename 으로 덮은 뒤에도 세션 시작과 종료가 그대로 동작하는 것을 사본 격리 여정이 확인한다. 환경 변수와 대화 데이터는 guard 에 들어가지 않는다 |
 
 <!-- gates:end -->
 

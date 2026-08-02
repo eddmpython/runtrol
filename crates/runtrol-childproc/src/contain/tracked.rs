@@ -319,8 +319,7 @@ impl TrackedCommand {
         let plan_fd = plan_private.as_raw_fd();
         let status_fd = status_private.as_raw_fd();
         let lock_fd = lock_private.as_raw_fd();
-        let executable = std::env::current_exe()
-            .map_err(|error| containment_io("finding the child bootstrap executable", error))?;
+        let executable = keeper_program()?;
         let mut command = self.into_command(executable.as_os_str(), false, false);
         command.kill_on_drop(false);
         command.args([
@@ -373,6 +372,36 @@ impl TrackedCommand {
 
         Ok(TrackedChild::keeper(child, status_read))
     }
+}
+
+/// The program name that reaches this executable's live image, not its possibly-replaced file.
+///
+/// On Linux the child resolves `/proc/self/exe` after fork and before exec, which names the
+/// forking image itself: an update that renamed or deleted the file on disk cannot break it, while
+/// a lookup through `current_exe()` returns a deleted path there and every later spawn fails
+/// (the confirmed defect that blocked updates: "갱신했더니 세션이 안 열린다").
+///
+/// macOS has no descriptor-based exec for an unprivileged process, so the path captured at first
+/// use is the honest remainder: it names the original file and an in-place update there is the
+/// open design question recorded in the update initiative.
+#[cfg(target_os = "linux")]
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "the platform implementations keep one fallible signature so the spawn path cannot fork per operating system"
+)]
+fn keeper_program() -> Result<std::ffi::OsString, SpawnError> {
+    Ok(std::ffi::OsString::from("/proc/self/exe"))
+}
+
+#[cfg(all(unix, not(target_os = "linux")))]
+fn keeper_program() -> Result<std::ffi::OsString, SpawnError> {
+    static PROGRAM: std::sync::OnceLock<std::ffi::OsString> = std::sync::OnceLock::new();
+    if let Some(program) = PROGRAM.get() {
+        return Ok(program.clone());
+    }
+    let found = std::env::current_exe()
+        .map_err(|error| containment_io("finding the child bootstrap executable", error))?;
+    Ok(PROGRAM.get_or_init(|| found.into_os_string()).clone())
 }
 
 #[cfg(unix)]

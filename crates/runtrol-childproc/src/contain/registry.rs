@@ -10,17 +10,27 @@ use std::ffi::OsStr;
 use std::fs::{File, OpenOptions};
 use std::io::{Read as _, Write as _};
 use std::os::fd::{AsRawFd as _, RawFd};
-use std::os::unix::ffi::{OsStrExt as _, OsStringExt as _};
 use std::os::unix::fs::OpenOptionsExt as _;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
-use crate::contain::identity::{LiveIdentity, MAX_EXECUTABLE_BYTES, ProcessIdentity};
+use crate::contain::identity::{
+    BOOT_ID_BYTES, LiveIdentity, MAX_EXECUTABLE_BYTES, ProcessIdentity,
+};
 use crate::error::SpawnError;
 
 const MAX_GUARDS: usize = 64;
-const RECORD_MAGIC: &[u8; 8] = b"RTGRD001";
+const RECORD_MAGIC: &[u8; 8] = b"RTGRD002";
+const RECORD_MAGIC_V1: &[u8; 8] = b"RTGRD001";
+/// How long an ambiguous record is kept before its group check may retire it. Mirrors the
+/// repository's seven-day scratch decay convention: old enough that any real keeper has long since
+/// resolved through its own close path, short enough that the 64-record bound cannot silt up.
+#[expect(
+    clippy::duration_suboptimal_units,
+    reason = "the day-unit constructors are not stable yet, so seven days is spelled in seconds"
+)]
+const AMBIGUOUS_TTL: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 const ACTIVE_SUFFIX: &str = ".active";
 const PENDING_SUFFIX: &str = ".pending";
 const LOCK_FILE: &str = ".spawn.lock";
@@ -325,15 +335,25 @@ impl Registry {
         sync_directory(directory)
     }
 
-    pub(super) fn recover(&self) -> Result<(), SpawnError> {
+    /// Recover every durable record, returning how many were kept as ambiguous.
+    ///
+    /// A kept record is not silence: it stays in the bounded directory, every later recovery pass
+    /// sees it again, and the caller receives the count so a surface can say it out loud.
+    pub(super) fn recover(&self) -> Result<usize, SpawnError> {
         let entries = self.entries()?;
+        let mut ambiguous = 0_usize;
         for entry in entries {
             match entry {
                 Entry::Pending(path) | Entry::Transient(path) => remove_if_present(&path)?,
-                Entry::Active { path, identity, .. } => reap(&identity, &path)?,
+                Entry::Active { path, identity, .. } => {
+                    if reap(&identity, &path)? == Reaped::KeptAmbiguous {
+                        ambiguous += 1;
+                    }
+                }
             }
         }
-        sync_directory(self.directory())
+        sync_directory(self.directory())?;
+        Ok(ambiguous)
     }
 
     pub(super) fn terminate_all(&self) -> Result<(), SpawnError> {
@@ -353,7 +373,11 @@ impl Registry {
         errors.extend(scan.errors);
         for entry in scan.entries {
             let result = match entry {
-                Entry::Active { path, identity, .. } => reap(&identity, &path),
+                Entry::Active { path, identity, .. } => reap(&identity, &path).map(|_kept| {
+                    // A kept ambiguous record is not a termination failure: nothing observable of
+                    // that generation remains to signal, and the durable record itself stays for
+                    // the next recovery pass to see.
+                }),
                 Entry::Pending(path) | Entry::Transient(path) => remove_if_present(&path),
             };
             if let Err(error) = result {
@@ -392,8 +416,9 @@ impl Registry {
         let Some(identity) = read_active_if_present(&path)? else {
             return Ok(());
         };
-        wait_for_group_quiescence(&identity)?;
-        remove_if_present(&path)?;
+        if wait_for_group_quiescence(&identity)? == Quiescence::Clear {
+            remove_if_present(&path)?;
+        }
         sync_directory(self.directory())
     }
 
@@ -417,8 +442,9 @@ impl Registry {
         let Some(identity) = read_active_if_present(&path)? else {
             return Ok(());
         };
-        wait_for_group_quiescence(&identity)?;
-        remove_if_present(&path)?;
+        if wait_for_group_quiescence(&identity)? == Quiescence::Clear {
+            remove_if_present(&path)?;
+        }
         sync_directory(self.directory())
     }
 
@@ -542,17 +568,17 @@ fn parse_entry(item: &std::fs::DirEntry) -> Result<Option<Entry>, SpawnError> {
 }
 
 fn encode(identity: &ProcessIdentity) -> Result<Vec<u8>, SpawnError> {
-    let executable = identity.executable.as_os_str().as_bytes();
-    let length = u32::try_from(executable.len()).map_err(|error| SpawnError::Containment {
-        doing: "encoding a process guard",
-        detail: error.to_string(),
-    })?;
-    let mut encoded = Vec::with_capacity(24 + executable.len());
+    let Some(boot) = identity.boot else {
+        return Err(failure(
+            "encoding a process guard",
+            "a bootless identity exists only when decoding the previous record format",
+        ));
+    };
+    let mut encoded = Vec::with_capacity(8 + BOOT_ID_BYTES + 12);
     encoded.extend_from_slice(RECORD_MAGIC);
+    encoded.extend_from_slice(&boot);
     encoded.extend_from_slice(&identity.pid.to_le_bytes());
     encoded.extend_from_slice(&identity.start.to_le_bytes());
-    encoded.extend_from_slice(&length.to_le_bytes());
-    encoded.extend_from_slice(executable);
     Ok(encoded)
 }
 
@@ -583,7 +609,26 @@ fn read_active_if_present(path: &Path) -> Result<Option<ProcessIdentity>, SpawnE
 }
 
 fn decode_active(bytes: &[u8]) -> Result<ProcessIdentity, SpawnError> {
-    if bytes.len() < 24 || bytes.get(..8) != Some(RECORD_MAGIC.as_slice()) {
+    if bytes.get(..8) == Some(RECORD_MAGIC.as_slice()) {
+        if bytes.len() != 8 + BOOT_ID_BYTES + 12 {
+            return Err(failure(
+                "decoding a process guard",
+                "the guard record length is malformed",
+            ));
+        }
+        let boot = copy_array::<BOOT_ID_BYTES>(bytes, 8)?;
+        let pid = u32::from_le_bytes(copy_array::<4>(bytes, 8 + BOOT_ID_BYTES)?);
+        let start = u64::from_le_bytes(copy_array::<8>(bytes, 12 + BOOT_ID_BYTES)?);
+        return Ok(ProcessIdentity {
+            pid,
+            start,
+            boot: Some(boot),
+        });
+    }
+    // The previous format carried an executable path and no boot identifier. The path is validated
+    // and discarded: it stopped being identity the moment updates could rename the file behind a
+    // live keeper, and a bootless identity resolves through the group check instead.
+    if bytes.len() < 24 || bytes.get(..8) != Some(RECORD_MAGIC_V1.as_slice()) {
         return Err(failure(
             "decoding a process guard",
             "the guard header is malformed",
@@ -604,13 +649,10 @@ fn decode_active(bytes: &[u8]) -> Result<ProcessIdentity, SpawnError> {
             "the executable length is malformed",
         ));
     }
-    let executable = PathBuf::from(std::ffi::OsString::from_vec(
-        bytes.get(24..).unwrap_or_default().to_vec(),
-    ));
     Ok(ProcessIdentity {
         pid,
         start,
-        executable,
+        boot: None,
     })
 }
 
@@ -640,12 +682,45 @@ fn request_keeper_stop(control: &mut std::os::unix::net::UnixStream) -> Result<(
     }
 }
 
-fn reap(identity: &ProcessIdentity, path: &Path) -> Result<(), SpawnError> {
+/// What one recovery pass decided about a durable record.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Reaped {
+    /// The record was retired because nothing recorded in it can execute.
+    Cleared,
+    /// The record was kept: its PID now carries another start value, and this pass refuses to treat
+    /// an uncertain generation as permission to erase a group's only trace.
+    KeptAmbiguous,
+}
+
+fn reap(identity: &ProcessIdentity, path: &Path) -> Result<Reaped, SpawnError> {
     // Recovery never signals a numeric process or group identifier. The stable keeper owns that operation while it
     // is itself a member of the group. A replacement only waits for the keeper's private control channel to close the
     // old group, then removes the record when nothing in it can execute.
-    wait_for_group_quiescence(identity)?;
-    remove_if_present(path)
+    match wait_for_group_quiescence(identity)? {
+        Quiescence::Clear => {
+            remove_if_present(path)?;
+            Ok(Reaped::Cleared)
+        }
+        Quiescence::Ambiguous => {
+            // An expired ambiguous record has outlived every path that could still resolve it, so
+            // one group check decides it: nothing executing retires the record, and an executing
+            // group keeps its trace (an unbounded keep would silt the 64-record directory shut).
+            if record_expired(path)? && !group_has_executing_members(identity.pid)? {
+                remove_if_present(path)?;
+                return Ok(Reaped::Cleared);
+            }
+            Ok(Reaped::KeptAmbiguous)
+        }
+    }
+}
+
+fn record_expired(path: &Path) -> Result<bool, SpawnError> {
+    let modified = std::fs::metadata(path)
+        .and_then(|meta| meta.modified())
+        .map_err(|error| io_failure("reading a process guard age", error))?;
+    Ok(SystemTime::now()
+        .duration_since(modified)
+        .is_ok_and(|age| age > AMBIGUOUS_TTL))
 }
 
 #[cfg(test)]
@@ -700,31 +775,50 @@ fn group_exists(group: u32) -> Result<bool, SpawnError> {
     }
 }
 
-fn wait_for_group_quiescence(identity: &ProcessIdentity) -> Result<(), SpawnError> {
+/// How a keeper wait ended.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Quiescence {
+    /// Nothing recorded in the guard can execute any more.
+    Clear,
+    /// The recorded PID belongs to another generation, so this group cannot be observed through it.
+    Ambiguous,
+}
+
+fn wait_for_group_quiescence(identity: &ProcessIdentity) -> Result<Quiescence, SpawnError> {
     // Keeper self-termination can leave an orphaned zombie visible indefinitely when the host's PID 1 does not reap
     // promptly. Such a row cannot execute or fork. Waiting for the numeric group to disappear would turn successful
     // termination into a permanent startup failure, so the durable record closes when no non-zombie member remains.
+    //
+    // A keeper whose executable was replaced on disk is still `Ours`: the executable is not part of
+    // the identity any more, because an update renames the file behind a live keeper (the previous
+    // reading treated that as another process and erased records over executing groups).
     let deadline = Instant::now() + REAP_BUDGET;
     while Instant::now() < deadline {
         match identity.live_identity()? {
-            LiveIdentity::Reused => return Ok(()),
-            LiveIdentity::Exact | LiveIdentity::Gone => {
+            LiveIdentity::DifferentBoot => return Ok(Quiescence::Clear),
+            LiveIdentity::Ambiguous => return Ok(Quiescence::Ambiguous),
+            LiveIdentity::Ours | LiveIdentity::Gone => {
                 if !group_has_executing_members(identity.pid)? {
-                    return Ok(());
+                    return Ok(Quiescence::Clear);
                 }
             }
         }
         std::thread::sleep(REAP_POLL);
     }
-    if identity.live_identity()? != LiveIdentity::Reused
-        && group_has_executing_members(identity.pid)?
-    {
-        return Err(failure(
-            "waiting for a process keeper to end",
-            "the durable keeper group retained an executing member for 10 seconds; recovery refused to signal a numeric identifier",
-        ));
+    match identity.live_identity()? {
+        LiveIdentity::DifferentBoot => Ok(Quiescence::Clear),
+        LiveIdentity::Ambiguous => Ok(Quiescence::Ambiguous),
+        LiveIdentity::Ours | LiveIdentity::Gone => {
+            if group_has_executing_members(identity.pid)? {
+                Err(failure(
+                    "waiting for a process keeper to end",
+                    "the durable keeper group retained an executing member for 10 seconds; recovery refused to signal a numeric identifier",
+                ))
+            } else {
+                Ok(Quiescence::Clear)
+            }
+        }
     }
-    Ok(())
 }
 
 #[cfg(target_os = "linux")]
@@ -953,7 +1047,7 @@ mod tests {
         let identity = ProcessIdentity {
             pid: 42,
             start: 7_654_321,
-            executable: PathBuf::from("/opt/runtrol/provider"),
+            boot: Some([7; BOOT_ID_BYTES]),
         };
         let encoded = encode(&identity)?;
         let decoded = decode_active(&encoded)?;
@@ -963,29 +1057,52 @@ mod tests {
     }
 
     #[test]
+    fn a_previous_format_record_decodes_without_a_boot() -> Result<(), SpawnError> {
+        let executable = b"/opt/runtrol/provider";
+        let mut v1 = Vec::new();
+        v1.extend_from_slice(RECORD_MAGIC_V1);
+        v1.extend_from_slice(&42_u32.to_le_bytes());
+        v1.extend_from_slice(&7_654_321_u64.to_le_bytes());
+        v1.extend_from_slice(
+            &u32::try_from(executable.len())
+                .unwrap_or(u32::MAX)
+                .to_le_bytes(),
+        );
+        v1.extend_from_slice(executable);
+        let decoded = decode_active(&v1)?;
+
+        assert_eq!(
+            decoded,
+            ProcessIdentity {
+                pid: 42,
+                start: 7_654_321,
+                boot: None,
+            }
+        );
+        Ok(())
+    }
+
+    #[test]
     fn active_record_rejects_truncation_and_unbounded_paths() -> Result<(), SpawnError> {
         let identity = ProcessIdentity {
             pid: 42,
             start: 7_654_321,
-            executable: PathBuf::from("/opt/runtrol/provider"),
+            boot: Some([7; BOOT_ID_BYTES]),
         };
         let encoded = encode(&identity)?;
-        let mut oversized = encoded.clone();
-        let Some(length_field) = oversized.get_mut(20..24) else {
-            return Err(failure(
-                "testing a process guard",
-                "the encoded record omitted its length field",
-            ));
-        };
-        length_field.copy_from_slice(
+        let truncated = encoded.get(..encoded.len().saturating_sub(1));
+        assert!(matches!(truncated, Some(bytes) if decode_active(bytes).is_err()));
+
+        let mut oversized_v1 = Vec::new();
+        oversized_v1.extend_from_slice(RECORD_MAGIC_V1);
+        oversized_v1.extend_from_slice(&42_u32.to_le_bytes());
+        oversized_v1.extend_from_slice(&7_654_321_u64.to_le_bytes());
+        oversized_v1.extend_from_slice(
             &u32::try_from(MAX_EXECUTABLE_BYTES + 1)
                 .unwrap_or(u32::MAX)
                 .to_le_bytes(),
         );
-        let truncated = encoded.get(..encoded.len().saturating_sub(1));
-
-        assert!(matches!(truncated, Some(bytes) if decode_active(bytes).is_err()));
-        assert!(decode_active(&oversized).is_err());
+        assert!(decode_active(&oversized_v1).is_err());
         Ok(())
     }
 
@@ -1013,7 +1130,7 @@ mod tests {
 
         fixture.kill_supervisor()?;
         let replacement = Registry::open(&fixture.guards)?;
-        replacement.recover()?;
+        assert_eq!(replacement.recover()?, 0);
         assert_eq!(record_count(&fixture.guards, PENDING_SUFFIX)?, 0);
         assert_eq!(record_count(&fixture.guards, ACTIVE_SUFFIX)?, 0);
         fixture.finish()?;
@@ -1039,7 +1156,7 @@ mod tests {
 
         fixture.kill_supervisor()?;
         let replacement = Registry::open(&fixture.guards)?;
-        replacement.recover()?;
+        assert_eq!(replacement.recover()?, 0);
         assert!(!group_has_executing_members(root)?);
         assert_eq!(record_count(&fixture.guards, PENDING_SUFFIX)?, 0);
         assert_eq!(record_count(&fixture.guards, ACTIVE_SUFFIX)?, 0);
@@ -1116,9 +1233,7 @@ mod tests {
                 std::io::Error::last_os_error(),
             ));
         }
-        let executable = std::env::current_exe()
-            .map_err(|error| io_failure("finding the active crash fixture", error))?;
-        let identity = ProcessIdentity::current(&executable)?;
+        let identity = ProcessIdentity::current()?;
         Registry::publish(&root.join("guards"), &guard, &identity)?;
         // SAFETY: this raw descriptor is the one inherited specifically for this test process. Closing it models
         // the production keeper's explicit post-publication release without adding a production failpoint.

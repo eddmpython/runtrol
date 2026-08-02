@@ -203,9 +203,10 @@ fn run(plan_fd: RawFd, status_fd: RawFd, lock_fd: RawFd) -> Result<(), SpawnErro
             std::io::Error::last_os_error(),
         ));
     }
-    let keeper_executable = std::env::current_exe()
-        .map_err(|error| io_failure("finding the process keeper executable", error))?;
-    let identity = ProcessIdentity::current(&keeper_executable)?;
+    // The keeper's own executable is deliberately not consulted: after an update renames the file
+    // behind this process, a lookup by name returns a deleted path, and the durable identity must
+    // keep naming this keeper regardless (kernel PID, start value, and boot identifier do).
+    let identity = ProcessIdentity::current()?;
     Registry::publish(&plan.directory, &plan.guard, &identity)?;
 
     set_close_on_exec(status_fd)?;

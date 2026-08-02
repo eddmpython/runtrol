@@ -104,6 +104,9 @@ pub struct Containment {
     /// Durable process-group recovery, when production supplied its bounded guard directory.
     #[cfg(unix)]
     recovery: Option<registry::Registry>,
+    /// Records the recovery pass kept because their recorded generation could not be confirmed.
+    #[cfg(unix)]
+    ambiguous_guards: usize,
 }
 
 /// What is actually holding the children.
@@ -136,6 +139,8 @@ impl Containment {
             inner: Inner::Nothing,
             #[cfg(unix)]
             recovery: None,
+            #[cfg(unix)]
+            ambiguous_guards: 0,
         }
     }
 
@@ -155,6 +160,8 @@ impl Containment {
             inner: Inner::Platform(platform::Containment::establish()?),
             #[cfg(unix)]
             recovery: None,
+            #[cfg(unix)]
+            ambiguous_guards: 0,
         })
     }
 
@@ -174,16 +181,34 @@ impl Containment {
         #[cfg(unix)]
         {
             let recovery = registry::Registry::open(directory)?;
-            recovery.recover()?;
+            let ambiguous_guards = recovery.recover()?;
             Ok(Self {
                 inner: Inner::Platform(platform::Containment::establish()?),
                 recovery: Some(recovery),
+                ambiguous_guards,
             })
         }
         #[cfg(windows)]
         {
             _ = directory;
             Self::establish()
+        }
+    }
+
+    /// How many durable guard records the recovery pass kept because their generation is uncertain.
+    ///
+    /// A kept record stays in the bounded guard directory and is re-examined by every later pass;
+    /// this count exists so a surface can state that condition instead of the daemon holding it
+    /// silently.
+    #[must_use]
+    pub const fn ambiguous_guards(&self) -> usize {
+        #[cfg(unix)]
+        {
+            self.ambiguous_guards
+        }
+        #[cfg(windows)]
+        {
+            0
         }
     }
 

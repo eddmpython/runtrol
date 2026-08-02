@@ -1,80 +1,152 @@
 //! Kernel process identity used by durable Unix process-group recovery.
-
-use std::path::{Path, PathBuf};
+//!
+//! The executable is deliberately not part of this identity. An update replaces the file behind a
+//! live keeper without touching the process, so an executable lookup names a deleted or different
+//! path while the recorded keeper is still ours (measured: rename-over marks every live lookup
+//! `(deleted)` on Linux). PID plus kernel start value identifies a process within one boot, and the
+//! boot identifier closes the reboot boundary that the executable field covered by accident.
 
 use crate::error::SpawnError;
 
-/// Maximum executable path retained by one guard record.
+/// Fixed width of one recorded boot identifier.
+pub(super) const BOOT_ID_BYTES: usize = 16;
+
+/// Maximum executable-path bytes accepted while decoding a previous-format guard record.
 pub(super) const MAX_EXECUTABLE_BYTES: usize = 32 * 1024;
 
-/// An operating-system process identity that does not alias after PID reuse.
+/// An operating-system process identity that does not alias after PID reuse or an executable update.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct ProcessIdentity {
     /// Process and process-group identifier. Every supervised root leads its own group.
     pub(super) pid: u32,
     /// Kernel-recorded process start value in the platform's native unit.
     pub(super) start: u64,
-    /// Canonical executable of the stable keeper.
-    pub(super) executable: PathBuf,
+    /// The boot this identity was recorded in. `None` only for records written by the previous
+    /// format, which cannot separate a reboot; those resolve through the group check instead.
+    pub(super) boot: Option<[u8; BOOT_ID_BYTES]>,
 }
 
 /// What the kernel says about the durable keeper generation now.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum LiveIdentity {
-    /// PID, start value, and executable all still name the recorded keeper.
-    Exact,
+    /// Boot, PID, and start value still name the recorded keeper, even if its executable was
+    /// replaced on disk since.
+    Ours,
     /// No process currently has the recorded PID.
     Gone,
-    /// The PID exists but its start value or executable belongs to another generation.
-    Reused,
+    /// The record was written in a different boot, so nothing recorded then can still execute.
+    /// This is the only state whose record may be removed without a group check.
+    DifferentBoot,
+    /// The PID exists but its start value belongs to another generation. The kernel reallocates a
+    /// number only once nothing held it, but that reasoning was measured on one emulated surface,
+    /// so recovery treats the record as ambiguous instead of trusting the reallocation argument.
+    Ambiguous,
 }
 
 impl ProcessIdentity {
     /// Read the current process identity while the Unix bootstrap is still running.
-    pub(super) fn current(expected: &Path) -> Result<Self, SpawnError> {
+    pub(super) fn current() -> Result<Self, SpawnError> {
         let pid = std::process::id();
         let start =
             start_of(pid)?.ok_or_else(|| failure("reading the bootstrap start identity"))?;
-        let executable = canonical_executable(expected)?;
         Ok(Self {
             pid,
             start,
-            executable,
+            boot: Some(current_boot()?),
         })
     }
 
     /// Revalidate the stable keeper against every durable kernel identity field.
     pub(super) fn live_identity(&self) -> Result<LiveIdentity, SpawnError> {
+        if let Some(boot) = self.boot
+            && boot != current_boot()?
+        {
+            return Ok(LiveIdentity::DifferentBoot);
+        }
         let Some(start) = start_of(self.pid)? else {
             return Ok(LiveIdentity::Gone);
         };
-        if start != self.start {
-            return Ok(LiveIdentity::Reused);
-        }
-        let Some(executable) = executable_of(self.pid)? else {
-            return Ok(LiveIdentity::Gone);
-        };
-        if executable == self.executable {
-            Ok(LiveIdentity::Exact)
+        if start == self.start {
+            Ok(LiveIdentity::Ours)
         } else {
-            Ok(LiveIdentity::Reused)
+            Ok(LiveIdentity::Ambiguous)
         }
     }
 }
 
-/// Canonicalize an executable before it becomes a durable comparison value.
-pub(super) fn canonical_executable(path: &Path) -> Result<PathBuf, SpawnError> {
-    let canonical = std::fs::canonicalize(path).map_err(|error| SpawnError::Containment {
-        doing: "canonicalizing a supervised executable",
-        detail: error.to_string(),
-    })?;
-    if canonical.as_os_str().as_encoded_bytes().len() > MAX_EXECUTABLE_BYTES {
-        return Err(SpawnError::Containment {
-            doing: "recording a supervised executable",
-            detail: format!("the executable path exceeds {MAX_EXECUTABLE_BYTES} bytes"),
-        });
+fn current_boot() -> Result<[u8; BOOT_ID_BYTES], SpawnError> {
+    static BOOT: std::sync::OnceLock<[u8; BOOT_ID_BYTES]> = std::sync::OnceLock::new();
+    if let Some(boot) = BOOT.get() {
+        return Ok(*boot);
     }
-    Ok(canonical)
+    let boot = read_boot_id()?;
+    Ok(*BOOT.get_or_init(|| boot))
+}
+
+#[cfg(target_os = "linux")]
+fn read_boot_id() -> Result<[u8; BOOT_ID_BYTES], SpawnError> {
+    let text = std::fs::read_to_string("/proc/sys/kernel/random/boot_id").map_err(|error| {
+        SpawnError::Containment {
+            doing: "reading the boot identity",
+            detail: error.to_string(),
+        }
+    })?;
+    let mut bytes = [0_u8; BOOT_ID_BYTES];
+    let mut digits = text.trim().bytes().filter(u8::is_ascii_hexdigit);
+    for slot in &mut bytes {
+        let high = digits
+            .next()
+            .ok_or_else(|| failure("parsing the boot identity"))?;
+        let low = digits
+            .next()
+            .ok_or_else(|| failure("parsing the boot identity"))?;
+        *slot = (hex_value(high) << 4) | hex_value(low);
+    }
+    if digits.next().is_some() {
+        return Err(failure("parsing the boot identity"));
+    }
+    Ok(bytes)
+}
+
+#[cfg(target_os = "linux")]
+const fn hex_value(digit: u8) -> u8 {
+    match digit {
+        b'0'..=b'9' => digit - b'0',
+        b'a'..=b'f' => digit - b'a' + 10,
+        _ => digit - b'A' + 10,
+    }
+}
+
+#[cfg(target_os = "macos")]
+#[expect(
+    unsafe_code,
+    reason = "macOS exposes the boot moment only through the kern.boottime sysctl"
+)]
+fn read_boot_id() -> Result<[u8; BOOT_ID_BYTES], SpawnError> {
+    let mut boottime = std::mem::MaybeUninit::<libc::timeval>::uninit();
+    let mut size = size_of::<libc::timeval>();
+    let mut name = [libc::CTL_KERN, libc::KERN_BOOTTIME];
+    // SAFETY: `boottime` is writable for exactly `size` bytes and the kernel borrows the name array
+    // only for this call. The value is read only after a complete-size success.
+    let result = unsafe {
+        libc::sysctl(
+            name.as_mut_ptr(),
+            2,
+            boottime.as_mut_ptr().cast(),
+            &mut size,
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    if result != 0 || size != size_of::<libc::timeval>() {
+        return Err(failure("reading the boot identity"));
+    }
+    // SAFETY: the complete-size result above states the kernel initialized every byte.
+    let boottime = unsafe { boottime.assume_init() };
+    let mut bytes = [0_u8; BOOT_ID_BYTES];
+    bytes[..8].copy_from_slice(&i64::from(boottime.tv_sec).to_le_bytes());
+    bytes[8..].copy_from_slice(&i64::from(boottime.tv_usec).to_le_bytes());
+    Ok(bytes)
 }
 
 #[cfg(target_os = "linux")]
@@ -105,18 +177,6 @@ fn start_of(pid: u32) -> Result<Option<u64>, SpawnError> {
             detail: error.to_string(),
         })?;
     Ok(Some(start))
-}
-
-#[cfg(target_os = "linux")]
-fn executable_of(pid: u32) -> Result<Option<PathBuf>, SpawnError> {
-    match std::fs::read_link(format!("/proc/{pid}/exe")) {
-        Ok(path) => Ok(Some(path)),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(SpawnError::Containment {
-            doing: "reading a process executable identity",
-            detail: error.to_string(),
-        }),
-    }
 }
 
 #[cfg(target_os = "macos")]
@@ -173,47 +233,6 @@ fn start_of(pid: u32) -> Result<Option<u64>, SpawnError> {
     Ok(Some(micros))
 }
 
-#[cfg(target_os = "macos")]
-#[expect(
-    unsafe_code,
-    reason = "macOS exposes a live process executable path only through proc_pidpath"
-)]
-fn executable_of(pid: u32) -> Result<Option<PathBuf>, SpawnError> {
-    use std::os::unix::ffi::OsStringExt as _;
-
-    let pid = i32::try_from(pid).map_err(|error| SpawnError::Containment {
-        doing: "reading a process executable identity",
-        detail: error.to_string(),
-    })?;
-    let mut bytes = vec![0_u8; libc::PROC_PIDPATHINFO_MAXSIZE as usize];
-    let size = u32::try_from(bytes.len()).map_err(|error| SpawnError::Containment {
-        doing: "reading a process executable identity",
-        detail: error.to_string(),
-    })?;
-    // SAFETY: `bytes` is writable for exactly `size` bytes, and proc_pidpath borrows it only for this call.
-    let written = unsafe { libc::proc_pidpath(pid, bytes.as_mut_ptr().cast(), size) };
-    if written == 0 {
-        let error = std::io::Error::last_os_error();
-        return if matches!(error.raw_os_error(), Some(libc::ESRCH)) {
-            Ok(None)
-        } else {
-            Err(SpawnError::Containment {
-                doing: "reading a process executable identity",
-                detail: error.to_string(),
-            })
-        };
-    }
-    let written = usize::try_from(written).map_err(|error| SpawnError::Containment {
-        doing: "reading a process executable identity",
-        detail: error.to_string(),
-    })?;
-    if written >= bytes.len() {
-        return Err(failure("reading a complete process executable identity"));
-    }
-    bytes.truncate(written);
-    Ok(Some(PathBuf::from(std::ffi::OsString::from_vec(bytes))))
-}
-
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
 compile_error!("durable Unix containment currently supports Linux and macOS only");
 
@@ -229,27 +248,49 @@ mod tests {
     use super::*;
 
     #[test]
-    fn current_keeper_identity_revalidates_exactly() -> Result<(), SpawnError> {
-        let executable = std::env::current_exe().map_err(|error| SpawnError::Containment {
-            doing: "finding the identity test executable",
-            detail: error.to_string(),
-        })?;
-        let identity = ProcessIdentity::current(&executable)?;
+    fn current_keeper_identity_revalidates_as_ours() -> Result<(), SpawnError> {
+        let identity = ProcessIdentity::current()?;
 
-        assert_eq!(identity.live_identity()?, LiveIdentity::Exact);
+        assert_eq!(identity.live_identity()?, LiveIdentity::Ours);
         Ok(())
     }
 
     #[test]
-    fn executable_mismatch_is_not_an_exact_keeper() -> Result<(), SpawnError> {
-        let executable = std::env::current_exe().map_err(|error| SpawnError::Containment {
-            doing: "finding the identity test executable",
-            detail: error.to_string(),
-        })?;
-        let mut identity = ProcessIdentity::current(&executable)?;
-        identity.executable.push("not-the-live-keeper");
+    fn a_replaced_executable_cannot_change_the_verdict() -> Result<(), SpawnError> {
+        // The executable is not consulted at all, which is the point: an update that renames the
+        // file behind this live process must leave the keeper recognized as ours.
+        let identity = ProcessIdentity::current()?;
 
-        assert_eq!(identity.live_identity()?, LiveIdentity::Reused);
+        assert_eq!(identity.live_identity()?, LiveIdentity::Ours);
+        Ok(())
+    }
+
+    #[test]
+    fn a_start_value_from_another_generation_is_ambiguous() -> Result<(), SpawnError> {
+        let mut identity = ProcessIdentity::current()?;
+        identity.start = identity.start.wrapping_add(1);
+
+        assert_eq!(identity.live_identity()?, LiveIdentity::Ambiguous);
+        Ok(())
+    }
+
+    #[test]
+    fn a_record_from_another_boot_is_closed_without_a_group_check() -> Result<(), SpawnError> {
+        let mut identity = ProcessIdentity::current()?;
+        let mut boot = identity.boot.expect("current identity carries a boot");
+        boot[0] = boot[0].wrapping_add(1);
+        identity.boot = Some(boot);
+
+        assert_eq!(identity.live_identity()?, LiveIdentity::DifferentBoot);
+        Ok(())
+    }
+
+    #[test]
+    fn a_previous_format_record_without_a_boot_still_resolves() -> Result<(), SpawnError> {
+        let mut identity = ProcessIdentity::current()?;
+        identity.boot = None;
+
+        assert_eq!(identity.live_identity()?, LiveIdentity::Ours);
         Ok(())
     }
 }

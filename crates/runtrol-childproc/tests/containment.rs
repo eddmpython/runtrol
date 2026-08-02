@@ -59,6 +59,20 @@ fn explicit_termination_uses_the_keeper_control() {
 
 #[cfg(unix)]
 #[test]
+fn an_update_renamed_over_the_running_image_and_sessions_still_open_and_close() {
+    let helper = env!("CARGO_BIN_EXE_containedParent");
+    let guard_directory = guard_directory("update-rename");
+    let status = Command::new(helper)
+        .arg("--verify-update-rename")
+        .arg(&guard_directory)
+        .status()
+        .expect("the update-rename keeper verification starts");
+    assert!(status.success());
+    std::fs::remove_dir_all(&guard_directory).expect("remove the update-rename guard directory");
+}
+
+#[cfg(unix)]
+#[test]
 fn provider_spawn_failure_removes_pending_and_active_guards() {
     let helper = env!("CARGO_BIN_EXE_containedParent");
     let guard_directory = guard_directory("spawn-failure");
