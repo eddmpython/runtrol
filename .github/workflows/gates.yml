@@ -272,6 +272,16 @@ jobs:
       - name: 시작과 재개 및 확인된 목록 삭제
         if: matrix.os == 'windows-latest'
         run: python -X utf8 tests/audit/desktopLifecycleSmoke.py
+      - name: 데스크톱 무대화 경계 자체 검증
+        run: python -X utf8 tests/audit/desktopThinBoundary.py --selftest
+      - name: 데스크톱 저장 권한과 API 경계
+        run: python -X utf8 tests/audit/desktopThinBoundary.py
+      - name: 데스크톱 대화 비저장 게이트 자체 검증
+        if: matrix.os == 'windows-latest'
+        run: python -X utf8 tests/audit/desktopPersistenceSmoke.py --selftest
+      - name: 새로고침 뒤 대화 프레임 비저장
+        if: matrix.os == 'windows-latest'
+        run: python -X utf8 tests/audit/desktopPersistenceSmoke.py
       - name: memory budget gate product binary
         run: cargo build -p runtrol --bin runtrol
       - name: 유휴 상주 비용 ratchet 자체 검증

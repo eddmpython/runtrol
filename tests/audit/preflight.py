@@ -160,6 +160,22 @@ GATES: dict[str, tuple[str, list[str]]] = {
         "시작과 재개 및 확인된 목록 삭제",
         [*PY, f"{HOOKS}/desktopLifecycleSmoke.py"],
     ),
+    "desktopThinBoundarySelftest": (
+        "데스크톱 무대화 경계 자체 검증",
+        [*PY, f"{HOOKS}/desktopThinBoundary.py", "--selftest"],
+    ),
+    "desktopThinBoundary": (
+        "데스크톱 저장 권한과 API 경계",
+        [*PY, f"{HOOKS}/desktopThinBoundary.py"],
+    ),
+    "desktopPersistenceSmokeSelftest": (
+        "데스크톱 대화 비저장 게이트 자체 검증",
+        [*PY, f"{HOOKS}/desktopPersistenceSmoke.py", "--selftest"],
+    ),
+    "desktopPersistenceSmoke": (
+        "새로고침 뒤 대화 프레임 비저장",
+        [*PY, f"{HOOKS}/desktopPersistenceSmoke.py"],
+    ),
     "cargoFmt": ("cargo fmt --check", ["cargo", "fmt", "--all", "--check"]),
     "cargoClippy": (
         "cargo clippy (경고 = 실패)",
@@ -305,6 +321,10 @@ SUITES: dict[str, tuple[str, ...]] = {
         "desktopConvenienceSmoke",
         "desktopLifecycleSmokeSelftest",
         "desktopLifecycleSmoke",
+        "desktopThinBoundarySelftest",
+        "desktopThinBoundary",
+        "desktopPersistenceSmokeSelftest",
+        "desktopPersistenceSmoke",
         "cargoFmt",
         "cargoClippy",
     ),
@@ -353,9 +373,9 @@ def skipReasonFor(name: str) -> str | None:
             return "cargo 없음"
         if not hasCargoWorkspace():
             return "Cargo.toml 없음 (부트스트랩 단계)"
-    if name in {"frontendBuild", "interactionLatencyBudget", "scrollUnderLoadSmoke", "reconnectContinuitySmoke", "desktopLifecycleSmoke"} and shutil.which("npm") is None:
+    if name in {"frontendBuild", "interactionLatencyBudget", "scrollUnderLoadSmoke", "reconnectContinuitySmoke", "desktopLifecycleSmoke", "desktopPersistenceSmoke"} and shutil.which("npm") is None:
         return "npm 없음"
-    if name in {"interactionLatencyBudget", "scrollUnderLoadSmoke", "reconnectContinuitySmoke", "desktopLifecycleSmoke"} and shutil.which("node") is None:
+    if name in {"interactionLatencyBudget", "scrollUnderLoadSmoke", "reconnectContinuitySmoke", "desktopLifecycleSmoke", "desktopPersistenceSmoke"} and shutil.which("node") is None:
         return "node 없음"
     if name == "audit" and not hasAuditCrate():
         return "tests/audit crate 없음"

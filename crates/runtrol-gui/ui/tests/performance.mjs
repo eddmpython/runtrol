@@ -584,6 +584,48 @@ async function lifecycle(page, url) {
   };
 }
 
+async function persistence(page, url) {
+  await page.goto(url, { waitUntil: "domcontentloaded" });
+  await page.getByTestId("session-gate-000").waitFor();
+  await page.evaluate(async () => {
+    localStorage.clear();
+    sessionStorage.clear();
+    for (const database of await indexedDB.databases()) {
+      if (database.name) indexedDB.deleteDatabase(database.name);
+    }
+    for (const key of await caches.keys()) await caches.delete(key);
+  });
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await page.getByTestId("session-gate-000").waitFor();
+  await startWithoutChoosingProvider(page, "C:/work/persistence-check");
+  await page.evaluate(() => {
+    window.__RUNTROL_PERF__.emit("session-frame", {
+      session: "started-from-gui",
+      frame: window.__RUNTROL_PERF__.frame(
+        "started-from-gui",
+        "conversation sentinel must disappear on reload",
+        "persistence-sentinel",
+      ),
+    });
+  });
+  await waitFor(page, () => document.body.textContent?.includes("conversation sentinel must disappear on reload"));
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await page.getByTestId("session-gate-000").waitFor();
+  return page.evaluate(async () => {
+    const localKeys = Object.keys(localStorage).sort();
+    return {
+      frameGoneAfterReload: !document.body.textContent?.includes("conversation sentinel must disappear on reload"),
+      onlyScalarPreferences: JSON.stringify(localKeys) === JSON.stringify([
+        "runtrol.lastProvider",
+        "runtrol.theme",
+      ]),
+      sessionStorageEmpty: sessionStorage.length === 0,
+      indexedDbEmpty: (await indexedDB.databases()).length === 0,
+      cacheStorageEmpty: (await caches.keys()).length === 0,
+    };
+  });
+}
+
 async function reconnect(page, url) {
   await page.goto(url, { waitUntil: "domcontentloaded" });
   await page.getByTestId("session-gate-000").waitFor();
@@ -644,8 +686,10 @@ async function reconnect(page, url) {
 
 async function main() {
   const mode = process.argv[2];
-  if (!new Set(["interaction", "scroll", "convenience", "lifecycle", "reconnect"]).has(mode)) {
-    throw new Error("usage: node tests/performance.mjs interaction|scroll|convenience|lifecycle|reconnect");
+  if (!new Set(["interaction", "scroll", "convenience", "lifecycle", "persistence", "reconnect"]).has(mode)) {
+    throw new Error(
+      "usage: node tests/performance.mjs interaction|scroll|convenience|lifecycle|persistence|reconnect",
+    );
   }
   await access(join(DIST, "index.html"));
   const browserPath = await executable();
@@ -669,7 +713,9 @@ async function main() {
           ? await convenience(page, url)
           : mode === "lifecycle"
             ? await lifecycle(page, url)
-            : await reconnect(page, url);
+            : mode === "persistence"
+              ? await persistence(page, url)
+              : await reconnect(page, url);
     process.stdout.write(`${JSON.stringify({ mode, browserPath, ...metrics })}\n`);
   } finally {
     await browser?.close();

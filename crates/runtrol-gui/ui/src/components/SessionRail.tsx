@@ -115,7 +115,7 @@ export const SessionRail = memo(function SessionRail({
           />
         </div>
       }
-      resizable={{ defaultWidth: 276, minWidth: 228, maxWidth: 380, autoSaveId: "runtrol-session-rail" }}
+      resizable={{ defaultWidth: 276, minWidth: 228, maxWidth: 380 }}
       collapsible={{ buttonLabel: "세션 탐색 접기" }}
     >
       {groups.size === 0 ? (
