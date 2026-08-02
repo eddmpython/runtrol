@@ -40,6 +40,22 @@ const RECOVER_MODE: &str = "--recover";
 /// Name the guard directory for the supervising-parent mode.
 const GUARD_DIRECTORY: &str = "--guard-directory";
 
+/// Exercise provider exit-status proxying from a binary that owns the bootstrap entry point.
+#[cfg(unix)]
+const VERIFY_EXIT_STATUS: &str = "--verify-exit-status";
+
+/// Exercise an explicit keeper stop from a binary that owns the bootstrap entry point.
+#[cfg(unix)]
+const VERIFY_EXPLICIT_STOP: &str = "--verify-explicit-stop";
+
+/// Exercise the panic stop path against more than one keeper.
+#[cfg(unix)]
+const VERIFY_STOP_ALL: &str = "--verify-stop-all";
+
+/// Exercise provider spawn failure cleanup after the keeper has published its durable record.
+#[cfg(unix)]
+const VERIFY_SPAWN_FAILURE: &str = "--verify-spawn-failure";
+
 /// Long enough that the test finishes first, short enough that a stray copy cannot linger.
 const SLEEP: Duration = Duration::from_mins(1);
 
@@ -83,6 +99,31 @@ fn main() {
         {
             eprintln!("could not recover containment: {error}");
             std::process::exit(10);
+        }
+        return;
+    }
+
+    #[cfg(unix)]
+    if let Some(mode) = words.first().filter(|argument| {
+        matches!(
+            argument.as_str(),
+            VERIFY_EXIT_STATUS | VERIFY_EXPLICIT_STOP | VERIFY_STOP_ALL | VERIFY_SPAWN_FAILURE
+        )
+    }) {
+        let Some(directory) = words.get(1) else {
+            eprintln!("keeper verification needs a guard directory");
+            std::process::exit(21);
+        };
+        let verified = match mode.as_str() {
+            VERIFY_EXIT_STATUS => verify_exit_status(directory),
+            VERIFY_EXPLICIT_STOP => verify_explicit_stop(directory),
+            VERIFY_STOP_ALL => verify_stop_all(directory),
+            VERIFY_SPAWN_FAILURE => verify_spawn_failure(directory),
+            _ => Err("the keeper verification mode was not recognized".to_owned()),
+        };
+        if let Err(error) = verified {
+            eprintln!("keeper verification failed: {error}");
+            std::process::exit(22);
         }
         return;
     }
@@ -208,4 +249,163 @@ fn supervising_parent(directory: &str) -> ! {
     // the property under test.
     std::thread::sleep(SLEEP);
     std::process::exit(0);
+}
+
+#[cfg(unix)]
+fn verification_context(
+    directory: &str,
+) -> Result<
+    (
+        tokio::runtime::Runtime,
+        runtrol_childproc::Containment,
+        std::path::PathBuf,
+    ),
+    String,
+> {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|error| format!("could not build the containment runtime: {error}"))?;
+    let containment = runtrol_childproc::Containment::establish_tracked(Path::new(directory))
+        .map_err(|error| format!("could not establish containment: {error}"))?;
+    let own_path = std::env::current_exe()
+        .map_err(|error| format!("could not find the keeper verification binary: {error}"))?;
+    Ok((runtime, containment, own_path))
+}
+
+#[cfg(unix)]
+fn verify_exit_status(directory: &str) -> Result<(), String> {
+    let (runtime, containment, own_path) = verification_context(directory)?;
+    if containment.strength() != runtrol_childproc::Strength::EvenIfKilled {
+        return Err("tracked Unix containment did not claim crash-safe strength".to_owned());
+    }
+    let mut command = runtrol_childproc::TrackedCommand::new(own_path);
+    command.args([EXIT_MODE, "23"]);
+    command.stdin(Stdio::null());
+    command.stdout(Stdio::null());
+    command.stderr(Stdio::inherit());
+    command.kill_on_drop(true);
+    let spawned = {
+        let _entered = runtime.enter();
+        command.spawn(&containment)
+    };
+    let (mut child, mut guard) =
+        spawned.map_err(|error| format!("could not start the exiting provider: {error}"))?;
+    let status = runtime
+        .block_on(child.wait())
+        .map_err(|error| format!("could not read the provider exit status: {error}"))?;
+    if status.code() != Some(23) {
+        return Err(format!(
+            "the keeper returned the wrong provider status: {status}"
+        ));
+    }
+    guard
+        .complete()
+        .map_err(|error| format!("could not complete the natural exit guard: {error}"))?;
+    verify_no_guard_records(directory)
+}
+
+#[cfg(unix)]
+fn verify_explicit_stop(directory: &str) -> Result<(), String> {
+    let (runtime, containment, own_path) = verification_context(directory)?;
+    let mut command = runtrol_childproc::TrackedCommand::new(own_path);
+    command.arg(LEAF_MODE);
+    command.stdin(Stdio::null());
+    command.stdout(Stdio::null());
+    command.stderr(Stdio::inherit());
+    command.kill_on_drop(true);
+    let spawned = {
+        let _entered = runtime.enter();
+        command.spawn(&containment)
+    };
+    let (mut child, mut guard) =
+        spawned.map_err(|error| format!("could not start the long-lived provider: {error}"))?;
+    runtime
+        .block_on(guard.terminate(&mut child))
+        .map_err(|error| format!("could not terminate the provider through its keeper: {error}"))?;
+    verify_no_guard_records(directory)
+}
+
+#[cfg(unix)]
+fn verify_stop_all(directory: &str) -> Result<(), String> {
+    let (runtime, containment, own_path) = verification_context(directory)?;
+    let mut children = Vec::new();
+    let mut guards = Vec::new();
+    for _ in 0..2 {
+        let mut command = runtrol_childproc::TrackedCommand::new(&own_path);
+        command.arg(LEAF_MODE);
+        command.stdin(Stdio::null());
+        command.stdout(Stdio::null());
+        command.stderr(Stdio::inherit());
+        command.kill_on_drop(true);
+        let spawned = {
+            let _entered = runtime.enter();
+            command.spawn(&containment)
+        };
+        let (child, guard) =
+            spawned.map_err(|error| format!("could not start a stop-all provider: {error}"))?;
+        children.push(child);
+        guards.push(guard);
+    }
+    containment
+        .terminate_all()
+        .map_err(|error| format!("could not stop every registered keeper: {error}"))?;
+    for child in &mut children {
+        match runtime.block_on(child.wait()) {
+            Ok(status) => {
+                return Err(format!(
+                    "a stopped keeper unexpectedly returned provider status {status}"
+                ));
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => {}
+            Err(error) => {
+                return Err(format!(
+                    "a stopped keeper returned the wrong missing-frame error: {error}"
+                ));
+            }
+        }
+    }
+    drop(guards);
+    verify_no_guard_records(directory)
+}
+
+#[cfg(unix)]
+fn verify_spawn_failure(directory: &str) -> Result<(), String> {
+    let (runtime, containment, _own_path) = verification_context(directory)?;
+    let mut command =
+        runtrol_childproc::TrackedCommand::new(Path::new(directory).join("absent-provider"));
+    command.stdin(Stdio::null());
+    command.stdout(Stdio::null());
+    command.stderr(Stdio::inherit());
+    command.kill_on_drop(true);
+    let spawned = {
+        let _entered = runtime.enter();
+        command.spawn(&containment)
+    };
+    let error = match spawned {
+        Ok(_) => return Err("an absent provider unexpectedly started".to_owned()),
+        Err(error) => error.to_string(),
+    };
+    if !error.contains("executing the supervised provider") {
+        return Err(format!(
+            "provider spawn failure lost its diagnostic: {error}"
+        ));
+    }
+    verify_no_guard_records(directory)
+}
+
+#[cfg(unix)]
+fn verify_no_guard_records(directory: &str) -> Result<(), String> {
+    let entries = std::fs::read_dir(directory)
+        .map_err(|error| format!("could not read the guard directory: {error}"))?;
+    for entry in entries {
+        let name = entry
+            .map_err(|error| format!("could not read a guard entry: {error}"))?
+            .file_name();
+        let name = name.to_string_lossy();
+        if name.ends_with(".pending") || name.ends_with(".active") {
+            return Err(format!("failed provider spawn retained guard {name}"));
+        }
+    }
+    Ok(())
 }

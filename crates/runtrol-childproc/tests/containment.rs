@@ -34,35 +34,12 @@ const REAP_BUDGET: Duration = Duration::from_secs(10);
 fn stable_keeper_proxies_the_provider_exit_status() {
     let helper = env!("CARGO_BIN_EXE_containedParent");
     let guard_directory = guard_directory("exit-status");
-    let containment = runtrol_childproc::Containment::establish_tracked(&guard_directory)
-        .expect("tracked containment starts");
-    assert_eq!(
-        containment.strength(),
-        runtrol_childproc::Strength::EvenIfKilled
-    );
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .expect("the containment runtime builds");
-    let mut command = runtrol_childproc::TrackedCommand::new(helper);
-    command.args(["--exit-with", "23"]);
-    command.stdin(Stdio::null());
-    command.stdout(Stdio::null());
-    command.stderr(Stdio::inherit());
-    command.kill_on_drop(true);
-    let spawned = {
-        let _entered = runtime.enter();
-        command.spawn(&containment)
-    };
-    let (mut child, mut guard) = spawned.expect("the provider starts behind its keeper");
-
-    let status = runtime
-        .block_on(child.wait())
-        .expect("the keeper relays the provider status");
-    assert_eq!(status.code(), Some(23));
-    guard
-        .complete()
-        .expect("the natural exit removes its guard");
+    let status = Command::new(helper)
+        .arg("--verify-exit-status")
+        .arg(&guard_directory)
+        .status()
+        .expect("the exit-status keeper verification starts");
+    assert!(status.success());
     std::fs::remove_dir_all(&guard_directory).expect("remove the exit-status guard directory");
 }
 
@@ -71,67 +48,26 @@ fn stable_keeper_proxies_the_provider_exit_status() {
 fn explicit_termination_uses_the_keeper_control() {
     let helper = env!("CARGO_BIN_EXE_containedParent");
     let guard_directory = guard_directory("explicit-stop");
-    let containment = runtrol_childproc::Containment::establish_tracked(&guard_directory)
-        .expect("tracked containment starts");
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .expect("the containment runtime builds");
-    let mut command = runtrol_childproc::TrackedCommand::new(helper);
-    command.arg("--leaf-until-killed");
-    command.stdin(Stdio::null());
-    command.stdout(Stdio::null());
-    command.stderr(Stdio::inherit());
-    command.kill_on_drop(true);
-    let spawned = {
-        let _entered = runtime.enter();
-        command.spawn(&containment)
-    };
-    let (mut child, mut guard) = spawned.expect("the provider starts behind its keeper");
-    let keeper = child.id().expect("the keeper has an identifier");
-
-    runtime
-        .block_on(guard.terminate(&mut child))
-        .expect("the private control stops the keeper group");
-    assert!(wait_until_gone(keeper));
+    let status = Command::new(helper)
+        .arg("--verify-explicit-stop")
+        .arg(&guard_directory)
+        .status()
+        .expect("the explicit-stop keeper verification starts");
+    assert!(status.success());
     std::fs::remove_dir_all(&guard_directory).expect("remove the explicit-stop guard directory");
 }
 
 #[cfg(unix)]
 #[test]
 fn provider_spawn_failure_removes_pending_and_active_guards() {
+    let helper = env!("CARGO_BIN_EXE_containedParent");
     let guard_directory = guard_directory("spawn-failure");
-    let containment = runtrol_childproc::Containment::establish_tracked(&guard_directory)
-        .expect("tracked containment starts");
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .expect("the containment runtime builds");
-    let mut command =
-        runtrol_childproc::TrackedCommand::new(guard_directory.join("absent-provider"));
-    command.stdin(Stdio::null());
-    command.stdout(Stdio::null());
-    command.stderr(Stdio::inherit());
-    command.kill_on_drop(true);
-    let spawned = {
-        let _entered = runtime.enter();
-        command.spawn(&containment)
-    };
-
-    assert!(spawned.is_err());
-    let mut records = 0;
-    for entry in
-        std::fs::read_dir(&guard_directory).expect("the private guard directory remains readable")
-    {
-        let name = entry
-            .expect("a guard directory entry is readable")
-            .file_name();
-        let name = name.to_string_lossy();
-        if name.ends_with(".pending") || name.ends_with(".active") {
-            records += 1;
-        }
-    }
-    assert_eq!(records, 0);
+    let status = Command::new(helper)
+        .arg("--verify-spawn-failure")
+        .arg(&guard_directory)
+        .status()
+        .expect("the spawn-failure keeper verification starts");
+    assert!(status.success());
     std::fs::remove_dir_all(&guard_directory).expect("remove the failed-spawn guard directory");
 }
 
@@ -140,40 +76,12 @@ fn provider_spawn_failure_removes_pending_and_active_guards() {
 fn panic_termination_attempts_every_registered_keeper() {
     let helper = env!("CARGO_BIN_EXE_containedParent");
     let guard_directory = guard_directory("stop-all");
-    let containment = runtrol_childproc::Containment::establish_tracked(&guard_directory)
-        .expect("tracked containment starts");
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .expect("the containment runtime builds");
-    let mut children = Vec::new();
-    let mut guards = Vec::new();
-    let mut keepers = Vec::new();
-    for _ in 0..2 {
-        let mut command = runtrol_childproc::TrackedCommand::new(helper);
-        command.arg("--leaf-until-killed");
-        command.stdin(Stdio::null());
-        command.stdout(Stdio::null());
-        command.stderr(Stdio::inherit());
-        command.kill_on_drop(true);
-        let spawned = {
-            let _entered = runtime.enter();
-            command.spawn(&containment)
-        };
-        let (child, guard) = spawned.expect("the provider starts behind its keeper");
-        keepers.push(child.id().expect("the keeper has an identifier"));
-        children.push(child);
-        guards.push(guard);
-    }
-
-    containment
-        .terminate_all()
-        .expect("the panic control stops every keeper");
-    for child in &mut children {
-        let _missing_exit_frame = runtime.block_on(child.wait());
-    }
-    assert!(keepers.into_iter().all(wait_until_gone));
-    drop(guards);
+    let status = Command::new(helper)
+        .arg("--verify-stop-all")
+        .arg(&guard_directory)
+        .status()
+        .expect("the stop-all keeper verification starts");
+    assert!(status.success());
     std::fs::remove_dir_all(&guard_directory).expect("remove the stop-all guard directory");
 }
 
