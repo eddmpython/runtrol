@@ -224,9 +224,16 @@ fn is_alive(pid: u32) -> bool {
 /// Whether a process with this id is still running.
 #[cfg(unix)]
 fn is_alive(pid: u32) -> bool {
-    let output = Command::new("ps").args(["-p", &pid.to_string()]).output();
+    let output = Command::new("ps")
+        .args(["-o", "stat=", "-p", &pid.to_string()])
+        .output();
     match output {
-        Ok(output) => output.status.success(),
+        Ok(output) => {
+            output.status.success()
+                && !String::from_utf8_lossy(&output.stdout)
+                    .trim_start()
+                    .starts_with('Z')
+        }
         Err(error) => panic!("cannot ask the operating system about process {pid}: {error}"),
     }
 }

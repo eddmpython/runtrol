@@ -63,11 +63,13 @@ fn main() -> ExitCode {
         };
     }
     #[cfg(target_os = "macos")]
-    if let Err(error) = prepare_daemon_allocator(&words) {
-        report(&format!(
-            "runtrol cannot prepare its daemon allocator: {error}"
-        ));
-        return ExitCode::FAILURE;
+    if words.first().map(String::as_str) == Some(runtrol_cli::DAEMON_ARGUMENT) {
+        if let Err(error) = runtrol_childproc::handoff::prepare_macos_daemon_allocator(&words) {
+            report(&format!(
+                "runtrol cannot prepare its daemon allocator: {error}"
+            ));
+            return ExitCode::FAILURE;
+        }
     }
 
     // Before anything could be started. Whether this program's own handles may travel to what it starts is a property
@@ -99,74 +101,6 @@ fn main() -> ExitCode {
             ExitCode::FAILURE
         }
     }
-}
-
-#[cfg(target_os = "macos")]
-#[expect(
-    unsafe_code,
-    reason = "the single-threaded daemon entry restores its inherited allocator variables before any child can start"
-)]
-fn prepare_daemon_allocator(words: &[String]) -> std::io::Result<()> {
-    use std::ffi::OsStr;
-    use std::os::unix::process::CommandExt as _;
-
-    const POLICY: &str = "MallocSpaceEfficient";
-    const MARKER: &str = "RUNTROL_INTERNAL_MACOS_ALLOCATOR";
-    const ORIGINAL: &str = "RUNTROL_INTERNAL_MACOS_ALLOCATOR_ORIGINAL";
-
-    if words.first().map(String::as_str) != Some(runtrol_cli::DAEMON_ARGUMENT) {
-        return Ok(());
-    }
-    match std::env::var_os(MARKER).as_deref() {
-        Some(marker) if marker == OsStr::new("unset") => {
-            // SAFETY: main has not created a runtime or another thread. The allocator has already consumed this
-            // process's inherited policy, and removal keeps it out of provider children.
-            unsafe {
-                std::env::remove_var(POLICY);
-                std::env::remove_var(MARKER);
-                std::env::remove_var(ORIGINAL);
-            }
-            return Ok(());
-        }
-        Some(marker) if marker == OsStr::new("set") => {
-            let original = std::env::var_os(ORIGINAL).ok_or_else(|| {
-                std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    "the daemon allocator restart lost its original policy",
-                )
-            })?;
-            // SAFETY: same single-threaded entry boundary as the unset case above.
-            unsafe {
-                std::env::set_var(POLICY, original);
-                std::env::remove_var(MARKER);
-                std::env::remove_var(ORIGINAL);
-            }
-            return Ok(());
-        }
-        Some(_) => {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "the daemon allocator restart marker is malformed",
-            ));
-        }
-        None => {}
-    }
-    if std::env::var_os(POLICY).as_deref() == Some(OsStr::new("1")) {
-        return Ok(());
-    }
-
-    let executable = std::env::current_exe()?;
-    let mut restarted = std::process::Command::new(executable);
-    restarted.args(words).env(POLICY, "1");
-    match std::env::var_os(POLICY) {
-        Some(original) => {
-            restarted.env(MARKER, "set").env(ORIGINAL, original);
-        }
-        None => {
-            restarted.env(MARKER, "unset").env_remove(ORIGINAL);
-        }
-    }
-    Err(restarted.exec())
 }
 
 /// Read argv, and nothing else.

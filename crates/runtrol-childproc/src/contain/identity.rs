@@ -32,21 +32,17 @@ impl ProcessIdentity {
         })
     }
 
-    /// Whether the PID still names this exact process and still leads its recorded group.
-    pub(super) fn matches_live_root(&self) -> Result<bool, SpawnError> {
+    /// Whether the recorded PID has been reused by a different kernel process generation.
+    ///
+    /// A missing PID is not reuse. POSIX keeps a process-group identifier reserved while any member of that
+    /// group remains, so a missing root plus an existing group still identifies the group created by the recorded
+    /// root. A present PID with a different start value proves that the old group ended and the numeric identifier
+    /// was later reused.
+    pub(super) fn pid_was_reused(&self) -> Result<bool, SpawnError> {
         let Some(start) = start_of(self.pid)? else {
             return Ok(false);
         };
-        if start != self.start || process_group_of(self.pid)? != Some(self.pid) {
-            return Ok(false);
-        }
-        let Some(executable) = executable_of(self.pid)? else {
-            return Ok(false);
-        };
-        if executable != self.executable {
-            return Ok(false);
-        }
-        Ok(start_of(self.pid)? == Some(self.start))
+        Ok(start != self.start)
     }
 }
 
@@ -93,48 +89,6 @@ fn start_of(pid: u32) -> Result<Option<u64>, SpawnError> {
             detail: error.to_string(),
         })?;
     Ok(Some(start))
-}
-
-#[cfg(target_os = "linux")]
-fn process_group_of(pid: u32) -> Result<Option<u32>, SpawnError> {
-    let path = format!("/proc/{pid}/stat");
-    let text = match std::fs::read_to_string(path) {
-        Ok(text) => text,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => {
-            return Err(SpawnError::Containment {
-                doing: "reading a process group",
-                detail: error.to_string(),
-            });
-        }
-    };
-    let tail = text
-        .rsplit_once(") ")
-        .map(|(_, tail)| tail)
-        .ok_or_else(|| failure("parsing a process group"))?;
-    let group = tail
-        .split_whitespace()
-        // The tail begins at state, followed by ppid and process group.
-        .nth(2)
-        .ok_or_else(|| failure("parsing a process group"))?
-        .parse::<u32>()
-        .map_err(|error| SpawnError::Containment {
-            doing: "parsing a process group",
-            detail: error.to_string(),
-        })?;
-    Ok(Some(group))
-}
-
-#[cfg(target_os = "linux")]
-fn executable_of(pid: u32) -> Result<Option<PathBuf>, SpawnError> {
-    match std::fs::read_link(format!("/proc/{pid}/exe")) {
-        Ok(path) => Ok(Some(path)),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(SpawnError::Containment {
-            doing: "reading a process executable",
-            detail: error.to_string(),
-        }),
-    }
 }
 
 #[cfg(target_os = "macos")]
@@ -189,54 +143,6 @@ fn start_of(pid: u32) -> Result<Option<u64>, SpawnError> {
         .and_then(|value| value.checked_add(info.pbi_start_tvusec))
         .ok_or_else(|| failure("combining a process start identity"))?;
     Ok(Some(micros))
-}
-
-#[cfg(target_os = "macos")]
-fn process_group_of(pid: u32) -> Result<Option<u32>, SpawnError> {
-    Ok(bsd_info(pid)?.map(|info| info.pbi_pgid))
-}
-
-#[cfg(target_os = "macos")]
-#[expect(
-    unsafe_code,
-    reason = "macOS exposes the executable for an arbitrary PID only through proc_pidpath"
-)]
-fn executable_of(pid: u32) -> Result<Option<PathBuf>, SpawnError> {
-    use std::os::unix::ffi::OsStringExt as _;
-
-    let pid = i32::try_from(pid).map_err(|error| SpawnError::Containment {
-        doing: "reading a process executable",
-        detail: error.to_string(),
-    })?;
-    let mut bytes = vec![0_u8; usize::try_from(libc::PROC_PIDPATHINFO_MAXSIZE).unwrap_or(4096)];
-    // SAFETY: `bytes` is writable for its declared length and that same length is passed to the kernel.
-    let read = unsafe {
-        libc::proc_pidpath(
-            pid,
-            bytes.as_mut_ptr().cast(),
-            u32::try_from(bytes.len()).unwrap_or(u32::MAX),
-        )
-    };
-    if read == 0 {
-        let error = std::io::Error::last_os_error();
-        return if matches!(error.raw_os_error(), Some(libc::ESRCH)) {
-            Ok(None)
-        } else {
-            Err(SpawnError::Containment {
-                doing: "reading a process executable",
-                detail: error.to_string(),
-            })
-        };
-    }
-    let length = usize::try_from(read).map_err(|error| SpawnError::Containment {
-        doing: "reading a process executable",
-        detail: error.to_string(),
-    })?;
-    bytes.truncate(length);
-    while bytes.last() == Some(&0) {
-        bytes.pop();
-    }
-    Ok(Some(PathBuf::from(std::ffi::OsString::from_vec(bytes))))
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]

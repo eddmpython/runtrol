@@ -126,6 +126,7 @@ impl TrackedCommand {
         include_current_dir: bool,
     ) -> tokio::process::Command {
         let mut command = tokio::process::Command::new(program);
+        crate::handoff::prepare_child_environment(command.as_std_mut());
         if include_arguments {
             command.args(&self.arguments);
         }
@@ -436,11 +437,13 @@ impl ChildGuard {
         }
     }
 
-    /// Remove the durable record after the caller has observed that the complete process group is gone.
+    /// Finish a naturally exited root, stop any residual descendants, and remove the durable record after no group
+    /// member can execute.
     ///
     /// # Errors
     ///
-    /// [`SpawnError::Containment`] when the group still exists or the durable record cannot be removed.
+    /// [`SpawnError::Containment`] when residual descendants cannot be stopped or the durable record cannot be
+    /// removed.
     pub fn complete(&mut self) -> Result<(), SpawnError> {
         #[cfg(unix)]
         if let Some(tracked) = &mut self.tracked {

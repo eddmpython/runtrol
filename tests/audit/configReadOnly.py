@@ -2,9 +2,9 @@
 
 The rule is enforced as a closed list of production files that may mutate the filesystem. A path
 cannot be proven safe from a string search after it has been assembled at runtime, so the gate
-controls the capability instead: storage, runtrol home creation, the probe cache, and local endpoint
-cleanup are the only existing disk writers. Provider drivers and orchestration code have no direct
-filesystem mutation API available in their source.
+controls the capability instead: storage, runtrol home creation, the probe cache, local endpoint
+cleanup, and Unix process guards are the only existing disk writers. Provider drivers and
+orchestration code have no direct filesystem mutation API available in their source.
 
 Official provider commands are still allowed. They are child processes and own their configuration;
 runtrol does not recreate their file format or write around them.
@@ -33,6 +33,8 @@ CRATES = ROOT / "crates"
 # These files own runtrol data or its local endpoint. The list is intentionally exact and printed on
 # every successful run, so adding a new disk writer is a visible architecture decision.
 MAY_MUTATE_DISK = {
+    "crates/runtrol-childproc/src/contain/registry.rs": "owns runtrol's durable Unix process guards",
+    "crates/runtrol-childproc/src/contain/tracked.rs": "owns runtrol's Unix bootstrap handoff files",
     "crates/runtrol-core/src/home/mod.rs": "creates runtrol's own state directories",
     "crates/runtrol-core/src/probe/cache.rs": "atomically replaces runtrol's disposable probe cache",
     "crates/runtrol-ipc/src/transport.rs": "creates and removes runtrol's local Unix socket",
@@ -88,21 +90,34 @@ def failures() -> list[str]:
 
 
 def selftest() -> int:
-    """Inject direct writes and prove the scanner rejects them while permitting reads and tests."""
+    """Prove mutation detection and that reviewed ownership remains file-exact."""
+    example = "crates/example/src/lib.rs"
+    registry = "crates/runtrol-childproc/src/contain/registry.rs"
+    tracked = "crates/runtrol-childproc/src/contain/tracked.rs"
+    adjacent = "crates/runtrol-childproc/src/contain/bootstrap.rs"
     fixtures = [
-        ("direct write", 'fn change() { std::fs::write("settings", b"x"); }', 1),
-        ("aliased write", 'fn change() { fs::rename("a", "b"); }', 1),
-        ("open options", "fn change() { let _file = OpenOptions::new(); }", 1),
-        ("read only", 'fn inspect() { drop(std::fs::read("settings")); }', 0),
+        ("direct write", example, 'fn change() { std::fs::write("settings", b"x"); }', 1),
+        ("aliased write", example, 'fn change() { fs::rename("a", "b"); }', 1),
+        ("open options", example, "fn change() { let _file = OpenOptions::new(); }", 1),
+        ("read only", example, 'fn inspect() { drop(std::fs::read("settings")); }', 0),
         (
             "test fixture",
+            example,
             '#[cfg(test)]\nmod tests {\n  fn fixture() { std::fs::write("settings", b"x"); }\n}',
             0,
         ),
+        ("reviewed guard registry", registry, 'fn change() { std::fs::write("guard", b"x"); }', 0),
+        ("reviewed guard handoff", tracked, 'fn change() { std::fs::write("plan", b"x"); }', 0),
+        (
+            "unreviewed adjacent containment file",
+            adjacent,
+            'fn change() { std::fs::write("guard", b"x"); }',
+            1,
+        ),
     ]
     problems: list[str] = []
-    for name, source, expected in fixtures:
-        actual = len(mutationsIn(source, "crates/example/src/lib.rs"))
+    for name, relative, source, expected in fixtures:
+        actual = len(mutationsIn(source, relative))
         if actual != expected:
             problems.append(f"{name}: expected {expected} finding(s), got {actual}")
 

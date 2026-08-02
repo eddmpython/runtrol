@@ -25,6 +25,13 @@
 
 use crate::error::SpawnError;
 
+#[cfg(target_os = "macos")]
+const MACOS_ALLOCATOR_POLICY: &str = "MallocSpaceEfficient";
+#[cfg(target_os = "macos")]
+const MACOS_ALLOCATOR_MARKER: &str = "RUNTROL_INTERNAL_MACOS_ALLOCATOR";
+#[cfg(target_os = "macos")]
+const MACOS_ALLOCATOR_ORIGINAL: &str = "RUNTROL_INTERNAL_MACOS_ALLOCATOR_ORIGINAL";
+
 /// Stop this process's own standard handles from travelling to anything it starts.
 ///
 /// Call once, before starting anything. What a child is given as its input and output is unaffected: this is about
@@ -37,6 +44,120 @@ use crate::error::SpawnError;
 /// with nothing to show for it, and a program that could not prevent it should say so while somebody is watching.
 pub fn keep_handles_to_ourselves() -> Result<(), SpawnError> {
     platform::keep_handles_to_ourselves()
+}
+
+/// Restart a macOS daemon with the allocator policy measured by the live memory gate.
+///
+/// Call this at process entry, before constructing a runtime or starting any child. The first call replaces the
+/// current process with a copy whose allocator sees `MallocSpaceEfficient=1`. The replacement keeps the original
+/// value in private restart variables. [`TrackedCommand`](crate::TrackedCommand) restores that value on each
+/// supervised child without mutating the daemon's process-wide environment.
+///
+/// # Errors
+///
+/// Returns an I/O error when the executable cannot be found or replaced, or when the private restart environment is
+/// inconsistent. A successful first call does not return because it replaces the process image.
+#[cfg(target_os = "macos")]
+pub fn prepare_macos_daemon_allocator(arguments: &[String]) -> std::io::Result<()> {
+    use std::ffi::OsStr;
+    use std::os::unix::process::CommandExt as _;
+
+    match std::env::var_os(MACOS_ALLOCATOR_MARKER).as_deref() {
+        Some(marker) if marker == OsStr::new("unset") => {
+            require_allocator_policy()?;
+            return Ok(());
+        }
+        Some(marker) if marker == OsStr::new("set") => {
+            require_allocator_policy()?;
+            if std::env::var_os(MACOS_ALLOCATOR_ORIGINAL).is_none() {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "the daemon allocator restart lost its original policy",
+                ));
+            }
+            return Ok(());
+        }
+        Some(_) => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "the daemon allocator restart marker is malformed",
+            ));
+        }
+        None => {}
+    }
+    if std::env::var_os(MACOS_ALLOCATOR_POLICY).as_deref() == Some(OsStr::new("1")) {
+        return Ok(());
+    }
+
+    let executable = std::env::current_exe()?;
+    let mut restarted = std::process::Command::new(executable);
+    restarted.args(arguments).env(MACOS_ALLOCATOR_POLICY, "1");
+    match std::env::var_os(MACOS_ALLOCATOR_POLICY) {
+        Some(original) => {
+            restarted
+                .env(MACOS_ALLOCATOR_MARKER, "set")
+                .env(MACOS_ALLOCATOR_ORIGINAL, original);
+        }
+        None => {
+            restarted
+                .env(MACOS_ALLOCATOR_MARKER, "unset")
+                .env_remove(MACOS_ALLOCATOR_ORIGINAL);
+        }
+    }
+    Err(restarted.exec())
+}
+
+#[cfg(target_os = "macos")]
+fn require_allocator_policy() -> std::io::Result<()> {
+    if std::env::var_os(MACOS_ALLOCATOR_POLICY).as_deref() == Some(std::ffi::OsStr::new("1")) {
+        Ok(())
+    } else {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "the daemon allocator restart lost its allocator policy",
+        ))
+    }
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn prepare_child_environment(command: &mut std::process::Command) {
+    restore_macos_daemon_environment(command);
+}
+
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn prepare_child_environment(_: &mut std::process::Command) {}
+
+#[cfg(target_os = "macos")]
+fn restore_macos_daemon_environment(command: &mut std::process::Command) {
+    let marker = std::env::var_os(MACOS_ALLOCATOR_MARKER);
+    let original = std::env::var_os(MACOS_ALLOCATOR_ORIGINAL);
+    restore_macos_daemon_environment_from(command, marker.as_deref(), original.as_deref());
+}
+
+#[cfg(target_os = "macos")]
+fn restore_macos_daemon_environment_from(
+    command: &mut std::process::Command,
+    marker: Option<&std::ffi::OsStr>,
+    original: Option<&std::ffi::OsStr>,
+) {
+    use std::ffi::OsStr;
+
+    match marker {
+        Some(marker) if marker == OsStr::new("unset") => {
+            command.env_remove(MACOS_ALLOCATOR_POLICY);
+        }
+        Some(marker) if marker == OsStr::new("set") => {
+            if let Some(original) = original {
+                command.env(MACOS_ALLOCATOR_POLICY, original);
+            } else {
+                command.env_remove(MACOS_ALLOCATOR_POLICY);
+            }
+        }
+        _ => return,
+    }
+    command
+        .env_remove(MACOS_ALLOCATOR_MARKER)
+        .env_remove(MACOS_ALLOCATOR_ORIGINAL);
 }
 
 #[cfg(windows)]
@@ -120,5 +241,45 @@ mod tests {
         let mut out = std::io::stdout();
         write!(out, "").expect("standard output still works");
         out.flush().expect("and still flushes");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn supervised_child_removes_an_allocator_policy_that_was_originally_unset() {
+        let mut command = std::process::Command::new("not-started");
+        restore_macos_daemon_environment_from(
+            &mut command,
+            Some(std::ffi::OsStr::new("unset")),
+            None,
+        );
+
+        assert!(environment_is_removed(&command, MACOS_ALLOCATOR_POLICY));
+        assert!(environment_is_removed(&command, MACOS_ALLOCATOR_MARKER));
+        assert!(environment_is_removed(&command, MACOS_ALLOCATOR_ORIGINAL));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn supervised_child_restores_an_allocator_policy_that_was_originally_set() {
+        let mut command = std::process::Command::new("not-started");
+        restore_macos_daemon_environment_from(
+            &mut command,
+            Some(std::ffi::OsStr::new("set")),
+            Some(std::ffi::OsStr::new("operator-value")),
+        );
+
+        assert!(command.get_envs().any(|(key, value)| {
+            key == std::ffi::OsStr::new(MACOS_ALLOCATOR_POLICY)
+                && value == Some(std::ffi::OsStr::new("operator-value"))
+        }));
+        assert!(environment_is_removed(&command, MACOS_ALLOCATOR_MARKER));
+        assert!(environment_is_removed(&command, MACOS_ALLOCATOR_ORIGINAL));
+    }
+
+    #[cfg(target_os = "macos")]
+    fn environment_is_removed(command: &std::process::Command, key: &str) -> bool {
+        command
+            .get_envs()
+            .any(|(candidate, value)| candidate == std::ffi::OsStr::new(key) && value.is_none())
     }
 }

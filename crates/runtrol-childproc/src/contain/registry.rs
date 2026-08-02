@@ -340,7 +340,7 @@ impl Registry {
         let Some(identity) = read_active_if_present(&path)? else {
             return Ok(());
         };
-        wait_for_group_absence(identity.pid)?;
+        wait_for_group_quiescence(&identity)?;
         remove_if_present(&path)?;
         sync_directory(self.directory())
     }
@@ -364,13 +364,10 @@ impl Registry {
         let Some(identity) = read_active_if_present(&path)? else {
             return Ok(());
         };
-        if group_exists(identity.pid)? {
-            return Err(failure(
-                "completing a process guard",
-                "the process group still exists, so its guard must remain durable",
-            ));
+        if signal_or_clear(&identity, &path)? {
+            wait_for_group_quiescence(&identity)?;
+            remove_if_present(&path)?;
         }
-        remove_if_present(&path)?;
         sync_directory(self.directory())
     }
 
@@ -576,34 +573,24 @@ fn copy_array<const N: usize>(bytes: &[u8], at: usize) -> Result<[u8; N], SpawnE
 }
 
 fn reap(identity: &ProcessIdentity, path: &Path) -> Result<(), SpawnError> {
-    if identity.matches_live_root()? {
-        signal_group(identity.pid)?;
-        wait_for_group_absence(identity.pid)?;
-        remove_if_present(path)?;
-        return Ok(());
+    // A group identifier cannot be reused while the old group has a member. A missing root therefore still anchors
+    // the exact recorded group. A present PID with another start value proves later numeric reuse and must never be
+    // signalled.
+    if !group_exists(identity.pid)? || identity.pid_was_reused()? {
+        return remove_if_present(path);
     }
-    if group_exists(identity.pid)? {
-        return Err(failure(
-            "recovering a process group",
-            "the recorded root identity is gone or changed while its process group still exists",
-        ));
-    }
+    signal_group(identity.pid)?;
+    wait_for_group_quiescence(identity)?;
     remove_if_present(path)
 }
 
 fn signal_or_clear(identity: &ProcessIdentity, path: &Path) -> Result<bool, SpawnError> {
-    if identity.matches_live_root()? {
-        signal_group(identity.pid)?;
-        return Ok(true);
+    if !group_exists(identity.pid)? || identity.pid_was_reused()? {
+        remove_if_present(path)?;
+        return Ok(false);
     }
-    if group_exists(identity.pid)? {
-        return Err(failure(
-            "terminating a process group",
-            "the recorded root identity is gone or changed while its process group still exists",
-        ));
-    }
-    remove_if_present(path)?;
-    Ok(false)
+    signal_group(identity.pid)?;
+    Ok(true)
 }
 
 #[expect(
@@ -657,21 +644,162 @@ fn group_exists(group: u32) -> Result<bool, SpawnError> {
     }
 }
 
-fn wait_for_group_absence(group: u32) -> Result<(), SpawnError> {
+fn wait_for_group_quiescence(identity: &ProcessIdentity) -> Result<(), SpawnError> {
+    // SIGKILL can leave an orphaned zombie visible indefinitely when the host's PID 1 does not reap promptly. Such a
+    // row cannot execute or fork. Waiting for the numeric group to disappear would turn successful termination into
+    // a permanent startup failure, so the durable record closes when no non-zombie member remains.
     let deadline = Instant::now() + REAP_BUDGET;
     while Instant::now() < deadline {
-        if !group_exists(group)? {
+        if identity.pid_was_reused()? || !group_has_executing_members(identity.pid)? {
             return Ok(());
         }
         std::thread::sleep(REAP_POLL);
     }
-    if group_exists(group)? {
+    if !identity.pid_was_reused()? && group_has_executing_members(identity.pid)? {
         return Err(failure(
             "waiting for a process group to end",
-            "the process group remained after SIGKILL for 10 seconds",
+            "the process group retained an executing member after SIGKILL for 10 seconds",
         ));
     }
     Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn group_has_executing_members(group: u32) -> Result<bool, SpawnError> {
+    let processes = std::fs::read_dir("/proc")
+        .map_err(|error| io_failure("listing process-group members", error))?;
+    for process in processes {
+        let process =
+            process.map_err(|error| io_failure("reading a process-group member", error))?;
+        if process
+            .file_name()
+            .to_string_lossy()
+            .parse::<u32>()
+            .is_err()
+        {
+            continue;
+        }
+        let stat = match std::fs::read_to_string(process.path().join("stat")) {
+            Ok(stat) => stat,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(io_failure("reading a process-group member", error)),
+        };
+        let Some(tail) = stat.rsplit_once(") ").map(|(_, tail)| tail) else {
+            return Err(failure(
+                "reading a process-group member",
+                "the kernel returned a malformed process status",
+            ));
+        };
+        let mut fields = tail.split_whitespace();
+        let state = fields.next().ok_or_else(|| {
+            failure(
+                "reading a process-group member",
+                "the kernel omitted a process state",
+            )
+        })?;
+        let _parent = fields.next().ok_or_else(|| {
+            failure(
+                "reading a process-group member",
+                "the kernel omitted a parent process identifier",
+            )
+        })?;
+        let process_group = fields
+            .next()
+            .ok_or_else(|| {
+                failure(
+                    "reading a process-group member",
+                    "the kernel omitted a process-group identifier",
+                )
+            })?
+            .parse::<u32>()
+            .map_err(|error| SpawnError::Containment {
+                doing: "reading a process-group member",
+                detail: error.to_string(),
+            })?;
+        if process_group == group && !matches!(state, "Z" | "X") {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+#[cfg(target_os = "macos")]
+#[expect(
+    unsafe_code,
+    reason = "macOS exposes bounded process-group membership and zombie state only through libproc"
+)]
+fn group_has_executing_members(group: u32) -> Result<bool, SpawnError> {
+    const PROC_PGRP_ONLY: u32 = 2;
+    const MAX_GROUP_MEMBERS: usize = 4096;
+
+    let mut processes = vec![0_i32; MAX_GROUP_MEMBERS];
+    let byte_capacity =
+        i32::try_from(std::mem::size_of_val(processes.as_slice())).map_err(|error| {
+            SpawnError::Containment {
+                doing: "listing process-group members",
+                detail: error.to_string(),
+            }
+        })?;
+    // SAFETY: `processes` is writable for exactly `byte_capacity` bytes and libproc borrows it only for this call.
+    let bytes = unsafe {
+        libc::proc_listpids(
+            PROC_PGRP_ONLY,
+            group,
+            processes.as_mut_ptr().cast(),
+            byte_capacity,
+        )
+    };
+    if bytes < 0 {
+        return Err(io_failure(
+            "listing process-group members",
+            std::io::Error::last_os_error(),
+        ));
+    }
+    if bytes == byte_capacity {
+        return Err(failure(
+            "listing process-group members",
+            "the process group exceeds the 4096-member recovery bound",
+        ));
+    }
+    let count = usize::try_from(bytes).map_err(|error| SpawnError::Containment {
+        doing: "listing process-group members",
+        detail: error.to_string(),
+    })? / std::mem::size_of::<i32>();
+    for pid in processes.into_iter().take(count).filter(|pid| *pid > 0) {
+        let mut info = std::mem::MaybeUninit::<libc::proc_bsdshortinfo>::uninit();
+        let info_size =
+            i32::try_from(std::mem::size_of::<libc::proc_bsdshortinfo>()).map_err(|error| {
+                SpawnError::Containment {
+                    doing: "reading a process-group member",
+                    detail: error.to_string(),
+                }
+            })?;
+        // SAFETY: `info` is writable for exactly `info_size` bytes and is read only after a complete-size result.
+        let read = unsafe {
+            libc::proc_pidinfo(
+                pid,
+                libc::PROC_PIDT_SHORTBSDINFO,
+                0,
+                info.as_mut_ptr().cast(),
+                info_size,
+            )
+        };
+        if read == 0 {
+            continue;
+        }
+        if read != info_size {
+            return Err(failure(
+                "reading a process-group member",
+                "the kernel returned an incomplete process status",
+            ));
+        }
+        // SAFETY: the complete-size result above states that every byte of `info` was initialized by the kernel.
+        let info = unsafe { info.assume_init() };
+        if info.pbsi_status != libc::SZOMB {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 #[expect(
@@ -849,7 +977,7 @@ mod tests {
 
         let replacement = Registry::open(&fixture.guards)?;
         replacement.recover()?;
-        assert!(!group_exists(root)?);
+        assert!(!group_has_executing_members(root)?);
         assert_eq!(record_count(&fixture.guards, PENDING_SUFFIX)?, 0);
         assert_eq!(record_count(&fixture.guards, ACTIVE_SUFFIX)?, 0);
         fixture.process_group = None;

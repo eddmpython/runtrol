@@ -242,6 +242,20 @@ def outputsReady(paths: list[Path], reply_bytes: int, admitted: bool) -> bool:
     return all(path.exists() and b"watch lagged" in path.read_bytes() for path in paths)
 
 
+def waitWatcherReady(watcher: subprocess.Popen[str], output: Path) -> None:
+    """Require one endpoint acknowledgement before opening the next concurrent watcher."""
+    deadline = time.monotonic() + acp.TURN_WAIT_S
+    while time.monotonic() < deadline:
+        if watcher.poll() is not None:
+            stdout, stderr = watcher.communicate(timeout=2.0)
+            detail = (stderr or stdout or "watch client exited without diagnostics").strip()
+            raise Failed(f"a watch client ended before its acknowledgement: {detail}")
+        if output.exists() and b"watching" in output.read_bytes():
+            return
+        time.sleep(0.025)
+    raise Failed("a watch client did not acknowledge its subscription")
+
+
 def exerciseCase(
     binary: Path, fixture: Path, reply_bytes: int, admitted: bool
 ) -> Evidence:
@@ -279,9 +293,7 @@ def exerciseCase(
                             errors="replace",
                         )
                     watchers.append(watcher)
-                time.sleep(0.25)
-                if any(watcher.poll() is not None for watcher in watchers):
-                    raise Failed("a watch client ended before the large event")
+                    waitWatcherReady(watcher, outputPath)
                 prompt = subprocess.Popen(
                     [str(binary), "say", session, f"large memory gate event {case + 1}"],
                     cwd=acp.ROOT,

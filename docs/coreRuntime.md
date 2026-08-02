@@ -45,7 +45,8 @@ charged to the daemon's RSS budget.
 
 The Linux ceiling accounts for the desktop runtime mapped into the shared executable. The macOS residual allowance
 records measured allocator retention. On macOS the daemon performs one early self-exec with the system allocator's
-space-efficient policy, then restores the inherited environment before any provider child starts. These numbers are
+space-efficient policy. Its central supervised-command boundary restores the operator's original allocator
+environment and removes private restart markers from every provider session and probe child. These numbers are
 regression ceilings, not estimates of object sizes.
 
 The live journey admits one 900 KiB provider event and delivers it completely to four real watchers. A separate
