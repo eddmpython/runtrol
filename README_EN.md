@@ -4,8 +4,8 @@
 
 [한국어](README.md) | English | [中文](README_ZH.md) | [日本語](README_JA.md)
 
-> Status: **the core is up.** Sessions from both providers appear in one list, and start, close and resume run
-> against the real CLIs. Most scores below are 0 because no gate asserts those axes yet, not because there is
+> Status: **the core and Windows desktop are implemented.** Session lifecycles run against both real CLIs, and
+> the production Tauri product provides one list and a bounded live view. Most scores below are 0 because no gate asserts those axes yet, not because there is
 > no code.
 
 The security boundary and default-deny settings are documented in [SECURITY.md](SECURITY.md).
@@ -18,20 +18,20 @@ At the desk it is an app; away from the desk it is a phone. The same session, th
 However many providers there are, there is one list. Whatever the operating system, the method is the same.
 The conversation travels only between the user's PC and the provider. runtrol does not get in between.**
 
-The current total is **36/140, average 2.6/10**. Six axes have active CI gates, and one local-only axis remains at the manual tier.
+The current total is **38/140, average 2.7/10**. Seven axes have active CI gates.
 A 10 means the complete journey has been repeatedly verified in a real environment.
 **A score above the manual tier is backed by a gate that actually runs in CI. A path that is not executed automatically cannot pass 3, no matter how implemented it looks.**
 
 | North Star | Score | Today | Target state |
 |---|---:|---|---|
-| One session list | 3/10 | `sessionLifecycleSmoke` starts, closes, and resumes sessions from two real CLIs in the local preflight, but hosted CI has neither subscription login. It therefore cannot pass the manual tier. | Whether the provider is Claude Code, Codex, or whatever comes next, every session alive on this PC appears in one list, and start, resume, and delete all happen there. |
+| One session list | 5/10 | Hosted Windows CI drives the production browser lifecycle and the actual Tauri product through start, hot and cold open, an editable next prompt, and confirmed list removal. The counterparts are a deterministic mock transport and ACP fixture, so this remains the mock tier. | Whether the provider is Claude Code, Codex, or whatever comes next, every session alive on this PC appears in one list, and start, resume, and delete all happen there. |
 | Instant response | 5/10 | A real browser measures the production bundle, enforcing ratchets for the list, opening a conversation, and typing while processing 3,000 raw frames per second. The transport counterpart is a mock, so the axis remains at this tier. | The list appears with no wait, a conversation opens the moment it is tapped, and neither scrolling nor typing stutters when long output pours in. There is no moment where the user perceives loading. |
 | Reach my PC sessions from my phone | 0/10 | Not built. | Pair the phone to the PC once, and from then on, away from the desk, send new instructions into sessions running on that PC and watch the output live. Neither the plan tier nor the auth method of a provider account blocks this. |
 | Provider extensibility | 5/10 | Hosted CI checks the public outside-driver contract, a generic ACP fixture on three operating systems, two turns plus native load through an independently distributed ACP implementation, and the hidden approval denial round trip of real Claude Code. The model endpoints are local mocks. Scheduled CI repeats the parser probes and approval journey with current CLIs. It does not claim account-backed model behavior or the complete event surface. | When a new CLI appears, one adapter is added and the PC screen, the phone screen, and the controls stay the same. The user notices a new provider only as a longer list. |
 | No conversation passthrough | 6/10 | An exact egress allowlist on real loopback sockets and the production Noise IK and IKpsk1 boundary run in `egressContract`. A prompt sample never appears in plaintext in the relay capture or diagnostics, transport has no disk or logging API, and drivers and storage know no provider transcript path. The ceiling is 6 until a live phone and relay gate exists. | The user's prompts and the model's responses travel only between the PC and the provider, and between the user's own devices. runtrol stores no copy of that content, and no server in between ever receives it in a readable form. |
 | Approve from the phone | 0/10 | Not built. | When an agent stops in front of a dangerous action, it appears on the phone, and allowing or denying there resumes the PC session immediately. |
 | Survive disconnection | 0/10 | The remote phone end-to-end gate is not built. | The PC session remains recoverable through the official resume surface when the phone locks, the network drops, or runtrol restarts. Retained frames continue from an exact cursor; anything outside the bounded window is an explicit gap, never a silent skip. |
-| Cost of running | 6/10 | Hosted Windows, macOS, and Linux measure a real debug daemon's idle RSS and a 100 ms CPU ceiling per 10 seconds (`idleFootprintRatchet`). There is no independent second gate kind, so the ceiling is 6. | Leave it on all day and the user never notices it is there. Not in the battery, not in the fan, not in the task manager. |
+| Cost of running | 6/10 | All three hosted operating systems measure the real debug daemon's idle RSS and CPU. Windows also checks the production GUI and full WebView2 tree against a 60-second ratchet. Both are bench evidence, so the ceiling remains 6, and the 24-hour campaign is a separate contract. | Leave it on all day and the user never notices it is there. Not in the battery, not in the fan, not in the task manager. |
 | Same method everywhere | 0/10 | Not built. | Install and operation are the same on Windows, macOS, and Linux. A Windows user never needs to know what WSL or tmux is. |
 | Current without asking | 0/10 | Not built. | The app and the installed agent CLIs stay current on their own, and if an update breaks a session it has already rolled back before the user touches anything. There is no moment where the user thinks about versions. |
 | Automatic model detection | 6/10 | Hosted `modelDetectionSmoke --require-all` installs current real CLIs without credentials, checks Codex `model/list` and a Claude partial catalogue containing an isolated provider-owned option-cache sentinel, and rejects observed identifiers hardcoded in production source. It does not prove availability for a particular account, so one live gate kind caps the score at 6. | The models this account can actually use appear in the list as they are, and a new model appears without runtrol being changed. |
@@ -104,11 +104,11 @@ At every fork, take the side that is easier for the user. The test is not taste.
 
 | | |
 |---|---|
-| **PC (Windows)** | Installer with a launcher. Stays current on its own after install. GitHub Releases is the source of truth |
+| **PC (Windows)** | Not released yet. A source build produces the production Tauri product; installation and automatic updates belong to M2 |
 | **PC (macOS, Linux)** | In preparation |
 | **Mobile** | PWA. Open it in a browser and add it to the home screen. No app store needed |
 
-There is no release yet. This is the design stage.
+There is no release yet. The core and Windows desktop are implemented, while the distribution surface is in preparation.
 
 ## Who does not need runtrol
 
@@ -145,7 +145,7 @@ If those axes are not nailed down by gates, using Rust means nothing.
 
 | | | |
 |---|---|---|
-| `crates/` | The product (Rust). Daemon, provider adapters, transport, desktop app | Not created |
+| `crates/` | The product (Rust). Daemon, provider adapters, transport, desktop app | Implemented |
 | `pwa/` | Mobile PWA | Not created |
 | `site/` | GitHub Pages landing | Not created |
 | [`assets/brand/`](assets/brand/) | The logo. SVG is the source; favicons, icons, and social cards derive from it | |

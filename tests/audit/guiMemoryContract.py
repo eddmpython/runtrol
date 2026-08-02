@@ -65,6 +65,7 @@ CAMPAIGN_CHURN_SECONDS = 60.0
 START_WITHIN_SECONDS = 45.0
 SMOKE_SEED_RECORDS = 5
 TRACE_NEEDLE = "first list at "
+MEASUREMENT_CLOSE_TRACE = "memory measurement window made nonclosable"
 APPLIED_TRACE = "frame applied "
 PAINTED_TRACE = "feed painted "
 WEBVIEW_IMAGE = "msedgewebview2.exe"
@@ -87,6 +88,21 @@ CONTINUITY_FIELDS = (
 )
 RATCHET_FIELDS = (*MEMORY_CEILING_FIELDS, *TOPOLOGY_CEILING_FIELDS)
 ATTESTATION_NAME = "guiMemoryBuildAttestation.json"
+FAILURE_EVIDENCE_BYTES = MIB
+FAILURE_EVIDENCE_DIR = (
+    Path(tempfile.gettempdir()) / f"runtrol-gui-memory-failure-{os.getpid()}"
+)
+FAILURE_TRACE_PATH = FAILURE_EVIDENCE_DIR / "trace.log"
+FAILURE_ERROR_PATH = FAILURE_EVIDENCE_DIR / "error.log"
+FAILURE_TRACE_PREFIXES = (
+    TRACE_NEEDLE,
+    MEASUREMENT_CLOSE_TRACE,
+    APPLIED_TRACE,
+    PAINTED_TRACE,
+    "app exit",
+    "window close requested ",
+    "window destroyed ",
+)
 CHECKPOINT_RE = re.compile(
     rf"^({re.escape(APPLIED_TRACE.strip())}|{re.escape(PAINTED_TRACE.strip())}) "
     r"checkpoint=([0-9]+:[0-9]+:[0-9]+:[0-9]+) "
@@ -516,6 +532,62 @@ def waitForTrace(gui: subprocess.Popen[bytes], trace_path: Path, needles: tuple[
         time.sleep(0.05)
     trace = trace_path.read_text(encoding="utf-8", errors="replace") if trace_path.is_file() else ""
     raise Failed(f"the production page emitted incomplete trace evidence: {needles!r}; trace was {trace!r}")
+
+
+def requestWindowClose(pid: int) -> None:
+    """Send one real close request to the measured top-level window."""
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    callback_type = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+    user32.EnumWindows.argtypes = [callback_type, ctypes.c_void_p]
+    user32.EnumWindows.restype = ctypes.c_bool
+    user32.GetWindowThreadProcessId.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_ulong)]
+    user32.GetWindowThreadProcessId.restype = ctypes.c_ulong
+    user32.IsWindowVisible.argtypes = [ctypes.c_void_p]
+    user32.IsWindowVisible.restype = ctypes.c_bool
+    user32.GetWindowTextLengthW.argtypes = [ctypes.c_void_p]
+    user32.GetWindowTextLengthW.restype = ctypes.c_int
+    user32.GetWindowTextW.argtypes = [ctypes.c_void_p, ctypes.c_wchar_p, ctypes.c_int]
+    user32.GetWindowTextW.restype = ctypes.c_int
+    user32.PostMessageW.argtypes = [ctypes.c_void_p, ctypes.c_uint, ctypes.c_size_t, ctypes.c_ssize_t]
+    user32.PostMessageW.restype = ctypes.c_bool
+    found: int | None = None
+
+    @callback_type
+    def inspect(window: int, _argument: int) -> bool:
+        nonlocal found
+        owner = ctypes.c_ulong()
+        user32.GetWindowThreadProcessId(window, ctypes.byref(owner))
+        if owner.value != pid or not user32.IsWindowVisible(window):
+            return True
+        length = user32.GetWindowTextLengthW(window)
+        title = ctypes.create_unicode_buffer(length + 1)
+        user32.GetWindowTextW(window, title, len(title))
+        if title.value == "runtrol":
+            found = window
+            return False
+        return True
+
+    user32.EnumWindows(inspect, None)
+    if found is None:
+        raise Failed("the production GUI exposed no visible top-level window titled runtrol")
+    if not user32.PostMessageW(found, 0x0010, 0, 0):
+        raise Failed(f"could not inject WM_CLOSE into the production GUI: {ctypes.get_last_error()}")
+
+
+def preserveFailureEvidence(trace_path: Path, error_path: Path, reason: Exception) -> None:
+    """Keep bounded, content-free diagnostics outside the ephemeral measurement home."""
+    try:
+        FAILURE_EVIDENCE_DIR.mkdir(parents=True, exist_ok=True)
+        trace_lines = trace_path.read_text(encoding="utf-8", errors="replace").splitlines()
+        allowed = [line for line in trace_lines if line.startswith(FAILURE_TRACE_PREFIXES)]
+        trace = ("\n".join(allowed) + ("\n" if allowed else "")).encode("utf-8")
+        FAILURE_TRACE_PATH.write_bytes(trace[-FAILURE_EVIDENCE_BYTES:])
+        stderr_bytes = error_path.stat().st_size if error_path.is_file() else 0
+        summary = f"{type(reason).__name__}: {reason}\nproduct stderr bytes={stderr_bytes}\n"
+        FAILURE_ERROR_PATH.write_bytes(summary.encode("utf-8")[-FAILURE_EVIDENCE_BYTES:])
+    except OSError as error:
+        # The measurement failure remains primary. Artifact I/O is reported without hiding that cause.
+        print(f"[guiMemoryContract] could not preserve failure evidence: {error}", file=sys.stderr)
 
 
 def checkpointEvidence(
@@ -1024,10 +1096,16 @@ def measure(
         manifest(home, fixture)
         environment = acp.environment(home, fixture)
         environment["RUNTROL_GUI_TRACE"] = "1"
-        daemon = acp.startDaemon(binary, environment, home)
+        environment["RUNTROL_GUI_MEMORY_MEASUREMENT"] = "1"
+        try:
+            daemon = acp.startDaemon(binary, environment, home)
+        except Exception as error:
+            preserveFailureEvidence(trace_path, error_path, error)
+            raise
         gui: subprocess.Popen[bytes] | None = None
         session: str | None = None
         observed_identities = treeIdentities(daemon.pid)
+        failure: Exception | None = None
         try:
             session = acp.command(binary, environment, ["start", acp.PROVIDER, str(workspace)])
             if acp.SESSION_RE.fullmatch(session) is None:
@@ -1049,6 +1127,17 @@ def measure(
                 warmup_before = len(warmup_trace.splitlines())
                 acp.command(binary, environment, ["say", session, "gui memory warmup"])
                 waitForCheckpointGrowth(gui, trace_path, warmup_before)
+                requestWindowClose(gui.pid)
+                waitForTrace(
+                    gui,
+                    trace_path,
+                    (TRACE_NEEDLE, MEASUREMENT_CLOSE_TRACE),
+                )
+                close_probe_before = len(
+                    trace_path.read_text(encoding="utf-8", errors="replace").splitlines()
+                )
+                acp.command(binary, environment, ["say", session, "gui memory close probe"])
+                waitForCheckpointGrowth(gui, trace_path, close_probe_before)
                 time.sleep(settle)
                 samples: list[TreeMemory] = []
                 turns = 0
@@ -1139,8 +1228,22 @@ def measure(
                 painted_checkpoints=painted,
                 completed_checkpoints=len(qualifiedCheckpoints(completed)),
             )
+        except Exception as error:
+            failure = error
+            preserveFailureEvidence(trace_path, error_path, error)
+            raise
         finally:
-            cleanupOwned(gui, daemon, session, binary, environment, observed_identities)
+            try:
+                cleanupOwned(gui, daemon, session, binary, environment, observed_identities)
+            except Exception as cleanup_error:
+                if failure is None:
+                    preserveFailureEvidence(trace_path, error_path, cleanup_error)
+                    raise
+                preserveFailureEvidence(
+                    trace_path,
+                    error_path,
+                    Failed(f"{failure}; cleanup also failed: {cleanup_error}"),
+                )
 
 
 def windowsFileVersion(path: Path) -> str:

@@ -115,12 +115,20 @@ impl<T> Answered<T> {
 /// Off by default, so nothing is printed during ordinary use.
 pub const TRACE_ENV: &str = "RUNTROL_GUI_TRACE";
 
+/// The gate-only flag that keeps an unattended memory measurement from being closed by desktop input.
+const MEMORY_MEASUREMENT_ENV: &str = "RUNTROL_GUI_MEMORY_MEASUREMENT";
+
 /// Whether this window was started to be measured.
 ///
 /// Asked once by the page at startup, so an ordinary run costs one call and then never reports again.
 #[tauri::command]
 fn tracing() -> bool {
     std::env::var_os(TRACE_ENV).is_some_and(|value| !value.is_empty())
+}
+
+/// Whether an unattended GUI memory measurement owns this window.
+fn memory_measurement() -> bool {
+    tracing() && std::env::var_os(MEMORY_MEASUREMENT_ENV).is_some_and(|value| !value.is_empty())
 }
 
 /// One measurement from the page.
@@ -149,6 +157,27 @@ fn trace(line: String) {
         if let Err(error) = writeln!(stdout, "{line}").and_then(|()| stdout.flush()) {
             eprintln!("runtrol could not write a GUI trace: {error}");
         }
+    }
+}
+
+/// Record only lifecycle shape when a product gate explicitly requested tracing.
+fn trace_lifecycle(event: &tauri::RunEvent) {
+    let line = match event {
+        tauri::RunEvent::Exit => Some("app exit".to_owned()),
+        tauri::RunEvent::ExitRequested { code, .. } => {
+            Some(format!("app exit requested code={code:?}"))
+        }
+        tauri::RunEvent::WindowEvent { label, event, .. } => match event {
+            tauri::WindowEvent::CloseRequested { .. } => {
+                Some(format!("window close requested label={label}"))
+            }
+            tauri::WindowEvent::Destroyed => Some(format!("window destroyed label={label}")),
+            _ => None,
+        },
+        _ => None,
+    };
+    if let Some(line) = line {
+        trace(line);
     }
 }
 
@@ -737,14 +766,29 @@ fn parse_session(text: &str) -> Option<runtrol_provider::SessionId> {
 ///
 /// [`tauri::Error`] when the window cannot be created or the runtime cannot start.
 pub fn run(reaching: Reaching) -> Result<(), tauri::Error> {
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .setup(|app| {
             // Asked for by the window itself. A process raising its own new window is allowed to; a harness
             // handing it the foreground from outside is not, which the shell campaign measured the hard way.
             if let Some(window) = app.get_webview_window("main") {
+                if memory_measurement() {
+                    window.set_closable(false)?;
+                    trace("memory measurement window made nonclosable".to_owned());
+                }
                 drop(window.set_focus());
             }
             Ok(())
+        })
+        .on_window_event(|_window, event| {
+            // The disabled close button above does not stop a taskbar close or WM_CLOSE (measured: an
+            // unattended measurement died mid-journey to one), so the request itself is refused while a
+            // gate owns this window. Ordinary windows keep every close path.
+            if memory_measurement()
+                && let tauri::WindowEvent::CloseRequested { api, .. } = event
+            {
+                api.prevent_close();
+                trace("memory measurement window refused a close request".to_owned());
+            }
         })
         .manage(reaching)
         .manage(Watching::default())
@@ -763,7 +807,9 @@ pub fn run(reaching: Reaching) -> Result<(), tauri::Error> {
             tracing,
             trace
         ])
-        .run(tauri::generate_context!())
+        .build(tauri::generate_context!())?;
+    app.run(|_handle, event| trace_lifecycle(&event));
+    Ok(())
 }
 
 #[cfg(test)]

@@ -4,8 +4,7 @@
 
 [한국어](README.md) | [English](README_EN.md) | [中文](README_ZH.md) | 日本語
 
-> ステータス: **コアが動いている。** 二つのプロバイダーのセッションが一つの一覧に並び、開始・終了・再開が実物の
-> CLI に対して動く。以下のスコアの多くが 0 なのは、コードがないからではなく、その軸を断言するゲートがまだない
+> ステータス: **コアと Windows デスクトップを実装済み。** 二つの実物 CLI のセッション lifecycle が動き、production Tauri 製品が一つの一覧と bounded live view を提供する。以下のスコアの多くが 0 なのは、コードがないからではなく、その軸を断言するゲートがまだない
 > からである。
 
 The security boundary and default-deny settings are documented in [SECURITY.md](SECURITY.md).
@@ -18,20 +17,20 @@ The security boundary and default-deny settings are documented in [SECURITY.md](
 プロバイダーがいくつあってもリストは一つ、OS が何であっても方法は同じ。
 会話はユーザーの PC とプロバイダーの間だけを往復する。runtrol はその間に割り込まない。**
 
-現在の合計は **36/140、平均 2.6/10** である。有効な CI ゲートが立つ軸は六つで、ローカル専用の一軸は manual 層に留まる。
+現在の合計は **38/140、平均 2.7/10** である。有効な CI ゲートが立つ軸は七つである。
 10 点は、実際の環境で完結した道筋が繰り返し検証された状態を指す。
 **manual 層を超えるスコアの根拠は CI で実際に動くゲートである。自動実行されない経路は、どれほど実装済みに見えても 3 点を超えない。**
 
 | 北極星 | 現在のスコア | 現状 | 到達すべき状態 |
 |---|---:|---|---|
-| 一つのセッション一覧 | 3/10 | `sessionLifecycleSmoke` はローカル preflight で二つの実物 CLI の開始、終了、再開を動かすが、hosted CI にはその購読ログインがない。したがって manual 層を超えない。 | プロバイダーが Claude Code でも Codex でも、その次の何かでも、いま自分の PC で生きているセッションが一つの一覧に並び、開始・再開・削除がそこで完結する。 |
+| 一つのセッション一覧 | 5/10 | hosted Windows CI が production browser lifecycle と実際の Tauri 製品を動かし、開始、hot および cold session の open、編集可能な次の入力、確認済み一覧削除を検証する。相手は決定論的な mock transport と ACP fixture なので mock 層に留まる。 | プロバイダーが Claude Code でも Codex でも、その次の何かでも、いま自分の PC で生きているセッションが一つの一覧に並び、開始・再開・削除がそこで完結する。 |
 | 即座の反応 | 5/10 | 実ブラウザで production bundle を測り、一覧、会話を開く操作、入力遅延の ratchet を守りながら毎秒 3,000 個の raw frame を処理する。transport の相手は mock なので、この tier に留まる。 | 一覧が待ち時間なく現れ、会話は押した瞬間に開き、長い出力が流れてもスクロールと入力が途切れない。ユーザーが読み込みを意識する瞬間が存在しない。 |
 | スマホから自分の PC のセッションへ | 0/10 | 未実装。 | スマートフォンを PC に一度つないでおけば、席を離れた後もその PC で動いているセッションに新しい指示を入れ、出力をリアルタイムで見られる。プロバイダーアカウントのプランや認証方式がこの体験を妨げない。 |
 | プロバイダー拡張性 | 5/10 | hosted CI は外部ドライバーの公開契約、三つの OS 上の汎用 ACP fixture、独立配布 ACP 実装による二つの turn と native load、実物 Claude Code の hidden approval 拒否往復を検証する。model endpoint はローカル mock である。scheduled CI は最新 CLI で parser probe と同じ approval journey を繰り返すが、アカウント model の動作や event 全表面は主張しない。 | 新しい CLI が出たらアダプターを一つ足すだけで、PC 画面もスマホ画面も操作方法もそのまま。ユーザーはプロバイダーが増えたことを一覧が長くなったこととしてだけ知る。 |
 | 会話を通さない | 6/10 | `egressContract` は実物の loopback socket で正確な送信 allowlist と production Noise IK、IKpsk1 境界を動かす。prompt の標本は relay capture や診断文字列に平文で現れず、transport は disk と log の API を持たず、driver と storage は provider の transcript path を知らない。実物のスマートフォンと relay を結ぶ live gate がないため、天井は 6 である。 | ユーザーのプロンプトとモデルの応答は、PC とプロバイダーの間、そしてユーザー自身のデバイスの間だけを往復する。runtrol はその本文を保存せず、途中のどのサーバーも読める形でそれを受け取らない。 |
 | スマホで承認 | 0/10 | 未実装。 | エージェントが危険な操作の前で止まるとスマートフォンに表示され、そこで許可または拒否すると PC のセッションがただちに続く。 |
 | 切れても生き残る | 0/10 | リモートのスマートフォンを含む end-to-end ゲートは未実装。 | スマートフォンのロック、ネットワーク切断、runtrol 再起動の後も、PC セッションは公式 resume surface から復旧できる。保持範囲内は正確な cursor から続き、範囲外は黙って飛ばさず明示的な gap になる。 |
-| 常駐コスト | 6/10 | Windows、macOS、Linux の hosted CI が実物の debug daemon の idle RSS と、10 秒あたり CPU 100 ms の上限を測る（`idleFootprintRatchet`）。独立した二種類目のゲートがないため上限は 6。 | 一日中つけっぱなしでも、ユーザーはその存在に気づかない。バッテリーにも、ファンにも、タスクマネージャーにも見えない。 |
+| 常駐コスト | 6/10 | 三つの hosted OS が実物 debug daemon の idle RSS と CPU を測る。Windows は production GUI と WebView2 process tree 全体を 60 秒 ratchet にも照合する。どちらも bench 証拠なので上限は 6 のままで、24 時間 campaign は別契約である。 | 一日中つけっぱなしでも、ユーザーはその存在に気づかない。バッテリーにも、ファンにも、タスクマネージャーにも見えない。 |
 | どこでも同じやり方 | 0/10 | 未実装。 | Windows、macOS、Linux でインストール方法も操作も同じ。Windows ユーザーが WSL や tmux を知る必要がない。 |
 | 勝手に最新 | 0/10 | 未実装。 | アプリとインストール済みのエージェント CLI が自動で最新を保ち、更新がセッションを壊したらユーザーが手を触れる前に戻っている。ユーザーがバージョンを気にする瞬間が存在しない。 |
 | モデル自動認識 | 6/10 | hosted `modelDetectionSmoke --require-all` は資格情報なしで最新の実物 CLI を導入し、Codex の `model/list` と隔離した provider-owned option cache sentinel を含む Claude partial catalogue を検査し、観測した identifier が production source にハードコードされていないことを確認する。特定アカウントでの利用可否までは証明しないため、live gate 一種類の上限 6 である。 | いまこのアカウントで実際に使えるモデルがそのまま一覧に出て、新しいモデルが出ても runtrol を直さずに現れる。 |
@@ -102,11 +101,11 @@ The security boundary and default-deny settings are documented in [SECURITY.md](
 
 | | |
 |---|---|
-| **PC（Windows）** | ランチャー付きインストーラー。インストール後は自動で最新を保つ。GitHub Releases が正本 |
+| **PC（Windows）** | まだ未リリース。ソースビルドは production Tauri 製品を生成し、インストールと自動更新は M2 の範囲である |
 | **PC（macOS、Linux）** | 準備中 |
 | **モバイル** | PWA。ブラウザで開いてホーム画面に追加する。アプリストアは不要 |
 
-まだリリースはない。設計段階である。
+まだリリースはない。コアと Windows デスクトップは実装済みで、配布面は準備中である。
 
 ## runtrol が要らない人
 
@@ -143,7 +142,7 @@ Rust は目的ではなく、上の表の三つの軸のための手段である
 
 | | | |
 |---|---|---|
-| `crates/` | 製品（Rust）。デーモン、プロバイダーアダプター、トランスポート、デスクトップアプリ | 未作成 |
+| `crates/` | 製品（Rust）。デーモン、プロバイダーアダプター、トランスポート、デスクトップアプリ | 実装済み |
 | `pwa/` | モバイル PWA | 未作成 |
 | `site/` | GitHub Pages ランディング | 未作成 |
 | [`assets/brand/`](assets/brand/) | ロゴ。SVG が正本で、favicon・アイコン・ソーシャルカードはそこから派生する | |

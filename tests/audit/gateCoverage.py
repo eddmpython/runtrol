@@ -64,6 +64,11 @@ LOCAL_ONLY: dict[str, str] = {
     "sessionLifecycleSmokeSelftest": "the same script with a flag. it needs no CLI and could run in CI, but "
     "it proves the gate above can fail, and a proof that runs where the thing it proves does not is a proof "
     "of nothing",
+    "desktopRealProviderGuiSmoke": "it drives the production window against two real subscription CLIs and "
+    "an operator-prepared file naming existing native conversations. neither the logins nor that file can "
+    "exist on a hosted runner, so it runs where they live, which is the operator's own preflight",
+    "desktopRealProviderGuiSmokeSelftest": "the same script with a flag. it proves the operator gate can "
+    "fail, and a proof that runs where the thing it proves does not is a proof of nothing",
     "clippyCrossCfg": "the workflow runs this gate too, and it has to name a different target: each "
     "runner cross-compiles toward the platform it is not, so the local command targets linux and the "
     "linux runner targets windows. the gate is present on both sides; only the argument differs, which "

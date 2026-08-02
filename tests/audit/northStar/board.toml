@@ -28,12 +28,16 @@
 
 [[axis]]
 key = "oneSessionList"
-# The local preflight drives the real CLIs, but hosted CI cannot carry either subscription login.
-# Local-only execution is useful diagnosis and supports only the manual tier until a CI runner is active.
-tier = "manual"
+# Hosted Windows CI drives the production browser lifecycle and the actual Tauri product against
+# deterministic counterparts. Those counterparts are mocks, so this axis stops at the mock tier.
+tier = "mock"
 additives = []
 name = { ko = "하나의 세션 목록", en = "One session list", zh = "统一的会话列表", ja = "一つのセッション一覧" }
-gate = [{ name = "sessionLifecycleSmoke", kind = "smoke" }]
+gate = [
+    { name = "desktopLifecycleSmoke", kind = "smoke" },
+    { name = "actualShellSmoke", kind = "smoke" },
+    { name = "sessionLifecycleSmoke", kind = "operator" },
+]
 
 [[axis]]
 key = "instantResponse"
@@ -44,6 +48,8 @@ gate = [
     { name = "interactionLatencyBudget", kind = "bench" },
     { name = "scrollUnderLoadSmoke", kind = "smoke" },
     { name = "desktopConvenienceSmoke", kind = "smoke" },
+    { name = "desktopTextInputSmoke", kind = "smoke" },
+    { name = "desktopImeSmoke", kind = "operator" },
 ]
 
 [[axis]]
@@ -102,7 +108,10 @@ key = "costOfRunning"
 tier = "realOneKind"
 additives = []
 name = { ko = "상주 비용", en = "Cost of running", zh = "常驻成本", ja = "常駐コスト" }
-gate = [{ name = "idleFootprintRatchet", kind = "bench" }]
+gate = [
+    { name = "idleFootprintRatchet", kind = "bench" },
+    { name = "guiMemoryContract", kind = "bench" },
+]
 
 [[axis]]
 key = "sameMethodEverywhere"
@@ -185,6 +194,12 @@ category = "modularity"
 name = "workspaceLints"
 status = "built"
 file = "workspaceLints.py"
+
+[[floor]]
+category = "modularity"
+name = "desktopThinBoundary"
+status = "built"
+file = "desktopThinBoundary.py"
 
 [[floor]]
 category = "cleanCode"
@@ -273,6 +288,12 @@ status = "built"
 file = "configReadOnly.py"
 
 [[floor]]
+category = "security"
+name = "desktopPersistenceSmoke"
+status = "built"
+file = "desktopPersistenceSmoke.py"
+
+[[floor]]
 category = "hygiene"
 name = "workspaceHygiene"
 status = "built"
@@ -295,6 +316,12 @@ category = "hygiene"
 name = "noConsoleFlash"
 status = "built"
 file = "noConsoleFlash.rs"
+
+[[floor]]
+category = "hygiene"
+name = "desktopConsolePolicy"
+status = "built"
+file = "desktopConsolePolicy.py"
 
 [[floor]]
 category = "scoreboard"

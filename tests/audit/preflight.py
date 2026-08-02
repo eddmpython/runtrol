@@ -21,6 +21,7 @@ CI 와 같은 게이트를 로컬에서 돌린다. push 준비 보고 직전에 
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import sys
@@ -245,7 +246,25 @@ GATES: dict[str, tuple[str, list[str]]] = {
     ),
     "guiMemoryContract": (
         "production GUI and WebView memory smoke",
-        [*PY, f"{HOOKS}/guiMemoryContract.py", "--profile", "smoke", "--record-auto"],
+        [
+            *PY,
+            f"{HOOKS}/guiMemoryContract.py",
+            "--profile",
+            "smoke",
+            "--record-auto",
+            "--budget",
+            f"{HOOKS}/guiMemorySmokeBudget.json",
+        ],
+    ),
+    "desktopRealProviderGuiSmokeSelftest": (
+        "실물 공급자 GUI 여정 게이트 자체 검증",
+        [*PY, f"{HOOKS}/desktopRealProviderGuiSmoke.py", "--selftest"],
+    ),
+    # 운영자 게이트. 실물 두 CLI 와 운영자가 준비한 기존 대화 메타데이터 파일을 요구하므로,
+    # 대상 파일이 선언된 기계에서만 돌고 없으면 건너뛴다고 밝히고 건너뛴다.
+    "desktopRealProviderGuiSmoke": (
+        "실물 두 공급자의 production GUI 생애주기 (운영자)",
+        [*PY, f"{HOOKS}/desktopRealProviderGuiSmoke.py", "--built-product"],
     ),
     "cargoTest": ("cargo test", ["cargo", "test", "--all"]),
     "genericAcpSmokeSelftest": (
@@ -408,6 +427,7 @@ CARGO_GATES = frozenset(
         "cargoBuild",
         "desktopProductBuild",
         "guiMemoryContract",
+        "desktopRealProviderGuiSmoke",
         "cargoTest",
         "genericAcpSmokeSelftest",
         "genericAcpSmoke",
@@ -458,9 +478,19 @@ def skipReasonFor(name: str) -> str | None:
         "actualShellSmoke",
         "desktopProductBuild",
         "guiMemoryContract",
+        "desktopRealProviderGuiSmoke",
     } and shutil.which("npm") is None:
         return "npm 없음"
-    if name in {"interactionLatencyBudget", "scrollUnderLoadSmoke", "reconnectContinuitySmoke", "desktopLifecycleSmoke", "desktopTextInputSmoke", "desktopPersistenceSmoke"} and shutil.which("node") is None:
+    if name in {
+        "interactionLatencyBudget",
+        "scrollUnderLoadSmoke",
+        "reconnectContinuitySmoke",
+        "desktopLifecycleSmoke",
+        "desktopTextInputSmoke",
+        "desktopPersistenceSmoke",
+        "desktopRealProviderGuiSmoke",
+        "desktopRealProviderGuiSmokeSelftest",
+    } and shutil.which("node") is None:
         return "node 없음"
     if name == "audit" and not hasAuditCrate():
         return "tests/audit crate 없음"
@@ -469,8 +499,11 @@ def skipReasonFor(name: str) -> str | None:
         "desktopConsolePolicy",
         "desktopProductBuild",
         "guiMemoryContract",
+        "desktopRealProviderGuiSmoke",
     } and sys.platform != "win32":
         return "실제 제품 창 게이트의 첫 러너는 Windows"
+    if name == "desktopRealProviderGuiSmoke" and not os.environ.get("RUNTROL_REAL_PROVIDER_TARGETS"):
+        return "RUNTROL_REAL_PROVIDER_TARGETS 미설정 (운영자가 실물 대상 파일을 준비했을 때만 돈다)"
     if name == "cargoShear" and shutil.which("cargo-shear") is None:
         return "cargo-shear 미설치 (cargo binstall cargo-shear)"
     if name == "cargoDeny" and shutil.which("cargo-deny") is None:

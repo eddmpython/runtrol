@@ -312,12 +312,15 @@ jobs:
         env:
           TEMP: ${{ runner.temp }}
           TMP: ${{ runner.temp }}
-        run: python -X utf8 tests/audit/guiMemoryContract.py --profile smoke --record-auto
+        run: python -X utf8 tests/audit/guiMemoryContract.py --profile smoke --record-auto --budget tests/audit/guiMemorySmokeBudget.json
       - uses: actions/upload-artifact@v4
-        if: matrix.os == 'windows-latest'
+        if: always() && matrix.os == 'windows-latest'
         with:
           name: gui-memory-smoke-${{ github.run_id }}
-          path: ${{ runner.temp }}/runtrol-gui-memory-smoke.json
+          path: |
+            ${{ runner.temp }}/runtrol-gui-memory-smoke.json
+            ${{ runner.temp }}/runtrol-gui-memory-failure-*/trace.log
+            ${{ runner.temp }}/runtrol-gui-memory-failure-*/error.log
           if-no-files-found: error
       - name: 데스크톱 무대화 경계 자체 검증
         run: python -X utf8 tests/audit/desktopThinBoundary.py --selftest
@@ -453,8 +456,11 @@ jobs:
         if: always()
         with:
           name: gui-memory-campaign-${{ github.run_id }}
-          path: ${{ runner.temp }}/runtrol-gui-memory-campaign.json
-          if-no-files-found: warn
+          path: |
+            ${{ runner.temp }}/runtrol-gui-memory-campaign.json
+            ${{ runner.temp }}/runtrol-gui-memory-failure-*/trace.log
+            ${{ runner.temp }}/runtrol-gui-memory-failure-*/error.log
+          if-no-files-found: error
 
   # Parser probes need no account or turn. The approval journey runs the current real CLI against a local
   # deterministic Messages endpoint, carries only a non-secret sentinel, and spends no hosted model token.

@@ -4,7 +4,7 @@
 
 한국어 | [English](README_EN.md) | [中文](README_ZH.md) | [日本語](README_JA.md)
 
-> 상태: **코어 착수.** 두 공급자의 세션이 한 목록에 뜨고 시작·닫기·재개가 실물 CLI 로 돈다.
+> 상태: **코어와 Windows 데스크톱 구현.** 두 공급자의 세션 생명주기가 실물 CLI 로 돌고, production Tauri 제품이 한 목록과 bounded live 화면을 제공한다.
 > 아래 점수 대부분이 0 인 것은 코드가 없어서가 아니라 그 축을 단언하는 게이트가 아직 없어서다.
 
 보안 경계와 기본 거부 설정은 [SECURITY.md](SECURITY.md)에 정리되어 있다.
@@ -17,20 +17,20 @@ PC 앞에서는 앱으로, 자리를 떠나면 폰으로, 같은 세션을 같�
 공급자가 몇 개든 목록은 하나이고, 운영체제가 무엇이든 방법은 같다.
 대화는 사용자의 PC와 공급자 사이에서만 오간다. runtrol은 그 사이에 끼어들지 않는다.**
 
-현재 총점은 **36/140, 평균 2.6/10** 이다. 활성 CI 게이트가 선 축은 여섯이고, 로컬 전용 한 축은 manual 층이다.
+현재 총점은 **38/140, 평균 2.7/10** 이다. 활성 CI 게이트가 선 축은 일곱이다.
 10 점은 실제 환경에서 완결 여정이 반복 검증된 상태다.
 **3 점을 넘는 점수의 근거는 CI 에서 실제로 도는 게이트다. 자동으로 실행되지 않는 경로는 구현돼 있어도 manual 층을 넘지 않는다.**
 
 | 북극성 | 현재 점수 | 현 상태 | 도달할 상태 |
 |---|---:|---|---|
-| 하나의 세션 목록 | 3/10 | 실물 CLI 두 개의 세션을 한 목록에서 시작·닫기·재개하는 `sessionLifecycleSmoke` 는 로컬 preflight 에서 돌지만 구독 로그인이 없는 hosted CI 에서는 돌지 않는다. 따라서 manual 층을 넘지 않는다. | 공급자가 Claude Code 든 Codex 든 그 다음 무엇이든, 지금 내 PC 에 살아 있는 세션이 한 목록에 뜨고 거기서 시작, 재개, 삭제가 끝난다. |
+| 하나의 세션 목록 | 5/10 | hosted Windows CI 가 production browser lifecycle 과 실제 Tauri 제품을 구동해 시작, hot 및 cold 열기, 편집 가능한 다음 입력, 확인된 목록 제거를 검증한다. 상대가 deterministic mock transport 와 ACP fixture 이므로 mock 층이다. | 공급자가 Claude Code 든 Codex 든 그 다음 무엇이든, 지금 내 PC 에 살아 있는 세션이 한 목록에 뜨고 거기서 시작, 재개, 삭제가 끝난다. |
 | 즉시 반응 | 5/10 | production bundle 을 실물 브라우저에서 재 목록, 대화 열기, 입력 지연 ratchet 을 지키고 초당 3,000 원시 프레임을 처리한다. 전송 상대가 mock 이라 이 층에 머문다. | 목록이 기다림 없이 뜨고, 대화가 누르는 즉시 열리고, 긴 출력이 쏟아져도 스크롤과 입력이 끊기지 않는다. 사용자가 로딩을 인지하는 순간이 없다. |
 | 폰에서 내 PC 세션 잇기 | 0/10 | 미구현. | 폰을 PC 에 한 번 붙여 두면, 자리를 떠난 뒤에도 그 PC 에서 돌고 있는 세션에 폰에서 새 지시를 넣고 출력을 실시간으로 본다. 공급자 계정의 등급이나 인증 방식이 이 경험을 막지 않는다. |
 | 공급자 확장성 | 5/10 | hosted CI 는 외부 드라이버 공개 계약, 3 개 OS 의 범용 ACP fixture, 독립 배포 ACP 구현의 두 턴과 native load, 실물 Claude Code 의 hidden 승인 거부 왕복을 검증한다. model endpoint 들은 로컬 mock 이며, 스케줄 CI 는 최신 CLI 로 parser probe 와 같은 승인 여정을 반복한다. 계정 기반 model 동작과 전체 event 표면은 주장하지 않는다. | 새 CLI 가 나오면 어댑터 하나만 추가되고 PC 화면과 폰 화면과 조작 방법은 그대로다. 사용자는 공급자가 늘어난 것을 목록이 길어진 것으로만 안다. |
 | 대화 무통과 | 6/10 | 실물 루프백 소켓의 정확한 송신 허용 목록과 production Noise IK 및 IKpsk1 경계가 돈다 (`egressContract`). 프롬프트 표본은 릴레이 캡처와 진단 문자열에 평문으로 나타나지 않고, transport 는 디스크와 로그 API 를 갖지 않으며, 드라이버와 저장소는 공급자 transcript 경로를 모른다. 실물 폰과 릴레이를 잇는 live 게이트가 없어 천장이 6 이다. | 사용자의 프롬프트와 모델의 응답은 PC 와 공급자 사이, 그리고 사용자 자신의 기기 사이에서만 오간다. runtrol 은 본문을 저장하지 않고, 중간의 어떤 서버도 그것을 읽을 수 있는 형태로 받지 않는다. |
 | 폰에서 승인 | 0/10 | 미구현. | 에이전트가 위험한 작업 앞에서 멈추면 폰에 뜨고, 폰에서 허용하거나 거부하면 PC 의 세션이 즉시 이어진다. |
 | 끊겨도 살아남기 | 0/10 | 원격 폰 종단 게이트는 미구현이다. | 폰이 잠기거나 네트워크가 끊기거나 runtrol 을 재시작해도 PC 세션은 공식 resume surface 로 복구된다. bounded window 안은 exact cursor 로 이어지고, 밖은 조용히 건너뛰지 않고 명시적 gap 으로 보인다. |
-| 상주 비용 | 6/10 | Windows, macOS, Linux hosted CI 가 실제 debug daemon 의 idle RSS와 10초당 CPU 100 ms 상한을 측정한다 (`idleFootprintRatchet`). 독립적인 두 번째 게이트 종류가 없어 천장이 6 이다. | 하루 종일 켜 두어도 사용자가 존재를 눈치채지 못한다. 배터리, 팬, 작업 관리자 어디에서도 눈에 띄지 않는다. |
+| 상주 비용 | 6/10 | 세 hosted OS가 실제 debug daemon의 idle RSS와 CPU를 재고, Windows는 production GUI와 전체 WebView2 트리를 60초 ratchet에 대조한다. 둘 다 bench 종류라 천장은 6이고 24시간 campaign은 별도 계약이다. | 하루 종일 켜 두어도 사용자가 존재를 눈치채지 못한다. 배터리, 팬, 작업 관리자 어디에서도 눈에 띄지 않는다. |
 | 어디서나 같은 방법 | 0/10 | 미구현. | Windows, macOS, Linux 에서 설치 방법과 조작이 같다. Windows 사용자가 WSL 이나 tmux 를 알 필요가 없다. |
 | 알아서 최신 | 0/10 | 미구현. | 앱과 설치된 에이전트 CLI 가 알아서 최신이고, 업데이트가 세션을 깨면 사용자가 손대기 전에 되돌아가 있다. 사용자가 버전을 신경 쓰는 순간이 없다. |
 | 모델 자동 인식 | 6/10 | hosted `modelDetectionSmoke --require-all` 은 자격증명 없이 최신 실물 CLI 를 설치해 Codex `model/list` 와 격리된 provider-owned option cache sentinel 을 포함한 Claude partial catalogue 를 검사하고, 관측한 identifier 가 production source 에 하드코딩되지 않았음을 확인한다. 특정 계정의 실제 사용 가능 여부는 주장하지 않아 live 한 종류의 천장 6 이다. | 지금 이 계정으로 쓸 수 있는 모델이 목록에 그대로 뜨고, 새 모델이 나와도 runtrol 을 고치지 않아도 뜬다. |
@@ -101,11 +101,11 @@ PC 앞에서는 앱으로, 자리를 떠나면 폰으로, 같은 세션을 같�
 
 | | |
 |---|---|
-| **PC (Windows)** | 설치형 런처. 설치 후 알아서 최신을 유지한다. GitHub Releases 가 정본 |
+| **PC (Windows)** | 아직 미출시. 소스 빌드는 production Tauri 제품을 만들며 설치와 자동 갱신은 M2 범위다 |
 | **PC (macOS, Linux)** | 준비 중 |
 | **모바일** | PWA. 브라우저에서 열고 홈 화면에 추가한다. 앱 스토어가 필요 없다 |
 
-아직 릴리즈가 없다. 설계 단계다.
+아직 릴리즈가 없다. 코어와 Windows 데스크톱은 구현됐고 배포 표면은 준비 중이다.
 
 ## runtrol 이 필요 없는 사람
 
@@ -142,7 +142,7 @@ Rust 는 목적이 아니라 위 표의 세 축을 위한 수단이다.
 
 | | | |
 |---|---|---|
-| `crates/` | 제품 (Rust). daemon, provider 어댑터, 전송, 데스크톱 앱 | 미생성 |
+| `crates/` | 제품 (Rust). daemon, provider 어댑터, 전송, 데스크톱 앱 | 구현됨 |
 | `pwa/` | 모바일 PWA | 미생성 |
 | `site/` | GitHub Pages 랜딩 | 미생성 |
 | [`assets/brand/`](assets/brand/) | 로고. SVG 가 정본, 파비콘·아이콘·소셜 카드는 파생 | |

@@ -4,7 +4,7 @@
 
 [한국어](README.md) | [English](README_EN.md) | 中文 | [日本語](README_JA.md)
 
-> 状态：**内核已经跑起来。** 两个供应商的会话出现在同一个列表里，启动、关闭、恢复都对着真实 CLI 运行。
+> 状态：**内核与 Windows 桌面端已经实现。** 两个真实 CLI 的会话生命周期可运行，production Tauri 产品提供统一列表与有界实时视图。
 > 下面多数分数为 0，不是因为没有代码，而是因为还没有门禁去断言那些轴。
 
 The security boundary and default-deny settings are documented in [SECURITY.md](SECURITY.md).
@@ -17,20 +17,20 @@ The security boundary and default-deny settings are documented in [SECURITY.md](
 无论有多少供应商，列表只有一个；无论操作系统是什么，方法都一样。
 对话只在用户的电脑与供应商之间往返。runtrol 不介入其中。**
 
-当前总分为 **36/140，平均 2.6/10**。六个轴由启用的 CI 门禁支撑，另有一个仅本地运行的轴停留在 manual 层。
+当前总分为 **38/140，平均 2.7/10**。七个轴由启用的 CI 门禁支撑。
 10 分意味着完整旅程已在真实环境中被反复验证。
 **超过 manual 层的分数必须由 CI 中真正运行的门禁支撑。不会自动执行的路径，无论看起来实现得多完整，都不能超过 3 分。**
 
 | 北极星 | 当前分数 | 现状 | 目标状态 |
 |---|---:|---|---|
-| 统一的会话列表 | 3/10 | `sessionLifecycleSmoke` 会在本地 preflight 中对两个真实 CLI 执行启动、关闭与恢复，但 hosted CI 没有这两个订阅登录。因此它不能超过 manual 层。 | 无论供应商是 Claude Code、Codex 还是之后出现的任何一个，此刻在我电脑上存活的会话都出现在一个列表里，启动、恢复、删除都在那里完成。 |
+| 统一的会话列表 | 5/10 | hosted Windows CI 驱动 production browser lifecycle 与实际 Tauri 产品，验证启动、热会话与冷会话打开、可编辑的下一条输入以及确认后的列表移除。对端是确定性的 mock transport 与 ACP fixture，因此停留在 mock 层。 | 无论供应商是 Claude Code、Codex 还是之后出现的任何一个，此刻在我电脑上存活的会话都出现在一个列表里，启动、恢复、删除都在那里完成。 |
 | 即时响应 | 5/10 | 使用真实浏览器测量 production bundle，对列表、打开会话和输入延迟执行棘轮限制，同时处理每秒 3,000 个原始帧。传输对端仍是 mock，因此该轴停留在此层级。 | 列表毫无等待地出现，对话在按下的瞬间打开，长输出倾泻而下时滚动与输入也不卡顿。用户不存在感知到加载的时刻。 |
 | 用手机接续电脑上的会话 | 0/10 | 未实现。 | 手机与电脑配对一次，之后即使离开座位，也能向那台电脑上正在运行的会话发送新指令并实时查看输出。供应商账户的等级或认证方式不会阻断这一体验。 |
 | 供应商可扩展性 | 5/10 | hosted CI 检查外部驱动公开契约、三个操作系统上的通用 ACP fixture、独立发布 ACP 实现的两轮对话与 native load，以及真实 Claude Code 的隐藏审批拒绝往返。model endpoint 均为本地 mock。定时 CI 会用当前 CLI 重复 parser probe 与同一审批旅程，但不宣称覆盖账户模型行为或完整 event 表面。 | 出现新的 CLI 时只需增加一个适配器，电脑界面、手机界面与操作方式保持不变。用户只会感到列表变长了。 |
 | 对话不经过 | 6/10 | `egressContract` 在真实回环套接字上运行精确的出站白名单和 production Noise IK、IKpsk1 边界。提示词样本不会以明文出现在中继捕获或诊断信息中，transport 没有磁盘或日志 API，驱动与存储也不知道供应商 transcript 路径。尚无连接真实手机与中继的 live 门禁，所以天花板是 6。 | 用户的提示词与模型的回复只在电脑与供应商之间、以及用户自己的设备之间往返。runtrol 不保存其内容，中间的任何服务器都不会以可读的形式收到它。 |
 | 在手机上批准 | 0/10 | 未实现。 | 代理在危险操作前停下时会出现在手机上，在手机上允许或拒绝后，电脑上的会话立即继续。 |
 | 断了也活着 | 0/10 | 远程手机端到端门禁尚未实现。 | 手机锁屏、网络中断或 runtrol 重启后，PC 会话仍可通过官方 resume surface 恢复。保留窗口内按精确 cursor 接续，窗口外明确显示 gap，绝不静默跳过。 |
-| 常驻成本 | 6/10 | Windows、macOS、Linux hosted CI 测量真实 debug daemon 的 idle RSS，并限制每 10 秒 CPU 不超过 100 ms（`idleFootprintRatchet`）。缺少独立的第二种门禁，因此上限为 6。 | 整天开着，用户也察觉不到它的存在。电池、风扇、任务管理器里都看不见。 |
+| 常驻成本 | 6/10 | 三个 hosted 操作系统都测量真实 debug daemon 的 idle RSS 与 CPU。Windows 还用 60 秒棘轮检查 production GUI 与完整 WebView2 进程树。两者都属于 bench 证据，因此上限仍为 6，24 小时 campaign 是独立合同。 | 整天开着，用户也察觉不到它的存在。电池、风扇、任务管理器里都看不见。 |
 | 到哪都一样 | 0/10 | 未实现。 | 在 Windows、macOS、Linux 上安装方式与操作方式相同。Windows 用户无需知道 WSL 或 tmux 是什么。 |
 | 自动保持最新 | 0/10 | 未实现。 | 应用与已安装的代理 CLI 会自行保持最新；若更新破坏了会话，在用户动手之前它已经回滚。用户不存在需要关心版本的时刻。 |
 | 自动识别模型 | 6/10 | hosted `modelDetectionSmoke --require-all` 在无凭据环境中安装当前真实 CLI，检查 Codex 的 `model/list` 与包含隔离 provider-owned option cache sentinel 的 Claude partial catalogue，并拒绝在 production source 中硬编码观测 identifier。它不证明特定账户的实际可用性，因此一种 live gate 的上限为 6。 | 当前账户实际可用的模型原样出现在列表中，出现新模型时无需修改 runtrol 就会显示。 |
@@ -101,11 +101,11 @@ The security boundary and default-deny settings are documented in [SECURITY.md](
 
 | | |
 |---|---|
-| **PC（Windows）** | 带启动器的安装包。安装后自行保持最新。以 GitHub Releases 为准 |
+| **PC（Windows）** | 尚未发布。源码构建可生成 production Tauri 产品，安装与自动更新属于 M2 |
 | **PC（macOS、Linux）** | 准备中 |
 | **移动端** | PWA。在浏览器中打开并添加到主屏幕。无需应用商店 |
 
-尚无发布版本。目前处于设计阶段。
+尚无发布版本。内核与 Windows 桌面端已经实现，发布表面仍在准备中。
 
 ## 不需要 runtrol 的人
 
@@ -142,7 +142,7 @@ Rust 不是目的，而是上表中三个轴的手段。
 
 | | | |
 |---|---|---|
-| `crates/` | 产品（Rust）。守护进程、供应商适配器、传输、桌面应用 | 未创建 |
+| `crates/` | 产品（Rust）。守护进程、供应商适配器、传输、桌面应用 | 已实现 |
 | `pwa/` | 移动端 PWA | 未创建 |
 | `site/` | GitHub Pages 落地页 | 未创建 |
 | [`assets/brand/`](assets/brand/) | 标志。SVG 为正本，favicon、图标与社交卡片皆由其派生 | |

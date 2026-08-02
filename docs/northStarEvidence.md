@@ -25,10 +25,14 @@
 
 | 게이트 | 무엇을 단언하는가 |
 |---|---|
-| `sessionLifecycleSmoke` | 실물 CLI 를 몰아서: 시작 -> **두 provider 가 한 목록에** -> 목록이 재개에 필요한 이름을 싣는다 -> 닫기 -> 목록에서 사라짐. 프롬프트를 보내지 않으므로 토큰·rate limit 0 이고 그래서 매 preflight 에 돈다. **닿지 못하는 절반을 매 실행마다 말한다**: 턴이 한 번도 없던 대화는 provider 저장소에 없어서 재개할 수 없다 (한쪽은 이름을 안 주고, 한쪽은 `no rollout` 으로 거절한다. 둘 다 실측). 그래서 이 게이트가 지키는 것은 **성공한 재개가 아니라 실패한 재개가 이름을 갖고 거절되는 것** (조용히 새 대화를 시작해 재개인 척하지 않는 것) 이다. 성공한 재개는 턴 하나가 필요해 이 게이트 밖이다. provider 이름은 박지 않고 manifest 에서 발견한다 |
 | `interactionLatencyBudget` | 실물 Edge 또는 Chrome 이 production bundle 을 열고 목록 첫 페인트, 저장된 꼬리 표시, 입력 반응의 상한을 지킨다. 전송 상대는 mock 이므로 5 점 층이다. 수치는 **내려가기만 하는 ratchet** |
 | `scrollUnderLoadSmoke` | 실물 브라우저에 provider 모양 원시 프레임을 초당 3,000 개 넣고 처리량, p95 프레임, 입력 지연, DOM 창 상한을 함께 판정한다. 전송 상대는 mock 이므로 provider 시간은 섞이지 않는다 |
 | `desktopConvenienceSmoke` | 실물 브라우저의 production bundle 에서 공급자를 고르지 않고 세션을 시작하고, 마지막 공급자가 다음 시작의 기본값이 되는지 확인한다. 드라이버가 이미 내는 문맥 사용량과 계정 한도 프레임도 별도 사본 없이 화면에 보이는지 판정한다 |
+| `desktopLifecycleSmoke` | The production browser bundle keeps one provider-neutral list, opens a started session, leaves the metadata shell visible during cold preparation, preserves drafts while preparation or sending is in flight, and requires confirmation before removing only the runtrol row. The transport counterpart is deterministic, so this is mock-tier evidence. |
+| `actualShellSmoke` | The actual Tauri product obtains a session row through a Rust command, installs a watch through local IPC, and receives a provider frame serialized as a Tauri event while using the embedded production bundle, daemon, and external ACP fixture. It validates one canonical build attestation before and after the crossings and requires exact process cleanup. |
+| `sessionLifecycleSmoke` | An operator-side local preflight starts and closes sessions from every installed real CLI, keeps their provider-native names in one list, survives a daemon restart, and reports native resume refusal instead of silently starting a replacement. This real-account evidence is operator-only and does not add score. |
+| `desktopTextInputSmoke` | A real browser drives composition, guarded commit Enter, normal line breaks, selection, copy, token preservation, editable replacement, session changes, and unmount against the production bundle. The transport counterpart is a mock. |
+| `desktopImeSmoke` | An operator-only Windows product journey sends physical virtual keys through the installed Korean IME, requires exact committed and copied text with zero submissions, and restores key, IME, layout, and clipboard state. Operator evidence does not add score. |
 | `phoneDrivesPcSmoke` | headless 브라우저의 실물 PWA 가 실물 데몬을 통해 실물 `claude`/`codex` 세션에 프롬프트를 넣고 출력을 받는다 |
 | `iosInstallAndPush` | iOS 홈화면 설치 + Web Push 수신. 실기기 필요. **점수에서 뺀다** |
 | `providerContract` | 저장소 밖 구현이 공개 `Provider` 와 `Agent` trait 를 구현하고 native command 를 처리하며 미지 event 를 `Unmapped` 로 보존할 수 있다. 코어의 provider 고유명사 격리는 별도 `providerIsolation` 게이트가 맡는다 |
@@ -40,6 +44,7 @@
 | `approvalRoundtripSmoke` | 실제 permission prompt 가 폰 표면에 도달하고, 폰의 응답이 세션을 재개시킨다 |
 | `remoteResilienceFaultInjection` | 실물 폰과 원격 transport 를 연결한 상태에서 네트워크 차단과 데몬 강제 종료를 주입한다. bounded replay 안의 프레임은 exact cursor 로 이어지고, 그 밖의 모든 단절은 명시적 gap 으로 보이며, provider 공식 resume surface 로 세션을 계속할 수 있어야 한다. 아직 미구현이다 |
 | `idleFootprintRatchet` | hosted Windows, macOS, Linux 에서 실제 debug daemon 의 유휴 RSS 계약을 `memoryBudget` 정본으로 검사하고, 10 초 유휴 구간의 process CPU 누적 증가를 한 코어의 100 ms 이하로 제한한다. release live 비용이나 GUI 비용은 주장하지 않는다 |
+| `guiMemoryContract` | A canonical production Windows GUI and all descendant WebView2 processes stay within tracked private-byte, working-set, retained-growth, topology, cadence, and churn budgets. The gate binds source, bundle, product, fixture, and attestation identity, requires a same-ID 256 KiB worker-to-DOM paint, and leaves zero exact survivors. |
 | `crossPlatformMatrix` | 같은 종단 스모크가 Windows·macOS·Linux 러너에서 전부 green. **Windows 잡은 WSL 없이 돈다** |
 | `cliUpdateRehearsal` | 구버전 -> 업데이트 -> 세션 정상 -> 고의로 깨진 버전 -> 자동 롤백 |
 | `appUpdateRehearsal` | 런처가 GitHub Releases 에서 서명된 업데이트를 받아 설치하고, 서명이 안 맞으면 거부한다 |
@@ -58,6 +63,7 @@
 | `noScriptsDir` | repo 어디에도 `scripts/` 가 없다. 소유자 없는 폴더는 아무도 안 지운다 |
 | `providerIsolation` | 코어 (`session`·`transport`·`api`) 에 provider 고유명사 분기가 없다. 새 CLI 는 manifest 또는 trait 구현만으로 붙는다 |
 | `workspaceLints` | 어느 crate 가 워크스페이스 lint 표를 상속하고 어느 crate 가 자기 표를 쓰는지 고정한다 (`tests/audit` 는 후자다. 실측된 cargo 제약) |
+| `desktopThinBoundary` | Only the theme and last-provider scalar keys may use localStorage. Other durable browser stores, Rust file access, filesystem dependencies, and Tauri capabilities beyond event listening make the gate red. |
 | `cargoFmt` | `cargo fmt --check` 통과. rustfmt 와 싸우지 않는다 |
 | `cargoClippy` | `--all-targets -D warnings` 통과. 경고는 실패다 |
 | `checkSilentFail` | `let _ = ...`, `.ok()`, 빈 `catch` 로 에러를 버리지 않는다. 근거 주석이 있는 것만 인정 |
@@ -72,10 +78,12 @@
 | `approvalAuthorization` | 승인 응답은 드라이버가 실제로 보관한 대기 요청의 id, subject digest, 선택지, 만료 시각, 구조적 위험도에 결박된다. wire 에 위험도를 싣지 않으므로 원격 장치가 필요 권한을 낮출 수 없고, 불완전한 subject 와 권한 밖 선택지는 공급자에게 전달되지 않는다 |
 | `argumentEscaping` | Windows `.cmd` 실행 인자 이스케이프 (BatBadBut CVE-2024-24576) |
 | `configReadOnly` | provider 설정 파일에 **쓰는** 코드가 없다 |
+| `desktopPersistenceSmoke` | Reloading the production desktop surface restores only theme and last-provider preferences. Conversation frames and drafts do not survive because the GUI has no transcript store. |
 | `workspaceHygiene` | 루트 allowlist + `.tmp/` 7 일 부패 검출. stray log/tmp/trace 0 |
 | `gateCoverage` | 저장소에 있는 게이트를 러너가 전부 부른다. 로컬 목록과 CI 목록이 서로를 검사한다 |
 | `checkNoAiMarkers` | 커밋·태그·PR·주석에 AI 기여자 표식과 벤더명이 없다. 공개 artifact 는 주체 중립이다 |
 | `noConsoleFlash` | Windows 데스크톱이 실행하는 provider 세션, 탐색 probe, 분리 daemon 이 콘솔 창을 만들지 않는다. 실제 자식 프로세스의 console handle 부재와 모든 제품 spawn 경계의 공통 정책 적용을 함께 확인한다 |
+| `desktopConsolePolicy` | A private GUI console is hidden before the first list paint, while a console shared with a parent remains visible. The Tauri window stays visible in both cases and cleanup requires zero exact survivors. |
 | `northStarBoard` | 점수판의 모든 숫자가 `board.toml` 에서 계산된다. manual 근거는 manual 층까지만 점수가 되고, 그보다 높은 층은 근거 게이트가 활성 hosted CI 작업에서 실행돼야 한다. `if: false` 작업과 로컬 전용 게이트는 manual 초과 근거에서 빠진다 |
 | `readmeParity` | 4 개 언어 README 가 같은 축·같은 점수·같은 채점 규칙을 인쇄한다. 언어판이 낡으면 red |
 | `memoryBudget` | 실제 daemon 의 idle RSS 만 platform 과 build profile 별 상한에 대조한다. session, subscriber, live payload 증분과 CPU 는 이 게이트의 주장이 아니다 |
