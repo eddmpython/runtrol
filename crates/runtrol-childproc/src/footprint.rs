@@ -40,6 +40,15 @@ pub fn resident_bytes(pid: u32) -> Result<u64, SpawnError> {
     platform::resident_bytes(pid)
 }
 
+/// Return allocator pages made unused by a completed provider session to the operating system where the platform
+/// exposes a bounded synchronous operation for doing so.
+///
+/// This is a lifecycle operation, not a timer. The daemon calls it after the provider and every event allocation for
+/// one closed session have been dropped. Platforms without such an operation do nothing.
+pub fn release_unused_memory() {
+    platform::release_unused_memory();
+}
+
 #[cfg(windows)]
 mod platform {
     use windows_sys::Win32::Foundation::CloseHandle;
@@ -109,6 +118,8 @@ mod platform {
         }
         Ok(counters.WorkingSetSize as u64)
     }
+
+    pub(super) const fn release_unused_memory() {}
 }
 
 #[cfg(target_os = "linux")]
@@ -169,6 +180,21 @@ mod platform {
 
         Ok(resident.saturating_mul(page_bytes()))
     }
+
+    #[cfg(target_env = "gnu")]
+    #[expect(
+        unsafe_code,
+        reason = "glibc exposes its explicit unused-page release only through malloc_trim"
+    )]
+    pub(super) fn release_unused_memory() {
+        // SAFETY: `malloc_trim` takes no pointer and only asks the process allocator to return completely unused pages.
+        // A zero pad retains no extra trailing allocation. Its best-effort result needs no branch because failure
+        // changes no allocator state the caller must recover.
+        let _released = unsafe { libc::malloc_trim(0) };
+    }
+
+    #[cfg(not(target_env = "gnu"))]
+    pub(super) const fn release_unused_memory() {}
 }
 
 #[cfg(target_os = "macos")]
@@ -178,6 +204,8 @@ mod platform {
     pub(super) fn resident_bytes(pid: u32) -> Result<u64, SpawnError> {
         super::resident_from_ps(pid)
     }
+
+    pub(super) const fn release_unused_memory() {}
 }
 
 #[cfg(all(not(windows), not(target_os = "linux"), not(target_os = "macos")))]
@@ -187,6 +215,8 @@ mod platform {
     pub(super) fn resident_bytes(pid: u32) -> Result<u64, SpawnError> {
         super::resident_from_ps(pid)
     }
+
+    pub(super) const fn release_unused_memory() {}
 }
 
 #[cfg(not(any(windows, target_os = "linux")))]
@@ -246,5 +276,11 @@ mod tests {
             Ok(held) => panic!("a process that is not there reported {held} bytes"),
             Err(other) => panic!("expected a footprint failure naming the process, got {other}"),
         }
+    }
+
+    #[test]
+    fn releasing_unused_pages_is_safe_to_repeat() {
+        release_unused_memory();
+        release_unused_memory();
     }
 }

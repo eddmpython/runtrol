@@ -54,6 +54,9 @@ journey opens and closes three consecutive sessions whose provider emits a 15 Mi
 framing parser's input limit but above the live event limit, so every watcher receives an explicit lag boundary and
 the payload is not placed on the live wire.
 
+After a provider session is fully released, GNU/Linux performs one explicit allocator trim at that lifecycle
+boundary. The trim adds no timer or background worker.
+
 The current evidence does not claim a release-build live ceiling, GUI memory, or immediate return of every freed page
 to the operating system.
 
@@ -111,17 +114,21 @@ Containment is established before provider discovery or process launch.
 On Windows, all supervised descendants join a job object configured to terminate them when its last handle closes.
 The kernel therefore removes them when the daemon exits normally, panics, or is killed without cleanup.
 
-On Unix, each supervised root leads its own process group. Clean shutdown signals the group, reaps the direct child,
-waits for the group to disappear, and then removes its guard record. Before the provider executable starts, a small
-bootstrap boundary durably activates a record containing the root PID, its kernel start identity, and executable
-identity. The root PID is also required to be the process group ID. The registry is bounded to 64 records.
+On Unix, a small stable keeper leads one process group and starts the provider as its child. Before the provider is
+reported ready, the keeper durably activates a bounded guard containing its PID, kernel start identity, and executable
+identity. The daemon retains the other end of one private inherited control socket. An explicit success or bounded
+error frame closes the launch handshake. The registry holds at most 64 records.
 
-A replacement daemon holds the exclusive store lock before it examines those records. It validates the exact root
-identity and recovers the matching process group before provider discovery begins. Ambiguous identity is refused
-instead of broad process-name or environment scanning.
+Closing that control socket, including when the daemon is killed without cleanup, makes the live keeper signal its own
+current group. The syscall contains no stored numeric PID or PGID, and the keeper is still a group member at that
+instant, so a reused identifier cannot redirect termination. When the provider exits, the keeper sends its native exit
+status to the daemon and then terminates its own group, including any residual descendants and itself. The daemon
+reaps the keeper and removes the durable guard only after no group member can execute.
 
-Unix does not claim immediate descendant removal after an uncatchable daemon kill. The durable record and the next
-daemon start close that gap. Windows provides immediate kernel-owned cleanup through the job object.
+A replacement daemon holds the exclusive store lock before it examines crash records. It never signals a recorded
+numeric process or group identifier. It revalidates the keeper PID, kernel start identity, and executable, waits only
+for non-zombie members to disappear, and refuses an ambiguous live group. No process-name or environment scan is
+used. Windows provides the corresponding kernel-owned cleanup through the job object.
 
 ## Storage boundary
 
@@ -142,7 +149,7 @@ described above.
 | `liveMemoryBudget` | Real ACP event delivery, explicit oversize lag, peak and residual RSS ceilings |
 | `idleFootprintRatchet` | The idle RSS source of truth plus at most 100 ms process CPU per 10 seconds |
 | `resilienceFaultInjection` | Exact bounded local replay, hard restart gap, and provider-native resume |
-| `orphanReaping` | Pending and active Unix crash windows, inherited registry locking, and real process-tree recovery |
+| `orphanReaping` | Pending and active Unix crash windows, keeper control EOF, and real process-group removal |
 
 The claim registry and hosted runner coverage are maintained in
 [northStarEvidence.md](northStarEvidence.md).

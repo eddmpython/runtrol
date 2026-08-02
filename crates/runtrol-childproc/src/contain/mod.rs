@@ -14,9 +14,11 @@
 //! - **Windows.** [`Strength::EvenIfKilled`]. A job object with kill-on-close holds every descendant, and
 //!   the kernel enforces it when the last handle closes. That happens whether runtrol exits cleanly, panics,
 //!   or is killed outright.
-//! - **Unix.** [`Strength::CleanShutdownOnly`]. A process group handles every shutdown runtrol can see coming.
-//!   No parent-death mechanism covers a whole descendant tree, so an unclean daemon kill is closed by exact
-//!   process identity and a process-group sweep at the next startup.
+//! - **Unix without durable tracking.** [`Strength::CleanShutdownOnly`]. A direct process group handles shutdowns
+//!   runtrol can see coming.
+//! - **Unix with durable tracking.** [`Strength::EvenIfKilled`]. A stable group keeper observes its private daemon
+//!   control channel closing and atomically terminates its own group. Startup recovery never signals a numeric PID or
+//!   process-group identifier.
 //!
 //! # Holding it is what makes it work
 //!
@@ -64,7 +66,7 @@ use crate::error::SpawnError;
 
 #[cfg(unix)]
 pub use bootstrap::{BOOTSTRAP_ARGUMENT, bootstrap_if_requested};
-pub use tracked::{ChildGuard, TrackedCommand};
+pub use tracked::{ChildGuard, TrackedChild, TrackedCommand};
 
 /// What containment this platform can actually enforce.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -202,6 +204,10 @@ impl Containment {
     /// truth about the value it is holding.
     #[must_use]
     pub const fn strength(&self) -> Strength {
+        #[cfg(unix)]
+        if self.recovery.is_some() && matches!(&self.inner, Inner::Platform(_)) {
+            return Strength::EvenIfKilled;
+        }
         match &self.inner {
             Inner::Platform(_) => Self::platform_strength(),
             Inner::Nothing => Strength::CleanShutdownOnly {

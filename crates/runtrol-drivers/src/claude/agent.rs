@@ -35,7 +35,7 @@ use core::time::Duration;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use async_trait::async_trait;
-use runtrol_childproc::contain::{ChildGuard, TrackedCommand};
+use runtrol_childproc::contain::{ChildGuard, TrackedChild, TrackedCommand};
 use runtrol_childproc::{Containment, Program, SpawnError};
 use runtrol_provider::{
     Agent, AgentCommand, ApprovalId, ApprovalRequest, CloseMode, ContentBlock, Declarant,
@@ -43,7 +43,7 @@ use runtrol_provider::{
     ProviderId, SessionId, StopReason, TurnEvent, TurnId, WallMs, WithdrawnReason,
 };
 use tokio::io::AsyncWriteExt as _;
-use tokio::process::{Child, ChildStdin};
+use tokio::process::ChildStdin;
 
 use crate::claude::approval::{self, ApprovalBook, ApprovalBuildError, NativeAnswer};
 use crate::claude::map::{self, Frame};
@@ -63,7 +63,7 @@ pub struct ClaudeAgent {
     /// The durable process-group record, dropped before the child handle so the live root can identify the group.
     child_guard: ChildGuard,
     /// The child.
-    child: Child,
+    child: TrackedChild,
     /// Its input, taken so a command can be written.
     stdin: Option<ChildStdin>,
     /// Its output, one line at a time.

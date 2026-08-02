@@ -5,7 +5,7 @@ use std::collections::VecDeque;
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use runtrol_childproc::contain::{ChildGuard, TrackedCommand};
+use runtrol_childproc::contain::{ChildGuard, TrackedChild, TrackedCommand};
 use runtrol_childproc::{Containment, Program, SpawnError};
 use runtrol_provider::{
     Agent, AgentCommand, Attached, CapabilitySet, CloseMode, ContentBlock, Declarant, Disposition,
@@ -13,7 +13,7 @@ use runtrol_provider::{
     StopReason, TurnEvent, TurnId,
 };
 use tokio::io::AsyncWriteExt as _;
-use tokio::process::{Child, ChildStdin};
+use tokio::process::ChildStdin;
 
 use crate::acp::{map, wire};
 use crate::framing::jsonrpc;
@@ -37,7 +37,7 @@ pub struct AcpAgent {
     session: SessionId,
     native: String,
     child_guard: ChildGuard,
-    child: Child,
+    child: TrackedChild,
     stdin: Option<ChildStdin>,
     lines: Lines<tokio::process::ChildStdout>,
     next_request: i64,

@@ -10,8 +10,9 @@
 //!
 //! No Unix parent-death signal provides a process-tree guarantee. Linux applies it only to the direct child,
 //! which can remove the group leader while leaving descendants behind and make safe restart recovery harder.
-//! Both Linux and macOS therefore make the same honest promise: clean shutdown kills the group, and a durable
-//! identity lets the next daemon reap a group left by an unclean shutdown.
+//! This module owns the direct, untracked boundary and therefore makes only the clean-shutdown promise. Production
+//! tracked sessions use the stable keeper in `bootstrap`: daemon control EOF makes that live member terminate its own
+//! group, while startup recovery only validates durable identity and waits for non-zombie members to disappear.
 //!
 //! # Why the per-child work happens between fork and exec
 //!
@@ -51,8 +52,8 @@ impl Containment {
     /// What this platform enforces. Answerable without establishing anything.
     pub(super) const fn platform_strength() -> Strength {
         Strength::CleanShutdownOnly {
-            why: "Unix has no job object for an entire descendant tree. a kill -9 of runtrol cannot be \
-                  intercepted, so exact process groups are recovered at the next startup",
+            why: "this is the direct Unix boundary without a durable keeper. production tracked sessions add the \
+                  keeper before provider launch",
         }
     }
 

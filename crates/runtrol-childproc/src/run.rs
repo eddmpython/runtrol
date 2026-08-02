@@ -147,7 +147,7 @@ pub async fn capture(
 
 /// Wait for a child while draining both pipes concurrently into bounded buffers.
 async fn collect(
-    child: &mut tokio::process::Child,
+    child: &mut crate::contain::TrackedChild,
     child_guard: &mut crate::contain::ChildGuard,
     stdout: tokio::process::ChildStdout,
     stderr: tokio::process::ChildStderr,

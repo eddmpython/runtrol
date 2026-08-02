@@ -31,6 +31,9 @@ const SLEEP_MODE: &str = "--sleep-until-killed";
 /// A descendant that shares the tracked root's process group and only blocks.
 const LEAF_MODE: &str = "--leaf-until-killed";
 
+/// Exit immediately with the supplied code so integration tests can verify keeper status proxying.
+const EXIT_MODE: &str = "--exit-with";
+
 /// Establish tracked containment and recover whatever the killed parent left.
 const RECOVER_MODE: &str = "--recover";
 
@@ -54,6 +57,14 @@ fn main() {
     if words.first().is_some_and(|argument| argument == LEAF_MODE) {
         std::thread::sleep(SLEEP);
         return;
+    }
+
+    if words.first().is_some_and(|argument| argument == EXIT_MODE) {
+        let code = match words.get(1).map(|value| value.parse::<i32>()) {
+            Some(Ok(code)) => code,
+            Some(Err(_)) | None => 20,
+        };
+        std::process::exit(code);
     }
 
     if words.first().is_some_and(|argument| argument == SLEEP_MODE) {
@@ -118,6 +129,16 @@ fn sleeping_root() -> ! {
 }
 
 fn supervising_parent(directory: &str) -> ! {
+    let runtime = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            eprintln!("could not build the containment runtime: {error}");
+            std::process::exit(19);
+        }
+    };
     let containment = match runtrol_childproc::Containment::establish_tracked(Path::new(directory))
     {
         Ok(containment) => containment,
@@ -140,7 +161,11 @@ fn supervising_parent(directory: &str) -> ! {
     command.stdin(Stdio::null());
     command.stdout(Stdio::piped());
     command.stderr(Stdio::null());
-    let (mut child, _child_guard) = match command.spawn(&containment) {
+    let spawned = {
+        let _entered = runtime.enter();
+        command.spawn(&containment)
+    };
+    let (mut child, _child_guard) = match spawned {
         Ok(spawned) => spawned,
         Err(error) => {
             eprintln!("could not start the child: {error}");
@@ -155,13 +180,6 @@ fn supervising_parent(directory: &str) -> ! {
     let Some(child_stdout) = child.stdout.take() else {
         eprintln!("the child process has no output pipe");
         std::process::exit(16);
-    };
-    let runtime = match tokio::runtime::Builder::new_current_thread().build() {
-        Ok(runtime) => runtime,
-        Err(error) => {
-            eprintln!("could not build the descendant id reader: {error}");
-            std::process::exit(19);
-        }
     };
     let descendant_id = match runtime.block_on(async {
         use tokio::io::AsyncBufReadExt as _;

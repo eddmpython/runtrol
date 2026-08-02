@@ -1,5 +1,10 @@
 //! Bounded durable guard records for Unix process groups.
 
+#![expect(
+    clippy::disallowed_types,
+    reason = "this bounded synchronous control map is never retained across an await and cannot use an async lock"
+)]
+
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::ffi::OsStr;
 use std::fs::{File, OpenOptions};
@@ -8,10 +13,10 @@ use std::os::fd::{AsRawFd as _, RawFd};
 use std::os::unix::ffi::{OsStrExt as _, OsStringExt as _};
 use std::os::unix::fs::OpenOptionsExt as _;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
-use crate::contain::identity::{MAX_EXECUTABLE_BYTES, ProcessIdentity};
+use crate::contain::identity::{LiveIdentity, MAX_EXECUTABLE_BYTES, ProcessIdentity};
 use crate::error::SpawnError;
 
 const MAX_GUARDS: usize = 64;
@@ -74,6 +79,8 @@ struct RegistryInner {
     /// Keeps the bounded create-check-create sequence atomic between threads in one daemon.
     spawn_gate: AtomicBool,
     stopping: AtomicBool,
+    /// Parent ends of private keeper channels. Closing one is the only request that can terminate its Unix group.
+    controls: Mutex<Vec<(GuardId, std::os::unix::net::UnixStream)>>,
 }
 
 pub(super) struct SpawnPermit<'a> {
@@ -125,6 +132,7 @@ impl Registry {
                 lock,
                 spawn_gate: AtomicBool::new(false),
                 stopping: AtomicBool::new(false),
+                controls: Mutex::new(Vec::new()),
             }),
         })
     }
@@ -228,6 +236,52 @@ impl Registry {
         super::ChildGuard::tracked(self.clone(), id, kill_on_drop)
     }
 
+    pub(super) fn register_control(
+        &self,
+        id: GuardId,
+        control: std::os::unix::net::UnixStream,
+    ) -> Result<(), SpawnError> {
+        let mut controls = self.controls()?;
+        if controls.len() >= MAX_GUARDS || controls.iter().any(|(candidate, _)| candidate == &id) {
+            return Err(failure(
+                "registering a process keeper",
+                "the bounded keeper registry already contains this guard or is full",
+            ));
+        }
+        controls.push((id, control));
+        Ok(())
+    }
+
+    pub(super) fn stop_keeper(&self, id: &GuardId) -> Result<bool, SpawnError> {
+        let mut controls = self.controls()?;
+        let Some(at) = controls.iter().position(|(candidate, _)| candidate == id) else {
+            return Ok(false);
+        };
+        let (_id, mut control) = controls.swap_remove(at);
+        request_keeper_stop(&mut control)?;
+        Ok(true)
+    }
+
+    fn forget_keeper(&self, id: &GuardId) -> Result<(), SpawnError> {
+        let mut controls = self.controls()?;
+        if let Some(at) = controls.iter().position(|(candidate, _)| candidate == id) {
+            drop(controls.swap_remove(at));
+        }
+        Ok(())
+    }
+
+    fn controls(
+        &self,
+    ) -> Result<std::sync::MutexGuard<'_, Vec<(GuardId, std::os::unix::net::UnixStream)>>, SpawnError>
+    {
+        self.inner.controls.lock().map_err(|_| {
+            failure(
+                "accessing process keeper controls",
+                "the in-process keeper registry was poisoned",
+            )
+        })
+    }
+
     pub(super) fn confirm_published(&self, id: &GuardId) -> Result<(), SpawnError> {
         let active = self.active_path(id);
         let pending = self.pending_path(id);
@@ -285,13 +339,21 @@ impl Registry {
     pub(super) fn terminate_all(&self) -> Result<(), SpawnError> {
         let shutdown_permit = self.begin_shutdown()?;
         let spawn_permit = self.acquire_spawn_gate(SHUTDOWN_GATE_BUDGET)?;
+        let mut errors = Vec::new();
+        {
+            let mut controls = self.controls()?;
+            for (_id, control) in controls.iter_mut() {
+                if let Err(error) = request_keeper_stop(control) {
+                    errors.push(error.to_string());
+                }
+            }
+            controls.clear();
+        }
         let scan = self.scan_entries()?;
-        let mut errors = scan.errors;
+        errors.extend(scan.errors);
         for entry in scan.entries {
             let result = match entry {
-                Entry::Active { path, identity, .. } => {
-                    signal_or_clear(&identity, &path).map(|_| ())
-                }
+                Entry::Active { path, identity, .. } => reap(&identity, &path),
                 Entry::Pending(path) | Entry::Transient(path) => remove_if_present(&path),
             };
             if let Err(error) = result {
@@ -325,16 +387,6 @@ impl Registry {
         })
     }
 
-    pub(super) fn start_terminate(&self, id: &GuardId) -> Result<bool, SpawnError> {
-        let path = self.active_path(id);
-        let Some(identity) = read_active_if_present(&path)? else {
-            return Ok(false);
-        };
-        let signalled = signal_or_clear(&identity, &path)?;
-        sync_directory(self.directory())?;
-        Ok(signalled)
-    }
-
     pub(super) fn finish_terminate(&self, id: &GuardId) -> Result<(), SpawnError> {
         let path = self.active_path(id);
         let Some(identity) = read_active_if_present(&path)? else {
@@ -360,14 +412,13 @@ impl Registry {
     }
 
     pub(super) fn complete(&self, id: &GuardId) -> Result<(), SpawnError> {
+        self.forget_keeper(id)?;
         let path = self.active_path(id);
         let Some(identity) = read_active_if_present(&path)? else {
             return Ok(());
         };
-        if signal_or_clear(&identity, &path)? {
-            wait_for_group_quiescence(&identity)?;
-            remove_if_present(&path)?;
-        }
+        wait_for_group_quiescence(&identity)?;
+        remove_if_present(&path)?;
         sync_directory(self.directory())
     }
 
@@ -572,38 +623,42 @@ fn copy_array<const N: usize>(bytes: &[u8], at: usize) -> Result<[u8; N], SpawnE
         .map_err(|_| failure("decoding a process guard", "the guard record is truncated"))
 }
 
-fn reap(identity: &ProcessIdentity, path: &Path) -> Result<(), SpawnError> {
-    // A group identifier cannot be reused while the old group has a member. A missing root therefore still anchors
-    // the exact recorded group. A present PID with another start value proves later numeric reuse and must never be
-    // signalled.
-    if !group_exists(identity.pid)? || identity.pid_was_reused()? {
-        return remove_if_present(path);
+fn request_keeper_stop(control: &mut std::os::unix::net::UnixStream) -> Result<(), SpawnError> {
+    match control.write_all(&[super::bootstrap::STOP_FRAME]) {
+        Ok(()) => Ok(()),
+        Err(error)
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::BrokenPipe
+                    | std::io::ErrorKind::ConnectionReset
+                    | std::io::ErrorKind::NotConnected
+            ) =>
+        {
+            Ok(())
+        }
+        Err(error) => Err(io_failure("requesting process keeper termination", error)),
     }
-    signal_group(identity.pid)?;
+}
+
+fn reap(identity: &ProcessIdentity, path: &Path) -> Result<(), SpawnError> {
+    // Recovery never signals a numeric process or group identifier. The stable keeper owns that operation while it
+    // is itself a member of the group. A replacement only waits for the keeper's private control channel to close the
+    // old group, then removes the record when nothing in it can execute.
     wait_for_group_quiescence(identity)?;
     remove_if_present(path)
 }
 
-fn signal_or_clear(identity: &ProcessIdentity, path: &Path) -> Result<bool, SpawnError> {
-    if !group_exists(identity.pid)? || identity.pid_was_reused()? {
-        remove_if_present(path)?;
-        return Ok(false);
-    }
-    signal_group(identity.pid)?;
-    Ok(true)
-}
-
+#[cfg(test)]
 #[expect(
     unsafe_code,
-    reason = "signalling an exact Unix process group requires the kill system call"
+    reason = "test cleanup signals only the process group minted by that test"
 )]
 fn signal_group(group: u32) -> Result<(), SpawnError> {
     let group = i32::try_from(group).map_err(|error| SpawnError::Containment {
-        doing: "signalling a process group",
+        doing: "cleaning a test process group",
         detail: error.to_string(),
     })?;
-    // SAFETY: a negative PID is the documented Unix interface for signalling one process group. The group is
-    // verified against its durable root identity before this call.
+    // SAFETY: test cleanup receives the fresh group identifier printed by its own helper process.
     let result = unsafe { libc::kill(-group, libc::SIGKILL) };
     if result == 0
         || matches!(
@@ -614,12 +669,13 @@ fn signal_group(group: u32) -> Result<(), SpawnError> {
         Ok(())
     } else {
         Err(io_failure(
-            "signalling a process group",
+            "cleaning a test process group",
             std::io::Error::last_os_error(),
         ))
     }
 }
 
+#[cfg(test)]
 #[expect(
     unsafe_code,
     reason = "checking an exact Unix process group requires signal zero through the kill system call"
@@ -645,20 +701,27 @@ fn group_exists(group: u32) -> Result<bool, SpawnError> {
 }
 
 fn wait_for_group_quiescence(identity: &ProcessIdentity) -> Result<(), SpawnError> {
-    // SIGKILL can leave an orphaned zombie visible indefinitely when the host's PID 1 does not reap promptly. Such a
-    // row cannot execute or fork. Waiting for the numeric group to disappear would turn successful termination into
-    // a permanent startup failure, so the durable record closes when no non-zombie member remains.
+    // Keeper self-termination can leave an orphaned zombie visible indefinitely when the host's PID 1 does not reap
+    // promptly. Such a row cannot execute or fork. Waiting for the numeric group to disappear would turn successful
+    // termination into a permanent startup failure, so the durable record closes when no non-zombie member remains.
     let deadline = Instant::now() + REAP_BUDGET;
     while Instant::now() < deadline {
-        if identity.pid_was_reused()? || !group_has_executing_members(identity.pid)? {
-            return Ok(());
+        match identity.live_identity()? {
+            LiveIdentity::Reused => return Ok(()),
+            LiveIdentity::Exact | LiveIdentity::Gone => {
+                if !group_has_executing_members(identity.pid)? {
+                    return Ok(());
+                }
+            }
         }
         std::thread::sleep(REAP_POLL);
     }
-    if !identity.pid_was_reused()? && group_has_executing_members(identity.pid)? {
+    if identity.live_identity()? != LiveIdentity::Reused
+        && group_has_executing_members(identity.pid)?
+    {
         return Err(failure(
-            "waiting for a process group to end",
-            "the process group retained an executing member after SIGKILL for 10 seconds",
+            "waiting for a process keeper to end",
+            "the durable keeper group retained an executing member for 10 seconds; recovery refused to signal a numeric identifier",
         ));
     }
     Ok(())
@@ -671,14 +734,9 @@ fn group_has_executing_members(group: u32) -> Result<bool, SpawnError> {
     for process in processes {
         let process =
             process.map_err(|error| io_failure("reading a process-group member", error))?;
-        if process
-            .file_name()
-            .to_string_lossy()
-            .parse::<u32>()
-            .is_err()
-        {
+        let Ok(_pid) = process.file_name().to_string_lossy().parse::<u32>() else {
             continue;
-        }
+        };
         let stat = match std::fs::read_to_string(process.path().join("stat")) {
             Ok(stat) => stat,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
@@ -761,10 +819,17 @@ fn group_has_executing_members(group: u32) -> Result<bool, SpawnError> {
             "the process group exceeds the 4096-member recovery bound",
         ));
     }
-    let count = usize::try_from(bytes).map_err(|error| SpawnError::Containment {
+    let bytes = usize::try_from(bytes).map_err(|error| SpawnError::Containment {
         doing: "listing process-group members",
         detail: error.to_string(),
-    })? / std::mem::size_of::<i32>();
+    })?;
+    if bytes % std::mem::size_of::<i32>() != 0 {
+        return Err(failure(
+            "listing process-group members",
+            "the kernel returned a partial process identifier",
+        ));
+    }
+    let count = bytes / std::mem::size_of::<i32>();
     for pid in processes.into_iter().take(count).filter(|pid| *pid > 0) {
         let mut info = std::mem::MaybeUninit::<libc::proc_bsdshortinfo>::uninit();
         let info_size =
@@ -785,7 +850,11 @@ fn group_has_executing_members(group: u32) -> Result<bool, SpawnError> {
             )
         };
         if read == 0 {
-            continue;
+            let error = std::io::Error::last_os_error();
+            if matches!(error.raw_os_error(), Some(libc::ESRCH)) {
+                continue;
+            }
+            return Err(io_failure("reading a process-group member", error));
         }
         if read != info_size {
             return Err(failure(
@@ -872,8 +941,6 @@ mod tests {
     const TEST_GUARD: &str = "RUNTROL_CONTAINMENT_TEST_GUARD";
     const TEST_LOCK_FD: &str = "RUNTROL_CONTAINMENT_TEST_LOCK_FD";
     const TEST_READY: &str = "RUNTROL_CONTAINMENT_TEST_READY";
-    const TEST_PARENT_GONE: &str = "RUNTROL_CONTAINMENT_TEST_PARENT_GONE";
-    const TEST_RELEASE: &str = "RUNTROL_CONTAINMENT_TEST_RELEASE";
     const PENDING_TEST: &str =
         "contain::registry::tests::a_pending_guard_survives_a_hard_kill_until_recovery";
     const ACTIVE_TEST: &str =
@@ -971,10 +1038,6 @@ mod tests {
         assert_eq!(record_count(&fixture.guards, ACTIVE_SUFFIX)?, 1);
 
         fixture.kill_supervisor()?;
-        wait_for_file(&fixture.parent_gone)?;
-        assert_lock_is_held(&fixture.guards.join(LOCK_FILE))?;
-        write_marker(&fixture.release, b"release")?;
-
         let replacement = Registry::open(&fixture.guards)?;
         replacement.recover()?;
         assert!(!group_has_executing_members(root)?);
@@ -1015,8 +1078,6 @@ mod tests {
             .env(TEST_GUARD, pending.id.as_str())
             .env(TEST_LOCK_FD, lock_fd.to_string())
             .env(TEST_READY, required_path(TEST_READY)?)
-            .env(TEST_PARENT_GONE, required_path(TEST_PARENT_GONE)?)
-            .env(TEST_RELEASE, required_path(TEST_RELEASE)?)
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
             .stderr(Stdio::null());
@@ -1046,8 +1107,6 @@ mod tests {
                 detail: error.to_string(),
             })?;
         let ready = required_path(TEST_READY)?;
-        let parent_gone = required_path(TEST_PARENT_GONE)?;
-        let release = required_path(TEST_RELEASE)?;
 
         // SAFETY: this test process has no supervised descendants yet. Zero makes it the root of the exact group
         // recorded below, matching the production bootstrap order.
@@ -1061,6 +1120,14 @@ mod tests {
             .map_err(|error| io_failure("finding the active crash fixture", error))?;
         let identity = ProcessIdentity::current(&executable)?;
         Registry::publish(&root.join("guards"), &guard, &identity)?;
+        // SAFETY: this raw descriptor is the one inherited specifically for this test process. Closing it models
+        // the production keeper's explicit post-publication release without adding a production failpoint.
+        if unsafe { libc::close(lock_fd) } != 0 {
+            return Err(io_failure(
+                "closing the inherited test registry lock",
+                std::io::Error::last_os_error(),
+            ));
+        }
         write_marker(&ready, identity.pid.to_string().as_bytes())?;
 
         let mut lifeline = std::io::stdin().lock();
@@ -1068,22 +1135,14 @@ mod tests {
         lifeline
             .read_to_end(&mut ignored)
             .map_err(|error| io_failure("waiting for the test supervisor to die", error))?;
-        write_marker(&parent_gone, b"parent-gone")?;
-        wait_for_file(&release)?;
-        // SAFETY: this raw descriptor is the one inherited specifically for this test process. Closing it models
-        // the production bootstrap's close-on-exec transition without adding a production failpoint.
-        if unsafe { libc::close(lock_fd) } != 0 {
+        // SAFETY: zero addresses this test worker's own freshly created group while the worker is still its leader.
+        if unsafe { libc::kill(0, libc::SIGKILL) } != 0 {
             return Err(io_failure(
-                "closing the inherited test registry lock",
+                "terminating the active crash fixture group",
                 std::io::Error::last_os_error(),
             ));
         }
-
-        std::thread::sleep(CHILD_BUDGET);
-        Err(failure(
-            "testing active recovery",
-            "the replacement did not terminate the published process group",
-        ))
+        std::process::abort()
     }
 
     fn spawn_test_role(
@@ -1098,8 +1157,6 @@ mod tests {
             .env(TEST_ROLE, role)
             .env(TEST_ROOT, &fixture.root)
             .env(TEST_READY, &fixture.ready)
-            .env(TEST_PARENT_GONE, &fixture.parent_gone)
-            .env(TEST_RELEASE, &fixture.release)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -1185,45 +1242,10 @@ mod tests {
             })
     }
 
-    #[expect(
-        unsafe_code,
-        reason = "a nonblocking flock is the direct proof that the killed supervisor's bootstrap retained it"
-    )]
-    fn assert_lock_is_held(path: &Path) -> Result<(), SpawnError> {
-        let lock = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(path)
-            .map_err(|error| io_failure("opening the inherited test lock", error))?;
-        // SAFETY: `lock` owns the descriptor for the duration of this one nonblocking lock attempt.
-        let result = unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
-        if result == 0 {
-            // SAFETY: this branch acquired the lock above and releases it before returning the failed assertion.
-            unsafe {
-                libc::flock(lock.as_raw_fd(), libc::LOCK_UN);
-            }
-            return Err(failure(
-                "checking the inherited registry lock",
-                "the active bootstrap did not retain the lock after its supervisor died",
-            ));
-        }
-        let error = std::io::Error::last_os_error();
-        if error
-            .raw_os_error()
-            .is_some_and(|code| code == libc::EWOULDBLOCK || code == libc::EAGAIN)
-        {
-            Ok(())
-        } else {
-            Err(io_failure("checking the inherited registry lock", error))
-        }
-    }
-
     struct CrashFixture {
         root: PathBuf,
         guards: PathBuf,
         ready: PathBuf,
-        parent_gone: PathBuf,
-        release: PathBuf,
         supervisor: Option<Child>,
         process_group: Option<u32>,
         finished: bool,
@@ -1243,8 +1265,6 @@ mod tests {
             Ok(Self {
                 guards: root.join("guards"),
                 ready: root.join("ready"),
-                parent_gone: root.join("parent-gone"),
-                release: root.join("release"),
                 root,
                 supervisor: None,
                 process_group: None,

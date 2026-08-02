@@ -234,7 +234,10 @@ async fn serve_sessions(
                     }
                 }
                 ReservationAsked::CancelOpen(reservation) => sessions.cancel_open(reservation),
-                ReservationAsked::ReleaseClosing(reservation) => sessions.release_closing(reservation),
+                ReservationAsked::ReleaseClosing(reservation) => {
+                    sessions.release_closing(reservation);
+                    runtrol_childproc::footprint::release_unused_memory();
+                }
             },
 
             Some(ask) = asked.recv() => {

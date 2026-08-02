@@ -2,11 +2,12 @@
 
 use std::ffi::{OsString, c_void};
 use std::fs::File;
-use std::io::Read as _;
+use std::io::{Read as _, Write as _};
 use std::os::fd::{FromRawFd as _, RawFd};
 use std::os::unix::ffi::{OsStrExt as _, OsStringExt as _};
-use std::os::unix::process::CommandExt as _;
-use std::path::{Path, PathBuf};
+use std::os::unix::net::UnixStream;
+use std::os::unix::process::ExitStatusExt as _;
+use std::path::PathBuf;
 
 use crate::contain::identity::ProcessIdentity;
 use crate::contain::registry::{GuardId, Registry};
@@ -14,6 +15,9 @@ use crate::error::SpawnError;
 
 /// The private argv word that selects the transient child bootstrap.
 pub const BOOTSTRAP_ARGUMENT: &str = "__runtrol-child-bootstrap";
+pub(super) const READY_FRAME: u8 = 0;
+pub(super) const EXIT_FRAME: u8 = 1;
+pub(super) const STOP_FRAME: u8 = 2;
 
 const PLAN_MAGIC: &[u8; 8] = b"RTPLN001";
 const MAX_PLAN_BYTES: usize = 128 * 1024;
@@ -122,7 +126,7 @@ impl LaunchPlan {
 /// Run the hidden bootstrap when `words` select it.
 ///
 /// The executable entry point must call this before interpreting public command words. `None` means this is an
-/// ordinary invocation. A successful bootstrap never returns because it replaces itself with the provider.
+/// ordinary invocation. A successful bootstrap remains as the provider's stable process-group keeper.
 pub fn bootstrap_if_requested(words: &[String]) -> Option<Result<(), SpawnError>> {
     if words.first().map(String::as_str) != Some(BOOTSTRAP_ARGUMENT) {
         return None;
@@ -192,14 +196,16 @@ fn run(plan_fd: RawFd, status_fd: RawFd, lock_fd: RawFd) -> Result<(), SpawnErro
     let plan = LaunchPlan::decode(&encoded)?;
 
     // SAFETY: zero means the calling process for both arguments. The bootstrap performs this before publishing the
-    // active record, so every published root is already the leader of the group recovery will signal.
+    // active record, so every published keeper already anchors the group it alone may terminate.
     if unsafe { libc::setpgid(0, 0) } != 0 {
         return Err(io_failure(
             "creating the provider process group",
             std::io::Error::last_os_error(),
         ));
     }
-    let identity = ProcessIdentity::current(Path::new(&plan.program))?;
+    let keeper_executable = std::env::current_exe()
+        .map_err(|error| io_failure("finding the process keeper executable", error))?;
+    let identity = ProcessIdentity::current(&keeper_executable)?;
     Registry::publish(&plan.directory, &plan.guard, &identity)?;
 
     set_close_on_exec(status_fd)?;
@@ -210,8 +216,82 @@ fn run(plan_fd: RawFd, status_fd: RawFd, lock_fd: RawFd) -> Result<(), SpawnErro
     if let Some(directory) = plan.current_dir {
         command.current_dir(directory);
     }
-    let error = command.exec();
-    Err(io_failure("executing the supervised provider", error))
+    let provider = command
+        .spawn()
+        .map_err(|error| io_failure("executing the supervised provider", error))?;
+
+    // SAFETY: the private bootstrap transfers ownership of its inherited control descriptor here exactly once.
+    let control = unsafe { UnixStream::from_raw_fd(status_fd) };
+    if let Err(error) = keep_provider(provider, control, lock_fd) {
+        eprintln!("runtrol process keeper failed: {error}");
+    }
+    kill_own_group()
+}
+
+fn keep_provider(
+    mut provider: std::process::Child,
+    mut control: UnixStream,
+    lock_fd: RawFd,
+) -> Result<(), SpawnError> {
+    control
+        .write_all(&[READY_FRAME])
+        .map_err(|error| io_failure("publishing child bootstrap success", error))?;
+    control
+        .set_read_timeout(Some(std::time::Duration::from_millis(25)))
+        .map_err(|error| io_failure("bounding the process keeper control wait", error))?;
+    close_descriptor(lock_fd);
+
+    let provider_status = loop {
+        if let Some(status) = provider
+            .try_wait()
+            .map_err(|error| io_failure("waiting for the supervised provider", error))?
+        {
+            break status;
+        }
+        let mut command = [0_u8; 1];
+        match control.read(&mut command) {
+            Ok(_) => kill_own_group(),
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ) => {}
+            Err(error) => return Err(io_failure("reading a process keeper command", error)),
+        }
+    };
+
+    let mut exited = [0_u8; 5];
+    exited[0] = EXIT_FRAME;
+    exited[1..].copy_from_slice(&provider_status.into_raw().to_le_bytes());
+    control
+        .write_all(&exited)
+        .map_err(|error| io_failure("publishing the provider exit status", error))?;
+    kill_own_group()
+}
+
+#[expect(
+    unsafe_code,
+    reason = "only a live member can atomically terminate its own Unix process group without a reused numeric target"
+)]
+fn kill_own_group() -> ! {
+    // SAFETY: zero addresses this process's current group. The keeper is a live member at this syscall, so the group
+    // generation cannot disappear or be reused before the signal is delivered to that same group.
+    if unsafe { libc::kill(0, libc::SIGKILL) } != 0 {
+        eprintln!(
+            "runtrol process keeper could not terminate its group: {}",
+            std::io::Error::last_os_error()
+        );
+    }
+    std::process::abort()
+}
+
+#[expect(
+    unsafe_code,
+    reason = "the inherited global spawn lock is a raw descriptor owned by the private bootstrap"
+)]
+fn close_descriptor(fd: RawFd) {
+    // SAFETY: the bootstrap owns this inherited duplicate and closes it exactly once after provider publication.
+    let _closed = unsafe { libc::close(fd) };
 }
 
 #[expect(

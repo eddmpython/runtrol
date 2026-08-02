@@ -40,12 +40,12 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use runtrol_childproc::contain::{ChildGuard, TrackedCommand};
+use runtrol_childproc::contain::{ChildGuard, TrackedChild, TrackedCommand};
 use runtrol_childproc::{Containment, Program, SpawnError};
 use runtrol_provider::{ProviderError, ProviderId};
 use serde::Deserialize;
 use tokio::io::{AsyncWrite, AsyncWriteExt as _};
-use tokio::process::{Child, ChildStdin, ChildStdout};
+use tokio::process::{ChildStdin, ChildStdout};
 use tokio::sync::{Mutex, mpsc};
 
 use crate::codex::bound::{
@@ -184,7 +184,7 @@ pub struct Connection {
     /// The durable process-group record, dropped before the child handle so the live root can identify the group.
     child_guard: Mutex<ChildGuard>,
     /// The child, held so that an explicit stop can reap the process.
-    child: Mutex<Child>,
+    child: Mutex<TrackedChild>,
     /// The stdout reader, owned rather than detached so cancellation cannot leave a task behind.
     reader: tokio::task::JoinHandle<()>,
 }
@@ -488,7 +488,7 @@ fn spawn(
     provider: ProviderId,
     program: &Program,
     contained_by: &Containment,
-) -> Result<(Child, ChildGuard, ChildStdin, ChildStdout), ProviderError> {
+) -> Result<(TrackedChild, ChildGuard, ChildStdin, ChildStdout), ProviderError> {
     let mut command = TrackedCommand::new(program.path().as_std_path());
     command
         .args(program.leading())

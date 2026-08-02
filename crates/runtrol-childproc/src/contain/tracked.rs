@@ -9,6 +9,101 @@ use std::process::Stdio;
 use crate::contain::Containment;
 use crate::error::SpawnError;
 
+/// A provider child whose Unix exit status is relayed by its stable process-group keeper.
+pub struct TrackedChild {
+    inner: tokio::process::Child,
+    /// Provider standard input.
+    pub stdin: Option<tokio::process::ChildStdin>,
+    /// Provider standard output.
+    pub stdout: Option<tokio::process::ChildStdout>,
+    /// Provider standard error.
+    pub stderr: Option<tokio::process::ChildStderr>,
+    #[cfg(unix)]
+    control: Option<std::os::unix::net::UnixStream>,
+}
+
+impl TrackedChild {
+    fn direct(mut child: tokio::process::Child) -> Self {
+        let stdin = child.stdin.take();
+        let stdout = child.stdout.take();
+        let stderr = child.stderr.take();
+        Self {
+            inner: child,
+            stdin,
+            stdout,
+            stderr,
+            #[cfg(unix)]
+            control: None,
+        }
+    }
+
+    #[cfg(unix)]
+    fn keeper(mut child: tokio::process::Child, control: std::os::unix::net::UnixStream) -> Self {
+        let stdin = child.stdin.take();
+        let stdout = child.stdout.take();
+        let stderr = child.stderr.take();
+        Self {
+            inner: child,
+            stdin,
+            stdout,
+            stderr,
+            control: Some(control),
+        }
+    }
+
+    /// Process identifier of the direct child handle.
+    #[must_use]
+    pub fn id(&self) -> Option<u32> {
+        self.inner.id()
+    }
+
+    /// Wait for the provider and return its native exit status.
+    ///
+    /// # Errors
+    ///
+    /// When the child cannot be reaped or a Unix keeper ends without its complete exit frame.
+    pub async fn wait(&mut self) -> std::io::Result<std::process::ExitStatus> {
+        let keeper_status = self.inner.wait().await?;
+        #[cfg(unix)]
+        if let Some(mut control) = self.control.take() {
+            use std::io::Read as _;
+            use std::os::unix::process::ExitStatusExt as _;
+
+            let mut exited = [0_u8; 5];
+            control.read_exact(&mut exited).map_err(|error| {
+                std::io::Error::new(
+                    error.kind(),
+                    format!("the process keeper ended without a provider exit frame: {error}"),
+                )
+            })?;
+            if exited[0] != super::bootstrap::EXIT_FRAME {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "the process keeper returned a malformed provider exit frame",
+                ));
+            }
+            let raw = i32::from_le_bytes(exited[1..].try_into().map_err(|_| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "the process keeper truncated the provider exit status",
+                )
+            })?);
+            return Ok(std::process::ExitStatus::from_raw(raw));
+        }
+        Ok(keeper_status)
+    }
+
+    #[cfg(unix)]
+    async fn wait_keeper(&mut self) -> std::io::Result<std::process::ExitStatus> {
+        self.control.take();
+        self.inner.wait().await
+    }
+
+    async fn kill(&mut self) -> std::io::Result<()> {
+        self.inner.kill().await
+    }
+}
+
 /// A provider-neutral child command with an optional durable containment boundary.
 pub struct TrackedCommand {
     program: OsString,
@@ -86,8 +181,8 @@ impl TrackedCommand {
 
     /// Spawn the command and return its process handle with the durable group guard.
     ///
-    /// Production Unix containment uses the same executable's hidden bootstrap. A containment without durable
-    /// tracking, including test containment, spawns the provider directly.
+    /// Production Unix containment uses the same executable's hidden stable keeper. A containment without durable
+    /// tracking spawns the provider directly.
     ///
     /// # Errors
     ///
@@ -96,7 +191,7 @@ impl TrackedCommand {
     pub fn spawn(
         self,
         containment: &Containment,
-    ) -> Result<(tokio::process::Child, ChildGuard), SpawnError> {
+    ) -> Result<(TrackedChild, ChildGuard), SpawnError> {
         #[cfg(unix)]
         if let Some(registry) = &containment.recovery {
             return self.spawn_bootstrap(registry);
@@ -107,7 +202,7 @@ impl TrackedCommand {
     fn spawn_direct(
         self,
         containment: &Containment,
-    ) -> Result<(tokio::process::Child, ChildGuard), SpawnError> {
+    ) -> Result<(TrackedChild, ChildGuard), SpawnError> {
         let program = self.program.clone();
         let mut command = self.into_command(&program, true, true);
         containment.prepare(command.as_std_mut());
@@ -116,7 +211,7 @@ impl TrackedCommand {
             path: program.to_string_lossy().into_owned(),
             detail: error.to_string(),
         })?;
-        Ok((child, ChildGuard::untracked()))
+        Ok((TrackedChild::direct(child), ChildGuard::untracked()))
     }
 
     fn into_command(
@@ -152,7 +247,7 @@ impl TrackedCommand {
     fn spawn_bootstrap(
         self,
         registry: &super::registry::Registry,
-    ) -> Result<(tokio::process::Child, ChildGuard), SpawnError> {
+    ) -> Result<(TrackedChild, ChildGuard), SpawnError> {
         let spawn_permit = registry.serialize_spawn()?;
         let pending = registry.create_pending(&spawn_permit)?;
         let kill_on_drop = self.kill_on_drop;
@@ -175,8 +270,8 @@ impl TrackedCommand {
         self,
         registry: &super::registry::Registry,
         pending: &super::registry::PendingGuard,
-    ) -> Result<tokio::process::Child, BootstrapFailure> {
-        use std::io::{Read as _, Seek as _, Write as _};
+    ) -> Result<TrackedChild, BootstrapFailure> {
+        use std::io::{Seek as _, Write as _};
         use std::os::fd::AsRawFd as _;
         use std::os::unix::fs::OpenOptionsExt as _;
 
@@ -254,29 +349,29 @@ impl TrackedCommand {
         drop((plan_private, status_private, lock_private));
 
         if let Err(error) = wait_for_bootstrap(&status_read) {
-            return Err(with_stop_result(&mut child, error));
+            drop(status_read);
+            return Err(with_keeper_stop_result(&mut child, error));
         }
-        let mut status = status_read;
-        let mut error_text = Vec::new();
-        if let Err(error) = std::io::Read::by_ref(&mut status)
-            .take(4097)
-            .read_to_end(&mut error_text)
-        {
-            let error = containment_io("reading child bootstrap status", error);
-            return Err(with_stop_result(&mut child, error));
+        if let Err(error) = registry.confirm_published(&pending.id) {
+            drop(status_read);
+            return Err(with_keeper_stop_result(&mut child, error));
         }
-        if !error_text.is_empty() {
-            let error = SpawnError::Containment {
-                doing: "executing the supervised provider",
-                detail: String::from_utf8_lossy(&error_text).into_owned(),
-            };
-            return Err(with_stop_result(&mut child, error));
+        let registry_control = match status_read.try_clone() {
+            Ok(control) => control,
+            Err(error) => {
+                drop(status_read);
+                return Err(with_keeper_stop_result(
+                    &mut child,
+                    containment_io("cloning the process keeper control", error),
+                ));
+            }
+        };
+        if let Err(error) = registry.register_control(pending.id.clone(), registry_control) {
+            drop(status_read);
+            return Err(with_keeper_stop_result(&mut child, error));
         }
-        registry
-            .confirm_published(&pending.id)
-            .map_err(|error| with_stop_result(&mut child, error))?;
 
-        Ok(child)
+        Ok(TrackedChild::keeper(child, status_read))
     }
 }
 
@@ -297,8 +392,11 @@ impl From<SpawnError> for BootstrapFailure {
 }
 
 #[cfg(unix)]
-fn with_stop_result(child: &mut tokio::process::Child, original: SpawnError) -> BootstrapFailure {
-    match stop_bootstrap(child) {
+fn with_keeper_stop_result(
+    child: &mut tokio::process::Child,
+    original: SpawnError,
+) -> BootstrapFailure {
+    match wait_for_failed_keeper(child) {
         Ok(()) => original.into(),
         Err(stop) => BootstrapFailure {
             error: SpawnError::Containment {
@@ -311,7 +409,7 @@ fn with_stop_result(child: &mut tokio::process::Child, original: SpawnError) -> 
 }
 
 #[cfg(unix)]
-fn stop_bootstrap(child: &mut tokio::process::Child) -> Result<(), SpawnError> {
+fn wait_for_failed_keeper(child: &mut tokio::process::Child) -> Result<(), SpawnError> {
     if child
         .try_wait()
         .map_err(|error| containment_io("checking a failed child bootstrap", error))?
@@ -319,9 +417,6 @@ fn stop_bootstrap(child: &mut tokio::process::Child) -> Result<(), SpawnError> {
     {
         return Ok(());
     }
-    child
-        .start_kill()
-        .map_err(|error| containment_io("stopping a failed child bootstrap", error))?;
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     while std::time::Instant::now() < deadline {
         if child
@@ -334,8 +429,8 @@ fn stop_bootstrap(child: &mut tokio::process::Child) -> Result<(), SpawnError> {
         std::thread::sleep(std::time::Duration::from_millis(25));
     }
     Err(SpawnError::Containment {
-        doing: "waiting for a failed child bootstrap",
-        detail: "the bootstrap remained after termination for 10 seconds".to_owned(),
+        doing: "waiting for a failed process keeper",
+        detail: "the keeper did not close its own process group within 10 seconds".to_owned(),
     })
 }
 
@@ -368,7 +463,8 @@ pub(super) fn prepare_bootstrap_descriptors<const N: usize>(
     unsafe_code,
     reason = "bounded waiting for an inherited pipe requires Unix poll"
 )]
-fn wait_for_bootstrap(status: &std::fs::File) -> Result<(), SpawnError> {
+fn wait_for_bootstrap(status: &std::os::unix::net::UnixStream) -> Result<(), SpawnError> {
+    use std::io::Read as _;
     use std::os::fd::AsRawFd as _;
 
     let mut descriptor = libc::pollfd {
@@ -383,7 +479,23 @@ fn wait_for_bootstrap(status: &std::fs::File) -> Result<(), SpawnError> {
         // SAFETY: `descriptor` points to one initialized `pollfd`, and poll borrows it only for this bounded call.
         let result = unsafe { libc::poll(&raw mut descriptor, 1, milliseconds) };
         if result > 0 {
-            return Ok(());
+            let mut status = status;
+            let mut first = [0_u8; 1];
+            status
+                .read_exact(&mut first)
+                .map_err(|error| containment_io("reading child bootstrap status", error))?;
+            if first == [0] {
+                return Ok(());
+            }
+            let mut error_text = vec![first[0]];
+            std::io::Read::by_ref(&mut status)
+                .take(4096)
+                .read_to_end(&mut error_text)
+                .map_err(|error| containment_io("reading child bootstrap failure", error))?;
+            return Err(SpawnError::Containment {
+                doing: "executing the supervised provider",
+                detail: String::from_utf8_lossy(&error_text).into_owned(),
+            });
         }
         if result == 0 {
             return Err(SpawnError::Containment {
@@ -453,26 +565,25 @@ impl ChildGuard {
         Ok(())
     }
 
-    /// Kill the exact recorded process group, reap its direct child, and remove the durable record only after the
-    /// complete group is absent.
+    /// Close the exact keeper's private control channel, reap it, and remove the durable record after no group member
+    /// can execute.
     ///
     /// # Errors
     ///
-    /// [`SpawnError::Containment`] when identity verification, group termination, reaping, or durable removal fails.
-    pub async fn terminate(&mut self, child: &mut tokio::process::Child) -> Result<(), SpawnError> {
+    /// [`SpawnError::Containment`] when keeper termination, reaping, or durable removal fails.
+    pub async fn terminate(&mut self, child: &mut TrackedChild) -> Result<(), SpawnError> {
         #[cfg(unix)]
         if let Some(tracked) = &mut self.tracked {
-            let signalled = tracked.registry.start_terminate(&tracked.id)?;
-            let _exit_status = child
-                .wait()
-                .await
-                .map_err(|error| SpawnError::Containment {
-                    doing: "reaping a terminated child root",
-                    detail: error.to_string(),
-                })?;
-            if signalled {
-                tracked.registry.finish_terminate(&tracked.id)?;
-            }
+            let _requested = tracked.registry.stop_keeper(&tracked.id)?;
+            let _exit_status =
+                child
+                    .wait_keeper()
+                    .await
+                    .map_err(|error| SpawnError::Containment {
+                        doing: "reaping a terminated child root",
+                        detail: error.to_string(),
+                    })?;
+            tracked.registry.finish_terminate(&tracked.id)?;
             tracked.finished = true;
             return Ok(());
         }
@@ -493,92 +604,26 @@ impl Drop for ChildGuard {
         if let Some(tracked) = &mut self.tracked
             && !tracked.finished
             && tracked.kill_on_drop
-            && let Err(error) = tracked.registry.start_terminate(&tracked.id)
+            && let Err(error) = tracked.registry.stop_keeper(&tracked.id)
         {
-            eprintln!("runtrol: could not signal a tracked child group: {error}");
+            eprintln!("runtrol: could not stop a tracked child keeper: {error}");
         }
     }
 }
 
 #[cfg(unix)]
-#[expect(
-    unsafe_code,
-    reason = "creating owned ends of a Unix pipe requires transferring raw descriptor ownership"
-)]
 fn status_channel(
-    directory: &Path,
-    id: &super::registry::GuardId,
-) -> Result<(std::fs::File, std::fs::File), SpawnError> {
-    use std::os::unix::ffi::OsStrExt as _;
-    use std::os::unix::fs::OpenOptionsExt as _;
-
-    let path = directory.join(format!(".{}.status", id.as_str()));
-    let encoded = std::ffi::CString::new(path.as_os_str().as_bytes()).map_err(|_| {
-        SpawnError::Containment {
-            doing: "creating the child bootstrap status channel",
-            detail: "the private status path contains a zero byte".to_owned(),
-        }
-    })?;
-    // SAFETY: `encoded` is one terminated path and the requested mode creates a private FIFO only at that path.
-    if unsafe { libc::mkfifo(encoded.as_ptr(), 0o600) } != 0 {
-        return Err(containment_io(
-            "creating the child bootstrap status channel",
-            std::io::Error::last_os_error(),
-        ));
-    }
-    let opened = (|| {
-        let read = std::fs::OpenOptions::new()
-            .read(true)
-            .custom_flags(libc::O_CLOEXEC | libc::O_NONBLOCK)
-            .open(&path)
-            .map_err(|error| containment_io("opening the child bootstrap status reader", error))?;
-        let write = std::fs::OpenOptions::new()
-            .write(true)
-            .custom_flags(libc::O_CLOEXEC | libc::O_NONBLOCK)
-            .open(&path)
-            .map_err(|error| containment_io("opening the child bootstrap status writer", error))?;
-        set_blocking(&read)?;
-        set_blocking(&write)?;
-        Ok((read, write))
-    })();
-    let removed = std::fs::remove_file(&path)
-        .map_err(|error| containment_io("unlinking the child bootstrap status channel", error));
-    match (opened, removed) {
-        (Ok(channel), Ok(())) => Ok(channel),
-        (Err(open), Err(remove)) => Err(SpawnError::Containment {
-            doing: "cleaning the failed child bootstrap status channel",
-            detail: format!("{open}; unlinking it also failed: {remove}"),
-        }),
-        (Err(error), Ok(())) | (Ok(_), Err(error)) => Err(error),
-    }
-}
-
-#[cfg(unix)]
-#[expect(
-    unsafe_code,
-    reason = "descriptor status flags and atomic close-on-exec duplication require Unix fcntl"
-)]
-fn set_blocking(file: &std::fs::File) -> Result<(), SpawnError> {
-    use std::os::fd::AsRawFd as _;
-
-    let fd = file.as_raw_fd();
-    // SAFETY: the file owns a valid descriptor and this call only reads its open-file status flags.
-    let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
-    if flags < 0 {
-        return Err(containment_io(
-            "reading the child bootstrap status channel flags",
-            std::io::Error::last_os_error(),
-        ));
-    }
-    // SAFETY: the file still owns this valid descriptor and F_SETFL updates only its open-file status flags.
-    let changed = unsafe { libc::fcntl(fd, libc::F_SETFL, flags & !libc::O_NONBLOCK) };
-    if changed != 0 {
-        return Err(containment_io(
-            "making the child bootstrap status channel blocking",
-            std::io::Error::last_os_error(),
-        ));
-    }
-    Ok(())
+    _directory: &Path,
+    _id: &super::registry::GuardId,
+) -> Result<
+    (
+        std::os::unix::net::UnixStream,
+        std::os::unix::net::UnixStream,
+    ),
+    SpawnError,
+> {
+    std::os::unix::net::UnixStream::pair()
+        .map_err(|error| containment_io("creating the child bootstrap control channel", error))
 }
 
 #[cfg(unix)]
@@ -607,5 +652,43 @@ fn containment_io(doing: &'static str, error: impl std::fmt::Display) -> SpawnEr
     SpawnError::Containment {
         doing,
         detail: error.to_string(),
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use std::io::Write as _;
+
+    use super::*;
+
+    fn guard() -> Result<super::super::registry::GuardId, SpawnError> {
+        super::super::registry::GuardId::parse(&"a".repeat(56))
+    }
+
+    #[test]
+    fn explicit_keeper_ready_frame_completes_without_closing_control() -> Result<(), SpawnError> {
+        let (status, mut keeper) = status_channel(Path::new("unused"), &guard()?)?;
+        let writer = std::thread::spawn(move || keeper.write_all(&[0]));
+
+        wait_for_bootstrap(&status)?;
+        writer
+            .join()
+            .map_err(|_| containment_io("joining the ready-frame writer", "the writer panicked"))?
+            .map_err(|error| containment_io("writing the ready frame", error))?;
+        Ok(())
+    }
+
+    #[test]
+    fn explicit_keeper_error_frame_preserves_its_diagnostic() -> Result<(), SpawnError> {
+        let (status, mut keeper) = status_channel(Path::new("unused"), &guard()?)?;
+        let writer = std::thread::spawn(move || keeper.write_all(b"provider exec was refused"));
+
+        let error = wait_for_bootstrap(&status).expect_err("an error frame must refuse the spawn");
+        writer
+            .join()
+            .map_err(|_| containment_io("joining the error-frame writer", "the writer panicked"))?
+            .map_err(|error| containment_io("writing the error frame", error))?;
+        assert!(error.to_string().contains("provider exec was refused"));
+        Ok(())
     }
 }
