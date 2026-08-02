@@ -155,15 +155,17 @@ def requireExactReplayBoundaries(evidence: Evidence) -> None:
 
 
 def requireDenseRestartBoundaries(evidence: Evidence) -> None:
-    """Require the resumed live stream to begin at its acknowledged edge with no holes."""
+    """Require the resumed stream to begin where the gap said delivery resumes, with no holes."""
     if len(CURSOR_RE.findall(evidence.restart_text)) != 1:
         raise Failed("provider-native continuation did not expose exactly one watching acknowledgement")
     if len(GAP_RE.findall(evidence.restart_text)) != 1 or "watch lagged" in evidence.restart_text:
         raise Failed("provider-native continuation did not expose exactly one gap and no lag")
-    stream, epoch, seq = cursorParts(evidence.resumed_cursor)
+    # Dense from the gap's resume point rather than the live edge: a gap acknowledgement replays the
+    # retained suffix first, so the earliest boundaries may sit behind the live cursor.
+    stream, epoch, seq = cursorParts(evidence.gap_live)
     observed = [frame[:3] for frame in framedEvents(evidence.restart_text, expect_gap=True)]
-    if len(observed) != 3:
-        raise Failed(f"provider-native continuation exposed {len(observed)} event boundaries instead of 3")
+    if len(observed) < 3:
+        raise Failed(f"provider-native continuation exposed only {len(observed)} event boundaries")
     expected = [(stream, epoch, value) for value in range(seq + 1, seq + len(observed) + 1)]
     if observed != expected:
         raise Failed(f"provider-native continuation cursor sequence was not dense: {observed} != {expected}")
@@ -177,8 +179,10 @@ def verifyEvidence(evidence: Evidence) -> None:
         raise Failed(f"bounded replay reply order was not exactly [2, 3]: {replay_turns}")
     if evidence.gap_requested != evidence.requested_cursor:
         raise Failed("restart gap did not name the requested old cursor")
-    if evidence.gap_live != evidence.resumed_cursor:
-        raise Failed("restart gap did not name the new live cursor")
+    gap_stream, gap_epoch, gap_seq = cursorParts(evidence.gap_live)
+    live_stream, live_epoch, live_seq = cursorParts(evidence.resumed_cursor)
+    if (gap_stream, gap_epoch) != (live_stream, live_epoch) or gap_seq > live_seq:
+        raise Failed("restart gap did not name where delivery resumes on the new stream")
     if evidence.requested_cursor.split(":", 1)[0] == evidence.resumed_cursor.split(":", 1)[0]:
         raise Failed("daemon restart reused the old stream identifier")
     if "watch gap" not in evidence.restart_text:
@@ -259,6 +263,7 @@ def selftest() -> int:
         ),
         replace(valid, gap_requested=new),
         replace(valid, gap_live=old),
+        replace(valid, gap_live="22222222-2222-2222-2222-222222222222:0:9"),
         replace(valid, resumed_cursor=old, gap_live=old),
         replace(valid, restart_text="fixture reply 4\n\"step\":\"ended\""),
         replace(valid, restart_text=valid.restart_text + "\nfixture reply 2"),

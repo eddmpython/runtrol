@@ -62,6 +62,13 @@ its measured architecture, and the gate harness.
 - The PC pairing identity persists across restarts only as a Windows CurrentUser DPAPI blob, so the
   raw Noise private key never rests on disk and other machine accounts cannot read it.
 
+### Fixed
+
+- The conversation pane no longer freezes after one reply chunk larger than the reconnect window.
+  A reconnect that lands behind such a chunk now shows the explicit gap and still receives the
+  retained tail of the conversation, including the turn's ending, instead of waiting forever for
+  output that had already finished.
+
 ### Changed
 
 - Modularity, clean code, security, hygiene, and budget are named gates on a pass or fail

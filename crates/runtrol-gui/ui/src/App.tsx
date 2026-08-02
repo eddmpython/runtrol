@@ -236,9 +236,20 @@ export function App() {
     current.view = started.view;
     current.cursor = started.startsAt;
     current.over = null;
+    // The subscription boundary in the trace names what was asked and what the daemon answered, so a
+    // reconnect that lands in a gap is attributable from the trace alone (measured: a silent gap hid
+    // a skipped turn for a whole failing journey).
+    const cursorWord = (cursor: WatchCursor | null | undefined) =>
+      cursor ? `${cursor.epoch}:${cursor.seq}` : "-";
+    trace(
+      `watch ack view=${started.view} after=${cursorWord(after)} starts=${cursorWord(started.startsAt)} `
+        + `live=${cursorWord(started.liveAt)} gap=${started.gap ? cursorWord(started.gap.requested) : "none"}`,
+    );
     if (started.gap) {
+      // The cursor stays at startsAt: the daemon replays its retained suffix after a gap, and moving
+      // to liveAt here (as this branch once did) declared that replay a discontinuity, reconnected
+      // out of it, and froze the pane on a turn that had already ended.
       feed.status("연결이 끊긴 동안 보관 한계를 넘은 출력이 있어 빈 구간을 표시한다");
-      current.cursor = started.liveAt;
     }
     const continued = await askForSelection<null>(selection, "continue_watch", { view: started.view });
     if (!continued || applyAnswer(continued) === undefined) {

@@ -1184,11 +1184,21 @@ mod tests {
                 live_at,
                 gap: Some(gap),
             } => {
-                assert_eq!(starts_at, live_at);
+                // The gap names the unreachable request, and delivery still resumes at the retained
+                // suffix rather than skipping to live: the ring holds the session's one event, so
+                // the acknowledgement starts there and the event itself follows.
                 assert_eq!(gap.requested, wrong_stream);
-                assert_eq!(gap.live_at, live_at);
+                assert_eq!(gap.live_at, starts_at);
+                assert_eq!(starts_at.seq, 0);
+                assert_eq!(live_at.seq, 1);
             }
             other => panic!("expected a visible stream gap, got {other:?}"),
+        }
+        match receive(&mut mismatched).await {
+            Response::Event { payload, .. } => {
+                assert!(payload.as_str().contains("\"seq\":0"));
+            }
+            other => panic!("expected the retained suffix to replay after the gap, got {other:?}"),
         }
 
         running.stop();

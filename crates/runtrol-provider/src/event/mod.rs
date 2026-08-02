@@ -135,7 +135,9 @@ pub struct WatchCursor {
 pub struct WatchGap {
     /// The boundary the watcher requested.
     pub requested: WatchCursor,
-    /// The first boundary from which live delivery can continue now.
+    /// The first boundary from which delivery resumes: the retained replay suffix when the window
+    /// still holds one, or the live boundary when it does not. Everything between `requested` and
+    /// this position is the gap.
     pub live_at: WatchCursor,
 }
 

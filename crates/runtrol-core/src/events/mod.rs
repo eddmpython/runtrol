@@ -340,14 +340,32 @@ impl SessionHub {
                     cursor,
                     None,
                 ),
-                Reach::Gap => (
-                    VecDeque::new(),
-                    live_at,
-                    Some(WatchGap {
-                        requested: cursor,
-                        live_at,
-                    }),
-                ),
+                Reach::Gap => {
+                    // The requested boundary is unreachable, but the ring still holds a dense recent
+                    // suffix, and that tail is delivered with the explicit gap in front of it. Skipping
+                    // to the live boundary instead was measured to freeze a watcher forever: a turn
+                    // whose large output evicted the window had already ended, so nothing live ever
+                    // arrived and the events the ring did hold were never shown.
+                    let replay: VecDeque<_> = self
+                        .ring
+                        .frames()
+                        .cloned()
+                        .map(WatchEvent::encode)
+                        .collect();
+                    let starts_at = replay.front().map_or(live_at, |frame| WatchCursor {
+                        stream: self.stream,
+                        epoch: frame.event().epoch,
+                        seq: frame.event().seq,
+                    });
+                    (
+                        replay,
+                        starts_at,
+                        Some(WatchGap {
+                            requested: cursor,
+                            live_at: starts_at,
+                        }),
+                    )
+                }
             },
         };
         SessionView {
@@ -638,6 +656,38 @@ mod tests {
         let current = hub.view(Some(live_at));
         assert_eq!(current.start().gap, None);
         assert_eq!(current.start().live_at, live_at);
+    }
+
+    #[test]
+    fn a_gap_still_replays_the_retained_suffix_after_an_unretainable_frame() {
+        // The measured freeze: a frame larger than the ring cleared the window mid-turn, the watcher
+        // reconnected behind the loss marker, and the old gap branch skipped to live with nothing to
+        // deliver although the ring held the turn's ending. The gap must carry the retained tail.
+        let mut hub = SessionHub::new(SessionId::now());
+        hub.publish(10, a_body("{}"));
+        let behind = hub.live_at();
+        let huge = format!(
+            "{{\"filler\":\"{}\"}}",
+            "x".repeat(crate::events::ring::RING_BYTES)
+        );
+        hub.publish(20, a_body(&huge));
+        hub.publish(30, a_body("{}"));
+        hub.publish(40, a_body("{}"));
+
+        let mut view = hub.view(Some(behind));
+        let start = view.start();
+        let gap = start.gap.expect("crossing the loss marker is a gap");
+        assert_eq!(gap.requested, behind);
+        assert_eq!(
+            start.starts_at.seq, 2,
+            "delivery resumes at the retained suffix"
+        );
+        assert_eq!(gap.live_at, start.starts_at);
+        let delivered = (0..2)
+            .map(|_| watch_event(view.try_recv().expect("the retained suffix replays")).seq)
+            .collect::<Vec<_>>();
+        assert_eq!(delivered, vec![2, 3]);
+        assert!(view.try_recv().is_none());
     }
 
     #[test]
