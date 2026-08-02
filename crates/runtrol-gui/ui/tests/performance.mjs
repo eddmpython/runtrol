@@ -50,6 +50,10 @@ function mockBridge() {
   let activeWatch = null;
   let pendingReplay = null;
   let holdNextWatch = false;
+  let holdNextResume = false;
+  let pendingResume = null;
+  let holdNextPrompt = false;
+  let pendingPrompt = null;
   const pendingWatches = new Map();
   const stoppedIntents = [];
   const sessions = Array.from({ length: 240 }, (_, index) => ({
@@ -58,7 +62,7 @@ function mockBridge() {
     native: `native-${index}`,
     workspace: `C:/work/project-${Math.floor(index / 12)}`,
     folder: `project-${Math.floor(index / 12)}`,
-    hot: true,
+    hot: index !== 1,
     doing: "idle",
     looksStuck: false,
   }));
@@ -99,10 +103,25 @@ function mockBridge() {
     emit,
     frame,
     startedWith: null,
+    resumeRequests: [],
+    promptRequests: [],
+    closeRequests: [],
     watchRequests: [],
     currentWatch: () => activeWatch ? structuredClone(activeWatch) : null,
     holdNextWatch() {
       holdNextWatch = true;
+    },
+    holdNextResume() {
+      holdNextResume = true;
+    },
+    releaseResume() {
+      pendingResume?.();
+    },
+    holdNextPrompt() {
+      holdNextPrompt = true;
+    },
+    releasePrompt() {
+      pendingPrompt?.();
     },
     pendingIntent: () => pendingWatches.keys().next().value ?? null,
     stoppedIntents: () => [...stoppedIntents],
@@ -262,9 +281,59 @@ function mockBridge() {
         }
         if (command === "start") {
           window.__RUNTROL_PERF__.startedWith = args;
+          sessions.push({
+            session: "started-from-gui",
+            provider: args.provider,
+            native: null,
+            workspace: args.workspace,
+            folder: args.workspace.split(/[\\/]/).filter(Boolean).at(-1) ?? args.workspace,
+            hot: true,
+            doing: "idle",
+            looksStuck: false,
+          });
           return { outcome: "ok", value: "started-from-gui" };
         }
-        if (command === "prompt" || command === "close") {
+        if (command === "resume") {
+          window.__RUNTROL_PERF__.resumeRequests.push(args);
+          const finish = () => {
+            const index = sessions.findIndex((row) => row.native === args.native);
+            if (index < 0) return { outcome: "broken", message: "fixture native session is missing" };
+            sessions.splice(index, 1, {
+              ...sessions[index],
+              session: "resumed-from-gui",
+              hot: true,
+              doing: "idle",
+            });
+            return { outcome: "ok", value: "resumed-from-gui" };
+          };
+          if (holdNextResume) {
+            holdNextResume = false;
+            return new Promise((resolve) => {
+              pendingResume = () => {
+                pendingResume = null;
+                resolve(finish());
+              };
+            });
+          }
+          return finish();
+        }
+        if (command === "prompt") {
+          window.__RUNTROL_PERF__.promptRequests.push(args);
+          if (holdNextPrompt) {
+            holdNextPrompt = false;
+            return new Promise((resolve) => {
+              pendingPrompt = () => {
+                pendingPrompt = null;
+                resolve({ outcome: "ok", value: null });
+              };
+            });
+          }
+          return { outcome: "ok", value: null };
+        }
+        if (command === "close") {
+          window.__RUNTROL_PERF__.closeRequests.push(args);
+          const index = sessions.findIndex((row) => row.session === args.session);
+          if (index >= 0) sessions.splice(index, 1);
           return { outcome: "ok", value: null };
         }
         throw new Error(`performance bridge does not implement ${command}`);
@@ -446,6 +515,75 @@ async function convenience(page, url) {
   };
 }
 
+async function lifecycle(page, url) {
+  await page.goto(url, { waitUntil: "domcontentloaded" });
+  await page.getByTestId("session-gate-000").waitFor();
+  const unifiedProviders = await page.evaluate(() => {
+    const text = document.body.textContent ?? "";
+    return text.includes("provider-a") && text.includes("provider-b");
+  });
+
+  await startWithoutChoosingProvider(page, "C:/work/started-project");
+  await page.getByTestId("session-started-from-gui").waitFor();
+  await waitFor(page, () => window.__RUNTROL_PERF__.currentWatch()?.session === "started-from-gui");
+  const startOpened = await page.getByTestId("conversation-pane").isVisible();
+
+  await page.evaluate(() => window.__RUNTROL_PERF__.holdNextResume());
+  await page.getByTestId("session-gate-001").click();
+  await page.getByText("공급자 준비 중", { exact: true }).waitFor();
+  const composer = page.locator('[contenteditable="true"]');
+  await composer.fill("재개 중 초안");
+  await composer.press("Enter");
+  const shellStayedVisible = await page.getByTestId("conversation-pane").isVisible();
+  const promptBlockedWhilePreparing = await page.evaluate(
+    () => window.__RUNTROL_PERF__.promptRequests.length === 0,
+  );
+  const preparingDraftPreserved = (await composer.textContent())?.includes("재개 중 초안") ?? false;
+
+  await page.evaluate(() => window.__RUNTROL_PERF__.releaseResume());
+  await page.getByTestId("session-resumed-from-gui").waitFor();
+  await waitFor(page, () => window.__RUNTROL_PERF__.currentWatch()?.session === "resumed-from-gui");
+  const resumeReplacedRow = await page.getByTestId("session-gate-001").count() === 0;
+
+  await composer.fill("첫 요청");
+  await page.evaluate(() => window.__RUNTROL_PERF__.holdNextPrompt());
+  await composer.press("Enter");
+  await waitFor(page, () => window.__RUNTROL_PERF__.promptRequests.length === 1);
+  await composer.fill("다음 한글 초안");
+  const editableWhileSending = await composer.getAttribute("contenteditable") === "true";
+  const nextDraftPreserved = (await composer.textContent())?.includes("다음 한글 초안") ?? false;
+  await page.evaluate(() => window.__RUNTROL_PERF__.releasePrompt());
+
+  await page.getByRole("button", { name: "목록에서 삭제", exact: true }).click();
+  const dialog = page.getByTestId("remove-session-dialog");
+  await dialog.waitFor();
+  await dialog.getByRole("button", { name: "취소", exact: true }).click();
+  const cancelMadeNoRequest = await page.evaluate(
+    () => window.__RUNTROL_PERF__.closeRequests.length === 0,
+  );
+  const cancelKeptRow = await page.getByTestId("session-resumed-from-gui").count() === 1;
+
+  await page.getByRole("button", { name: "목록에서 삭제", exact: true }).click();
+  await dialog.getByRole("button", { name: "목록에서 삭제", exact: true }).click();
+  await waitFor(page, () => window.__RUNTROL_PERF__.closeRequests.length === 1);
+  await waitFor(page, () => document.querySelector('[data-testid="session-resumed-from-gui"]') === null);
+  const deleteRemovedRow = await page.getByTestId("session-resumed-from-gui").count() === 0;
+
+  return {
+    unifiedProviders,
+    startOpened,
+    shellStayedVisible,
+    promptBlockedWhilePreparing,
+    preparingDraftPreserved,
+    resumeReplacedRow,
+    editableWhileSending,
+    nextDraftPreserved,
+    cancelMadeNoRequest,
+    cancelKeptRow,
+    deleteRemovedRow,
+  };
+}
+
 async function reconnect(page, url) {
   await page.goto(url, { waitUntil: "domcontentloaded" });
   await page.getByTestId("session-gate-000").waitFor();
@@ -506,8 +644,8 @@ async function reconnect(page, url) {
 
 async function main() {
   const mode = process.argv[2];
-  if (!new Set(["interaction", "scroll", "convenience", "reconnect"]).has(mode)) {
-    throw new Error("usage: node tests/performance.mjs interaction|scroll|convenience|reconnect");
+  if (!new Set(["interaction", "scroll", "convenience", "lifecycle", "reconnect"]).has(mode)) {
+    throw new Error("usage: node tests/performance.mjs interaction|scroll|convenience|lifecycle|reconnect");
   }
   await access(join(DIST, "index.html"));
   const browserPath = await executable();
@@ -529,7 +667,9 @@ async function main() {
         ? await scroll(page, url)
         : mode === "convenience"
           ? await convenience(page, url)
-          : await reconnect(page, url);
+          : mode === "lifecycle"
+            ? await lifecycle(page, url)
+            : await reconnect(page, url);
     process.stdout.write(`${JSON.stringify({ mode, browserPath, ...metrics })}\n`);
   } finally {
     await browser?.close();

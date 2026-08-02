@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AppShell, Theme } from "@astryxdesign/core";
+import { AlertDialog, AppShell, Theme } from "@astryxdesign/core";
 import { neutralTheme } from "@astryxdesign/theme-neutral/built";
 import brandLight from "../../../../assets/brand/lockup-light.svg";
 import brandDark from "../../../../assets/brand/lockup-dark.svg";
@@ -79,6 +79,9 @@ export function App() {
   const [workspace, setWorkspace] = useState("");
   const [starting, setStarting] = useState(false);
   const [sending, setSending] = useState(false);
+  const [preparingSelection, setPreparingSelection] = useState<number | null>(null);
+  const [removeOpen, setRemoveOpen] = useState(false);
+  const [removing, setRemoving] = useState(false);
   const [usage, setUsage] = useState<UsageGauge | null>(null);
   const [rateLimit, setRateLimit] = useState<RateLimitGauge | null>(null);
 
@@ -94,6 +97,8 @@ export function App() {
   const frameWorkerRef = useRef<Worker | null>(null);
   const frameWorkerBusyRef = useRef(false);
   const selectionRef = useRef(0);
+  const preparingSelectionRef = useRef<number | null>(null);
+  const sendingRef = useRef(false);
   const nextWatchIntentRef = useRef(0);
   const watchRef = useRef<ActiveWatch | null>(null);
   const retryTimerRef = useRef<number | null>(null);
@@ -297,6 +302,9 @@ export function App() {
     }
     selectionRef.current += 1;
     const selection = selectionRef.current;
+    preparingSelectionRef.current = null;
+    setPreparingSelection(null);
+    setRemoveOpen(false);
     if (retryTimerRef.current !== null) {
       window.clearTimeout(retryTimerRef.current);
       retryTimerRef.current = null;
@@ -324,26 +332,42 @@ export function App() {
         setNotice({ kind: "broken", message: "공급자가 아직 이 세션에 원본 식별자를 붙이지 않았다." });
         return;
       }
-      const resumedAnswer = await askForSelection<string>(selection, "resume", {
-        provider: row.provider,
-        native: row.native,
-        workspace: row.workspace,
-      });
-      if (!resumedAnswer) {
-        return;
+      preparingSelectionRef.current = selection;
+      setPreparingSelection(selection);
+      try {
+        const resumedAnswer = await askForSelection<string>(selection, "resume", {
+          provider: row.provider,
+          native: row.native,
+          workspace: row.workspace,
+        });
+        if (!resumedAnswer) {
+          return;
+        }
+        const resumed = applyAnswer(resumedAnswer);
+        if (!resumed || watchRef.current?.selection !== selection) {
+          return;
+        }
+        const resumedRow: SessionRow = {
+          ...row,
+          session: resumed,
+          hot: true,
+          doing: "idle",
+          looksStuck: false,
+        };
+        const nextRows = rowsRef.current.map((entry) => entry.session === session ? resumedRow : entry);
+        rowsRef.current = nextRows;
+        setRows(nextRows);
+        watchRef.current.session = resumed;
+        selectedRef.current = resumed;
+        setSelected(resumed);
+        feed.clear();
+        await watchSession(resumed, selection, false);
+      } finally {
+        if (preparingSelectionRef.current === selection) {
+          preparingSelectionRef.current = null;
+          setPreparingSelection(null);
+        }
       }
-      const resumed = applyAnswer(resumedAnswer);
-      if (!resumed) {
-        return;
-      }
-      if (watchRef.current?.selection !== selection) {
-        return;
-      }
-      watchRef.current.session = resumed;
-      selectedRef.current = resumed;
-      setSelected(resumed);
-      feed.clear();
-      await watchSession(resumed, selection, false);
       return;
     }
     await watchSession(session, selection, false);
@@ -597,17 +621,25 @@ export function App() {
 
   const send = useCallback(async (text: string) => {
     const session = selectedRef.current;
-    if (!session || !text.trim() || sending) {
+    if (!session || !text.trim() || sendingRef.current) {
       return;
     }
-    setDraft("");
+    if (preparingSelectionRef.current === watchRef.current?.selection) {
+      setNotice({ kind: "warning", message: "공급자를 준비 중이다. 작성한 내용은 그대로 두었다." });
+      return;
+    }
+    sendingRef.current = true;
     setSending(true);
     try {
-      await ask<null>("prompt", { session, text });
+      const accepted = await ask<null>("prompt", { session, text });
+      if (accepted !== undefined) {
+        setDraft((current) => current === text ? "" : current);
+      }
     } finally {
+      sendingRef.current = false;
       setSending(false);
     }
-  }, [ask, sending]);
+  }, [ask]);
 
   const closeSession = useCallback(async () => {
     const session = selectedRef.current;
@@ -615,31 +647,37 @@ export function App() {
     if (!session || selection === undefined) {
       return;
     }
-    const closedAnswer = await askForSelection<null>(selection, "close", { session, now: false });
-    if (!closedAnswer) {
-      return;
+    setRemoving(true);
+    try {
+      const closedAnswer = await askForSelection<null>(selection, "close", { session, now: false });
+      if (!closedAnswer) {
+        return;
+      }
+      const closed = applyAnswer(closedAnswer);
+      if (closed === undefined) {
+        return;
+      }
+      const watched = watchRef.current;
+      if (!watched || watched.session !== session || watched.selection !== selection) {
+        return;
+      }
+      if (watched.intent !== null) {
+        void invoke<Answered<null>>("stop_watch", { intent: watched.intent });
+      }
+      if (retryTimerRef.current !== null) {
+        window.clearTimeout(retryTimerRef.current);
+        retryTimerRef.current = null;
+      }
+      selectionRef.current += 1;
+      watchRef.current = null;
+      selectedRef.current = null;
+      setSelected(null);
+      setRemoveOpen(false);
+      feed.clear();
+      await refresh();
+    } finally {
+      setRemoving(false);
     }
-    const closed = applyAnswer(closedAnswer);
-    if (closed === undefined) {
-      return;
-    }
-    const watched = watchRef.current;
-    if (!watched || watched.session !== session || watched.selection !== selection) {
-      return;
-    }
-    if (watched.intent !== null) {
-      void invoke<Answered<null>>("stop_watch", { intent: watched.intent });
-    }
-    if (retryTimerRef.current !== null) {
-      window.clearTimeout(retryTimerRef.current);
-      retryTimerRef.current = null;
-    }
-    selectionRef.current += 1;
-    watchRef.current = null;
-    selectedRef.current = null;
-    setSelected(null);
-    feed.clear();
-    await refresh();
   }, [applyAnswer, askForSelection, feed, refresh]);
 
   const selectSession = useCallback((session: string) => {
@@ -680,14 +718,30 @@ export function App() {
           feed={feed}
           draft={draft}
           sending={sending}
+          preparing={preparingSelection !== null}
           usage={usage}
           rateLimit={rateLimit}
           brandLight={brandLight}
           brandDark={brandDark}
           onDraftChange={setDraft}
           onSend={(text) => void send(text)}
-          onClose={() => void closeSession()}
+          onRemove={() => setRemoveOpen(true)}
           onStart={showStart}
+        />
+        <AlertDialog
+          isOpen={removeOpen && selectedRow !== null}
+          onOpenChange={(open) => {
+            if (!removing) {
+              setRemoveOpen(open);
+            }
+          }}
+          title="이 세션을 runtrol 목록에서 삭제할까요?"
+          description="runtrol의 목록 포인터와 실행 중인 프로세스를 정리합니다. 공급자가 소유한 원본 대화는 삭제하지 않습니다."
+          cancelLabel="취소"
+          actionLabel="목록에서 삭제"
+          isActionLoading={removing}
+          onAction={() => void closeSession()}
+          data-testid="remove-session-dialog"
         />
         <StartSessionDialog
           isOpen={startOpen}

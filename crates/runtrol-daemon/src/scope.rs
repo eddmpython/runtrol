@@ -71,15 +71,10 @@ pub fn needed(request: &Request) -> Needed {
         Request::Prompt { .. } => Needed::Scope(DeviceScope::SessionInputWrite),
         Request::AnswerApproval { .. } => Needed::ApprovalResponse,
         Request::Watch { .. } => Needed::Scope(DeviceScope::SessionOutputRead),
-        // Both take work away from a turn that is running, so both need the same thing. Written apart rather
-        // than merged: they are different requests that agree today, and merging them would hide the day one of
-        // them needs something else.
-        #[expect(
-            clippy::match_same_arms,
-            reason = "interrupting and closing are different requests that need the same scope today"
-        )]
         Request::Interrupt { .. } => Needed::Scope(DeviceScope::SessionStop),
-        Request::Close { .. } => Needed::Scope(DeviceScope::SessionStop),
+        // Close also removes runtrol's durable pointer. The provider still owns its conversation, but removing
+        // the only runtrol list entry is irreversible here and therefore needs the separate delete authority.
+        Request::Close { .. } => Needed::Scope(DeviceScope::SessionDelete),
 
         Request::StopEverything => Needed::Anyone(
             "the security posture requires the panic button to work from anywhere with no permission, and the \
@@ -294,18 +289,19 @@ mod tests {
     }
 
     #[test]
-    fn stopping_a_session_and_interrupting_one_need_the_same_thing() {
-        // Both take work away from a turn that is running. Splitting them would let a device hold one and be
-        // surprised by the other, and neither is the irreversible one: removing a session from the list is
-        // `SessionDelete`, which nothing here maps to yet.
+    fn closing_a_session_needs_delete_while_interrupting_needs_stop() {
         assert_eq!(
             needed(&Request::Interrupt {
                 session: SessionId::now()
             }),
+            Needed::Scope(DeviceScope::SessionStop)
+        );
+        assert_eq!(
             needed(&Request::Close {
                 session: SessionId::now(),
                 now: true
-            })
+            }),
+            Needed::Scope(DeviceScope::SessionDelete)
         );
     }
 }

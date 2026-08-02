@@ -152,6 +152,14 @@ GATES: dict[str, tuple[str, list[str]]] = {
         "마지막 공급자와 사용량 및 한도 표시",
         [*PY, f"{HOOKS}/desktopConvenienceSmoke.py"],
     ),
+    "desktopLifecycleSmokeSelftest": (
+        "데스크톱 세션 생명주기 게이트 자체 검증",
+        [*PY, f"{HOOKS}/desktopLifecycleSmoke.py", "--selftest"],
+    ),
+    "desktopLifecycleSmoke": (
+        "시작과 재개 및 확인된 목록 삭제",
+        [*PY, f"{HOOKS}/desktopLifecycleSmoke.py"],
+    ),
     "cargoFmt": ("cargo fmt --check", ["cargo", "fmt", "--all", "--check"]),
     "cargoClippy": (
         "cargo clippy (경고 = 실패)",
@@ -295,6 +303,8 @@ SUITES: dict[str, tuple[str, ...]] = {
         "idleFootprintRatchet",
         "desktopConvenienceSmokeSelftest",
         "desktopConvenienceSmoke",
+        "desktopLifecycleSmokeSelftest",
+        "desktopLifecycleSmoke",
         "cargoFmt",
         "cargoClippy",
     ),
@@ -343,9 +353,9 @@ def skipReasonFor(name: str) -> str | None:
             return "cargo 없음"
         if not hasCargoWorkspace():
             return "Cargo.toml 없음 (부트스트랩 단계)"
-    if name in {"frontendBuild", "interactionLatencyBudget", "scrollUnderLoadSmoke", "reconnectContinuitySmoke"} and shutil.which("npm") is None:
+    if name in {"frontendBuild", "interactionLatencyBudget", "scrollUnderLoadSmoke", "reconnectContinuitySmoke", "desktopLifecycleSmoke"} and shutil.which("npm") is None:
         return "npm 없음"
-    if name in {"interactionLatencyBudget", "scrollUnderLoadSmoke", "reconnectContinuitySmoke"} and shutil.which("node") is None:
+    if name in {"interactionLatencyBudget", "scrollUnderLoadSmoke", "reconnectContinuitySmoke", "desktopLifecycleSmoke"} and shutil.which("node") is None:
         return "node 없음"
     if name == "audit" and not hasAuditCrate():
         return "tests/audit crate 없음"

@@ -681,7 +681,7 @@ async fn stop_watching(app: &tauri::AppHandle) {
     }
 }
 
-/// Stop following a session. **Not a delete**: the conversation stays with its provider.
+/// Remove runtrol's session pointer and stop following it. The provider still owns the conversation.
 #[tauri::command]
 async fn close(app: tauri::AppHandle, session: String, now: bool) -> Answered<()> {
     let Some(session) = parse_session(&session) else {

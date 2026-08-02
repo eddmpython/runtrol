@@ -2,6 +2,7 @@ import {
   Badge,
   Button,
   ChatComposer,
+  ChatSendButton,
   ChatLayout,
   ChatMessage,
   ChatMessageBubble,
@@ -27,13 +28,14 @@ type ConversationPaneProps = {
   feed: ConversationFeed;
   draft: string;
   sending: boolean;
+  preparing: boolean;
   usage: UsageGauge | null;
   rateLimit: RateLimitGauge | null;
   brandLight: string;
   brandDark: string;
   onDraftChange: (value: string) => void;
   onSend: (value: string) => void;
-  onClose: () => void;
+  onRemove: () => void;
   onStart: () => void;
 };
 
@@ -127,13 +129,14 @@ export function ConversationPane({
   feed,
   draft,
   sending,
+  preparing,
   usage,
   rateLimit,
   brandLight,
   brandDark,
   onDraftChange,
   onSend,
-  onClose,
+  onRemove,
   onStart,
 }: ConversationPaneProps) {
   if (!row) {
@@ -150,7 +153,12 @@ export function ConversationPane({
     );
   }
 
-  const statusLabel = row.looksStuck ? `${row.doing}, 응답이 없다` : row.doing;
+  const statusLabel = preparing
+    ? "공급자 준비 중"
+    : row.looksStuck
+      ? `${row.doing}, 응답이 없다`
+      : row.doing;
+  const submitLocked = preparing || sending;
   return (
     <section className="conversation" aria-label={`${row.folder} 세션`} data-testid="conversation-pane">
       <header className="conversation-header">
@@ -178,9 +186,9 @@ export function ConversationPane({
           </div>
           <div className="conversation-status">
             <StatusDot
-              variant={row.looksStuck ? "warning" : row.hot ? "success" : "neutral"}
+              variant={preparing || row.looksStuck ? "warning" : row.hot ? "success" : "neutral"}
               label={statusLabel}
-              isPulsing={row.hot && row.doing !== "idle"}
+              isPulsing={preparing || (row.hot && row.doing !== "idle")}
             />
             <Text type="supporting">{statusLabel}</Text>
           </div>
@@ -197,29 +205,49 @@ export function ConversationPane({
             />
           }
           composer={
-            <ChatComposer
-              value={draft}
-              onChange={onDraftChange}
-              onSubmit={onSend}
-              placeholder="무엇이든 요청해 보세요"
-              isDisabled={sending}
-              status={sending ? { type: "warning", message: "요청을 전달하고 있다" } : undefined}
-              headerContext={
-                <span className="composer-context" title={row.workspace}>
-                  <Text type="supporting" maxLines={1}>{row.native ?? "첫 턴 전"}</Text>
-                </span>
-              }
-              footerActions={
-                <Button
-                  label="세션 닫기"
-                  tooltip="세션 닫기"
-                  variant="ghost"
-                  size="sm"
-                  icon={<CloseIcon />}
-                  onClick={onClose}
-                />
-              }
-            />
+            <div
+              onKeyDownCapture={(event) => {
+                if (event.key !== "Enter" || event.shiftKey) {
+                  return;
+                }
+                if (event.nativeEvent.isComposing) {
+                  event.stopPropagation();
+                  return;
+                }
+                if (submitLocked) {
+                  event.preventDefault();
+                  event.stopPropagation();
+                }
+              }}
+            >
+              <ChatComposer
+                value={draft}
+                onChange={onDraftChange}
+                onSubmit={onSend}
+                placeholder="무엇이든 요청해 보세요"
+                sendButton={<ChatSendButton isDisabled={submitLocked || !draft.trim()} />}
+                status={preparing
+                  ? { type: "warning", message: "공급자를 준비 중이다. 작성한 내용은 보존된다" }
+                  : sending
+                    ? { type: "warning", message: "요청을 전달하고 있다. 계속 입력할 수 있다" }
+                    : undefined}
+                headerContext={
+                  <span className="composer-context" title={row.workspace}>
+                    <Text type="supporting" maxLines={1}>{row.native ?? "첫 턴 전"}</Text>
+                  </span>
+                }
+                footerActions={
+                  <Button
+                    label="목록에서 삭제"
+                    tooltip="runtrol 목록에서 삭제"
+                    variant="ghost"
+                    size="sm"
+                    icon={<CloseIcon />}
+                    onClick={onRemove}
+                  />
+                }
+              />
+            </div>
           }
         >
           <ConversationMessages feed={feed} isStreaming={row.hot && row.doing !== "idle"} />
