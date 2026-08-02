@@ -32,6 +32,7 @@ import time
 from dataclasses import dataclass, replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from typing import IO
 
 import genericAcpSmoke as acp
 
@@ -358,6 +359,24 @@ def completeTurn(
         encoding="utf-8",
         errors="replace",
     )
+    # Both pipes are drained while the turn runs. An undrained pipe fills at the platform's buffer size
+    # (measured: the resumed session's replayed history exceeds it on Windows), which blocks the watcher
+    # mid-event and makes the terminal declaration vanish with the terminate below.
+    watched_lines: list[str] = []
+    turn_ended = threading.Event()
+
+    def drain(stream: IO[str] | None) -> None:
+        for line in stream or ():
+            watched_lines.append(line)
+            if '"step":"ended"' in line and '"stop":"endTurn"' in line:
+                turn_ended.set()
+
+    readers = [
+        threading.Thread(target=drain, args=(watcher.stdout,), daemon=True),
+        threading.Thread(target=drain, args=(watcher.stderr,), daemon=True),
+    ]
+    for reader in readers:
+        reader.start()
     try:
         time.sleep(0.25)
         requests_before = model.requests
@@ -378,9 +397,14 @@ def completeTurn(
         else:
             raise Failed("the external ACP turn did not return to idle")
 
+        # The list can say idle before the watch stream carries the provider's own declaration, so the
+        # watcher is stopped only after that declaration arrives or its bounded wait names the absence.
+        turn_ended.wait(timeout=10.0)
         watcher.terminate()
-        stdout, stderr = watcher.communicate(timeout=5.0)
-        watched = (stdout or "") + "\n" + (stderr or "")
+        watcher.wait(timeout=5.0)
+        for reader in readers:
+            reader.join(timeout=5.0)
+        watched = "".join(watched_lines)
         requests_after = model.requests
         if requests_after <= requests_before:
             raise Failed(

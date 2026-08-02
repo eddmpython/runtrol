@@ -45,6 +45,12 @@ WATCH_ACK_RE = re.compile(
     r"^watching  [0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}:"
     r"(?P<epoch>0|[1-9][0-9]*):(?P<seq>0|[1-9][0-9]*)$"
 )
+# The runtrol-owned reconnect boundary printed before every event payload. Transport metadata, not a
+# provider line, so it carries no supervision fact; a malformed one is a protocol fault like any other.
+WATCH_EVENT_RE = re.compile(
+    r"^watch event  next [0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}:"
+    r"(?P<epoch>0|[1-9][0-9]*):(?P<seq>0|[1-9][0-9]*)$"
+)
 
 
 class Failed(Exception):
@@ -228,6 +234,23 @@ def selftest() -> int:
     )
     if any((fact := watchFact(line, target, session, False)) is None or fact.kind == "ready" for line in malformed_acks):
         print("[claudeApprovalSmoke:selftest] FAIL. a malformed acknowledgement looked ready.", file=sys.stderr)
+        return 2
+    boundary = "watch event  next 0198f0cf-22dc-7c11-94d6-f514bf512dd3:7:12\n"
+    if watchFact(boundary, target, session, True) is not None:
+        print("[claudeApprovalSmoke:selftest] FAIL. the runtrol event boundary line became a fact.", file=sys.stderr)
+        return 2
+    broken_boundaries = (
+        "watch event  next not-a-uuid:7:12\n",
+        "watch event  next 0198f0cf-22dc-7c11-94d6-f514bf512dd3:4294967296:12\n",
+        "watch event  next 0198f0cf-22dc-7c11-94d6-f514bf512dd3:7:12 extra\n",
+        "watch gap  requested 0198f0cf-22dc-7c11-94d6-f514bf512dd3:7:2  live 0198f0cf-22dc-7c11-94d6-f514bf512dd3:7:12\n",
+        "watch lagged  reconnect after 0198f0cf-22dc-7c11-94d6-f514bf512dd3:7:12\n",
+    )
+    if any(
+        (fact := watchFact(line, target, session, True)) is None or fact.kind != "fault"
+        for line in broken_boundaries
+    ):
+        print("[claudeApprovalSmoke:selftest] FAIL. a broken or gapped boundary line was not a fault.", file=sys.stderr)
         return 2
 
     print("[claudeApprovalSmoke:selftest] OK. evidence, parsers, ordering, and cleanup defects are red.")
@@ -719,6 +742,17 @@ def watchFact(line: str, target: Path, session: str, ready_sent: bool) -> WatchF
         and int(acknowledgement.group("seq")) <= 0xFFFF_FFFF_FFFF_FFFF
     ):
         return WatchFact("ready") if not ready_sent else None
+    boundary_line = WATCH_EVENT_RE.fullmatch(line.rstrip("\r\n"))
+    if boundary_line is not None:
+        in_range = (
+            int(boundary_line.group("epoch")) <= 0xFFFF_FFFF
+            and int(boundary_line.group("seq")) <= 0xFFFF_FFFF_FFFF_FFFF
+        )
+        return None if in_range else WatchFact("fault")
+    if line.rstrip("\r\n").startswith(("watch ", "watching")):
+        # A gap, a lag, or a malformed transport line means this watcher can no longer claim it saw
+        # every event, and a journey that must observe the exact approval boundary cannot continue.
+        return WatchFact("fault")
     try:
         event = json.loads(line)
     except json.JSONDecodeError:
