@@ -9,6 +9,11 @@ repository.workspace = true
 authors.workspace = true
 publish = false
 
+[features]
+# Cargo's profile does not choose Tauri's embedded asset protocol. Product-window builds opt into this feature
+# explicitly so a release binary cannot silently point at the development server.
+custom-protocol = ["tauri/custom-protocol"]
+
 [build-dependencies]
 # Tauri 의 빌드 단계. tauri.conf.json 을 읽어 런타임이 기대하는 context 를 만든다.
 tauri-build = { workspace = true }

@@ -160,6 +160,34 @@ GATES: dict[str, tuple[str, list[str]]] = {
         "시작과 재개 및 확인된 목록 삭제",
         [*PY, f"{HOOKS}/desktopLifecycleSmoke.py"],
     ),
+    "desktopTextInputSmokeSelftest": (
+        "데스크톱 텍스트 입력 게이트 자체 검증",
+        [*PY, f"{HOOKS}/desktopTextInputSmoke.py", "--selftest"],
+    ),
+    "desktopTextInputSmoke": (
+        "Astryx 조합 입력과 선택 및 복사",
+        [*PY, f"{HOOKS}/desktopTextInputSmoke.py"],
+    ),
+    "desktopProductBuild": (
+        "production GUI와 workload fixture 단일 빌드",
+        [*PY, f"{HOOKS}/guiMemoryContract.py", "--build"],
+    ),
+    "desktopConsolePolicySelftest": (
+        "GUI 콘솔 정책 게이트 자체 검증",
+        [*PY, f"{HOOKS}/desktopConsolePolicy.py", "--selftest"],
+    ),
+    "desktopConsolePolicy": (
+        "GUI 전용 콘솔 숨김과 공유 콘솔 보존",
+        [*PY, f"{HOOKS}/desktopConsolePolicy.py", "--built-product"],
+    ),
+    "actualShellSmokeSelftest": (
+        "실제 제품 창 게이트 자체 검증",
+        [*PY, f"{HOOKS}/actualShellSmoke.py", "--selftest"],
+    ),
+    "actualShellSmoke": (
+        "제품 창의 Rust 명령과 로컬 IPC 및 이벤트 직렬화",
+        [*PY, f"{HOOKS}/actualShellSmoke.py", "--built-product"],
+    ),
     "desktopThinBoundarySelftest": (
         "데스크톱 무대화 경계 자체 검증",
         [*PY, f"{HOOKS}/desktopThinBoundary.py", "--selftest"],
@@ -175,6 +203,10 @@ GATES: dict[str, tuple[str, list[str]]] = {
     "desktopPersistenceSmoke": (
         "새로고침 뒤 대화 프레임 비저장",
         [*PY, f"{HOOKS}/desktopPersistenceSmoke.py"],
+    ),
+    "guiMemoryContractSelftest": (
+        "production GUI memory ratchet selftest",
+        [*PY, f"{HOOKS}/guiMemoryContract.py", "--selftest"],
     ),
     "cargoFmt": ("cargo fmt --check", ["cargo", "fmt", "--all", "--check"]),
     "cargoClippy": (
@@ -210,6 +242,10 @@ GATES: dict[str, tuple[str, list[str]]] = {
     "cargoBuild": (
         "memory budget gate product binary",
         ["cargo", "build", "-p", "runtrol", "--bin", "runtrol"],
+    ),
+    "guiMemoryContract": (
+        "production GUI and WebView memory smoke",
+        [*PY, f"{HOOKS}/guiMemoryContract.py", "--profile", "smoke", "--record-auto"],
     ),
     "cargoTest": ("cargo test", ["cargo", "test", "--all"]),
     "genericAcpSmokeSelftest": (
@@ -321,12 +357,45 @@ SUITES: dict[str, tuple[str, ...]] = {
         "desktopConvenienceSmoke",
         "desktopLifecycleSmokeSelftest",
         "desktopLifecycleSmoke",
+        "desktopTextInputSmokeSelftest",
+        "desktopTextInputSmoke",
+        "desktopProductBuild",
+        "desktopConsolePolicySelftest",
+        "desktopConsolePolicy",
+        "actualShellSmokeSelftest",
+        "actualShellSmoke",
         "desktopThinBoundarySelftest",
         "desktopThinBoundary",
         "desktopPersistenceSmokeSelftest",
         "desktopPersistenceSmoke",
+        "guiMemoryContractSelftest",
         "cargoFmt",
         "cargoClippy",
+    ),
+    "desktop": (
+        "frontendBuildSelftest",
+        "frontendBuild",
+        "interactionLatencyBudgetSelftest",
+        "interactionLatencyBudget",
+        "scrollUnderLoadSmokeSelftest",
+        "scrollUnderLoadSmoke",
+        "reconnectContinuitySmokeSelftest",
+        "reconnectContinuitySmoke",
+        "desktopConvenienceSmokeSelftest",
+        "desktopConvenienceSmoke",
+        "desktopLifecycleSmokeSelftest",
+        "desktopLifecycleSmoke",
+        "desktopTextInputSmokeSelftest",
+        "desktopTextInputSmoke",
+        "desktopProductBuild",
+        "desktopConsolePolicySelftest",
+        "desktopConsolePolicy",
+        "actualShellSmokeSelftest",
+        "actualShellSmoke",
+        "desktopPersistenceSmokeSelftest",
+        "desktopPersistenceSmoke",
+        "guiMemoryContractSelftest",
+        "guiMemoryContract",
     ),
     "preflight": tuple(GATES),
 }
@@ -337,6 +406,8 @@ CARGO_GATES = frozenset(
         "cargoClippy",
         "clippyCrossCfg",
         "cargoBuild",
+        "desktopProductBuild",
+        "guiMemoryContract",
         "cargoTest",
         "genericAcpSmokeSelftest",
         "genericAcpSmoke",
@@ -349,6 +420,8 @@ CARGO_GATES = frozenset(
         "liveMemoryBudget",
         "idleFootprintRatchet",
         "resilienceFaultInjection",
+        "actualShellSmoke",
+        "desktopConsolePolicy",
         "audit",
         "cargoShear",
         "cargoDeny",
@@ -373,12 +446,31 @@ def skipReasonFor(name: str) -> str | None:
             return "cargo 없음"
         if not hasCargoWorkspace():
             return "Cargo.toml 없음 (부트스트랩 단계)"
-    if name in {"frontendBuild", "interactionLatencyBudget", "scrollUnderLoadSmoke", "reconnectContinuitySmoke", "desktopLifecycleSmoke", "desktopPersistenceSmoke"} and shutil.which("npm") is None:
+    if name in {
+        "frontendBuild",
+        "interactionLatencyBudget",
+        "scrollUnderLoadSmoke",
+        "reconnectContinuitySmoke",
+        "desktopLifecycleSmoke",
+        "desktopTextInputSmoke",
+        "desktopConsolePolicy",
+        "desktopPersistenceSmoke",
+        "actualShellSmoke",
+        "desktopProductBuild",
+        "guiMemoryContract",
+    } and shutil.which("npm") is None:
         return "npm 없음"
-    if name in {"interactionLatencyBudget", "scrollUnderLoadSmoke", "reconnectContinuitySmoke", "desktopLifecycleSmoke", "desktopPersistenceSmoke"} and shutil.which("node") is None:
+    if name in {"interactionLatencyBudget", "scrollUnderLoadSmoke", "reconnectContinuitySmoke", "desktopLifecycleSmoke", "desktopTextInputSmoke", "desktopPersistenceSmoke"} and shutil.which("node") is None:
         return "node 없음"
     if name == "audit" and not hasAuditCrate():
         return "tests/audit crate 없음"
+    if name in {
+        "actualShellSmoke",
+        "desktopConsolePolicy",
+        "desktopProductBuild",
+        "guiMemoryContract",
+    } and sys.platform != "win32":
+        return "실제 제품 창 게이트의 첫 러너는 Windows"
     if name == "cargoShear" and shutil.which("cargo-shear") is None:
         return "cargo-shear 미설치 (cargo binstall cargo-shear)"
     if name == "cargoDeny" and shutil.which("cargo-deny") is None:

@@ -20,12 +20,23 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+    inputs:
+      interactiveIme:
+        description: Run the production Korean IME gate on a configured interactive Windows runner
+        required: false
+        type: boolean
+        default: false
+      guiMemoryCampaign:
+        description: Run the 24-hour production GUI memory campaign on a self-hosted Windows runner
+        required: false
+        default: false
+        type: boolean
   schedule:
     - cron: "17 3 * * *"
 
 concurrency:
-  group: gates-${{ github.ref }}
-  cancel-in-progress: true
+  group: gates-${{ github.ref }}-${{ github.event_name }}-${{ github.event.schedule || inputs.guiMemoryCampaign || 'ordinary' }}
+  cancel-in-progress: ${{ !inputs.guiMemoryCampaign }}
 
 permissions:
   contents: read
@@ -272,6 +283,42 @@ jobs:
       - name: 시작과 재개 및 확인된 목록 삭제
         if: matrix.os == 'windows-latest'
         run: python -X utf8 tests/audit/desktopLifecycleSmoke.py
+      - name: 데스크톱 텍스트 입력 게이트 자체 검증
+        if: matrix.os == 'windows-latest'
+        run: python -X utf8 tests/audit/desktopTextInputSmoke.py --selftest
+      - name: Astryx 조합 입력과 선택 및 복사
+        if: matrix.os == 'windows-latest'
+        run: python -X utf8 tests/audit/desktopTextInputSmoke.py
+      - name: production GUI와 workload fixture 단일 빌드
+        if: matrix.os == 'windows-latest'
+        run: python -X utf8 tests/audit/guiMemoryContract.py --build
+      - name: GUI 콘솔 정책 게이트 자체 검증
+        if: matrix.os == 'windows-latest'
+        run: python -X utf8 tests/audit/desktopConsolePolicy.py --selftest
+      - name: GUI 전용 콘솔 숨김과 공유 콘솔 보존
+        if: matrix.os == 'windows-latest'
+        run: python -X utf8 tests/audit/desktopConsolePolicy.py --built-product
+      - name: 실제 제품 창 게이트 자체 검증
+        if: matrix.os == 'windows-latest'
+        run: python -X utf8 tests/audit/actualShellSmoke.py --selftest
+      - name: 제품 창의 Rust 명령과 로컬 IPC 및 이벤트 직렬화
+        if: matrix.os == 'windows-latest'
+        run: python -X utf8 tests/audit/actualShellSmoke.py --built-product
+      - name: production GUI memory gate selftest
+        if: matrix.os == 'windows-latest'
+        run: python -X utf8 tests/audit/guiMemoryContract.py --selftest
+      - name: production GUI and WebView memory smoke
+        if: matrix.os == 'windows-latest'
+        env:
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
+        run: python -X utf8 tests/audit/guiMemoryContract.py --profile smoke --record-auto
+      - uses: actions/upload-artifact@v4
+        if: matrix.os == 'windows-latest'
+        with:
+          name: gui-memory-smoke-${{ github.run_id }}
+          path: ${{ runner.temp }}/runtrol-gui-memory-smoke.json
+          if-no-files-found: error
       - name: 데스크톱 무대화 경계 자체 검증
         run: python -X utf8 tests/audit/desktopThinBoundary.py --selftest
       - name: 데스크톱 저장 권한과 API 경계
@@ -356,6 +403,58 @@ jobs:
         env:
           TMPDIR: ${{ matrix.os == 'macos-latest' && '/tmp' || runner.temp }}
         run: python -X utf8 tests/audit/uninstallLeavesNoTrace.py
+
+  desktopInteractive:
+    if: github.event_name == 'workflow_dispatch' && inputs.interactiveIme
+    runs-on: [self-hosted, Windows, X64, runtrol-interactive-ime]
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: crates/runtrol-gui/ui/package-lock.json
+      - name: 데스크톱 프런트엔드 의존성
+        run: npm --prefix crates/runtrol-gui/ui ci
+      - name: production Windows 한글 IME와 선택 및 복사
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/audit/desktopImeSmoke.ps1
+
+  guiMemoryCampaign:
+    if: github.event_name == 'workflow_dispatch' && inputs.guiMemoryCampaign
+    runs-on: [self-hosted, Windows, X64]
+    timeout-minutes: 1500
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: crates/runtrol-gui/ui/package-lock.json
+      - uses: Swatinem/rust-cache@v2
+      - name: production desktop dependencies
+        run: npm --prefix crates/runtrol-gui/ui ci
+      - name: production desktop bundle
+        run: python -X utf8 tests/audit/frontendBuild.py
+      - name: production GUI memory product and fixture build
+        run: python -X utf8 tests/audit/guiMemoryContract.py --build
+      - name: production GUI memory gate selftest
+        run: python -X utf8 tests/audit/guiMemoryContract.py --selftest
+      - name: 24-hour production GUI and WebView memory campaign
+        env:
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
+        run: python -X utf8 tests/audit/guiMemoryContract.py --profile campaign --record-auto
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: gui-memory-campaign-${{ github.run_id }}
+          path: ${{ runner.temp }}/runtrol-gui-memory-campaign.json
+          if-no-files-found: warn
 
   # Parser probes need no account or turn. The approval journey runs the current real CLI against a local
   # deterministic Messages endpoint, carries only a non-secret sentinel, and spends no hosted model token.

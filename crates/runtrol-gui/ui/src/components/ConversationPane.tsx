@@ -12,7 +12,7 @@ import {
   StatusDot,
   Text,
 } from "@astryxdesign/core";
-import { memo, useSyncExternalStore } from "react";
+import { memo, useEffect, useRef, useSyncExternalStore } from "react";
 import type {
   ConversationItem,
   LimitWindow,
@@ -23,9 +23,18 @@ import type {
 import type { ConversationFeed } from "../frames";
 import { AgentIcon, CloseIcon } from "../icons";
 
+type RenderCheckpoint = {
+  id: string;
+  view: number;
+  seq: number;
+  items: number;
+  characters: number;
+};
+
 type ConversationPaneProps = {
   row: SessionRow | null;
   feed: ConversationFeed;
+  checkpoint: RenderCheckpoint | null;
   draft: string;
   sending: boolean;
   preparing: boolean;
@@ -36,10 +45,12 @@ type ConversationPaneProps = {
   onDraftChange: (value: string) => void;
   onSend: (value: string) => void;
   onRemove: () => void;
+  onInputTrace: (line: string) => void;
   onStart: () => void;
 };
 
 const MAX_RENDERED_ITEMS = 48;
+const COMPOSITION_COMMIT_ENTER_GUARD_MS = 80;
 const counts = new Intl.NumberFormat("ko-KR", { maximumFractionDigits: 2 });
 
 function usageText(usage: UsageGauge): string {
@@ -96,7 +107,7 @@ function rateLimitText(rateLimit: RateLimitGauge): string {
 
 const Message = memo(function Message({ item }: { item: ConversationItem }) {
   if (item.side === "meta") {
-    return <ChatSystemMessage>{item.text}</ChatSystemMessage>;
+    return <ChatSystemMessage><span className="verbatim">{item.text}</span></ChatSystemMessage>;
   }
   const isMine = item.side === "mine";
   return (
@@ -111,15 +122,55 @@ const Message = memo(function Message({ item }: { item: ConversationItem }) {
   );
 });
 
-function ConversationMessages({ feed, isStreaming }: { feed: ConversationFeed; isStreaming: boolean }) {
+function ConversationMessages({
+  feed,
+  checkpoint,
+  isStreaming,
+  onTrace,
+}: {
+  feed: ConversationFeed;
+  checkpoint: RenderCheckpoint | null;
+  isStreaming: boolean;
+  onTrace: (line: string) => void;
+}) {
   const items = useSyncExternalStore(feed.subscribe, feed.snapshot);
   const renderedItems = items.slice(-MAX_RENDERED_ITEMS);
+  const paintSentinelRef = useRef<HTMLSpanElement>(null);
+  useEffect(() => {
+    if (!checkpoint) {
+      return;
+    }
+    let paintFrame: number | null = null;
+    const commitFrame = requestAnimationFrame(() => {
+      paintFrame = requestAnimationFrame(() => {
+        const list = paintSentinelRef.current?.parentElement;
+        if (!list) {
+          return;
+        }
+        const rendered = Array.from(list.querySelectorAll<HTMLElement>(".verbatim"));
+        const characters = rendered.reduce(
+          (total, node) => total + (node.textContent?.length ?? 0),
+          0,
+        );
+        onTrace(
+          `feed painted checkpoint=${checkpoint.id} view=${checkpoint.view} seq=${checkpoint.seq} items=${rendered.length} characters=${characters}`,
+        );
+      });
+    });
+    return () => {
+      cancelAnimationFrame(commitFrame);
+      if (paintFrame !== null) {
+        cancelAnimationFrame(paintFrame);
+      }
+    };
+  }, [checkpoint, items, onTrace]);
   if (renderedItems.length === 0) {
     return null;
   }
   return (
     <ChatMessageList density="balanced" gap={3} isStreaming={isStreaming}>
       {renderedItems.map((entry) => <Message key={entry.key} item={entry} />)}
+      <span ref={paintSentinelRef} hidden aria-hidden="true" />
     </ChatMessageList>
   );
 }
@@ -127,6 +178,7 @@ function ConversationMessages({ feed, isStreaming }: { feed: ConversationFeed; i
 export function ConversationPane({
   row,
   feed,
+  checkpoint,
   draft,
   sending,
   preparing,
@@ -137,8 +189,71 @@ export function ConversationPane({
   onDraftChange,
   onSend,
   onRemove,
+  onInputTrace,
   onStart,
 }: ConversationPaneProps) {
+  const composingRef = useRef(false);
+  const compositionEndedAtRef = useRef(Number.NEGATIVE_INFINITY);
+  const commitBreakGuardGenerationRef = useRef<number | null>(null);
+  const commitBreakGenerationRef = useRef(0);
+  const commitBreakGuardTimerRef = useRef<number | null>(null);
+  const composerHostRef = useRef<HTMLDivElement>(null);
+  const onInputTraceRef = useRef(onInputTrace);
+  onInputTraceRef.current = onInputTrace;
+  useEffect(() => {
+    const host = composerHostRef.current;
+    if (!host) {
+      return;
+    }
+    let editable: HTMLElement | null = null;
+    const resetInputLifecycle = () => {
+      composingRef.current = false;
+      compositionEndedAtRef.current = Number.NEGATIVE_INFINITY;
+      commitBreakGenerationRef.current += 1;
+      commitBreakGuardGenerationRef.current = null;
+      if (commitBreakGuardTimerRef.current !== null) {
+        window.clearTimeout(commitBreakGuardTimerRef.current);
+        commitBreakGuardTimerRef.current = null;
+      }
+    };
+    const blockCommitBreak = (event: Event) => {
+      const inputEvent = event as InputEvent;
+      const generation = commitBreakGuardGenerationRef.current;
+      if (generation === null || event.target !== editable || !inputEvent.cancelable ||
+        (inputEvent.inputType !== "insertParagraph" && inputEvent.inputType !== "insertLineBreak")) {
+        return;
+      }
+      inputEvent.preventDefault();
+      if (!inputEvent.defaultPrevented || commitBreakGuardGenerationRef.current !== generation) {
+        return;
+      }
+      commitBreakGuardGenerationRef.current = null;
+      if (commitBreakGuardTimerRef.current !== null) {
+        window.clearTimeout(commitBreakGuardTimerRef.current);
+        commitBreakGuardTimerRef.current = null;
+      }
+      onInputTraceRef.current("composer composition commit break blocked");
+    };
+    const attachEditable = () => {
+      const next = host.querySelector<HTMLElement>('[contenteditable="true"]');
+      if (next === editable) {
+        return;
+      }
+      resetInputLifecycle();
+      editable?.removeEventListener("beforeinput", blockCommitBreak, { capture: true });
+      editable = next;
+      editable?.addEventListener("beforeinput", blockCommitBreak, { capture: true });
+    };
+    attachEditable();
+    const observer = new MutationObserver(attachEditable);
+    observer.observe(host, { childList: true, subtree: true });
+    return () => {
+      observer.disconnect();
+      editable?.removeEventListener("beforeinput", blockCommitBreak, { capture: true });
+      editable = null;
+      resetInputLifecycle();
+    };
+  }, [row?.session]);
   if (!row) {
     return (
       <section className="welcome" aria-label="시작">
@@ -206,12 +321,52 @@ export function ConversationPane({
           }
           composer={
             <div
+              ref={composerHostRef}
+              onCompositionStartCapture={() => {
+                composingRef.current = true;
+                compositionEndedAtRef.current = Number.NEGATIVE_INFINITY;
+                commitBreakGenerationRef.current += 1;
+                commitBreakGuardGenerationRef.current = null;
+                if (commitBreakGuardTimerRef.current !== null) {
+                  window.clearTimeout(commitBreakGuardTimerRef.current);
+                  commitBreakGuardTimerRef.current = null;
+                }
+                onInputTrace("composer composition started");
+              }}
+              onCompositionUpdateCapture={() => onInputTrace("composer composition updated")}
+              onCompositionEndCapture={() => {
+                composingRef.current = false;
+                compositionEndedAtRef.current = performance.now();
+                onInputTrace("composer composition ended");
+              }}
+              onCopyCapture={() => onInputTrace("composer copied selection")}
               onKeyDownCapture={(event) => {
                 if (event.key !== "Enter" || event.shiftKey) {
                   return;
                 }
-                if (event.nativeEvent.isComposing) {
+                if (composingRef.current || event.nativeEvent.isComposing) {
+                  onInputTrace("composer composing enter blocked");
                   event.stopPropagation();
+                  return;
+                }
+                if (performance.now() - compositionEndedAtRef.current <= COMPOSITION_COMMIT_ENTER_GUARD_MS) {
+                  commitBreakGenerationRef.current += 1;
+                  const generation = commitBreakGenerationRef.current;
+                  commitBreakGuardGenerationRef.current = generation;
+                  if (commitBreakGuardTimerRef.current !== null) {
+                    window.clearTimeout(commitBreakGuardTimerRef.current);
+                  }
+                  onInputTrace("composer composition commit enter blocked");
+                  event.stopPropagation();
+                  const timer = window.setTimeout(() => {
+                    if (commitBreakGuardGenerationRef.current === generation) {
+                      commitBreakGuardGenerationRef.current = null;
+                    }
+                    if (commitBreakGuardTimerRef.current === timer) {
+                      commitBreakGuardTimerRef.current = null;
+                    }
+                  }, 0);
+                  commitBreakGuardTimerRef.current = timer;
                   return;
                 }
                 if (submitLocked) {
@@ -250,7 +405,12 @@ export function ConversationPane({
             </div>
           }
         >
-          <ConversationMessages feed={feed} isStreaming={row.hot && row.doing !== "idle"} />
+          <ConversationMessages
+            feed={feed}
+            checkpoint={checkpoint}
+            isStreaming={row.hot && row.doing !== "idle"}
+            onTrace={onInputTrace}
+          />
         </ChatLayout>
       </div>
     </section>

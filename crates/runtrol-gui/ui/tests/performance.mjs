@@ -105,6 +105,7 @@ function mockBridge() {
     startedWith: null,
     resumeRequests: [],
     promptRequests: [],
+    traceLines: [],
     closeRequests: [],
     watchRequests: [],
     currentWatch: () => activeWatch ? structuredClone(activeWatch) : null,
@@ -213,8 +214,11 @@ function mockBridge() {
   window.__TAURI__ = {
     core: {
       async invoke(command, args = {}) {
-        if (command === "tracing") return false;
-        if (command === "trace") return undefined;
+        if (command === "tracing") return true;
+        if (command === "trace") {
+          window.__RUNTROL_PERF__.traceLines.push(args.line);
+          return undefined;
+        }
         if (command === "sessions") {
           return { outcome: "ok", value: { sessions, warnings: [] } };
         }
@@ -626,6 +630,392 @@ async function persistence(page, url) {
   });
 }
 
+async function textInput(page, url) {
+  await page.goto(url, { waitUntil: "domcontentloaded" });
+  await page.getByTestId("session-gate-000").waitFor();
+  const composer = page.locator('[contenteditable="true"]');
+  await composer.waitFor();
+  const initial = await page.evaluate(() => {
+    const editable = document.querySelector('[contenteditable="true"]');
+    if (!(editable instanceof HTMLElement)) throw new Error("the Astryx composer is missing");
+    window.__RUNTROL_TEXT_COPY_EVENTS__ = 0;
+    editable.addEventListener("copy", () => { window.__RUNTROL_TEXT_COPY_EVENTS__ += 1; });
+    editable.focus();
+    editable.textContent = "안녕하세요";
+    editable.dispatchEvent(new InputEvent("input", {
+      bubbles: true,
+      inputType: "insertCompositionText",
+      data: "안녕하세요",
+      isComposing: true,
+    }));
+    editable.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true, data: "ㅇ" }));
+    editable.dispatchEvent(new CompositionEvent("compositionupdate", { bubbles: true, data: "안녕하세요" }));
+    editable.dispatchEvent(new KeyboardEvent("keydown", {
+      bubbles: true,
+      cancelable: true,
+      key: "Enter",
+      // WebView builds have reported false here while a compositionstart is still active. The product tracks
+      // both signals, so this fixture proves the event-field-only regression cannot submit a partial syllable.
+      isComposing: false,
+    }));
+    const preserved = editable.textContent === "안녕하세요";
+    const requestsAfterComposingEnter = window.__RUNTROL_PERF__.promptRequests.length;
+    editable.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true, data: "안녕하세요" }));
+
+    const token = document.createElement("span");
+    token.dataset.tokenSentinel = "true";
+    token.contentEditable = "false";
+    editable.append(token);
+    window.__RUNTROL_COMMIT_KEYDOWN_DEFAULT_PREVENTED__ = null;
+    window.addEventListener("keydown", (event) => {
+      queueMicrotask(() => { window.__RUNTROL_COMMIT_KEYDOWN_DEFAULT_PREVENTED__ = event.defaultPrevented; });
+    }, { capture: true, once: true });
+    return { preserved, requestsAfterComposingEnter };
+  });
+
+  await composer.press("Enter");
+  const result = await page.evaluate(async ({ preserved, requestsAfterComposingEnter }) => {
+    const editable = document.querySelector('[contenteditable="true"]');
+    if (!(editable instanceof HTMLElement)) throw new Error("the Astryx composer is missing");
+    const token = editable.querySelector('[data-token-sentinel="true"]');
+    const paragraphBlocked = window.__RUNTROL_PERF__.traceLines
+      .includes("composer composition commit break blocked");
+    const secondParagraph = new InputEvent("beforeinput", {
+      bubbles: true,
+      cancelable: true,
+      inputType: "insertParagraph",
+      data: null,
+    });
+    editable.dispatchEvent(secondParagraph);
+
+    const armCommitGuard = () => {
+      editable.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true, data: "안녕하세요" }));
+      const keydown = new KeyboardEvent("keydown", {
+        bubbles: true,
+        cancelable: true,
+        key: "Enter",
+        isComposing: false,
+      });
+      editable.dispatchEvent(keydown);
+      return keydown;
+    };
+    const lineCommitEnter = armCommitGuard();
+    const lineBreak = new InputEvent("beforeinput", {
+      bubbles: true,
+      cancelable: true,
+      inputType: "insertLineBreak",
+      data: null,
+    });
+    editable.dispatchEvent(lineBreak);
+
+    armCommitGuard();
+    const tracesBeforeNonCancelable = window.__RUNTROL_PERF__.traceLines
+      .filter((line) => line === "composer composition commit break blocked").length;
+    const nonCancelableBreak = new InputEvent("beforeinput", {
+      bubbles: true,
+      cancelable: false,
+      inputType: "insertParagraph",
+      data: null,
+    });
+    editable.dispatchEvent(nonCancelableBreak);
+    const tracesAfterNonCancelable = window.__RUNTROL_PERF__.traceLines
+      .filter((line) => line === "composer composition commit break blocked").length;
+    const afterNonCancelable = new InputEvent("beforeinput", {
+      bubbles: true,
+      cancelable: true,
+      inputType: "insertParagraph",
+      data: null,
+    });
+    editable.dispatchEvent(afterNonCancelable);
+
+    armCommitGuard();
+    const tracesBeforeUnmatched = window.__RUNTROL_PERF__.traceLines
+      .filter((line) => line === "composer composition commit break blocked").length;
+    const unmatchedInput = new InputEvent("beforeinput", {
+      bubbles: true,
+      cancelable: true,
+      inputType: "insertText",
+      data: "x",
+    });
+    editable.dispatchEvent(unmatchedInput);
+    const tracesAfterUnmatched = window.__RUNTROL_PERF__.traceLines
+      .filter((line) => line === "composer composition commit break blocked").length;
+    const afterUnmatched = new InputEvent("beforeinput", {
+      bubbles: true,
+      cancelable: true,
+      inputType: "insertParagraph",
+      data: null,
+    });
+    editable.dispatchEvent(afterUnmatched);
+
+    armCommitGuard();
+    const foreignTargetBreak = new InputEvent("beforeinput", {
+      bubbles: true,
+      cancelable: true,
+      inputType: "insertParagraph",
+      data: null,
+    });
+    token.dispatchEvent(foreignTargetBreak);
+    const afterForeignTarget = new InputEvent("beforeinput", {
+      bubbles: true,
+      cancelable: true,
+      inputType: "insertParagraph",
+      data: null,
+    });
+    editable.dispatchEvent(afterForeignTarget);
+
+    const originalSetTimeout = window.setTimeout;
+    const staleCallbacks = [];
+    window.setTimeout = (callback, delay, ...args) => {
+      if (delay === 0) {
+        staleCallbacks.push(callback);
+        return 2_146_000_000 + staleCallbacks.length;
+      }
+      return originalSetTimeout(callback, delay, ...args);
+    };
+    let staleTimerBreak;
+    try {
+      armCommitGuard();
+      armCommitGuard();
+      staleCallbacks[0]?.();
+      staleTimerBreak = new InputEvent("beforeinput", {
+        bubbles: true,
+        cancelable: true,
+        inputType: "insertParagraph",
+        data: null,
+      });
+      editable.dispatchEvent(staleTimerBreak);
+    } finally {
+      window.setTimeout = originalSetTimeout;
+    }
+
+    armCommitGuard();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    const expiredBreak = new InputEvent("beforeinput", {
+      bubbles: true,
+      cancelable: true,
+      inputType: "insertParagraph",
+      data: null,
+    });
+    editable.dispatchEvent(expiredBreak);
+
+    const shiftedEnter = new KeyboardEvent("keydown", {
+      bubbles: true,
+      cancelable: true,
+      key: "Enter",
+      shiftKey: true,
+      isComposing: false,
+    });
+    editable.dispatchEvent(shiftedEnter);
+    const shiftedBreak = new InputEvent("beforeinput", {
+      bubbles: true,
+      cancelable: true,
+      inputType: "insertLineBreak",
+      data: null,
+    });
+    editable.dispatchEvent(shiftedBreak);
+    const ordinaryBreak = new InputEvent("beforeinput", {
+      bubbles: true,
+      cancelable: true,
+      inputType: "insertParagraph",
+      data: null,
+    });
+    editable.dispatchEvent(ordinaryBreak);
+    const selection = window.getSelection();
+    const range = document.createRange();
+    range.selectNodeContents(editable);
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    editable.dispatchEvent(new ClipboardEvent("copy", { bubbles: true, cancelable: true }));
+    const selectedText = selection?.toString() ?? "";
+    return {
+      draftPreservedDuringComposition: preserved,
+      composingEnterBlocked: requestsAfterComposingEnter === 0,
+      commitEndedEnterBlocked: window.__RUNTROL_PERF__.promptRequests.length === 0,
+      commitNativeDefaultAllowed: window.__RUNTROL_COMMIT_KEYDOWN_DEFAULT_PREVENTED__ === false
+        && !lineCommitEnter.defaultPrevented,
+      commitParagraphBreakBlocked: paragraphBlocked,
+      commitLineBreakBlocked: lineBreak.defaultPrevented,
+      commitBreakOneShot: !secondParagraph.defaultPrevented,
+      nonCancelableBreakIgnored: !nonCancelableBreak.defaultPrevented
+        && tracesAfterNonCancelable === tracesBeforeNonCancelable
+        && afterNonCancelable.defaultPrevented,
+      unmatchedInputIgnored: !unmatchedInput.defaultPrevented
+        && tracesAfterUnmatched === tracesBeforeUnmatched
+        && afterUnmatched.defaultPrevented,
+      foreignTargetIgnored: !foreignTargetBreak.defaultPrevented && afterForeignTarget.defaultPrevented,
+      staleTimerPreservesNewGuard: staleTimerBreak?.defaultPrevented === true,
+      expiredGuardIgnored: !expiredBreak.defaultPrevented,
+      commitBreaksLeaveExactText: editable.textContent === "안녕하세요"
+        && !editable.textContent.includes("\r") && !editable.textContent.includes("\n"),
+      commitFallbackTraceRecorded: window.__RUNTROL_PERF__.traceLines
+        .includes("composer composition commit enter blocked"),
+      commitBreakTraceRecorded: window.__RUNTROL_PERF__.traceLines
+        .includes("composer composition commit break blocked"),
+      shiftedBreakAllowed: !shiftedEnter.defaultPrevented && !shiftedBreak.defaultPrevented,
+      ordinaryBreakAllowed: !ordinaryBreak.defaultPrevented,
+      tokenNodePreserved: token instanceof HTMLElement && token.isConnected && token.parentElement === editable,
+      selectionCreated: selectedText === "안녕하세요",
+      copyEventReached: window.__RUNTROL_TEXT_COPY_EVENTS__ === 1,
+    };
+  }, initial);
+  await page.getByTestId("session-gate-002").click();
+  await waitFor(page, () => window.__RUNTROL_PERF__.currentWatch()?.session === "gate-002");
+  await page.getByTestId("session-gate-000").click();
+  await waitFor(page, () => window.__RUNTROL_PERF__.currentWatch()?.session === "gate-000");
+  const listenerSingleAfterSessionSwitch = await page.evaluate(() => {
+    const editable = document.querySelector('[contenteditable="true"]');
+    if (!(editable instanceof HTMLElement)) throw new Error("the switched composer is missing");
+    const before = window.__RUNTROL_PERF__.traceLines
+      .filter((line) => line === "composer composition commit break blocked").length;
+    editable.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true, data: "안녕하세요" }));
+    editable.dispatchEvent(new KeyboardEvent("keydown", {
+      bubbles: true,
+      cancelable: true,
+      key: "Enter",
+      isComposing: false,
+    }));
+    const paragraph = new InputEvent("beforeinput", {
+      bubbles: true,
+      cancelable: true,
+      inputType: "insertParagraph",
+      data: null,
+    });
+    editable.dispatchEvent(paragraph);
+    const after = window.__RUNTROL_PERF__.traceLines
+      .filter((line) => line === "composer composition commit break blocked").length;
+    return paragraph.defaultPrevented && after - before === 1;
+  });
+
+  await page.waitForTimeout(120);
+  await composer.press("Enter");
+  await waitFor(page, () => window.__RUNTROL_PERF__.promptRequests.length === 1);
+  await page.evaluate(() => {
+    const editable = document.querySelector('[contenteditable="true"]');
+    if (!(editable instanceof HTMLElement)) throw new Error("the composer to unmount is missing");
+    window.__RUNTROL_OLD_EDITABLE__ = editable;
+    const originalSetTimeout = window.setTimeout;
+    window.setTimeout = (callback, delay, ...args) => {
+      if (delay === 0) {
+        window.__RUNTROL_STALE_COMMIT_TIMER__ = callback;
+        return 2_147_000_000;
+      }
+      return originalSetTimeout(callback, delay, ...args);
+    };
+    try {
+      editable.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true, data: "" }));
+      editable.dispatchEvent(new KeyboardEvent("keydown", {
+        bubbles: true,
+        cancelable: true,
+        key: "Enter",
+        isComposing: false,
+      }));
+    } finally {
+      window.setTimeout = originalSetTimeout;
+    }
+    window.__RUNTROL_UNMOUNT_BREAK_TRACES__ = window.__RUNTROL_PERF__.traceLines
+      .filter((line) => line === "composer composition commit break blocked").length;
+  });
+  await page.getByRole("button", { name: "목록에서 삭제", exact: true }).click();
+  const dialog = page.getByTestId("remove-session-dialog");
+  await dialog.waitFor();
+  await dialog.getByRole("button", { name: "목록에서 삭제", exact: true }).click();
+  await waitFor(page, () => document.querySelector('[contenteditable="true"]') === null);
+  const unmountCleanup = await page.evaluate(() => {
+    const editable = window.__RUNTROL_OLD_EDITABLE__;
+    if (!(editable instanceof HTMLElement)) return false;
+    const paragraph = new InputEvent("beforeinput", {
+      bubbles: true,
+      cancelable: true,
+      inputType: "insertParagraph",
+      data: null,
+    });
+    editable.dispatchEvent(paragraph);
+    const after = window.__RUNTROL_PERF__.traceLines
+      .filter((line) => line === "composer composition commit break blocked").length;
+    return !paragraph.defaultPrevented && after === window.__RUNTROL_UNMOUNT_BREAK_TRACES__;
+  });
+
+  await page.goto(url, { waitUntil: "domcontentloaded" });
+  await page.getByTestId("session-gate-000").waitFor();
+  await page.locator('[contenteditable="true"]').fill("조합 시작 전환");
+  await page.evaluate(() => {
+    const editable = document.querySelector('[contenteditable="true"]');
+    if (!(editable instanceof HTMLElement)) throw new Error("the composition-start composer is missing");
+    editable.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true, data: "조" }));
+  });
+  await page.getByTestId("session-gate-002").click();
+  await waitFor(page, () => window.__RUNTROL_PERF__.currentWatch()?.session === "gate-002");
+  const startSwitchBlockedBefore = await page.evaluate(() => window.__RUNTROL_PERF__.traceLines
+    .filter((line) => line === "composer composing enter blocked").length);
+  await page.locator('[contenteditable="true"]').press("Enter");
+  await waitFor(page, () => window.__RUNTROL_PERF__.promptRequests.length === 1);
+  const compositionStartSessionSwitchReset = await page.evaluate((before) => window.__RUNTROL_PERF__.traceLines
+    .filter((line) => line === "composer composing enter blocked").length === before, startSwitchBlockedBefore);
+
+  await page.goto(url, { waitUntil: "domcontentloaded" });
+  await page.getByTestId("session-gate-000").waitFor();
+  await page.locator('[contenteditable="true"]').fill("조합 종료 전환");
+  await page.evaluate(() => {
+    const editable = document.querySelector('[contenteditable="true"]');
+    if (!(editable instanceof HTMLElement)) throw new Error("the composition-end composer is missing");
+    editable.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true, data: "조" }));
+    editable.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true, data: "조합 종료 전환" }));
+  });
+  await page.getByTestId("session-gate-002").click();
+  await waitFor(page, () => window.__RUNTROL_PERF__.currentWatch()?.session === "gate-002");
+  const endSwitchMarkerBefore = await page.evaluate(() => window.__RUNTROL_PERF__.traceLines
+    .filter((line) => line === "composer composition commit enter blocked").length);
+  await page.locator('[contenteditable="true"]').press("Enter");
+  await waitFor(page, () => window.__RUNTROL_PERF__.promptRequests.length === 1);
+  const compositionEndSessionSwitchReset = await page.evaluate((before) => window.__RUNTROL_PERF__.traceLines
+    .filter((line) => line === "composer composition commit enter blocked").length === before, endSwitchMarkerBefore);
+
+  await page.goto(url, { waitUntil: "domcontentloaded" });
+  await page.getByTestId("session-gate-000").waitFor();
+  const editableRemountCompositionReset = await page.evaluate(async () => {
+    const editable = document.querySelector('[contenteditable="true"]');
+    if (!(editable instanceof HTMLElement)) throw new Error("the remount composer is missing");
+    editable.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true, data: "조" }));
+    const replacement = editable.cloneNode(true);
+    if (!(replacement instanceof HTMLElement)) return false;
+    editable.replaceWith(replacement);
+    await new Promise(requestAnimationFrame);
+    const blockedBefore = window.__RUNTROL_PERF__.traceLines
+      .filter((line) => line === "composer composing enter blocked").length;
+    let staleEnterReachedTarget = false;
+    replacement.addEventListener("keydown", () => { staleEnterReachedTarget = true; }, { once: true });
+    replacement.dispatchEvent(new KeyboardEvent("keydown", {
+      bubbles: true,
+      cancelable: true,
+      key: "Enter",
+      isComposing: false,
+    }));
+    const staleWasNotBlocked = staleEnterReachedTarget && window.__RUNTROL_PERF__.traceLines
+      .filter((line) => line === "composer composing enter blocked").length === blockedBefore;
+    replacement.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true, data: "새" }));
+    replacement.dispatchEvent(new KeyboardEvent("keydown", {
+      bubbles: true,
+      cancelable: true,
+      key: "Enter",
+      isComposing: false,
+    }));
+    const replacementStillUsesLifecycle = window.__RUNTROL_PERF__.traceLines
+      .filter((line) => line === "composer composing enter blocked").length === blockedBefore + 1;
+    replacement.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true, data: "새" }));
+    return staleWasNotBlocked && replacementStillUsesLifecycle;
+  });
+  return {
+    ...result,
+    listenerSingleAfterSessionSwitch,
+    normalEnterSubmitted: true,
+    unmountCleanup,
+    compositionStartSessionSwitchReset,
+    compositionEndSessionSwitchReset,
+    editableRemountCompositionReset,
+  };
+}
+
 async function reconnect(page, url) {
   await page.goto(url, { waitUntil: "domcontentloaded" });
   await page.getByTestId("session-gate-000").waitFor();
@@ -684,11 +1074,124 @@ async function reconnect(page, url) {
   };
 }
 
+async function retention(page, url) {
+  const limit = 256 * 1024;
+  const open = async () => {
+    await page.goto(url, { waitUntil: "domcontentloaded" });
+    await page.getByTestId("session-gate-000").waitFor();
+    await waitFor(page, () => document.body.textContent?.includes("saved tail gate-000"));
+  };
+  const emitText = (text, messageId) => page.evaluate(({ text, messageId }) => {
+    window.__RUNTROL_PERF__.emit("session-frame", {
+      session: "gate-000",
+      frame: window.__RUNTROL_PERF__.frame("gate-000", text, messageId),
+    });
+  }, { text, messageId });
+  const settleFrames = () => page.evaluate(async () => {
+    await new Promise(requestAnimationFrame);
+    await new Promise(requestAnimationFrame);
+    await new Promise(requestAnimationFrame);
+  });
+  const domMetrics = () => page.evaluate(() => {
+    const nodes = [...document.querySelectorAll(".verbatim")];
+    return {
+      items: nodes.length,
+      lengths: nodes.map((node) => node.textContent?.length ?? 0),
+      characters: nodes.reduce((total, node) => total + (node.textContent?.length ?? 0), 0),
+      first: nodes[0]?.textContent?.at(0) ?? "",
+      last: nodes.at(-1)?.textContent?.at(-1) ?? "",
+    };
+  });
+
+  await open();
+  await page.evaluate((characters) => {
+    window.__RUNTROL_PERF__.emit("session-frame", {
+      session: "gate-000",
+      frame: window.__RUNTROL_PERF__.frame(
+        "gate-000",
+        "A".repeat(characters + 100),
+        "huge-retained",
+      ),
+    });
+    window.__RUNTROL_PERF__.emit("session-frame", {
+      session: "gate-000",
+      frame: JSON.stringify({ body: { event: "turn", step: "ended", stop: "done" } }),
+    });
+  }, limit);
+  await settleFrames();
+  const hugeStatus = await domMetrics();
+
+  await open();
+  await emitText("E".repeat(limit), "exact-bound");
+  await settleFrames();
+  const exact = await domMetrics();
+
+  await open();
+  await emitText("A".repeat(100 * 1024), "multiple-a");
+  await emitText("B".repeat(100 * 1024), "multiple-b");
+  await emitText("C".repeat(100 * 1024), "multiple-c");
+  await settleFrames();
+  const multiple = await domMetrics();
+
+  await open();
+  await page.evaluate(() => { window.__RUNTROL_PERF__.traceLines.length = 0; });
+  for (let batch = 0; batch < 20; batch += 1) {
+    await page.evaluate((start) => {
+      for (let offset = 0; offset < 25; offset += 1) {
+        const index = start + offset;
+        window.__RUNTROL_PERF__.emit("session-frame", {
+          session: "gate-000",
+          frame: window.__RUNTROL_PERF__.frame(
+            "gate-000",
+            `${String(index).padStart(4, "0")}${"x".repeat(1020)}`,
+            `bounded-${index}`,
+          ),
+        });
+      }
+    }, batch * 25);
+    await settleFrames();
+  }
+  const growth = await page.evaluate(() => {
+    const applied = window.__RUNTROL_PERF__.traceLines
+      .filter((line) => line.startsWith("frame applied checkpoint="))
+      .map((line) => {
+        const match = /items=(\d+) characters=(\d+)$/.exec(line);
+        return match ? { items: Number(match[1]), characters: Number(match[2]) } : null;
+      })
+      .filter(Boolean);
+    const latest = applied.at(-1) ?? { items: 0, characters: 0 };
+    const nodes = [...document.querySelectorAll(".verbatim")];
+    return {
+      latest,
+      maximumCharacters: Math.max(0, ...applied.map((entry) => entry.characters)),
+      renderedItems: nodes.length,
+      newestVisible: nodes.at(-1)?.textContent?.startsWith("0499") ?? false,
+    };
+  });
+
+  return {
+    hugeItemAndStatus: hugeStatus.characters === limit
+      && hugeStatus.items === 2
+      && hugeStatus.first === "A",
+    exactBound: exact.characters === limit && exact.items === 1,
+    multipleItems: multiple.characters === limit
+      && multiple.items === 3
+      && multiple.lengths[0] === 56 * 1024
+      && multiple.first === "A"
+      && multiple.last === "C",
+    boundedGrowth: growth.latest.characters === limit
+      && growth.latest.items <= 400
+      && growth.maximumCharacters <= limit
+      && growth.renderedItems <= 48
+      && growth.newestVisible,
+  };
+}
+
 async function main() {
   const mode = process.argv[2];
-  if (!new Set(["interaction", "scroll", "convenience", "lifecycle", "persistence", "reconnect"]).has(mode)) {
+  if (!new Set(["interaction", "scroll", "convenience", "lifecycle", "persistence", "text-input", "reconnect", "retention"]).has(mode)) {
     throw new Error(
-      "usage: node tests/performance.mjs interaction|scroll|convenience|lifecycle|persistence|reconnect",
+      "usage: node tests/performance.mjs interaction|scroll|convenience|lifecycle|persistence|text-input|reconnect|retention",
     );
   }
   await access(join(DIST, "index.html"));
@@ -715,6 +1218,10 @@ async function main() {
             ? await lifecycle(page, url)
             : mode === "persistence"
               ? await persistence(page, url)
+            : mode === "text-input"
+              ? await textInput(page, url)
+              : mode === "retention"
+                ? await retention(page, url)
               : await reconnect(page, url);
     process.stdout.write(`${JSON.stringify({ mode, browserPath, ...metrics })}\n`);
   } finally {

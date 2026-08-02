@@ -23,6 +23,7 @@
 pub mod ask;
 pub mod view;
 
+use std::io::Write as _;
 use std::path::PathBuf;
 
 use runtrol_ipc::wire::{Request, Response};
@@ -135,8 +136,8 @@ fn tracing() -> bool {
 /// says nothing about whether it drew what it was supposed to.
 #[tauri::command]
 #[expect(
-    clippy::print_stdout,
-    reason = "the measurement channel. it is what a gate reads, and it is silent unless asked for"
+    clippy::print_stderr,
+    reason = "a requested measurement that cannot be written must remain visible to its gate"
 )]
 #[expect(
     clippy::needless_pass_by_value,
@@ -144,7 +145,10 @@ fn tracing() -> bool {
 )]
 fn trace(line: String) {
     if tracing() {
-        println!("{line}");
+        let mut stdout = std::io::stdout().lock();
+        if let Err(error) = writeln!(stdout, "{line}").and_then(|()| stdout.flush()) {
+            eprintln!("runtrol could not write a GUI trace: {error}");
+        }
     }
 }
 

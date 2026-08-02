@@ -173,11 +173,20 @@ function characterCount(items: readonly ConversationItem[]): number {
 
 function bounded(items: ConversationItem[]): ConversationItem[] {
   let result = items.slice(-MAX_VISIBLE_ITEMS);
-  while (result.length > 1 && characterCount(result) > MAX_VISIBLE_CHARACTERS) {
-    result = result.slice(1);
-  }
-  if (result.length === 1 && result[0].text.length > MAX_VISIBLE_CHARACTERS) {
-    result = [{ ...result[0], text: result[0].text.slice(-MAX_VISIBLE_CHARACTERS) }];
+  let characters = characterCount(result);
+  while (result.length > 0 && characters > MAX_VISIBLE_CHARACTERS) {
+    const excess = characters - MAX_VISIBLE_CHARACTERS;
+    const oldest = result[0];
+    if (oldest.text.length <= excess) {
+      characters -= oldest.text.length;
+      result = result.slice(1);
+      continue;
+    }
+    result = [
+      { ...oldest, text: oldest.text.slice(excess) },
+      ...result.slice(1),
+    ];
+    characters -= excess;
   }
   return result;
 }

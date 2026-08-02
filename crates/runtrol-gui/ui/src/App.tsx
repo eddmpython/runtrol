@@ -51,6 +51,14 @@ type ParsedFrameBatch = {
   frames: Array<{ pending: PendingFrame; nextExpected: WatchCursor }>;
 };
 
+export type RenderCheckpoint = {
+  id: string;
+  view: number;
+  seq: number;
+  items: number;
+  characters: number;
+};
+
 function follows(cursor: WatchCursor, next: WatchCursor): boolean {
   return cursor.stream === next.stream
     && cursor.epoch === next.epoch
@@ -84,6 +92,7 @@ export function App() {
   const [removing, setRemoving] = useState(false);
   const [usage, setUsage] = useState<UsageGauge | null>(null);
   const [rateLimit, setRateLimit] = useState<RateLimitGauge | null>(null);
+  const [renderCheckpoint, setRenderCheckpoint] = useState<RenderCheckpoint | null>(null);
 
   const selectedRef = useRef<string | null>(null);
   const rowsRef = useRef<SessionRow[]>([]);
@@ -454,6 +463,19 @@ export function App() {
         feed.append(accepted);
         watched.cursor = cursor;
         watched.retries = 0;
+        const applied = feed.snapshot();
+        const characters = applied.reduce((total, item) => total + item.text.length, 0);
+        const checkpoint = {
+          id: `${watched.view}:${cursor.seq}:${applied.length}:${characters}`,
+          view: watched.view,
+          seq: cursor.seq,
+          items: applied.length,
+          characters,
+        };
+        setRenderCheckpoint(checkpoint);
+        trace(
+          `frame applied checkpoint=${checkpoint.id} view=${checkpoint.view} seq=${checkpoint.seq} items=${checkpoint.items} characters=${checkpoint.characters}`,
+        );
         for (const frame of accepted) {
           if (frame.usage) {
             setUsage(frame.usage);
@@ -716,6 +738,7 @@ export function App() {
         <ConversationPane
           row={selectedRow}
           feed={feed}
+          checkpoint={renderCheckpoint}
           draft={draft}
           sending={sending}
           preparing={preparingSelection !== null}
@@ -724,7 +747,11 @@ export function App() {
           brandLight={brandLight}
           brandDark={brandDark}
           onDraftChange={setDraft}
-          onSend={(text) => void send(text)}
+          onSend={(text) => {
+            trace("composer submitted");
+            void send(text);
+          }}
+          onInputTrace={trace}
           onRemove={() => setRemoveOpen(true)}
           onStart={showStart}
         />

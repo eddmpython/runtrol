@@ -80,6 +80,12 @@ def selftest() -> int:
     }
     cases = (
         ("unexpected localStorage", {**clean, "frames.ts": 'localStorage.setItem("tail", frame)'}, {}, ""),
+        (
+            "duplicate basename",
+            {**clean, "components/theme.ts": 'localStorage.setItem("tail", frame)'},
+            {},
+            "",
+        ),
         ("IndexedDB", {**clean, "frames.ts": "indexedDB.open('frames')"}, {}, ""),
         (
             "second preference key",
@@ -117,7 +123,7 @@ def selftest() -> int:
 def main() -> int:
     """Inspect the production desktop sources and capability manifest."""
     files = {
-        path.name: path.read_text(encoding="utf-8")
+        path.relative_to(UI_SOURCE).as_posix(): path.read_text(encoding="utf-8")
         for path in sorted(UI_SOURCE.rglob("*"))
         if path.suffix in {".ts", ".tsx"}
     }

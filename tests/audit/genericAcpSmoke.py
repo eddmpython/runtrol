@@ -161,8 +161,7 @@ def startDaemon(binary: Path, env: dict[str, str], home: Path) -> subprocess.Pop
                 time.sleep(0.1)
             return daemon
         time.sleep(0.025)
-    daemon.terminate()
-    daemon.wait(timeout=2.0)
+    stopDaemon(daemon)
     raise Failed("the isolated daemon did not become ready")
 
 
