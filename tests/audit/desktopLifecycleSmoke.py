@@ -18,6 +18,8 @@ from desktopPerformance import measurement
 
 EXPECTED = (
     "unifiedProviders",
+    "metadataSearch",
+    "titleFallbacks",
     "startOpened",
     "shellStayedVisible",
     "promptBlockedWhilePreparing",
@@ -48,7 +50,7 @@ def selftest() -> int:
         if problems(fixture) != [name]:
             print(f"[desktopLifecycleSmoke --selftest] FAIL. {name} escaped.", file=sys.stderr)
             return 2
-    print("[desktopLifecycleSmoke --selftest] OK. all eleven regressions make the gate red.")
+    print(f"[desktopLifecycleSmoke --selftest] OK. all {len(EXPECTED)} regressions make the gate red.")
     return 0
 
 

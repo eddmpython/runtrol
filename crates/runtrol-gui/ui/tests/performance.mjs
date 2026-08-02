@@ -61,7 +61,7 @@ function mockBridge() {
     provider: index % 2 === 0 ? "provider-a" : "provider-b",
     native: `native-${index}`,
     workspace: `C:/work/project-${Math.floor(index / 12)}`,
-    folder: `project-${Math.floor(index / 12)}`,
+    folder: `folder-${Math.floor(index / 12)}`,
     hot: index !== 1,
     doing: "idle",
     looksStuck: false,
@@ -526,11 +526,59 @@ async function lifecycle(page, url) {
     const text = document.body.textContent ?? "";
     return text.includes("provider-a") && text.includes("provider-b");
   });
+  const rowLabel = (testId) => page.getByTestId(testId).evaluate((row) =>
+    Array.from(row.children)
+      .filter((child) => child.tagName === "SPAN")
+      .map((child) => child.textContent?.trim() ?? "")
+      .find(Boolean) ?? "",
+  );
+  const nativeTitleVisible = await rowLabel("session-gate-000") === "native-0";
+  const search = page.getByPlaceholder("세션 검색");
+  await search.fill("native-119");
+  await waitFor(page, () => document.querySelectorAll('[data-testid^="session-"]').length === 1);
+  const nativeSearch = await page.getByTestId("session-gate-119").count() === 1;
+  await search.fill("gate-023");
+  await waitFor(page, () => document.querySelectorAll('[data-testid^="session-"]').length === 1);
+  const sessionSearch = await page.getByTestId("session-gate-023").count() === 1;
+  await search.fill("project-3");
+  await waitFor(page, () => document.querySelectorAll('[data-testid^="session-"]').length === 12);
+  const workspaceSearch = await page.getByTestId("session-gate-036").count() === 1;
+  await search.fill("folder-7");
+  await waitFor(page, () => document.querySelectorAll('[data-testid^="session-"]').length === 12);
+  const folderSearch = await page.getByTestId("session-gate-084").count() === 1;
+  await search.fill("provider-a");
+  await waitFor(page, () => document.querySelectorAll('[data-testid^="session-"]').length === 120);
+  const providerSearch = await page.getByTestId("session-gate-000").count() === 1
+    && await page.getByTestId("session-gate-001").count() === 0;
+  await search.fill("");
+  await page.getByTestId("session-gate-000").waitFor();
+  await waitFor(page, () => window.__RUNTROL_PERF__.currentWatch()?.session === "gate-000");
+  await page.evaluate(() => window.__RUNTROL_PERF__.emit("session-frame", {
+    session: "gate-000",
+    frame: window.__RUNTROL_PERF__.frame("gate-000", "conversation-only-sentinel", "search-boundary"),
+  }));
+  await page.getByText("conversation-only-sentinel", { exact: true }).waitFor();
+  await search.fill("conversation-only-sentinel");
+  await waitFor(page, () => document.querySelectorAll('[data-testid^="session-"]').length === 0);
+  const conversationExcluded = await page.getByText("검색 결과가 없다.", { exact: true }).count() === 1;
+  await search.fill("");
+  await page.getByTestId("session-gate-000").waitFor();
+  const metadataSearch = nativeSearch
+    && sessionSearch
+    && workspaceSearch
+    && folderSearch
+    && providerSearch
+    && conversationExcluded;
 
   await startWithoutChoosingProvider(page, "C:/work/started-project");
   await page.getByTestId("session-started-from-gui").waitFor();
   await waitFor(page, () => window.__RUNTROL_PERF__.currentWatch()?.session === "started-from-gui");
   const startOpened = await page.getByTestId("conversation-pane").isVisible();
+  const startedTitle = await rowLabel("session-started-from-gui");
+  const startedFolderTitle = await page.getByTestId("conversation-pane").locator("h1").textContent();
+  const titleFallbacks = nativeTitleVisible
+    && startedTitle === "started-"
+    && startedFolderTitle === "started-project";
 
   await page.evaluate(() => window.__RUNTROL_PERF__.holdNextResume());
   await page.getByTestId("session-gate-001").click();
@@ -575,6 +623,8 @@ async function lifecycle(page, url) {
 
   return {
     unifiedProviders,
+    metadataSearch,
+    titleFallbacks,
     startOpened,
     shellStayedVisible,
     promptBlockedWhilePreparing,
