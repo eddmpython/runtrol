@@ -41,6 +41,8 @@ MAY_MUTATE_DISK = {
     "crates/runtrol-vault/src/lib.rs": "atomically creates runtrol's OS-protected machine identity file",
     "crates/runtrol-childproc/src/bin/containedParent.rs": "the containment proof binary rehearses "
     "the update rename dance against its own disposable copy, never a provider file",
+    "crates/runtrol-daemon/src/crash.rs": "the detached daemon's panic hook appends to its own "
+    "bounded crash file inside the runtrol home",
 }
 MAY_MUTATE_PREFIXES = {
     "crates/runtrol-store/src/": "the database crate owns runtrol's session pointer store",

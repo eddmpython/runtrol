@@ -14,11 +14,13 @@
 //! - [`serve`] one owner of the sessions, and a task for every connection beside it
 
 pub mod compose;
+mod crash;
 pub mod dispatch;
 pub mod scope;
 pub mod serve;
 
 pub use compose::{ComposeError, Composed};
+pub use crash::record_panics_at;
 pub use scope::{Needed, WallRefusal, allowed, needed};
 pub use serve::{MAX_BLOCKING_PROVIDER_OPERATIONS, MODEL_PREPARATION_BUDGET_MS, ServeError, serve};
 

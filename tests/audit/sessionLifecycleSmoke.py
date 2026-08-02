@@ -404,6 +404,12 @@ def main(argv: list[str]) -> int:
         exercise(binary, home, workspace, present)
     except Failed as failure:
         print(f"[sessionLifecycleSmoke] the lifecycle did not hold: {failure}", file=sys.stderr)
+        crash_log = home / "daemon-crash.log"
+        if crash_log.is_file():
+            # The daemon's own last words, read before the finally below deletes the home. Without
+            # this, a daemon that died mid-journey leaves only "stopped without answering".
+            words = crash_log.read_text(encoding="utf-8", errors="replace")[-4096:]
+            print(f"[sessionLifecycleSmoke] the daemon's crash file said:\n{words}", file=sys.stderr)
         return 2
     finally:
         # This gate's own daemon, and only ever this one: it is the daemon serving the temporary home above.

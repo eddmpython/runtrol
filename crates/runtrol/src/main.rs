@@ -154,6 +154,9 @@ fn serving() -> impl FnOnce(&tokio::runtime::Runtime) -> ExitCode {
                 return ExitCode::FAILURE;
             }
         };
+        // A detached daemon's streams go nowhere, so from here on a panic also lands in the home's
+        // bounded crash file instead of evaporating with the process.
+        runtrol_daemon::record_panics_at(composed.home.paths().daemon_crash_log().as_std_path());
         let address = composed.home.paths().endpoint().address().to_owned();
 
         // The endpoint and the serving are both on the runtime, because an endpoint has to be created there.

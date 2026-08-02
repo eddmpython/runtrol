@@ -19,11 +19,13 @@
 //! | `process-guards/` | child supervision, containing only bounded process identity records |
 //! | the probe cache | the binary-identity cache of what each installed CLI can do |
 //! | the machine identity vault | the per-user OS protector and Noise handshake assembly |
+//! | the daemon crash file | the detached daemon's panic hook writes it; the operator and gates read it |
 //! | the endpoint | the daemon binds it, the CLI connects to it |
 //!
-//! Deliberately absent: a log directory. Where runtrol's own diagnostics go has not been decided,
-//! and a named path with no decision behind it is the deferred wiring this repository refuses to
-//! carry.
+//! Deliberately absent: a general log directory. Where runtrol's ordinary diagnostics go has not
+//! been decided. The crash file is the one decided exception: a detached daemon's streams go
+//! nowhere, and one died with its reason unrecorded (measured three times), which is exactly the
+//! silence the error rules forbid.
 //!
 //! # Why the endpoint is not simply a path
 //!
@@ -54,6 +56,9 @@ const PROBE_CACHE: &str = "probe.json";
 /// The operating-system-protected long-lived machine identity.
 const MACHINE_IDENTITY: &str = "machine-identity.vault";
 
+/// Where the detached daemon's panic hook records why it died.
+const DAEMON_CRASH_LOG: &str = "daemon-crash.log";
+
 /// Directories runtrol creates when it opens a home.
 ///
 /// Created up front rather than on first write, so that `rm -rf $RUNTROL_HOME` followed by a start
@@ -75,6 +80,8 @@ pub struct Layout {
     probe_cache: AbsPath,
     /// The operating-system-protected machine identity.
     machine_identity: AbsPath,
+    /// Where the detached daemon's panic hook records why it died.
+    daemon_crash_log: AbsPath,
     /// Where the daemon listens.
     endpoint: Endpoint,
 }
@@ -101,6 +108,7 @@ impl Layout {
             process_guards: entry(PROCESS_GUARDS)?,
             probe_cache: entry(PROBE_CACHE)?,
             machine_identity: entry(MACHINE_IDENTITY)?,
+            daemon_crash_log: entry(DAEMON_CRASH_LOG)?,
             endpoint: Endpoint::of(&root)?,
             root,
         })
@@ -142,6 +150,12 @@ impl Layout {
         &self.machine_identity
     }
 
+    /// Where the detached daemon's panic hook records why it died.
+    #[must_use]
+    pub const fn daemon_crash_log(&self) -> &AbsPath {
+        &self.daemon_crash_log
+    }
+
     /// Where the daemon listens and the CLI connects.
     #[must_use]
     pub const fn endpoint(&self) -> &Endpoint {
@@ -162,6 +176,7 @@ impl Layout {
             &self.process_guards,
             &self.probe_cache,
             &self.machine_identity,
+            &self.daemon_crash_log,
         ]
     }
 }
