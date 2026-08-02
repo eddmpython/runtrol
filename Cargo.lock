@@ -2705,6 +2705,7 @@ dependencies = [
 name = "runtrol-daemon"
 version = "0.0.0"
 dependencies = [
+ "async-trait",
  "runtrol-childproc",
  "runtrol-core",
  "runtrol-drivers",
@@ -2746,6 +2747,7 @@ dependencies = [
  "tauri",
  "tauri-build",
  "thiserror 2.0.19",
+ "tokio",
 ]
 
 [[package]]
