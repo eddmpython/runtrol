@@ -94,15 +94,6 @@ FAILURE_EVIDENCE_DIR = (
 )
 FAILURE_TRACE_PATH = FAILURE_EVIDENCE_DIR / "trace.log"
 FAILURE_ERROR_PATH = FAILURE_EVIDENCE_DIR / "error.log"
-FAILURE_TRACE_PREFIXES = (
-    TRACE_NEEDLE,
-    MEASUREMENT_CLOSE_TRACE,
-    APPLIED_TRACE,
-    PAINTED_TRACE,
-    "app exit",
-    "window close requested ",
-    "window destroyed ",
-)
 CHECKPOINT_RE = re.compile(
     rf"^({re.escape(APPLIED_TRACE.strip())}|{re.escape(PAINTED_TRACE.strip())}) "
     r"checkpoint=([0-9]+:[0-9]+:[0-9]+:[0-9]+) "
@@ -574,13 +565,35 @@ def requestWindowClose(pid: int) -> None:
         raise Failed(f"could not inject WM_CLOSE into the production GUI: {ctypes.get_last_error()}")
 
 
+def holdForDiagnosis(session: str | None) -> None:
+    """Keep the failed journey alive for an operator probe when explicitly asked to.
+
+    Never set in CI. With the hold variable naming a number of seconds, the wedged daemon, fixture,
+    and window stay up so an outside connection can ask them what state they are actually in.
+    """
+    raw = os.environ.get("RUNTROL_GUI_MEMORY_HOLD_ON_FAILURE", "")
+    if not raw:
+        return
+    try:
+        seconds = min(600.0, float(raw))
+    except ValueError:
+        return
+    print(
+        f"[guiMemoryContract] holding the failed journey for {seconds:.0f}s; session={session}",
+        file=sys.stderr,
+        flush=True,
+    )
+    time.sleep(seconds)
+
+
 def preserveFailureEvidence(trace_path: Path, error_path: Path, reason: Exception) -> None:
     """Keep bounded, content-free diagnostics outside the ephemeral measurement home."""
     try:
         FAILURE_EVIDENCE_DIR.mkdir(parents=True, exist_ok=True)
-        trace_lines = trace_path.read_text(encoding="utf-8", errors="replace").splitlines()
-        allowed = [line for line in trace_lines if line.startswith(FAILURE_TRACE_PREFIXES)]
-        trace = ("\n".join(allowed) + ("\n" if allowed else "")).encode("utf-8")
+        # The journey drives only the deterministic fixture, so every trace line is runtrol-owned
+        # or gate-owned and the complete tail can travel. An earlier prefix filter hid exactly the
+        # reconnect lines a real failure needed (measured: two hosted failures shipped no cause).
+        trace = trace_path.read_text(encoding="utf-8", errors="replace").encode("utf-8")
         FAILURE_TRACE_PATH.write_bytes(trace[-FAILURE_EVIDENCE_BYTES:])
         stderr_bytes = error_path.stat().st_size if error_path.is_file() else 0
         summary = f"{type(reason).__name__}: {reason}\nproduct stderr bytes={stderr_bytes}\n"
@@ -1231,6 +1244,7 @@ def measure(
         except Exception as error:
             failure = error
             preserveFailureEvidence(trace_path, error_path, error)
+            holdForDiagnosis(session)
             raise
         finally:
             try:

@@ -39,6 +39,8 @@ MAY_MUTATE_DISK = {
     "crates/runtrol-core/src/probe/cache.rs": "atomically replaces runtrol's disposable probe cache",
     "crates/runtrol-ipc/src/transport.rs": "creates and removes runtrol's local Unix socket",
     "crates/runtrol-vault/src/lib.rs": "atomically creates runtrol's OS-protected machine identity file",
+    "crates/runtrol-childproc/src/bin/containedParent.rs": "the containment proof binary rehearses "
+    "the update rename dance against its own disposable copy, never a provider file",
 }
 MAY_MUTATE_PREFIXES = {
     "crates/runtrol-store/src/": "the database crate owns runtrol's session pointer store",
