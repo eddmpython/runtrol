@@ -38,8 +38,8 @@
 | `claudeApprovalSmoke` | 설치된 실물 Claude Code 를 production stream-json 드라이버와 실물 daemon 으로 실행하고 로컬 결정론 Messages endpoint 에 연결한다. 실제 hidden `can_use_tool` 승인 수신, 정규화된 `rejectOnce` 선택, 원생 `control_response` 소비 뒤 두 번째 model 요청, provider 선언 `endTurn`, 대상 파일 부재를 한 여정에서 검증한다. model 상대는 mock 이고 계정 인증과 hosted model 동작은 주장하지 않는다 |
 | `egressContract` | production 송신 정책으로 정확히 허용한 IP 와 port 만 실물 루프백 소켓에 연결된다. production `Noise_IK_25519_AESGCM_SHA256` 세션과 `Noise_IKpsk1_25519_AESGCM_SHA256` 페어링이 고정 static key, 링크 종류, relay origin, peer id 를 인증하며 변조와 잘못된 key, PSK, prologue 를 거절한다. 65,519 byte 경계 분할, `varint(len) || ciphertext`, REKEY 뒤 왕복까지 돈다. relay capture 와 `Debug` 에 prompt 표본이 평문으로 없고 transport 에 disk 또는 log API 가 없으며, **driver 와 store 에 벤더 세션 경로가 없다**는 정적 검사 포함 |
 | `approvalRoundtripSmoke` | 실제 permission prompt 가 폰 표면에 도달하고, 폰의 응답이 세션을 재개시킨다 |
-| `resilienceFaultInjection` | 네트워크 차단, 데몬 강제 종료, 폰 재연결 각각에서 세션이 살아남고 **출력 손실 0** |
-| `idleFootprintRatchet` | idle RSS 와 CPU 상한. **내려가기만 하는 ratchet.** 기준은 데몬 단독이고 (상주하는 것은 데몬이다), GUI 창 열림은 별도 예산으로 병기한다 |
+| `remoteResilienceFaultInjection` | 실물 폰과 원격 transport 를 연결한 상태에서 네트워크 차단과 데몬 강제 종료를 주입한다. bounded replay 안의 프레임은 exact cursor 로 이어지고, 그 밖의 모든 단절은 명시적 gap 으로 보이며, provider 공식 resume surface 로 세션을 계속할 수 있어야 한다. 아직 미구현이다 |
+| `idleFootprintRatchet` | hosted Windows, macOS, Linux 에서 실제 debug daemon 의 유휴 RSS 계약을 `memoryBudget` 정본으로 검사하고, 10 초 유휴 구간의 process CPU 누적 증가를 한 코어의 100 ms 이하로 제한한다. release live 비용이나 GUI 비용은 주장하지 않는다 |
 | `crossPlatformMatrix` | 같은 종단 스모크가 Windows·macOS·Linux 러너에서 전부 green. **Windows 잡은 WSL 없이 돈다** |
 | `cliUpdateRehearsal` | 구버전 -> 업데이트 -> 세션 정상 -> 고의로 깨진 버전 -> 자동 롤백 |
 | `appUpdateRehearsal` | 런처가 GitHub Releases 에서 서명된 업데이트를 받아 설치하고, 서명이 안 맞으면 거부한다 |
@@ -78,8 +78,11 @@
 | `noConsoleFlash` | Windows 데스크톱이 실행하는 provider 세션, 탐색 probe, 분리 daemon 이 콘솔 창을 만들지 않는다. 실제 자식 프로세스의 console handle 부재와 모든 제품 spawn 경계의 공통 정책 적용을 함께 확인한다 |
 | `northStarBoard` | 점수판의 모든 숫자가 `board.toml` 에서 계산된다. manual 근거는 manual 층까지만 점수가 되고, 그보다 높은 층은 근거 게이트가 활성 hosted CI 작업에서 실행돼야 한다. `if: false` 작업과 로컬 전용 게이트는 manual 초과 근거에서 빠진다 |
 | `readmeParity` | 4 개 언어 README 가 같은 축·같은 점수·같은 채점 규칙을 인쇄한다. 언어판이 낡으면 red |
-| `memoryBudget` | daemon idle RSS 와 세션당 증분 상한. 예산을 올리는 것은 운영자 승인 사항이다 |
-| `orphanReaping` | 데몬을 죽이면 자식 CLI 프로세스가 남지 않는다 |
+| `memoryBudget` | 실제 daemon 의 idle RSS 만 platform 과 build profile 별 상한에 대조한다. session, subscriber, live payload 증분과 CPU 는 이 게이트의 주장이 아니다 |
+| `liveMemoryBudget` | 실제 debug daemon 과 외부 ACP fixture 에 hot session 하나와 watcher 네 개를 연결한다. 900 KiB payload 의 완전 전달, baseline 대비 10 MiB 이하 peak 증가, Windows 및 macOS 48 MiB와 Linux 64 MiB total RSS, 종료 뒤 Windows 및 Linux 4 MiB와 macOS 5 MiB 이하 residual 을 검사한다. parser 입력 상한 아래의 15 MiB payload 는 live wire 에 싣지 않고 watcher 모두에게 explicit lag 를 내며, 같은 daemon 에서 session 을 세 번 연속 열어 거부한 뒤에도 residual 상한을 지켜야 한다 |
+| `reconnectContinuitySmoke` | production browser bundle 이 받아들인 frame 을 drain 한 뒤 exact cursor 로 재접속하고, stale generation 과 취소된 pending watch 가 새 view 에 섞이지 않는지 검사한다. 실제 network, daemon crash, phone 은 이 게이트의 주장이 아니다 |
+| `resilienceFaultInjection` | 실제 local IPC endpoint 를 끊은 동안 bounded ring 에 남은 fixture frame 이 exact cursor 뒤 한 번씩 replay 되는지 검사한다. 이어 daemon 을 강제 종료하고 같은 home 으로 재시작해 새 stream 의 explicit gap, provider-native identity 보존, 공식 resume 뒤 새 turn 을 확인한다. remote network, phone, transcript recovery, lossless history 는 주장하지 않는다 |
+| `orphanReaping` | Windows 에서는 job handle 종료 뒤 자식 tree 부재를 확인한다. Unix 에서는 강제 종료가 남긴 durable process identity 를 다음 supervisor 시작이 PID, kernel start identity, executable, process group 으로 재검증한 뒤 회수하고 group 부재를 확인한다. 환경 변수와 대화 데이터는 guard 에 들어가지 않는다 |
 
 <!-- gates:end -->
 

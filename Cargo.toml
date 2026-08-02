@@ -38,7 +38,7 @@ authors = ["eddmpython"]
 # 리뷰 가능한 이유가 동행한다. 오늘 라이브 인덱스에 대해 해소를 확인한 판본 목록은
 # `.claude/discussion/r2/crateTopology.md` 0 절에 남아 있다.
 [workspace.dependencies]
-# 공유 버퍼. 이벤트 payload 는 복사하지 않고 refcount 로 팬아웃한다 (04-memory-contract.md).
+# Shared event payloads are reference-counted across watchers. See docs/coreRuntime.md.
 bytes = "1.12.1"
 
 # 직렬화. serde_json 의 preserve_order 는 절대 켜지 않는다 (워크스페이스 전역 오염).
@@ -62,8 +62,7 @@ which = { version = "8.0.4", default-features = false }
 # async fn 은 dyn 이 안 된다. 런타임 비용 0, 매크로 하나.
 async-trait = "0.1.91"
 
-# 런타임. feature 는 여기서 켜지 않는다. 멤버가 자기가 쓰는 것만 얹는다
-# (01-runtime-measurements.md: 필요 없는 feature 는 코드와 OS 스레드를 산다).
+# Runtime features stay opt-in per member. Unused features add code and OS threads. See docs/coreRuntime.md.
 tokio = { version = "1.53.1", default-features = false }
 
 # Phone-facing HTTP. The guard wraps the connection before routing, so Host, Origin, browser metadata, and
@@ -81,8 +80,8 @@ hkdf = { version = "0.12.4", default-features = false }
 sha2 = { version = "0.10.9", default-features = false }
 zeroize = { version = "1.9.0", features = ["zeroize_derive"] }
 
-# 저장소. 배경 스레드가 없어서 골랐다 (03-storage-decision.md). 4.1 이 바닥이다
-# (4.0 에 -68% RSS region allocator 수정이 없고, 4.0 이전은 가변폭 튜플 인코딩이 다르다).
+# Metadata store with no background worker. Version 4.1 includes the region allocator RSS fix and is the floor.
+# Earlier versions also use a different variable-width tuple encoding. See docs/coreRuntime.md.
 redb = "4.1.0"
 
 # 플랫폼. job object (Windows) 와 fork-exec 사이 시스템 콜 (Unix).
@@ -150,8 +149,8 @@ self_named_module_files = "deny"
 opt-level = 3
 lto = "fat"
 codegen-units = 1
-# 감독자는 태스크 하나의 패닉에서 살아남는다 (04-memory-contract.md).
-# 이미 release 기본값이지만, 명시해서 미래의 abort 전환을 막는다.
+# The supervisor survives one task panic. This keeps the release default explicit and prevents a future abort switch.
+# See docs/coreRuntime.md.
 panic = "unwind"
 # debuginfo 만 버리고 심볼은 남긴다. 패닉 백트레이스가 함수 이름을 말해야
 # 버그 리포트가 쓸모 있다. 데몬에서 이건 타협 대상이 아니다.
@@ -163,9 +162,9 @@ incremental = false
 # Windows 링크 시간을 줄이면서 백트레이스는 살린다.
 debug = "line-tables-only"
 
-# `mainPlan/coreRuntime/01-runtime-measurements.md` 의 비교 숫자를 재현하는 프로파일.
-# 그 표는 panic="abort" + strip=true 로 쟀다. 그것은 **측정 조건**이지 제품 프로파일이 아니다.
-# 이 프로파일이 있는 이유는 누군가 표에 맞추려고 release 를 "고치는" 것을 막기 위해서다.
+# Reproduces the runtime comparison conditions behind docs/coreRuntime.md.
+# panic="abort" and strip=true are measurement conditions, not the product profile. Keeping this separate prevents
+# anyone from changing release settings to match a footprint experiment.
 [profile.measure]
 inherits = "release"
 panic = "abort"

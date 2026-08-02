@@ -1,6 +1,6 @@
 # desktopGui
 
-상태: 활성. `coreRuntime` 과 공개 provider adapter 경계 위에 선다. **셸은 Tauri v2 로 확정됐다** (실측, 아래).
+상태: 활성. [core runtime](../../docs/coreRuntime.md) 과 공개 provider adapter 경계 위에 선다. **셸은 Tauri v2 로 확정됐다** (실측, 아래).
 
 ## 한 문장 정의
 
@@ -17,10 +17,10 @@
 | 가져올 동작 | 왜 편한가 | runtrol 에서의 형태 |
 |---|---|---|
 | **세션 목록이 항상 왼쪽에 있다** | 어디에 있는지 찾을 필요가 없다. 위치가 고정이라 근육 기억이 생긴다 | provider 를 가로질러 하나의 목록. provider 는 행의 뱃지이지 탭이 아니다 |
-| **누르면 즉시 열린다** | 기다림을 인지하는 순간이 없다 | 가상 스크롤 + 꼬리부터 점진 로딩. transcript 전체를 안 읽는다 |
+| **누르면 즉시 열린다** | 기다림을 인지하는 순간이 없다 | 셸과 세션 메타데이터를 먼저 그리고, live 세션은 bounded recent window 를 즉시 붙인다. detached 본문은 provider 공식 resume/load 이벤트를 따른다 |
 | **새 대화 버튼이 늘 같은 자리** | 시작 비용이 0 에 가깝다 | 새 세션은 **provider 선택 없이** 시작 가능해야 한다 (마지막에 쓴 것이 기본값) |
-| **검색으로 옛 대화를 찾는다** | 목록이 길어져도 안 무섭다 | **얇음 주의**: 본문 색인을 우리가 만들지 않는다. provider 파일에 대한 on-demand 검색 |
-| **제목이 알아서 붙는다** | 이름 짓는 일을 안 시킨다 | provider 가 제목을 주면 쓰고, 없으면 첫 지시 앞부분. **우리가 요약 모델을 돌리지 않는다** |
+| **검색으로 옛 대화를 찾는다** | 목록이 길어져도 안 무섭다 | runtrol 메타데이터 검색이 기본이다. provider 가 공식 구조화 검색을 제공하고 runtime discovery 로 확인된 경우에만 본문 검색을 노출한다 |
+| **제목이 알아서 붙는다** | 이름 짓는 일을 안 시킨다 | provider 가 구조화된 제목을 주면 쓰고, 없으면 workspace 와 native session metadata 로 구분한다. 본문을 제목으로 복사하거나 요약하지 않는다 |
 | **스트리밍이 자연스럽다** | 지금 살아있다는 감각 | 프레임 스트림 그대로 렌더. 재조립 안 함 |
 
 **GPT 앱에 없는 것도 하나 더한다: 사용량과 한도가 보인다.** rate limit 대기는 이 카테고리 사용자의 일상 스트레스인데 (첫 probe 에서 71.8 초 대기 실측) 두 CLI 모두 그것을 구조화해 내준다 (`rate_limit_event` · `account/rateLimits/read`). 숨겨진 대기를 보이게 만드는 것이 편의다. "왜 안 되지" 가 "한도 리셋까지 12 분" 으로 바뀐다.
@@ -29,7 +29,7 @@
 
 ## GPT 앱에서 안 가져올 것
 
-- **메모리 증가.** 운영자가 지목한 유일한 불만이다. 대화가 쌓일수록 무거워지는 것은 **전체를 메모리에 들기 때문**이고, runtrol 은 애초에 사본을 안 갖는다 ([../coreRuntime/04-memory-contract.md](../coreRuntime/04-memory-contract.md)). 이 축이 우리가 이길 자리다
+- **대화 크기에 따른 메모리 증가.** runtrol 은 transcript 사본이나 전체 scrollback 을 소유하지 않는다. live 전달은 bounded ring 과 bounded watcher queue 안에서만 유지한다 ([core runtime](../../docs/coreRuntime.md)). 이 축이 우리가 이길 자리다
 - **대화 재해석.** GPT 앱은 자기 대화의 주인이라 마음대로 렌더링한다. runtrol 은 아니다 ([[thinPrinciple]])
 - **계정·로그인·동기화.** 우리는 로컬이다
 
@@ -58,20 +58,21 @@
 - **단발 `-p` 호출을 반복하는 설계는 금지다.** 12.5 초를 매번 문다
 - **첫 턴의 6~12 초는 사용자에게 정직하게 보인다.** 새 세션을 열면 준비 중임을 표시한다. 숨기지 않는다. (rate limit 대기가 겹치면 더 길어질 수 있고, `rate_limit_event` 가 오므로 그것도 그대로 보여준다)
 
-### cold 세션도 즉시 열린다 (지연을 없애는 게 아니라 숨긴다)
+### cold 세션도 화면은 즉시 열린다
 
-hot 상한 (8 개) 을 넘는 세션을 열면 첫 턴에 6~12 초가 붙는다. 그 순간의 경험을 설계로 못박는다: **세션을 여는 동작과 프로세스를 깨우는 동작을 분리한다.**
+hot 상한 (8 개) 을 넘는 세션을 열면 provider process 준비에 6~12 초가 붙을 수 있다. 화면을 여는 동작과 provider process 를 준비하는 동작을 분리하되, 아직 도착하지 않은 대화 본문이 이미 있는 것처럼 가장하지 않는다.
 
-1. 클릭 즉시 **transcript 를 파일에서 그린다** (위치 지정 읽기 64KiB = 1.1 ms 실측). 화면에 로딩이 없다
-2. 같은 순간 백그라운드에서 프로세스를 미리 깨운다 (첫 턴 오버헤드 6.6 초 실측)
-3. 사용자가 옛 대화를 읽는 몇 초 동안 준비가 끝난다. 입력할 때는 대부분 이미 hot 이다
-4. 아직 준비 중인데 입력하면 그 사실을 정직하게 보여준다. 숨기지 않는다
+1. 클릭 즉시 runtrol 이 소유한 세션 메타데이터와 화면 셸을 그린다
+2. live 세션이면 bounded recent window 를 붙이고, 범위 밖 cursor 는 explicit gap 으로 표시한다
+3. detached 세션이면 provider 의 공식 native resume/load surface 로 process 를 준비한다
+4. 본문은 그 process 가 내보내는 live structured event 로만 표시한다. transcript 파일 경로를 찾거나 파생하거나 읽지 않는다
+5. 아직 준비 중인데 입력하면 그 사실을 정직하게 보여준다. 숨기지 않는다
 
-**transcript 표시는 프로세스와 무관하게 항상 즉시다.** 이것이 "대화 가져오는 거랑 버벅임도 없어야" 의 구조적 답이다.
+**즉시라는 계약은 셸, 세션 메타데이터, 보유 중인 bounded live window 에 적용된다.** detached 본문 도착 시간은 provider 공식 surface 의 실제 지연으로 측정하고 표시한다.
 
 ### 상주하는 것은 데몬이다
 
-GUI 창은 열고 닫는 앱이고, **닫아도 세션은 산다** (데몬이 본체다). 메모리 계약의 유휴 6MB / 천장 48MB 는 데몬 몫이고, GUI 창이 열렸을 때의 웹뷰 비용은 별도 예산으로 병기한다 (`idleFootprintRatchet` 이 둘을 분리 측정한다). GPT 앱의 "메모리 많아지면 빡치는" 문제는 창을 닫으면 0 이 되는 구조로 답한다.
+GUI 창은 열고 닫는 앱이고, **닫아도 세션은 산다** (데몬이 본체다). 플랫폼별 debug daemon RSS 상한은 [core runtime](../../docs/coreRuntime.md) 이 정본이고 `idleFootprintRatchet` 은 daemon 유휴 비용만 측정한다. GUI 창이 열린 동안의 웹뷰 비용은 아직 별도 실측과 예산이 필요하다. GPT 앱의 "메모리 많아지면 빡치는" 문제는 창을 닫으면 GUI 비용이 사라지는 구조로 답한다.
 
 Windows 에서 `runtrol gui` 를 직접 실행할 때 이 프로세스만 붙은 새 콘솔은 즉시 숨긴다. 이미 PowerShell 이나 cmd 와 공유하는 콘솔은 숨기지 않으므로 한 바이너리의 CLI 출력은 그대로 유지된다. GUI 를 열 때마다 검은 터미널 창이 함께 뜨는 동작은 제품 동작이 아니다.
 
@@ -92,11 +93,12 @@ Windows 에서 `runtrol gui` 를 직접 실행할 때 이 프로세스만 붙은
 
 운영자 지시: "정말 속도와 비동기성도 혁신적인 파이프라인으로 진행해야 해."
 
-바닥은 이미 깔려 있다 ([../coreRuntime/](README.md)):
+바닥은 이미 깔려 있다 ([core runtime](../../docs/coreRuntime.md)):
 
-- 이벤트 로그 + u64 오프셋 -> **GUI 도 PWA 와 같은 커서를 쓴다.** 같은 세션을 PC 와 폰이 동시에 봐도 위치가 각자다
-- backpressure 는 위치를 버리되 데이터를 안 버린다 -> GUI 가 느려도 데이터가 안 사라진다
-- 위치 지정 읽기 64KiB 가 1.1ms -> **스크롤백은 메모리가 아니라 파일에서 온다**
+- bounded live ring + `WatchCursor { stream, epoch, seq }` -> **GUI 도 PWA 와 같은 커서를 쓴다.** 같은 세션을 PC 와 폰이 동시에 봐도 다음 기대 위치가 각자다
+- backpressure 를 넘긴 watcher 는 조용히 건너뛰지 않는다. 연결이 명시적으로 lagged 되고 재접속 시 retained window 또는 explicit gap 을 받는다
+- `src_end` 는 live provider stream 의 source boundary 일 뿐 transcript offset 이 아니다
+- transcript 파일 기반 scrollback 은 없다. 화면은 bounded live window 와 provider 공식 resume/load event 만 소비한다
 
 GUI 가 추가로 지켜야 할 것:
 

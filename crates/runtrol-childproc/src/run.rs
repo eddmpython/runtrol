@@ -10,8 +10,8 @@
 //! generous and it has to exist.
 //!
 //! **Bytes.** Output goes into memory, so it is bounded and truncation is reported. `--help` is a few
-//! kilobytes; a CLI in a bad state can print a great deal more, and the daemon's whole idle budget is
-//! single-digit megabytes.
+//! kilobytes; a CLI in a bad state can print a great deal more, and the daemon has a strict platform-specific
+//! memory budget.
 //!
 //! **Containment.** A probe is a child like any other. It joins the containment, so a daemon that dies does
 //! not leave it running.
@@ -24,13 +24,11 @@
 
 use core::time::Duration;
 
-use tokio::io::{AsyncRead, AsyncReadExt};
-use tokio::process::Command;
-
 use crate::argv;
-use crate::contain::Containment;
+use crate::contain::{Containment, TrackedCommand};
 use crate::error::SpawnError;
 use crate::resolve::Program;
+use tokio::io::{AsyncRead, AsyncReadExt};
 
 /// How much of a program's output runtrol will hold.
 ///
@@ -99,7 +97,7 @@ pub async fn capture(
     full.extend_from_slice(args);
     argv::check_all(&full)?;
 
-    let mut command = Command::new(program.path().as_std_path());
+    let mut command = TrackedCommand::new(program.path().as_std_path());
     command
         .args(&full)
         .stdin(std::process::Stdio::null())
@@ -108,13 +106,7 @@ pub async fn capture(
         // The child must not outlive the answer. Without this the process is reaped only when the handle is
         // dropped, and a timeout would leave it running.
         .kill_on_drop(true);
-    crate::hide_console_window(command.as_std_mut());
-    contained_by.prepare(command.as_std_mut());
-
-    let mut child = command.spawn().map_err(|error| SpawnError::Io {
-        path: program.path().to_string(),
-        detail: error.to_string(),
-    })?;
+    let (mut child, mut child_guard) = command.spawn(contained_by)?;
     let stdout = child.stdout.take().ok_or_else(|| SpawnError::Io {
         path: program.path().to_string(),
         detail: "the captured standard output pipe was not created".to_owned(),
@@ -124,33 +116,60 @@ pub async fn capture(
         detail: "the captured standard error pipe was not created".to_owned(),
     })?;
 
-    match tokio::time::timeout(within, collect(child, stdout, stderr)).await {
-        Ok(Ok(output)) => Ok(output),
-        Ok(Err(error)) => Err(SpawnError::Io {
-            path: program.path().to_string(),
-            detail: error.to_string(),
-        }),
-        // The child is killed by `kill_on_drop` as the future is dropped here, so the timeout does not leave
-        // a process behind.
-        Err(_elapsed) => Err(SpawnError::Timeout {
-            path: program.path().clone(),
-            after_ms: u64::try_from(within.as_millis()).unwrap_or(u64::MAX),
-        }),
+    match tokio::time::timeout(
+        within,
+        collect(
+            &mut child,
+            &mut child_guard,
+            stdout,
+            stderr,
+            program.path().as_str(),
+        ),
+    )
+    .await
+    {
+        Ok(result) => result,
+        Err(_elapsed) => {
+            let timeout = SpawnError::Timeout {
+                path: program.path().clone(),
+                after_ms: u64::try_from(within.as_millis()).unwrap_or(u64::MAX),
+            };
+            match child_guard.terminate(&mut child).await {
+                Ok(()) => Err(timeout),
+                Err(cleanup) => Err(SpawnError::Containment {
+                    doing: "stopping a program after its probe timed out",
+                    detail: format!("{timeout}; cleanup also failed: {cleanup}"),
+                }),
+            }
+        }
     }
 }
 
 /// Wait for a child while draining both pipes concurrently into bounded buffers.
 async fn collect(
-    mut child: tokio::process::Child,
+    child: &mut tokio::process::Child,
+    child_guard: &mut crate::contain::ChildGuard,
     stdout: tokio::process::ChildStdout,
     stderr: tokio::process::ChildStderr,
-) -> std::io::Result<Output> {
+    path: &str,
+) -> Result<Output, SpawnError> {
     let (status, stdout, stderr) =
         tokio::join!(child.wait(), read_bounded(stdout), read_bounded(stderr));
-    let (stdout, stdout_truncated) = stdout?;
-    let (stderr, stderr_truncated) = stderr?;
+    let status = status.map_err(|error| SpawnError::Io {
+        path: path.to_owned(),
+        detail: error.to_string(),
+    })?;
+    child_guard.complete()?;
+    let (stdout, stdout_truncated) = stdout.map_err(|error| SpawnError::Io {
+        path: path.to_owned(),
+        detail: error.to_string(),
+    })?;
+    let (stderr, stderr_truncated) = stderr.map_err(|error| SpawnError::Io {
+        path: path.to_owned(),
+        detail: error.to_string(),
+    })?;
     Ok(Output {
-        code: status?.code(),
+        code: status.code(),
         stdout,
         stderr,
         truncated: stdout_truncated || stderr_truncated,
@@ -263,8 +282,7 @@ mod tests {
 
     #[tokio::test]
     async fn the_byte_bound_applies_before_excess_output_is_retained() {
-        // A program in a bad state can print a great deal, and the daemon's whole idle budget is
-        // single-digit megabytes.
+        // A program in a bad state can print a great deal, while the daemon's platform budget remains fixed.
         let long = vec![b'x'; MAX_OUTPUT_BYTES * 2];
         let (kept, truncated) = read_bounded(long.as_slice()).await.expect("read bytes");
         assert_eq!(kept.len(), MAX_OUTPUT_BYTES);

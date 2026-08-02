@@ -7,11 +7,9 @@
 //!
 //! # The order is not arbitrary
 //!
-//! Containment is first, before anything could have started a child. Establishing it later would leave whatever was
-//! already running outside it on some platforms, which is the kind of partial guarantee that reads as a full one.
-//!
-//! Then the home, because everything else lives inside it. Then the providers, which is reading files and no more:
-//! nothing is probed and no process is started, so a start costs no more than reading a directory.
+//! The home is opened first, then the store's exclusive lock. Only the process holding that lock may interpret durable
+//! child identities as crash leftovers. Containment recovers those exact process groups next, before provider files
+//! are loaded and before anything can start a new child.
 //!
 //! # What composing does not do
 //!
@@ -116,16 +114,16 @@ impl Composed {
     /// runtrol's directory cannot be established. Both stop the start: a daemon that cannot contain its agents or
     /// cannot find its own files is worse than no daemon.
     pub fn assemble(home: Option<&str>, builtin: Builtin) -> Result<Self, ComposeError> {
-        // First, before any child could exist.
-        let containment = Arc::new(Containment::establish()?);
-
         let home = match home {
             Some(chosen) => RuntrolHome::open_at(chosen)?,
             None => RuntrolHome::open()?,
         };
 
-        let registry = load(&home, builtin);
         let store = Store::open(home.paths().database())?;
+        let containment = Arc::new(Containment::establish_tracked(
+            home.paths().process_guards().as_std_path(),
+        )?);
+        let registry = load(&home, builtin);
         let (granted, paired_devices) = restore_device_authority(&store)?;
         Ok(Self {
             home,

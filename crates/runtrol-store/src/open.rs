@@ -14,7 +14,7 @@ use crate::schema::{META, META_SCHEMA_VERSION, META_WRITTEN_BY, SCHEMA_VERSION};
 /// How much of the database the engine may keep in memory.
 ///
 /// The engine's own default is one gibibyte. That is a reasonable default for a database server and an absurd
-/// one for a supervisor whose entire idle budget is single-digit megabytes, so it is set here, at the only
+/// one for a supervisor with a strict tens-of-mebibytes process budget, so it is set here, at the only
 /// open call site, and pinned by a gate.
 pub const CACHE_BYTES: usize = 1024 * 1024;
 
@@ -360,8 +360,8 @@ mod tests {
 
     #[test]
     fn the_cache_is_a_supervisor_sized_budget_and_not_the_engine_default() {
-        // The engine defaults to a gibibyte. A supervisor whose whole idle budget is single-digit megabytes
-        // cannot inherit that, and this is the only place it is set.
+        // The engine defaults to a gibibyte. A bounded supervisor cannot inherit that, and this is the only place
+        // the smaller cache is set.
         assert_eq!(CACHE_BYTES, 1024 * 1024);
     }
 }

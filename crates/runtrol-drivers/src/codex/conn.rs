@@ -40,7 +40,8 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use runtrol_childproc::{Containment, Program};
+use runtrol_childproc::contain::{ChildGuard, TrackedCommand};
+use runtrol_childproc::{Containment, Program, SpawnError};
 use runtrol_provider::{ProviderError, ProviderId};
 use serde::Deserialize;
 use tokio::io::{AsyncWrite, AsyncWriteExt as _};
@@ -180,10 +181,9 @@ pub struct Connection {
     routes: Arc<Mutex<Routes>>,
     /// Lines that were not protocol frames.
     unreadable: Arc<AtomicU64>,
-    /// The child.
-    ///
-    /// Held so that dropping the connection stops the process. Never awaited on: Drop first aborts the owned reader
-    /// and then this handle's kill-on-drop closes the process side of both pipes.
+    /// The durable process-group record, dropped before the child handle so the live root can identify the group.
+    child_guard: Mutex<ChildGuard>,
+    /// The child, held so that an explicit stop can reap the process.
     child: Mutex<Child>,
     /// The stdout reader, owned rather than detached so cancellation cannot leave a task behind.
     reader: tokio::task::JoinHandle<()>,
@@ -232,7 +232,7 @@ impl Connection {
         client: &str,
         version: &str,
     ) -> Result<Self, ProviderError> {
-        let (child, stdin, stdout) = spawn(provider, program, contained_by)?;
+        let (child, child_guard, stdin, stdout) = spawn(provider, program, contained_by)?;
 
         let stdin = Arc::new(Mutex::new(stdin));
         let pending = Arc::new(Mutex::new(Pending::new()));
@@ -254,6 +254,7 @@ impl Connection {
             routes,
             unreadable,
             child: Mutex::new(child),
+            child_guard: Mutex::new(child_guard),
             reader,
         };
 
@@ -449,15 +450,16 @@ impl Connection {
     ///
     /// [`ProviderError::Io`] when the process could not be stopped.
     pub async fn stop(&self) -> Result<(), ProviderError> {
-        self.child
+        let mut child = self.child.lock().await;
+        self.child_guard
             .lock()
             .await
-            .kill()
+            .terminate(&mut child)
             .await
-            .map_err(|source| ProviderError::Io {
+            .map_err(|error| ProviderError::Io {
                 provider: self.provider,
-                doing: "stopping the provider daemon",
-                source,
+                doing: "stopping the provider daemon and its process group",
+                source: std::io::Error::other(error),
             })
     }
 }
@@ -486,8 +488,8 @@ fn spawn(
     provider: ProviderId,
     program: &Program,
     contained_by: &Containment,
-) -> Result<(Child, ChildStdin, ChildStdout), ProviderError> {
-    let mut command = tokio::process::Command::new(program.path().as_std_path());
+) -> Result<(Child, ChildGuard, ChildStdin, ChildStdout), ProviderError> {
+    let mut command = TrackedCommand::new(program.path().as_std_path());
     command
         .args(program.leading())
         .args(["app-server", "--stdio"])
@@ -499,14 +501,9 @@ fn spawn(
         // reads fills up and blocks the process it belongs to.
         .stderr(std::process::Stdio::inherit())
         .kill_on_drop(true);
-    runtrol_childproc::hide_console_window(command.as_std_mut());
-    contained_by.prepare(command.as_std_mut());
-
-    let mut child = command.spawn().map_err(|source| ProviderError::Spawn {
-        provider,
-        program: program.path().to_string(),
-        source,
-    })?;
+    let (mut child, child_guard) = command
+        .spawn(contained_by)
+        .map_err(|error| spawn_error(provider, program, error))?;
 
     let missing = |what: &str| ProviderError::Spawn {
         provider,
@@ -515,7 +512,15 @@ fn spawn(
     };
     let stdin = child.stdin.take().ok_or_else(|| missing("input"))?;
     let stdout = child.stdout.take().ok_or_else(|| missing("output"))?;
-    Ok((child, stdin, stdout))
+    Ok((child, child_guard, stdin, stdout))
+}
+
+fn spawn_error(provider: ProviderId, program: &Program, error: SpawnError) -> ProviderError {
+    ProviderError::Spawn {
+        provider,
+        program: program.path().to_string(),
+        source: std::io::Error::other(error),
+    }
 }
 
 /// Write one line, with its newline, in a single call.

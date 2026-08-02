@@ -93,11 +93,13 @@ key = "surviveDisconnection"
 tier = "none"
 additives = []
 name = { ko = "끊겨도 살아남기", en = "Survive disconnection", zh = "断了也活着", ja = "切れても生き残る" }
-gate = [{ name = "resilienceFaultInjection", kind = "smoke" }]
+gate = [{ name = "remoteResilienceFaultInjection", kind = "smoke" }]
 
 [[axis]]
 key = "costOfRunning"
-tier = "none"
+# Hosted CI measures a real idle daemon's RSS and process CPU time on all three operating systems. Release-live cost
+# remains unmeasured. The score ceiling itself comes from the absence of a second independent evidence kind.
+tier = "realOneKind"
 additives = []
 name = { ko = "상주 비용", en = "Cost of running", zh = "常驻成本", ja = "常駐コスト" }
 gate = [{ name = "idleFootprintRatchet", kind = "bench" }]
@@ -311,6 +313,24 @@ category = "budget"
 name = "memoryBudget"
 status = "built"
 file = "memoryBudget.rs"
+
+[[floor]]
+category = "budget"
+name = "liveMemoryBudget"
+status = "built"
+file = "liveMemoryBudget.py"
+
+[[floor]]
+category = "transport"
+name = "reconnectContinuitySmoke"
+status = "built"
+file = "reconnectContinuitySmoke.py"
+
+[[floor]]
+category = "resilience"
+name = "resilienceFaultInjection"
+status = "built"
+file = "resilienceFaultInjection.py"
 
 [[floor]]
 category = "budget"

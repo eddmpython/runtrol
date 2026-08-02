@@ -18,7 +18,7 @@ The security boundary and default-deny settings are documented in [SECURITY.md](
 プロバイダーがいくつあってもリストは一つ、OS が何であっても方法は同じ。
 会話はユーザーの PC とプロバイダーの間だけを往復する。runtrol はその間に割り込まない。**
 
-現在の合計は **30/140、平均 2.1/10** である。有効な CI ゲートが立つ軸は五つで、ローカル専用の一軸は manual 層に留まる。
+現在の合計は **36/140、平均 2.6/10** である。有効な CI ゲートが立つ軸は六つで、ローカル専用の一軸は manual 層に留まる。
 10 点は、実際の環境で完結した道筋が繰り返し検証された状態を指す。
 **manual 層を超えるスコアの根拠は CI で実際に動くゲートである。自動実行されない経路は、どれほど実装済みに見えても 3 点を超えない。**
 
@@ -30,8 +30,8 @@ The security boundary and default-deny settings are documented in [SECURITY.md](
 | プロバイダー拡張性 | 5/10 | hosted CI は外部ドライバーの公開契約、三つの OS 上の汎用 ACP fixture、独立配布 ACP 実装による二つの turn と native load、実物 Claude Code の hidden approval 拒否往復を検証する。model endpoint はローカル mock である。scheduled CI は最新 CLI で parser probe と同じ approval journey を繰り返すが、アカウント model の動作や event 全表面は主張しない。 | 新しい CLI が出たらアダプターを一つ足すだけで、PC 画面もスマホ画面も操作方法もそのまま。ユーザーはプロバイダーが増えたことを一覧が長くなったこととしてだけ知る。 |
 | 会話を通さない | 6/10 | `egressContract` は実物の loopback socket で正確な送信 allowlist と production Noise IK、IKpsk1 境界を動かす。prompt の標本は relay capture や診断文字列に平文で現れず、transport は disk と log の API を持たず、driver と storage は provider の transcript path を知らない。実物のスマートフォンと relay を結ぶ live gate がないため、天井は 6 である。 | ユーザーのプロンプトとモデルの応答は、PC とプロバイダーの間、そしてユーザー自身のデバイスの間だけを往復する。runtrol はその本文を保存せず、途中のどのサーバーも読める形でそれを受け取らない。 |
 | スマホで承認 | 0/10 | 未実装。 | エージェントが危険な操作の前で止まるとスマートフォンに表示され、そこで許可または拒否すると PC のセッションがただちに続く。 |
-| 切れても生き残る | 0/10 | 未実装。 | スマートフォンがロックされても、ネットワークが切れても、runtrol を再起動しても PC のセッションは死なず、戻ればその間の出力が漏れなく続く。 |
-| 常駐コスト | 0/10 | 未実装。 | 一日中つけっぱなしでも、ユーザーはその存在に気づかない。バッテリーにも、ファンにも、タスクマネージャーにも見えない。 |
+| 切れても生き残る | 0/10 | リモートのスマートフォンを含む end-to-end ゲートは未実装。 | スマートフォンのロック、ネットワーク切断、runtrol 再起動の後も、PC セッションは公式 resume surface から復旧できる。保持範囲内は正確な cursor から続き、範囲外は黙って飛ばさず明示的な gap になる。 |
+| 常駐コスト | 6/10 | Windows、macOS、Linux の hosted CI が実物の debug daemon の idle RSS と、10 秒あたり CPU 100 ms の上限を測る（`idleFootprintRatchet`）。独立した二種類目のゲートがないため上限は 6。 | 一日中つけっぱなしでも、ユーザーはその存在に気づかない。バッテリーにも、ファンにも、タスクマネージャーにも見えない。 |
 | どこでも同じやり方 | 0/10 | 未実装。 | Windows、macOS、Linux でインストール方法も操作も同じ。Windows ユーザーが WSL や tmux を知る必要がない。 |
 | 勝手に最新 | 0/10 | 未実装。 | アプリとインストール済みのエージェント CLI が自動で最新を保ち、更新がセッションを壊したらユーザーが手を触れる前に戻っている。ユーザーがバージョンを気にする瞬間が存在しない。 |
 | モデル自動認識 | 6/10 | hosted `modelDetectionSmoke --require-all` は資格情報なしで最新の実物 CLI を導入し、Codex の `model/list` と隔離した provider-owned option cache sentinel を含む Claude partial catalogue を検査し、観測した identifier が production source にハードコードされていないことを確認する。特定アカウントでの利用可否までは証明しないため、live gate 一種類の上限 6 である。 | いまこのアカウントで実際に使えるモデルがそのまま一覧に出て、新しいモデルが出ても runtrol を直さずに現れる。 |

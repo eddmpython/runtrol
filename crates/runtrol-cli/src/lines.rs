@@ -4,8 +4,8 @@
 //! person can read is a surface nothing can build on, and this is the surface every script somebody writes around
 //! runtrol will be written against.
 //!
-//! An event is printed as the provider wrote it. Laying it out differently would be this surface reading a
-//! conversation, which is the one thing runtrol does not do.
+//! Each event is preceded by its runtrol-owned reconnect boundary, then printed as the provider wrote it. Laying the
+//! payload out differently would be this surface reading a conversation, which is the one thing runtrol does not do.
 
 use runtrol_ipc::wire::Response;
 use runtrol_provider::ModelCatalog;
@@ -117,9 +117,12 @@ pub fn render(response: &Response) -> Vec<String> {
             render_watching(*live_at, gap.as_deref().copied())
         }
 
-        // As the provider wrote it. Reformatting would be this surface reading a conversation, which is the one thing
-        // runtrol does not do.
-        Response::Event { payload, .. } => vec![payload.as_str().to_owned()],
+        // The cursor line is runtrol-owned transport metadata. The second line remains exactly what the provider wrote:
+        // reformatting it would be this surface reading a conversation, which is the one thing runtrol does not do.
+        Response::Event {
+            payload,
+            next_expected,
+        } => render_event(payload, *next_expected),
 
         Response::Lagged { next_expected } => vec![format!(
             "watch lagged  reconnect after {}:{}:{}",
@@ -140,6 +143,19 @@ pub fn render(response: &Response) -> Vec<String> {
         // deserves to know an answer came back, even one this build cannot lay out.
         other => vec![format!("an answer this build cannot lay out: {other:?}")],
     }
+}
+
+fn render_event(
+    payload: &runtrol_provider::Opaque,
+    next_expected: runtrol_provider::WatchCursor,
+) -> Vec<String> {
+    vec![
+        format!(
+            "watch event  next {}:{}:{}",
+            next_expected.stream, next_expected.epoch, next_expected.seq
+        ),
+        payload.as_str().to_owned(),
+    ]
 }
 
 fn render_watching(
@@ -344,17 +360,27 @@ mod tests {
     }
 
     #[test]
-    fn an_event_is_printed_as_the_provider_wrote_it() {
+    fn an_event_names_its_reconnect_boundary_then_prints_the_provider_bytes_unchanged() {
         let payload = r#"{"z":1,"a":[2,3]}"#;
+        let next_expected = WatchCursor {
+            stream: StreamId::now(),
+            epoch: 0,
+            seq: 1,
+        };
         let lines = render(&Response::Event {
             payload: runtrol_provider::Opaque::owned(payload.to_owned()),
-            next_expected: WatchCursor {
-                stream: StreamId::now(),
-                epoch: 0,
-                seq: 1,
-            },
+            next_expected,
         });
-        assert_eq!(lines, vec![payload]);
+        assert_eq!(
+            lines,
+            vec![
+                format!(
+                    "watch event  next {}:{}:{}",
+                    next_expected.stream, next_expected.epoch, next_expected.seq
+                ),
+                payload.to_owned(),
+            ]
+        );
     }
 
     #[test]

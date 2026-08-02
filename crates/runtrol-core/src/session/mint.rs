@@ -16,9 +16,9 @@
 //! # The one provider that takes runtrol's name
 //!
 //! One of the two supported CLIs accepts an identifier at start time, so runtrol hands it the one it just
-//! minted and the two identifiers are equal. Measured: that identifier becomes the transcript's file name and
-//! comes back in the result. That is a convenience of that provider, **not an invariant**: the code below
-//! never assumes the two are equal, because the other provider issues its own.
+//! minted and the two identifiers are equal. The provider returns that identifier through its structured session
+//! surface. That is a convenience of that provider, **not an invariant**: the code below never assumes the two are
+//! equal, because the other provider issues its own.
 //!
 //! # The latest observation wins
 //!
@@ -60,7 +60,7 @@ impl Identity {
         Self::assigned(provider, SessionId::now())
     }
 
-    /// Take on a session runtrol has read about from a provider's own store.
+    /// Take on an existing provider-owned session whose identifiers the caller already has.
     ///
     /// The provider's identifier is known from the start here, because the session already existed before
     /// runtrol heard of it.
@@ -202,7 +202,7 @@ mod tests {
     }
 
     #[test]
-    fn a_session_read_from_a_providers_store_arrives_with_both_names() {
+    fn an_existing_provider_session_arrives_with_both_names() {
         let session = SessionId::now();
         let identity = Identity::discovered(provider(), session, native("thread_09"));
         assert_eq!(identity.session(), session);

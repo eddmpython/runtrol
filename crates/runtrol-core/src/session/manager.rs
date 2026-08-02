@@ -738,8 +738,8 @@ impl SessionManager {
             }
 
             Some(Err(error)) => {
-                // Promoted to session state and said out loud, in that order. The session stays visible and resumable:
-                // the conversation is in the provider's own store and only the attachment was lost.
+                // Promoted to session state and said out loud, in that order. The session stays visible through its
+                // metadata, and its provider-native identifier remains available for the provider's resume surface.
                 let detail = error.to_string();
                 let at = WallMs::now();
                 drop(live.state.observe(
@@ -1118,10 +1118,8 @@ impl SessionManager {
 
     /// Every live session, oldest name first.
     ///
-    /// Only the ones with a process. The rest of a listing comes from the providers' own stores and from runtrol's
-    /// rows, and joining those needs a driver that can read a provider's session store: measured at 4.4 milliseconds
-    /// against 39.9 seconds for asking the CLI, which is why the join is a file read and not a question. That reader
-    /// arrives with the driver that owns it.
+    /// Only the ones with a process. The daemon joins these with runtrol's own stored session pointers. Provider
+    /// transcript storage is outside this manager and is never scanned to build the list.
     pub fn live_sessions(&self) -> impl Iterator<Item = LiveSession<'_>> {
         self.live.iter().map(|(session, live)| LiveSession {
             session: *session,

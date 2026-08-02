@@ -1,26 +1,19 @@
-//! Cold, warm, hot: how many sessions may cost a process.
+//! Cold and hot: how many sessions may cost a process.
 //!
-//! A thousand sessions in a list must not mean a thousand child processes. The list is built by reading the
-//! providers' own stores, and a child exists only for a session somebody is actually working in.
+//! A thousand durable supervisor rows must not mean a thousand child processes. A child exists only for a session
+//! somebody is actually working in.
 //!
-//! # The three tiers, and what each one costs runtrol
+//! # The two tiers, and what each one costs runtrol
 //!
 //! | Tier | What exists | runtrol's own cost |
 //! |---|---|---:|
-//! | cold | a row read from a provider's store | 256 B |
-//! | warm | a reader open on the provider's file | 8 KiB |
+//! | cold | runtrol's identifiers and lifecycle metadata | 256 B |
 //! | hot | a child process, bound and running | 128 KiB |
 //!
 //! Those are runtrol's numbers, and they are the small half. Measured on this machine, one of these CLIs is a
 //! 265 MB executable with observed working sets of 110, 215, and 699 MB. **That memory is not runtrol's and
 //! cannot be reduced by runtrol.** What runtrol decides is how many of them exist at once, which is why the
 //! hot bound is about the operator's machine rather than about the daemon's own budget.
-//!
-//! # Why the list is not built by asking
-//!
-//! Measured: one CLI answers a list query in 39.9 seconds, and reading the same information out of its own
-//! files takes 4.4 milliseconds. Nine thousand times. The thin rule and the fast answer point at the same
-//! design, which does not happen often enough to waste.
 //!
 //! # What may be evicted, and what may not
 //!
@@ -30,11 +23,8 @@
 
 use runtrol_provider::{SessionId, WallMs};
 
-/// What runtrol holds for a session it has only read about.
+/// What runtrol holds for one durable session pointer without a child process.
 pub const COLD_BYTES: usize = 256;
-
-/// What runtrol holds for a session with a reader open on the provider's file.
-pub const WARM_BYTES: usize = 8 * 1024;
 
 /// What runtrol holds for a session with a child process bound.
 ///
@@ -52,10 +42,8 @@ pub const MAX_HOT: usize = 8;
 /// How much of a session exists right now.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub enum Tier {
-    /// A row, read from the provider's own store. No process, no open file.
+    /// Durable supervisor metadata. No provider process and no conversation reader.
     Cold,
-    /// A reader is open on the provider's file. Still no process.
-    Warm,
     /// A child process is bound.
     Hot,
 }
@@ -66,7 +54,6 @@ impl Tier {
     pub const fn bytes(self) -> usize {
         match self {
             Self::Cold => COLD_BYTES,
-            Self::Warm => WARM_BYTES,
             Self::Hot => HOT_BYTES,
         }
     }
@@ -82,7 +69,6 @@ impl Tier {
     pub const fn name(self) -> &'static str {
         match self {
             Self::Cold => "cold",
-            Self::Warm => "warm",
             Self::Hot => "hot",
         }
     }
@@ -181,16 +167,13 @@ mod tests {
             "a thousand cold rows is {thousand_cold} bytes"
         );
         assert!(!Tier::Cold.has_a_process());
-        assert!(!Tier::Warm.has_a_process());
         assert!(Tier::Hot.has_a_process());
     }
 
     #[test]
     fn the_tiers_cost_more_the_more_of_a_session_exists() {
-        assert!(Tier::Cold.bytes() < Tier::Warm.bytes());
-        assert!(Tier::Warm.bytes() < Tier::Hot.bytes());
-        assert!(Tier::Cold < Tier::Warm);
-        assert!(Tier::Warm < Tier::Hot);
+        assert!(Tier::Cold.bytes() < Tier::Hot.bytes());
+        assert!(Tier::Cold < Tier::Hot);
     }
 
     #[test]
@@ -198,7 +181,6 @@ mod tests {
         // A second opinion about these numbers is how a contract becomes a suggestion. If they change, they
         // change here and in the contract at the same time, and only downwards.
         assert_eq!(COLD_BYTES, 256);
-        assert_eq!(WARM_BYTES, 8 * 1024);
         assert_eq!(HOT_BYTES, 128 * 1024);
         assert_eq!(MAX_HOT, 8);
     }
@@ -266,7 +248,7 @@ mod tests {
 
     #[test]
     fn each_tier_can_name_itself() {
-        for tier in [Tier::Cold, Tier::Warm, Tier::Hot] {
+        for tier in [Tier::Cold, Tier::Hot] {
             assert!(!tier.name().is_empty());
         }
     }

@@ -4,8 +4,8 @@
 //! containment from inside its own process: proving "children die when the parent is killed without warning"
 //! needs a parent that can be killed without warning, and a test harness is not that.
 //!
-//! Prints the child's process id on the first line of stdout, then blocks. The test reads the id, kills this
-//! process the hard way, and checks whether the child is still there.
+//! Prints the tracked root and its descendant process ids on stdout, then blocks. The test reads both ids, kills
+//! this process the hard way, and checks whether the complete process group is still there.
 //!
 //! # Why the child is another copy of this binary
 //!
@@ -21,22 +21,105 @@
 )]
 
 use std::io::Write as _;
-use std::process::{Command, Stdio};
+use std::path::Path;
+use std::process::Stdio;
 use std::time::Duration;
 
 /// The argument that puts this binary into its sleeping mode.
 const SLEEP_MODE: &str = "--sleep-until-killed";
 
+/// A descendant that shares the tracked root's process group and only blocks.
+const LEAF_MODE: &str = "--leaf-until-killed";
+
+/// Establish tracked containment and recover whatever the killed parent left.
+const RECOVER_MODE: &str = "--recover";
+
+/// Name the guard directory for the supervising-parent mode.
+const GUARD_DIRECTORY: &str = "--guard-directory";
+
 /// Long enough that the test finishes first, short enough that a stray copy cannot linger.
 const SLEEP: Duration = Duration::from_mins(1);
 
 fn main() {
-    if std::env::args().any(|argument| argument == SLEEP_MODE) {
+    let words: Vec<String> = std::env::args().skip(1).collect();
+    #[cfg(unix)]
+    if let Some(result) = runtrol_childproc::bootstrap_if_requested(&words) {
+        if let Err(error) = result {
+            eprintln!("child bootstrap failed: {error}");
+            std::process::exit(8);
+        }
+        return;
+    }
+
+    if words.first().is_some_and(|argument| argument == LEAF_MODE) {
         std::thread::sleep(SLEEP);
         return;
     }
 
-    let containment = match runtrol_childproc::Containment::establish() {
+    if words.first().is_some_and(|argument| argument == SLEEP_MODE) {
+        sleeping_root();
+    }
+
+    if words
+        .first()
+        .is_some_and(|argument| argument == RECOVER_MODE)
+    {
+        let Some(directory) = words.get(1) else {
+            eprintln!("recovery needs a guard directory");
+            std::process::exit(9);
+        };
+        if let Err(error) = runtrol_childproc::Containment::establish_tracked(Path::new(directory))
+        {
+            eprintln!("could not recover containment: {error}");
+            std::process::exit(10);
+        }
+        return;
+    }
+
+    let Some(directory) = words
+        .first()
+        .filter(|argument| argument.as_str() == GUARD_DIRECTORY)
+        .and_then(|_| words.get(1))
+    else {
+        eprintln!("the parent needs --guard-directory <path>");
+        std::process::exit(11);
+    };
+    supervising_parent(directory);
+}
+
+fn sleeping_root() -> ! {
+    let own_path = match std::env::current_exe() {
+        Ok(path) => path,
+        Err(error) => {
+            eprintln!("could not find the descendant binary: {error}");
+            std::process::exit(13);
+        }
+    };
+    let mut descendant = std::process::Command::new(own_path);
+    descendant.arg(LEAF_MODE);
+    descendant.stdin(Stdio::null());
+    descendant.stdout(Stdio::null());
+    descendant.stderr(Stdio::null());
+    runtrol_childproc::hide_console_window(&mut descendant);
+    let descendant = match descendant.spawn() {
+        Ok(descendant) => descendant,
+        Err(error) => {
+            eprintln!("could not start the descendant: {error}");
+            std::process::exit(14);
+        }
+    };
+    println!("{}", descendant.id());
+    if let Err(error) = std::io::stdout().flush() {
+        eprintln!("could not flush the descendant id: {error}");
+        std::process::exit(15);
+    }
+    std::thread::sleep(SLEEP);
+    std::process::exit(0);
+}
+
+fn supervising_parent(directory: &str) -> ! {
+    let containment = match runtrol_childproc::Containment::establish_tracked(Path::new(directory))
+    {
         Ok(containment) => containment,
         Err(error) => {
             eprintln!("could not establish containment: {error}");
@@ -52,23 +135,52 @@ fn main() {
         }
     };
 
-    let mut command = Command::new(own_path);
+    let mut command = runtrol_childproc::TrackedCommand::new(own_path);
     command.arg(SLEEP_MODE);
     command.stdin(Stdio::null());
-    command.stdout(Stdio::null());
+    command.stdout(Stdio::piped());
     command.stderr(Stdio::null());
-    runtrol_childproc::hide_console_window(&mut command);
-    containment.prepare(&mut command);
-
-    let child = match command.spawn() {
-        Ok(child) => child,
+    let (mut child, _child_guard) = match command.spawn(&containment) {
+        Ok(spawned) => spawned,
         Err(error) => {
             eprintln!("could not start the child: {error}");
             std::process::exit(4);
         }
     };
 
-    println!("{}", child.id());
+    let Some(child_id) = child.id() else {
+        eprintln!("the child process has no identifier");
+        std::process::exit(12);
+    };
+    let Some(child_stdout) = child.stdout.take() else {
+        eprintln!("the child process has no output pipe");
+        std::process::exit(16);
+    };
+    let runtime = match tokio::runtime::Builder::new_current_thread().build() {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            eprintln!("could not build the descendant id reader: {error}");
+            std::process::exit(19);
+        }
+    };
+    let descendant_id = match runtime.block_on(async {
+        use tokio::io::AsyncBufReadExt as _;
+
+        let mut descendant_lines = tokio::io::BufReader::new(child_stdout).lines();
+        descendant_lines.next_line().await
+    }) {
+        Ok(Some(id)) => id,
+        Err(error) => {
+            eprintln!("could not read the descendant id: {error}");
+            std::process::exit(17);
+        }
+        Ok(None) => {
+            eprintln!("the child did not report its descendant");
+            std::process::exit(18);
+        }
+    };
+    println!("{child_id}");
+    println!("{descendant_id}");
     if let Err(error) = std::io::stdout().flush() {
         eprintln!("could not flush the child id: {error}");
         std::process::exit(5);
@@ -77,12 +189,5 @@ fn main() {
     // Block until killed. The containment guard stays alive for exactly as long as this process does, which is
     // the property under test.
     std::thread::sleep(SLEEP);
-
-    // Reading the guard here is what keeps it alive to the end of `main`. `drop` would not: on the platform
-    // whose containment carries no resource there is no `Drop` to run, so the call says nothing and lints as
-    // pointless. Reading it is honest on both, and it stops a future edit from shortening the guard's scope
-    // without anybody noticing.
-    if containment.strength().survives_an_unclean_kill() {
-        eprintln!("this platform's containment does not cover an unclean kill");
-    }
+    std::process::exit(0);
 }

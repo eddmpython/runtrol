@@ -14,12 +14,9 @@
 //! - **Windows.** [`Strength::EvenIfKilled`]. A job object with kill-on-close holds every descendant, and
 //!   the kernel enforces it when the last handle closes. That happens whether runtrol exits cleanly, panics,
 //!   or is killed outright.
-//! - **Linux.** [`Strength::EvenIfKilled`]. Each child asks the kernel to signal it when its parent dies,
-//!   which covers the unclean case, and a process group covers the clean one.
-//! - **macOS and other Unix.** [`Strength::CleanShutdownOnly`]. There is no parent-death signal and no job
-//!   object. A process group handles every shutdown runtrol can see coming; a `SIGKILL` of the daemon
-//!   cannot be intercepted, so children survive it. Stated rather than hidden, and the answer is an orphan
-//!   sweep at the next startup, which needs the storage crate and arrives with it.
+//! - **Unix.** [`Strength::CleanShutdownOnly`]. A process group handles every shutdown runtrol can see coming.
+//!   No parent-death mechanism covers a whole descendant tree, so an unclean daemon kill is closed by exact
+//!   process identity and a process-group sweep at the next startup.
 //!
 //! # Holding it is what makes it work
 //!
@@ -53,9 +50,21 @@ mod unix;
 #[cfg(unix)]
 use unix as platform;
 
+#[cfg(unix)]
+mod bootstrap;
+#[cfg(unix)]
+mod identity;
+#[cfg(unix)]
+mod registry;
+mod tracked;
+
 use std::process::Command;
 
 use crate::error::SpawnError;
+
+#[cfg(unix)]
+pub use bootstrap::{BOOTSTRAP_ARGUMENT, bootstrap_if_requested};
+pub use tracked::{ChildGuard, TrackedCommand};
 
 /// What containment this platform can actually enforce.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -90,6 +99,9 @@ impl Strength {
 pub struct Containment {
     /// The platform's own mechanism, or nothing.
     inner: Inner,
+    /// Durable process-group recovery, when production supplied its bounded guard directory.
+    #[cfg(unix)]
+    recovery: Option<registry::Registry>,
 }
 
 /// What is actually holding the children.
@@ -120,6 +132,8 @@ impl Containment {
     pub const fn without_any() -> Self {
         Self {
             inner: Inner::Nothing,
+            #[cfg(unix)]
+            recovery: None,
         }
     }
 
@@ -137,7 +151,38 @@ impl Containment {
     pub fn establish() -> Result<Self, SpawnError> {
         Ok(Self {
             inner: Inner::Platform(platform::Containment::establish()?),
+            #[cfg(unix)]
+            recovery: None,
         })
+    }
+
+    /// Establish containment with durable Unix process-group recovery.
+    ///
+    /// The caller must already hold the daemon's exclusive store lock. That ordering prevents a second daemon from
+    /// interpreting the first daemon's live children as orphans.
+    ///
+    /// On Windows the job object is already a kernel-owned unclean-exit boundary, so `directory` is accepted only to
+    /// keep one construction surface and is otherwise unused.
+    ///
+    /// # Errors
+    ///
+    /// [`SpawnError::Containment`] when the guard directory cannot be made durable, an earlier process group cannot
+    /// be reaped safely, or the platform containment cannot be established.
+    pub fn establish_tracked(directory: &std::path::Path) -> Result<Self, SpawnError> {
+        #[cfg(unix)]
+        {
+            let recovery = registry::Registry::open(directory)?;
+            recovery.recover()?;
+            Ok(Self {
+                inner: Inner::Platform(platform::Containment::establish()?),
+                recovery: Some(recovery),
+            })
+        }
+        #[cfg(windows)]
+        {
+            _ = directory;
+            Self::establish()
+        }
     }
 
     /// What this platform can enforce, without establishing anything.
@@ -189,6 +234,10 @@ impl Containment {
     /// [`SpawnError::Containment`] when the platform's own call fails. Reported rather than swallowed: an
     /// operator who pressed the panic button has to know whether it worked.
     pub fn terminate_all(&self) -> Result<(), SpawnError> {
+        #[cfg(unix)]
+        if let Some(recovery) = &self.recovery {
+            return recovery.terminate_all();
+        }
         match &self.inner {
             Inner::Platform(platform) => platform.terminate_all(),
             // A panic button that did nothing must not report success. Same rule as the platform that
@@ -212,7 +261,7 @@ mod tests {
     #[test]
     fn this_platform_declares_what_it_can_enforce() {
         let strength = Containment::platform_strength();
-        if cfg!(any(windows, target_os = "linux")) {
+        if cfg!(windows) {
             assert_eq!(
                 strength,
                 Strength::EvenIfKilled,

@@ -5,10 +5,9 @@
 //! Session rows are written durably. Losing one loses a session the operator can no longer find, and no other
 //! copy exists anywhere.
 //!
-//! Cursors are written without durability. Losing one costs a re-scan of the provider's own transcript and
-//! never costs data, because that transcript is the record and runtrol keeps no copy of it. The relaxed
-//! setting is safe there precisely because runtrol does not own the data, which is thinness buying
-//! performance rather than trading it away.
+//! Source checkpoints are written without durability. They are advisory progress metadata and are not the
+//! `WatchCursor` used for bounded reconnect. Losing one loses no session pointer or conversation content, and runtrol
+//! does not scan a provider transcript to reconstruct it.
 //!
 //! # Why the list is a range scan and nothing else
 //!
@@ -24,10 +23,12 @@ use crate::error::StoreError;
 use crate::open::Store;
 use crate::schema::{CURSORS, NATIVE_INDEX, SESSIONS, SessionKey};
 
-/// Where a session's event stream had reached.
+/// The last observed live-stream source boundary and event sequence.
+///
+/// This diagnostic checkpoint is not a reconnect `WatchCursor`, which also binds a stream incarnation and epoch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Cursor {
-    /// How far into the provider's own store the last relayed event corresponded to.
+    /// The last monotone source boundary reported by the live provider stream.
     pub src_end: u64,
     /// The position of the last relayed event within its attach.
     pub seq: u64,
@@ -262,8 +263,8 @@ impl Store {
 
     /// Record where a session's event stream had reached.
     ///
-    /// Written without durability, which is safe here and nowhere else: the provider's transcript is the
-    /// record, so a cursor lost to a power cut costs a re-scan and never costs data.
+    /// Written without durability because this is advisory progress metadata. A power cut may lose the checkpoint,
+    /// but not a durable session pointer or conversation content. It is not used to recover a transcript.
     ///
     /// # Errors
     ///

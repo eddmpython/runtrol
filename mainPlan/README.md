@@ -10,13 +10,7 @@
 
 전문 에이전트 5 인 토론 (2026-07-30, r1) 의 결론을 카테고리화했다. 원본 토론은 `.claude/discussion/r1/` 에 있다 (L-local).
 
-## 1. 코어 . 얇은 연결
-
-| 폴더 | 상태 | 한 줄 |
-|---|---|---|
-| [coreRuntime](coreRuntime/) | 설계 | daemon 위상, 세션 상태 기계, **메모리 계약 숫자 확정** (유휴 6MB, 천장 48MB), backpressure, 고아 회수. 런타임·Windows I/O·저장소 결정이 전부 실측 근거다. |
-
-## 2. 사용자 표면
+## 1. 사용자 표면
 
 | 폴더 | 상태 | 한 줄 |
 |---|---|---|
@@ -26,13 +20,13 @@
 | [crossConsult](crossConsult/) | 대기 | 토글 하나로 두 CLI 가 서로를 공식 표면 (MCP) 으로 등록해 AI 끼리 자문한다. 배선은 CLI 공식 명령만, 본문은 여전히 무통과. M1 뒤에 얹는다. |
 | [landingSite](landingSite/) | 설계 | GitHub Pages 한 장. 로고·설명·다운로드 둘·우측 상단 SNS (xlpod 방식). **프론트 "astryx 방식" 이 운영자 확인 대기.** |
 
-## 3. 배포와 최신성
+## 2. 배포와 최신성
 
 | 폴더 | 상태 | 한 줄 |
 |---|---|---|
 | [launcherUpdate](launcherUpdate/) | 설계 | exe 는 런처 방식. **정본은 GitHub Releases**, minisign 서명, 관리자 권한 불필요, 작업 중이면 미룸. runtrol 자신과 provider CLI **두 층**을 갱신한다 (clipscout 방식 승계). |
 
-## 4. 안전
+## 3. 안전
 
 | 폴더 | 상태 | 한 줄 |
 |---|---|---|

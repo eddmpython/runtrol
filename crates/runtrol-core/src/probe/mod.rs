@@ -28,7 +28,7 @@
 //! Probing spawns a process. Measured on this machine, a cold start of one of these costs roughly 300 ms
 //! before it does anything, so probing every provider at boot would put a second of nothing in front of the
 //! operator's first list. Probing is lazy, its answer is cached against the binary's own identity, and the
-//! list is built from the provider's own files rather than by asking a CLI anything.
+//! initial list comes from runtrol's own supervision metadata and live process state.
 //!
 //! # What is deliberately not here
 //!

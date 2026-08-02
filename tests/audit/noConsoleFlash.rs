@@ -41,10 +41,19 @@ fn every_product_spawn_boundary_applies_the_policy() {
     for relative in async_spawns {
         let text = source(relative);
         assert!(
-            text.contains("hide_console_window(command.as_std_mut())"),
-            "{relative} starts a background child without suppressing a Windows console window"
+            text.contains("TrackedCommand::new"),
+            "{relative} bypasses the tracked spawn boundary that owns the Windows console policy"
         );
     }
+
+    let tracked = source("crates/runtrol-childproc/src/contain/tracked.rs");
+    assert!(
+        tracked
+            .match_indices("crate::hide_console_window(command.as_std_mut())")
+            .count()
+            >= 2,
+        "the tracked direct and bootstrap spawn paths do not both suppress Windows console windows"
+    );
 
     let daemon = source("crates/runtrol-cli/src/link.rs");
     assert!(

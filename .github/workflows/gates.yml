@@ -268,6 +268,12 @@ jobs:
         run: python -X utf8 tests/audit/desktopConvenienceSmoke.py
       - name: memory budget gate product binary
         run: cargo build -p runtrol --bin runtrol
+      - name: 유휴 상주 비용 ratchet 자체 검증
+        run: python -X utf8 tests/audit/idleFootprintRatchet.py --selftest
+      - name: 유휴 데몬 RSS와 CPU ratchet
+        env:
+          TMPDIR: ${{ matrix.os == 'macos-latest' && '/tmp' || runner.temp }}
+        run: python -X utf8 tests/audit/idleFootprintRatchet.py
       - name: cargo test
         if: matrix.os != 'macos-latest'
         run: cargo test --all
@@ -283,6 +289,12 @@ jobs:
         env:
           TMPDIR: ${{ matrix.os == 'macos-latest' && '/tmp' || runner.temp }}
         run: python -X utf8 tests/audit/genericAcpSmoke.py
+      - name: 로컬 복원력 결함 주입 게이트 자체 검증
+        run: python -X utf8 tests/audit/resilienceFaultInjection.py --selftest
+      - name: 로컬 IPC 단절과 데몬 재시작 복원력
+        env:
+          TMPDIR: ${{ matrix.os == 'macos-latest' && '/tmp' || runner.temp }}
+        run: python -X utf8 tests/audit/resilienceFaultInjection.py
       - name: 독립 ACP 구현 설치
         run: npm install --global opencode-ai@1.2.27
       - name: 독립 ACP 구현 게이트 자체 검증

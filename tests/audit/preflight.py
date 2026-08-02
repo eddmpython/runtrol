@@ -74,6 +74,14 @@ GATES: dict[str, tuple[str, list[str]]] = {
         [*PY, f"{HOOKS}/orphanReaping.py", "--selftest"],
     ),
     "orphanReaping": ("부모 강제 종료 뒤 자식 회수", [*PY, f"{HOOKS}/orphanReaping.py"]),
+    "resilienceFaultInjectionSelftest": (
+        "로컬 복원력 결함 주입 게이트 자체 검증",
+        [*PY, f"{HOOKS}/resilienceFaultInjection.py", "--selftest"],
+    ),
+    "resilienceFaultInjection": (
+        "로컬 IPC 단절과 데몬 재시작 복원력",
+        [*PY, f"{HOOKS}/resilienceFaultInjection.py"],
+    ),
     # 게이트가 저장소에 있는 것과 도는 것은 다른 말이다. 이 게이트가 그 차이를 감시한다.
     "gateCoverageSelftest": (
         "게이트 러너 커버리지 자체 검증",
@@ -127,6 +135,14 @@ GATES: dict[str, tuple[str, list[str]]] = {
     "liveMemoryBudget": (
         "hot 세션과 구독자 4개 RSS 상한",
         [*PY, f"{HOOKS}/liveMemoryBudget.py"],
+    ),
+    "idleFootprintRatchetSelftest": (
+        "유휴 상주 비용 ratchet 자체 검증",
+        [*PY, f"{HOOKS}/idleFootprintRatchet.py", "--selftest"],
+    ),
+    "idleFootprintRatchet": (
+        "유휴 데몬 RSS와 CPU ratchet",
+        [*PY, f"{HOOKS}/idleFootprintRatchet.py"],
     ),
     "desktopConvenienceSmokeSelftest": (
         "데스크톱 편의 계약 게이트 자체 검증",
@@ -257,6 +273,8 @@ SUITES: dict[str, tuple[str, ...]] = {
         "scopeWall",
         "orphanReapingSelftest",
         "orphanReaping",
+        "resilienceFaultInjectionSelftest",
+        "resilienceFaultInjection",
         "gateCoverageSelftest",
         "gateCoverage",
         "northStarBoardSelftest",
@@ -273,6 +291,8 @@ SUITES: dict[str, tuple[str, ...]] = {
         "reconnectContinuitySmoke",
         "liveMemoryBudgetSelftest",
         "liveMemoryBudget",
+        "idleFootprintRatchetSelftest",
+        "idleFootprintRatchet",
         "desktopConvenienceSmokeSelftest",
         "desktopConvenienceSmoke",
         "cargoFmt",
@@ -297,6 +317,8 @@ CARGO_GATES = frozenset(
         "uninstallLeavesNoTraceSelftest",
         "uninstallLeavesNoTrace",
         "liveMemoryBudget",
+        "idleFootprintRatchet",
+        "resilienceFaultInjection",
         "audit",
         "cargoShear",
         "cargoDeny",

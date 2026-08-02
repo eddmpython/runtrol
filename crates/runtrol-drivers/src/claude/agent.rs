@@ -22,21 +22,21 @@
 //! A turn that was running when the process died gets an ending too, declared by the exit and **not** by the
 //! provider, which is what keeps "the outcome is unknown" distinguishable from "it finished".
 //!
-//! # Where a subscriber recovers older content from
+//! # What the source boundary means
 //!
-//! The provider's own transcript, addressed by byte offset. Verified append-only by controlled experiment: a file
-//! grew from 17,877 to 22,339 bytes across a resume while the hash of its first 4,096 bytes stayed identical. That
-//! is what makes an offset a durable cursor and what lets runtrol keep no copy.
+//! `src_end` is a monotone boundary within this live provider stream. Complete content and provider-declared turn
+//! endings advance it, while fragments and control events carry the current value. It is diagnostic ordering
+//! metadata, not a transcript byte offset, a provider resume token, or a reconnect cursor.
 //!
-//! The path is found by searching for the identifier rather than by computing it. Measured: the first attempt to
-//! compute it was wrong, because the rule replaces every one of `:` `\` `/` `_` `.` with `-` and a guess got that
-//! wrong on the first try. Searching cannot be wrong in that way.
+//! A subscriber reconnects with a `WatchCursor` over the bounded in-memory window. Content outside that window is
+//! reported as an explicit gap. This driver never discovers, derives, or reads a provider transcript path.
 
 use core::time::Duration;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use async_trait::async_trait;
-use runtrol_childproc::{Containment, Program};
+use runtrol_childproc::contain::{ChildGuard, TrackedCommand};
+use runtrol_childproc::{Containment, Program, SpawnError};
 use runtrol_provider::{
     Agent, AgentCommand, ApprovalId, ApprovalRequest, CloseMode, ContentBlock, Declarant,
     Disposition, EventBody, Level, Notice, NoticeCode, Opaque, OpenIntent, Produced, ProviderError,
@@ -60,6 +60,8 @@ pub struct ClaudeAgent {
     session: SessionId,
     /// The provider's name for it, once it has announced one.
     native: Option<String>,
+    /// The durable process-group record, dropped before the child handle so the live root can identify the group.
+    child_guard: ChildGuard,
     /// The child.
     child: Child,
     /// Its input, taken so a command can be written.
@@ -72,11 +74,10 @@ pub struct ClaudeAgent {
     running: Option<TurnId>,
     /// Which turn number to use next.
     next_turn: u32,
-    /// How far into the provider's own store the session has reached.
+    /// The monotone source boundary in this live provider stream.
     ///
-    /// Advanced only when the provider persists something, which for this CLI means a whole message or an ending.
-    /// A fragment is not persisted, so it carries the previous durable value and a client resuming from the file
-    /// receives the finished message instead of the pieces.
+    /// A whole message or provider-declared ending advances it. Fragments and control events carry the current
+    /// value. This is separate from the stream, epoch, and sequence in a subscriber's `WatchCursor`.
     src_end: u64,
     /// An event runtrol itself produced, waiting to be handed over.
     ///
@@ -113,7 +114,7 @@ impl ClaudeAgent {
             why: "this argument cannot be passed on a command line",
         })?;
 
-        let mut command = tokio::process::Command::new(program.path().as_std_path());
+        let mut command = TrackedCommand::new(program.path().as_std_path());
         command
             .args(program.leading())
             .args(&args)
@@ -124,14 +125,9 @@ impl ClaudeAgent {
             // reads fills up and blocks the process it belongs to.
             .stderr(std::process::Stdio::inherit())
             .kill_on_drop(true);
-        runtrol_childproc::hide_console_window(command.as_std_mut());
-        contained_by.prepare(command.as_std_mut());
-
-        let mut child = command.spawn().map_err(|source| ProviderError::Spawn {
-            provider,
-            program: program.path().to_string(),
-            source,
-        })?;
+        let (mut child, child_guard) = command
+            .spawn(contained_by)
+            .map_err(|error| spawn_error(provider, program, error))?;
 
         let missing = |what: &str| ProviderError::Spawn {
             provider,
@@ -146,6 +142,7 @@ impl ClaudeAgent {
             session: intent.session,
             native: None,
             child,
+            child_guard,
             stdin: Some(stdin),
             lines: Lines::new(stdout),
             running: None,
@@ -198,8 +195,6 @@ impl ClaudeAgent {
                     src_end: self.src_end,
                     body: EventBody::Attached(Box::new(runtrol_provider::Attached {
                         native: startup.native,
-                        // Where older content comes from is decided when the transcript is located, which is a
-                        // search rather than a computation and happens on demand.
                         // What runtrol asked for, not what will answer. Filled by whoever opened the session; the
                         // model in the frame is the answering one and rides in the payload.
                         model_requested: None,
@@ -224,9 +219,7 @@ impl ClaudeAgent {
             }
 
             Frame::Body(body) => {
-                // A fragment is not persisted by the provider, so it carries the previous durable cursor. Anything
-                // whole advances it, which is what makes a resume from the file deliver finished messages rather
-                // than a stream of pieces.
+                // A fragment belongs to the current source boundary. A complete body advances the boundary.
                 if !body.is_fragment() {
                     self.src_end = self.src_end.saturating_add(1);
                 }
@@ -402,6 +395,14 @@ impl ClaudeAgent {
 
             other => Ok(self.produce(other)),
         }
+    }
+}
+
+fn spawn_error(provider: ProviderId, program: &Program, error: SpawnError) -> ProviderError {
+    ProviderError::Spawn {
+        provider,
+        program: program.path().to_string(),
+        source: std::io::Error::other(error),
     }
 }
 
@@ -720,22 +721,47 @@ impl Agent for ClaudeAgent {
             _ => Duration::ZERO,
         };
 
-        if !grace.is_zero()
-            && let Ok(Ok(_status)) = tokio::time::timeout(grace, self.child.wait()).await
-        {
-            return Ok(());
+        if !grace.is_zero() {
+            match tokio::time::timeout(grace, self.child.wait()).await {
+                Ok(Ok(_status)) => {
+                    return self
+                        .child_guard
+                        .complete()
+                        .map_err(|error| ProviderError::Io {
+                            provider: self.provider,
+                            doing: "completing session process containment",
+                            source: std::io::Error::other(error),
+                        });
+                }
+                Ok(Err(wait_error)) => {
+                    return match self.child_guard.terminate(&mut self.child).await {
+                        Ok(()) => Err(ProviderError::Io {
+                            provider: self.provider,
+                            doing: "waiting for a session to stop",
+                            source: wait_error,
+                        }),
+                        Err(cleanup) => Err(ProviderError::Io {
+                            provider: self.provider,
+                            doing: "waiting for and cleaning up a session",
+                            source: std::io::Error::other(format!(
+                                "wait failed: {wait_error}; cleanup also failed: {cleanup}"
+                            )),
+                        }),
+                    };
+                }
+                Err(_elapsed) => {}
+            }
         }
 
         // Either the caller asked for it to stop now, or it did not finish in the time it was given. Reported
         // rather than swallowed: an operator who asked for a session to stop has to know whether it did.
-        let provider = self.provider;
-        self.child
-            .kill()
+        self.child_guard
+            .terminate(&mut self.child)
             .await
-            .map_err(|error| ProviderError::Protocol {
-                provider,
-                doing: "stopping a session",
-                detail: error.to_string(),
+            .map_err(|error| ProviderError::Io {
+                provider: self.provider,
+                doing: "stopping a session and its process group",
+                source: std::io::Error::other(error),
             })
     }
 }

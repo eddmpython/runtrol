@@ -919,9 +919,8 @@ fn send(sessions: &mut SessionManager, session: SessionId, command: AgentCommand
 
 /// The sessions this daemon can see.
 ///
-/// Live ones only for now. The rest come from the providers' own stores and from runtrol's rows, and joining those needs
-/// a driver that can read a provider's session store: measured at 4.4 milliseconds against 39.9 seconds for asking the
-/// CLI, which is why that join is a file read and not a question. That reader arrives with the driver that owns it.
+/// Joins runtrol's stored session pointers with the sessions that currently have a supervised process. Provider
+/// transcript storage is not consulted, so listing never discovers, derives, or reads a transcript path.
 fn list(composed: &Composed, sessions: &SessionManager) -> Response {
     let stored = match composed.store.list_sessions() {
         Ok(stored) => stored,

@@ -67,11 +67,10 @@ pub const DEVICES: TableDefinition<'static, DeviceKey, &[u8]> = TableDefinition:
 pub const NATIVE_INDEX: TableDefinition<'static, (&str, &str), SessionKey> =
     TableDefinition::new("native_ix");
 
-/// Where each session's event stream had reached.
+/// The last observed live-stream source boundary and event sequence for each session.
 ///
-/// The one table written without durability. Losing a cursor costs a re-scan and never costs data, because
-/// the provider's own transcript is the record and runtrol keeps no copy of it. That is what makes the
-/// relaxed setting safe here and nowhere else.
+/// The one table written without durability. These values are advisory diagnostics, not reconnect
+/// `WatchCursor` values. Losing one does not lose a durable session pointer or cause a transcript scan.
 pub const CURSORS: TableDefinition<'static, SessionKey, (u64, u64)> =
     TableDefinition::new("cursors");
 

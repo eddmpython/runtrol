@@ -40,16 +40,6 @@ pub fn resident_bytes(pid: u32) -> Result<u64, SpawnError> {
     platform::resident_bytes(pid)
 }
 
-/// Return allocator pages that are no longer owned after an exceptional large transient allocation.
-///
-/// The ordinary allocator policy remains untouched. This boundary exists for a provider frame near the bounded input
-/// limit that is deliberately rejected from live retention: macOS otherwise keeps the freed large block resident for
-/// the daemon lifetime. Other platforms release or reuse that memory within their measured residual budget, so this
-/// is a no-op there.
-pub fn release_unused_memory() {
-    platform::release_unused_memory();
-}
-
 #[cfg(windows)]
 mod platform {
     use windows_sys::Win32::Foundation::CloseHandle;
@@ -119,8 +109,6 @@ mod platform {
         }
         Ok(counters.WorkingSetSize as u64)
     }
-
-    pub(super) const fn release_unused_memory() {}
 }
 
 #[cfg(target_os = "linux")]
@@ -181,37 +169,14 @@ mod platform {
 
         Ok(resident.saturating_mul(page_bytes()))
     }
-
-    pub(super) const fn release_unused_memory() {}
 }
 
 #[cfg(target_os = "macos")]
 mod platform {
     use crate::error::SpawnError;
 
-    #[expect(
-        unsafe_code,
-        reason = "the pinned libc crate does not expose this stable macOS allocator symbol"
-    )]
-    unsafe extern "C" {
-        fn malloc_zone_pressure_relief(
-            zone: *mut libc::malloc_zone_t,
-            goal: libc::size_t,
-        ) -> libc::size_t;
-    }
-
     pub(super) fn resident_bytes(pid: u32) -> Result<u64, SpawnError> {
         super::resident_from_ps(pid)
-    }
-
-    #[expect(
-        unsafe_code,
-        reason = "asking the system allocator to release free pages is a platform call with no safe wrapper"
-    )]
-    pub(super) fn release_unused_memory() {
-        let _released =
-            // SAFETY: null selects all zones; the call only releases pages the allocator already considers free.
-            unsafe { malloc_zone_pressure_relief(core::ptr::null_mut(), 0) };
     }
 }
 
@@ -222,8 +187,6 @@ mod platform {
     pub(super) fn resident_bytes(pid: u32) -> Result<u64, SpawnError> {
         super::resident_from_ps(pid)
     }
-
-    pub(super) const fn release_unused_memory() {}
 }
 
 #[cfg(not(any(windows, target_os = "linux")))]

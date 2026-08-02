@@ -5,9 +5,8 @@
 //! harness is not that. So this drives a real helper process, kills it the hard way, and looks at whether the
 //! grandchild is still there.
 //!
-//! On the platform where containment is a kernel guarantee, the grandchild must be gone. On the platform where
-//! it is not, this test says so rather than failing, because a test that fails for a documented platform
-//! limitation trains people to ignore red.
+//! Windows must remove the grandchild through its kernel job. Unix must remove it when a replacement supervisor
+//! opens the durable guard directory and validates the recorded process group. A surviving child is red everywhere.
 
 // The `allow-panic-in-tests` hatch covers `#[test]` functions and `#[cfg(test)]` modules, and a free helper
 // in an integration test file is neither: measured, and noted in `clippy.toml`. A helper that cannot ask the
@@ -19,7 +18,8 @@
 )]
 
 use std::io::{BufRead as _, BufReader};
-use std::process::{Command, Stdio};
+use std::path::PathBuf;
+use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
 /// How long to wait for the kernel to reap the grandchild.
@@ -31,56 +31,164 @@ const REAP_BUDGET: Duration = Duration::from_secs(10);
 #[test]
 fn killing_the_parent_kills_the_child() {
     let helper = env!("CARGO_BIN_EXE_containedParent");
+    let guard_directory = std::env::temp_dir().join(format!(
+        "runtrol-containment-recovery-{}",
+        std::process::id()
+    ));
+    if guard_directory.exists() {
+        std::fs::remove_dir_all(&guard_directory).expect("clear the previous guard directory");
+    }
+    std::fs::create_dir_all(&guard_directory).expect("create the guard directory");
+    let guard_directory = guard_directory
+        .canonicalize()
+        .expect("canonicalize the guard directory");
 
     let mut command = Command::new(helper);
+    command.arg("--guard-directory").arg(&guard_directory);
     command.stdout(Stdio::piped()).stderr(Stdio::piped());
     runtrol_childproc::hide_console_window(&mut command);
-    let mut parent = command.spawn().expect("the helper binary must start");
+    let parent = command.spawn().expect("the helper binary must start");
+    let mut cleanup = Cleanup {
+        parent: Some(parent),
+        helper: PathBuf::from(helper),
+        guard_directory: guard_directory.clone(),
+        process_ids: Vec::new(),
+        finished: false,
+    };
 
-    let stdout = parent.stdout.take().expect("stdout was piped");
+    let stdout = cleanup
+        .parent
+        .as_mut()
+        .and_then(|parent| parent.stdout.take())
+        .expect("stdout was piped");
     let mut lines = BufReader::new(stdout).lines();
-    let reported = lines
+    let root_reported = lines
         .next()
-        .expect("the helper prints the child id before blocking")
+        .expect("the helper prints the tracked root id before blocking")
         .expect("the id line is readable");
-    let grandchild: u32 = reported
+    let tracked_root: u32 = root_reported
         .trim()
         .parse()
-        .unwrap_or_else(|error| panic!("expected a process id, got {reported:?}: {error}"));
+        .unwrap_or_else(|error| panic!("expected a process id, got {root_reported:?}: {error}"));
+    let descendant_reported = lines
+        .next()
+        .expect("the helper prints the descendant id before blocking")
+        .expect("the descendant id line is readable");
+    let descendant: u32 = descendant_reported.trim().parse().unwrap_or_else(|error| {
+        panic!("expected a process id, got {descendant_reported:?}: {error}")
+    });
+    cleanup.process_ids.extend([tracked_root, descendant]);
 
     assert!(
-        is_alive(grandchild),
-        "the grandchild should be running before the parent is killed"
+        is_alive(tracked_root),
+        "the tracked root should be running before the parent is killed"
+    );
+    assert!(
+        is_alive(descendant),
+        "the tracked root's descendant should be running before the parent is killed"
     );
 
     // The hard way. No signal handler runs, no destructor runs, nothing gets a chance to clean up. That is
     // the case the containment exists for.
-    parent.kill().expect("the helper must be killable");
-    parent.wait().expect("reaping the helper");
+    cleanup.kill_parent().expect("the helper must be killable");
 
-    // Asked without establishing anything. Establishing here would put this test process into the same
-    // kill-on-close job and the guard's drop would terminate the runner, which is what happened the first
-    // time and is why this accessor exists.
     let strength = runtrol_childproc::Containment::platform_strength();
-
-    let died = wait_until_gone(grandchild);
-
     if strength.survives_an_unclean_kill() {
-        // A documented platform limitation, not a defect. Reported rather than asserted either way: asserting
-        // that it survives would fail the day somebody adds the orphan sweep, and asserting that it dies would
-        // fail today for a reason that is written down.
-        println!(
-            "this platform promises only clean-shutdown containment. grandchild gone: {died}. \
-             the gap is closed by an orphan sweep at the next startup, not from inside a killed process"
+        let recovered = cleanup
+            .recover()
+            .expect("the replacement supervisor must start");
+        assert!(
+            recovered.success(),
+            "the replacement supervisor did not recover the process group"
         );
-        return;
     }
 
     assert!(
-        died,
-        "the grandchild survived an unclean kill of its parent, on a platform whose containment is supposed \
-         to be a kernel guarantee. an agent is now writing to the operator's files with nobody watching"
+        wait_until_gone(tracked_root),
+        "the tracked root survived both the hard parent kill and the platform's required recovery boundary"
     );
+    assert!(
+        wait_until_gone(descendant),
+        "the tracked root's descendant survived the platform's required process-group recovery boundary"
+    );
+    cleanup
+        .finish()
+        .expect("remove the recovered guard directory");
+}
+
+struct Cleanup {
+    parent: Option<Child>,
+    helper: PathBuf,
+    guard_directory: PathBuf,
+    process_ids: Vec<u32>,
+    finished: bool,
+}
+
+impl Cleanup {
+    fn kill_parent(&mut self) -> std::io::Result<()> {
+        let Some(mut parent) = self.parent.take() else {
+            return Ok(());
+        };
+        if parent.try_wait()?.is_none() {
+            parent.kill()?;
+        }
+        let _status = parent.wait()?;
+        Ok(())
+    }
+
+    fn recover(&self) -> std::io::Result<std::process::ExitStatus> {
+        let mut command = Command::new(&self.helper);
+        command.arg("--recover").arg(&self.guard_directory);
+        runtrol_childproc::hide_console_window(&mut command);
+        command.status()
+    }
+
+    fn finish(&mut self) -> std::io::Result<()> {
+        if self.guard_directory.exists() {
+            std::fs::remove_dir_all(&self.guard_directory)?;
+        }
+        self.finished = true;
+        Ok(())
+    }
+}
+
+impl Drop for Cleanup {
+    fn drop(&mut self) {
+        if self.finished {
+            return;
+        }
+        let _stopped = self.kill_parent();
+        #[cfg(unix)]
+        if self.guard_directory.exists() {
+            let _recovered = self.recover();
+        }
+        for pid in &self.process_ids {
+            if is_alive(*pid) {
+                force_kill(*pid);
+            }
+        }
+        for pid in &self.process_ids {
+            let _gone = wait_until_gone(*pid);
+        }
+        if self.guard_directory.exists() {
+            let _removed = std::fs::remove_dir_all(&self.guard_directory);
+        }
+    }
+}
+
+#[cfg(windows)]
+fn force_kill(pid: u32) {
+    let mut command = Command::new("taskkill");
+    command.args(["/PID", &pid.to_string(), "/F"]);
+    runtrol_childproc::hide_console_window(&mut command);
+    let _status = command.status();
+}
+
+#[cfg(unix)]
+fn force_kill(pid: u32) {
+    let _status = Command::new("kill")
+        .args(["-KILL", &pid.to_string()])
+        .status();
 }
 
 /// Wait for a process to disappear, up to [`REAP_BUDGET`].

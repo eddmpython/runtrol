@@ -5,7 +5,8 @@ use std::collections::VecDeque;
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use runtrol_childproc::{Containment, Program};
+use runtrol_childproc::contain::{ChildGuard, TrackedCommand};
+use runtrol_childproc::{Containment, Program, SpawnError};
 use runtrol_provider::{
     Agent, AgentCommand, Attached, CapabilitySet, CloseMode, ContentBlock, Declarant, Disposition,
     EventBody, NativeSessionId, Opaque, OpenIntent, Produced, ProviderError, ProviderId, SessionId,
@@ -35,6 +36,7 @@ pub struct AcpAgent {
     provider: ProviderId,
     session: SessionId,
     native: String,
+    child_guard: ChildGuard,
     child: Child,
     stdin: Option<ChildStdin>,
     lines: Lines<tokio::process::ChildStdout>,
@@ -84,7 +86,7 @@ impl AcpAgent {
             why: "a manifest transport argument cannot be passed on a command line",
         })?;
 
-        let mut command = tokio::process::Command::new(program.path().as_std_path());
+        let mut command = TrackedCommand::new(program.path().as_std_path());
         command
             .args(program.leading())
             .args(&arguments)
@@ -93,14 +95,9 @@ impl AcpAgent {
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::inherit())
             .kill_on_drop(true);
-        runtrol_childproc::hide_console_window(command.as_std_mut());
-        contained_by.prepare(command.as_std_mut());
-
-        let mut child = command.spawn().map_err(|source| ProviderError::Spawn {
-            provider,
-            program: program.path().to_string(),
-            source,
-        })?;
+        let (mut child, child_guard) = command
+            .spawn(contained_by)
+            .map_err(|error| spawn_error(provider, program, error))?;
         let missing = |what: &str| ProviderError::Spawn {
             provider,
             program: program.path().to_string(),
@@ -114,6 +111,7 @@ impl AcpAgent {
             session: intent.session,
             native: String::new(),
             child,
+            child_guard,
             stdin: Some(stdin),
             lines: Lines::new(stdout),
             next_request: 1,
@@ -463,6 +461,14 @@ impl AcpAgent {
     }
 }
 
+fn spawn_error(provider: ProviderId, program: &Program, error: SpawnError) -> ProviderError {
+    ProviderError::Spawn {
+        provider,
+        program: program.path().to_string(),
+        source: std::io::Error::other(error),
+    }
+}
+
 #[async_trait]
 impl Agent for AcpAgent {
     fn session(&self) -> SessionId {
@@ -614,16 +620,45 @@ impl Agent for AcpAgent {
             CloseMode::Graceful { grace_ms } => Duration::from_millis(grace_ms),
             _ => Duration::ZERO,
         };
-        if !grace.is_zero()
-            && let Ok(Ok(_status)) = tokio::time::timeout(grace, self.child.wait()).await
-        {
-            return Ok(());
+        if !grace.is_zero() {
+            match tokio::time::timeout(grace, self.child.wait()).await {
+                Ok(Ok(_status)) => {
+                    return self
+                        .child_guard
+                        .complete()
+                        .map_err(|error| ProviderError::Io {
+                            provider: self.provider,
+                            doing: "completing ACP process containment",
+                            source: std::io::Error::other(error),
+                        });
+                }
+                Ok(Err(wait_error)) => {
+                    return match self.child_guard.terminate(&mut self.child).await {
+                        Ok(()) => Err(ProviderError::Io {
+                            provider: self.provider,
+                            doing: "waiting for an ACP session to stop",
+                            source: wait_error,
+                        }),
+                        Err(cleanup) => Err(ProviderError::Io {
+                            provider: self.provider,
+                            doing: "waiting for and cleaning up an ACP session",
+                            source: std::io::Error::other(format!(
+                                "wait failed: {wait_error}; cleanup also failed: {cleanup}"
+                            )),
+                        }),
+                    };
+                }
+                Err(_elapsed) => {}
+            }
         }
-        self.child.kill().await.map_err(|error| ProviderError::Io {
-            provider: self.provider,
-            doing: "stopping an ACP session",
-            source: error,
-        })
+        self.child_guard
+            .terminate(&mut self.child)
+            .await
+            .map_err(|error| ProviderError::Io {
+                provider: self.provider,
+                doing: "stopping an ACP session and its process group",
+                source: std::io::Error::other(error),
+            })
     }
 }
 

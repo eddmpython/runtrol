@@ -98,16 +98,15 @@ pub enum Disposition {
 
 /// One event a driver produced, before the hub numbers it.
 ///
-/// A driver supplies what happened and how far into the provider's own store it corresponds to. It does not
-/// supply a position: numbering happens at the one point where a driver's output enters a session, so that a
-/// driver turning one provider line into three events never has to think about it and two drivers across a
-/// reattach cannot collide.
+/// A driver supplies what happened and its monotone boundary in the current live provider stream. It does not supply
+/// a watch position: stream, epoch, and sequence numbering happen where driver output enters a session, so a driver
+/// turning one provider frame into three events never has to coordinate with another attachment.
 #[derive(Clone, Debug)]
 pub struct Produced {
-    /// How far into the provider's own store this corresponds to.
+    /// The source boundary within the current live provider stream.
     ///
-    /// The unit is the driver's business. The kernel compares it and never interprets it, which is what keeps
-    /// provider-specific knowledge out of the kernel.
+    /// The unit is the driver's business. The kernel compares it only for monotonicity and never interprets it. It is
+    /// neither a transcript offset nor the `WatchCursor` used for bounded reconnect.
     pub src_end: u64,
     /// What happened.
     pub body: EventBody,

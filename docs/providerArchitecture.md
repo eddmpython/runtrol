@@ -2,7 +2,7 @@
 
 ## Boundary
 
-runtrol supervises provider CLI processes. It does not own their conversations, credentials, model catalogues, or session storage. A provider CLI remains the source of truth for its transcript and native session identifier.
+runtrol supervises provider CLI processes and transports their live structured events. It does not own conversations, credentials, model catalogues, or provider session storage. The provider CLI remains the sole owner of its durable transcript and native resume surface. runtrol never discovers, derives, or reads a provider transcript path.
 
 The public boundary has three parts:
 
@@ -35,7 +35,7 @@ The generic ACP v1 driver accepts an external manifest and supervises a separate
 
 ## Session ownership
 
-runtrol assigns its own session identifier for supervision and retains only provider identity, native session identity, workspace identity, labels, pins, and bounded event delivery state. It does not copy transcript content into its store.
+runtrol assigns its own session identifier for supervision and retains only provider identity, native session identity, workspace identity, labels, pins, and bounded event delivery state. It does not copy transcript content into its store. Session listings join this metadata with current supervised process state and never scan provider storage.
 
 Closing or removing a runtrol session removes the supervisor's pointer. It does not delete the provider-owned session. Removing `RUNTROL_HOME` therefore removes runtrol metadata, not the provider session. The deterministic ACP fixture proves direct native resume while runtrol is absent and proves that an optional reinstall can load the same native session again.
 
@@ -49,7 +49,7 @@ The terminal command surface answers the provider-neutral boundary as `runtrol a
 
 ## Remote wire boundary
 
-The PWA wire uses a runtrol transport envelope, not raw ACP. The envelope owns the session identifier, append-only event offset, idempotent RPC identifier, authorization scope, and reconnect boundary that every driver needs. Its event field carries the provider-neutral event bytes already produced by the driver without interpreting or rewriting their content.
+The PWA wire uses a runtrol transport envelope, not raw ACP. A `WatchCursor` is the next expected boundary inside one bounded live stream and consists of stream incarnation, attachment epoch, and dense sequence. A reconnect receives the retained window exactly once or an explicit gap when that boundary is unavailable. The provider event's `src_end` is separate diagnostic ordering metadata for the current live source, not a transcript offset or reconnect token. The envelope also carries the session identifier, idempotent RPC identifier, and authorization scope. Event payload bytes pass through without interpretation or rewriting.
 
 ACP remains one driver protocol behind that boundary. Exposing it as the remote wire would make non-ACP drivers imitate ACP, couple phone authentication and replay to one provider protocol, and move transport responsibilities into the adapter layer.
 

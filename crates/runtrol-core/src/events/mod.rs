@@ -7,7 +7,7 @@
 //!
 //! # The three parts, and why they are three files
 //!
-//! - [`seq`] assigns positions and holds the source cursor. Pure arithmetic with one rule.
+//! - [`seq`] assigns positions and holds the live provider source boundary. Pure arithmetic with one rule.
 //! - [`ring`] keeps the last few frames so a brief reconnect is served from memory.
 //! - [`fanout`] hands frames to watchers under a bound a slow reader cannot exceed.
 //!
@@ -21,9 +21,9 @@
 //!
 //! # Nothing here reads a payload
 //!
-//! The hub touches an event's envelope: which session, which position, which cursor, how many bytes. The
-//! payload is counted and moved and never opened. That is not a matter of discipline here; there is no code
-//! in this module that could read one.
+//! The hub touches an event's envelope: session, stream, epoch, sequence, source boundary, and byte count. The
+//! payload is counted and moved and never opened. That is not a matter of discipline here; there is no code in this
+//! module that could read one.
 
 pub mod fanout;
 pub mod ring;
@@ -142,14 +142,15 @@ impl WatchEvent {
 /// What one publish produced.
 #[derive(Clone, Debug)]
 pub struct Published {
-    /// The frame as it went out, with its position and cursor assigned.
+    /// The frame as it went out, with its watch position and source boundary assigned.
     ///
-    /// Handed back so the caller can persist the cursor. That is the caller's job rather than the hub's:
+    /// Handed back so the caller can persist the diagnostic source checkpoint. That is the caller's job rather than
+    /// the hub's:
     /// the hub owns ordering, and the database is somebody else's concern.
     pub event: AgentEvent,
     /// Who got it and who fell behind.
     pub delivery: Delivery,
-    /// The driver reported a cursor behind one it had already reported.
+    /// The driver reported a source boundary behind one it had already reported.
     ///
     /// Already turned into a notice frame by the time this is returned. Reported here as well because the
     /// caller may want to count it, and because a value nobody can miss is better than a log line.
@@ -234,7 +235,7 @@ pub struct SessionHub {
     session: SessionId,
     /// This hub incarnation, distinct across close/reopen and daemon restart.
     stream: StreamId,
-    /// Position and cursor assignment.
+    /// Sequence and live source-boundary assignment.
     seq: Sequencer,
     /// The reconnect window.
     ring: ReplayRing,
@@ -277,7 +278,7 @@ impl SessionHub {
         }
     }
 
-    /// How far into the provider's own store this attach has reached.
+    /// The highest source boundary reported in this live provider attachment.
     #[must_use]
     pub const fn src_end(&self) -> u64 {
         self.seq.src_end()
@@ -369,7 +370,7 @@ impl SessionHub {
 
     /// Stamp a frame, keep it in the window, and give it to every watcher.
     ///
-    /// A cursor that went backwards is corrected in the frame and then reported as a notice of its own, in
+    /// A source boundary that went backwards is corrected in the frame and then reported as a notice of its own, in
     /// that order. Doing it here rather than leaving it to a caller is what makes the guarantee mechanical:
     /// there is no path through this function on which a misbehaving driver goes unremarked.
     pub fn publish(&mut self, src_end: u64, body: EventBody) -> Published {
@@ -394,7 +395,7 @@ impl SessionHub {
         delivery
     }
 
-    /// Say out loud that a driver reported a cursor behind one it had already reported.
+    /// Say out loud that a driver reported a source boundary behind one it had already reported.
     ///
     /// A frame runtrol originates, so its payload is runtrol's own text. Only two numbers go into it, which
     /// is why building the JSON by hand here is safe: nothing a provider wrote is interpolated.
@@ -472,7 +473,7 @@ mod tests {
                 .map(subscription_event)
                 .map(|frame| frame.src_end),
             Some(700),
-            "the watcher gets the same cursor the window kept"
+            "the watcher gets the same source boundary the window kept"
         );
     }
 
@@ -515,7 +516,7 @@ mod tests {
         );
         assert_eq!(
             published.event.src_end, 900,
-            "the frame carries the cursor that held"
+            "the frame carries the source boundary that held"
         );
 
         let mut frames = Vec::new();
@@ -532,7 +533,10 @@ mod tests {
         assert_eq!(notice.code, NoticeCode::ProtocolViolation);
         assert_eq!(notice.level, Level::Warn);
         assert!(!notice.retryable);
-        assert!(notice.payload.as_str().contains("900"), "the kept cursor");
+        assert!(
+            notice.payload.as_str().contains("900"),
+            "the kept source boundary"
+        );
     }
 
     #[test]
@@ -572,7 +576,7 @@ mod tests {
         assert_eq!(published.event.seq, 0);
         assert_eq!(
             published.event.src_end, 20,
-            "a new attach may resume anywhere in the provider's store"
+            "a new attach starts its own live source boundary"
         );
     }
 
@@ -648,7 +652,7 @@ mod tests {
     }
 
     #[test]
-    fn the_hub_tracks_its_own_cursor_for_whoever_persists_it() {
+    fn the_hub_tracks_its_source_boundary_for_whoever_persists_it() {
         let mut hub = SessionHub::new(SessionId::now());
         assert_eq!(hub.src_end(), 0);
         hub.publish(4_096, a_body("{}"));

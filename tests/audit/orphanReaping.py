@@ -1,7 +1,8 @@
-"""Gate: killing a supervising parent does not leave its child running.
+"""Gate: crash-window recovery and real process containment leave no supervised child running.
 
-The real process test belongs to `runtrol-childproc`, beside the platform containment code. This named gate
-invokes that test so the security board and every runner can require the guarantee without copying it.
+The durable registry crash tests and real process test belong to `runtrol-childproc`, beside the platform
+containment code. This named gate invokes that target set so every runner can require the guarantee without
+copying it.
 """
 
 from __future__ import annotations
@@ -12,7 +13,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-COMMAND = ["cargo", "test", "-p", "runtrol-childproc", "--test", "containment"]
+COMMAND = ["cargo", "test", "-p", "runtrol-childproc", "--all-targets"]
 Runner = Callable[..., subprocess.CompletedProcess[object]]
 
 

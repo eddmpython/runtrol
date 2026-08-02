@@ -51,9 +51,11 @@ pub mod run;
 pub use argv::{MAX_ARGUMENT_LEN, check_all, check_one};
 pub use console::hide_if_private;
 pub use console_window::hide_console_window;
-pub use contain::{Containment, Strength};
+#[cfg(unix)]
+pub use contain::bootstrap_if_requested;
+pub use contain::{ChildGuard, Containment, Strength, TrackedCommand};
 pub use error::SpawnError;
-pub use footprint::{release_unused_memory, resident_bytes};
+pub use footprint::resident_bytes;
 pub use handoff::keep_handles_to_ourselves;
 pub use resolve::{LauncherKept, Program, ProgramKind, resolve};
 pub use run::{MAX_OUTPUT_BYTES, Output, capture};

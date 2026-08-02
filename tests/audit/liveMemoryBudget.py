@@ -1,8 +1,8 @@
 """Gate: one hot session and four live watchers stay inside the daemon memory ceiling.
 
 The gate uses the external ACP fixture through a manifest, starts the real daemon, opens four real watch
-connections, and emits both an admitted 900 KiB provider event and a rejected 15 MiB event just below the parser's
-16 MiB input bound. Every admitted watcher
+connections, and emits both an admitted 900 KiB provider event and three consecutive rejected 15 MiB events just
+below the parser's 16 MiB input bound. Every admitted watcher
 must receive the complete payload, every rejected watcher must receive an explicit lag boundary, and RSS is sampled
 from outside the daemon through the operating system. The provider child and watch clients are deliberately excluded
 from the daemon's budget.
@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import ctypes
 import json
+import math
 import os
 import subprocess
 import sys
@@ -57,6 +58,10 @@ class Evidence:
 def problems(evidence: Evidence, enforce_hot_increment: bool = True) -> list[str]:
     """Return every memory contract violation."""
     found: list[str] = []
+    if not all(
+        math.isfinite(value) for value in (evidence.baseline, evidence.peak, evidence.residual)
+    ):
+        return ["a memory sample was not finite"]
     if evidence.peak < evidence.baseline:
         found.append("peak is below baseline")
     if evidence.peak > HARD_CEILING:
@@ -96,6 +101,7 @@ def selftest() -> int:
         "hot increment": replace(green, peak=green.baseline + HOT_INCREMENT + 1),
         "residual": replace(green, residual=green.baseline + RESIDUAL_INCREMENT + 1),
         "invalid sample": replace(green, peak=green.baseline - 1),
+        "nonfinite sample": replace(green, residual=float("nan")),
     }
     if problems(green):
         print("[liveMemoryBudget --selftest] FAIL. green fixture was rejected.", file=sys.stderr)
@@ -239,7 +245,7 @@ def outputsReady(paths: list[Path], reply_bytes: int, admitted: bool) -> bool:
 def exerciseCase(
     binary: Path, fixture: Path, reply_bytes: int, admitted: bool
 ) -> Evidence:
-    """Measure one admitted or rejected event across four real watch connections."""
+    """Measure one admitted event or three rejected events across four real watch connections."""
     with tempfile.TemporaryDirectory(prefix="runtrol-live-memory-") as raw_home:
         home = Path(raw_home)
         workspace = home / "workspace"
@@ -251,62 +257,67 @@ def exerciseCase(
         outputPaths: list[Path] = []
         try:
             baseline = sample(daemon.pid, 0.5)
-            session = acp.command(binary, environment, ["start", acp.PROVIDER, str(workspace)])
-            if acp.SESSION_RE.fullmatch(session) is None:
-                raise Failed(f"start returned no session identifier: {session!r}")
-            for index in range(WATCHERS):
-                outputPath = home / f"watch-{index}.out"
-                outputPaths.append(outputPath)
-                with outputPath.open("wb") as output:
-                    watcher = subprocess.Popen(
-                        [str(binary), "watch", session],
-                        cwd=acp.ROOT,
-                        env=environment,
-                        stdout=output,
-                        stderr=subprocess.PIPE,
-                        text=True,
-                        encoding="utf-8",
-                        errors="replace",
-                    )
-                watchers.append(watcher)
-            time.sleep(0.25)
-            if any(watcher.poll() is not None for watcher in watchers):
-                raise Failed("a watch client ended before the large event")
-            prompt = subprocess.Popen(
-                [str(binary), "say", session, "large memory gate event"],
-                cwd=acp.ROOT,
-                env=environment,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-            )
             peak = baseline
-            deadline = time.monotonic() + acp.TURN_WAIT_S
-            while time.monotonic() < deadline:
-                peak = max(peak, resident(daemon.pid))
-                if prompt.poll() is not None and outputsReady(outputPaths, reply_bytes, admitted):
-                    break
-                time.sleep(0.005)
-            if prompt.poll() is None:
-                stop(prompt)
-                raise Failed("the large provider event did not finish")
-            stdout, stderr = prompt.communicate(timeout=2.0)
-            if prompt.returncode != 0:
-                raise Failed((stderr or stdout or "the prompt failed without output").strip())
-            if not outputsReady(outputPaths, reply_bytes, admitted):
-                expected = "complete payload" if admitted else "explicit lag boundary"
-                raise Failed(f"not every watcher received the {expected}")
-            peak = max(peak, sample(daemon.pid, 0.5))
+            cases = 1 if admitted else 3
+            for case in range(cases):
+                session = acp.command(binary, environment, ["start", acp.PROVIDER, str(workspace)])
+                if acp.SESSION_RE.fullmatch(session) is None:
+                    raise Failed(f"start returned no session identifier: {session!r}")
+                outputPaths = []
+                for index in range(WATCHERS):
+                    outputPath = home / f"watch-{case}-{index}.out"
+                    outputPaths.append(outputPath)
+                    with outputPath.open("wb") as output:
+                        watcher = subprocess.Popen(
+                            [str(binary), "watch", session],
+                            cwd=acp.ROOT,
+                            env=environment,
+                            stdout=output,
+                            stderr=subprocess.PIPE,
+                            text=True,
+                            encoding="utf-8",
+                            errors="replace",
+                        )
+                    watchers.append(watcher)
+                time.sleep(0.25)
+                if any(watcher.poll() is not None for watcher in watchers):
+                    raise Failed("a watch client ended before the large event")
+                prompt = subprocess.Popen(
+                    [str(binary), "say", session, f"large memory gate event {case + 1}"],
+                    cwd=acp.ROOT,
+                    env=environment,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                )
+                deadline = time.monotonic() + acp.TURN_WAIT_S
+                while time.monotonic() < deadline:
+                    peak = max(peak, resident(daemon.pid))
+                    if prompt.poll() is not None and outputsReady(outputPaths, reply_bytes, admitted):
+                        break
+                    time.sleep(0.005)
+                if prompt.poll() is None:
+                    stop(prompt)
+                    raise Failed("the large provider event did not finish")
+                stdout, stderr = prompt.communicate(timeout=2.0)
+                if prompt.returncode != 0:
+                    raise Failed((stderr or stdout or "the prompt failed without output").strip())
+                if not outputsReady(outputPaths, reply_bytes, admitted):
+                    expected = "complete payload" if admitted else "explicit lag boundary"
+                    raise Failed(f"not every watcher received the {expected}")
+                peak = max(peak, sample(daemon.pid, 0.5))
 
-            for watcher in watchers:
-                stop(watcher)
-            outputs = [path.read_bytes() for path in outputPaths]
-            deliveryProblems = watchProblems(outputs, reply_bytes, admitted)
-            if deliveryProblems:
-                raise Failed("; ".join(deliveryProblems))
-            acp.command(binary, environment, ["close", session, "--now"])
+                for watcher in watchers:
+                    stop(watcher)
+                watchers.clear()
+                outputs = [path.read_bytes() for path in outputPaths]
+                deliveryProblems = watchProblems(outputs, reply_bytes, admitted)
+                if deliveryProblems:
+                    raise Failed("; ".join(deliveryProblems))
+                acp.command(binary, environment, ["close", session, "--now"])
+                time.sleep(0.25)
             time.sleep(0.5)
             residual = sample(daemon.pid, 0.5)
             evidence = Evidence(baseline=baseline, peak=peak, residual=residual)
@@ -317,6 +328,14 @@ def exerciseCase(
                     + f" (baseline={baseline}, peak={peak}, residual={residual})"
                 )
             return evidence
+        except (Failed, acp.Failed, OSError, subprocess.SubprocessError) as error:
+            if daemon.poll() is None:
+                time.sleep(0.1)
+            if daemon.poll() is not None:
+                stdout, stderr = daemon.communicate(timeout=2.0)
+                detail = (stderr or stdout or "daemon exited without diagnostics").strip()
+                raise Failed(f"{error}; daemon exited: {detail}") from error
+            raise
         finally:
             for watcher in watchers:
                 stop(watcher)

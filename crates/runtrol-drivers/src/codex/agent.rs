@@ -15,9 +15,9 @@
 //!
 //! # Closing a session does not delete the conversation
 //!
-//! The daemon keeps it and so does the provider's own store, which is what makes deleting everything runtrol
-//! holds lose nothing. Closing here means runtrol stops following it, and the conversation stays resumable
-//! with the provider's own command.
+//! The provider owns the durable conversation and its native resume surface. runtrol retains only the native
+//! identifier needed to ask that surface. Closing here means runtrol stops following the live stream; it neither
+//! deletes nor reads the provider's transcript.
 
 use core::time::Duration;
 use std::sync::Arc;
@@ -66,11 +66,10 @@ pub struct CodexAgent {
     running: Option<Running>,
     /// Which turn number to use next.
     next_turn: u32,
-    /// How far into the provider's own store the session has reached.
+    /// The monotone source boundary in this live provider stream.
     ///
-    /// Counted in frames the provider persists, which for this CLI means a completed item or a completed
-    /// turn. A fragment carries the previous value, so a subscriber resuming from the provider's own store
-    /// receives finished messages rather than the pieces they were assembled from.
+    /// A completed item or provider-declared turn advances it. Fragments and control events carry the current
+    /// value. This is separate from the stream, epoch, and sequence in a subscriber's `WatchCursor`.
     src_end: u64,
     /// An event runtrol itself produced, waiting to be handed over.
     ///
@@ -168,8 +167,6 @@ impl CodexAgent {
                 src_end: 0,
                 body: EventBody::Attached(Box::new(Attached {
                     native: named,
-                    // Where older content comes from is the provider's own store, addressed by a cursor this
-                    // driver counts rather than by a file this driver reads.
                     model_requested: intent.model.clone(),
                     // This CLI declares what it can do once per connection rather than once per conversation,
                     // and a capability list copied onto every session would be the same fact repeated with
@@ -228,7 +225,7 @@ impl CodexAgent {
             }
 
             Frame::Body(body) => {
-                // A fragment is not persisted by the provider, so it carries the previous durable cursor.
+                // A fragment belongs to the current source boundary. A complete body advances the boundary.
                 if !body.is_fragment() {
                     self.src_end = self.src_end.saturating_add(1);
                 }

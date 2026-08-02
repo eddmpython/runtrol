@@ -8,11 +8,10 @@
 //! public identity, a one-way credential fingerprint, exact approved scope strings, safe display labels, and the
 //! approval time. It never stores the bearer credential itself.
 //!
-//! No transcripts. No message previews, titles, turn counts, or token counts. Everything a person reads is
-//! owned by the provider and read live from the provider's own store. That is not a storage optimization; it
-//! is the reason this product is allowed to sit alongside the CLIs it supervises, and it is what lets a
-//! subscriber that falls behind be served from the provider's file instead of from a copy runtrol would
-//! otherwise have to keep.
+//! No transcripts. No message previews, titles, turn counts, or token counts. Conversation content reaches a
+//! subscriber only as events from the live provider process and through a small bounded in-memory reconnect window.
+//! A subscriber outside that window receives an explicit gap. runtrol never fills it by discovering or reading a
+//! provider transcript path.
 //!
 //! # Layout
 //!

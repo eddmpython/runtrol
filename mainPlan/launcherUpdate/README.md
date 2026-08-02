@@ -27,7 +27,7 @@ plugins.updater.endpoints = [<latest.json URL>]
 plugins.updater.windows.installMode = "passive"     # 설치 중 사용자를 막지 않음
 ```
 
-`installMode = "currentUser"` 가 중요하다. **설치에 관리자 권한을 요구하지 않는다** ([../coreRuntime/05-process-topology.md](../coreRuntime/05-process-topology.md) 의 "Windows Service 를 안 쓴다" 와 같은 이유).
+`installMode = "currentUser"` 가 중요하다. **설치에 관리자 권한을 요구하지 않는다** ([core runtime](../../docs/coreRuntime.md#process-containment-and-restart-recovery) 이 Windows Service 를 쓰지 않는 것과 같은 이유).
 
 ### 업데이트 루프 (clipscout `updates.rs` 승계)
 

@@ -108,8 +108,7 @@ impl Serialize for Opaque {
     ///
     /// A subscriber receives exactly the bytes the provider wrote. Round-tripping the payload through a
     /// JSON model would be reading it, and it would also silently normalize things (key order, number
-    /// formatting, float precision) that are the provider's business and that the subscriber may be
-    /// comparing against the provider's own store.
+    /// formatting, float precision) that are the provider's business and that a subscriber may rely on.
     ///
     /// Nothing is allocated here. Building an owned raw value per frame would put one copy of every
     /// payload on the fan-out path, which is the cost this whole type exists to avoid.
@@ -129,8 +128,8 @@ impl<'de> Deserialize<'de> for Opaque {
     /// the far end, which would leave the command surface unable to receive an event at all.
     ///
     /// Taken as a raw value rather than through a JSON model, for the same reason writing is: round-tripping through a
-    /// model would be reading it, and it would silently normalize key order and number formatting that the provider
-    /// chose and that a subscriber may be comparing against the provider's own store.
+    /// model would be reading it, and it would silently normalize key order and number formatting chosen by the
+    /// provider.
     fn deserialize<D: Deserializer<'de>>(de: D) -> Result<Self, D::Error> {
         let raw = <&serde_json::value::RawValue as Deserialize>::deserialize(de)?;
         Ok(Self(Bytes::copy_from_slice(raw.get().as_bytes())))

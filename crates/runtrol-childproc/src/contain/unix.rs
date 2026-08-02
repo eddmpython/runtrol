@@ -1,4 +1,4 @@
-//! Containment on Unix: a process group, plus a parent-death signal where the kernel offers one.
+//! Containment on Unix: one process group per supervised root.
 //!
 //! # There is no job object here, and this file does not pretend otherwise
 //!
@@ -8,13 +8,10 @@
 //! can see coming: an exit, a caught signal, a panic with a handler. Each child is made a group leader of
 //! its own group so that signalling one session cannot touch another.
 //!
-//! A **parent-death signal** covers the case runtrol cannot see coming. A child asks the kernel to signal it
-//! when its parent dies, so a `SIGKILL` of the daemon still reaches the child. This exists on Linux and not
-//! on macOS.
-//!
-//! So on Linux the guarantee is complete, and on macOS it is not. What closes the macOS gap is not something
-//! this file can do from inside a process being killed: it is noticing the orphans at the next startup,
-//! which needs recorded child identities and therefore the storage crate.
+//! No Unix parent-death signal provides a process-tree guarantee. Linux applies it only to the direct child,
+//! which can remove the group leader while leaving descendants behind and make safe restart recovery harder.
+//! Both Linux and macOS therefore make the same honest promise: clean shutdown kills the group, and a durable
+//! identity lets the next daemon reap a group left by an unclean shutdown.
 //!
 //! # Why the per-child work happens between fork and exec
 //!
@@ -53,13 +50,9 @@ impl Containment {
 
     /// What this platform enforces. Answerable without establishing anything.
     pub(super) const fn platform_strength() -> Strength {
-        if cfg!(target_os = "linux") {
-            Strength::EvenIfKilled
-        } else {
-            Strength::CleanShutdownOnly {
-                why: "this platform has no parent-death signal and no job object, so a kill -9 of runtrol \
-                      cannot be intercepted. leftover agents are found at the next startup instead",
-            }
+        Strength::CleanShutdownOnly {
+            why: "Unix has no job object for an entire descendant tree. a kill -9 of runtrol cannot be \
+                  intercepted, so exact process groups are recovered at the next startup",
         }
     }
 
@@ -87,17 +80,6 @@ impl Containment {
                 let grouped = libc::setpgid(0, 0);
                 if grouped != 0 {
                     return Err(std::io::Error::last_os_error());
-                }
-
-                // Linux only. Asks the kernel to send this signal when the parent dies, which is what covers
-                // a kill runtrol cannot intercept. Absent elsewhere, and `strength` says so rather than this
-                // failing quietly.
-                #[cfg(target_os = "linux")]
-                {
-                    let requested = libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM);
-                    if requested != 0 {
-                        return Err(std::io::Error::last_os_error());
-                    }
                 }
 
                 Ok(())

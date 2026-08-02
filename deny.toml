@@ -73,10 +73,10 @@ wildcards = "deny"
 # which is the condition cargo-deny requires before granting this.
 allow-wildcard-paths = true
 
-# 기각 원장. 각 항목의 근거는 mainPlan 문서에 있다.
+# Rejected dependency ledger. Each entry carries or links its reason.
 [[bans.deny]]
 name = "sled"
-reason = "fsync 를 신뢰성 있게 하지 않고 RSS 폭증 보고가 미해결이다. mainPlan/coreRuntime/03-storage-decision.md"
+reason = "sled has unresolved durability and RSS concerns. See docs/coreRuntime.md"
 use-instead = "redb"
 
 [[bans.deny]]

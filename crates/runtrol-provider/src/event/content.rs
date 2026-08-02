@@ -30,10 +30,8 @@ pub struct Chunk {
     pub message_id: Option<MessageId>,
     /// A fragment to append, rather than a whole message to show.
     ///
-    /// Two decisions ride on this. A subscriber appends or replaces. And a fragment is **not durable in
-    /// the provider's own store**, so its cursor equals the previous durable frame's: a client resuming
-    /// from the file receives the completed message instead of the fragments, which is the same content
-    /// in a better form.
+    /// A subscriber appends rather than replaces. A fragment also carries the current live source boundary,
+    /// while a complete body advances it. Reconnect uses a separate bounded `WatchCursor`.
     pub delta: bool,
     /// The tool call this content belongs under, for subagent nesting.
     ///

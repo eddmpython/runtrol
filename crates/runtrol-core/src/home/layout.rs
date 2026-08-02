@@ -16,7 +16,7 @@
 //! |---|---|
 //! | the database file | `runtrol-store`, the only code that opens it |
 //! | `providers/` | the manifest loader, last in the discovery order and therefore able to shadow |
-//! | `trash/` | a driver deleting a provider session file, which renames rather than unlinks |
+//! | `process-guards/` | child supervision, containing only bounded process identity records |
 //! | the probe cache | the binary-identity cache of what each installed CLI can do |
 //! | the endpoint | the daemon binds it, the CLI connects to it |
 //!
@@ -44,8 +44,8 @@ const DATABASE: &str = "runtrol.redb";
 /// Provider manifests the operator wrote.
 const PROVIDERS: &str = "providers";
 
-/// Where a deleted provider session file is renamed to, rather than unlinked.
-const TRASH: &str = "trash";
+/// Durable Unix child identities used only to recover process groups after an unclean daemon exit.
+const PROCESS_GUARDS: &str = "process-guards";
 
 /// What each installed CLI was found to support, keyed by its version.
 const PROBE_CACHE: &str = "probe.json";
@@ -54,7 +54,7 @@ const PROBE_CACHE: &str = "probe.json";
 ///
 /// Created up front rather than on first write, so that `rm -rf $RUNTROL_HOME` followed by a start
 /// is a supported sequence rather than a race between whoever writes first.
-const DIRECTORIES: [&str; 2] = [PROVIDERS, TRASH];
+const DIRECTORIES: [&str; 2] = [PROVIDERS, PROCESS_GUARDS];
 
 /// Every path runtrol uses inside its home directory, resolved.
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -65,8 +65,8 @@ pub struct Layout {
     database: AbsPath,
     /// The operator's manifest directory.
     providers: AbsPath,
-    /// The trash directory.
-    trash: AbsPath,
+    /// Bounded durable process identities for restart recovery.
+    process_guards: AbsPath,
     /// The probe cache file.
     probe_cache: AbsPath,
     /// Where the daemon listens.
@@ -92,7 +92,7 @@ impl Layout {
         Ok(Self {
             database: entry(DATABASE)?,
             providers: entry(PROVIDERS)?,
-            trash: entry(TRASH)?,
+            process_guards: entry(PROCESS_GUARDS)?,
             probe_cache: entry(PROBE_CACHE)?,
             endpoint: Endpoint::of(&root)?,
             root,
@@ -117,10 +117,10 @@ impl Layout {
         &self.providers
     }
 
-    /// The directory a deleted provider session file is renamed into.
+    /// The bounded process-identity directory used for restart recovery.
     #[must_use]
-    pub const fn trash(&self) -> &AbsPath {
-        &self.trash
+    pub const fn process_guards(&self) -> &AbsPath {
+        &self.process_guards
     }
 
     /// The probe cache file.
@@ -137,7 +137,7 @@ impl Layout {
 
     /// The directories that have to exist before anything writes.
     pub(crate) const fn directories(&self) -> [&AbsPath; DIRECTORIES.len()] {
-        [&self.providers, &self.trash]
+        [&self.providers, &self.process_guards]
     }
 
     /// Every file and directory this layout names, for tests that must see the whole set.
@@ -146,7 +146,7 @@ impl Layout {
         vec![
             &self.database,
             &self.providers,
-            &self.trash,
+            &self.process_guards,
             &self.probe_cache,
         ]
     }
