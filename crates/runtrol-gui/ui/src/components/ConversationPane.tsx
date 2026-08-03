@@ -40,6 +40,8 @@ type ConversationPaneProps = {
   preparing: boolean;
   usage: UsageGauge | null;
   rateLimit: RateLimitGauge | null;
+  /** Provider frames runtrol relayed without reading. Reported as a count, never as conversation. */
+  unreadFrames: number;
   brandLight: string;
   brandDark: string;
   onDraftChange: (value: string) => void;
@@ -184,6 +186,7 @@ export function ConversationPane({
   preparing,
   usage,
   rateLimit,
+  unreadFrames,
   brandLight,
   brandDark,
   onDraftChange,
@@ -298,6 +301,15 @@ export function ConversationPane({
                 {rateLimitText(rateLimit)}
               </span>
             ) : null}
+            {unreadFrames > 0 ? (
+              <span
+                className="metric"
+                data-testid="unread-frames"
+                title="공급자가 보냈고 runtrol 이 해석하지 않는 프레임입니다. 대화가 아니므로 본문에 그리지 않고 수만 보여줍니다."
+              >
+                미해석 프레임 {counts.format(unreadFrames)}
+              </span>
+            ) : null}
           </div>
           <div className="conversation-status">
             <StatusDot
@@ -387,8 +399,14 @@ export function ConversationPane({
                     ? { type: "warning", message: "요청을 전달하고 있다. 계속 입력할 수 있다" }
                     : undefined}
                 headerContext={
-                  <span className="composer-context" title={row.workspace}>
-                    <Text type="supporting" maxLines={1}>{row.native ?? "첫 턴 전"}</Text>
+                  // Where the agent works, which is what a person needs to see before they send an
+                  // instruction. The provider's own identifier for the conversation used to sit here as a
+                  // raw UUID: it is machine data, it told nobody anything, and it is one hover away.
+                  <span
+                    className="composer-context"
+                    title={`${row.workspace}\n${row.native ?? "이 공급자는 첫 턴 전까지 대화를 만들지 않는다"}`}
+                  >
+                    <Text type="supporting" maxLines={1}>{row.trail}</Text>
                   </span>
                 }
                 footerActions={

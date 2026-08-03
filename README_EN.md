@@ -18,7 +18,7 @@ At the desk it is an app; away from the desk it is a phone. The same session, th
 However many providers there are, there is one list. Whatever the operating system, the method is the same.
 The conversation travels only between the user's PC and the provider. runtrol does not get in between.**
 
-The current total is **38/140, average 2.7/10**. Seven axes have active CI gates.
+The current total is **41/140, average 2.9/10**. Seven axes have active CI gates.
 A 10 means the complete journey has been repeatedly verified in a real environment.
 **A score above the manual tier is backed by a gate that actually runs in CI. A path that is not executed automatically cannot pass 3, no matter how implemented it looks.**
 
@@ -36,7 +36,7 @@ A 10 means the complete journey has been repeatedly verified in a real environme
 | Current without asking | 0/10 | Not built. | The app and the installed agent CLIs stay current on their own, and if an update breaks a session it has already rolled back before the user touches anything. There is no moment where the user thinks about versions. |
 | Automatic model detection | 6/10 | Hosted `modelDetectionSmoke --require-all` installs current real CLIs without credentials, checks Codex `model/list` and a Claude partial catalogue containing an isolated provider-owned option-cache sentinel, and rejects observed identifiers hardcoded in production source. It does not prove availability for a particular account, so one live gate kind caps the score at 6. | The models this account can actually use appear in the list as they are, and a new model appears without runtrol being changed. |
 | Sessions do not trample each other | 0/10 | Not built. | Which session is touching which folder is always distinguishable, starting a second session into the same folder warns before it happens, and when a provider offers isolation (worktrees) it is available right on the start screen. |
-| Agents consult each other | 0/10 | Not built. | One toggle registers two CLIs with each other over their official surface (MCP), so one agent asks another for an opinion mid-turn and gets it back. The wiring is made only through each CLI's own official commands (no direct config-file writes), conversation bodies still never pass through runtrol, and the user never needs to learn what MCP is. |
+| Agents consult each other | 3/10 | The toggle wires, verifies, and restores the two real CLIs through their own commands, and a real mid-turn consultation was received and measured by hand (2026-08-03). `crossConsultSmoke` drives the real subscription CLIs, so it runs on the operator's machine; with no hosted CI gate the tier is manual. | One toggle registers two CLIs with each other over their official surface (MCP), so one agent asks another for an opinion mid-turn and gets it back. The wiring is made only through each CLI's own official commands (no direct config-file writes), conversation bodies still never pass through runtrol, and the user never needs to learn what MCP is. |
 | Freedom to leave | 5/10 | `uninstallLeavesNoTrace` completes a turn with provider state outside the runtrol home, removes the entire home, then loads the same native session under a new daemon and completes a second turn. The counterpart is an ACP fixture, so this is the mock tier. | Delete runtrol and the sessions and history remain each CLI's own, continuing the original way. There is no data runtrol holds hostage. |
 
 Which gate backs which axis is defined in [docs/northStarEvidence.md](docs/northStarEvidence.md).

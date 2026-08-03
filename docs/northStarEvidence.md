@@ -47,10 +47,10 @@
 | `guiMemoryContract` | A canonical production Windows GUI and all descendant WebView2 processes stay within tracked private-byte, working-set, retained-growth, topology, cadence, and churn budgets. The gate binds source, bundle, product, fixture, and attestation identity, requires a same-ID 256 KiB worker-to-DOM paint, and leaves zero exact survivors. |
 | `crossPlatformMatrix` | 같은 종단 스모크가 Windows·macOS·Linux 러너에서 전부 green. **Windows 잡은 WSL 없이 돈다** |
 | `cliUpdateRehearsal` | 구버전 -> 업데이트 -> 세션 정상 -> 고의로 깨진 버전 -> 자동 롤백 |
-| `appUpdateRehearsal` | 런처가 GitHub Releases 에서 서명된 업데이트를 받아 설치하고, 서명이 안 맞으면 거부한다 |
+| `appUpdateRehearsal` | GitHub Releases 에서 받은 서명된 이미지를 검증하고, **살아 있는 데몬을 상대로** 하드링크 keeper 를 만든 뒤 실행 중인 이름 위로 원자적으로 교체한다. 서명 불일치는 거부, 재시도에는 상한, 프로세스는 생존, 잔여 링크는 정리된다. 설치기를 다시 돌리는 경로도 런처도 없다 (실측이 그 구조를 폐기했다) |
 | `modelDetectionSmoke` | 자격증명을 제거한 hosted CI 에 최신 실물 CLI 를 설치하고 모든 built-in 실행을 강제한다. Codex 는 live `model/list`, Claude 는 격리한 provider-owned option cache sentinel 을 포함한 정직한 partial catalogue 를 반환해야 한다. 관측한 runtime model identifier 가 production source 에 리터럴로 있으면 red 다. 특정 계정의 사용 가능 모델은 주장하지 않는다 |
 | `sessionOverlapGuard` | cwd 겹침이 목록에 구분돼 보이고, 같은 폴더에 두 번째 세션을 시작하면 경고가 선행하며, provider 가 내주는 워크트리 시작 옵션이 그대로 노출된다. **격리를 runtrol 이 직접 구현하는 것은 얇음 위반이라 하지 않는다** (겹침을 보이게 하고 provider 의 수단을 노출하는 것까지가 경계) |
-| `crossConsultSmoke` | 토글 켬 -> 두 CLI 가 서로를 자기 공식 설정 명령 (MCP 등록) 으로 배선 -> 한 CLI 가 턴 중에 다른 CLI 의 의견을 실제로 받아옴 -> 토글 끔 -> 설정 원상복구. **본문은 runtrol 을 지나지 않고, 설정 파일을 직접 쓰지 않는다** (배선은 CLI 공식 명령만. `configReadOnly` 바닥 게이트와 양립하는 것이 곧 설계다) |
+| `crossConsultSmoke` | 격리 홈에서 토글 켬 -> 배선 가능한 방향이 상대 서버의 tools/list 검증을 거쳐 CLI 공식 명령으로 등록되고, 등록 CLI 자신의 get 이 확증 -> 역방향은 실측 근거를 단 "지원 안 됨" -> 토글 끔 -> 설정이 정확히 원상복구되고 등록 항목에 명령 외 내용이 없음을 단언. **본문은 runtrol 을 지나지 않고, 설정 파일을 직접 쓰지 않는다** (배선은 CLI 공식 명령만. `configReadOnly` 바닥 게이트와 양립하는 것이 곧 설계다). 턴 중 실수신은 실물 턴 비용이라 게이트가 아니라 수기 실측이며 (2026-08-03, [cross consult](crossConsult.md)), 게이트 출력이 그 한계를 밝힌다. 실물 구독 CLI 를 몰므로 운영자 기계에서 돈다 |
 | `uninstallLeavesNoTrace` | 공급자 소유 marker 를 `RUNTROL_HOME` 밖에 둔 채 한 턴을 끝내고 데몬 종료와 home 전체 삭제 뒤 runtrol 이 없는 상태에서 공급자 실행 파일로 같은 원생 세션을 직접 재개한다. 이어서 선택적 재설치와 manifest 재선언 뒤 같은 원생 세션을 load 해 두 번째 턴을 끝내며, Windows, macOS, Linux 에서 돈다. marker 는 transcript 가 아니라 native id 와 완료 횟수만 가진 fixture 상태다 |
 
 ### 바닥 게이트 (점수가 아니다. green/red 뿐이다)
@@ -64,6 +64,8 @@
 | `providerIsolation` | 코어 (`session`·`transport`·`api`) 에 provider 고유명사 분기가 없다. 새 CLI 는 manifest 또는 trait 구현만으로 붙는다 |
 | `workspaceLints` | 어느 crate 가 워크스페이스 lint 표를 상속하고 어느 crate 가 자기 표를 쓰는지 고정한다 (`tests/audit` 는 후자다. 실측된 cargo 제약) |
 | `desktopThinBoundary` | Only the theme and last-provider scalar keys may use localStorage. Other durable browser stores, Rust file access, filesystem dependencies, and Tauri capabilities beyond event listening make the gate red. |
+| `desktopTypeScale` | 창 스타일시트의 모든 `font-size` 가 테마가 발행한 스케일 토큰이고, 브랜드 색 리터럴은 토큰 정의 한 줄에만 있다. 둘 다 실제로 새어 나갔던 결함이다: 스케일에 없는 raw px (13·11) 이 박혀 있었고, 레일이 정본 마크 (`assets/brand/symbol.svg`) 대신 CSS 로 그린 오렌지 `r` 사각형을 제 로고로 띄웠다 |
+| `desktopEventCoverage` | `EventBody::wire_name` 이 내는 이벤트 19 종 전부가 창에 표현을 갖는다. 어휘에 없는 이름만 원문과 함께 보이는 fallback 으로 간다. 실제로 새어 나간 결함이다: 12 종이 표현 없이 fallback 으로 떨어져 한국어 창 한복판에 `attached`·`toolCall`·`approvalRequested` 가 영어 기계어로 찍혔다 |
 | `cargoFmt` | `cargo fmt --check` 통과. rustfmt 와 싸우지 않는다 |
 | `cargoClippy` | `--all-targets -D warnings` 통과. 경고는 실패다 |
 | `checkSilentFail` | `let _ = ...`, `.ok()`, 빈 `catch` 로 에러를 버리지 않는다. 근거 주석이 있는 것만 인정 |

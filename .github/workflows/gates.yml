@@ -326,6 +326,14 @@ jobs:
         run: python -X utf8 tests/audit/desktopThinBoundary.py --selftest
       - name: 데스크톱 저장 권한과 API 경계
         run: python -X utf8 tests/audit/desktopThinBoundary.py
+      - name: 창 스타일시트 타입 스케일 게이트 자체 검증
+        run: python -X utf8 tests/audit/desktopTypeScale.py --selftest
+      - name: 창 스타일시트가 테마 스케일과 브랜드 정본만 쓴다
+        run: python -X utf8 tests/audit/desktopTypeScale.py
+      - name: 창 이벤트 표현 게이트 자체 검증
+        run: python -X utf8 tests/audit/desktopEventCoverage.py --selftest
+      - name: provider 어휘의 모든 이벤트가 창에 표현을 갖는다
+        run: python -X utf8 tests/audit/desktopEventCoverage.py
       - name: 데스크톱 대화 비저장 게이트 자체 검증
         if: matrix.os == 'windows-latest'
         run: python -X utf8 tests/audit/desktopPersistenceSmoke.py --selftest

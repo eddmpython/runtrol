@@ -20,6 +20,10 @@ EXPECTED = (
     "unifiedProviders",
     "metadataSearch",
     "titleFallbacks",
+    # A frame runtrol relays without reading is counted beside the other diagnostics and never drawn as a
+    # conversation line. Twelve of them once filled the pane with the word `unmapped` in front of an
+    # operator who had not sent a turn yet.
+    "unreadFramesAreNotConversation",
     "startOpened",
     "shellStayedVisible",
     "promptBlockedWhilePreparing",

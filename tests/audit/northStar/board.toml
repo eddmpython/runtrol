@@ -148,10 +148,14 @@ gate = [{ name = "sessionOverlapGuard", kind = "smoke" }]
 
 [[axis]]
 key = "agentsConsultEachOther"
-tier = "none"
+# The toggle wires the two real CLIs through their own commands and was run whole by hand on
+# 2026-08-03, including one real mid-turn reception. The gate drives the real subscription CLIs, so
+# like the session lifecycle gate it runs on the operator's machine and cannot back a score from
+# hosted CI. The tier is manual until a CI-runnable counterpart exists.
+tier = "manual"
 additives = []
 name = { ko = "AI 끼리 서로 자문", en = "Agents consult each other", zh = "AI 互相咨询", ja = "AI 同士が相談し合う" }
-gate = [{ name = "crossConsultSmoke", kind = "smoke" }]
+gate = [{ name = "crossConsultSmoke", kind = "operator" }]
 
 [[axis]]
 key = "freedomToLeave"
@@ -200,6 +204,24 @@ category = "modularity"
 name = "desktopThinBoundary"
 status = "built"
 file = "desktopThinBoundary.py"
+
+# One type scale and one brand source, held mechanically. A floor rather than an axis: a window that
+# invents its own sizes and draws its own logo is not worth a fraction of a point, it is a product that
+# does not look like itself. Both defects it watches shipped and were caught by an operator's eyes.
+[[floor]]
+category = "modularity"
+name = "desktopTypeScale"
+status = "built"
+file = "desktopTypeScale.py"
+
+# The window presents every event kind the vocabulary can produce. A floor because the failure it prevents
+# is the product speaking machine English at the operator mid-conversation, which shipped: twelve of the
+# nineteen kinds had no presentation and arrived as their raw wire names.
+[[floor]]
+category = "modularity"
+name = "desktopEventCoverage"
+status = "built"
+file = "desktopEventCoverage.py"
 
 [[floor]]
 category = "cleanCode"

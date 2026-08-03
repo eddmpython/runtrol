@@ -62,6 +62,9 @@ function mockBridge() {
     native: `native-${index}`,
     workspace: `C:/work/project-${Math.floor(index / 12)}`,
     folder: `folder-${Math.floor(index / 12)}`,
+    // What the daemon computes for the rail's subtitle. Short enough here that it is the path itself,
+    // which is the same answer the real one gives for a path this length.
+    trail: `C:/work/project-${Math.floor(index / 12)}`,
     hot: index !== 1,
     doing: "idle",
     looksStuck: false,
@@ -558,6 +561,22 @@ async function lifecycle(page, url) {
     frame: window.__RUNTROL_PERF__.frame("gate-000", "conversation-only-sentinel", "search-boundary"),
   }));
   await page.getByText("conversation-only-sentinel", { exact: true }).waitFor();
+
+  // A frame runtrol relays without reading is not conversation. Twelve of them once filled the pane with
+  // the word `unmapped` in front of an operator who had not sent a turn, so what is asserted here is both
+  // halves: no line in the conversation, and a count where the other diagnostics are.
+  await page.evaluate(() => window.__RUNTROL_PERF__.emit("session-frame", {
+    session: "gate-000",
+    frame: JSON.stringify({ body: { event: "unmapped", payload: { anything: "at all" } } }),
+  }));
+  await page.getByTestId("unread-frames").waitFor();
+  const unreadCounted = (await page.getByTestId("unread-frames").textContent())?.includes("1") ?? false;
+  const unreadNotDrawn = await page.evaluate(
+    () => !(document.querySelector('[data-testid="conversation-pane"]')
+      ?.querySelector(".verbatim, [class*='message']")?.textContent ?? "").includes("unmapped"),
+  );
+  const unreadFramesAreNotConversation = unreadCounted && unreadNotDrawn;
+
   await search.fill("conversation-only-sentinel");
   await waitFor(page, () => document.querySelectorAll('[data-testid^="session-"]').length === 0);
   const conversationExcluded = await page.getByText("검색 결과가 없다.", { exact: true }).count() === 1;
@@ -576,8 +595,11 @@ async function lifecycle(page, url) {
   const startOpened = await page.getByTestId("conversation-pane").isVisible();
   const startedTitle = await rowLabel("session-started-from-gui");
   const startedFolderTitle = await page.getByTestId("conversation-pane").locator("h1").textContent();
+  // An identifier too long for the rail keeps its end, because both identifiers here are UUIDv7 and their
+  // leading characters are a timestamp: head-truncation rendered three different sessions as `019fc4fc…`.
+  // A name that already fits is untouched, which is what `native-0` checks.
   const titleFallbacks = nativeTitleVisible
-    && startedTitle === "started-"
+    && startedTitle === "…arted-from-gui"
     && startedFolderTitle === "started-project";
 
   await page.evaluate(() => window.__RUNTROL_PERF__.holdNextResume());
@@ -625,6 +647,7 @@ async function lifecycle(page, url) {
     unifiedProviders,
     metadataSearch,
     titleFallbacks,
+    unreadFramesAreNotConversation,
     startOpened,
     shellStayedVisible,
     promptBlockedWhilePreparing,

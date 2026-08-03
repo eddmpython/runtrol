@@ -64,6 +64,11 @@ LOCAL_ONLY: dict[str, str] = {
     "sessionLifecycleSmokeSelftest": "the same script with a flag. it needs no CLI and could run in CI, but "
     "it proves the gate above can fail, and a proof that runs where the thing it proves does not is a proof "
     "of nothing",
+    "crossConsultSmoke": "it registers the real installed CLIs into each other through their own commands, "
+    "and judges the result with their own answers. hosted runners have neither CLI nor the person-shaped "
+    "logins they need, so it runs where they live: the operator's own preflight",
+    "crossConsultSmokeSelftest": "the same script with a flag, kept beside the gate it proves for the same "
+    "reason as the lifecycle selftest above",
     "desktopRealProviderGuiSmoke": "it drives the production window against two real subscription CLIs and "
     "an operator-prepared file naming existing native conversations. neither the logins nor that file can "
     "exist on a hosted runner, so it runs where they live, which is the operator's own preflight",

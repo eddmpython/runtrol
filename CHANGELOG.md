@@ -41,6 +41,12 @@ its measured architecture, and the gate harness.
 - Credential-free hosted model discovery. Codex enumerates its live protocol catalogue, while Claude
   exposes stable aliases plus an honest partial catalogue from provider-owned read-only state. Hosted CI
   proves that file-backed path through an isolated sentinel and scans all production source for leaks.
+- A cross-consult toggle. One switch registers Codex as a consultable server inside Claude Code using
+  only the CLIs' own official commands, verified against the server's own tool list before wiring and
+  against the registering CLI's own answer after, so a Claude turn can ask Codex for an opinion and
+  relay it back. The reverse direction reports honestly as unsupported with the measured reason, flipping
+  is never order-sensitive, turning it off restores the configuration exactly, and the switch works only
+  at the machine, never from a paired device.
 
 - North Star with a scored checklist. Every axis began at 0. Manual evidence can establish
   the manual tier, while every higher score requires its evidence gate to run in hosted CI.
