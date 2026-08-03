@@ -21,6 +21,7 @@ type SessionRailProps = {
   onQueryChange: (value: string) => void;
   onSelect: (session: string) => void;
   onStart: () => void;
+  onConsult: () => void;
   onToggleTheme: () => void;
 };
 
@@ -34,8 +35,25 @@ function statusOf(row: SessionRow): { variant: "success" | "warning" | "neutral"
   return { variant: "neutral", label: row.doing };
 }
 
+/** How much of an identifier is shown when it is too long to show whole. */
+const NAME_BUDGET = 14;
+
+/**
+ * A session's name, short enough for the rail and still able to tell two sessions apart.
+ *
+ * Kept from the end. Both identifiers here are UUIDv7, whose leading characters are a timestamp, so
+ * sessions started in the same minute share them: measured on this machine, three sessions in two folders
+ * all rendered as `019fc4fc…`, which is a label that names nothing. The end is the random part.
+ *
+ * A provider that names conversations in words keeps them whole, because a name a person chose beats any
+ * fragment of an identifier.
+ */
 function shortName(row: SessionRow): string {
-  return (row.native ?? row.session).slice(0, row.native ? 22 : 8);
+  const name = row.native ?? row.session;
+  if (name.length <= NAME_BUDGET) {
+    return name;
+  }
+  return `…${name.slice(-NAME_BUDGET)}`;
 }
 
 export const SessionRail = memo(function SessionRail({
@@ -47,6 +65,7 @@ export const SessionRail = memo(function SessionRail({
   onQueryChange,
   onSelect,
   onStart,
+  onConsult,
   onToggleTheme,
 }: SessionRailProps) {
   const needle = query.trim().toLocaleLowerCase();
@@ -68,11 +87,11 @@ export const SessionRail = memo(function SessionRail({
       aria-label="세션 탐색"
       className="session-rail"
       header={
-        <SideNavHeading
-          heading="runtrol"
-          subheading="에이전트 세션"
-          icon={<span className="brand-symbol">r</span>}
-        />
+        // No mark here. The window's own title bar already carries the real one, and a second brand
+        // block inside a 276px rail is chrome that costs list space and says nothing new. What was here
+        // was not even the mark: it was an orange `r` drawn in CSS, while the real symbol is the four
+        // corner brackets in `assets/brand/symbol.svg`.
+        <SideNavHeading heading="runtrol" subheading="에이전트 세션" />
       }
       topContent={
         <div className="rail-actions">
@@ -105,6 +124,14 @@ export const SessionRail = memo(function SessionRail({
             <span>{reachable ? "데몬 연결됨" : "데몬에 닿지 않는다"}</span>
           </div>
           <Button
+            label="AI 자문"
+            tooltip="한 AI가 턴 중에 다른 AI의 의견을 받아오게 연결한다"
+            variant="ghost"
+            size="sm"
+            onClick={onConsult}
+            data-testid="open-consult"
+          />
+          <Button
             label={theme === "dark" ? "밝은 테마" : "어두운 테마"}
             tooltip={theme === "dark" ? "밝은 테마" : "어두운 테마"}
             variant="ghost"
@@ -127,7 +154,9 @@ export const SessionRail = memo(function SessionRail({
           <SideNavSection
             key={workspace}
             title={sessions[0].folder || workspace}
-            subtitle={workspace}
+            // The shortened form, which keeps the end of the path. The whole path is still one hover
+            // away on each row, and the head is what every path on a machine has in common.
+            subtitle={sessions[0].trail}
           >
             {sessions.map((row) => {
               const status = statusOf(row);
@@ -139,7 +168,13 @@ export const SessionRail = memo(function SessionRail({
                   isSelected={row.session === selected}
                   onClick={() => onSelect(row.session)}
                   endContent={
-                    <span className="row-end" title={status.label}>
+                    // The whole identifier and the whole path ride the hover, for the one moment somebody
+                    // needs to read or copy them. Neither belongs on the line itself at this width, and the
+                    // item component takes no title of its own.
+                    <span
+                      className="row-end"
+                      title={`${status.label}\n${row.native ?? row.session}\n${row.workspace}`}
+                    >
                       <StatusDot variant={status.variant} label={status.label} isPulsing={row.hot && row.doing !== "idle"} />
                       <Badge label={row.provider} variant="neutral" />
                     </span>

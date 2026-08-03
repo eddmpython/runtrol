@@ -6,6 +6,7 @@ import brandDark from "../../../../assets/brand/lockup-dark.svg";
 import { FRAME_EVENT, OVER_EVENT, REFRESH_MS, invoke, listen } from "./bridge";
 import type {
   Answered,
+  ConsultDirection,
   FrameEnvelope,
   Notice,
   ModelCatalog,
@@ -22,6 +23,7 @@ import type {
 import { ConversationFeed } from "./frames";
 import type { PendingFrame } from "./frames";
 import { applyTheme, initialTheme } from "./theme";
+import { ConsultDialog } from "./components/ConsultDialog";
 import { ConversationPane } from "./components/ConversationPane";
 import { NoticeCard } from "./components/NoticeCard";
 import { SessionRail } from "./components/SessionRail";
@@ -90,8 +92,13 @@ export function App() {
   const [preparingSelection, setPreparingSelection] = useState<number | null>(null);
   const [removeOpen, setRemoveOpen] = useState(false);
   const [removing, setRemoving] = useState(false);
+  const [consultOpen, setConsultOpen] = useState(false);
+  const [consultDirections, setConsultDirections] = useState<ConsultDirection[]>([]);
+  const [consultBusy, setConsultBusy] = useState<string | null>(null);
+  const [consultLoading, setConsultLoading] = useState(false);
   const [usage, setUsage] = useState<UsageGauge | null>(null);
   const [rateLimit, setRateLimit] = useState<RateLimitGauge | null>(null);
+  const [unreadFrames, setUnreadFrames] = useState(0);
   const [renderCheckpoint, setRenderCheckpoint] = useState<RenderCheckpoint | null>(null);
 
   const selectedRef = useRef<string | null>(null);
@@ -343,6 +350,7 @@ export function App() {
     feed.clear();
     setUsage(null);
     setRateLimit(null);
+    setUnreadFrames(0);
     if (row && !row.hot) {
       if (!resumeCold) {
         feed.status("세션을 다시 눌러 공급자 원본에 연결할 수 있다");
@@ -497,6 +505,13 @@ export function App() {
         }
         finishWatchOver(watched);
       }
+      // Counted from the accepted frames, the same set the feed drew from: a frame past a discontinuity
+      // was never applied, so counting it would report arrivals the operator's view does not include.
+      // Counted separately because an unread frame carries no item and so never reaches the loop above.
+      const unread = accepted.reduce((total, frame) => total + (frame.unread ? 1 : 0), 0);
+      if (unread > 0) {
+        setUnreadFrames((current) => current + unread);
+      }
       if (discontinuity) {
         feed.status("출력 순서가 이어지지 않아 마지막으로 그린 위치에서 다시 연결한다");
         scheduleReconnect(watched.session, watched.selection);
@@ -627,6 +642,43 @@ export function App() {
     };
   }, [ask, provider, startOpen]);
 
+  const openConsult = useCallback(async () => {
+    setConsultOpen(true);
+    setConsultLoading(true);
+    setConsultDirections([]);
+    try {
+      // Display names come from the same discovery the start dialog uses; the state itself is the daemon's
+      // fresh reading of the CLIs' own configuration, never something this page derives.
+      const offered = await ask<OfferedProvider[]>("providers");
+      if (offered) {
+        setProviders(offered);
+      }
+      const directions = await ask<ConsultDirection[]>("consult");
+      if (directions) {
+        setConsultDirections(directions);
+      }
+    } finally {
+      setConsultLoading(false);
+    }
+  }, [ask]);
+
+  const toggleConsult = useCallback(async (direction: ConsultDirection) => {
+    const key = `${direction.from}->${direction.to}`;
+    setConsultBusy(key);
+    try {
+      const command = direction.state === "wired" ? "consult_unwire" : "consult_wire";
+      const directions = await ask<ConsultDirection[]>(command, {
+        from: direction.from,
+        to: direction.to,
+      });
+      if (directions) {
+        setConsultDirections(directions);
+      }
+    } finally {
+      setConsultBusy(null);
+    }
+  }, [ask]);
+
   const startSession = useCallback(async () => {
     const where = workspace.trim();
     if (!provider || !where) {
@@ -742,6 +794,7 @@ export function App() {
             onQueryChange={setQuery}
             onSelect={selectSession}
             onStart={showStart}
+            onConsult={() => void openConsult()}
             onToggleTheme={toggleTheme}
           />
         }
@@ -755,6 +808,7 @@ export function App() {
           preparing={preparingSelection !== null}
           usage={usage}
           rateLimit={rateLimit}
+          unreadFrames={unreadFrames}
           brandLight={brandLight}
           brandDark={brandDark}
           onDraftChange={setDraft}
@@ -780,6 +834,19 @@ export function App() {
           isActionLoading={removing}
           onAction={() => void closeSession()}
           data-testid="remove-session-dialog"
+        />
+        <ConsultDialog
+          isOpen={consultOpen}
+          directions={consultDirections}
+          providers={providers}
+          busy={consultBusy}
+          loading={consultLoading}
+          onOpenChange={(open) => {
+            if (consultBusy === null) {
+              setConsultOpen(open);
+            }
+          }}
+          onToggle={(direction) => void toggleConsult(direction)}
         />
         <StartSessionDialog
           isOpen={startOpen}

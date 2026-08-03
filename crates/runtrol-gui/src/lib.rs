@@ -264,6 +264,69 @@ async fn models(
     }
 }
 
+/// Every cross-consult direction, with its state read fresh from the CLIs' own configuration.
+#[tauri::command]
+async fn consult(app: tauri::AppHandle) -> Answered<Vec<view::ConsultDirection>> {
+    let reaching = reaching(&app);
+    let asked = ask::once(&reaching.address, &reaching.runtrol, Request::Consult).await;
+    consult_answer(asked)
+}
+
+/// Register `to` as a consultant inside `from`, and answer with the refreshed directions.
+#[tauri::command]
+async fn consult_wire(
+    app: tauri::AppHandle,
+    from: String,
+    to: String,
+) -> Answered<Vec<view::ConsultDirection>> {
+    let reaching = reaching(&app);
+    let asked = ask::once(
+        &reaching.address,
+        &reaching.runtrol,
+        Request::ConsultWire {
+            from: from.into(),
+            to: to.into(),
+        },
+    )
+    .await;
+    consult_answer(asked)
+}
+
+/// Undo the registration with `from`'s own removal command, and answer with the refreshed directions.
+#[tauri::command]
+async fn consult_unwire(
+    app: tauri::AppHandle,
+    from: String,
+    to: String,
+) -> Answered<Vec<view::ConsultDirection>> {
+    let reaching = reaching(&app);
+    let asked = ask::once(
+        &reaching.address,
+        &reaching.runtrol,
+        Request::ConsultUnwire {
+            from: from.into(),
+            to: to.into(),
+        },
+    )
+    .await;
+    consult_answer(asked)
+}
+
+/// The one reading of a consult answer, shared by status and both flips.
+fn consult_answer(asked: Result<Response, ask::Failed>) -> Answered<Vec<view::ConsultDirection>> {
+    match asked {
+        Err(failed) => Answered::broken(&failed),
+        Ok(Response::Consult(directions)) => Answered::Ok {
+            value: directions
+                .iter()
+                .map(view::ConsultDirection::from)
+                .collect(),
+        },
+        Ok(Response::Failed(error)) => Answered::refused(&error),
+        Ok(other) => Answered::unreadable(&other),
+    }
+}
+
 /// Start a session.
 #[tauri::command]
 async fn start(
@@ -796,6 +859,9 @@ pub fn run(reaching: Reaching) -> Result<(), tauri::Error> {
             sessions,
             providers,
             models,
+            consult,
+            consult_wire,
+            consult_unwire,
             start,
             resume,
             close,

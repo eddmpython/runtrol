@@ -56,17 +56,25 @@ textarea {
   border-inline-end: 1px solid var(--color-border);
 }
 
-.brand-symbol {
-  display: grid;
-  place-items: center;
-  width: 28px;
-  height: 28px;
-  border-radius: 9px;
-  background: #ff5a2f;
-  color: #ffffff;
-  font-size: 17px;
-  font-weight: 750;
-  letter-spacing: -0.06em;
+/* A rail scrolls up and down and never sideways. Without this, one long path or identifier inside it sets
+   the width of the whole column and puts a horizontal scrollbar under the session list (measured: a
+   workspace under a temporary directory did exactly that). Anything too wide is shortened or elided by the
+   rules above, so there is nothing here that a sideways scroll would reveal. */
+.session-rail,
+.session-rail * {
+  min-width: 0;
+}
+
+.session-rail {
+  overflow-x: hidden;
+}
+
+/* The panel the shell wraps the rail in scrolls sideways by default, and measured on this machine it had
+   three pixels to scroll: 279 against 276. Three pixels of nothing bought a scrollbar across the bottom of
+   the session list. A column of fixed width has nothing to reveal sideways, so the offer is withdrawn for
+   this one panel: the selector names the panel that holds the rail and no other. */
+.astryx-layout-panel:has(> .session-rail) {
+  overflow-x: hidden;
 }
 
 .rail-actions {
@@ -92,7 +100,10 @@ textarea {
 .rail-empty {
   margin: 18px 14px;
   color: var(--color-text-secondary);
-  font-size: 13px;
+  /* Prose the operator reads, so it sits at body size. Every size in this file is a scale token: a
+     raw pixel value is a size nobody chose, and the two that were here (13 and 11) were not even on
+     the scale the theme publishes. */
+  font-size: var(--font-size-base);
   line-height: 1.5;
 }
 
@@ -111,7 +122,7 @@ textarea {
   align-items: center;
   gap: 8px;
   color: var(--color-text-secondary);
-  font-size: 12px;
+  font-size: var(--font-size-sm);
 }
 
 .conversation {
@@ -171,7 +182,9 @@ textarea {
   border-radius: 999px;
   color: var(--color-text-secondary);
   background: var(--color-background-secondary);
-  font-size: 11px;
+  /* A pill carrying a workspace name and usage numbers the operator actually reads, so it rounds up
+     to the nearest scale step rather than down. */
+  font-size: var(--font-size-sm);
   line-height: 1.2;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -236,7 +249,7 @@ textarea {
   padding: 32px;
   text-align: center;
   background:
-    radial-gradient(circle at 50% 44%, color-mix(in srgb, #ff5a2f 7%, transparent), transparent 34%),
+    radial-gradient(circle at 50% 44%, color-mix(in srgb, var(--color-accent) 7%, transparent), transparent 34%),
     var(--runtrol-panel);
 }
 
@@ -270,7 +283,7 @@ textarea {
 .model-note {
   margin: -4px 0 0;
   color: var(--color-text-secondary);
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   line-height: 1.45;
 }
 
@@ -279,6 +292,38 @@ textarea {
   justify-content: flex-end;
   gap: 8px;
   width: 100%;
+}
+
+.consult-directions {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+}
+
+.consult-row {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.consult-row-main {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.consult-label {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--font-size-base);
+}
+
+.consult-note {
+  margin: 0;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+  line-height: 1.45;
 }
 
 .notice-card {

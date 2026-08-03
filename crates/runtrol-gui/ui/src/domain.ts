@@ -14,6 +14,8 @@ export type SessionRow = {
   native: string | null;
   workspace: string;
   folder: string;
+  /** Enough of the workspace path to tell two projects apart, keeping its end. */
+  trail: string;
   hot: boolean;
   doing: string;
   looksStuck: boolean;
@@ -29,6 +31,13 @@ export type OfferedProvider = {
   displayName: string;
   usable: boolean;
   whyNot: string | null;
+};
+
+export type ConsultDirection = {
+  from: string;
+  to: string;
+  state: "wired" | "unwired" | "unsupported";
+  why: string | null;
 };
 
 export type ReasoningChoice = {
