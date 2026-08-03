@@ -411,7 +411,7 @@ fn verify_spawn_failure(directory: &str) -> Result<(), String> {
 ///
 /// Runs in two stages. The shared cargo test binary must stay where cargo put it, so the outer
 /// stage copies itself into a disposable name beside the guard directory and re-executes that copy.
-/// The copy performs the journey: one session before the update, then the launcherUpdate rename
+/// The copy performs the journey: one session before the update, then the autoUpdate rename
 /// dance against its own image (hard link keeper, new build renamed over the running name), then a
 /// second session that must start and close exactly like the first. Before the identity redesign,
 /// the second spawn failed on Linux because the process re-found itself through a lookup that now
@@ -483,7 +483,7 @@ fn verify_update_rename(directory: &str) -> Result<(), String> {
 
     run_session("pre-update")?;
 
-    // The update dance from the launcherUpdate design, aimed at this running copy: keep the live
+    // The update dance from the autoUpdate design, aimed at this running copy: keep the live
     // image reachable through a keeper link, then rename a new build over the only public name.
     let keeper = own_path.with_extension("inuse");
     std::fs::hard_link(&own_path, &keeper)

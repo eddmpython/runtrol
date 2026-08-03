@@ -10,37 +10,30 @@
 
 전문 에이전트 5 인 토론 (2026-07-30, r1) 의 결론을 카테고리화했다. 원본 토론은 `.claude/discussion/r1/` 에 있다 (L-local).
 
-## 1. 사용자 표면
+## 남은 이니셔티브 . 폴더 이름이 곧 순서다
 
-| 폴더 | 상태 | 한 줄 |
-|---|---|---|
-| [pwaConnection](pwaConnection/) | 활성 | **origin 과 transport 를 분리한다.** 불변 HTTPS origin 하나 + 4 단 전송 사다리 + Noise E2E + 데몬 직접 Web Push. |
-| [pwaSurface](pwaSurface/) | 대기 | PWA 자체. 연결 계층이 선 뒤에 짓는다. |
-| [crossConsult](crossConsult/) | 설계 | 토글 하나로 두 CLI 가 서로를 공식 표면 (MCP) 으로 등록해 AI 끼리 자문한다. 배선은 CLI 공식 명령만, 본문은 여전히 무통과. |
-| [landingSite](landingSite/) | 설계 | GitHub Pages 한 장. 로고·설명·다운로드 둘·우측 상단 SNS (xlpod 방식). **프론트 "astryx 방식" 이 운영자 확인 대기.** |
+**폴더 앞의 숫자가 짓는 순서다.** 카테고리로 묶어 두면 순서가 어디에도 안 적히고, 안 적힌 순서는 매번 다시 논쟁된다.
+그래서 순서를 이름에 박았고, 각 줄에 **왜 그 자리인지 (앞의 무엇이 없으면 못 하는지)** 를 함께 적는다.
 
-## 2. 배포와 최신성
+| 폴더 | 상태 | 한 줄 | 왜 이 자리인가 |
+|---|---|---|---|
+| [0-securityPosture](0-securityPosture/) | 활성 | default-deny 권한 모델, 소켓 표면 (Windows named pipe / Unix socket), 승인 전달, 감사 로그, 킬 스위치. **공개 저장소라 "모르는 사람이 기본값으로 켠다" 가 기준선이다.** | **순서상의 한 칸이 아니라 나머지 전부가 딛는 바닥이다.** 첫 커밋부터 함께 갔고, 남은 항목 (폰 표면 권한) 이 4 번에 걸려 있어 **마지막 뒤에 닫힌다.** 0 은 "먼저 하고 넘어간다" 가 아니라 "1~4 가 이것 위에서 돈다" 는 뜻이다 |
+| [1-autoUpdate](1-autoUpdate/) | 활성 | **정본은 GitHub Releases**, 서명 검증, 관리자 권한 불필요. 앱 갱신은 설치기를 다시 돌리지 않고 **살아 있는 이미지를 원자적으로 교체한다** (실측 근거). provider 는 **확증된 채널에서만** 갱신하고 롤백 대상은 버전 순서로 고른다. | **지금 이 제품은 아무도 설치할 수 없다.** 데스크톱은 완성됐는데 배포 경로가 없다. 그리고 이것이 **버전 SSOT** (지금 손으로 적힌 버전 16 곳) 를 세우는데, 2 번의 다운로드 링크와 4 번의 앱 신원이 전부 거기서 파생된다. 선행 결함 (keeper 신원) 은 2026-08-03 에 닫혔다 |
+| [2-landingSite](2-landingSite/) | 설계 | GitHub Pages 한 장. 로고·설명·다운로드 둘·우측 상단 SNS. **프론트 "astryx 방식" 이 운영자 확인 대기.** | 다운로드 링크를 **릴리즈에서 파생**하므로 1 번이 없으면 완료 판정을 만족할 수 없다. 그리고 이 자리의 진짜 이유는 따로 있다: **이것이 도메인을 확정한다.** 3 번의 첫 번째 결정이 "origin 은 영원히 안 바뀐다" 이고 그 문서의 운영자 대기 1 번이 "도메인 하나를 영원히 소유할 것인가" 다. **주소를 소유하기 전에 전송 계층을 지으면 그 위에 지은 신원·push 구독·설치가 전부 주소와 함께 날아간다** |
+| [3-pwaConnection](3-pwaConnection/) | 활성 | **origin 과 transport 를 분리한다.** 불변 HTTPS origin 하나 + 4 단 전송 사다리 + Noise E2E + 데몬 직접 Web Push. | 2 번이 확정한 불변 origin 위에서만 성립한다. 보안 기반 (Noise, 페어링, rebinding, egress, DPAPI 금고) 은 0 번에서 이미 섰고, 남은 것은 릴레이·원격 리스너·push·클라이언트다 |
+| [4-pwaSurface](4-pwaSurface/) | 대기 | PWA 자체. 연결 계층이 선 뒤에 짓는다. | 3 번의 프레임 스트림 (이벤트 로그 + 커서) 이 확정되기 전에 화면을 얹으면 전송이 바뀔 때 화면을 다시 짓는다 (강행규칙 `바닥부터. 부채 금지`) |
 
-| 폴더 | 상태 | 한 줄 |
-|---|---|---|
-| [launcherUpdate](launcherUpdate/) | 활성 | **정본은 GitHub Releases**, 서명 검증, 관리자 권한 불필요. 앱 갱신은 설치기를 다시 돌리지 않고 **살아 있는 이미지를 원자적으로 교체한다** (실측 근거). provider 는 **확증된 채널에서만** 갱신하고 롤백 대상은 버전 순서로 고른다. |
+**1 과 2 를 3 앞에 두는 것이 이 순서의 유일한 비자명한 판단이다.** 폰이 가장 눈에 띄는 미완이지만,
+설치할 수 없는 제품에는 폰으로 이을 PC 세션이 없고, 소유하지 않은 주소 위에는 불변 origin 이 없다.
 
-## 3. 안전
-
-| 폴더 | 상태 | 한 줄 |
-|---|---|---|
-| [securityPosture](securityPosture/) | 활성 | default-deny 권한 모델, 소켓 표면 (Windows named pipe / Unix socket), 승인 전달, 감사 로그, 킬 스위치. **공개 저장소라 "모르는 사람이 기본값으로 켠다" 가 기준선이다.** |
-
-## 빌드 순서 (마일스톤)
-
-위 표는 카테고리이지 순서가 아니다. 짓는 순서는 이것이다.
+## 마일스톤 (같은 순서를 사용자 관점으로 본 것)
 
 | 마일스톤 | 내용 | 완료의 정의 |
 |---|---|---|
 | **M0 코어 슬라이스** (완료) | 공개 provider 경계 + Rust daemon + 세션 목록·시작·재개. 운영 정본은 [core runtime](../docs/coreRuntime.md) 이다 | 두 provider 의 세션이 한 명령에 뜨고 이어진다 |
 | **M1 데스크톱 (dogfood)** (제품 구현 완료, dogfood 판정 대기) | Tauri v2 + 한 목록 + 대화 + 즉시 반응. 운영 정본은 [desktop GUI](../docs/desktopGui.md) 다 | **운영자가 GPT 앱 대신 이것을 매일 쓴다** |
-| **M2 배포** | 서명된 갱신 + GitHub Releases + landing | 낯선 사람이 설치해서 쓴다 |
-| **M3 폰** | pwaConnection (릴레이 + E2E + push) -> pwaSurface -> 폰 승인 | 밖에서 폰으로 내 세션을 잇고 승인한다 |
+| **M2 배포** | 1-autoUpdate -> 2-landingSite | 낯선 사람이 설치해서 쓴다 |
+| **M3 폰** | 3-pwaConnection (릴레이 + E2E + push) -> 4-pwaSurface -> 폰 승인 | 밖에서 폰으로 내 세션을 잇고 승인한다 |
 
 왜 이 순서인가.
 
@@ -49,7 +42,7 @@
 3. **폰은 구조적으로 뒤다.** 페어링 QR 표시와 물리 행동 승인이 PC 표면을 전제한다. PC 표면 없이 폰부터 지을 수 없다.
 4. **가장 어려운 인프라 (연결·암호·push) 를 안정된 코어 위에 얹는다.** 반대로 하면 인프라를 두 번 짓는다.
 
-`securityPosture` 는 마일스톤이 아니라 **모든 마일스톤의 골격**이다 (M0 부터 스코프 타입이 함께 간다). 북극성 증거 체계는 [공개 등록부](../docs/northStarEvidence.md) 와 [점수판 엔진](../tests/audit/northStar/) 에서 각 마일스톤과 동행한다. `어디서나 같은 방법` (macOS·Linux) 은 M2 이후다.
+북극성 증거 체계는 [공개 등록부](../docs/northStarEvidence.md) 와 [점수판 엔진](../tests/audit/northStar/) 에서 각 마일스톤과 동행한다. `어디서나 같은 방법` (macOS·Linux) 은 M2 이후다.
 
 ## 완료 판정
 
@@ -60,7 +53,7 @@
 (4) 이니셔티브 폴더가 삭제됐다
 는 뜻이다.
 
-**완료 사례**: `positioningDecision` 은 2026-07-30 에 [docs/positioning.md](../docs/positioning.md) 로, `desktopGui` 는 2026-08-02 에 [docs/desktopGui.md](../docs/desktopGui.md) 로 승격되고 삭제됐다.
+**완료 사례**: `positioningDecision` 은 2026-07-30 에 [docs/positioning.md](../docs/positioning.md) 로, `desktopGui` 는 2026-08-02 에 [docs/desktopGui.md](../docs/desktopGui.md) 로, `crossConsult` 는 2026-08-03 에 [docs/crossConsult.md](../docs/crossConsult.md) 로 승격되고 삭제됐다.
 
 ## 이 판을 지배하는 사실 (r1 조사)
 

@@ -2,10 +2,11 @@
 //!
 //! # Why this wire has a compatibility story at all
 //!
-//! The launcher updates one file at a time, so a newer command surface will meet an older daemon on a real machine.
-//! That is not an edge case, it is the ordinary consequence of updating: whichever file lands first is newer for a
-//! moment. So the version is on the wire and a side that does not know it **says so by name** instead of reading the
-//! bytes with the wrong meaning.
+//! An update replaces the one executable atomically, and the daemon started from the old image keeps serving until
+//! its hot sessions reach zero. So a command run from the new image meets an older daemon on a real machine, for as
+//! long as somebody is mid-session. That is not an edge case, it is a designed window: the alternative is killing a
+//! running agent to install something. So the version is on the wire and a side that does not know it **says so by
+//! name** instead of reading the bytes with the wrong meaning.
 //!
 //! # A length prefix is a promise somebody else writes
 //!
@@ -335,8 +336,9 @@ mod tests {
 
     #[test]
     fn a_side_that_speaks_a_different_wire_format_is_told_which_one_to_update() {
-        // The launcher updates one file at a time, so this happens on real machines. An operator needs to know which
-        // of the two is behind, and that is only answerable if both numbers are in the message.
+        // A daemon from the replaced image serves until its sessions end, so this happens on real machines. An
+        // operator needs to know which of the two is behind, and that is only answerable if both numbers are in
+        // the message.
         assert_eq!(check_version(WIRE_VERSION), Ok(()));
 
         match check_version(WIRE_VERSION + 1) {

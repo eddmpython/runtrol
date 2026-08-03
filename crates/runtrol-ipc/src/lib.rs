@@ -4,9 +4,9 @@
 //!
 //! Two reasons, and both are enforcement rather than tidiness.
 //!
-//! The wire needs its own compatibility story. The launcher updates one file at a time, so a newer command surface
-//! will meet an older daemon on a real machine, and that is the ordinary consequence of updating rather than an edge
-//! case.
+//! The wire needs its own compatibility story. An update replaces the one executable atomically while the daemon
+//! from the old image keeps serving until its sessions end, so a newer command surface will meet an older daemon on
+//! a real machine, and that is a designed window rather than an edge case.
 //!
 //! And the command surface must be able to speak it **without linking storage, drivers, or the kernel**. As a crate
 //! whose dependency list is the vocabulary and nothing else, "the command surface never opens the database" is a fact
