@@ -48,7 +48,7 @@ use tokio::task::JoinSet;
 use crate::compose::Composed;
 use crate::dispatch::{
     Cleanup, CleanupReservation, Conversation, Discovered, Prepared, PreparedKind, Reply,
-    answer_prepared, complete_prepare_for, discover, needs_driver, refuse,
+    answer_prepared, complete_prepare_for, discover, needs_driver, prepare_consult, refuse,
 };
 
 /// How many answered requests may be waiting to reach the one task that answers them.
@@ -492,7 +492,8 @@ async fn converse(
             None
         };
 
-        let mut preparation_gate = if needs_driver(&request) {
+        let mut preparation_gate = if needs_driver(&request) || crate::consult::is_consult(&request)
+        {
             Some(discovering.lock().await)
         } else {
             None
@@ -507,6 +508,10 @@ async fn converse(
                 complete_prepare_for(&request, discovered, reserved_session).await
             };
             finish_model_preparation(provider, preparing, model_preparation_budget()).await
+        } else if crate::consult::is_consult(&request) {
+            // The whole consult exchange runs here in the connection's own task, behind the same gate that
+            // bounds temporary provider processes, so a toggle never stops a running session's events.
+            prepare_consult(&conversation, &composed, &request).await
         } else {
             let discovered = if preparation_gate.is_some() {
                 discover(&conversation, &composed, &request).await

@@ -107,7 +107,7 @@ fn main() -> ExitCode {
 fn choose(words: &[String]) -> Personality {
     match words.first().map(String::as_str) {
         None => Personality::Usage(
-            "runtrol <command>. try: gui, list, start, resume, say, answer, stop, watch, close, panic"
+            "runtrol <command>. try: gui, list, start, resume, say, answer, stop, watch, close, consult, panic"
                 .to_owned(),
         ),
         // Spelled as a subcommand rather than inferred from how the program was invoked. Inferring it from the

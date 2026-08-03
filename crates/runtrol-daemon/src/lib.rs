@@ -11,9 +11,11 @@
 //! - [`compose`] establishing containment, finding the home, and reading which providers exist
 //! - [`scope`] what each request needs before anybody is allowed to make it
 //! - [`dispatch`] one request in, one answer out
+//! - [`consult`] wiring one CLI into another as a consultant, through the CLIs' own commands
 //! - [`serve`] one owner of the sessions, and a task for every connection beside it
 
 pub mod compose;
+mod consult;
 mod crash;
 pub mod dispatch;
 pub mod scope;

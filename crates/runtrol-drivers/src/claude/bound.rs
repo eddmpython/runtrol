@@ -183,6 +183,33 @@ pub const FLAGS: &[BoundFlag] = &[
     },
 ];
 
+/// This CLI's part in cross-consult wiring.
+///
+/// Measured on 2.1.220:
+///
+/// - Registration is official: `claude mcp add --scope user <name> -- <command...>`, with `remove` and `get`
+///   beside it. User scope is bound deliberately, because it is the one scope whose canonical file the CLI
+///   itself names on every change, which is what lets a smoke assert the mutation is exactly one entry.
+/// - Serving is official (`claude mcp serve`) but there is nothing to consult: `tools/list` answers with the
+///   CLI's own toolset, and the one delegating tool in it answers "Agent type 'general-purpose' not found"
+///   over an empty available list in serve context. Declaring the absence keeps the reverse direction an
+///   honest "unsupported" instead of a wiring that fails mid-turn.
+pub const CONSULT: crate::consult::ConsultSurface = crate::consult::ConsultSurface {
+    registrar: Some(crate::consult::McpRegistrar {
+        add: &["mcp", "add", "--scope", "user"],
+        remove: &["mcp", "remove", "--scope", "user"],
+        get: &["mcp", "get"],
+    }),
+    server: Some(crate::consult::McpConsultServer {
+        serve: &["mcp", "serve"],
+        tool: crate::consult::ConsultTool::Absent {
+            why: "this CLI's own MCP server exposes its toolset, not a consultation: measured on 2.1.220, \
+                  its delegating tool answers 'Agent type not found' with an empty available list in serve \
+                  context",
+        },
+    }),
+};
+
 #[cfg(test)]
 mod tests {
     use super::*;

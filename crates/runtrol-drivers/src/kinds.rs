@@ -63,6 +63,8 @@ pub struct DriverKind {
     pub make: Option<MakeDriver>,
     /// Flags this driver actually passes to its CLI.
     pub flags: &'static [DriverFlag],
+    /// How this CLI takes part in cross-consult wiring, when it has official commands for it.
+    pub consult: crate::consult::ConsultSurface,
     /// Why this build cannot serve it, when it cannot.
     ///
     /// A sentence an operator reads, not a code. The difference between "this build has no generic driver for that
@@ -77,6 +79,7 @@ impl core::fmt::Debug for DriverKind {
             .field("kind", &self.kind)
             .field("served", &self.make.is_some())
             .field("flags", &self.flags)
+            .field("consult", &self.consult)
             .field("unavailable", &self.unavailable)
             .finish()
     }
@@ -118,30 +121,37 @@ pub const KINDS: &[DriverKind] = &[
         kind: "claude-stream-json",
         make: Some(make_claude),
         flags: crate::claude::FLAGS,
+        consult: crate::claude::CONSULT,
         unavailable: None,
     },
     DriverKind {
         kind: "codex-app-server",
         make: Some(make_codex),
         flags: &[],
+        consult: crate::codex::CONSULT,
         unavailable: None,
     },
     DriverKind {
         kind: "acp",
         make: Some(make_acp),
         flags: &[],
+        // The generic protocol driver serves whatever CLI a manifest names, so there is no one set of
+        // official wiring commands to declare for it.
+        consult: crate::consult::ConsultSurface::NONE,
         unavailable: None,
     },
     DriverKind {
         kind: "exec-oneshot",
         make: None,
         flags: &[],
+        consult: crate::consult::ConsultSurface::NONE,
         unavailable: Some("one process per turn is not a transport this build serves"),
     },
     DriverKind {
         kind: "pty",
         make: None,
         flags: &[],
+        consult: crate::consult::ConsultSurface::NONE,
         unavailable: Some("a terminal transport is not built into this binary"),
     },
 ];

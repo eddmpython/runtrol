@@ -278,6 +278,28 @@ pub fn is_per_thread(method: &str) -> Option<bool> {
         .map(|notice| notice.per_thread)
 }
 
+/// This CLI's part in cross-consult wiring.
+///
+/// Measured on 0.146.0:
+///
+/// - Registration is official: `codex mcp add <name> -- <command...>`, with `remove` and `get` beside it.
+///   Its configuration is global, so there is no scope word to bind.
+/// - Serving is official and consultable: `codex mcp-server` answers `tools/list` with a `codex` tool that
+///   runs a session, which is exactly what a counterpart calls to get this CLI's opinion. The name is
+///   verified against a fresh `tools/list` before every wiring, so a vendor rename becomes a refusal at the
+///   toggle rather than a failure mid-turn.
+pub const CONSULT: crate::consult::ConsultSurface = crate::consult::ConsultSurface {
+    registrar: Some(crate::consult::McpRegistrar {
+        add: &["mcp", "add"],
+        remove: &["mcp", "remove"],
+        get: &["mcp", "get"],
+    }),
+    server: Some(crate::consult::McpConsultServer {
+        serve: &["mcp-server"],
+        tool: crate::consult::ConsultTool::Named("codex"),
+    }),
+};
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -26,8 +26,8 @@ pub use events::{
 };
 pub use home::{Endpoint, HomeError, Layout, RuntrolHome};
 pub use probe::{
-    BinFacts, Flags, LeadingArgFacts, LeadingFileFacts, ProbeCache, ProbeError, locate, probe,
-    probe_program,
+    BinFacts, Flags, LeadingArgFacts, LeadingFileFacts, ProbeCache, ProbeError, locate,
+    locate_named, probe, probe_program,
 };
 pub use registry::{
     KindEntry, KindStatus, KindTable, Origin, Provider, ProviderRegistry, RegistryError,

@@ -132,6 +132,28 @@ pub enum Request {
     /// and a request with no arguments has nothing an attacker could aim. The worst it achieves is stopping work, which
     /// is the safe direction.
     StopEverything,
+
+    /// Every cross-consult direction this build knows, with its current wired state.
+    ///
+    /// Read-only: the state lives in the CLIs' own configuration and is asked for fresh, so there is no second
+    /// place for it to go stale.
+    Consult,
+
+    /// Register `to` as a consultable MCP server inside `from`, using `from`'s own official command.
+    ConsultWire {
+        /// The CLI that gains a consultant.
+        from: Box<str>,
+        /// The CLI whose opinion becomes reachable mid-turn.
+        to: Box<str>,
+    },
+
+    /// Undo [`Request::ConsultWire`] with `from`'s own removal command, restoring its configuration.
+    ConsultUnwire {
+        /// The CLI that loses its consultant.
+        from: Box<str>,
+        /// The CLI being unregistered.
+        to: Box<str>,
+    },
 }
 
 /// What the daemon answers.
@@ -192,8 +214,40 @@ pub enum Response {
         next_expected: WatchCursor,
     },
 
+    /// Every cross-consult direction, each with its current state.
+    ///
+    /// Answered for the status request and after a wire or unwire, so a surface renders one shape and never
+    /// derives state on its own.
+    Consult(Vec<ConsultLine>),
+
     /// It did not work.
     Failed(WireError),
+}
+
+/// One cross-consult direction, as a surface shows it.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct ConsultLine {
+    /// The CLI that would gain a consultant.
+    pub from: Box<str>,
+    /// The CLI whose opinion would become reachable.
+    pub to: Box<str>,
+    /// Where this direction stands.
+    pub state: ConsultState,
+    /// Why, when the state needs a sentence: the measured absence for an unsupported direction, or the
+    /// CLI's own words when its answer could not be trusted.
+    pub why: Option<Box<str>>,
+}
+
+/// Where one cross-consult direction stands.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ConsultState {
+    /// The registration exists in the `from` CLI's own configuration.
+    Wired,
+    /// It does not.
+    Unwired,
+    /// This direction cannot be wired, and `why` says what was measured.
+    Unsupported,
 }
 
 /// The small fixed edges around an already encoded event payload.
@@ -430,6 +484,15 @@ mod tests {
                 subject_digest: [3; 32],
             },
             Request::StopEverything,
+            Request::Consult,
+            Request::ConsultWire {
+                from: "claude".into(),
+                to: "codex".into(),
+            },
+            Request::ConsultUnwire {
+                from: "claude".into(),
+                to: "codex".into(),
+            },
         ] {
             let back = round_trip_request(&request);
             assert_eq!(
@@ -638,6 +701,38 @@ mod tests {
         {
             Response::Lagged { next_expected } => assert_eq!(next_expected, requested),
             other => panic!("expected a lag control, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_consult_answer_carries_every_direction_with_its_state_and_reason() {
+        // One shape for status and for the answer to a wire, so a surface never derives state on its own.
+        let response = Response::Consult(vec![
+            ConsultLine {
+                from: "claude".into(),
+                to: "codex".into(),
+                state: ConsultState::Wired,
+                why: None,
+            },
+            ConsultLine {
+                from: "codex".into(),
+                to: "claude".into(),
+                state: ConsultState::Unsupported,
+                why: Some("measured absent".into()),
+            },
+        ]);
+        let encoded = serde_json::to_string(&response).expect("writable");
+        assert!(encoded.contains("unsupported"), "{encoded}");
+        match serde_json::from_str::<Response>(&encoded).expect("readable") {
+            Response::Consult(lines) => {
+                assert_eq!(lines.len(), 2);
+                let unsupported = lines
+                    .iter()
+                    .find(|line| line.state == ConsultState::Unsupported)
+                    .expect("the unsupported direction survives the wire");
+                assert!(unsupported.why.is_some(), "and it says why");
+            }
+            other => panic!("expected a consult answer, got {other:?}"),
         }
     }
 

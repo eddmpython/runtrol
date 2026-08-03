@@ -9,6 +9,7 @@
 //! - [`framing`] getting bytes to and from a child in the shapes these CLIs speak
 //! - [`claude`] the driver for the CLI that runs one process per session, and its measured surface
 //! - [`codex`] the driver for the CLI whose sessions share one daemon, and its measured surface
+//! - [`consult`] how a driver takes part in cross-consult wiring, as a declared surface
 //! - [`kinds`] the kind table and the manifests compiled into this binary
 //!
 //! # The whole public surface is one function and two tables
@@ -19,9 +20,11 @@
 pub mod acp;
 pub mod claude;
 pub mod codex;
+pub mod consult;
 pub mod framing;
 pub mod kinds;
 
+pub use consult::{ConsultSurface, ConsultTool, McpConsultServer, McpRegistrar};
 pub use framing::{FrameError, Incoming, LineError, Lines, Pending, RequestId};
 pub use kinds::{DriverContext, DriverKind, KINDS, MANIFESTS, MakeDriver};
 

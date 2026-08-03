@@ -25,13 +25,20 @@
 //! when they need it.
 
 use runtrol_ipc::wire::Request;
-use runtrol_security::{Caller, DeviceScope, GrantLedger, SecurityError};
+use runtrol_security::{Caller, DeviceScope, GrantLedger, LocalScope, SecurityError};
 
 /// What a request needs.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Needed {
     /// A device must hold this scope. Somebody at the machine always may.
     Scope(DeviceScope),
+
+    /// Only somebody at the machine, ever. No grant can carry it to a device.
+    ///
+    /// The [`LocalScope`] names which capability this is in the audit vocabulary. The type it belongs to is
+    /// the enforcement: there is no conversion from a local scope into anything the grant ledger accepts, so
+    /// a device cannot hold this by construction and the check here is presence and nothing else.
+    AtTheMachine(LocalScope),
 
     /// Answering needs either low or high approval authority at the boundary.
     ///
@@ -65,7 +72,8 @@ pub fn needed(request: &Request) -> Needed {
         }
 
         Request::List => Needed::Scope(DeviceScope::SessionList),
-        Request::Models { .. } => Needed::Scope(DeviceScope::ConfigRead),
+        // Model discovery and consult status both read configuration and touch nothing.
+        Request::Models { .. } | Request::Consult => Needed::Scope(DeviceScope::ConfigRead),
         Request::Start { .. } => Needed::Scope(DeviceScope::SessionStart),
         Request::Resume { .. } => Needed::Scope(DeviceScope::SessionResume),
         Request::Prompt { .. } => Needed::Scope(DeviceScope::SessionInputWrite),
@@ -80,6 +88,12 @@ pub fn needed(request: &Request) -> Needed {
             "the security posture requires the panic button to work from anywhere with no permission, and the \
              worst it achieves is that work stops",
         ),
+
+        // Wiring expands what an agent can reach mid-turn and edits the CLIs' own configuration. Capability
+        // growth is answered at the keyboard or not at all, so no grant can carry it.
+        Request::ConsultWire { .. } | Request::ConsultUnwire { .. } => {
+            Needed::AtTheMachine(LocalScope::ConsultWire)
+        }
 
         _ => Needed::Unknown,
     }
@@ -102,6 +116,13 @@ pub fn allowed(
         Needed::Scope(scope) => caller
             .may(scope, ledger)
             .map_err(|source| WallRefusal::Denied { source }),
+        Needed::AtTheMachine(capability) => {
+            if caller.is_at_the_machine() {
+                Ok(())
+            } else {
+                Err(WallRefusal::NeverRemote { capability })
+            }
+        }
         Needed::ApprovalResponse => match caller.may(DeviceScope::ApprovalRespondLow, ledger) {
             Ok(()) => Ok(()),
             Err(low) => match caller.may(DeviceScope::ApprovalRespondHigh, ledger) {
@@ -130,6 +151,18 @@ pub enum WallRefusal {
     /// permission, the other means the two ends are different builds.
     #[error("this daemon has no rule about who may make that request")]
     Unknown,
+
+    /// The capability is answered at the machine and can never be granted to a device.
+    ///
+    /// Separate from a denial, because a denial says "ask for the permission" and there is nothing here to
+    /// ask for: the honest instruction is to go to the keyboard.
+    #[error(
+        "{capability} is decided at the machine runtrol runs on and cannot be granted remotely"
+    )]
+    NeverRemote {
+        /// Which capability, in the audit vocabulary.
+        capability: LocalScope,
+    },
 }
 
 #[cfg(test)]
@@ -185,6 +218,15 @@ mod tests {
                 now: false,
             },
             Request::StopEverything,
+            Request::Consult,
+            Request::ConsultWire {
+                from: "claude".into(),
+                to: "codex".into(),
+            },
+            Request::ConsultUnwire {
+                from: "claude".into(),
+                to: "codex".into(),
+            },
         ]
     }
 
@@ -216,13 +258,54 @@ mod tests {
                     assert!(!why.is_empty(), "{request:?} is open and does not say why");
                     assert!(allowed(&caller, &request, &ledger).is_ok());
                 }
-                Needed::Scope(_) | Needed::ApprovalResponse => assert!(
+                Needed::Scope(_) | Needed::ApprovalResponse | Needed::AtTheMachine(_) => assert!(
                     allowed(&caller, &request, &ledger).is_err(),
                     "{request:?} was allowed to a device that holds nothing"
                 ),
                 Needed::Unknown => panic!("{request:?} has no rule"),
             }
         }
+    }
+
+    #[test]
+    fn consult_wiring_is_refused_to_every_device_no_matter_what_it_holds() {
+        // Capability growth is answered at the keyboard or not at all. "No matter what it holds" is total by
+        // construction rather than by enumeration: the check is presence, the ledger is never consulted, and
+        // there is no conversion from `LocalScope` into anything the grant ledger accepts. The refusal names
+        // the keyboard rather than a permission, because there is none to ask for.
+        let ledger = GrantLedger::new();
+        let caller = Caller::Device {
+            device: DeviceId::now(),
+        };
+        for request in [
+            Request::ConsultWire {
+                from: "claude".into(),
+                to: "codex".into(),
+            },
+            Request::ConsultUnwire {
+                from: "claude".into(),
+                to: "codex".into(),
+            },
+        ] {
+            match allowed(&caller, &request, &ledger) {
+                Err(WallRefusal::NeverRemote { capability }) => {
+                    assert_eq!(capability.name(), "consult.wire");
+                }
+                other => panic!("{request:?} was not refused as never-remote: {other:?}"),
+            }
+        }
+        assert!(
+            allowed(
+                &Caller::AtTheMachine,
+                &Request::ConsultWire {
+                    from: "claude".into(),
+                    to: "codex".into()
+                },
+                &ledger
+            )
+            .is_ok(),
+            "presence is the one thing that opens it"
+        );
     }
 
     #[test]

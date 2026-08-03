@@ -25,6 +25,6 @@ mod models;
 pub mod provider;
 
 pub use agent::ClaudeAgent;
-pub use bound::{BoundFlag, BoundFrame, CONTROL, FLAGS, FRAMES, TERMINAL};
+pub use bound::{BoundFlag, BoundFrame, CONSULT, CONTROL, FLAGS, FRAMES, TERMINAL};
 pub use map::{Ended, Frame, MapError, Startup};
 pub use provider::ClaudeProvider;

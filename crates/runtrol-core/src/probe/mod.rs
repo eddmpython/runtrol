@@ -244,10 +244,24 @@ pub async fn probe_program(
 ///
 /// [`ProbeError::NotInstalled`] when none of the candidates resolves, naming every one that was tried.
 pub fn locate(manifest: &Manifest) -> Result<Program, ProbeError> {
+    locate_named(manifest).map(|(_, program)| program)
+}
+
+/// [`locate`], also naming the candidate that resolved.
+///
+/// The name matters to a caller writing an invocation into somewhere long-lived, such as a counterpart CLI's
+/// own configuration: a resolved absolute path goes stale on the next update, while the candidate name keeps
+/// meaning "whatever is installed" for as long as the operator's search path does. Answered here so the
+/// manifest's candidate order has exactly one reader.
+///
+/// # Errors
+///
+/// [`ProbeError::NotInstalled`] when none of the candidates resolves, naming every one that was tried.
+pub fn locate_named(manifest: &Manifest) -> Result<(&str, Program), ProbeError> {
     locate_with(manifest, resolve)
 }
 
-/// The first candidate name that resolves, in the manifest's own order.
+/// The first candidate name that resolves, in the manifest's own order, and the candidate itself.
 ///
 /// The order is the manifest author's and it decides which program runs: a native executable and a launcher
 /// script for the same CLI are both commonly on the path, they behave the same, and one of them costs an extra
@@ -258,10 +272,10 @@ pub fn locate(manifest: &Manifest) -> Result<Program, ProbeError> {
 fn locate_with<P>(
     manifest: &Manifest,
     try_one: impl Fn(&str) -> Result<P, SpawnError>,
-) -> Result<P, ProbeError> {
+) -> Result<(&str, P), ProbeError> {
     for name in &manifest.bin.names {
         if let Ok(program) = try_one(name) {
-            return Ok(program);
+            return Ok((&**name, program));
         }
     }
     // Nothing resolved. Every individual failure is "not on the path", and reporting five of those would bury
@@ -751,13 +765,15 @@ Options:
             searched: "nowhere".to_owned(),
         };
 
-        // Everything installed: the first wins.
-        let chosen = locate_with(&manifest, |name| Ok::<String, SpawnError>(name.to_owned()))
-            .expect("something resolves");
+        // Everything installed: the first wins, and the winning candidate is named.
+        let (name, chosen) =
+            locate_with(&manifest, |name| Ok::<String, SpawnError>(name.to_owned()))
+                .expect("something resolves");
         assert_eq!(chosen, "first");
+        assert_eq!(name, "first", "the caller is told which candidate won");
 
         // The preferred one absent: the next in the manifest's order wins, not the last.
-        let chosen = locate_with(&manifest, |name| {
+        let (name, chosen) = locate_with(&manifest, |name| {
             if name == "first" {
                 Err(missing(name))
             } else {
@@ -766,9 +782,10 @@ Options:
         })
         .expect("something resolves");
         assert_eq!(chosen, "second");
+        assert_eq!(name, "second");
 
         // Only the last one installed: it is still found, so a failure does not stop the search.
-        let chosen = locate_with(&manifest, |name| {
+        let (name, chosen) = locate_with(&manifest, |name| {
             if name == "third" {
                 Ok(name.to_owned())
             } else {
@@ -777,6 +794,7 @@ Options:
         })
         .expect("the last candidate resolves");
         assert_eq!(chosen, "third");
+        assert_eq!(name, "third");
     }
 
     #[test]

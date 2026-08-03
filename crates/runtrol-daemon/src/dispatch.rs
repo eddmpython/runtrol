@@ -142,6 +142,48 @@ pub(crate) struct Opened {
     agent: Box<dyn Agent>,
 }
 
+/// The exact consult request a prepared consult answer belongs to.
+///
+/// Carried beside the answer so that one consult's answer cannot be replayed for a different consult request,
+/// the same binding rule every other prepared result follows.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub(crate) enum ConsultAsked {
+    /// The status of every direction.
+    Status,
+    /// One direction being wired.
+    Wire {
+        /// The registering provider.
+        from: Box<str>,
+        /// The provider being served.
+        to: Box<str>,
+    },
+    /// One direction being unwired.
+    Unwire {
+        /// The registering provider.
+        from: Box<str>,
+        /// The provider being unregistered.
+        to: Box<str>,
+    },
+}
+
+impl ConsultAsked {
+    /// The binding for one request, or `None` for a request that is not a consult.
+    fn of(request: &Request) -> Option<Self> {
+        match request {
+            Request::Consult => Some(Self::Status),
+            Request::ConsultWire { from, to } => Some(Self::Wire {
+                from: from.clone(),
+                to: to.clone(),
+            }),
+            Request::ConsultUnwire { from, to } => Some(Self::Unwire {
+                from: from.clone(),
+                to: to.clone(),
+            }),
+            _ => None,
+        }
+    }
+}
+
 /// Process work completed before the single session owner receives a request.
 ///
 /// Probing a cold provider can take seconds. Keeping that wait outside the owner lets existing sessions continue to
@@ -178,6 +220,17 @@ pub(crate) enum Prepared {
         provider: ProviderId,
         /// The opened process or refusal.
         result: Result<Opened, Response>,
+    },
+
+    /// A consult exchange completed by the connection task, outside the session owner.
+    ///
+    /// The whole exchange, not a handle to one: consult work is a few bounded process questions and holds no
+    /// agent, so by the time the owner sees this there is nothing left that could wait.
+    Consult {
+        /// The exact consult request the answer was computed for.
+        asked: ConsultAsked,
+        /// The completed answer.
+        response: Response,
     },
 }
 
@@ -423,6 +476,29 @@ pub(crate) const fn needs_driver(request: &Request) -> bool {
     )
 }
 
+/// Complete a consult exchange in the connection task, or nothing when the wall would refuse it anyway.
+///
+/// The wall is still asked by the owner before the answer is used. It is asked here first because consult
+/// work runs provider processes, and an unauthorized request must cost nothing before it is refused.
+pub(crate) async fn prepare_consult(
+    conversation: &Conversation,
+    composed: &Composed,
+    request: &Request,
+) -> Prepared {
+    if !conversation.greeted()
+        || crate::scope::allowed(&conversation.caller, request, &composed.granted).is_err()
+    {
+        return Prepared::None;
+    }
+    let Some(asked) = ConsultAsked::of(request) else {
+        return Prepared::None;
+    };
+    Prepared::Consult {
+        asked,
+        response: crate::consult::answer(composed, request).await,
+    }
+}
+
 /// Answer one request after any slow provider discovery has completed elsewhere.
 #[expect(
     clippy::too_many_lines,
@@ -570,6 +646,19 @@ pub(crate) fn answer_prepared(
             Err(error) => Reply::One(refuse(&error.to_string())),
         },
 
+        // The exchange already happened in the connection task. What is verified here is the binding: the
+        // answer must be the one computed for this exact request, the rule every prepared result follows.
+        consult @ (Request::Consult
+        | Request::ConsultWire { .. }
+        | Request::ConsultUnwire { .. }) => match prepared {
+            Prepared::Consult { asked, response }
+                if ConsultAsked::of(&consult).as_ref() == Some(&asked) =>
+            {
+                Reply::One(response)
+            }
+            other => mismatched(other),
+        },
+
         // A request that arrived after this build was made. Refused by name, because a wildcard that answered "done"
         // would report something as carried out when nothing happened.
         other => Reply::One(refuse(&format!("this daemon has no binding for {other:?}"))),
@@ -709,7 +798,8 @@ fn bound(
     requested_provider: &str,
 ) -> Result<Prepared, Reply> {
     let matches = match &prepared {
-        Prepared::None => false,
+        // A consult answer never belongs to a provider request; its own binding is checked where it is used.
+        Prepared::None | Prepared::Consult { .. } => false,
         Prepared::Invalid { kind, provider, .. } => {
             *kind == requested_kind && provider.as_ref() == requested_provider
         }
@@ -1599,6 +1689,7 @@ mod tests {
         let optional = runtrol_drivers::DriverKind {
             kind: "fixture",
             make: None,
+            consult: runtrol_drivers::ConsultSurface::NONE,
             flags: &[runtrol_drivers::kinds::DriverFlag {
                 flag: "--optional",
                 required: false,

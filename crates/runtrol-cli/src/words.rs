@@ -16,7 +16,9 @@ use runtrol_provider::{ApprovalId, OptionId, SessionId, StreamId, WatchCursor};
 #[non_exhaustive]
 pub enum Misunderstood {
     /// Nothing was typed.
-    #[error("no command. try: list, models, start, resume, say, answer, stop, watch, close, panic")]
+    #[error(
+        "no command. try: list, models, start, resume, say, answer, stop, watch, close, consult, panic"
+    )]
     Nothing,
 
     /// The command is not one runtrol has.
@@ -24,7 +26,7 @@ pub enum Misunderstood {
     /// Names what was typed, because the operator's next move is to correct it and a message that does not repeat it
     /// makes them guess what runtrol thought they said.
     #[error(
-        "no command called {typed:?}. try: list, models, start, resume, say, answer, stop, watch, close, panic"
+        "no command called {typed:?}. try: list, models, start, resume, say, answer, stop, watch, close, consult, panic"
     )]
     NoSuchCommand {
         /// What they typed.
@@ -189,7 +191,37 @@ pub fn understand(words: &[String], here: &str) -> Result<Request, Misunderstood
 
         "panic" => Ok(Request::StopEverything),
 
+        "consult" => consult_of(rest),
+
         typed => Err(Misunderstood::NoSuchCommand {
+            typed: typed.to_owned(),
+        }),
+    }
+}
+
+/// The consult command: bare for status, `wire`/`unwire` with both ends named to flip a direction.
+fn consult_of(rest: &[String]) -> Result<Request, Misunderstood> {
+    match rest.first().map(String::as_str) {
+        // Bare, it asks where every direction stands. The state lives in the CLIs' own configuration, so
+        // there is nothing to name.
+        None => Ok(Request::Consult),
+        Some(flip @ ("wire" | "unwire")) => {
+            if let Some(typed) = rest.get(3) {
+                return Err(Misunderstood::Extra {
+                    command: "consult",
+                    typed: typed.clone(),
+                });
+            }
+            let from = word(rest, 1, "consult", "which provider registers")?.into();
+            let to = word(rest, 2, "consult", "which provider is consulted")?.into();
+            if flip == "wire" {
+                Ok(Request::ConsultWire { from, to })
+            } else {
+                Ok(Request::ConsultUnwire { from, to })
+            }
+        }
+        Some(typed) => Err(Misunderstood::Extra {
+            command: "consult",
             typed: typed.to_owned(),
         }),
     }
@@ -485,5 +517,44 @@ mod tests {
             understand(&typed("panic"), here()).expect("understandable"),
             Request::StopEverything
         ));
+    }
+
+    #[test]
+    fn consult_asks_for_status_bare_and_names_both_ends_to_flip() {
+        assert!(matches!(
+            understand(&typed("consult"), here()).expect("understandable"),
+            Request::Consult
+        ));
+        match understand(&typed("consult wire claude codex"), here()).expect("understandable") {
+            Request::ConsultWire { from, to } => {
+                assert_eq!(&*from, "claude");
+                assert_eq!(&*to, "codex");
+            }
+            other => panic!("expected a wire, got {other:?}"),
+        }
+        match understand(&typed("consult unwire claude codex"), here()).expect("understandable") {
+            Request::ConsultUnwire { from, to } => {
+                assert_eq!(&*from, "claude");
+                assert_eq!(&*to, "codex");
+            }
+            other => panic!("expected an unwire, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_consult_flip_missing_an_end_or_carrying_extras_is_refused() {
+        // Wiring edits another program's configuration. A guessed direction would edit one nobody named.
+        for line in [
+            "consult wire",
+            "consult wire claude",
+            "consult unwire claude",
+            "consult wire claude codex extra",
+            "consult status",
+        ] {
+            assert!(
+                understand(&typed(line), here()).is_err(),
+                "accepted {line:?}"
+            );
+        }
     }
 }

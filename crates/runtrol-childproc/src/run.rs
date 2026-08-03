@@ -93,20 +93,66 @@ pub async fn capture(
     within: Duration,
     contained_by: &Containment,
 ) -> Result<Output, SpawnError> {
+    capture_exchange(program, args, None, within, contained_by).await
+}
+
+/// Run a resolved program, hand it `input` on standard input, close the pipe, and read what it said.
+///
+/// For the one question shape [`capture`] cannot ask: a program that reads its question from standard input
+/// and answers on standard output, such as a CLI's own MCP server asked for its tool list. The whole input is
+/// written up front and the pipe is closed, so a program that waits for end of input sees it immediately, and
+/// the same deadline bounds a program that never exits.
+///
+/// # Errors
+///
+/// The same errors as [`capture`].
+pub async fn capture_with_input(
+    program: &Program,
+    args: &[String],
+    input: &[u8],
+    within: Duration,
+    contained_by: &Containment,
+) -> Result<Output, SpawnError> {
+    capture_exchange(program, args, Some(input), within, contained_by).await
+}
+
+/// One bounded question, with or without bytes on standard input.
+async fn capture_exchange(
+    program: &Program,
+    args: &[String],
+    input: Option<&[u8]>,
+    within: Duration,
+    contained_by: &Containment,
+) -> Result<Output, SpawnError> {
     let mut full: Vec<String> = program.leading().to_vec();
     full.extend_from_slice(args);
     argv::check_all(&full)?;
 
+    let stdin = if input.is_some() {
+        std::process::Stdio::piped()
+    } else {
+        std::process::Stdio::null()
+    };
     let mut command = TrackedCommand::new(program.path().as_std_path());
     command
         .args(&full)
-        .stdin(std::process::Stdio::null())
+        .stdin(stdin)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         // The child must not outlive the answer. Without this the process is reaped only when the handle is
         // dropped, and a timeout would leave it running.
         .kill_on_drop(true);
     let (mut child, mut child_guard) = command.spawn(contained_by)?;
+    let writing = match input {
+        Some(bytes) => {
+            let stdin = child.stdin.take().ok_or_else(|| SpawnError::Io {
+                path: program.path().to_string(),
+                detail: "the captured standard input pipe was not created".to_owned(),
+            })?;
+            Some((stdin, bytes.to_vec()))
+        }
+        None => None,
+    };
     let stdout = child.stdout.take().ok_or_else(|| SpawnError::Io {
         path: program.path().to_string(),
         detail: "the captured standard output pipe was not created".to_owned(),
@@ -121,6 +167,7 @@ pub async fn capture(
         collect(
             &mut child,
             &mut child_guard,
+            writing,
             stdout,
             stderr,
             program.path().as_str(),
@@ -145,16 +192,32 @@ pub async fn capture(
     }
 }
 
-/// Wait for a child while draining both pipes concurrently into bounded buffers.
+/// Wait for a child while writing any input and draining both pipes concurrently into bounded buffers.
 async fn collect(
     child: &mut crate::contain::TrackedChild,
     child_guard: &mut crate::contain::ChildGuard,
+    writing: Option<(tokio::process::ChildStdin, Vec<u8>)>,
     stdout: tokio::process::ChildStdout,
     stderr: tokio::process::ChildStderr,
     path: &str,
 ) -> Result<Output, SpawnError> {
-    let (status, stdout, stderr) =
-        tokio::join!(child.wait(), read_bounded(stdout), read_bounded(stderr));
+    // The write runs beside the reads, so a child that answers before consuming everything cannot deadlock
+    // against a full pipe. The handle is dropped when the write ends, which is what closes the pipe and lets
+    // a child that reads to end of input finish. A child that exits without reading makes the write fail with
+    // a broken pipe, which is not an error here: what it said is still the answer.
+    let write_all = async {
+        if let Some((mut stdin, bytes)) = writing {
+            use tokio::io::AsyncWriteExt as _;
+            drop(stdin.write_all(&bytes).await);
+            drop(stdin.shutdown().await);
+        }
+    };
+    let (status, _written, stdout, stderr) = tokio::join!(
+        child.wait(),
+        write_all,
+        read_bounded(stdout),
+        read_bounded(stderr)
+    );
     let status = status.map_err(|error| SpawnError::Io {
         path: path.to_owned(),
         detail: error.to_string(),
@@ -238,6 +301,36 @@ mod tests {
         assert!(
             !output.text().is_empty(),
             "a program that was asked something must have said something"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_program_that_reads_its_question_from_stdin_is_answered() {
+        // The shape a CLI's own MCP server has: question on standard input, answer on standard output, exit
+        // on end of input. The sorter is the one program on every supported platform that reads to the end
+        // of its input, so ordering in its output proves the input arrived whole and the pipe was closed.
+        let program = resolve::resolve("sort").expect("every supported platform ships a sorter");
+        let output = capture_with_input(
+            &program,
+            &[],
+            b"beta\nalpha\n",
+            Duration::from_secs(30),
+            &uncontained(),
+        )
+        .await
+        .expect("the program must run");
+
+        assert!(output.succeeded(), "{:?}", output.code);
+        let text = output.text();
+        let alpha = text
+            .find("alpha")
+            .expect("the second input line is in the answer");
+        let beta = text
+            .find("beta")
+            .expect("the first input line is in the answer");
+        assert!(
+            alpha < beta,
+            "sorted output proves the whole input was read: {text}"
         );
     }
 

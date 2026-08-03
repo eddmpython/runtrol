@@ -129,6 +129,8 @@ pub fn render(response: &Response) -> Vec<String> {
             next_expected.stream, next_expected.epoch, next_expected.seq
         )],
 
+        Response::Consult(directions) => render_consult(directions),
+
         Response::Failed(failure) => {
             let mut lines = vec![failure.message.to_string()];
             if failure.needs_the_operator {
@@ -143,6 +145,30 @@ pub fn render(response: &Response) -> Vec<String> {
         // deserves to know an answer came back, even one this build cannot lay out.
         other => vec![format!("an answer this build cannot lay out: {other:?}")],
     }
+}
+
+fn render_consult(directions: &[runtrol_ipc::wire::ConsultLine]) -> Vec<String> {
+    if directions.is_empty() {
+        return vec!["no consult directions".to_owned()];
+    }
+    directions
+        .iter()
+        .map(|one| {
+            let state = match one.state {
+                runtrol_ipc::wire::ConsultState::Wired => "wired",
+                runtrol_ipc::wire::ConsultState::Unwired => "unwired",
+                runtrol_ipc::wire::ConsultState::Unsupported => "unsupported",
+            };
+            // Fixed fields first, prose last, so the line splits on whitespace like every other listing on
+            // this surface.
+            let why = one
+                .why
+                .as_deref()
+                .map(|why| format!("  ({why})"))
+                .unwrap_or_default();
+            format!("consult  {}  {}  {state}{why}", one.from, one.to)
+        })
+        .collect()
 }
 
 fn render_event(
@@ -318,6 +344,38 @@ mod tests {
         assert_eq!(
             partial.get(2).map(String::as_str),
             Some("model  runtime-model  Runtime Model")
+        );
+    }
+
+    #[test]
+    fn consult_directions_are_one_per_line_with_the_reason_last() {
+        let lines = render(&Response::Consult(vec![
+            runtrol_ipc::wire::ConsultLine {
+                from: "claude".into(),
+                to: "codex".into(),
+                state: runtrol_ipc::wire::ConsultState::Wired,
+                why: None,
+            },
+            runtrol_ipc::wire::ConsultLine {
+                from: "codex".into(),
+                to: "claude".into(),
+                state: runtrol_ipc::wire::ConsultState::Unsupported,
+                why: Some("measured absent".into()),
+            },
+        ]));
+        assert_eq!(lines.len(), 2);
+        let wired = lines.first().expect("two lines");
+        // Fixed fields first so the line splits on whitespace like every other listing here.
+        let fields: Vec<&str> = wired.split_whitespace().collect();
+        assert_eq!(fields, vec!["consult", "claude", "codex", "wired"]);
+        let unsupported = lines.get(1).expect("two lines");
+        assert!(unsupported.contains("unsupported"), "{unsupported}");
+        assert!(unsupported.contains("measured absent"), "{unsupported}");
+
+        assert_eq!(
+            render(&Response::Consult(Vec::new())),
+            vec!["no consult directions"],
+            "an empty answer says so rather than printing nothing"
         );
     }
 

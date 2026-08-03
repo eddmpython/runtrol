@@ -31,8 +31,8 @@ pub mod provider;
 
 pub use agent::CodexAgent;
 pub use bound::{
-    Answer, BoundCall, BoundNotice, BoundReport, BoundRequest, CALLS, NOTICES, REPORTS, REQUESTS,
-    TERMINAL,
+    Answer, BoundCall, BoundNotice, BoundReport, BoundRequest, CALLS, CONSULT, NOTICES, REPORTS,
+    REQUESTS, TERMINAL,
 };
 pub use conn::{Connection, Delivery, INBOX_DEPTH, Inbox};
 pub use map::{Ended, Frame, MapError};
