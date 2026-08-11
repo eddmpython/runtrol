@@ -15,6 +15,9 @@ its measured architecture, and the gate harness.
 
 ### Added
 
+- A full installed-provider VS Code journey. A real Extension Host now auto-discovers Claude Code, starts sessions in
+  two workspaces, carries a prompt and hidden approval denial, reconnects, interrupts, switches the same window,
+  restores the exact selected session, and closes every exact process without storing conversation content.
 - A real VS Code eight-hot-session ratchet. External-manifest ACP children stay supervised while each switch waits for
   a Core watch acknowledgement and Webview paint, and a new VS Code process restores the exact selected session in
   its workspace from one bounded scalar preference.

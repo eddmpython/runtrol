@@ -129,6 +129,14 @@ GATES: dict[str, tuple[str, list[str]]] = {
         "실제 VS Code 활성화, 뷰, 갱신 p95, RSS ratchet",
         [*PY, f"{HOOKS}/vscodeHostPerformance.py"],
     ),
+    "vscodeRealProviderJourneySelftest": (
+        "VS Code 실물 provider 전체 여정 게이트 자체 검증",
+        [*PY, f"{HOOKS}/vscodeRealProviderJourney.py", "--selftest"],
+    ),
+    "vscodeRealProviderJourney": (
+        "VS Code에서 실물 CLI 시작, 승인, 중단, 재접속, workspace 전환, 종료",
+        [*PY, f"{HOOKS}/vscodeRealProviderJourney.py", "--require-external"],
+    ),
     "interactionLatencyBudgetSelftest": (
         "데스크톱 상호작용 예산 게이트 자체 검증",
         [*PY, f"{HOOKS}/interactionLatencyBudget.py", "--selftest"],
@@ -421,6 +429,8 @@ SUITES: dict[str, tuple[str, ...]] = {
         "vscodeExtension",
         "vscodeHostPerformanceSelftest",
         "vscodeHostPerformance",
+        "vscodeRealProviderJourneySelftest",
+        "vscodeRealProviderJourney",
         "interactionLatencyBudgetSelftest",
         "interactionLatencyBudget",
         "scrollUnderLoadSmokeSelftest",
@@ -486,6 +496,8 @@ SUITES: dict[str, tuple[str, ...]] = {
         "vscodePackage",
         "vscodeHostPerformanceSelftest",
         "vscodeHostPerformance",
+        "vscodeRealProviderJourneySelftest",
+        "vscodeRealProviderJourney",
         "cargoFmt",
         "cargoClippy",
     ),
@@ -499,6 +511,7 @@ CARGO_GATES = frozenset(
         "clippyCrossCfg",
         "cargoBuild",
         "vscodeHostPerformance",
+        "vscodeRealProviderJourney",
         "desktopProductBuild",
         "guiMemoryContract",
         "desktopRealProviderGuiSmoke",
@@ -556,6 +569,7 @@ def skipReasonFor(name: str) -> str | None:
         "desktopRealProviderGuiSmoke",
         "vscodeExtension",
         "vscodeHostPerformance",
+        "vscodeRealProviderJourney",
     } and shutil.which("npm") is None:
         return "npm 없음"
     if name in {
@@ -569,6 +583,7 @@ def skipReasonFor(name: str) -> str | None:
         "desktopRealProviderGuiSmokeSelftest",
         "vscodeExtension",
         "vscodeHostPerformance",
+        "vscodeRealProviderJourney",
     } and shutil.which("node") is None:
         return "node 없음"
     if name == "audit" and not hasAuditCrate():
@@ -591,7 +606,7 @@ def skipReasonFor(name: str) -> str | None:
         return f"{CROSS_TARGET} 미설치 (rustup target add {CROSS_TARGET})"
     if name == "externalAcpSmoke" and shutil.which("opencode") is None:
         return "독립 ACP CLI 미설치 (npm install --global opencode-ai@1.2.27)"
-    if name == "claudeApprovalSmoke" and shutil.which("claude") is None:
+    if name in {"claudeApprovalSmoke", "vscodeRealProviderJourney"} and shutil.which("claude") is None:
         return "Claude Code 미설치 (npm install --global @anthropic-ai/claude-code@2.1.220)"
     return None
 

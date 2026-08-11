@@ -1,0 +1,73 @@
+import * as vscode from "vscode";
+
+import { ConversationView } from "./conversationView";
+import { Controller } from "./controller";
+import type { ProviderLine, SessionLine } from "./protocol";
+import { RuntimeState } from "./state";
+
+export type JourneyApi = {
+  providers(): readonly ProviderLine[];
+  sessions(): readonly SessionLine[];
+  start(
+    provider: string,
+    workspace: string,
+    model?: string | null,
+  ): Promise<string>;
+  select(session: string, follow?: boolean): Promise<void>;
+  prompt(text: string): Promise<void>;
+  answerApproval(approval: string, option: number, subjectDigest: number[]): Promise<void>;
+  interrupt(): Promise<void>;
+  reconnect(): Promise<void>;
+  openWorkspace(session: string): Promise<void>;
+  close(session: string, now?: boolean): Promise<void>;
+  verifySelected(session: string): Promise<void>;
+};
+
+export function journeyApi(
+  controller: Controller,
+  state: RuntimeState,
+  conversation: ConversationView,
+  afterReady: <T>(action: () => Promise<T>) => Promise<T>,
+  extensionMode: vscode.ExtensionMode,
+): JourneyApi | undefined {
+  if (
+    extensionMode !== vscode.ExtensionMode.Test
+    || process.env.RUNTROL_VSCODE_REAL_PROVIDER_JOURNEY !== "1"
+  ) {
+    return undefined;
+  }
+  return {
+    providers: () => [...state.providers],
+    sessions: () => [...state.sessions],
+    start: (provider, workspace, model = null) => afterReady(
+      () => controller.startResolvedSession(provider, workspace, model, "exclusive", false),
+    ),
+    select: (session, follow = false) => afterReady(() => controller.select(session, follow)),
+    prompt: (text) => afterReady(() => controller.prompt(text)),
+    answerApproval: (approval, option, subjectDigest) => afterReady(
+      () => controller.answerApproval(approval, option, subjectDigest),
+    ),
+    interrupt: () => afterReady(() => controller.interrupt()),
+    reconnect: () => afterReady(async () => {
+      await controller.reconnect();
+      await controller.selectedWatchReady();
+    }),
+    openWorkspace: (session) => afterReady(async () => {
+      const selected = state.sessions.find((candidate) => candidate.session === session);
+      if (!selected) {
+        throw new Error("that session is no longer listed");
+      }
+      await controller.openWorkspace(selected);
+    }),
+    close: (session, now = false) => afterReady(() => controller.closeResolvedSession(session, now)),
+    verifySelected: (session) => afterReady(async () => {
+      if (state.selected?.session !== session) {
+        throw new Error(`selected ${state.selected?.session ?? "no session"}, expected ${session}`);
+      }
+      await Promise.all([
+        controller.selectedWatchReady(),
+        conversation.waitForCurrentRender(),
+      ]);
+    }),
+  };
+}

@@ -51,6 +51,9 @@ The first end-to-end slice landed on 2026-08-11:
 - a fault-injected archive gate compares version, target, allowlisted entries, license, executable mode, and exact Core
   bytes before an isolated stable VS Code installs the package with no configured Core path
 - the release workflow builds and clean-installs native Windows, macOS, and Linux packages before any publication job
+- a real isolated Extension Host runs an installed Claude Code process through start, prompt, hidden approval denial,
+  reconnect, interrupt, same-window workspace switching, exact selection restoration, and close; the loopback model
+  endpoint discards request bodies and exact process cleanup is mandatory
 
 The hosted `vscodeExtension` gate checks the thin boundary, no polling, no browser persistence, one selected watch,
 queue and renderer bounds, TypeScript, framing tests, and production bundle size.
@@ -75,13 +78,11 @@ workspace reload restoration at 1,500 ms while 15,000 raw frames cross the bound
 
 ## Remaining gates before release
 
-1. Exercise start, prompt, approval, interrupt, reconnect, close, and workspace switching against installed real CLIs
-   from an Extension Development Host.
-2. Verify upgrade plus rollback without stopping active sessions. The hosted native release matrix already builds and
+1. Verify upgrade plus rollback without stopping active sessions. The hosted native release matrix already builds and
    clean-installs all six platform packages.
    Marketplace publication signs the complete platform VSIX, including the exact Core bytes already checked by the
    archive gate. A separate inner-binary signature is not claimed.
-3. Publish `Runtrol Studio` to the Visual Studio Marketplace and verify a clean machine installs and runs it.
+2. Publish `Runtrol Studio` to the Visual Studio Marketplace and verify a clean machine installs and runs it.
 
 ## Completion
 

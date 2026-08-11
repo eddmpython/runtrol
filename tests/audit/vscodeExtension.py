@@ -80,6 +80,13 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
             "validSession",
             "writeFile(this.file",
         ],
+        "journeyApi.ts": [
+            "extensionMode !== vscode.ExtensionMode.Test",
+            'process.env.RUNTROL_VSCODE_REAL_PROVIDER_JOURNEY !== "1"',
+            "return undefined",
+            "sessions: () => [...state.sessions]",
+            'controller.startResolvedSession(provider, workspace, model, "exclusive", false)',
+        ],
     }
     for relative, tokens in required.items():
         source = sources.get(relative, "")
@@ -103,6 +110,12 @@ def selftest() -> int:
         "core/client.ts": "watchSessions commandConnection commandTail",
         "core/locator.ts": '["endpoint"] candidates.push("runtrol")',
         "selectionStore.ts": "MAX_FILE_BYTES MAX_SESSION_BYTES schema: 1 validSession writeFile(this.file",
+        "journeyApi.ts": (
+            'extensionMode !== vscode.ExtensionMode.Test '
+            'process.env.RUNTROL_VSCODE_REAL_PROVIDER_JOURNEY !== "1" return undefined '
+            'sessions: () => [...state.sessions] '
+            'controller.startResolvedSession(provider, workspace, model, "exclusive", false)'
+        ),
     }
     if sourceViolations(package, sources):
         print("[vscodeExtension --selftest] FAIL. the green fixture was rejected.", file=sys.stderr)
@@ -117,6 +130,7 @@ def selftest() -> int:
         (package, {**sources, "controller.ts": sources["controller.ts"].replace("workspaceCollisions", "")}),
         (package, {**sources, "controller.ts": sources["controller.ts"] + " writeFile("}),
         (package, {**sources, "selectionStore.ts": sources["selectionStore.ts"] + " prompt"}),
+        (package, {**sources, "journeyApi.ts": "return undefined sessions: () => [...state.sessions]"}),
     ]
     for index, (changed_package, changed_sources) in enumerate(mutations, start=1):
         if not sourceViolations(changed_package, changed_sources):

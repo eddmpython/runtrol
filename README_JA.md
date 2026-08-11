@@ -4,7 +4,7 @@
 
 [한국어](README.md) | [English](README_EN.md) | [中文](README_ZH.md) | 日本語
 
-> ステータス: **コア、Windows デスクトップ、VS Code 拡張の最初の end-to-end slice、live session index、実物 Extension Host と秒間 3,000 frame Webview の性能 ratchet、六つの native VSIX target の内容と clean install 検証を実装済み。** `Runtrol Studio` は Core 自動検出、インストール済み CLI 一覧、マルチセッション TreeView、変更時だけ届くセッション snapshot、再利用する command channel、選択セッション一つの購読、bounded live view、同一ウィンドウでの workspace 切り替えを提供する。Marketplace 署名と公開はまだ残っている。以下のスコアの多くが 0 なのは、コードがないからではなく、その軸を断言するゲートがまだない
+> ステータス: **コア、Windows デスクトップ、VS Code 拡張の最初の end-to-end slice、live session index、実物 Extension Host と秒間 3,000 frame Webview の性能 ratchet、インストール済み実物 CLI の完全な VS Code 操作 journey、六つの native VSIX target の内容と clean install 検証を実装済み。** `Runtrol Studio` は Core 自動検出、インストール済み CLI 一覧、マルチセッション TreeView、変更時だけ届くセッション snapshot、再利用する command channel、選択セッション一つの購読、bounded live view、同一ウィンドウでの workspace 切り替えを提供する。Marketplace 署名と公開はまだ残っている。以下のスコアの多くが 0 なのは、コードがないからではなく、その軸を断言するゲートがまだない
 > からである。
 
 The security boundary and default-deny settings are documented in [SECURITY.md](SECURITY.md).
@@ -26,7 +26,7 @@ streaming と background 作業が入力、スクロール、セッション切�
 - **マルチエージェントは provider-neutral である。** 対応するインストール済み CLI を自動検出し、一つの一覧と同じ操作法で運用する。新しい provider は core を変更せず manifest または driver で追加する。
 - **エージェントがリポジトリを自律的に変更する。** provider CLI が作業と会話を所有し、runtrol は session、workspace、worktree、process lifecycle、collision boundary だけを監督する。
 - **会話選択と workspace 切り替えを結び付ける。** session 選択時に会話とファイル文脈を即座に切り替え、実際の編集が必要な時だけ正確な workspace または worktree を Code-hot にする。会話本文から path を推測しない。
-- **デバイス接続とセッション所有権を分離する。** VS Code とスマートフォンは同じ Core にペアリングされた操作面であり、どちらもセッションを所有しない。ウィンドウ、デバイス、ネットワーク経路が変わっても Core がセッションを維持する。
+- **デバイス接続とセッション所有権を分離する。** VS Code とスマートフォンは同じ Core にペアリングされた操作面であり、どちらもセッションを所有しない。ウィンドウ、デバイス、ネットワーク経路が変わっても Core がセッションを維持する。Tailscale など既存のプライベートネットワークは検出時に直結経路として使えるが、ペアリング、push、正しさはそれに依存しない。
 - **人間が常に最優先である。** 長い streaming、複数 agent、build、test の最中でも入力、スクロール、editor、ファイル移動が先に反応する。
 - **薄い境界は変わらない。** credential、transcript、model API key、conversation copy を所有しない。
 

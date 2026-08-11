@@ -414,6 +414,12 @@ jobs:
         run: python -X utf8 tests/audit/externalAcpSmoke.py --require-external
       - name: 실물 Claude Code 고정 판본 설치
         run: npm install --global @anthropic-ai/claude-code@2.1.220
+      - name: VS Code 실물 provider 전체 여정 게이트 자체 검증
+        run: python -X utf8 tests/audit/vscodeRealProviderJourney.py --selftest
+      - name: VS Code에서 실물 CLI 시작, 승인, 중단, 재접속, workspace 전환, 종료
+        env:
+          TMPDIR: ${{ matrix.os == 'macos-latest' && '/tmp' || runner.temp }}
+        run: python -X utf8 tests/audit/vscodeRealProviderJourney.py --require-external
       - name: 실물 Codex 고정 판본 설치
         run: npm install --global @openai/codex@0.146.0
       - name: 고정 판본 credential-free 모델 fixture 준비

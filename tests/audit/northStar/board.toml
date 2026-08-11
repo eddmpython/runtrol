@@ -390,6 +390,12 @@ status = "built"
 file = "vscodeHostPerformance.py"
 
 [[floor]]
+category = "journey"
+name = "vscodeRealProviderJourney"
+status = "built"
+file = "vscodeRealProviderJourney.py"
+
+[[floor]]
 category = "transport"
 name = "reconnectContinuitySmoke"
 status = "built"

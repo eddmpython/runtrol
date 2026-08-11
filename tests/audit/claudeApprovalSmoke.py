@@ -279,9 +279,10 @@ class ModelServer(ThreadingHTTPServer):
     daemon_threads = False
     block_on_close = True
 
-    def __init__(self, target: Path) -> None:
+    def __init__(self, target: Path, max_requests: int) -> None:
         super().__init__(("127.0.0.1", 0), ModelHandler)
         self.target = target
+        self.max_requests = max_requests
         self.request_count = 0
         self.request_times: list[float] = []
         self.sentinel_auth = True
@@ -356,10 +357,10 @@ class ModelHandler(BaseHTTPRequestHandler):
             return
 
         request_number = server.observedRequest(arrived_at)
-        if request_number > 2:
+        if request_number > server.max_requests:
             self.send_error(500)
             return
-        events = toolUseEvents(server.target) if request_number == 1 else completionEvents()
+        events = toolUseEvents(server.target) if request_number % 2 == 1 else completionEvents()
         body = b"".join(
             f"event: {kind}\r\ndata: {json.dumps(payload, separators=(',', ':'))}\r\n\r\n".encode()
             for kind, payload in events
@@ -476,8 +477,10 @@ def completionEvents() -> tuple[tuple[str, dict[str, object]], ...]:
 class RunningModel:
     """Own the local server thread and prove it stops."""
 
-    def __init__(self, target: Path) -> None:
-        self.server = ModelServer(target)
+    def __init__(self, target: Path, max_requests: int = 2) -> None:
+        if max_requests < 1:
+            raise ValueError("max_requests must be positive")
+        self.server = ModelServer(target, max_requests)
         self.thread = threading.Thread(target=self.server.serve_forever, name="claude-model", daemon=True)
 
     @property

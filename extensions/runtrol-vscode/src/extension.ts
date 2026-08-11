@@ -4,6 +4,7 @@ import { ConversationView, type WebviewPerformance } from "./conversationView";
 import { Controller } from "./controller";
 import { CoreClient } from "./core/client";
 import { CoreLocator } from "./core/locator";
+import { journeyApi, type JourneyApi } from "./journeyApi";
 import { SelectionStore } from "./selectionStore";
 import { RuntimeState } from "./state";
 import { ProvidersTree, SessionsTree } from "./trees";
@@ -14,6 +15,7 @@ export type RuntrolExtensionApi = {
   measureWebview?(framesPerSecond?: number, durationMs?: number): Promise<WebviewPerformance>;
   measureHotSessions?(sessionIds: readonly string[]): Promise<HotSessionPerformance>;
   verifyRestoredSession?(sessionId: string): Promise<void>;
+  readonly journey?: JourneyApi;
 };
 
 export type HotSessionPerformance = {
@@ -139,6 +141,7 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
         ]);
       })
       : undefined,
+    journey: journeyApi(controller, state, conversation, afterReady, context.extensionMode),
   };
 }
 

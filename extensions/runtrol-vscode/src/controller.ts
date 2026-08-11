@@ -70,7 +70,7 @@ export class Controller implements vscode.Disposable {
     this.indexAbort?.abort();
     this.indexAbort = null;
     await this.client.reset();
-    await this.refresh();
+    await this.refreshAfterReconnect();
     this.startSessionIndexWatch();
     const selected = this.state.selected;
     if (selected) {
@@ -120,12 +120,32 @@ export class Controller implements vscode.Disposable {
     if (model === undefined) {
       return;
     }
+    await this.startResolvedSession(
+      provider.id,
+      selectedWorkspace.workspace,
+      model,
+      selectedWorkspace.access,
+      true,
+    );
+  }
+
+  async startResolvedSession(
+    providerId: string,
+    workspace: string,
+    model: string | null,
+    access: WorkspaceAccess,
+    follow: boolean,
+  ): Promise<string> {
+    const provider = this.state.providers.find((candidate) => candidate.id === providerId);
+    if (!provider?.usable) {
+      throw new Error(`the installed provider ${providerId} is not usable`);
+    }
     const { response } = await this.client.once({
       ask: "start",
       with: {
         provider: provider.id,
-        workspace: selectedWorkspace.workspace,
-        workspace_access: selectedWorkspace.access,
+        workspace,
+        workspace_access: access,
         model,
         permission: null,
       },
@@ -137,7 +157,8 @@ export class Controller implements vscode.Disposable {
       throw new Error(`the daemon answered start with ${response.say}`);
     }
     await this.refresh();
-    await this.select(response.with.session);
+    await this.select(response.with.session, follow);
+    return response.with.session;
   }
 
   async prompt(text?: string): Promise<void> {
@@ -191,9 +212,18 @@ export class Controller implements vscode.Disposable {
     if (!choice) {
       return;
     }
+    await this.closeResolvedSession(session, choice === "Stop now");
+  }
+
+  async closeResolvedSession(value: SessionItem | SessionLine | string, now: boolean): Promise<void> {
+    const id = typeof value === "string" ? value : value instanceof SessionItem ? value.session.session : value.session;
+    const session = this.state.sessions.find((candidate) => candidate.session === id);
+    if (!session) {
+      throw new Error("that session is no longer listed");
+    }
     const { response } = await this.client.once({
       ask: "close",
-      with: { session: session.session, now: choice === "Stop now" },
+      with: { session: session.session, now },
     });
     requireDone(response, "close");
     await this.refresh();
@@ -273,6 +303,23 @@ export class Controller implements vscode.Disposable {
     const abort = new AbortController();
     this.indexAbort = abort;
     void this.sessionIndexLoop(abort.signal);
+  }
+
+  private async refreshAfterReconnect(): Promise<void> {
+    let lastError: unknown;
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      try {
+        await this.refresh();
+        return;
+      } catch (error) {
+        lastError = error;
+        await this.client.reset();
+        if (attempt < 3) {
+          await delay(25 * (2 ** attempt));
+        }
+      }
+    }
+    throw lastError;
   }
 
   private async sessionIndexLoop(signal: AbortSignal): Promise<void> {
@@ -551,4 +598,8 @@ function abortableDelay(milliseconds: number, signal: AbortSignal): Promise<void
       resolve();
     }
   });
+}
+
+function delay(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
