@@ -482,6 +482,28 @@ async fn converse(
             }
         };
 
+        // The owner has already published the exact current listing as encoded wire bytes. A refresh that queued a
+        // second reconstruction behind session work made every surface pay owner contention for immutable state.
+        // Greeting and scope stay in front of the fast path, just as they are in answer_prepared.
+        if matches!(request, Request::List) && conversation.greeted() {
+            if let Err(refusal) =
+                crate::scope::allowed(conversation.caller(), &request, &composed.granted)
+            {
+                if write(&mut connection, &refuse(&refusal.to_string()))
+                    .await
+                    .is_err()
+                {
+                    return;
+                }
+            } else {
+                let current = Arc::clone(&session_index.borrow());
+                if connection.send(current.as_ref()).await.is_err() {
+                    return;
+                }
+            }
+            continue;
+        }
+
         let reservation = if matches!(request, Request::Start { .. } | Request::Resume { .. })
             && conversation.greeted()
             && crate::scope::allowed(conversation.caller(), &request, &composed.granted).is_ok()

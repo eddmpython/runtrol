@@ -10,10 +10,11 @@ await rm(out, { recursive: true, force: true });
 await mkdir(out, { recursive: true });
 
 await build({
-  entryPoints: [
-    path.join(extensionRoot, "src/core/framing.test.ts"),
-    path.join(extensionRoot, "src/core/liveCore.test.ts"),
-  ],
+  entryPoints: {
+    "framing.test": path.join(extensionRoot, "src/core/framing.test.ts"),
+    "liveCore.test": path.join(extensionRoot, "src/core/liveCore.test.ts"),
+    "stateRows.test": path.join(extensionRoot, "src/stateRows.test.ts"),
+  },
   outdir: out,
   bundle: true,
   platform: "node",
@@ -27,6 +28,7 @@ const result = spawnSync(process.execPath, [
   "--test",
   path.join(out, "framing.test.js"),
   path.join(out, "liveCore.test.js"),
+  path.join(out, "stateRows.test.js"),
 ], {
   stdio: "inherit",
 });
