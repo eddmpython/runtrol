@@ -21,9 +21,10 @@ its measured architecture, and the gate harness.
 - A full installed-provider VS Code journey. A real Extension Host now auto-discovers Claude Code, starts sessions in
   two workspaces, carries a prompt and hidden approval denial, reconnects, interrupts, switches the same window,
   restores the exact selected session, and closes every exact process without storing conversation content.
-- A real VS Code eight-hot-session ratchet. External-manifest ACP children stay supervised while each switch waits for
-  a Core watch acknowledgement and Webview paint, and a new VS Code process restores the exact selected session in
-  its workspace from one bounded scalar preference.
+- A 30-session VS Code control surface with selected-first stable ordering, fuzzy project, provider, state, and path
+  search, immediate cold-row feedback, provider-native cold resume, and at most eight supervised hot processes. The
+  real Extension Host ratchet waits for Core watch acknowledgement and Webview paint on every hot switch, bounds cold
+  resume, and restores the exact selected session from one bounded scalar preference in a new VS Code process.
 - Core-owned project and working-tree identity with atomic writer reservations. Separate folders in one Git worktree
   cannot race through opening, live, or closing states, linked worktrees remain independently usable, and only the
   existing explicit shared-start action can opt into overlapping writers.

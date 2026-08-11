@@ -70,6 +70,15 @@ export type Request =
         permission: string | null;
       };
     }
+  | {
+      ask: "resume";
+      with: {
+        provider: string;
+        native: string;
+        workspace: string;
+        workspace_access: WorkspaceAccess;
+      };
+    }
   | { ask: "prompt"; with: { session: string; text: string } }
   | {
       ask: "answerApproval";

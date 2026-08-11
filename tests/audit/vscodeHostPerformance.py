@@ -2,9 +2,9 @@
 
 The measurement launches an isolated VS Code profile, the production extension bundle, and a tracked Core
 daemon. It measures ready activation, opening the contributed view, repeated session refresh p95, Extension Host RSS
-growth, eight hot external ACP sessions, selected-watch plus Webview-paint switching, and exact selection restoration
-after VS Code restarts in another workspace. The JSON budget beside the extension is the only threshold source used
-by both this gate and the in-host test.
+growth, 30 managed external ACP sessions with at most eight hot, a real cold-session resume, selected-watch plus
+Webview-paint switching, and exact selection restoration after VS Code restarts in another workspace. The JSON
+budget beside the extension is the only threshold source used by both this gate and the in-host test.
 
 Usage::
 
@@ -36,10 +36,12 @@ FIELDS = (
     "webviewInputP95Ms",
     "webviewScrollP95Ms",
     "webviewPendingFrames",
+    "coldResumeMs",
     "sessionSwitchP95Ms",
     "reloadRestoreMs",
 )
 EXPECTED_HOT_SESSIONS = 8
+EXPECTED_MANAGED_SESSIONS = 30
 EXPECTED_DROPPED_FRAMES = 0
 
 
@@ -70,6 +72,10 @@ def problems(metrics: dict[str, Any], budget: dict[str, float]) -> list[str]:
         found.append(
             f"hotSessionCount {metrics.get('hotSessionCount')!r} is not {EXPECTED_HOT_SESSIONS}"
         )
+    if metrics.get("sessionCount") != EXPECTED_MANAGED_SESSIONS:
+        found.append(
+            f"sessionCount {metrics.get('sessionCount')!r} is not {EXPECTED_MANAGED_SESSIONS}"
+        )
     if metrics.get("webviewDroppedFrames") != EXPECTED_DROPPED_FRAMES:
         found.append(
             f"webviewDroppedFrames {metrics.get('webviewDroppedFrames')!r} is not "
@@ -84,6 +90,7 @@ def selftest() -> int:
     green = {
         **budget,
         "hotSessionCount": EXPECTED_HOT_SESSIONS,
+        "sessionCount": EXPECTED_MANAGED_SESSIONS,
         "webviewDroppedFrames": EXPECTED_DROPPED_FRAMES,
     }
     if problems(green, budget):
@@ -109,12 +116,21 @@ def selftest() -> int:
     if problems(wrong_count, budget) != [expected_count_problem]:
         print("[vscodeHostPerformance --selftest] FAIL. a missing hot session escaped.", file=sys.stderr)
         return 2
+    wrong_managed = dict(green)
+    wrong_managed_value = EXPECTED_MANAGED_SESSIONS - 1
+    wrong_managed["sessionCount"] = wrong_managed_value
+    expected_managed_problem = (
+        f"sessionCount {wrong_managed_value!r} is not {EXPECTED_MANAGED_SESSIONS}"
+    )
+    if problems(wrong_managed, budget) != [expected_managed_problem]:
+        print("[vscodeHostPerformance --selftest] FAIL. a missing managed session escaped.", file=sys.stderr)
+        return 2
     dropped = dict(green)
     dropped["webviewDroppedFrames"] = 1
     if problems(dropped, budget) != ["webviewDroppedFrames 1 is not 0"]:
         print("[vscodeHostPerformance --selftest] FAIL. a dropped frame escaped.", file=sys.stderr)
         return 2
-    print("[vscodeHostPerformance --selftest] OK. all twenty-four injected defects make the gate red.")
+    print("[vscodeHostPerformance --selftest] OK. all twenty-seven injected defects make the gate red.")
     return 0
 
 
@@ -216,7 +232,9 @@ def run() -> int:
         f"(baseline {metrics['webviewBaselineFrameP95Ms']:.1f}, overrun {metrics['webviewFrameOverrunP95Ms']:.1f}), "
         f"input {metrics['webviewInputP95Ms']:.1f} ms, "
         f"scroll {metrics['webviewScrollP95Ms']:.1f} ms, pending {metrics['webviewPendingFrames']:.0f}, "
-        f"eight-session switch p95 {metrics['sessionSwitchP95Ms']:.1f} ms, "
+        f"{metrics['sessionCount']:.0f} managed, {metrics['hotSessionCount']:.0f} hot, "
+        f"cold resume {metrics['coldResumeMs']:.1f} ms, "
+        f"hot-session switch p95 {metrics['sessionSwitchP95Ms']:.1f} ms, "
         f"reload restore {metrics['reloadRestoreMs']:.1f} ms."
     )
     return 0

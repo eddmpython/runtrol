@@ -13,6 +13,7 @@ type Session = {
   session: string;
   provider: string;
   workspace: string;
+  hot: boolean;
   doing: string;
 };
 
@@ -145,14 +146,17 @@ function reset(session: Session | null, nextGeneration: number): void {
   status.className = "";
   title.textContent = session ? `${folderName(session.workspace)}  ${session.provider}` : "No active session";
   sessionPath.textContent = session?.workspace ?? "Select a session from the list.";
-  prompt.disabled = !session;
-  send.disabled = !session;
-  interrupt.disabled = !session;
+  const interactive = session?.hot === true;
+  prompt.disabled = !interactive;
+  send.disabled = !interactive;
+  interrupt.disabled = !interactive;
   close.disabled = !session;
   openWorkspace.disabled = !session;
-  prompt.placeholder = session
-    ? "Send unchanged text to the provider CLI"
-    : "Select a session to send a prompt";
+  prompt.placeholder = !session
+    ? "Select a session to send a prompt"
+    : interactive
+      ? "Send unchanged text to the provider CLI"
+      : "Resuming the provider-owned session";
   if (session) {
     appendMessage("meta", `Connected to ${session.doing}`);
   }

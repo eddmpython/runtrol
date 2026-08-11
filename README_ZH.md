@@ -21,7 +21,7 @@ active subscription 与 Code-hot workspace 始终有界。streaming 与后台工
 ### 永不改变的核心
 
 - **功能与速度是一份合同。** 功能增加不能成为等待或卡顿的理由。可见延迟、frame drop 与输入延迟都会阻止发布。
-- **多会话成本不随会话数增长。** 可以存在大量逻辑会话，但 active renderer 与 full stream 必须始终各只有一个。
+- **多会话成本不随会话数增长。** 15 个会话是日常使用基线，30 个会话是发布门槛负载。逻辑会话可以更多，但 hot 进程最多 8 个，active renderer 与 full stream 必须始终各只有一个。固定当前选择、即时搜索、稳定排序和 workspace 切换在 30 个会话时仍使用相同操作。
 - **多代理必须 provider-neutral。** 自动发现受支持的已安装 CLI，并通过统一列表和同一种操作方式运行。新增 provider 只需要 manifest 或 driver，绝不修改 core。
 - **代理自主修改仓库。** provider CLI 拥有工作与对话，runtrol 只监督 session、workspace、worktree、process lifecycle 与 collision boundary。
 - **对话选择与 workspace 切换绑定。** 选择 session 后立即切换对话和文件上下文，只有真正需要编辑时才把准确的 workspace 或 worktree 提升为 Code-hot。绝不读取对话内容来猜测路径。
@@ -36,7 +36,7 @@ active subscription 与 Code-hot workspace 始终有界。streaming 与后台工
 | 北极星 | 当前分数 | 现状 | 目标状态 |
 |---|---:|---|---|
 | 统一的会话列表 | 5/10 | hosted Windows CI 驱动 production browser lifecycle 与实际 Tauri 产品，验证启动、热会话与冷会话打开、可编辑的下一条输入以及确认后的列表移除。对端是确定性的 mock transport 与 ACP fixture，因此停留在 mock 层。 | 无论供应商是 Claude Code、Codex 还是之后出现的任何一个，此刻在我电脑上存活的会话都出现在一个列表里，启动、恢复、删除都在那里完成。 |
-| 即时响应 | 5/10 | 真实浏览器与 VS Code Extension Host 测量 production bundle。同一棘轮覆盖每秒 3,000 个原始帧、8 个 hot ACP 进程、完成 Core watch 确认与 Webview 绘制的会话切换，以及 workspace 改变后的精确选择恢复。传输对端仍是 mock，因此该轴停留在此层级。 | 列表毫无等待地出现，对话在按下的瞬间打开，长输出倾泻而下时滚动与输入也不卡顿。用户不存在感知到加载的时刻。 |
+| 即时响应 | 5/10 | 真实浏览器与 VS Code Extension Host 测量 production bundle。同一棘轮覆盖真实的 30 会话列表、最多 8 个 hot ACP 进程、provider-native cold resume、每秒 3,000 个原始帧、完成 Core watch 确认与 Webview 绘制的会话切换，以及 workspace 改变后的精确选择恢复。传输对端仍是 mock，因此该轴停留在此层级。 | 列表毫无等待地出现，对话在按下的瞬间打开，长输出倾泻而下时滚动与输入也不卡顿。用户不存在感知到加载的时刻。 |
 | 用手机接续电脑上的会话 | 0/10 | 未实现。 | 手机与电脑配对一次，之后即使离开座位，也能向那台电脑上正在运行的会话发送新指令并实时查看输出。供应商账户的等级或认证方式不会阻断这一体验。 |
 | 供应商可扩展性 | 5/10 | hosted CI 检查外部驱动公开契约、三个操作系统上的通用 ACP fixture、独立发布 ACP 实现的两轮对话与 native load，以及真实 Claude Code 的隐藏审批拒绝往返。model endpoint 均为本地 mock。定时 CI 会用当前 CLI 重复 parser probe 与同一审批旅程，但不宣称覆盖账户模型行为或完整 event 表面。 | 出现新的 CLI 时只需增加一个适配器，电脑界面、手机界面与操作方式保持不变。用户只会感到列表变长了。 |
 | 对话不经过 | 6/10 | `egressContract` 在真实回环套接字上运行精确的出站白名单和 production Noise IK、IKpsk1 边界。提示词样本不会以明文出现在中继捕获或诊断信息中，transport 没有磁盘或日志 API，驱动与存储也不知道供应商 transcript 路径。尚无连接真实手机与中继的 live 门禁，所以天花板是 6。 | 用户的提示词与模型的回复只在电脑与供应商之间、以及用户自己的设备之间往返。runtrol 不保存其内容，中间的任何服务器都不会以可读的形式收到它。 |

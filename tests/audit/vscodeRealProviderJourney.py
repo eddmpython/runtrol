@@ -435,6 +435,26 @@ def waitIdentitiesGone(identities: set[ProcessIdentity]) -> set[ProcessIdentity]
     return alive
 
 
+def stopExactIdentities(identities: set[ProcessIdentity]) -> set[ProcessIdentity]:
+    """Terminate every still-live generation this journey observed, including detached descendants."""
+    survivors = aliveIdentities(identities)
+    for identity in survivors:
+        try:
+            os.kill(identity.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            # ok: this exact generation exited between the identity scan and the signal.
+            continue
+    survivors = waitIdentitiesGone(survivors)
+    force_signal = signal.SIGTERM if sys.platform == "win32" else signal.SIGKILL
+    for identity in survivors:
+        try:
+            os.kill(identity.pid, force_signal)
+        except ProcessLookupError:
+            # ok: the graceful signal won the race before the forced signal.
+            continue
+    return waitIdentitiesGone(survivors)
+
+
 def exercise(claude: str) -> None:
     """Drive start, prompt, approval, interrupt, reconnect, switch, restore, and close through VS Code."""
     node = shutil.which("node.exe" if sys.platform == "win32" else "node") or shutil.which("node")
@@ -565,7 +585,7 @@ def exercise(claude: str) -> None:
                     marked_cleanup_error = str(error)
                 finally:
                     process.stopDaemon(daemon)
-                survivors = waitIdentitiesGone(daemon_processes | host_processes)
+                survivors = stopExactIdentities(daemon_processes | host_processes)
                 cleanup_complete = (
                     sessions_closed
                     and marked_cleanup

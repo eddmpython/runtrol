@@ -13,6 +13,7 @@ import type {
   WorkspaceAccess,
 } from "./protocol";
 import { SelectionStore } from "./selectionStore";
+import { sessionChoices } from "./sessionNavigation";
 import { RuntimeState } from "./state";
 import { SessionItem } from "./trees";
 import { workspaceCollisions, type WorkspaceCollision } from "./workspaceCollision";
@@ -34,7 +35,7 @@ export class Controller implements vscode.Disposable {
   ) {
     this.status = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 20);
     this.status.name = "Runtrol sessions";
-    this.status.command = "runtrol.sessions.focus";
+    this.status.command = "runtrol.switchSession";
     this.status.show();
     context.subscriptions.push(this.status, state.onDidChange(() => this.updateStatus()));
   }
@@ -64,6 +65,19 @@ export class Controller implements vscode.Disposable {
     this.applyListing(response.with.sessions, response.with.warnings, providers);
   }
 
+  async switchSession(): Promise<void> {
+    const selected = this.state.selected?.session ?? null;
+    const picked = await vscode.window.showQuickPick(sessionChoices(this.state.sessions, selected), {
+      title: `Switch Runtrol session (${this.state.sessions.length})`,
+      placeHolder: "Type a project, provider, state, or workspace",
+      matchOnDescription: true,
+      matchOnDetail: true,
+    });
+    if (picked) {
+      await this.select(picked.session);
+    }
+  }
+
   async reconnect(): Promise<void> {
     this.watchAbort?.abort();
     this.watchAbort = null;
@@ -89,21 +103,60 @@ export class Controller implements vscode.Disposable {
 
   private async selectNow(value: SessionItem | SessionLine | string, follow: boolean): Promise<void> {
     const id = typeof value === "string" ? value : value instanceof SessionItem ? value.session.session : value.session;
-    const session = this.state.sessions.find((candidate) => candidate.session === id);
+    let session = this.state.sessions.find((candidate) => candidate.session === id);
     if (!session) {
       throw new Error("that session is no longer listed");
     }
-    await this.selection.save(session.session);
+    if (!session.hot) {
+      this.watchAbort?.abort();
+      this.watchAbort = null;
+      this.state.select(session.session);
+      this.conversation.reset(session);
+      this.conversation.status("Resuming the provider-owned session...", "info");
+      session = await this.resumeSession(session);
+    }
+    const stored = this.selection.save(session.session);
     this.watchAbort?.abort();
     this.state.select(session.session);
     this.conversation.reset(session);
 
     const follows = vscode.workspace.getConfiguration("runtrol").get<boolean>("followWorkspace", true);
     if (follow && follows && !workspaceIsOpen(session.workspace)) {
-      await this.openWorkspace(session);
+      await stored;
+      await vscode.commands.executeCommand("vscode.openFolder", vscode.Uri.file(session.workspace), {
+        forceNewWindow: false,
+      });
       return;
     }
     this.startWatch(session);
+    await stored;
+  }
+
+  private async resumeSession(session: SessionLine): Promise<SessionLine> {
+    if (!session.native) {
+      throw new Error("that cold session has no provider-owned conversation identifier to resume");
+    }
+    const { response } = await this.client.once({
+      ask: "resume",
+      with: {
+        provider: session.provider,
+        native: session.native,
+        workspace: session.workspace,
+        workspace_access: "exclusive",
+      },
+    });
+    if (response.say === "failed") {
+      throw new Error(response.with.message);
+    }
+    if (response.say !== "started") {
+      throw new Error(`the daemon answered resume with ${response.say}`);
+    }
+    await this.refresh();
+    const resumed = this.state.sessions.find((candidate) => candidate.session === response.with.session);
+    if (!resumed) {
+      throw new Error("the resumed session is absent from the current session index");
+    }
+    return resumed;
   }
 
   async startSession(): Promise<void> {

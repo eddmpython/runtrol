@@ -40,12 +40,14 @@ const resultPath = path.join(temporary, "result.json");
 const restoreResultPath = path.join(temporary, "restore-result.json");
 const runtrolHome = path.join(temporary, "runtrol-home");
 const userData = path.join(temporary, "user");
-const extensions = path.join(temporary, "extensions");
+const measureExtensions = path.join(temporary, "extensions-measure");
+const restoreExtensions = path.join(temporary, "extensions-restore");
 await rm(output, { recursive: true, force: true });
 await mkdir(output, { recursive: true });
 await mkdir(path.join(userData, "User"), { recursive: true });
-await mkdir(extensions, { recursive: true });
-const workspaces = Array.from({ length: 8 }, (_unused, index) => path.join(temporary, `workspace-${index + 1}`));
+await mkdir(measureExtensions, { recursive: true });
+await mkdir(restoreExtensions, { recursive: true });
+const workspaces = Array.from({ length: 30 }, (_unused, index) => path.join(temporary, `workspace-${index + 1}`));
 for (const workspace of workspaces) {
   await mkdir(workspace, { recursive: true });
 }
@@ -81,10 +83,11 @@ await writeFile(
 );
 const pathKey = Object.keys(process.env).find((name) => name.toLowerCase() === "path") ?? "PATH";
 const coreEnvironment = { ...process.env, RUNTROL_HOME: runtrolHome };
+coreEnvironment.RUNTROL_ACP_FIXTURE_UNIQUE_SESSIONS = "1";
 coreEnvironment[pathKey] = `${path.dirname(fixture)}${path.delimiter}${process.env[pathKey] ?? ""}`;
 let daemon = null;
 let daemonStderr = "";
-const hotSessions = [];
+const managedSessions = [];
 
 try {
   daemon = spawn(core, ["daemon"], {
@@ -119,7 +122,7 @@ try {
     if (started.status !== 0 || !session) {
       throw new Error(`cannot start a hot ACP fixture session:\n${started.stdout}${started.stderr}`);
     }
-    hotSessions.push(session);
+    managedSessions.push(session);
   }
   await build({
     entryPoints: [path.join(extensionRoot, "src", "integration", "extensionHost.test.ts")],
@@ -139,19 +142,42 @@ try {
     RUNTROL_VSCODE_PERFORMANCE: "1",
     RUNTROL_VSCODE_RESULT: resultPath,
     RUNTROL_VSCODE_PHASE: "measure",
-    RUNTROL_VSCODE_HOT_SESSIONS: JSON.stringify(hotSessions),
+    RUNTROL_VSCODE_MANAGED_SESSIONS: JSON.stringify(managedSessions),
   };
   const installed = process.env.RUNTROL_TEST_VSCODE_EXECUTABLE;
-  await runHost(installed, testEntry, resultPath, testEnvironment, repositoryRoot);
+  await runHost(
+    installed,
+    testEntry,
+    resultPath,
+    testEnvironment,
+    repositoryRoot,
+    measureExtensions,
+  );
   const measured = JSON.parse(await readFile(resultPath, "utf8"));
-  const restoreSession = hotSessions.at(-1);
+  const resumedIndex = managedSessions.indexOf(measured.resumedFrom);
+  if (resumedIndex < 0 || typeof measured.resumedTo !== "string" || !measured.resumedTo) {
+    throw new Error("the host measurement did not identify the cold session it resumed");
+  }
+  managedSessions[resumedIndex] = measured.resumedTo;
+  const restoreSession = measured.restoreSession;
+  const restoreWorkspace = measured.restoreWorkspace;
+  if (typeof restoreSession !== "string" || !restoreSession || typeof restoreWorkspace !== "string" || !restoreWorkspace) {
+    throw new Error("the host measurement did not identify its final selected session");
+  }
   const restoreEnvironment = {
     ...testEnvironment,
     RUNTROL_VSCODE_RESULT: restoreResultPath,
     RUNTROL_VSCODE_PHASE: "restore",
     RUNTROL_VSCODE_RESTORE_SESSION: restoreSession,
   };
-  await runHost(installed, testEntry, restoreResultPath, restoreEnvironment, workspaces.at(-1));
+  await runHost(
+    installed,
+    testEntry,
+    restoreResultPath,
+    restoreEnvironment,
+    restoreWorkspace,
+    restoreExtensions,
+  );
   const restored = JSON.parse(await readFile(restoreResultPath, "utf8"));
   const result = { ...measured, ...restored };
   process.stdout.write(`RUNTROL_VSCODE_HOST ${JSON.stringify(result)}\n`);
@@ -173,7 +199,7 @@ try {
   throw error;
 } finally {
   const cleanupFailures = [];
-  for (const session of [...hotSessions].reverse()) {
+  for (const session of [...managedSessions].reverse()) {
     if (daemon?.exitCode !== null) {
       cleanupFailures.push(`Core exited before session ${session} could close`);
       break;
@@ -207,9 +233,16 @@ function delay(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
-async function runHost(installed, testEntry, resultPath, testEnvironment, workspace) {
+async function runHost(installed, testEntry, resultPath, testEnvironment, workspace, extensionsDirectory) {
   if (installed?.toLowerCase().endsWith(".cmd")) {
-    await runInstalledCode(installed, testEntry, resultPath, testEnvironment, workspace);
+    await runInstalledCode(
+      installed,
+      testEntry,
+      resultPath,
+      testEnvironment,
+      workspace,
+      extensionsDirectory,
+    );
     return;
   }
   await runTests({
@@ -221,14 +254,21 @@ async function runHost(installed, testEntry, resultPath, testEnvironment, worksp
       workspace,
       "--disable-extensions",
       `--user-data-dir=${userData}`,
-      `--extensions-dir=${extensions}`,
+      `--extensions-dir=${extensionsDirectory}`,
     ],
     version: process.env.RUNTROL_TEST_VSCODE_VERSION || "stable",
     vscodeExecutablePath: installed || undefined,
   });
 }
 
-async function runInstalledCode(executable, testEntry, resultPath, testEnvironment, workspace) {
+async function runInstalledCode(
+  executable,
+  testEntry,
+  resultPath,
+  testEnvironment,
+  workspace,
+  extensionsDirectory,
+) {
   const arguments_ = [
     "--new-window",
     "--disable-extensions",
@@ -237,7 +277,7 @@ async function runInstalledCode(executable, testEntry, resultPath, testEnvironme
     "--user-data-dir",
     userData,
     "--extensions-dir",
-    extensions,
+    extensionsDirectory,
     "--extensionDevelopmentPath",
     extensionRoot,
     "--extensionTestsPath",

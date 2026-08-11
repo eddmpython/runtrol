@@ -3,6 +3,7 @@ import path from "node:path";
 import * as vscode from "vscode";
 
 import type { ProviderLine, SessionLine } from "./protocol";
+import { orderedSessions } from "./sessionNavigation";
 import { RuntimeState } from "./state";
 
 export class SessionItem extends vscode.TreeItem {
@@ -44,10 +45,8 @@ export class SessionsTree implements vscode.TreeDataProvider<SessionItem>, vscod
   }
 
   getChildren(): SessionItem[] {
-    const selected = this.state.selected?.session;
-    return this.state.sessions
-      .slice()
-      .sort((left, right) => Number(right.hot) - Number(left.hot))
+    const selected = this.state.selected?.session ?? null;
+    return orderedSessions(this.state.sessions, selected)
       .map((session) => new SessionItem(session, session.session === selected));
   }
 
@@ -91,4 +90,3 @@ export class ProvidersTree implements vscode.TreeDataProvider<ProviderItem>, vsc
     this.changedEmitter.dispose();
   }
 }
-

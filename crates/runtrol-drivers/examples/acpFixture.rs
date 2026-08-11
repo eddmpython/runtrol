@@ -10,6 +10,7 @@ use std::process::ExitCode;
 use serde_json::{Value, json};
 
 const NATIVE_SESSION: &str = "fixture-session";
+const UNIQUE_SESSIONS_ENV: &str = "RUNTROL_ACP_FIXTURE_UNIQUE_SESSIONS";
 
 /// Provider-owned session metadata used only when a gate asks for persistence.
 ///
@@ -110,6 +111,7 @@ fn serve(state: Option<&Path>, reply_bytes: Option<usize>) -> Result<(), ()> {
                 }),
             )?,
             "session/new" => {
+                let native = native_session(&frame)?;
                 client_question(&mut output)?;
                 let refusal = lines.next().ok_or(())?.map_err(|_| ())?;
                 require_refusal(&refusal)?;
@@ -117,7 +119,7 @@ fn serve(state: Option<&Path>, reply_bytes: Option<usize>) -> Result<(), ()> {
                     write_marker(
                         path,
                         &SessionMarker {
-                            native: NATIVE_SESSION.to_owned(),
+                            native: native.clone(),
                             completed_turns: 0,
                         },
                     )?;
@@ -125,7 +127,7 @@ fn serve(state: Option<&Path>, reply_bytes: Option<usize>) -> Result<(), ()> {
                 answer(
                     &mut output,
                     id.as_ref().ok_or(())?,
-                    &json!({"sessionId": NATIVE_SESSION}),
+                    &json!({"sessionId": native}),
                 )?;
             }
             "session/load" => {
@@ -170,6 +172,22 @@ fn serve(state: Option<&Path>, reply_bytes: Option<usize>) -> Result<(), ()> {
         }
     }
     Ok(())
+}
+
+fn native_session(frame: &Value) -> Result<String, ()> {
+    if std::env::var_os(UNIQUE_SESSIONS_ENV).is_none_or(|value| value.is_empty()) {
+        return Ok(NATIVE_SESSION.to_owned());
+    }
+    let workspace = frame
+        .pointer("/params/cwd")
+        .and_then(Value::as_str)
+        .ok_or(())?;
+    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
+    for byte in workspace.bytes() {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    Ok(format!("fixture-session-{hash:016x}"))
 }
 
 fn notify_reply(

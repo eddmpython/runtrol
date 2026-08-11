@@ -33,6 +33,7 @@
     "onView:runtrol.providers",
     "onView:runtrol.conversation",
     "onCommand:runtrol.refresh",
+    "onCommand:runtrol.switchSession",
     "onCommand:runtrol.startSession",
     "onCommand:runtrol.selectSession",
     "onCommand:runtrol.openWorkspace",
@@ -73,6 +74,11 @@
         "icon": "$(refresh)"
       },
       {
+        "command": "runtrol.switchSession",
+        "title": "Runtrol: Switch Session",
+        "icon": "$(search)"
+      },
+      {
         "command": "runtrol.startSession",
         "title": "Runtrol: Start Session",
         "icon": "$(add)"
@@ -100,14 +106,19 @@
     "menus": {
       "view/title": [
         {
-          "command": "runtrol.startSession",
+          "command": "runtrol.switchSession",
           "when": "view == runtrol.sessions",
           "group": "navigation@1"
         },
         {
+          "command": "runtrol.startSession",
+          "when": "view == runtrol.sessions",
+          "group": "navigation@2"
+        },
+        {
           "command": "runtrol.refresh",
           "when": "view == runtrol.sessions || view == runtrol.providers",
-          "group": "navigation@2"
+          "group": "navigation@3"
         }
       ],
       "view/item/context": [

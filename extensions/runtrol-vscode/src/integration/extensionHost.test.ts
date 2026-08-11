@@ -22,9 +22,15 @@ type ExtensionApi = {
     visibleCharacters: number;
     visibleItems: number;
   }>;
-  measureHotSessions?(sessionIds: readonly string[]): Promise<{
+  measureSessionManagement?(sessionIds: readonly string[]): Promise<{
+    sessionCount: number;
     hotSessionCount: number;
+    coldResumeMs: number;
     sessionSwitchP95Ms: number;
+    resumedFrom: string;
+    resumedTo: string;
+    restoreSession: string;
+    restoreWorkspace: string;
   }>;
   verifyRestoredSession?(sessionId: string): Promise<void>;
 };
@@ -128,13 +134,13 @@ async function measure(resultPath: string): Promise<Record<string, number | stri
   }
 
   currentStage = "session-switch";
-  if (!api.measureHotSessions) {
+  if (!api.measureSessionManagement) {
     throw new Error("the performance-only hot-session measurement API is unavailable");
   }
   const switched = await within(
-    api.measureHotSessions(hotSessionIds()),
+    api.measureSessionManagement(managedSessionIds()),
     20_000,
-    "eight hot session switches",
+    "30-session management and eight hot session switches",
   );
 
   const result = {
@@ -150,8 +156,14 @@ async function measure(resultPath: string): Promise<Record<string, number | stri
     webviewScrollP95Ms: webview.scrollP95Ms,
     webviewPendingFrames: webview.maxPendingFrames,
     webviewDroppedFrames: webview.droppedFrames,
+    sessionCount: switched.sessionCount,
     hotSessionCount: switched.hotSessionCount,
+    coldResumeMs: switched.coldResumeMs,
     sessionSwitchP95Ms: switched.sessionSwitchP95Ms,
+    resumedFrom: switched.resumedFrom,
+    resumedTo: switched.resumedTo,
+    restoreSession: switched.restoreSession,
+    restoreWorkspace: switched.restoreWorkspace,
   };
   const failures = budgetFailures(result);
   if (failures.length > 0) {
@@ -253,6 +265,8 @@ function budgetFailures(result: {
   webviewInputP95Ms: number;
   webviewScrollP95Ms: number;
   webviewPendingFrames: number;
+  sessionCount: number;
+  coldResumeMs: number;
   sessionSwitchP95Ms: number;
 }): string[] {
   const failures: string[] = [];
@@ -294,6 +308,12 @@ function budgetFailures(result: {
       `Webview pending frames ${result.webviewPendingFrames} exceeds ${budget.webviewPendingFrames}`,
     );
   }
+  if (result.sessionCount !== 30) {
+    failures.push(`managed session count ${result.sessionCount} is not 30`);
+  }
+  if (result.coldResumeMs > budget.coldResumeMs) {
+    failures.push(`cold resume ${result.coldResumeMs.toFixed(1)} ms exceeds ${budget.coldResumeMs} ms`);
+  }
   if (result.sessionSwitchP95Ms > budget.sessionSwitchP95Ms) {
     failures.push(
       `session switch p95 ${result.sessionSwitchP95Ms.toFixed(1)} ms exceeds ${budget.sessionSwitchP95Ms} ms`,
@@ -324,16 +344,16 @@ function numericEnvironment(name: string, fallback: number): number {
   return value;
 }
 
-function hotSessionIds(): string[] {
-  const raw = requiredEnvironment("RUNTROL_VSCODE_HOT_SESSIONS");
+function managedSessionIds(): string[] {
+  const raw = requiredEnvironment("RUNTROL_VSCODE_MANAGED_SESSIONS");
   let value: unknown;
   try {
     value = JSON.parse(raw);
   } catch {
-    throw new Error("RUNTROL_VSCODE_HOT_SESSIONS is not JSON");
+    throw new Error("RUNTROL_VSCODE_MANAGED_SESSIONS is not JSON");
   }
-  if (!Array.isArray(value) || value.length !== 8 || !value.every((item) => typeof item === "string")) {
-    throw new Error("RUNTROL_VSCODE_HOT_SESSIONS must contain eight session identifiers");
+  if (!Array.isArray(value) || value.length !== 30 || !value.every((item) => typeof item === "string")) {
+    throw new Error("RUNTROL_VSCODE_MANAGED_SESSIONS must contain 30 session identifiers");
   }
   return value;
 }

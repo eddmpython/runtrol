@@ -13,14 +13,20 @@ export type RuntrolExtensionApi = {
   readonly ready: Promise<void>;
   refresh(): Promise<void>;
   measureWebview?(framesPerSecond?: number, durationMs?: number): Promise<WebviewPerformance>;
-  measureHotSessions?(sessionIds: readonly string[]): Promise<HotSessionPerformance>;
+  measureSessionManagement?(sessionIds: readonly string[]): Promise<SessionManagementPerformance>;
   verifyRestoredSession?(sessionId: string): Promise<void>;
   readonly journey?: JourneyApi;
 };
 
-export type HotSessionPerformance = {
+export type SessionManagementPerformance = {
+  sessionCount: number;
   hotSessionCount: number;
+  coldResumeMs: number;
   sessionSwitchP95Ms: number;
+  resumedFrom: string;
+  resumedTo: string;
+  restoreSession: string;
+  restoreWorkspace: string;
 };
 
 export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi {
@@ -65,6 +71,10 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
     }),
     vscode.commands.registerCommand("runtrol.refresh", () => run(() => afterReady(() => controller.refresh()))),
     vscode.commands.registerCommand(
+      "runtrol.switchSession",
+      () => run(() => afterReady(() => controller.switchSession())),
+    ),
+    vscode.commands.registerCommand(
       "runtrol.startSession",
       () => run(() => afterReady(() => controller.startSession())),
     ),
@@ -105,18 +115,49 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
         () => conversation.measurePerformance(framesPerSecond, durationMs),
       )
       : undefined,
-    measureHotSessions: process.env.RUNTROL_VSCODE_PERFORMANCE === "1"
+    measureSessionManagement: process.env.RUNTROL_VSCODE_PERFORMANCE === "1"
       ? (sessionIds) => afterReady(async () => {
         const expected = new Set(sessionIds);
-        const hot = state.sessions.filter((session) => expected.has(session.session) && session.hot);
-        if (expected.size !== 8 || hot.length !== expected.size) {
-          throw new Error(`expected eight named hot sessions, found ${hot.length}`);
+        const managed = state.sessions.filter((session) => expected.has(session.session));
+        const initialHot = managed.filter((session) => session.hot);
+        const cold = managed.find((session) => !session.hot);
+        if (expected.size !== 30 || managed.length !== expected.size || initialHot.length !== 8 || !cold) {
+          throw new Error(
+            `expected 30 named sessions with eight hot and a cold choice, found ${managed.length} and ${initialHot.length}`,
+          );
+        }
+
+        const resumeStarted = performance.now();
+        await controller.select(cold.session, false);
+        await Promise.all([
+          controller.selectedWatchReady(),
+          conversation.waitForCurrentRender(),
+        ]);
+        const coldResumeMs = performance.now() - resumeStarted;
+        const resumed = state.selected;
+        if (
+          !resumed
+          || !resumed.hot
+          || resumed.session === cold.session
+          || resumed.provider !== cold.provider
+          || resumed.native !== cold.native
+          || resumed.workspace !== cold.workspace
+          || state.sessions.some((session) => session.session === cold.session)
+        ) {
+          throw new Error("selecting a cold row did not replace it with the same provider-owned hot session");
+        }
+        const current = state.sessions.filter(
+          (session) => expected.has(session.session) || session.session === resumed.session,
+        );
+        const hot = current.filter((session) => session.hot);
+        if (current.length !== 30 || hot.length !== 8) {
+          throw new Error(`cold resume changed the 30-session and eight-hot bounds to ${current.length} and ${hot.length}`);
         }
         const samples: number[] = [];
         for (let round = 0; round < 2; round += 1) {
-          for (const sessionId of sessionIds) {
+          for (const session of hot) {
             const started = performance.now();
-            await controller.select(sessionId, false);
+            await controller.select(session.session, false);
             await Promise.all([
               controller.selectedWatchReady(),
               conversation.waitForCurrentRender(),
@@ -125,8 +166,14 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
           }
         }
         return {
+          sessionCount: current.length,
           hotSessionCount: hot.length,
+          coldResumeMs,
           sessionSwitchP95Ms: percentile(samples, 0.95),
+          resumedFrom: cold.session,
+          resumedTo: resumed.session,
+          restoreSession: state.selected?.session ?? "",
+          restoreWorkspace: state.selected?.workspace ?? "",
         };
       })
       : undefined,

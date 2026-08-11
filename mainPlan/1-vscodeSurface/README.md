@@ -17,6 +17,8 @@ The first end-to-end slice landed on 2026-08-11:
 - the extension discovers a configured Core, a bundled Core, or `runtrol` on `PATH`
 - the extension speaks the existing four-byte framed IPC directly over a named pipe or Unix socket
 - native TreeViews show runtime-discovered providers and every session
+- the selected session stays first, and the status bar plus Sessions title open one fuzzy switcher across project,
+  provider, state, and full workspace without adding a second session index
 - exactly one selected session has a live watch connection and reconnect cursor
 - selecting a session opens its exact workspace in the same VS Code window and survives the reload by session id
 - the active Webview bounds frames, characters, DOM nodes, and per-animation-frame work
@@ -40,8 +42,8 @@ The first end-to-end slice landed on 2026-08-11:
 - sustained output keeps the existing 16 ms first-post schedule and bounded queue, while backpressured transport uses
   the same 4,096-frame queue ceiling as its maximum batch to reduce Extension Host to Webview cross-process calls;
   the real gate requires zero dropped raw frames without relaxing latency budgets
-- a real Extension Host keeps eight external-manifest ACP children hot, then measures every selected-watch
-  acknowledgement and Webview paint; switch p95 is capped at 100 ms
+- a real Extension Host owns 30 external-manifest ACP sessions while the Core keeps at most eight children hot, then
+  measures every hot selected-watch acknowledgement and Webview paint; switch p95 is capped at 100 ms
 - the selected session is one bounded scalar SSOT under the extension's global storage, never conversation content;
   a second VS Code process opens that session's workspace with the same profile and must restore its watch and paint
   inside 1,500 ms
@@ -65,7 +67,8 @@ queue and renderer bounds, TypeScript, framing tests, and production bundle size
 The hosted `vscodeHostPerformance` gate launches the product Core and production extension in a real isolated VS Code
 profile. Its shared ratchet caps ready activation at 1,000 ms, view opening at 500 ms, refresh p95 at 50 ms, Extension
 Host RSS growth at 48 MiB, Webview animation p95 at 40 ms, animation overrun from the unloaded native cadence at 8 ms,
-input and scroll p95 at 50 ms, renderer backlog at 1,024 frames, eight-hot-session switch p95 at 100 ms, and full
+input and scroll p95 at 50 ms, renderer backlog at 1,024 frames, 30 managed sessions with at most eight hot,
+provider-native cold resume at 1,500 ms, hot-session switch p95 at 100 ms, and full
 workspace reload restoration at 1,500 ms while 15,000 raw frames cross the boundary in five seconds.
 
 ## Module boundaries
