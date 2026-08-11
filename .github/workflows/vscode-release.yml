@@ -1,0 +1,127 @@
+name: vscode-release
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish verified packages to the Marketplace and create the GitHub release
+        required: true
+        type: boolean
+        default: false
+
+concurrency:
+  group: vscode-release
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.manifest.outputs.matrix }}
+      targetCount: ${{ steps.manifest.outputs.targetCount }}
+      version: ${{ steps.manifest.outputs.version }}
+    steps:
+      - uses: actions/checkout@v5
+      - name: Read the extension release SSOT
+        id: manifest
+        run: |
+          node <<'NODE'
+          const fs = require('fs');
+          const manifest = require('./extensions/runtrol-vscode/package.json');
+          const targets = require('./extensions/runtrol-vscode/release-targets.json');
+          const include = Object.entries(targets).map(([target, contract]) => ({ target, ...contract }));
+          fs.appendFileSync(
+            process.env.GITHUB_OUTPUT,
+            `version=${manifest.version}\ntargetCount=${include.length}\nmatrix=${JSON.stringify({ include })}\n`,
+          );
+          NODE
+
+  package:
+    needs: prepare
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v5
+      - name: Linux native build and VS Code test dependencies
+        if: matrix.family == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev xvfb
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: |
+            crates/runtrol-gui/ui/package-lock.json
+            extensions/runtrol-vscode/package-lock.json
+      - name: Install deterministic frontend dependencies
+        run: |
+          npm --prefix crates/runtrol-gui/ui ci
+          npm --prefix extensions/runtrol-vscode ci
+      - name: Refuse a runner that differs from the release SSOT
+        run: node -e "const actual=process.platform+'-'+process.arch; const expected='${{ matrix.target }}'; if(actual!==expected) throw new Error('runner is '+actual+', expected '+expected)"
+      - name: Build the production desktop assets
+        run: npm --prefix crates/runtrol-gui/ui run build
+      - name: Build the native release Core
+        run: cargo build --release -p runtrol --bin runtrol
+      - name: Package the native VSIX
+        run: npm --prefix extensions/runtrol-vscode run package:native
+      - name: Inspect exact VSIX contents and Core bytes
+        run: >-
+          python -X utf8 tests/audit/vscodePackage.py
+          --archive release/runtrol-studio-${{ needs.prepare.outputs.version }}-${{ matrix.target }}.vsix
+          --target ${{ matrix.target }}
+          --core target/release/${{ matrix.executable }}
+      - name: Install and activate the package in clean VS Code
+        if: matrix.family != 'linux'
+        run: node extensions/runtrol-vscode/tooling/installed-package.mjs release/runtrol-studio-${{ needs.prepare.outputs.version }}-${{ matrix.target }}.vsix
+      - name: Install and activate the package in clean VS Code on Linux
+        if: matrix.family == 'linux'
+        run: xvfb-run -a node extensions/runtrol-vscode/tooling/installed-package.mjs release/runtrol-studio-${{ needs.prepare.outputs.version }}-${{ matrix.target }}.vsix
+      - uses: actions/upload-artifact@v4
+        with:
+          name: runtrol-studio-${{ needs.prepare.outputs.version }}-${{ matrix.target }}
+          path: release/runtrol-studio-${{ needs.prepare.outputs.version }}-${{ matrix.target }}.vsix
+          if-no-files-found: error
+
+  publish:
+    needs: [prepare, package]
+    if: inputs.publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: extensions/runtrol-vscode/package-lock.json
+      - run: npm --prefix extensions/runtrol-vscode ci
+      - uses: actions/download-artifact@v5
+        with:
+          pattern: runtrol-studio-${{ needs.prepare.outputs.version }}-*
+          path: release
+          merge-multiple: true
+      - name: Refuse an incomplete platform set
+        run: |
+          count="$(find release -maxdepth 1 -name 'runtrol-studio-${{ needs.prepare.outputs.version }}-*.vsix' -type f | wc -l)"
+          test "$count" -eq "${{ needs.prepare.outputs.targetCount }}"
+      - name: Publish all platform packages
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        run: >-
+          node extensions/runtrol-vscode/node_modules/@vscode/vsce/vsce publish
+          --packagePath release/runtrol-studio-${{ needs.prepare.outputs.version }}-*.vsix
+      - name: Create the immutable GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          gh release create vscode-v${{ needs.prepare.outputs.version }}
+          release/runtrol-studio-${{ needs.prepare.outputs.version }}-*.vsix
+          --title "Runtrol Studio ${{ needs.prepare.outputs.version }}"
+          --notes-file CHANGELOG.md

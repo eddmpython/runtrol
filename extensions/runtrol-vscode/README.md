@@ -22,14 +22,28 @@ npm run build
 Set `runtrol.corePath` to a local debug or release executable while developing. A packaged platform VSIX contains one
 matching runtrol core under `resources/core/`.
 
-## Package Windows x64
+## Package the native platform
 
 Build the Rust release binary, then run:
 
 ```text
 cargo build --release --bin runtrol
-npm run package:win32-x64
+npm run package:native
 ```
 
 `RUNTROL_CORE_BINARY` may name a different verified binary. Packages are written under the repository `release/`
 directory, which is not tracked.
+
+The release target map is `release-targets.json`. The manifest version is the release version SSOT and the package
+filename is derived from it. Every package contains one matching Core, the production bundles, brand resources, and
+the repository license. Source, tooling, dependencies, test budgets, and target metadata are excluded.
+
+Inspect and clean-install a built package before publication:
+
+```text
+python -X utf8 ../../tests/audit/vscodePackage.py --archive ../../release/runtrol-studio-VERSION-win32-x64.vsix --target win32-x64 --core ../../target/release/runtrol.exe
+node tooling/installed-package.mjs ../../release/runtrol-studio-VERSION-win32-x64.vsix
+```
+
+The hosted release workflow repeats this journey on native Windows, macOS, and Linux runners. The Visual Studio
+Marketplace signs published VSIX files, and VS Code verifies that signature when installing them.

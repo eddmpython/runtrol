@@ -2,9 +2,9 @@
   "name": "runtrol-studio",
   "displayName": "Runtrol Studio",
   "description": "Control every local coding-agent CLI session from one VS Code window.",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "publisher": "eddmpython",
-  "license": "MIT",
+  "license": "SEE LICENSE IN resources/LICENSE",
   "repository": {
     "type": "git",
     "url": "https://github.com/eddmpython/runtrol.git"
@@ -145,6 +145,7 @@
     "check": "tsc --noEmit",
     "test": "node tooling/test.mjs",
     "test:host": "node tooling/extension-host.mjs",
+    "package:native": "node tooling/package.mjs",
     "package:win32-x64": "node tooling/package.mjs win32-x64"
   },
   "devDependencies": {

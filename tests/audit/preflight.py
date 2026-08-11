@@ -113,6 +113,14 @@ GATES: dict[str, tuple[str, list[str]]] = {
         "VS Code 확장 thin boundary, 타입 검사, 테스트, 번들",
         [*PY, f"{HOOKS}/vscodeExtension.py"],
     ),
+    "vscodePackageSelftest": (
+        "VS Code 플랫폼 패키지 게이트 자체 검증",
+        [*PY, f"{HOOKS}/vscodePackage.py", "--selftest"],
+    ),
+    "vscodePackage": (
+        "VS Code 릴리스 버전, 대상, 내용 allowlist 계약",
+        [*PY, f"{HOOKS}/vscodePackage.py"],
+    ),
     "vscodeHostPerformanceSelftest": (
         "VS Code Extension Host 성능 게이트 자체 검증",
         [*PY, f"{HOOKS}/vscodeHostPerformance.py", "--selftest"],
@@ -470,6 +478,8 @@ SUITES: dict[str, tuple[str, ...]] = {
     "vscode": (
         "vscodeExtensionSelftest",
         "vscodeExtension",
+        "vscodePackageSelftest",
+        "vscodePackage",
         "vscodeHostPerformanceSelftest",
         "vscodeHostPerformance",
         "cargoFmt",

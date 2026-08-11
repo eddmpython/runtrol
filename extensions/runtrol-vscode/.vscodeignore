@@ -3,6 +3,8 @@ tooling/**
 src/**
 tsconfig.json
 package-lock.json
+performance-budget.json
+release-targets.json
 node_modules/**
 !dist/**
 !resources/**

@@ -15,6 +15,8 @@ its measured architecture, and the gate harness.
 
 ### Added
 
+- Platform-specific `Runtrol Studio` release packaging with one exact bundled Core, license and archive allowlist
+  verification, clean stable VS Code installation, automatic bundled-Core discovery, and native release automation.
 - A change-only session-index subscription. Surfaces receive one current snapshot and then only list-visible changes;
   stable conversation content causes no list rebuild, and one encoded snapshot is shared across every subscriber.
 - The first `Runtrol Studio` VS Code slice. It discovers a configured, bundled, or PATH Core,

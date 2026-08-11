@@ -14,6 +14,7 @@ await mkdir(resources, { recursive: true });
 await Promise.all([
   cp(path.join(repositoryRoot, "assets/brand/symbol.svg"), path.join(resources, "symbol.svg")),
   cp(path.join(repositoryRoot, "assets/brand/icon-512.png"), path.join(resources, "icon.png")),
+  cp(path.join(repositoryRoot, "LICENSE"), path.join(resources, "LICENSE")),
 ]);
 
 await Promise.all([

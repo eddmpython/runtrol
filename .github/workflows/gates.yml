@@ -180,6 +180,12 @@ jobs:
       - name: VS Code 확장
         if: needs.detect.outputs.hasWorkspace == 'true'
         run: python -X utf8 tests/audit/vscodeExtension.py
+      - name: VS Code 플랫폼 패키지 게이트 자체 검증
+        if: needs.detect.outputs.hasWorkspace == 'true'
+        run: python -X utf8 tests/audit/vscodePackage.py --selftest
+      - name: VS Code 릴리스 버전, 대상, 내용 allowlist 계약
+        if: needs.detect.outputs.hasWorkspace == 'true'
+        run: python -X utf8 tests/audit/vscodePackage.py
       - name: cargo fmt
         if: needs.detect.outputs.hasWorkspace == 'true'
         run: cargo fmt --all --check

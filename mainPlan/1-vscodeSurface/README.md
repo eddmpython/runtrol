@@ -28,6 +28,12 @@ The first end-to-end slice landed on 2026-08-11:
   and Windows named-pipe churn while watches remain independent
 - an isolated real Extension Host ratchet measures ready activation, contributed-view opening, 40 refreshes, and RSS
   growth against `performance-budget.json` on every supported CI operating system
+- the extension manifest owns release SemVer, while `release-targets.json` owns the six native Marketplace targets
+- platform packaging includes exactly one matching Core and the repository license, while excluding source, tooling,
+  dependencies, test budgets, and release metadata
+- a fault-injected archive gate compares version, target, allowlisted entries, license, executable mode, and exact Core
+  bytes before an isolated stable VS Code installs the package with no configured Core path
+- the release workflow builds and clean-installs native Windows, macOS, and Linux packages before any publication job
 
 The hosted `vscodeExtension` gate checks the thin boundary, no polling, no browser persistence, one selected watch,
 queue and renderer bounds, TypeScript, framing tests, and production bundle size.
@@ -56,8 +62,9 @@ and Extension Host RSS growth at 48 MiB.
    one vocabulary SSOT.
 4. Exercise start, prompt, approval, interrupt, reconnect, close, and workspace switching against installed real CLIs
    from an Extension Development Host.
-5. Build one signed Core per Marketplace target, package platform-specific VSIX files, install each into clean VS Code,
-   and verify upgrade plus rollback without stopping active sessions.
+5. Complete the hosted native release matrix, then verify upgrade plus rollback without stopping active sessions.
+   Marketplace publication signs the complete platform VSIX, including the exact Core bytes already checked by the
+   archive gate. A separate inner-binary signature is not claimed.
 6. Publish `Runtrol Studio` to the Visual Studio Marketplace and verify a clean machine installs and runs it.
 
 ## Completion

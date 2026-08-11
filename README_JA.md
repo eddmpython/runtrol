@@ -4,7 +4,7 @@
 
 [한국어](README.md) | [English](README_EN.md) | [中文](README_ZH.md) | 日本語
 
-> ステータス: **コア、Windows デスクトップ、VS Code 拡張の最初の end-to-end slice、live session index、実物 Extension Host の基本性能 ratchet を実装済み。** `Runtrol Studio` は Core 自動検出、インストール済み CLI 一覧、マルチセッション TreeView、変更時だけ届くセッション snapshot、再利用する command channel、選択セッション一つの購読、bounded live view、同一ウィンドウでの workspace 切り替えを提供する。Webview 高負荷 ratchet、署名付き VSIX、Marketplace 公開はまだ残っている。以下のスコアの多くが 0 なのは、コードがないからではなく、その軸を断言するゲートがまだない
+> ステータス: **コア、Windows デスクトップ、VS Code 拡張の最初の end-to-end slice、live session index、実物 Extension Host の基本性能 ratchet、platform VSIX 内容ゲート、Windows のクリーンインストールを実装済み。** `Runtrol Studio` は Core 自動検出、インストール済み CLI 一覧、マルチセッション TreeView、変更時だけ届くセッション snapshot、再利用する command channel、選択セッション一つの購読、bounded live view、同一ウィンドウでの workspace 切り替えを提供する。Webview 高負荷 ratchet、hosted マルチプラットフォーム package 検証、Marketplace 署名と公開はまだ残っている。以下のスコアの多くが 0 なのは、コードがないからではなく、その軸を断言するゲートがまだない
 > からである。
 
 The security boundary and default-deny settings are documented in [SECURITY.md](SECURITY.md).
