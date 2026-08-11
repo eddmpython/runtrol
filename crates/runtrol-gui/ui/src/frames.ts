@@ -1,4 +1,5 @@
 import type { ConversationItem, LimitWindow, RateLimitGauge, UsageGauge } from "./domain";
+import eventPresentation from "../../../../assets/event-presentation.json";
 
 const MAX_VISIBLE_ITEMS = 400;
 const MAX_VISIBLE_CHARACTERS = 256 * 1024;
@@ -6,57 +7,29 @@ const MAX_STREAM_CHUNK_CHARACTERS = 1024;
 
 type UnknownRecord = Record<string, unknown>;
 
-/**
- * The event kind runtrol relays without reading.
- *
- * Kept as a named constant because three readers depend on it meaning the same thing: this module, which
- * keeps it out of the conversation, the pane, which reports how many arrived, and the coverage gate.
- */
-export const UNREAD_EVENT = "unmapped";
+type PresentationContract =
+  | { kind: "message"; side: ConversationItem["side"]; labelKey: string }
+  | { kind: "status" | "approval"; textKey: string }
+  | { kind: "turn" | "notice" | "usage" | "rateLimit" | "discard" };
 
-const PRESENTATION: Record<string, Pick<ConversationItem, "side" | "label">> = {
-  userMessageChunk: { side: "mine", label: "나" },
-  agentMessageChunk: { side: "theirs", label: "에이전트" },
-  agentThoughtChunk: { side: "thought", label: "생각" },
+const EVENT_PRESENTATION = eventPresentation.events as Record<string, PresentationContract>;
+
+const LOCALIZED_TEXT: Record<string, string> = {
+  "message.you": "나",
+  "message.agent": "에이전트",
+  "message.thought": "생각",
+  "session.attached": "세션에 연결됐다",
+  "session.detached": "세션에서 떨어졌다",
+  "session.updated": "세션 정보가 바뀌었다",
+  "tool.started": "도구를 호출한다",
+  "tool.updated": "도구 호출이 진행 중이다",
+  "plan.updated": "계획을 세웠다",
+  "commands.updated": "쓸 수 있는 명령이 바뀌었다",
+  "mode.updated": "동작 모드가 바뀌었다",
+  "configuration.updated": "설정 항목이 바뀌었다",
+  "approval.waiting": "승인을 기다린다",
+  "approval.withdrawn": "승인 요청을 거뒀다",
 };
-
-/**
- * What every remaining event kind reads as, in the language the rest of this window speaks.
- *
- * The vocabulary has nineteen kinds and this page used to present seven of them. The other twelve fell
- * through to a fallback that printed the wire name, so a Korean window showed `attached`, `toolCall` and
- * `approvalRequested` as bare English machine words in the middle of a conversation. A tool call in
- * particular is something an operator wants to read, and it was a single untranslated token.
- *
- * The wire names are runtrol's own vocabulary, spelled in `runtrol_provider::EventBody::wire_name`, and
- * `desktopEventCoverage.py` holds this table against that one so a kind added there cannot quietly arrive
- * here as English again. What each event *means* is written here; what any of them *contains* is still
- * never read.
- */
-const STATUS_TEXT: Record<string, string> = {
-  attached: "세션에 연결됐다",
-  detached: "세션에서 떨어졌다",
-  toolCall: "도구를 호출한다",
-  toolCallUpdate: "도구 호출이 진행 중이다",
-  plan: "계획을 세웠다",
-  availableCommandsUpdate: "쓸 수 있는 명령이 바뀌었다",
-  currentModeUpdate: "동작 모드가 바뀌었다",
-  configOptionUpdate: "설정 항목이 바뀌었다",
-  sessionInfoUpdate: "세션 정보가 바뀌었다",
-  approvalRequested: "승인을 기다린다",
-  approvalWithdrawn: "승인 요청을 거뒀다",
-};
-
-/** Every kind this page presents, for the gate that compares it against the provider vocabulary. */
-export const PRESENTED_EVENTS: readonly string[] = [
-  ...Object.keys(PRESENTATION),
-  ...Object.keys(STATUS_TEXT),
-  "turn",
-  "notice",
-  "usageUpdate",
-  "rateLimitUpdate",
-  UNREAD_EVENT,
-];
 
 let nextKey = 0;
 
@@ -184,19 +157,27 @@ export function frameToItem(frame: string): PendingFrame {
   }
 
   const event = string(body.event) || "알 수 없는 이벤트";
-  if (event === "turn") {
+  const presentation = EVENT_PRESENTATION[event];
+  if (!presentation) {
+    const text = textOf(body.content ?? body.payload);
+    return {
+      item: item("meta", "", `알 수 없는 이벤트 ${event}${text ? ` · ${text}` : ""}`),
+      isDelta: false,
+    };
+  }
+  if (presentation.kind === "turn") {
     return { item: item("meta", "", turnText(body)), isDelta: false };
   }
-  if (event === "notice") {
+  if (presentation.kind === "notice") {
     return {
       item: item("meta", "", `알림 · ${string(body.code) || "내용 없음"}`),
       isDelta: false,
     };
   }
-  if (event === "usageUpdate") {
+  if (presentation.kind === "usage") {
     return { item: null, isDelta: false, usage: usageGauge(body) };
   }
-  if (event === "rateLimitUpdate") {
+  if (presentation.kind === "rateLimit") {
     return { item: null, isDelta: false, rateLimit: rateLimitGauge(body) };
   }
 
@@ -204,27 +185,25 @@ export function frameToItem(frame: string): PendingFrame {
   // twelve lines reading `unmapped` in front of an operator who had not sent a turn yet. It is counted
   // and reported beside the other diagnostics instead: nothing is hidden, and the conversation pane is
   // for the conversation. Thinness is about not interpreting a payload, not about rendering every frame.
-  if (event === UNREAD_EVENT) {
+  if (presentation.kind === "discard") {
     return { item: null, isDelta: false, unread: true };
   }
 
-  const known = PRESENTATION[event];
   const text = textOf(body.content ?? body.payload);
-  const status = STATUS_TEXT[event];
-  if (status) {
-    return { item: item("meta", "", status), isDelta: false };
+  if (presentation.kind === "status" || presentation.kind === "approval") {
+    return { item: item("meta", "", LOCALIZED_TEXT[presentation.textKey] ?? presentation.textKey), isDelta: false };
   }
-  if (!known) {
-    // A name the vocabulary does not have. Shown with the name itself, because it means the two ends of
-    // runtrol disagree about their own vocabulary and an operator has to be able to see which name it was.
-    return {
-      item: item("meta", "", `알 수 없는 이벤트 ${event}${text ? ` · ${text}` : ""}`),
-      isDelta: false,
-    };
+  if (presentation.kind !== "message") {
+    return { item: item("meta", "", "알 수 없는 표현 계약"), isDelta: false };
   }
   const messageId = body.message_id === undefined ? null : String(body.message_id);
   return {
-    item: item(known.side, known.label, text, messageId),
+    item: item(
+      presentation.side,
+      LOCALIZED_TEXT[presentation.labelKey] ?? presentation.labelKey,
+      text,
+      messageId,
+    ),
     isDelta: Boolean(body.delta),
   };
 }

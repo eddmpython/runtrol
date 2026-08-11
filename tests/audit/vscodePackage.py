@@ -84,7 +84,10 @@ def sourceProblems(
         "release-targets.json",
         "target !== nativeTarget",
         '"--no-dependencies"',
-        "await rm(coreDirectory",
+        "path.resolve(repositoryRoot, process.env.RUNTROL_CORE_BINARY)",
+        'mkdtemp(path.join(os.tmpdir(), "runtrol-vsix-"))',
+        "cp(source, path.join(stagedCore, targetContract.executable))",
+        "await rm(staging",
     )
     for token in requiredPackageTokens:
         if token not in packageScript:
@@ -277,7 +280,12 @@ def selftest() -> int:
             "family": family,
             "runner": f"{family}-native",
         }
-    packageScript = "packageManifest.version release-targets.json target !== nativeTarget \"--no-dependencies\" await rm(coreDirectory"
+    packageScript = (
+        "packageManifest.version release-targets.json target !== nativeTarget \"--no-dependencies\" "
+        "path.resolve(repositoryRoot, process.env.RUNTROL_CORE_BINARY) "
+        "mkdtemp(path.join(os.tmpdir(), \"runtrol-vsix-\")) "
+        "cp(source, path.join(stagedCore, targetContract.executable)) await rm(staging"
+    )
     buildScript = 'path.join(repositoryRoot, "LICENSE")'
     releaseWorkflow = """
     cargo build --release -p runtrol --bin runtrol --no-default-features --target-dir target/vscode-release

@@ -31,6 +31,7 @@ FIELDS = (
     "refreshP95Ms",
     "rssGrowthBytes",
     "webviewFrameP95Ms",
+    "webviewFrameOverrunP95Ms",
     "webviewInputP95Ms",
     "webviewScrollP95Ms",
     "webviewPendingFrames",
@@ -81,7 +82,7 @@ def selftest() -> int:
         if problems(missing, budget) != [f"{name} is missing or not numeric"]:
             print(f"[vscodeHostPerformance --selftest] FAIL. missing {name} escaped.", file=sys.stderr)
             return 2
-    print("[vscodeHostPerformance --selftest] OK. all sixteen injected defects make the gate red.")
+    print("[vscodeHostPerformance --selftest] OK. all eighteen injected defects make the gate red.")
     return 0
 
 
@@ -178,7 +179,9 @@ def run() -> int:
         "[vscodeHostPerformance] OK. "
         f"activation {metrics['activationMs']:.1f} ms, view {metrics['openViewMs']:.1f} ms, "
         f"refresh p95 {metrics['refreshP95Ms']:.1f} ms, RSS growth {metrics['rssGrowthBytes']:.0f} bytes, "
-        f"Webview frame {metrics['webviewFrameP95Ms']:.1f} ms, input {metrics['webviewInputP95Ms']:.1f} ms, "
+        f"Webview frame {metrics['webviewFrameP95Ms']:.1f} ms "
+        f"(baseline {metrics['webviewBaselineFrameP95Ms']:.1f}, overrun {metrics['webviewFrameOverrunP95Ms']:.1f}), "
+        f"input {metrics['webviewInputP95Ms']:.1f} ms, "
         f"scroll {metrics['webviewScrollP95Ms']:.1f} ms, pending {metrics['webviewPendingFrames']:.0f}."
     )
     return 0

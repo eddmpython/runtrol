@@ -1,4 +1,17 @@
+import eventPresentation from "../../../../assets/event-presentation.json";
+
 export type UnknownRecord = Record<string, unknown>;
+
+export type PresentationContract =
+  | { kind: "message"; side: "mine" | "theirs" | "thought"; labelKey: string }
+  | { kind: "status" | "approval"; textKey: string }
+  | { kind: "turn" | "notice" | "usage" | "rateLimit" | "discard" };
+
+const EVENT_PRESENTATION = eventPresentation.events as Record<string, PresentationContract>;
+
+export function presentationOf(event: string): PresentationContract | null {
+  return EVENT_PRESENTATION[event] ?? null;
+}
 
 export function coalesceChunks(frames: readonly unknown[]): unknown[] {
   const result: unknown[] = [];
@@ -58,12 +71,13 @@ function mergeChunkPair(left: unknown, right: unknown): unknown | null {
   const leftBody = record(leftEnvelope?.body);
   const rightBody = record(rightEnvelope?.body);
   const event = string(leftBody?.event);
+  const presentation = presentationOf(event);
   if (
     !leftEnvelope
     || !rightEnvelope
     || !leftBody
     || !rightBody
-    || !isMessageChunk(event)
+    || presentation?.kind !== "message"
     || event !== string(rightBody.event)
     || !rightBody.delta
     || !string(leftBody.message_id)
@@ -83,8 +97,4 @@ function mergeChunkPair(left: unknown, right: unknown): unknown | null {
       content: { text: `${leftText}${rightText}` },
     },
   };
-}
-
-function isMessageChunk(event: string): boolean {
-  return event === "userMessageChunk" || event === "agentMessageChunk" || event === "agentThoughtChunk";
 }

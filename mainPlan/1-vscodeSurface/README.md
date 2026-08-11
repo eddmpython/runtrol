@@ -30,6 +30,8 @@ The first end-to-end slice landed on 2026-08-11:
   growth against `performance-budget.json` on every supported CI operating system
 - the same real Webview run carries 3,000 raw frames per second while animation, typing, scrolling, Extension Host
   posting, renderer backlog, DOM nodes, visible characters, and memory remain inside one shared budget
+- desktop and VS Code bundle one event-presentation SSOT for all 19 wire events; each surface owns only localized text,
+  while a fault-injected gate rejects vocabulary drift and surface-local event-name maps
 - the extension manifest owns release SemVer, while `release-targets.json` owns the six native Marketplace targets
 - platform packaging includes exactly one matching Core and the repository license, while excluding source, tooling,
   dependencies, test budgets, and release metadata
@@ -41,8 +43,9 @@ The hosted `vscodeExtension` gate checks the thin boundary, no polling, no brows
 queue and renderer bounds, TypeScript, framing tests, and production bundle size.
 The hosted `vscodeHostPerformance` gate launches the product Core and production extension in a real isolated VS Code
 profile. Its shared ratchet caps ready activation at 1,000 ms, view opening at 500 ms, refresh p95 at 50 ms, Extension
-Host RSS growth at 48 MiB, Webview animation p95 at 24 ms, input and scroll p95 at 50 ms, and renderer backlog at
-1,024 frames while 15,000 raw frames cross the boundary in five seconds.
+Host RSS growth at 48 MiB, Webview animation p95 at 40 ms, animation overrun from the unloaded native cadence at 8 ms,
+input and scroll p95 at 50 ms, and renderer backlog at 1,024 frames while 15,000 raw frames cross the boundary in five
+seconds.
 
 ## Module boundaries
 
@@ -61,14 +64,12 @@ Host RSS growth at 48 MiB, Webview animation p95 at 24 ms, input and scroll p95 
 1. Show workspace overlap and provider-offered worktree choices before starting conflicting sessions.
 2. Extend the current 3,000-frame real Webview ratchet through session switching, workspace reload, and eight hot
    sessions.
-3. Move shared event presentation rules out of the retired desktop surface so VS Code and any future phone surface use
-   one vocabulary SSOT.
-4. Exercise start, prompt, approval, interrupt, reconnect, close, and workspace switching against installed real CLIs
+3. Exercise start, prompt, approval, interrupt, reconnect, close, and workspace switching against installed real CLIs
    from an Extension Development Host.
-5. Complete the hosted native release matrix, then verify upgrade plus rollback without stopping active sessions.
+4. Complete the hosted native release matrix, then verify upgrade plus rollback without stopping active sessions.
    Marketplace publication signs the complete platform VSIX, including the exact Core bytes already checked by the
    archive gate. A separate inner-binary signature is not claimed.
-6. Publish `Runtrol Studio` to the Visual Studio Marketplace and verify a clean machine installs and runs it.
+5. Publish `Runtrol Studio` to the Visual Studio Marketplace and verify a clean machine installs and runs it.
 
 ## Completion
 

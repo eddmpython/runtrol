@@ -272,6 +272,8 @@ jobs:
           key: vscode-test-${{ runner.os }}-${{ hashFiles('extensions/runtrol-vscode/package-lock.json') }}
       - name: 데스크톱 프런트엔드
         run: python -X utf8 tests/audit/frontendBuild.py
+      - name: memory budget gate product binary
+        run: cargo build -p runtrol --bin runtrol
       - name: VS Code Extension Host 성능 게이트 자체 검증
         run: python -X utf8 tests/audit/vscodeHostPerformance.py --selftest
       - name: 실제 VS Code 활성화, 뷰, 갱신 p95, RSS ratchet
@@ -372,8 +374,6 @@ jobs:
       - name: 새로고침 뒤 대화 프레임 비저장
         if: matrix.os == 'windows-latest'
         run: python -X utf8 tests/audit/desktopPersistenceSmoke.py
-      - name: memory budget gate product binary
-        run: cargo build -p runtrol --bin runtrol
       - name: 유휴 상주 비용 ratchet 자체 검증
         run: python -X utf8 tests/audit/idleFootprintRatchet.py --selftest
       - name: 유휴 데몬 RSS와 CPU ratchet

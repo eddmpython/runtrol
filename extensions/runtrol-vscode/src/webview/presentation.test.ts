@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { coalesceChunks, record, textOf } from "./presentation";
+import { coalesceChunks, presentationOf, record, textOf } from "./presentation";
 
 function chunk(message: string, text: string, delta = true, event = "agentMessageChunk"): unknown {
   return { body: { event, message_id: message, delta, content: { text } } };
@@ -29,4 +29,16 @@ test("provider-owned content shapes keep their exact visible text", () => {
   assert.equal(textOf({ delta: "delta" }), "delta");
   assert.equal(textOf({ item: { text: "item" } }), "item");
   assert.equal(textOf({ content: [{ text: "one" }, { text: "two" }] }), "onetwo");
+});
+
+test("shared presentation data drives message, status, approval, and discarded events", () => {
+  assert.deepEqual(presentationOf("agentMessageChunk"), {
+    kind: "message",
+    side: "theirs",
+    labelKey: "message.agent",
+  });
+  assert.equal(presentationOf("attached")?.kind, "status");
+  assert.equal(presentationOf("approvalRequested")?.kind, "approval");
+  assert.equal(presentationOf("unmapped")?.kind, "discard");
+  assert.equal(presentationOf("futureProviderEvent"), null);
 });

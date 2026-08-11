@@ -1,5 +1,13 @@
 import "./webview.css";
-import { coalesceChunks, number, record, string, textOf, type UnknownRecord } from "./presentation";
+import {
+  coalesceChunks,
+  number,
+  presentationOf,
+  record,
+  string,
+  textOf,
+  type UnknownRecord,
+} from "./presentation";
 
 type Session = {
   session: string;
@@ -26,6 +34,8 @@ type VsCodeApi = {
 
 type Measurement = {
   id: string;
+  baselineIntervals: number[];
+  baselineFrameP95Ms: number | null;
   frameIntervals: number[];
   inputLatencies: number[];
   scrollLatencies: number[];
@@ -35,6 +45,7 @@ type Measurement = {
   maxPendingFrames: number;
   producedFrames: number | null;
   completing: boolean;
+  ready: boolean;
 };
 
 declare function acquireVsCodeApi(): VsCodeApi;
@@ -44,6 +55,20 @@ const MAX_VISIBLE_CHARACTERS = 256 * 1024;
 const MAX_MESSAGE_CHARACTERS = 8 * 1024;
 const MAX_BATCH = 240;
 const MAX_PENDING_FRAMES = 4_096;
+const BASELINE_FRAMES = 30;
+const LOCALIZED_TEXT: Record<string, string> = {
+  "session.attached": "Session attached",
+  "session.detached": "Session detached",
+  "session.updated": "Session information changed",
+  "tool.started": "Tool call started",
+  "tool.updated": "Tool call updated",
+  "plan.updated": "Plan updated",
+  "commands.updated": "Available commands changed",
+  "mode.updated": "Agent mode changed",
+  "configuration.updated": "Configuration changed",
+  "approval.waiting": "Approval required",
+  "approval.withdrawn": "Approval was withdrawn",
+};
 const vscode = acquireVsCodeApi();
 const title = element<HTMLElement>("session-title");
 const sessionPath = element<HTMLDivElement>("session-path");
@@ -209,43 +234,34 @@ function present(payload: unknown): void {
     return;
   }
 
-  if (event === "userMessageChunk" || event === "agentMessageChunk" || event === "agentThoughtChunk") {
-    const side = event === "userMessageChunk" ? "mine" : event === "agentThoughtChunk" ? "thought" : "theirs";
-    const text = textOf(body.content);
-    const messageId = string(body.message_id);
-    appendMessage(side, text, Boolean(body.delta), messageId);
+  const presentation = presentationOf(event);
+  if (!presentation) {
+    appendMessage("warning", `Unknown event ${event}`);
     return;
   }
-  if (event === "approvalRequested") {
+  if (presentation.kind === "message") {
+    const text = textOf(body.content);
+    const messageId = string(body.message_id);
+    appendMessage(presentation.side, text, Boolean(body.delta), messageId);
+    return;
+  }
+  if (presentation.kind === "approval") {
     appendApproval(body);
     return;
   }
-  if (event === "turn") {
+  if (presentation.kind === "turn") {
     const step = string(body.step) || "updated";
     const stop = string(body.stop);
     appendMessage("meta", stop ? `Turn ${step}: ${stop}` : `Turn ${step}`);
     return;
   }
-  if (event === "notice") {
+  if (presentation.kind === "notice") {
     const code = string(body.code) || "provider notice";
     appendMessage("warning", code);
     return;
   }
-  const statusText: Record<string, string> = {
-    attached: "Session attached",
-    detached: "Session detached",
-    toolCall: "Tool call started",
-    toolCallUpdate: "Tool call updated",
-    plan: "Plan updated",
-    availableCommandsUpdate: "Available commands changed",
-    currentModeUpdate: "Agent mode changed",
-    configOptionUpdate: "Configuration changed",
-    sessionInfoUpdate: "Session information changed",
-    approvalWithdrawn: "Approval was withdrawn",
-  };
-  const text = statusText[event];
-  if (text) {
-    appendMessage("meta", text);
+  if (presentation.kind === "status") {
+    appendMessage("meta", LOCALIZED_TEXT[presentation.textKey] ?? presentation.textKey);
   }
 }
 
@@ -359,6 +375,8 @@ function startMeasurement(id: string): void {
   const now = performance.now();
   measurement = {
     id,
+    baselineIntervals: [],
+    baselineFrameP95Ms: null,
     frameIntervals: [],
     inputLatencies: [],
     scrollLatencies: [],
@@ -368,9 +386,9 @@ function startMeasurement(id: string): void {
     maxPendingFrames: pendingCount(),
     producedFrames: null,
     completing: false,
+    ready: false,
   };
   requestAnimationFrame((at) => measureFrame(id, at));
-  vscode.postMessage({ type: "measurementReady", id });
 }
 
 function measureFrame(id: string, at: number): void {
@@ -378,8 +396,21 @@ function measureFrame(id: string, at: number): void {
   if (!active || active.id !== id) {
     return;
   }
-  active.frameIntervals.push(at - active.lastFrameAt);
+  const interval = at - active.lastFrameAt;
   active.lastFrameAt = at;
+  if (!active.ready) {
+    active.baselineIntervals.push(interval);
+    if (active.baselineIntervals.length >= BASELINE_FRAMES) {
+      active.baselineFrameP95Ms = percentile(active.baselineIntervals.slice(5), 0.95);
+      active.ready = true;
+      active.nextInputAt = at + 100;
+      active.nextScrollAt = at + 100;
+      vscode.postMessage({ type: "measurementReady", id });
+    }
+    requestAnimationFrame((next) => measureFrame(id, next));
+    return;
+  }
+  active.frameIntervals.push(interval);
   if (at >= active.nextInputAt) {
     active.nextInputAt = at + 100;
     const started = performance.now();
@@ -422,8 +453,12 @@ function finishMeasurementWhenDrained(): void {
     if (measurement !== active) {
       return;
     }
+    const frameP95Ms = percentile(active.frameIntervals.slice(5), 0.95);
+    const baselineFrameP95Ms = active.baselineFrameP95Ms ?? Number.POSITIVE_INFINITY;
     const metrics = {
-      frameP95Ms: percentile(active.frameIntervals.slice(5), 0.95),
+      baselineFrameP95Ms,
+      frameP95Ms,
+      frameOverrunP95Ms: Math.max(0, frameP95Ms - baselineFrameP95Ms),
       inputP95Ms: percentile(active.inputLatencies, 0.95),
       scrollP95Ms: percentile(active.scrollLatencies, 0.95),
       maxPendingFrames: active.maxPendingFrames,

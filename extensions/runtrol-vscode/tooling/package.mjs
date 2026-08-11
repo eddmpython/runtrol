@@ -1,6 +1,7 @@
-import { cp, mkdir, readFile, rm, stat } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import os from "node:os";
 import path from "node:path";
 
 const extensionRoot = fileURLToPath(new URL("../", import.meta.url));
@@ -20,17 +21,12 @@ if (!process.env.RUNTROL_CORE_BINARY && target !== nativeTarget) {
 }
 
 const source = process.env.RUNTROL_CORE_BINARY
-  ? path.resolve(process.env.RUNTROL_CORE_BINARY)
+  ? path.resolve(repositoryRoot, process.env.RUNTROL_CORE_BINARY)
   : path.join(repositoryRoot, "target", "vscode-release", "release", targetContract.executable);
 const sourceInfo = await stat(source);
 if (!sourceInfo.isFile() || sourceInfo.size < 1024 * 1024) {
   throw new Error(`the release Core at ${source} is missing or too small to be the product binary`);
 }
-
-const coreDirectory = path.join(extensionRoot, "resources/core");
-await rm(coreDirectory, { recursive: true, force: true });
-await mkdir(coreDirectory, { recursive: true });
-await cp(source, path.join(coreDirectory, targetContract.executable));
 
 const build = spawnSync(process.execPath, [path.join(extensionRoot, "tooling/build.mjs")], {
   cwd: extensionRoot,
@@ -44,9 +40,31 @@ const release = path.join(repositoryRoot, "release");
 await mkdir(release, { recursive: true });
 const output = path.join(release, `${packageManifest.name}-${packageManifest.version}-${target}.vsix`);
 const vsce = path.join(extensionRoot, "node_modules/@vscode/vsce/vsce");
-const packaged = spawnSync(
-  process.execPath,
-  [vsce, "package", "--target", target, "--no-dependencies", "--out", output],
-  { cwd: extensionRoot, stdio: "inherit" },
-);
-process.exitCode = packaged.status ?? 1;
+const staging = await mkdtemp(path.join(os.tmpdir(), "runtrol-vsix-"));
+try {
+  const stagedDist = path.join(staging, "dist");
+  const stagedResources = path.join(staging, "resources");
+  const stagedCore = path.join(stagedResources, "core");
+  await Promise.all([
+    mkdir(stagedDist, { recursive: true }),
+    mkdir(stagedCore, { recursive: true }),
+  ]);
+  await Promise.all([
+    cp(path.join(extensionRoot, "package.json"), path.join(staging, "package.json")),
+    cp(path.join(extensionRoot, "README.md"), path.join(staging, "README.md")),
+    cp(path.join(extensionRoot, ".vscodeignore"), path.join(staging, ".vscodeignore")),
+    cp(path.join(extensionRoot, "dist"), stagedDist, { recursive: true }),
+    cp(path.join(extensionRoot, "resources/icon.png"), path.join(stagedResources, "icon.png")),
+    cp(path.join(extensionRoot, "resources/symbol.svg"), path.join(stagedResources, "symbol.svg")),
+    cp(path.join(extensionRoot, "resources/LICENSE"), path.join(stagedResources, "LICENSE")),
+    cp(source, path.join(stagedCore, targetContract.executable)),
+  ]);
+  const packaged = spawnSync(
+    process.execPath,
+    [vsce, "package", "--target", target, "--no-dependencies", "--out", output],
+    { cwd: staging, stdio: "inherit" },
+  );
+  process.exitCode = packaged.status ?? 1;
+} finally {
+  await rm(staging, { recursive: true, force: true });
+}

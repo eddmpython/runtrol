@@ -15,6 +15,8 @@ its measured architecture, and the gate harness.
 
 ### Added
 
+- One event-presentation SSOT shared by desktop and VS Code, with presentation kind, message side, and localization
+  keys for all 19 wire events and fault-injected coverage against the Rust vocabulary.
 - A real VS Code Webview burst ratchet at 3,000 raw frames per second, including animation, input, scroll, queue,
   DOM, character, RSS, activation, view-open, and refresh budgets.
 - Platform-specific `Runtrol Studio` release packaging with one exact bundled Core, license and archive allowlist
@@ -94,6 +96,11 @@ its measured architecture, and the gate harness.
 
 ### Changed
 
+- Native VSIX packaging now resolves Core paths from the repository root and assembles each package in an isolated
+  temporary directory, so a running development Core is never replaced or deleted by a release build.
+- The VS Code Webview ratchet now records the isolated runner's native animation cadence before load, then enforces
+  both a 40 ms absolute frame ceiling and an 8 ms p95 load-overrun ceiling. A 30 Hz virtual display no longer looks
+  like application jank, while output-induced degradation still fails.
 - The VS Code surface batches Extension Host delivery, coalesces only adjacent deltas of the same visible message,
   segments long streaming text, isolates offscreen layout, and avoids forced layout in its render loop.
 

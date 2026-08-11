@@ -31,6 +31,9 @@ cargo build --release --bin runtrol --no-default-features --target-dir ../../tar
 npm run package:native
 ```
 
+The packager resolves relative Core paths from the repository root and assembles the VSIX in an isolated temporary
+directory. It does not replace `resources/core` in the working extension, even when that development Core is running.
+
 `RUNTROL_CORE_BINARY` may name a different verified binary. Packages are written under the repository `release/`
 directory, which is not tracked.
 
@@ -41,7 +44,7 @@ the repository license. Source, tooling, dependencies, test budgets, and target 
 Inspect and clean-install a built package before publication:
 
 ```text
-python -X utf8 ../../tests/audit/vscodePackage.py --archive ../../release/runtrol-studio-VERSION-win32-x64.vsix --target win32-x64 --core ../../target/release/runtrol.exe
+python -X utf8 ../../tests/audit/vscodePackage.py --archive ../../release/runtrol-studio-VERSION-win32-x64.vsix --target win32-x64 --core ../../target/vscode-release/release/runtrol.exe
 node tooling/installed-package.mjs ../../release/runtrol-studio-VERSION-win32-x64.vsix
 ```
 

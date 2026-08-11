@@ -3,7 +3,8 @@
   "openViewMs": 500,
   "refreshP95Ms": 50,
   "rssGrowthBytes": 50331648,
-  "webviewFrameP95Ms": 24,
+  "webviewFrameP95Ms": 40,
+  "webviewFrameOverrunP95Ms": 8,
   "webviewInputP95Ms": 50,
   "webviewScrollP95Ms": 50,
   "webviewPendingFrames": 1024

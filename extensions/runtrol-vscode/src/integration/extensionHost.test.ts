@@ -11,7 +11,9 @@ type ExtensionApi = {
   readonly ready: Promise<void>;
   refresh(): Promise<void>;
   measureWebview?(framesPerSecond?: number, durationMs?: number): Promise<{
+    baselineFrameP95Ms: number;
     frameP95Ms: number;
+    frameOverrunP95Ms: number;
     inputP95Ms: number;
     scrollP95Ms: number;
     maxPendingFrames: number;
@@ -117,6 +119,8 @@ async function measure(resultPath: string): Promise<void> {
     refreshP95Ms: percentile(refreshSamples, 0.95),
     rssGrowthBytes: Math.max(0, process.memoryUsage().rss - rssBefore),
     webviewFrameP95Ms: webview.frameP95Ms,
+    webviewBaselineFrameP95Ms: webview.baselineFrameP95Ms,
+    webviewFrameOverrunP95Ms: webview.frameOverrunP95Ms,
     webviewInputP95Ms: webview.inputP95Ms,
     webviewScrollP95Ms: webview.scrollP95Ms,
     webviewPendingFrames: webview.maxPendingFrames,
@@ -156,6 +160,7 @@ function budgetFailures(result: {
   refreshP95Ms: number;
   rssGrowthBytes: number;
   webviewFrameP95Ms: number;
+  webviewFrameOverrunP95Ms: number;
   webviewInputP95Ms: number;
   webviewScrollP95Ms: number;
   webviewPendingFrames: number;
@@ -176,6 +181,12 @@ function budgetFailures(result: {
   if (result.webviewFrameP95Ms > budget.webviewFrameP95Ms) {
     failures.push(
       `Webview frame p95 ${result.webviewFrameP95Ms.toFixed(1)} ms exceeds ${budget.webviewFrameP95Ms} ms`,
+    );
+  }
+  if (result.webviewFrameOverrunP95Ms > budget.webviewFrameOverrunP95Ms) {
+    failures.push(
+      `Webview frame overrun p95 ${result.webviewFrameOverrunP95Ms.toFixed(1)} ms exceeds `
+      + `${budget.webviewFrameOverrunP95Ms} ms`,
     );
   }
   if (result.webviewInputP95Ms > budget.webviewInputP95Ms) {

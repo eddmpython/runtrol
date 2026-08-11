@@ -10,7 +10,9 @@ type ViewAction =
   | { type: "close" };
 
 export type WebviewPerformance = {
+  baselineFrameP95Ms: number;
   frameP95Ms: number;
+  frameOverrunP95Ms: number;
   inputP95Ms: number;
   scrollP95Ms: number;
   maxPendingFrames: number;
@@ -291,7 +293,9 @@ function performanceMetrics(value: unknown): WebviewPerformance | null {
   }
   const metrics = value as Record<string, unknown>;
   const names: Array<keyof WebviewPerformance> = [
+    "baselineFrameP95Ms",
     "frameP95Ms",
+    "frameOverrunP95Ms",
     "inputP95Ms",
     "scrollP95Ms",
     "maxPendingFrames",
