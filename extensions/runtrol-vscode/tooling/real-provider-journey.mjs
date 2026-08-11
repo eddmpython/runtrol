@@ -1,10 +1,11 @@
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { runTests } from "@vscode/test-electron";
 import { build } from "esbuild";
+
+import { terminateExactProcesses } from "./isolated-vscode.mjs";
 
 const extensionRoot = fileURLToPath(new URL("../", import.meta.url));
 const output = path.join(extensionRoot, ".test-dist");
@@ -15,6 +16,7 @@ const firstWorkspace = requiredEnvironment("RUNTROL_VSCODE_WORKSPACE_ONE");
 const secondWorkspace = requiredEnvironment("RUNTROL_VSCODE_WORKSPACE_TWO");
 const userData = requiredEnvironment("RUNTROL_VSCODE_USER_DATA");
 const extensions = requiredEnvironment("RUNTROL_VSCODE_EXTENSIONS");
+const vscode = requiredEnvironment("RUNTROL_TEST_VSCODE_EXECUTABLE");
 
 await Promise.all([
   stat(core),
@@ -57,7 +59,7 @@ await build({
 });
 
 try {
-  const firstError = await runHost(firstWorkspace).then(() => null, (error) => error);
+  await runHost(firstWorkspace, "switching");
   let result = await readResult();
   if (typeof result.failure === "string") {
     throw new Error(
@@ -66,10 +68,8 @@ try {
     );
   }
   if (result.stage === "switching") {
-    await runHost(secondWorkspace);
+    await runHost(secondWorkspace, "complete");
     result = await readResult();
-  } else if (firstError) {
-    throw firstError;
   }
   if (typeof result.failure === "string") {
     throw new Error(
@@ -85,21 +85,79 @@ try {
   await rm(output, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 }
 
-async function runHost(workspace) {
-  await runTests({
-    cachePath: path.join(extensionRoot, ".vscode-test"),
-    extensionDevelopmentPath: extensionRoot,
-    extensionTestsPath: testEntry,
-    extensionTestsEnv: process.env,
-    launchArgs: [
-      workspace,
-      "--disable-extensions",
-      `--user-data-dir=${userData}`,
-      `--extensions-dir=${extensions}`,
-    ],
-    version: process.env.RUNTROL_TEST_VSCODE_VERSION || "stable",
-    vscodeExecutablePath: process.env.RUNTROL_TEST_VSCODE_EXECUTABLE || undefined,
+async function runHost(workspace, expectedStage) {
+  const arguments_ = [
+    "--new-window",
+    "--no-sandbox",
+    "--disable-gpu-sandbox",
+    "--disable-updates",
+    "--disable-extensions",
+    "--disable-workspace-trust",
+    "--skip-welcome",
+    "--skip-release-notes",
+    "--no-cached-data",
+    "--user-data-dir",
+    userData,
+    "--extensions-dir",
+    extensions,
+    "--extensionDevelopmentPath",
+    extensionRoot,
+    "--extensionTestsPath",
+    testEntry,
+    workspace,
+  ];
+  const child = spawn(vscode, arguments_, {
+    env: process.env,
+    stdio: "inherit",
+    windowsHide: true,
   });
+  let exit = null;
+  let spawnError = null;
+  child.once("error", (error) => {
+    spawnError = error;
+  });
+  child.once("exit", (code, signal) => {
+    exit = { code, signal, at: Date.now() };
+  });
+  try {
+    const deadline = Date.now() + 150_000;
+    let lastStage = "not started";
+    while (Date.now() < deadline) {
+      if (spawnError) {
+        throw spawnError;
+      }
+      const result = await tryReadResult();
+      if (result) {
+        if (typeof result.stage === "string") {
+          lastStage = result.stage;
+        }
+        if (typeof result.failure === "string") {
+          throw new Error(
+            `journey failed at ${String(result.stage)}: ${result.failure}`
+            + (typeof result.stack === "string" ? `\n${result.stack}` : ""),
+          );
+        }
+        if (result.stage === expectedStage) {
+          if (expectedStage === "switching") {
+            await delay(5_000);
+          }
+          return;
+        }
+      }
+      if (exit && Date.now() - exit.at > 2_000) {
+        throw new Error(
+          `VS Code exited as ${String(exit.code ?? exit.signal)} after checkpoint ${lastStage}`,
+        );
+      }
+      await delay(100);
+    }
+    throw new Error(`VS Code timed out after checkpoint ${lastStage}`);
+  } finally {
+    await terminateExactProcesses(userData, null);
+    if (child.exitCode === null && child.signalCode === null) {
+      child.kill("SIGKILL");
+    }
+  }
 }
 
 async function readResult() {
@@ -109,6 +167,21 @@ async function readResult() {
     throw new Error("the Extension Host journey result is not an object");
   }
   return result;
+}
+
+async function tryReadResult() {
+  try {
+    return await readResult();
+  } catch (error) {
+    if (error.code === "ENOENT" || error instanceof SyntaxError) {
+      return null;
+    }
+    throw error;
+  }
+}
+
+function delay(milliseconds) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
 function requiredEnvironment(name) {

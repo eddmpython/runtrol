@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import os
+import signal
 import shutil
 import subprocess
 import sys
@@ -54,6 +55,23 @@ class Evidence:
     sessions_closed: bool
     target_absent: bool
     cleanup_complete: bool
+
+
+@dataclass(frozen=True)
+class ProcessIdentity:
+    """One process generation, not merely a reusable operating-system PID."""
+
+    pid: int
+    started: str
+
+
+@dataclass(frozen=True)
+class ProcessRow:
+    """The bounded fields needed for parentage, generation, and creation ordering."""
+
+    parent: int
+    started: str
+    age_seconds: int | None
 
 
 def verifyEvidence(evidence: Evidence) -> None:
@@ -197,6 +215,194 @@ def closeExactSessions(binary: Path, env: dict[str, str], sessions: tuple[str, .
     return closed
 
 
+def processIdentityTable() -> dict[int, ProcessRow]:
+    """Read process generations without retaining arguments or environment data."""
+    if sys.platform == "win32":
+        command = (
+            "Get-CimInstance Win32_Process | Where-Object { $_.CreationDate } | ForEach-Object { "
+            "'{0}|{1}|{2}' -f $_.ProcessId,$_.ParentProcessId,$_.CreationDate.ToUniversalTime().Ticks }"
+        )
+        listed = subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", command],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=30.0,
+            check=False,
+        )
+    else:
+        listed = subprocess.run(
+            ["ps", "-axo", "pid=,ppid=,etimes=,lstart="],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=15.0,
+            check=False,
+        )
+    if listed.returncode != 0:
+        raise Failed(f"process identity enumeration failed: {listed.stderr[-2000:]}")
+    found: dict[int, ProcessRow] = {}
+    for line in listed.stdout.splitlines():
+        fields = line.split("|", 2) if sys.platform == "win32" else line.split(maxsplit=3)
+        if len(fields) != (3 if sys.platform == "win32" else 4):
+            continue
+        try:
+            pid = int(fields[0])
+            parent = int(fields[1])
+            age = None if sys.platform == "win32" else int(fields[2])
+        except ValueError:
+            # ok: an unrelated process row raced removal; complete rows still identify every owned generation.
+            continue
+        started = fields[2].strip() if sys.platform == "win32" else fields[3].strip()
+        if pid > 0 and started:
+            found[pid] = ProcessRow(parent, started, age)
+    return found
+
+
+def processGeneration(pid: int) -> str:
+    """Capture the start token that disambiguates later PID reuse."""
+    row = processIdentityTable().get(pid)
+    if row is None:
+        raise Failed(f"process {pid} vanished before its generation could be captured")
+    return row.started
+
+
+def ownedDescendants(parent: int, started: str) -> set[ProcessIdentity]:
+    """Return descendants created no earlier than one exact parent generation."""
+    table = processIdentityTable()
+    root = table.get(parent)
+    if root is None or root.started != started:
+        return set()
+    found: set[int] = set()
+    frontier = {parent}
+    while frontier:
+        children = {
+            pid for pid, row in table.items()
+            if row.parent in frontier and pid not in found and createdAfter(row, root)
+        }
+        found.update(children)
+        frontier = children
+    return {ProcessIdentity(pid, table[pid].started) for pid in found}
+
+
+def createdAfter(candidate: ProcessRow, root: ProcessRow) -> bool:
+    """Reject stale parent identifiers that point at a newer reused PID."""
+    if sys.platform == "win32":
+        return int(candidate.started) >= int(root.started)
+    if candidate.age_seconds is None or root.age_seconds is None:
+        return False
+    return candidate.age_seconds <= root.age_seconds + 1
+
+
+def markedProcesses(marker: Path) -> set[ProcessIdentity]:
+    """Find marked VS Code roots and every child still held by those exact roots."""
+    marker_text = str(marker)
+    if sys.platform == "win32":
+        command = (
+            "$marker=[Environment]::GetEnvironmentVariable('RUNTROL_VSCODE_MARKER'); "
+            "Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -and "
+            "$_.CommandLine.IndexOf($marker,[StringComparison]::OrdinalIgnoreCase) -ge 0 } | "
+            "Select-Object -ExpandProperty ProcessId"
+        )
+        listed = subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", command],
+            env={**os.environ, "RUNTROL_VSCODE_MARKER": marker_text},
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=30.0,
+            check=False,
+        )
+        if listed.returncode != 0:
+            raise Failed(f"isolated VS Code process enumeration failed: {listed.stderr[-2000:]}")
+        candidates = listed.stdout.splitlines()
+    else:
+        listed = subprocess.run(
+            ["ps", "-axo", "pid=,command="],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=15.0,
+            check=False,
+        )
+        if listed.returncode != 0:
+            raise Failed(f"isolated VS Code process enumeration failed: {listed.stderr[-2000:]}")
+        candidates = [
+            line.split(maxsplit=1)[0]
+            for line in listed.stdout.splitlines()
+            if marker_text in line and line.split(maxsplit=1)
+        ]
+    roots: set[int] = set()
+    for value in candidates:
+        try:
+            pid = int(value.strip())
+        except ValueError:
+            # ok: a command-line row vanished while CIM or ps rendered it; remaining marked roots are still checked.
+            continue
+        if pid > 0 and pid != os.getpid():
+            roots.add(pid)
+    table = processIdentityTable()
+    found: set[ProcessIdentity] = set()
+    for pid in roots:
+        row = table.get(pid)
+        if row is None:
+            continue
+        found.add(ProcessIdentity(pid, row.started))
+        found.update(ownedDescendants(pid, row.started))
+    return found
+
+
+def stopMarkedProcesses(marker: Path) -> bool:
+    """Terminate only VS Code processes carrying the exact isolated path marker."""
+    owned = markedProcesses(marker)
+    for identity in owned:
+        try:
+            os.kill(identity.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            # ok: this exact generation already exited, which is the cleanup outcome the next identity scan verifies.
+            continue
+    survivors = aliveIdentities(owned)
+    deadline = time.monotonic() + 5.0
+    while survivors and time.monotonic() < deadline:
+        time.sleep(0.05)
+        survivors = aliveIdentities(owned)
+    force_signal = signal.SIGTERM if sys.platform == "win32" else signal.SIGKILL
+    for identity in survivors:
+        try:
+            os.kill(identity.pid, force_signal)
+        except ProcessLookupError:
+            # ok: this exact generation exited before the forced signal, and the next identity scan verifies it.
+            continue
+    deadline = time.monotonic() + 5.0
+    while survivors and time.monotonic() < deadline:
+        time.sleep(0.05)
+        survivors = aliveIdentities(owned)
+    return not survivors
+
+
+def aliveIdentities(identities: set[ProcessIdentity]) -> set[ProcessIdentity]:
+    """Keep only the same process generations, never a later PID occupant."""
+    table = processIdentityTable()
+    return {
+        identity for identity in identities
+        if table.get(identity.pid) is not None and table[identity.pid].started == identity.started
+    }
+
+
+def waitIdentitiesGone(identities: set[ProcessIdentity]) -> set[ProcessIdentity]:
+    """Wait briefly for exact process generations to exit."""
+    deadline = time.monotonic() + 5.0
+    alive = aliveIdentities(identities)
+    while alive and time.monotonic() < deadline:
+        time.sleep(0.05)
+        alive = aliveIdentities(identities)
+    return alive
+
+
 def exercise(claude: str) -> None:
     """Drive start, prompt, approval, interrupt, reconnect, switch, restore, and close through VS Code."""
     node = shutil.which("node.exe" if sys.platform == "win32" else "node") or shutil.which("node")
@@ -218,6 +424,7 @@ def exercise(claude: str) -> None:
             path.mkdir(parents=True)
 
         evidence: Evidence | None = None
+        cleanup_detail = ""
         with provider_gate.RunningModel(target, max_requests=3) as model:
             env = provider_gate.environment(root, home, config, model, claude)
             env.update(
@@ -237,11 +444,15 @@ def exercise(claude: str) -> None:
             )
             cli_probed = provider_gate.probeClaude(claude, env)
             daemon = provider_gate.startDaemon(binary, env, home)
-            daemon_pids: set[int] = set()
-            host_pids: set[int] = set()
+            daemon_generation = processGeneration(daemon.pid)
+            daemon_processes: set[ProcessIdentity] = set()
+            host_processes: set[ProcessIdentity] = set()
+            host_generation = ""
             host: subprocess.Popen[str] | None = None
             output = ""
             sessions_closed = False
+            marked_cleanup = False
+            marked_cleanup_error = ""
             try:
                 with tempfile.TemporaryFile(mode="w+", encoding="utf-8", errors="replace") as host_output:
                     host = subprocess.Popen(
@@ -255,10 +466,11 @@ def exercise(claude: str) -> None:
                         encoding="utf-8",
                         errors="replace",
                     )
+                    host_generation = processGeneration(host.pid)
                     deadline = time.monotonic() + TIMEOUT_S
                     while host.poll() is None and time.monotonic() < deadline:
-                        daemon_pids.update(provider_gate.descendants(daemon.pid))
-                        host_pids.update(provider_gate.descendants(host.pid))
+                        daemon_processes.update(ownedDescendants(daemon.pid, daemon_generation))
+                        host_processes.update(ownedDescendants(host.pid, host_generation))
                         time.sleep(0.05)
                     if host.poll() is None:
                         host.terminate()
@@ -306,23 +518,38 @@ def exercise(claude: str) -> None:
                 )
                 sessions_closed = True
             finally:
-                daemon_pids.update(provider_gate.descendants(daemon.pid))
-                if host is not None:
-                    host_pids.update(provider_gate.descendants(host.pid))
+                daemon_processes.update(ownedDescendants(daemon.pid, daemon_generation))
+                if host is not None and host_generation:
+                    host_processes.update(ownedDescendants(host.pid, host_generation))
                 sessions = readSessionIds(result_path)
                 if sessions and daemon.poll() is None:
                     listing = process.command(binary, env, ["list"])
                     remaining = tuple(session for session in sessions if session in listing)
                     sessions_closed = closeExactSessions(binary, env, remaining) and sessions_closed
                 provider_gate.stopProcess(host)
-                process.stopDaemon(daemon)
-                survivors = provider_gate.waitGone(daemon_pids | host_pids)
+                try:
+                    marked_cleanup = stopMarkedProcesses(user_data)
+                except (Failed, OSError, subprocess.SubprocessError) as error:
+                    marked_cleanup_error = str(error)
+                finally:
+                    process.stopDaemon(daemon)
+                survivors = waitIdentitiesGone(daemon_processes | host_processes)
                 cleanup_complete = (
                     sessions_closed
+                    and marked_cleanup
                     and daemon.poll() is not None
                     and (host is None or host.poll() is not None)
                     and not survivors
                 )
+                if not cleanup_complete:
+                    cleanup_detail = (
+                        f"sessions_closed={sessions_closed}, marked_cleanup={marked_cleanup}, "
+                        f"marked_cleanup_error={marked_cleanup_error or 'none'}, "
+                        f"daemon_exit={daemon.poll()}, host_exit={None if host is None else host.poll()}, "
+                        f"survivors={sorted(identity.pid for identity in survivors)}, "
+                        f"daemon_tracked={sorted(identity.pid for identity in daemon_processes)}, "
+                        f"host_tracked={sorted(identity.pid for identity in host_processes)}"
+                    )
                 if evidence is not None:
                     evidence = replace(
                         evidence,
@@ -336,6 +563,8 @@ def exercise(claude: str) -> None:
 
         if evidence is None:
             raise Failed("the installed-provider VS Code journey produced no evidence")
+        if cleanup_detail:
+            raise Failed(f"exact cleanup was incomplete: {cleanup_detail}")
         verifyEvidence(evidence)
         print(
             "[vscodeRealProviderJourney] OK. installed Claude Code completed start, prompt, approval denial, "
