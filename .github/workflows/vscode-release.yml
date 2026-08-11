@@ -21,7 +21,7 @@ jobs:
       targetCount: ${{ steps.manifest.outputs.targetCount }}
       version: ${{ steps.manifest.outputs.version }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Read the extension release SSOT
         id: manifest
         run: |
@@ -44,14 +44,14 @@ jobs:
       matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Linux native build and VS Code test dependencies
         if: matrix.family == 'linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y xvfb
-      - uses: Swatinem/rust-cache@v2
-      - uses: actions/setup-node@v5
+      - uses: Swatinem/rust-cache@63fed3e2fecf6f7b51dc6f043341b79ef82a9ae7 # v2.9.2
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "24"
           cache: npm
@@ -84,7 +84,7 @@ jobs:
         env:
           TMPDIR: ${{ matrix.family == 'macos' && '/tmp' || runner.temp }}
         run: python -X utf8 tests/audit/vscodeUpgradeRollback.py --archive release/runtrol-studio-${{ needs.prepare.outputs.version }}-${{ matrix.target }}.vsix
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: runtrol-studio-${{ needs.prepare.outputs.version }}-${{ matrix.target }}
           path: release/runtrol-studio-${{ needs.prepare.outputs.version }}-${{ matrix.target }}.vsix
@@ -96,15 +96,16 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      id-token: write
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "24"
           cache: npm
           cache-dependency-path: extensions/runtrol-vscode/package-lock.json
       - run: npm --prefix extensions/runtrol-vscode ci
-      - uses: actions/download-artifact@v5
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: runtrol-studio-${{ needs.prepare.outputs.version }}-*
           path: release
@@ -114,10 +115,9 @@ jobs:
           count="$(find release -maxdepth 1 -name 'runtrol-studio-${{ needs.prepare.outputs.version }}-*.vsix' -type f | wc -l)"
           test "$count" -eq "${{ needs.prepare.outputs.targetCount }}"
       - name: Publish all platform packages
-        env:
-          VSCE_PAT: ${{ secrets.VSCE_PAT }}
         run: >-
           node extensions/runtrol-vscode/node_modules/@vscode/vsce/vsce publish
+          --oidc
           --packagePath release/runtrol-studio-${{ needs.prepare.outputs.version }}-*.vsix
       - name: Create the immutable GitHub release
         env:

@@ -64,6 +64,10 @@ def sourceProblems(
         found.append("the public extension identity changed")
     if package.get("license") != "SEE LICENSE IN resources/LICENSE":
         found.append("the extension manifest does not point to the packaged repository license")
+    dependencies = package.get("devDependencies")
+    vsceVersion = dependencies.get("@vscode/vsce") if isinstance(dependencies, dict) else None
+    if not isinstance(vsceVersion, str) or not re.fullmatch(r"\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?", vsceVersion):
+        found.append("the Marketplace publisher CLI is not pinned to one exact version")
     scripts = package.get("scripts")
     if not isinstance(scripts, dict) or scripts.get("package:native") != "node tooling/package.mjs":
         found.append("package:native is not the release packaging entry point")
@@ -100,6 +104,8 @@ def sourceProblems(
         "--target-dir target/vscode-release",
         "RUNTROL_CORE_BINARY: target/vscode-release/release/${{ matrix.executable }}",
         "tests/audit/vscodeUpgradeRollback.py --archive",
+        "id-token: write",
+        "--oidc",
     )
     for token in requiredWorkflowTokens:
         if token not in releaseWorkflow:
@@ -107,6 +113,11 @@ def sourceProblems(
     for token in ("crates/runtrol-gui", "libwebkit2gtk-4.1-dev"):
         if token in releaseWorkflow:
             found.append(f"vscode-release.yml restores unused desktop release work {token}")
+    if "VSCE_PAT" in releaseWorkflow:
+        found.append("vscode-release.yml stores a long-lived Marketplace publishing token")
+    for actionRevision in re.findall(r"uses:\s+[^@\s]+@([^\s#]+)", releaseWorkflow):
+        if not re.fullmatch(r"[0-9a-f]{40}", actionRevision):
+            found.append(f"vscode-release.yml uses an unpinned action revision: {actionRevision}")
     for token in ('default = ["desktop"]', 'desktop = ["dep:runtrol-gui"]', "optional = true"):
         if token not in coreManifest:
             found.append(f"runtrol Cargo.toml is missing optional desktop contract {token}")
@@ -117,6 +128,34 @@ def sourceProblems(
         found.append("the installed-package verifier is missing")
     if not upgradeVerifierExists:
         found.append("the installed upgrade and rollback verifier is missing")
+    return found
+
+
+def listingProblems(package: dict[str, object], readme: str) -> list[str]:
+    """Return Marketplace presentation defects without contacting the Marketplace."""
+    found: list[str] = []
+    if package.get("displayName") != "Runtrol Studio":
+        found.append("the Marketplace display name changed")
+    if package.get("homepage") != "https://eddmpython.github.io/runtrol/":
+        found.append("the Marketplace homepage is not the public product site")
+    if package.get("bugs") != {"url": "https://github.com/eddmpython/runtrol/issues"}:
+        found.append("the Marketplace issue link is not the public repository")
+    if package.get("pricing") != "Free":
+        found.append("the open source extension is not labelled Free")
+    if package.get("galleryBanner") != {"color": "#0B0D0F", "theme": "dark"}:
+        found.append("the Marketplace banner does not use the canonical graphite contract")
+    requiredReadmeTokens = (
+        "# Runtrol Studio for VS Code",
+        "## Install",
+        "Search for `Runtrol Studio`",
+        "No Core path is required for a Marketplace installation",
+        "## Ownership and security",
+        "https://eddmpython.github.io/runtrol/",
+        "https://github.com/eddmpython/runtrol/blob/main/SECURITY.md",
+    )
+    for token in requiredReadmeTokens:
+        if token not in readme:
+            found.append(f"the Marketplace README is missing {token}")
     return found
 
 
@@ -271,11 +310,37 @@ def selftest() -> int:
 
     sourcePackage = {
         "name": "runtrol-studio",
+        "displayName": "Runtrol Studio",
         "publisher": "eddmpython",
         "version": version,
         "license": "SEE LICENSE IN resources/LICENSE",
+        "homepage": "https://eddmpython.github.io/runtrol/",
+        "bugs": {"url": "https://github.com/eddmpython/runtrol/issues"},
+        "pricing": "Free",
+        "galleryBanner": {"color": "#0B0D0F", "theme": "dark"},
         "scripts": {"package:native": "node tooling/package.mjs"},
+        "devDependencies": {"@vscode/vsce": "3.9.3-5"},
     }
+    listingReadme = """
+    # Runtrol Studio for VS Code
+    ## Install
+    Search for `Runtrol Studio`
+    No Core path is required for a Marketplace installation
+    ## Ownership and security
+    https://eddmpython.github.io/runtrol/
+    https://github.com/eddmpython/runtrol/blob/main/SECURITY.md
+    """
+    if listingProblems(sourcePackage, listingReadme):
+        print("[vscodePackage --selftest] FAIL. the green Marketplace listing was rejected.", file=sys.stderr)
+        return 2
+    listingMutations = (
+        ({**sourcePackage, "homepage": "https://example.invalid/"}, listingReadme),
+        (sourcePackage, listingReadme.replace("## Install", "## Setup")),
+    )
+    for index, (mutatedPackage, mutatedReadme) in enumerate(listingMutations, start=1):
+        if not listingProblems(mutatedPackage, mutatedReadme):
+            print(f"[vscodePackage --selftest] FAIL. listing mutation {index} escaped.", file=sys.stderr)
+            return 2
     targets = {}
     for name in EXPECTED_TARGETS:
         family = "windows" if name.startswith("win32-") else "macos" if name.startswith("darwin-") else "linux"
@@ -295,6 +360,9 @@ def selftest() -> int:
     cargo build --release -p runtrol --bin runtrol --no-default-features --target-dir target/vscode-release
     RUNTROL_CORE_BINARY: target/vscode-release/release/${{ matrix.executable }}
     tests/audit/vscodeUpgradeRollback.py --archive
+    id-token: write
+    --oidc
+    uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
     """
     coreManifest = 'default = ["desktop"]\ndesktop = ["dep:runtrol-gui"]\nruntrol-gui = { optional = true }'
     ignore = "tooling/** src/** node_modules/** performance-budget.json release-targets.json"
@@ -313,12 +381,16 @@ def selftest() -> int:
         return 2
     brokenSource = dict(sourcePackage)
     brokenSource["version"] = "0.0.0"
+    floatingPublisher = {**sourcePackage, "devDependencies": {"@vscode/vsce": "^3.9.3"}}
     sourceMutations = (
         (brokenSource, releaseWorkflow, coreManifest),
+        (floatingPublisher, releaseWorkflow, coreManifest),
         (sourcePackage, releaseWorkflow.replace("--no-default-features", ""), coreManifest),
         (sourcePackage, releaseWorkflow, coreManifest.replace("optional = true", "")),
         (sourcePackage, f"{releaseWorkflow}\ncrates/runtrol-gui", coreManifest),
         (sourcePackage, releaseWorkflow.replace("tests/audit/vscodeUpgradeRollback.py --archive", ""), coreManifest),
+        (sourcePackage, releaseWorkflow.replace("--oidc", "VSCE_PAT"), coreManifest),
+        (sourcePackage, f"{releaseWorkflow}\nuses: actions/setup-node@v7", coreManifest),
     )
     for index, (mutatedPackage, mutatedWorkflow, mutatedManifest) in enumerate(sourceMutations, start=1):
         if not sourceProblems(
@@ -334,7 +406,7 @@ def selftest() -> int:
         ):
             print(f"[vscodePackage --selftest] FAIL. source mutation {index} escaped.", file=sys.stderr)
             return 2
-    print("[vscodePackage --selftest] OK. eight archives and five source mutations make the gate red.")
+    print("[vscodePackage --selftest] OK. eight archives, eight source mutations, and two listing mutations make the gate red.")
     return 0
 
 
@@ -369,6 +441,7 @@ def sourceRun() -> int:
         (EXTENSION / "tooling" / "upgrade-rollback.mjs").is_file()
         and (EXTENSION / "src" / "integration" / "upgradeRollback.test.ts").is_file(),
     )
+    found += listingProblems(package, (EXTENSION / "README.md").read_text(encoding="utf-8"))
     if found:
         return report("vscodePackage", found)
     print(f"[vscodePackage] OK. release {package['version']} and six native targets are wired.")

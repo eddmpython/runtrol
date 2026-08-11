@@ -87,7 +87,7 @@ workspace reload restoration at 1,500 ms while 15,000 raw frames cross the bound
 
 ## Remaining gates before release
 
-1. Publish `Runtrol Studio` to the Visual Studio Marketplace and verify a clean machine installs and runs it.
+1. Register one Visual Studio Marketplace trusted publisher for publisher `eddmpython`, GitHub owner `eddmpython`, repository `runtrol`, and workflow `vscode-release.yml`. The release workflow requests a short-lived OIDC credential and contains no Marketplace PAT. Then publish `Runtrol Studio` and verify a clean machine installs and runs it.
    Marketplace publication signs the complete platform VSIX, including the exact Core bytes already checked by the
    archive gate. A separate inner-binary signature is not claimed.
 
