@@ -35,7 +35,7 @@ type MeasurementWaiter = {
 };
 
 const MAX_PENDING_POSTS = 4_096;
-const POST_BATCH = 128;
+const POST_BATCH = 512;
 
 export class ConversationView implements vscode.WebviewViewProvider {
   static readonly viewType = "runtrol.conversation";

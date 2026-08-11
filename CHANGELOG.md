@@ -102,6 +102,8 @@ its measured architecture, and the gate harness.
 
 ### Changed
 
+- Reduced Extension Host to Webview calls under sustained output while preserving the existing bounded queue and
+  responsiveness budgets.
 - Native VSIX packaging now resolves Core paths from the repository root and assembles each package in an isolated
   temporary directory, so a running development Core is never replaced or deleted by a release build.
 - The VS Code Webview ratchet now records the isolated runner's native animation cadence before load, then enforces

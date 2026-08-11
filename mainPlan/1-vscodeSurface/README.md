@@ -37,6 +37,8 @@ The first end-to-end slice landed on 2026-08-11:
 - the Core resolves bounded Git metadata into project and working-tree identity before provider discovery, then its
   single session owner atomically reserves that writer identity through opening, live, displacement, and closing;
   linked worktrees stay independent and only the surface's explicit continue action requests shared access
+- sustained output keeps the existing 16 ms first-post schedule and bounded queue, while backpressured transport uses
+  512-frame batches to reduce Extension Host to Webview cross-process calls without relaxing latency budgets
 - the extension manifest owns release SemVer, while `release-targets.json` owns the six native Marketplace targets
 - platform packaging includes exactly one matching Core and the repository license, while excluding source, tooling,
   dependencies, test budgets, and release metadata
