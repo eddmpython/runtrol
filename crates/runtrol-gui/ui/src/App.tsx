@@ -482,19 +482,21 @@ export function App() {
         feed.append(accepted);
         watched.cursor = cursor;
         watched.retries = 0;
-        const applied = feed.snapshot();
-        const characters = applied.reduce((total, item) => total + item.text.length, 0);
-        const checkpoint = {
-          id: `${watched.view}:${cursor.seq}:${applied.length}:${characters}`,
-          view: watched.view,
-          seq: cursor.seq,
-          items: applied.length,
-          characters,
-        };
-        setRenderCheckpoint(checkpoint);
-        trace(
-          `frame applied checkpoint=${checkpoint.id} view=${checkpoint.view} seq=${checkpoint.seq} items=${checkpoint.items} characters=${checkpoint.characters}`,
-        );
+        if (tracingRef.current) {
+          const applied = feed.snapshot();
+          const characters = applied.reduce((total, item) => total + item.text.length, 0);
+          const checkpoint = {
+            id: `${watched.view}:${cursor.seq}:${applied.length}:${characters}`,
+            view: watched.view,
+            seq: cursor.seq,
+            items: applied.length,
+            characters,
+          };
+          setRenderCheckpoint(checkpoint);
+          trace(
+            `frame applied checkpoint=${checkpoint.id} view=${checkpoint.view} seq=${checkpoint.seq} items=${checkpoint.items} characters=${checkpoint.characters}`,
+          );
+        }
         for (const frame of accepted) {
           if (frame.usage) {
             setUsage(frame.usage);
@@ -773,6 +775,10 @@ export function App() {
     void openStart();
   }, [openStart]);
 
+  const showConsult = useCallback(() => {
+    void openConsult();
+  }, [openConsult]);
+
   const toggleTheme = useCallback(() => {
     setTheme((current) => current === "dark" ? "light" : "dark");
   }, []);
@@ -794,7 +800,7 @@ export function App() {
             onQueryChange={setQuery}
             onSelect={selectSession}
             onStart={showStart}
-            onConsult={() => void openConsult()}
+            onConsult={showConsult}
             onToggleTheme={toggleTheme}
           />
         }

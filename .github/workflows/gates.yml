@@ -344,7 +344,10 @@ jobs:
             ${{ runner.temp }}/runtrol-gui-memory-smoke.json
             ${{ runner.temp }}/runtrol-gui-memory-failure-*/trace.log
             ${{ runner.temp }}/runtrol-gui-memory-failure-*/error.log
-          if-no-files-found: error
+          # An earlier independent Windows gate can stop this job before the memory campaign creates a file.
+          # Keep that original failure as the job's cause and make the missing diagnostic visible without adding
+          # a second, misleading product failure.
+          if-no-files-found: warn
       - name: 데스크톱 무대화 경계 자체 검증
         run: python -X utf8 tests/audit/desktopThinBoundary.py --selftest
       - name: 데스크톱 저장 권한과 API 경계

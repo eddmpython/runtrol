@@ -23,7 +23,11 @@ if (bundled.status !== 0) {
   throw new Error(`production extension build failed:\n${bundled.stdout}${bundled.stderr}`);
 }
 
-const temporary = await mkdtemp(path.join(os.tmpdir(), "runtrol-vscode-host-"));
+// macOS expands its per-user temporary directory to a path long enough to exceed the Unix-domain socket
+// ceiling once runtrol's home and socket names are appended. `/tmp` is the kernel-stable short alias for
+// exactly this purpose, and the random suffix still isolates concurrent runs.
+const temporaryRoot = process.platform === "darwin" ? "/tmp" : os.tmpdir();
+const temporary = await mkdtemp(path.join(temporaryRoot, "runtrol-vscode-host-"));
 const output = path.join(extensionRoot, ".test-dist");
 const testEntry = path.join(output, "extensionHost.test.cjs");
 const resultPath = path.join(temporary, "result.json");

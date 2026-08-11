@@ -81,6 +81,8 @@ its measured architecture, and the gate harness.
 
 ### Fixed
 
+- Typing and scrolling no longer rerender the full multi-session rail during sustained output. Frame parsing stays
+  bounded, and disabled production tracing no longer schedules hidden DOM checkpoint work.
 - The conversation pane no longer freezes after one reply chunk larger than the reconnect window.
   A reconnect that lands behind such a chunk now shows the explicit gap and still receives the
   retained tail of the conversation, including the turn's ending, instead of waiting forever for

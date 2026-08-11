@@ -43,7 +43,7 @@ async function executable() {
   throw new Error("no Edge or Chrome executable found; set RUNTROL_BROWSER to its absolute path");
 }
 
-function mockBridge() {
+function mockBridge(measurementMode) {
   const frameEvent = "session-frame";
   const listeners = new Map();
   let nextView = 0;
@@ -146,6 +146,10 @@ function mockBridge() {
       if (!(editable instanceof HTMLElement)) {
         throw new Error("the real composer editor is missing");
       }
+      const scrollable = [...document.querySelectorAll("div")].find((element) => {
+        const style = getComputedStyle(element);
+        return style.overflowY === "auto" && element.scrollHeight > element.clientHeight;
+      });
 
       const pctl = (values, fraction) => {
         const sorted = [...values].sort((left, right) => left - right);
@@ -156,6 +160,8 @@ function mockBridge() {
       let previous = started;
       let produced = 0;
       let nextInput = started + 100;
+      let nextScroll = started + 100;
+      let scrollToEnd = false;
       await new Promise((done) => {
         const tick = (now) => {
           intervals.push(now - previous);
@@ -182,12 +188,10 @@ function mockBridge() {
             nextInput += 100;
           }
 
-          const scrollable = [...document.querySelectorAll("div")].find((element) => {
-            const style = getComputedStyle(element);
-            return style.overflowY === "auto" && element.scrollHeight > element.clientHeight;
-          });
-          if (scrollable) {
-            scrollable.scrollTop = Math.max(0, scrollable.scrollHeight - scrollable.clientHeight - 30);
+          if (scrollable && now >= nextScroll) {
+            scrollable.scrollTop = scrollToEnd ? Number.MAX_SAFE_INTEGER : 0;
+            scrollToEnd = !scrollToEnd;
+            nextScroll += 100;
           }
 
           if (now - started < seconds * 1000) {
@@ -217,7 +221,9 @@ function mockBridge() {
   window.__TAURI__ = {
     core: {
       async invoke(command, args = {}) {
-        if (command === "tracing") return true;
+        // The production default is tracing off. The load gate must measure that path because tracing every
+        // individual frame would turn the test recorder itself into a 3,000-line-per-second workload.
+        if (command === "tracing") return measurementMode !== "scroll";
         if (command === "trace") {
           window.__RUNTROL_PERF__.traceLines.push(args.line);
           return undefined;
@@ -1280,7 +1286,7 @@ async function main() {
     const page = await browser.newPage({ viewport: { width: 1100, height: 720 } });
     page.on("console", (message) => process.stderr.write(`[browser console] ${message.text()}\n`));
     page.on("pageerror", (error) => process.stderr.write(`[browser error] ${error.message}\n`));
-    await page.addInitScript(mockBridge);
+    await page.addInitScript(mockBridge, mode);
     const metrics = mode === "interaction"
       ? await interaction(page, url)
       : mode === "scroll"
