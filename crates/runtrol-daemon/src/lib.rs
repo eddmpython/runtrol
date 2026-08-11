@@ -24,7 +24,10 @@ pub mod serve;
 pub use compose::{ComposeError, Composed};
 pub use crash::record_panics_at;
 pub use scope::{Needed, WallRefusal, allowed, needed};
-pub use serve::{MAX_BLOCKING_PROVIDER_OPERATIONS, MODEL_PREPARATION_BUDGET_MS, ServeError, serve};
+pub use serve::{
+    MAX_BLOCKING_PROVIDER_OPERATIONS, MODEL_PREPARATION_BUDGET_MS, PhoneIngress, PhoneIngressError,
+    ServeError, serve, serve_with_phone,
+};
 
 /// Where a daemon for this home listens.
 ///

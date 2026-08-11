@@ -266,6 +266,18 @@ impl Conversation {
         }
     }
 
+    /// A connection from one device authenticated by the remote transport.
+    ///
+    /// This stays crate-private so request data cannot choose a caller. Only the daemon's transport boundary can
+    /// construct it after matching a cryptographic identity to one restored paired device.
+    #[must_use]
+    pub(crate) const fn from_device(device: runtrol_security::DeviceId) -> Self {
+        Self {
+            caller: Caller::Device { device },
+            greeted: false,
+        }
+    }
+
     /// Who is on the other end.
     #[must_use]
     pub(crate) const fn caller(&self) -> &Caller {

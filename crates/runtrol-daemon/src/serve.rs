@@ -33,6 +33,7 @@
 
 use core::future::Future;
 use core::time::Duration;
+use std::net::SocketAddr;
 use std::sync::Arc;
 
 use runtrol_core::{
@@ -44,6 +45,11 @@ use runtrol_ipc::wire::{Request, Response, WireError};
 use runtrol_provider::{
     AbsPath, AgentCommand, CloseMode, ProviderError, SessionId, WorkspaceAccess,
 };
+use runtrol_transport::{
+    CryptoError, LinkKind, NoiseUpgrade, NoiseWebSocket, PhoneHttp, PhoneHttpError, SessionBinding,
+    StaticKeypair, WebSocketLinkError, response,
+};
+use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{Mutex, mpsc, oneshot, watch};
 use tokio::task::JoinSet;
 
@@ -73,6 +79,71 @@ pub const MAX_BLOCKING_PROVIDER_OPERATIONS: usize = runtrol_core::session::MAX_H
 /// page timeout together. It also bounds a child that stops reading stdin or a driver that never returns.
 pub const MODEL_PREPARATION_BUDGET_MS: u64 = 300_000;
 
+/// Noise handshakes admitted by HTTP but not yet mapped to a paired device.
+const PHONE_UPGRADE_QUEUE: usize = 16;
+
+/// An explicit loopback phone listener used to join authenticated browser links to the same Core.
+pub struct PhoneIngress {
+    listener: TcpListener,
+    admission: PhoneHttp,
+}
+
+impl PhoneIngress {
+    /// Wrap an already-bound loopback listener with exact Host and Origin admission.
+    ///
+    /// Binding is kept outside so the caller can choose a fixed port or let the operating system assign one. The
+    /// assigned address is then the single source for the accepted Host values.
+    ///
+    /// # Errors
+    ///
+    /// [`PhoneIngressError::Address`] when the listener address cannot be read,
+    /// [`PhoneIngressError::NonLoopback`] when it is not loopback, or [`PhoneIngressError::Policy`] when an origin is
+    /// invalid.
+    pub fn loopback(
+        listener: TcpListener,
+        origins: impl IntoIterator<Item = impl AsRef<str>>,
+    ) -> Result<Self, PhoneIngressError> {
+        let address = listener.local_addr()?;
+        if !address.ip().is_loopback() {
+            return Err(PhoneIngressError::NonLoopback { address });
+        }
+        let admission = PhoneHttp::loopback(address.port(), origins, [])?;
+        Ok(Self {
+            listener,
+            admission,
+        })
+    }
+
+    /// The exact address assigned to this listener.
+    ///
+    /// # Errors
+    ///
+    /// An operating-system socket error if the listener no longer exposes its local address.
+    pub fn local_addr(&self) -> Result<SocketAddr, std::io::Error> {
+        self.listener.local_addr()
+    }
+}
+
+/// An invalid phone ingress boundary.
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
+pub enum PhoneIngressError {
+    /// The listener's local address could not be read.
+    #[error("cannot read the phone listener address: {0}")]
+    Address(#[from] std::io::Error),
+
+    /// This constructor admits only a listener that cannot leave the machine.
+    #[error("phone loopback listener is not loopback: {address}")]
+    NonLoopback {
+        /// The refused bound address.
+        address: SocketAddr,
+    },
+
+    /// Exact Host or Origin admission could not be built.
+    #[error(transparent)]
+    Policy(#[from] PhoneHttpError),
+}
+
 /// The daemon could not keep serving.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
@@ -84,6 +155,75 @@ pub enum ServeError {
     /// Minimal session metadata could not be persisted.
     #[error(transparent)]
     Store(#[from] runtrol_store::StoreError),
+
+    /// A remote listener was requested on a platform without a protected PC identity.
+    #[error("phone ingress requires a protected PC identity")]
+    PhoneIdentityUnavailable,
+
+    /// The immutable Noise binding could not be constructed.
+    #[error(transparent)]
+    PhoneCrypto(#[from] CryptoError),
+
+    /// The bound phone listener could not accept another TCP connection.
+    #[error("phone listener failed while accepting a connection: {0}")]
+    PhoneAccept(#[source] std::io::Error),
+}
+
+struct PhonePlane {
+    ingress: PhoneIngress,
+    identity: Arc<StaticKeypair>,
+    binding: Arc<SessionBinding>,
+}
+
+enum SurfaceConnection {
+    Local(Connection),
+    Phone(Box<NoiseWebSocket>),
+}
+
+impl SurfaceConnection {
+    async fn recv(&mut self) -> Result<Option<bytes::Bytes>, SurfaceError> {
+        match self {
+            Self::Local(connection) => connection.recv().await.map_err(SurfaceError::from),
+            Self::Phone(connection) => connection.recv().await.map_err(SurfaceError::from),
+        }
+    }
+
+    async fn send(&mut self, payload: &[u8]) -> Result<(), SurfaceError> {
+        match self {
+            Self::Local(connection) => connection.send(payload).await.map_err(SurfaceError::from),
+            Self::Phone(connection) => connection.send(payload).await.map_err(SurfaceError::from),
+        }
+    }
+
+    async fn send_parts(&mut self, parts: &[&[u8]]) -> Result<(), SurfaceError> {
+        match self {
+            Self::Local(connection) => connection
+                .send_parts(parts)
+                .await
+                .map_err(SurfaceError::from),
+            Self::Phone(connection) => connection
+                .send_parts(parts)
+                .await
+                .map_err(SurfaceError::from),
+        }
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+enum SurfaceError {
+    #[error(transparent)]
+    Local(#[from] TransportError),
+    #[error(transparent)]
+    Phone(#[from] WebSocketLinkError),
+}
+
+struct ConnectionServices {
+    asking: mpsc::Sender<Asked>,
+    reserving: mpsc::UnboundedSender<ReservationAsked>,
+    returning: mpsc::UnboundedSender<AgentReturned>,
+    composed: Arc<Composed>,
+    discovering: Arc<Mutex<()>>,
+    session_index: watch::Receiver<Arc<[u8]>>,
 }
 
 /// One request, from a connection that is waiting for the answer.
@@ -191,14 +331,56 @@ pub async fn serve(composed: Composed, mut listener: Listener) -> Result<(), Ser
     serve_sessions(composed, &mut listener, SessionManager::new()).await
 }
 
+/// Serve local surfaces and one explicit phone ingress through the same session owner.
+///
+/// The phone listener starts only after composition restored the PC identity, paired device keys, and grant ledger.
+/// An unpaired Noise key is dropped before handshake message two and never reaches request dispatch.
+///
+/// # Errors
+///
+/// The same failures as [`serve`], plus [`ServeError::PhoneIdentityUnavailable`] when no protected PC key exists.
+pub async fn serve_with_phone(
+    composed: Composed,
+    mut listener: Listener,
+    ingress: PhoneIngress,
+) -> Result<(), ServeError> {
+    let phone = phone_plane(&composed, ingress)?;
+    serve_surfaces(composed, &mut listener, SessionManager::new(), Some(phone)).await
+}
+
+fn phone_plane(composed: &Composed, ingress: PhoneIngress) -> Result<PhonePlane, ServeError> {
+    let identity = composed
+        .pc_identity
+        .clone()
+        .ok_or(ServeError::PhoneIdentityUnavailable)?;
+    let binding = Arc::new(SessionBinding::direct(
+        LinkKind::Loopback,
+        identity.public_key().to_bytes(),
+    )?);
+    Ok(PhonePlane {
+        ingress,
+        identity,
+        binding,
+    })
+}
+
+async fn serve_sessions(
+    composed: Composed,
+    listener: &mut Listener,
+    sessions: SessionManager,
+) -> Result<(), ServeError> {
+    serve_surfaces(composed, listener, sessions, None).await
+}
+
 #[expect(
     clippy::too_many_lines,
     reason = "one owner loop keeps every way session state changes visible beside index publication"
 )]
-async fn serve_sessions(
+async fn serve_surfaces(
     composed: Composed,
     listener: &mut Listener,
     mut sessions: SessionManager,
+    phone: Option<PhonePlane>,
 ) -> Result<(), ServeError> {
     let composed = Arc::new(composed);
     let (asking, mut asked) = mpsc::channel::<Asked>(ASKED_QUEUE);
@@ -214,6 +396,7 @@ async fn serve_sessions(
     // process slots are bounded separately by MAX_HOT.
     let discovering = Arc::new(Mutex::new(()));
     let mut connections = JoinSet::new();
+    let (upgrading, mut upgrades) = mpsc::channel::<NoiseUpgrade>(PHONE_UPGRADE_QUEUE);
 
     let outcome = loop {
         tokio::select! {
@@ -224,14 +407,84 @@ async fn serve_sessions(
                 };
                 // The connection's own task. It reads, it writes, and it never touches a session.
                 connections.spawn(converse(
-                    connection,
-                    asking.clone(),
-                    reserving.clone(),
-                    returning.clone(),
-                    Arc::clone(&composed),
-                    Arc::clone(&discovering),
-                    session_index.subscribe(),
+                    SurfaceConnection::Local(connection),
+                    Conversation::at_the_machine(),
+                    ConnectionServices {
+                        asking: asking.clone(),
+                        reserving: reserving.clone(),
+                        returning: returning.clone(),
+                        composed: Arc::clone(&composed),
+                        discovering: Arc::clone(&discovering),
+                        session_index: session_index.subscribe(),
+                    },
                 ));
+            }
+
+            arrived = accept_phone(phone.as_ref()), if phone.is_some() => {
+                let stream = match arrived {
+                    Ok(stream) => stream,
+                    Err(error) => break Err(ServeError::PhoneAccept(error)),
+                };
+                let Some(plane) = phone.as_ref() else {
+                    continue;
+                };
+                let admission = plane.ingress.admission.clone();
+                let identity = Arc::clone(&plane.identity);
+                let binding = Arc::clone(&plane.binding);
+                let upgrading = upgrading.clone();
+                connections.spawn(async move {
+                    drop(admission.serve_noise_connection(stream, move |admitted| {
+                        let identity = Arc::clone(&identity);
+                        let binding = Arc::clone(&binding);
+                        let upgrading = upgrading.clone();
+                        async move {
+                            let Ok(permit) = upgrading.try_reserve() else {
+                                return response(runtrol_transport::StatusCode::SERVICE_UNAVAILABLE, "busy");
+                            };
+                            match admitted.begin(&identity, &binding) {
+                                Ok((answer, upgrade)) => {
+                                    permit.send(upgrade);
+                                    answer
+                                }
+                                Err(_) => response(runtrol_transport::StatusCode::BAD_REQUEST, "invalid upgrade"),
+                            }
+                        }
+                    }).await);
+                });
+            }
+
+            Some(upgrade) = upgrades.recv(), if phone.is_some() => {
+                let services = ConnectionServices {
+                    asking: asking.clone(),
+                    reserving: reserving.clone(),
+                    returning: returning.clone(),
+                    composed: Arc::clone(&composed),
+                    discovering: Arc::clone(&discovering),
+                    session_index: session_index.subscribe(),
+                };
+                connections.spawn(async move {
+                    let Ok(pending) = upgrade.receive().await else {
+                        return;
+                    };
+                    let remote = pending.remote_public_key();
+                    let Some(device) = services
+                        .composed
+                        .paired_devices
+                        .iter()
+                        .find(|paired| paired.remote_static_key == remote)
+                        .map(|paired| paired.id)
+                    else {
+                        return;
+                    };
+                    let Ok(connection) = pending.approve(remote).await else {
+                        return;
+                    };
+                    converse(
+                        SurfaceConnection::Phone(Box::new(connection)),
+                        Conversation::from_device(device),
+                        services,
+                    ).await;
+                });
             }
 
             Some(reservation) = reservations.recv() => match reservation {
@@ -478,20 +731,18 @@ fn requested_workspace(request: &Request) -> Option<(&str, WorkspaceAccess)> {
     reason = "one connection lifecycle keeps reservation cancellation and request ownership visible together"
 )]
 async fn converse(
-    mut connection: Connection,
-    asking: mpsc::Sender<Asked>,
-    reserving: mpsc::UnboundedSender<ReservationAsked>,
-    returning: mpsc::UnboundedSender<AgentReturned>,
-    composed: Arc<Composed>,
-    discovering: Arc<Mutex<()>>,
-    mut session_index: watch::Receiver<Arc<[u8]>>,
+    mut connection: SurfaceConnection,
+    mut conversation: Conversation,
+    services: ConnectionServices,
 ) {
-    // Every connection today arrives on the local endpoint, which is inside a directory only the operator can
-    // enter and refuses anything off this machine. That is what makes this the right answer rather than an
-    // assumption: a remote transport arrives with its own way of saying who authenticated, and there is no way to
-    // build a conversation that claims to be one until it does.
-    let mut conversation = Conversation::at_the_machine();
-
+    let ConnectionServices {
+        asking,
+        reserving,
+        returning,
+        composed,
+        discovering,
+        mut session_index,
+    } = services;
     loop {
         let frame = match connection.recv().await {
             Ok(Some(frame)) => frame,
@@ -860,7 +1111,7 @@ async fn finish_connection_cleanup(
 ///
 /// The event goes out as the provider wrote it. Encoded here and read by nobody in between: this is the last hop a
 /// conversation takes inside runtrol, and the whole of what happens to it is being put in an envelope.
-async fn relay(connection: &mut Connection, mut watching: runtrol_core::SessionView) {
+async fn relay(connection: &mut SurfaceConnection, mut watching: runtrol_core::SessionView) {
     let stream = watching.start().live_at.stream;
     while let Some(item) = watching.recv().await {
         let event = match item {
@@ -915,7 +1166,7 @@ async fn relay(connection: &mut Connection, mut watching: runtrol_core::SessionV
 
 /// Relay coalesced current session snapshots without copying one frame per connected surface.
 async fn relay_session_index(
-    connection: &mut Connection,
+    connection: &mut SurfaceConnection,
     session_index: &mut watch::Receiver<Arc<[u8]>>,
 ) {
     let current = Arc::clone(&session_index.borrow_and_update());
@@ -951,8 +1202,23 @@ fn publish_session_index(
 /// A response that cannot be serialized is a defect in this build rather than something a caller did, so what goes out
 /// instead says exactly that. The alternative is writing nothing, which leaves the caller waiting on a daemon that is
 /// working perfectly well.
-async fn write(connection: &mut Connection, response: &Response) -> Result<(), TransportError> {
+async fn write(
+    connection: &mut SurfaceConnection,
+    response: &Response,
+) -> Result<(), SurfaceError> {
     connection.send(&encode_response(response)).await
+}
+
+async fn accept_phone(phone: Option<&PhonePlane>) -> Result<TcpStream, std::io::Error> {
+    match phone {
+        Some(phone) => phone
+            .ingress
+            .listener
+            .accept()
+            .await
+            .map(|(stream, _)| stream),
+        None => core::future::pending().await,
+    }
 }
 
 fn encode_response(response: &Response) -> Vec<u8> {
@@ -968,8 +1234,20 @@ fn encode_response(response: &Response) -> Vec<u8> {
 
 #[cfg(test)]
 mod tests {
+    use core::future::Future;
+
     use async_trait::async_trait;
-    use runtrol_provider::{Agent, AgentCommand, Opaque, Produced, ProviderError};
+    use fastwebsockets::{Frame, OpCode, WebSocket, handshake};
+    use http_body_util::Empty;
+    use hyper::Request as HttpRequest;
+    use hyper::upgrade::Upgraded;
+    use hyper_util::rt::TokioIo;
+    use runtrol_provider::{Agent, AgentCommand, Opaque, Produced, ProviderError, WallMs};
+    use runtrol_security::{DeviceId, DeviceLabels, DeviceScope, GrantLedger};
+    use runtrol_transport::{
+        AccessToken, Channel, EncryptedRecord, InitiatorHandshake, MAX_ENCRYPTED_RECORD_WIRE,
+        NOISE_LINK_PATH, NOISE_LINK_PROTOCOL, PublicKey,
+    };
 
     use super::*;
 
@@ -1148,6 +1426,66 @@ mod tests {
             }
         }
 
+        async fn start_with_phone(
+            name: &str,
+            sessions: SessionManager,
+        ) -> (Self, SocketAddr, PublicKey, StaticKeypair) {
+            let root = std::env::temp_dir().join(format!("runtrol-serve-{name}"));
+            if root.exists() {
+                std::fs::remove_dir_all(&root).expect("clear the previous run");
+            }
+            let home = root
+                .to_str()
+                .expect("the temporary path is UTF-8")
+                .to_owned();
+            let mut composed =
+                crate::compose::Composed::for_tests(&home, runtrol_drivers::builtin())
+                    .expect("a fresh home composes");
+            let pc = StaticKeypair::generate().expect("PC key");
+            let pc_public = pc.public_key();
+            let phone = StaticKeypair::generate().expect("phone key");
+            let device = DeviceId::now();
+            let token = AccessToken::parse(
+                "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            )
+            .expect("canonical credential");
+            composed.pc_identity = Some(Arc::new(pc));
+            composed.granted =
+                GrantLedger::from_persisted([(device, vec![DeviceScope::SessionList])]);
+            composed.paired_devices = vec![crate::compose::PairedDevice {
+                id: device,
+                remote_static_key: phone.public_key(),
+                credential_fingerprint: token.fingerprint(),
+                labels: DeviceLabels::new("Test phone", "Browser").expect("device labels"),
+                paired_at: WallMs::from_millis(1_767_225_600_000),
+            }];
+
+            let address = composed.home.paths().endpoint().address().to_owned();
+            let mut listener = Listener::bind(&address)
+                .await
+                .expect("the endpoint is free");
+            let tcp = TcpListener::bind("127.0.0.1:0")
+                .await
+                .expect("phone listener");
+            let ingress =
+                PhoneIngress::loopback(tcp, ["https://phone.runtrol.test"]).expect("phone ingress");
+            let phone_address = ingress.local_addr().expect("phone address");
+            let phone_plane = phone_plane(&composed, ingress).expect("phone plane");
+            let serving = tokio::spawn(async move {
+                serve_surfaces(composed, &mut listener, sessions, Some(phone_plane)).await
+            });
+            (
+                Self {
+                    address,
+                    home,
+                    serving,
+                },
+                phone_address,
+                pc_public,
+                phone,
+            )
+        }
+
         async fn caller(&self) -> Connection {
             runtrol_ipc::transport::connect(&self.address)
                 .await
@@ -1157,6 +1495,131 @@ mod tests {
         fn stop(self) {
             self.serving.abort();
             drop(std::fs::remove_dir_all(&self.home));
+        }
+    }
+
+    type BrowserSocket = WebSocket<TokioIo<Upgraded>>;
+
+    struct TokioExecutor;
+
+    impl<F> hyper::rt::Executor<F> for TokioExecutor
+    where
+        F: Future + Send + 'static,
+        F::Output: Send + 'static,
+    {
+        fn execute(&self, future: F) {
+            tokio::spawn(future);
+        }
+    }
+
+    struct BrowserPhone {
+        socket: BrowserSocket,
+        channel: Channel,
+    }
+
+    impl BrowserPhone {
+        async fn connect(address: SocketAddr, pc: PublicKey, phone: &StaticKeypair) -> Self {
+            let mut socket = browser_socket(address).await;
+            let binding = SessionBinding::direct(LinkKind::Loopback, pc.to_bytes())
+                .expect("phone link binding");
+            let mut initiator =
+                InitiatorHandshake::session(phone, pc, &binding).expect("phone Noise initiator");
+            let first = initiator.write_first(&[]).expect("Noise message one");
+            write_browser_record(&mut socket, &first).await;
+            let reply = read_browser_record(&mut socket).await;
+            let (channel, payload) = initiator.finish(&reply).expect("Noise message two");
+            assert!(payload.is_empty());
+            Self { socket, channel }
+        }
+
+        async fn ask(&mut self, request: &Request) -> Response {
+            let payload = serde_json::to_vec(request).expect("phone request encoding");
+            for record in self
+                .channel
+                .seal_frame(&payload)
+                .expect("phone request frame")
+            {
+                write_browser_record(&mut self.socket, &record).await;
+            }
+            self.receive().await
+        }
+
+        async fn receive(&mut self) -> Response {
+            let payload = loop {
+                let record = read_browser_record(&mut self.socket).await;
+                if let Some(frame) = self
+                    .channel
+                    .open_record(&record)
+                    .expect("phone answer record")
+                {
+                    break frame;
+                }
+            };
+            serde_json::from_slice(&payload).expect("phone answer encoding")
+        }
+    }
+
+    async fn browser_socket(address: SocketAddr) -> BrowserSocket {
+        const ORIGIN: &str = "https://phone.runtrol.test";
+        let stream = TcpStream::connect(address).await.expect("phone TCP");
+        let request = HttpRequest::builder()
+            .method("GET")
+            .uri(format!("ws://{address}{NOISE_LINK_PATH}"))
+            .header("Host", address.to_string())
+            .header("Origin", ORIGIN)
+            .header("Sec-Fetch-Site", "same-origin")
+            .header("Upgrade", "websocket")
+            .header("Connection", "Upgrade")
+            .header("Sec-WebSocket-Key", handshake::generate_key())
+            .header("Sec-WebSocket-Version", "13")
+            .header("Sec-WebSocket-Protocol", NOISE_LINK_PROTOCOL)
+            .body(Empty::<bytes::Bytes>::new())
+            .expect("phone upgrade request");
+        let (mut socket, switched) = handshake::client(&TokioExecutor, request, stream)
+            .await
+            .expect("phone WebSocket");
+        assert_eq!(
+            switched.status(),
+            runtrol_transport::StatusCode::SWITCHING_PROTOCOLS
+        );
+        assert_eq!(
+            switched
+                .headers()
+                .get("Sec-WebSocket-Protocol")
+                .map(|value| value.to_str().expect("ASCII subprotocol")),
+            Some(NOISE_LINK_PROTOCOL)
+        );
+        socket.set_max_message_size(MAX_ENCRYPTED_RECORD_WIRE);
+        socket
+    }
+
+    async fn write_browser_record(socket: &mut BrowserSocket, record: &EncryptedRecord) {
+        let mut encoded = Vec::new();
+        record
+            .append_wire(&mut encoded)
+            .expect("canonical Noise record");
+        socket
+            .write_frame(Frame::binary(encoded.into()))
+            .await
+            .expect("browser record write");
+    }
+
+    async fn read_browser_record(socket: &mut BrowserSocket) -> EncryptedRecord {
+        loop {
+            let frame = socket.read_frame().await.expect("browser record read");
+            match frame.opcode {
+                OpCode::Binary => {
+                    let (record, consumed) = EncryptedRecord::decode_wire(&frame.payload)
+                        .expect("Noise record envelope");
+                    assert_eq!(consumed, frame.payload.len());
+                    return record;
+                }
+                OpCode::Ping | OpCode::Pong => {}
+                OpCode::Close => panic!("phone link closed before its answer"),
+                OpCode::Text | OpCode::Continuation => {
+                    panic!("phone link returned a non-binary message")
+                }
+            }
         }
     }
 
@@ -1274,6 +1737,105 @@ mod tests {
             }
             other => panic!("expected a listing, got {other:?}"),
         }
+        running.stop();
+    }
+
+    #[tokio::test]
+    async fn a_paired_phone_and_local_surface_share_one_session_owner() {
+        let session = SessionId::now();
+        let mut sessions = SessionManager::new();
+        attach_test_agent(
+            &mut sessions,
+            session,
+            Box::new(PendingSend {
+                session,
+                started: None,
+                release: None,
+                panic_after_start: false,
+            }),
+        );
+        let (running, phone_address, pc, phone_key) =
+            Running::start_with_phone("phone-same-owner", sessions).await;
+
+        let stranger = StaticKeypair::generate().expect("unpaired phone key");
+        let binding = SessionBinding::direct(LinkKind::Loopback, pc.to_bytes())
+            .expect("unpaired link binding");
+        let mut stranger_handshake =
+            InitiatorHandshake::session(&stranger, pc, &binding).expect("unpaired Noise initiator");
+        let first = stranger_handshake
+            .write_first(&[])
+            .expect("unpaired message one");
+        let mut stranger_socket = browser_socket(phone_address).await;
+        write_browser_record(&mut stranger_socket, &first).await;
+        let closed = tokio::time::timeout(Duration::from_secs(1), stranger_socket.read_frame())
+            .await
+            .expect("unpaired identity is closed without a handshake reply");
+        if let Ok(frame) = closed {
+            assert_ne!(frame.opcode, OpCode::Binary);
+        }
+        drop(stranger_socket);
+
+        let mut local = greeted_caller(&running).await;
+        let local_session = match ask(&mut local, &Request::List).await {
+            Response::Sessions(listing) => listing.sessions.first().map(|line| line.session),
+            other => panic!("expected a local session index, got {other:?}"),
+        };
+        assert_eq!(local_session, Some(session));
+
+        let mut phone = BrowserPhone::connect(phone_address, pc, &phone_key).await;
+        assert!(matches!(
+            phone
+                .ask(&Request::Hello {
+                    wire: runtrol_ipc::WIRE_VERSION,
+                })
+                .await,
+            Response::Welcome { .. }
+        ));
+        let phone_session = match phone.ask(&Request::List).await {
+            Response::Sessions(listing) => listing.sessions.first().map(|line| line.session),
+            other => panic!("expected a phone session index, got {other:?}"),
+        };
+        assert_eq!(phone_session, local_session);
+        match phone.ask(&Request::Close { session, now: true }).await {
+            Response::Failed(error) => assert!(error.message.contains("session.delete")),
+            other => panic!("ungranted phone close was not refused: {other:?}"),
+        }
+
+        let mut watcher = BrowserPhone::connect(phone_address, pc, &phone_key).await;
+        assert!(matches!(
+            watcher
+                .ask(&Request::Hello {
+                    wire: runtrol_ipc::WIRE_VERSION,
+                })
+                .await,
+            Response::Welcome { .. }
+        ));
+        assert!(matches!(
+            watcher.ask(&Request::WatchSessions).await,
+            Response::WatchingSessions
+        ));
+        match watcher.receive().await {
+            Response::Sessions(listing) => {
+                assert_eq!(
+                    listing.sessions.first().map(|line| line.session),
+                    Some(session)
+                );
+            }
+            other => panic!("expected the initial phone watch snapshot, got {other:?}"),
+        }
+
+        assert!(matches!(
+            ask(&mut local, &Request::Close { session, now: true }).await,
+            Response::Done
+        ));
+        match watcher.receive().await {
+            Response::Sessions(listing) => assert!(listing.sessions.is_empty()),
+            other => panic!("expected the changed phone watch snapshot, got {other:?}"),
+        }
+
+        drop(phone);
+        drop(watcher);
+        drop(local);
         running.stop();
     }
 
