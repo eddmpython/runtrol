@@ -49,6 +49,8 @@ def sourceProblems(
     targets: dict[str, object],
     packageScript: str,
     buildScript: str,
+    releaseWorkflow: str,
+    coreManifest: str,
     ignore: str,
     installedVerifierExists: bool,
 ) -> list[str]:
@@ -89,6 +91,20 @@ def sourceProblems(
             found.append(f"package.mjs is missing release contract {token}")
     if 'path.join(repositoryRoot, "LICENSE")' not in buildScript:
         found.append("build.mjs does not copy the repository license into package resources")
+    requiredWorkflowTokens = (
+        "cargo build --release -p runtrol --bin runtrol --no-default-features",
+        "--target-dir target/vscode-release",
+        "RUNTROL_CORE_BINARY: target/vscode-release/release/${{ matrix.executable }}",
+    )
+    for token in requiredWorkflowTokens:
+        if token not in releaseWorkflow:
+            found.append(f"vscode-release.yml is missing supervisor-only Core contract {token}")
+    for token in ("crates/runtrol-gui", "libwebkit2gtk-4.1-dev"):
+        if token in releaseWorkflow:
+            found.append(f"vscode-release.yml restores unused desktop release work {token}")
+    for token in ('default = ["desktop"]', 'desktop = ["dep:runtrol-gui"]', "optional = true"):
+        if token not in coreManifest:
+            found.append(f"runtrol Cargo.toml is missing optional desktop contract {token}")
     for token in ("tooling/**", "src/**", "node_modules/**", "performance-budget.json", "release-targets.json"):
         if token not in ignore:
             found.append(f".vscodeignore does not exclude {token}")
@@ -263,16 +279,46 @@ def selftest() -> int:
         }
     packageScript = "packageManifest.version release-targets.json target !== nativeTarget \"--no-dependencies\" await rm(coreDirectory"
     buildScript = 'path.join(repositoryRoot, "LICENSE")'
+    releaseWorkflow = """
+    cargo build --release -p runtrol --bin runtrol --no-default-features --target-dir target/vscode-release
+    RUNTROL_CORE_BINARY: target/vscode-release/release/${{ matrix.executable }}
+    """
+    coreManifest = 'default = ["desktop"]\ndesktop = ["dep:runtrol-gui"]\nruntrol-gui = { optional = true }'
     ignore = "tooling/** src/** node_modules/** performance-budget.json release-targets.json"
-    if sourceProblems(sourcePackage, targets, packageScript, buildScript, ignore, True):
+    if sourceProblems(
+        sourcePackage,
+        targets,
+        packageScript,
+        buildScript,
+        releaseWorkflow,
+        coreManifest,
+        ignore,
+        True,
+    ):
         print("[vscodePackage --selftest] FAIL. the green source contract was rejected.", file=sys.stderr)
         return 2
     brokenSource = dict(sourcePackage)
     brokenSource["version"] = "0.0.0"
-    if not sourceProblems(brokenSource, targets, packageScript, buildScript, ignore, True):
-        print("[vscodePackage --selftest] FAIL. development version escaped.", file=sys.stderr)
-        return 2
-    print("[vscodePackage --selftest] OK. eight archives and one source mutation make the gate red.")
+    sourceMutations = (
+        (brokenSource, releaseWorkflow, coreManifest),
+        (sourcePackage, releaseWorkflow.replace("--no-default-features", ""), coreManifest),
+        (sourcePackage, releaseWorkflow, coreManifest.replace("optional = true", "")),
+        (sourcePackage, f"{releaseWorkflow}\ncrates/runtrol-gui", coreManifest),
+    )
+    for index, (mutatedPackage, mutatedWorkflow, mutatedManifest) in enumerate(sourceMutations, start=1):
+        if not sourceProblems(
+            mutatedPackage,
+            targets,
+            packageScript,
+            buildScript,
+            mutatedWorkflow,
+            mutatedManifest,
+            ignore,
+            True,
+        ):
+            print(f"[vscodePackage --selftest] FAIL. source mutation {index} escaped.", file=sys.stderr)
+            return 2
+    print("[vscodePackage --selftest] OK. eight archives and four source mutations make the gate red.")
     return 0
 
 
@@ -299,6 +345,8 @@ def sourceRun() -> int:
         targets,
         (EXTENSION / "tooling" / "package.mjs").read_text(encoding="utf-8"),
         (EXTENSION / "tooling" / "build.mjs").read_text(encoding="utf-8"),
+        (ROOT / ".github" / "workflows" / "vscode-release.yml").read_text(encoding="utf-8"),
+        (ROOT / "crates" / "runtrol" / "Cargo.toml").read_text(encoding="utf-8"),
         (EXTENSION / ".vscodeignore").read_text(encoding="utf-8"),
         (EXTENSION / "tooling" / "installed-package.mjs").is_file()
         and (EXTENSION / "src" / "integration" / "installedPackage.test.ts").is_file(),

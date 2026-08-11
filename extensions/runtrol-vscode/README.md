@@ -27,7 +27,7 @@ matching runtrol core under `resources/core/`.
 Build the Rust release binary, then run:
 
 ```text
-cargo build --release --bin runtrol
+cargo build --release --bin runtrol --no-default-features --target-dir ../../target/vscode-release
 npm run package:native
 ```
 

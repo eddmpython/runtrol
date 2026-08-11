@@ -17,9 +17,13 @@ publish = false
 name = "runtrol"
 path = "src/main.rs"
 
+[features]
+default = ["desktop"]
+desktop = ["dep:runtrol-gui"]
+
 [dependencies]
 runtrol-cli = { workspace = true }
-runtrol-gui = { workspace = true }
+runtrol-gui = { workspace = true, optional = true }
 runtrol-daemon = { workspace = true }
 # What this process passes on to anything it starts. A process-wide setting, so it belongs to the program.
 runtrol-childproc = { workspace = true }

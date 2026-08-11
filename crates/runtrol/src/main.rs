@@ -191,31 +191,40 @@ fn serving() -> impl FnOnce(&tokio::runtime::Runtime) -> ExitCode {
 /// the command surface is given and for the same reason: a library that worked out "whatever process this is"
 /// would run the test runner inside a test.
 fn showing() -> ExitCode {
-    let address = match runtrol_daemon::endpoint(None) {
-        Ok(address) => address,
-        Err(error) => {
-            report(&format!(
-                "cannot tell where runtrol keeps its files: {error}"
-            ));
-            return ExitCode::FAILURE;
-        }
-    };
-    let executable = match std::env::current_exe() {
-        Ok(executable) => executable,
-        Err(error) => {
-            report(&format!("cannot tell where runtrol itself is: {error}"));
-            return ExitCode::FAILURE;
-        }
-    };
+    #[cfg(not(feature = "desktop"))]
+    {
+        report("this bundled runtrol Core has no desktop window; open Runtrol Studio in VS Code");
+        ExitCode::FAILURE
+    }
 
-    match runtrol_gui::run(runtrol_gui::Reaching {
-        address,
-        runtrol: executable,
-    }) {
-        Ok(()) => ExitCode::SUCCESS,
-        Err(error) => {
-            report(&format!("runtrol could not open its window: {error}"));
-            ExitCode::FAILURE
+    #[cfg(feature = "desktop")]
+    {
+        let address = match runtrol_daemon::endpoint(None) {
+            Ok(address) => address,
+            Err(error) => {
+                report(&format!(
+                    "cannot tell where runtrol keeps its files: {error}"
+                ));
+                return ExitCode::FAILURE;
+            }
+        };
+        let executable = match std::env::current_exe() {
+            Ok(executable) => executable,
+            Err(error) => {
+                report(&format!("cannot tell where runtrol itself is: {error}"));
+                return ExitCode::FAILURE;
+            }
+        };
+
+        match runtrol_gui::run(runtrol_gui::Reaching {
+            address,
+            runtrol: executable,
+        }) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => {
+                report(&format!("runtrol could not open its window: {error}"));
+                ExitCode::FAILURE
+            }
         }
     }
 }

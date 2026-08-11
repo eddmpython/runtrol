@@ -72,6 +72,9 @@ header strong {
 }
 
 .message {
+  contain: layout paint style;
+  content-visibility: auto;
+  contain-intrinsic-size: auto 2.5rem;
   max-width: 94%;
   margin: 0 0 0.65rem;
   padding: 0.55rem 0.65rem;
@@ -187,4 +190,3 @@ button:disabled {
   color: var(--vscode-button-secondaryForeground);
   background: var(--vscode-button-secondaryBackground);
 }
-

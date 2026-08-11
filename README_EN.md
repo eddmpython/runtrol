@@ -4,7 +4,7 @@
 
 [한국어](README.md) | English | [中文](README_ZH.md) | [日本語](README_JA.md)
 
-> Status: **the core, Windows desktop, first end-to-end VS Code extension slice, live session index, real Extension Host baseline performance ratchet, platform VSIX content gate, and clean Windows installation are implemented.** `Runtrol Studio` provides Core discovery, installed CLI listing, a multi-session TreeView, change-only session snapshots, a reused command channel, one selected watch, a bounded live view, and same-window workspace switching. Webview burst-load ratchets, hosted multi-platform package confirmation, Marketplace signing, and publishing remain. Most scores below are 0 because no gate asserts those axes yet, not because there is
+> Status: **the core, Windows desktop, first end-to-end VS Code extension slice, live session index, real Extension Host and 3,000-frame-per-second Webview performance ratchets, platform VSIX content gate, and clean Windows installation are implemented.** `Runtrol Studio` provides Core discovery, installed CLI listing, a multi-session TreeView, change-only session snapshots, a reused command channel, one selected watch, a bounded live view, and same-window workspace switching. Hosted multi-platform package confirmation, Marketplace signing, and publishing remain. Most scores below are 0 because no gate asserts those axes yet, not because there is
 > no code.
 
 The security boundary and default-deny settings are documented in [SECURITY.md](SECURITY.md).

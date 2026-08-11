@@ -10,6 +10,15 @@ let currentStage = "starting";
 type ExtensionApi = {
   readonly ready: Promise<void>;
   refresh(): Promise<void>;
+  measureWebview?(framesPerSecond?: number, durationMs?: number): Promise<{
+    frameP95Ms: number;
+    inputP95Ms: number;
+    scrollP95Ms: number;
+    maxPendingFrames: number;
+    producedFrames: number;
+    visibleCharacters: number;
+    visibleItems: number;
+  }>;
 };
 
 export async function run(): Promise<void> {
@@ -61,6 +70,11 @@ async function measure(resultPath: string): Promise<void> {
       cause: error,
     });
   }
+  await within(
+    vscode.commands.executeCommand("runtrol.conversation.focus"),
+    5_000,
+    "focusing the Runtrol Webview",
+  );
   const openViewMs = performance.now() - viewStarted;
   await checkpoint(resultPath, "view-open");
 
@@ -75,12 +89,37 @@ async function measure(resultPath: string): Promise<void> {
     refreshSamples.push(performance.now() - started);
   }
 
+  currentStage = "webview-load";
+  if (!api.measureWebview) {
+    throw new Error("the performance-only Webview measurement API is unavailable");
+  }
+  const framesPerSecond = numericEnvironment("RUNTROL_VSCODE_PERFORMANCE_RATE", 3_000);
+  const durationMs = numericEnvironment("RUNTROL_VSCODE_PERFORMANCE_DURATION", 5_000);
+  const webview = await within(
+    api.measureWebview(framesPerSecond, durationMs),
+    30_000,
+    "Webview burst measurement",
+  );
+  const expectedFrames = Math.ceil(framesPerSecond * durationMs / 1_000);
+  if (webview.producedFrames < expectedFrames) {
+    throw new Error(`Webview load produced only ${webview.producedFrames} frames`);
+  }
+  if (webview.visibleItems > 400 || webview.visibleCharacters > 256 * 1024) {
+    throw new Error(
+      `Webview bounds escaped at ${webview.visibleItems} items and ${webview.visibleCharacters} characters`,
+    );
+  }
+
   const result = {
     vscode: vscode.version,
     activationMs,
     openViewMs,
     refreshP95Ms: percentile(refreshSamples, 0.95),
     rssGrowthBytes: Math.max(0, process.memoryUsage().rss - rssBefore),
+    webviewFrameP95Ms: webview.frameP95Ms,
+    webviewInputP95Ms: webview.inputP95Ms,
+    webviewScrollP95Ms: webview.scrollP95Ms,
+    webviewPendingFrames: webview.maxPendingFrames,
   };
   await writeFile(resultPath, JSON.stringify(result), "utf8");
 
@@ -116,6 +155,10 @@ function budgetFailures(result: {
   openViewMs: number;
   refreshP95Ms: number;
   rssGrowthBytes: number;
+  webviewFrameP95Ms: number;
+  webviewInputP95Ms: number;
+  webviewScrollP95Ms: number;
+  webviewPendingFrames: number;
 }): string[] {
   const failures: string[] = [];
   if (result.activationMs > budget.activationMs) {
@@ -130,6 +173,26 @@ function budgetFailures(result: {
   if (result.rssGrowthBytes > budget.rssGrowthBytes) {
     failures.push(`RSS growth ${result.rssGrowthBytes} exceeds ${budget.rssGrowthBytes} bytes`);
   }
+  if (result.webviewFrameP95Ms > budget.webviewFrameP95Ms) {
+    failures.push(
+      `Webview frame p95 ${result.webviewFrameP95Ms.toFixed(1)} ms exceeds ${budget.webviewFrameP95Ms} ms`,
+    );
+  }
+  if (result.webviewInputP95Ms > budget.webviewInputP95Ms) {
+    failures.push(
+      `Webview input p95 ${result.webviewInputP95Ms.toFixed(1)} ms exceeds ${budget.webviewInputP95Ms} ms`,
+    );
+  }
+  if (result.webviewScrollP95Ms > budget.webviewScrollP95Ms) {
+    failures.push(
+      `Webview scroll p95 ${result.webviewScrollP95Ms.toFixed(1)} ms exceeds ${budget.webviewScrollP95Ms} ms`,
+    );
+  }
+  if (result.webviewPendingFrames > budget.webviewPendingFrames) {
+    failures.push(
+      `Webview pending frames ${result.webviewPendingFrames} exceeds ${budget.webviewPendingFrames}`,
+    );
+  }
   return failures;
 }
 
@@ -142,6 +205,15 @@ function requiredEnvironment(name: string): string {
   const value = process.env[name];
   if (!value) {
     throw new Error(`${name} is required`);
+  }
+  return value;
+}
+
+function numericEnvironment(name: string, fallback: number): number {
+  const raw = process.env[name];
+  const value = raw ? Number(raw) : fallback;
+  if (!Number.isFinite(value) || value <= 0) {
+    throw new Error(`${name} must be a positive number`);
   }
   return value;
 }

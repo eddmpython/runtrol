@@ -193,7 +193,7 @@ async function terminateExactProcesses(marker, executable) {
 function windowsPids(marker, executable) {
   const query = "$marker=[Environment]::GetEnvironmentVariable('RUNTROL_CLEANUP_MARKER'); "
     + "$core=[Environment]::GetEnvironmentVariable('RUNTROL_CLEANUP_CORE'); "
-    + "Get-CimInstance Win32_Process | Where-Object { "
+    + "Get-CimInstance Win32_Process -Filter \"Name = 'Code.exe' OR Name = 'runtrol.exe'\" | Where-Object { "
     + "($_.CommandLine -and $_.CommandLine.Contains($marker)) -or "
     + "($core -and $_.ExecutablePath -eq $core) "
     + "} | Select-Object -ExpandProperty ProcessId";
@@ -207,7 +207,7 @@ function windowsPids(marker, executable) {
         RUNTROL_CLEANUP_CORE: executable || "",
       },
       encoding: "utf8",
-      timeout: 15_000,
+      timeout: 60_000,
       windowsHide: true,
     },
   );

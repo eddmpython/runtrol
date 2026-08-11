@@ -49,33 +49,29 @@ jobs:
         if: matrix.family == 'linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev xvfb
+          sudo apt-get install -y xvfb
       - uses: Swatinem/rust-cache@v2
       - uses: actions/setup-node@v5
         with:
           node-version: "24"
           cache: npm
-          cache-dependency-path: |
-            crates/runtrol-gui/ui/package-lock.json
-            extensions/runtrol-vscode/package-lock.json
+          cache-dependency-path: extensions/runtrol-vscode/package-lock.json
       - name: Install deterministic frontend dependencies
-        run: |
-          npm --prefix crates/runtrol-gui/ui ci
-          npm --prefix extensions/runtrol-vscode ci
+        run: npm --prefix extensions/runtrol-vscode ci
       - name: Refuse a runner that differs from the release SSOT
         run: node -e "const actual=process.platform+'-'+process.arch; const expected='${{ matrix.target }}'; if(actual!==expected) throw new Error('runner is '+actual+', expected '+expected)"
-      - name: Build the production desktop assets
-        run: npm --prefix crates/runtrol-gui/ui run build
       - name: Build the native release Core
-        run: cargo build --release -p runtrol --bin runtrol
+        run: cargo build --release -p runtrol --bin runtrol --no-default-features --target-dir target/vscode-release
       - name: Package the native VSIX
         run: npm --prefix extensions/runtrol-vscode run package:native
+        env:
+          RUNTROL_CORE_BINARY: target/vscode-release/release/${{ matrix.executable }}
       - name: Inspect exact VSIX contents and Core bytes
         run: >-
           python -X utf8 tests/audit/vscodePackage.py
           --archive release/runtrol-studio-${{ needs.prepare.outputs.version }}-${{ matrix.target }}.vsix
           --target ${{ matrix.target }}
-          --core target/release/${{ matrix.executable }}
+          --core target/vscode-release/release/${{ matrix.executable }}
       - name: Install and activate the package in clean VS Code
         if: matrix.family != 'linux'
         run: node extensions/runtrol-vscode/tooling/installed-package.mjs release/runtrol-studio-${{ needs.prepare.outputs.version }}-${{ matrix.target }}.vsix

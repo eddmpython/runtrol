@@ -1,6 +1,6 @@
 import * as vscode from "vscode";
 
-import { ConversationView } from "./conversationView";
+import { ConversationView, type WebviewPerformance } from "./conversationView";
 import { Controller } from "./controller";
 import { CoreClient } from "./core/client";
 import { CoreLocator } from "./core/locator";
@@ -10,6 +10,7 @@ import { ProvidersTree, SessionsTree } from "./trees";
 export type RuntrolExtensionApi = {
   readonly ready: Promise<void>;
   refresh(): Promise<void>;
+  measureWebview?(framesPerSecond?: number, durationMs?: number): Promise<WebviewPerformance>;
 };
 
 export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi {
@@ -17,9 +18,9 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
   const client = new CoreClient(locator);
   const state = new RuntimeState();
   let lifecycle: Promise<void> = Promise.resolve();
-  const afterReady = async (action: () => Promise<void>): Promise<void> => {
+  const afterReady = async <T>(action: () => Promise<T>): Promise<T> => {
     await lifecycle;
-    await action();
+    return action();
   };
   let controller: Controller;
   const conversation = new ConversationView(context.extensionUri, (message) => {
@@ -88,6 +89,11 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
       return lifecycle;
     },
     refresh: () => afterReady(() => controller.refresh()),
+    measureWebview: process.env.RUNTROL_VSCODE_PERFORMANCE === "1"
+      ? (framesPerSecond, durationMs) => afterReady(
+        () => conversation.measurePerformance(framesPerSecond, durationMs),
+      )
+      : undefined,
   };
 }
 

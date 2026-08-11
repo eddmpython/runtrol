@@ -21,7 +21,7 @@ if (!process.env.RUNTROL_CORE_BINARY && target !== nativeTarget) {
 
 const source = process.env.RUNTROL_CORE_BINARY
   ? path.resolve(process.env.RUNTROL_CORE_BINARY)
-  : path.join(repositoryRoot, "target", "release", targetContract.executable);
+  : path.join(repositoryRoot, "target", "vscode-release", "release", targetContract.executable);
 const sourceInfo = await stat(source);
 if (!sourceInfo.isFile() || sourceInfo.size < 1024 * 1024) {
   throw new Error(`the release Core at ${source} is missing or too small to be the product binary`);

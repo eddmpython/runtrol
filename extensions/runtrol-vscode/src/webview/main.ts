@@ -1,6 +1,5 @@
 import "./webview.css";
-
-type UnknownRecord = Record<string, unknown>;
+import { coalesceChunks, number, record, string, textOf, type UnknownRecord } from "./presentation";
 
 type Session = {
   session: string;
@@ -9,20 +8,42 @@ type Session = {
   doing: string;
 };
 
+type FrameEnvelope = {
+  generation: number;
+  payload: unknown;
+};
+
 type Incoming =
-  | { type: "reset"; session: Session | null }
-  | { type: "frame"; payload: unknown }
-  | { type: "status"; message: string; kind: "info" | "warning" | "error" };
+  | { type: "reset"; session: Session | null; generation: number }
+  | { type: "frames"; batch: FrameEnvelope[]; gap: boolean }
+  | { type: "status"; message: string; kind: "info" | "warning" | "error" }
+  | { type: "measureStart"; id: string }
+  | { type: "measureEnd"; id: string; producedFrames: number };
 
 type VsCodeApi = {
   postMessage(message: unknown): void;
+};
+
+type Measurement = {
+  id: string;
+  frameIntervals: number[];
+  inputLatencies: number[];
+  scrollLatencies: number[];
+  lastFrameAt: number;
+  nextInputAt: number;
+  nextScrollAt: number;
+  maxPendingFrames: number;
+  producedFrames: number | null;
+  completing: boolean;
 };
 
 declare function acquireVsCodeApi(): VsCodeApi;
 
 const MAX_VISIBLE_ITEMS = 400;
 const MAX_VISIBLE_CHARACTERS = 256 * 1024;
-const MAX_BATCH = 64;
+const MAX_MESSAGE_CHARACTERS = 8 * 1024;
+const MAX_BATCH = 240;
+const MAX_PENDING_FRAMES = 4_096;
 const vscode = acquireVsCodeApi();
 const title = element<HTMLElement>("session-title");
 const sessionPath = element<HTMLDivElement>("session-path");
@@ -36,20 +57,37 @@ const close = element<HTMLButtonElement>("close");
 const openWorkspace = element<HTMLButtonElement>("open-workspace");
 const pending: unknown[] = [];
 let selected: Session | null = null;
+let generation = 0;
+let pendingHead = 0;
 let scheduled = false;
 let visibleCharacters = 0;
+let measurement: Measurement | null = null;
+let followsTail = true;
 
 window.addEventListener("message", ({ data }: MessageEvent<Incoming>) => {
   if (data.type === "reset") {
-    reset(data.session);
+    reset(data.session, data.generation);
     return;
   }
   if (data.type === "status") {
     setStatus(data.message, data.kind);
     return;
   }
-  pending.push(data.payload);
-  schedule();
+  if (data.type === "measureStart") {
+    startMeasurement(data.id);
+    return;
+  }
+  if (data.type === "measureEnd") {
+    endMeasurement(data.id, data.producedFrames);
+    return;
+  }
+  const frames = data.batch
+    .filter((frame) => frame.generation === generation)
+    .map((frame) => frame.payload);
+  if (data.gap) {
+    setStatus("The active view fell behind its bounded presentation queue.", "warning");
+  }
+  enqueue(frames);
 });
 
 composer.addEventListener("submit", (event) => {
@@ -65,12 +103,18 @@ composer.addEventListener("submit", (event) => {
 interrupt.addEventListener("click", () => vscode.postMessage({ type: "interrupt" }));
 close.addEventListener("click", () => vscode.postMessage({ type: "close" }));
 openWorkspace.addEventListener("click", () => vscode.postMessage({ type: "openWorkspace" }));
+conversation.addEventListener("scroll", () => {
+  followsTail = conversation.scrollHeight - conversation.scrollTop - conversation.clientHeight < 24;
+}, { passive: true });
 
-function reset(session: Session | null): void {
+function reset(session: Session | null, nextGeneration: number): void {
   selected = session;
+  generation = nextGeneration;
   pending.length = 0;
+  pendingHead = 0;
   conversation.replaceChildren();
   visibleCharacters = 0;
+  followsTail = true;
   status.textContent = "";
   status.className = "";
   title.textContent = session ? `${folderName(session.workspace)}  ${session.provider}` : "No active session";
@@ -88,6 +132,23 @@ function reset(session: Session | null): void {
   }
 }
 
+function enqueue(frames: readonly unknown[]): void {
+  const renderFrames = coalesceChunks(frames);
+  if (renderFrames.length === 0) {
+    return;
+  }
+  const overflow = pendingCount() + renderFrames.length - MAX_PENDING_FRAMES;
+  if (overflow > 0) {
+    discardPending(overflow);
+    setStatus("The active view fell behind its bounded render queue.", "warning");
+  }
+  pending.push(...renderFrames.slice(Math.max(0, renderFrames.length - MAX_PENDING_FRAMES)));
+  if (measurement) {
+    measurement.maxPendingFrames = Math.max(measurement.maxPendingFrames, pendingCount());
+  }
+  schedule();
+}
+
 function schedule(): void {
   if (scheduled) {
     return;
@@ -98,12 +159,44 @@ function schedule(): void {
 
 function flush(): void {
   scheduled = false;
-  const count = Math.min(MAX_BATCH, pending.length);
+  const shouldFollowTail = followsTail;
+  const count = Math.min(MAX_BATCH, pendingCount());
   for (let index = 0; index < count; index += 1) {
-    present(pending.shift());
+    present(takePending());
   }
-  if (pending.length > 0) {
+  if (shouldFollowTail) {
+    conversation.scrollTop = Number.MAX_SAFE_INTEGER;
+  }
+  compactPending();
+  if (pendingCount() > 0) {
     schedule();
+  } else {
+    finishMeasurementWhenDrained();
+  }
+}
+
+function pendingCount(): number {
+  return pending.length - pendingHead;
+}
+
+function takePending(): unknown {
+  const value = pending[pendingHead];
+  pendingHead += 1;
+  return value;
+}
+
+function discardPending(count: number): void {
+  pendingHead = Math.min(pending.length, pendingHead + count);
+  compactPending();
+}
+
+function compactPending(): void {
+  if (pendingHead === pending.length) {
+    pending.length = 0;
+    pendingHead = 0;
+  } else if (pendingHead >= 1_024 && pendingHead * 2 >= pending.length) {
+    pending.splice(0, pendingHead);
+    pendingHead = 0;
   }
 }
 
@@ -160,13 +253,30 @@ function appendMessage(side: string, text: string, delta = false, messageId = ""
   if (!text) {
     return;
   }
+  if (text.length > MAX_MESSAGE_CHARACTERS) {
+    for (let offset = 0; offset < text.length; offset += MAX_MESSAGE_CHARACTERS) {
+      appendMessage(side, text.slice(offset, offset + MAX_MESSAGE_CHARACTERS), delta, messageId);
+    }
+    return;
+  }
   const last = conversation.lastElementChild as HTMLElement | null;
-  if (delta && messageId && last?.dataset.messageId === messageId && last.dataset.side === side) {
-    const previous = last.textContent ?? "";
-    last.textContent = `${previous}${text}`;
+  const lastCharacters = Number(last?.dataset.characters ?? 0);
+  if (
+    delta
+    && messageId
+    && last?.dataset.messageId === messageId
+    && last.dataset.side === side
+    && lastCharacters + text.length <= MAX_MESSAGE_CHARACTERS
+  ) {
+    const tail = last.lastChild;
+    if (tail instanceof Text) {
+      tail.appendData(text);
+    } else {
+      last.append(document.createTextNode(text));
+    }
+    last.dataset.characters = String(lastCharacters + text.length);
     visibleCharacters += text.length;
     trim();
-    conversation.scrollTop = conversation.scrollHeight;
     return;
   }
   const item = document.createElement("article");
@@ -175,11 +285,11 @@ function appendMessage(side: string, text: string, delta = false, messageId = ""
   if (messageId) {
     item.dataset.messageId = messageId;
   }
+  item.dataset.characters = String(text.length);
   item.textContent = text;
   visibleCharacters += text.length;
   conversation.append(item);
   trim();
-  conversation.scrollTop = conversation.scrollHeight;
 }
 
 function appendApproval(body: UnknownRecord): void {
@@ -220,9 +330,9 @@ function appendApproval(body: UnknownRecord): void {
   }
   card.append(actions);
   visibleCharacters += card.textContent?.length ?? 0;
+  card.dataset.characters = String(card.textContent?.length ?? 0);
   conversation.append(card);
   trim();
-  conversation.scrollTop = conversation.scrollHeight;
 }
 
 function trim(): void {
@@ -235,7 +345,7 @@ function trim(): void {
       visibleCharacters = 0;
       return;
     }
-    visibleCharacters -= oldest.textContent?.length ?? 0;
+    visibleCharacters -= Number((oldest as HTMLElement).dataset.characters ?? 0);
     oldest.remove();
   }
 }
@@ -245,28 +355,93 @@ function setStatus(message: string, kind: string): void {
   status.className = message ? kind : "";
 }
 
-function textOf(value: unknown): string {
-  if (typeof value === "string") {
-    return value;
+function startMeasurement(id: string): void {
+  const now = performance.now();
+  measurement = {
+    id,
+    frameIntervals: [],
+    inputLatencies: [],
+    scrollLatencies: [],
+    lastFrameAt: now,
+    nextInputAt: now + 100,
+    nextScrollAt: now + 100,
+    maxPendingFrames: pendingCount(),
+    producedFrames: null,
+    completing: false,
+  };
+  requestAnimationFrame((at) => measureFrame(id, at));
+  vscode.postMessage({ type: "measurementReady", id });
+}
+
+function measureFrame(id: string, at: number): void {
+  const active = measurement;
+  if (!active || active.id !== id) {
+    return;
   }
-  const source = record(value);
-  if (!source) {
-    return "";
+  active.frameIntervals.push(at - active.lastFrameAt);
+  active.lastFrameAt = at;
+  if (at >= active.nextInputAt) {
+    active.nextInputAt = at + 100;
+    const started = performance.now();
+    prompt.value = `${prompt.value.slice(-31)}x`;
+    prompt.dispatchEvent(new InputEvent("input", { data: "x", inputType: "insertText" }));
+    requestAnimationFrame(() => {
+      if (measurement?.id === id) {
+        active.inputLatencies.push(performance.now() - started);
+      }
+    });
   }
-  const direct = string(source.delta) || string(source.text);
-  if (direct) {
-    return direct;
+  if (at >= active.nextScrollAt) {
+    active.nextScrollAt = at + 100;
+    const started = performance.now();
+    conversation.scrollTop = conversation.scrollTop > 0 ? 0 : Number.MAX_SAFE_INTEGER;
+    requestAnimationFrame(() => {
+      if (measurement?.id === id) {
+        active.scrollLatencies.push(performance.now() - started);
+      }
+    });
   }
-  const item = record(source.item);
-  if (item && typeof item.text === "string") {
-    return item.text;
+  requestAnimationFrame((next) => measureFrame(id, next));
+}
+
+function endMeasurement(id: string, producedFrames: number): void {
+  if (!measurement || measurement.id !== id) {
+    return;
   }
-  const content = Array.isArray(source.content)
-    ? source.content
-    : Array.isArray(record(source.message)?.content)
-      ? record(source.message)?.content as unknown[]
-      : [];
-  return content.map((part) => string(record(part)?.text)).join("");
+  measurement.producedFrames = producedFrames;
+  finishMeasurementWhenDrained();
+}
+
+function finishMeasurementWhenDrained(): void {
+  const active = measurement;
+  if (!active || active.producedFrames === null || active.completing || pendingCount() > 0) {
+    return;
+  }
+  active.completing = true;
+  requestAnimationFrame(() => requestAnimationFrame(() => requestAnimationFrame(() => {
+    if (measurement !== active) {
+      return;
+    }
+    const metrics = {
+      frameP95Ms: percentile(active.frameIntervals.slice(5), 0.95),
+      inputP95Ms: percentile(active.inputLatencies, 0.95),
+      scrollP95Ms: percentile(active.scrollLatencies, 0.95),
+      maxPendingFrames: active.maxPendingFrames,
+      producedFrames: active.producedFrames,
+      visibleCharacters,
+      visibleItems: conversation.childElementCount,
+    };
+    measurement = null;
+    vscode.postMessage({ type: "performanceMeasurement", id: active.id, metrics });
+  })));
+}
+
+function percentile(values: readonly number[], at: number): number {
+  if (values.length === 0) {
+    return Number.POSITIVE_INFINITY;
+  }
+  const ordered = [...values].sort((left, right) => left - right);
+  return ordered[Math.ceil(ordered.length * at) - 1] ?? Number.POSITIVE_INFINITY;
 }
 
 function printable(value: unknown): string {
@@ -278,20 +453,6 @@ function printable(value: unknown): string {
   } catch {
     return "The provider supplied a subject that cannot be displayed.";
   }
-}
-
-function record(value: unknown): UnknownRecord | null {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? value as UnknownRecord
-    : null;
-}
-
-function string(value: unknown): string {
-  return typeof value === "string" ? value : "";
-}
-
-function number(value: unknown): number | null {
-  return typeof value === "number" && Number.isInteger(value) ? value : null;
 }
 
 function folderName(workspace: string): string {

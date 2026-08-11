@@ -28,6 +28,8 @@ The first end-to-end slice landed on 2026-08-11:
   and Windows named-pipe churn while watches remain independent
 - an isolated real Extension Host ratchet measures ready activation, contributed-view opening, 40 refreshes, and RSS
   growth against `performance-budget.json` on every supported CI operating system
+- the same real Webview run carries 3,000 raw frames per second while animation, typing, scrolling, Extension Host
+  posting, renderer backlog, DOM nodes, visible characters, and memory remain inside one shared budget
 - the extension manifest owns release SemVer, while `release-targets.json` owns the six native Marketplace targets
 - platform packaging includes exactly one matching Core and the repository license, while excluding source, tooling,
   dependencies, test budgets, and release metadata
@@ -38,8 +40,9 @@ The first end-to-end slice landed on 2026-08-11:
 The hosted `vscodeExtension` gate checks the thin boundary, no polling, no browser persistence, one selected watch,
 queue and renderer bounds, TypeScript, framing tests, and production bundle size.
 The hosted `vscodeHostPerformance` gate launches the product Core and production extension in a real isolated VS Code
-profile. Its shared ratchet currently caps ready activation at 1,000 ms, view opening at 500 ms, refresh p95 at 50 ms,
-and Extension Host RSS growth at 48 MiB.
+profile. Its shared ratchet caps ready activation at 1,000 ms, view opening at 500 ms, refresh p95 at 50 ms, Extension
+Host RSS growth at 48 MiB, Webview animation p95 at 24 ms, input and scroll p95 at 50 ms, and renderer backlog at
+1,024 frames while 15,000 raw frames cross the boundary in five seconds.
 
 ## Module boundaries
 
@@ -56,8 +59,8 @@ and Extension Host RSS growth at 48 MiB.
 ## Remaining gates before release
 
 1. Show workspace overlap and provider-offered worktree choices before starting conflicting sessions.
-2. Extend the real Extension Host ratchet to the Webview under 3,000 frames per second, typing, scrolling, switching,
-   workspace reload, and eight hot sessions.
+2. Extend the current 3,000-frame real Webview ratchet through session switching, workspace reload, and eight hot
+   sessions.
 3. Move shared event presentation rules out of the retired desktop surface so VS Code and any future phone surface use
    one vocabulary SSOT.
 4. Exercise start, prompt, approval, interrupt, reconnect, close, and workspace switching against installed real CLIs

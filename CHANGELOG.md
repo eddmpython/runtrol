@@ -15,6 +15,8 @@ its measured architecture, and the gate harness.
 
 ### Added
 
+- A real VS Code Webview burst ratchet at 3,000 raw frames per second, including animation, input, scroll, queue,
+  DOM, character, RSS, activation, view-open, and refresh budgets.
 - Platform-specific `Runtrol Studio` release packaging with one exact bundled Core, license and archive allowlist
   verification, clean stable VS Code installation, automatic bundled-Core discovery, and native release automation.
 - A change-only session-index subscription. Surfaces receive one current snapshot and then only list-visible changes;
@@ -91,6 +93,9 @@ its measured architecture, and the gate harness.
   output that had already finished.
 
 ### Changed
+
+- The VS Code surface batches Extension Host delivery, coalesces only adjacent deltas of the same visible message,
+  segments long streaming text, isolates offscreen layout, and avoids forced layout in its render loop.
 
 - The immutable North Star now targets one responsive VS Code window for every project, session,
   and supported installed agent. It binds session selection to the exact workspace or worktree,

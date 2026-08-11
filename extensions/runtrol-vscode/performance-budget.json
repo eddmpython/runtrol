@@ -2,5 +2,9 @@
   "activationMs": 1000,
   "openViewMs": 500,
   "refreshP95Ms": 50,
-  "rssGrowthBytes": 50331648
+  "rssGrowthBytes": 50331648,
+  "webviewFrameP95Ms": 24,
+  "webviewInputP95Ms": 50,
+  "webviewScrollP95Ms": 50,
+  "webviewPendingFrames": 1024
 }

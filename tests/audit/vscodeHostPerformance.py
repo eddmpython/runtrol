@@ -25,7 +25,16 @@ ROOT = Path(__file__).resolve().parents[2]
 EXTENSION = ROOT / "extensions" / "runtrol-vscode"
 BUDGET_PATH = EXTENSION / "performance-budget.json"
 MARKER = "RUNTROL_VSCODE_HOST "
-FIELDS = ("activationMs", "openViewMs", "refreshP95Ms", "rssGrowthBytes")
+FIELDS = (
+    "activationMs",
+    "openViewMs",
+    "refreshP95Ms",
+    "rssGrowthBytes",
+    "webviewFrameP95Ms",
+    "webviewInputP95Ms",
+    "webviewScrollP95Ms",
+    "webviewPendingFrames",
+)
 
 
 def loadBudget() -> dict[str, float]:
@@ -72,7 +81,7 @@ def selftest() -> int:
         if problems(missing, budget) != [f"{name} is missing or not numeric"]:
             print(f"[vscodeHostPerformance --selftest] FAIL. missing {name} escaped.", file=sys.stderr)
             return 2
-    print("[vscodeHostPerformance --selftest] OK. all eight injected defects make the gate red.")
+    print("[vscodeHostPerformance --selftest] OK. all sixteen injected defects make the gate red.")
     return 0
 
 
@@ -97,11 +106,25 @@ def runCommand(command: list[str], cwd: Path, environment: dict[str, str] | None
 
 def productBinary() -> Path:
     """Build the current product Core and return its platform path."""
-    built = runCommand(["cargo", "build", "-p", "runtrol", "--bin", "runtrol"], ROOT)
+    target = ROOT / "target" / "vscode-performance"
+    built = runCommand(
+        [
+            "cargo",
+            "build",
+            "-p",
+            "runtrol",
+            "--bin",
+            "runtrol",
+            "--no-default-features",
+            "--target-dir",
+            str(target),
+        ],
+        ROOT,
+    )
     if built.returncode != 0:
         raise RuntimeError(f"cargo build returned {built.returncode}")
     suffix = ".exe" if sys.platform == "win32" else ""
-    binary = ROOT / "target" / "debug" / f"runtrol{suffix}"
+    binary = target / "debug" / f"runtrol{suffix}"
     if not binary.is_file():
         raise RuntimeError(f"built Core is missing at {binary}")
     return binary
@@ -125,10 +148,6 @@ def measurement(binary: Path) -> dict[str, Any]:
     """Run the isolated Extension Host and parse its single result record."""
     environment = dict(os.environ)
     environment["RUNTROL_TEST_CORE"] = str(binary)
-    if "RUNTROL_TEST_VSCODE_EXECUTABLE" not in environment and sys.platform == "win32":
-        installed = shutil.which("code.cmd")
-        if installed:
-            environment["RUNTROL_TEST_VSCODE_EXECUTABLE"] = installed
     result = runCommand(hostCommand(), EXTENSION, environment)
     if result.returncode != 0:
         raise RuntimeError(f"VS Code Extension Host returned {result.returncode}")
@@ -158,7 +177,9 @@ def run() -> int:
     print(
         "[vscodeHostPerformance] OK. "
         f"activation {metrics['activationMs']:.1f} ms, view {metrics['openViewMs']:.1f} ms, "
-        f"refresh p95 {metrics['refreshP95Ms']:.1f} ms, RSS growth {metrics['rssGrowthBytes']:.0f} bytes."
+        f"refresh p95 {metrics['refreshP95Ms']:.1f} ms, RSS growth {metrics['rssGrowthBytes']:.0f} bytes, "
+        f"Webview frame {metrics['webviewFrameP95Ms']:.1f} ms, input {metrics['webviewInputP95Ms']:.1f} ms, "
+        f"scroll {metrics['webviewScrollP95Ms']:.1f} ms, pending {metrics['webviewPendingFrames']:.0f}."
     )
     return 0
 

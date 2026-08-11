@@ -83,6 +83,7 @@ try {
   const testEnvironment = {
     RUNTROL_HOME: runtrolHome,
     RUNTROL_TEST_CORE: core,
+    RUNTROL_VSCODE_PERFORMANCE: "1",
     RUNTROL_VSCODE_RESULT: resultPath,
   };
   const installed = process.env.RUNTROL_TEST_VSCODE_EXECUTABLE;
@@ -156,8 +157,9 @@ async function runInstalledCode(executable, testEntry, resultPath, testEnvironme
     testEntry,
     repositoryRoot,
   ];
+  let child;
   const started = new Promise((resolve, reject) => {
-    const child = spawn(`"${executable}"`, arguments_, {
+    child = spawn(`"${executable}"`, arguments_, {
       env: { ...process.env, ...testEnvironment },
       shell: true,
       stdio: "inherit",
@@ -168,30 +170,72 @@ async function runInstalledCode(executable, testEntry, resultPath, testEnvironme
   });
   await started;
 
-  const deadline = Date.now() + 30_000;
-  let lastStage = "not started";
-  while (Date.now() < deadline) {
-    try {
-      const result = JSON.parse(await readFile(resultPath, "utf8"));
-      if (typeof result.vscode === "string") {
-        await delay(1_000);
-        return;
+  try {
+    const deadline = Date.now() + 30_000;
+    let lastStage = "not started";
+    while (Date.now() < deadline) {
+      try {
+        const result = JSON.parse(await readFile(resultPath, "utf8"));
+        if (typeof result.vscode === "string") {
+          return;
+        }
+        if (typeof result.failure === "string") {
+          throw new Error(
+            `installed VS Code test failed after checkpoint ${String(result.stage || lastStage)}: ${result.failure}`
+            + (typeof result.stack === "string" ? `\n${result.stack}` : ""),
+          );
+        }
+        if (typeof result.stage === "string") {
+          lastStage = result.stage;
+        }
+      } catch (error) {
+        if (error.code !== "ENOENT" && !(error instanceof SyntaxError)) {
+          throw error;
+        }
       }
-      if (typeof result.failure === "string") {
-        throw new Error(
-          `installed VS Code test failed after checkpoint ${String(result.stage || lastStage)}: ${result.failure}`
-          + (typeof result.stack === "string" ? `\n${result.stack}` : ""),
-        );
-      }
-      if (typeof result.stage === "string") {
-        lastStage = result.stage;
-      }
-    } catch (error) {
-      if (error.code !== "ENOENT" && !(error instanceof SyntaxError)) {
-        throw error;
-      }
+      await delay(100);
     }
-    await delay(100);
+    throw new Error(`installed VS Code test timed out after checkpoint ${lastStage}`);
+  } finally {
+    await terminateInstalledCode(userData);
+    if (child?.exitCode === null) {
+      child.kill();
+    }
   }
-  throw new Error(`installed VS Code test timed out after checkpoint ${lastStage}`);
+}
+
+async function terminateInstalledCode(marker) {
+  if (process.platform !== "win32") {
+    return;
+  }
+  const query = "$marker=[Environment]::GetEnvironmentVariable('RUNTROL_VSCODE_MARKER'); "
+    + "Get-CimInstance Win32_Process -Filter \"Name = 'Code.exe'\" "
+    + "| Where-Object { $_.CommandLine -and $_.CommandLine.Contains($marker) } "
+    + "| Select-Object -ExpandProperty ProcessId";
+  const listed = spawnSync(
+    "powershell.exe",
+    ["-NoProfile", "-NonInteractive", "-Command", query],
+    {
+      env: { ...process.env, RUNTROL_VSCODE_MARKER: marker },
+      encoding: "utf8",
+      timeout: 60_000,
+      windowsHide: true,
+    },
+  );
+  if (listed.status !== 0) {
+    throw new Error(`cannot enumerate the isolated VS Code processes: ${listed.stderr}`);
+  }
+  const pids = listed.stdout.split(/\s+/).map(Number).filter(
+    (pid) => Number.isInteger(pid) && pid > 0 && pid !== process.pid,
+  );
+  for (const pid of pids) {
+    try {
+      process.kill(pid, "SIGTERM");
+    } catch (error) {
+      if (error.code !== "ESRCH") throw error;
+    }
+  }
+  if (pids.length > 0) {
+    await delay(500);
+  }
 }

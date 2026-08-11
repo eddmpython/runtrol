@@ -13,6 +13,7 @@ await build({
   entryPoints: {
     "framing.test": path.join(extensionRoot, "src/core/framing.test.ts"),
     "liveCore.test": path.join(extensionRoot, "src/core/liveCore.test.ts"),
+    "presentation.test": path.join(extensionRoot, "src/webview/presentation.test.ts"),
     "stateRows.test": path.join(extensionRoot, "src/stateRows.test.ts"),
   },
   outdir: out,
@@ -28,6 +29,7 @@ const result = spawnSync(process.execPath, [
   "--test",
   path.join(out, "framing.test.js"),
   path.join(out, "liveCore.test.js"),
+  path.join(out, "presentation.test.js"),
   path.join(out, "stateRows.test.js"),
 ], {
   stdio: "inherit",
