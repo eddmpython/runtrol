@@ -1,0 +1,41 @@
+# Site Deployment
+
+The public site is live at [https://eddmpython.github.io/runtrol/](https://eddmpython.github.io/runtrol/). GitHub Pages is configured with `build_type: workflow` and enforced HTTPS.
+
+## Source and build
+
+[`site/`](../site/) is the only source directory. The site uses static HTML, CSS, and browser JavaScript with no package dependencies and no CDN assets. `npm --prefix site run build` creates the ignored `site/dist` directory from reviewed source plus canonical files under [`assets/brand/`](../assets/brand/).
+
+The build deletes only `site/dist`, creates `.nojekyll`, and rejects a complete output larger than 250,000 bytes. The first public deployment was 77,429 bytes. Main content, product status, and installation instructions remain available without JavaScript.
+
+## Contract test
+
+`npm --prefix site test` checks:
+
+- English is the static default;
+- Korean, Chinese, and Japanese dictionaries exist;
+- the 30-session North Star is visible in static HTML;
+- Marketplace and phone PWA states remain honest while unpublished;
+- manual installation requires a `.vsix` asset from the latest GitHub Release;
+- there is no hardcoded release version or external style, font, or script CDN;
+- forbidden dash characters do not enter site source.
+
+The test also injects five defects and requires every mutation to fail before the valid source passes.
+
+## GitHub Pages workflow
+
+[`pages.yml`](../.github/workflows/pages.yml) runs on relevant pushes to `main` and on manual dispatch. The build job has only repository content read and Pages read permissions. The deploy job receives only Pages write and OIDC token permissions. Every external action is pinned to a full commit digest.
+
+The job order is test, build, configure, upload, then deploy into the `github-pages` environment. The first successful public run was `31545875267` at commit `59625bb`.
+
+## Release links
+
+The primary extension install location is the Visual Studio Marketplace. Until publication, the site renders a non-interactive pending state.
+
+The browser requests the latest `eddmpython/runtrol` GitHub Release and enables the manual button only when an asset name ends in `.vsix`. The page never invents a version or links to a build artifact that does not exist.
+
+The phone application is reserved for `/runtrol/app/` under the same Pages origin. That route and its install action must not be published until the production pairing, remote listener, route selection, and encrypted transport gates pass.
+
+## Visual direction
+
+The page combines eddmpython's restrained carbon and ivory composition, xlpod's compact channel rail, and pyproc's product-like technical panel. The content-heavy codaro structure is intentionally not used for this single-page open source tool. The canonical runtrol mark is reused without modifications, effects, or alternate geometry.

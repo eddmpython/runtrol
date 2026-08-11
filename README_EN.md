@@ -4,7 +4,7 @@
 
 [한국어](README.md) | English | [中文](README_ZH.md) | [日本語](README_JA.md)
 
-> Status: **the core, primary VS Code extension, live session index, real Extension Host and 3,000-frame-per-second Webview performance ratchets, a full VS Code journey with an installed real CLI, content plus clean-install verification for six native VSIX targets, session-preserving VSIX upgrade and rollback, and the dependency-free public site are implemented.** `Runtrol Studio` provides Core discovery, installed CLI listing, a 30-session manager, change-only session snapshots, a reused command channel, one selected watch, a bounded live view, and same-window workspace switching. The standalone desktop GUI is not a public product surface. Marketplace signing, public extension publishing, GitHub Pages deployment, and the phone PWA remain. Most scores below are 0 because no gate asserts those axes yet, not because there is
+> Status: **the core, primary VS Code extension, live session index, real Extension Host and 3,000-frame-per-second Webview performance ratchets, a full VS Code journey with an installed real CLI, content plus clean-install verification for six native VSIX targets, session-preserving VSIX upgrade and rollback, and the dependency-free public site are implemented.** `Runtrol Studio` provides Core discovery, installed CLI listing, a 30-session manager, change-only session snapshots, a reused command channel, one selected watch, a bounded live view, and same-window workspace switching. The standalone desktop GUI is not a public product surface. The [GitHub Pages site](https://eddmpython.github.io/runtrol/) is live. Marketplace signing, public extension publishing, and the phone PWA remain. Most scores below are 0 because no gate asserts those axes yet, not because there is
 > no code.
 
 The security boundary and default-deny settings are documented in [SECURITY.md](SECURITY.md).
@@ -159,7 +159,7 @@ If those axes are not nailed down by gates, using Rust means nothing.
 | `crates/` | The product core (Rust). Daemon, provider adapters, and transport. Legacy internal GUI code is not a public target | Implemented |
 | [`extensions/runtrol-vscode/`](extensions/runtrol-vscode/) | The only PC surface, `Runtrol Studio` | 30-session release load implemented, not released |
 | `pwa/` | Mobile PWA | Not created |
-| [`site/`](site/) | Dependency-free GitHub Pages landing | Implemented, deployment pending |
+| [`site/`](site/) | [Dependency-free GitHub Pages landing](https://eddmpython.github.io/runtrol/) | Live |
 | [`assets/brand/`](assets/brand/) | The logo. SVG is the source; favicons, icons, and social cards derive from it | |
 | [`docs/`](docs/README.md) | Operational documentation, source of truth | |
 | [`mainPlan/`](mainPlan/README.md) | What is to be built (initiatives; on completion the knowledge is promoted to `docs/` and the folder is deleted) | |

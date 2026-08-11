@@ -491,7 +491,7 @@ to old. This closes the VS Code deployment slice only. It does not satisfy the b
   - **나머지 둘은 Cargo 워크스페이스를 상속할 수 없다.** 파생 수단이 따로 필요하고,
     데스크톱 crate 에 이미 빌드 스크립트가 있으므로 그것이 후보다. 안 정하면 SSOT 는 14 곳만 덮는다
   - 그 뒤에야 "손으로 적힌 버전이 0 개" 를 완료 판정에 넣을 수 있다
-- 랜딩 링크의 세부는 landingSite 가 정본이다. 여기서는 **버전 문자열이 손으로 적히지 않는다**만 요구한다
+- 랜딩 링크의 세부는 [site deployment](../../docs/siteDeployment.md)가 정본이다. 여기서는 **버전 문자열이 손으로 적히지 않는다**만 요구한다
 
 ## 완료 판정
 

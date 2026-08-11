@@ -20,12 +20,11 @@
 | [0-securityPosture](0-securityPosture/) | 활성 | default-deny 권한 모델, 소켓 표면 (Windows named pipe / Unix socket), 승인 전달, 감사 로그, 킬 스위치. **공개 저장소라 "모르는 사람이 기본값으로 켠다" 가 기준선이다.** | **순서상의 한 칸이 아니라 나머지 전부가 딛는 바닥이다.** 첫 커밋부터 함께 갔고, 남은 항목 (폰 표면 권한) 이 4 번에 걸려 있어 **마지막 뒤에 닫힌다.** 0 은 "먼저 하고 넘어간다" 가 아니라 "1~4 가 이것 위에서 돈다" 는 뜻이다 |
 | [1-vscodeSurface](1-vscodeSurface/) | 활성 | VS Code 주력 표면, Core 자동 탐색, 단일 hot renderer, 세션별 workspace 및 worktree 결박, Marketplace VSIX | 새 북극성 자체다. 이 표면이 실물로 서지 않으면 뒤의 배포와 폰은 다른 제품을 배포하는 일이 된다. 첫 end-to-end slice, change-only session-index 구독, 실물 Extension Host의 30개 세션 관리, 3,000fps Webview, 최대 8개 hot 세션 전환과 workspace reload ratchet, 공유 이벤트 표현 SSOT, workspace 충돌 선택, Core 원자 worktree 예약, 6개 플랫폼 패키지 확증, 실물 전체 여정, 활성 세션을 보존하는 VSIX 갱신과 롤백은 구현됐고 공개 배포만 남았다 |
 | [2-autoUpdate](2-autoUpdate/) | 활성 | **정본은 GitHub Releases**, 서명 검증, 관리자 권한 불필요. 앱 갱신은 설치기를 다시 돌리지 않고 **살아 있는 이미지를 원자적으로 교체한다** (실측 근거). provider 는 **확증된 채널에서만** 갱신하고 롤백 대상은 버전 순서로 고른다. | VS Code 확장과 bundled Core의 버전 SSOT, 무중단 교체, 롤백을 세운다. Marketplace 패키징 완료 판정이 이 계약을 사용한다 |
-| [3-landingSite](3-landingSite/) | 활성 | 영문 기본 GitHub Pages 한 장. 정본 브랜드, 30세션 제품 패널, Marketplace와 실제 VSIX에서 파생하는 정직한 설치 상태, 영구 PWA origin | 무의존성 소스와 Pages workflow는 구현됐다. 실제 공개 배포를 확인한 뒤 운영 문서로 승격한다 |
-| [4-pwaConnection](4-pwaConnection/) | 활성 | **origin 과 transport 를 분리한다.** 불변 HTTPS origin 하나 + 4 단 전송 사다리 + Noise E2E + 데몬 직접 Web Push. | 3 번이 확정한 불변 origin 위에서만 성립한다. 보안 기반은 0 번에서 이미 섰고, 남은 것은 릴레이, 원격 리스너, push, 클라이언트다 |
+| [4-pwaConnection](4-pwaConnection/) | 활성 | **origin 과 transport 를 분리한다.** 불변 HTTPS origin 하나 + 4 단 전송 사다리 + Noise E2E + 데몬 직접 Web Push. | 공개된 [site deployment](../docs/siteDeployment.md)의 불변 origin 위에서 성립한다. 보안 기반은 0 번에서 이미 섰고, 남은 것은 릴레이, 원격 리스너, push, 클라이언트다 |
 | [5-pwaSurface](5-pwaSurface/) | 대기 | PWA 자체. 연결 계층이 선 뒤에 짓는다. | 4 번의 프레임 스트림이 확정되기 전에 화면을 얹으면 전송이 바뀔 때 화면을 다시 짓는다 |
 
-**1 과 2 를 3 앞에 두는 것이 이 순서의 유일한 비자명한 판단이다.** 폰이 가장 눈에 띄는 미완이지만,
-설치할 수 없는 제품에는 폰으로 이을 PC 세션이 없고, 소유하지 않은 주소 위에는 불변 origin 이 없다.
+공개 사이트와 불변 origin은 완성되어 [운영 문서](../docs/siteDeployment.md)로 승격됐다. 폰이 가장 눈에 띄는 미완이지만,
+설치할 수 없는 제품에는 폰으로 이을 PC 세션이 없으므로 Marketplace 공개를 먼저 닫는다.
 
 ## 마일스톤 (같은 순서를 사용자 관점으로 본 것)
 
@@ -33,7 +32,7 @@
 |---|---|---|
 | **M0 코어 슬라이스** (완료) | 공개 provider 경계 + Rust daemon + 세션 목록·시작·재개. 운영 정본은 [core runtime](../docs/coreRuntime.md) 이다 | 두 provider 의 세션이 한 명령에 뜨고 이어진다 |
 | **M1 PC 표면 통합** (완료) | 공개 PC 표면을 `Runtrol Studio` VS Code 확장 하나로 고정한다. 기존 Tauri GUI는 공개 배포 대상이 아닌 내부 증거다 | **운영자가 별도 창 없이 VS Code에서 모든 세션을 다룬다** |
-| **M2 VS Code 배포** | 1-vscodeSurface -> 2-autoUpdate -> 3-landingSite | 낯선 사람이 Marketplace에서 설치해 한 창으로 실물 CLI를 운영한다 |
+| **M2 VS Code 배포** | 1-vscodeSurface -> 2-autoUpdate. 공개 사이트는 [완료](../docs/siteDeployment.md) | 낯선 사람이 Marketplace에서 설치해 한 창으로 실물 CLI를 운영한다 |
 | **M3 폰** | 4-pwaConnection (릴레이 + E2E + push) -> 5-pwaSurface -> 폰 승인 | 밖에서 폰으로 내 세션을 잇고 승인한다 |
 
 왜 이 순서인가.

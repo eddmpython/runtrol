@@ -4,7 +4,7 @@
 
 한국어 | [English](README_EN.md) | [中文](README_ZH.md) | [日本語](README_JA.md)
 
-> 상태: **코어, 주력 VS Code 확장, 실시간 세션 인덱스, 실물 Extension Host 및 초당 3,000 프레임 Webview 성능 ratchet, 설치된 실물 CLI의 전체 VS Code 조작 여정, 6개 네이티브 플랫폼 VSIX 내용과 깨끗한 설치 검증, 활성 세션을 보존하는 VSIX 갱신과 롤백, 무의존성 공개 사이트를 구현했다.** `Runtrol Studio`는 Core 자동 탐색, 설치형 CLI 목록, 30개 세션 관리자, 변화 시에만 갱신되는 세션 목록, 재사용 명령 채널, 선택 세션 단일 구독, bounded live 화면, 동일 창 workspace 전환을 제공한다. 별도 데스크톱 GUI는 공개 제품 표면이 아니다. Marketplace 서명, 확장 공개 배포, GitHub Pages 배포, 휴대폰 PWA는 아직 남았다.
+> 상태: **코어, 주력 VS Code 확장, 실시간 세션 인덱스, 실물 Extension Host 및 초당 3,000 프레임 Webview 성능 ratchet, 설치된 실물 CLI의 전체 VS Code 조작 여정, 6개 네이티브 플랫폼 VSIX 내용과 깨끗한 설치 검증, 활성 세션을 보존하는 VSIX 갱신과 롤백, 무의존성 공개 사이트를 구현했다.** `Runtrol Studio`는 Core 자동 탐색, 설치형 CLI 목록, 30개 세션 관리자, 변화 시에만 갱신되는 세션 목록, 재사용 명령 채널, 선택 세션 단일 구독, bounded live 화면, 동일 창 workspace 전환을 제공한다. 별도 데스크톱 GUI는 공개 제품 표면이 아니다. [GitHub Pages 사이트](https://eddmpython.github.io/runtrol/)는 공개됐다. Marketplace 서명, 확장 공개 배포, 휴대폰 PWA는 아직 남았다.
 > 아래 점수 대부분이 0 인 것은 코드가 없어서가 아니라 그 축을 단언하는 게이트가 아직 없어서다.
 
 보안 경계와 기본 거부 설정은 [SECURITY.md](SECURITY.md)에 정리되어 있다.
@@ -157,7 +157,7 @@ Rust 는 목적이 아니라 위 표의 세 축을 위한 수단이다.
 | `crates/` | 제품 코어 (Rust). daemon, provider 어댑터, 전송. 기존 내부 GUI 코드는 공개 대상이 아니다 | 구현됨 |
 | [`extensions/runtrol-vscode/`](extensions/runtrol-vscode/) | 유일한 PC 표면 `Runtrol Studio` | 30개 세션 출시 부하 구현, 미배포 |
 | `pwa/` | 모바일 PWA | 미생성 |
-| [`site/`](site/) | 무의존성 GitHub Pages 랜딩 | 구현됨, 배포 대기 |
+| [`site/`](site/) | [무의존성 GitHub Pages 랜딩](https://eddmpython.github.io/runtrol/) | 공개됨 |
 | [`assets/brand/`](assets/brand/) | 로고. SVG 가 정본, 파비콘·아이콘·소셜 카드는 파생 | |
 | [`docs/`](docs/README.md) | 운영문서 정본 | |
 | [`mainPlan/`](mainPlan/README.md) | 앞으로 지을 것 (이니셔티브. 완료되면 `docs/` 로 승격하고 지운다) | |
