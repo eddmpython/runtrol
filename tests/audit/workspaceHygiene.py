@@ -61,6 +61,7 @@ ALLOWED_ROOT: frozenset[str] = frozenset(
         "docs",
         "mainPlan",
         "assets",
+        "extensions",
         # Rust 워크스페이스
         "Cargo.toml",
         "Cargo.lock",

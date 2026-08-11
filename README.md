@@ -4,7 +4,7 @@
 
 한국어 | [English](README_EN.md) | [中文](README_ZH.md) | [日本語](README_JA.md)
 
-> 상태: **코어와 Windows 데스크톱 구현. VS Code 주력 표면 재편 결정.** 두 공급자의 세션 생명주기가 실물 CLI 로 돌고, production Tauri 제품이 한 목록과 bounded live 화면을 제공한다. `Runtrol Studio` 확장은 아직 미구현이다.
+> 상태: **코어, Windows 데스크톱, VS Code 확장의 첫 end-to-end slice 구현.** `Runtrol Studio`는 Core 자동 탐색, 설치형 CLI 목록, 멀티세션 TreeView, 선택 세션 단일 구독, bounded live 화면, 동일 창 workspace 전환을 제공한다. session-index 실시간 구독, 실물 VS Code 성능 ratchet, VSIX 서명과 Marketplace 배포는 아직 남았다.
 > 아래 점수 대부분이 0 인 것은 코드가 없어서가 아니라 그 축을 단언하는 게이트가 아직 없어서다.
 
 보안 경계와 기본 거부 설정은 [SECURITY.md](SECURITY.md)에 정리되어 있다.
@@ -113,7 +113,7 @@ Code-hot workspace는 bounded 상태를 유지한다. streaming과 background �
 
 | | |
 |---|---|
-| **PC (Windows)** | 아직 미출시. 현재 소스 빌드는 production Tauri 제품을 만든다. 주력 배포 목표는 bundled Core를 포함한 `Runtrol Studio` Marketplace 확장이다 |
+| **PC (Windows)** | 아직 미출시. `Runtrol Studio` 확장 소스와 직접 Core IPC는 구현됐다. 주력 배포 목표는 검증된 bundled Core를 포함한 Marketplace 확장이다 |
 | **PC (macOS, Linux)** | 준비 중 |
 | **모바일** | PWA. 브라우저에서 열고 홈 화면에 추가한다. 앱 스토어가 필요 없다 |
 
@@ -155,7 +155,7 @@ Rust 는 목적이 아니라 위 표의 세 축을 위한 수단이다.
 | | | |
 |---|---|---|
 | `crates/` | 제품 (Rust). daemon, provider 어댑터, 전송, 데스크톱 앱 | 구현됨 |
-| `extensions/runtrol-vscode/` | VS Code 주력 표면 `Runtrol Studio` | 미생성 |
+| [`extensions/runtrol-vscode/`](extensions/runtrol-vscode/) | VS Code 주력 표면 `Runtrol Studio` | 첫 수직 기능 구현, 미배포 |
 | `pwa/` | 모바일 PWA | 미생성 |
 | `site/` | GitHub Pages 랜딩 | 미생성 |
 | [`assets/brand/`](assets/brand/) | 로고. SVG 가 정본, 파비콘·아이콘·소셜 카드는 파생 | |

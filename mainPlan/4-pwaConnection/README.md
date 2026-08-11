@@ -1,6 +1,6 @@
 # pwaConnection
 
-상태: 진행 중, 착수 순서 3 번 ([2-landingSite](../2-landingSite/README.md) 가 불변 origin 을 확정한 뒤).
+상태: 진행 중, 착수 순서 4 번 ([3-landingSite](../3-landingSite/README.md) 가 불변 origin 을 확정한 뒤).
 아래 "운영자 결정 대기" 1 번 (도메인 소유) 이 곧 2 번의 일이다.
 
 Phone-facing HTTP admission, rebinding defenses, exact egress allowlisting, Noise IK session encryption, the 120-second single-use Noise IKpsk1 pairing lifecycle with exact PC approval, durable device authorization rows, fail-closed daemon startup restoration, and the Windows CurrentUser DPAPI PC Noise identity vault are implemented. Relay service, the daemon remote listener, non-Windows native identity protectors, the PWA client, and push remain.

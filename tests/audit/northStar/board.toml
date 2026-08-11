@@ -205,6 +205,12 @@ name = "desktopThinBoundary"
 status = "built"
 file = "desktopThinBoundary.py"
 
+[[floor]]
+category = "modularity"
+name = "vscodeExtension"
+status = "built"
+file = "vscodeExtension.py"
+
 # One type scale and one brand source, held mechanically. A floor rather than an axis: a window that
 # invents its own sizes and draws its own logo is not worth a fraction of a point, it is a product that
 # does not look like itself. Both defects it watches shipped and were caught by an operator's eyes.

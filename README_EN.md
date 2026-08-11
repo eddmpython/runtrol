@@ -4,8 +4,7 @@
 
 [한국어](README.md) | English | [中文](README_ZH.md) | [日本語](README_JA.md)
 
-> Status: **the core and Windows desktop are implemented. The primary surface is being reset around VS Code.** Session lifecycles run against both real CLIs, and
-> the production Tauri product provides one list and a bounded live view. The `Runtrol Studio` extension is not implemented yet. Most scores below are 0 because no gate asserts those axes yet, not because there is
+> Status: **the core, Windows desktop, and first end-to-end VS Code extension slice are implemented.** `Runtrol Studio` provides Core discovery, installed CLI listing, a multi-session TreeView, one selected watch, a bounded live view, and same-window workspace switching. A live session-index subscription, real VS Code performance ratchets, signed VSIX files, and Marketplace publishing remain. Most scores below are 0 because no gate asserts those axes yet, not because there is
 > no code.
 
 The security boundary and default-deny settings are documented in [SECURITY.md](SECURITY.md).
@@ -116,7 +115,7 @@ At every fork, take the side that is easier for the user. The test is not taste.
 
 | | |
 |---|---|
-| **PC (Windows)** | Not released yet. The current source build produces the production Tauri product. The primary distribution target is the `Runtrol Studio` Marketplace extension with a bundled Core |
+| **PC (Windows)** | Not released yet. The `Runtrol Studio` extension source and direct Core IPC are implemented. The primary distribution target is a Marketplace extension with a verified bundled Core |
 | **PC (macOS, Linux)** | In preparation |
 | **Mobile** | PWA. Open it in a browser and add it to the home screen. No app store needed |
 
@@ -158,7 +157,7 @@ If those axes are not nailed down by gates, using Rust means nothing.
 | | | |
 |---|---|---|
 | `crates/` | The product (Rust). Daemon, provider adapters, transport, desktop app | Implemented |
-| `extensions/runtrol-vscode/` | The primary VS Code surface, `Runtrol Studio` | Not created |
+| [`extensions/runtrol-vscode/`](extensions/runtrol-vscode/) | The primary VS Code surface, `Runtrol Studio` | First vertical slice implemented, not released |
 | `pwa/` | Mobile PWA | Not created |
 | `site/` | GitHub Pages landing | Not created |
 | [`assets/brand/`](assets/brand/) | The logo. SVG is the source; favicons, icons, and social cards derive from it | |

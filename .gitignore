@@ -39,6 +39,9 @@ crates/runtrol-gui/gen/
 # 마크를 다시 그리는 날 한쪽만 바뀐다. 빌드가 매번 가져온다.
 crates/runtrol-gui/ui/brand/
 
+# VS Code package resources are copied from the brand SSOT and the selected release binary during build.
+extensions/runtrol-vscode/resources/
+
 # Python. 게이트 harness 전용이고 재생성된다.
 .venv/
 __pycache__/

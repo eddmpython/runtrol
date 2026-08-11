@@ -2,8 +2,8 @@
 
 상태: 설계 완료, 착수 순서 2 번. 로고 도착 (2026-07-30). 자산은 [`assets/brand/`](../../assets/brand/) 에 있고 그 폴더의 README 가 사용 규칙의 정본이다.
 
-**왜 3 번 앞인가.** 다운로드 링크를 릴리즈에서 파생하므로 [1-autoUpdate](../1-autoUpdate/README.md) 가 선행이고,
-더 중요하게는 **이것이 도메인을 확정한다.** [3-pwaConnection](../3-pwaConnection/README.md) 의 첫 번째 결정이
+**왜 4 번 앞인가.** 다운로드 링크를 릴리즈에서 파생하므로 [2-autoUpdate](../2-autoUpdate/README.md) 가 선행이고,
+더 중요하게는 **이것이 도메인을 확정한다.** [4-pwaConnection](../4-pwaConnection/README.md) 의 첫 번째 결정이
 "origin 은 영원히 안 바뀐다" 이고 그 문서의 운영자 대기 1 번이 "도메인 하나를 영원히 소유할 것인가" 다.
 주소를 소유하기 전에 전송 계층을 지으면 그 위에 세운 기기 신원과 push 구독과 설치가 주소와 함께 날아간다.
 
@@ -38,7 +38,7 @@ xlpod `ui/chrome/bars/brandSocial.jsx` 의 구조를 그대로 가져온다.
 - 각 항목에 `title` 과 `aria-label` 을 붙인다 (접근성)
 - 외부 링크는 `target="_blank" rel="noopener"`
 
-**아이콘은 인라인 SVG 다.** CDN 을 부르지 않는 것이 GitHub Pages 정적 호스팅과도 맞고, [pwaConnection](../3-pwaConnection/README.md) 의 CSP 원칙과도 같은 방향이다.
+**아이콘은 인라인 SVG 다.** CDN 을 부르지 않는 것이 GitHub Pages 정적 호스팅과도 맞고, [pwaConnection](../4-pwaConnection/README.md) 의 CSP 원칙과도 같은 방향이다.
 
 ## 다운로드 . 릴리즈에서 파생한다
 
@@ -46,7 +46,7 @@ xlpod `ui/chrome/bars/brandSocial.jsx` 의 구조를 그대로 가져온다.
 
 - PC 버튼은 **GitHub Releases API** 로 최신 릴리즈의 Windows 아티팩트를 찾아 링크한다
 - 릴리즈가 없으면 버튼이 "준비 중" 으로 정직하게 뜬다 (죽은 링크를 두지 않는다)
-- 모바일 버튼은 PWA origin 으로 간다. **origin 은 영원히 안 바뀐다** ([pwaConnection](../3-pwaConnection/README.md) 의 첫 번째 결정)
+- 모바일 버튼은 PWA origin 으로 간다. **origin 은 영원히 안 바뀐다** ([pwaConnection](../4-pwaConnection/README.md) 의 첫 번째 결정)
 
 게이트: `landingLinksAlive` (다운로드 링크가 실제로 200 이거나 정직하게 "준비 중")
 

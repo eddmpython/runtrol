@@ -105,6 +105,14 @@ GATES: dict[str, tuple[str, list[str]]] = {
         [*PY, f"{HOOKS}/frontendBuild.py", "--selftest"],
     ),
     "frontendBuild": ("데스크톱 프런트엔드 타입 검사 + 번들", [*PY, f"{HOOKS}/frontendBuild.py"]),
+    "vscodeExtensionSelftest": (
+        "VS Code 확장 게이트 자체 검증",
+        [*PY, f"{HOOKS}/vscodeExtension.py", "--selftest"],
+    ),
+    "vscodeExtension": (
+        "VS Code 확장 thin boundary, 타입 검사, 테스트, 번들",
+        [*PY, f"{HOOKS}/vscodeExtension.py"],
+    ),
     "interactionLatencyBudgetSelftest": (
         "데스크톱 상호작용 예산 게이트 자체 검증",
         [*PY, f"{HOOKS}/interactionLatencyBudget.py", "--selftest"],
@@ -389,6 +397,8 @@ SUITES: dict[str, tuple[str, ...]] = {
         "readmeParity",
         "frontendBuildSelftest",
         "frontendBuild",
+        "vscodeExtensionSelftest",
+        "vscodeExtension",
         "interactionLatencyBudgetSelftest",
         "interactionLatencyBudget",
         "scrollUnderLoadSmokeSelftest",
@@ -446,6 +456,12 @@ SUITES: dict[str, tuple[str, ...]] = {
         "desktopPersistenceSmoke",
         "guiMemoryContractSelftest",
         "guiMemoryContract",
+    ),
+    "vscode": (
+        "vscodeExtensionSelftest",
+        "vscodeExtension",
+        "cargoFmt",
+        "cargoClippy",
     ),
     "preflight": tuple(GATES),
 }
@@ -510,6 +526,7 @@ def skipReasonFor(name: str) -> str | None:
         "desktopProductBuild",
         "guiMemoryContract",
         "desktopRealProviderGuiSmoke",
+        "vscodeExtension",
     } and shutil.which("npm") is None:
         return "npm 없음"
     if name in {
@@ -521,6 +538,7 @@ def skipReasonFor(name: str) -> str | None:
         "desktopPersistenceSmoke",
         "desktopRealProviderGuiSmoke",
         "desktopRealProviderGuiSmokeSelftest",
+        "vscodeExtension",
     } and shutil.which("node") is None:
         return "node 없음"
     if name == "audit" and not hasAuditCrate():

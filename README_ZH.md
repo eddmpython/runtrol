@@ -4,7 +4,7 @@
 
 [한국어](README.md) | [English](README_EN.md) | 中文 | [日本語](README_JA.md)
 
-> 状态：**内核与 Windows 桌面端已经实现，主界面已决定重设为 VS Code 中心。** 两个真实 CLI 的会话生命周期可运行，production Tauri 产品提供统一列表与有界实时视图。`Runtrol Studio` 扩展尚未实现。
+> 状态：**内核、Windows 桌面端和 VS Code 扩展的首个端到端切片已经实现。** `Runtrol Studio` 提供 Core 自动发现、已安装 CLI 列表、多会话 TreeView、单个选中会话订阅、有界实时视图以及同一窗口内的 workspace 切换。session-index 实时订阅、真实 VS Code 性能门槛、签名 VSIX 和 Marketplace 发布仍未完成。
 > 下面多数分数为 0，不是因为没有代码，而是因为还没有门禁去断言那些轴。
 
 The security boundary and default-deny settings are documented in [SECURITY.md](SECURITY.md).
@@ -112,7 +112,7 @@ active subscription 与 Code-hot workspace 始终有界。streaming 与后台工
 
 | | |
 |---|---|
-| **PC（Windows）** | 尚未发布。当前源码构建可生成 production Tauri 产品。主要分发目标是包含 bundled Core 的 `Runtrol Studio` Marketplace 扩展 |
+| **PC（Windows）** | 尚未发布。`Runtrol Studio` 扩展源码与 Core 直接 IPC 已实现。主要分发目标是包含已验证 bundled Core 的 Marketplace 扩展 |
 | **PC（macOS、Linux）** | 准备中 |
 | **移动端** | PWA。在浏览器中打开并添加到主屏幕。无需应用商店 |
 
@@ -154,7 +154,7 @@ Rust 不是目的，而是上表中三个轴的手段。
 | | | |
 |---|---|---|
 | `crates/` | 产品（Rust）。守护进程、供应商适配器、传输、桌面应用 | 已实现 |
-| `extensions/runtrol-vscode/` | VS Code 主界面 `Runtrol Studio` | 尚未创建 |
+| [`extensions/runtrol-vscode/`](extensions/runtrol-vscode/) | VS Code 主界面 `Runtrol Studio` | 首个垂直切片已实现，尚未发布 |
 | `pwa/` | 移动端 PWA | 未创建 |
 | `site/` | GitHub Pages 落地页 | 未创建 |
 | [`assets/brand/`](assets/brand/) | 标志。SVG 为正本，favicon、图标与社交卡片皆由其派生 | |

@@ -15,6 +15,12 @@ its measured architecture, and the gate harness.
 
 ### Added
 
+- The first `Runtrol Studio` VS Code slice. It discovers a configured, bundled, or PATH Core,
+  lists runtime-discovered CLIs and sessions in native views, keeps one selected framed watch,
+  switches the same window to the session workspace, renders a bounded live conversation, and
+  carries prompts, interruption, close, and provider-native approval choices without persistence.
+- A Core-owned `runtrol endpoint` command that starts the daemon when needed and reports the exact
+  named-pipe or Unix-socket address without duplicating home or endpoint rules in native surfaces.
 - A provider-neutral desktop application that keeps every discovered session in one list, opens hot
   sessions from their bounded live tail, and uses the provider's native surface for cold resume.
 - Confirmed removal that deletes only the runtrol list pointer and leaves the provider-owned

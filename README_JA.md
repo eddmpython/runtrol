@@ -4,7 +4,7 @@
 
 [한국어](README.md) | [English](README_EN.md) | [中文](README_ZH.md) | 日本語
 
-> ステータス: **コアと Windows デスクトップを実装済み。主力 surface を VS Code 中心に再設定することを決定。** 二つの実物 CLI のセッション lifecycle が動き、production Tauri 製品が一つの一覧と bounded live view を提供する。`Runtrol Studio` 拡張はまだ未実装である。以下のスコアの多くが 0 なのは、コードがないからではなく、その軸を断言するゲートがまだない
+> ステータス: **コア、Windows デスクトップ、VS Code 拡張の最初の end-to-end slice を実装済み。** `Runtrol Studio` は Core 自動検出、インストール済み CLI 一覧、マルチセッション TreeView、選択セッション一つの購読、bounded live view、同一ウィンドウでの workspace 切り替えを提供する。session-index の live 購読、実物 VS Code 性能 ratchet、署名付き VSIX、Marketplace 公開はまだ残っている。以下のスコアの多くが 0 なのは、コードがないからではなく、その軸を断言するゲートがまだない
 > からである。
 
 The security boundary and default-deny settings are documented in [SECURITY.md](SECURITY.md).
@@ -113,7 +113,7 @@ streaming と background 作業が入力、スクロール、セッション切�
 
 | | |
 |---|---|
-| **PC（Windows）** | まだ未リリース。現在のソースビルドは production Tauri 製品を生成する。主力配布目標は bundled Core を含む `Runtrol Studio` Marketplace 拡張である |
+| **PC（Windows）** | まだ未リリース。`Runtrol Studio` 拡張ソースと Core 直接 IPC は実装済みである。主力配布目標は検証済み bundled Core を含む Marketplace 拡張である |
 | **PC（macOS、Linux）** | 準備中 |
 | **モバイル** | PWA。ブラウザで開いてホーム画面に追加する。アプリストアは不要 |
 
@@ -155,7 +155,7 @@ Rust は目的ではなく、上の表の三つの軸のための手段である
 | | | |
 |---|---|---|
 | `crates/` | 製品（Rust）。デーモン、プロバイダーアダプター、トランスポート、デスクトップアプリ | 実装済み |
-| `extensions/runtrol-vscode/` | VS Code の主力 surface `Runtrol Studio` | 未作成 |
+| [`extensions/runtrol-vscode/`](extensions/runtrol-vscode/) | VS Code の主力 surface `Runtrol Studio` | 最初の垂直 slice を実装、未リリース |
 | `pwa/` | モバイル PWA | 未作成 |
 | `site/` | GitHub Pages ランディング | 未作成 |
 | [`assets/brand/`](assets/brand/) | ロゴ。SVG が正本で、favicon・アイコン・ソーシャルカードはそこから派生する | |

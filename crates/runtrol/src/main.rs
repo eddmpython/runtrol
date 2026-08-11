@@ -5,12 +5,13 @@
 //! boundaries meaningful: the command surface is a crate that cannot see storage, the daemon is a crate a test can
 //! link, and this is neither.
 //!
-//! # Three personalities
+//! # Four personalities
 //!
 //! - **A daemon**, asked for by name, which serves until it is stopped.
 //! - **A command**, which is everything else somebody types.
+//! - **A local endpoint reporter**, used by native surfaces that speak the framed IPC directly.
 //! - **A daemon started by a command**, which is the first one again, launched by the second when nothing is
-//!   listening. It is not a fourth thing to build: it is why the first is a subcommand rather than a separate program.
+//!   listening. It is not a fifth thing to build: it is why the first is a subcommand rather than a separate program.
 //!
 //! # Why one executable
 //!
@@ -26,6 +27,8 @@ enum Personality {
     Daemon,
     /// Open the window.
     Window,
+    /// Ensure the daemon is reachable and print its exact local endpoint.
+    Endpoint,
     /// Ask the daemon something and print the answer.
     Command(Vec<String>),
     /// Say what the words could have been.
@@ -37,6 +40,9 @@ enum Personality {
 /// Spelled here beside the daemon's word rather than inferred from how the program was invoked, for the same
 /// reason: a renamed file behaving differently is a surprise nobody asked for.
 const WINDOW_ARGUMENT: &str = "gui";
+
+/// The word native surfaces use to discover the daemon endpoint from its single owner.
+const ENDPOINT_ARGUMENT: &str = "endpoint";
 
 /// Blocking pipe operations admitted by the daemon at one time on Windows.
 ///
@@ -95,6 +101,7 @@ fn main() -> ExitCode {
         // No runtime is built for this one. The window's own toolkit owns the main thread and brings a runtime
         // with it, and wrapping it in a second would be two schedulers for one process.
         Personality::Window => showing(),
+        Personality::Endpoint => run(endpointing()),
         Personality::Command(words) => run(commanding(&words)),
         Personality::Usage(message) => {
             report(&message);
@@ -107,13 +114,14 @@ fn main() -> ExitCode {
 fn choose(words: &[String]) -> Personality {
     match words.first().map(String::as_str) {
         None => Personality::Usage(
-            "runtrol <command>. try: gui, list, start, resume, say, answer, stop, watch, close, consult, panic"
+            "runtrol <command>. try: gui, endpoint, list, start, resume, say, answer, stop, watch, close, consult, panic"
                 .to_owned(),
         ),
         // Spelled as a subcommand rather than inferred from how the program was invoked. Inferring it from the
         // executable's own name would mean a renamed file behaving differently, which is a surprise nobody asked for.
         Some(word) if word == runtrol_cli::DAEMON_ARGUMENT => Personality::Daemon,
         Some(word) if word == WINDOW_ARGUMENT => Personality::Window,
+        Some(word) if word == ENDPOINT_ARGUMENT => Personality::Endpoint,
         Some(_) => Personality::Command(words.to_vec()),
     }
 }
@@ -208,6 +216,43 @@ fn showing() -> ExitCode {
         Err(error) => {
             report(&format!("runtrol could not open its window: {error}"));
             ExitCode::FAILURE
+        }
+    }
+}
+
+/// Ensure one daemon exists and report the exact address its local IPC clients must use.
+///
+/// The endpoint stays owned by `RuntrolHome`. A native surface asks this executable once instead of reimplementing
+/// platform home selection, canonicalization, Windows fingerprinting, or Unix socket length rules.
+fn endpointing() -> impl FnOnce(&tokio::runtime::Runtime) -> ExitCode {
+    |runtime| {
+        let address = match runtrol_daemon::endpoint(None) {
+            Ok(address) => address,
+            Err(error) => {
+                report(&format!(
+                    "cannot tell where runtrol keeps its files: {error}"
+                ));
+                return ExitCode::FAILURE;
+            }
+        };
+        let executable = match std::env::current_exe() {
+            Ok(executable) => executable,
+            Err(error) => {
+                report(&format!("cannot tell where runtrol itself is: {error}"));
+                return ExitCode::FAILURE;
+            }
+        };
+
+        match runtime.block_on(runtrol_cli::reach(&address, &executable)) {
+            Ok(connection) => {
+                drop(connection);
+                say(&address);
+                ExitCode::SUCCESS
+            }
+            Err(error) => {
+                report(&format!("cannot reach the runtrol daemon: {error}"));
+                ExitCode::FAILURE
+            }
         }
     }
 }
@@ -345,6 +390,14 @@ mod tests {
             Personality::Command(passed) => assert_eq!(passed, words),
             _ => panic!("expected a command"),
         }
+    }
+
+    #[test]
+    fn endpoint_discovery_is_not_sent_to_the_daemon_as_a_product_request() {
+        assert!(matches!(
+            choose(&typed(ENDPOINT_ARGUMENT)),
+            Personality::Endpoint
+        ));
     }
 
     #[test]

@@ -159,16 +159,27 @@ jobs:
         with:
           node-version: "24"
           cache: npm
-          cache-dependency-path: crates/runtrol-gui/ui/package-lock.json
+          cache-dependency-path: |
+            crates/runtrol-gui/ui/package-lock.json
+            extensions/runtrol-vscode/package-lock.json
       - name: 데스크톱 프런트엔드 의존성
         if: needs.detect.outputs.hasWorkspace == 'true'
         run: npm --prefix crates/runtrol-gui/ui ci
+      - name: VS Code 확장 의존성
+        if: needs.detect.outputs.hasWorkspace == 'true'
+        run: npm --prefix extensions/runtrol-vscode ci
       - name: 프런트엔드 빌드 게이트 자체 검증
         if: needs.detect.outputs.hasWorkspace == 'true'
         run: python -X utf8 tests/audit/frontendBuild.py --selftest
       - name: 데스크톱 프런트엔드
         if: needs.detect.outputs.hasWorkspace == 'true'
         run: python -X utf8 tests/audit/frontendBuild.py
+      - name: VS Code 확장 게이트 자체 검증
+        if: needs.detect.outputs.hasWorkspace == 'true'
+        run: python -X utf8 tests/audit/vscodeExtension.py --selftest
+      - name: VS Code 확장
+        if: needs.detect.outputs.hasWorkspace == 'true'
+        run: python -X utf8 tests/audit/vscodeExtension.py
       - name: cargo fmt
         if: needs.detect.outputs.hasWorkspace == 'true'
         run: cargo fmt --all --check
