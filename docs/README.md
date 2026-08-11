@@ -12,9 +12,10 @@
 | [providerArchitecture.md](providerArchitecture.md) | manifest, driver kind, provider-neutral lifecycle, approval wire, session ownership, drift and uninstall verification boundaries |
 | [providerDiscovery.md](providerDiscovery.md) | lazy executable probes, binary-identity cache, required and optional flags, honest model catalogues, and drift boundaries |
 | [coreRuntime.md](coreRuntime.md) | thin daemon boundary, runtime admission, memory and CPU budgets, bounded replay, cursor gaps, process containment, and metadata-only storage |
+| [productSurfaces.md](productSurfaces.md) | public surface ownership, the VS Code-only PC decision, 30-session interaction contract, GitHub Pages distribution, and phone PWA boundary |
 | [desktopGui.md](desktopGui.md) | Tauri desktop ownership, session lifecycle, bounded rendering, Korean IME, console policy, memory budgets, and evidence boundaries |
 | [crossConsult.md](crossConsult.md) | the consult toggle: official-command wiring, control-name judgements, tools/list verification, the measured direction asymmetry, and the at-machine-only capability |
-| [frontendStack.md](frontendStack.md) | Astryx + StyleX. 랜딩·PWA·데스크톱 세 표면이 공유하는 컴포넌트 층과 테마 계약 |
+| [frontendStack.md](frontendStack.md) | surface-specific frontend choices and the shared brand, theme, performance, storage, and accessibility contracts |
 | [northStarEvidence.md](northStarEvidence.md) | 게이트가 무엇을 단언하는가의 정본. 어느 축에 붙고 몇 점인지는 [`tests/audit/northStar/board.toml`](../tests/audit/northStar/board.toml) 이 정본이고 `northStarBoard` 게이트가 계산한다 |
 
 코드가 서면 여기가 는다.

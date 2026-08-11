@@ -1,0 +1,10 @@
+{
+  "name": "runtrol-site",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The dependency-free public site for runtrol.",
+  "scripts": {
+    "build": "node build.mjs",
+    "test": "node test.mjs"
+  }
+}

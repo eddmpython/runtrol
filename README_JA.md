@@ -4,7 +4,7 @@
 
 [한국어](README.md) | [English](README_EN.md) | [中文](README_ZH.md) | 日本語
 
-> ステータス: **コア、Windows デスクトップ、VS Code 拡張の最初の end-to-end slice、live session index、実物 Extension Host と秒間 3,000 frame Webview の性能 ratchet、インストール済み実物 CLI の完全な VS Code 操作 journey、六つの native VSIX target の内容と clean install 検証、active session を維持する VSIX upgrade と rollback を実装済み。** `Runtrol Studio` は Core 自動検出、インストール済み CLI 一覧、マルチセッション TreeView、変更時だけ届く session snapshot、再利用する command channel、選択 session 一つの購読、bounded live view、同一 window での workspace 切り替えを提供する。Marketplace 署名と公開はまだ残っている。以下のスコアの多くが 0 なのは、コードがないからではなく、その軸を断言するゲートがまだない
+> ステータス: **コア、主力 VS Code 拡張、live session index、実物 Extension Host と秒間 3,000 frame Webview の性能 ratchet、インストール済み実物 CLI の完全な VS Code 操作 journey、六つの native VSIX target の内容と clean install 検証、active session を維持する VSIX upgrade と rollback、依存関係のない公開サイトを実装済み。** `Runtrol Studio` は Core 自動検出、インストール済み CLI 一覧、30 session manager、変更時だけ届く session snapshot、再利用する command channel、選択 session 一つの購読、bounded live view、同一 window での workspace 切り替えを提供する。独立したデスクトップ GUI は公開製品 surface ではない。Marketplace 署名、拡張の公開、GitHub Pages 配布、スマートフォン PWA はまだ残っている。以下のスコアの多くが 0 なのは、コードがないからではなく、その軸を断言するゲートがまだない
 > からである。
 
 The security boundary and default-deny settings are documented in [SECURITY.md](SECURITY.md).
@@ -114,11 +114,10 @@ streaming と background 作業が入力、スクロール、セッション切�
 
 | | |
 |---|---|
-| **PC（Windows）** | まだ未リリース。`Runtrol Studio` 拡張ソースと Core 直接 IPC は実装済みである。主力配布目標は検証済み bundled Core を含む Marketplace 拡張である |
-| **PC（macOS、Linux）** | 準備中 |
-| **モバイル** | PWA。ブラウザで開いてホーム画面に追加する。アプリストアは不要 |
+| **PC（Windows、macOS、Linux）** | まだ未リリース。署名済み公開リリース後、VS Code Marketplace から `Runtrol Studio` をインストールする。独立したデスクトップアプリは配布しない |
+| **モバイル** | スマートフォン PWA を開発中。安全なペアリングと通信ゲートを通過した後にのみ、恒久的な GitHub Pages オリジンでインストール操作を提供する |
 
-まだリリースはない。コアと Windows デスクトップは実装済みで、配布面は準備中である。
+公開リリースはまだない。VS Code surface と bundled Core は実装済みで、Marketplace 公開を準備している。
 
 ## runtrol が要らない人
 
@@ -155,10 +154,10 @@ Rust は目的ではなく、上の表の三つの軸のための手段である
 
 | | | |
 |---|---|---|
-| `crates/` | 製品（Rust）。デーモン、プロバイダーアダプター、トランスポート、デスクトップアプリ | 実装済み |
-| [`extensions/runtrol-vscode/`](extensions/runtrol-vscode/) | VS Code の主力 surface `Runtrol Studio` | 最初の垂直 slice を実装、未リリース |
+| `crates/` | 製品コア（Rust）。デーモン、プロバイダーアダプター、トランスポート。旧内部 GUI コードは公開対象ではない | 実装済み |
+| [`extensions/runtrol-vscode/`](extensions/runtrol-vscode/) | 唯一の PC surface `Runtrol Studio` | 30 session のリリース負荷を実装、未リリース |
 | `pwa/` | モバイル PWA | 未作成 |
-| `site/` | GitHub Pages ランディング | 未作成 |
+| [`site/`](site/) | 依存関係のない GitHub Pages ランディング | 実装済み、配布待ち |
 | [`assets/brand/`](assets/brand/) | ロゴ。SVG が正本で、favicon・アイコン・ソーシャルカードはそこから派生する | |
 | [`docs/`](docs/README.md) | 運用ドキュメントの正本 | |
 | [`mainPlan/`](mainPlan/README.md) | これから作るもの（イニシアチブ。完了したら知識を `docs/` へ昇格しフォルダを削除する） | |

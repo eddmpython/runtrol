@@ -4,7 +4,7 @@
 
 [한국어](README.md) | English | [中文](README_ZH.md) | [日本語](README_JA.md)
 
-> Status: **the core, Windows desktop, first end-to-end VS Code extension slice, live session index, real Extension Host and 3,000-frame-per-second Webview performance ratchets, a full VS Code journey with an installed real CLI, content plus clean-install verification for six native VSIX targets, and session-preserving VSIX upgrade and rollback are implemented.** `Runtrol Studio` provides Core discovery, installed CLI listing, a multi-session TreeView, change-only session snapshots, a reused command channel, one selected watch, a bounded live view, and same-window workspace switching. Marketplace signing and public publishing remain. Most scores below are 0 because no gate asserts those axes yet, not because there is
+> Status: **the core, primary VS Code extension, live session index, real Extension Host and 3,000-frame-per-second Webview performance ratchets, a full VS Code journey with an installed real CLI, content plus clean-install verification for six native VSIX targets, session-preserving VSIX upgrade and rollback, and the dependency-free public site are implemented.** `Runtrol Studio` provides Core discovery, installed CLI listing, a 30-session manager, change-only session snapshots, a reused command channel, one selected watch, a bounded live view, and same-window workspace switching. The standalone desktop GUI is not a public product surface. Marketplace signing, public extension publishing, GitHub Pages deployment, and the phone PWA remain. Most scores below are 0 because no gate asserts those axes yet, not because there is
 > no code.
 
 The security boundary and default-deny settings are documented in [SECURITY.md](SECURITY.md).
@@ -116,11 +116,10 @@ At every fork, take the side that is easier for the user. The test is not taste.
 
 | | |
 |---|---|
-| **PC (Windows)** | Not released yet. The `Runtrol Studio` extension source and direct Core IPC are implemented. The primary distribution target is a Marketplace extension with a verified bundled Core |
-| **PC (macOS, Linux)** | In preparation |
-| **Mobile** | PWA. Open it in a browser and add it to the home screen. No app store needed |
+| **PC (Windows, macOS, Linux)** | Not released yet. Install `Runtrol Studio` from the VS Code Marketplace after the signed public release. A separate desktop application will not be distributed |
+| **Mobile** | Phone PWA in progress. The install action will appear at the permanent GitHub Pages origin only after secure pairing and transport gates pass |
 
-There is no release yet. The core and Windows desktop are implemented, while the distribution surface is in preparation.
+There is no public release yet. The VS Code surface and bundled Core are implemented, while Marketplace publication is in preparation.
 
 ## Who does not need runtrol
 
@@ -157,10 +156,10 @@ If those axes are not nailed down by gates, using Rust means nothing.
 
 | | | |
 |---|---|---|
-| `crates/` | The product (Rust). Daemon, provider adapters, transport, desktop app | Implemented |
-| [`extensions/runtrol-vscode/`](extensions/runtrol-vscode/) | The primary VS Code surface, `Runtrol Studio` | First vertical slice implemented, not released |
+| `crates/` | The product core (Rust). Daemon, provider adapters, and transport. Legacy internal GUI code is not a public target | Implemented |
+| [`extensions/runtrol-vscode/`](extensions/runtrol-vscode/) | The only PC surface, `Runtrol Studio` | 30-session release load implemented, not released |
 | `pwa/` | Mobile PWA | Not created |
-| `site/` | GitHub Pages landing | Not created |
+| [`site/`](site/) | Dependency-free GitHub Pages landing | Implemented, deployment pending |
 | [`assets/brand/`](assets/brand/) | The logo. SVG is the source; favicons, icons, and social cards derive from it | |
 | [`docs/`](docs/README.md) | Operational documentation, source of truth | |
 | [`mainPlan/`](mainPlan/README.md) | What is to be built (initiatives; on completion the knowledge is promoted to `docs/` and the folder is deleted) | |

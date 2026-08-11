@@ -1,0 +1,280 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#101514">
+    <meta name="color-scheme" content="dark light">
+    <meta
+      name="description"
+      content="Run every repository, session, and installed coding-agent CLI from one VS Code window."
+    >
+    <meta property="og:type" content="website">
+    <meta property="og:title" content="runtrol | Every coding-agent session, one control plane">
+    <meta
+      property="og:description"
+      content="A thin, provider-neutral supervisor for coding-agent CLI sessions in VS Code and on your phone."
+    >
+    <meta property="og:url" content="https://eddmpython.github.io/runtrol/">
+    <meta property="og:image" content="https://eddmpython.github.io/runtrol/assets/brand/social-card-dark.png">
+    <meta name="twitter:card" content="summary_large_image">
+    <link rel="canonical" href="https://eddmpython.github.io/runtrol/">
+    <link rel="icon" href="assets/brand/favicon.svg" type="image/svg+xml">
+    <link rel="icon" href="assets/brand/favicon.ico" sizes="48x48">
+    <link rel="apple-touch-icon" href="assets/brand/apple-touch-icon.png">
+    <link rel="stylesheet" href="styles.css">
+    <script src="app.js" defer></script>
+    <title>runtrol | Every coding-agent session, one control plane</title>
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+
+    <header class="site-header">
+      <a class="brand" href="#top" aria-label="runtrol home">
+        <img class="brand-dark" src="assets/brand/lockup-dark.svg" alt="runtrol" width="153" height="32">
+        <img class="brand-light" src="assets/brand/lockup-light.svg" alt="runtrol" width="153" height="32">
+      </a>
+
+      <nav class="main-nav" aria-label="Primary navigation">
+        <a href="#product" data-i18n="navProduct">Product</a>
+        <a href="#install" data-i18n="navInstall">Install</a>
+        <a href="#phone" data-i18n="navPhone">Phone</a>
+      </nav>
+
+      <div class="header-tools">
+        <label class="language-control">
+          <span class="sr-only">Language</span>
+          <select id="language" aria-label="Language">
+            <option value="en">EN</option>
+            <option value="ko">KO</option>
+            <option value="zh">ZH</option>
+            <option value="ja">JA</option>
+          </select>
+        </label>
+        <button class="theme-toggle" id="theme-toggle" type="button" aria-label="Switch color theme">
+          <span aria-hidden="true">Light</span>
+        </button>
+        <a class="header-github" href="https://github.com/eddmpython/runtrol" rel="noreferrer">GitHub</a>
+      </div>
+    </header>
+
+    <main id="main">
+      <section class="hero" id="top" aria-labelledby="hero-title">
+        <div class="hero-copy">
+          <p class="eyebrow" data-i18n="heroEyebrow">OPEN SOURCE CONTROL PLANE</p>
+          <h1 id="hero-title" data-i18n="heroTitle">One VS Code window.<br>Every session in reach.</h1>
+          <p class="hero-lede" data-i18n="heroLede">
+            runtrol supervises the coding-agent CLIs already installed on your machine. Switch repositories,
+            resume provider-owned sessions, and keep 30 conversations organized without turning VS Code into a slow chat archive.
+          </p>
+          <div class="hero-actions" aria-label="Primary actions">
+            <span class="button button-primary is-pending" aria-disabled="true" data-i18n="marketplacePending">
+              Marketplace release pending
+            </span>
+            <a class="button button-secondary" href="https://github.com/eddmpython/runtrol" rel="noreferrer" data-i18n="viewSource">
+              View source
+            </a>
+          </div>
+          <p class="release-note" id="release-status" aria-live="polite" data-i18n="releaseChecking">
+            Checking GitHub Releases for a VSIX.
+          </p>
+        </div>
+
+        <div class="control-shell" id="product" aria-label="Runtrol Studio session manager preview">
+          <div class="window-bar">
+            <span class="window-mark"><img src="assets/brand/symbol-orange.svg" alt="" width="18" height="18"></span>
+            <span>Runtrol Studio</span>
+            <span class="window-context">workspace / atlas</span>
+          </div>
+          <div class="control-layout">
+            <aside class="session-rail" aria-label="Session list preview">
+              <div class="rail-heading">
+                <span data-i18n="sessions">Sessions</span>
+                <kbd>Ctrl K</kbd>
+              </div>
+              <label class="session-search">
+                <span class="sr-only">Find a session</span>
+                <span aria-hidden="true">/</span>
+                <input type="text" value="" placeholder="Find project, CLI, or state" readonly tabindex="-1">
+              </label>
+              <div class="session-list">
+                <div class="session-row is-selected">
+                  <span class="state-dot is-live"></span>
+                  <span><strong>atlas / api</strong><small>active now</small></span>
+                  <span class="provider-tag">native</span>
+                </div>
+                <div class="session-row">
+                  <span class="state-dot is-live"></span>
+                  <span><strong>north / web</strong><small>2 min</small></span>
+                  <span class="provider-tag">native</span>
+                </div>
+                <div class="session-row">
+                  <span class="state-dot"></span>
+                  <span><strong>relay / core</strong><small>cold</small></span>
+                  <span class="provider-tag">native</span>
+                </div>
+                <div class="session-row">
+                  <span class="state-dot"></span>
+                  <span><strong>paper / docs</strong><small>cold</small></span>
+                  <span class="provider-tag">native</span>
+                </div>
+                <div class="session-row">
+                  <span class="state-dot"></span>
+                  <span><strong>signal / mobile</strong><small>cold</small></span>
+                  <span class="provider-tag">native</span>
+                </div>
+              </div>
+              <div class="rail-footer">
+                <span><strong>30</strong> managed</span>
+                <span><strong>8</strong> hot</span>
+              </div>
+            </aside>
+
+            <div class="session-detail">
+              <div class="detail-topline">
+                <div>
+                  <span class="detail-kicker" data-i18n="selectedSession">SELECTED SESSION</span>
+                  <h2>atlas / api</h2>
+                </div>
+                <span class="connected-status"><span></span> Core connected</span>
+              </div>
+              <div class="activity-block">
+                <p class="activity-label">provider event stream</p>
+                <div class="activity-line is-wide"></div>
+                <div class="activity-line"></div>
+                <div class="activity-line is-short"></div>
+              </div>
+              <div class="workspace-route">
+                <div>
+                  <span data-i18n="workspaceFollows">WORKSPACE FOLLOWS SELECTION</span>
+                  <strong>C:\work\atlas</strong>
+                </div>
+                <span class="route-state">ready</span>
+              </div>
+              <div class="detail-footer">
+                <span>1 renderer</span>
+                <span>raw stream</span>
+                <span>provider-owned transcript</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="proof-strip" aria-label="Product constraints">
+          <div><strong>30</strong><span data-i18n="proofSessions">session release gate</span></div>
+          <div><strong>8</strong><span data-i18n="proofHot">maximum hot processes</span></div>
+          <div><strong>1</strong><span data-i18n="proofRenderer">active renderer</span></div>
+          <div><strong>0</strong><span data-i18n="proofKeys">model API keys held</span></div>
+        </div>
+      </section>
+
+      <section class="install-section ruled-section" id="install" aria-labelledby="install-title">
+        <div class="section-intro">
+          <p class="eyebrow" data-i18n="installEyebrow">VS CODE IS THE PC APP</p>
+          <h2 id="install-title" data-i18n="installTitle">Install once. Let runtrol find the CLIs.</h2>
+          <p data-i18n="installIntro">
+            There is no separate desktop window to manage. Runtrol Studio lives where the work already happens and discovers supported installed CLIs at runtime.
+          </p>
+        </div>
+
+        <ol class="install-steps">
+          <li>
+            <span class="step-number">01</span>
+            <div><strong data-i18n="stepOneTitle">Install Runtrol Studio</strong><p data-i18n="stepOneBody">Get the extension from the VS Code Marketplace when the first public release is signed.</p></div>
+          </li>
+          <li>
+            <span class="step-number">02</span>
+            <div><strong data-i18n="stepTwoTitle">Open the Runtrol activity icon</strong><p data-i18n="stepTwoBody">The session manager opens inside your current VS Code window.</p></div>
+          </li>
+          <li>
+            <span class="step-number">03</span>
+            <div><strong data-i18n="stepThreeTitle">Use the CLIs you already have</strong><p data-i18n="stepThreeBody">Supported installations, versions, models, flags, and capabilities are discovered instead of hardcoded.</p></div>
+          </li>
+          <li>
+            <span class="step-number">04</span>
+            <div><strong data-i18n="stepFourTitle">Select a session and keep moving</strong><p data-i18n="stepFourBody">The workspace follows your selection and cold sessions resume through their provider-native identity.</p></div>
+          </li>
+        </ol>
+
+        <div class="download-row">
+          <div>
+            <span class="download-label" data-i18n="primaryInstall">PRIMARY INSTALL</span>
+            <strong>Visual Studio Marketplace</strong>
+            <small data-i18n="primaryInstallState">Public signing and publication are in progress.</small>
+          </div>
+          <span class="button button-muted" aria-disabled="true" data-i18n="notReleased">Not released yet</span>
+        </div>
+        <div class="download-row">
+          <div>
+            <span class="download-label" data-i18n="manualInstall">MANUAL FALLBACK</span>
+            <strong>VSIX from GitHub Releases</strong>
+            <small id="vsix-description" data-i18n="vsixUnavailable">No public VSIX is available yet.</small>
+          </div>
+          <a class="button button-muted is-disabled" id="vsix-download" href="#install" aria-disabled="true" data-i18n="checkReleases">Check Releases</a>
+        </div>
+      </section>
+
+      <section class="phone-section ruled-section" id="phone" aria-labelledby="phone-title">
+        <div class="phone-copy">
+          <p class="eyebrow" data-i18n="phoneEyebrow">THE SAME CORE, IN YOUR POCKET</p>
+          <h2 id="phone-title" data-i18n="phoneTitle">Pair once. Keep the session owner on your PC.</h2>
+          <p data-i18n="phoneBody">
+            The phone PWA will live at this permanent HTTPS origin. It will pair as a scoped control surface, choose the best available route, and reconnect to the same Core without owning the session or receiving model API keys.
+          </p>
+          <div class="phone-status">
+            <span class="status-pulse" aria-hidden="true"></span>
+            <div><strong data-i18n="phoneProgress">Secure phone app in progress</strong><small data-i18n="phoneHonesty">The install action will appear only after pairing and transport gates pass.</small></div>
+          </div>
+        </div>
+        <div class="phone-frame" aria-label="Planned phone PWA session list">
+          <div class="phone-speaker"></div>
+          <div class="phone-screen">
+            <div class="phone-head">
+              <img src="assets/brand/symbol-orange.svg" alt="" width="20" height="20">
+              <span>runtrol</span>
+              <span class="phone-online">PC online</span>
+            </div>
+            <p class="phone-caption">SESSIONS / 30</p>
+            <div class="phone-session is-current"><span><strong>atlas / api</strong><small>active now</small></span><b>open</b></div>
+            <div class="phone-session"><span><strong>north / web</strong><small>2 min</small></span><b>resume</b></div>
+            <div class="phone-session"><span><strong>relay / core</strong><small>cold</small></span><b>resume</b></div>
+            <div class="phone-session"><span><strong>paper / docs</strong><small>cold</small></span><b>resume</b></div>
+            <div class="phone-bottom">paired surface / same Core</div>
+          </div>
+        </div>
+      </section>
+
+      <section class="principles-section ruled-section" aria-labelledby="principles-title">
+        <div class="section-intro">
+          <p class="eyebrow" data-i18n="principlesEyebrow">THIN BY DESIGN</p>
+          <h2 id="principles-title" data-i18n="principlesTitle">The supervisor stays out of the conversation.</h2>
+        </div>
+        <div class="principle-grid">
+          <article><span>01</span><h3 data-i18n="principleOneTitle">Provider-owned history</h3><p data-i18n="principleOneBody">runtrol transports process events. It never keeps a second transcript or rewrites meaning.</p></article>
+          <article><span>02</span><h3 data-i18n="principleTwoTitle">Runtime discovery</h3><p data-i18n="principleTwoBody">Providers, versions, models, flags, and session paths come from the installed CLI at runtime.</p></article>
+          <article><span>03</span><h3 data-i18n="principleThreeTitle">Remote default deny</h3><p data-i18n="principleThreeBody">Phone control is scoped, paired, and encrypted. Model credentials never cross runtrol.</p></article>
+        </div>
+      </section>
+    </main>
+
+    <aside class="channel-rail" aria-label="Project channels">
+      <a href="https://github.com/eddmpython/runtrol" rel="noreferrer" aria-label="GitHub">GH</a>
+      <a href="https://www.youtube.com/@eddmpython" rel="noreferrer" aria-label="YouTube">YT</a>
+      <a href="https://www.threads.com/@eddmpython" rel="noreferrer" aria-label="Threads">TH</a>
+      <span aria-hidden="true"></span>
+    </aside>
+
+    <footer class="site-footer">
+      <div>
+        <img src="assets/brand/symbol-orange.svg" alt="" width="22" height="22">
+        <span>runtrol</span>
+      </div>
+      <p data-i18n="footerText">Open source. Built around the sessions and tools you already own.</p>
+      <div class="footer-links">
+        <a href="https://github.com/eddmpython/runtrol/blob/main/LICENSE" rel="noreferrer">MIT License</a>
+        <a href="https://github.com/eddmpython/runtrol/blob/main/SECURITY.md" rel="noreferrer">Security</a>
+        <a href="mailto:eddmpython@gmail.com">Contact</a>
+      </div>
+    </footer>
+  </body>
+</html>

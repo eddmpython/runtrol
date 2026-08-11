@@ -4,7 +4,7 @@
 
 한국어 | [English](README_EN.md) | [中文](README_ZH.md) | [日本語](README_JA.md)
 
-> 상태: **코어, Windows 데스크톱, VS Code 확장의 첫 end-to-end slice, 실시간 세션 인덱스, 실물 Extension Host 및 초당 3,000 프레임 Webview 성능 ratchet, 설치된 실물 CLI의 전체 VS Code 조작 여정, 6개 네이티브 플랫폼 VSIX 내용과 깨끗한 설치 검증, 활성 세션을 보존하는 VSIX 갱신과 롤백을 구현했다.** `Runtrol Studio`는 Core 자동 탐색, 설치형 CLI 목록, 멀티세션 TreeView, 변화 시에만 갱신되는 세션 목록, 재사용 명령 채널, 선택 세션 단일 구독, bounded live 화면, 동일 창 workspace 전환을 제공한다. Marketplace 서명과 공개 배포는 아직 남았다.
+> 상태: **코어, 주력 VS Code 확장, 실시간 세션 인덱스, 실물 Extension Host 및 초당 3,000 프레임 Webview 성능 ratchet, 설치된 실물 CLI의 전체 VS Code 조작 여정, 6개 네이티브 플랫폼 VSIX 내용과 깨끗한 설치 검증, 활성 세션을 보존하는 VSIX 갱신과 롤백, 무의존성 공개 사이트를 구현했다.** `Runtrol Studio`는 Core 자동 탐색, 설치형 CLI 목록, 30개 세션 관리자, 변화 시에만 갱신되는 세션 목록, 재사용 명령 채널, 선택 세션 단일 구독, bounded live 화면, 동일 창 workspace 전환을 제공한다. 별도 데스크톱 GUI는 공개 제품 표면이 아니다. Marketplace 서명, 확장 공개 배포, GitHub Pages 배포, 휴대폰 PWA는 아직 남았다.
 > 아래 점수 대부분이 0 인 것은 코드가 없어서가 아니라 그 축을 단언하는 게이트가 아직 없어서다.
 
 보안 경계와 기본 거부 설정은 [SECURITY.md](SECURITY.md)에 정리되어 있다.
@@ -114,11 +114,10 @@ Code-hot workspace는 bounded 상태를 유지한다. streaming과 background �
 
 | | |
 |---|---|
-| **PC (Windows)** | 아직 미출시. `Runtrol Studio` 확장 소스와 직접 Core IPC는 구현됐다. 주력 배포 목표는 검증된 bundled Core를 포함한 Marketplace 확장이다 |
-| **PC (macOS, Linux)** | 준비 중 |
-| **모바일** | PWA. 브라우저에서 열고 홈 화면에 추가한다. 앱 스토어가 필요 없다 |
+| **PC (Windows, macOS, Linux)** | 아직 미출시. 서명된 공개 릴리스 뒤 VS Code Marketplace에서 `Runtrol Studio`를 설치한다. 별도 데스크톱 앱은 배포하지 않는다 |
+| **모바일** | 휴대폰 PWA 구현 중. 안전한 페어링과 전송 게이트를 통과한 뒤에만 영구 GitHub Pages 주소에서 설치 동작을 제공한다 |
 
-아직 릴리즈가 없다. 코어와 Windows 데스크톱은 구현됐고 배포 표면은 준비 중이다.
+아직 공개 릴리즈가 없다. VS Code 표면과 bundled Core는 구현됐고 Marketplace 공개를 준비 중이다.
 
 ## runtrol 이 필요 없는 사람
 
@@ -155,10 +154,10 @@ Rust 는 목적이 아니라 위 표의 세 축을 위한 수단이다.
 
 | | | |
 |---|---|---|
-| `crates/` | 제품 (Rust). daemon, provider 어댑터, 전송, 데스크톱 앱 | 구현됨 |
-| [`extensions/runtrol-vscode/`](extensions/runtrol-vscode/) | VS Code 주력 표면 `Runtrol Studio` | 첫 수직 기능 구현, 미배포 |
+| `crates/` | 제품 코어 (Rust). daemon, provider 어댑터, 전송. 기존 내부 GUI 코드는 공개 대상이 아니다 | 구현됨 |
+| [`extensions/runtrol-vscode/`](extensions/runtrol-vscode/) | 유일한 PC 표면 `Runtrol Studio` | 30개 세션 출시 부하 구현, 미배포 |
 | `pwa/` | 모바일 PWA | 미생성 |
-| `site/` | GitHub Pages 랜딩 | 미생성 |
+| [`site/`](site/) | 무의존성 GitHub Pages 랜딩 | 구현됨, 배포 대기 |
 | [`assets/brand/`](assets/brand/) | 로고. SVG 가 정본, 파비콘·아이콘·소셜 카드는 파생 | |
 | [`docs/`](docs/README.md) | 운영문서 정본 | |
 | [`mainPlan/`](mainPlan/README.md) | 앞으로 지을 것 (이니셔티브. 완료되면 `docs/` 로 승격하고 지운다) | |

@@ -1,5 +1,7 @@
 # Desktop GUI
 
+> Status: legacy internal evidence. This Tauri surface is not a public product or distribution target. The only PC surface is the `Runtrol Studio` VS Code extension. Preserve this document only while unique gate coverage is being migrated, as defined by [product surfaces](productSurfaces.md).
+
 The desktop GUI is a Tauri v2 window embedded in the `runtrol` executable. It is a local view and control surface for the daemon. It does not supervise provider processes, discover transcript paths, or own a conversation copy.
 
 ## Runtime ownership

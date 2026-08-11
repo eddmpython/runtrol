@@ -1,6 +1,6 @@
 # landingSite
 
-상태: 설계 완료, 착수 순서 2 번. 로고 도착 (2026-07-30). 자산은 [`assets/brand/`](../../assets/brand/) 에 있고 그 폴더의 README 가 사용 규칙의 정본이다.
+상태: 구현 완료, 공개 배포 확인 대기. 자산은 [`assets/brand/`](../../assets/brand/) 에 있고 그 폴더의 README 가 사용 규칙의 정본이다.
 
 **왜 4 번 앞인가.** 다운로드 링크를 릴리즈에서 파생하므로 [2-autoUpdate](../2-autoUpdate/README.md) 가 선행이고,
 더 중요하게는 **이것이 도메인을 확정한다.** [4-pwaConnection](../4-pwaConnection/README.md) 의 첫 번째 결정이
@@ -9,7 +9,7 @@
 
 ## 한 문장 정의
 
-**GitHub Pages 에 뜨는 간단한 렌더링 한 장.** 로고와 설명, 다운로드 둘 (PC exe 런처 · 모바일 PWA), 우측 상단 SNS. 그 이상 안 만든다.
+**GitHub Pages 에 뜨는 영문 기본 정적 페이지 한 장.** 로고, 30세션 제품 패널, VS Code 확장 설치, 정직한 PWA 상태, 우측 채널 rail로 구성한다.
 
 ## 화면 구성
 
@@ -20,7 +20,7 @@
 |       한 VS Code 창에서 모든 프로젝트와 AI 를 즉시 운영한다     |  <- 한 줄 북극성
 |              (한 문단 설명. 무엇이고 왜 필요한가)               |
 |                                                              |
-|      [ PC 다운로드 (Windows) ]    [ 모바일 PWA 열기 ]          |  <- 다운로드 둘
+|      [ VS Code Marketplace ]    [ 서명된 VSIX 대안 ]         |  <- 실제 출시에서 파생
 |                                                              |
 |              (되는 것 몇 줄 · 안 하는 것 몇 줄)                 |
 +--------------------------------------------------------------+
@@ -44,9 +44,10 @@ xlpod `ui/chrome/bars/brandSocial.jsx` 의 구조를 그대로 가져온다.
 
 **버전 번호를 손으로 적지 않는다.** 손으로 적은 열거는 반드시 썩는다.
 
-- PC 버튼은 **GitHub Releases API** 로 최신 릴리즈의 Windows 아티팩트를 찾아 링크한다
+- PC 기본 설치는 **VS Code Marketplace** 다. 별도 desktop executable은 배포하지 않는다
+- 수동 대안은 **GitHub Releases API** 로 최신 릴리즈의 실제 `.vsix`를 찾아 링크한다
 - 릴리즈가 없으면 버튼이 "준비 중" 으로 정직하게 뜬다 (죽은 링크를 두지 않는다)
-- 모바일 버튼은 PWA origin 으로 간다. **origin 은 영원히 안 바뀐다** ([pwaConnection](../4-pwaConnection/README.md) 의 첫 번째 결정)
+- 모바일 설치 동작은 pairing과 transport production gate가 선 뒤 같은 origin의 `/app/`에서 연다. **origin 은 영원히 안 바뀐다** ([pwaConnection](../4-pwaConnection/README.md) 의 첫 번째 결정)
 
 게이트: `landingLinksAlive` (다운로드 링크가 실제로 200 이거나 정직하게 "준비 중")
 
@@ -57,17 +58,17 @@ xlpod `ui/chrome/bars/brandSocial.jsx` 의 구조를 그대로 가져온다.
 - **JS 없이도 읽힌다.** 로고·설명·링크는 정적 HTML 이고, 릴리즈 조회만 JS 다
 - **다크·라이트 둘 다.** 시스템 설정을 따르고 토글을 준다
 
-## 프론트 . Astryx + StyleX
+## 프론트
 
 **정본은 [docs/frontendStack.md](../../docs/frontendStack.md) 다.** 여기 되풀이하지 않는다.
 
-랜딩에 직접 관계된 부분만: `TopNav` 로 상단 바, `Stack`/`VStack` 으로 레이아웃, `Button` 으로 다운로드 둘, `Text` 로 타이포. 테마는 `data-astryx-media`. **CDN 없이 벤더링**하므로 GitHub Pages 정적 호스팅에 그대로 올라간다.
+랜딩은 HTML, CSS, 작은 browser JavaScript만 사용한다. 정적 본문은 JavaScript 없이 읽히고, 릴리즈 조회와 언어 및 테마 전환만 JavaScript가 맡는다. 공개 font, icon kit, CSS, script CDN은 없다.
 
-랜딩이 Astryx 를 쓰는 것은 예쁘게 하려는 것이 아니라 **랜딩·PWA·데스크톱이 같은 시각 언어를 갖게** 하려는 것이다. 사용자가 랜딩에서 본 것과 앱에서 보는 것이 같아야 한다.
+시각 방향은 eddmpython의 절제된 carbon과 ivory, xlpod의 channel rail, pyproc의 실제 제품 panel을 결합한다. codaro의 content-heavy 구조는 한 장짜리 오픈소스 도구에 맞지 않아 사용하지 않는다.
 
 ## 완료 판정
 
 - 4 개 언어가 다 뜬다
 - 다운로드 링크가 릴리즈에서 파생되고 손으로 적힌 버전이 없다
-- `landingBudget` · `landingLinksAlive` · `frontendVendored` · `themeContract` 가 CI 에서 돈다
+- `npm --prefix site test`가 5개 red-path 변이를 먼저 실패시키고 Pages workflow가 build와 deploy를 실행한다
 - 라이트·다크 둘 다 확인됨

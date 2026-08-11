@@ -20,7 +20,7 @@
 | [0-securityPosture](0-securityPosture/) | 활성 | default-deny 권한 모델, 소켓 표면 (Windows named pipe / Unix socket), 승인 전달, 감사 로그, 킬 스위치. **공개 저장소라 "모르는 사람이 기본값으로 켠다" 가 기준선이다.** | **순서상의 한 칸이 아니라 나머지 전부가 딛는 바닥이다.** 첫 커밋부터 함께 갔고, 남은 항목 (폰 표면 권한) 이 4 번에 걸려 있어 **마지막 뒤에 닫힌다.** 0 은 "먼저 하고 넘어간다" 가 아니라 "1~4 가 이것 위에서 돈다" 는 뜻이다 |
 | [1-vscodeSurface](1-vscodeSurface/) | 활성 | VS Code 주력 표면, Core 자동 탐색, 단일 hot renderer, 세션별 workspace 및 worktree 결박, Marketplace VSIX | 새 북극성 자체다. 이 표면이 실물로 서지 않으면 뒤의 배포와 폰은 다른 제품을 배포하는 일이 된다. 첫 end-to-end slice, change-only session-index 구독, 실물 Extension Host의 30개 세션 관리, 3,000fps Webview, 최대 8개 hot 세션 전환과 workspace reload ratchet, 공유 이벤트 표현 SSOT, workspace 충돌 선택, Core 원자 worktree 예약, 6개 플랫폼 패키지 확증, 실물 전체 여정, 활성 세션을 보존하는 VSIX 갱신과 롤백은 구현됐고 공개 배포만 남았다 |
 | [2-autoUpdate](2-autoUpdate/) | 활성 | **정본은 GitHub Releases**, 서명 검증, 관리자 권한 불필요. 앱 갱신은 설치기를 다시 돌리지 않고 **살아 있는 이미지를 원자적으로 교체한다** (실측 근거). provider 는 **확증된 채널에서만** 갱신하고 롤백 대상은 버전 순서로 고른다. | VS Code 확장과 bundled Core의 버전 SSOT, 무중단 교체, 롤백을 세운다. Marketplace 패키징 완료 판정이 이 계약을 사용한다 |
-| [3-landingSite](3-landingSite/) | 설계 | GitHub Pages 한 장. 로고·설명·다운로드 둘·우측 상단 SNS. **프론트 "astryx 방식" 이 운영자 확인 대기.** | 다운로드 링크를 릴리즈에서 파생하므로 2 번이 선행이고, 불변 origin은 뒤의 폰 전송 계층이 사용한다 |
+| [3-landingSite](3-landingSite/) | 활성 | 영문 기본 GitHub Pages 한 장. 정본 브랜드, 30세션 제품 패널, Marketplace와 실제 VSIX에서 파생하는 정직한 설치 상태, 영구 PWA origin | 무의존성 소스와 Pages workflow는 구현됐다. 실제 공개 배포를 확인한 뒤 운영 문서로 승격한다 |
 | [4-pwaConnection](4-pwaConnection/) | 활성 | **origin 과 transport 를 분리한다.** 불변 HTTPS origin 하나 + 4 단 전송 사다리 + Noise E2E + 데몬 직접 Web Push. | 3 번이 확정한 불변 origin 위에서만 성립한다. 보안 기반은 0 번에서 이미 섰고, 남은 것은 릴레이, 원격 리스너, push, 클라이언트다 |
 | [5-pwaSurface](5-pwaSurface/) | 대기 | PWA 자체. 연결 계층이 선 뒤에 짓는다. | 4 번의 프레임 스트림이 확정되기 전에 화면을 얹으면 전송이 바뀔 때 화면을 다시 짓는다 |
 
@@ -32,14 +32,14 @@
 | 마일스톤 | 내용 | 완료의 정의 |
 |---|---|---|
 | **M0 코어 슬라이스** (완료) | 공개 provider 경계 + Rust daemon + 세션 목록·시작·재개. 운영 정본은 [core runtime](../docs/coreRuntime.md) 이다 | 두 provider 의 세션이 한 명령에 뜨고 이어진다 |
-| **M1 데스크톱 (dogfood)** (제품 구현 완료, dogfood 판정 대기) | Tauri v2 + 한 목록 + 대화 + 즉시 반응. 운영 정본은 [desktop GUI](../docs/desktopGui.md) 다 | **운영자가 GPT 앱 대신 이것을 매일 쓴다** |
+| **M1 PC 표면 통합** (완료) | 공개 PC 표면을 `Runtrol Studio` VS Code 확장 하나로 고정한다. 기존 Tauri GUI는 공개 배포 대상이 아닌 내부 증거다 | **운영자가 별도 창 없이 VS Code에서 모든 세션을 다룬다** |
 | **M2 VS Code 배포** | 1-vscodeSurface -> 2-autoUpdate -> 3-landingSite | 낯선 사람이 Marketplace에서 설치해 한 창으로 실물 CLI를 운영한다 |
 | **M3 폰** | 4-pwaConnection (릴레이 + E2E + push) -> 5-pwaSurface -> 폰 승인 | 밖에서 폰으로 내 세션을 잇고 승인한다 |
 
 왜 이 순서인가.
 
-1. **바닥 가치는 이미 섰다.** M1 은 여러 AI 세션을 한 목록에서 다루는 core와 desktop 바닥을 증명했다. 현재 최우선은 VS Code 주력 표면의 Webview 폭주 성능 ratchet, workspace overlap 처리, Marketplace 배포를 실물 게이트로 닫는 일이다.
-2. **dogfood 가 설계를 현실에 부딪히게 한다.** kill criteria 5 번 (운영자가 안 쓰면 접는다) 을 가장 빨리 판정할 수 있는 순서다.
+1. **바닥 가치는 이미 섰다.** M1 은 여러 AI 세션을 한 목록에서 다루는 Core를 증명했고 공개 PC 표면은 VS Code 하나로 통합됐다. 현재 최우선은 Marketplace 배포를 실물 게이트로 닫는 일이다.
+2. **VS Code dogfood 가 설계를 현실에 부딪히게 한다.** kill criteria 5 번 (운영자가 안 쓰면 접는다) 을 가장 빨리 판정할 수 있는 표면이다.
 3. **폰은 구조적으로 뒤다.** 페어링 QR 표시와 물리 행동 승인이 PC 표면을 전제한다. PC 표면 없이 폰부터 지을 수 없다.
 4. **가장 어려운 인프라 (연결·암호·push) 를 안정된 코어 위에 얹는다.** 반대로 하면 인프라를 두 번 짓는다.
 
