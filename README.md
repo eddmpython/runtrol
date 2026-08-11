@@ -4,7 +4,7 @@
 
 한국어 | [English](README_EN.md) | [中文](README_ZH.md) | [日本語](README_JA.md)
 
-> 상태: **코어, Windows 데스크톱, VS Code 확장의 첫 end-to-end slice, 실시간 세션 인덱스, 실물 Extension Host 및 초당 3,000 프레임 Webview 성능 ratchet, 설치된 실물 CLI의 전체 VS Code 조작 여정, 6개 네이티브 플랫폼 VSIX 내용과 깨끗한 설치 검증을 구현했다.** `Runtrol Studio`는 Core 자동 탐색, 설치형 CLI 목록, 멀티세션 TreeView, 변화 시에만 갱신되는 세션 목록, 재사용 명령 채널, 선택 세션 단일 구독, bounded live 화면, 동일 창 workspace 전환을 제공한다. Marketplace 서명과 공개 배포는 아직 남았다.
+> 상태: **코어, Windows 데스크톱, VS Code 확장의 첫 end-to-end slice, 실시간 세션 인덱스, 실물 Extension Host 및 초당 3,000 프레임 Webview 성능 ratchet, 설치된 실물 CLI의 전체 VS Code 조작 여정, 6개 네이티브 플랫폼 VSIX 내용과 깨끗한 설치 검증, 활성 세션을 보존하는 VSIX 갱신과 롤백을 구현했다.** `Runtrol Studio`는 Core 자동 탐색, 설치형 CLI 목록, 멀티세션 TreeView, 변화 시에만 갱신되는 세션 목록, 재사용 명령 채널, 선택 세션 단일 구독, bounded live 화면, 동일 창 workspace 전환을 제공한다. Marketplace 서명과 공개 배포는 아직 남았다.
 > 아래 점수 대부분이 0 인 것은 코드가 없어서가 아니라 그 축을 단언하는 게이트가 아직 없어서다.
 
 보안 경계와 기본 거부 설정은 [SECURITY.md](SECURITY.md)에 정리되어 있다.

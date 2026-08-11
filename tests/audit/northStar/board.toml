@@ -396,6 +396,12 @@ status = "built"
 file = "vscodeRealProviderJourney.py"
 
 [[floor]]
+category = "release"
+name = "vscodeUpgradeRollback"
+status = "built"
+file = "vscodeUpgradeRollback.py"
+
+[[floor]]
 category = "transport"
 name = "reconnectContinuitySmoke"
 status = "built"

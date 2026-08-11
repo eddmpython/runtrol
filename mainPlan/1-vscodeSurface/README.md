@@ -54,6 +54,11 @@ The first end-to-end slice landed on 2026-08-11:
 - a real isolated Extension Host runs an installed Claude Code process through start, prompt, hidden approval denial,
   reconnect, interrupt, same-window workspace switching, exact selection restoration, and close; the loopback model
   endpoint discards request bodies and exact process cleanup is mandatory
+- the bundled Core is copied by streaming digest into one extension-global stable path; a hard link preserves the
+  mapped image before atomic replacement, so VS Code can retain or remove versioned extension directories freely
+- a real installed-package rehearsal keeps one external ACP session alive across baseline-to-current upgrade and
+  current-to-baseline rollback, requiring the original daemon PID, provider PID, session selection, workspace, three
+  successful provider turns, exact Core digest direction, and zero cleanup survivors on every hosted operating system
 
 The hosted `vscodeExtension` gate checks the thin boundary, no polling, no browser persistence, one selected watch,
 queue and renderer bounds, TypeScript, framing tests, and production bundle size.
@@ -68,6 +73,7 @@ workspace reload restoration at 1,500 ms while 15,000 raw frames cross the bound
 | Module | Owns | Must not own |
 |---|---|---|
 | `core/locator.ts` | Core candidate order and one endpoint probe | provider names, session policy |
+| `core/managedCore.ts` | streaming digest, stable Core path, preserved mapped image, atomic replacement, stale-link cleanup | session state, provider data, update policy |
 | `core/framing.ts` | bounded four-byte frame transport | request meaning, conversation rendering |
 | `protocol.ts` | the TypeScript projection of the Rust wire | provider-specific fields |
 | `state.ts` | session, provider, cursor, and selection metadata in memory | conversation frames |
@@ -78,11 +84,9 @@ workspace reload restoration at 1,500 ms while 15,000 raw frames cross the bound
 
 ## Remaining gates before release
 
-1. Verify upgrade plus rollback without stopping active sessions. The hosted native release matrix already builds and
-   clean-installs all six platform packages.
+1. Publish `Runtrol Studio` to the Visual Studio Marketplace and verify a clean machine installs and runs it.
    Marketplace publication signs the complete platform VSIX, including the exact Core bytes already checked by the
    archive gate. A separate inner-binary signature is not claimed.
-2. Publish `Runtrol Studio` to the Visual Studio Marketplace and verify a clean machine installs and runs it.
 
 ## Completion
 

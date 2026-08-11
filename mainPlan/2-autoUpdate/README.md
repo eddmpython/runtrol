@@ -467,6 +467,19 @@ postinstall 이 실제로 도는 실물 공급자 패키지로 격리 prefix 와
 
 ## 배포와 랜딩
 
+### VS Code packaged Core boundary
+
+The packaged Core is now release material, not the live executable location. On activation the extension streams its
+digest and materializes it at one extension-global stable path. When bytes change, it hard-links the current mapped
+image and atomically replaces only the stable name. VS Code may retain or remove its versioned extension directory
+without owning the daemon lifetime.
+
+`vscodeUpgradeRollback` installs a baseline VSIX, starts one external ACP session, installs the current VSIX, and
+reinstalls the baseline through the official VS Code CLI. The original daemon PID, provider PID, session identifier,
+workspace selection, and working prompt path must survive, while the managed Core digest alone moves old to current
+to old. This closes the VS Code deployment slice only. It does not satisfy the broader signed desktop
+`appUpdateRehearsal` or provider `cliUpdateRehearsal` contracts below.
+
 - 태그에서 빌드하고 서명하고 Releases 에 올린다
 - **자산 이름에 버전을 넣지 않는다.** 그러면 랜딩과 갱신 endpoint 가 영구 고정 URL 하나가 된다.
   API 호출도, 속도 제한도, 손으로 적은 버전도 없다

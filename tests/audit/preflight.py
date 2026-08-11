@@ -137,6 +137,14 @@ GATES: dict[str, tuple[str, list[str]]] = {
         "VS Code에서 실물 CLI 시작, 승인, 중단, 재접속, workspace 전환, 종료",
         [*PY, f"{HOOKS}/vscodeRealProviderJourney.py", "--require-external"],
     ),
+    "vscodeUpgradeRollbackSelftest": (
+        "VS Code 확장 갱신과 롤백 게이트 자체 검증",
+        [*PY, f"{HOOKS}/vscodeUpgradeRollback.py", "--selftest"],
+    ),
+    "vscodeUpgradeRollback": (
+        "활성 세션을 보존하는 VSIX 갱신과 롤백",
+        [*PY, f"{HOOKS}/vscodeUpgradeRollback.py"],
+    ),
     "interactionLatencyBudgetSelftest": (
         "데스크톱 상호작용 예산 게이트 자체 검증",
         [*PY, f"{HOOKS}/interactionLatencyBudget.py", "--selftest"],
@@ -431,6 +439,8 @@ SUITES: dict[str, tuple[str, ...]] = {
         "vscodeHostPerformance",
         "vscodeRealProviderJourneySelftest",
         "vscodeRealProviderJourney",
+        "vscodeUpgradeRollbackSelftest",
+        "vscodeUpgradeRollback",
         "interactionLatencyBudgetSelftest",
         "interactionLatencyBudget",
         "scrollUnderLoadSmokeSelftest",
@@ -498,6 +508,8 @@ SUITES: dict[str, tuple[str, ...]] = {
         "vscodeHostPerformance",
         "vscodeRealProviderJourneySelftest",
         "vscodeRealProviderJourney",
+        "vscodeUpgradeRollbackSelftest",
+        "vscodeUpgradeRollback",
         "cargoFmt",
         "cargoClippy",
     ),
@@ -512,6 +524,7 @@ CARGO_GATES = frozenset(
         "cargoBuild",
         "vscodeHostPerformance",
         "vscodeRealProviderJourney",
+        "vscodeUpgradeRollback",
         "desktopProductBuild",
         "guiMemoryContract",
         "desktopRealProviderGuiSmoke",
@@ -570,6 +583,7 @@ def skipReasonFor(name: str) -> str | None:
         "vscodeExtension",
         "vscodeHostPerformance",
         "vscodeRealProviderJourney",
+        "vscodeUpgradeRollback",
     } and shutil.which("npm") is None:
         return "npm 없음"
     if name in {
@@ -584,6 +598,7 @@ def skipReasonFor(name: str) -> str | None:
         "vscodeExtension",
         "vscodeHostPerformance",
         "vscodeRealProviderJourney",
+        "vscodeUpgradeRollback",
     } and shutil.which("node") is None:
         return "node 없음"
     if name == "audit" and not hasAuditCrate():

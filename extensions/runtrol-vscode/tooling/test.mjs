@@ -13,6 +13,7 @@ await build({
   entryPoints: {
     "framing.test": path.join(extensionRoot, "src/core/framing.test.ts"),
     "liveCore.test": path.join(extensionRoot, "src/core/liveCore.test.ts"),
+    "managedCore.test": path.join(extensionRoot, "src/core/managedCore.test.ts"),
     "presentation.test": path.join(extensionRoot, "src/webview/presentation.test.ts"),
     "selectionStore.test": path.join(extensionRoot, "src/selectionStore.test.ts"),
     "stateRows.test": path.join(extensionRoot, "src/stateRows.test.ts"),
@@ -31,6 +32,7 @@ const result = spawnSync(process.execPath, [
   "--test",
   path.join(out, "framing.test.js"),
   path.join(out, "liveCore.test.js"),
+  path.join(out, "managedCore.test.js"),
   path.join(out, "presentation.test.js"),
   path.join(out, "selectionStore.test.js"),
   path.join(out, "stateRows.test.js"),

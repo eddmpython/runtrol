@@ -4,6 +4,8 @@ import path from "node:path";
 
 import * as vscode from "vscode";
 
+import { materializeManagedCore } from "./managedCore";
+
 type LocatedCore = {
   executable: string;
   endpoint: string;
@@ -39,11 +41,19 @@ export class CoreLocator {
       }
       candidates.push(configured);
     } else {
+      let bundledExists = false;
       try {
         await access(bundled);
-        candidates.push(bundled);
-      } catch {
+        bundledExists = true;
+      } catch (error) {
+        if (!isNotFound(error)) {
+          throw error;
+        }
         // A development build normally has no bundled core yet.
+      }
+      if (bundledExists) {
+        const managed = await materializeManagedCore(bundled, this.context.globalStorageUri.fsPath);
+        candidates.push(managed.executable);
       }
       candidates.push("runtrol");
     }
@@ -59,6 +69,13 @@ export class CoreLocator {
     }
     throw new Error(`no usable runtrol core was found. ${failures.join(" | ")}`);
   }
+}
+
+function isNotFound(error: unknown): boolean {
+  return Boolean(
+    error && typeof error === "object" && "code" in error
+      && String((error as NodeJS.ErrnoException).code) === "ENOENT",
+  );
 }
 
 function probeEndpoint(executable: string): Promise<string> {
@@ -82,4 +99,3 @@ function probeEndpoint(executable: string): Promise<string> {
     );
   });
 }
-

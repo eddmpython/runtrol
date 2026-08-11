@@ -4,7 +4,7 @@
 
 [한국어](README.md) | [English](README_EN.md) | 中文 | [日本語](README_JA.md)
 
-> 状态：**内核、Windows 桌面端、VS Code 扩展的首个端到端切片、实时会话索引、真实 Extension Host 和每秒 3,000 帧 Webview 性能门槛、已安装真实 CLI 的完整 VS Code 操作旅程，以及六个原生 VSIX 目标的内容与全新安装验证已经实现。** `Runtrol Studio` 提供 Core 自动发现、已安装 CLI 列表、多会话 TreeView、仅在变化时推送的会话快照、复用命令通道、单个选中会话订阅、有界实时视图以及同一窗口内的 workspace 切换。Marketplace 签名和公开发布仍未完成。
+> 状态：**内核、Windows 桌面端、VS Code 扩展的首个端到端切片、实时会话索引、真实 Extension Host 和每秒 3,000 帧 Webview 性能门槛、已安装真实 CLI 的完整 VS Code 操作旅程、六个原生 VSIX 目标的内容与全新安装验证，以及保留活动会话的 VSIX 升级与回滚已经实现。** `Runtrol Studio` 提供 Core 自动发现、已安装 CLI 列表、多会话 TreeView、仅在变化时推送的会话快照、复用命令通道、单个选中会话订阅、有界实时视图以及同一窗口内的 workspace 切换。Marketplace 签名和公开发布仍未完成。
 > 下面多数分数为 0，不是因为没有代码，而是因为还没有门禁去断言那些轴。
 
 The security boundary and default-deny settings are documented in [SECURITY.md](SECURITY.md).

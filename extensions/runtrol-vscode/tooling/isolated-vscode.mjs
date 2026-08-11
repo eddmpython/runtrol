@@ -1,0 +1,196 @@
+import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import { createReadStream } from "node:fs";
+import { readdir } from "node:fs/promises";
+import path from "node:path";
+
+import {
+  downloadAndUnzipVSCode,
+  resolveCliArgsFromVSCodeExecutablePath,
+  runTests,
+} from "@vscode/test-electron";
+
+import { descendantPids, normalizedExecutable, processRows } from "./process-identity.mjs";
+
+export async function acquireVSCode(cachePath) {
+  const executable = await downloadAndUnzipVSCode({
+    version: process.env.RUNTROL_TEST_VSCODE_VERSION || "stable",
+    cachePath,
+  });
+  const [cli] = resolveCliArgsFromVSCodeExecutablePath(executable);
+  return { executable, cli };
+}
+
+export function installVSIX(cli, archive, userData, extensions) {
+  const installed = spawnSync(
+    cli,
+    [
+      "--user-data-dir",
+      userData,
+      "--extensions-dir",
+      extensions,
+      "--install-extension",
+      archive,
+      "--force",
+    ],
+    {
+      encoding: "utf8",
+      timeout: 60_000,
+      windowsHide: true,
+      shell: process.platform === "win32",
+    },
+  );
+  if (installed.status !== 0) {
+    throw new Error(
+      `VSIX installation failed: ${installed.error?.message ?? `exit ${String(installed.status)}`}\n`
+      + `${installed.stdout ?? ""}${installed.stderr ?? ""}`,
+    );
+  }
+}
+
+export function uninstallExtension(cli, identifier, userData, extensions) {
+  const uninstalled = spawnSync(
+    cli,
+    [
+      "--user-data-dir",
+      userData,
+      "--extensions-dir",
+      extensions,
+      "--uninstall-extension",
+      identifier,
+    ],
+    {
+      encoding: "utf8",
+      timeout: 60_000,
+      windowsHide: true,
+      shell: process.platform === "win32",
+    },
+  );
+  if (uninstalled.status !== 0) {
+    throw new Error(
+      `extension uninstall failed: ${uninstalled.error?.message ?? `exit ${String(uninstalled.status)}`}\n`
+      + `${uninstalled.stdout ?? ""}${uninstalled.stderr ?? ""}`,
+    );
+  }
+}
+
+export function runInstalledExtensionTest(options) {
+  return runTests({
+    vscodeExecutablePath: options.vscodeExecutablePath,
+    extensionDevelopmentPath: options.verifierRoot,
+    extensionTestsPath: options.testEntry,
+    extensionTestsEnv: options.environment,
+    launchArgs: [
+      options.workspace,
+      "--disable-workspace-trust",
+      "--skip-welcome",
+      `--user-data-dir=${options.userData}`,
+      `--extensions-dir=${options.extensions}`,
+    ],
+  });
+}
+
+export async function findInstalledExtension(root, expectedVersion) {
+  const entries = await readdir(root, { withFileTypes: true });
+  const matches = entries.filter(
+    (entry) => entry.isDirectory() && entry.name.startsWith("eddmpython.runtrol-studio-"),
+  );
+  if (!expectedVersion) {
+    if (matches.length !== 1) {
+      throw new Error(`expected one isolated Runtrol Studio installation, found ${matches.length}`);
+    }
+    return path.join(root, matches[0].name);
+  }
+  const expected = matches.filter((entry) => entry.name.includes(`-${expectedVersion}`));
+  if (expected.length !== 1) {
+    throw new Error(
+      `expected one Runtrol Studio ${expectedVersion} directory, found ${expected.length} among ${matches.length}`,
+    );
+  }
+  return path.join(root, expected[0].name);
+}
+
+export async function fileDigest(file) {
+  const digest = createHash("sha256");
+  for await (const chunk of createReadStream(file)) {
+    digest.update(chunk);
+  }
+  return digest.digest("hex");
+}
+
+export async function terminateExactProcesses(marker, executable) {
+  const expected = executable ? normalizedExecutable(executable) : "";
+  const normalizedMarker = process.platform === "win32"
+    ? marker.toLocaleLowerCase("en-US")
+    : marker;
+  const matchingIdentities = () => {
+    const rows = processRows();
+    const roots = rows.filter((row) => {
+      const command = process.platform === "win32"
+        ? row.command.toLocaleLowerCase("en-US")
+        : row.command;
+      return command.includes(normalizedMarker)
+        || (expected && normalizedExecutable(row.executable) === expected);
+    });
+    const pids = new Set(roots.map((row) => row.pid));
+    for (const root of roots) {
+      for (const pid of descendantPids(rows, root.pid)) {
+        pids.add(pid);
+      }
+    }
+    return rows.filter((row) => pids.has(row.pid) && row.pid !== process.pid);
+  };
+
+  const identities = matchingIdentities();
+  signalExactProcesses(identities, "SIGTERM");
+  let survivors = await waitForExactProcesses(identities, 5_000);
+  if (survivors.length > 0) {
+    signalExactProcesses(survivors, "SIGKILL");
+    survivors = await waitForExactProcesses(identities, 5_000);
+  }
+  const late = matchingIdentities();
+  if (late.length > 0) {
+    signalExactProcesses(late, "SIGKILL");
+    await waitForExactProcesses(late, 5_000);
+  }
+  const unique = new Map();
+  for (const identity of [...survivingIdentities(identities), ...survivingIdentities(late)]) {
+    unique.set(identity.pid, identity);
+  }
+  survivors = [...unique.values()];
+  if (survivors.length > 0) {
+    throw new Error(
+      `isolated process cleanup left exact PIDs ${survivors.map((row) => row.pid).join(", ")}`,
+    );
+  }
+}
+
+function signalExactProcesses(identities, signal) {
+  for (const identity of identities) {
+    try {
+      process.kill(identity.pid, signal);
+    } catch (error) {
+      if (error.code !== "ESRCH") throw error;
+    }
+  }
+}
+
+async function waitForExactProcesses(identities, milliseconds) {
+  const deadline = Date.now() + milliseconds;
+  let survivors = survivingIdentities(identities);
+  while (survivors.length > 0 && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    survivors = survivingIdentities(identities);
+  }
+  return survivors;
+}
+
+function survivingIdentities(identities) {
+  const current = new Map(processRows().map((row) => [row.pid, row]));
+  return identities.filter((identity) => {
+    const row = current.get(identity.pid);
+    return row
+      && row.command === identity.command
+      && normalizedExecutable(row.executable) === normalizedExecutable(identity.executable);
+  });
+}

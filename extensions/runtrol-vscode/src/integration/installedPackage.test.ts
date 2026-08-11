@@ -51,8 +51,8 @@ async function verifyInstalledPackage(resultPath: string): Promise<void> {
   }
 
   const executableName = process.platform === "win32" ? "runtrol.exe" : "runtrol";
-  const corePath = path.join(installedPath, "resources", "core", executableName);
-  await access(corePath);
+  const bundledCore = path.join(installedPath, "resources", "core", executableName);
+  await access(bundledCore);
 
   currentStage = "activating-installed-extension";
   const api = await within(extension.activate() as Promise<ExtensionApi>, 10_000, "installed extension activation");
@@ -72,7 +72,7 @@ async function verifyInstalledPackage(resultPath: string): Promise<void> {
       extensionVersion: expectedVersion,
       target: expectedTarget,
       extensionPath: installedPath,
-      corePath,
+      bundledCore,
       configuredCore,
     }),
     "utf8",

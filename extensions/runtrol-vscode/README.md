@@ -26,7 +26,8 @@ npm run build
 ```
 
 Set `runtrol.corePath` to a local debug or release executable while developing. A packaged platform VSIX contains one
-matching runtrol core under `resources/core/`.
+matching runtrol core under `resources/core/`. On activation that file is streamed into one stable path under the
+extension's global storage. The packaged file is release material and never owns a daemon lifetime.
 
 ## Package the native platform
 
@@ -47,11 +48,16 @@ The release target map is `release-targets.json`. The manifest version is the re
 filename is derived from it. Every package contains one matching Core, the production bundles, brand resources, and
 the repository license. Source, tooling, dependencies, test budgets, and target metadata are excluded.
 
+When Core bytes change, the extension preserves the currently mapped image with a hard link before atomically
+replacing the stable name. An Extension Host reload, VSIX upgrade, or VSIX rollback therefore reconnects to the same
+daemon and active provider processes instead of making the versioned extension directory their owner.
+
 Inspect and clean-install a built package before publication:
 
 ```text
 python -X utf8 ../../tests/audit/vscodePackage.py --archive ../../release/runtrol-studio-VERSION-win32-x64.vsix --target win32-x64 --core ../../target/vscode-release/release/runtrol.exe
 node tooling/installed-package.mjs ../../release/runtrol-studio-VERSION-win32-x64.vsix
+python -X utf8 ../../tests/audit/vscodeUpgradeRollback.py --archive ../../release/runtrol-studio-VERSION-win32-x64.vsix
 ```
 
 The hosted release workflow repeats this journey on native Windows, macOS, and Linux runners. The Visual Studio

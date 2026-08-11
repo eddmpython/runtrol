@@ -1,7 +1,8 @@
 """Gate: the VS Code surface stays thin, bounded, buildable, and package-shaped.
 
 The gate deliberately checks the source contract before invoking the toolchain. A bundle that compiles can still
-poll, persist conversation data, keep hidden renderers alive, or ship runtime Node dependencies.
+poll, persist conversation data, keep hidden renderers alive, or ship runtime Node dependencies. The only product
+disk writers are the bounded selected-session scalar and the reviewed atomic managed-Core installer.
 
 Usage::
 
@@ -54,6 +55,16 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
             "the only filesystem writer must be selectionStore.ts, found "
             + (", ".join(writers) if writers else "none")
         )
+    coreWriters = [
+        relative
+        for relative, source in sources.items()
+        if any(token in source for token in ("copyFile(", "link(", "rename(", "unlink("))
+    ]
+    if coreWriters != ["core/managedCore.ts"]:
+        found.append(
+            "the only managed Core writer must be core/managedCore.ts, found "
+            + (", ".join(coreWriters) if coreWriters else "none")
+        )
     selection_source = sources.get("selectionStore.ts", "")
     for token in ("prompt", "reply", "approval", "transcript", "conversation", "frame"):
         if token in selection_source.lower():
@@ -73,6 +84,13 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
         ],
         "core/client.ts": ["watchSessions", "commandConnection", "commandTail"],
         "core/locator.ts": ['["endpoint"]', 'candidates.push("runtrol")'],
+        "core/managedCore.ts": [
+            "createReadStream",
+            "copyFile(source, incoming)",
+            "link(executable, preserved)",
+            "rename(incoming, executable)",
+            "removeInactiveImages",
+        ],
         "selectionStore.ts": [
             "MAX_FILE_BYTES",
             "MAX_SESSION_BYTES",
@@ -109,6 +127,10 @@ def selftest() -> int:
         ),
         "core/client.ts": "watchSessions commandConnection commandTail",
         "core/locator.ts": '["endpoint"] candidates.push("runtrol")',
+        "core/managedCore.ts": (
+            "createReadStream copyFile(source, incoming) link(executable, preserved) "
+            "rename(incoming, executable) unlink(file) removeInactiveImages"
+        ),
         "selectionStore.ts": "MAX_FILE_BYTES MAX_SESSION_BYTES schema: 1 validSession writeFile(this.file",
         "journeyApi.ts": (
             'extensionMode !== vscode.ExtensionMode.Test '
@@ -129,6 +151,7 @@ def selftest() -> int:
         (package, {**sources, "core/framing.ts": "MAX_FRAME_BYTES"}),
         (package, {**sources, "controller.ts": sources["controller.ts"].replace("workspaceCollisions", "")}),
         (package, {**sources, "controller.ts": sources["controller.ts"] + " writeFile("}),
+        (package, {**sources, "controller.ts": sources["controller.ts"] + " copyFile("}),
         (package, {**sources, "selectionStore.ts": sources["selectionStore.ts"] + " prompt"}),
         (package, {**sources, "journeyApi.ts": "return undefined sessions: () => [...state.sessions]"}),
     ]

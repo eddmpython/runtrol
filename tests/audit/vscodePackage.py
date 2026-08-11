@@ -53,6 +53,7 @@ def sourceProblems(
     coreManifest: str,
     ignore: str,
     installedVerifierExists: bool,
+    upgradeVerifierExists: bool,
 ) -> list[str]:
     """Return release-wiring defects that do not require a built binary."""
     found: list[str] = []
@@ -98,6 +99,7 @@ def sourceProblems(
         "cargo build --release -p runtrol --bin runtrol --no-default-features",
         "--target-dir target/vscode-release",
         "RUNTROL_CORE_BINARY: target/vscode-release/release/${{ matrix.executable }}",
+        "tests/audit/vscodeUpgradeRollback.py --archive",
     )
     for token in requiredWorkflowTokens:
         if token not in releaseWorkflow:
@@ -113,6 +115,8 @@ def sourceProblems(
             found.append(f".vscodeignore does not exclude {token}")
     if not installedVerifierExists:
         found.append("the installed-package verifier is missing")
+    if not upgradeVerifierExists:
+        found.append("the installed upgrade and rollback verifier is missing")
     return found
 
 
@@ -290,6 +294,7 @@ def selftest() -> int:
     releaseWorkflow = """
     cargo build --release -p runtrol --bin runtrol --no-default-features --target-dir target/vscode-release
     RUNTROL_CORE_BINARY: target/vscode-release/release/${{ matrix.executable }}
+    tests/audit/vscodeUpgradeRollback.py --archive
     """
     coreManifest = 'default = ["desktop"]\ndesktop = ["dep:runtrol-gui"]\nruntrol-gui = { optional = true }'
     ignore = "tooling/** src/** node_modules/** performance-budget.json release-targets.json"
@@ -302,6 +307,7 @@ def selftest() -> int:
         coreManifest,
         ignore,
         True,
+        True,
     ):
         print("[vscodePackage --selftest] FAIL. the green source contract was rejected.", file=sys.stderr)
         return 2
@@ -312,6 +318,7 @@ def selftest() -> int:
         (sourcePackage, releaseWorkflow.replace("--no-default-features", ""), coreManifest),
         (sourcePackage, releaseWorkflow, coreManifest.replace("optional = true", "")),
         (sourcePackage, f"{releaseWorkflow}\ncrates/runtrol-gui", coreManifest),
+        (sourcePackage, releaseWorkflow.replace("tests/audit/vscodeUpgradeRollback.py --archive", ""), coreManifest),
     )
     for index, (mutatedPackage, mutatedWorkflow, mutatedManifest) in enumerate(sourceMutations, start=1):
         if not sourceProblems(
@@ -323,10 +330,11 @@ def selftest() -> int:
             mutatedManifest,
             ignore,
             True,
+            True,
         ):
             print(f"[vscodePackage --selftest] FAIL. source mutation {index} escaped.", file=sys.stderr)
             return 2
-    print("[vscodePackage --selftest] OK. eight archives and four source mutations make the gate red.")
+    print("[vscodePackage --selftest] OK. eight archives and five source mutations make the gate red.")
     return 0
 
 
@@ -358,6 +366,8 @@ def sourceRun() -> int:
         (EXTENSION / ".vscodeignore").read_text(encoding="utf-8"),
         (EXTENSION / "tooling" / "installed-package.mjs").is_file()
         and (EXTENSION / "src" / "integration" / "installedPackage.test.ts").is_file(),
+        (EXTENSION / "tooling" / "upgrade-rollback.mjs").is_file()
+        and (EXTENSION / "src" / "integration" / "upgradeRollback.test.ts").is_file(),
     )
     if found:
         return report("vscodePackage", found)

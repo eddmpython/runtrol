@@ -15,6 +15,9 @@ its measured architecture, and the gate harness.
 
 ### Added
 
+- Session-preserving VSIX upgrades and rollbacks. The bundled Core is materialized at one stable extension-global
+  path and atomically replaced behind a preserved mapped image, so Extension Host reloads and official VS Code
+  install or uninstall operations keep the original daemon, provider process, selected session, and workspace alive.
 - A full installed-provider VS Code journey. A real Extension Host now auto-discovers Claude Code, starts sessions in
   two workspaces, carries a prompt and hidden approval denial, reconnects, interrupts, switches the same window,
   restores the exact selected session, and closes every exact process without storing conversation content.
