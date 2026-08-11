@@ -4,6 +4,7 @@ import { ConversationView, type WebviewPerformance } from "./conversationView";
 import { Controller } from "./controller";
 import { CoreClient } from "./core/client";
 import { CoreLocator } from "./core/locator";
+import { SelectionStore } from "./selectionStore";
 import { RuntimeState } from "./state";
 import { ProvidersTree, SessionsTree } from "./trees";
 
@@ -11,12 +12,20 @@ export type RuntrolExtensionApi = {
   readonly ready: Promise<void>;
   refresh(): Promise<void>;
   measureWebview?(framesPerSecond?: number, durationMs?: number): Promise<WebviewPerformance>;
+  measureHotSessions?(sessionIds: readonly string[]): Promise<HotSessionPerformance>;
+  verifyRestoredSession?(sessionId: string): Promise<void>;
+};
+
+export type HotSessionPerformance = {
+  hotSessionCount: number;
+  sessionSwitchP95Ms: number;
 };
 
 export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi {
   const locator = new CoreLocator(context);
   const client = new CoreClient(locator);
   const state = new RuntimeState();
+  const selection = new SelectionStore(context.globalStorageUri.fsPath);
   let lifecycle: Promise<void> = Promise.resolve();
   const afterReady = async <T>(action: () => Promise<T>): Promise<T> => {
     await lifecycle;
@@ -38,7 +47,7 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
       void run(() => afterReady(() => controller.close()));
     }
   });
-  controller = new Controller(context, client, state, conversation);
+  controller = new Controller(context, client, state, conversation, selection);
   const sessions = new SessionsTree(state);
   const providers = new ProvidersTree(state);
 
@@ -94,6 +103,42 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
         () => conversation.measurePerformance(framesPerSecond, durationMs),
       )
       : undefined,
+    measureHotSessions: process.env.RUNTROL_VSCODE_PERFORMANCE === "1"
+      ? (sessionIds) => afterReady(async () => {
+        const expected = new Set(sessionIds);
+        const hot = state.sessions.filter((session) => expected.has(session.session) && session.hot);
+        if (expected.size !== 8 || hot.length !== expected.size) {
+          throw new Error(`expected eight named hot sessions, found ${hot.length}`);
+        }
+        const samples: number[] = [];
+        for (let round = 0; round < 2; round += 1) {
+          for (const sessionId of sessionIds) {
+            const started = performance.now();
+            await controller.select(sessionId, false);
+            await Promise.all([
+              controller.selectedWatchReady(),
+              conversation.waitForCurrentRender(),
+            ]);
+            samples.push(performance.now() - started);
+          }
+        }
+        return {
+          hotSessionCount: hot.length,
+          sessionSwitchP95Ms: percentile(samples, 0.95),
+        };
+      })
+      : undefined,
+    verifyRestoredSession: process.env.RUNTROL_VSCODE_PERFORMANCE === "1"
+      ? (sessionId) => afterReady(async () => {
+        if (state.selected?.session !== sessionId) {
+          throw new Error(`restored ${state.selected?.session ?? "no session"}, expected ${sessionId}`);
+        }
+        await Promise.all([
+          controller.selectedWatchReady(),
+          conversation.waitForCurrentRender(),
+        ]);
+      })
+      : undefined,
   };
 }
 
@@ -105,4 +150,9 @@ async function run(action: () => Promise<void>): Promise<void> {
   } catch (error) {
     await vscode.window.showErrorMessage(`Runtrol: ${error instanceof Error ? error.message : String(error)}`);
   }
+}
+
+function percentile(values: readonly number[], at: number): number {
+  const ordered = [...values].sort((left, right) => left - right);
+  return ordered[Math.ceil(ordered.length * at) - 1] ?? Number.POSITIVE_INFINITY;
 }

@@ -37,7 +37,7 @@ Code-hot workspace는 bounded 상태를 유지한다. streaming과 background �
 | 북극성 | 현재 점수 | 현 상태 | 도달할 상태 |
 |---|---:|---|---|
 | 하나의 세션 목록 | 5/10 | hosted Windows CI 가 production browser lifecycle 과 실제 Tauri 제품을 구동해 시작, hot 및 cold 열기, 편집 가능한 다음 입력, 확인된 목록 제거를 검증한다. 상대가 deterministic mock transport 와 ACP fixture 이므로 mock 층이다. | 공급자가 Claude Code 든 Codex 든 그 다음 무엇이든, 지금 내 PC 에 살아 있는 세션이 한 목록에 뜨고 거기서 시작, 재개, 삭제가 끝난다. |
-| 즉시 반응 | 5/10 | production bundle 을 실물 브라우저에서 재 목록, 대화 열기, 입력 지연 ratchet 을 지키고 초당 3,000 원시 프레임을 처리한다. 전송 상대가 mock 이라 이 층에 머문다. | 목록이 기다림 없이 뜨고, 대화가 누르는 즉시 열리고, 긴 출력이 쏟아져도 스크롤과 입력이 끊기지 않는다. 사용자가 로딩을 인지하는 순간이 없다. |
+| 즉시 반응 | 5/10 | 실물 브라우저와 VS Code Extension Host가 production bundle을 측정한다. 초당 3,000 원시 프레임, 8개 hot ACP 프로세스, watch와 Webview paint가 끝난 세션 전환, workspace 변경 뒤 정확한 선택 복원까지 하나의 ratchet으로 막는다. 전송 상대가 mock이라 이 층에 머문다. | 목록이 기다림 없이 뜨고, 대화가 누르는 즉시 열리고, 긴 출력이 쏟아져도 스크롤과 입력이 끊기지 않는다. 사용자가 로딩을 인지하는 순간이 없다. |
 | 폰에서 내 PC 세션 잇기 | 0/10 | 미구현. | 폰을 PC 에 한 번 붙여 두면, 자리를 떠난 뒤에도 그 PC 에서 돌고 있는 세션에 폰에서 새 지시를 넣고 출력을 실시간으로 본다. 공급자 계정의 등급이나 인증 방식이 이 경험을 막지 않는다. |
 | 공급자 확장성 | 5/10 | hosted CI 는 외부 드라이버 공개 계약, 3 개 OS 의 범용 ACP fixture, 독립 배포 ACP 구현의 두 턴과 native load, 실물 Claude Code 의 hidden 승인 거부 왕복을 검증한다. model endpoint 들은 로컬 mock 이며, 스케줄 CI 는 최신 CLI 로 parser probe 와 같은 승인 여정을 반복한다. 계정 기반 model 동작과 전체 event 표면은 주장하지 않는다. | 새 CLI 가 나오면 어댑터 하나만 추가되고 PC 화면과 폰 화면과 조작 방법은 그대로다. 사용자는 공급자가 늘어난 것을 목록이 길어진 것으로만 안다. |
 | 대화 무통과 | 6/10 | 실물 루프백 소켓의 정확한 송신 허용 목록과 production Noise IK 및 IKpsk1 경계가 돈다 (`egressContract`). 프롬프트 표본은 릴레이 캡처와 진단 문자열에 평문으로 나타나지 않고, transport 는 디스크와 로그 API 를 갖지 않으며, 드라이버와 저장소는 공급자 transcript 경로를 모른다. 실물 폰과 릴레이를 잇는 live 게이트가 없어 천장이 6 이다. | 사용자의 프롬프트와 모델의 응답은 PC 와 공급자 사이, 그리고 사용자 자신의 기기 사이에서만 오간다. runtrol 은 본문을 저장하지 않고, 중간의 어떤 서버도 그것을 읽을 수 있는 형태로 받지 않는다. |

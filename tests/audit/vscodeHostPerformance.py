@@ -1,9 +1,10 @@
 """Gate: the real VS Code Extension Host stays inside one checked-in performance budget.
 
 The measurement launches an isolated VS Code profile, the production extension bundle, and a tracked Core
-daemon. It measures ready activation, opening the contributed view, repeated session refresh p95, and Extension
-Host RSS growth. The JSON budget beside the extension is the only threshold source used by both this gate and the
-in-host test.
+daemon. It measures ready activation, opening the contributed view, repeated session refresh p95, Extension Host RSS
+growth, eight hot external ACP sessions, selected-watch plus Webview-paint switching, and exact selection restoration
+after VS Code restarts in another workspace. The JSON budget beside the extension is the only threshold source used
+by both this gate and the in-host test.
 
 Usage::
 
@@ -35,7 +36,11 @@ FIELDS = (
     "webviewInputP95Ms",
     "webviewScrollP95Ms",
     "webviewPendingFrames",
+    "sessionSwitchP95Ms",
+    "reloadRestoreMs",
 )
+EXPECTED_HOT_SESSIONS = 8
+EXPECTED_DROPPED_FRAMES = 0
 
 
 def loadBudget() -> dict[str, float]:
@@ -61,13 +66,26 @@ def problems(metrics: dict[str, Any], budget: dict[str, float]) -> list[str]:
             found.append(f"{name} is missing or not numeric")
         elif value > budget[name]:
             found.append(f"{name} {value:.1f} exceeds {budget[name]:.1f}")
+    if metrics.get("hotSessionCount") != EXPECTED_HOT_SESSIONS:
+        found.append(
+            f"hotSessionCount {metrics.get('hotSessionCount')!r} is not {EXPECTED_HOT_SESSIONS}"
+        )
+    if metrics.get("webviewDroppedFrames") != EXPECTED_DROPPED_FRAMES:
+        found.append(
+            f"webviewDroppedFrames {metrics.get('webviewDroppedFrames')!r} is not "
+            f"{EXPECTED_DROPPED_FRAMES}"
+        )
     return found
 
 
 def selftest() -> int:
     """Prove each missing and regressed metric makes the gate red independently."""
     budget = loadBudget()
-    green = dict(budget)
+    green = {
+        **budget,
+        "hotSessionCount": EXPECTED_HOT_SESSIONS,
+        "webviewDroppedFrames": EXPECTED_DROPPED_FRAMES,
+    }
     if problems(green, budget):
         print("[vscodeHostPerformance --selftest] FAIL. exact budgets were rejected.", file=sys.stderr)
         return 2
@@ -82,7 +100,21 @@ def selftest() -> int:
         if problems(missing, budget) != [f"{name} is missing or not numeric"]:
             print(f"[vscodeHostPerformance --selftest] FAIL. missing {name} escaped.", file=sys.stderr)
             return 2
-    print("[vscodeHostPerformance --selftest] OK. all eighteen injected defects make the gate red.")
+    wrong_count = dict(green)
+    wrong_count_value = EXPECTED_HOT_SESSIONS - 1
+    wrong_count["hotSessionCount"] = wrong_count_value
+    expected_count_problem = (
+        f"hotSessionCount {wrong_count_value!r} is not {EXPECTED_HOT_SESSIONS}"
+    )
+    if problems(wrong_count, budget) != [expected_count_problem]:
+        print("[vscodeHostPerformance --selftest] FAIL. a missing hot session escaped.", file=sys.stderr)
+        return 2
+    dropped = dict(green)
+    dropped["webviewDroppedFrames"] = 1
+    if problems(dropped, budget) != ["webviewDroppedFrames 1 is not 0"]:
+        print("[vscodeHostPerformance --selftest] FAIL. a dropped frame escaped.", file=sys.stderr)
+        return 2
+    print("[vscodeHostPerformance --selftest] OK. all twenty-four injected defects make the gate red.")
     return 0
 
 
@@ -105,30 +137,30 @@ def runCommand(command: list[str], cwd: Path, environment: dict[str, str] | None
     return result
 
 
-def productBinary() -> Path:
-    """Build the current product Core and return its platform path."""
+def productBinaries() -> tuple[Path, Path]:
+    """Build the current product Core and the external ACP fixture."""
     target = ROOT / "target" / "vscode-performance"
-    built = runCommand(
+    commands = (
         [
-            "cargo",
-            "build",
-            "-p",
-            "runtrol",
-            "--bin",
-            "runtrol",
-            "--no-default-features",
-            "--target-dir",
-            str(target),
+            "cargo", "build", "-p", "runtrol", "--bin", "runtrol",
+            "--no-default-features", "--target-dir", str(target),
         ],
-        ROOT,
+        [
+            "cargo", "build", "-p", "runtrol-drivers", "--example", "acpFixture",
+            "--target-dir", str(target),
+        ],
     )
-    if built.returncode != 0:
-        raise RuntimeError(f"cargo build returned {built.returncode}")
+    for command in commands:
+        built = runCommand(command, ROOT)
+        if built.returncode != 0:
+            raise RuntimeError(f"cargo build returned {built.returncode}")
     suffix = ".exe" if sys.platform == "win32" else ""
     binary = target / "debug" / f"runtrol{suffix}"
-    if not binary.is_file():
-        raise RuntimeError(f"built Core is missing at {binary}")
-    return binary
+    fixture = target / "debug" / "examples" / f"acpFixture{suffix}"
+    for expected in (binary, fixture):
+        if not expected.is_file():
+            raise RuntimeError(f"built performance binary is missing at {expected}")
+    return binary, fixture
 
 
 def hostCommand() -> list[str]:
@@ -145,10 +177,11 @@ def hostCommand() -> list[str]:
     return command
 
 
-def measurement(binary: Path) -> dict[str, Any]:
+def measurement(binary: Path, fixture: Path) -> dict[str, Any]:
     """Run the isolated Extension Host and parse its single result record."""
     environment = dict(os.environ)
     environment["RUNTROL_TEST_CORE"] = str(binary)
+    environment["RUNTROL_TEST_ACP_FIXTURE"] = str(fixture)
     result = runCommand(hostCommand(), EXTENSION, environment)
     if result.returncode != 0:
         raise RuntimeError(f"VS Code Extension Host returned {result.returncode}")
@@ -165,7 +198,7 @@ def run() -> int:
     """Build, measure, and enforce the shared budget."""
     try:
         budget = loadBudget()
-        metrics = measurement(productBinary())
+        metrics = measurement(*productBinaries())
     except (OSError, ValueError, RuntimeError, json.JSONDecodeError) as error:
         print(f"[vscodeHostPerformance] FAIL. {error}", file=sys.stderr)
         return 2
@@ -182,7 +215,9 @@ def run() -> int:
         f"Webview frame {metrics['webviewFrameP95Ms']:.1f} ms "
         f"(baseline {metrics['webviewBaselineFrameP95Ms']:.1f}, overrun {metrics['webviewFrameOverrunP95Ms']:.1f}), "
         f"input {metrics['webviewInputP95Ms']:.1f} ms, "
-        f"scroll {metrics['webviewScrollP95Ms']:.1f} ms, pending {metrics['webviewPendingFrames']:.0f}."
+        f"scroll {metrics['webviewScrollP95Ms']:.1f} ms, pending {metrics['webviewPendingFrames']:.0f}, "
+        f"eight-session switch p95 {metrics['sessionSwitchP95Ms']:.1f} ms, "
+        f"reload restore {metrics['reloadRestoreMs']:.1f} ms."
     )
     return 0
 

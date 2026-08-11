@@ -42,12 +42,22 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
         "indexedDB": "conversation-capable browser persistence",
         "setInterval(": "polling loop",
         "scheduleRefresh": "session-list requery loop",
-        "writeFile(": "filesystem write surface",
         "appendFile(": "filesystem write surface",
     }
     for token, meaning in forbidden.items():
         if token in all_source:
             found.append(f"{meaning} is reachable through `{token}`")
+
+    writers = [relative for relative, source in sources.items() if "writeFile(" in source]
+    if writers != ["selectionStore.ts"]:
+        found.append(
+            "the only filesystem writer must be selectionStore.ts, found "
+            + (", ".join(writers) if writers else "none")
+        )
+    selection_source = sources.get("selectionStore.ts", "")
+    for token in ("prompt", "reply", "approval", "transcript", "conversation", "frame"):
+        if token in selection_source.lower():
+            found.append(f"selectionStore.ts contains conversation-capable token `{token}`")
 
     required = {
         "core/framing.ts": ["MAX_FRAME_BYTES", "MAX_QUEUED_FRAMES", "MAX_QUEUED_BYTES", "setImmediate"],
@@ -63,6 +73,13 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
         ],
         "core/client.ts": ["watchSessions", "commandConnection", "commandTail"],
         "core/locator.ts": ['["endpoint"]', 'candidates.push("runtrol")'],
+        "selectionStore.ts": [
+            "MAX_FILE_BYTES",
+            "MAX_SESSION_BYTES",
+            "schema: 1",
+            "validSession",
+            "writeFile(this.file",
+        ],
     }
     for relative, tokens in required.items():
         source = sources.get(relative, "")
@@ -85,6 +102,7 @@ def selftest() -> int:
         ),
         "core/client.ts": "watchSessions commandConnection commandTail",
         "core/locator.ts": '["endpoint"] candidates.push("runtrol")',
+        "selectionStore.ts": "MAX_FILE_BYTES MAX_SESSION_BYTES schema: 1 validSession writeFile(this.file",
     }
     if sourceViolations(package, sources):
         print("[vscodeExtension --selftest] FAIL. the green fixture was rejected.", file=sys.stderr)
@@ -97,6 +115,8 @@ def selftest() -> int:
         (package, {**sources, "controller.ts": "setInterval("}),
         (package, {**sources, "core/framing.ts": "MAX_FRAME_BYTES"}),
         (package, {**sources, "controller.ts": sources["controller.ts"].replace("workspaceCollisions", "")}),
+        (package, {**sources, "controller.ts": sources["controller.ts"] + " writeFile("}),
+        (package, {**sources, "selectionStore.ts": sources["selectionStore.ts"] + " prompt"}),
     ]
     for index, (changed_package, changed_sources) in enumerate(mutations, start=1):
         if not sourceViolations(changed_package, changed_sources):

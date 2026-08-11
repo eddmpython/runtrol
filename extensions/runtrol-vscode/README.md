@@ -7,6 +7,9 @@ window to that session's exact workspace or worktree.
 The Core pushes one current session snapshot and then only changed snapshots. Conversation traffic never triggers a
 session-list query or rebuild, and every connected window shares the Core's once-encoded snapshot bytes.
 
+Only the selected runtrol session identifier is retained across workspace reloads. It is a bounded scalar under the
+extension's global storage. Prompts, replies, approvals, provider state, and conversation frames are never stored.
+
 Before another hot writer starts in the same, parent, or child path, the extension offers the existing session, a
 separate known or browsed workspace or worktree, an explicit continue action, or cancellation.
 

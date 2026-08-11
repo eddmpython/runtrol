@@ -17,6 +17,7 @@ export type WebviewPerformance = {
   scrollP95Ms: number;
   maxPendingFrames: number;
   producedFrames: number;
+  droppedFrames: number;
   visibleCharacters: number;
   visibleItems: number;
 };
@@ -34,8 +35,14 @@ type MeasurementWaiter = {
   reject(error: Error): void;
 };
 
+type RenderWaiter = {
+  generation: number;
+  resolve(): void;
+  reject(error: Error): void;
+};
+
 const MAX_PENDING_POSTS = 4_096;
-const POST_BATCH = 512;
+const POST_BATCH = MAX_PENDING_POSTS;
 
 export class ConversationView implements vscode.WebviewViewProvider {
   static readonly viewType = "runtrol.conversation";
@@ -45,7 +52,10 @@ export class ConversationView implements vscode.WebviewViewProvider {
   private pendingFrames: FrameEnvelope[] = [];
   private posting: Promise<void> | null = null;
   private postGap = false;
+  private droppedFrames = 0;
   private readonly measurements = new Map<string, MeasurementWaiter>();
+  private readonly renderWaiters = new Set<RenderWaiter>();
+  private renderedGeneration = 0;
 
   constructor(
     private readonly extensionUri: vscode.Uri,
@@ -60,6 +70,9 @@ export class ConversationView implements vscode.WebviewViewProvider {
     };
     view.webview.html = this.html(view.webview);
     view.webview.onDidReceiveMessage((message: unknown) => {
+      if (this.receiveRenderedGeneration(message)) {
+        return;
+      }
       if (this.receiveMeasurement(message)) {
         return;
       }
@@ -73,17 +86,29 @@ export class ConversationView implements vscode.WebviewViewProvider {
         this.view = null;
         this.pendingFrames = [];
         this.rejectMeasurements(new Error("the Runtrol Webview closed during measurement"));
+        this.rejectRenderWaiters(new Error("the Runtrol Webview closed before painting the selected session"));
       }
     });
     this.reset(this.selected);
   }
 
-  reset(session: SessionLine | null): void {
+  reset(session: SessionLine | null): number {
     this.selected = session;
     this.generation += 1;
     this.pendingFrames = [];
     this.postGap = false;
     void this.view?.webview.postMessage({ type: "reset", session, generation: this.generation });
+    return this.generation;
+  }
+
+  waitForCurrentRender(): Promise<void> {
+    const generation = this.generation;
+    if (this.renderedGeneration >= generation) {
+      return Promise.resolve();
+    }
+    return new Promise<void>((resolve, reject) => {
+      this.renderWaiters.add({ generation, resolve, reject });
+    });
   }
 
   frame(payload: unknown): void {
@@ -91,7 +116,9 @@ export class ConversationView implements vscode.WebviewViewProvider {
       return;
     }
     if (this.pendingFrames.length >= MAX_PENDING_POSTS) {
-      this.pendingFrames.splice(0, this.pendingFrames.length - MAX_PENDING_POSTS + 1);
+      const dropped = this.pendingFrames.length - MAX_PENDING_POSTS + 1;
+      this.pendingFrames.splice(0, dropped);
+      this.droppedFrames += dropped;
       this.postGap = true;
     }
     this.pendingFrames.push({ generation: this.generation, payload });
@@ -112,6 +139,7 @@ export class ConversationView implements vscode.WebviewViewProvider {
     const webview = this.view.webview;
     const id = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
     const waiter = measurementWaiter();
+    const droppedBefore = this.droppedFrames;
     this.measurements.set(id, waiter);
     const timeout = setTimeout(
       () => waiter.reject(new Error("the Runtrol Webview measurement exceeded 30 seconds")),
@@ -135,7 +163,12 @@ export class ConversationView implements vscode.WebviewViewProvider {
         await delay(10);
       }
       await this.drainPosts();
-      if (!await webview.postMessage({ type: "measureEnd", id, producedFrames: produced })) {
+      if (!await webview.postMessage({
+        type: "measureEnd",
+        id,
+        producedFrames: produced,
+        droppedFrames: this.droppedFrames - droppedBefore,
+      })) {
         throw new Error("the Runtrol Webview closed before measurement finished");
       }
       return await waiter.result;
@@ -206,11 +239,40 @@ export class ConversationView implements vscode.WebviewViewProvider {
     return false;
   }
 
+  private receiveRenderedGeneration(value: unknown): boolean {
+    if (value === null || typeof value !== "object" || Array.isArray(value)) {
+      return false;
+    }
+    const message = value as Record<string, unknown>;
+    if (
+      message.type !== "selectionRendered"
+      || typeof message.generation !== "number"
+      || !Number.isSafeInteger(message.generation)
+    ) {
+      return false;
+    }
+    this.renderedGeneration = Math.max(this.renderedGeneration, message.generation);
+    for (const waiter of this.renderWaiters) {
+      if (waiter.generation <= this.renderedGeneration) {
+        this.renderWaiters.delete(waiter);
+        waiter.resolve();
+      }
+    }
+    return true;
+  }
+
   private rejectMeasurements(error: Error): void {
     for (const waiter of this.measurements.values()) {
       waiter.reject(error);
     }
     this.measurements.clear();
+  }
+
+  private rejectRenderWaiters(error: Error): void {
+    for (const waiter of this.renderWaiters) {
+      waiter.reject(error);
+    }
+    this.renderWaiters.clear();
   }
 
   private html(webview: vscode.Webview): string {
@@ -300,6 +362,7 @@ function performanceMetrics(value: unknown): WebviewPerformance | null {
     "scrollP95Ms",
     "maxPendingFrames",
     "producedFrames",
+    "droppedFrames",
     "visibleCharacters",
     "visibleItems",
   ];

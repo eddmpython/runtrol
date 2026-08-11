@@ -7,5 +7,7 @@
   "webviewFrameOverrunP95Ms": 8,
   "webviewInputP95Ms": 50,
   "webviewScrollP95Ms": 50,
-  "webviewPendingFrames": 1024
+  "webviewPendingFrames": 1024,
+  "sessionSwitchP95Ms": 100,
+  "reloadRestoreMs": 1500
 }

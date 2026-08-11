@@ -26,7 +26,7 @@ type Incoming =
   | { type: "frames"; batch: FrameEnvelope[]; gap: boolean }
   | { type: "status"; message: string; kind: "info" | "warning" | "error" }
   | { type: "measureStart"; id: string }
-  | { type: "measureEnd"; id: string; producedFrames: number };
+  | { type: "measureEnd"; id: string; producedFrames: number; droppedFrames: number };
 
 type VsCodeApi = {
   postMessage(message: unknown): void;
@@ -44,6 +44,7 @@ type Measurement = {
   nextScrollAt: number;
   maxPendingFrames: number;
   producedFrames: number | null;
+  droppedFrames: number | null;
   completing: boolean;
   ready: boolean;
 };
@@ -103,7 +104,7 @@ window.addEventListener("message", ({ data }: MessageEvent<Incoming>) => {
     return;
   }
   if (data.type === "measureEnd") {
-    endMeasurement(data.id, data.producedFrames);
+    endMeasurement(data.id, data.producedFrames, data.droppedFrames);
     return;
   }
   const frames = data.batch
@@ -155,6 +156,9 @@ function reset(session: Session | null, nextGeneration: number): void {
   if (session) {
     appendMessage("meta", `Connected to ${session.doing}`);
   }
+  requestAnimationFrame(() => {
+    vscode.postMessage({ type: "selectionRendered", generation: nextGeneration });
+  });
 }
 
 function enqueue(frames: readonly unknown[]): void {
@@ -385,6 +389,7 @@ function startMeasurement(id: string): void {
     nextScrollAt: now + 100,
     maxPendingFrames: pendingCount(),
     producedFrames: null,
+    droppedFrames: null,
     completing: false,
     ready: false,
   };
@@ -435,17 +440,24 @@ function measureFrame(id: string, at: number): void {
   requestAnimationFrame((next) => measureFrame(id, next));
 }
 
-function endMeasurement(id: string, producedFrames: number): void {
+function endMeasurement(id: string, producedFrames: number, droppedFrames: number): void {
   if (!measurement || measurement.id !== id) {
     return;
   }
   measurement.producedFrames = producedFrames;
+  measurement.droppedFrames = droppedFrames;
   finishMeasurementWhenDrained();
 }
 
 function finishMeasurementWhenDrained(): void {
   const active = measurement;
-  if (!active || active.producedFrames === null || active.completing || pendingCount() > 0) {
+  if (
+    !active
+    || active.producedFrames === null
+    || active.droppedFrames === null
+    || active.completing
+    || pendingCount() > 0
+  ) {
     return;
   }
   active.completing = true;
@@ -463,6 +475,7 @@ function finishMeasurementWhenDrained(): void {
       scrollP95Ms: percentile(active.scrollLatencies, 0.95),
       maxPendingFrames: active.maxPendingFrames,
       producedFrames: active.producedFrames,
+      droppedFrames: active.droppedFrames,
       visibleCharacters,
       visibleItems: conversation.childElementCount,
     };

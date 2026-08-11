@@ -15,6 +15,9 @@ its measured architecture, and the gate harness.
 
 ### Added
 
+- A real VS Code eight-hot-session ratchet. External-manifest ACP children stay supervised while each switch waits for
+  a Core watch acknowledgement and Webview paint, and a new VS Code process restores the exact selected session in
+  its workspace from one bounded scalar preference.
 - Core-owned project and working-tree identity with atomic writer reservations. Separate folders in one Git worktree
   cannot race through opening, live, or closing states, linked worktrees remain independently usable, and only the
   existing explicit shared-start action can opt into overlapping writers.

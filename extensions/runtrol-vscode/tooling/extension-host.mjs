@@ -13,6 +13,12 @@ const core = process.env.RUNTROL_TEST_CORE
   ? path.resolve(process.env.RUNTROL_TEST_CORE)
   : path.join(repositoryRoot, "target", "debug", process.platform === "win32" ? "runtrol.exe" : "runtrol");
 await stat(core);
+const fixtureSetting = process.env.RUNTROL_TEST_ACP_FIXTURE;
+if (!fixtureSetting) {
+  throw new Error("RUNTROL_TEST_ACP_FIXTURE is required");
+}
+const fixture = path.resolve(fixtureSetting);
+await stat(fixture);
 
 const bundled = spawnSync(process.execPath, [path.join(extensionRoot, "tooling", "build.mjs")], {
   cwd: extensionRoot,
@@ -31,6 +37,7 @@ const temporary = await mkdtemp(path.join(temporaryRoot, "runtrol-vscode-host-")
 const output = path.join(extensionRoot, ".test-dist");
 const testEntry = path.join(output, "extensionHost.test.cjs");
 const resultPath = path.join(temporary, "result.json");
+const restoreResultPath = path.join(temporary, "restore-result.json");
 const runtrolHome = path.join(temporary, "runtrol-home");
 const userData = path.join(temporary, "user");
 const extensions = path.join(temporary, "extensions");
@@ -38,17 +45,50 @@ await rm(output, { recursive: true, force: true });
 await mkdir(output, { recursive: true });
 await mkdir(path.join(userData, "User"), { recursive: true });
 await mkdir(extensions, { recursive: true });
+const workspaces = Array.from({ length: 8 }, (_unused, index) => path.join(temporary, `workspace-${index + 1}`));
+for (const workspace of workspaces) {
+  await mkdir(workspace, { recursive: true });
+}
+const providers = path.join(runtrolHome, "providers");
+await mkdir(providers, { recursive: true });
 await writeFile(
-  path.join(userData, "User", "settings.json"),
-  JSON.stringify({ "runtrol.corePath": core, "workbench.startupEditor": "none" }),
+  path.join(providers, "fixture-acp.toml"),
+  `schema = 1
+id = "fixture-acp"
+display_name = "ACP Fixture"
+kind = "acp"
+
+[bin]
+names = ["${path.basename(fixture)}"]
+
+[probe]
+version = { args = ["--version"], parse = "semver-anywhere" }
+
+[transport]
+argv = []
+listen = "stdio"
+`,
   "utf8",
 );
+await writeFile(
+  path.join(userData, "User", "settings.json"),
+  JSON.stringify({
+    "runtrol.corePath": core,
+    "runtrol.followWorkspace": false,
+    "workbench.startupEditor": "none",
+  }),
+  "utf8",
+);
+const pathKey = Object.keys(process.env).find((name) => name.toLowerCase() === "path") ?? "PATH";
+const coreEnvironment = { ...process.env, RUNTROL_HOME: runtrolHome };
+coreEnvironment[pathKey] = `${path.dirname(fixture)}${path.delimiter}${process.env[pathKey] ?? ""}`;
 let daemon = null;
 let daemonStderr = "";
+const hotSessions = [];
 
 try {
   daemon = spawn(core, ["daemon"], {
-    env: { ...process.env, RUNTROL_HOME: runtrolHome },
+    env: coreEnvironment,
     stdio: ["ignore", "ignore", "pipe"],
     windowsHide: true,
   });
@@ -60,13 +100,26 @@ try {
     throw new Error(`test Core stopped during startup:\n${daemonStderr}`);
   }
   const reached = spawnSync(core, ["endpoint"], {
-    env: { ...process.env, RUNTROL_HOME: runtrolHome },
+    env: coreEnvironment,
     encoding: "utf8",
     timeout: 15_000,
     windowsHide: true,
   });
   if (reached.status !== 0 || !reached.stdout.trim()) {
     throw new Error(`test Core did not expose an endpoint:\n${reached.stdout}${reached.stderr}`);
+  }
+  for (const workspace of workspaces) {
+    const started = spawnSync(core, ["start", "fixture-acp", workspace], {
+      env: coreEnvironment,
+      encoding: "utf8",
+      timeout: 15_000,
+      windowsHide: true,
+    });
+    const session = started.stdout.trim();
+    if (started.status !== 0 || !session) {
+      throw new Error(`cannot start a hot ACP fixture session:\n${started.stdout}${started.stderr}`);
+    }
+    hotSessions.push(session);
   }
   await build({
     entryPoints: [path.join(extensionRoot, "src", "integration", "extensionHost.test.ts")],
@@ -81,32 +134,26 @@ try {
   });
 
   const testEnvironment = {
-    RUNTROL_HOME: runtrolHome,
+    ...coreEnvironment,
     RUNTROL_TEST_CORE: core,
     RUNTROL_VSCODE_PERFORMANCE: "1",
     RUNTROL_VSCODE_RESULT: resultPath,
+    RUNTROL_VSCODE_PHASE: "measure",
+    RUNTROL_VSCODE_HOT_SESSIONS: JSON.stringify(hotSessions),
   };
   const installed = process.env.RUNTROL_TEST_VSCODE_EXECUTABLE;
-  if (installed?.toLowerCase().endsWith(".cmd")) {
-    await runInstalledCode(installed, testEntry, resultPath, testEnvironment);
-  } else {
-    await runTests({
-      cachePath: path.join(extensionRoot, ".vscode-test"),
-      extensionDevelopmentPath: extensionRoot,
-      extensionTestsPath: testEntry,
-      extensionTestsEnv: testEnvironment,
-      launchArgs: [
-        repositoryRoot,
-        "--disable-extensions",
-        `--user-data-dir=${userData}`,
-        `--extensions-dir=${extensions}`,
-      ],
-      version: process.env.RUNTROL_TEST_VSCODE_VERSION || "stable",
-      vscodeExecutablePath: installed || undefined,
-    });
-  }
-
-  const result = JSON.parse(await readFile(resultPath, "utf8"));
+  await runHost(installed, testEntry, resultPath, testEnvironment, repositoryRoot);
+  const measured = JSON.parse(await readFile(resultPath, "utf8"));
+  const restoreSession = hotSessions.at(-1);
+  const restoreEnvironment = {
+    ...testEnvironment,
+    RUNTROL_VSCODE_RESULT: restoreResultPath,
+    RUNTROL_VSCODE_PHASE: "restore",
+    RUNTROL_VSCODE_RESTORE_SESSION: restoreSession,
+  };
+  await runHost(installed, testEntry, restoreResultPath, restoreEnvironment, workspaces.at(-1));
+  const restored = JSON.parse(await readFile(restoreResultPath, "utf8"));
+  const result = { ...measured, ...restored };
   process.stdout.write(`RUNTROL_VSCODE_HOST ${JSON.stringify(result)}\n`);
 } catch (error) {
   if (daemon?.exitCode !== null) {
@@ -125,6 +172,22 @@ try {
   }
   throw error;
 } finally {
+  const cleanupFailures = [];
+  for (const session of [...hotSessions].reverse()) {
+    if (daemon?.exitCode !== null) {
+      cleanupFailures.push(`Core exited before session ${session} could close`);
+      break;
+    }
+    const closed = spawnSync(core, ["close", session, "--now"], {
+      env: coreEnvironment,
+      encoding: "utf8",
+      timeout: 15_000,
+      windowsHide: true,
+    });
+    if (closed.status !== 0) {
+      cleanupFailures.push(`session ${session}: ${closed.stderr || closed.stdout || "close failed"}`);
+    }
+  }
   if (daemon?.exitCode === null) {
     const exited = new Promise((resolve) => daemon.once("close", resolve));
     daemon.kill();
@@ -135,13 +198,37 @@ try {
   }
   await rm(output, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   await rm(temporary, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  if (cleanupFailures.length > 0) {
+    throw new Error(`hot-session cleanup failed:\n${cleanupFailures.join("\n")}`);
+  }
 }
 
 function delay(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
-async function runInstalledCode(executable, testEntry, resultPath, testEnvironment) {
+async function runHost(installed, testEntry, resultPath, testEnvironment, workspace) {
+  if (installed?.toLowerCase().endsWith(".cmd")) {
+    await runInstalledCode(installed, testEntry, resultPath, testEnvironment, workspace);
+    return;
+  }
+  await runTests({
+    cachePath: path.join(extensionRoot, ".vscode-test"),
+    extensionDevelopmentPath: extensionRoot,
+    extensionTestsPath: testEntry,
+    extensionTestsEnv: testEnvironment,
+    launchArgs: [
+      workspace,
+      "--disable-extensions",
+      `--user-data-dir=${userData}`,
+      `--extensions-dir=${extensions}`,
+    ],
+    version: process.env.RUNTROL_TEST_VSCODE_VERSION || "stable",
+    vscodeExecutablePath: installed || undefined,
+  });
+}
+
+async function runInstalledCode(executable, testEntry, resultPath, testEnvironment, workspace) {
   const arguments_ = [
     "--new-window",
     "--disable-extensions",
@@ -155,7 +242,7 @@ async function runInstalledCode(executable, testEntry, resultPath, testEnvironme
     extensionRoot,
     "--extensionTestsPath",
     testEntry,
-    repositoryRoot,
+    workspace,
   ];
   let child;
   const started = new Promise((resolve, reject) => {

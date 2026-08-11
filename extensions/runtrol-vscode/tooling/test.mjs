@@ -14,6 +14,7 @@ await build({
     "framing.test": path.join(extensionRoot, "src/core/framing.test.ts"),
     "liveCore.test": path.join(extensionRoot, "src/core/liveCore.test.ts"),
     "presentation.test": path.join(extensionRoot, "src/webview/presentation.test.ts"),
+    "selectionStore.test": path.join(extensionRoot, "src/selectionStore.test.ts"),
     "stateRows.test": path.join(extensionRoot, "src/stateRows.test.ts"),
     "workspaceCollision.test": path.join(extensionRoot, "src/workspaceCollision.test.ts"),
   },
@@ -31,6 +32,7 @@ const result = spawnSync(process.execPath, [
   path.join(out, "framing.test.js"),
   path.join(out, "liveCore.test.js"),
   path.join(out, "presentation.test.js"),
+  path.join(out, "selectionStore.test.js"),
   path.join(out, "stateRows.test.js"),
   path.join(out, "workspaceCollision.test.js"),
 ], {

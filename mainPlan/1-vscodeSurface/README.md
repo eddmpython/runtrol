@@ -38,7 +38,13 @@ The first end-to-end slice landed on 2026-08-11:
   single session owner atomically reserves that writer identity through opening, live, displacement, and closing;
   linked worktrees stay independent and only the surface's explicit continue action requests shared access
 - sustained output keeps the existing 16 ms first-post schedule and bounded queue, while backpressured transport uses
-  512-frame batches to reduce Extension Host to Webview cross-process calls without relaxing latency budgets
+  the same 4,096-frame queue ceiling as its maximum batch to reduce Extension Host to Webview cross-process calls;
+  the real gate requires zero dropped raw frames without relaxing latency budgets
+- a real Extension Host keeps eight external-manifest ACP children hot, then measures every selected-watch
+  acknowledgement and Webview paint; switch p95 is capped at 100 ms
+- the selected session is one bounded scalar SSOT under the extension's global storage, never conversation content;
+  a second VS Code process opens that session's workspace with the same profile and must restore its watch and paint
+  inside 1,500 ms
 - the extension manifest owns release SemVer, while `release-targets.json` owns the six native Marketplace targets
 - platform packaging includes exactly one matching Core and the repository license, while excluding source, tooling,
   dependencies, test budgets, and release metadata
@@ -51,8 +57,8 @@ queue and renderer bounds, TypeScript, framing tests, and production bundle size
 The hosted `vscodeHostPerformance` gate launches the product Core and production extension in a real isolated VS Code
 profile. Its shared ratchet caps ready activation at 1,000 ms, view opening at 500 ms, refresh p95 at 50 ms, Extension
 Host RSS growth at 48 MiB, Webview animation p95 at 40 ms, animation overrun from the unloaded native cadence at 8 ms,
-input and scroll p95 at 50 ms, and renderer backlog at 1,024 frames while 15,000 raw frames cross the boundary in five
-seconds.
+input and scroll p95 at 50 ms, renderer backlog at 1,024 frames, eight-hot-session switch p95 at 100 ms, and full
+workspace reload restoration at 1,500 ms while 15,000 raw frames cross the boundary in five seconds.
 
 ## Module boundaries
 
@@ -62,21 +68,20 @@ seconds.
 | `core/framing.ts` | bounded four-byte frame transport | request meaning, conversation rendering |
 | `protocol.ts` | the TypeScript projection of the Rust wire | provider-specific fields |
 | `state.ts` | session, provider, cursor, and selection metadata in memory | conversation frames |
+| `selectionStore.ts` | one bounded selected-session identifier across workspace reloads | prompts, replies, provider state |
 | `controller.ts` | user actions, one watch lifetime, workspace binding | transcript discovery or agent loops |
 | `conversationView.ts` | CSP and Webview transport | retained conversation state |
 | `webview/` | bounded active rendering and input | durable storage, background sessions |
 
 ## Remaining gates before release
 
-1. Extend the current 3,000-frame real Webview ratchet through session switching, workspace reload, and eight hot
-   sessions.
-2. Exercise start, prompt, approval, interrupt, reconnect, close, and workspace switching against installed real CLIs
+1. Exercise start, prompt, approval, interrupt, reconnect, close, and workspace switching against installed real CLIs
    from an Extension Development Host.
-3. Verify upgrade plus rollback without stopping active sessions. The hosted native release matrix already builds and
+2. Verify upgrade plus rollback without stopping active sessions. The hosted native release matrix already builds and
    clean-installs all six platform packages.
    Marketplace publication signs the complete platform VSIX, including the exact Core bytes already checked by the
    archive gate. A separate inner-binary signature is not claimed.
-4. Publish `Runtrol Studio` to the Visual Studio Marketplace and verify a clean machine installs and runs it.
+3. Publish `Runtrol Studio` to the Visual Studio Marketplace and verify a clean machine installs and runs it.
 
 ## Completion
 

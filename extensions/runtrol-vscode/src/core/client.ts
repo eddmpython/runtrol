@@ -17,6 +17,7 @@ type Connected = {
 };
 
 export type WatchHandlers = {
+  started?: () => void;
   event: (payload: unknown, nextExpected: WatchCursor) => void;
   gap: (nextExpected: WatchCursor, message: string) => void;
 };
@@ -71,6 +72,7 @@ export class CoreClient {
       if (started.say !== "watching") {
         throw new Error(`the daemon answered watch with ${started.say}`);
       }
+      handlers.started?.();
       if (started.with.gap) {
         handlers.gap(started.with.starts_at, "The bounded replay window has a gap.");
       }

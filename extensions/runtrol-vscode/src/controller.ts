@@ -12,16 +12,17 @@ import type {
   SessionLine,
   WorkspaceAccess,
 } from "./protocol";
+import { SelectionStore } from "./selectionStore";
 import { RuntimeState } from "./state";
 import { SessionItem } from "./trees";
 import { workspaceCollisions, type WorkspaceCollision } from "./workspaceCollision";
-
-const SELECTED_SESSION_KEY = "runtrol.selectedSession";
 
 export class Controller implements vscode.Disposable {
   private watchAbort: AbortController | null = null;
   private indexAbort: AbortController | null = null;
   private readonly status: vscode.StatusBarItem;
+  private selectionTail: Promise<void> = Promise.resolve();
+  private watchReady: Promise<void> = Promise.resolve();
   private disposed = false;
 
   constructor(
@@ -29,6 +30,7 @@ export class Controller implements vscode.Disposable {
     private readonly client: CoreClient,
     private readonly state: RuntimeState,
     private readonly conversation: ConversationView,
+    private readonly selection: SelectionStore,
   ) {
     this.status = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 20);
     this.status.name = "Runtrol sessions";
@@ -40,7 +42,7 @@ export class Controller implements vscode.Disposable {
   async initialize(): Promise<void> {
     await this.refresh();
     this.startSessionIndexWatch();
-    const remembered = this.context.globalState.get<string>(SELECTED_SESSION_KEY);
+    const remembered = await this.selection.load();
     const selected = this.state.sessions.find((session) => session.session === remembered)
       ?? this.state.sessions.find((session) => session.hot)
       ?? null;
@@ -79,15 +81,21 @@ export class Controller implements vscode.Disposable {
     }
   }
 
-  async select(value: SessionItem | SessionLine | string, follow = true): Promise<void> {
+  select(value: SessionItem | SessionLine | string, follow = true): Promise<void> {
+    const selected = this.selectionTail.then(() => this.selectNow(value, follow));
+    this.selectionTail = selected.catch(() => undefined);
+    return selected;
+  }
+
+  private async selectNow(value: SessionItem | SessionLine | string, follow: boolean): Promise<void> {
     const id = typeof value === "string" ? value : value instanceof SessionItem ? value.session.session : value.session;
     const session = this.state.sessions.find((candidate) => candidate.session === id);
     if (!session) {
       throw new Error("that session is no longer listed");
     }
+    await this.selection.save(session.session);
     this.watchAbort?.abort();
     this.state.select(session.session);
-    await this.context.globalState.update(SELECTED_SESSION_KEY, session.session);
     this.conversation.reset(session);
 
     const follows = vscode.workspace.getConfiguration("runtrol").get<boolean>("followWorkspace", true);
@@ -197,7 +205,7 @@ export class Controller implements vscode.Disposable {
 
   async openWorkspace(value?: SessionItem | SessionLine): Promise<void> {
     const session = value instanceof SessionItem ? value.session : value ?? this.requireSelected();
-    await this.context.globalState.update(SELECTED_SESSION_KEY, session.session);
+    await this.selection.save(session.session);
     if (workspaceIsOpen(session.workspace)) {
       await vscode.commands.executeCommand("workbench.view.explorer");
       return;
@@ -214,13 +222,21 @@ export class Controller implements vscode.Disposable {
     this.client.dispose();
   }
 
+  selectedWatchReady(): Promise<void> {
+    return this.watchReady;
+  }
+
   private startWatch(session: SessionLine): void {
     const abort = new AbortController();
     this.watchAbort = abort;
-    void this.watchLoop(session, abort.signal);
+    let ready = () => {};
+    this.watchReady = new Promise<void>((resolve) => {
+      ready = resolve;
+    });
+    void this.watchLoop(session, abort.signal, ready);
   }
 
-  private async watchLoop(session: SessionLine, signal: AbortSignal): Promise<void> {
+  private async watchLoop(session: SessionLine, signal: AbortSignal, ready: () => void): Promise<void> {
     let retryMs = 250;
     while (!signal.aborted && !this.disposed && this.state.selected?.session === session.session) {
       try {
@@ -228,6 +244,7 @@ export class Controller implements vscode.Disposable {
           session.session,
           this.state.cursor(session.session),
           {
+            started: ready,
             event: (payload, nextExpected) => {
               this.state.advance(session.session, nextExpected);
               this.conversation.frame(payload);
@@ -292,7 +309,13 @@ export class Controller implements vscode.Disposable {
     }
     if (selected && !this.state.selected) {
       this.watchAbort?.abort();
-      void this.context.globalState.update(SELECTED_SESSION_KEY, undefined);
+      this.watchReady = Promise.resolve();
+      void this.selection.clear().catch((error: unknown) => {
+        this.conversation.status(
+          `Cannot clear the selected session: ${error instanceof Error ? error.message : String(error)}`,
+          "warning",
+        );
+      });
       this.conversation.reset(null);
     }
   }

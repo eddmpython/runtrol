@@ -18,15 +18,27 @@ type ExtensionApi = {
     scrollP95Ms: number;
     maxPendingFrames: number;
     producedFrames: number;
+    droppedFrames: number;
     visibleCharacters: number;
     visibleItems: number;
   }>;
+  measureHotSessions?(sessionIds: readonly string[]): Promise<{
+    hotSessionCount: number;
+    sessionSwitchP95Ms: number;
+  }>;
+  verifyRestoredSession?(sessionId: string): Promise<void>;
 };
 
 export async function run(): Promise<void> {
   const resultPath = requiredEnvironment("RUNTROL_VSCODE_RESULT");
   try {
-    await measure(resultPath);
+    if (process.env.RUNTROL_VSCODE_PHASE === "restore") {
+      const restored = await measureRestore(requiredEnvironment("RUNTROL_VSCODE_RESTORE_SESSION"));
+      await writeFile(resultPath, JSON.stringify(restored), "utf8");
+    } else {
+      const measured = await measure(resultPath);
+      await writeFile(resultPath, JSON.stringify(measured), "utf8");
+    }
   } catch (error) {
     await writeFile(
       resultPath,
@@ -41,7 +53,7 @@ export async function run(): Promise<void> {
   }
 }
 
-async function measure(resultPath: string): Promise<void> {
+async function measure(resultPath: string): Promise<Record<string, number | string>> {
   const core = requiredEnvironment("RUNTROL_TEST_CORE");
   const configuredCore = vscode.workspace.getConfiguration("runtrol").get<string>("corePath");
   if (configuredCore !== core) {
@@ -106,11 +118,24 @@ async function measure(resultPath: string): Promise<void> {
   if (webview.producedFrames < expectedFrames) {
     throw new Error(`Webview load produced only ${webview.producedFrames} frames`);
   }
+  if (webview.droppedFrames !== 0) {
+    throw new Error(`Webview transport dropped ${webview.droppedFrames} raw frames`);
+  }
   if (webview.visibleItems > 400 || webview.visibleCharacters > 256 * 1024) {
     throw new Error(
       `Webview bounds escaped at ${webview.visibleItems} items and ${webview.visibleCharacters} characters`,
     );
   }
+
+  currentStage = "session-switch";
+  if (!api.measureHotSessions) {
+    throw new Error("the performance-only hot-session measurement API is unavailable");
+  }
+  const switched = await within(
+    api.measureHotSessions(hotSessionIds()),
+    20_000,
+    "eight hot session switches",
+  );
 
   const result = {
     vscode: vscode.version,
@@ -124,13 +149,77 @@ async function measure(resultPath: string): Promise<void> {
     webviewInputP95Ms: webview.inputP95Ms,
     webviewScrollP95Ms: webview.scrollP95Ms,
     webviewPendingFrames: webview.maxPendingFrames,
+    webviewDroppedFrames: webview.droppedFrames,
+    hotSessionCount: switched.hotSessionCount,
+    sessionSwitchP95Ms: switched.sessionSwitchP95Ms,
   };
-  await writeFile(resultPath, JSON.stringify(result), "utf8");
-
   const failures = budgetFailures(result);
   if (failures.length > 0) {
     throw new Error(failures.join("; "));
   }
+  return result;
+}
+
+async function measureRestore(expected: string): Promise<{
+  reloadRestoreMs: number;
+  reloadActivationMs: number;
+  reloadReadyMs: number;
+  reloadViewMs: number;
+  reloadSelectionMs: number;
+}> {
+  currentStage = "reload-activation";
+  const extension = vscode.extensions.getExtension("eddmpython.runtrol-studio");
+  if (!extension) {
+    throw new Error("the Runtrol Studio development extension is missing after reload");
+  }
+  const started = performance.now();
+  const api = await within(extension.activate() as Promise<ExtensionApi>, 5_000, "reload activation");
+  const activatedAt = performance.now();
+  let readyAt = activatedAt;
+  let viewAt = activatedAt;
+  const ready = within(api.ready, 5_000, "reload initialization").then(() => {
+    readyAt = performance.now();
+  });
+  const view = (async () => {
+    await within(
+      vscode.commands.executeCommand("workbench.view.extension.runtrol"),
+      5_000,
+      "opening the Runtrol view after reload",
+    );
+    await within(
+      vscode.commands.executeCommand("runtrol.conversation.focus"),
+      5_000,
+      "focusing the Runtrol Webview after reload",
+    );
+    viewAt = performance.now();
+  })();
+  await Promise.all([ready, view]);
+  const readyAndViewAt = Math.max(readyAt, viewAt);
+  if (!api.verifyRestoredSession) {
+    throw new Error("the performance-only restored-session verifier is unavailable");
+  }
+  currentStage = "reload-selection";
+  await within(api.verifyRestoredSession(expected), 5_000, "restoring the selected hot session");
+  const selectedAt = performance.now();
+  const reloadRestoreMs = selectedAt - started;
+  const reloadActivationMs = activatedAt - started;
+  const reloadReadyMs = readyAt - activatedAt;
+  const reloadViewMs = viewAt - activatedAt;
+  const reloadSelectionMs = selectedAt - readyAndViewAt;
+  if (reloadRestoreMs > budget.reloadRestoreMs) {
+    throw new Error(
+      `reload restore ${reloadRestoreMs.toFixed(1)} ms exceeds ${budget.reloadRestoreMs} ms `
+      + `(activation ${reloadActivationMs.toFixed(1)}, ready ${reloadReadyMs.toFixed(1)}, `
+      + `view ${reloadViewMs.toFixed(1)}, selection ${reloadSelectionMs.toFixed(1)})`,
+    );
+  }
+  return {
+    reloadRestoreMs,
+    reloadActivationMs,
+    reloadReadyMs,
+    reloadViewMs,
+    reloadSelectionMs,
+  };
 }
 
 async function checkpoint(resultPath: string, stage: string): Promise<void> {
@@ -164,6 +253,7 @@ function budgetFailures(result: {
   webviewInputP95Ms: number;
   webviewScrollP95Ms: number;
   webviewPendingFrames: number;
+  sessionSwitchP95Ms: number;
 }): string[] {
   const failures: string[] = [];
   if (result.activationMs > budget.activationMs) {
@@ -204,6 +294,11 @@ function budgetFailures(result: {
       `Webview pending frames ${result.webviewPendingFrames} exceeds ${budget.webviewPendingFrames}`,
     );
   }
+  if (result.sessionSwitchP95Ms > budget.sessionSwitchP95Ms) {
+    failures.push(
+      `session switch p95 ${result.sessionSwitchP95Ms.toFixed(1)} ms exceeds ${budget.sessionSwitchP95Ms} ms`,
+    );
+  }
   return failures;
 }
 
@@ -225,6 +320,20 @@ function numericEnvironment(name: string, fallback: number): number {
   const value = raw ? Number(raw) : fallback;
   if (!Number.isFinite(value) || value <= 0) {
     throw new Error(`${name} must be a positive number`);
+  }
+  return value;
+}
+
+function hotSessionIds(): string[] {
+  const raw = requiredEnvironment("RUNTROL_VSCODE_HOT_SESSIONS");
+  let value: unknown;
+  try {
+    value = JSON.parse(raw);
+  } catch {
+    throw new Error("RUNTROL_VSCODE_HOT_SESSIONS is not JSON");
+  }
+  if (!Array.isArray(value) || value.length !== 8 || !value.every((item) => typeof item === "string")) {
+    throw new Error("RUNTROL_VSCODE_HOT_SESSIONS must contain eight session identifiers");
   }
   return value;
 }
