@@ -7,15 +7,18 @@
 pub mod crypto;
 pub mod egress;
 pub mod http;
+pub mod websocket;
 
 pub use crypto::{
     ApprovedPairing, Channel, CryptoError, EncryptedRecord, InitiatorHandshake, LinkKind,
-    MAX_NOISE_PLAINTEXT, MAX_TRANSPORT_FRAME, PairingInvitation, PairingOffer, PairingSecret,
-    PendingPairing, PublicKey, ResponderHandshake, SessionBinding, StaticKeypair,
+    MAX_ENCRYPTED_RECORD_WIRE, MAX_NOISE_PLAINTEXT, MAX_TRANSPORT_FRAME, PairingInvitation,
+    PairingOffer, PairingSecret, PendingPairing, PendingSession, PublicKey, ResponderHandshake,
+    SessionBinding, SessionResponder, StaticKeypair,
 };
 pub use egress::{ApprovedDestination, EgressError, EgressPolicy};
 pub use http::{
-    AccessToken, CredentialFingerprint, DeviceCredential, PhoneBody, PhoneHttp, PhoneHttpError,
-    response,
+    AccessToken, AdmittedNoiseUpgrade, CredentialFingerprint, DeviceCredential, NOISE_LINK_PATH,
+    NOISE_LINK_PROTOCOL, PhoneBody, PhoneHttp, PhoneHttpError, response,
 };
 pub use hyper::StatusCode;
+pub use websocket::{NoiseUpgrade, NoiseWebSocket, PendingNoiseWebSocket, WebSocketLinkError};

@@ -71,6 +71,8 @@ tokio = { version = "1.53.1", default-features = false }
 hyper = { version = "1.11.0", default-features = false }
 hyper-util = { version = "0.1.20", default-features = false }
 http-body-util = { version = "0.1.4", default-features = false }
+# Browser-compatible binary links. Only Hyper upgrade support is enabled; TLS and the web framework stay outside.
+fastwebsockets = { version = "0.10.0", default-features = false, features = ["upgrade"] }
 
 # End-to-end phone channel. The negotiated suite is AES-GCM only. `snow` 0.10.0's AES resolver gets its shared
 # `KeyInit` import behind the ChaCha feature, so that feature is also required for this release to compile even

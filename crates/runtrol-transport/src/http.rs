@@ -17,7 +17,7 @@ use std::future::Future;
 use std::sync::Arc;
 
 use bytes::Bytes;
-use http_body_util::{BodyExt as _, Full, combinators::BoxBody};
+use http_body_util::{BodyExt as _, Empty, Full, combinators::BoxBody};
 use hyper::body::Incoming;
 use hyper::header::{
     ACCESS_CONTROL_ALLOW_CREDENTIALS, ACCESS_CONTROL_ALLOW_HEADERS, ACCESS_CONTROL_ALLOW_METHODS,
@@ -33,11 +33,18 @@ use sha2::{Digest as _, Sha256};
 use tokio::net::TcpStream;
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
+use crate::{NoiseUpgrade, SessionBinding, SessionResponder, StaticKeypair, WebSocketLinkError};
+
 const PROTOCOL_HEADER: &str = "x-runtrol-proto";
 const PROTOCOL_VERSION: &str = "1";
 const TOKEN_BYTES: usize = 32;
 const TOKEN_HEX: usize = TOKEN_BYTES * 2;
 const TOKEN_FINGERPRINT_DOMAIN: &[u8] = b"runtrol/http-credential/1";
+/// Exact HTTP path used by the browser-compatible Noise link.
+pub const NOISE_LINK_PATH: &str = "/v1/link";
+
+/// Exact RFC 6455 subprotocol selected for the browser-compatible Noise link.
+pub const NOISE_LINK_PROTOCOL: &str = "runtrol.noise.v1";
 
 /// A response body on the phone-facing HTTP plane.
 ///
@@ -167,6 +174,43 @@ pub struct PhoneHttp {
     policy: Arc<Policy>,
 }
 
+/// One exact-origin WebSocket upgrade admitted only to begin Noise device authentication.
+///
+/// The request carries no [`Caller`]. A caller exists only after [`NoiseUpgrade::receive`] authenticates its static
+/// key and the daemon maps that key to one durable paired device.
+pub struct AdmittedNoiseUpgrade {
+    request: Request<Incoming>,
+}
+
+impl AdmittedNoiseUpgrade {
+    /// Produce HTTP 101 and a pending Noise responder bound to the selected physical link.
+    ///
+    /// The response must be returned from the HTTP handler before awaiting the [`NoiseUpgrade`].
+    ///
+    /// # Errors
+    ///
+    /// [`WebSocketLinkError::Crypto`] when the Noise responder cannot be initialized, or
+    /// [`WebSocketLinkError::WebSocket`] when the RFC 6455 upgrade fields are invalid.
+    pub fn begin(
+        mut self,
+        local: &StaticKeypair,
+        binding: &SessionBinding,
+    ) -> Result<(Response<PhoneBody>, NoiseUpgrade), WebSocketLinkError> {
+        let responder = SessionResponder::new(local, binding)?;
+        let (mut response, upgraded) = fastwebsockets::upgrade::upgrade(&mut self.request)
+            .map_err(WebSocketLinkError::from)?;
+        response.headers_mut().insert(
+            "Sec-WebSocket-Protocol",
+            hyper::header::HeaderValue::from_static(NOISE_LINK_PROTOCOL),
+        );
+        let (parts, _) = response.into_parts();
+        Ok((
+            Response::from_parts(parts, Empty::<Bytes>::new().boxed()),
+            NoiseUpgrade::new(upgraded, responder),
+        ))
+    }
+}
+
 struct Policy {
     hosts: Vec<Box<str>>,
     origins: Vec<Box<str>>,
@@ -255,6 +299,55 @@ impl PhoneHttp {
                         status,
                         allowed_origin,
                     } => refusal(status, allowed_origin.as_deref()),
+                    Decision::NoiseUpgrade { origin } => {
+                        refusal(StatusCode::FORBIDDEN, Some(&origin))
+                    }
+                };
+                Ok::<_, Infallible>(answer)
+            }
+        });
+
+        http1::Builder::new()
+            .serve_connection(TokioIo::new(stream), service)
+            .with_upgrades()
+            .await
+    }
+
+    /// Serve one TCP connection that admits only the browser Noise WebSocket endpoint.
+    ///
+    /// Host, Origin, browser metadata, path, method, RFC 6455 upgrade fields, and the exact subprotocol are checked
+    /// before `handler` receives [`AdmittedNoiseUpgrade`]. No bearer token crosses the unencrypted LAN hop. The
+    /// upgraded stream itself remains unusable until Noise authenticates and the daemon authorizes a stored key.
+    ///
+    /// # Errors
+    ///
+    /// A Hyper connection error when the peer violates HTTP framing or the socket fails.
+    pub async fn serve_noise_connection<F, Fut>(
+        &self,
+        stream: TcpStream,
+        handler: F,
+    ) -> Result<(), hyper::Error>
+    where
+        F: Fn(AdmittedNoiseUpgrade) -> Fut + Clone + Send + Sync + 'static,
+        Fut: Future<Output = Response<PhoneBody>> + Send + 'static,
+    {
+        let server = self.clone();
+        let service = service_fn(move |request| {
+            let server = server.clone();
+            let handler = handler.clone();
+            async move {
+                let answer = match server.policy.admit_noise(&request) {
+                    Decision::NoiseUpgrade { origin } => {
+                        let response = handler(AdmittedNoiseUpgrade { request }).await;
+                        secure_response(response, Some(&origin))
+                    }
+                    Decision::Refuse {
+                        status,
+                        allowed_origin,
+                    } => refusal(status, allowed_origin.as_deref()),
+                    Decision::Forward { .. } | Decision::Preflight { .. } => {
+                        refusal(StatusCode::FORBIDDEN, None)
+                    }
                 };
                 Ok::<_, Infallible>(answer)
             }
@@ -352,6 +445,53 @@ impl Policy {
             .iter()
             .any(|allowed| allowed.eq_ignore_ascii_case(offered))
     }
+
+    fn admit_noise<B>(&self, request: &Request<B>) -> Decision {
+        if !self.host_allowed(request.headers()) {
+            return Decision::Refuse {
+                status: StatusCode::MISDIRECTED_REQUEST,
+                allowed_origin: None,
+            };
+        }
+        let Some(origin) = single_header(request.headers(), ORIGIN) else {
+            return Decision::Refuse {
+                status: StatusCode::FORBIDDEN,
+                allowed_origin: None,
+            };
+        };
+        let Some(origin) = self.origins.iter().find(|known| &***known == origin) else {
+            return Decision::Refuse {
+                status: StatusCode::FORBIDDEN,
+                allowed_origin: None,
+            };
+        };
+        let origin = origin.clone();
+        if request.method() != Method::GET {
+            return Decision::Refuse {
+                status: StatusCode::METHOD_NOT_ALLOWED,
+                allowed_origin: Some(origin),
+            };
+        }
+        if request.uri().path() != NOISE_LINK_PATH || request.uri().query().is_some() {
+            return Decision::Refuse {
+                status: StatusCode::NOT_FOUND,
+                allowed_origin: Some(origin),
+            };
+        }
+        if !matches!(
+            single_header(request.headers(), "sec-fetch-site"),
+            Some("same-origin" | "none")
+        ) || single_header(request.headers(), "sec-websocket-protocol")
+            != Some(NOISE_LINK_PROTOCOL)
+            || !fastwebsockets::upgrade::is_upgrade_request(request)
+        {
+            return Decision::Refuse {
+                status: StatusCode::FORBIDDEN,
+                allowed_origin: Some(origin),
+            };
+        }
+        Decision::NoiseUpgrade { origin }
+    }
 }
 
 enum Decision {
@@ -360,6 +500,9 @@ enum Decision {
         origin: Box<str>,
     },
     Preflight {
+        origin: Box<str>,
+    },
+    NoiseUpgrade {
         origin: Box<str>,
     },
     Refuse {
@@ -503,6 +646,8 @@ pub enum PhoneHttpError {
 mod tests {
     use super::*;
 
+    const PHONE_ORIGIN: &str = "https://phone.runtrol.test";
+
     #[test]
     fn tokens_are_fixed_strength_and_canonical() {
         let canonical = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
@@ -550,5 +695,69 @@ mod tests {
     fn no_origin_and_no_device_is_a_valid_default_deny_policy() {
         let policy = PhoneHttp::loopback(49152, std::iter::empty::<&str>(), []);
         assert!(policy.is_ok());
+    }
+
+    #[test]
+    fn noise_upgrade_requires_the_exact_browser_boundary() {
+        let server = PhoneHttp::loopback(49152, [PHONE_ORIGIN], []).expect("policy");
+        assert!(matches!(
+            server.policy.admit_noise(&noise_request()),
+            Decision::NoiseUpgrade { .. }
+        ));
+
+        for (name, value, status) in [
+            (HOST, "attacker.test:49152", StatusCode::MISDIRECTED_REQUEST),
+            (ORIGIN, "https://attacker.test", StatusCode::FORBIDDEN),
+            (
+                hyper::header::HeaderName::from_static("sec-fetch-site"),
+                "cross-site",
+                StatusCode::FORBIDDEN,
+            ),
+            (
+                hyper::header::HeaderName::from_static("sec-websocket-protocol"),
+                "runtrol.other.v1",
+                StatusCode::FORBIDDEN,
+            ),
+        ] {
+            let mut request = noise_request();
+            request.headers_mut().insert(
+                name,
+                hyper::header::HeaderValue::from_str(value).expect("header value"),
+            );
+            assert!(matches!(
+                server.policy.admit_noise(&request),
+                Decision::Refuse { status: found, .. } if found == status
+            ));
+        }
+    }
+
+    #[test]
+    fn noise_upgrade_rejects_a_query_or_non_link_path() {
+        let server = PhoneHttp::loopback(49152, [PHONE_ORIGIN], []).expect("policy");
+        for uri in ["/v1/link?token=plaintext", "/v1/other"] {
+            let mut request = noise_request();
+            *request.uri_mut() = uri.parse().expect("request URI");
+            assert!(matches!(
+                server.policy.admit_noise(&request),
+                Decision::Refuse {
+                    status: StatusCode::NOT_FOUND,
+                    ..
+                }
+            ));
+        }
+    }
+
+    fn noise_request() -> Request<()> {
+        Request::builder()
+            .method(Method::GET)
+            .uri(NOISE_LINK_PATH)
+            .header(HOST, "127.0.0.1:49152")
+            .header(ORIGIN, PHONE_ORIGIN)
+            .header("Sec-Fetch-Site", "same-origin")
+            .header("Connection", "Upgrade")
+            .header("Upgrade", "websocket")
+            .header("Sec-WebSocket-Protocol", NOISE_LINK_PROTOCOL)
+            .body(())
+            .expect("noise request")
     }
 }

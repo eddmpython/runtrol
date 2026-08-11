@@ -33,6 +33,9 @@ const PAIRING_MAX_ATTEMPTS: u8 = 5;
 /// Maximum plaintext accepted by one Noise transport message.
 pub const MAX_NOISE_PLAINTEXT: usize = NOISE_MESSAGE_MAX - NOISE_TAG_LEN;
 
+/// Maximum canonical wire bytes occupied by one encrypted Noise record.
+pub const MAX_ENCRYPTED_RECORD_WIRE: usize = NOISE_MESSAGE_MAX + 3;
+
 /// Maximum in-memory frame carried by this boundary.
 ///
 /// This deliberately matches the local IPC envelope budget without depending on the IPC crate. Transport remains a
@@ -632,11 +635,7 @@ impl ResponderHandshake {
         expected_remote: PublicKey,
         binding: &SessionBinding,
     ) -> Result<Self, CryptoError> {
-        let prologue = binding.prologue();
-        let state = Builder::new(noise_params(SESSION_PATTERN)?)
-            .local_private_key(&local.private)?
-            .prologue(&prologue)?
-            .build_responder()?;
+        let state = session_responder_state(local, binding)?;
         Ok(Self {
             state,
             expected_remote,
@@ -680,6 +679,76 @@ impl ResponderHandshake {
         let reply = write_handshake(&mut self.state, payload)?;
         let transport = self.state.into_transport_mode()?;
         Ok((Channel::new(transport), reply, first_payload))
+    }
+}
+
+/// A session responder before the authenticated static key is mapped to a paired device.
+///
+/// Noise IK hides the initiator static key inside message one. This state may decrypt that message and expose only
+/// the authenticated public key. It cannot produce message two or a transport channel until [`PendingSession::approve`]
+/// pins that key to one previously paired identity.
+pub struct SessionResponder {
+    state: HandshakeState,
+}
+
+impl SessionResponder {
+    /// Prepare a responder for one transport-bound session without guessing which paired device connected.
+    ///
+    /// # Errors
+    ///
+    /// [`CryptoError::Noise`] when the exact suite cannot be initialized.
+    pub fn new(local: &StaticKeypair, binding: &SessionBinding) -> Result<Self, CryptoError> {
+        Ok(Self {
+            state: session_responder_state(local, binding)?,
+        })
+    }
+
+    /// Authenticate message one enough to recover its static key, but do not establish a usable channel yet.
+    ///
+    /// # Errors
+    ///
+    /// [`CryptoError::Noise`] for an invalid message or [`CryptoError::RemoteIdentity`] when Noise did not reveal an
+    /// authenticated initiator static key.
+    pub fn receive(mut self, first: &EncryptedRecord) -> Result<PendingSession, CryptoError> {
+        let initiator_payload = read_handshake(&mut self.state, first)?;
+        let remote_public = remote_public(&self.state)?;
+        Ok(PendingSession {
+            state: self.state,
+            remote_public,
+            initiator_payload,
+        })
+    }
+}
+
+/// An authenticated Noise initiator that is not authorized as a stored paired device yet.
+pub struct PendingSession {
+    state: HandshakeState,
+    remote_public: PublicKey,
+    initiator_payload: Vec<u8>,
+}
+
+impl PendingSession {
+    /// The authenticated static key used to find one restored paired device.
+    #[must_use]
+    pub const fn remote_public_key(&self) -> PublicKey {
+        self.remote_public
+    }
+
+    /// Pin the authenticated key to the selected paired identity and enter transport mode.
+    ///
+    /// # Errors
+    ///
+    /// [`CryptoError::RemoteIdentity`] if `expected` is not the key authenticated by message one, or
+    /// [`CryptoError::Noise`] if message two cannot be written.
+    pub fn approve(
+        mut self,
+        expected: PublicKey,
+        payload: &[u8],
+    ) -> Result<(Channel, EncryptedRecord, Vec<u8>), CryptoError> {
+        verify_remote(&self.state, expected)?;
+        let reply = write_handshake(&mut self.state, payload)?;
+        let transport = self.state.into_transport_mode()?;
+        Ok((Channel::new(transport), reply, self.initiator_payload))
     }
 }
 
@@ -964,6 +1033,17 @@ fn read_handshake(
     Ok(payload)
 }
 
+fn session_responder_state(
+    local: &StaticKeypair,
+    binding: &SessionBinding,
+) -> Result<HandshakeState, CryptoError> {
+    let prologue = binding.prologue();
+    Ok(Builder::new(noise_params(SESSION_PATTERN)?)
+        .local_private_key(&local.private)?
+        .prologue(&prologue)?
+        .build_responder()?)
+}
+
 fn verify_remote(state: &HandshakeState, expected: PublicKey) -> Result<(), CryptoError> {
     let Some(remote) = state.get_remote_static() else {
         return Err(CryptoError::RemoteIdentity);
@@ -1109,5 +1189,57 @@ mod pairing_lifecycle_tests {
         let second = StaticKeypair::from_private(&private).expect("second identity");
         assert_eq!(first.public_key(), second.public_key());
         assert_ne!(first.public_key().to_bytes(), [0; 32]);
+    }
+
+    #[test]
+    fn a_session_responder_exposes_only_the_authenticated_key_before_approval() {
+        let pc = StaticKeypair::generate().expect("pc key");
+        let phone = StaticKeypair::generate().expect("phone key");
+        let binding = SessionBinding::direct(LinkKind::Loopback, pc.public_key().to_bytes())
+            .expect("loopback binding");
+        let mut initiator =
+            InitiatorHandshake::session(&phone, pc.public_key(), &binding).expect("initiator");
+        let first = initiator.write_first(&[]).expect("message one");
+
+        let pending = SessionResponder::new(&pc, &binding)
+            .expect("responder")
+            .receive(&first)
+            .expect("authenticated message one");
+
+        assert_eq!(pending.remote_public_key(), phone.public_key());
+        let (mut responder, reply, early) = pending
+            .approve(phone.public_key(), b"ready")
+            .expect("paired identity approved");
+        assert!(early.is_empty());
+        let (mut phone_channel, response) = initiator.finish(&reply).expect("message two");
+        assert_eq!(response, b"ready");
+        let records = phone_channel
+            .seal_frame(b"same core")
+            .expect("sealed frame");
+        let opened = records
+            .into_iter()
+            .find_map(|record| responder.open_record(&record).expect("opened record"));
+        assert_eq!(opened.as_deref(), Some(b"same core".as_slice()));
+    }
+
+    #[test]
+    fn a_session_responder_cannot_approve_a_different_paired_key() {
+        let pc = StaticKeypair::generate().expect("pc key");
+        let phone = StaticKeypair::generate().expect("phone key");
+        let stranger = StaticKeypair::generate().expect("stranger key");
+        let binding = SessionBinding::direct(LinkKind::Loopback, pc.public_key().to_bytes())
+            .expect("loopback binding");
+        let mut initiator =
+            InitiatorHandshake::session(&phone, pc.public_key(), &binding).expect("initiator");
+        let first = initiator.write_first(&[]).expect("message one");
+        let pending = SessionResponder::new(&pc, &binding)
+            .expect("responder")
+            .receive(&first)
+            .expect("authenticated message one");
+
+        assert!(matches!(
+            pending.approve(stranger.public_key(), &[]),
+            Err(CryptoError::RemoteIdentity)
+        ));
     }
 }
