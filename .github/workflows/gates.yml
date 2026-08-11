@@ -247,17 +247,29 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev xvfb
       - uses: Swatinem/rust-cache@v2
       - uses: actions/setup-node@v5
         with:
           node-version: "24"
           cache: npm
-          cache-dependency-path: crates/runtrol-gui/ui/package-lock.json
+          cache-dependency-path: |
+            crates/runtrol-gui/ui/package-lock.json
+            extensions/runtrol-vscode/package-lock.json
       - name: 데스크톱 프런트엔드 의존성
         run: npm --prefix crates/runtrol-gui/ui ci
+      - name: VS Code 확장 의존성
+        run: npm --prefix extensions/runtrol-vscode ci
+      - uses: actions/cache@v4
+        with:
+          path: extensions/runtrol-vscode/.vscode-test
+          key: vscode-test-${{ runner.os }}-${{ hashFiles('extensions/runtrol-vscode/package-lock.json') }}
       - name: 데스크톱 프런트엔드
         run: python -X utf8 tests/audit/frontendBuild.py
+      - name: VS Code Extension Host 성능 게이트 자체 검증
+        run: python -X utf8 tests/audit/vscodeHostPerformance.py --selftest
+      - name: 실제 VS Code 활성화, 뷰, 갱신 p95, RSS ratchet
+        run: python -X utf8 tests/audit/vscodeHostPerformance.py
       - name: 데스크톱 상호작용 예산 게이트 자체 검증
         if: matrix.os == 'windows-latest'
         run: python -X utf8 tests/audit/interactionLatencyBudget.py --selftest

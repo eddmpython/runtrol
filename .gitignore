@@ -41,6 +41,7 @@ crates/runtrol-gui/ui/brand/
 
 # VS Code package resources are copied from the brand SSOT and the selected release binary during build.
 extensions/runtrol-vscode/resources/
+extensions/runtrol-vscode/.vscode-test/
 
 # Python. 게이트 harness 전용이고 재생성된다.
 .venv/

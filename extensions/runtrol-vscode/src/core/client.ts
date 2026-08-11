@@ -1,5 +1,5 @@
 import { FrameTransport } from "./framing";
-import { CoreLocator } from "./locator";
+import type { CoreLocator } from "./locator";
 import {
   type ProviderLine,
   type Request,
@@ -26,17 +26,31 @@ export type SessionIndexHandlers = {
 };
 
 export class CoreClient {
+  private commandConnection: Promise<Connected> | null = null;
+  private commandTail: Promise<void> = Promise.resolve();
+
   constructor(private readonly locator: CoreLocator) {}
 
-  async once(request: Request): Promise<{ response: Response; providers: ProviderLine[] }> {
-    const connected = await this.connect();
-    try {
-      await connected.transport.send(request);
-      const response = readResponse(JSON.parse((await connected.transport.receive()).toString("utf8")));
-      return { response, providers: connected.providers };
-    } finally {
-      connected.transport.close();
-    }
+  once(request: Request): Promise<{ response: Response; providers: ProviderLine[] }> {
+    return this.serial(async () => {
+      const connected = await this.command();
+      try {
+        await connected.transport.send(request);
+        const response = readResponse(JSON.parse((await connected.transport.receive()).toString("utf8")));
+        return { response, providers: connected.providers };
+      } catch (error) {
+        this.dropCommandConnection();
+        throw error;
+      }
+    });
+  }
+
+  reset(): Promise<void> {
+    return this.serial(async () => this.dropCommandConnection());
+  }
+
+  dispose(): void {
+    this.dropCommandConnection();
   }
 
   async watch(
@@ -136,5 +150,31 @@ export class CoreClient {
       transport.close();
       throw error;
     }
+  }
+
+  private command(): Promise<Connected> {
+    this.commandConnection ??= this.connect().catch((error: unknown) => {
+      this.commandConnection = null;
+      throw error;
+    });
+    return this.commandConnection;
+  }
+
+  private serial<T>(action: () => Promise<T>): Promise<T> {
+    const result = this.commandTail.then(action);
+    this.commandTail = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
+  }
+
+  private dropCommandConnection(): void {
+    const connected = this.commandConnection;
+    this.commandConnection = null;
+    void connected?.then(
+      (value) => value.transport.close(),
+      () => undefined,
+    );
   }
 }

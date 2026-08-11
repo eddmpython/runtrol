@@ -1,0 +1,6 @@
+{
+  "activationMs": 1000,
+  "openViewMs": 500,
+  "refreshP95Ms": 50,
+  "rssGrowthBytes": 50331648
+}

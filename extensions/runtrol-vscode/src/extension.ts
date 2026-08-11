@@ -7,22 +7,34 @@ import { CoreLocator } from "./core/locator";
 import { RuntimeState } from "./state";
 import { ProvidersTree, SessionsTree } from "./trees";
 
-export function activate(context: vscode.ExtensionContext): void {
+export type RuntrolExtensionApi = {
+  readonly ready: Promise<void>;
+  refresh(): Promise<void>;
+};
+
+export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi {
   const locator = new CoreLocator(context);
   const client = new CoreClient(locator);
   const state = new RuntimeState();
+  let lifecycle: Promise<void> = Promise.resolve();
+  const afterReady = async (action: () => Promise<void>): Promise<void> => {
+    await lifecycle;
+    await action();
+  };
   let controller: Controller;
   const conversation = new ConversationView(context.extensionUri, (message) => {
     if (message.type === "prompt") {
-      void run(() => controller.prompt(message.text));
+      void run(() => afterReady(() => controller.prompt(message.text)));
     } else if (message.type === "answerApproval") {
-      void run(() => controller.answerApproval(message.approval, message.option, message.subjectDigest));
+      void run(() => afterReady(
+        () => controller.answerApproval(message.approval, message.option, message.subjectDigest),
+      ));
     } else if (message.type === "openWorkspace") {
-      void run(() => controller.openWorkspace());
+      void run(() => afterReady(() => controller.openWorkspace()));
     } else if (message.type === "interrupt") {
-      void run(() => controller.interrupt());
+      void run(() => afterReady(() => controller.interrupt()));
     } else {
-      void run(() => controller.close());
+      void run(() => afterReady(() => controller.close()));
     }
   });
   controller = new Controller(context, client, state, conversation);
@@ -39,21 +51,44 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.window.registerWebviewViewProvider(ConversationView.viewType, conversation, {
       webviewOptions: { retainContextWhenHidden: false },
     }),
-    vscode.commands.registerCommand("runtrol.refresh", () => run(() => controller.refresh())),
-    vscode.commands.registerCommand("runtrol.startSession", () => run(() => controller.startSession())),
-    vscode.commands.registerCommand("runtrol.selectSession", (item) => run(() => controller.select(item))),
-    vscode.commands.registerCommand("runtrol.openWorkspace", (item) => run(() => controller.openWorkspace(item))),
-    vscode.commands.registerCommand("runtrol.interrupt", () => run(() => controller.interrupt())),
-    vscode.commands.registerCommand("runtrol.closeSession", (item) => run(() => controller.close(item))),
+    vscode.commands.registerCommand("runtrol.refresh", () => run(() => afterReady(() => controller.refresh()))),
+    vscode.commands.registerCommand(
+      "runtrol.startSession",
+      () => run(() => afterReady(() => controller.startSession())),
+    ),
+    vscode.commands.registerCommand(
+      "runtrol.selectSession",
+      (item) => run(() => afterReady(() => controller.select(item))),
+    ),
+    vscode.commands.registerCommand(
+      "runtrol.openWorkspace",
+      (item) => run(() => afterReady(() => controller.openWorkspace(item))),
+    ),
+    vscode.commands.registerCommand("runtrol.interrupt", () => run(() => afterReady(() => controller.interrupt()))),
+    vscode.commands.registerCommand(
+      "runtrol.closeSession",
+      (item) => run(() => afterReady(() => controller.close(item))),
+    ),
     vscode.workspace.onDidChangeConfiguration((event) => {
       if (event.affectsConfiguration("runtrol.corePath")) {
-        locator.invalidate();
-        void run(() => controller.refresh());
+        const previous = lifecycle;
+        lifecycle = previous.catch(() => undefined).then(async () => {
+          locator.invalidate();
+          await controller.reconnect();
+        });
+        void run(() => lifecycle);
       }
     }),
   );
 
-  void run(() => controller.initialize());
+  lifecycle = controller.initialize();
+  void run(() => lifecycle);
+  return {
+    get ready() {
+      return lifecycle;
+    },
+    refresh: () => afterReady(() => controller.refresh()),
+  };
 }
 
 export function deactivate(): void {}

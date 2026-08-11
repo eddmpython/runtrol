@@ -5,7 +5,9 @@ import path from "node:path";
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { CoreClient } from "./client";
 import { FrameTransport } from "./framing";
+import type { CoreLocator } from "./locator";
 import { WIRE_VERSION } from "../protocol";
 
 const core = process.env.RUNTROL_TEST_CORE;
@@ -34,6 +36,20 @@ test("the extension framing greets and lists through a real core", { skip: !core
     const snapshot = JSON.parse((await index.receive()).toString("utf8"));
     assert.equal(snapshot.say, "sessions");
     assert.deepEqual(snapshot.with.sessions, []);
+
+    let locations = 0;
+    const client = new CoreClient({
+      locate: async () => {
+        locations += 1;
+        return { executable: core as string, endpoint };
+      },
+    } as CoreLocator);
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      const refreshed = await client.once({ ask: "list" });
+      assert.equal(refreshed.response.say, "sessions", `refresh ${attempt} lists sessions`);
+    }
+    assert.equal(locations, 1, "refreshes reuse one greeted command connection");
+    client.dispose();
 
     await transport.send({ ask: "stopEverything" });
     await assert.rejects(transport.receive(), /closed|connection/i);

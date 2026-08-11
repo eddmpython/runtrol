@@ -1208,6 +1208,14 @@ mod tests {
             other => panic!("expected the current session index, got {other:?}"),
         }
 
+        for _ in 0..40 {
+            let mut refresh = greeted_caller(&running).await;
+            assert!(matches!(
+                ask(&mut refresh, &Request::List).await,
+                Response::Sessions(_)
+            ));
+        }
+
         let mut control = greeted_caller(&running).await;
         assert!(matches!(
             ask(&mut control, &Request::Close { session, now: true }).await,

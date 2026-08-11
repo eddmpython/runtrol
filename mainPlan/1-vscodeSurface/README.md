@@ -24,9 +24,16 @@ The first end-to-end slice landed on 2026-08-11:
 - the extension stores no prompt, reply, draft, approval subject, or transcript copy
 - the daemon pushes one current session index and then only list-visible changes, with one encoded snapshot shared by
   every surface and no session-list work for stable conversation content
+- one greeted command connection is serialized and reused across refreshes, removing repeated discovery, handshake,
+  and Windows named-pipe churn while watches remain independent
+- an isolated real Extension Host ratchet measures ready activation, contributed-view opening, 40 refreshes, and RSS
+  growth against `performance-budget.json` on every supported CI operating system
 
 The hosted `vscodeExtension` gate checks the thin boundary, no polling, no browser persistence, one selected watch,
 queue and renderer bounds, TypeScript, framing tests, and production bundle size.
+The hosted `vscodeHostPerformance` gate launches the product Core and production extension in a real isolated VS Code
+profile. Its shared ratchet currently caps ready activation at 1,000 ms, view opening at 500 ms, refresh p95 at 50 ms,
+and Extension Host RSS growth at 48 MiB.
 
 ## Module boundaries
 
@@ -43,8 +50,8 @@ queue and renderer bounds, TypeScript, framing tests, and production bundle size
 ## Remaining gates before release
 
 1. Show workspace overlap and provider-offered worktree choices before starting conflicting sessions.
-2. Measure the actual VS Code extension host and Webview under 3,000 frames per second, typing, scrolling, switching,
-   workspace reload, and eight hot sessions. Turn every measured ceiling into a ratchet.
+2. Extend the real Extension Host ratchet to the Webview under 3,000 frames per second, typing, scrolling, switching,
+   workspace reload, and eight hot sessions.
 3. Move shared event presentation rules out of the retired desktop surface so VS Code and any future phone surface use
    one vocabulary SSOT.
 4. Exercise start, prompt, approval, interrupt, reconnect, close, and workspace switching against installed real CLIs

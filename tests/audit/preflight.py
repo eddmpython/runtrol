@@ -113,6 +113,14 @@ GATES: dict[str, tuple[str, list[str]]] = {
         "VS Code 확장 thin boundary, 타입 검사, 테스트, 번들",
         [*PY, f"{HOOKS}/vscodeExtension.py"],
     ),
+    "vscodeHostPerformanceSelftest": (
+        "VS Code Extension Host 성능 게이트 자체 검증",
+        [*PY, f"{HOOKS}/vscodeHostPerformance.py", "--selftest"],
+    ),
+    "vscodeHostPerformance": (
+        "실제 VS Code 활성화, 뷰, 갱신 p95, RSS ratchet",
+        [*PY, f"{HOOKS}/vscodeHostPerformance.py"],
+    ),
     "interactionLatencyBudgetSelftest": (
         "데스크톱 상호작용 예산 게이트 자체 검증",
         [*PY, f"{HOOKS}/interactionLatencyBudget.py", "--selftest"],
@@ -399,6 +407,8 @@ SUITES: dict[str, tuple[str, ...]] = {
         "frontendBuild",
         "vscodeExtensionSelftest",
         "vscodeExtension",
+        "vscodeHostPerformanceSelftest",
+        "vscodeHostPerformance",
         "interactionLatencyBudgetSelftest",
         "interactionLatencyBudget",
         "scrollUnderLoadSmokeSelftest",
@@ -460,6 +470,8 @@ SUITES: dict[str, tuple[str, ...]] = {
     "vscode": (
         "vscodeExtensionSelftest",
         "vscodeExtension",
+        "vscodeHostPerformanceSelftest",
+        "vscodeHostPerformance",
         "cargoFmt",
         "cargoClippy",
     ),
@@ -472,6 +484,7 @@ CARGO_GATES = frozenset(
         "cargoClippy",
         "clippyCrossCfg",
         "cargoBuild",
+        "vscodeHostPerformance",
         "desktopProductBuild",
         "guiMemoryContract",
         "desktopRealProviderGuiSmoke",
@@ -527,6 +540,7 @@ def skipReasonFor(name: str) -> str | None:
         "guiMemoryContract",
         "desktopRealProviderGuiSmoke",
         "vscodeExtension",
+        "vscodeHostPerformance",
     } and shutil.which("npm") is None:
         return "npm 없음"
     if name in {
@@ -539,6 +553,7 @@ def skipReasonFor(name: str) -> str | None:
         "desktopRealProviderGuiSmoke",
         "desktopRealProviderGuiSmokeSelftest",
         "vscodeExtension",
+        "vscodeHostPerformance",
     } and shutil.which("node") is None:
         return "node 없음"
     if name == "audit" and not hasAuditCrate():

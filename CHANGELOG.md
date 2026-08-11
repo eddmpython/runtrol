@@ -21,6 +21,9 @@ its measured architecture, and the gate harness.
   lists runtime-discovered CLIs and sessions in native views, keeps one selected framed watch,
   switches the same window to the session workspace, renders a bounded live conversation, and
   carries prompts, interruption, close, and provider-native approval choices without persistence.
+- A real VS Code Extension Host performance ratchet for ready activation, view opening, refresh p95,
+  and RSS growth. Refreshes reuse one serialized greeted command connection, removing repeated
+  endpoint handshakes and rapid Windows named-pipe churn.
 - A Core-owned `runtrol endpoint` command that starts the daemon when needed and reports the exact
   named-pipe or Unix-socket address without duplicating home or endpoint rules in native surfaces.
 - A provider-neutral desktop application that keeps every discovered session in one list, opens hot

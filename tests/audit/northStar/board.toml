@@ -376,6 +376,12 @@ status = "built"
 file = "liveMemoryBudget.py"
 
 [[floor]]
+category = "budget"
+name = "vscodeHostPerformance"
+status = "built"
+file = "vscodeHostPerformance.py"
+
+[[floor]]
 category = "transport"
 name = "reconnectContinuitySmoke"
 status = "built"

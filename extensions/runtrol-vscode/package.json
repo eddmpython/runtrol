@@ -144,11 +144,13 @@
     "build": "node tooling/build.mjs",
     "check": "tsc --noEmit",
     "test": "node tooling/test.mjs",
+    "test:host": "node tooling/extension-host.mjs",
     "package:win32-x64": "node tooling/package.mjs win32-x64"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
     "@types/vscode": "^1.100.0",
+    "@vscode/test-electron": "3.1.0",
     "@vscode/vsce": "^3.6.2",
     "esbuild": "^0.25.0",
     "typescript": "^5.9.0"

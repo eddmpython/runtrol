@@ -51,9 +51,23 @@ export class Controller implements vscode.Disposable {
     if (response.say !== "sessions") {
       throw new Error(`the daemon answered list with ${response.say}`);
     }
-    this.state.replace(response.with.sessions, providers);
-    for (const warning of response.with.warnings) {
-      this.conversation.status(warning, "warning");
+    this.applyListing(response.with.sessions, response.with.warnings, providers);
+  }
+
+  async reconnect(): Promise<void> {
+    this.watchAbort?.abort();
+    this.watchAbort = null;
+    this.indexAbort?.abort();
+    this.indexAbort = null;
+    await this.client.reset();
+    await this.refresh();
+    this.startSessionIndexWatch();
+    const selected = this.state.selected;
+    if (selected) {
+      this.conversation.reset(selected);
+      this.startWatch(selected);
+    } else {
+      this.conversation.reset(null);
     }
   }
 
@@ -183,6 +197,7 @@ export class Controller implements vscode.Disposable {
     this.disposed = true;
     this.watchAbort?.abort();
     this.indexAbort?.abort();
+    this.client.dispose();
   }
 
   private startWatch(session: SessionLine): void {
