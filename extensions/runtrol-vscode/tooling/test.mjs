@@ -15,6 +15,7 @@ await build({
     "liveCore.test": path.join(extensionRoot, "src/core/liveCore.test.ts"),
     "presentation.test": path.join(extensionRoot, "src/webview/presentation.test.ts"),
     "stateRows.test": path.join(extensionRoot, "src/stateRows.test.ts"),
+    "workspaceCollision.test": path.join(extensionRoot, "src/workspaceCollision.test.ts"),
   },
   outdir: out,
   bundle: true,
@@ -31,6 +32,7 @@ const result = spawnSync(process.execPath, [
   path.join(out, "liveCore.test.js"),
   path.join(out, "presentation.test.js"),
   path.join(out, "stateRows.test.js"),
+  path.join(out, "workspaceCollision.test.js"),
 ], {
   stdio: "inherit",
 });

@@ -59,8 +59,8 @@ async function measure(resultPath: string): Promise<void> {
   const activationMs = performance.now() - activationStarted;
   await checkpoint(resultPath, "ready");
 
-  const viewStarted = performance.now();
   await checkpoint(resultPath, "view-opening");
+  const viewStarted = performance.now();
   try {
     await within(
       vscode.commands.executeCommand("workbench.view.extension.runtrol"),

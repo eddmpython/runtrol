@@ -32,6 +32,8 @@ The first end-to-end slice landed on 2026-08-11:
   posting, renderer backlog, DOM nodes, visible characters, and memory remain inside one shared budget
 - desktop and VS Code bundle one event-presentation SSOT for all 19 wire events; each surface owns only localized text,
   while a fault-injected gate rejects vocabulary drift and surface-local event-name maps
+- starting another writer in the same, parent, or child workspace now shows the active collisions and offers focus,
+  a separate known or browsed workspace or worktree, explicit continue, and cancel without scanning the repository
 - the extension manifest owns release SemVer, while `release-targets.json` owns the six native Marketplace targets
 - platform packaging includes exactly one matching Core and the repository license, while excluding source, tooling,
   dependencies, test budgets, and release metadata
@@ -61,7 +63,8 @@ seconds.
 
 ## Remaining gates before release
 
-1. Show workspace overlap and provider-offered worktree choices before starting conflicting sessions.
+1. Back the surface collision decision with Core-owned project identity and atomic worktree reservations for multi-agent
+   starts; the current start flow already handles active path overlap and existing workspace or worktree choices.
 2. Extend the current 3,000-frame real Webview ratchet through session switching, workspace reload, and eight hot
    sessions.
 3. Exercise start, prompt, approval, interrupt, reconnect, close, and workspace switching against installed real CLIs

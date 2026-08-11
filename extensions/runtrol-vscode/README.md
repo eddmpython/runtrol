@@ -7,6 +7,9 @@ window to that session's exact workspace or worktree.
 The Core pushes one current session snapshot and then only changed snapshots. Conversation traffic never triggers a
 session-list query or rebuild, and every connected window shares the Core's once-encoded snapshot bytes.
 
+Before another hot writer starts in the same, parent, or child path, the extension offers the existing session, a
+separate known or browsed workspace or worktree, an explicit continue action, or cancellation.
+
 The extension does not read provider transcript files, keep a conversation copy, hold model credentials, or run an
 agent loop. The installed provider CLI remains the owner of the conversation and repository changes.
 

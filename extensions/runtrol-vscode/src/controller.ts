@@ -7,6 +7,7 @@ import { CoreClient } from "./core/client";
 import type { ModelCatalog, ModelChoice, ProviderLine, Response, SessionLine } from "./protocol";
 import { RuntimeState } from "./state";
 import { SessionItem } from "./trees";
+import { workspaceCollisions, type WorkspaceCollision } from "./workspaceCollision";
 
 const SELECTED_SESSION_KEY = "runtrol.selectedSession";
 
@@ -92,12 +93,12 @@ export class Controller implements vscode.Disposable {
 
   async startSession(): Promise<void> {
     await this.refresh();
-    const provider = await chooseProvider(this.state.providers);
-    if (!provider) {
+    const workspace = await this.chooseStartWorkspace();
+    if (!workspace) {
       return;
     }
-    const workspace = await chooseWorkspace();
-    if (!workspace) {
+    const provider = await chooseProvider(this.state.providers);
+    if (!provider) {
       return;
     }
     const model = await this.chooseModel(provider);
@@ -302,6 +303,43 @@ export class Controller implements vscode.Disposable {
     return selected?.id;
   }
 
+  private async chooseStartWorkspace(): Promise<string | null> {
+    let workspace = await chooseWorkspace();
+    while (workspace) {
+      const collisions = workspaceCollisions(workspace, this.state.sessions);
+      if (collisions.length === 0) {
+        return workspace;
+      }
+      const action = await vscode.window.showWarningMessage(
+        `${path.basename(workspace)} overlaps ${collisions.length} running runtrol session${
+          collisions.length === 1 ? "" : "s"
+        }.`,
+        {
+          modal: true,
+          detail: collisionDetail(collisions),
+        },
+        "Focus existing",
+        "Choose another",
+        "Start here anyway",
+      );
+      if (action === "Start here anyway") {
+        return workspace;
+      }
+      if (action === "Focus existing") {
+        const existing = await chooseCollision(collisions);
+        if (existing) {
+          await this.select(existing);
+        }
+        return null;
+      }
+      if (action !== "Choose another") {
+        return null;
+      }
+      workspace = await chooseAlternateWorkspace(workspace, this.state.sessions);
+    }
+    return null;
+  }
+
   private requireSelected(): SessionLine {
     const selected = this.state.selected;
     if (!selected) {
@@ -360,6 +398,76 @@ async function chooseWorkspace(): Promise<string | null> {
     canSelectMany: false,
   });
   return selected?.[0]?.fsPath ?? null;
+}
+
+async function chooseCollision(collisions: readonly WorkspaceCollision[]): Promise<SessionLine | null> {
+  if (collisions.length === 1) {
+    return collisions[0]?.session ?? null;
+  }
+  const selected = await vscode.window.showQuickPick(
+    collisions.map(({ session }) => ({
+      label: path.basename(session.workspace) || session.workspace,
+      description: `${session.provider}  ${session.doing}`,
+      detail: session.workspace,
+      session,
+    })),
+    { title: "Focus a running session", placeHolder: "Select the session already modifying this workspace" },
+  );
+  return selected?.session ?? null;
+}
+
+function collisionDetail(collisions: readonly WorkspaceCollision[]): string {
+  const visible = collisions
+    .slice(0, 3)
+    .map(({ session }) => `${session.provider}: ${session.workspace}`)
+    .join("\n");
+  const remaining = collisions.length > 3 ? `\n${collisions.length - 3} more running sessions` : "";
+  return "Starting another agent here can modify the same files. Focus an existing session, choose a separate "
+    + `workspace or worktree, or explicitly continue.\n\n${visible}${remaining}`;
+}
+
+async function chooseAlternateWorkspace(
+  current: string,
+  sessions: readonly SessionLine[],
+): Promise<string | null> {
+  const candidates = new Map<string, string>();
+  for (const workspace of [
+    ...(vscode.workspace.workspaceFolders ?? []).map((folder) => folder.uri.fsPath),
+    ...sessions.filter((session) => !session.hot).map((session) => session.workspace),
+  ]) {
+    if (
+      normalizePath(workspace) !== normalizePath(current)
+      && workspaceCollisions(workspace, sessions).length === 0
+    ) {
+      candidates.set(normalizePath(workspace), workspace);
+    }
+  }
+  const browse = { label: "$(folder-opened) Browse for another workspace or worktree", browse: true as const };
+  const selected = await vscode.window.showQuickPick(
+    [
+      ...[...candidates.values()].map((workspace) => ({
+        label: path.basename(workspace) || workspace,
+        description: workspace,
+        workspace,
+        browse: false as const,
+      })),
+      browse,
+    ],
+    { title: "Choose a separate workspace", placeHolder: "Avoid overlapping active writers" },
+  );
+  if (!selected) {
+    return null;
+  }
+  if (!selected.browse) {
+    return selected.workspace;
+  }
+  const picked = await vscode.window.showOpenDialog({
+    title: "Choose another workspace or worktree",
+    canSelectFolders: true,
+    canSelectFiles: false,
+    canSelectMany: false,
+  });
+  return picked?.[0]?.fsPath ?? null;
 }
 
 function modelChoices(catalog: ModelCatalog): Array<{ label: string; id: string; description?: string }> {

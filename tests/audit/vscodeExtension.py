@@ -53,7 +53,14 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
         "core/framing.ts": ["MAX_FRAME_BYTES", "MAX_QUEUED_FRAMES", "MAX_QUEUED_BYTES", "setImmediate"],
         "webview/main.ts": ["MAX_VISIBLE_ITEMS", "MAX_VISIBLE_CHARACTERS", "MAX_BATCH"],
         "extension.ts": ["retainContextWhenHidden: false", "afterReady"],
-        "controller.ts": ["private watchAbort", "private indexAbort", "this.watchAbort?.abort()", "reconnect"],
+        "controller.ts": [
+            "private watchAbort",
+            "private indexAbort",
+            "this.watchAbort?.abort()",
+            "reconnect",
+            "workspaceCollisions",
+            '"Start here anyway"',
+        ],
         "core/client.ts": ["watchSessions", "commandConnection", "commandTail"],
         "core/locator.ts": ['["endpoint"]', 'candidates.push("runtrol")'],
     }
@@ -72,7 +79,10 @@ def selftest() -> int:
         "core/framing.ts": "MAX_FRAME_BYTES MAX_QUEUED_FRAMES MAX_QUEUED_BYTES setImmediate",
         "webview/main.ts": "MAX_VISIBLE_ITEMS MAX_VISIBLE_CHARACTERS MAX_BATCH",
         "extension.ts": "retainContextWhenHidden: false afterReady",
-        "controller.ts": "private watchAbort; private indexAbort; this.watchAbort?.abort(); reconnect",
+        "controller.ts": (
+            'private watchAbort; private indexAbort; this.watchAbort?.abort(); reconnect workspaceCollisions '
+            '"Start here anyway"'
+        ),
         "core/client.ts": "watchSessions commandConnection commandTail",
         "core/locator.ts": '["endpoint"] candidates.push("runtrol")',
     }
@@ -86,6 +96,7 @@ def selftest() -> int:
         (package, {**sources, "webview/main.ts": "localStorage MAX_VISIBLE_ITEMS"}),
         (package, {**sources, "controller.ts": "setInterval("}),
         (package, {**sources, "core/framing.ts": "MAX_FRAME_BYTES"}),
+        (package, {**sources, "controller.ts": sources["controller.ts"].replace("workspaceCollisions", "")}),
     ]
     for index, (changed_package, changed_sources) in enumerate(mutations, start=1):
         if not sourceViolations(changed_package, changed_sources):

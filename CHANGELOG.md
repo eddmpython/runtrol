@@ -15,6 +15,9 @@ its measured architecture, and the gate harness.
 
 ### Added
 
+- Workspace collision visibility in the VS Code start flow. Exact, ancestor, and descendant hot workspaces are shown
+  before another writer starts, with focus-existing, choose-another workspace or worktree, explicit continue, and
+  cancel outcomes.
 - One event-presentation SSOT shared by desktop and VS Code, with presentation kind, message side, and localization
   keys for all 19 wire events and fault-injected coverage against the Rust vocabulary.
 - A real VS Code Webview burst ratchet at 3,000 raw frames per second, including animation, input, scroll, queue,
