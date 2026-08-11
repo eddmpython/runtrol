@@ -1,22 +1,34 @@
 # runtrol
 
-**Manage every AI from one place.**
+**Run every project, session, and agent instantly from one VS Code window.**
 
 [한국어](README.md) | English | [中文](README_ZH.md) | [日本語](README_JA.md)
 
-> Status: **the core and Windows desktop are implemented.** Session lifecycles run against both real CLIs, and
-> the production Tauri product provides one list and a bounded live view. Most scores below are 0 because no gate asserts those axes yet, not because there is
+> Status: **the core and Windows desktop are implemented. The primary surface is being reset around VS Code.** Session lifecycles run against both real CLIs, and
+> the production Tauri product provides one list and a bounded live view. The `Runtrol Studio` extension is not implemented yet. Most scores below are 0 because no gate asserts those axes yet, not because there is
 > no code.
 
 The security boundary and default-deny settings are documented in [SECURITY.md](SECURITY.md).
 
 ## North Star
 
-**runtrol helps developers who run several coding agent CLIs, such as Claude Code and Codex,
-open, continue, and approve all of them from a single list.
-At the desk it is an app; away from the desk it is a phone. The same session, the same way.
-However many providers there are, there is one list. Whatever the operating system, the method is the same.
-The conversation travels only between the user's PC and the provider. runtrol does not get in between.**
+**runtrol turns one VS Code window into the control plane for every project, supported installed coding-agent CLI,
+and provider-owned session. Each agent changes its bound repository autonomously. runtrol keeps sessions alive,
+isolates concurrent work, and connects the selected session to its exact workspace or worktree without interpreting
+the conversation. Session and agent counts may grow while renderers, active subscriptions, and Code-hot workspaces
+remain bounded. Streaming and background work must never make typing, scrolling, session switching, or file
+navigation stutter. Installed CLIs, models, and capabilities are discovered at runtime. Conversations travel only
+between the user's PC and the provider. runtrol does not get in between.**
+
+### Immutable core
+
+- **Features and speed are one contract.** More capability never excuses waiting or stutter. Visible latency, frame drops, and input delay block a release.
+- **Multisession cost does not scale with session count.** Many logical sessions may exist, but there is exactly one active renderer and one full stream.
+- **Multi-agent operation is provider-neutral.** Supported installed CLIs are discovered automatically and use one list and one interaction model. A new provider requires a manifest or driver, never a core edit.
+- **Agents change repositories autonomously.** The provider CLI owns the work and conversation. runtrol supervises only session, workspace, worktree, process lifecycle, and collision boundaries.
+- **Conversation selection is bound to workspace switching.** Selecting a session changes conversation and file context immediately. The exact workspace or worktree becomes Code-hot only when editing requires it. runtrol never reads conversation text to guess a path.
+- **The human is always first.** Typing, scrolling, the editor, and file navigation stay responsive during long streams, multiple agents, builds, and tests.
+- **The thin boundary never changes.** runtrol owns no credential, transcript, model API key, or conversation copy.
 
 The current total is **41/140, average 2.9/10**. Seven axes have active CI gates.
 A 10 means the complete journey has been repeatedly verified in a real environment.
@@ -104,7 +116,7 @@ At every fork, take the side that is easier for the user. The test is not taste.
 
 | | |
 |---|---|
-| **PC (Windows)** | Not released yet. A source build produces the production Tauri product; installation and automatic updates belong to M2 |
+| **PC (Windows)** | Not released yet. The current source build produces the production Tauri product. The primary distribution target is the `Runtrol Studio` Marketplace extension with a bundled Core |
 | **PC (macOS, Linux)** | In preparation |
 | **Mobile** | PWA. Open it in a browser and add it to the home screen. No app store needed |
 
@@ -146,6 +158,7 @@ If those axes are not nailed down by gates, using Rust means nothing.
 | | | |
 |---|---|---|
 | `crates/` | The product (Rust). Daemon, provider adapters, transport, desktop app | Implemented |
+| `extensions/runtrol-vscode/` | The primary VS Code surface, `Runtrol Studio` | Not created |
 | `pwa/` | Mobile PWA | Not created |
 | `site/` | GitHub Pages landing | Not created |
 | [`assets/brand/`](assets/brand/) | The logo. SVG is the source; favicons, icons, and social cards derive from it | |

@@ -12,9 +12,9 @@
 #           never worth a fraction of a point, because a floor rule at 7/10 is a floor rule being
 #           broken. splitting these into named gates is how they get finer, not by scoring them.
 #
-# A third kind is deliberately absent. Innovation gets no number: it is the axis list itself
-# ("manage several AI agents in one place"), so a separate score would count it twice, and no gate
-# can assert it. Whether it still holds is a kill criterion in `docs/positioning.md`.
+# A third kind is deliberately absent. Innovation gets no number: the immutable North Star is the
+# combined outcome of the axis list, so a separate score would count it twice and no single gate can
+# assert it. Whether the product still points there is a kill criterion in `docs/positioning.md`.
 #
 # Editing rules, all of them enforced by `board.py`:
 #   - a tier above `manual` names gates that exist as files and run in active hosted CI

@@ -77,6 +77,9 @@ its measured architecture, and the gate harness.
 
 ### Changed
 
+- The immutable North Star now targets one responsive VS Code window for every project, session,
+  and supported installed agent. It binds session selection to the exact workspace or worktree,
+  keeps renderer and stream costs bounded, and treats visible waiting or stutter as a release blocker.
 - Modularity, clean code, security, hygiene, and budget are named gates on a pass or fail
   board instead of prose. They are deliberately not worth points: a floor rule at 7 out of 10
   is a floor rule being broken, and a total that rises without the user receiving anything is

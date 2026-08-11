@@ -1,21 +1,33 @@
 # runtrol
 
-**여러 AI를 한 곳에서 관리한다.**
+**한 개의 VS Code 창에서 모든 프로젝트, 세션, 에이전트를 즉시 운영한다.**
 
 한국어 | [English](README_EN.md) | [中文](README_ZH.md) | [日本語](README_JA.md)
 
-> 상태: **코어와 Windows 데스크톱 구현.** 두 공급자의 세션 생명주기가 실물 CLI 로 돌고, production Tauri 제품이 한 목록과 bounded live 화면을 제공한다.
+> 상태: **코어와 Windows 데스크톱 구현. VS Code 주력 표면 재편 결정.** 두 공급자의 세션 생명주기가 실물 CLI 로 돌고, production Tauri 제품이 한 목록과 bounded live 화면을 제공한다. `Runtrol Studio` 확장은 아직 미구현이다.
 > 아래 점수 대부분이 0 인 것은 코드가 없어서가 아니라 그 축을 단언하는 게이트가 아직 없어서다.
 
 보안 경계와 기본 거부 설정은 [SECURITY.md](SECURITY.md)에 정리되어 있다.
 
 ## 북극성
 
-**runtrol은 Claude Code와 Codex 같은 코딩 에이전트 CLI를 여러 개 쓰는 개발자가,
-그 전부를 하나의 목록에서 열고, 이어가고, 승인하도록 돕는다.
-PC 앞에서는 앱으로, 자리를 떠나면 폰으로, 같은 세션을 같은 방법으로 다룬다.
-공급자가 몇 개든 목록은 하나이고, 운영체제가 무엇이든 방법은 같다.
-대화는 사용자의 PC와 공급자 사이에서만 오간다. runtrol은 그 사이에 끼어들지 않는다.**
+**runtrol은 한 개의 VS Code 창을 모든 프로젝트, 지원되는 설치형 코딩 에이전트 CLI,
+provider 소유 세션의 control plane으로 만든다. 각 에이전트는 결박된 저장소를 자율적으로 변경한다.
+runtrol은 세션을 살려 두고 동시 작업을 격리하며, 대화 본문을 해석하지 않고 선택한 세션을 정확한
+workspace 또는 worktree에 연결한다. 세션과 에이전트가 늘어도 renderer, 활성 subscription,
+Code-hot workspace는 bounded 상태를 유지한다. streaming과 background 작업은 입력, 스크롤,
+세션 전환, 파일 탐색을 버벅이게 해서는 안 된다. 설치된 CLI, 모델, capability는 런타임에 자동 발견한다.
+대화는 사용자의 PC와 provider 사이에서만 오가며 runtrol은 그 사이에 끼어들지 않는다.**
+
+### 변하지 않는 핵심
+
+- **기능과 속도는 하나의 계약이다.** 기능이 많아져도 기다림과 버벅임은 허용하지 않는다. 보이는 지연, frame drop, 입력 지연은 출시를 막는 버그다.
+- **멀티세션 비용은 세션 수에 비례하지 않는다.** 논리 세션은 많이 존재할 수 있지만 active renderer와 full stream은 정확히 하나다.
+- **멀티에이전트는 provider-neutral이다.** 지원되는 설치형 CLI를 자동 발견하고 한 목록과 같은 조작법으로 운영한다. 새 provider는 core 수정 없이 manifest 또는 driver로 추가한다.
+- **에이전트가 저장소를 자율적으로 변경한다.** provider CLI가 작업과 대화를 소유하고 runtrol은 session, workspace, worktree, process lifecycle, collision boundary만 감독한다.
+- **대화 선택과 workspace 전환을 결박한다.** session 선택 즉시 대화와 파일 맥락을 전환하고, 실제 편집이 필요할 때만 정확한 workspace 또는 worktree를 Code-hot으로 승격한다. 대화 본문을 읽어 경로를 추측하지 않는다.
+- **사람이 항상 우선이다.** 긴 streaming, 여러 agent, build, test 중에도 사용자의 입력, 스크롤, 편집기와 파일 탐색이 먼저 반응한다.
+- **얇은 경계는 바뀌지 않는다.** credential, transcript, 모델 API key, conversation copy를 소유하지 않는다.
 
 현재 총점은 **41/140, 평균 2.9/10** 이다. 활성 CI 게이트가 선 축은 일곱이다.
 10 점은 실제 환경에서 완결 여정이 반복 검증된 상태다.
@@ -101,7 +113,7 @@ PC 앞에서는 앱으로, 자리를 떠나면 폰으로, 같은 세션을 같�
 
 | | |
 |---|---|
-| **PC (Windows)** | 아직 미출시. 소스 빌드는 production Tauri 제품을 만들며 설치와 자동 갱신은 M2 범위다 |
+| **PC (Windows)** | 아직 미출시. 현재 소스 빌드는 production Tauri 제품을 만든다. 주력 배포 목표는 bundled Core를 포함한 `Runtrol Studio` Marketplace 확장이다 |
 | **PC (macOS, Linux)** | 준비 중 |
 | **모바일** | PWA. 브라우저에서 열고 홈 화면에 추가한다. 앱 스토어가 필요 없다 |
 
@@ -143,6 +155,7 @@ Rust 는 목적이 아니라 위 표의 세 축을 위한 수단이다.
 | | | |
 |---|---|---|
 | `crates/` | 제품 (Rust). daemon, provider 어댑터, 전송, 데스크톱 앱 | 구현됨 |
+| `extensions/runtrol-vscode/` | VS Code 주력 표면 `Runtrol Studio` | 미생성 |
 | `pwa/` | 모바일 PWA | 미생성 |
 | `site/` | GitHub Pages 랜딩 | 미생성 |
 | [`assets/brand/`](assets/brand/) | 로고. SVG 가 정본, 파비콘·아이콘·소셜 카드는 파생 | |

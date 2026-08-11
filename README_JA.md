@@ -1,21 +1,33 @@
 # runtrol
 
-**すべての AI を一か所で管理する。**
+**一つの VS Code ウィンドウですべてのプロジェクト、セッション、エージェントを即座に運用する。**
 
 [한국어](README.md) | [English](README_EN.md) | [中文](README_ZH.md) | 日本語
 
-> ステータス: **コアと Windows デスクトップを実装済み。** 二つの実物 CLI のセッション lifecycle が動き、production Tauri 製品が一つの一覧と bounded live view を提供する。以下のスコアの多くが 0 なのは、コードがないからではなく、その軸を断言するゲートがまだない
+> ステータス: **コアと Windows デスクトップを実装済み。主力 surface を VS Code 中心に再設定することを決定。** 二つの実物 CLI のセッション lifecycle が動き、production Tauri 製品が一つの一覧と bounded live view を提供する。`Runtrol Studio` 拡張はまだ未実装である。以下のスコアの多くが 0 なのは、コードがないからではなく、その軸を断言するゲートがまだない
 > からである。
 
 The security boundary and default-deny settings are documented in [SECURITY.md](SECURITY.md).
 
 ## 北極星
 
-**runtrol は、Claude Code や Codex のようなコーディングエージェント CLI を複数使う開発者が、
-そのすべてを一つのリストから開き、続け、承認できるようにする。
-机の前ではアプリ、席を離れればスマートフォン。同じセッションを、同じ方法で扱う。
-プロバイダーがいくつあってもリストは一つ、OS が何であっても方法は同じ。
-会話はユーザーの PC とプロバイダーの間だけを往復する。runtrol はその間に割り込まない。**
+**runtrol は一つの VS Code ウィンドウを、すべてのプロジェクト、対応するインストール済み
+コーディングエージェント CLI、provider 所有セッションの control plane にする。各エージェントは
+結び付けられたリポジトリを自律的に変更する。runtrol はセッションを生かし、同時作業を隔離し、
+会話本文を解釈せずに選択したセッションを正確な workspace または worktree に接続する。
+セッションとエージェントが増えても renderer、active subscription、Code-hot workspace は bounded のまま。
+streaming と background 作業が入力、スクロール、セッション切り替え、ファイル移動を詰まらせてはならない。
+インストール済み CLI、モデル、capability は runtime に自動検出する。会話はユーザーの PC と provider の間だけを往復し、runtrol はその間に割り込まない。**
+
+### 変わらない中核
+
+- **機能と速度は一つの契約である。** 機能が増えても待ち時間や引っかかりを許さない。目に見える遅延、frame drop、入力遅延は release を止めるバグである。
+- **マルチセッションの費用はセッション数に比例しない。** 論理セッションは多数存在できるが、active renderer と full stream は正確に一つである。
+- **マルチエージェントは provider-neutral である。** 対応するインストール済み CLI を自動検出し、一つの一覧と同じ操作法で運用する。新しい provider は core を変更せず manifest または driver で追加する。
+- **エージェントがリポジトリを自律的に変更する。** provider CLI が作業と会話を所有し、runtrol は session、workspace、worktree、process lifecycle、collision boundary だけを監督する。
+- **会話選択と workspace 切り替えを結び付ける。** session 選択時に会話とファイル文脈を即座に切り替え、実際の編集が必要な時だけ正確な workspace または worktree を Code-hot にする。会話本文から path を推測しない。
+- **人間が常に最優先である。** 長い streaming、複数 agent、build、test の最中でも入力、スクロール、editor、ファイル移動が先に反応する。
+- **薄い境界は変わらない。** credential、transcript、model API key、conversation copy を所有しない。
 
 現在の合計は **41/140、平均 2.9/10** である。有効な CI ゲートが立つ軸は七つである。
 10 点は、実際の環境で完結した道筋が繰り返し検証された状態を指す。
@@ -101,7 +113,7 @@ The security boundary and default-deny settings are documented in [SECURITY.md](
 
 | | |
 |---|---|
-| **PC（Windows）** | まだ未リリース。ソースビルドは production Tauri 製品を生成し、インストールと自動更新は M2 の範囲である |
+| **PC（Windows）** | まだ未リリース。現在のソースビルドは production Tauri 製品を生成する。主力配布目標は bundled Core を含む `Runtrol Studio` Marketplace 拡張である |
 | **PC（macOS、Linux）** | 準備中 |
 | **モバイル** | PWA。ブラウザで開いてホーム画面に追加する。アプリストアは不要 |
 
@@ -143,6 +155,7 @@ Rust は目的ではなく、上の表の三つの軸のための手段である
 | | | |
 |---|---|---|
 | `crates/` | 製品（Rust）。デーモン、プロバイダーアダプター、トランスポート、デスクトップアプリ | 実装済み |
+| `extensions/runtrol-vscode/` | VS Code の主力 surface `Runtrol Studio` | 未作成 |
 | `pwa/` | モバイル PWA | 未作成 |
 | `site/` | GitHub Pages ランディング | 未作成 |
 | [`assets/brand/`](assets/brand/) | ロゴ。SVG が正本で、favicon・アイコン・ソーシャルカードはそこから派生する | |
