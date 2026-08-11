@@ -4,7 +4,7 @@
 
 [한국어](README.md) | [English](README_EN.md) | 中文 | [日本語](README_JA.md)
 
-> 状态：**内核、Windows 桌面端、VS Code 扩展的首个端到端切片、实时会话索引、真实 Extension Host 和每秒 3,000 帧 Webview 性能门槛、平台 VSIX 内容门禁以及 Windows 全新安装已经实现。** `Runtrol Studio` 提供 Core 自动发现、已安装 CLI 列表、多会话 TreeView、仅在变化时推送的会话快照、复用命令通道、单个选中会话订阅、有界实时视图以及同一窗口内的 workspace 切换。托管多平台包验证、Marketplace 签名和发布仍未完成。
+> 状态：**内核、Windows 桌面端、VS Code 扩展的首个端到端切片、实时会话索引、真实 Extension Host 和每秒 3,000 帧 Webview 性能门槛，以及六个原生 VSIX 目标的内容与全新安装验证已经实现。** `Runtrol Studio` 提供 Core 自动发现、已安装 CLI 列表、多会话 TreeView、仅在变化时推送的会话快照、复用命令通道、单个选中会话订阅、有界实时视图以及同一窗口内的 workspace 切换。Marketplace 签名和公开发布仍未完成。
 > 下面多数分数为 0，不是因为没有代码，而是因为还没有门禁去断言那些轴。
 
 The security boundary and default-deny settings are documented in [SECURITY.md](SECURITY.md).
@@ -29,7 +29,7 @@ active subscription 与 Code-hot workspace 始终有界。streaming 与后台工
 - **人始终优先。** 即使存在长 streaming、多个 agent、build 与 test，输入、滚动、editor 和文件导航也必须先响应。
 - **薄边界永不改变。** 不持有 credential、transcript、model API key 或 conversation copy。
 
-当前总分为 **41/140，平均 2.9/10**。七个轴由启用的 CI 门禁支撑。
+当前总分为 **46/140，平均 3.3/10**。八个轴由启用的 CI 门禁支撑。
 10 分意味着完整旅程已在真实环境中被反复验证。
 **超过 manual 层的分数必须由 CI 中真正运行的门禁支撑。不会自动执行的路径，无论看起来实现得多完整，都不能超过 3 分。**
 
@@ -46,7 +46,7 @@ active subscription 与 Code-hot workspace 始终有界。streaming 与后台工
 | 到哪都一样 | 0/10 | 未实现。 | 在 Windows、macOS、Linux 上安装方式与操作方式相同。Windows 用户无需知道 WSL 或 tmux 是什么。 |
 | 自动保持最新 | 0/10 | 未实现。 | 应用与已安装的代理 CLI 会自行保持最新；若更新破坏了会话，在用户动手之前它已经回滚。用户不存在需要关心版本的时刻。 |
 | 自动识别模型 | 6/10 | hosted `modelDetectionSmoke --require-all` 在无凭据环境中安装当前真实 CLI，检查 Codex 的 `model/list` 与包含隔离 provider-owned option cache sentinel 的 Claude partial catalogue，并拒绝在 production source 中硬编码观测 identifier。它不证明特定账户的实际可用性，因此一种 live gate 的上限为 6。 | 当前账户实际可用的模型原样出现在列表中，出现新模型时无需修改 runtrol 就会显示。 |
-| 会话之间不互踩 | 0/10 | 未实现。 | 哪个会话在哪个文件夹改了什么始终可以区分；第二个会话将要触碰同一文件夹时，在开始前就会收到警告；供应商提供隔离手段（worktree）时，可直接在开始界面使用。 |
+| 会话之间不互踩 | 5/10 | 真实 Git metadata 与 production Core admission 会把同一 worktree 的子目录视为一个 writer，并原子拒绝 opening、live、closing 状态下重叠的预约。linked worktree 与操作员明确允许的共享启动保持独立。provider 是 fixture，因此属于 mock 层。 | 哪个会话在哪个文件夹改了什么始终可以区分；第二个会话将要触碰同一文件夹时，在开始前就会收到警告；供应商提供隔离手段（worktree）时，可直接在开始界面使用。 |
 | AI 互相咨询 | 3/10 | 开关通过两个真实 CLI 各自的官方命令完成接线、验证与复原，并已手动实测一次真实回合中的咨询接收（2026-08-03）。`crossConsultSmoke` 驱动真实的订阅 CLI，因此在操作者自己的机器上运行；没有 hosted CI 门禁，所以停在 manual 层。 | 一个开关让两个 CLI 通过各自的官方表面（MCP）相互注册，一个 AI 在回合中直接获取另一个 AI 的意见。接线只通过各 CLI 自己的官方命令完成（不直接写配置文件），对话内容依然不经过 runtrol，用户不需要知道 MCP 是什么。 |
 | 离开的自由 | 5/10 | `uninstallLeavesNoTrace` 在 runtrol home 之外保存供应商状态并完成一个回合，删除整个 home 后由新 daemon 加载同一个原生会话并完成第二个回合。对端是 ACP fixture，因此处于 mock 层。 | 删除 runtrol 后，会话与记录仍属于各个 CLI，按原来的方式继续。不存在被 runtrol 扣作人质的数据。 |
 

@@ -13,7 +13,7 @@ use runtrol_provider::{
     AbsPath, Agent, AgentCommand, ApprovalId, ApprovalKind, ApprovalOption, ApprovalRequest,
     CloseMode, Disposition, EventBody, ModelCatalog, Opaque, OpenIntent, OptionId,
     PermissionOptionKind, Produced, Provider, ProviderError, ProviderId, RiskClass, SessionId,
-    WallMs,
+    WallMs, WorkspaceAccess,
 };
 use runtrol_security::{
     Caller, DeviceId, DeviceScope, GrantLedger, GrantRequest, LocalConsole, PresenceChallenge,
@@ -168,6 +168,7 @@ async fn running(
                 model: None,
                 permission: None,
             },
+            WorkspaceAccess::Exclusive,
         )
         .await
         .expect("the fixture session starts");

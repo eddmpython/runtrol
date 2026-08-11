@@ -294,7 +294,7 @@ async fn answer(
         && crate::scope::allowed(&conversation.caller, &request, &composed.granted).is_ok()
     {
         let session = SessionId::now();
-        match sessions.reserve_open(session) {
+        match sessions.reserve_open_for_tests(session) {
             Ok(reserved) => Some(reserved),
             Err(error) => return Reply::One(from_session_error(&error)),
         }
@@ -303,7 +303,13 @@ async fn answer(
     };
     let mut reserved = reserved;
     if let Some(displaced) = reserved.as_mut().and_then(|one| one.displaced.take()) {
-        drop(displaced.close(CloseMode::Graceful { grace_ms: 0 }).await);
+        drop(
+            displaced
+                .agent
+                .close(CloseMode::Graceful { grace_ms: 0 })
+                .await,
+        );
+        sessions.release_closing(displaced.reservation);
     }
     let discovered = discover(conversation, composed, &request).await;
     let prepared = complete_prepare_for(
@@ -554,6 +560,7 @@ pub(crate) fn answer_prepared(
         Request::Start {
             provider,
             workspace: _,
+            workspace_access: _,
             model: _,
             permission: _,
         } => open(
@@ -569,6 +576,7 @@ pub(crate) fn answer_prepared(
             provider,
             native: _,
             workspace: _,
+            workspace_access: _,
         } => open(
             composed,
             sessions,
@@ -1216,7 +1224,14 @@ mod tests {
             model: None,
             permission: None,
         };
-        let reserved = sessions.reserve_open(session).expect("one process slot");
+        let claim = runtrol_core::WorkspaceClaim::discover(
+            workspace.clone(),
+            runtrol_provider::WorkspaceAccess::Shared,
+        )
+        .expect("the scratch workspace has an identity");
+        let reserved = sessions
+            .reserve_open(session, claim)
+            .expect("one process slot");
         sessions
             .attach_opened(
                 reserved.reservation,
@@ -1387,6 +1402,7 @@ mod tests {
             Request::Start {
                 provider: "nothing-declares-this".into(),
                 workspace: std::env::temp_dir().to_string_lossy().into_owned().into(),
+                workspace_access: runtrol_provider::WorkspaceAccess::Exclusive,
                 model: None,
                 permission: None,
             },
@@ -1431,6 +1447,7 @@ mod tests {
             Request::Start {
                 provider: provider.into(),
                 workspace: "this/is/not/a/real/place".into(),
+                workspace_access: runtrol_provider::WorkspaceAccess::Exclusive,
                 model: None,
                 permission: None,
             },
@@ -1757,6 +1774,7 @@ mod tests {
             Request::Start {
                 provider: prepared_for.as_str().into(),
                 workspace: std::env::temp_dir().to_string_lossy().into_owned().into(),
+                workspace_access: runtrol_provider::WorkspaceAccess::Exclusive,
                 model: None,
                 permission: None,
             },

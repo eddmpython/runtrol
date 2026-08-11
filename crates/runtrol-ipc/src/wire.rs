@@ -31,6 +31,7 @@
 
 use runtrol_provider::{
     ApprovalId, ModelCatalog, Opaque, OptionId, ProviderError, SessionId, WatchCursor, WatchGap,
+    WorkspaceAccess,
 };
 use serde::{Deserialize, Serialize};
 
@@ -71,6 +72,8 @@ pub enum Request {
         provider: Box<str>,
         /// Where the agent works.
         workspace: Box<str>,
+        /// Whether this start must own the working tree alone.
+        workspace_access: WorkspaceAccess,
         /// The model to ask for, when the operator chose one.
         model: Option<Box<str>>,
         /// The permission posture to start at, when the operator chose one.
@@ -85,6 +88,8 @@ pub enum Request {
         native: Box<str>,
         /// Where the agent works.
         workspace: Box<str>,
+        /// Whether this resumed process must own the working tree alone.
+        workspace_access: WorkspaceAccess,
     },
 
     /// Send what the operator wrote.
@@ -487,6 +492,7 @@ mod tests {
             Request::Start {
                 provider: "claude".into(),
                 workspace: "/work".into(),
+                workspace_access: WorkspaceAccess::Exclusive,
                 model: Some("haiku".into()),
                 permission: None,
             },
@@ -494,6 +500,7 @@ mod tests {
                 provider: "claude".into(),
                 native: "some-name".into(),
                 workspace: "/work".into(),
+                workspace_access: WorkspaceAccess::Exclusive,
             },
             Request::Prompt {
                 session,

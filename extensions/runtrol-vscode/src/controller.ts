@@ -4,7 +4,14 @@ import * as vscode from "vscode";
 
 import { ConversationView } from "./conversationView";
 import { CoreClient } from "./core/client";
-import type { ModelCatalog, ModelChoice, ProviderLine, Response, SessionLine } from "./protocol";
+import type {
+  ModelCatalog,
+  ModelChoice,
+  ProviderLine,
+  Response,
+  SessionLine,
+  WorkspaceAccess,
+} from "./protocol";
 import { RuntimeState } from "./state";
 import { SessionItem } from "./trees";
 import { workspaceCollisions, type WorkspaceCollision } from "./workspaceCollision";
@@ -93,8 +100,8 @@ export class Controller implements vscode.Disposable {
 
   async startSession(): Promise<void> {
     await this.refresh();
-    const workspace = await this.chooseStartWorkspace();
-    if (!workspace) {
+    const selectedWorkspace = await this.chooseStartWorkspace();
+    if (!selectedWorkspace) {
       return;
     }
     const provider = await chooseProvider(this.state.providers);
@@ -107,7 +114,13 @@ export class Controller implements vscode.Disposable {
     }
     const { response } = await this.client.once({
       ask: "start",
-      with: { provider: provider.id, workspace, model, permission: null },
+      with: {
+        provider: provider.id,
+        workspace: selectedWorkspace.workspace,
+        workspace_access: selectedWorkspace.access,
+        model,
+        permission: null,
+      },
     });
     if (response.say === "failed") {
       throw new Error(response.with.message);
@@ -303,12 +316,12 @@ export class Controller implements vscode.Disposable {
     return selected?.id;
   }
 
-  private async chooseStartWorkspace(): Promise<string | null> {
+  private async chooseStartWorkspace(): Promise<StartWorkspace | null> {
     let workspace = await chooseWorkspace();
     while (workspace) {
       const collisions = workspaceCollisions(workspace, this.state.sessions);
       if (collisions.length === 0) {
-        return workspace;
+        return { workspace, access: "exclusive" };
       }
       const action = await vscode.window.showWarningMessage(
         `${path.basename(workspace)} overlaps ${collisions.length} running runtrol session${
@@ -323,7 +336,7 @@ export class Controller implements vscode.Disposable {
         "Start here anyway",
       );
       if (action === "Start here anyway") {
-        return workspace;
+        return { workspace, access: "shared" };
       }
       if (action === "Focus existing") {
         const existing = await chooseCollision(collisions);
@@ -357,6 +370,11 @@ export class Controller implements vscode.Disposable {
     this.status.tooltip = `${hot} hot sessions, ${this.state.sessions.length} total`;
   }
 }
+
+type StartWorkspace = {
+  workspace: string;
+  access: WorkspaceAccess;
+};
 
 function requireDone(response: Response, operation: string): void {
   if (response.say === "failed") {

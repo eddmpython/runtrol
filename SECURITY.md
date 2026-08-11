@@ -16,7 +16,8 @@ the relay, pairing, and PWA work can only be connected behind the rules below.
 - runtrol does not own a transcript and does not store a copy of conversation content.
 - A remote device is denied every action until a PC-local presence flow grants explicit device scopes.
 - A remote device can reduce its authority. It cannot grant itself authority.
-- Device pairing, configuration writes, automatic approval, and dangerous permission modes are local-only types.
+- Device pairing, configuration writes, automatic approval, dangerous permission modes, consult wiring, and explicit
+  overlapping-workspace starts are local-only types.
 - Approval expiry is denial. An approval whose subject cannot be shown is denial-only.
 - Stopping every supervised session is always available. Re-enabling work requires action at the PC.
 

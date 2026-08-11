@@ -15,6 +15,9 @@ its measured architecture, and the gate harness.
 
 ### Added
 
+- Core-owned project and working-tree identity with atomic writer reservations. Separate folders in one Git worktree
+  cannot race through opening, live, or closing states, linked worktrees remain independently usable, and only the
+  existing explicit shared-start action can opt into overlapping writers.
 - Workspace collision visibility in the VS Code start flow. Exact, ancestor, and descendant hot workspaces are shown
   before another writer starts, with focus-existing, choose-another workspace or worktree, explicit continue, and
   cancel outcomes.

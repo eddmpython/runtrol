@@ -1,4 +1,6 @@
-export const WIRE_VERSION = 7;
+export const WIRE_VERSION = 8;
+
+export type WorkspaceAccess = "exclusive" | "shared";
 
 export type WatchCursor = {
   stream: string;
@@ -63,6 +65,7 @@ export type Request =
       with: {
         provider: string;
         workspace: string;
+        workspace_access: WorkspaceAccess;
         model: string | null;
         permission: string | null;
       };

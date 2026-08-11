@@ -307,6 +307,10 @@ GATES: dict[str, tuple[str, list[str]]] = {
         [*PY, f"{HOOKS}/desktopRealProviderGuiSmoke.py", "--built-product"],
     ),
     "cargoTest": ("cargo test", ["cargo", "test", "--all"]),
+    "sessionOverlapGuard": (
+        "Core project identity and atomic worktree reservation",
+        ["cargo", "test", "-p", "runtrol-audit", "--test", "sessionOverlapGuard"],
+    ),
     "genericAcpSmokeSelftest": (
         "범용 ACP 게이트 자체 검증",
         [*PY, f"{HOOKS}/genericAcpSmoke.py", "--selftest"],
@@ -499,6 +503,7 @@ CARGO_GATES = frozenset(
         "guiMemoryContract",
         "desktopRealProviderGuiSmoke",
         "cargoTest",
+        "sessionOverlapGuard",
         "genericAcpSmokeSelftest",
         "genericAcpSmoke",
         "externalAcpSmokeSelftest",

@@ -25,6 +25,7 @@
 //! when they need it.
 
 use runtrol_ipc::wire::Request;
+use runtrol_provider::WorkspaceAccess;
 use runtrol_security::{Caller, DeviceScope, GrantLedger, LocalScope, SecurityError};
 
 /// What a request needs.
@@ -74,8 +75,22 @@ pub fn needed(request: &Request) -> Needed {
         Request::List | Request::WatchSessions => Needed::Scope(DeviceScope::SessionList),
         // Model discovery and consult status both read configuration and touch nothing.
         Request::Models { .. } | Request::Consult => Needed::Scope(DeviceScope::ConfigRead),
-        Request::Start { .. } => Needed::Scope(DeviceScope::SessionStart),
-        Request::Resume { .. } => Needed::Scope(DeviceScope::SessionResume),
+        Request::Start {
+            workspace_access: WorkspaceAccess::Shared,
+            ..
+        }
+        | Request::Resume {
+            workspace_access: WorkspaceAccess::Shared,
+            ..
+        } => Needed::AtTheMachine(LocalScope::WorkspaceShare),
+        Request::Start {
+            workspace_access: WorkspaceAccess::Exclusive,
+            ..
+        } => Needed::Scope(DeviceScope::SessionStart),
+        Request::Resume {
+            workspace_access: WorkspaceAccess::Exclusive,
+            ..
+        } => Needed::Scope(DeviceScope::SessionResume),
         Request::Prompt { .. } => Needed::Scope(DeviceScope::SessionInputWrite),
         Request::AnswerApproval { .. } => Needed::ApprovalResponse,
         Request::Watch { .. } => Needed::Scope(DeviceScope::SessionOutputRead),
@@ -189,6 +204,7 @@ mod tests {
             Request::Start {
                 provider: "example".into(),
                 workspace: "/work".into(),
+                workspace_access: WorkspaceAccess::Exclusive,
                 model: None,
                 permission: None,
             },
@@ -196,6 +212,7 @@ mod tests {
                 provider: "example".into(),
                 native: "n".into(),
                 workspace: "/work".into(),
+                workspace_access: WorkspaceAccess::Exclusive,
             },
             Request::Prompt {
                 session: SessionId::now(),
@@ -307,6 +324,29 @@ mod tests {
             .is_ok(),
             "presence is the one thing that opens it"
         );
+    }
+
+    #[test]
+    fn sharing_a_workspace_is_refused_to_every_remote_device() {
+        let ledger = GrantLedger::new();
+        let caller = Caller::Device {
+            device: DeviceId::now(),
+        };
+        let request = Request::Start {
+            provider: "example".into(),
+            workspace: "/work".into(),
+            workspace_access: WorkspaceAccess::Shared,
+            model: None,
+            permission: None,
+        };
+
+        match allowed(&caller, &request, &ledger) {
+            Err(WallRefusal::NeverRemote { capability }) => {
+                assert_eq!(capability.name(), "workspace.share");
+            }
+            other => panic!("shared workspace start was not refused as never-remote: {other:?}"),
+        }
+        assert!(allowed(&Caller::AtTheMachine, &request, &ledger).is_ok());
     }
 
     #[test]

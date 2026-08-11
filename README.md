@@ -4,7 +4,7 @@
 
 한국어 | [English](README_EN.md) | [中文](README_ZH.md) | [日本語](README_JA.md)
 
-> 상태: **코어, Windows 데스크톱, VS Code 확장의 첫 end-to-end slice, 실시간 세션 인덱스, 실물 Extension Host 및 초당 3,000 프레임 Webview 성능 ratchet, 플랫폼 VSIX 내용 게이트와 Windows 깨끗한 설치를 구현했다.** `Runtrol Studio`는 Core 자동 탐색, 설치형 CLI 목록, 멀티세션 TreeView, 변화 시에만 갱신되는 세션 목록, 재사용 명령 채널, 선택 세션 단일 구독, bounded live 화면, 동일 창 workspace 전환을 제공한다. hosted 다중 플랫폼 패키지 확증, Marketplace 서명과 배포는 아직 남았다.
+> 상태: **코어, Windows 데스크톱, VS Code 확장의 첫 end-to-end slice, 실시간 세션 인덱스, 실물 Extension Host 및 초당 3,000 프레임 Webview 성능 ratchet, 6개 네이티브 플랫폼 VSIX 내용과 깨끗한 설치 검증을 구현했다.** `Runtrol Studio`는 Core 자동 탐색, 설치형 CLI 목록, 멀티세션 TreeView, 변화 시에만 갱신되는 세션 목록, 재사용 명령 채널, 선택 세션 단일 구독, bounded live 화면, 동일 창 workspace 전환을 제공한다. Marketplace 서명과 공개 배포는 아직 남았다.
 > 아래 점수 대부분이 0 인 것은 코드가 없어서가 아니라 그 축을 단언하는 게이트가 아직 없어서다.
 
 보안 경계와 기본 거부 설정은 [SECURITY.md](SECURITY.md)에 정리되어 있다.
@@ -30,7 +30,7 @@ Code-hot workspace는 bounded 상태를 유지한다. streaming과 background �
 - **사람이 항상 우선이다.** 긴 streaming, 여러 agent, build, test 중에도 사용자의 입력, 스크롤, 편집기와 파일 탐색이 먼저 반응한다.
 - **얇은 경계는 바뀌지 않는다.** credential, transcript, 모델 API key, conversation copy를 소유하지 않는다.
 
-현재 총점은 **41/140, 평균 2.9/10** 이다. 활성 CI 게이트가 선 축은 일곱이다.
+현재 총점은 **46/140, 평균 3.3/10** 이다. 활성 CI 게이트가 선 축은 여덟이다.
 10 점은 실제 환경에서 완결 여정이 반복 검증된 상태다.
 **3 점을 넘는 점수의 근거는 CI 에서 실제로 도는 게이트다. 자동으로 실행되지 않는 경로는 구현돼 있어도 manual 층을 넘지 않는다.**
 
@@ -47,7 +47,7 @@ Code-hot workspace는 bounded 상태를 유지한다. streaming과 background �
 | 어디서나 같은 방법 | 0/10 | 미구현. | Windows, macOS, Linux 에서 설치 방법과 조작이 같다. Windows 사용자가 WSL 이나 tmux 를 알 필요가 없다. |
 | 알아서 최신 | 0/10 | 미구현. | 앱과 설치된 에이전트 CLI 가 알아서 최신이고, 업데이트가 세션을 깨면 사용자가 손대기 전에 되돌아가 있다. 사용자가 버전을 신경 쓰는 순간이 없다. |
 | 모델 자동 인식 | 6/10 | hosted `modelDetectionSmoke --require-all` 은 자격증명 없이 최신 실물 CLI 를 설치해 Codex `model/list` 와 격리된 provider-owned option cache sentinel 을 포함한 Claude partial catalogue 를 검사하고, 관측한 identifier 가 production source 에 하드코딩되지 않았음을 확인한다. 특정 계정의 실제 사용 가능 여부는 주장하지 않아 live 한 종류의 천장 6 이다. | 지금 이 계정으로 쓸 수 있는 모델이 목록에 그대로 뜨고, 새 모델이 나와도 runtrol 을 고치지 않아도 뜬다. |
-| 세션끼리 안 밟기 | 0/10 | 미구현. | 어느 세션이 어느 폴더에서 무엇을 고치는지 항상 구분되고, 두 세션이 같은 폴더를 만지게 되면 시작 전에 경고받으며, 공급자가 격리 수단 (워크트리) 을 내주면 시작 화면에서 그대로 쓴다. |
+| 세션끼리 안 밟기 | 5/10 | 실제 Git metadata와 production Core admission이 같은 worktree의 하위 폴더를 한 writer로 묶고, opening, live, closing 예약의 겹침을 원자적으로 거부한다. linked worktree와 운영자가 명시한 공유 시작은 구분한다. provider가 fixture라 mock 층이다. | 어느 세션이 어느 폴더에서 무엇을 고치는지 항상 구분되고, 두 세션이 같은 폴더를 만지게 되면 시작 전에 경고받으며, 공급자가 격리 수단 (워크트리) 을 내주면 시작 화면에서 그대로 쓴다. |
 | AI 끼리 서로 자문 | 3/10 | 토글이 실물 두 CLI 를 각자의 공식 명령으로 배선·검증·원상복구하고, 실제 턴 중 자문 수신까지 수기 실측했다 (2026-08-03). `crossConsultSmoke` 는 실물 구독 CLI 를 몰므로 운영자 기계에서 돌고, hosted CI 게이트가 없어 manual 층이다. | 토글 하나로 두 CLI 가 서로를 공식 표면 (MCP) 으로 등록해, 한 AI 가 턴 중에 다른 AI 의 의견을 직접 받아온다. 배선은 CLI 자신의 공식 명령으로만 만들고 (설정 파일을 직접 쓰지 않는다), 대화 본문은 여전히 runtrol 을 지나지 않는다. 사용자가 MCP 라는 개념을 몰라도 된다. |
 | 떠날 자유 | 5/10 | `uninstallLeavesNoTrace` 가 공급자 상태를 runtrol 홈 밖에 둔 채 실제 데몬과 자식 프로세스로 턴을 끝내고, 홈 전체를 삭제한 뒤 새 데몬에서 같은 원생 세션을 불러와 두 번째 턴을 끝낸다. 상대가 ACP fixture 이므로 mock 층이다. | runtrol 을 지워도 세션과 기록은 각 CLI 의 것으로 그대로 남아 원래 방식으로 이어진다. runtrol 이 인질로 잡는 데이터가 없다. |
 

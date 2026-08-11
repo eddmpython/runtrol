@@ -57,5 +57,5 @@ pub use manifest::{
     BinSpec, FallbackSpec, FlagProbe, Kind, MANIFEST_SCHEMA, Manifest, ManifestError, ModelAliases,
     ProbeSpec, SecretPaths, TransportSpec, UpdateHint, UpdateSpec, VersionParse, VersionProbe,
 };
-pub use path::{AbsPath, PathError};
+pub use path::{AbsPath, PathError, WorkspaceAccess};
 pub use time::WallMs;

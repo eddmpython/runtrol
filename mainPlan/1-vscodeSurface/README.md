@@ -34,6 +34,9 @@ The first end-to-end slice landed on 2026-08-11:
   while a fault-injected gate rejects vocabulary drift and surface-local event-name maps
 - starting another writer in the same, parent, or child workspace now shows the active collisions and offers focus,
   a separate known or browsed workspace or worktree, explicit continue, and cancel without scanning the repository
+- the Core resolves bounded Git metadata into project and working-tree identity before provider discovery, then its
+  single session owner atomically reserves that writer identity through opening, live, displacement, and closing;
+  linked worktrees stay independent and only the surface's explicit continue action requests shared access
 - the extension manifest owns release SemVer, while `release-targets.json` owns the six native Marketplace targets
 - platform packaging includes exactly one matching Core and the repository license, while excluding source, tooling,
   dependencies, test budgets, and release metadata
@@ -63,16 +66,15 @@ seconds.
 
 ## Remaining gates before release
 
-1. Back the surface collision decision with Core-owned project identity and atomic worktree reservations for multi-agent
-   starts; the current start flow already handles active path overlap and existing workspace or worktree choices.
-2. Extend the current 3,000-frame real Webview ratchet through session switching, workspace reload, and eight hot
+1. Extend the current 3,000-frame real Webview ratchet through session switching, workspace reload, and eight hot
    sessions.
-3. Exercise start, prompt, approval, interrupt, reconnect, close, and workspace switching against installed real CLIs
+2. Exercise start, prompt, approval, interrupt, reconnect, close, and workspace switching against installed real CLIs
    from an Extension Development Host.
-4. Complete the hosted native release matrix, then verify upgrade plus rollback without stopping active sessions.
+3. Verify upgrade plus rollback without stopping active sessions. The hosted native release matrix already builds and
+   clean-installs all six platform packages.
    Marketplace publication signs the complete platform VSIX, including the exact Core bytes already checked by the
    archive gate. A separate inner-binary signature is not claimed.
-5. Publish `Runtrol Studio` to the Visual Studio Marketplace and verify a clean machine installs and runs it.
+4. Publish `Runtrol Studio` to the Visual Studio Marketplace and verify a clean machine installs and runs it.
 
 ## Completion
 

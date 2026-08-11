@@ -27,6 +27,7 @@ use std::io::Write as _;
 use std::path::PathBuf;
 
 use runtrol_ipc::wire::{Request, Response};
+use runtrol_provider::WorkspaceAccess;
 use tauri::{Emitter as _, Manager as _};
 
 pub use ask::Failed;
@@ -338,6 +339,7 @@ async fn start(
     let request = Request::Start {
         provider: provider.into(),
         workspace: workspace.into(),
+        workspace_access: WorkspaceAccess::Exclusive,
         // An absent choice means the provider's own setting. The window never invents a default.
         model: model.filter(|value| !value.is_empty()).map(Into::into),
         permission: None,
@@ -357,6 +359,7 @@ async fn resume(
         provider: provider.into(),
         native: native.into(),
         workspace: workspace.into(),
+        workspace_access: WorkspaceAccess::Exclusive,
     };
     started(&reaching(&app), request).await
 }

@@ -4,7 +4,7 @@
 
 [한국어](README.md) | [English](README_EN.md) | [中文](README_ZH.md) | 日本語
 
-> ステータス: **コア、Windows デスクトップ、VS Code 拡張の最初の end-to-end slice、live session index、実物 Extension Host と秒間 3,000 frame Webview の性能 ratchet、platform VSIX 内容ゲート、Windows のクリーンインストールを実装済み。** `Runtrol Studio` は Core 自動検出、インストール済み CLI 一覧、マルチセッション TreeView、変更時だけ届くセッション snapshot、再利用する command channel、選択セッション一つの購読、bounded live view、同一ウィンドウでの workspace 切り替えを提供する。hosted マルチプラットフォーム package 検証、Marketplace 署名と公開はまだ残っている。以下のスコアの多くが 0 なのは、コードがないからではなく、その軸を断言するゲートがまだない
+> ステータス: **コア、Windows デスクトップ、VS Code 拡張の最初の end-to-end slice、live session index、実物 Extension Host と秒間 3,000 frame Webview の性能 ratchet、六つの native VSIX target の内容と clean install 検証を実装済み。** `Runtrol Studio` は Core 自動検出、インストール済み CLI 一覧、マルチセッション TreeView、変更時だけ届くセッション snapshot、再利用する command channel、選択セッション一つの購読、bounded live view、同一ウィンドウでの workspace 切り替えを提供する。Marketplace 署名と公開はまだ残っている。以下のスコアの多くが 0 なのは、コードがないからではなく、その軸を断言するゲートがまだない
 > からである。
 
 The security boundary and default-deny settings are documented in [SECURITY.md](SECURITY.md).
@@ -30,7 +30,7 @@ streaming と background 作業が入力、スクロール、セッション切�
 - **人間が常に最優先である。** 長い streaming、複数 agent、build、test の最中でも入力、スクロール、editor、ファイル移動が先に反応する。
 - **薄い境界は変わらない。** credential、transcript、model API key、conversation copy を所有しない。
 
-現在の合計は **41/140、平均 2.9/10** である。有効な CI ゲートが立つ軸は七つである。
+現在の合計は **46/140、平均 3.3/10** である。有効な CI ゲートが立つ軸は八つである。
 10 点は、実際の環境で完結した道筋が繰り返し検証された状態を指す。
 **manual 層を超えるスコアの根拠は CI で実際に動くゲートである。自動実行されない経路は、どれほど実装済みに見えても 3 点を超えない。**
 
@@ -47,7 +47,7 @@ streaming と background 作業が入力、スクロール、セッション切�
 | どこでも同じやり方 | 0/10 | 未実装。 | Windows、macOS、Linux でインストール方法も操作も同じ。Windows ユーザーが WSL や tmux を知る必要がない。 |
 | 勝手に最新 | 0/10 | 未実装。 | アプリとインストール済みのエージェント CLI が自動で最新を保ち、更新がセッションを壊したらユーザーが手を触れる前に戻っている。ユーザーがバージョンを気にする瞬間が存在しない。 |
 | モデル自動認識 | 6/10 | hosted `modelDetectionSmoke --require-all` は資格情報なしで最新の実物 CLI を導入し、Codex の `model/list` と隔離した provider-owned option cache sentinel を含む Claude partial catalogue を検査し、観測した identifier が production source にハードコードされていないことを確認する。特定アカウントでの利用可否までは証明しないため、live gate 一種類の上限 6 である。 | いまこのアカウントで実際に使えるモデルがそのまま一覧に出て、新しいモデルが出ても runtrol を直さずに現れる。 |
-| セッション同士が踏まない | 0/10 | 未実装。 | どのセッションがどのフォルダで何を変えているかが常に区別でき、二つ目のセッションが同じフォルダに触れそうなときは開始前に警告され、プロバイダーが隔離手段（ワークツリー）を出しているなら開始画面でそのまま使える。 |
+| セッション同士が踏まない | 5/10 | 実際の Git metadata と production Core admission が同じ worktree の下位フォルダを一つの writer として扱い、opening、live、closing の重複予約を原子的に拒否する。linked worktree と運用者が明示した共有開始は区別する。provider は fixture なので mock 層である。 | どのセッションがどのフォルダで何を変えているかが常に区別でき、二つ目のセッションが同じフォルダに触れそうなときは開始前に警告され、プロバイダーが隔離手段（ワークツリー）を出しているなら開始画面でそのまま使える。 |
 | AI 同士が相談し合う | 3/10 | トグルが実物の二つの CLI を各自の公式コマンドで配線・検証・復元し、実際のターン中の相談受信まで手動で実測した（2026-08-03）。`crossConsultSmoke` は実物のサブスクリプション CLI を動かすため運用者のマシンで走り、hosted CI ゲートがないので manual 層。 | トグル一つで二つの CLI が互いを公式表面（MCP）で登録し、一方の AI がターン中にもう一方の意見を直接受け取る。配線は各 CLI 自身の公式コマンドだけで作り（設定ファイルを直接書かない）、会話本文は依然として runtrol を通らない。ユーザーは MCP という概念を知らなくていい。 |
 | 去る自由 | 5/10 | `uninstallLeavesNoTrace` は runtrol home の外にプロバイダー状態を置いて一つのターンを終え、home 全体を削除した後、新しい daemon で同じ native session を読み込み二つ目のターンを終える。相手は ACP fixture なので mock 層である。 | runtrol を消してもセッションと記録は各 CLI のものとしてそのまま残り、元のやり方で続けられる。runtrol が人質に取るデータがない。 |
 

@@ -141,7 +141,9 @@ gate = [{ name = "modelDetectionSmoke", kind = "smoke" }]
 
 [[axis]]
 key = "sessionsDoNotTrample"
-tier = "none"
+# Hosted CI uses real filesystem repository metadata and the production Core admission path. The provider process is a
+# deterministic fixture, so this axis stops at the mock tier.
+tier = "mock"
 additives = []
 name = { ko = "세션끼리 안 밟기", en = "Sessions do not trample each other", zh = "会话之间不互踩", ja = "セッション同士が踏まない" }
 gate = [{ name = "sessionOverlapGuard", kind = "smoke" }]

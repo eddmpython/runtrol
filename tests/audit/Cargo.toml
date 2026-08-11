@@ -33,6 +33,10 @@ name = "dependencyDirection"
 path = "dependencyDirection.rs"
 
 [[test]]
+name = "sessionOverlapGuard"
+path = "sessionOverlapGuard.rs"
+
+[[test]]
 name = "memoryBudget"
 path = "memoryBudget.rs"
 

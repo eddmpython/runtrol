@@ -259,6 +259,11 @@ pub enum LocalScope {
     /// through their official commands. Both are capability growth, and a remote caller may
     /// shrink its authority and never grow it.
     ConsultWire,
+    /// Start another writer in a working tree that is already reserved.
+    ///
+    /// Concurrent writers can overwrite each other's repository changes. Accepting that collision is a per-action
+    /// decision at the PC, never an authority a remote device can retain.
+    WorkspaceShare,
 }
 
 impl LocalScope {
@@ -271,6 +276,7 @@ impl LocalScope {
             Self::ApprovalAuto => "approval.auto",
             Self::ModeDangerous => "mode.dangerous",
             Self::ConsultWire => "consult.wire",
+            Self::WorkspaceShare => "workspace.share",
         }
     }
 }
@@ -351,6 +357,7 @@ mod tests {
             LocalScope::ApprovalAuto,
             LocalScope::ModeDangerous,
             LocalScope::ConsultWire,
+            LocalScope::WorkspaceShare,
         ]
     }
 
@@ -394,6 +401,7 @@ mod tests {
         );
         assert_eq!(DeviceScope::ModeAcceptEdits.name(), "mode.acceptEdits");
         assert_eq!(LocalScope::ModeDangerous.name(), "mode.dangerous");
+        assert_eq!(LocalScope::WorkspaceShare.name(), "workspace.share");
     }
 
     #[test]

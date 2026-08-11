@@ -14,6 +14,19 @@ use std::path::Path;
 use camino::{Utf8Component, Utf8Path, Utf8PathBuf};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+/// Whether a new session must own its workspace alone.
+///
+/// This is an operator decision carried across surfaces and the Core. A provider never interprets it. The Core uses
+/// it while admitting the process, before the provider is allowed to open one.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum WorkspaceAccess {
+    /// Refuse when another opening, live, or closing process owns the same working tree.
+    Exclusive,
+    /// The operator explicitly accepted concurrent writers for this start.
+    Shared,
+}
+
 /// A path offered to runtrol did not satisfy [`AbsPath`]'s invariants.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum PathError {

@@ -9,7 +9,7 @@
 //! daemon, a socket, or a session.
 
 use runtrol_ipc::wire::Request;
-use runtrol_provider::{ApprovalId, OptionId, SessionId, StreamId, WatchCursor};
+use runtrol_provider::{ApprovalId, OptionId, SessionId, StreamId, WatchCursor, WorkspaceAccess};
 
 /// What somebody typed could not be understood.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -113,6 +113,7 @@ pub fn understand(words: &[String], here: &str) -> Result<Request, Misunderstood
         "start" => Ok(Request::Start {
             provider: word(rest, 0, "start", "which provider")?.into(),
             workspace: word(rest, 1, "start", "a directory").unwrap_or(here).into(),
+            workspace_access: WorkspaceAccess::Exclusive,
             model: rest.get(2).map(|one| one.as_str().into()),
             permission: None,
         }),
@@ -123,6 +124,7 @@ pub fn understand(words: &[String], here: &str) -> Result<Request, Misunderstood
             workspace: word(rest, 2, "resume", "a directory")
                 .unwrap_or(here)
                 .into(),
+            workspace_access: WorkspaceAccess::Exclusive,
         }),
 
         "say" => {

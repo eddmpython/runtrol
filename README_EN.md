@@ -4,7 +4,7 @@
 
 [한국어](README.md) | English | [中文](README_ZH.md) | [日本語](README_JA.md)
 
-> Status: **the core, Windows desktop, first end-to-end VS Code extension slice, live session index, real Extension Host and 3,000-frame-per-second Webview performance ratchets, platform VSIX content gate, and clean Windows installation are implemented.** `Runtrol Studio` provides Core discovery, installed CLI listing, a multi-session TreeView, change-only session snapshots, a reused command channel, one selected watch, a bounded live view, and same-window workspace switching. Hosted multi-platform package confirmation, Marketplace signing, and publishing remain. Most scores below are 0 because no gate asserts those axes yet, not because there is
+> Status: **the core, Windows desktop, first end-to-end VS Code extension slice, live session index, real Extension Host and 3,000-frame-per-second Webview performance ratchets, and content plus clean-install verification for six native VSIX targets are implemented.** `Runtrol Studio` provides Core discovery, installed CLI listing, a multi-session TreeView, change-only session snapshots, a reused command channel, one selected watch, a bounded live view, and same-window workspace switching. Marketplace signing and public publishing remain. Most scores below are 0 because no gate asserts those axes yet, not because there is
 > no code.
 
 The security boundary and default-deny settings are documented in [SECURITY.md](SECURITY.md).
@@ -30,7 +30,7 @@ between the user's PC and the provider. runtrol does not get in between.**
 - **The human is always first.** Typing, scrolling, the editor, and file navigation stay responsive during long streams, multiple agents, builds, and tests.
 - **The thin boundary never changes.** runtrol owns no credential, transcript, model API key, or conversation copy.
 
-The current total is **41/140, average 2.9/10**. Seven axes have active CI gates.
+The current total is **46/140, average 3.3/10**. Eight axes have active CI gates.
 A 10 means the complete journey has been repeatedly verified in a real environment.
 **A score above the manual tier is backed by a gate that actually runs in CI. A path that is not executed automatically cannot pass 3, no matter how implemented it looks.**
 
@@ -47,7 +47,7 @@ A 10 means the complete journey has been repeatedly verified in a real environme
 | Same method everywhere | 0/10 | Not built. | Install and operation are the same on Windows, macOS, and Linux. A Windows user never needs to know what WSL or tmux is. |
 | Current without asking | 0/10 | Not built. | The app and the installed agent CLIs stay current on their own, and if an update breaks a session it has already rolled back before the user touches anything. There is no moment where the user thinks about versions. |
 | Automatic model detection | 6/10 | Hosted `modelDetectionSmoke --require-all` installs current real CLIs without credentials, checks Codex `model/list` and a Claude partial catalogue containing an isolated provider-owned option-cache sentinel, and rejects observed identifiers hardcoded in production source. It does not prove availability for a particular account, so one live gate kind caps the score at 6. | The models this account can actually use appear in the list as they are, and a new model appears without runtrol being changed. |
-| Sessions do not trample each other | 0/10 | Not built. | Which session is touching which folder is always distinguishable, starting a second session into the same folder warns before it happens, and when a provider offers isolation (worktrees) it is available right on the start screen. |
+| Sessions do not trample each other | 5/10 | Real Git metadata and the production Core admission path treat subdirectories in one worktree as one writer and atomically reject overlapping opening, live, and closing reservations. Linked worktrees and operator-explicit shared starts remain distinct. The provider is a fixture, so this is the mock tier. | Which session is touching which folder is always distinguishable, starting a second session into the same folder warns before it happens, and when a provider offers isolation (worktrees) it is available right on the start screen. |
 | Agents consult each other | 3/10 | The toggle wires, verifies, and restores the two real CLIs through their own commands, and a real mid-turn consultation was received and measured by hand (2026-08-03). `crossConsultSmoke` drives the real subscription CLIs, so it runs on the operator's machine; with no hosted CI gate the tier is manual. | One toggle registers two CLIs with each other over their official surface (MCP), so one agent asks another for an opinion mid-turn and gets it back. The wiring is made only through each CLI's own official commands (no direct config-file writes), conversation bodies still never pass through runtrol, and the user never needs to learn what MCP is. |
 | Freedom to leave | 5/10 | `uninstallLeavesNoTrace` completes a turn with provider state outside the runtrol home, removes the entire home, then loads the same native session under a new daemon and completes a second turn. The counterpart is an ACP fixture, so this is the mock tier. | Delete runtrol and the sessions and history remain each CLI's own, continuing the original way. There is no data runtrol holds hostage. |
 

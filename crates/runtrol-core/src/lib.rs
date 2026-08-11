@@ -12,11 +12,13 @@
 //! - [`events`] the single point a driver's output enters a session, and the bounds it travels under
 //! - [`registry`] which providers exist, and the seam that keeps their names out of this crate
 //! - [`probe`] what each installed CLI actually is, asked rather than assumed, and remembered
+//! - [`project`] canonical project and working-tree identity for atomic writer admission
 //! - [`session`] the two names a session has, the one place its state may change, and the tiers
 
 pub mod events;
 pub mod home;
 pub mod probe;
+pub mod project;
 pub mod registry;
 pub mod session;
 
@@ -29,6 +31,7 @@ pub use probe::{
     BinFacts, Flags, LeadingArgFacts, LeadingFileFacts, ProbeCache, ProbeError, locate,
     locate_named, probe, probe_program,
 };
+pub use project::{ProjectError, ProjectIdentity, WorkspaceClaim};
 pub use registry::{
     KindEntry, KindStatus, KindTable, Origin, Provider, ProviderRegistry, RegistryError,
 };

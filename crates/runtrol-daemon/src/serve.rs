@@ -37,11 +37,13 @@ use std::sync::Arc;
 
 use runtrol_core::{
     AgentLease, ClosingReservation, OpenReservation, ReservedOpen, SessionError, SessionManager,
-    TakenAgent,
+    TakenAgent, WorkspaceClaim,
 };
 use runtrol_ipc::transport::{Connection, Listener, TransportError};
 use runtrol_ipc::wire::{Request, Response, WireError};
-use runtrol_provider::{AgentCommand, CloseMode, ProviderError, SessionId};
+use runtrol_provider::{
+    AbsPath, AgentCommand, CloseMode, ProviderError, SessionId, WorkspaceAccess,
+};
 use tokio::sync::{Mutex, mpsc, oneshot, watch};
 use tokio::task::JoinSet;
 
@@ -106,6 +108,7 @@ struct Asked {
 enum ReservationAsked {
     Reserve {
         session: SessionId,
+        claim: WorkspaceClaim,
         answered: oneshot::Sender<Result<ReservedOpen, SessionError>>,
     },
     CancelOpen(OpenReservation),
@@ -232,8 +235,8 @@ async fn serve_sessions(
             }
 
             Some(reservation) = reservations.recv() => match reservation {
-                ReservationAsked::Reserve { session, answered } => {
-                    let reserved = sessions.reserve_open(session);
+                ReservationAsked::Reserve { session, claim, answered } => {
+                    let reserved = sessions.reserve_open(session, claim);
                     publish_session_index(&session_index, &composed, &sessions);
                     if let Err(Ok(abandoned)) = answered.send(reserved) {
                         abandon_reserved(
@@ -347,12 +350,22 @@ fn abandon_reserved(
     };
     let cancelling = cancelling.clone();
     tasks.spawn(async move {
-        let releasing = ReservationGuard {
+        let releasing_open = ReservationGuard {
             reservation: Some(CleanupReservation::Open(reservation)),
+            cancelling: cancelling.clone(),
+        };
+        let releasing_displaced = ReservationGuard {
+            reservation: Some(CleanupReservation::Closing(displaced.reservation)),
             cancelling,
         };
-        drop(displaced.close(CloseMode::Graceful { grace_ms: 0 }).await);
-        drop(releasing);
+        drop(
+            displaced
+                .agent
+                .close(CloseMode::Graceful { grace_ms: 0 })
+                .await,
+        );
+        drop(releasing_displaced);
+        drop(releasing_open);
     });
 }
 
@@ -428,6 +441,32 @@ fn spawn_abandoned_cleanup(
         drop(agent.close(how).await);
         drop(releasing);
     });
+}
+
+fn canonical_workspace_claim(
+    workspace: &str,
+    access: WorkspaceAccess,
+) -> Result<WorkspaceClaim, SessionError> {
+    let workspace = AbsPath::canonicalize(workspace)
+        .map_err(runtrol_core::ProjectError::from)
+        .map_err(SessionError::from)?;
+    WorkspaceClaim::discover(workspace, access).map_err(SessionError::from)
+}
+
+fn requested_workspace(request: &Request) -> Option<(&str, WorkspaceAccess)> {
+    match request {
+        Request::Start {
+            workspace,
+            workspace_access,
+            ..
+        }
+        | Request::Resume {
+            workspace,
+            workspace_access,
+            ..
+        } => Some((workspace, *workspace_access)),
+        _ => None,
+    }
 }
 
 /// One connection, for as long as it lasts.
@@ -508,10 +547,38 @@ async fn converse(
             && conversation.greeted()
             && crate::scope::allowed(conversation.caller(), &request, &composed.granted).is_ok()
         {
+            let Some((workspace, access)) = requested_workspace(&request) else {
+                if write(
+                    &mut connection,
+                    &refuse("an opening request did not name a workspace"),
+                )
+                .await
+                .is_err()
+                {
+                    return;
+                }
+                continue;
+            };
+            let claim = match canonical_workspace_claim(workspace, access) {
+                Ok(claim) => claim,
+                Err(error) => {
+                    if write(&mut connection, &refuse(&error.to_string()))
+                        .await
+                        .is_err()
+                    {
+                        return;
+                    }
+                    continue;
+                }
+            };
             let session = SessionId::now();
             let (answered, hearing) = oneshot::channel();
             if reserving
-                .send(ReservationAsked::Reserve { session, answered })
+                .send(ReservationAsked::Reserve {
+                    session,
+                    claim,
+                    answered,
+                })
                 .is_err()
             {
                 return;
@@ -538,7 +605,17 @@ async fn converse(
                 cancelling: reserving.clone(),
             };
             if let Some(displaced) = displaced {
-                drop(displaced.close(CloseMode::Graceful { grace_ms: 0 }).await);
+                let releasing = ReservationGuard {
+                    reservation: Some(CleanupReservation::Closing(displaced.reservation)),
+                    cancelling: reserving.clone(),
+                };
+                drop(
+                    displaced
+                        .agent
+                        .close(CloseMode::Graceful { grace_ms: 0 })
+                        .await,
+                );
+                drop(releasing);
             }
             Some(guard)
         } else {
@@ -979,7 +1056,9 @@ mod tests {
     }
 
     fn attach_test_agent(sessions: &mut SessionManager, session: SessionId, agent: Box<dyn Agent>) {
-        let reserved = sessions.reserve_open(session).expect("one process slot");
+        let reserved = sessions
+            .reserve_open_for_tests(session)
+            .expect("one process slot");
         let intent = runtrol_provider::OpenIntent {
             session,
             workspace: runtrol_provider::AbsPath::new(if cfg!(windows) {
@@ -1530,12 +1609,12 @@ mod tests {
         for _ in 0..runtrol_core::session::MAX_HOT - 2 {
             reservations.push(
                 sessions
-                    .reserve_open(SessionId::now())
+                    .reserve_open_for_tests(SessionId::now())
                     .expect("an unrelated owner request progresses"),
             );
         }
         assert!(matches!(
-            sessions.reserve_open(SessionId::now()),
+            sessions.reserve_open_for_tests(SessionId::now()),
             Err(SessionError::OpeningCapacityReserved)
         ));
 
@@ -1632,7 +1711,7 @@ mod tests {
             sessions.abandon_agent(lease);
             assert!(!sessions.is_live(session));
             assert!(
-                sessions.reserve_open(SessionId::now()).is_ok(),
+                sessions.reserve_open_for_tests(SessionId::now()).is_ok(),
                 "cleanup returns the process slot"
             );
         }
@@ -1642,7 +1721,7 @@ mod tests {
     fn abandoning_connection_preparation_requests_reservation_cancellation() {
         let mut sessions = SessionManager::new();
         let reserved = sessions
-            .reserve_open(SessionId::now())
+            .reserve_open_for_tests(SessionId::now())
             .expect("one bounded slot");
         let (cancelling, mut cancelled) = mpsc::unbounded_channel();
         drop(ReservationGuard {
@@ -1659,7 +1738,7 @@ mod tests {
         sessions.cancel_open(reservation);
         for _ in 0..runtrol_core::session::MAX_HOT {
             sessions
-                .reserve_open(SessionId::now())
+                .reserve_open_for_tests(SessionId::now())
                 .expect("the abandoned slot was returned");
         }
     }
@@ -1667,26 +1746,46 @@ mod tests {
     #[tokio::test]
     async fn an_unanswered_reservation_stays_occupied_while_displaced_cleanup_is_pending() {
         let mut sessions = SessionManager::new();
-        let mut held = Vec::new();
-        for _ in 0..runtrol_core::session::MAX_HOT {
-            held.push(
-                sessions
-                    .reserve_open(SessionId::now())
-                    .expect("fills one bounded slot"),
-            );
-        }
-        let abandoned = held.pop().expect("one reserved slot");
         let (started, closing) = oneshot::channel();
         let (release, released) = oneshot::channel();
-        let abandoned = ReservedOpen {
-            reservation: abandoned.reservation,
-            displaced: Some(Box::new(PendingClose {
-                session: SessionId::now(),
+        let victim = SessionId::now();
+        attach_test_agent(
+            &mut sessions,
+            victim,
+            Box::new(PendingClose {
+                session: victim,
                 started,
                 release: released,
                 panic_after_release: false,
-            })),
-        };
+            }),
+        );
+        for _ in 1..runtrol_core::session::MAX_HOT {
+            let session = SessionId::now();
+            attach_test_agent(
+                &mut sessions,
+                session,
+                Box::new(ReadyEvent {
+                    session,
+                    ready: true,
+                }),
+            );
+            drop(
+                sessions
+                    .pump_once(session)
+                    .await
+                    .expect("the newer session can publish"),
+            );
+        }
+        let abandoned = sessions
+            .reserve_open_for_tests(SessionId::now())
+            .expect("the oldest idle process is displaced");
+        assert_eq!(
+            abandoned
+                .displaced
+                .as_ref()
+                .map(|displaced| displaced.reservation.session()),
+            Some(victim)
+        );
         let (cancelling, mut cancelled) = mpsc::unbounded_channel();
         let mut tasks = JoinSet::new();
 
@@ -1696,7 +1795,7 @@ mod tests {
             .expect("cleanup start did not time out")
             .expect("cleanup started");
         assert!(matches!(
-            sessions.reserve_open(SessionId::now()),
+            sessions.reserve_open_for_tests(SessionId::now()),
             Err(SessionError::OpeningCapacityReserved)
         ));
 
@@ -1706,16 +1805,20 @@ mod tests {
             .expect("cleanup task join did not time out")
             .expect("cleanup task joined")
             .expect("cleanup task completed");
-        let ReservationAsked::CancelOpen(reservation) =
-            tokio::time::timeout(core::time::Duration::from_secs(2), cancelled.recv())
+        for _ in 0..2 {
+            match tokio::time::timeout(core::time::Duration::from_secs(2), cancelled.recv())
                 .await
                 .expect("slot release did not time out")
-                .expect("cleanup releases its slot")
-        else {
-            panic!("a cancellation message was expected");
-        };
-        sessions.cancel_open(reservation);
-        assert!(sessions.reserve_open(SessionId::now()).is_ok());
+                .expect("cleanup releases both reservations")
+            {
+                ReservationAsked::CancelOpen(reservation) => sessions.cancel_open(reservation),
+                ReservationAsked::ReleaseClosing(reservation) => {
+                    sessions.release_closing(reservation);
+                }
+                ReservationAsked::Reserve { .. } => panic!("a slot release was expected"),
+            }
+        }
+        assert!(sessions.reserve_open_for_tests(SessionId::now()).is_ok());
     }
 
     enum DroppedCleanup {
@@ -1732,7 +1835,7 @@ mod tests {
         for _ in 0..runtrol_core::session::MAX_HOT {
             held.push(
                 sessions
-                    .reserve_open(SessionId::now())
+                    .reserve_open_for_tests(SessionId::now())
                     .expect("fills one bounded slot"),
             );
         }
@@ -1800,7 +1903,7 @@ mod tests {
             .expect("abandoned cleanup start did not time out")
             .expect("abandoned reply cleanup started");
         assert!(matches!(
-            sessions.reserve_open(SessionId::now()),
+            sessions.reserve_open_for_tests(SessionId::now()),
             Err(SessionError::OpeningCapacityReserved)
         ));
 
@@ -1825,7 +1928,7 @@ mod tests {
             }
             ReservationAsked::Reserve { .. } => panic!("a slot release was expected"),
         }
-        assert!(sessions.reserve_open(SessionId::now()).is_ok());
+        assert!(sessions.reserve_open_for_tests(SessionId::now()).is_ok());
     }
 
     #[tokio::test]

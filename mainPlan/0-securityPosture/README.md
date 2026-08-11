@@ -58,6 +58,7 @@ Windows 의 loopback TCP 에는 **OS ACL 이 없다.** 모든 사용자 세션�
 - `session.delete`
 - `mode.dangerous` (workspace 단위, 최대 8 시간 TTL, **git 트리 청결 필수**)
 - `consult.wire` (구현됨, `LocalScope::ConsultWire`): AI 자문 배선 켬·끔. 에이전트 능력 확장 + CLI 설정 변경이라 기기 grant 로 절대 못 나간다. 정본은 [cross consult](../../docs/crossConsult.md)
+- `workspace.share` (구현됨, `LocalScope::WorkspaceShare`): 이미 예약된 worktree에 writer를 하나 더 여는 명시적 동의다. 파일 충돌 위험 때문에 PC 표면에서 매번 결정하며 기기 grant로 나가지 않는다.
 
 **승인 만료 = 거부.** 적대적 릴레이가 할 수 있는 최악은 "거부" 여야 한다.
 

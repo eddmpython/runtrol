@@ -205,6 +205,9 @@ jobs:
       - name: cargo test
         if: needs.detect.outputs.hasWorkspace == 'true'
         run: cargo test --all
+      - name: Core project identity and atomic worktree reservation
+        if: needs.detect.outputs.hasWorkspace == 'true'
+        run: cargo test -p runtrol-audit --test sessionOverlapGuard
       - name: 자식 회수 게이트 자체 검증
         if: needs.detect.outputs.hasWorkspace == 'true'
         run: python -X utf8 tests/audit/orphanReaping.py --selftest

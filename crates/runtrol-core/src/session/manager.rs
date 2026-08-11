@@ -40,11 +40,12 @@ use std::collections::BTreeMap;
 use runtrol_provider::{
     AbsPath, Agent, AgentCommand, ApprovalId, CloseMode, Disposition, EventBody, Level, Notice,
     NoticeCode, Opaque, OpenIntent, OptionId, Produced, Provider, ProviderError, ProviderId,
-    RiskClass, SessionId, WallMs, WatchCursor,
+    RiskClass, SessionId, WallMs, WatchCursor, WorkspaceAccess,
 };
 use runtrol_security::{Caller, DeviceScope, GrantLedger, SecurityError};
 
 use crate::events::{Published, SessionHub, SessionView};
+use crate::project::{ProjectError, ProjectIdentity, WorkspaceClaim};
 use crate::session::mint::Identity;
 use crate::session::state::{FailureCode, Observed, SessionState};
 use crate::session::tier::{Admit, HotSession, MAX_HOT, Tier};
@@ -86,6 +87,32 @@ pub enum SessionError {
         /// The session whose reservation was missing.
         session: SessionId,
     },
+
+    /// Another opening, live, or closing process owns overlapping writable files.
+    #[error("workspace {requested} overlaps {occupied}, which is reserved by session {session}")]
+    WorkspaceOccupied {
+        /// The new working tree.
+        requested: AbsPath,
+        /// The working tree already held.
+        occupied: AbsPath,
+        /// The session holding it.
+        session: SessionId,
+    },
+
+    /// Provider opening resolved to a different workspace than the atomic reservation.
+    #[error("session {session} opened workspace {opened}, not reserved workspace {reserved}")]
+    WorkspaceReservationMismatch {
+        /// The session being opened.
+        session: SessionId,
+        /// The canonical workspace that was reserved.
+        reserved: AbsPath,
+        /// The canonical workspace handed to the provider.
+        opened: AbsPath,
+    },
+
+    /// The project and working-tree identity could not be established safely.
+    #[error(transparent)]
+    Project(#[from] ProjectError),
 
     /// The session's agent is temporarily owned by an in-flight provider command.
     #[error("session {session} is carrying out another provider command")]
@@ -174,6 +201,8 @@ struct Live {
     /// Kept because a listing has to say it. Which session is touching which folder is the whole of the
     /// `sessions do not trample each other` axis, and a surface that cannot show it cannot warn about it.
     workspace: AbsPath,
+    /// The Core-owned working-tree identity used for writer admission.
+    project: ProjectIdentity,
     /// What it is doing.
     state: SessionState,
 }
@@ -240,10 +269,11 @@ enum ReservationState {
     Closing,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct HeldReservation {
     generation: u64,
     state: ReservationState,
+    project: ProjectIdentity,
 }
 
 /// The result of reserving a process slot.
@@ -251,7 +281,7 @@ pub struct ReservedOpen {
     /// The reservation an attach must consume.
     pub reservation: OpenReservation,
     /// The idle process that must stop before a replacement is opened.
-    pub displaced: Option<Box<dyn Agent>>,
+    pub displaced: Option<ClosingSession>,
 }
 
 /// A detached process that continues to occupy its bounded slot until cleanup finishes.
@@ -419,17 +449,25 @@ impl SessionManager {
         &mut self,
         provider: &dyn Provider,
         intent: OpenIntent,
+        workspace_access: WorkspaceAccess,
     ) -> Result<SessionId, SessionError> {
+        let claim = WorkspaceClaim::discover(intent.workspace.clone(), workspace_access)?;
         let ReservedOpen {
             reservation,
             displaced,
-        } = self.reserve_open(intent.session)?;
+        } = self.reserve_open(intent.session, claim)?;
         let mut opening = OpeningGuard {
             manager: self,
             reservation: Some(reservation),
         };
         if let Some(displaced) = displaced {
-            drop(displaced.close(CloseMode::Graceful { grace_ms: 0 }).await);
+            drop(
+                displaced
+                    .agent
+                    .close(CloseMode::Graceful { grace_ms: 0 })
+                    .await,
+            );
+            opening.manager.release_closing(displaced.reservation);
         }
         let agent = match provider.open(intent.clone()).await {
             Ok(agent) => agent,
@@ -458,6 +496,15 @@ impl SessionManager {
         }
     }
 
+    #[cfg(test)]
+    async fn start_for_tests(
+        &mut self,
+        provider: &dyn Provider,
+        intent: OpenIntent,
+    ) -> Result<SessionId, SessionError> {
+        self.start(provider, intent, WorkspaceAccess::Shared).await
+    }
+
     /// Reserve one bounded process slot before a provider is asked to open it.
     ///
     /// Any displaced idle process is removed synchronously and returned. The caller must stop it before opening the
@@ -467,40 +514,93 @@ impl SessionManager {
     ///
     /// Refuses a duplicate session identifier, a tier containing only busy sessions, or capacity already promised to
     /// other opening requests.
-    pub fn reserve_open(&mut self, session: SessionId) -> Result<ReservedOpen, SessionError> {
+    pub fn reserve_open(
+        &mut self,
+        session: SessionId,
+        claim: WorkspaceClaim,
+    ) -> Result<ReservedOpen, SessionError> {
         if self.live.contains_key(&session) || self.opening.contains_key(&session) {
             return Err(SessionError::AlreadyLive { session });
         }
+        if claim.access() == WorkspaceAccess::Exclusive
+            && let Some((occupied_by, occupied)) = self.workspace_conflict(claim.identity())
+        {
+            return Err(SessionError::WorkspaceOccupied {
+                requested: claim.identity().worktree().clone(),
+                occupied: occupied.worktree().clone(),
+                session: occupied_by,
+            });
+        }
+
+        let admission = {
+            let occupied = self.live.len() + self.opening.len();
+            if occupied < MAX_HOT {
+                Admit::Straight
+            } else if self.live.len() < MAX_HOT {
+                return Err(SessionError::OpeningCapacityReserved);
+            } else {
+                self.admit()?
+            }
+        };
         let generation = self.allocate_reservation_generation()?;
         let reservation = OpenReservation {
             session,
             generation,
         };
-
-        let occupied = self.live.len() + self.opening.len();
-        let displaced = if occupied < MAX_HOT {
-            None
-        } else if self.live.len() < MAX_HOT {
-            return Err(SessionError::OpeningCapacityReserved);
-        } else {
-            match self.admit()? {
-                Admit::Straight => None,
-                Admit::Evicting { session: victim } => {
-                    self.live.remove(&victim).and_then(|live| live.agent)
-                }
+        let displaced = match admission {
+            Admit::Straight => None,
+            Admit::Evicting { session: victim } => {
+                let closing_generation = self.allocate_reservation_generation()?;
+                let Some(mut live) = self.live.remove(&victim) else {
+                    return Err(SessionError::NotLive { session: victim });
+                };
+                let Some(agent) = live.agent.take() else {
+                    self.live.insert(victim, live);
+                    return Err(SessionError::AgentInFlight { session: victim });
+                };
+                self.opening.insert(
+                    victim,
+                    HeldReservation {
+                        generation: closing_generation,
+                        state: ReservationState::Closing,
+                        project: live.project,
+                    },
+                );
+                Some(ClosingSession {
+                    agent,
+                    reservation: ClosingReservation {
+                        session: victim,
+                        generation: closing_generation,
+                    },
+                })
             }
         };
+        let project = claim.into_identity();
         self.opening.insert(
             session,
             HeldReservation {
                 generation,
                 state: ReservationState::Opening,
+                project,
             },
         );
         Ok(ReservedOpen {
             reservation,
             displaced,
         })
+    }
+
+    /// Reserve a process slot against a fixed non-repository workspace in internal tests.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn reserve_open_for_tests(
+        &mut self,
+        session: SessionId,
+    ) -> Result<ReservedOpen, SessionError> {
+        let workspace = AbsPath::new(if cfg!(windows) { r"C:\work" } else { "/work" })
+            .map_err(ProjectError::from)?;
+        let claim = WorkspaceClaim::discover(workspace, WorkspaceAccess::Shared)?;
+        self.reserve_open(session, claim)
     }
 
     /// Release a slot whose provider open was abandoned or failed.
@@ -513,11 +613,11 @@ impl SessionManager {
             session,
             generation,
         } = reservation;
-        let expected = HeldReservation {
+        if held_matches(
+            self.opening.get(&session),
             generation,
-            state: ReservationState::Opening,
-        };
-        if self.opening.get(&session) == Some(&expected) {
+            ReservationState::Opening,
+        ) {
             self.opening.remove(&session);
         }
     }
@@ -543,12 +643,12 @@ impl SessionManager {
         agent: Box<dyn Agent>,
     ) -> Result<AttachedSession, AttachError> {
         let session = intent.session;
-        let expected = HeldReservation {
-            generation: reservation.generation,
-            state: ReservationState::Opening,
-        };
         if reservation.session != session
-            || self.opening.get(&reservation.session) != Some(&expected)
+            || !held_matches(
+                self.opening.get(&reservation.session),
+                reservation.generation,
+                ReservationState::Opening,
+            )
         {
             return Err(AttachError {
                 error: SessionError::OpenNotReserved { session },
@@ -569,6 +669,24 @@ impl SessionManager {
                 error: SessionError::AgentSessionMismatch {
                     expected: session,
                     actual,
+                },
+                agent,
+                reservation,
+            });
+        }
+        let Some(held) = self.opening.get(&reservation.session) else {
+            return Err(AttachError {
+                error: SessionError::OpenNotReserved { session },
+                agent,
+                reservation,
+            });
+        };
+        if held.project.workspace() != &intent.workspace {
+            return Err(AttachError {
+                error: SessionError::WorkspaceReservationMismatch {
+                    session,
+                    reserved: held.project.workspace().clone(),
+                    opened: intent.workspace.clone(),
                 },
                 agent,
                 reservation,
@@ -600,7 +718,13 @@ impl SessionManager {
         };
 
         let workspace = intent.workspace.clone();
-        self.opening.remove(&reservation.session);
+        let Some(held) = self.opening.remove(&reservation.session) else {
+            return Err(AttachError {
+                error: SessionError::OpenNotReserved { session },
+                agent,
+                reservation,
+            });
+        };
         let mut state = SessionState::new(WallMs::now());
         // Binding happened: the driver answered. Recorded through the transition table like everything else, so there
         // is still exactly one place a state may change.
@@ -615,6 +739,7 @@ impl SessionManager {
                 hub: SessionHub::new(session),
                 identity,
                 workspace,
+                project: held.project,
                 state,
             },
         );
@@ -1089,6 +1214,7 @@ impl SessionManager {
             HeldReservation {
                 generation,
                 state: ReservationState::Closing,
+                project: live.project,
             },
         );
         Ok(ClosingSession {
@@ -1110,13 +1236,33 @@ impl SessionManager {
             session,
             generation,
         } = reservation;
-        let expected = HeldReservation {
+        if held_matches(
+            self.opening.get(&session),
             generation,
-            state: ReservationState::Closing,
-        };
-        if self.opening.get(&session) == Some(&expected) {
+            ReservationState::Closing,
+        ) {
             self.opening.remove(&session);
         }
+    }
+
+    fn workspace_conflict(
+        &self,
+        requested: &ProjectIdentity,
+    ) -> Option<(SessionId, &ProjectIdentity)> {
+        self.live
+            .iter()
+            .find_map(|(session, live)| {
+                requested
+                    .overlaps(&live.project)
+                    .then_some((*session, &live.project))
+            })
+            .or_else(|| {
+                self.opening.iter().find_map(|(session, held)| {
+                    requested
+                        .overlaps(&held.project)
+                        .then_some((*session, &held.project))
+                })
+            })
     }
 
     fn allocate_reservation_generation(&mut self) -> Result<u64, SessionError> {
@@ -1179,6 +1325,10 @@ impl SessionManager {
             state: &live.state,
         })
     }
+}
+
+fn held_matches(held: Option<&HeldReservation>, generation: u64, state: ReservationState) -> bool {
+    held.is_some_and(|held| held.generation == generation && held.state == state)
 }
 
 impl Default for SessionManager {
@@ -1382,6 +1532,29 @@ mod tests {
         }
     }
 
+    fn workspace(tail: &str) -> AbsPath {
+        let root = if cfg!(windows) {
+            r"C:\runtrol-workspace-claim"
+        } else {
+            "/runtrol-workspace-claim"
+        };
+        AbsPath::new(&format!("{root}/{tail}")).expect("valid test workspace")
+    }
+
+    fn claim(tail: &str, access: WorkspaceAccess) -> WorkspaceClaim {
+        WorkspaceClaim::discover(workspace(tail), access).expect("discover test workspace")
+    }
+
+    fn intent_at(session: SessionId, workspace: AbsPath) -> OpenIntent {
+        OpenIntent {
+            session,
+            workspace,
+            disposition: Disposition::Fresh,
+            model: None,
+            permission: None,
+        }
+    }
+
     fn an_agent(session: SessionId) -> Box<dyn Agent> {
         Box::new(Scripted {
             provider: an_id(),
@@ -1428,7 +1601,7 @@ mod tests {
         let session = SessionId::now();
 
         let started = manager
-            .start(&provider, an_intent(session))
+            .start_for_tests(&provider, an_intent(session))
             .await
             .expect("a scripted driver opens");
 
@@ -1439,6 +1612,106 @@ mod tests {
             manager.state(session).map(|state| state.lifecycle().name()),
             Some("idle"),
             "the driver answered, so the session is bound and not in a turn"
+        );
+    }
+
+    #[test]
+    fn an_exclusive_opening_claim_atomically_blocks_overlapping_workspaces() {
+        let mut manager = SessionManager::new();
+        let first = SessionId::now();
+        let second = SessionId::now();
+        let reserved = manager
+            .reserve_open(first, claim("repo", WorkspaceAccess::Exclusive))
+            .expect("reserve the first writer");
+
+        assert!(matches!(
+            manager.reserve_open(second, claim("repo/src", WorkspaceAccess::Exclusive)),
+            Err(SessionError::WorkspaceOccupied { session, .. }) if session == first
+        ));
+
+        manager.cancel_open(reserved.reservation);
+        assert!(
+            manager
+                .reserve_open(second, claim("repo/src", WorkspaceAccess::Exclusive))
+                .is_ok(),
+            "releasing the exact opening claim permits the next writer"
+        );
+    }
+
+    #[test]
+    fn only_an_explicit_shared_start_can_overlap_an_existing_claim() {
+        let mut manager = SessionManager::new();
+        manager
+            .reserve_open(SessionId::now(), claim("repo", WorkspaceAccess::Exclusive))
+            .expect("reserve the exclusive writer");
+
+        assert!(
+            manager
+                .reserve_open(SessionId::now(), claim("repo/src", WorkspaceAccess::Shared),)
+                .is_ok(),
+            "the operator explicitly accepted concurrent writers"
+        );
+    }
+
+    #[test]
+    fn a_closing_process_keeps_its_workspace_until_cleanup_finishes() {
+        let mut manager = SessionManager::new();
+        let first = SessionId::now();
+        let identity = claim("repo", WorkspaceAccess::Exclusive);
+        let intent = intent_at(first, identity.identity().workspace().clone());
+        let reserved = manager
+            .reserve_open(first, identity)
+            .expect("reserve the first writer");
+        manager
+            .attach_opened(reserved.reservation, an_id(), &intent, an_agent(first))
+            .expect("attach the first writer");
+
+        let closing = manager.close(first).expect("begin close");
+        assert!(matches!(
+            manager.reserve_open(
+                SessionId::now(),
+                claim("repo/src", WorkspaceAccess::Exclusive)
+            ),
+            Err(SessionError::WorkspaceOccupied { session, .. }) if session == first
+        ));
+
+        manager.release_closing(closing.reservation);
+        assert!(
+            manager
+                .reserve_open(
+                    SessionId::now(),
+                    claim("repo/src", WorkspaceAccess::Exclusive),
+                )
+                .is_ok(),
+            "cleanup released the closing writer identity"
+        );
+    }
+
+    #[test]
+    fn an_opened_process_cannot_change_the_workspace_it_reserved() {
+        let mut manager = SessionManager::new();
+        let session = SessionId::now();
+        let reserved = manager
+            .reserve_open(session, claim("repo", WorkspaceAccess::Exclusive))
+            .expect("reserve the requested workspace");
+        let intent = intent_at(session, workspace("other"));
+
+        let error = manager
+            .attach_opened(reserved.reservation, an_id(), &intent, an_agent(session))
+            .expect_err("a changed workspace must be refused");
+        let (error, agent, reservation) = error.into_parts();
+        assert!(matches!(
+            error,
+            SessionError::WorkspaceReservationMismatch { session: refused, .. }
+                if refused == session
+        ));
+        drop(agent);
+        manager.cancel_open(reservation);
+        assert!(
+            manager
+                .reserve_open(session, claim("other", WorkspaceAccess::Exclusive))
+                .is_ok(),
+            "the refused process did not leak its claim"
         );
     }
 
@@ -1455,7 +1728,7 @@ mod tests {
         let mut manager = SessionManager::new();
         let session = SessionId::now();
 
-        match manager.start(&provider, an_intent(session)).await {
+        match manager.start_for_tests(&provider, an_intent(session)).await {
             Err(SessionError::Provider(ProviderError::BinNotFound { .. })) => {}
             other => panic!("expected the provider's own variant, got {other:?}"),
         }
@@ -1481,14 +1754,14 @@ mod tests {
         let mut manager = SessionManager::new();
         let cancelled = tokio::time::timeout(
             core::time::Duration::from_millis(1),
-            manager.start(&NeverOpens, an_intent(SessionId::now())),
+            manager.start_for_tests(&NeverOpens, an_intent(SessionId::now())),
         )
         .await;
         assert!(cancelled.is_err(), "the provider never opens");
 
         for _ in 0..MAX_HOT {
             manager
-                .reserve_open(SessionId::now())
+                .reserve_open_for_tests(SessionId::now())
                 .expect("the cancelled start returned its slot");
         }
     }
@@ -1500,32 +1773,36 @@ mod tests {
         for _ in 0..MAX_HOT {
             reservations.push(
                 manager
-                    .reserve_open(SessionId::now())
+                    .reserve_open_for_tests(SessionId::now())
                     .expect("an unused bounded slot"),
             );
         }
         assert!(matches!(
-            manager.reserve_open(SessionId::now()),
+            manager.reserve_open_for_tests(SessionId::now()),
             Err(SessionError::OpeningCapacityReserved)
         ));
 
         let cancelled = reservations.pop().expect("one reservation").reservation;
         manager.cancel_open(cancelled);
-        assert!(manager.reserve_open(SessionId::now()).is_ok());
+        assert!(manager.reserve_open_for_tests(SessionId::now()).is_ok());
     }
 
     #[test]
     fn a_stale_open_reservation_cannot_release_a_new_closing_lease() {
         let mut manager = SessionManager::new();
         let session = SessionId::now();
-        let old = manager.reserve_open(session).expect("one opening lease");
+        let old = manager
+            .reserve_open_for_tests(session)
+            .expect("one opening lease");
         let stale = OpenReservation {
             session: old.reservation.session,
             generation: old.reservation.generation,
         };
         manager.cancel_open(old.reservation);
 
-        let current = manager.reserve_open(session).expect("a new opening lease");
+        let current = manager
+            .reserve_open_for_tests(session)
+            .expect("a new opening lease");
         let intent = an_intent(session);
         manager
             .attach_opened(current.reservation, an_id(), &intent, an_agent(session))
@@ -1534,13 +1811,13 @@ mod tests {
 
         manager.cancel_open(stale);
         assert!(matches!(
-            manager.reserve_open(session),
+            manager.reserve_open_for_tests(session),
             Err(SessionError::AlreadyLive { session: held }) if held == session
         ));
 
         drop(closing.agent);
         manager.release_closing(closing.reservation);
-        assert!(manager.reserve_open(session).is_ok());
+        assert!(manager.reserve_open_for_tests(session).is_ok());
     }
 
     #[test]
@@ -1548,7 +1825,7 @@ mod tests {
         let mut opening = SessionManager::new();
         opening.next_reservation = u64::MAX;
         assert!(matches!(
-            opening.reserve_open(SessionId::now()),
+            opening.reserve_open_for_tests(SessionId::now()),
             Err(SessionError::ReservationGenerationExhausted)
         ));
         assert_eq!(opening.hot(), 0);
@@ -1556,7 +1833,9 @@ mod tests {
 
         let mut closing = SessionManager::new();
         let session = SessionId::now();
-        let reserved = closing.reserve_open(session).expect("one opening lease");
+        let reserved = closing
+            .reserve_open_for_tests(session)
+            .expect("one opening lease");
         closing
             .attach_opened(
                 reserved.reservation,
@@ -1578,7 +1857,9 @@ mod tests {
     fn an_agent_handoff_is_exclusive_and_can_be_restored_or_abandoned() {
         let mut manager = SessionManager::new();
         let session = SessionId::now();
-        let reserved = manager.reserve_open(session).expect("one opening lease");
+        let reserved = manager
+            .reserve_open_for_tests(session)
+            .expect("one opening lease");
         manager
             .attach_opened(
                 reserved.reservation,
@@ -1616,7 +1897,9 @@ mod tests {
     fn exhausted_agent_handoff_generations_leave_the_agent_attached() {
         let mut manager = SessionManager::new();
         let session = SessionId::now();
-        let reserved = manager.reserve_open(session).expect("one opening lease");
+        let reserved = manager
+            .reserve_open_for_tests(session)
+            .expect("one opening lease");
         manager
             .attach_opened(
                 reserved.reservation,
@@ -1643,7 +1926,9 @@ mod tests {
     fn attach_requires_the_reserved_session_and_preserves_the_exact_identity() {
         let mut manager = SessionManager::new();
         let session = SessionId::now();
-        let reserved = manager.reserve_open(session).expect("one bounded slot");
+        let reserved = manager
+            .reserve_open_for_tests(session)
+            .expect("one bounded slot");
         let intent = an_intent(session);
 
         let attached = manager
@@ -1660,7 +1945,9 @@ mod tests {
         let mut manager = SessionManager::new();
         let expected = SessionId::now();
         let actual = SessionId::now();
-        let reserved = manager.reserve_open(expected).expect("one bounded slot");
+        let reserved = manager
+            .reserve_open_for_tests(expected)
+            .expect("one bounded slot");
         let intent = an_intent(expected);
 
         let error = manager
@@ -1678,7 +1965,7 @@ mod tests {
         manager.cancel_open(reservation);
         assert_eq!(manager.hot(), 0);
         assert!(
-            manager.reserve_open(SessionId::now()).is_ok(),
+            manager.reserve_open_for_tests(SessionId::now()).is_ok(),
             "a rejected attach consumed and released its reservation"
         );
     }
@@ -1689,7 +1976,7 @@ mod tests {
         let reserved_for = SessionId::now();
         let intent_for = SessionId::now();
         let reserved = manager
-            .reserve_open(reserved_for)
+            .reserve_open_for_tests(reserved_for)
             .expect("one bounded slot");
         let intent = an_intent(intent_for);
 
@@ -1708,7 +1995,7 @@ mod tests {
         for _ in 0..MAX_HOT {
             held.push(
                 manager
-                    .reserve_open(SessionId::now())
+                    .reserve_open_for_tests(SessionId::now())
                     .expect("the mismatched reservation was released"),
             );
         }
@@ -1722,18 +2009,18 @@ mod tests {
         for _ in 0..MAX_HOT {
             let session = SessionId::now();
             manager
-                .start(&provider, an_intent(session))
+                .start_for_tests(&provider, an_intent(session))
                 .await
                 .expect("fills one slot");
         }
 
         let reserved = manager
-            .reserve_open(SessionId::now())
+            .reserve_open_for_tests(SessionId::now())
             .expect("one idle session gives way");
         assert!(reserved.displaced.is_some());
         assert_eq!(manager.hot(), MAX_HOT - 1);
         assert!(matches!(
-            manager.reserve_open(SessionId::now()),
+            manager.reserve_open_for_tests(SessionId::now()),
             Err(SessionError::OpeningCapacityReserved)
         ));
     }
@@ -1744,12 +2031,12 @@ mod tests {
         let mut manager = SessionManager::new();
         let session = SessionId::now();
         manager
-            .start(&provider, an_intent(session))
+            .start_for_tests(&provider, an_intent(session))
             .await
             .expect("the original session opens");
 
         assert!(matches!(
-            manager.reserve_open(session),
+            manager.reserve_open_for_tests(session),
             Err(SessionError::AlreadyLive { session: duplicate }) if duplicate == session
         ));
         assert!(manager.is_live(session));
@@ -1767,7 +2054,7 @@ mod tests {
         let mut manager = SessionManager::new();
         let session = SessionId::now();
         manager
-            .start(&provider, an_intent(session))
+            .start_for_tests(&provider, an_intent(session))
             .await
             .expect("opens");
 
@@ -1825,7 +2112,7 @@ mod tests {
         let mut manager = SessionManager::new();
         let session = SessionId::now();
         manager
-            .start(&provider, an_intent(session))
+            .start_for_tests(&provider, an_intent(session))
             .await
             .expect("opens");
 
@@ -1850,7 +2137,7 @@ mod tests {
         let mut manager = SessionManager::new();
         let session = SessionId::now();
         manager
-            .start(&provider, an_intent(session))
+            .start_for_tests(&provider, an_intent(session))
             .await
             .expect("opens");
         let mut watcher = manager.subscribe(session, None).expect("watchable");
@@ -1925,12 +2212,12 @@ mod tests {
         let mut manager = SessionManager::new();
         let quiet = SessionId::now();
         manager
-            .start(&Quiet, an_intent(quiet))
+            .start_for_tests(&Quiet, an_intent(quiet))
             .await
             .expect("opens");
         let talkative = SessionId::now();
         manager
-            .start(
+            .start_for_tests(
                 &a_fake(vec![Step::Content, Step::Content]),
                 an_intent(talkative),
             )
@@ -1961,7 +2248,7 @@ mod tests {
         let mut manager = SessionManager::new();
         let session = SessionId::now();
         manager
-            .start(&a_fake(vec![Step::TurnStarted(0)]), an_intent(session))
+            .start_for_tests(&a_fake(vec![Step::TurnStarted(0)]), an_intent(session))
             .await
             .expect("opens");
 
@@ -1980,7 +2267,7 @@ mod tests {
         for _ in 0..3 {
             let session = SessionId::now();
             manager
-                .start(&provider, an_intent(session))
+                .start_for_tests(&provider, an_intent(session))
                 .await
                 .expect("opens");
             names.push(session);
@@ -2013,7 +2300,7 @@ mod tests {
         let mut manager = SessionManager::new();
         let session = SessionId::now();
         manager
-            .start(&provider, an_intent(session))
+            .start_for_tests(&provider, an_intent(session))
             .await
             .expect("opens");
 
@@ -2033,7 +2320,7 @@ mod tests {
         let mut manager = SessionManager::new();
         let session = SessionId::now();
         manager
-            .start(&provider, an_intent(session))
+            .start_for_tests(&provider, an_intent(session))
             .await
             .expect("opens");
 
@@ -2060,7 +2347,7 @@ mod tests {
         let mut manager = SessionManager::new();
         let session = SessionId::now();
         manager
-            .start(&provider, an_intent(session))
+            .start_for_tests(&provider, an_intent(session))
             .await
             .expect("opens");
         let mut watcher = manager.subscribe(session, None).expect("watchable");
@@ -2095,7 +2382,7 @@ mod tests {
         let mut manager = SessionManager::new();
         let session = SessionId::now();
         manager
-            .start(&provider, an_intent(session))
+            .start_for_tests(&provider, an_intent(session))
             .await
             .expect("opens");
 
@@ -2118,7 +2405,10 @@ mod tests {
             native: "already-exists".into(),
         };
 
-        manager.start(&provider, intent).await.expect("opens");
+        manager
+            .start_for_tests(&provider, intent)
+            .await
+            .expect("opens");
         assert_eq!(manager.native(session), Some("already-exists"));
     }
 
@@ -2132,7 +2422,7 @@ mod tests {
         for _ in 0..crate::session::tier::MAX_HOT {
             let session = SessionId::now();
             manager
-                .start(&provider, an_intent(session))
+                .start_for_tests(&provider, an_intent(session))
                 .await
                 .expect("opens");
             names.push(session);
@@ -2141,7 +2431,7 @@ mod tests {
 
         let extra = SessionId::now();
         manager
-            .start(&provider, an_intent(extra))
+            .start_for_tests(&provider, an_intent(extra))
             .await
             .expect("room is made");
 
@@ -2166,7 +2456,7 @@ mod tests {
         for _ in 0..crate::session::tier::MAX_HOT {
             let session = SessionId::now();
             manager
-                .start(&provider, an_intent(session))
+                .start_for_tests(&provider, an_intent(session))
                 .await
                 .expect("opens");
             names.push(session);
@@ -2177,7 +2467,7 @@ mod tests {
         manager.pump_once(oldest).await.expect("a turn begins");
 
         manager
-            .start(&provider, an_intent(SessionId::now()))
+            .start_for_tests(&provider, an_intent(SessionId::now()))
             .await
             .expect("room is made from an idle session");
         assert!(
@@ -2195,13 +2485,16 @@ mod tests {
         for _ in 0..crate::session::tier::MAX_HOT {
             let session = SessionId::now();
             manager
-                .start(&provider, an_intent(session))
+                .start_for_tests(&provider, an_intent(session))
                 .await
                 .expect("opens");
             manager.pump_once(session).await.expect("a turn begins");
         }
 
-        match manager.start(&provider, an_intent(SessionId::now())).await {
+        match manager
+            .start_for_tests(&provider, an_intent(SessionId::now()))
+            .await
+        {
             Err(SessionError::NoRoom(refusal)) => {
                 assert_eq!(refusal.held, crate::session::tier::MAX_HOT);
             }
@@ -2215,7 +2508,7 @@ mod tests {
         let mut manager = SessionManager::new();
         let session = SessionId::now();
         manager
-            .start(&provider, an_intent(session))
+            .start_for_tests(&provider, an_intent(session))
             .await
             .expect("opens");
 
@@ -2246,7 +2539,7 @@ mod tests {
         for _ in 0..MAX_HOT {
             let session = SessionId::now();
             manager
-                .start(&provider, an_intent(session))
+                .start_for_tests(&provider, an_intent(session))
                 .await
                 .expect("fills one process slot");
             sessions.push(session);
@@ -2256,14 +2549,14 @@ mod tests {
             .close(*sessions.first().expect("one live session"))
             .expect("the process is handed out for cleanup");
         assert!(matches!(
-            manager.reserve_open(SessionId::now()),
+            manager.reserve_open_for_tests(SessionId::now()),
             Err(SessionError::OpeningCapacityReserved)
         ));
 
         drop(closing.agent);
         manager.release_closing(closing.reservation);
         assert!(
-            manager.reserve_open(SessionId::now()).is_ok(),
+            manager.reserve_open_for_tests(SessionId::now()).is_ok(),
             "the slot returns only after cleanup"
         );
     }
@@ -2310,7 +2603,7 @@ mod tests {
         let mut manager = SessionManager::new();
         let session = SessionId::now();
         manager
-            .start(&Sluggish, an_intent(session))
+            .start_for_tests(&Sluggish, an_intent(session))
             .await
             .expect("opens");
 
@@ -2348,7 +2641,7 @@ mod tests {
         let mut manager = SessionManager::new();
         let session = SessionId::now();
         manager
-            .start(&provider, an_intent(session))
+            .start_for_tests(&provider, an_intent(session))
             .await
             .expect("opens");
         manager.pump_once(session).await.expect("published");
