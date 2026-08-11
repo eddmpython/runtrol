@@ -11,6 +11,24 @@ Phone-facing HTTP admission, rebinding defenses, exact egress allowlisting, Nois
 
 **origin 과 transport 를 분리한다.** PWA 는 영원히 바뀌지 않는 HTTPS origin 하나에 살고, 그 아래에서 전송 경로만 갈아끼운다. 보안 경계는 TLS 가 아니라 우리 자신의 Noise 계층 하나다.
 
+## Tailnet-style device mesh, without a VPN dependency
+
+The useful Tailscale idea is stable device identity over replaceable network paths, not making a VPN account a product
+dependency. runtrol applies that idea at its existing thin Core boundary:
+
+- the PC Core is the stable node and owns supervised process lifetime
+- VS Code and the phone are paired control surfaces, never session owners
+- a phone pairs once to the PC identity and receives durable, explicitly scoped device authorization
+- a session is addressed by PC identity plus runtrol session identity, so changing windows or links does not rename it
+- the transport ladder chooses direct LAN or P2P when reachable and falls back to an E2E encrypted relay
+- the relay sees routing presence and ciphertext only, and never receives a model credential or readable conversation
+- an installed Tailscale route may become an optional discovered direct path later, but pairing, push, and correctness
+  cannot depend on Tailscale, an identity provider, or one vendor's pricing
+
+The VS Code extension therefore connects to the local Core exactly like any other trusted surface. Closing or
+reloading the extension never ends a provider process. The phone joins the same Core session index through its own
+scoped device identity instead of tunnelling through a VS Code window.
+
 ## 최상위 결정 넷
 
 ### 1. origin 은 불변, transport 는 교체 가능

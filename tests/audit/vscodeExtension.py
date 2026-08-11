@@ -41,6 +41,7 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
         "sessionStorage": "conversation-capable browser persistence",
         "indexedDB": "conversation-capable browser persistence",
         "setInterval(": "polling loop",
+        "scheduleRefresh": "session-list requery loop",
         "writeFile(": "filesystem write surface",
         "appendFile(": "filesystem write surface",
     }
@@ -52,7 +53,8 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
         "core/framing.ts": ["MAX_FRAME_BYTES", "MAX_QUEUED_FRAMES", "MAX_QUEUED_BYTES", "setImmediate"],
         "webview/main.ts": ["MAX_VISIBLE_ITEMS", "MAX_VISIBLE_CHARACTERS", "MAX_BATCH"],
         "extension.ts": ["retainContextWhenHidden: false"],
-        "controller.ts": ["private watchAbort", "this.watchAbort?.abort()"],
+        "controller.ts": ["private watchAbort", "private indexAbort", "this.watchAbort?.abort()"],
+        "core/client.ts": ["watchSessions"],
         "core/locator.ts": ['["endpoint"]', 'candidates.push("runtrol")'],
     }
     for relative, tokens in required.items():
@@ -70,7 +72,8 @@ def selftest() -> int:
         "core/framing.ts": "MAX_FRAME_BYTES MAX_QUEUED_FRAMES MAX_QUEUED_BYTES setImmediate",
         "webview/main.ts": "MAX_VISIBLE_ITEMS MAX_VISIBLE_CHARACTERS MAX_BATCH",
         "extension.ts": "retainContextWhenHidden: false",
-        "controller.ts": "private watchAbort; this.watchAbort?.abort()",
+        "controller.ts": "private watchAbort; private indexAbort; this.watchAbort?.abort()",
+        "core/client.ts": "watchSessions",
         "core/locator.ts": '["endpoint"] candidates.push("runtrol")',
     }
     if sourceViolations(package, sources):

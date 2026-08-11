@@ -12,7 +12,7 @@ const SELECTED_SESSION_KEY = "runtrol.selectedSession";
 
 export class Controller implements vscode.Disposable {
   private watchAbort: AbortController | null = null;
-  private refreshTimer: NodeJS.Timeout | null = null;
+  private indexAbort: AbortController | null = null;
   private readonly status: vscode.StatusBarItem;
   private disposed = false;
 
@@ -31,6 +31,7 @@ export class Controller implements vscode.Disposable {
 
   async initialize(): Promise<void> {
     await this.refresh();
+    this.startSessionIndexWatch();
     const remembered = this.context.globalState.get<string>(SELECTED_SESSION_KEY);
     const selected = this.state.sessions.find((session) => session.session === remembered)
       ?? this.state.sessions.find((session) => session.hot)
@@ -118,7 +119,6 @@ export class Controller implements vscode.Disposable {
       with: { session: session.session, text: written },
     });
     requireDone(response, "prompt");
-    this.scheduleRefresh();
   }
 
   async interrupt(): Promise<void> {
@@ -128,7 +128,6 @@ export class Controller implements vscode.Disposable {
       with: { session: session.session },
     });
     requireDone(response, "interrupt");
-    this.scheduleRefresh();
   }
 
   async answerApproval(approval: string, option: number, subjectDigest: number[]): Promise<void> {
@@ -183,9 +182,7 @@ export class Controller implements vscode.Disposable {
   dispose(): void {
     this.disposed = true;
     this.watchAbort?.abort();
-    if (this.refreshTimer) {
-      clearTimeout(this.refreshTimer);
-    }
+    this.indexAbort?.abort();
   }
 
   private startWatch(session: SessionLine): void {
@@ -205,9 +202,6 @@ export class Controller implements vscode.Disposable {
             event: (payload, nextExpected) => {
               this.state.advance(session.session, nextExpected);
               this.conversation.frame(payload);
-              if (isLifecycleFrame(payload)) {
-                this.scheduleRefresh();
-              }
             },
             gap: (nextExpected, message) => {
               this.state.advance(session.session, nextExpected);
@@ -228,16 +222,50 @@ export class Controller implements vscode.Disposable {
     }
   }
 
-  private scheduleRefresh(): void {
-    if (this.refreshTimer) {
-      clearTimeout(this.refreshTimer);
-    }
-    this.refreshTimer = setTimeout(() => {
-      this.refreshTimer = null;
-      void this.refresh().catch((error: unknown) => {
+  private startSessionIndexWatch(): void {
+    this.indexAbort?.abort();
+    const abort = new AbortController();
+    this.indexAbort = abort;
+    void this.sessionIndexLoop(abort.signal);
+  }
+
+  private async sessionIndexLoop(signal: AbortSignal): Promise<void> {
+    let retryMs = 250;
+    while (!signal.aborted && !this.disposed) {
+      try {
+        await this.client.watchSessions(
+          {
+            snapshot: (listing, providers) => this.applyListing(listing.sessions, listing.warnings, providers),
+          },
+          signal,
+        );
+        retryMs = 250;
+      } catch (error) {
+        if (signal.aborted) {
+          return;
+        }
         this.conversation.status(error instanceof Error ? error.message : String(error), "error");
-      });
-    }, 200);
+      }
+      await abortableDelay(retryMs, signal);
+      retryMs = Math.min(retryMs * 2, 5_000);
+    }
+  }
+
+  private applyListing(
+    sessions: readonly SessionLine[],
+    warnings: readonly string[],
+    providers: readonly ProviderLine[],
+  ): void {
+    const selected = this.state.selected?.session ?? null;
+    this.state.replace(sessions, providers);
+    for (const warning of warnings) {
+      this.conversation.status(warning, "warning");
+    }
+    if (selected && !this.state.selected) {
+      this.watchAbort?.abort();
+      void this.context.globalState.update(SELECTED_SESSION_KEY, undefined);
+      this.conversation.reset(null);
+    }
   }
 
   private async chooseModel(provider: ProviderLine): Promise<string | null | undefined> {
@@ -344,18 +372,6 @@ function workspaceIsOpen(workspace: string): boolean {
 function normalizePath(value: string): string {
   const normalized = path.resolve(value);
   return process.platform === "win32" ? normalized.toLocaleLowerCase("en-US") : normalized;
-}
-
-function isLifecycleFrame(payload: unknown): boolean {
-  if (payload === null || typeof payload !== "object" || Array.isArray(payload)) {
-    return false;
-  }
-  const body = (payload as { body?: unknown }).body;
-  if (body === null || typeof body !== "object" || Array.isArray(body)) {
-    return false;
-  }
-  const event = (body as { event?: unknown }).event;
-  return event === "attached" || event === "detached" || event === "turn" || event === "notice";
 }
 
 function abortableDelay(milliseconds: number, signal: AbortSignal): Promise<void> {

@@ -48,6 +48,8 @@ pub(crate) enum Reply {
     /// A separate shape because watching is not a question with an answer: it is the connection changing what it is for,
     /// and a dispatcher that pretended otherwise would have to answer once and then keep writing.
     Watching(Box<SessionView>),
+    /// The caller is now watching the current session index.
+    WatchingSessions,
     /// The session is closed, and its process is still being stopped.
     ///
     /// A separate shape because stopping is a wait, and the answer is not known until it is over. Handing the wait out
@@ -545,6 +547,8 @@ pub(crate) fn answer_prepared(
 
         Request::List => Reply::One(list(composed, sessions)),
 
+        Request::WatchSessions => Reply::WatchingSessions,
+
         Request::Models { provider } => models(&provider, prepared),
 
         Request::Start {
@@ -1011,7 +1015,7 @@ fn send(sessions: &mut SessionManager, session: SessionId, command: AgentCommand
 ///
 /// Joins runtrol's stored session pointers with the sessions that currently have a supervised process. Provider
 /// transcript storage is not consulted, so listing never discovers, derives, or reads a transcript path.
-fn list(composed: &Composed, sessions: &SessionManager) -> Response {
+pub(crate) fn list(composed: &Composed, sessions: &SessionManager) -> Response {
     let stored = match composed.store.list_sessions() {
         Ok(stored) => stored,
         Err(error) => return refuse(&error.to_string()),
@@ -1791,7 +1795,7 @@ mod tests {
     fn shape(reply: &Reply) -> String {
         match reply {
             Reply::One(response) => format!("{response:?}"),
-            Reply::Watching(_) => "a subscription".to_owned(),
+            Reply::Watching(_) | Reply::WatchingSessions => "a subscription".to_owned(),
             Reply::Stopping { how, .. } => format!("a process still stopping, {how:?}"),
             Reply::Cleaning { agents, .. } => format!("{} processes still stopping", agents.len()),
             Reply::Sending { .. } => "a provider command in flight".to_owned(),

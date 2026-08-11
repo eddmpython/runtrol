@@ -4,7 +4,7 @@
 
 한국어 | [English](README_EN.md) | [中文](README_ZH.md) | [日本語](README_JA.md)
 
-> 상태: **코어, Windows 데스크톱, VS Code 확장의 첫 end-to-end slice 구현.** `Runtrol Studio`는 Core 자동 탐색, 설치형 CLI 목록, 멀티세션 TreeView, 선택 세션 단일 구독, bounded live 화면, 동일 창 workspace 전환을 제공한다. session-index 실시간 구독, 실물 VS Code 성능 ratchet, VSIX 서명과 Marketplace 배포는 아직 남았다.
+> 상태: **코어, Windows 데스크톱, VS Code 확장의 첫 end-to-end slice와 실시간 세션 인덱스 구현.** `Runtrol Studio`는 Core 자동 탐색, 설치형 CLI 목록, 멀티세션 TreeView, 변화 시에만 갱신되는 세션 목록, 선택 세션 단일 구독, bounded live 화면, 동일 창 workspace 전환을 제공한다. 실물 VS Code 성능 ratchet, VSIX 서명과 Marketplace 배포는 아직 남았다.
 > 아래 점수 대부분이 0 인 것은 코드가 없어서가 아니라 그 축을 단언하는 게이트가 아직 없어서다.
 
 보안 경계와 기본 거부 설정은 [SECURITY.md](SECURITY.md)에 정리되어 있다.
@@ -26,6 +26,7 @@ Code-hot workspace는 bounded 상태를 유지한다. streaming과 background �
 - **멀티에이전트는 provider-neutral이다.** 지원되는 설치형 CLI를 자동 발견하고 한 목록과 같은 조작법으로 운영한다. 새 provider는 core 수정 없이 manifest 또는 driver로 추가한다.
 - **에이전트가 저장소를 자율적으로 변경한다.** provider CLI가 작업과 대화를 소유하고 runtrol은 session, workspace, worktree, process lifecycle, collision boundary만 감독한다.
 - **대화 선택과 workspace 전환을 결박한다.** session 선택 즉시 대화와 파일 맥락을 전환하고, 실제 편집이 필요할 때만 정확한 workspace 또는 worktree를 Code-hot으로 승격한다. 대화 본문을 읽어 경로를 추측하지 않는다.
+- **기기 연결과 세션 소유권을 분리한다.** VS Code와 폰은 같은 Core에 페어링된 표면이며 어느 쪽도 세션을 소유하지 않는다. 창, 기기, 네트워크 경로가 바뀌어도 Core가 세션을 살려 둔다.
 - **사람이 항상 우선이다.** 긴 streaming, 여러 agent, build, test 중에도 사용자의 입력, 스크롤, 편집기와 파일 탐색이 먼저 반응한다.
 - **얇은 경계는 바뀌지 않는다.** credential, transcript, 모델 API key, conversation copy를 소유하지 않는다.
 

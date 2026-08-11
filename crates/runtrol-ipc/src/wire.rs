@@ -53,6 +53,12 @@ pub enum Request {
     /// Every session this machine has.
     List,
 
+    /// Watch the session index.
+    ///
+    /// The daemon sends one current [`Response::Sessions`] snapshot after the acknowledgement, then another only
+    /// when a list-visible value changes. Conversation frames never enter this stream.
+    WatchSessions,
+
     /// Discover the current model choices for one provider.
     Models {
         /// Which provider to ask. The driver owns how discovery works.
@@ -196,6 +202,9 @@ pub enum Response {
         /// The requested boundary could not be served from the bounded window.
         gap: Option<Box<WatchGap>>,
     },
+
+    /// A session-index subscription is installed and all later answers are current session snapshots.
+    WatchingSessions,
 
     /// One event, already encoded, with the next exact reconnect boundary.
     ///
@@ -453,12 +462,25 @@ mod tests {
     }
 
     #[test]
+    fn watching_sessions_is_a_payload_free_subscription_boundary() {
+        assert_eq!(
+            serde_json::to_string(&Request::WatchSessions).expect("writable"),
+            r#"{"ask":"watchSessions"}"#
+        );
+        assert_eq!(
+            serde_json::to_string(&Response::WatchingSessions).expect("writable"),
+            r#"{"say":"watchingSessions"}"#
+        );
+    }
+
+    #[test]
     fn a_request_reads_back_as_what_it_was() {
         let session = SessionId::now();
         let approval = ApprovalId::now();
         for request in [
             Request::Hello { wire: WIRE_VERSION },
             Request::List,
+            Request::WatchSessions,
             Request::Models {
                 provider: "claude".into(),
             },

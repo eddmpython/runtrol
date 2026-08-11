@@ -1,4 +1,4 @@
-export const WIRE_VERSION = 6;
+export const WIRE_VERSION = 7;
 
 export type WatchCursor = {
   stream: string;
@@ -56,6 +56,7 @@ export type WireError = {
 export type Request =
   | { ask: "hello"; with: { wire: number } }
   | { ask: "list" }
+  | { ask: "watchSessions" }
   | { ask: "models"; with: { provider: string } }
   | {
       ask: "start";
@@ -85,6 +86,7 @@ export type Response =
       say: "watching";
       with: { starts_at: WatchCursor; live_at: WatchCursor; gap: WatchGap | null };
     }
+  | { say: "watchingSessions" }
   | { say: "event"; with: { payload: unknown; next_expected: WatchCursor } }
   | { say: "lagged"; with: { next_expected: WatchCursor } }
   | { say: "failed"; with: WireError };

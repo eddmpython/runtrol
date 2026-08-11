@@ -42,7 +42,7 @@ use runtrol_core::{
 use runtrol_ipc::transport::{Connection, Listener, TransportError};
 use runtrol_ipc::wire::{Request, Response, WireError};
 use runtrol_provider::{AgentCommand, CloseMode, ProviderError, SessionId};
-use tokio::sync::{Mutex, mpsc, oneshot};
+use tokio::sync::{Mutex, mpsc, oneshot, watch};
 use tokio::task::JoinSet;
 
 use crate::compose::Composed;
@@ -188,6 +188,10 @@ pub async fn serve(composed: Composed, mut listener: Listener) -> Result<(), Ser
     serve_sessions(composed, &mut listener, SessionManager::new()).await
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "one owner loop keeps every way session state changes visible beside index publication"
+)]
 async fn serve_sessions(
     composed: Composed,
     listener: &mut Listener,
@@ -197,6 +201,10 @@ async fn serve_sessions(
     let (asking, mut asked) = mpsc::channel::<Asked>(ASKED_QUEUE);
     let (reserving, mut reservations) = mpsc::unbounded_channel::<ReservationAsked>();
     let (returning, mut returned) = mpsc::unbounded_channel::<AgentReturned>();
+    let initial_index = Arc::<[u8]>::from(encode_response(&crate::dispatch::list(
+        &composed, &sessions,
+    )));
+    let (session_index, _initial_index_receiver) = watch::channel(initial_index);
     // ProbeCache replaces one file atomically but is deliberately not a database. Serializing provider preparation
     // keeps two connections from publishing stale snapshots over each other and bounds temporary provider processes.
     // A Models request holds this gate through its provider call. Opens release it after discovery because their
@@ -219,12 +227,15 @@ async fn serve_sessions(
                     returning.clone(),
                     Arc::clone(&composed),
                     Arc::clone(&discovering),
+                    session_index.subscribe(),
                 ));
             }
 
             Some(reservation) = reservations.recv() => match reservation {
                 ReservationAsked::Reserve { session, answered } => {
-                    if let Err(Ok(abandoned)) = answered.send(sessions.reserve_open(session)) {
+                    let reserved = sessions.reserve_open(session);
+                    publish_session_index(&session_index, &composed, &sessions);
+                    if let Err(Ok(abandoned)) = answered.send(reserved) {
                         abandon_reserved(
                             &mut sessions,
                             &mut connections,
@@ -242,6 +253,10 @@ async fn serve_sessions(
 
             Some(ask) = asked.recv() => {
                 let Asked { mut conversation, request, prepared, reservation, answered } = ask;
+                let changes_index = matches!(
+                    &request,
+                    Request::Start { .. } | Request::Resume { .. } | Request::Close { .. }
+                );
                 let reservation = reservation.and_then(ReservationGuard::take);
                 let reply = answer_prepared(
                     &mut conversation,
@@ -253,13 +268,16 @@ async fn serve_sessions(
                 );
                 // The connection stopped while its request was being answered. Nothing to report and nowhere to
                 // report it: the caller is gone, and the sessions already record everything the request did.
-                deliver_answer(
+                let abandoned_agent = deliver_answer(
                     answered,
                     Answered { conversation, reply },
                     &mut connections,
                     &reserving,
                     &mut sessions,
                 );
+                if changes_index || abandoned_agent {
+                    publish_session_index(&session_index, &composed, &sessions);
+                }
             }
 
             Some(returned_agent) = returned.recv() => match returned_agent {
@@ -276,7 +294,10 @@ async fn serve_sessions(
                     };
                     drop(answered.send(response));
                 }
-                AgentReturned::Abandoned(lease) => sessions.abandon_agent(lease),
+                AgentReturned::Abandoned(lease) => {
+                    sessions.abandon_agent(lease);
+                    publish_session_index(&session_index, &composed, &sessions);
+                }
             },
 
             // Events reach watchers through the session's own fan-out. This arm keeps the provider stream moving.
@@ -294,6 +315,9 @@ async fn serve_sessions(
                     ) {
                         break Err(error.into());
                     }
+                }
+                if pumped.index_changed {
+                    publish_session_index(&session_index, &composed, &sessions);
                 }
             }
 
@@ -339,10 +363,11 @@ fn deliver_answer(
     tasks: &mut JoinSet<()>,
     cancelling: &mpsc::UnboundedSender<ReservationAsked>,
     sessions: &mut SessionManager,
-) {
+) -> bool {
     if let Err(abandoned) = answered.send(answer) {
-        abandon_reply(tasks, cancelling, sessions, abandoned.reply);
+        return abandon_reply(tasks, cancelling, sessions, abandoned.reply);
     }
+    false
 }
 
 fn abandon_reply(
@@ -350,19 +375,22 @@ fn abandon_reply(
     cancelling: &mpsc::UnboundedSender<ReservationAsked>,
     sessions: &mut SessionManager,
     reply: Reply,
-) {
+) -> bool {
     match reply {
         Reply::Stopping {
             agent,
             how,
             reservation,
-        } => spawn_abandoned_cleanup(
-            tasks,
-            cancelling,
-            agent,
-            how,
-            Some(CleanupReservation::Closing(reservation)),
-        ),
+        } => {
+            spawn_abandoned_cleanup(
+                tasks,
+                cancelling,
+                agent,
+                how,
+                Some(CleanupReservation::Closing(reservation)),
+            );
+            false
+        }
         Reply::Cleaning { agents, .. } => {
             for Cleanup {
                 agent,
@@ -372,13 +400,15 @@ fn abandon_reply(
             {
                 spawn_abandoned_cleanup(tasks, cancelling, agent, how, reservation);
             }
+            false
         }
         Reply::Sending { taken, .. } => {
             let TakenAgent { agent, lease } = taken;
             drop(agent);
             sessions.abandon_agent(lease);
+            true
         }
-        Reply::One(_) | Reply::Watching(_) => {}
+        Reply::One(_) | Reply::Watching(_) | Reply::WatchingSessions => false,
     }
 }
 
@@ -415,6 +445,7 @@ async fn converse(
     returning: mpsc::UnboundedSender<AgentReturned>,
     composed: Arc<Composed>,
     discovering: Arc<Mutex<()>>,
+    mut session_index: watch::Receiver<Arc<[u8]>>,
 ) {
     // Every connection today arrives on the local endpoint, which is inside a directory only the operator can
     // enter and refuses anything off this machine. That is what makes this the right answer rather than an
@@ -564,6 +595,17 @@ async fn converse(
                     return;
                 }
                 relay(&mut connection, *watching).await;
+                return;
+            }
+
+            Reply::WatchingSessions => {
+                if write(&mut connection, &Response::WatchingSessions)
+                    .await
+                    .is_err()
+                {
+                    return;
+                }
+                relay_session_index(&mut connection, &mut session_index).await;
                 return;
             }
 
@@ -772,21 +814,57 @@ async fn relay(connection: &mut Connection, mut watching: runtrol_core::SessionV
     }
 }
 
+/// Relay coalesced current session snapshots without copying one frame per connected surface.
+async fn relay_session_index(
+    connection: &mut Connection,
+    session_index: &mut watch::Receiver<Arc<[u8]>>,
+) {
+    let current = Arc::clone(&session_index.borrow_and_update());
+    if connection.send(current.as_ref()).await.is_err() {
+        return;
+    }
+    while session_index.changed().await.is_ok() {
+        let current = Arc::clone(&session_index.borrow_and_update());
+        if connection.send(current.as_ref()).await.is_err() {
+            return;
+        }
+    }
+}
+
+/// Publish only a changed current index. The encoded bytes are shared by every subscriber.
+fn publish_session_index(
+    session_index: &watch::Sender<Arc<[u8]>>,
+    composed: &Composed,
+    sessions: &SessionManager,
+) {
+    let next = Arc::<[u8]>::from(encode_response(&crate::dispatch::list(composed, sessions)));
+    session_index.send_if_modified(|current| {
+        if current.as_ref() == next.as_ref() {
+            return false;
+        }
+        *current = next;
+        true
+    });
+}
+
 /// Write one answer.
 ///
 /// A response that cannot be serialized is a defect in this build rather than something a caller did, so what goes out
 /// instead says exactly that. The alternative is writing nothing, which leaves the caller waiting on a daemon that is
 /// working perfectly well.
 async fn write(connection: &mut Connection, response: &Response) -> Result<(), TransportError> {
-    let frame = serde_json::to_vec(response).unwrap_or_else(|error| {
+    connection.send(&encode_response(response)).await
+}
+
+fn encode_response(response: &Response) -> Vec<u8> {
+    serde_json::to_vec(response).unwrap_or_else(|error| {
         let said = refuse(&format!("this daemon could not write its own answer: {error}"));
         serde_json::to_vec(&said).unwrap_or_else(|_| {
             // Two failures to serialize means the failure is in the vocabulary itself. This is that vocabulary,
             // written by hand, so that there is no third thing that could fail.
             br#"{"say":"failed","with":{"message":"this daemon cannot write its own answer","retryable":false,"needs_the_operator":false}}"#.to_vec()
         })
-    });
-    connection.send(&frame).await
+    })
 }
 
 #[cfg(test)]
@@ -1095,6 +1173,51 @@ mod tests {
             }
             other => panic!("expected a listing, got {other:?}"),
         }
+        running.stop();
+    }
+
+    #[tokio::test]
+    async fn a_session_index_watch_pushes_only_the_new_current_snapshot() {
+        let session = SessionId::now();
+        let mut sessions = SessionManager::new();
+        attach_test_agent(
+            &mut sessions,
+            session,
+            Box::new(PendingSend {
+                session,
+                started: None,
+                release: None,
+                panic_after_start: false,
+            }),
+        );
+        let running = Running::start_with_sessions("session-index", sessions).await;
+        let mut watcher = greeted_caller(&running).await;
+
+        assert!(matches!(
+            ask(&mut watcher, &Request::WatchSessions).await,
+            Response::WatchingSessions
+        ));
+        match receive(&mut watcher).await {
+            Response::Sessions(listing) => {
+                assert_eq!(listing.sessions.len(), 1);
+                assert_eq!(
+                    listing.sessions.first().map(|line| line.session),
+                    Some(session)
+                );
+            }
+            other => panic!("expected the current session index, got {other:?}"),
+        }
+
+        let mut control = greeted_caller(&running).await;
+        assert!(matches!(
+            ask(&mut control, &Request::Close { session, now: true }).await,
+            Response::Done
+        ));
+        match receive(&mut watcher).await {
+            Response::Sessions(listing) => assert!(listing.sessions.is_empty()),
+            other => panic!("expected the changed session index, got {other:?}"),
+        }
+
         running.stop();
     }
 

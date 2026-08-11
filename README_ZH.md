@@ -4,7 +4,7 @@
 
 [한국어](README.md) | [English](README_EN.md) | 中文 | [日本語](README_JA.md)
 
-> 状态：**内核、Windows 桌面端和 VS Code 扩展的首个端到端切片已经实现。** `Runtrol Studio` 提供 Core 自动发现、已安装 CLI 列表、多会话 TreeView、单个选中会话订阅、有界实时视图以及同一窗口内的 workspace 切换。session-index 实时订阅、真实 VS Code 性能门槛、签名 VSIX 和 Marketplace 发布仍未完成。
+> 状态：**内核、Windows 桌面端、VS Code 扩展的首个端到端切片和实时会话索引已经实现。** `Runtrol Studio` 提供 Core 自动发现、已安装 CLI 列表、多会话 TreeView、仅在变化时推送的会话快照、单个选中会话订阅、有界实时视图以及同一窗口内的 workspace 切换。真实 VS Code 性能门槛、签名 VSIX 和 Marketplace 发布仍未完成。
 > 下面多数分数为 0，不是因为没有代码，而是因为还没有门禁去断言那些轴。
 
 The security boundary and default-deny settings are documented in [SECURITY.md](SECURITY.md).
@@ -25,6 +25,7 @@ active subscription 与 Code-hot workspace 始终有界。streaming 与后台工
 - **多代理必须 provider-neutral。** 自动发现受支持的已安装 CLI，并通过统一列表和同一种操作方式运行。新增 provider 只需要 manifest 或 driver，绝不修改 core。
 - **代理自主修改仓库。** provider CLI 拥有工作与对话，runtrol 只监督 session、workspace、worktree、process lifecycle 与 collision boundary。
 - **对话选择与 workspace 切换绑定。** 选择 session 后立即切换对话和文件上下文，只有真正需要编辑时才把准确的 workspace 或 worktree 提升为 Code-hot。绝不读取对话内容来猜测路径。
+- **设备连接与会话所有权相互分离。** VS Code 和手机只是配对到同一 Core 的操作界面，双方都不拥有会话。即使窗口、设备或网络路径改变，Core 仍保持会话存活。
 - **人始终优先。** 即使存在长 streaming、多个 agent、build 与 test，输入、滚动、editor 和文件导航也必须先响应。
 - **薄边界永不改变。** 不持有 credential、transcript、model API key 或 conversation copy。
 

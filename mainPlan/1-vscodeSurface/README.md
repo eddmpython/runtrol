@@ -22,6 +22,8 @@ The first end-to-end slice landed on 2026-08-11:
 - the active Webview bounds frames, characters, DOM nodes, and per-animation-frame work
 - prompts, interruption, close, and provider-native approval choices cross the existing daemon boundary
 - the extension stores no prompt, reply, draft, approval subject, or transcript copy
+- the daemon pushes one current session index and then only list-visible changes, with one encoded snapshot shared by
+  every surface and no session-list work for stable conversation content
 
 The hosted `vscodeExtension` gate checks the thin boundary, no polling, no browser persistence, one selected watch,
 queue and renderer bounds, TypeScript, framing tests, and production bundle size.
@@ -40,21 +42,19 @@ queue and renderer bounds, TypeScript, framing tests, and production bundle size
 
 ## Remaining gates before release
 
-1. Add a daemon session-index subscription so every session state changes without polling.
-2. Show workspace overlap and provider-offered worktree choices before starting conflicting sessions.
-3. Measure the actual VS Code extension host and Webview under 3,000 frames per second, typing, scrolling, switching,
+1. Show workspace overlap and provider-offered worktree choices before starting conflicting sessions.
+2. Measure the actual VS Code extension host and Webview under 3,000 frames per second, typing, scrolling, switching,
    workspace reload, and eight hot sessions. Turn every measured ceiling into a ratchet.
-4. Move shared event presentation rules out of the retired desktop surface so VS Code and any future phone surface use
+3. Move shared event presentation rules out of the retired desktop surface so VS Code and any future phone surface use
    one vocabulary SSOT.
-5. Exercise start, prompt, approval, interrupt, reconnect, close, and workspace switching against installed real CLIs
+4. Exercise start, prompt, approval, interrupt, reconnect, close, and workspace switching against installed real CLIs
    from an Extension Development Host.
-6. Build one signed Core per Marketplace target, package platform-specific VSIX files, install each into clean VS Code,
+5. Build one signed Core per Marketplace target, package platform-specific VSIX files, install each into clean VS Code,
    and verify upgrade plus rollback without stopping active sessions.
-7. Publish `Runtrol Studio` to the Visual Studio Marketplace and verify a clean machine installs and runs it.
+6. Publish `Runtrol Studio` to the Visual Studio Marketplace and verify a clean machine installs and runs it.
 
 ## Completion
 
 This initiative is complete only when the Marketplace listing is public, a clean stable VS Code installs the matching
 platform package, installed CLIs are discovered without configuration, the full real-provider journey passes, all
 latency and memory ratchets are green, and no process started by the release verification remains alive.
-

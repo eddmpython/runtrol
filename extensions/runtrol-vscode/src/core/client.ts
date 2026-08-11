@@ -4,6 +4,7 @@ import {
   type ProviderLine,
   type Request,
   type Response,
+  type SessionListing,
   type WatchCursor,
   failureMessage,
   readResponse,
@@ -18,6 +19,10 @@ type Connected = {
 export type WatchHandlers = {
   event: (payload: unknown, nextExpected: WatchCursor) => void;
   gap: (nextExpected: WatchCursor, message: string) => void;
+};
+
+export type SessionIndexHandlers = {
+  snapshot: (listing: SessionListing, providers: readonly ProviderLine[]) => void;
 };
 
 export class CoreClient {
@@ -81,6 +86,39 @@ export class CoreClient {
     }
   }
 
+  async watchSessions(handlers: SessionIndexHandlers, signal: AbortSignal): Promise<void> {
+    const connected = await this.connect();
+    const abort = () => connected.transport.close();
+    signal.addEventListener("abort", abort, { once: true });
+    try {
+      await connected.transport.send({ ask: "watchSessions" });
+      const started = readResponse(JSON.parse((await connected.transport.receive()).toString("utf8")));
+      if (started.say === "failed") {
+        throw new Error(started.with.message);
+      }
+      if (started.say !== "watchingSessions") {
+        throw new Error(`the daemon answered session watch with ${started.say}`);
+      }
+
+      while (!signal.aborted) {
+        const response = readResponse(JSON.parse((await connected.transport.receive()).toString("utf8")));
+        if (response.say === "sessions") {
+          handlers.snapshot(response.with, connected.providers);
+          continue;
+        }
+        const failed = failureMessage(response);
+        throw new Error(failed ?? `the session watch received ${response.say}`);
+      }
+    } catch (error) {
+      if (!signal.aborted) {
+        throw error;
+      }
+    } finally {
+      signal.removeEventListener("abort", abort);
+      connected.transport.close();
+    }
+  }
+
   private async connect(): Promise<Connected> {
     const located = await this.locator.locate();
     const transport = await FrameTransport.connect(located.endpoint);
@@ -100,4 +138,3 @@ export class CoreClient {
     }
   }
 }
-

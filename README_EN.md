@@ -4,7 +4,7 @@
 
 [한국어](README.md) | English | [中文](README_ZH.md) | [日本語](README_JA.md)
 
-> Status: **the core, Windows desktop, and first end-to-end VS Code extension slice are implemented.** `Runtrol Studio` provides Core discovery, installed CLI listing, a multi-session TreeView, one selected watch, a bounded live view, and same-window workspace switching. A live session-index subscription, real VS Code performance ratchets, signed VSIX files, and Marketplace publishing remain. Most scores below are 0 because no gate asserts those axes yet, not because there is
+> Status: **the core, Windows desktop, first end-to-end VS Code extension slice, and live session index are implemented.** `Runtrol Studio` provides Core discovery, installed CLI listing, a multi-session TreeView, change-only session snapshots, one selected watch, a bounded live view, and same-window workspace switching. Real VS Code performance ratchets, signed VSIX files, and Marketplace publishing remain. Most scores below are 0 because no gate asserts those axes yet, not because there is
 > no code.
 
 The security boundary and default-deny settings are documented in [SECURITY.md](SECURITY.md).
@@ -26,6 +26,7 @@ between the user's PC and the provider. runtrol does not get in between.**
 - **Multi-agent operation is provider-neutral.** Supported installed CLIs are discovered automatically and use one list and one interaction model. A new provider requires a manifest or driver, never a core edit.
 - **Agents change repositories autonomously.** The provider CLI owns the work and conversation. runtrol supervises only session, workspace, worktree, process lifecycle, and collision boundaries.
 - **Conversation selection is bound to workspace switching.** Selecting a session changes conversation and file context immediately. The exact workspace or worktree becomes Code-hot only when editing requires it. runtrol never reads conversation text to guess a path.
+- **Device connectivity is separate from session ownership.** VS Code and the phone are paired surfaces of the same Core, and neither owns a session. The Core keeps sessions alive across window, device, and network-path changes.
 - **The human is always first.** Typing, scrolling, the editor, and file navigation stay responsive during long streams, multiple agents, builds, and tests.
 - **The thin boundary never changes.** runtrol owns no credential, transcript, model API key, or conversation copy.
 

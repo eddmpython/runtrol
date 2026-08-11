@@ -71,7 +71,7 @@ pub fn needed(request: &Request) -> Needed {
             Needed::Anyone("agreeing a wire format decides nothing and touches nothing")
         }
 
-        Request::List => Needed::Scope(DeviceScope::SessionList),
+        Request::List | Request::WatchSessions => Needed::Scope(DeviceScope::SessionList),
         // Model discovery and consult status both read configuration and touch nothing.
         Request::Models { .. } | Request::Consult => Needed::Scope(DeviceScope::ConfigRead),
         Request::Start { .. } => Needed::Scope(DeviceScope::SessionStart),
@@ -182,6 +182,7 @@ mod tests {
                 wire: runtrol_ipc::WIRE_VERSION,
             },
             Request::List,
+            Request::WatchSessions,
             Request::Models {
                 provider: "example".into(),
             },

@@ -185,6 +185,16 @@ pub struct Pumped {
     pub session: SessionId,
     /// What was published, or `None` when that session's stream ended.
     pub published: Option<Published>,
+    /// Whether a field visible in the session index changed.
+    ///
+    /// Content frames leave this false, so a surface watching many active sessions does not pay to rebuild its
+    /// session list for conversation traffic.
+    pub index_changed: bool,
+}
+
+struct Applied {
+    published: Option<Published>,
+    index_changed: bool,
 }
 
 /// A process that was admitted to the live session set.
@@ -634,7 +644,7 @@ impl SessionManager {
             .as_mut()
             .ok_or(SessionError::AgentInFlight { session })?;
         let spoke = agent.next().await;
-        Ok(self.apply(session, spoke))
+        Ok(self.apply(session, spoke).published)
     }
 
     /// Wait until any live session speaks, and let that event change what runtrol believes.
@@ -651,9 +661,11 @@ impl SessionManager {
         let (session, spoke) = self.hear_one().await;
         // The next round starts after this one, which is the whole of the fairness rule.
         self.after = Some(session);
+        let applied = self.apply(session, spoke);
         Pumped {
             session,
-            published: self.apply(session, spoke),
+            published: applied.published,
+            index_changed: applied.index_changed,
         }
     }
 
@@ -704,21 +716,33 @@ impl SessionManager {
         &mut self,
         session: SessionId,
         spoke: Option<Result<Produced, ProviderError>>,
-    ) -> Option<Published> {
+    ) -> Applied {
         // The session is here: both callers just read from it. Asked for rather than assumed, so that a future
         // caller which does not hold that guarantee gets nothing rather than a panic.
-        let live = self.live.get_mut(&session)?;
+        let Some(live) = self.live.get_mut(&session) else {
+            return Applied {
+                published: None,
+                index_changed: false,
+            };
+        };
 
         match spoke {
             Some(Ok(produced)) => {
                 // The provider's own name may have arrived with this frame. The newest answer wins.
-                if let Some(native) = live.agent.as_ref().and_then(|agent| agent.native())
+                let native_changed = if let Some(native) =
+                    live.agent.as_ref().and_then(|agent| agent.native())
                     && let Ok(parsed) = runtrol_provider::NativeSessionId::new(native)
                 {
+                    let changed = live.identity.native() != Some(&parsed);
                     live.identity.observe_native(parsed);
-                }
+                    changed
+                } else {
+                    false
+                };
 
                 let observed = observation_of(&produced.body);
+                let lifecycle_before = live.state.lifecycle().clone();
+                let stuck_before = live.state.looks_stuck();
                 let published = live.hub.publish(produced.src_end, produced.body);
                 if let Some(observed) = observed {
                     // A driver reporting something that cannot have happened becomes a notice rather than a panic. A
@@ -734,7 +758,12 @@ impl SessionManager {
                         );
                     }
                 }
-                Some(published)
+                Applied {
+                    published: Some(published),
+                    index_changed: native_changed
+                        || live.state.lifecycle() != &lifecycle_before
+                        || live.state.looks_stuck() != stuck_before,
+                }
             }
 
             Some(Err(error)) => {
@@ -754,7 +783,10 @@ impl SessionManager {
                     notice(NoticeCode::ProtocolViolation, Level::Error, &detail),
                 );
                 self.live.remove(&session);
-                Some(published)
+                Applied {
+                    published: Some(published),
+                    index_changed: true,
+                }
             }
 
             None => {
@@ -763,7 +795,10 @@ impl SessionManager {
                 let at = WallMs::now();
                 drop(live.state.observe(Observed::Detached, at));
                 self.live.remove(&session);
-                None
+                Applied {
+                    published: None,
+                    index_changed: true,
+                }
             }
         }
     }
@@ -1895,16 +1930,44 @@ mod tests {
             .expect("opens");
         let talkative = SessionId::now();
         manager
-            .start(&a_fake(vec![Step::Content]), an_intent(talkative))
+            .start(
+                &a_fake(vec![Step::Content, Step::Content]),
+                an_intent(talkative),
+            )
+            .await
+            .expect("opens");
+
+        let first = manager.pump_any().await;
+        assert_eq!(
+            first.session, talkative,
+            "the session with something ready is the one that is heard"
+        );
+        assert!(first.published.is_some());
+        assert!(
+            first.index_changed,
+            "the first frame reveals the provider-native identifier"
+        );
+
+        let heard = manager.pump_any().await;
+        assert!(heard.published.is_some());
+        assert!(
+            !heard.index_changed,
+            "content with stable identity must not rebuild the session index"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_lifecycle_event_marks_the_session_index_changed() {
+        let mut manager = SessionManager::new();
+        let session = SessionId::now();
+        manager
+            .start(&a_fake(vec![Step::TurnStarted(0)]), an_intent(session))
             .await
             .expect("opens");
 
         let heard = manager.pump_any().await;
-        assert_eq!(
-            heard.session, talkative,
-            "the session with something ready is the one that is heard"
-        );
-        assert!(heard.published.is_some());
+        assert_eq!(heard.session, session);
+        assert!(heard.index_changed, "busy is visible in the session index");
     }
 
     #[tokio::test]
@@ -1957,6 +2020,10 @@ mod tests {
         let heard = manager.pump_any().await;
         assert_eq!(heard.session, session);
         assert!(heard.published.is_none(), "the stream is over");
+        assert!(
+            heard.index_changed,
+            "the removed hot session changes the index"
+        );
         assert!(!manager.is_live(session));
     }
 

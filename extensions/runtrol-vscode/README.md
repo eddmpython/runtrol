@@ -4,6 +4,9 @@ Runtrol Studio is the primary runtrol surface. It connects one VS Code window to
 shows every runtime-discovered coding-agent CLI and session, keeps one selected event stream hot, and switches the
 window to that session's exact workspace or worktree.
 
+The Core pushes one current session snapshot and then only changed snapshots. Conversation traffic never triggers a
+session-list query or rebuild, and every connected window shares the Core's once-encoded snapshot bytes.
+
 The extension does not read provider transcript files, keep a conversation copy, hold model credentials, or run an
 agent loop. The installed provider CLI remains the owner of the conversation and repository changes.
 
@@ -30,4 +33,3 @@ npm run package:win32-x64
 
 `RUNTROL_CORE_BINARY` may name a different verified binary. Packages are written under the repository `release/`
 directory, which is not tracked.
-

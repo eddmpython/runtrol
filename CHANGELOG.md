@@ -15,6 +15,8 @@ its measured architecture, and the gate harness.
 
 ### Added
 
+- A change-only session-index subscription. Surfaces receive one current snapshot and then only list-visible changes;
+  stable conversation content causes no list rebuild, and one encoded snapshot is shared across every subscriber.
 - The first `Runtrol Studio` VS Code slice. It discovers a configured, bundled, or PATH Core,
   lists runtime-discovered CLIs and sessions in native views, keeps one selected framed watch,
   switches the same window to the session workspace, renders a bounded live conversation, and

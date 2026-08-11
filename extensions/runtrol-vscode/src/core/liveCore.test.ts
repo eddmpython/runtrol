@@ -6,6 +6,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { FrameTransport } from "./framing";
+import { WIRE_VERSION } from "../protocol";
 
 const core = process.env.RUNTROL_TEST_CORE;
 
@@ -15,7 +16,7 @@ test("the extension framing greets and lists through a real core", { skip: !core
   try {
     endpoint = await discover(core as string, home);
     const transport = await FrameTransport.connect(endpoint);
-    await transport.send({ ask: "hello", with: { wire: 6 } });
+    await transport.send({ ask: "hello", with: { wire: WIRE_VERSION } });
     const welcome = JSON.parse((await transport.receive()).toString("utf8"));
     assert.equal(welcome.say, "welcome");
     assert.ok(Array.isArray(welcome.with.providers));
@@ -25,8 +26,18 @@ test("the extension framing greets and lists through a real core", { skip: !core
     assert.equal(listing.say, "sessions");
     assert.deepEqual(listing.with.sessions, []);
 
+    const index = await FrameTransport.connect(endpoint);
+    await index.send({ ask: "hello", with: { wire: WIRE_VERSION } });
+    assert.equal(JSON.parse((await index.receive()).toString("utf8")).say, "welcome");
+    await index.send({ ask: "watchSessions" });
+    assert.equal(JSON.parse((await index.receive()).toString("utf8")).say, "watchingSessions");
+    const snapshot = JSON.parse((await index.receive()).toString("utf8"));
+    assert.equal(snapshot.say, "sessions");
+    assert.deepEqual(snapshot.with.sessions, []);
+
     await transport.send({ ask: "stopEverything" });
     await assert.rejects(transport.receive(), /closed|connection/i);
+    index.close();
   } finally {
     if (endpoint) {
       await stopIfRunning(endpoint);
@@ -60,7 +71,7 @@ function discover(executable: string, home: string): Promise<string> {
 async function stopIfRunning(endpoint: string): Promise<void> {
   try {
     const transport = await FrameTransport.connect(endpoint, 250);
-    await transport.send({ ask: "hello", with: { wire: 6 } });
+    await transport.send({ ask: "hello", with: { wire: WIRE_VERSION } });
     await transport.receive();
     await transport.send({ ask: "stopEverything" });
     transport.close();
