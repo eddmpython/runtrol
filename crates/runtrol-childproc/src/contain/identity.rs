@@ -154,7 +154,7 @@ fn start_of(pid: u32) -> Result<Option<u64>, SpawnError> {
     let path = format!("/proc/{pid}/stat");
     let text = match std::fs::read_to_string(&path) {
         Ok(text) => text,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) if process_lookup_is_gone(&error) => return Ok(None),
         Err(error) => {
             return Err(SpawnError::Containment {
                 doing: "reading a process start identity",
@@ -177,6 +177,12 @@ fn start_of(pid: u32) -> Result<Option<u64>, SpawnError> {
             detail: error.to_string(),
         })?;
     Ok(Some(start))
+}
+
+#[cfg(target_os = "linux")]
+fn process_lookup_is_gone(error: &std::io::Error) -> bool {
+    error.kind() == std::io::ErrorKind::NotFound
+        || matches!(error.raw_os_error(), Some(libc::ESRCH))
 }
 
 #[cfg(target_os = "macos")]
@@ -292,5 +298,13 @@ mod tests {
 
         assert_eq!(identity.live_identity()?, LiveIdentity::Ours);
         Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn an_esrch_process_lookup_is_a_gone_process() {
+        let error = std::io::Error::from_raw_os_error(libc::ESRCH);
+
+        assert!(process_lookup_is_gone(&error));
     }
 }

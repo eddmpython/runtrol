@@ -72,6 +72,7 @@ class ProcessRow:
     parent: int
     started: str
     age_seconds: int | None
+    state: str
 
 
 def verifyEvidence(evidence: Evidence) -> None:
@@ -231,9 +232,21 @@ def processIdentityTable() -> dict[int, ProcessRow]:
             timeout=30.0,
             check=False,
         )
+    elif sys.platform == "darwin":
+        listed = subprocess.run(
+            ["ps", "-axo", "pid=,ppid=,state=,lstart="],
+            env={**os.environ, "LC_ALL": "C"},
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=15.0,
+            check=False,
+        )
     else:
         listed = subprocess.run(
-            ["ps", "-axo", "pid=,ppid=,etimes=,lstart="],
+            ["ps", "-axo", "pid=,ppid=,state=,etimes=,lstart="],
+            env={**os.environ, "LC_ALL": "C"},
             capture_output=True,
             text=True,
             encoding="utf-8",
@@ -245,19 +258,36 @@ def processIdentityTable() -> dict[int, ProcessRow]:
         raise Failed(f"process identity enumeration failed: {listed.stderr[-2000:]}")
     found: dict[int, ProcessRow] = {}
     for line in listed.stdout.splitlines():
-        fields = line.split("|", 2) if sys.platform == "win32" else line.split(maxsplit=3)
-        if len(fields) != (3 if sys.platform == "win32" else 4):
+        if sys.platform == "win32":
+            fields = line.split("|", 2)
+        elif sys.platform == "darwin":
+            fields = line.split(maxsplit=3)
+        else:
+            fields = line.split(maxsplit=4)
+        expected_fields = 3 if sys.platform == "win32" else (4 if sys.platform == "darwin" else 5)
+        if len(fields) != expected_fields:
             continue
         try:
             pid = int(fields[0])
             parent = int(fields[1])
-            age = None if sys.platform == "win32" else int(fields[2])
+            if sys.platform == "win32":
+                age = None
+                state = ""
+                started = fields[2].strip()
+            elif sys.platform == "darwin":
+                state = fields[2]
+                started = fields[3].strip()
+                started_at = time.mktime(time.strptime(started, "%a %b %d %H:%M:%S %Y"))
+                age = max(0, int(time.time() - started_at))
+            else:
+                state = fields[2]
+                age = int(fields[3])
+                started = fields[4].strip()
         except ValueError:
             # ok: an unrelated process row raced removal; complete rows still identify every owned generation.
             continue
-        started = fields[2].strip() if sys.platform == "win32" else fields[3].strip()
         if pid > 0 and started:
-            found[pid] = ProcessRow(parent, started, age)
+            found[pid] = ProcessRow(parent, started, age, state)
     return found
 
 
@@ -389,7 +419,9 @@ def aliveIdentities(identities: set[ProcessIdentity]) -> set[ProcessIdentity]:
     table = processIdentityTable()
     return {
         identity for identity in identities
-        if table.get(identity.pid) is not None and table[identity.pid].started == identity.started
+        if table.get(identity.pid) is not None
+        and table[identity.pid].started == identity.started
+        and not table[identity.pid].state.startswith(("Z", "X"))
     }
 
 

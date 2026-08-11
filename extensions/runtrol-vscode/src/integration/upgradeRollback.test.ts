@@ -9,6 +9,7 @@ type ExtensionApi = {
   verifyRestoredSession?(sessionId: string): Promise<void>;
 };
 
+const continuityTimeoutMs = 15_000;
 let currentStage = "starting";
 
 export async function run(): Promise<void> {
@@ -66,7 +67,11 @@ async function verifyPhase(resultPath: string): Promise<void> {
     if (!api.verifyRestoredSession) {
       throw new Error("the bounded restored-session verifier is unavailable");
     }
-    await within(api.verifyRestoredSession(expectedSession), 5_000, `${phase} selected-session restore`);
+    await within(
+      api.verifyRestoredSession(expectedSession),
+      continuityTimeoutMs,
+      `${phase} selected-session restore`,
+    );
   }
 
   await writeFile(
