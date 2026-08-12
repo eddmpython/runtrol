@@ -22,6 +22,7 @@ import {
   acquireVSCode,
   fileDigest,
   findInstalledExtension,
+  installMarketplaceExtension,
   installVSIX,
   runInstalledExtensionTest,
   terminateExactProcesses,
@@ -29,11 +30,15 @@ import {
 
 const repositoryRoot = fileURLToPath(new URL("../../../", import.meta.url));
 const target = `${process.platform}-${process.arch}`;
-const archive = process.argv[2] ? path.resolve(process.argv[2]) : null;
-if (!archive) {
-  throw new Error("usage: node tooling/installed-package.mjs <platform.vsix>");
+const source = process.argv[2];
+const marketplace = source === "--marketplace";
+const archive = source && !marketplace ? path.resolve(source) : null;
+if (!source) {
+  throw new Error("usage: node tooling/installed-package.mjs <platform.vsix|--marketplace>");
 }
-await access(archive);
+if (archive) {
+  await access(archive);
+}
 
 const temporaryRoot = process.platform === "darwin" ? "/tmp" : os.tmpdir();
 const temporary = await mkdtemp(path.join(temporaryRoot, "runtrol-vscode-package-"));
@@ -84,7 +89,11 @@ try {
   });
 
   const vscode = await acquireVSCode(path.join(extensionRoot, ".vscode-test"));
-  installVSIX(vscode.cli, archive, userData, extensions);
+  if (marketplace) {
+    installMarketplaceExtension(vscode.cli, extensionIdentifier, userData, extensions);
+  } else {
+    installVSIX(vscode.cli, archive, userData, extensions);
+  }
   const installedDirectory = await findInstalledExtension(extensions);
   bundledCore = path.join(
     installedDirectory,

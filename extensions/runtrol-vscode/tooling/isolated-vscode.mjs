@@ -22,7 +22,7 @@ export async function acquireVSCode(cachePath) {
   return { executable, cli };
 }
 
-export function installVSIX(cli, archive, userData, extensions) {
+function installExtension(cli, source, userData, extensions) {
   const installed = spawnSync(
     cli,
     [
@@ -31,7 +31,7 @@ export function installVSIX(cli, archive, userData, extensions) {
       "--extensions-dir",
       extensions,
       "--install-extension",
-      archive,
+      source,
       "--force",
     ],
     {
@@ -43,10 +43,18 @@ export function installVSIX(cli, archive, userData, extensions) {
   );
   if (installed.status !== 0) {
     throw new Error(
-      `VSIX installation failed: ${installed.error?.message ?? `exit ${String(installed.status)}`}\n`
+      `extension installation failed: ${installed.error?.message ?? `exit ${String(installed.status)}`}\n`
       + `${installed.stdout ?? ""}${installed.stderr ?? ""}`,
     );
   }
+}
+
+export function installVSIX(cli, archive, userData, extensions) {
+  installExtension(cli, archive, userData, extensions);
+}
+
+export function installMarketplaceExtension(cli, identifier, userData, extensions) {
+  installExtension(cli, identifier, userData, extensions);
 }
 
 export function uninstallExtension(cli, identifier, userData, extensions) {
