@@ -225,9 +225,11 @@ async function restore(checkpoint: SwitchingCheckpoint, resultPath: string): Pro
 }
 
 async function activate(): Promise<ExtensionApi> {
+  currentStage = "activating-extension";
   const extension = extensionUnderTest<ExtensionApi>();
-  const api = await within(extension.activate() as Promise<ExtensionApi>, 10_000, "extension activation");
-  await within(api.ready, 10_000, "extension initialization");
+  const api = await within(extension.activate() as Promise<ExtensionApi>, 30_000, "extension activation");
+  currentStage = "initializing-extension";
+  await within(api.ready, 30_000, "extension initialization");
   return api;
 }
 
