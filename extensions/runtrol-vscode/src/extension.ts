@@ -183,8 +183,8 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
           throw new Error(`restored ${state.selected?.session ?? "no session"}, expected ${sessionId}`);
         }
         await Promise.all([
-          controller.selectedWatchReady(),
-          conversation.waitForCurrentRender(),
+          within(controller.selectedWatchReady(), 10_000, "selected-session watch handshake"),
+          within(conversation.waitForCurrentRender(), 10_000, "selected-session Webview render"),
         ]);
       })
       : undefined,
@@ -205,4 +205,18 @@ async function run(action: () => Promise<void>): Promise<void> {
 function percentile(values: readonly number[], at: number): number {
   const ordered = [...values].sort((left, right) => left - right);
   return ordered[Math.ceil(ordered.length * at) - 1] ?? Number.POSITIVE_INFINITY;
+}
+
+function within<T>(work: Promise<T>, milliseconds: number, label: string): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  return Promise.race([
+    work,
+    new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => reject(new Error(`${label} exceeded ${milliseconds} ms`)), milliseconds);
+    }),
+  ]).finally(() => {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  });
 }

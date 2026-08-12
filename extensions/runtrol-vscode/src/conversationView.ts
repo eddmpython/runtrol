@@ -68,8 +68,11 @@ export class ConversationView implements vscode.WebviewViewProvider {
       enableScripts: true,
       localResourceRoots: [vscode.Uri.joinPath(this.extensionUri, "dist")],
     };
-    view.webview.html = this.html(view.webview);
     view.webview.onDidReceiveMessage((message: unknown) => {
+      if (isWebviewReady(message)) {
+        this.reset(this.selected);
+        return;
+      }
       if (this.receiveRenderedGeneration(message)) {
         return;
       }
@@ -89,7 +92,7 @@ export class ConversationView implements vscode.WebviewViewProvider {
         this.rejectRenderWaiters(new Error("the Runtrol Webview closed before painting the selected session"));
       }
     });
-    this.reset(this.selected);
+    view.webview.html = this.html(view.webview);
   }
 
   reset(session: SessionLine | null): number {
@@ -396,6 +399,13 @@ function isViewAction(value: unknown): value is ViewAction {
       && candidate.subjectDigest.every((byte) => Number.isInteger(byte) && byte >= 0 && byte <= 255);
   }
   return type === "openWorkspace" || type === "interrupt" || type === "close";
+}
+
+function isWebviewReady(value: unknown): boolean {
+  return value !== null
+    && typeof value === "object"
+    && !Array.isArray(value)
+    && (value as Record<string, unknown>).type === "webviewReady";
 }
 
 function nonceValue(): string {

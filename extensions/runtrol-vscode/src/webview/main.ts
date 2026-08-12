@@ -8,6 +8,7 @@ import {
   textOf,
   type UnknownRecord,
 } from "./presentation";
+import { afterFrameOrDelay } from "./renderReady";
 
 type Session = {
   session: string;
@@ -58,6 +59,7 @@ const MAX_MESSAGE_CHARACTERS = 8 * 1024;
 const MAX_BATCH = 240;
 const MAX_PENDING_FRAMES = 4_096;
 const BASELINE_FRAMES = 30;
+const SELECTION_RENDER_FALLBACK_MS = 250;
 const LOCALIZED_TEXT: Record<string, string> = {
   "session.attached": "Session attached",
   "session.detached": "Session detached",
@@ -117,6 +119,8 @@ window.addEventListener("message", ({ data }: MessageEvent<Incoming>) => {
   enqueue(frames);
 });
 
+vscode.postMessage({ type: "webviewReady" });
+
 composer.addEventListener("submit", (event) => {
   event.preventDefault();
   const text = prompt.value;
@@ -160,9 +164,19 @@ function reset(session: Session | null, nextGeneration: number): void {
   if (session) {
     appendMessage("meta", `Connected to ${session.doing}`);
   }
-  requestAnimationFrame(() => {
-    vscode.postMessage({ type: "selectionRendered", generation: nextGeneration });
-  });
+  afterFrameOrDelay(
+    {
+      requestFrame: (callback) => requestAnimationFrame(callback),
+      setDelay: (callback, milliseconds) => window.setTimeout(callback, milliseconds),
+      clearDelay: (handle) => window.clearTimeout(handle),
+    },
+    SELECTION_RENDER_FALLBACK_MS,
+    () => {
+      if (generation === nextGeneration) {
+        vscode.postMessage({ type: "selectionRendered", generation: nextGeneration });
+      }
+    },
+  );
 }
 
 function enqueue(frames: readonly unknown[]): void {
