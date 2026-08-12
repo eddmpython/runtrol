@@ -3,8 +3,8 @@ name: vscode-release
 on:
   workflow_dispatch:
     inputs:
-      publish:
-        description: Publish verified packages to the Marketplace and create the GitHub release
+      release:
+        description: Create an immutable GitHub release after all native packages pass
         required: true
         type: boolean
         default: false
@@ -90,13 +90,12 @@ jobs:
           path: release/runtrol-studio-${{ needs.prepare.outputs.version }}-${{ matrix.target }}.vsix
           if-no-files-found: error
 
-  publish:
+  release:
     needs: [prepare, package]
-    if: inputs.publish
+    if: inputs.release
     runs-on: ubuntu-latest
     permissions:
       contents: write
-      id-token: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -114,11 +113,6 @@ jobs:
         run: |
           count="$(find release -maxdepth 1 -name 'runtrol-studio-${{ needs.prepare.outputs.version }}-*.vsix' -type f | wc -l)"
           test "$count" -eq "${{ needs.prepare.outputs.targetCount }}"
-      - name: Publish all platform packages
-        run: >-
-          node extensions/runtrol-vscode/node_modules/@vscode/vsce/vsce publish
-          --oidc
-          --packagePath release/runtrol-studio-${{ needs.prepare.outputs.version }}-*.vsix
       - name: Create the immutable GitHub release
         env:
           GH_TOKEN: ${{ github.token }}

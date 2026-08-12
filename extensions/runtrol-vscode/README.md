@@ -87,4 +87,4 @@ node tooling/installed-package.mjs ../../release/runtrol-studio-VERSION-win32-x6
 python -X utf8 ../../tests/audit/vscodeUpgradeRollback.py --archive ../../release/runtrol-studio-VERSION-win32-x64.vsix
 ```
 
-The hosted release workflow repeats this journey on native Windows, macOS, and Linux runners. Visual Studio Marketplace signs published VSIX files, and VS Code verifies that signature when installing them.
+The hosted release workflow repeats this journey on native Windows, macOS, and Linux runners and creates an immutable GitHub Release only after all six packages pass. Upload those exact assets through the `runtrol` Marketplace publisher portal. The Marketplace signs the published VSIX files, and VS Code verifies that signature when installing them. The workflow intentionally contains neither a long-lived Marketplace token nor the unavailable OIDC publishing command.

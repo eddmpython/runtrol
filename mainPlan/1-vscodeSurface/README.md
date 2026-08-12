@@ -87,9 +87,7 @@ workspace reload restoration at 1,500 ms while 15,000 raw frames cross the bound
 
 ## Remaining gates before release
 
-1. Register one Visual Studio Marketplace trusted publisher for publisher `runtrol`, GitHub owner `eddmpython`, repository `runtrol`, and workflow `vscode-release.yml`. The release workflow requests a short-lived OIDC credential and contains no Marketplace PAT. Then publish `Runtrol Studio` and verify a clean machine installs and runs it.
-   Marketplace publication signs the complete platform VSIX, including the exact Core bytes already checked by the
-   archive gate. A separate inner-binary signature is not claimed.
+1. Upload the six verified native packages from the immutable GitHub Release through the `runtrol` Marketplace publisher portal, then verify a clean machine installs and runs the matching public package. The attempted credentialless OIDC exchange returned `404` from the Marketplace token endpoint, so the release workflow does not retain a broken publishing command or a long-lived Marketplace secret. It creates the immutable GitHub Release after all six native jobs pass. Marketplace publication signs the complete platform VSIX, including the exact Core bytes already checked by the archive gate. A separate inner-binary signature is not claimed.
 
 ## Completion
 

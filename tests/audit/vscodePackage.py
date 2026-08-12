@@ -106,8 +106,9 @@ def sourceProblems(
         "--target-dir target/vscode-release",
         "RUNTROL_CORE_BINARY: target/vscode-release/release/${{ matrix.executable }}",
         "tests/audit/vscodeUpgradeRollback.py --archive",
-        "id-token: write",
-        "--oidc",
+        "if: inputs.release",
+        "Refuse an incomplete platform set",
+        "gh release create",
     )
     for token in requiredWorkflowTokens:
         if token not in releaseWorkflow:
@@ -115,8 +116,9 @@ def sourceProblems(
     for token in ("crates/runtrol-gui", "libwebkit2gtk-4.1-dev"):
         if token in releaseWorkflow:
             found.append(f"vscode-release.yml restores unused desktop release work {token}")
-    if "VSCE_PAT" in releaseWorkflow:
-        found.append("vscode-release.yml stores a long-lived Marketplace publishing token")
+    for token in ("VSCE_PAT", "--oidc", "--azure-credential", "vsce publish", "id-token: write"):
+        if token in releaseWorkflow:
+            found.append(f"vscode-release.yml contains an unavailable or secret Marketplace publishing path: {token}")
     for actionRevision in re.findall(r"uses:\s+[^@\s]+@([^\s#]+)", releaseWorkflow):
         if not re.fullmatch(r"[0-9a-f]{40}", actionRevision):
             found.append(f"vscode-release.yml uses an unpinned action revision: {actionRevision}")
@@ -362,8 +364,9 @@ def selftest() -> int:
     cargo build --release -p runtrol --bin runtrol --no-default-features --target-dir target/vscode-release
     RUNTROL_CORE_BINARY: target/vscode-release/release/${{ matrix.executable }}
     tests/audit/vscodeUpgradeRollback.py --archive
-    id-token: write
-    --oidc
+    if: inputs.release
+    Refuse an incomplete platform set
+    gh release create
     uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
     """
     coreManifest = 'default = ["desktop"]\ndesktop = ["dep:runtrol-gui"]\nruntrol-gui = { optional = true }'
@@ -391,7 +394,9 @@ def selftest() -> int:
         (sourcePackage, releaseWorkflow, coreManifest.replace("optional = true", "")),
         (sourcePackage, f"{releaseWorkflow}\ncrates/runtrol-gui", coreManifest),
         (sourcePackage, releaseWorkflow.replace("tests/audit/vscodeUpgradeRollback.py --archive", ""), coreManifest),
-        (sourcePackage, releaseWorkflow.replace("--oidc", "VSCE_PAT"), coreManifest),
+        (sourcePackage, releaseWorkflow.replace("gh release create", ""), coreManifest),
+        (sourcePackage, f"{releaseWorkflow}\nVSCE_PAT", coreManifest),
+        (sourcePackage, f"{releaseWorkflow}\nvsce publish --oidc", coreManifest),
         (sourcePackage, f"{releaseWorkflow}\nuses: actions/setup-node@v7", coreManifest),
     )
     for index, (mutatedPackage, mutatedWorkflow, mutatedManifest) in enumerate(sourceMutations, start=1):
