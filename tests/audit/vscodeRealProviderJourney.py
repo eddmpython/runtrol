@@ -493,7 +493,7 @@ def exercise(claude: str) -> None:
     vscode = vscodeExecutable(node)
     binary = provider_gate.buildBinary()
     with tempfile.TemporaryDirectory(prefix="runtrol-vscode-real-provider-") as raw_root:
-        root = Path(raw_root)
+        root = Path(raw_root).resolve()
         home = root / "runtrol-home"
         first_workspace = root / "workspace-one"
         second_workspace = root / "workspace-two"

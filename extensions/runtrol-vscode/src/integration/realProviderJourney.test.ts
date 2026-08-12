@@ -159,10 +159,14 @@ async function journey(resultPath: string): Promise<void> {
     currentSecondSession = secondSession;
     await api.journey.verifySelected(secondSession);
     const listed = api.journey.sessions();
-    if (!listed.some((session) => session.session === firstSession && session.workspace === firstWorkspace)) {
+    if (!listed.some(
+      (session) => session.session === firstSession && samePath(session.workspace, firstWorkspace),
+    )) {
       throw new Error("the first installed-provider session lost its workspace binding");
     }
-    if (!listed.some((session) => session.session === secondSession && session.workspace === secondWorkspace)) {
+    if (!listed.some(
+      (session) => session.session === secondSession && samePath(session.workspace, secondWorkspace),
+    )) {
       throw new Error("the second installed-provider session lost its workspace binding");
     }
 
