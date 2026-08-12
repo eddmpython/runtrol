@@ -24,6 +24,7 @@ import {
   findInstalledExtension,
   installMarketplaceExtension,
   installVSIX,
+  isolatedProfileSettings,
   runInstalledExtensionTest,
   terminateExactProcesses,
 } from "./isolated-vscode.mjs";
@@ -60,7 +61,7 @@ try {
   await Promise.all([
     writeFile(
       path.join(userData, "User", "settings.json"),
-      JSON.stringify({ "workbench.startupEditor": "none" }),
+      JSON.stringify(isolatedProfileSettings),
       "utf8",
     ),
     writeFile(

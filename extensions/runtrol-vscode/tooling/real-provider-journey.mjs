@@ -5,7 +5,12 @@ import path from "node:path";
 import { build } from "esbuild";
 
 import { extensionIdentifier, extensionRoot } from "./extension-manifest.mjs";
-import { terminateExactProcesses } from "./isolated-vscode.mjs";
+import {
+  isolatedLaunchArguments,
+  isolatedProfileSettings,
+  isolateVSCodeProduct,
+  terminateExactProcesses,
+} from "./isolated-vscode.mjs";
 
 const output = path.join(extensionRoot, ".test-dist");
 const testEntry = path.join(output, "realProviderJourney.test.cjs");
@@ -15,21 +20,25 @@ const firstWorkspace = requiredEnvironment("RUNTROL_VSCODE_WORKSPACE_ONE");
 const secondWorkspace = requiredEnvironment("RUNTROL_VSCODE_WORKSPACE_TWO");
 const userData = requiredEnvironment("RUNTROL_VSCODE_USER_DATA");
 const extensions = requiredEnvironment("RUNTROL_VSCODE_EXTENSIONS");
-const vscode = requiredEnvironment("RUNTROL_TEST_VSCODE_EXECUTABLE");
+const configuredVscode = requiredEnvironment("RUNTROL_TEST_VSCODE_EXECUTABLE");
 
 await Promise.all([
   stat(core),
+  stat(configuredVscode),
   stat(firstWorkspace),
   stat(secondWorkspace),
   mkdir(path.join(userData, "User"), { recursive: true }),
   mkdir(extensions, { recursive: true }),
 ]);
+const vscode = process.platform === "darwin"
+  ? await isolateVSCodeProduct(configuredVscode, path.join(userData, "vscode-product"))
+  : configuredVscode;
 await writeFile(
   path.join(userData, "User", "settings.json"),
   JSON.stringify({
+    ...isolatedProfileSettings,
     "runtrol.corePath": core,
     "runtrol.followWorkspace": true,
-    "workbench.startupEditor": "none",
   }),
   "utf8",
 );
@@ -87,9 +96,9 @@ try {
 async function runHost(workspace, expectedStage) {
   const arguments_ = [
     "--new-window",
+    ...isolatedLaunchArguments,
     "--no-sandbox",
     "--disable-gpu-sandbox",
-    "--disable-updates",
     "--disable-extensions",
     "--disable-workspace-trust",
     "--skip-welcome",

@@ -12,6 +12,7 @@ import {
   fileDigest,
   findInstalledExtension,
   installVSIX,
+  isolatedProfileSettings,
   runInstalledExtensionTest,
   terminateExactProcesses,
   uninstallExtension,
@@ -218,8 +219,8 @@ listen = "stdio"
     writeFile(
       path.join(userData, "User", "settings.json"),
       JSON.stringify({
+        ...isolatedProfileSettings,
         "runtrol.followWorkspace": false,
-        "workbench.startupEditor": "none",
       }),
       "utf8",
     ),

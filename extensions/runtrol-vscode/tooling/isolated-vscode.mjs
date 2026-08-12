@@ -1,7 +1,18 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { createReadStream } from "node:fs";
-import { readdir } from "node:fs/promises";
+import { constants, createReadStream } from "node:fs";
+import {
+  copyFile,
+  link,
+  lstat,
+  mkdir,
+  readFile,
+  readdir,
+  readlink,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import path from "node:path";
 
 import {
@@ -13,6 +24,16 @@ import {
 import { extensionInstallPrefix } from "./extension-manifest.mjs";
 import { descendantPids, normalizedExecutable, processRows } from "./process-identity.mjs";
 
+export const isolatedProfileSettings = Object.freeze({
+  "extensions.autoCheckUpdates": false,
+  "extensions.autoUpdate": false,
+  "workbench.startupEditor": "none",
+});
+
+export const isolatedLaunchArguments = Object.freeze([
+  "--disable-updates",
+]);
+
 export async function acquireVSCode(cachePath) {
   const executable = await downloadAndUnzipVSCode({
     version: process.env.RUNTROL_TEST_VSCODE_VERSION || "stable",
@@ -20,6 +41,73 @@ export async function acquireVSCode(cachePath) {
   });
   const [cli] = resolveCliArgsFromVSCodeExecutablePath(executable);
   return { executable, cli };
+}
+
+export async function isolateVSCodeProduct(executable, destination) {
+  const product = await locateProduct(executable);
+  await rm(destination, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  await cloneWithLinks(product.root, destination);
+  const isolatedProduct = path.join(destination, product.relativeProduct);
+  const manifest = JSON.parse(await readFile(isolatedProduct, "utf8"));
+  delete manifest.extensionsGallery;
+  await rm(isolatedProduct, { force: true });
+  await writeFile(isolatedProduct, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+  return path.join(destination, product.relativeExecutable);
+}
+
+async function locateProduct(executable) {
+  const resolvedExecutable = path.resolve(executable);
+  let root = path.dirname(resolvedExecutable);
+  for (let depth = 0; depth < 6; depth += 1) {
+    const relativeProducts = [
+      path.join("resources", "app", "product.json"),
+      path.join("Resources", "app", "product.json"),
+    ];
+    const children = await readdir(root, { withFileTypes: true }).catch(() => []);
+    for (const child of children) {
+      if (child.isDirectory()) {
+        relativeProducts.push(
+          path.join(child.name, "resources", "app", "product.json"),
+          path.join(child.name, "Resources", "app", "product.json"),
+        );
+      }
+    }
+    for (const relativeProduct of relativeProducts) {
+      const candidate = path.join(root, relativeProduct);
+      if (await lstat(candidate).then((entry) => entry.isFile()).catch(() => false)) {
+        return {
+          root,
+          relativeProduct,
+          relativeExecutable: path.relative(root, resolvedExecutable),
+        };
+      }
+    }
+    const parent = path.dirname(root);
+    if (parent === root) break;
+    root = parent;
+  }
+  throw new Error(`cannot locate VS Code product.json above ${resolvedExecutable}`);
+}
+
+async function cloneWithLinks(source, destination) {
+  const pending = [[source, destination]];
+  while (pending.length > 0) {
+    const [directory, clonedDirectory] = pending.pop();
+    await mkdir(clonedDirectory, { recursive: true });
+    for (const entry of await readdir(directory, { withFileTypes: true })) {
+      const from = path.join(directory, entry.name);
+      const to = path.join(clonedDirectory, entry.name);
+      if (entry.isDirectory()) {
+        pending.push([from, to]);
+      } else if (entry.isSymbolicLink()) {
+        await symlink(await readlink(from), to);
+      } else if (entry.isFile()) {
+        await link(from, to).catch(async () => {
+          await copyFile(from, to, constants.COPYFILE_FICLONE);
+        });
+      }
+    }
+  }
 }
 
 function installExtension(cli, source, userData, extensions) {
@@ -91,6 +179,7 @@ export function runInstalledExtensionTest(options) {
     extensionTestsEnv: options.environment,
     launchArgs: [
       options.workspace,
+      ...isolatedLaunchArguments,
       "--disable-workspace-trust",
       "--skip-welcome",
       `--user-data-dir=${options.userData}`,

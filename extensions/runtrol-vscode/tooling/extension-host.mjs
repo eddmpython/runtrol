@@ -8,6 +8,7 @@ import { runTests } from "@vscode/test-electron";
 import { build } from "esbuild";
 
 import { extensionIdentifier, extensionRoot } from "./extension-manifest.mjs";
+import { isolatedLaunchArguments, isolatedProfileSettings } from "./isolated-vscode.mjs";
 
 const repositoryRoot = fileURLToPath(new URL("../../../", import.meta.url));
 const core = process.env.RUNTROL_TEST_CORE
@@ -76,9 +77,9 @@ listen = "stdio"
 await writeFile(
   path.join(userData, "User", "settings.json"),
   JSON.stringify({
+    ...isolatedProfileSettings,
     "runtrol.corePath": core,
     "runtrol.followWorkspace": false,
-    "workbench.startupEditor": "none",
   }),
   "utf8",
 );
@@ -277,6 +278,7 @@ async function runHost(installed, testEntry, resultPath, testEnvironment, worksp
     extensionTestsEnv: testEnvironment,
     launchArgs: [
       workspace,
+      ...isolatedLaunchArguments,
       "--disable-extensions",
       `--user-data-dir=${userData}`,
       `--extensions-dir=${extensionsDirectory}`,
@@ -296,6 +298,7 @@ async function runInstalledCode(
 ) {
   const arguments_ = [
     "--new-window",
+    ...isolatedLaunchArguments,
     "--disable-extensions",
     "--disable-workspace-trust",
     "--skip-welcome",
