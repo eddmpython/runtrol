@@ -14,6 +14,11 @@ use runtrol_transport::{
 };
 use tokio::net::TcpListener;
 
+#[path = "productionSource.rs"]
+mod production_source;
+
+use production_source::without_tail_test_module;
+
 const LOOPBACK: IpAddr = IpAddr::V4(Ipv4Addr::LOCALHOST);
 
 #[tokio::test]
@@ -205,8 +210,7 @@ fn product_socket_dials_exist_only_inside_the_egress_policy() {
         .to_path_buf();
     let mut callers = Vec::new();
     visit_rs(&root.join("crates"), &mut |path, source| {
-        let product_end = source.find("#[cfg(test)]").unwrap_or(source.len());
-        if source[..product_end].contains("TcpStream::connect") {
+        if without_tail_test_module(source).contains("TcpStream::connect") {
             callers.push(
                 path.strip_prefix(&root)
                     .expect("relative path")

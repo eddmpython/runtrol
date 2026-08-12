@@ -14,6 +14,11 @@ use runtrol_transport::{
     PairingSecret, StaticKeypair,
 };
 
+#[path = "productionSource.rs"]
+mod production_source;
+
+use production_source::without_tail_test_module;
+
 const TOKEN: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
 struct Scratch {
@@ -243,7 +248,9 @@ fn persisted_grants_enter_only_through_daemon_assembly() {
     let mut hits = Vec::new();
     for source in sources {
         let text = std::fs::read_to_string(&source).expect("read production Rust source");
-        let count = text.matches("GrantLedger::from_persisted(").count();
+        let count = without_tail_test_module(&text)
+            .matches("GrantLedger::from_persisted(")
+            .count();
         if count > 0 {
             let relative = source
                 .strip_prefix(&repository)
@@ -256,10 +263,7 @@ fn persisted_grants_enter_only_through_daemon_assembly() {
 
     assert_eq!(
         hits,
-        vec![
-            ("crates/runtrol-daemon/src/compose.rs".to_owned(), 1),
-            ("crates/runtrol-security/src/grant.rs".to_owned(), 1),
-        ],
+        vec![("crates/runtrol-daemon/src/compose.rs".to_owned(), 1)],
         "persisted authority gained another production entry point"
     );
 }
