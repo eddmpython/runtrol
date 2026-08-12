@@ -7,7 +7,7 @@ const repositoryRoot = dirname(siteRoot);
 const outputRoot = join(siteRoot, "dist");
 const brandSource = join(repositoryRoot, "assets", "brand");
 const brandOutput = join(outputRoot, "assets", "brand");
-const sourceFiles = ["index.html", "styles.css", "app.js"];
+const sourceFiles = ["index.html", "styles.css", "app.js", "release-assets.mjs"];
 const brandFiles = [
   "apple-touch-icon.png",
   "favicon.ico",

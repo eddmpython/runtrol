@@ -1,3 +1,5 @@
+import { inferNativeTarget, selectTargetVsix } from "./release-assets.mjs";
+
 const PROJECT = Object.freeze({
   repository: "https://github.com/eddmpython/runtrol",
   releasesApi: "https://api.github.com/repos/eddmpython/runtrol/releases/latest",
@@ -11,7 +13,7 @@ const COPY = {
     heroEyebrow: "OPEN SOURCE CONTROL PLANE",
     heroTitle: "One VS Code window.<br>Every session in reach.",
     heroLede: "runtrol supervises the coding-agent CLIs already installed on your machine. Switch repositories, resume provider-owned sessions, and keep 30 conversations organized without turning VS Code into a slow chat archive.",
-    marketplacePending: "Marketplace release pending",
+    installMarketplace: "Install from Marketplace",
     viewSource: "View source",
     releaseChecking: "Checking GitHub Releases for a VSIX.",
     releaseMissing: "No public VSIX has been released yet.",
@@ -27,7 +29,7 @@ const COPY = {
     installTitle: "Install once. Let runtrol find the CLIs.",
     installIntro: "There is no separate desktop window to manage. Runtrol Studio lives where the work already happens and discovers supported installed CLIs at runtime.",
     stepOneTitle: "Install Runtrol Studio",
-    stepOneBody: "Get the extension from the VS Code Marketplace when the first public release is signed.",
+    stepOneBody: "Install the signed extension from the Visual Studio Marketplace.",
     stepTwoTitle: "Open the Runtrol activity icon",
     stepTwoBody: "The session manager opens inside your current VS Code window.",
     stepThreeTitle: "Use the CLIs you already have",
@@ -35,12 +37,14 @@ const COPY = {
     stepFourTitle: "Select a session and keep moving",
     stepFourBody: "The workspace follows your selection and cold sessions resume through their provider-native identity.",
     primaryInstall: "PRIMARY INSTALL",
-    primaryInstallState: "Public signing and publication are in progress.",
-    notReleased: "Not released yet",
+    primaryInstallState: "Runtrol Studio is publicly available for supported native platforms.",
+    openMarketplace: "Open Marketplace",
     manualInstall: "MANUAL FALLBACK",
     vsixUnavailable: "No public VSIX is available yet.",
     checkReleases: "Check Releases",
     downloadVsix: "Download VSIX",
+    chooseVsix: "Choose platform",
+    releaseChoose: "Choose the VSIX that matches your operating system and architecture.",
     phoneEyebrow: "THE SAME CORE, IN YOUR POCKET",
     phoneTitle: "Pair once. Keep the session owner on your PC.",
     phoneBody: "The phone PWA will live at this permanent HTTPS origin. It will pair as a scoped control surface, choose the best available route, and reconnect to the same Core without owning the session or receiving model API keys.",
@@ -63,7 +67,7 @@ const COPY = {
     heroEyebrow: "오픈소스 컨트롤 플레인",
     heroTitle: "하나의 VS Code 창.<br>모든 세션을 바로 곁에.",
     heroLede: "runtrol은 컴퓨터에 이미 설치된 코딩 에이전트 CLI를 감독합니다. VS Code를 느린 대화 보관소로 만들지 않고 저장소를 바꾸고, 공급자가 소유한 세션을 재개하며, 30개 대화를 정리합니다.",
-    marketplacePending: "Marketplace 출시 준비 중",
+    installMarketplace: "Marketplace에서 설치",
     viewSource: "소스 보기",
     releaseChecking: "GitHub Releases에서 VSIX를 확인하고 있습니다.",
     releaseMissing: "아직 공개 VSIX가 없습니다.",
@@ -79,7 +83,7 @@ const COPY = {
     installTitle: "한 번 설치하면 CLI는 runtrol이 찾습니다.",
     installIntro: "관리할 별도 데스크톱 창은 없습니다. Runtrol Studio는 작업이 일어나는 VS Code 안에 있고 지원되는 설치 CLI를 런타임에 찾습니다.",
     stepOneTitle: "Runtrol Studio 설치",
-    stepOneBody: "첫 공개 릴리스가 서명되면 VS Code Marketplace에서 확장을 설치합니다.",
+    stepOneBody: "Visual Studio Marketplace에서 서명된 확장을 설치합니다.",
     stepTwoTitle: "Runtrol 활동 아이콘 열기",
     stepTwoBody: "현재 VS Code 창 안에서 세션 관리자가 열립니다.",
     stepThreeTitle: "이미 설치된 CLI 사용",
@@ -87,12 +91,14 @@ const COPY = {
     stepFourTitle: "세션을 선택하고 계속 작업",
     stepFourBody: "워크스페이스가 선택을 따라가고 콜드 세션은 공급자 고유 식별자로 재개됩니다.",
     primaryInstall: "기본 설치",
-    primaryInstallState: "공개 서명과 배포를 준비하고 있습니다.",
-    notReleased: "아직 출시되지 않음",
+    primaryInstallState: "지원되는 네이티브 플랫폼용 Runtrol Studio가 공개되어 있습니다.",
+    openMarketplace: "Marketplace 열기",
     manualInstall: "수동 설치 대안",
     vsixUnavailable: "아직 공개 VSIX가 없습니다.",
     checkReleases: "Releases 확인",
     downloadVsix: "VSIX 다운로드",
+    chooseVsix: "플랫폼 선택",
+    releaseChoose: "운영체제와 아키텍처에 맞는 VSIX를 선택하세요.",
     phoneEyebrow: "주머니 속에서도 같은 CORE",
     phoneTitle: "한 번 페어링하고 세션 소유자는 PC에 둡니다.",
     phoneBody: "휴대폰 PWA는 이 영구 HTTPS 주소에 위치합니다. 범위가 제한된 제어 화면으로 페어링하고, 가장 좋은 경로를 선택하며, 세션을 소유하거나 모델 API 키를 받지 않고 같은 Core에 다시 연결합니다.",
@@ -115,7 +121,7 @@ const COPY = {
     heroEyebrow: "开源控制平面",
     heroTitle: "一个 VS Code 窗口。<br>所有会话触手可及。",
     heroLede: "runtrol 管理电脑上已经安装的编码代理 CLI。切换仓库，恢复由供应方保存的会话，并流畅整理 30 个对话，而不会把 VS Code 变成迟缓的聊天档案库。",
-    marketplacePending: "Marketplace 发布准备中",
+    installMarketplace: "从 Marketplace 安装",
     viewSource: "查看源码",
     releaseChecking: "正在 GitHub Releases 中检查 VSIX。",
     releaseMissing: "目前还没有公开 VSIX。",
@@ -131,7 +137,7 @@ const COPY = {
     installTitle: "安装一次，让 runtrol 自动寻找 CLI。",
     installIntro: "无需管理单独的桌面窗口。Runtrol Studio 就在工作的 VS Code 中，并在运行时发现受支持的已安装 CLI。",
     stepOneTitle: "安装 Runtrol Studio",
-    stepOneBody: "首个公开版本签名后，从 VS Code Marketplace 安装扩展。",
+    stepOneBody: "从 Visual Studio Marketplace 安装已签名扩展。",
     stepTwoTitle: "打开 Runtrol 活动图标",
     stepTwoBody: "会话管理器会在当前 VS Code 窗口内打开。",
     stepThreeTitle: "使用现有 CLI",
@@ -139,12 +145,14 @@ const COPY = {
     stepFourTitle: "选择会话并继续工作",
     stepFourBody: "工作区会跟随选择，冷会话通过供应方原生身份恢复。",
     primaryInstall: "首选安装方式",
-    primaryInstallState: "公开签名与发布正在进行中。",
-    notReleased: "尚未发布",
+    primaryInstallState: "Runtrol Studio 已面向支持的原生平台公开发布。",
+    openMarketplace: "打开 Marketplace",
     manualInstall: "手动安装备用方式",
     vsixUnavailable: "目前还没有公开 VSIX。",
     checkReleases: "查看 Releases",
     downloadVsix: "下载 VSIX",
+    chooseVsix: "选择平台",
+    releaseChoose: "请选择与操作系统和架构匹配的 VSIX。",
     phoneEyebrow: "口袋里的同一个 CORE",
     phoneTitle: "配对一次，让电脑继续拥有会话。",
     phoneBody: "手机 PWA 将位于这个永久 HTTPS 地址。它作为权限受限的控制界面完成配对，选择最佳可用路径，并重新连接同一个 Core，不拥有会话，也不接收模型 API 密钥。",
@@ -167,7 +175,7 @@ const COPY = {
     heroEyebrow: "オープンソースのコントロールプレーン",
     heroTitle: "ひとつの VS Code ウィンドウ。<br>すべてのセッションを手元に。",
     heroLede: "runtrol はマシンにすでにインストールされているコーディングエージェント CLI を監督します。VS Code を重いチャット保管庫にせず、リポジトリを切り替え、プロバイダー所有のセッションを再開し、30件の会話を整理できます。",
-    marketplacePending: "Marketplace 公開準備中",
+    installMarketplace: "Marketplace からインストール",
     viewSource: "ソースを見る",
     releaseChecking: "GitHub Releases で VSIX を確認しています。",
     releaseMissing: "公開 VSIX はまだありません。",
@@ -183,7 +191,7 @@ const COPY = {
     installTitle: "一度インストールすれば、CLI は runtrol が見つけます。",
     installIntro: "管理する別のデスクトップウィンドウはありません。Runtrol Studio は作業中の VS Code 内にあり、対応するインストール済み CLI を実行時に検出します。",
     stepOneTitle: "Runtrol Studio をインストール",
-    stepOneBody: "最初の公開リリースが署名されたら VS Code Marketplace から拡張機能を入れます。",
+    stepOneBody: "Visual Studio Marketplace から署名済み拡張機能をインストールします。",
     stepTwoTitle: "Runtrol のアクティビティアイコンを開く",
     stepTwoBody: "現在の VS Code ウィンドウ内にセッションマネージャーが開きます。",
     stepThreeTitle: "すでにある CLI を使う",
@@ -191,12 +199,14 @@ const COPY = {
     stepFourTitle: "セッションを選んで作業を続ける",
     stepFourBody: "ワークスペースが選択に追従し、コールドセッションはプロバイダー固有の識別子で再開します。",
     primaryInstall: "基本インストール",
-    primaryInstallState: "公開署名と配布を準備しています。",
-    notReleased: "未公開",
+    primaryInstallState: "対応するネイティブプラットフォーム向け Runtrol Studio を公開しています。",
+    openMarketplace: "Marketplace を開く",
     manualInstall: "手動インストールの代替",
     vsixUnavailable: "公開 VSIX はまだありません。",
     checkReleases: "Releases を確認",
     downloadVsix: "VSIX をダウンロード",
+    chooseVsix: "プラットフォームを選択",
+    releaseChoose: "OS とアーキテクチャに合う VSIX を選択してください。",
     phoneEyebrow: "ポケットの中でも同じ CORE",
     phoneTitle: "一度ペアリングし、セッション所有者は PC に残します。",
     phoneBody: "スマートフォン PWA はこの恒久的な HTTPS オリジンに置かれます。範囲を限定した操作画面としてペアリングし、最適な経路を選び、セッションを所有せずモデル API キーも受け取らずに同じ Core へ再接続します。",
@@ -218,7 +228,29 @@ const state = {
   locale: "en",
   releaseChecked: false,
   vsixUrl: null,
+  releaseUrl: null,
 };
+
+async function inferBrowserTarget() {
+  let architecture = "";
+  let bitness = "";
+  try {
+    if (navigator.userAgentData?.getHighEntropyValues) {
+      const values = await navigator.userAgentData.getHighEntropyValues(["architecture", "bitness"]);
+      architecture = values.architecture ?? "";
+      bitness = values.bitness ?? "";
+    }
+  } catch {
+    // A matching Marketplace install remains the primary path when hints are unavailable.
+  }
+  return inferNativeTarget({
+    userAgentDataPlatform: navigator.userAgentData?.platform,
+    platform: navigator.platform,
+    userAgent: navigator.userAgent,
+    architecture,
+    bitness,
+  });
+}
 
 function readPreference(key) {
   try {
@@ -273,11 +305,11 @@ function updateReleaseUi() {
     return;
   }
 
-  if (state.vsixUrl) {
+  if (state.vsixUrl || state.releaseUrl) {
     status.textContent = copyFor("releaseFound");
-    description.textContent = copyFor("releaseFound");
-    download.textContent = copyFor("downloadVsix");
-    download.href = state.vsixUrl;
+    description.textContent = copyFor(state.vsixUrl ? "releaseFound" : "releaseChoose");
+    download.textContent = copyFor(state.vsixUrl ? "downloadVsix" : "chooseVsix");
+    download.href = state.vsixUrl ?? state.releaseUrl;
     download.classList.remove("is-disabled");
     download.removeAttribute("aria-disabled");
     return;
@@ -300,12 +332,15 @@ async function discoverRelease() {
       throw new Error(`release lookup returned ${response.status}`);
     }
     const release = await response.json();
-    const asset = Array.isArray(release.assets)
-      ? release.assets.find((candidate) => typeof candidate.name === "string" && candidate.name.endsWith(".vsix"))
-      : null;
+    const assets = Array.isArray(release.assets) ? release.assets : [];
+    const target = await inferBrowserTarget();
+    const asset = selectTargetVsix(assets, target);
+    const hasVsix = assets.some((candidate) => typeof candidate?.name === "string" && candidate.name.endsWith(".vsix"));
     state.vsixUrl = asset?.browser_download_url ?? null;
+    state.releaseUrl = hasVsix && typeof release.html_url === "string" ? release.html_url : null;
   } catch {
     state.vsixUrl = null;
+    state.releaseUrl = null;
   }
   state.releaseChecked = true;
   updateReleaseUi();
@@ -332,7 +367,7 @@ document.querySelector("#theme-toggle").addEventListener("click", () => {
   applyTheme(document.documentElement.dataset.theme === "dark" ? "light" : "dark");
 });
 document.querySelector("#vsix-download").addEventListener("click", (event) => {
-  if (!state.vsixUrl) {
+  if (!state.vsixUrl && !state.releaseUrl) {
     event.preventDefault();
     window.location.href = `${PROJECT.repository}/releases`;
   }

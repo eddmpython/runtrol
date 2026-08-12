@@ -23,7 +23,7 @@
     <link rel="icon" href="assets/brand/favicon.ico" sizes="48x48">
     <link rel="apple-touch-icon" href="assets/brand/apple-touch-icon.png">
     <link rel="stylesheet" href="styles.css">
-    <script src="app.js" defer></script>
+    <script src="app.js" type="module"></script>
     <title>runtrol | Every coding-agent session, one control plane</title>
   </head>
   <body>
@@ -68,9 +68,12 @@
             resume provider-owned sessions, and keep 30 conversations organized without turning VS Code into a slow chat archive.
           </p>
           <div class="hero-actions" aria-label="Primary actions">
-            <span class="button button-primary is-pending" aria-disabled="true" data-i18n="marketplacePending">
-              Marketplace release pending
-            </span>
+            <a
+              class="button button-primary"
+              href="https://marketplace.visualstudio.com/items?itemName=runtrol.runtrol-studio"
+              rel="noreferrer"
+              data-i18n="installMarketplace"
+            >Install from Marketplace</a>
             <a class="button button-secondary" href="https://github.com/eddmpython/runtrol" rel="noreferrer" data-i18n="viewSource">
               View source
             </a>
@@ -180,7 +183,7 @@
         <ol class="install-steps">
           <li>
             <span class="step-number">01</span>
-            <div><strong data-i18n="stepOneTitle">Install Runtrol Studio</strong><p data-i18n="stepOneBody">Get the extension from the VS Code Marketplace when the first public release is signed.</p></div>
+            <div><strong data-i18n="stepOneTitle">Install Runtrol Studio</strong><p data-i18n="stepOneBody">Install the signed extension from the Visual Studio Marketplace.</p></div>
           </li>
           <li>
             <span class="step-number">02</span>
@@ -200,9 +203,14 @@
           <div>
             <span class="download-label" data-i18n="primaryInstall">PRIMARY INSTALL</span>
             <strong>Visual Studio Marketplace</strong>
-            <small data-i18n="primaryInstallState">Public signing and publication are in progress.</small>
+            <small data-i18n="primaryInstallState">Runtrol Studio is publicly available for supported native platforms.</small>
           </div>
-          <span class="button button-muted" aria-disabled="true" data-i18n="notReleased">Not released yet</span>
+          <a
+            class="button button-muted"
+            href="https://marketplace.visualstudio.com/items?itemName=runtrol.runtrol-studio"
+            rel="noreferrer"
+            data-i18n="openMarketplace"
+          >Open Marketplace</a>
         </div>
         <div class="download-row">
           <div>
