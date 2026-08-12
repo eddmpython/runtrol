@@ -4,6 +4,10 @@ import path from "node:path";
 const FILE_NAME = "selected-session.json";
 const MAX_FILE_BYTES = 256;
 const MAX_SESSION_BYTES = 128;
+const WRITE_ATTEMPTS = 5;
+const WRITE_RETRY_DELAY_MS = 10;
+
+type SelectionWriter = (file: string, contents: string) => Promise<void>;
 
 type StoredSelection = {
   schema: 1;
@@ -13,7 +17,10 @@ type StoredSelection = {
 export class SelectionStore {
   private readonly file: string;
 
-  constructor(private readonly root: string) {
+  constructor(
+    private readonly root: string,
+    private readonly writer: SelectionWriter = writeSelection,
+  ) {
     this.file = path.join(root, FILE_NAME);
   }
 
@@ -55,12 +62,41 @@ export class SelectionStore {
     }
     await mkdir(this.root, { recursive: true });
     const stored: StoredSelection = { schema: 1, session };
-    await writeFile(this.file, JSON.stringify(stored), { encoding: "utf8", mode: 0o600 });
+    await retryTransientWrite(() => this.writer(this.file, JSON.stringify(stored)));
   }
 
   async clear(): Promise<void> {
     await rm(this.file, { force: true });
   }
+}
+
+function writeSelection(file: string, contents: string): Promise<void> {
+  return writeFile(file, contents, { encoding: "utf8", mode: 0o600 });
+}
+
+async function retryTransientWrite(write: () => Promise<void>): Promise<void> {
+  for (let attempt = 1; attempt <= WRITE_ATTEMPTS; attempt += 1) {
+    try {
+      await write();
+      return;
+    } catch (error) {
+      if (attempt === WRITE_ATTEMPTS || !isTransientWriteError(error)) {
+        throw error;
+      }
+      await delay(WRITE_RETRY_DELAY_MS);
+    }
+  }
+}
+
+function isTransientWriteError(error: unknown): boolean {
+  if (!error || typeof error !== "object" || !("code" in error)) {
+    return false;
+  }
+  return ["EACCES", "EBUSY", "EPERM"].includes(String((error as NodeJS.ErrnoException).code));
+}
+
+function delay(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
 function validSession(value: unknown): value is string {

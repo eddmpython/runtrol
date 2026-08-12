@@ -95,9 +95,11 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
         "selectionStore.ts": [
             "MAX_FILE_BYTES",
             "MAX_SESSION_BYTES",
+            "WRITE_ATTEMPTS",
             "schema: 1",
             "validSession",
-            "writeFile(this.file",
+            "retryTransientWrite",
+            "writeFile(file",
         ],
         "journeyApi.ts": [
             "extensionMode !== vscode.ExtensionMode.Test",
@@ -133,7 +135,10 @@ def selftest() -> int:
             "createReadStream copyFile(source, incoming) link(executable, preserved) "
             "rename(incoming, executable) unlink(file) removeInactiveImages"
         ),
-        "selectionStore.ts": "MAX_FILE_BYTES MAX_SESSION_BYTES schema: 1 validSession writeFile(this.file",
+        "selectionStore.ts": (
+            "MAX_FILE_BYTES MAX_SESSION_BYTES WRITE_ATTEMPTS schema: 1 validSession "
+            "retryTransientWrite writeFile(file"
+        ),
         "journeyApi.ts": (
             'extensionMode !== vscode.ExtensionMode.Test '
             'process.env.RUNTROL_VSCODE_REAL_PROVIDER_JOURNEY !== "1" return undefined '
@@ -156,6 +161,7 @@ def selftest() -> int:
         (package, {**sources, "controller.ts": sources["controller.ts"] + " writeFile("}),
         (package, {**sources, "controller.ts": sources["controller.ts"] + " copyFile("}),
         (package, {**sources, "selectionStore.ts": sources["selectionStore.ts"] + " prompt"}),
+        (package, {**sources, "selectionStore.ts": sources["selectionStore.ts"].replace("retryTransientWrite", "")}),
         (package, {**sources, "journeyApi.ts": "return undefined sessions: () => [...state.sessions]"}),
     ]
     for index, (changed_package, changed_sources) in enumerate(mutations, start=1):
