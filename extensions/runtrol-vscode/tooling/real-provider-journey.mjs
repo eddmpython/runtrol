@@ -8,7 +8,7 @@ import { extensionIdentifier, extensionRoot } from "./extension-manifest.mjs";
 import {
   isolatedLaunchArguments,
   isolatedProfileSettings,
-  isolateVSCodeProduct,
+  temporarilyDisableVSCodeGallery,
   terminateExactProcesses,
 } from "./isolated-vscode.mjs";
 
@@ -30,43 +30,49 @@ await Promise.all([
   mkdir(path.join(userData, "User"), { recursive: true }),
   mkdir(extensions, { recursive: true }),
 ]);
-const vscode = process.platform === "darwin"
-  ? await isolateVSCodeProduct(configuredVscode, path.join(userData, "vscode-product.app"))
-  : configuredVscode;
-await writeFile(
-  path.join(userData, "User", "settings.json"),
-  JSON.stringify({
-    ...isolatedProfileSettings,
-    "runtrol.corePath": core,
-    "runtrol.followWorkspace": true,
-  }),
-  "utf8",
-);
-
-const bundled = spawnSync(process.execPath, [path.join(extensionRoot, "tooling", "build.mjs")], {
-  cwd: extensionRoot,
-  encoding: "utf8",
-  windowsHide: true,
-});
-if (bundled.status !== 0) {
-  throw new Error(`production extension build failed:\n${bundled.stdout}${bundled.stderr}`);
+const testCache = path.join(extensionRoot, ".vscode-test");
+if (process.platform === "darwin" && !pathIsInside(testCache, configuredVscode)) {
+  throw new Error(`refusing to alter a VS Code product outside the test cache: ${configuredVscode}`);
 }
-
-await rm(output, { recursive: true, force: true });
-await mkdir(output, { recursive: true });
-await build({
-  entryPoints: [path.join(extensionRoot, "src", "integration", "realProviderJourney.test.ts")],
-  outfile: testEntry,
-  bundle: true,
-  external: ["vscode"],
-  platform: "node",
-  format: "cjs",
-  target: "node20",
-  sourcemap: false,
-  logLevel: "silent",
-});
-
+const vscode = configuredVscode;
+let restoreGallery = async () => {};
 try {
+  await writeFile(
+    path.join(userData, "User", "settings.json"),
+    JSON.stringify({
+      ...isolatedProfileSettings,
+      "runtrol.corePath": core,
+      "runtrol.followWorkspace": true,
+    }),
+    "utf8",
+  );
+
+  const bundled = spawnSync(process.execPath, [path.join(extensionRoot, "tooling", "build.mjs")], {
+    cwd: extensionRoot,
+    encoding: "utf8",
+    windowsHide: true,
+  });
+  if (bundled.status !== 0) {
+    throw new Error(`production extension build failed:\n${bundled.stdout}${bundled.stderr}`);
+  }
+
+  await rm(output, { recursive: true, force: true });
+  await mkdir(output, { recursive: true });
+  await build({
+    entryPoints: [path.join(extensionRoot, "src", "integration", "realProviderJourney.test.ts")],
+    outfile: testEntry,
+    bundle: true,
+    external: ["vscode"],
+    platform: "node",
+    format: "cjs",
+    target: "node20",
+    sourcemap: false,
+    logLevel: "silent",
+  });
+
+  if (process.platform === "darwin") {
+    restoreGallery = await temporarilyDisableVSCodeGallery(vscode);
+  }
   await runHost(firstWorkspace, "switching");
   let result = await readResult();
   if (typeof result.failure === "string") {
@@ -90,7 +96,11 @@ try {
   }
   process.stdout.write(`RUNTROL_VSCODE_REAL_PROVIDER ${JSON.stringify(result)}\n`);
 } finally {
-  await rm(output, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  try {
+    await rm(output, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  } finally {
+    await restoreGallery();
+  }
 }
 
 async function runHost(workspace, expectedStage) {
@@ -198,4 +208,9 @@ function requiredEnvironment(name) {
     throw new Error(`${name} is required`);
   }
   return value;
+}
+
+function pathIsInside(parent, child) {
+  const relative = path.relative(path.resolve(parent), path.resolve(child));
+  return relative !== "" && !relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative);
 }

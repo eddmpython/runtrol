@@ -1,16 +1,11 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { constants, createReadStream } from "node:fs";
+import { createReadStream } from "node:fs";
 import {
-  copyFile,
-  link,
   lstat,
-  mkdir,
   readFile,
   readdir,
-  readlink,
   rm,
-  symlink,
   writeFile,
 } from "node:fs/promises";
 import path from "node:path";
@@ -43,16 +38,43 @@ export async function acquireVSCode(cachePath) {
   return { executable, cli };
 }
 
-export async function isolateVSCodeProduct(executable, destination) {
+export async function temporarilyDisableVSCodeGallery(executable) {
   const product = await locateProduct(executable);
-  await rm(destination, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
-  await cloneWithLinks(product.root, destination);
-  const isolatedProduct = path.join(destination, product.relativeProduct);
-  const manifest = JSON.parse(await readFile(isolatedProduct, "utf8"));
+  const productPath = path.join(product.root, product.relativeProduct);
+  const backupPath = `${productPath}.runtrol-gallery-backup`;
+  await restoreInterruptedProduct(productPath, backupPath);
+  const original = await readFile(productPath);
+  const manifest = JSON.parse(original.toString("utf8"));
   delete manifest.extensionsGallery;
-  await rm(isolatedProduct, { force: true });
-  await writeFile(isolatedProduct, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
-  return path.join(destination, product.relativeExecutable);
+  await writeFile(backupPath, original, { flag: "wx" });
+  try {
+    await writeFile(productPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+  } catch (error) {
+    await restoreProduct(productPath, backupPath, original);
+    throw error;
+  }
+  let restored = false;
+  return async () => {
+    if (restored) return;
+    await restoreProduct(productPath, backupPath, original);
+    restored = true;
+  };
+}
+
+async function restoreInterruptedProduct(productPath, backupPath) {
+  let backup;
+  try {
+    backup = await readFile(backupPath);
+  } catch (error) {
+    if (error.code === "ENOENT") return;
+    throw error;
+  }
+  await restoreProduct(productPath, backupPath, backup);
+}
+
+async function restoreProduct(productPath, backupPath, original) {
+  await writeFile(productPath, original);
+  await rm(backupPath, { force: true });
 }
 
 async function locateProduct(executable) {
@@ -75,11 +97,9 @@ async function locateProduct(executable) {
     for (const relativeProduct of relativeProducts) {
       const candidate = path.join(root, relativeProduct);
       if (await lstat(candidate).then((entry) => entry.isFile()).catch(() => false)) {
-        const normalized = normalizeProductRoot(root, relativeProduct, resolvedExecutable);
         return {
-          root: normalized.root,
-          relativeProduct: normalized.relativeProduct,
-          relativeExecutable: path.relative(normalized.root, resolvedExecutable),
+          root,
+          relativeProduct,
         };
       }
     }
@@ -88,41 +108,6 @@ async function locateProduct(executable) {
     root = parent;
   }
   throw new Error(`cannot locate VS Code product.json above ${resolvedExecutable}`);
-}
-
-function normalizeProductRoot(root, relativeProduct, executable) {
-  if (
-    path.basename(root) === "Contents"
-    && path.extname(path.dirname(root)) === ".app"
-    && executable.startsWith(`${root}${path.sep}`)
-  ) {
-    return {
-      root: path.dirname(root),
-      relativeProduct: path.join("Contents", relativeProduct),
-    };
-  }
-  return { root, relativeProduct };
-}
-
-async function cloneWithLinks(source, destination) {
-  const pending = [[source, destination]];
-  while (pending.length > 0) {
-    const [directory, clonedDirectory] = pending.pop();
-    await mkdir(clonedDirectory, { recursive: true });
-    for (const entry of await readdir(directory, { withFileTypes: true })) {
-      const from = path.join(directory, entry.name);
-      const to = path.join(clonedDirectory, entry.name);
-      if (entry.isDirectory()) {
-        pending.push([from, to]);
-      } else if (entry.isSymbolicLink()) {
-        await symlink(await readlink(from), to);
-      } else if (entry.isFile()) {
-        await link(from, to).catch(async () => {
-          await copyFile(from, to, constants.COPYFILE_FICLONE);
-        });
-      }
-    }
-  }
 }
 
 function installExtension(cli, source, userData, extensions) {
