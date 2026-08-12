@@ -5,13 +5,17 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { build } from "esbuild";
 
-import { temporarilyDisableVSCodeGallery } from "./isolated-vscode.mjs";
+import {
+  isolatedExtensionTestArguments,
+  temporarilyDisableVSCodeGallery,
+} from "./isolated-vscode.mjs";
 
 const extensionRoot = fileURLToPath(new URL("../", import.meta.url));
 const out = path.join(extensionRoot, ".test-dist");
 await rm(out, { recursive: true, force: true });
 await mkdir(out, { recursive: true });
 await verifyMacProductIsolation();
+verifyExtensionTestArguments();
 
 await build({
   entryPoints: {
@@ -85,4 +89,24 @@ async function verifyMacProductIsolation() {
   await restoreAfterInterruption();
   assert.equal(await readFile(product, "utf8"), interrupted);
   await assert.rejects(readFile(backup), { code: "ENOENT" });
+}
+
+function verifyExtensionTestArguments() {
+  const arguments_ = isolatedExtensionTestArguments({
+    workspace: "/workspace",
+    userData: "/profile/user",
+    extensions: "/profile/extensions",
+    testEntry: "/extension/tests.cjs",
+    extensionRoot: "/extension",
+  });
+  assert.equal(arguments_[0], "/workspace");
+  assert.equal(arguments_.includes("--new-window"), false);
+  assert.equal(arguments_.includes("--user-data-dir"), false);
+  assert.equal(arguments_.includes("--extensions-dir"), false);
+  assert.equal(arguments_.includes("--extensionTestsPath"), false);
+  assert.equal(arguments_.includes("--extensionDevelopmentPath"), false);
+  assert.equal(arguments_.includes("--user-data-dir=/profile/user"), true);
+  assert.equal(arguments_.includes("--extensions-dir=/profile/extensions"), true);
+  assert.equal(arguments_.includes("--extensionTestsPath=/extension/tests.cjs"), true);
+  assert.equal(arguments_.includes("--extensionDevelopmentPath=/extension"), true);
 }

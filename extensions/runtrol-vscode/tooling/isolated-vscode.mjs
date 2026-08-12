@@ -29,6 +29,25 @@ export const isolatedLaunchArguments = Object.freeze([
   "--disable-updates",
 ]);
 
+export function isolatedExtensionTestArguments(options) {
+  return [
+    options.workspace,
+    ...isolatedLaunchArguments,
+    "--disable-extensions",
+    `--user-data-dir=${options.userData}`,
+    `--extensions-dir=${options.extensions}`,
+    "--no-sandbox",
+    "--disable-gpu-sandbox",
+    "--disable-updates",
+    "--skip-welcome",
+    "--skip-release-notes",
+    "--no-cached-data",
+    "--disable-workspace-trust",
+    `--extensionTestsPath=${options.testEntry}`,
+    `--extensionDevelopmentPath=${options.extensionRoot}`,
+  ];
+}
+
 export async function acquireVSCode(cachePath) {
   const executable = await downloadAndUnzipVSCode({
     version: process.env.RUNTROL_TEST_VSCODE_VERSION || "stable",

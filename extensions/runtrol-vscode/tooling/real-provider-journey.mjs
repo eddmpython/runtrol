@@ -6,7 +6,7 @@ import { build } from "esbuild";
 
 import { extensionIdentifier, extensionRoot } from "./extension-manifest.mjs";
 import {
-  isolatedLaunchArguments,
+  isolatedExtensionTestArguments,
   isolatedProfileSettings,
   temporarilyDisableVSCodeGallery,
   terminateExactProcesses,
@@ -104,26 +104,13 @@ try {
 }
 
 async function runHost(workspace, expectedStage) {
-  const arguments_ = [
-    "--new-window",
-    ...isolatedLaunchArguments,
-    "--no-sandbox",
-    "--disable-gpu-sandbox",
-    "--disable-extensions",
-    "--disable-workspace-trust",
-    "--skip-welcome",
-    "--skip-release-notes",
-    "--no-cached-data",
-    "--user-data-dir",
-    userData,
-    "--extensions-dir",
-    extensions,
-    "--extensionDevelopmentPath",
-    extensionRoot,
-    "--extensionTestsPath",
-    testEntry,
+  const arguments_ = isolatedExtensionTestArguments({
     workspace,
-  ];
+    userData,
+    extensions,
+    testEntry,
+    extensionRoot,
+  });
   const child = spawn(vscode, arguments_, {
     env: { ...process.env, RUNTROL_TEST_EXTENSION_ID: extensionIdentifier },
     stdio: "inherit",
