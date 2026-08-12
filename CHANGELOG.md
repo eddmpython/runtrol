@@ -10,8 +10,11 @@ and refactoring that no user can observe do not belong here.
 
 ## [Unreleased]
 
-Core implementation phase. No release yet. The repository holds the working supervisor,
-its measured architecture, and the gate harness.
+No user-visible changes yet.
+
+## [0.1.0] - 2026-08-12
+
+First public Runtrol Studio release for six native Windows, macOS, and Linux targets.
 
 ### Added
 

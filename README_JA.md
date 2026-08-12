@@ -4,7 +4,7 @@
 
 [한국어](README.md) | [English](README_EN.md) | [中文](README_ZH.md) | 日本語
 
-> ステータス: **コア、主力 VS Code 拡張、live session index、実物 Extension Host と秒間 3,000 frame Webview の性能 ratchet、インストール済み実物 CLI の完全な VS Code 操作 journey、六つの native VSIX target の内容と clean install 検証、active session を維持する VSIX upgrade と rollback、依存関係のない公開サイトを実装済み。** `Runtrol Studio` は Core 自動検出、インストール済み CLI 一覧、30 session manager、変更時だけ届く session snapshot、再利用する command channel、選択 session 一つの購読、bounded live view、同一 window での workspace 切り替えを提供する。独立したデスクトップ GUI は公開製品 surface ではない。[GitHub Pages サイト](https://eddmpython.github.io/runtrol/)は公開済みである。Marketplace 署名、拡張の公開、スマートフォン PWA はまだ残っている。以下のスコアの多くが 0 なのは、コードがないからではなく、その軸を断言するゲートがまだない
+> ステータス: **コアと主力 VS Code 拡張を実装し、`Runtrol Studio 0.1.0` を六つの native target 向けに公開した。** live session index、実物 Extension Host と秒間 3,000 frame Webview の性能 ratchet、インストール済み実物 CLI の完全な操作 journey、Marketplace からの clean install、active session を維持する VSIX upgrade と rollback を検証済みである。独立したデスクトップ GUI は公開製品 surface ではない。[Marketplace 拡張](https://marketplace.visualstudio.com/items?itemName=runtrol.runtrol-studio)と [GitHub Pages サイト](https://eddmpython.github.io/runtrol/)は公開済みである。スマートフォン PWA と自動更新イニシアチブはまだ残っている。以下のスコアの多くが 0 なのは、コードがないからではなく、その軸を断言するゲートがまだない
 > からである。
 
 The security boundary and default-deny settings are documented in [SECURITY.md](SECURITY.md).
@@ -114,10 +114,10 @@ streaming と background 作業が入力、スクロール、セッション切�
 
 | | |
 |---|---|
-| **PC（Windows、macOS、Linux）** | まだ未リリース。署名済み公開リリース後、VS Code Marketplace から `Runtrol Studio` をインストールする。独立したデスクトップアプリは配布しない |
+| **PC（Windows、macOS、Linux）** | [VS Code Marketplace から `Runtrol Studio`](https://marketplace.visualstudio.com/items?itemName=runtrol.runtrol-studio) をインストールする。x64 と ARM64 に対応し、独立したデスクトップアプリは配布しない |
 | **モバイル** | スマートフォン PWA を開発中。安全なペアリングと通信ゲートを通過した後にのみ、恒久的な GitHub Pages オリジンでインストール操作を提供する |
 
-公開リリースはまだない。VS Code surface と bundled Core は実装済みで、Marketplace 公開を準備している。
+公開リリース `0.1.0` と六つの platform VSIX は [GitHub Releases](https://github.com/eddmpython/runtrol/releases/tag/vscode-v0.1.0) からも取得できる。
 
 ## runtrol が要らない人
 
@@ -155,7 +155,7 @@ Rust は目的ではなく、上の表の三つの軸のための手段である
 | | | |
 |---|---|---|
 | `crates/` | 製品コア（Rust）。デーモン、プロバイダーアダプター、トランスポート。旧内部 GUI コードは公開対象ではない | 実装済み |
-| [`extensions/runtrol-vscode/`](extensions/runtrol-vscode/) | 唯一の PC surface `Runtrol Studio` | 30 session のリリース負荷を実装、未リリース |
+| [`extensions/runtrol-vscode/`](extensions/runtrol-vscode/) | 唯一の PC surface `Runtrol Studio` | 30 session のリリース負荷を検証、0.1.0 公開済み |
 | `pwa/` | モバイル PWA | 未作成 |
 | [`site/`](site/) | [依存関係のない GitHub Pages ランディング](https://eddmpython.github.io/runtrol/) | 公開済み |
 | [`assets/brand/`](assets/brand/) | ロゴ。SVG が正本で、favicon・アイコン・ソーシャルカードはそこから派生する | |

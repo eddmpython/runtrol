@@ -4,7 +4,7 @@
 
 [한국어](README.md) | English | [中文](README_ZH.md) | [日本語](README_JA.md)
 
-> Status: **the core, primary VS Code extension, live session index, real Extension Host and 3,000-frame-per-second Webview performance ratchets, a full VS Code journey with an installed real CLI, content plus clean-install verification for six native VSIX targets, session-preserving VSIX upgrade and rollback, and the dependency-free public site are implemented.** `Runtrol Studio` provides Core discovery, installed CLI listing, a 30-session manager, change-only session snapshots, a reused command channel, one selected watch, a bounded live view, and same-window workspace switching. The standalone desktop GUI is not a public product surface. The [GitHub Pages site](https://eddmpython.github.io/runtrol/) is live. Marketplace signing, public extension publishing, and the phone PWA remain. Most scores below are 0 because no gate asserts those axes yet, not because there is
+> Status: **the Core and primary VS Code extension are implemented, and `Runtrol Studio 0.1.0` is public for six native targets.** The live session index, real Extension Host and 3,000-frame-per-second Webview performance ratchets, full journey with an installed real CLI, clean Marketplace installation, and session-preserving VSIX upgrade and rollback are verified. The standalone desktop GUI is not a public product surface. The [Marketplace extension](https://marketplace.visualstudio.com/items?itemName=runtrol.runtrol-studio) and [GitHub Pages site](https://eddmpython.github.io/runtrol/) are live. The phone PWA and automatic update initiative remain. Most scores below are 0 because no gate asserts those axes yet, not because there is
 > no code.
 
 The security boundary and default-deny settings are documented in [SECURITY.md](SECURITY.md).
@@ -116,10 +116,10 @@ At every fork, take the side that is easier for the user. The test is not taste.
 
 | | |
 |---|---|
-| **PC (Windows, macOS, Linux)** | Not released yet. Install `Runtrol Studio` from the VS Code Marketplace after the signed public release. A separate desktop application will not be distributed |
+| **PC (Windows, macOS, Linux)** | Install [`Runtrol Studio` from the VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=runtrol.runtrol-studio). x64 and ARM64 are supported. No separate desktop application is distributed |
 | **Mobile** | Phone PWA in progress. The install action will appear at the permanent GitHub Pages origin only after secure pairing and transport gates pass |
 
-There is no public release yet. The VS Code surface and bundled Core are implemented, while Marketplace publication is in preparation.
+Public release `0.1.0` and all six platform VSIX packages are also available from [GitHub Releases](https://github.com/eddmpython/runtrol/releases/tag/vscode-v0.1.0).
 
 ## Who does not need runtrol
 
@@ -157,7 +157,7 @@ If those axes are not nailed down by gates, using Rust means nothing.
 | | | |
 |---|---|---|
 | `crates/` | The product core (Rust). Daemon, provider adapters, and transport. Legacy internal GUI code is not a public target | Implemented |
-| [`extensions/runtrol-vscode/`](extensions/runtrol-vscode/) | The only PC surface, `Runtrol Studio` | 30-session release load implemented, not released |
+| [`extensions/runtrol-vscode/`](extensions/runtrol-vscode/) | The only PC surface, `Runtrol Studio` | 30-session release load verified, 0.1.0 public |
 | `pwa/` | Mobile PWA | Not created |
 | [`site/`](site/) | [Dependency-free GitHub Pages landing](https://eddmpython.github.io/runtrol/) | Live |
 | [`assets/brand/`](assets/brand/) | The logo. SVG is the source; favicons, icons, and social cards derive from it | |

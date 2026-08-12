@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       release:
-        description: Create an immutable GitHub release after all native packages pass
+        description: Create a tagged GitHub release after all native packages pass
         required: true
         type: boolean
         default: false
@@ -113,7 +113,7 @@ jobs:
         run: |
           count="$(find release -maxdepth 1 -name 'runtrol-studio-${{ needs.prepare.outputs.version }}-*.vsix' -type f | wc -l)"
           test "$count" -eq "${{ needs.prepare.outputs.targetCount }}"
-      - name: Create the immutable GitHub release
+      - name: Create the tagged GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
         run: >-

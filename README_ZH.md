@@ -4,7 +4,7 @@
 
 [한국어](README.md) | [English](README_EN.md) | 中文 | [日本語](README_JA.md)
 
-> 状态：**内核、主要 VS Code 扩展、实时会话索引、真实 Extension Host 和每秒 3,000 帧 Webview 性能门槛、已安装真实 CLI 的完整 VS Code 操作旅程、六个原生 VSIX 目标的内容与全新安装验证、保留活动会话的 VSIX 升级与回滚，以及无依赖公开站点已经实现。** `Runtrol Studio` 提供 Core 自动发现、已安装 CLI 列表、30 会话管理器、仅在变化时推送的会话快照、复用命令通道、单个选中会话订阅、有界实时视图以及同一窗口内的 workspace 切换。独立桌面 GUI 不是公开产品界面。[GitHub Pages 站点](https://eddmpython.github.io/runtrol/)已经上线。Marketplace 签名、扩展公开发布与手机 PWA 仍未完成。
+> 状态：**内核和主要 VS Code 扩展已经实现，`Runtrol Studio 0.1.0` 已面向六个原生目标公开发布。** 实时会话索引、真实 Extension Host 和每秒 3,000 帧 Webview 性能门槛、已安装真实 CLI 的完整操作旅程、全新 Marketplace 安装，以及保留活动会话的 VSIX 升级与回滚都已验证。独立桌面 GUI 不是公开产品界面。[Marketplace 扩展](https://marketplace.visualstudio.com/items?itemName=runtrol.runtrol-studio)和 [GitHub Pages 站点](https://eddmpython.github.io/runtrol/)已经上线。手机 PWA 与自动更新倡议仍未完成。
 > 下面多数分数为 0，不是因为没有代码，而是因为还没有门禁去断言那些轴。
 
 The security boundary and default-deny settings are documented in [SECURITY.md](SECURITY.md).
@@ -113,10 +113,10 @@ active subscription 与 Code-hot workspace 始终有界。streaming 与后台工
 
 | | |
 |---|---|
-| **PC（Windows、macOS、Linux）** | 尚未发布。签名公开版本发布后，从 VS Code Marketplace 安装 `Runtrol Studio`。不会分发独立桌面应用 |
+| **PC（Windows、macOS、Linux）** | 从 [VS Code Marketplace 安装 `Runtrol Studio`](https://marketplace.visualstudio.com/items?itemName=runtrol.runtrol-studio)。支持 x64 与 ARM64，不会分发独立桌面应用 |
 | **移动端** | 手机 PWA 开发中。只有安全配对与传输门槛通过后，永久 GitHub Pages 地址才会提供安装操作 |
 
-尚无公开版本。VS Code 界面与 bundled Core 已实现，Marketplace 发布正在准备中。
+公开版本 `0.1.0` 与六个平台 VSIX 也可从 [GitHub Releases](https://github.com/eddmpython/runtrol/releases/tag/vscode-v0.1.0) 获取。
 
 ## 不需要 runtrol 的人
 
@@ -154,7 +154,7 @@ Rust 不是目的，而是上表中三个轴的手段。
 | | | |
 |---|---|---|
 | `crates/` | 产品内核（Rust）。守护进程、供应商适配器与传输。旧内部 GUI 代码不是公开目标 | 已实现 |
-| [`extensions/runtrol-vscode/`](extensions/runtrol-vscode/) | 唯一 PC 界面 `Runtrol Studio` | 30 会话发布负载已实现，尚未发布 |
+| [`extensions/runtrol-vscode/`](extensions/runtrol-vscode/) | 唯一 PC 界面 `Runtrol Studio` | 30 会话发布负载已验证，0.1.0 已公开 |
 | `pwa/` | 移动端 PWA | 未创建 |
 | [`site/`](site/) | [无依赖 GitHub Pages 落地页](https://eddmpython.github.io/runtrol/) | 已上线 |
 | [`assets/brand/`](assets/brand/) | 标志。SVG 为正本，favicon、图标与社交卡片皆由其派生 | |

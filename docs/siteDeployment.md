@@ -26,13 +26,13 @@ The test also injects five defects and requires every mutation to fail before th
 
 [`pages.yml`](../.github/workflows/pages.yml) runs on relevant pushes to `main` and on manual dispatch. The build job has only repository content read and Pages read permissions. The deploy job receives only Pages write and OIDC token permissions. Every external action is pinned to a full commit digest.
 
-The job order is test, build, configure, upload, then deploy into the `github-pages` environment. The first successful public run was `31545875267` at commit `59625bb`.
+The job order is test, build, configure, upload, then deploy into the `github-pages` environment. The first successful public run was `31545875267` at commit `59625bb`. Run `31557512027` deployed the live Marketplace actions and target-aware manual fallback at commit `1bf19d1`.
 
 ## Release links
 
-The primary extension install location is the public [Visual Studio Marketplace listing](https://marketplace.visualstudio.com/items?itemName=runtrol.runtrol-studio). The static English page exposes a working install action without requiring JavaScript.
+The primary extension install location is the public [Visual Studio Marketplace listing](https://marketplace.visualstudio.com/items?itemName=runtrol.runtrol-studio). Version 0.1.0 is available for all six supported Windows, macOS, and Linux architecture targets. The static English page exposes a working install action without requiring JavaScript.
 
-The browser requests the latest `eddmpython/runtrol` GitHub Release and enables the manual button only when at least one `.vsix` asset exists. Runtime platform and architecture hints select the matching native package. When the browser cannot identify a supported target, the button opens the immutable release so the user can choose explicitly. The page never invents a version or links to a build artifact that does not exist.
+The browser requests the latest `eddmpython/runtrol` GitHub Release and enables the manual button only when at least one `.vsix` asset exists. Runtime platform and architecture hints select the matching native package. When the browser cannot identify a supported target, the button opens the tagged release so the user can choose explicitly. The page never invents a version or links to a build artifact that does not exist.
 
 The phone application is reserved for `/runtrol/app/` under the same Pages origin. That route and its install action must not be published until the production pairing, remote listener, route selection, and encrypted transport gates pass.
 

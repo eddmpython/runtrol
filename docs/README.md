@@ -13,6 +13,7 @@
 | [providerDiscovery.md](providerDiscovery.md) | lazy executable probes, binary-identity cache, required and optional flags, honest model catalogues, and drift boundaries |
 | [coreRuntime.md](coreRuntime.md) | thin daemon boundary, runtime admission, memory and CPU budgets, bounded replay, cursor gaps, process containment, and metadata-only storage |
 | [productSurfaces.md](productSurfaces.md) | public surface ownership, the VS Code-only PC decision, 30-session interaction contract, GitHub Pages distribution, and phone PWA boundary |
+| [vscodeSurface.md](vscodeSurface.md) | the public VS Code runtime, module boundaries, 30-session and performance contracts, six-target distribution, and verification entry points |
 | [siteDeployment.md](siteDeployment.md) | live GitHub Pages origin, dependency-free build, failure mutations, release-link truth, workflow permissions, and visual direction |
 | [desktopGui.md](desktopGui.md) | Tauri desktop ownership, session lifecycle, bounded rendering, Korean IME, console policy, memory budgets, and evidence boundaries |
 | [crossConsult.md](crossConsult.md) | the consult toggle: official-command wiring, control-name judgements, tools/list verification, the measured direction asymmetry, and the at-machine-only capability |
