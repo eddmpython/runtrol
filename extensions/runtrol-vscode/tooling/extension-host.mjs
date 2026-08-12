@@ -7,7 +7,8 @@ import { fileURLToPath } from "node:url";
 import { runTests } from "@vscode/test-electron";
 import { build } from "esbuild";
 
-const extensionRoot = fileURLToPath(new URL("../", import.meta.url));
+import { extensionIdentifier, extensionRoot } from "./extension-manifest.mjs";
+
 const repositoryRoot = fileURLToPath(new URL("../../../", import.meta.url));
 const core = process.env.RUNTROL_TEST_CORE
   ? path.resolve(process.env.RUNTROL_TEST_CORE)
@@ -139,6 +140,7 @@ try {
   const testEnvironment = {
     ...coreEnvironment,
     RUNTROL_TEST_CORE: core,
+    RUNTROL_TEST_EXTENSION_ID: extensionIdentifier,
     RUNTROL_VSCODE_PERFORMANCE: "1",
     RUNTROL_VSCODE_RESULT: resultPath,
     RUNTROL_VSCODE_PHASE: "measure",

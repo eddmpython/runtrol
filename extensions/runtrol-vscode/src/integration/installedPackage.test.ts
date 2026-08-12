@@ -3,6 +3,8 @@ import path from "node:path";
 
 import * as vscode from "vscode";
 
+import { extensionUnderTest } from "./extensionUnderTest.test";
+
 type ExtensionApi = {
   readonly ready: Promise<void>;
   refresh(): Promise<void>;
@@ -38,10 +40,7 @@ async function verifyInstalledPackage(resultPath: string): Promise<void> {
   }
 
   currentStage = "locating-installed-extension";
-  const extension = vscode.extensions.getExtension("eddmpython.runtrol-studio");
-  if (!extension) {
-    throw new Error("the installed Runtrol Studio extension is missing");
-  }
+  const extension = extensionUnderTest<ExtensionApi>();
   if (extension.packageJSON.version !== expectedVersion) {
     throw new Error(`installed version ${String(extension.packageJSON.version)} is not ${expectedVersion}`);
   }

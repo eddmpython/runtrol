@@ -3,6 +3,7 @@ import path from "node:path";
 
 import * as vscode from "vscode";
 
+import { extensionUnderTest } from "./extensionUnderTest.test";
 import { Watcher, type EndFact } from "./realProviderWatch.test";
 
 type SessionLine = {
@@ -224,10 +225,7 @@ async function restore(checkpoint: SwitchingCheckpoint, resultPath: string): Pro
 }
 
 async function activate(): Promise<ExtensionApi> {
-  const extension = vscode.extensions.getExtension("eddmpython.runtrol-studio");
-  if (!extension) {
-    throw new Error("the Runtrol Studio development extension is missing");
-  }
+  const extension = extensionUnderTest<ExtensionApi>();
   const api = await within(extension.activate() as Promise<ExtensionApi>, 10_000, "extension activation");
   await within(api.ready, 10_000, "extension initialization");
   return api;

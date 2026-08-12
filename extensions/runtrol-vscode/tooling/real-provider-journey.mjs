@@ -1,13 +1,12 @@
 import { spawn, spawnSync } from "node:child_process";
 import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 
 import { build } from "esbuild";
 
+import { extensionIdentifier, extensionRoot } from "./extension-manifest.mjs";
 import { terminateExactProcesses } from "./isolated-vscode.mjs";
 
-const extensionRoot = fileURLToPath(new URL("../", import.meta.url));
 const output = path.join(extensionRoot, ".test-dist");
 const testEntry = path.join(output, "realProviderJourney.test.cjs");
 const core = requiredEnvironment("RUNTROL_TEST_CORE");
@@ -107,7 +106,7 @@ async function runHost(workspace, expectedStage) {
     workspace,
   ];
   const child = spawn(vscode, arguments_, {
-    env: process.env,
+    env: { ...process.env, RUNTROL_TEST_EXTENSION_ID: extensionIdentifier },
     stdio: "inherit",
     windowsHide: true,
   });

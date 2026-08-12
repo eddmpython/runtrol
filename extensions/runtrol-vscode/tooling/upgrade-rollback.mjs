@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 
 import { build } from "esbuild";
 
+import { extensionIdentifier, extensionRoot } from "./extension-manifest.mjs";
 import {
   acquireVSCode,
   fileDigest,
@@ -17,7 +18,6 @@ import {
 } from "./isolated-vscode.mjs";
 import { descendantPids, normalizedExecutable, processRows } from "./process-identity.mjs";
 
-const extensionRoot = fileURLToPath(new URL("../", import.meta.url));
 const repositoryRoot = fileURLToPath(new URL("../../../", import.meta.url));
 const [baselineArchiveArgument, currentArchiveArgument, baselineVersion, currentVersion, fixtureArgument] =
   process.argv.slice(2);
@@ -45,7 +45,7 @@ const managedCore = path.join(
   userData,
   "User",
   "globalStorage",
-  "eddmpython.runtrol-studio",
+  extensionIdentifier,
   "core",
   process.platform === "win32" ? "runtrol.exe" : "runtrol",
 );
@@ -53,7 +53,7 @@ const selectionFile = path.join(
   userData,
   "User",
   "globalStorage",
-  "eddmpython.runtrol-studio",
+  extensionIdentifier,
   "selected-session.json",
 );
 const pathKey = Object.keys(process.env).find((name) => name.toLowerCase() === "path") ?? "PATH";
@@ -104,7 +104,7 @@ try {
   await requireSameProcesses("upgrade");
   runCore(["say", session, "upgrade continuity"]);
 
-  uninstallExtension(vscode.cli, "eddmpython.runtrol-studio", userData, extensions);
+  uninstallExtension(vscode.cli, extensionIdentifier, userData, extensions);
   installVSIX(vscode.cli, baselineArchive, userData, extensions);
   const rollbackDirectory = await findInstalledExtension(extensions, baselineVersion);
   await runPhase(vscode.executable, "rollback", baselineVersion, session);
@@ -237,6 +237,7 @@ async function runPhase(vscodeExecutablePath, phase, version, selectedSession) {
       RUNTROL_VSCODE_PERFORMANCE: "1",
       RUNTROL_VSCODE_RESULT: resultPath,
       RUNTROL_VSCODE_PHASE: phase,
+      RUNTROL_TEST_EXTENSION_ID: extensionIdentifier,
       RUNTROL_TEST_EXTENSION_VERSION: version,
       RUNTROL_TEST_WORKSPACE: workspace,
       ...(selectedSession ? { RUNTROL_TEST_SESSION: selectedSession } : {}),

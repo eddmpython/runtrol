@@ -10,6 +10,7 @@ import {
   runTests,
 } from "@vscode/test-electron";
 
+import { extensionInstallPrefix } from "./extension-manifest.mjs";
 import { descendantPids, normalizedExecutable, processRows } from "./process-identity.mjs";
 
 export async function acquireVSCode(cachePath) {
@@ -93,7 +94,7 @@ export function runInstalledExtensionTest(options) {
 export async function findInstalledExtension(root, expectedVersion) {
   const entries = await readdir(root, { withFileTypes: true });
   const matches = entries.filter(
-    (entry) => entry.isDirectory() && entry.name.startsWith("eddmpython.runtrol-studio-"),
+    (entry) => entry.isDirectory() && entry.name.startsWith(extensionInstallPrefix),
   );
   if (!expectedVersion) {
     if (matches.length !== 1) {

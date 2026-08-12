@@ -3,7 +3,7 @@
   "displayName": "Runtrol Studio",
   "description": "Control every local coding-agent CLI session from one VS Code window.",
   "version": "0.1.0",
-  "publisher": "eddmpython",
+  "publisher": "runtrol",
   "license": "SEE LICENSE IN resources/LICENSE",
   "repository": {
     "type": "git",

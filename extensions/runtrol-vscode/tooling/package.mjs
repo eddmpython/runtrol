@@ -4,9 +4,9 @@ import { fileURLToPath } from "node:url";
 import os from "node:os";
 import path from "node:path";
 
-const extensionRoot = fileURLToPath(new URL("../", import.meta.url));
+import { extensionRoot, packageManifest } from "./extension-manifest.mjs";
+
 const repositoryRoot = fileURLToPath(new URL("../../../", import.meta.url));
-const packageManifest = JSON.parse(await readFile(path.join(extensionRoot, "package.json"), "utf8"));
 const targets = JSON.parse(await readFile(path.join(extensionRoot, "release-targets.json"), "utf8"));
 const nativeTarget = `${process.platform}-${process.arch}`;
 const target = process.argv[2] ?? nativeTarget;

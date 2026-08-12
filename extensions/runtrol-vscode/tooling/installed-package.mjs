@@ -14,6 +14,11 @@ import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
 
 import {
+  extensionIdentifier,
+  extensionRoot,
+  packageManifest,
+} from "./extension-manifest.mjs";
+import {
   acquireVSCode,
   fileDigest,
   findInstalledExtension,
@@ -22,9 +27,7 @@ import {
   terminateExactProcesses,
 } from "./isolated-vscode.mjs";
 
-const extensionRoot = fileURLToPath(new URL("../", import.meta.url));
 const repositoryRoot = fileURLToPath(new URL("../../../", import.meta.url));
-const packageManifest = JSON.parse(await readFile(path.join(extensionRoot, "package.json"), "utf8"));
 const target = `${process.platform}-${process.arch}`;
 const archive = process.argv[2] ? path.resolve(process.argv[2]) : null;
 if (!archive) {
@@ -94,7 +97,7 @@ try {
     userData,
     "User",
     "globalStorage",
-    "eddmpython.runtrol-studio",
+    extensionIdentifier,
     "core",
     process.platform === "win32" ? "runtrol.exe" : "runtrol",
   );
@@ -105,6 +108,7 @@ try {
     testEntry,
     environment: {
       RUNTROL_HOME: runtrolHome,
+      RUNTROL_TEST_EXTENSION_ID: extensionIdentifier,
       RUNTROL_VSCODE_RESULT: resultPath,
       RUNTROL_TEST_EXTENSION_VERSION: packageManifest.version,
       RUNTROL_TEST_EXTENSION_TARGET: target,

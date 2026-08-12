@@ -27,6 +27,8 @@ EXTENSION = ROOT / "extensions" / "runtrol-vscode"
 PACKAGE_PATH = EXTENSION / "package.json"
 TARGETS_PATH = EXTENSION / "release-targets.json"
 SEMVER = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$")
+PUBLIC_EXTENSION_NAME = "runtrol-studio"
+PUBLIC_PUBLISHER = "runtrol"
 EXPECTED_TARGETS = {
     "darwin-arm64",
     "darwin-x64",
@@ -60,7 +62,7 @@ def sourceProblems(
     version = package.get("version")
     if not isinstance(version, str) or not SEMVER.fullmatch(version) or version == "0.0.0":
         found.append("the extension version must be a publishable major.minor.patch other than 0.0.0")
-    if package.get("publisher") != "eddmpython" or package.get("name") != "runtrol-studio":
+    if package.get("publisher") != PUBLIC_PUBLISHER or package.get("name") != PUBLIC_EXTENSION_NAME:
         found.append("the public extension identity changed")
     if package.get("license") != "SEE LICENSE IN resources/LICENSE":
         found.append("the extension manifest does not point to the packaged repository license")
@@ -204,7 +206,7 @@ def archiveProblems(
         except (UnicodeDecodeError, json.JSONDecodeError):
             found.append("extension/package.json is not valid UTF-8 JSON")
         else:
-            if package.get("name") != "runtrol-studio" or package.get("publisher") != "eddmpython":
+            if package.get("name") != PUBLIC_EXTENSION_NAME or package.get("publisher") != PUBLIC_PUBLISHER:
                 found.append("the packaged extension identity is wrong")
             if package.get("version") != expectedVersion:
                 found.append("the packaged extension version differs from the release SSOT")
@@ -223,7 +225,7 @@ def archiveProblems(
             if identity is None:
                 found.append("the VSIX manifest has no identity")
             else:
-                if identity.get("Id") != "runtrol-studio" or identity.get("Publisher") != "eddmpython":
+                if identity.get("Id") != PUBLIC_EXTENSION_NAME or identity.get("Publisher") != PUBLIC_PUBLISHER:
                     found.append("the VSIX manifest identity is wrong")
                 if identity.get("Version") != expectedVersion:
                     found.append("the VSIX manifest version differs from the release SSOT")
@@ -253,13 +255,13 @@ def selftest() -> int:
     coreBytes = b"MZ" + b"x" * (1024 * 1024)
     manifest = (
         '<PackageManifest xmlns="http://schemas.microsoft.com/developer/vsx-schema/2011">'
-        '<Metadata><Identity Id="runtrol-studio" Version="0.1.0" Publisher="eddmpython" '
+        f'<Metadata><Identity Id="{PUBLIC_EXTENSION_NAME}" Version="0.1.0" Publisher="{PUBLIC_PUBLISHER}" '
         'TargetPlatform="win32-x64"/></Metadata></PackageManifest>'
     ).encode()
     package = json.dumps(
         {
-            "name": "runtrol-studio",
-            "publisher": "eddmpython",
+            "name": PUBLIC_EXTENSION_NAME,
+            "publisher": PUBLIC_PUBLISHER,
             "version": version,
             "license": "SEE LICENSE IN resources/LICENSE",
         }
@@ -309,9 +311,9 @@ def selftest() -> int:
             return 2
 
     sourcePackage = {
-        "name": "runtrol-studio",
+        "name": PUBLIC_EXTENSION_NAME,
         "displayName": "Runtrol Studio",
-        "publisher": "eddmpython",
+        "publisher": PUBLIC_PUBLISHER,
         "version": version,
         "license": "SEE LICENSE IN resources/LICENSE",
         "homepage": "https://eddmpython.github.io/runtrol/",

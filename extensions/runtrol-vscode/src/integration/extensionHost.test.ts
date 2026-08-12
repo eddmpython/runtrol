@@ -4,6 +4,7 @@ import { performance } from "node:perf_hooks";
 import * as vscode from "vscode";
 
 import budget from "../../performance-budget.json";
+import { extensionUnderTest } from "./extensionUnderTest.test";
 
 let currentStage = "starting";
 
@@ -65,10 +66,7 @@ async function measure(resultPath: string): Promise<Record<string, number | stri
   if (configuredCore !== core) {
     throw new Error(`the isolated VS Code profile configured unexpected Core ${String(configuredCore)}`);
   }
-  const extension = vscode.extensions.getExtension("eddmpython.runtrol-studio");
-  if (!extension) {
-    throw new Error("the Runtrol Studio development extension is missing");
-  }
+  const extension = extensionUnderTest<ExtensionApi>();
   const rssBefore = process.memoryUsage().rss;
   const activationStarted = performance.now();
   const api = await within(extension.activate() as Promise<ExtensionApi>, 5_000, "extension activation");
@@ -180,10 +178,7 @@ async function measureRestore(expected: string): Promise<{
   reloadSelectionMs: number;
 }> {
   currentStage = "reload-activation";
-  const extension = vscode.extensions.getExtension("eddmpython.runtrol-studio");
-  if (!extension) {
-    throw new Error("the Runtrol Studio development extension is missing after reload");
-  }
+  const extension = extensionUnderTest<ExtensionApi>();
   const started = performance.now();
   const api = await within(extension.activate() as Promise<ExtensionApi>, 5_000, "reload activation");
   const activatedAt = performance.now();
