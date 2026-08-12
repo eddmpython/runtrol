@@ -1,13 +1,17 @@
-import { mkdir, rm } from "node:fs/promises";
+import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { build } from "esbuild";
+
+import { isolateVSCodeProduct } from "./isolated-vscode.mjs";
 
 const extensionRoot = fileURLToPath(new URL("../", import.meta.url));
 const out = path.join(extensionRoot, ".test-dist");
 await rm(out, { recursive: true, force: true });
 await mkdir(out, { recursive: true });
+await verifyMacProductIsolation();
 
 await build({
   entryPoints: {
@@ -46,3 +50,33 @@ const result = spawnSync(process.execPath, [
 });
 await rm(out, { recursive: true, force: true });
 process.exitCode = result.status ?? 1;
+
+async function verifyMacProductIsolation() {
+  const source = path.join(out, "Source Code.app");
+  const executable = path.join(source, "Contents", "MacOS", "Electron");
+  const product = path.join(source, "Contents", "Resources", "app", "product.json");
+  const helper = path.join(source, "Contents", "Frameworks", "Code Helper.app", "helper");
+  await Promise.all([
+    mkdir(path.dirname(executable), { recursive: true }),
+    mkdir(path.dirname(product), { recursive: true }),
+    mkdir(path.dirname(helper), { recursive: true }),
+  ]);
+  await Promise.all([
+    writeFile(executable, "binary", "utf8"),
+    writeFile(product, JSON.stringify({ name: "Code", extensionsGallery: { serviceUrl: "https://invalid" } }), "utf8"),
+    writeFile(helper, "helper", "utf8"),
+  ]);
+
+  const destination = path.join(out, "Isolated Code.app");
+  const isolatedExecutable = await isolateVSCodeProduct(executable, destination);
+  assert.equal(isolatedExecutable, path.join(destination, "Contents", "MacOS", "Electron"));
+  await stat(path.join(destination, "Contents", "Frameworks", "Code Helper.app", "helper"));
+  const isolatedProduct = JSON.parse(await readFile(
+    path.join(destination, "Contents", "Resources", "app", "product.json"),
+    "utf8",
+  ));
+  const sourceProduct = JSON.parse(await readFile(product, "utf8"));
+  assert.equal(isolatedProduct.name, "Code");
+  assert.equal("extensionsGallery" in isolatedProduct, false);
+  assert.equal("extensionsGallery" in sourceProduct, true);
+}

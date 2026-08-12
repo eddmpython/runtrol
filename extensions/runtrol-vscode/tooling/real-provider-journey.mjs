@@ -31,7 +31,7 @@ await Promise.all([
   mkdir(extensions, { recursive: true }),
 ]);
 const vscode = process.platform === "darwin"
-  ? await isolateVSCodeProduct(configuredVscode, path.join(userData, "vscode-product"))
+  ? await isolateVSCodeProduct(configuredVscode, path.join(userData, "vscode-product.app"))
   : configuredVscode;
 await writeFile(
   path.join(userData, "User", "settings.json"),

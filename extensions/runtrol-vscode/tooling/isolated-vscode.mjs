@@ -75,10 +75,11 @@ async function locateProduct(executable) {
     for (const relativeProduct of relativeProducts) {
       const candidate = path.join(root, relativeProduct);
       if (await lstat(candidate).then((entry) => entry.isFile()).catch(() => false)) {
+        const normalized = normalizeProductRoot(root, relativeProduct, resolvedExecutable);
         return {
-          root,
-          relativeProduct,
-          relativeExecutable: path.relative(root, resolvedExecutable),
+          root: normalized.root,
+          relativeProduct: normalized.relativeProduct,
+          relativeExecutable: path.relative(normalized.root, resolvedExecutable),
         };
       }
     }
@@ -87,6 +88,20 @@ async function locateProduct(executable) {
     root = parent;
   }
   throw new Error(`cannot locate VS Code product.json above ${resolvedExecutable}`);
+}
+
+function normalizeProductRoot(root, relativeProduct, executable) {
+  if (
+    path.basename(root) === "Contents"
+    && path.extname(path.dirname(root)) === ".app"
+    && executable.startsWith(`${root}${path.sep}`)
+  ) {
+    return {
+      root: path.dirname(root),
+      relativeProduct: path.join("Contents", relativeProduct),
+    };
+  }
+  return { root, relativeProduct };
 }
 
 async function cloneWithLinks(source, destination) {
