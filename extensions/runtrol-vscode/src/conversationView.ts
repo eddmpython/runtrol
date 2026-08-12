@@ -41,6 +41,11 @@ type RenderWaiter = {
   reject(error: Error): void;
 };
 
+type WebviewReadyWaiter = {
+  promise: Promise<void>;
+  resolve(): void;
+};
+
 const MAX_PENDING_POSTS = 4_096;
 const POST_BATCH = MAX_PENDING_POSTS;
 
@@ -56,6 +61,7 @@ export class ConversationView implements vscode.WebviewViewProvider {
   private readonly measurements = new Map<string, MeasurementWaiter>();
   private readonly renderWaiters = new Set<RenderWaiter>();
   private renderedGeneration = 0;
+  private webviewReady: WebviewReadyWaiter | null = null;
 
   constructor(
     private readonly extensionUri: vscode.Uri,
@@ -64,12 +70,15 @@ export class ConversationView implements vscode.WebviewViewProvider {
 
   resolveWebviewView(view: vscode.WebviewView): void {
     this.view = view;
+    const ready = webviewReadyWaiter();
+    this.webviewReady = ready;
     view.webview.options = {
       enableScripts: true,
       localResourceRoots: [vscode.Uri.joinPath(this.extensionUri, "dist")],
     };
     view.webview.onDidReceiveMessage((message: unknown) => {
       if (isWebviewReady(message)) {
+        ready.resolve();
         this.reset(this.selected);
         return;
       }
@@ -87,7 +96,9 @@ export class ConversationView implements vscode.WebviewViewProvider {
     view.onDidDispose(() => {
       if (this.view === view) {
         this.view = null;
+        this.webviewReady = null;
         this.pendingFrames = [];
+        ready.resolve();
         this.rejectMeasurements(new Error("the Runtrol Webview closed during measurement"));
         this.rejectRenderWaiters(new Error("the Runtrol Webview closed before painting the selected session"));
       }
@@ -140,6 +151,14 @@ export class ConversationView implements vscode.WebviewViewProvider {
       throw new Error("Webview measurement rate and duration must be positive");
     }
     const webview = this.view.webview;
+    const ready = this.webviewReady;
+    if (!ready) {
+      throw new Error("open the Runtrol view before measuring its Webview");
+    }
+    await ready.promise;
+    if (this.view?.webview !== webview) {
+      throw new Error("the Runtrol Webview changed before measurement started");
+    }
     const id = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
     const waiter = measurementWaiter();
     const droppedBefore = this.droppedFrames;
@@ -313,6 +332,22 @@ export class ConversationView implements vscode.WebviewViewProvider {
 </body>
 </html>`;
   }
+}
+
+function webviewReadyWaiter(): WebviewReadyWaiter {
+  let settled = false;
+  let resolvePromise: () => void = () => {};
+  const promise = new Promise<void>((resolve) => {
+    resolvePromise = resolve;
+  });
+  return {
+    promise,
+    resolve: () => {
+      if (settled) return;
+      settled = true;
+      resolvePromise();
+    },
+  };
 }
 
 function measurementWaiter(): MeasurementWaiter {

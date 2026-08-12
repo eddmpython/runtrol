@@ -73,6 +73,7 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
     required = {
         "core/framing.ts": ["MAX_FRAME_BYTES", "MAX_QUEUED_FRAMES", "MAX_QUEUED_BYTES", "setImmediate"],
         "webview/main.ts": ["MAX_VISIBLE_ITEMS", "MAX_VISIBLE_CHARACTERS", "MAX_BATCH"],
+        "conversationView.ts": ["webviewReady", "await ready.promise"],
         "extension.ts": ["retainContextWhenHidden: false", "afterReady"],
         "controller.ts": [
             "private watchAbort",
@@ -120,6 +121,7 @@ def selftest() -> int:
     sources = {
         "core/framing.ts": "MAX_FRAME_BYTES MAX_QUEUED_FRAMES MAX_QUEUED_BYTES setImmediate",
         "webview/main.ts": "MAX_VISIBLE_ITEMS MAX_VISIBLE_CHARACTERS MAX_BATCH",
+        "conversationView.ts": "webviewReady await ready.promise",
         "extension.ts": "retainContextWhenHidden: false afterReady",
         "controller.ts": (
             'private watchAbort; private indexAbort; this.watchAbort?.abort(); reconnect workspaceCollisions '
@@ -149,6 +151,7 @@ def selftest() -> int:
         (package, {**sources, "webview/main.ts": "localStorage MAX_VISIBLE_ITEMS"}),
         (package, {**sources, "controller.ts": "setInterval("}),
         (package, {**sources, "core/framing.ts": "MAX_FRAME_BYTES"}),
+        (package, {**sources, "conversationView.ts": "webviewReady"}),
         (package, {**sources, "controller.ts": sources["controller.ts"].replace("workspaceCollisions", "")}),
         (package, {**sources, "controller.ts": sources["controller.ts"] + " writeFile("}),
         (package, {**sources, "controller.ts": sources["controller.ts"] + " copyFile("}),
