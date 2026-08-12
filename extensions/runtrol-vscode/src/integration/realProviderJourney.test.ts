@@ -98,8 +98,6 @@ async function journey(resultPath: string): Promise<void> {
   const core = requiredEnvironment("RUNTROL_TEST_CORE");
   const api = await activate();
 
-  currentStage = "opening-view";
-  await openView();
   if (!api.journey) {
     throw new Error("the real-provider journey API is unavailable");
   }
@@ -197,7 +195,6 @@ async function restore(checkpoint: SwitchingCheckpoint, resultPath: string): Pro
     throw new Error(`workspace restored as ${folders[0]?.uri.fsPath ?? "none"}`);
   }
   const api = await activate();
-  await openView();
   if (!api.journey) {
     throw new Error("the real-provider journey API is unavailable after the workspace switch");
   }
@@ -225,12 +222,21 @@ async function restore(checkpoint: SwitchingCheckpoint, resultPath: string): Pro
 }
 
 async function activate(): Promise<ExtensionApi> {
-  currentStage = "activating-extension";
+  currentStage = "opening-view";
   const extension = extensionUnderTest<ExtensionApi>();
-  const api = await within(extension.activate() as Promise<ExtensionApi>, 30_000, "extension activation");
+  await openView();
+  currentStage = "activating-extension";
+  const api = await within(waitForActivation(extension), 30_000, "extension activation through the Runtrol view");
   currentStage = "initializing-extension";
   await within(api.ready, 30_000, "extension initialization");
   return api;
+}
+
+async function waitForActivation(extension: vscode.Extension<ExtensionApi>): Promise<ExtensionApi> {
+  while (!extension.isActive) {
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  return extension.exports;
 }
 
 async function openView(): Promise<void> {
