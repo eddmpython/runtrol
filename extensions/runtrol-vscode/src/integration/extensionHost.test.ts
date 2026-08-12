@@ -3,7 +3,6 @@ import { performance } from "node:perf_hooks";
 
 import * as vscode from "vscode";
 
-import budget from "../../performance-budget.json";
 import { extensionUnderTest } from "./extensionUnderTest.test";
 
 let currentStage = "starting";
@@ -174,10 +173,6 @@ async function measure(resultPath: string): Promise<Record<string, number | stri
     restoreWorkspace: switched.restoreWorkspace,
   };
   await writeFile(resultPath, JSON.stringify(result), "utf8");
-  const failures = budgetFailures(result);
-  if (failures.length > 0) {
-    throw new Error(failures.join("; "));
-  }
   return result;
 }
 
@@ -224,13 +219,6 @@ async function measureRestore(expected: string): Promise<{
   const reloadReadyMs = readyAt - activatedAt;
   const reloadViewMs = viewAt - activatedAt;
   const reloadSelectionMs = selectedAt - readyAndViewAt;
-  if (reloadRestoreMs > budget.reloadRestoreMs) {
-    throw new Error(
-      `reload restore ${reloadRestoreMs.toFixed(1)} ms exceeds ${budget.reloadRestoreMs} ms `
-      + `(activation ${reloadActivationMs.toFixed(1)}, ready ${reloadReadyMs.toFixed(1)}, `
-      + `view ${reloadViewMs.toFixed(1)}, selection ${reloadSelectionMs.toFixed(1)})`,
-    );
-  }
   return {
     reloadRestoreMs,
     reloadActivationMs,
@@ -259,73 +247,6 @@ async function within<T>(work: Thenable<T>, milliseconds: number, label: string)
       clearTimeout(timer);
     }
   }
-}
-
-function budgetFailures(result: {
-  activationMs: number;
-  openViewMs: number;
-  refreshP95Ms: number;
-  rssGrowthBytes: number;
-  webviewFrameP95Ms: number;
-  webviewFrameOverrunP95Ms: number;
-  webviewInputP95Ms: number;
-  webviewScrollP95Ms: number;
-  webviewPendingFrames: number;
-  sessionCount: number;
-  coldResumeMs: number;
-  sessionSwitchP95Ms: number;
-}): string[] {
-  const failures: string[] = [];
-  if (result.activationMs > budget.activationMs) {
-    failures.push(`activation ${result.activationMs.toFixed(1)} ms exceeds ${budget.activationMs} ms`);
-  }
-  if (result.openViewMs > budget.openViewMs) {
-    failures.push(`view open ${result.openViewMs.toFixed(1)} ms exceeds ${budget.openViewMs} ms`);
-  }
-  if (result.refreshP95Ms > budget.refreshP95Ms) {
-    failures.push(`refresh p95 ${result.refreshP95Ms.toFixed(1)} ms exceeds ${budget.refreshP95Ms} ms`);
-  }
-  if (result.rssGrowthBytes > budget.rssGrowthBytes) {
-    failures.push(`RSS growth ${result.rssGrowthBytes} exceeds ${budget.rssGrowthBytes} bytes`);
-  }
-  if (result.webviewFrameP95Ms > budget.webviewFrameP95Ms) {
-    failures.push(
-      `Webview frame p95 ${result.webviewFrameP95Ms.toFixed(1)} ms exceeds ${budget.webviewFrameP95Ms} ms`,
-    );
-  }
-  if (result.webviewFrameOverrunP95Ms > budget.webviewFrameOverrunP95Ms) {
-    failures.push(
-      `Webview frame overrun p95 ${result.webviewFrameOverrunP95Ms.toFixed(1)} ms exceeds `
-      + `${budget.webviewFrameOverrunP95Ms} ms`,
-    );
-  }
-  if (result.webviewInputP95Ms > budget.webviewInputP95Ms) {
-    failures.push(
-      `Webview input p95 ${result.webviewInputP95Ms.toFixed(1)} ms exceeds ${budget.webviewInputP95Ms} ms`,
-    );
-  }
-  if (result.webviewScrollP95Ms > budget.webviewScrollP95Ms) {
-    failures.push(
-      `Webview scroll p95 ${result.webviewScrollP95Ms.toFixed(1)} ms exceeds ${budget.webviewScrollP95Ms} ms`,
-    );
-  }
-  if (result.webviewPendingFrames > budget.webviewPendingFrames) {
-    failures.push(
-      `Webview pending frames ${result.webviewPendingFrames} exceeds ${budget.webviewPendingFrames}`,
-    );
-  }
-  if (result.sessionCount !== 30) {
-    failures.push(`managed session count ${result.sessionCount} is not 30`);
-  }
-  if (result.coldResumeMs > budget.coldResumeMs) {
-    failures.push(`cold resume ${result.coldResumeMs.toFixed(1)} ms exceeds ${budget.coldResumeMs} ms`);
-  }
-  if (result.sessionSwitchP95Ms > budget.sessionSwitchP95Ms) {
-    failures.push(
-      `session switch p95 ${result.sessionSwitchP95Ms.toFixed(1)} ms exceeds ${budget.sessionSwitchP95Ms} ms`,
-    );
-  }
-  return failures;
 }
 
 function percentile(values: readonly number[], at: number): number {

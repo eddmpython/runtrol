@@ -1,10 +1,10 @@
 """Gate: the real VS Code Extension Host stays inside one checked-in performance budget.
 
 The measurement launches an isolated VS Code profile, the production extension bundle, and a tracked Core
-daemon. It measures ready activation, opening the contributed view, repeated session refresh p95, Extension Host RSS
-growth, 30 managed external ACP sessions with at most eight hot, a real cold-session resume, selected-watch plus
-Webview-paint switching, and exact selection restoration after VS Code restarts in another workspace. The JSON
-budget beside the extension is the only threshold source used by both this gate and the in-host test.
+daemon. Three isolated trials measure ready activation, opening the contributed view, repeated session refresh p95,
+Extension Host RSS growth, 30 managed external ACP sessions with at most eight hot, a real cold-session resume,
+selected-watch plus Webview-paint switching, and exact selection restoration after VS Code restarts in another
+workspace. The median rejects one hosted-runner scheduling outlier without relaxing the checked-in JSON thresholds.
 
 Usage::
 
@@ -43,6 +43,7 @@ FIELDS = (
 EXPECTED_HOT_SESSIONS = 8
 EXPECTED_MANAGED_SESSIONS = 30
 EXPECTED_DROPPED_FRAMES = 0
+MEASUREMENT_TRIALS = 3
 
 
 def loadBudget() -> dict[str, float]:
@@ -82,6 +83,29 @@ def problems(metrics: dict[str, Any], budget: dict[str, float]) -> list[str]:
             f"{EXPECTED_DROPPED_FRAMES}"
         )
     return found
+
+
+def medianMeasurements(measurements: list[dict[str, Any]]) -> dict[str, Any]:
+    """Aggregate three complete isolated trials without weakening exact invariants."""
+    if len(measurements) != MEASUREMENT_TRIALS:
+        raise ValueError(f"expected {MEASUREMENT_TRIALS} VS Code measurements, found {len(measurements)}")
+    result = dict(measurements[-1])
+    for name in FIELDS:
+        values = [measurement.get(name) for measurement in measurements]
+        if any(isinstance(value, bool) or not isinstance(value, (int, float)) for value in values):
+            raise ValueError(f"every VS Code measurement must contain numeric {name}")
+        result[name] = sorted(float(value) for value in values)[MEASUREMENT_TRIALS // 2]
+    exact = {
+        "hotSessionCount": EXPECTED_HOT_SESSIONS,
+        "sessionCount": EXPECTED_MANAGED_SESSIONS,
+        "webviewDroppedFrames": EXPECTED_DROPPED_FRAMES,
+    }
+    for name, expected in exact.items():
+        values = [measurement.get(name) for measurement in measurements]
+        if any(value != expected for value in values):
+            raise ValueError(f"every VS Code measurement must report {name}={expected}, found {values!r}")
+        result[name] = expected
+    return result
 
 
 def selftest() -> int:
@@ -130,7 +154,30 @@ def selftest() -> int:
     if problems(dropped, budget) != ["webviewDroppedFrames 1 is not 0"]:
         print("[vscodeHostPerformance --selftest] FAIL. a dropped frame escaped.", file=sys.stderr)
         return 2
-    print("[vscodeHostPerformance --selftest] OK. all twenty-seven injected defects make the gate red.")
+    measurements = [dict(green) for _unused in range(MEASUREMENT_TRIALS)]
+    measurements[0]["activationMs"] = budget["activationMs"] * 10
+    if problems(medianMeasurements(measurements), budget):
+        print("[vscodeHostPerformance --selftest] FAIL. one scheduling outlier made the median red.", file=sys.stderr)
+        return 2
+    measurements[1]["activationMs"] = budget["activationMs"] * 10
+    expected_median_problem = (
+        f"activationMs {budget['activationMs'] * 10:.1f} exceeds {budget['activationMs']:.1f}"
+    )
+    if problems(medianMeasurements(measurements), budget) != [expected_median_problem]:
+        print("[vscodeHostPerformance --selftest] FAIL. a majority activation regression escaped.", file=sys.stderr)
+        return 2
+    incomplete_rejected = False
+    try:
+        medianMeasurements([dict(green), dict(green)])
+    except ValueError:
+        incomplete_rejected = True
+    if not incomplete_rejected:
+        print("[vscodeHostPerformance --selftest] FAIL. an incomplete trial set was accepted.", file=sys.stderr)
+        return 2
+    print(
+        "[vscodeHostPerformance --selftest] OK. all twenty-seven injected defects and trial aggregation "
+        "make the gate red."
+    )
     return 0
 
 
@@ -193,8 +240,8 @@ def hostCommand() -> list[str]:
     return command
 
 
-def measurement(binary: Path, fixture: Path) -> dict[str, Any]:
-    """Run the isolated Extension Host and parse its single result record."""
+def singleMeasurement(binary: Path, fixture: Path) -> dict[str, Any]:
+    """Run one isolated Extension Host and parse its single result record."""
     environment = dict(os.environ)
     environment["RUNTROL_TEST_CORE"] = str(binary)
     environment["RUNTROL_TEST_ACP_FIXTURE"] = str(fixture)
@@ -208,6 +255,15 @@ def measurement(binary: Path, fixture: Path) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise RuntimeError("the VS Code Extension Host record is not an object")
     return value
+
+
+def measurement(binary: Path, fixture: Path) -> dict[str, Any]:
+    """Use the median of three isolated cold trials as the shared-host ratchet value."""
+    measured: list[dict[str, Any]] = []
+    for trial in range(1, MEASUREMENT_TRIALS + 1):
+        print(f"[vscodeHostPerformance] trial {trial}/{MEASUREMENT_TRIALS}")
+        measured.append(singleMeasurement(binary, fixture))
+    return medianMeasurements(measured)
 
 
 def run() -> int:

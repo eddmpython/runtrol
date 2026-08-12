@@ -57,8 +57,9 @@ the original daemon and provider processes instead of making a versioned extensi
 
 ## Performance contract
 
-The real Extension Host gate runs the production extension and Core on hosted Windows, macOS, and Linux. The shared
-ratchet currently caps:
+The real Extension Host gate runs three isolated cold trials of the production extension and Core on hosted Windows,
+macOS, and Linux. One median feeds the shared budget, while exact session counts and zero dropped frames must hold in
+every trial. The shared ratchet currently caps:
 
 | Measure | Ceiling |
 |---|---:|
