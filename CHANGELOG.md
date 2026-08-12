@@ -12,6 +12,17 @@ and refactoring that no user can observe do not belong here.
 
 No user-visible changes yet.
 
+## [0.1.1] - 2026-08-12
+
+### Fixed
+
+- Installed CLI discovery no longer repeats one expensive help process for every candidate flag. The measured cold
+  Core startup on Windows fell from about 30 seconds to about 4.3 seconds.
+- Webview performance and startup messages now wait for the renderer readiness handshake, avoiding lost messages on
+  slower VS Code hosts.
+- Selected-session persistence retries only short operating-system file locks within a bounded window, so a transient
+  Windows scanner lock cannot abort a session switch.
+
 ## [0.1.0] - 2026-08-12
 
 First public Runtrol Studio release for six native Windows, macOS, and Linux targets.
