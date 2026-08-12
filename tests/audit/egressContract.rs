@@ -205,7 +205,8 @@ fn product_socket_dials_exist_only_inside_the_egress_policy() {
         .to_path_buf();
     let mut callers = Vec::new();
     visit_rs(&root.join("crates"), &mut |path, source| {
-        if source.contains("TcpStream::connect") {
+        let product_end = source.find("#[cfg(test)]").unwrap_or(source.len());
+        if source[..product_end].contains("TcpStream::connect") {
             callers.push(
                 path.strip_prefix(&root)
                     .expect("relative path")

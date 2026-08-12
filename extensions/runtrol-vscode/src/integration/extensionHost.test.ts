@@ -1,4 +1,4 @@
-import { writeFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { performance } from "node:perf_hooks";
 
 import * as vscode from "vscode";
@@ -47,9 +47,19 @@ export async function run(): Promise<void> {
       await writeFile(resultPath, JSON.stringify(measured), "utf8");
     }
   } catch (error) {
+    let progress: Record<string, unknown> = {};
+    try {
+      const recorded: unknown = JSON.parse(await readFile(resultPath, "utf8"));
+      if (recorded && typeof recorded === "object" && !Array.isArray(recorded)) {
+        progress = recorded as Record<string, unknown>;
+      }
+    } catch {
+      // A failure before the first checkpoint has no progress record to preserve.
+    }
     await writeFile(
       resultPath,
       JSON.stringify({
+        ...progress,
         failure: error instanceof Error ? error.message : String(error),
         stack: error instanceof Error ? error.stack : undefined,
         stage: currentStage,
@@ -163,6 +173,7 @@ async function measure(resultPath: string): Promise<Record<string, number | stri
     restoreSession: switched.restoreSession,
     restoreWorkspace: switched.restoreWorkspace,
   };
+  await writeFile(resultPath, JSON.stringify(result), "utf8");
   const failures = budgetFailures(result);
   if (failures.length > 0) {
     throw new Error(failures.join("; "));

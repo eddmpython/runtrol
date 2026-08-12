@@ -147,20 +147,26 @@ try {
     RUNTROL_VSCODE_MANAGED_SESSIONS: JSON.stringify(managedSessions),
   };
   const installed = process.env.RUNTROL_TEST_VSCODE_EXECUTABLE;
-  await runHost(
-    installed,
-    testEntry,
-    resultPath,
-    testEnvironment,
-    repositoryRoot,
-    measureExtensions,
-  );
+  let resumedAdopted = false;
+  try {
+    await runHost(
+      installed,
+      testEntry,
+      resultPath,
+      testEnvironment,
+      repositoryRoot,
+      measureExtensions,
+    );
+  } finally {
+    const progress = await readFile(resultPath, "utf8")
+      .then((contents) => JSON.parse(contents))
+      .catch(() => null);
+    resumedAdopted = adoptResumedSession(managedSessions, progress);
+  }
   const measured = JSON.parse(await readFile(resultPath, "utf8"));
-  const resumedIndex = managedSessions.indexOf(measured.resumedFrom);
-  if (resumedIndex < 0 || typeof measured.resumedTo !== "string" || !measured.resumedTo) {
+  if (!resumedAdopted) {
     throw new Error("the host measurement did not identify the cold session it resumed");
   }
-  managedSessions[resumedIndex] = measured.resumedTo;
   const restoreSession = measured.restoreSession;
   const restoreWorkspace = measured.restoreWorkspace;
   if (typeof restoreSession !== "string" || !restoreSession || typeof restoreWorkspace !== "string" || !restoreWorkspace) {
@@ -233,6 +239,23 @@ try {
 
 function delay(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+function adoptResumedSession(sessions, result) {
+  if (
+    !result
+    || typeof result.resumedFrom !== "string"
+    || typeof result.resumedTo !== "string"
+    || !result.resumedTo
+  ) {
+    return false;
+  }
+  const resumedIndex = sessions.indexOf(result.resumedFrom);
+  if (resumedIndex < 0) {
+    return false;
+  }
+  sessions[resumedIndex] = result.resumedTo;
+  return true;
 }
 
 async function runHost(installed, testEntry, resultPath, testEnvironment, workspace, extensionsDirectory) {
