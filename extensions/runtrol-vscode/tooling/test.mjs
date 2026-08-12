@@ -1,20 +1,16 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, rm } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { build } from "esbuild";
 
-import {
-  isolatedExtensionTestArguments,
-  temporarilyDisableVSCodeGallery,
-} from "./isolated-vscode.mjs";
+import { isolatedExtensionTestArguments } from "./isolated-vscode.mjs";
 
 const extensionRoot = fileURLToPath(new URL("../", import.meta.url));
 const out = path.join(extensionRoot, ".test-dist");
 await rm(out, { recursive: true, force: true });
 await mkdir(out, { recursive: true });
-await verifyMacProductIsolation();
 verifyExtensionTestArguments();
 
 await build({
@@ -54,42 +50,6 @@ const result = spawnSync(process.execPath, [
 });
 await rm(out, { recursive: true, force: true });
 process.exitCode = result.status ?? 1;
-
-async function verifyMacProductIsolation() {
-  const source = path.join(out, "Source Code.app");
-  const executable = path.join(source, "Contents", "MacOS", "Electron");
-  const product = path.join(source, "Contents", "Resources", "app", "product.json");
-  const backup = `${product}.runtrol-gallery-backup`;
-  await Promise.all([
-    mkdir(path.dirname(executable), { recursive: true }),
-    mkdir(path.dirname(product), { recursive: true }),
-  ]);
-  const original = JSON.stringify({ name: "Code", extensionsGallery: { serviceUrl: "https://invalid" } });
-  await Promise.all([
-    writeFile(executable, "binary", "utf8"),
-    writeFile(product, original, "utf8"),
-  ]);
-
-  const restore = await temporarilyDisableVSCodeGallery(executable);
-  const isolatedProduct = JSON.parse(await readFile(product, "utf8"));
-  assert.equal(isolatedProduct.name, "Code");
-  assert.equal("extensionsGallery" in isolatedProduct, false);
-  await restore();
-  assert.equal(await readFile(product, "utf8"), original);
-  await restore();
-  assert.equal(await readFile(product, "utf8"), original);
-
-  const interrupted = JSON.stringify({ name: "Interrupted", extensionsGallery: { serviceUrl: "saved" } });
-  await Promise.all([
-    writeFile(product, JSON.stringify({ name: "Damaged" }), "utf8"),
-    writeFile(backup, interrupted, "utf8"),
-  ]);
-  const restoreAfterInterruption = await temporarilyDisableVSCodeGallery(executable);
-  assert.equal(JSON.parse(await readFile(product, "utf8")).name, "Interrupted");
-  await restoreAfterInterruption();
-  assert.equal(await readFile(product, "utf8"), interrupted);
-  await assert.rejects(readFile(backup), { code: "ENOENT" });
-}
 
 function verifyExtensionTestArguments() {
   const arguments_ = isolatedExtensionTestArguments({

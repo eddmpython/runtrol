@@ -8,7 +8,6 @@ import { extensionIdentifier, extensionRoot } from "./extension-manifest.mjs";
 import {
   isolatedExtensionTestArguments,
   isolatedProfileSettings,
-  temporarilyDisableVSCodeGallery,
   terminateExactProcesses,
 } from "./isolated-vscode.mjs";
 
@@ -30,12 +29,7 @@ await Promise.all([
   mkdir(path.join(userData, "User"), { recursive: true }),
   mkdir(extensions, { recursive: true }),
 ]);
-const testCache = path.join(extensionRoot, ".vscode-test");
-if (process.platform === "darwin" && !pathIsInside(testCache, configuredVscode)) {
-  throw new Error(`refusing to alter a VS Code product outside the test cache: ${configuredVscode}`);
-}
 const vscode = configuredVscode;
-let restoreGallery = async () => {};
 try {
   await writeFile(
     path.join(userData, "User", "settings.json"),
@@ -70,9 +64,6 @@ try {
     logLevel: "silent",
   });
 
-  if (process.platform === "darwin") {
-    restoreGallery = await temporarilyDisableVSCodeGallery(vscode);
-  }
   await runHost(firstWorkspace, "switching");
   let result = await readResult();
   if (typeof result.failure === "string") {
@@ -96,11 +87,7 @@ try {
   }
   process.stdout.write(`RUNTROL_VSCODE_REAL_PROVIDER ${JSON.stringify(result)}\n`);
 } finally {
-  try {
-    await rm(output, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
-  } finally {
-    await restoreGallery();
-  }
+  await rm(output, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 }
 
 async function runHost(workspace, expectedStage) {
@@ -195,9 +182,4 @@ function requiredEnvironment(name) {
     throw new Error(`${name} is required`);
   }
   return value;
-}
-
-function pathIsInside(parent, child) {
-  const relative = path.relative(path.resolve(parent), path.resolve(child));
-  return relative !== "" && !relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative);
 }

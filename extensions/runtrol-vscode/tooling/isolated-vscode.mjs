@@ -1,13 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
-import {
-  lstat,
-  readFile,
-  readdir,
-  rm,
-  writeFile,
-} from "node:fs/promises";
+import { readdir } from "node:fs/promises";
 import path from "node:path";
 
 import {
@@ -55,78 +49,6 @@ export async function acquireVSCode(cachePath) {
   });
   const [cli] = resolveCliArgsFromVSCodeExecutablePath(executable);
   return { executable, cli };
-}
-
-export async function temporarilyDisableVSCodeGallery(executable) {
-  const product = await locateProduct(executable);
-  const productPath = path.join(product.root, product.relativeProduct);
-  const backupPath = `${productPath}.runtrol-gallery-backup`;
-  await restoreInterruptedProduct(productPath, backupPath);
-  const original = await readFile(productPath);
-  const manifest = JSON.parse(original.toString("utf8"));
-  delete manifest.extensionsGallery;
-  await writeFile(backupPath, original, { flag: "wx" });
-  try {
-    await writeFile(productPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
-  } catch (error) {
-    await restoreProduct(productPath, backupPath, original);
-    throw error;
-  }
-  let restored = false;
-  return async () => {
-    if (restored) return;
-    await restoreProduct(productPath, backupPath, original);
-    restored = true;
-  };
-}
-
-async function restoreInterruptedProduct(productPath, backupPath) {
-  let backup;
-  try {
-    backup = await readFile(backupPath);
-  } catch (error) {
-    if (error.code === "ENOENT") return;
-    throw error;
-  }
-  await restoreProduct(productPath, backupPath, backup);
-}
-
-async function restoreProduct(productPath, backupPath, original) {
-  await writeFile(productPath, original);
-  await rm(backupPath, { force: true });
-}
-
-async function locateProduct(executable) {
-  const resolvedExecutable = path.resolve(executable);
-  let root = path.dirname(resolvedExecutable);
-  for (let depth = 0; depth < 6; depth += 1) {
-    const relativeProducts = [
-      path.join("resources", "app", "product.json"),
-      path.join("Resources", "app", "product.json"),
-    ];
-    const children = await readdir(root, { withFileTypes: true }).catch(() => []);
-    for (const child of children) {
-      if (child.isDirectory()) {
-        relativeProducts.push(
-          path.join(child.name, "resources", "app", "product.json"),
-          path.join(child.name, "Resources", "app", "product.json"),
-        );
-      }
-    }
-    for (const relativeProduct of relativeProducts) {
-      const candidate = path.join(root, relativeProduct);
-      if (await lstat(candidate).then((entry) => entry.isFile()).catch(() => false)) {
-        return {
-          root,
-          relativeProduct,
-        };
-      }
-    }
-    const parent = path.dirname(root);
-    if (parent === root) break;
-    root = parent;
-  }
-  throw new Error(`cannot locate VS Code product.json above ${resolvedExecutable}`);
 }
 
 function installExtension(cli, source, userData, extensions) {

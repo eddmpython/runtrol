@@ -129,6 +129,24 @@ def selftest() -> int:
             continue
         print(f"[vscodeRealProviderJourney:selftest] FAIL. injected defect escaped: {defect}", file=sys.stderr)
         return 2
+    host_env = hostEnvironment(
+        {"HOME": "/operator", "HTTP_PROXY": "http://operator-proxy"},
+        {
+            "HOME": "/provider",
+            "HTTP_PROXY": "http://127.0.0.1:9",
+            "ANTHROPIC_AUTH_TOKEN": "provider-secret",
+            "RUNTROL_HOME": "/runtrol",
+            "RUNTROL_VSCODE_RESULT": "/result.json",
+        },
+    )
+    if host_env != {
+        "HOME": "/operator",
+        "HTTP_PROXY": "http://operator-proxy",
+        "RUNTROL_HOME": "/runtrol",
+        "RUNTROL_VSCODE_RESULT": "/result.json",
+    }:
+        print("[vscodeRealProviderJourney:selftest] FAIL. the VS Code host inherited provider isolation.", file=sys.stderr)
+        return 2
     print(f"[vscodeRealProviderJourney:selftest] OK. all {len(defects)} injected defects make the gate red.")
     return 0
 
@@ -142,6 +160,18 @@ def hostCommand(node: str) -> list[str]:
             raise Failed("xvfb-run is required to test VS Code without a Linux display")
         return [xvfb, "-a", *command]
     return command
+
+
+def hostEnvironment(base: dict[str, str], provider: dict[str, str]) -> dict[str, str]:
+    """Keep VS Code on the operator environment while exposing only the Runtrol test contract."""
+    blocked_prefixes = ("ANTHROPIC_", "CLAUDE_", "AWS_", "AZURE_", "GOOGLE_")
+    result = {name: value for name, value in base.items() if not name.startswith(blocked_prefixes)}
+    result.update(
+        (name, value)
+        for name, value in provider.items()
+        if name == "RUNTROL_HOME" or name.startswith(("RUNTROL_TEST_", "RUNTROL_VSCODE_"))
+    )
+    return result
 
 
 def vscodeExecutable(node: str) -> Path:
@@ -494,6 +524,7 @@ def exercise(claude: str) -> None:
                     "RUNTROL_TEST_VSCODE_EXECUTABLE": str(vscode),
                 }
             )
+            host_env = hostEnvironment(dict(os.environ), env)
             cli_probed = provider_gate.probeClaude(claude, env)
             daemon = provider_gate.startDaemon(binary, env, home)
             daemon_generation = processGeneration(daemon.pid)
@@ -510,7 +541,7 @@ def exercise(claude: str) -> None:
                     host = subprocess.Popen(
                         hostCommand(node),
                         cwd=ROOT,
-                        env=env,
+                        env=host_env,
                         stdin=subprocess.DEVNULL,
                         stdout=host_output,
                         stderr=subprocess.STDOUT,
