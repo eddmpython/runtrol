@@ -13,3 +13,27 @@ pub(crate) fn without_tail_test_module(source: &str) -> &str {
         .unwrap_or(source.len());
     &source[..end]
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tail_test_modules_are_removed_for_both_line_endings() {
+        for source in [
+            "fn product() {}\n#[cfg(test)]\nmod tests { fn fixture() {} }",
+            "fn product() {}\r\n#[cfg(test)]\r\nmod tests { fn fixture() {} }",
+        ] {
+            assert_eq!(
+                without_tail_test_module(source).trim_end(),
+                "fn product() {}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_small_test_only_item_does_not_hide_later_product_code() {
+        let source = "#[cfg(test)]\nfn helper() {}\nfn product() {}";
+        assert_eq!(without_tail_test_module(source), source);
+    }
+}

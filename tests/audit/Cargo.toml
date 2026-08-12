@@ -61,6 +61,10 @@ name = "pairingLifecycle"
 path = "pairingLifecycle.rs"
 
 [[test]]
+name = "productionSource"
+path = "productionSource.rs"
+
+[[test]]
 name = "approvalAuthorization"
 path = "approvalAuthorization.rs"
 

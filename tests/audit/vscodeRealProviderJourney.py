@@ -518,7 +518,16 @@ def exercise(claude: str) -> None:
                         encoding="utf-8",
                         errors="replace",
                     )
-                    host_generation = processGeneration(host.pid)
+                    try:
+                        host_generation = processGeneration(host.pid)
+                    except Failed as generation_error:
+                        host.wait(timeout=5.0)
+                        host_output.seek(0)
+                        output = host_output.read()
+                        raise Failed(
+                            f"the Extension Host harness exited before identity capture: {generation_error}\n"
+                            f"{output[-8000:]}"
+                        ) from generation_error
                     deadline = time.monotonic() + TIMEOUT_S
                     while host.poll() is None and time.monotonic() < deadline:
                         daemon_processes.update(ownedDescendants(daemon.pid, daemon_generation))
