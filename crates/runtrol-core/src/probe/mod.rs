@@ -376,6 +376,8 @@ pub async fn confirm_flags(
         });
     };
     let safe: Vec<String> = probe.safe_with.iter().map(ToString::to_string).collect();
+    let (mut known, needs_parser) =
+        candidates_from_help(candidates, &ask_flags(program, contained_by).await);
 
     let mut refusals = Vec::with_capacity(CONTROLS.len());
     for control in CONTROLS {
@@ -396,14 +398,37 @@ pub async fn confirm_flags(
         });
     }
 
-    let mut known = std::collections::BTreeSet::new();
-    for candidate in candidates {
+    for candidate in needs_parser {
         let answer = ask_about(program, &safe, candidate, contained_by).await?;
         if answer != *first {
-            known.insert((*candidate).to_owned());
+            known.insert(candidate.to_owned());
         }
     }
     Ok(Flags::Observed(known))
+}
+
+/// Use the parser's complete help surface first and return only omissions for direct refusal comparison.
+///
+/// Some CLIs omit a real flag from help, so an omission is never treated as absence. It is handed to the
+/// control-question path below. A visible flag needs no second process, which keeps a cold probe proportional
+/// to the undocumented surface instead of to every flag the driver binds.
+fn candidates_from_help<'a>(
+    candidates: &[&'a str],
+    help: &Flags,
+) -> (std::collections::BTreeSet<String>, Vec<&'a str>) {
+    let Flags::Observed(visible) = help else {
+        return (std::collections::BTreeSet::new(), candidates.to_vec());
+    };
+    let mut known = std::collections::BTreeSet::new();
+    let mut needs_parser = Vec::new();
+    for candidate in candidates {
+        if visible.contains(*candidate) {
+            known.insert((*candidate).to_owned());
+        } else {
+            needs_parser.push(*candidate);
+        }
+    }
+    (known, needs_parser)
 }
 
 /// Ask about one flag and return the answer with the flag's own name taken out of it.
@@ -930,6 +955,26 @@ Options:
             question_argv(&[], "--candidate").len() == 1,
             "nothing is added on its own"
         );
+    }
+
+    #[test]
+    fn help_removes_only_visible_candidates_from_direct_parser_questions() {
+        let candidates = ["--visible", "--hidden", "--other"];
+        let help = Flags::Observed(
+            ["--visible".to_owned(), "--unbound".to_owned()]
+                .into_iter()
+                .collect(),
+        );
+        let (known, needs_parser) = candidates_from_help(&candidates, &help);
+        assert_eq!(known, ["--visible".to_owned()].into_iter().collect());
+        assert_eq!(needs_parser, ["--hidden", "--other"]);
+
+        let unavailable = Flags::Unknown {
+            why: "help unavailable".to_owned(),
+        };
+        let (known, needs_parser) = candidates_from_help(&candidates, &unavailable);
+        assert!(known.is_empty());
+        assert_eq!(needs_parser, candidates);
     }
 
     #[tokio::test]
