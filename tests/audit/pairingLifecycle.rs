@@ -1,6 +1,7 @@
 //! Pairing is short-lived, single-use, attempt-limited, and physically approved for the exact device.
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use runtrol_provider::{AbsPath, WallMs};
@@ -20,6 +21,7 @@ mod production_source;
 use production_source::without_tail_test_module;
 
 const TOKEN: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+static NEXT_SCRATCH: AtomicU64 = AtomicU64::new(0);
 
 struct Scratch {
     root: AbsPath,
@@ -28,11 +30,12 @@ struct Scratch {
 
 impl Scratch {
     fn make() -> Self {
-        let base = std::env::temp_dir().join("runtrol-pairing-lifecycle");
-        if base.exists() {
-            std::fs::remove_dir_all(&base).expect("clear previous pairing gate data");
-        }
-        std::fs::create_dir_all(&base).expect("create pairing gate directory");
+        let sequence = NEXT_SCRATCH.fetch_add(1, Ordering::Relaxed);
+        let base = std::env::temp_dir().join(format!(
+            "runtrol-pairing-lifecycle-{}-{sequence}",
+            std::process::id()
+        ));
+        std::fs::create_dir(&base).expect("create unique pairing gate directory");
         let root = AbsPath::canonicalize(base.to_str().expect("temporary path is UTF-8"))
             .expect("canonicalize pairing gate directory");
         let database = root.join("runtrol.redb").expect("valid database name");
