@@ -52,7 +52,7 @@ http-body-util = { workspace = true }
 hyper = { workspace = true, features = ["client", "http1"] }
 hyper-util = { workspace = true, features = ["tokio"] }
 # Serving is checked end to end against a real endpoint, so its tests need the runtime started for them.
-tokio = { workspace = true, features = ["rt", "macros", "time"] }
+tokio = { workspace = true, features = ["io-util", "process", "rt", "macros", "time"] }
 
 
 [lints]

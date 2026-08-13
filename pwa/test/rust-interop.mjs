@@ -56,6 +56,12 @@ assert.equal(
   text(await sessionChannel.openRecord(base64UrlDecode(sessionTransportAnswer.record))),
   "session transport from Rust",
 );
+send({ record: base64UrlEncode((await sessionChannel.sealFrame(utf8("session nonce one from WebCrypto")))[0]) });
+const secondSessionTransportAnswer = await receive();
+assert.equal(
+  text(await sessionChannel.openRecord(base64UrlDecode(secondSessionTransportAnswer.record))),
+  "session nonce one from Rust",
+);
 send({ ok: true });
 
 async function receive() {

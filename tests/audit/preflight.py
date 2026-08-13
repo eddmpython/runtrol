@@ -299,6 +299,22 @@ GATES: dict[str, tuple[str, list[str]]] = {
         "실물 Claude hidden approval 거부 왕복",
         [*PY, f"{HOOKS}/claudeApprovalSmoke.py", "--require-external"],
     ),
+    "phoneDrivesPcSmokeSelftest": (
+        "헤드리스 폰 실물 CLI 여정 게이트 자체 검증",
+        [*PY, f"{HOOKS}/phoneDrivesPcSmoke.py", "--selftest"],
+    ),
+    "phoneDrivesPcSmoke": (
+        "헤드리스 폰에서 실물 CLI 시작, 입력, 출력, 종료",
+        [*PY, f"{HOOKS}/phoneDrivesPcSmoke.py", "--require-external"],
+    ),
+    "approvalRoundtripSmokeSelftest": (
+        "헤드리스 폰 승인 왕복 게이트 자체 검증",
+        [*PY, f"{HOOKS}/approvalRoundtripSmoke.py", "--selftest"],
+    ),
+    "approvalRoundtripSmoke": (
+        "헤드리스 폰의 실물 CLI 승인 거부와 턴 재개",
+        [*PY, f"{HOOKS}/approvalRoundtripSmoke.py", "--require-external"],
+    ),
     "uninstallLeavesNoTraceSelftest": (
         "제거 독립성 게이트 자체 검증",
         [*PY, f"{HOOKS}/uninstallLeavesNoTrace.py", "--selftest"],
@@ -395,6 +411,10 @@ SUITES: dict[str, tuple[str, ...]] = {
         "vscodeRealProviderJourney",
         "missionLiveJourneySelftest",
         "missionLiveJourney",
+        "phoneDrivesPcSmokeSelftest",
+        "phoneDrivesPcSmoke",
+        "approvalRoundtripSmokeSelftest",
+        "approvalRoundtripSmoke",
         "vscodeUpgradeRollbackSelftest",
         "vscodeUpgradeRollback",
         "vscodeEventCoverageSelftest",
@@ -444,6 +464,8 @@ CARGO_GATES = frozenset(
         "externalAcpSmoke",
         "claudeApprovalSmokeSelftest",
         "claudeApprovalSmoke",
+        "phoneDrivesPcSmoke",
+        "approvalRoundtripSmoke",
         "uninstallLeavesNoTraceSelftest",
         "uninstallLeavesNoTrace",
         "liveMemoryBudget",
@@ -502,9 +524,15 @@ def skipReasonFor(name: str) -> str | None:
         return "독립 ACP CLI 미설치 (npm install --global opencode-ai@1.2.27)"
     if name == "missionLiveJourney" and shutil.which("opencode") is None:
         return "독립 ACP CLI 미설치 (npm install --global opencode-ai@1.2.27)"
-    if name in {"claudeApprovalSmoke", "vscodeRealProviderJourney", "missionLiveJourney"} and shutil.which("claude") is None:
+    if name in {
+        "approvalRoundtripSmoke",
+        "claudeApprovalSmoke",
+        "missionLiveJourney",
+        "phoneDrivesPcSmoke",
+        "vscodeRealProviderJourney",
+    } and shutil.which("claude") is None:
         return "Claude Code 미설치 (npm install --global @anthropic-ai/claude-code@2.1.220)"
-    if name == "missionLiveJourney" and shutil.which("node") is None:
+    if name in {"approvalRoundtripSmoke", "missionLiveJourney", "phoneDrivesPcSmoke"} and shutil.which("node") is None:
         return "node 없음"
     return None
 

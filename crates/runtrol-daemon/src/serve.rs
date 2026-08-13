@@ -2106,15 +2106,22 @@ fn encode_response(response: &Response) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use core::future::Future;
+    use std::collections::BTreeSet;
+    use std::path::PathBuf;
 
     use async_trait::async_trait;
+    use base64ct::{Base64UrlUnpadded, Encoding as _};
     use fastwebsockets::{Frame, OpCode, WebSocket, handshake};
     use http_body_util::Empty;
     use hyper::Request as HttpRequest;
     use hyper::upgrade::Upgraded;
     use hyper_util::rt::TokioIo;
-    use runtrol_provider::{Agent, AgentCommand, Opaque, Produced, ProviderError, WallMs};
-    use runtrol_security::{DeviceId, DeviceLabels, DeviceScope, GrantLedger};
+    use runtrol_provider::{
+        AbsPath, Agent, AgentCommand, Opaque, Produced, ProviderError, ProviderId, WallMs,
+    };
+    use runtrol_security::{
+        DeviceId, DeviceLabels, DeviceScope, GrantLedger, ProjectRootIdentity, WorkspaceRootId,
+    };
     use runtrol_transport::{
         AccessToken, Channel, EncryptedRecord, InitiatorHandshake, MAX_ENCRYPTED_RECORD_WIRE,
         NOISE_LINK_PATH, NOISE_LINK_PROTOCOL, PublicKey,
@@ -2360,6 +2367,100 @@ mod tests {
             )
         }
 
+        async fn start_with_live_phone(
+            name: &str,
+            remote_static_key: PublicKey,
+            workspace: &str,
+            provider: ProviderId,
+        ) -> (Self, SocketAddr, PublicKey) {
+            let root =
+                std::env::temp_dir().join(format!("runtrol-serve-{name}-{}", std::process::id()));
+            if root.exists() {
+                std::fs::remove_dir_all(&root).expect("clear the previous live phone run");
+            }
+            let home = root
+                .to_str()
+                .expect("the temporary path is UTF-8")
+                .to_owned();
+            let mut composed =
+                crate::compose::Composed::for_tests(&home, runtrol_drivers::builtin())
+                    .expect("a fresh home composes");
+            let pc = StaticKeypair::generate().expect("PC key");
+            let pc_public = pc.public_key();
+            let device = DeviceId::now();
+            let root_id = WorkspaceRootId::now();
+            let root_path = AbsPath::canonicalize(workspace).expect("live workspace is canonical");
+            let root_identity =
+                ProjectRootIdentity::read(&root_path).expect("live workspace has stable identity");
+            let token = AccessToken::parse(
+                "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            )
+            .expect("canonical credential");
+            let scopes = vec![
+                DeviceScope::SessionList,
+                DeviceScope::SessionOutputRead,
+                DeviceScope::SessionInputWrite,
+                DeviceScope::SessionStart,
+                DeviceScope::SessionStop,
+                DeviceScope::SessionResume,
+                DeviceScope::SessionDelete,
+                DeviceScope::ApprovalRespondLow,
+                DeviceScope::ApprovalRespondHigh,
+                DeviceScope::ModeDefault,
+                DeviceScope::Workspace(root_id),
+                DeviceScope::Provider(provider),
+            ];
+            composed.pc_identity = Some(Arc::new(pc));
+            composed.device_authority.replace(
+                GrantLedger::from_persisted([(device, scopes)]),
+                vec![crate::compose::PairedDevice {
+                    id: device,
+                    remote_static_key,
+                    credential_fingerprint: token.fingerprint(),
+                    labels: DeviceLabels::new("Headless phone", "Node WebCrypto")
+                        .expect("device labels"),
+                    roots: vec![crate::compose::PairedRoot {
+                        id: root_id,
+                        path: root_path,
+                        identity: root_identity,
+                    }],
+                    push_endpoint: None,
+                    paired_at: WallMs::from_millis(1_767_225_600_000),
+                }],
+            );
+
+            let address = composed.home.paths().endpoint().address().to_owned();
+            let mut listener = Listener::bind(&address)
+                .await
+                .expect("the endpoint is free");
+            let tcp = TcpListener::bind("127.0.0.1:0")
+                .await
+                .expect("phone listener");
+            let ingress =
+                PhoneIngress::loopback(tcp, ["https://phone.runtrol.test"]).expect("phone ingress");
+            let phone_address = ingress.local_addr().expect("phone address");
+            let phone_plane = phone_plane(&composed, ingress).expect("phone plane");
+            let serving = tokio::spawn(async move {
+                serve_surfaces(
+                    composed,
+                    &mut listener,
+                    SessionManager::new(),
+                    Some(phone_plane),
+                    None,
+                )
+                .await
+            });
+            (
+                Self {
+                    address,
+                    home,
+                    serving,
+                },
+                phone_address,
+                pc_public,
+            )
+        }
+
         async fn caller(&self) -> Connection {
             runtrol_ipc::transport::connect(&self.address)
                 .await
@@ -2370,6 +2471,46 @@ mod tests {
             self.serving.abort();
             drop(std::fs::remove_dir_all(&self.home));
         }
+
+        async fn close_live_sessions(&self) {
+            let mut caller = self.caller().await;
+            assert!(matches!(
+                ask(
+                    &mut caller,
+                    &Request::Hello {
+                        wire: runtrol_ipc::WIRE_VERSION,
+                    },
+                )
+                .await,
+                Response::Welcome { .. }
+            ));
+            let Response::Sessions(listing) = ask(&mut caller, &Request::List).await else {
+                panic!("the live cleanup did not receive a session listing");
+            };
+            for line in listing.sessions {
+                assert!(matches!(
+                    ask(
+                        &mut caller,
+                        &Request::Close {
+                            session: line.session,
+                            now: true,
+                        },
+                    )
+                    .await,
+                    Response::Done
+                ));
+            }
+        }
+    }
+
+    #[derive(serde::Deserialize)]
+    struct LivePhoneIdentity {
+        phone_public: Box<str>,
+    }
+
+    #[derive(Debug, serde::Deserialize)]
+    struct LivePhoneEvidence {
+        facts: BTreeSet<Box<str>>,
     }
 
     type BrowserSocket = WebSocket<TokioIo<Upgraded>>;
@@ -2531,6 +2672,141 @@ mod tests {
             Response::Welcome { .. }
         ));
         caller
+    }
+
+    async fn live_phone_journey(mode: &str) {
+        if !matches!(std::env::var("RUNTROL_PHONE_LIVE_MODE"), Ok(enabled) if enabled == mode) {
+            return;
+        }
+        let workspace = std::env::var("RUNTROL_PHONE_LIVE_WORKSPACE")
+            .expect("the live gate supplies its isolated workspace");
+        let provider_text = std::env::var("RUNTROL_PHONE_LIVE_PROVIDER")
+            .expect("the live gate supplies its discovered provider");
+        let provider =
+            ProviderId::parse(&provider_text).expect("the live provider identity is valid");
+        let node = std::env::var_os("RUNTROL_PHONE_LIVE_NODE").unwrap_or_else(|| "node".into());
+        let script =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../pwa/test/live-phone.mjs");
+        let mut child = tokio::process::Command::new(node)
+            .arg(script)
+            .arg(mode)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .expect("start the headless phone process");
+        let stdout = child.stdout.take().expect("phone stdout");
+        let mut lines = tokio::io::AsyncBufReadExt::lines(tokio::io::BufReader::new(stdout));
+        let stderr = child.stderr.take().expect("phone stderr");
+        let stderr_task = tokio::spawn(async move {
+            let mut bytes = Vec::new();
+            let mut reader = tokio::io::BufReader::new(stderr);
+            tokio::io::AsyncReadExt::read_to_end(&mut reader, &mut bytes)
+                .await
+                .expect("read phone diagnostics");
+            String::from_utf8_lossy(&bytes).into_owned()
+        });
+        let identity_line = tokio::time::timeout(Duration::from_secs(10), lines.next_line())
+            .await
+            .expect("phone identity timed out")
+            .expect("read phone identity")
+            .expect("phone exited before its identity");
+        let identity: LivePhoneIdentity =
+            serde_json::from_str(&identity_line).expect("phone identity contract");
+        let decoded = Base64UrlUnpadded::decode_vec(&identity.phone_public)
+            .expect("phone public key is canonical base64url");
+        let remote_bytes: [u8; 32] = decoded
+            .try_into()
+            .expect("phone public key has the X25519 length");
+        let (running, phone_address, pc_public) = Running::start_with_live_phone(
+            &format!("live-{mode}"),
+            PublicKey::from_bytes(remote_bytes),
+            &workspace,
+            provider,
+        )
+        .await;
+        let config = serde_json::json!({
+            "address": phone_address.to_string(),
+            "pc_public": Base64UrlUnpadded::encode_string(&pc_public.to_bytes()),
+            "workspace": workspace,
+            "provider": provider_text,
+        });
+        let mut stdin = child.stdin.take().expect("phone stdin");
+        tokio::io::AsyncWriteExt::write_all(&mut stdin, format!("{config}\n").as_bytes())
+            .await
+            .expect("send live phone config");
+        tokio::io::AsyncWriteExt::shutdown(&mut stdin)
+            .await
+            .expect("close live phone config");
+
+        let evidence_line = tokio::time::timeout(Duration::from_secs(90), lines.next_line()).await;
+        if evidence_line.is_err() {
+            child.kill().await.expect("stop timed-out phone process");
+        }
+        let waited = tokio::time::timeout(Duration::from_secs(10), child.wait()).await;
+        let exit_timed_out = waited.is_err();
+        let status = if let Ok(status) = waited {
+            status.expect("wait for phone process")
+        } else {
+            child
+                .kill()
+                .await
+                .expect("stop phone process after exit timeout");
+            child
+                .wait()
+                .await
+                .expect("reap phone process after exit timeout")
+        };
+        let diagnostics = stderr_task.await.expect("phone diagnostics task");
+        running.close_live_sessions().await;
+        running.stop();
+
+        assert!(
+            !exit_timed_out,
+            "headless phone did not exit: {diagnostics}"
+        );
+        assert!(status.success(), "headless phone failed: {diagnostics}");
+        let evidence_line = evidence_line
+            .expect("phone evidence timed out")
+            .expect("read phone evidence")
+            .expect("phone exited before its evidence");
+        let evidence: LivePhoneEvidence =
+            serde_json::from_str(&evidence_line).expect("phone evidence contract");
+        assert_live_phone_evidence(&evidence, mode);
+    }
+
+    fn assert_live_phone_evidence(evidence: &LivePhoneEvidence, mode: &str) {
+        let common = [
+            "started",
+            "prompted",
+            "output_seen",
+            "provider_ended",
+            "close_confirmed",
+        ];
+        for fact in common {
+            assert!(evidence.facts.contains(fact), "{evidence:?}");
+        }
+        if mode == "approval" {
+            for fact in [
+                "approval_seen",
+                "subject_complete",
+                "reject_once",
+                "answered",
+            ] {
+                assert!(evidence.facts.contains(fact), "{evidence:?}");
+            }
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn phone_drives_pc_through_a_real_cli() {
+        live_phone_journey("drive").await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn phone_approval_resumes_a_real_cli() {
+        live_phone_journey("approval").await;
     }
 
     #[tokio::test]

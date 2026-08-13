@@ -49,7 +49,9 @@ gate = [
 
 [[axis]]
 key = "phoneReachesPc"
-tier = "none"
+# Hosted CI runs the shipped PWA WebCrypto and Core modules in a headless phone process against the production
+# daemon and an installed real CLI. The model endpoint remains deterministic and local, so this stops at mock.
+tier = "mock"
 additives = []
 name = { ko = "폰에서 내 PC 세션 잇기", en = "Reach my PC sessions from my phone", zh = "用手机接续电脑上的会话", ja = "スマホから自分の PC のセッションへ" }
 gate = [
@@ -84,7 +86,9 @@ gate = [{ name = "egressContract", kind = "contract" }]
 
 [[axis]]
 key = "approveFromPhone"
-tier = "none"
+# The same active hosted journey receives a real CLI permission request, sends the exact rejection from the phone,
+# and observes the provider resume. Its model counterpart remains deterministic and local.
+tier = "mock"
 additives = []
 name = { ko = "폰에서 승인", en = "Approve from the phone", zh = "在手机上批准", ja = "スマホで承認" }
 gate = [{ name = "approvalRoundtripSmoke", kind = "smoke" }]

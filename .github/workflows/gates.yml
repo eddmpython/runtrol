@@ -415,6 +415,18 @@ jobs:
         env:
           TMPDIR: ${{ matrix.os == 'macos-latest' && '/tmp' || runner.temp }}
         run: python -X utf8 tests/audit/claudeApprovalSmoke.py --require-external
+      - name: 헤드리스 폰 실물 CLI 여정 게이트 자체 검증
+        run: python -X utf8 tests/audit/phoneDrivesPcSmoke.py --selftest
+      - name: 헤드리스 폰에서 실물 CLI 시작, 입력, 출력, 종료
+        env:
+          TMPDIR: ${{ matrix.os == 'macos-latest' && '/tmp' || runner.temp }}
+        run: python -X utf8 tests/audit/phoneDrivesPcSmoke.py --require-external
+      - name: 헤드리스 폰 승인 왕복 게이트 자체 검증
+        run: python -X utf8 tests/audit/approvalRoundtripSmoke.py --selftest
+      - name: 헤드리스 폰의 실물 CLI 승인 거부와 턴 재개
+        env:
+          TMPDIR: ${{ matrix.os == 'macos-latest' && '/tmp' || runner.temp }}
+        run: python -X utf8 tests/audit/approvalRoundtripSmoke.py --require-external
       - name: 제거 독립성 게이트 자체 검증
         run: python -X utf8 tests/audit/uninstallLeavesNoTrace.py --selftest
       - name: runtrol home 삭제 뒤 provider 세션 재개

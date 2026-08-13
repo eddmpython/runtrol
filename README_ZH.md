@@ -4,7 +4,7 @@
 
 [한국어](README.md) | [English](README_EN.md) | 中文 | [日本語](README_JA.md)
 
-> 状态：**内核和主要 VS Code 扩展已经实现，`Runtrol Studio 0.1.0` 已面向六个原生目标公开发布。** 实时会话索引、真实 Extension Host 和每秒 3,000 帧 Webview 性能门槛、已安装真实 CLI 的完整操作旅程、全新 Marketplace 安装，以及保留活动会话的 VSIX 升级与回滚都已验证。独立桌面 GUI 代码和执行路径已经删除，VS Code 扩展是唯一 PC 界面。公共 Runtime 协议、Rust 和 TypeScript SDK、外部打包消费门槛，以及六目标签名 standalone Runtime 发布流程也已经实现。已确认 provider 渠道的自动更新也具备进程互斥与精确回滚。[Marketplace 扩展](https://marketplace.visualstudio.com/items?itemName=runtrol.runtrol-studio)、[GitHub Pages 站点](https://eddmpython.github.io/runtrol/)和基于中继的手机 PWA 已经实现。手机端剩余的主要工作是 Web Push 与真实设备端到端门禁。
+> 状态：**内核和主要 VS Code 扩展已经实现，`Runtrol Studio 0.1.0` 已面向六个原生目标公开发布。** 实时会话索引、真实 Extension Host 和每秒 3,000 帧 Webview 性能门槛、已安装真实 CLI 的完整操作旅程、全新 Marketplace 安装，以及保留活动会话的 VSIX 升级与回滚都已验证。独立桌面 GUI 代码和执行路径已经删除，VS Code 扩展是唯一 PC 界面。公共 Runtime 协议、Rust 和 TypeScript SDK、外部打包消费门槛，以及六目标签名 standalone Runtime 发布流程也已经实现。已确认 provider 渠道的自动更新也具备进程互斥与精确回滚。[Marketplace 扩展](https://marketplace.visualstudio.com/items?itemName=runtrol.runtrol-studio)、[GitHub Pages 站点](https://eddmpython.github.io/runtrol/)、基于中继的手机 PWA、无正文 Web Push 和 Mission 监督界面都已实现。活动门禁会让已发布的 PWA 模块通过 production daemon 驱动已安装的真实 CLI，验证会话与批准旅程。手机端剩余的主要工作是远程断线恢复能力与 iOS 真机运行验证。
 > 下面多数分数为 0，不是因为没有代码，而是因为还没有门禁去断言那些轴。
 
 The security boundary and default-deny settings are documented in [SECURITY.md](SECURITY.md).
@@ -29,7 +29,7 @@ active subscription 与 Code-hot workspace 始终有界。streaming 与后台工
 - **人始终优先。** 即使存在长 streaming、多个 agent、build 与 test，输入、滚动、editor 和文件导航也必须先响应。
 - **薄边界永不改变。** 不持有 credential、transcript、model API key 或 conversation copy。
 
-当前总分为 **51/140，平均 3.6/10**。九个轴由启用的 CI 门禁支撑。
+当前总分为 **61/140，平均 4.4/10**。十一个轴由启用的 CI 门禁支撑。
 10 分意味着完整旅程已在真实环境中被反复验证。
 **超过 manual 层的分数必须由 CI 中真正运行的门禁支撑。不会自动执行的路径，无论看起来实现得多完整，都不能超过 3 分。**
 
@@ -37,10 +37,10 @@ active subscription 与 Code-hot workspace 始终有界。streaming 与后台工
 |---|---:|---|---|
 | 统一的会话列表 | 5/10 | hosted CI 驱动真实 VS Code Extension Host，验证启动、两个 workspace 切换、精确选择恢复、重连、中断与关闭。对端是确定性的 loopback model，因此停留在 mock 层。 | 无论供应商是 Claude Code、Codex 还是之后出现的任何一个，此刻在我电脑上存活的会话都出现在一个列表里，启动、恢复、删除都在那里完成。 |
 | 即时响应 | 5/10 | 真实 VS Code Extension Host 测量 production bundle。同一棘轮覆盖真实的 30 会话列表、最多 8 个 hot ACP 进程、provider-native cold resume、每秒 3,000 个原始帧、完成 Core watch 确认与 Webview 绘制的会话切换，以及 workspace 改变后的精确选择恢复。传输对端仍是 mock，因此该轴停留在此层级。 | 列表毫无等待地出现，对话在按下的瞬间打开，长输出倾泻而下时滚动与输入也不卡顿。用户不存在感知到加载的时刻。 |
-| 用手机接续电脑上的会话 | 0/10 | 中继 PWA 与 Rust 和 WebCrypto 互操作门禁已经实现。尚无真实手机连接真实 CLI 的活动门禁，因此分数仍为 0。 | 手机与电脑配对一次，之后即使离开座位，也能向那台电脑上正在运行的会话发送新指令并实时查看输出。供应商账户的等级或认证方式不会阻断这一体验。 |
+| 用手机接续电脑上的会话 | 5/10 | hosted CI 在无界面手机进程中运行已发布 PWA 的 WebCrypto、Noise 与 CoreClient 模块，通过 production daemon 启动已安装的真实 Claude Code 会话，发送提示、监听输出并关闭会话。模型对端是确定性的 loopback fixture，因此处于 mock 层。 | 手机与电脑配对一次，之后即使离开座位，也能向那台电脑上正在运行的会话发送新指令并实时查看输出。供应商账户的等级或认证方式不会阻断这一体验。 |
 | 供应商可扩展性 | 5/10 | hosted CI 检查外部驱动公开契约、三个操作系统上的通用 ACP fixture、独立发布 ACP 实现的两轮对话与 native load，以及真实 Claude Code 的隐藏审批拒绝往返。model endpoint 均为本地 mock。定时 CI 会用当前 CLI 重复 parser probe 与同一审批旅程，但不宣称覆盖账户模型行为或完整 event 表面。 | 出现新的 CLI 时只需增加一个适配器，电脑界面、手机界面与操作方式保持不变。用户只会感到列表变长了。 |
 | 对话不经过 | 6/10 | `egressContract` 在真实回环套接字上运行精确的出站白名单和 production Noise IK、IKpsk1 边界。提示词样本不会以明文出现在中继捕获或诊断信息中，transport 没有磁盘或日志 API，驱动与存储也不知道供应商 transcript 路径。尚无连接真实手机与中继的 live 门禁，所以天花板是 6。 | 用户的提示词与模型的回复只在电脑与供应商之间、以及用户自己的设备之间往返。runtrol 不保存其内容，中间的任何服务器都不会以可读的形式收到它。 |
-| 在手机上批准 | 0/10 | PWA 已显示受风险权限约束的选项与精确批准对象。尚无真实供应商批准的完整手机往返门禁，因此分数仍为 0。 | 代理在危险操作前停下时会出现在手机上，在手机上允许或拒绝后，电脑上的会话立即继续。 |
+| 在手机上批准 | 5/10 | 活动门禁通过 PWA watch 路径接收真实 Claude Code 的 hidden Write 批准，验证完整 subject、唯一 `rejectOnce` 与 32-byte digest，再确认同一 provider turn 恢复并结束。模型对端是确定性的 loopback fixture，因此处于 mock 层。 | 代理在危险操作前停下时会出现在手机上，在手机上允许或拒绝后，电脑上的会话立即继续。 |
 | 断了也活着 | 0/10 | 远程手机端到端门禁尚未实现。 | 手机锁屏、网络中断或 runtrol 重启后，PC 会话仍可通过官方 resume surface 恢复。保留窗口内按精确 cursor 接续，窗口外明确显示 gap，绝不静默跳过。 |
 | 常驻成本 | 6/10 | 三个 hosted 操作系统都用同一个棘轮测量真实 debug daemon 的 idle RSS 与十秒 idle CPU。没有第二种独立证据，因此上限仍为 6。 | 整天开着，用户也察觉不到它的存在。电池、风扇、任务管理器里都看不见。 |
 | 到哪都一样 | 0/10 | 未实现。 | 在 Windows、macOS、Linux 上安装方式与操作方式相同。Windows 用户无需知道 WSL 或 tmux 是什么。 |

@@ -26,7 +26,7 @@
 | 게이트 | 무엇을 단언하는가 |
 |---|---|
 | `sessionLifecycleSmoke` | An operator-side local preflight starts and closes sessions from every installed real CLI, keeps their provider-native names in one list, survives a daemon restart, and reports native resume refusal instead of silently starting a replacement. This real-account evidence is operator-only and does not add score. |
-| `phoneDrivesPcSmoke` | headless 브라우저의 실물 PWA 가 실물 데몬을 통해 실물 `claude`/`codex` 세션에 프롬프트를 넣고 출력을 받는다 |
+| `phoneDrivesPcSmoke` | shipped PWA 의 WebCrypto, Noise, record, CoreClient 모듈을 헤드리스 폰 프로세스에서 그대로 실행한다. QR 승인 완료 상태만 테스트 행으로 주입하고 production 데몬의 기기 인증, 정확한 scope, workspace 및 provider 권한, 실물 Claude Code 시작, prompt, watch 출력, provider 종료, session 삭제를 관통한다. model 상대는 요청 본문을 버리는 결정론 loopback fixture 다 |
 | `iosInstallAndPush` | iOS 홈화면 설치 + Web Push 수신. 실기기 필요. **점수에서 뺀다** |
 | `providerContract` | 저장소 밖 구현이 공개 `Provider` 와 `Agent` trait 를 구현하고 native command 를 처리하며 미지 event 를 `Unmapped` 로 보존할 수 있다. 코어의 provider 고유명사 격리는 별도 `providerIsolation` 게이트가 맡는다 |
 | `agentSurfaceDrift` | scheduled hosted CI 가 최신 실물 CLI 를 무인증으로 설치하고, schema provider 의 바인딩 메서드와 stream-json provider 의 바인딩 플래그를 실제 생성 스키마와 인자 파서에 대조한다. built-in probe 전략 하나라도 실행되지 않으면 red 다. 인증과 턴이 필요한 event 및 control frame 호환성은 이 게이트의 주장이 아니다 |
@@ -34,7 +34,7 @@
 | `externalAcpSmoke` | 저장소 밖에서 독립 배포되는 ACP CLI 를 고정 판본으로 설치하고 외부 TOML 만으로 연결한다. 로컬 결정론 model endpoint 를 사용해 실물 데몬과 CLI 표면에서 두 번의 스트림과 공급자 선언 종료, daemon 재시작, 같은 native session load 를 완주한다. model 상대는 mock 이고 공급자 구현은 실물이다 |
 | `claudeApprovalSmoke` | 설치된 실물 Claude Code 를 production stream-json 드라이버와 실물 daemon 으로 실행하고 로컬 결정론 Messages endpoint 에 연결한다. 실제 hidden `can_use_tool` 승인 수신, 정규화된 `rejectOnce` 선택, 원생 `control_response` 소비 뒤 두 번째 model 요청, provider 선언 `endTurn`, 대상 파일 부재를 한 여정에서 검증한다. model 상대는 mock 이고 계정 인증과 hosted model 동작은 주장하지 않는다 |
 | `egressContract` | production 송신 정책으로 정확히 허용한 IP 와 port 만 실물 루프백 소켓에 연결된다. production `Noise_IK_25519_AESGCM_SHA256` 세션과 `Noise_IKpsk1_25519_AESGCM_SHA256` 페어링이 고정 static key, 링크 종류, relay origin, peer id 를 인증하며 변조와 잘못된 key, PSK, prologue 를 거절한다. 65,519 byte 경계 분할, `varint(len) || ciphertext`, REKEY 뒤 왕복까지 돈다. relay capture 와 `Debug` 에 prompt 표본이 평문으로 없고 transport 에 disk 또는 log API 가 없으며, **driver 와 store 에 벤더 세션 경로가 없다**는 정적 검사 포함 |
-| `approvalRoundtripSmoke` | 실제 permission prompt 가 폰 표면에 도달하고, 폰의 응답이 세션을 재개시킨다 |
+| `approvalRoundtripSmoke` | 실물 Claude Code 의 hidden Write permission 요청이 PWA watch 경로에 도달한다. 폰이 완전한 subject, 유일한 `rejectOnce`, 32 byte digest를 확인해 답하고, CLI가 그 거부를 소비한 두 번째 model 요청과 provider 선언 `endTurn`까지 진행하며 대상 파일은 생기지 않는다 |
 | `remoteResilienceFaultInjection` | 실물 폰과 원격 transport 를 연결한 상태에서 네트워크 차단과 데몬 강제 종료를 주입한다. bounded replay 안의 프레임은 exact cursor 로 이어지고, 그 밖의 모든 단절은 명시적 gap 으로 보이며, provider 공식 resume surface 로 세션을 계속할 수 있어야 한다. 아직 미구현이다 |
 | `idleFootprintRatchet` | hosted Windows, macOS, Linux 에서 실제 debug daemon 의 유휴 RSS 계약을 `memoryBudget` 정본으로 검사하고, 10 초 유휴 구간의 process CPU 누적 증가를 한 코어의 100 ms 이하로 제한한다. release live 비용이나 GUI 비용은 주장하지 않는다 |
 | `crossPlatformMatrix` | 같은 종단 스모크가 Windows·macOS·Linux 러너에서 전부 green. **Windows 잡은 WSL 없이 돈다** |

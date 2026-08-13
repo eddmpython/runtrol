@@ -33,6 +33,21 @@ export async function sessionInitiator(identity, remotePublic, relayOrigin, peer
   );
 }
 
+export async function directSessionInitiator(identity, remotePublic, linkKind, peerId, ephemeral) {
+  if (![1, 2, 3].includes(linkKind)) throw new Error("direct Noise link kind is invalid");
+  const peer = asBytes(peerId);
+  if (peer.byteLength !== 32) throw new Error("direct Noise peer identity is invalid");
+  const prologue = concat(utf8("runtrol/1"), Uint8Array.of(linkKind), peer);
+  return NoiseInitiator.create(
+    SESSION_PATTERN,
+    identity,
+    base64UrlDecode(remotePublic, 32),
+    prologue,
+    null,
+    ephemeral,
+  );
+}
+
 export class NoiseInitiator {
   static async create(pattern, identity, remoteStatic, prologue, psk = null, ephemeral = undefined) {
     const localStatic = await exportPublic(identity.publicKey);
@@ -241,7 +256,7 @@ async function aeadDecrypt(keyBytes, nonce, additionalData, ciphertext) {
 function noiseNonce(value) {
   if (value < 0n || value > 0xffff_ffff_ffff_ffffn) throw new Error("Noise nonce was exhausted");
   const nonce = new Uint8Array(12);
-  new DataView(nonce.buffer).setBigUint64(4, value, true);
+  new DataView(nonce.buffer).setBigUint64(4, value);
   return nonce;
 }
 

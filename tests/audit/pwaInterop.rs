@@ -178,6 +178,18 @@ fn webcrypto_and_rust_pair_then_open_a_fresh_noise_session() {
         .remove(0);
     node.send(json!({ "record": encode_record(&session_reply) }));
 
+    let encrypted: CiphertextMessage = node.receive();
+    let session_frame = session_channel
+        .open_record(&decode_record(&encrypted.record))
+        .expect("Rust opens the second session transport record")
+        .expect("the second session transport record completes a frame");
+    assert_eq!(session_frame, b"session nonce one from WebCrypto");
+    let session_reply = session_channel
+        .seal_frame(b"session nonce one from Rust")
+        .expect("Rust seals the second session transport reply")
+        .remove(0);
+    node.send(json!({ "record": encode_record(&session_reply) }));
+
     let finished: Finished = node.receive();
     assert!(finished.ok, "WebCrypto peer verified both Rust replies");
     node.finish();
