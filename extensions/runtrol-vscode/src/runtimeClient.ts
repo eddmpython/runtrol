@@ -4,6 +4,7 @@ import {
   IntegrationCredentials,
   IntegrationIdentity,
   RuntimeConnector,
+  RuntimeRequestError,
   newMutationRequestId,
   type AppScope,
   type ClientOptions,
@@ -72,20 +73,21 @@ export class StudioRuntimeClient implements vscode.Disposable {
     private readonly context: vscode.ExtensionContext,
     private readonly ensureRuntimeReady: () => Promise<void>,
     private readonly approveEnrollment: (pendingId: string) => Promise<boolean>,
+    private readonly confirmForget: (
+      confirmationId: string,
+      sessionId: string,
+    ) => Promise<boolean>,
   ) {}
 
   async initialize(): Promise<void> {
     await this.ensureRuntimeReady();
     const stored = await this.loadOrCreateIdentity();
-    const identity = IntegrationIdentity.fromPkcs8(Buffer.from(stored.privateKeyPkcs8, "base64url"));
-    const grant = stored.grant ?? await this.enroll(stored, identity);
-    this.stored = { ...stored, grant };
-    this.options = {
-      name: "Runtrol Studio",
-      version: extensionVersion(this.context),
-      credentials: new IntegrationCredentials(identity, grant),
-    };
-    this.command = await this.connectCommand();
+    try {
+      await this.useIntegration(stored);
+    } catch (error) {
+      if (!stored.grant || !recoverableAuthenticationFailure(error)) throw error;
+      await this.replaceIntegration();
+    }
   }
 
   async inventory(): Promise<RuntimeInventory> {
@@ -155,6 +157,55 @@ export class StudioRuntimeClient implements vscode.Disposable {
         leaseId: lease.leaseId,
         leaseGeneration: lease.leaseGeneration,
       });
+    });
+  }
+
+  async close(session: RuntimeSessionAction, interruptRunning: boolean): Promise<void> {
+    await this.mutate(async (runtime) => {
+      let current = await runtime.sessions().get(session.sessionId);
+      if (current.lifecycle === "hotRunning") {
+        if (!interruptRunning) {
+          throw new Error("the running turn must be interrupted before this session can close");
+        }
+        const lease = await this.ensureControl(runtime, runtimeAction(current));
+        await runtime.sessions().interrupt({
+          requestId: newMutationRequestId(),
+          sessionId: current.sessionId,
+          leaseId: lease.leaseId,
+          leaseGeneration: lease.leaseGeneration,
+        });
+        current = await waitForIdleSession(runtime, current.sessionId);
+      }
+      if (current.lifecycle === "hotIdle") {
+        const lease = await this.ensureControl(runtime, runtimeAction(current));
+        await runtime.sessions().cool({
+          requestId: newMutationRequestId(),
+          sessionId: current.sessionId,
+          expectedSessionGeneration: current.sessionGeneration,
+          leaseId: lease.leaseId,
+          leaseGeneration: lease.leaseGeneration,
+        });
+        this.controls.delete(current.sessionId);
+        current = await runtime.sessions().get(current.sessionId);
+      }
+      if (current.lifecycle !== "cold") {
+        throw new Error(`the session cannot close from Runtime lifecycle ${current.lifecycle}`);
+      }
+      const forget = {
+        requestId: newMutationRequestId(),
+        sessionId: current.sessionId,
+        expectedSessionGeneration: current.sessionGeneration,
+      };
+      try {
+        await runtime.sessions().forget(forget);
+      } catch (error) {
+        if (!forgetConfirmation(error)) throw error;
+        if (!await this.confirmForget(error.failure.correlationId, current.sessionId)) {
+          throw new Error("the exact Runtime session removal was not confirmed locally");
+        }
+        await runtime.sessions().forget(forget);
+      }
+      this.controls.delete(current.sessionId);
     });
   }
 
@@ -290,7 +341,12 @@ export class StudioRuntimeClient implements vscode.Disposable {
       this.command = null;
       this.controls.clear();
       if (this.options) {
-        this.command = await this.connectCommand();
+        try {
+          this.command = await this.connectCommand();
+        } catch (error) {
+          if (!recoverableAuthenticationFailure(error)) throw error;
+          await this.replaceIntegration();
+        }
       }
     });
   }
@@ -412,7 +468,18 @@ export class StudioRuntimeClient implements vscode.Disposable {
 
   private async loadOrCreateIdentity(): Promise<StoredIntegration> {
     const stored = parseStoredIntegration(await this.context.secrets.get(SECRET_KEY));
-    if (stored) return stored;
+    if (stored) {
+      try {
+        IntegrationIdentity.fromPkcs8(Buffer.from(stored.privateKeyPkcs8, "base64url"));
+        return stored;
+      } catch {
+        return this.createIdentity();
+      }
+    }
+    return this.createIdentity();
+  }
+
+  private async createIdentity(): Promise<StoredIntegration> {
     const identity = IntegrationIdentity.generate();
     const created: StoredIntegration = {
       schema: 1,
@@ -421,6 +488,29 @@ export class StudioRuntimeClient implements vscode.Disposable {
     };
     await this.context.secrets.store(SECRET_KEY, JSON.stringify(created));
     return created;
+  }
+
+  private async useIntegration(stored: StoredIntegration): Promise<void> {
+    const identity = IntegrationIdentity.fromPkcs8(
+      Buffer.from(stored.privateKeyPkcs8, "base64url"),
+    );
+    const grant = stored.grant ?? await this.enroll(stored, identity);
+    this.stored = { ...stored, grant };
+    this.options = {
+      name: "Runtrol Studio",
+      version: extensionVersion(this.context),
+      credentials: new IntegrationCredentials(identity, grant),
+    };
+    this.command = await this.connectCommand();
+  }
+
+  private async replaceIntegration(): Promise<void> {
+    this.command?.close();
+    this.command = null;
+    this.controls.clear();
+    this.options = null;
+    this.stored = null;
+    await this.useIntegration(await this.createIdentity());
   }
 
   private async enroll(
@@ -498,4 +588,40 @@ function validGrant(value: unknown): value is IntegrationGrant {
 
 function sameBytes(left: readonly number[], right: readonly number[]): boolean {
   return left.length === right.length && left.every((byte, index) => byte === right[index]);
+}
+
+function forgetConfirmation(error: unknown): error is RuntimeRequestError {
+  return error instanceof RuntimeRequestError
+    && error.failure.code === "presenceRequired"
+    && error.failure.operatorAction === "reviewRuntimeRequestsInRuntrolStudio";
+}
+
+function recoverableAuthenticationFailure(error: unknown): boolean {
+  return error instanceof RuntimeRequestError
+    && (error.failure.code === "unauthenticated"
+      || error.failure.code === "integrationRevoked");
+}
+
+function runtimeAction(session: SessionDescriptor): RuntimeSessionAction {
+  return {
+    sessionId: session.sessionId,
+    lifecycle: session.lifecycle,
+    generation: session.sessionGeneration,
+    workspace: session.workspace,
+  };
+}
+
+async function waitForIdleSession(
+  runtime: RuntimeClient,
+  sessionId: string,
+): Promise<SessionDescriptor> {
+  const deadline = Date.now() + 10_000;
+  while (true) {
+    const current = await runtime.sessions().get(sessionId);
+    if (current.lifecycle !== "hotRunning") return current;
+    if (Date.now() >= deadline) {
+      throw new Error("the provider did not finish interrupting within 10000 ms");
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
 }

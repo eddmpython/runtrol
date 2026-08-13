@@ -83,8 +83,7 @@ export type Request =
   | { ask: "runtimeForgetConfirm"; with: { confirmation_id: string } }
   | { ask: "runtimeKeyRotationRequests" }
   | { ask: "runtimeKeyRotationConfirm"; with: { confirmation_id: string } }
-  | { ask: "rename"; with: { session: string; label: string | null } }
-  | { ask: "close"; with: { session: string; now: boolean } };
+  | { ask: "rename"; with: { session: string; label: string | null } };
 
 export type Response =
   | { say: "welcome"; with: { wire: number } }

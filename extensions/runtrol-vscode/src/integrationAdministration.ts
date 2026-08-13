@@ -76,6 +76,28 @@ export async function reviewRuntimeRequests(client: CoreClient): Promise<void> {
   await vscode.window.showInformationMessage("Runtrol: The Runtime metadata removal request was confirmed.");
 }
 
+export async function confirmRuntimeForget(
+  client: CoreClient,
+  confirmationId: string,
+  sessionId: string,
+): Promise<boolean> {
+  const response = await ask(client, { ask: "runtimeForgetRequests" });
+  if (response.say !== "runtimeForgetRequests") {
+    throw new Error(`the daemon answered Runtime forget listing with ${response.say}`);
+  }
+  const request = response.with.find(
+    (candidate) => candidate.confirmation_id === confirmationId
+      && candidate.session_id === sessionId,
+  );
+  if (!request || request.expires_at_ms <= Date.now()) return false;
+  const decided = await ask(client, {
+    ask: "runtimeForgetConfirm",
+    with: { confirmation_id: request.confirmation_id },
+  });
+  expectDone(decided, "Runtime session forget confirmation");
+  return true;
+}
+
 export async function reviewIntegrationEnrollments(client: CoreClient): Promise<void> {
   const response = await ask(client, { ask: "integrationEnrollments" });
   if (response.say !== "integrationEnrollments") {

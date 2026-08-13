@@ -5,6 +5,7 @@ import { Controller } from "./controller";
 import { CoreClient } from "./core/client";
 import { CoreLocator } from "./core/locator";
 import {
+  confirmRuntimeForget,
   manageIntegrations,
   reviewIntegrationEnrollment,
   reviewIntegrationEnrollments,
@@ -44,6 +45,7 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
     context,
     () => client.ensureRuntime(),
     (pendingId) => reviewIntegrationEnrollment(client, pendingId),
+    (confirmationId, sessionId) => confirmRuntimeForget(client, confirmationId, sessionId),
   );
   const state = new RuntimeState();
   const selection = new SelectionStore(context.globalStorageUri.fsPath);

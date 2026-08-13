@@ -226,6 +226,7 @@ fn studio_private_protocol_cannot_redeclare_public_session_contracts() {
         "ask: \"answerApproval\"",
         "ask: \"interrupt\"",
         "ask: \"watch\"",
+        "ask: \"close\"",
     ] {
         assert!(
             !protocol.contains(forbidden),

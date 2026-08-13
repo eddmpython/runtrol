@@ -355,19 +355,26 @@ export class Controller implements vscode.Disposable {
 
   async close(value?: SessionItem | SessionLine): Promise<void> {
     const session = value instanceof SessionItem ? value.session : value ?? this.requireSelected();
+    const action = session.lifecycle === "hotRunning"
+      ? "Interrupt and close"
+      : session.lifecycle === "cold"
+        ? "Forget session"
+        : "Close session";
     const choice = await vscode.window.showWarningMessage(
       `Close the ${session.providerId} session in ${path.basename(session.workspace)}?`,
       { modal: true },
-      "Close gracefully",
-      "Stop now",
+      action,
     );
-    if (!choice) {
+    if (choice !== action) {
       return;
     }
-    await this.closeResolvedSession(session, choice === "Stop now");
+    await this.closeResolvedSession(session, session.lifecycle === "hotRunning");
   }
 
-  async closeResolvedSession(value: SessionItem | SessionLine | string, now: boolean): Promise<void> {
+  async closeResolvedSession(
+    value: SessionItem | SessionLine | string,
+    interruptRunning: boolean,
+  ): Promise<void> {
     const id = typeof value === "string" ? value : value instanceof SessionItem
       ? value.session.sessionId
       : value.sessionId;
@@ -375,11 +382,7 @@ export class Controller implements vscode.Disposable {
     if (!session) {
       throw new Error("that session is no longer listed");
     }
-    const { response } = await this.client.once({
-      ask: "close",
-      with: { session: session.sessionId, now },
-    });
-    requireDone(response, "close");
+    await this.runtime.close(runtimeAction(session), interruptRunning);
     await this.refresh();
     if (!this.state.selected) {
       this.pauseWatch();
