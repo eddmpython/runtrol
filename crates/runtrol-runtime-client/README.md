@@ -3,6 +3,9 @@
 This crate connects to one installed per-user Runtime without starting or bundling it. It negotiates the public
 revision, proves a consumer-owned integration identity, and exposes typed provider and session operation groups.
 
+Version 0.1.1 implements finalized protocol revision `2026-08-13` and is tested with Runtime 0.1.1. Crate SemVer and
+wire revision negotiation are independent compatibility checks.
+
 `SessionClient::watch_index` turns one connection into a dedicated stream. Its acknowledgement contains the initial
 authorized snapshot, later notifications carry only changed complete snapshots, and authority loss has a typed final
 reason. The SDK performs no polling.

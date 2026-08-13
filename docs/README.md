@@ -12,6 +12,10 @@
 | [providerArchitecture.md](providerArchitecture.md) | manifest, driver kind, provider-neutral lifecycle, approval wire, session ownership, drift and uninstall verification boundaries |
 | [providerDiscovery.md](providerDiscovery.md) | lazy executable probes, binary-identity cache, required and optional flags, honest model catalogues, and drift boundaries |
 | [coreRuntime.md](coreRuntime.md) | thin daemon boundary, runtime admission, memory and CPU budgets, bounded replay, cursor gaps, process containment, and metadata-only storage |
+| [runtimeProtocol.md](runtimeProtocol.md) | public Runtime transport, identity, methods, scopes, mutations, streams, errors, and compatibility |
+| [runtimeIntegration.md](runtimeIntegration.md) | Rust and TypeScript SDK adoption, enrollment, least privilege, reconnect, failure recovery, and credential lifecycle |
+| [runtimeSecurity.md](runtimeSecurity.md) | public endpoint trust layers, data ownership, authorization, hostile provider input, hosted companions, and incident response |
+| [runtimeOperations.md](runtimeOperations.md) | standalone Runtime artifacts, install, locator repair, administration, update, rollback, and uninstall |
 | [productSurfaces.md](productSurfaces.md) | public surface ownership, the VS Code-only PC decision, 30-session interaction contract, GitHub Pages distribution, and phone PWA boundary |
 | [vscodeSurface.md](vscodeSurface.md) | the public VS Code runtime, module boundaries, 30-session and performance contracts, six-target distribution, and verification entry points |
 | [siteDeployment.md](siteDeployment.md) | live GitHub Pages origin, dependency-free build, failure mutations, release-link truth, workflow permissions, and visual direction |

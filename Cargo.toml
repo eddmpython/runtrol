@@ -116,7 +116,7 @@ runtrol-ipc = { path = "crates/runtrol-ipc" }
 runtrol-transport = { path = "crates/runtrol-transport" }
 runtrol-vault = { path = "crates/runtrol-vault" }
 runtrol-update = { path = "crates/runtrol-update" }
-runtrol-runtime-protocol = { path = "crates/runtrol-runtime-protocol" }
+runtrol-runtime-protocol = { path = "crates/runtrol-runtime-protocol", version = "0.1.1" }
 runtrol-runtime-client = { path = "crates/runtrol-runtime-client" }
 runtrol-core = { path = "crates/runtrol-core" }
 runtrol-drivers = { path = "crates/runtrol-drivers" }

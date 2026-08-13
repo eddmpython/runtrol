@@ -1,0 +1,202 @@
+name: runtime-release
+
+on:
+  workflow_dispatch:
+    inputs:
+      release:
+        description: Create a tagged GitHub release after all standalone Runtime packages pass
+        required: true
+        type: boolean
+        default: false
+
+concurrency:
+  group: runtime-release
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.manifest.outputs.matrix }}
+      targetCount: ${{ steps.manifest.outputs.targetCount }}
+      version: ${{ steps.manifest.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.13"
+      - name: Read the shared native release SSOT
+        id: manifest
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import tomllib
+          from pathlib import Path
+          targets = json.loads(Path("extensions/runtrol-vscode/release-targets.json").read_text(encoding="utf-8"))
+          version = tomllib.loads(Path("Cargo.toml").read_text(encoding="utf-8"))["workspace"]["package"]["version"]
+          include = [{"target": target, **contract} for target, contract in targets.items()]
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"version={version}\n")
+              output.write(f"targetCount={len(include)}\n")
+              output.write(f"matrix={json.dumps({'include': include}, separators=(',', ':'))}\n")
+          PY
+
+  package:
+    needs: prepare
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.13"
+      - uses: Swatinem/rust-cache@63fed3e2fecf6f7b51dc6f043341b79ef82a9ae7 # v2.9.2
+      - name: Refuse a runner that differs from the release SSOT
+        env:
+          EXPECTED_TARGET: ${{ matrix.target }}
+        run: >-
+          python -c "import os,platform;
+          system={'Windows':'win32','Darwin':'darwin','Linux':'linux'}[platform.system()];
+          machine=platform.machine().lower();
+          arch='arm64' if machine in {'arm64','aarch64'} else 'x64' if machine in {'amd64','x86_64'} else machine;
+          actual=f'{system}-{arch}';
+          expected=os.environ['EXPECTED_TARGET'];
+          (_ for _ in ()).throw(RuntimeError(f'runner is {actual}, expected {expected}')) if actual != expected else None"
+      - name: Build the native standalone Runtime
+        run: cargo build --release -p runtrol --bin runtrol --target-dir target/runtime-release
+      - name: Package the standalone Runtime
+        run: >-
+          python -X utf8 .github/scripts/release/runtimePackage.py package
+          --target ${{ matrix.target }}
+          --binary target/runtime-release/release/${{ matrix.executable }}
+          --output release/runtrol-runtime-${{ needs.prepare.outputs.version }}-${{ matrix.target }}.zip
+      - name: Inspect exact standalone Runtime contents
+        run: >-
+          python -X utf8 .github/scripts/release/runtimePackage.py inspect
+          --target ${{ matrix.target }}
+          --binary target/runtime-release/release/${{ matrix.executable }}
+          --archive release/runtrol-runtime-${{ needs.prepare.outputs.version }}-${{ matrix.target }}.zip
+      - name: Attest the native package with keyless Sigstore provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-path: release/runtrol-runtime-${{ needs.prepare.outputs.version }}-${{ matrix.target }}.zip
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: runtrol-runtime-${{ needs.prepare.outputs.version }}-${{ matrix.target }}
+          path: release/runtrol-runtime-${{ needs.prepare.outputs.version }}-${{ matrix.target }}.zip
+          if-no-files-found: error
+
+  sdk:
+    needs: prepare
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.13"
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: clients/typescript/package-lock.json
+      - uses: Swatinem/rust-cache@63fed3e2fecf6f7b51dc6f043341b79ef82a9ae7 # v2.9.2
+      - name: Pack and consume the public Rust SDK outside the repository
+        run: python -X utf8 tests/audit/runtimeRustClientSdk.py
+      - name: Pack and consume the public TypeScript SDK outside the repository
+        run: python -X utf8 tests/audit/runtimeClientSdk.py
+      - name: Collect the exact SDK artifacts
+        run: |
+          mkdir -p release
+          cp "target/package/runtrol-runtime-protocol-${{ needs.prepare.outputs.version }}.crate" release/
+          cp "target/package/runtrol-runtime-client-${{ needs.prepare.outputs.version }}.crate" release/
+          npm pack ./clients/typescript --pack-destination release
+      - name: Attest the packed SDKs with keyless Sigstore provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-path: |
+            release/runtrol-runtime-protocol-${{ needs.prepare.outputs.version }}.crate
+            release/runtrol-runtime-client-${{ needs.prepare.outputs.version }}.crate
+            release/runtrol-runtime-client-${{ needs.prepare.outputs.version }}.tgz
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: runtrol-runtime-sdk-${{ needs.prepare.outputs.version }}
+          path: |
+            release/runtrol-runtime-protocol-${{ needs.prepare.outputs.version }}.crate
+            release/runtrol-runtime-client-${{ needs.prepare.outputs.version }}.crate
+            release/runtrol-runtime-client-${{ needs.prepare.outputs.version }}.tgz
+          if-no-files-found: error
+
+  release:
+    needs: [prepare, package, sdk]
+    if: inputs.release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.13"
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: runtrol-runtime-${{ needs.prepare.outputs.version }}-*
+          path: release
+          merge-multiple: true
+      - name: Refuse an incomplete Runtime platform set
+        env:
+          EXPECTED_COUNT: ${{ needs.prepare.outputs.targetCount }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: >-
+          python -c "import os,pathlib;
+          files=list(pathlib.Path('release').glob(f\"runtrol-runtime-{os.environ['VERSION']}-*.zip\"));
+          expected=int(os.environ['EXPECTED_COUNT']);
+          (_ for _ in ()).throw(RuntimeError(f'found {len(files)} Runtime packages, expected {expected}')) if len(files) != expected else None"
+      - name: Refuse an incomplete SDK artifact set
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: >-
+          python -c "import os,pathlib;
+          version=os.environ['VERSION'];
+          expected={f'runtrol-runtime-protocol-{version}.crate',f'runtrol-runtime-client-{version}.crate',f'runtrol-runtime-client-{version}.tgz'};
+          found={path.name for path in pathlib.Path('release').iterdir() if path.suffix in {'.crate','.tgz'}};
+          (_ for _ in ()).throw(RuntimeError(f'SDK artifacts are {sorted(found)}, expected {sorted(expected)}')) if found != expected else None"
+      - name: Build the exact release manifest
+        run: >-
+          python -X utf8 .github/scripts/release/runtimePackage.py manifest
+          --directory release
+          --output release/runtime-release-manifest.json
+      - name: Attest release metadata and the complete platform set
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-path: |
+            release/runtime-release-manifest.json
+            release/runtrol-runtime-${{ needs.prepare.outputs.version }}-*.zip
+      - name: Create the tagged Runtime release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          gh release create runtime-v${{ needs.prepare.outputs.version }}
+          release/runtime-release-manifest.json
+          release/runtrol-runtime-${{ needs.prepare.outputs.version }}-*.zip
+          release/runtrol-runtime-protocol-${{ needs.prepare.outputs.version }}.crate
+          release/runtrol-runtime-client-${{ needs.prepare.outputs.version }}.crate
+          release/runtrol-runtime-client-${{ needs.prepare.outputs.version }}.tgz
+          --title "Runtrol Runtime ${{ needs.prepare.outputs.version }}"
+          --notes-file docs/runtimeOperations.md

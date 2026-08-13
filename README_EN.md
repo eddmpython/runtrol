@@ -4,7 +4,7 @@
 
 [한국어](README.md) | English | [中文](README_ZH.md) | [日本語](README_JA.md)
 
-> Status: **the Core and primary VS Code extension are implemented, and `Runtrol Studio 0.1.0` is public for six native targets.** The live session index, real Extension Host and 3,000-frame-per-second Webview performance ratchets, full journey with an installed real CLI, clean Marketplace installation, and session-preserving VSIX upgrade and rollback are verified. The standalone desktop GUI code and execution path have been removed, and the VS Code extension is the only PC surface. Automatic updates for confirmed provider channels now include process exclusion and exact rollback. The [Marketplace extension](https://marketplace.visualstudio.com/items?itemName=runtrol.runtrol-studio) and [GitHub Pages site](https://eddmpython.github.io/runtrol/) are live. The remaining major surface is the phone PWA. Most scores below are 0 because no gate asserts those axes yet, not because there is
+> Status: **the Core and primary VS Code extension are implemented, and `Runtrol Studio 0.1.0` is public for six native targets.** The live session index, real Extension Host and 3,000-frame-per-second Webview performance ratchets, full journey with an installed real CLI, clean Marketplace installation, and session-preserving VSIX upgrade and rollback are verified. The standalone desktop GUI code and execution path have been removed, and the VS Code extension is the only PC surface. The public Runtime protocol, Rust and TypeScript SDKs, external packed-consumer gates, and signed six-target standalone Runtime release pipeline are also implemented. Automatic updates for confirmed provider channels now include process exclusion and exact rollback. The [Marketplace extension](https://marketplace.visualstudio.com/items?itemName=runtrol.runtrol-studio) and [GitHub Pages site](https://eddmpython.github.io/runtrol/) are live. The remaining major surface is the phone PWA. Most scores below are 0 because no gate asserts those axes yet, not because there is
 > no code.
 
 The security boundary and default-deny settings are documented in [SECURITY.md](SECURITY.md).
@@ -157,6 +157,7 @@ If those axes are not nailed down by gates, using Rust means nothing.
 | | | |
 |---|---|---|
 | `crates/` | The product core (Rust). Daemon, provider adapters, and transport. There is no standalone GUI crate | Implemented |
+| [`clients/typescript/`](clients/typescript/) | Public Runtime TypeScript SDK for external products | Packed consumer verified |
 | [`extensions/runtrol-vscode/`](extensions/runtrol-vscode/) | The only PC surface, `Runtrol Studio` | 30-session release load verified, 0.1.0 public |
 | `pwa/` | Mobile PWA | Not created |
 | [`site/`](site/) | [Dependency-free GitHub Pages landing](https://eddmpython.github.io/runtrol/) | Live |

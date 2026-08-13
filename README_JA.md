@@ -4,7 +4,7 @@
 
 [한국어](README.md) | [English](README_EN.md) | [中文](README_ZH.md) | 日本語
 
-> ステータス: **コアと主力 VS Code 拡張を実装し、`Runtrol Studio 0.1.0` を六つの native target 向けに公開した。** live session index、実物 Extension Host と秒間 3,000 frame Webview の性能 ratchet、インストール済み実物 CLI の完全な操作 journey、Marketplace からの clean install、active session を維持する VSIX upgrade と rollback を検証済みである。独立したデスクトップ GUI のコードと実行経路は削除され、VS Code 拡張が唯一の PC surface である。確認済み provider channel の自動更新には process exclusion と正確な rollback も実装した。[Marketplace 拡張](https://marketplace.visualstudio.com/items?itemName=runtrol.runtrol-studio)と [GitHub Pages サイト](https://eddmpython.github.io/runtrol/)は公開済みである。残る主要 surface はスマートフォン PWA である。以下のスコアの多くが 0 なのは、コードがないからではなく、その軸を断言するゲートがまだない
+> ステータス: **コアと主力 VS Code 拡張を実装し、`Runtrol Studio 0.1.0` を六つの native target 向けに公開した。** live session index、実物 Extension Host と秒間 3,000 frame Webview の性能 ratchet、インストール済み実物 CLI の完全な操作 journey、Marketplace からの clean install、active session を維持する VSIX upgrade と rollback を検証済みである。独立したデスクトップ GUI のコードと実行経路は削除され、VS Code 拡張が唯一の PC surface である。公開 Runtime protocol、Rust と TypeScript SDK、外部 packed consumer gate、署名付き六 target standalone Runtime release pipeline も実装した。確認済み provider channel の自動更新には process exclusion と正確な rollback も実装した。[Marketplace 拡張](https://marketplace.visualstudio.com/items?itemName=runtrol.runtrol-studio)と [GitHub Pages サイト](https://eddmpython.github.io/runtrol/)は公開済みである。残る主要 surface はスマートフォン PWA である。以下のスコアの多くが 0 なのは、コードがないからではなく、その軸を断言するゲートがまだない
 > からである。
 
 The security boundary and default-deny settings are documented in [SECURITY.md](SECURITY.md).
@@ -155,6 +155,7 @@ Rust は目的ではなく、上の表の三つの軸のための手段である
 | | | |
 |---|---|---|
 | `crates/` | 製品コア（Rust）。デーモン、プロバイダーアダプター、トランスポート。独立 GUI crate は存在しない | 実装済み |
+| [`clients/typescript/`](clients/typescript/) | 外部製品向け公開 Runtime TypeScript SDK | packed consumer 検証済み |
 | [`extensions/runtrol-vscode/`](extensions/runtrol-vscode/) | 唯一の PC surface `Runtrol Studio` | 30 session のリリース負荷を検証、0.1.0 公開済み |
 | `pwa/` | モバイル PWA | 未作成 |
 | [`site/`](site/) | [依存関係のない GitHub Pages ランディング](https://eddmpython.github.io/runtrol/) | 公開済み |

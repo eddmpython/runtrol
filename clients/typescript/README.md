@@ -8,6 +8,9 @@ It does not bundle or start Runtime, inspect provider storage, hold provider cre
 The application owns its integration private key and should persist the PKCS#8 bytes in operating-system secure
 storage.
 
+Version 0.1.1 implements finalized protocol revision `2026-08-13` and is tested with Runtime 0.1.1. Package SemVer and
+wire revision negotiation are independent compatibility checks.
+
 ```ts
 import { IntegrationIdentity, RuntimeConnector } from "@runtrol/runtime-client";
 

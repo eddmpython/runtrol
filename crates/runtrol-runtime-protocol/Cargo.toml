@@ -1,6 +1,7 @@
 # Public, provider-neutral Runtime wire vocabulary and generated schema.
 [package]
 name = "runtrol-runtime-protocol"
+description = "Provider-neutral public protocol types and schema for Runtrol Runtime."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -8,6 +9,7 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 publish = true
+readme = "README.md"
 
 [dependencies]
 schemars = { workspace = true }

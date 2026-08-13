@@ -49,6 +49,8 @@ MAY_MUTATE_DISK = {
     "locator records inside the runtrol home",
     "crates/runtrol-runtime-protocol/src/bin/export_schema.rs": "writes only the generated checked "
     "public Runtime schema from its Rust DTO source of truth",
+    "crates/runtrol-security/src/root_identity.rs": "opens an approved directory read-only for its "
+    "kernel-issued Windows file identity and never writes provider or workspace data",
 }
 MAY_MUTATE_PREFIXES = {
     "crates/runtrol-store/src/": "the database crate owns runtrol's session pointer store",

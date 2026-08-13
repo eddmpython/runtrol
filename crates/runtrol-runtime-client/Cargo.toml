@@ -1,6 +1,7 @@
 # Public Rust client for one shared per-user Runtrol Runtime.
 [package]
 name = "runtrol-runtime-client"
+description = "Typed Rust client for one shared local Runtrol Runtime."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

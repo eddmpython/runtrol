@@ -155,6 +155,24 @@ jobs:
       - name: 공개 TypeScript Runtime SDK 생성, 계약, 외부 패키지 소비
         if: needs.detect.outputs.hasWorkspace == 'true'
         run: python -X utf8 tests/audit/runtimeClientSdk.py
+      - name: 공개 Rust Runtime SDK 게이트 자체 검증
+        if: needs.detect.outputs.hasWorkspace == 'true'
+        run: python -X utf8 tests/audit/runtimeRustClientSdk.py --selftest
+      - name: 공개 Rust Runtime SDK 패키징과 외부 소비
+        if: needs.detect.outputs.hasWorkspace == 'true'
+        run: python -X utf8 tests/audit/runtimeRustClientSdk.py
+      - name: standalone Runtime 배포 게이트 자체 검증
+        if: needs.detect.outputs.hasWorkspace == 'true'
+        run: python -X utf8 tests/audit/runtimeDistribution.py --selftest
+      - name: standalone Runtime 6개 대상, 내용 허용 목록, provenance 계약
+        if: needs.detect.outputs.hasWorkspace == 'true'
+        run: python -X utf8 tests/audit/runtimeDistribution.py
+      - name: 공개 Runtime 문서 게이트 자체 검증
+        if: needs.detect.outputs.hasWorkspace == 'true'
+        run: python -X utf8 tests/audit/runtimeDocumentation.py --selftest
+      - name: 공개 Runtime 프로토콜, 연동, 보안, 운영 문서 대조
+        if: needs.detect.outputs.hasWorkspace == 'true'
+        run: python -X utf8 tests/audit/runtimeDocumentation.py
       - name: VS Code 확장 게이트 자체 검증
         if: needs.detect.outputs.hasWorkspace == 'true'
         run: python -X utf8 tests/audit/vscodeExtension.py --selftest

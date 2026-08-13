@@ -115,6 +115,30 @@ GATES: dict[str, tuple[str, list[str]]] = {
         "공개 TypeScript Runtime SDK 생성, 계약, 외부 패키지 소비",
         [*PY, f"{HOOKS}/runtimeClientSdk.py"],
     ),
+    "runtimeRustClientSdkSelftest": (
+        "공개 Rust Runtime SDK 게이트 자체 검증",
+        [*PY, f"{HOOKS}/runtimeRustClientSdk.py", "--selftest"],
+    ),
+    "runtimeRustClientSdk": (
+        "공개 Rust Runtime SDK 패키징과 외부 소비",
+        [*PY, f"{HOOKS}/runtimeRustClientSdk.py"],
+    ),
+    "runtimeDistributionSelftest": (
+        "standalone Runtime 배포 게이트 자체 검증",
+        [*PY, f"{HOOKS}/runtimeDistribution.py", "--selftest"],
+    ),
+    "runtimeDistribution": (
+        "standalone Runtime 6개 대상, 내용 허용 목록, provenance 계약",
+        [*PY, f"{HOOKS}/runtimeDistribution.py"],
+    ),
+    "runtimeDocumentationSelftest": (
+        "공개 Runtime 문서 게이트 자체 검증",
+        [*PY, f"{HOOKS}/runtimeDocumentation.py", "--selftest"],
+    ),
+    "runtimeDocumentation": (
+        "공개 Runtime 프로토콜, 연동, 보안, 운영 문서 대조",
+        [*PY, f"{HOOKS}/runtimeDocumentation.py"],
+    ),
     "vscodePackageSelftest": (
         "VS Code 플랫폼 패키지 게이트 자체 검증",
         [*PY, f"{HOOKS}/vscodePackage.py", "--selftest"],
@@ -327,6 +351,12 @@ SUITES: dict[str, tuple[str, ...]] = {
         "vscodeExtension",
         "runtimeClientSdkSelftest",
         "runtimeClientSdk",
+        "runtimeRustClientSdkSelftest",
+        "runtimeRustClientSdk",
+        "runtimeDistributionSelftest",
+        "runtimeDistribution",
+        "runtimeDocumentationSelftest",
+        "runtimeDocumentation",
         "vscodeHostPerformanceSelftest",
         "vscodeHostPerformance",
         "vscodeRealProviderJourneySelftest",
@@ -386,6 +416,7 @@ CARGO_GATES = frozenset(
         "audit",
         "cargoShear",
         "cargoDeny",
+        "runtimeRustClientSdk",
     }
 )
 

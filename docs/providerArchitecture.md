@@ -37,6 +37,11 @@ The generic ACP v1 driver accepts an external manifest and supervises a separate
 
 runtrol assigns its own session identifier for supervision and retains only provider identity, native session identity, workspace identity, labels, pins, and bounded event delivery state. It does not copy transcript content into its store. Session listings join this metadata with current supervised process state and never scan provider storage.
 
+The public Runtime catalogue follows the same boundary. A provider exposes native sessions only through an official
+registered command or protocol with honest `complete`, `partial`, `unsupported`, or `unavailable` coverage. Missing
+catalogue support is a typed capability result. It is never replaced with a search through provider databases, JSONL
+files, logs, caches, or guessed session directories.
+
 Closing or removing a runtrol session removes the supervisor's pointer. It does not delete the provider-owned session. Removing `RUNTROL_HOME` therefore removes runtrol metadata, not the provider session. The deterministic ACP fixture proves direct native resume while runtrol is absent and proves that an optional reinstall can load the same native session again.
 
 ## Event and approval rules

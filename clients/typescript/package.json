@@ -29,6 +29,7 @@
     "dist/src",
     "schema",
     "README.md",
+    "CHANGELOG.md",
     "LICENSE"
   ],
   "scripts": {

@@ -28,6 +28,9 @@ def boundaryViolations(package: dict[str, object], sources: dict[str, str]) -> l
     requiredScripts = {"generate:check", "check", "test", "test:packed", "pack:check"}
     if not isinstance(scripts, dict) or not requiredScripts.issubset(scripts):
         found.append("the package does not expose every generation, test, and packed-consumer gate")
+    files = package.get("files")
+    if not isinstance(files, list) or "README.md" not in files or "CHANGELOG.md" not in files or "schema" not in files:
+        found.append("the published client does not include docs, changelog, and schema")
 
     allSource = "\n".join(sources.values())
     for forbidden in (
@@ -52,6 +55,7 @@ def selftest() -> int:
     """Prove every static defect class makes the gate red."""
     package = {
         "exports": {".": {}, "./testing": {}, "./schema": {}},
+        "files": ["README.md", "CHANGELOG.md", "schema"],
         "scripts": {
             "generate:check": "one",
             "check": "two",
@@ -68,6 +72,7 @@ def selftest() -> int:
         ({**package, "dependencies": {"ajv": "1"}}, sources),
         ({**package, "exports": {".": {}}}, sources),
         ({**package, "scripts": {}}, sources),
+        ({**package, "files": []}, sources),
         (package, {"src/index.ts": "extensions/runtrol-vscode"}),
         (package, {"src/index.ts": "runtimeLocatorAtForTesting"}),
     ]
