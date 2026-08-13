@@ -4,12 +4,14 @@ use schemars::{JsonSchema, schema_for};
 
 use crate::{
     AcquireControlParams, AdoptNativeSessionParams, ControlLease, ControlLeaseParams,
-    EnrollmentDecision, EnrollmentReceipt, InitializeParams, InitializeResult, IntegrationGrant,
-    JsonRpcNotification, JsonRpcRequest, JsonRpcResponse, LaggedNotification, ListModelsParams,
-    ListNativeSessionsParams, ManagedSessionList, NativeSessionCatalogue, ProviderList,
-    RequestEnrollmentParams, ResumeSessionParams, RuntimeEventNotification, RuntimeLocatorRecord,
-    RuntimeMethod, RuntimeModelCatalog, ServerChallenge, SessionOpenResult, StartSessionParams,
-    SubmitInputParams, WatchEnrollmentParams, WatchEventsParams, WatchEventsResult,
+    EnrollmentDecision, EnrollmentReceipt, GetProviderCapabilitiesParams, GetSessionParams,
+    InitializeParams, InitializeResult, IntegrationGrant, JsonRpcNotification, JsonRpcRequest,
+    JsonRpcResponse, LaggedNotification, ListModelsParams, ListNativeSessionsParams,
+    ManagedSessionList, NativeSessionCatalogue, ProviderList, RequestEnrollmentParams,
+    ResumeSessionParams, RuntimeEventNotification, RuntimeLocatorRecord, RuntimeMethod,
+    RuntimeModelCatalog, RuntimeProviderCapabilities, ServerChallenge, SessionDescriptor,
+    SessionOpenResult, StartSessionParams, SubmitInputParams, WatchEnrollmentParams,
+    WatchEventsParams, WatchEventsResult,
 };
 
 /// Checked schema filename inside this package.
@@ -36,11 +38,15 @@ struct PublicProtocolSchema {
     integration_grant: IntegrationGrant,
     runtime_locator: RuntimeLocatorRecord,
     provider_list: ProviderList,
+    get_provider_capabilities: GetProviderCapabilitiesParams,
+    provider_capabilities: RuntimeProviderCapabilities,
     list_models: ListModelsParams,
     model_catalogue: RuntimeModelCatalog,
     list_native_sessions: ListNativeSessionsParams,
     native_session_catalogue: NativeSessionCatalogue,
     managed_session_list: ManagedSessionList,
+    get_session: GetSessionParams,
+    session_descriptor: SessionDescriptor,
     start_session: StartSessionParams,
     adopt_native_session: AdoptNativeSessionParams,
     resume_session: ResumeSessionParams,

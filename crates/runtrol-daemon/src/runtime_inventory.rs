@@ -214,6 +214,16 @@ impl RuntimeSessionCatalogue {
         Ok(session.session)
     }
 
+    /// Read one authorized public descriptor without revealing sessions outside the grant.
+    pub(crate) fn authorized_descriptor(
+        &self,
+        authority: &AuthorizedIntegration,
+        requested: &runtrol_runtime_protocol::RuntimeSessionId,
+    ) -> Result<SessionDescriptor, RuntimeInventoryFailure> {
+        self.authorized_managed_session(authority, requested)
+            .map(|session| session.descriptor)
+    }
+
     /// Resolve the provider pointer and exact current workspace needed to heat one managed session.
     pub(crate) fn authorized_managed_session(
         &self,

@@ -11,6 +11,8 @@ import type {
   EnrollmentDecision,
   EnrollmentManifest,
   EnrollmentReceipt,
+  GetProviderCapabilitiesParams,
+  GetSessionParams,
   InitializeParams,
   InitializeResult,
   IntegrationAuthentication,
@@ -31,7 +33,10 @@ import type {
   RuntimeEventNotification,
   RuntimeMethod,
   RuntimeModelCatalog,
+  RuntimeProviderCapabilities,
+  RuntimeSessionId,
   ServerChallenge,
+  SessionDescriptor,
   SessionOpenResult,
   StartSessionParams,
   SubmitInputParams,
@@ -209,6 +214,16 @@ export class ProviderClient {
     return callRuntime(this.runtime, "providers/list", {}, "ProviderList");
   }
 
+  public getCapabilities(providerId: ProviderId): Promise<RuntimeProviderCapabilities> {
+    const params: GetProviderCapabilitiesParams = { providerId };
+    return callRuntime(
+      this.runtime,
+      "providers/getCapabilities",
+      params,
+      "RuntimeProviderCapabilities",
+    );
+  }
+
   public listModels(providerId: ProviderId): Promise<RuntimeModelCatalog> {
     const params: ListModelsParams = { providerId };
     return callRuntime(this.runtime, "providers/listModels", params, "RuntimeModelCatalog");
@@ -229,6 +244,11 @@ export class SessionClient {
 
   public list(): Promise<ManagedSessionList> {
     return callRuntime(this.runtime, "sessions/list", {}, "ManagedSessionList");
+  }
+
+  public get(sessionId: RuntimeSessionId): Promise<SessionDescriptor> {
+    const params: GetSessionParams = { sessionId };
+    return callRuntime(this.runtime, "sessions/get", params, "SessionDescriptor");
   }
 
   public start(params: StartSessionParams): Promise<SessionOpenResult> {

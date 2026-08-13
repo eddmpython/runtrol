@@ -135,6 +135,21 @@
         }
       ]
     },
+    "CapabilityFreshness": {
+      "description": "Freshness of a capability map relative to the installed binary identity.",
+      "oneOf": [
+        {
+          "const": "current",
+          "description": "The binary identity and driver observations were revalidated for this request.",
+          "type": "string"
+        },
+        {
+          "const": "stale",
+          "description": "A safe prior result is returned while a refresh is unavailable.",
+          "type": "string"
+        }
+      ]
+    },
     "CatalogueCoverage": {
       "description": "Honest native catalogue coverage for the current provider and root context.",
       "oneOf": [
@@ -514,6 +529,34 @@
       "required": [
         "requested",
         "liveAt"
+      ],
+      "type": "object"
+    },
+    "GetProviderCapabilitiesParams": {
+      "additionalProperties": false,
+      "description": "Select one provider for explicit capability discovery.",
+      "properties": {
+        "providerId": {
+          "$ref": "#/$defs/ProviderId",
+          "description": "Opaque provider identity returned by `providers/list`."
+        }
+      },
+      "required": [
+        "providerId"
+      ],
+      "type": "object"
+    },
+    "GetSessionParams": {
+      "additionalProperties": false,
+      "description": "Select one exact Runtime-managed session.",
+      "properties": {
+        "sessionId": {
+          "$ref": "#/$defs/RuntimeSessionId",
+          "description": "Stable opaque identity returned by the managed session catalogue."
+        }
+      },
+      "required": [
+        "sessionId"
       ],
       "type": "object"
     },
@@ -1048,6 +1091,78 @@
     "ProtocolRevision": {
       "description": "A finalized public Runtime contract date.",
       "type": "string"
+    },
+    "ProviderCapabilityAvailability": {
+      "description": "Whether one structural provider operation is usable in the observed installation.",
+      "oneOf": [
+        {
+          "const": "available",
+          "description": "The exact prepared driver reports an available official surface.",
+          "type": "string"
+        },
+        {
+          "const": "unsupported",
+          "description": "No registered official surface exists.",
+          "type": "string"
+        },
+        {
+          "const": "unknown",
+          "description": "Provider negotiation is required before Runtime can answer.",
+          "type": "string"
+        }
+      ]
+    },
+    "ProviderCapabilityObservation": {
+      "additionalProperties": false,
+      "description": "One sanitized structural capability observation.",
+      "properties": {
+        "availability": {
+          "$ref": "#/$defs/ProviderCapabilityAvailability",
+          "description": "Current availability."
+        },
+        "provenance": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProviderCapabilityProvenance"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Source of an available answer."
+        },
+        "why": {
+          "description": "Stable explanation for an unsupported or unknown answer.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "availability"
+      ],
+      "type": "object"
+    },
+    "ProviderCapabilityProvenance": {
+      "description": "Provenance of an available structural capability.",
+      "oneOf": [
+        {
+          "const": "officialProtocol",
+          "description": "A provider-neutral protocol negotiation or stable protocol contract.",
+          "type": "string"
+        },
+        {
+          "const": "officialCli",
+          "description": "A provider-owned command, flag parser, or structured stream.",
+          "type": "string"
+        },
+        {
+          "const": "driverContract",
+          "description": "Runtime's registered driver lifecycle contract.",
+          "type": "string"
+        }
+      ]
     },
     "ProviderDescriptor": {
       "additionalProperties": false,
@@ -1662,6 +1777,11 @@
           "type": "string"
         },
         {
+          "const": "providers/getCapabilities",
+          "description": "Discover structural lifecycle and event capabilities for one provider.",
+          "type": "string"
+        },
+        {
           "const": "providers/listModels",
           "description": "Discover the selected provider's current opaque model catalogue.",
           "type": "string"
@@ -1674,6 +1794,11 @@
         {
           "const": "sessions/list",
           "description": "Read the Runtime-managed session catalogue.",
+          "type": "string"
+        },
+        {
+          "const": "sessions/get",
+          "description": "Read one exact Runtime-managed session descriptor.",
           "type": "string"
         },
         {
@@ -1899,6 +2024,60 @@
         "description",
         "isDefault",
         "reasoningEfforts"
+      ],
+      "type": "object"
+    },
+    "RuntimeProviderCapabilities": {
+      "additionalProperties": false,
+      "description": "Structural lifecycle and event capabilities for one exact provider installation.",
+      "properties": {
+        "approvals": {
+          "$ref": "#/$defs/ProviderCapabilityObservation",
+          "description": "Structured provider-native approvals can be answered."
+        },
+        "cooling": {
+          "$ref": "#/$defs/ProviderCapabilityObservation",
+          "description": "A hot process can be released without deleting provider-native state."
+        },
+        "freshSession": {
+          "$ref": "#/$defs/ProviderCapabilityObservation",
+          "description": "A fresh session can be opened."
+        },
+        "freshness": {
+          "$ref": "#/$defs/CapabilityFreshness",
+          "description": "Whether these observations match the current binary identity."
+        },
+        "interrupt": {
+          "$ref": "#/$defs/ProviderCapabilityObservation",
+          "description": "A running turn can receive an interrupt request."
+        },
+        "nativeSessionCatalogue": {
+          "$ref": "#/$defs/ProviderCapabilityObservation",
+          "description": "An official provider-native session catalogue may be requested."
+        },
+        "providerId": {
+          "$ref": "#/$defs/ProviderId",
+          "description": "Opaque provider identity selected by the caller."
+        },
+        "resume": {
+          "$ref": "#/$defs/ProviderCapabilityObservation",
+          "description": "A provider-native session can be resumed."
+        },
+        "structuredEvents": {
+          "$ref": "#/$defs/ProviderCapabilityObservation",
+          "description": "Provider output is mapped to structured Runtime events."
+        }
+      },
+      "required": [
+        "providerId",
+        "freshness",
+        "freshSession",
+        "resume",
+        "structuredEvents",
+        "interrupt",
+        "approvals",
+        "cooling",
+        "nativeSessionCatalogue"
       ],
       "type": "object"
     },
@@ -2227,6 +2406,12 @@
     "enrollment_receipt": {
       "$ref": "#/$defs/EnrollmentReceipt"
     },
+    "get_provider_capabilities": {
+      "$ref": "#/$defs/GetProviderCapabilitiesParams"
+    },
+    "get_session": {
+      "$ref": "#/$defs/GetSessionParams"
+    },
     "initialize_params": {
       "$ref": "#/$defs/InitializeParams"
     },
@@ -2260,6 +2445,9 @@
     "notification": {
       "$ref": "#/$defs/JsonRpcNotification"
     },
+    "provider_capabilities": {
+      "$ref": "#/$defs/RuntimeProviderCapabilities"
+    },
     "provider_list": {
       "$ref": "#/$defs/ProviderList"
     },
@@ -2280,6 +2468,9 @@
     },
     "runtime_locator": {
       "$ref": "#/$defs/RuntimeLocatorRecord"
+    },
+    "session_descriptor": {
+      "$ref": "#/$defs/SessionDescriptor"
     },
     "session_open_result": {
       "$ref": "#/$defs/SessionOpenResult"
@@ -2315,11 +2506,15 @@
     "integration_grant",
     "runtime_locator",
     "provider_list",
+    "get_provider_capabilities",
+    "provider_capabilities",
     "list_models",
     "model_catalogue",
     "list_native_sessions",
     "native_session_catalogue",
     "managed_session_list",
+    "get_session",
+    "session_descriptor",
     "start_session",
     "adopt_native_session",
     "resume_session",

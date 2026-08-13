@@ -28,6 +28,7 @@
 
 use async_trait::async_trait;
 
+use crate::capability::ProviderCapabilities;
 use crate::catalog::ModelCatalog;
 use crate::command::{AgentCommand, CloseMode, OpenIntent, Produced};
 use crate::error::ProviderError;
@@ -43,6 +44,14 @@ use crate::native_catalogue::{NativeSessionCatalogue, NativeSessionQuery};
 pub trait Provider: Send + Sync + 'static {
     /// Which provider this is.
     fn id(&self) -> ProviderId;
+
+    /// Report structural operations supported by this exact prepared driver.
+    ///
+    /// The default is deliberately unknown so a third-party driver built for an older SPI never gains a capability
+    /// merely because Runtime learned a new public method.
+    fn capabilities(&self) -> ProviderCapabilities {
+        ProviderCapabilities::unknown()
+    }
 
     /// Discover the model choices this provider can truthfully offer now.
     ///
@@ -237,6 +246,12 @@ mod tests {
         let providers: Vec<Box<dyn Provider>> = vec![Box::new(Nothing)];
         let provider = providers.first().expect("one provider");
         assert_eq!(provider.id().as_str(), "example");
+        let capabilities = provider.capabilities();
+        assert_eq!(
+            capabilities.fresh_session.state,
+            crate::capability::ProviderCapabilityState::Unknown,
+            "an older driver must not gain a newly published capability"
+        );
 
         let session = SessionId::now();
         let mut agent = provider

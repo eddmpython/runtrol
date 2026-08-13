@@ -39,6 +39,12 @@ Claude Code does not expose a complete account catalogue. runtrol returns `Model
 
 Neither result claims that a credential-free hosted runner proves which models a particular account may use. Hosted CI proves runtime enumeration and honest partial fallback without credentials. Its isolated operator home contains a sentinel option in the provider-owned cache, and the product command must return that exact option. The operator's local preflight observes account-local state.
 
+## Public capability observations
+
+`providers/getCapabilities` prepares the exact discovered program and asks the selected driver for provider-neutral lifecycle and event capabilities. The public result reports each operation as `available`, `unsupported`, or `unknown`, includes provenance for available operations, and marks whether the binary-bound observation is current or stale. The current implementation returns only current observations because it revalidates the full program identity and driver-owned flag question before producing the map.
+
+The Provider SPI default is entirely unknown. An older or third-party driver therefore gains no public feature merely because Runtime added capability discovery. Built-in drivers declare support from their official protocol, official CLI surface, or process lifecycle contract. A capability negotiated only while opening a provider connection remains unknown until that context exists. Runtime never infers a capability from a provider identifier or version string.
+
 ## Session paths
 
 runtrol does not discover or calculate provider transcript paths. It carries the provider's native session identifier and uses the provider's official protocol or resume surface. This keeps session storage provider-owned and avoids turning a private directory layout into a runtime dependency.

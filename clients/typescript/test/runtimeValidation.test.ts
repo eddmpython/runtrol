@@ -159,6 +159,40 @@ test("session open results reject conversation-shaped extension fields", async (
   runtime.close();
 });
 
+test("provider capabilities reject unregistered provider semantics", async () => {
+  const instanceId = `rtm_${"5".repeat(32)}`;
+  const observed = { availability: "available", provenance: "officialProtocol" };
+  const transport = new ScriptedRuntimeTransport([
+    challenge(instanceId),
+    initialized(instanceId),
+    {
+      jsonrpc: "2.0",
+      id: 2,
+      result: {
+        providerId: "provider",
+        freshness: "current",
+        freshSession: observed,
+        resume: observed,
+        structuredEvents: observed,
+        interrupt: observed,
+        approvals: observed,
+        cooling: observed,
+        nativeSessionCatalogue: observed,
+        providerMode: "invented",
+      },
+    },
+  ]);
+  const runtime = await new RuntimeConnector(scriptedTransportFactory(transport)).connect(
+    validatedLocator(instanceId, "fixture", "0.1.1"),
+    { name: "fixture", version: "1.0.0" },
+  );
+  await assert.rejects(
+    runtime.providers().getCapabilities("provider"),
+    RuntimeProtocolError,
+  );
+  runtime.close();
+});
+
 test("integration identities round trip only through explicit private bytes", () => {
   const identity = IntegrationIdentity.generate();
   const restored = IntegrationIdentity.fromPkcs8(identity.exportPkcs8());

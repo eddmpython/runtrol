@@ -9,13 +9,15 @@ use runtrol_ipc::transport::Connection;
 use runtrol_provider::{CloseMode, Disposition, OpenIntent, WorkspaceAccess};
 use runtrol_runtime_protocol::{
     AcquireControlParams, AdoptNativeSessionParams, AppScope, ControlLeaseParams, ErrorResponse,
-    FINALIZED_REVISIONS, InitializeParams, InitializeResult, JsonRpcId, JsonRpcNotification,
-    JsonRpcRequest, JsonRpcResponse, LaggedNotification, ListModelsParams,
-    ListNativeSessionsParams, MAX_MODEL_SELECTION_BYTES, MAX_NATIVE_ADOPTION_TOKEN_BYTES,
-    MAX_NATIVE_PUBLIC_CURSOR_BYTES, MAX_PAGE_ITEMS, MAX_REVISION_OFFERS, ProtocolRevision,
-    RequestEnrollmentParams, ResumeSessionParams, RuntimeCapabilities, RuntimeError,
-    RuntimeErrorKind, RuntimeInstance, RuntimeLimits, RuntimeMethod, RuntimeModelCatalog,
-    RuntimeModelChoice, RuntimeReasoningChoice, RuntimeSessionId, SessionWorkspaceAccess,
+    FINALIZED_REVISIONS, GetProviderCapabilitiesParams, GetSessionParams, InitializeParams,
+    InitializeResult, JsonRpcId, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse,
+    LaggedNotification, ListModelsParams, ListNativeSessionsParams, MAX_MODEL_SELECTION_BYTES,
+    MAX_NATIVE_ADOPTION_TOKEN_BYTES, MAX_NATIVE_PUBLIC_CURSOR_BYTES, MAX_PAGE_ITEMS,
+    MAX_REVISION_OFFERS, ProtocolRevision, ProviderCapabilityAvailability,
+    ProviderCapabilityObservation, ProviderCapabilityProvenance, RequestEnrollmentParams,
+    ResumeSessionParams, RuntimeCapabilities, RuntimeError, RuntimeErrorKind, RuntimeInstance,
+    RuntimeLimits, RuntimeMethod, RuntimeModelCatalog, RuntimeModelChoice,
+    RuntimeProviderCapabilities, RuntimeReasoningChoice, RuntimeSessionId, SessionWorkspaceAccess,
     StartSessionParams, SubmitInputParams, SuccessResponse, WatchEnrollmentParams,
     WatchEventsParams, WatchEventsResult, negotiate,
 };
@@ -338,6 +340,9 @@ async fn dispatch_public(
             }
             RuntimeMethod::IntegrationsGetGrant => grant(state, composed, id, params),
             RuntimeMethod::ProvidersList => providers(state, composed, id, params),
+            RuntimeMethod::ProvidersGetCapabilities => {
+                get_provider_capabilities(state, composed, discovering, id, params).await
+            }
             RuntimeMethod::ProvidersListModels => {
                 list_models(state, composed, discovering, id, params).await
             }
@@ -354,6 +359,7 @@ async fn dispatch_public(
                 .await
             }
             RuntimeMethod::SessionsList => sessions_list(state, composed, sessions, id, params),
+            RuntimeMethod::SessionsGet => sessions_get(state, composed, sessions, id, params),
             RuntimeMethod::SessionsStart
             | RuntimeMethod::SessionsAdoptNative
             | RuntimeMethod::SessionsResume => {
@@ -401,10 +407,12 @@ async fn dispatch_public(
 
 fn required_scope(method: RuntimeMethod) -> Option<AppScope> {
     match method {
-        RuntimeMethod::ProvidersList => Some(AppScope::ProviderRead),
+        RuntimeMethod::ProvidersList | RuntimeMethod::ProvidersGetCapabilities => {
+            Some(AppScope::ProviderRead)
+        }
         RuntimeMethod::ProvidersListModels => Some(AppScope::ModelRead),
         RuntimeMethod::ProvidersListNativeSessions => Some(AppScope::SessionNativeDiscover),
-        RuntimeMethod::SessionsList => Some(AppScope::SessionList),
+        RuntimeMethod::SessionsList | RuntimeMethod::SessionsGet => Some(AppScope::SessionList),
         RuntimeMethod::SessionsStart => Some(AppScope::SessionStart),
         RuntimeMethod::SessionsAdoptNative | RuntimeMethod::SessionsResume => {
             Some(AppScope::SessionResume)
@@ -635,6 +643,111 @@ fn providers(
     match authorized(state, &composed.store, Some(AppScope::ProviderRead)) {
         Ok(_) => Answer::success(id, &crate::runtime_inventory::providers(composed)),
         Err(failure) => Answer::failure(id, failure),
+    }
+}
+
+async fn get_provider_capabilities(
+    state: &mut PublicState,
+    composed: &Composed,
+    discovering: &Mutex<()>,
+    id: JsonRpcId,
+    params: serde_json::Value,
+) -> Answer {
+    let Ok(params) = serde_json::from_value::<GetProviderCapabilitiesParams>(params) else {
+        return Answer::plain(
+            id,
+            RuntimeErrorKind::InvalidRequest,
+            "provider capability parameters are invalid",
+        );
+    };
+    if let Err(failure) = authorized(state, &composed.store, Some(AppScope::ProviderRead)) {
+        return Answer::failure(id, failure);
+    }
+    let Ok(provider_id) = runtrol_provider::ProviderId::parse(params.provider_id.as_str()) else {
+        return Answer::plain(
+            id,
+            RuntimeErrorKind::InvalidRequest,
+            "the selected provider identity is invalid",
+        );
+    };
+    let discovered = tokio::time::timeout(
+        Duration::from_millis(crate::serve::MODEL_PREPARATION_BUDGET_MS),
+        async {
+            let _preparing = discovering.lock().await;
+            crate::provider_prepare::driver(composed, provider_id).await
+        },
+    )
+    .await;
+    let driver = match discovered {
+        Ok(Ok(driver)) => driver,
+        Ok(Err(_)) => {
+            return Answer::plain(
+                id,
+                RuntimeErrorKind::ProviderUnavailable,
+                "the selected provider could not supply structural capabilities",
+            );
+        }
+        Err(_) => {
+            return Answer::plain(
+                id,
+                RuntimeErrorKind::RuntimeUnavailable,
+                "provider capability discovery exceeded its bounded deadline",
+            );
+        }
+    };
+    if let Err(failure) = authorized(state, &composed.store, Some(AppScope::ProviderRead)) {
+        return Answer::failure(id, failure);
+    }
+    Answer::success(
+        id,
+        &provider_capabilities(params.provider_id, driver.capabilities()),
+    )
+}
+
+fn provider_capabilities(
+    provider_id: runtrol_runtime_protocol::ProviderId,
+    capabilities: runtrol_provider::ProviderCapabilities,
+) -> RuntimeProviderCapabilities {
+    RuntimeProviderCapabilities {
+        provider_id,
+        freshness: runtrol_runtime_protocol::CapabilityFreshness::Current,
+        fresh_session: provider_capability(capabilities.fresh_session),
+        resume: provider_capability(capabilities.resume),
+        structured_events: provider_capability(capabilities.structured_events),
+        interrupt: provider_capability(capabilities.interrupt),
+        approvals: provider_capability(capabilities.approvals),
+        cooling: provider_capability(capabilities.cooling),
+        native_session_catalogue: provider_capability(capabilities.native_session_catalogue),
+    }
+}
+
+fn provider_capability(
+    capability: runtrol_provider::ProviderCapability,
+) -> ProviderCapabilityObservation {
+    ProviderCapabilityObservation {
+        availability: match capability.state {
+            runtrol_provider::ProviderCapabilityState::Available => {
+                ProviderCapabilityAvailability::Available
+            }
+            runtrol_provider::ProviderCapabilityState::Unsupported => {
+                ProviderCapabilityAvailability::Unsupported
+            }
+            runtrol_provider::ProviderCapabilityState::Unknown => {
+                ProviderCapabilityAvailability::Unknown
+            }
+        },
+        provenance: capability.source.map(|source| match source {
+            runtrol_provider::ProviderCapabilitySource::OfficialProtocol => {
+                ProviderCapabilityProvenance::OfficialProtocol
+            }
+            runtrol_provider::ProviderCapabilitySource::OfficialCli => {
+                ProviderCapabilityProvenance::OfficialCli
+            }
+            runtrol_provider::ProviderCapabilitySource::DriverContract => {
+                ProviderCapabilityProvenance::DriverContract
+            }
+        }),
+        why: capability.why.map(String::from),
     }
 }
 
@@ -924,6 +1037,29 @@ fn sessions_list(
                 RuntimeErrorKind::SessionNotFound,
                 "the Runtime session does not exist in the integration grant",
             ),
+        },
+        Err(failure) => Answer::failure(id, failure),
+    }
+}
+
+fn sessions_get(
+    state: &mut PublicState,
+    composed: &Composed,
+    sessions: &RuntimeSessionCatalogue,
+    id: JsonRpcId,
+    params: serde_json::Value,
+) -> Answer {
+    let Ok(params) = serde_json::from_value::<GetSessionParams>(params) else {
+        return Answer::plain(
+            id,
+            RuntimeErrorKind::InvalidRequest,
+            "session descriptor parameters are invalid",
+        );
+    };
+    match authorized(state, &composed.store, Some(AppScope::SessionList)) {
+        Ok(authority) => match sessions.authorized_descriptor(authority, &params.session_id) {
+            Ok(descriptor) => Answer::success(id, &descriptor),
+            Err(failure) => inventory_failure(id, failure),
         },
         Err(failure) => Answer::failure(id, failure),
     }
@@ -1641,9 +1777,11 @@ fn parse_session_operation(
         | RuntimeMethod::IntegrationsWatchEnrollment
         | RuntimeMethod::IntegrationsGetGrant
         | RuntimeMethod::ProvidersList
+        | RuntimeMethod::ProvidersGetCapabilities
         | RuntimeMethod::ProvidersListModels
         | RuntimeMethod::ProvidersListNativeSessions
         | RuntimeMethod::SessionsList
+        | RuntimeMethod::SessionsGet
         | RuntimeMethod::SessionsStart
         | RuntimeMethod::SessionsAdoptNative
         | RuntimeMethod::SessionsResume
@@ -2349,6 +2487,7 @@ listen = "stdio"
                 vec![
                     AppScope::ProviderRead,
                     AppScope::ModelRead,
+                    AppScope::SessionList,
                     AppScope::SessionNativeDiscover,
                     AppScope::SessionStart,
                     AppScope::SessionResume,
@@ -2382,6 +2521,7 @@ listen = "stdio"
                     scopes: vec![
                         AppScope::ProviderRead.as_str().into(),
                         AppScope::ModelRead.as_str().into(),
+                        AppScope::SessionList.as_str().into(),
                         AppScope::SessionNativeDiscover.as_str().into(),
                         AppScope::SessionStart.as_str().into(),
                         AppScope::SessionResume.as_str().into(),
@@ -2440,6 +2580,19 @@ listen = "stdio"
             .list()
             .await
             .expect("approved provider inventory");
+        let capabilities = approved
+            .providers()
+            .get_capabilities(runtrol_runtime_protocol::ProviderId::new("native-fixture"))
+            .await
+            .expect("approved provider capability discovery");
+        assert_eq!(
+            capabilities.fresh_session.availability,
+            runtrol_runtime_protocol::ProviderCapabilityAvailability::Unknown
+        );
+        assert_eq!(
+            capabilities.freshness,
+            runtrol_runtime_protocol::CapabilityFreshness::Current
+        );
         let first = approved
             .providers()
             .list_native_sessions(runtrol_runtime_protocol::ListNativeSessionsParams {
@@ -2465,6 +2618,16 @@ listen = "stdio"
             .as_str()
             .parse::<runtrol_provider::SessionId>()
             .expect("managed Runtime session identity");
+        let descriptor = approved
+            .sessions()
+            .get(managed_session.clone())
+            .await
+            .expect("read one exact managed session");
+        assert_eq!(descriptor.session_id, managed_session);
+        assert_eq!(
+            descriptor.lifecycle,
+            runtrol_runtime_protocol::LifecycleState::Cold
+        );
         let now = runtrol_provider::WallMs::now();
         composed
             .store

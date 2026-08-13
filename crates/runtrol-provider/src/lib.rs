@@ -25,6 +25,7 @@
 //! it tells you.
 
 pub mod agent;
+pub mod capability;
 pub mod catalog;
 pub mod command;
 pub mod error;
@@ -36,6 +37,9 @@ pub mod path;
 pub mod time;
 
 pub use agent::{Agent, Provider};
+pub use capability::{
+    ProviderCapabilities, ProviderCapability, ProviderCapabilitySource, ProviderCapabilityState,
+};
 pub use catalog::{
     MAX_MODEL_CHOICES, MAX_REASONING_CHOICES, ModelCatalog, ModelChoice, ReasoningChoice,
 };

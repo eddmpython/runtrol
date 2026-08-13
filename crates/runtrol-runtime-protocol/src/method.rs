@@ -30,6 +30,9 @@ pub enum RuntimeMethod {
     /// Read the structural provider inventory.
     #[serde(rename = "providers/list")]
     ProvidersList,
+    /// Discover structural lifecycle and event capabilities for one provider.
+    #[serde(rename = "providers/getCapabilities")]
+    ProvidersGetCapabilities,
     /// Discover the selected provider's current opaque model catalogue.
     #[serde(rename = "providers/listModels")]
     ProvidersListModels,
@@ -39,6 +42,9 @@ pub enum RuntimeMethod {
     /// Read the Runtime-managed session catalogue.
     #[serde(rename = "sessions/list")]
     SessionsList,
+    /// Read one exact Runtime-managed session descriptor.
+    #[serde(rename = "sessions/get")]
+    SessionsGet,
     /// Start one fresh provider-native session under an approved root.
     #[serde(rename = "sessions/start")]
     SessionsStart,
@@ -89,9 +95,11 @@ impl RuntimeMethod {
             Self::IntegrationsWatchEnrollment => "integrations/watchEnrollment",
             Self::IntegrationsGetGrant => "integrations/getGrant",
             Self::ProvidersList => "providers/list",
+            Self::ProvidersGetCapabilities => "providers/getCapabilities",
             Self::ProvidersListModels => "providers/listModels",
             Self::ProvidersListNativeSessions => "providers/listNativeSessions",
             Self::SessionsList => "sessions/list",
+            Self::SessionsGet => "sessions/get",
             Self::SessionsStart => "sessions/start",
             Self::SessionsAdoptNative => "sessions/adoptNative",
             Self::SessionsResume => "sessions/resume",
@@ -126,9 +134,11 @@ impl FromStr for RuntimeMethod {
             "integrations/watchEnrollment" => Ok(Self::IntegrationsWatchEnrollment),
             "integrations/getGrant" => Ok(Self::IntegrationsGetGrant),
             "providers/list" => Ok(Self::ProvidersList),
+            "providers/getCapabilities" => Ok(Self::ProvidersGetCapabilities),
             "providers/listModels" => Ok(Self::ProvidersListModels),
             "providers/listNativeSessions" => Ok(Self::ProvidersListNativeSessions),
             "sessions/list" => Ok(Self::SessionsList),
+            "sessions/get" => Ok(Self::SessionsGet),
             "sessions/start" => Ok(Self::SessionsStart),
             "sessions/adoptNative" => Ok(Self::SessionsAdoptNative),
             "sessions/resume" => Ok(Self::SessionsResume),
@@ -165,9 +175,11 @@ mod tests {
             RuntimeMethod::IntegrationsWatchEnrollment,
             RuntimeMethod::IntegrationsGetGrant,
             RuntimeMethod::ProvidersList,
+            RuntimeMethod::ProvidersGetCapabilities,
             RuntimeMethod::ProvidersListModels,
             RuntimeMethod::ProvidersListNativeSessions,
             RuntimeMethod::SessionsList,
+            RuntimeMethod::SessionsGet,
             RuntimeMethod::SessionsStart,
             RuntimeMethod::SessionsAdoptNative,
             RuntimeMethod::SessionsResume,

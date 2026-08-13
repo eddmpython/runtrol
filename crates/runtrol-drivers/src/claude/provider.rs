@@ -10,7 +10,8 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use runtrol_childproc::{Containment, Program};
 use runtrol_provider::{
-    Agent, ModelAliases, ModelCatalog, OpenIntent, Provider, ProviderError, ProviderId,
+    Agent, ModelAliases, ModelCatalog, OpenIntent, Provider, ProviderCapabilities,
+    ProviderCapability, ProviderCapabilitySource, ProviderError, ProviderId,
 };
 
 use crate::claude::agent::ClaudeAgent;
@@ -72,6 +73,31 @@ impl ClaudeProvider {
 impl Provider for ClaudeProvider {
     fn id(&self) -> ProviderId {
         self.id
+    }
+
+    fn capabilities(&self) -> ProviderCapabilities {
+        let cli = || ProviderCapability::available(ProviderCapabilitySource::OfficialCli);
+        let resume = if self.available_flags.contains("--resume") {
+            cli()
+        } else {
+            ProviderCapability::unsupported(
+                self.unavailable_flags
+                    .get("--resume")
+                    .copied()
+                    .unwrap_or("the installed CLI did not confirm its resume flag"),
+            )
+        };
+        ProviderCapabilities {
+            fresh_session: cli(),
+            resume,
+            structured_events: cli(),
+            interrupt: ProviderCapability::available(ProviderCapabilitySource::DriverContract),
+            approvals: cli(),
+            cooling: ProviderCapability::available(ProviderCapabilitySource::DriverContract),
+            native_session_catalogue: ProviderCapability::unsupported(
+                "this driver has no registered official native session catalogue",
+            ),
+        }
     }
 
     async fn models(&self) -> Result<ModelCatalog, ProviderError> {

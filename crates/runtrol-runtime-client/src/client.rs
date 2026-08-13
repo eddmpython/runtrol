@@ -4,13 +4,14 @@ use base64ct::{Base64UrlUnpadded, Encoding as _};
 use runtrol_runtime_protocol::{
     AcquireControlParams, AdoptNativeSessionParams, AppScope, CHALLENGE_LIFETIME_MS,
     ClientCapabilities, ClientInfo, ControlLease, ControlLeaseParams, EnrollmentDecision,
-    EnrollmentManifest, EnrollmentReceipt, ErrorResponse, FINALIZED_REVISIONS, InitializeParams,
-    InitializeResult, IntegrationAuthentication, IntegrationGrant, JsonRpcId, JsonRpcNotification,
-    JsonRpcRequest, JsonRpcResponse, LaggedNotification, ListModelsParams,
-    ListNativeSessionsParams, ManagedSessionList, NativeSessionCatalogue, PendingEnrollmentId,
-    ProviderId, ProviderList, RequestEnrollmentParams, ResumeSessionParams,
-    RuntimeEventNotification, RuntimeMethod, RuntimeModelCatalog, RuntimeSessionId,
-    ServerChallenge, SessionOpenResult, StartSessionParams, SubmitInputParams, SuccessResponse,
+    EnrollmentManifest, EnrollmentReceipt, ErrorResponse, FINALIZED_REVISIONS,
+    GetProviderCapabilitiesParams, GetSessionParams, InitializeParams, InitializeResult,
+    IntegrationAuthentication, IntegrationGrant, JsonRpcId, JsonRpcNotification, JsonRpcRequest,
+    JsonRpcResponse, LaggedNotification, ListModelsParams, ListNativeSessionsParams,
+    ManagedSessionList, NativeSessionCatalogue, PendingEnrollmentId, ProviderId, ProviderList,
+    RequestEnrollmentParams, ResumeSessionParams, RuntimeEventNotification, RuntimeMethod,
+    RuntimeModelCatalog, RuntimeProviderCapabilities, RuntimeSessionId, ServerChallenge,
+    SessionDescriptor, SessionOpenResult, StartSessionParams, SubmitInputParams, SuccessResponse,
     WatchEnrollmentParams, WatchEventsParams, WatchEventsResult, enrollment_signing_payload,
     initialization_signing_payload,
 };
@@ -550,6 +551,23 @@ impl ProviderClient<'_> {
             .await
     }
 
+    /// Discover one provider's structural lifecycle and event capabilities.
+    ///
+    /// # Errors
+    ///
+    /// Public client and Runtime failures, including unavailable providers and bounded discovery timeout.
+    pub async fn get_capabilities(
+        &mut self,
+        provider_id: ProviderId,
+    ) -> Result<RuntimeProviderCapabilities, ClientError> {
+        self.runtime
+            .call(
+                RuntimeMethod::ProvidersGetCapabilities,
+                &GetProviderCapabilitiesParams { provider_id },
+            )
+            .await
+    }
+
     /// Explicitly discover one provider's current opaque model catalogue.
     ///
     /// # Errors
@@ -596,6 +614,20 @@ impl SessionClient<'_> {
     pub async fn list(&mut self) -> Result<ManagedSessionList, ClientError> {
         self.runtime
             .call(RuntimeMethod::SessionsList, &EmptyParams {})
+            .await
+    }
+
+    /// Read one exact Runtime-managed session descriptor.
+    ///
+    /// # Errors
+    ///
+    /// Public client and Runtime failures, including hidden or missing sessions and changed root authority.
+    pub async fn get(
+        &mut self,
+        session_id: RuntimeSessionId,
+    ) -> Result<SessionDescriptor, ClientError> {
+        self.runtime
+            .call(RuntimeMethod::SessionsGet, &GetSessionParams { session_id })
             .await
     }
 
@@ -799,9 +831,11 @@ impl EventSubscription<'_> {
             | RuntimeMethod::IntegrationsWatchEnrollment
             | RuntimeMethod::IntegrationsGetGrant
             | RuntimeMethod::ProvidersList
+            | RuntimeMethod::ProvidersGetCapabilities
             | RuntimeMethod::ProvidersListModels
             | RuntimeMethod::ProvidersListNativeSessions
             | RuntimeMethod::SessionsList
+            | RuntimeMethod::SessionsGet
             | RuntimeMethod::SessionsStart
             | RuntimeMethod::SessionsAdoptNative
             | RuntimeMethod::SessionsResume

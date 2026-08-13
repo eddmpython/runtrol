@@ -40,6 +40,7 @@ try {
       type ListNativeSessionsParams,
       type ProviderId,
       type RuntimeClient,
+      type RuntimeSessionId,
       type StartSessionParams,
     } from "@runtrol/runtime-client";
     import { ScriptedRuntimeTransport } from "@runtrol/runtime-client/testing";
@@ -50,6 +51,9 @@ try {
     declare const runtime: RuntimeClient;
     const nativePage: ListNativeSessionsParams = { providerId: provider, root: "C:/opaque-root" };
     void runtime.providers().listNativeSessions(nativePage);
+    void runtime.providers().getCapabilities(provider);
+    const session: RuntimeSessionId = "opaque-session";
+    void runtime.sessions().get(session);
     const start: StartSessionParams = {
       requestId: newMutationRequestId(),
       providerId: provider,

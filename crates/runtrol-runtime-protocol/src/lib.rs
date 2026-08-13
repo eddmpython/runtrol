@@ -3,6 +3,7 @@
 //! This crate owns the negotiated wire vocabulary. It deliberately knows nothing about Core, provider drivers,
 //! storage, daemon composition, or first-party product surfaces.
 
+mod capability;
 mod error;
 mod integration;
 mod inventory;
@@ -16,6 +17,10 @@ mod schema;
 mod session;
 mod session_open;
 
+pub use capability::{
+    CapabilityFreshness, GetProviderCapabilitiesParams, ProviderCapabilityAvailability,
+    ProviderCapabilityObservation, ProviderCapabilityProvenance, RuntimeProviderCapabilities,
+};
 pub use error::{RuntimeError, RuntimeErrorKind};
 pub use integration::{
     AppScope, EnrollmentDecision, EnrollmentManifest, EnrollmentReceipt, IntegrationAuthentication,
@@ -24,8 +29,9 @@ pub use integration::{
     initialization_signing_payload,
 };
 pub use inventory::{
-    InstallationObservation, InstallationState, LifecycleState, ManagedSessionList,
-    ProviderDescriptor, ProviderId, ProviderList, RuntimeSessionId, SessionDescriptor,
+    GetSessionParams, InstallationObservation, InstallationState, LifecycleState,
+    ManagedSessionList, ProviderDescriptor, ProviderId, ProviderList, RuntimeSessionId,
+    SessionDescriptor,
 };
 pub use locator::{RUNTIME_LOCATOR_SCHEMA, RuntimeEndpointKind, RuntimeLocatorRecord};
 pub use method::RuntimeMethod;

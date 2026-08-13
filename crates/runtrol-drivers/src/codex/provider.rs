@@ -21,7 +21,8 @@ use runtrol_provider::{
     MAX_NATIVE_TIMESTAMP_BYTES, MAX_NATIVE_TITLE_BYTES, MAX_REASONING_CHOICES, ModelCatalog,
     ModelChoice, NativeCatalogueCoverage, NativeCatalogueSource, NativeResumeCapability,
     NativeSessionCatalogue, NativeSessionEntry, NativeSessionId, NativeSessionQuery, OpenIntent,
-    Provider, ProviderError, ProviderId, ReasoningChoice,
+    Provider, ProviderCapabilities, ProviderCapability, ProviderCapabilitySource, ProviderError,
+    ProviderId, ReasoningChoice,
 };
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
@@ -191,6 +192,19 @@ impl CodexProvider {
 impl Provider for CodexProvider {
     fn id(&self) -> ProviderId {
         self.id
+    }
+
+    fn capabilities(&self) -> ProviderCapabilities {
+        let protocol = || ProviderCapability::available(ProviderCapabilitySource::OfficialProtocol);
+        ProviderCapabilities {
+            fresh_session: protocol(),
+            resume: protocol(),
+            structured_events: protocol(),
+            interrupt: protocol(),
+            approvals: protocol(),
+            cooling: ProviderCapability::available(ProviderCapabilitySource::DriverContract),
+            native_session_catalogue: protocol(),
+        }
     }
 
     async fn models(&self) -> Result<ModelCatalog, ProviderError> {

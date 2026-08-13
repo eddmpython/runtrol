@@ -6,7 +6,8 @@ use async_trait::async_trait;
 use runtrol_childproc::{Containment, Program};
 use runtrol_provider::{
     Agent, ModelAliases, ModelCatalog, NativeSessionCatalogue, NativeSessionQuery, OpenIntent,
-    Provider, ProviderError, ProviderId,
+    Provider, ProviderCapabilities, ProviderCapability, ProviderCapabilitySource, ProviderError,
+    ProviderId,
 };
 
 use crate::acp::agent::AcpAgent;
@@ -50,6 +51,23 @@ impl AcpProvider {
 impl Provider for AcpProvider {
     fn id(&self) -> ProviderId {
         self.id
+    }
+
+    fn capabilities(&self) -> ProviderCapabilities {
+        let protocol = || ProviderCapability::available(ProviderCapabilitySource::OfficialProtocol);
+        ProviderCapabilities {
+            fresh_session: protocol(),
+            resume: ProviderCapability::unknown(
+                "the ACP agent announces resume support during initialization",
+            ),
+            structured_events: protocol(),
+            interrupt: protocol(),
+            approvals: protocol(),
+            cooling: ProviderCapability::available(ProviderCapabilitySource::DriverContract),
+            native_session_catalogue: ProviderCapability::unknown(
+                "the ACP agent announces session catalogue support during initialization",
+            ),
+        }
     }
 
     async fn models(&self) -> Result<ModelCatalog, ProviderError> {

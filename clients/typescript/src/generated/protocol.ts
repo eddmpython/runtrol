@@ -28,6 +28,9 @@ export interface AdoptNativeSessionParams { readonly access: SessionWorkspaceAcc
 /** Public integration authority, separate from remote device scopes. */
 export type AppScope = "provider.read" | "model.read" | "session.list" | "session.native.discover" | "session.output.read" | "session.start" | "session.resume" | "session.input.write" | "session.stop" | "approval.respond.low" | "approval.respond.high" | "session.delete";
 
+/** Freshness of a capability map relative to the installed binary identity. */
+export type CapabilityFreshness = "current" | "stale";
+
 /** Honest native catalogue coverage for the current provider and root context. */
 export type CatalogueCoverage = { readonly kind: "complete"; readonly source: CatalogueSource; } | { readonly kind: "partial"; readonly source: CatalogueSource; readonly why: string; } | { readonly kind: "unsupported"; readonly why: string; };
 
@@ -63,6 +66,12 @@ export interface EventCursor { readonly epoch: number; readonly seq: number; rea
 
 /** Explicit replay gap when the requested cursor fell outside the bounded ring. */
 export interface EventGap { readonly liveAt: EventCursor; readonly requested: EventCursor; }
+
+/** Select one provider for explicit capability discovery. */
+export interface GetProviderCapabilitiesParams { readonly providerId: ProviderId; }
+
+/** Select one exact Runtime-managed session. */
+export interface GetSessionParams { readonly sessionId: RuntimeSessionId; }
 
 /** Initialization is negotiation only. Inventory is a separate authorized request. */
 export interface InitializeParams { readonly authentication?: IntegrationAuthentication | null; readonly client: ClientInfo; readonly clientCapabilities?: ClientCapabilities; readonly supportedRevisions: ReadonlyArray<ProtocolRevision>; }
@@ -130,6 +139,15 @@ export type PendingEnrollmentId = string;
 /** A finalized public Runtime contract date. */
 export type ProtocolRevision = string;
 
+/** Whether one structural provider operation is usable in the observed installation. */
+export type ProviderCapabilityAvailability = "available" | "unsupported" | "unknown";
+
+/** One sanitized structural capability observation. */
+export interface ProviderCapabilityObservation { readonly availability: ProviderCapabilityAvailability; readonly provenance?: ProviderCapabilityProvenance | null; readonly why?: string | null; }
+
+/** Provenance of an available structural capability. */
+export type ProviderCapabilityProvenance = "officialProtocol" | "officialCli" | "driverContract";
+
 /** One provider in the fast inventory. */
 export interface ProviderDescriptor { readonly displayName: string; readonly installation: InstallationObservation; readonly providerId: ProviderId; }
 
@@ -170,13 +188,16 @@ export interface RuntimeLimits { readonly challengeLifetimeMs: number; readonly 
 export interface RuntimeLocatorRecord { readonly endpoint: string; readonly endpointKind: RuntimeEndpointKind; readonly instanceId: string; readonly processId: number; readonly runtimeVersion: string; readonly schema: number; }
 
 /** A public Runtime method implemented by the initial read-only boundary. */
-export type RuntimeMethod = "runtime/initialize" | "runtime/initialized" | "runtime/challenge" | "integrations/requestEnrollment" | "integrations/watchEnrollment" | "integrations/getGrant" | "providers/list" | "providers/listModels" | "providers/listNativeSessions" | "sessions/list" | "sessions/start" | "sessions/adoptNative" | "sessions/resume" | "sessions/acquireControl" | "sessions/renewControl" | "sessions/releaseControl" | "sessions/submitInput" | "sessions/watchEvents" | "sessions/interrupt" | "sessions/event" | "sessions/lagged" | "runtime/panicStop";
+export type RuntimeMethod = "runtime/initialize" | "runtime/initialized" | "runtime/challenge" | "integrations/requestEnrollment" | "integrations/watchEnrollment" | "integrations/getGrant" | "providers/list" | "providers/getCapabilities" | "providers/listModels" | "providers/listNativeSessions" | "sessions/list" | "sessions/get" | "sessions/start" | "sessions/adoptNative" | "sessions/resume" | "sessions/acquireControl" | "sessions/renewControl" | "sessions/releaseControl" | "sessions/submitInput" | "sessions/watchEvents" | "sessions/interrupt" | "sessions/event" | "sessions/lagged" | "runtime/panicStop";
 
 /** The current model information Runtime can truthfully expose. */
 export type RuntimeModelCatalog = { readonly coverage: "known"; readonly models: ReadonlyArray<RuntimeModelChoice>; } | { readonly aliases: ReadonlyArray<string>; readonly coverage: "aliases"; readonly why: string; } | { readonly aliases: ReadonlyArray<string>; readonly coverage: "partial"; readonly models: ReadonlyArray<RuntimeModelChoice>; readonly why: string; } | { readonly coverage: "unknown"; readonly why: string; } | { readonly coverage: "unsupported"; readonly why: string; };
 
 /** One opaque model selection reported by a provider. */
 export interface RuntimeModelChoice { readonly description: string; readonly displayName: string; readonly id: string; readonly isDefault: boolean; readonly reasoningEfforts: ReadonlyArray<RuntimeReasoningChoice>; }
+
+/** Structural lifecycle and event capabilities for one exact provider installation. */
+export interface RuntimeProviderCapabilities { readonly approvals: ProviderCapabilityObservation; readonly cooling: ProviderCapabilityObservation; readonly freshSession: ProviderCapabilityObservation; readonly freshness: CapabilityFreshness; readonly interrupt: ProviderCapabilityObservation; readonly nativeSessionCatalogue: ProviderCapabilityObservation; readonly providerId: ProviderId; readonly resume: ProviderCapabilityObservation; readonly structuredEvents: ProviderCapabilityObservation; }
 
 /** One opaque reasoning-effort option reported by a provider. */
 export interface RuntimeReasoningChoice { readonly description: string; readonly id: string; }

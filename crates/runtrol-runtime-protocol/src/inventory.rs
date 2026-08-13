@@ -131,3 +131,11 @@ pub struct ManagedSessionList {
     /// Safe structural omissions that do not identify an unauthorized project.
     pub warnings: Vec<String>,
 }
+
+/// Select one exact Runtime-managed session.
+#[derive(Clone, Debug, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GetSessionParams {
+    /// Stable opaque identity returned by the managed session catalogue.
+    pub session_id: RuntimeSessionId,
+}

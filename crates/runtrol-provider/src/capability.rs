@@ -1,0 +1,102 @@
+//! Provider-reported structural capabilities for one exact prepared driver.
+
+/// Whether one structural provider operation is currently usable.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ProviderCapabilityState {
+    /// The prepared driver has a registered implementation backed by the named official surface.
+    Available,
+    /// The provider or driver has no registered official surface for this operation.
+    Unsupported,
+    /// The answer depends on provider negotiation that has not happened in this context.
+    Unknown,
+}
+
+/// Where the capability observation came from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ProviderCapabilitySource {
+    /// A provider-neutral protocol negotiation or stable protocol contract.
+    OfficialProtocol,
+    /// A provider-owned command, flag parser, or structured stream.
+    OfficialCli,
+    /// The driver lifecycle contract itself, such as contained process cooling.
+    DriverContract,
+}
+
+/// One honest structural capability observation.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProviderCapability {
+    /// Current availability.
+    pub state: ProviderCapabilityState,
+    /// Official or structural source when one supplied the answer.
+    pub source: Option<ProviderCapabilitySource>,
+    /// Stable structural explanation for an unsupported or unknown answer.
+    pub why: Option<Box<str>>,
+}
+
+impl ProviderCapability {
+    /// Report one observed available operation.
+    #[must_use]
+    pub const fn available(source: ProviderCapabilitySource) -> Self {
+        Self {
+            state: ProviderCapabilityState::Available,
+            source: Some(source),
+            why: None,
+        }
+    }
+
+    /// Report a missing registered official surface.
+    #[must_use]
+    pub fn unsupported(why: impl Into<Box<str>>) -> Self {
+        Self {
+            state: ProviderCapabilityState::Unsupported,
+            source: None,
+            why: Some(why.into()),
+        }
+    }
+
+    /// Report a capability that requires later provider negotiation.
+    #[must_use]
+    pub fn unknown(why: impl Into<Box<str>>) -> Self {
+        Self {
+            state: ProviderCapabilityState::Unknown,
+            source: None,
+            why: Some(why.into()),
+        }
+    }
+}
+
+/// Structural lifecycle and event capabilities for one prepared provider.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProviderCapabilities {
+    /// A fresh session can be opened.
+    pub fresh_session: ProviderCapability,
+    /// A provider-native session can be resumed.
+    pub resume: ProviderCapability,
+    /// Provider output is mapped to structured Runtime events.
+    pub structured_events: ProviderCapability,
+    /// A running turn can receive an interrupt request.
+    pub interrupt: ProviderCapability,
+    /// Structured provider-native approvals can be answered.
+    pub approvals: ProviderCapability,
+    /// A hot process can be released without deleting its provider-native session.
+    pub cooling: ProviderCapability,
+    /// An official provider-native session catalogue may be requested.
+    pub native_session_catalogue: ProviderCapability,
+}
+
+impl ProviderCapabilities {
+    /// Honest source-compatible default for a driver that predates capability reporting.
+    #[must_use]
+    pub fn unknown() -> Self {
+        let missing = || ProviderCapability::unknown("this driver does not report this capability");
+        Self {
+            fresh_session: missing(),
+            resume: missing(),
+            structured_events: missing(),
+            interrupt: missing(),
+            approvals: missing(),
+            cooling: missing(),
+            native_session_catalogue: missing(),
+        }
+    }
+}

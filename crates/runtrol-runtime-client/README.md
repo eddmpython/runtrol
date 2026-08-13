@@ -18,6 +18,15 @@ let provider = runtime
     .into_iter()
     .next()
     .ok_or_else(|| std::io::Error::other("No provider is installed"))?;
+let capabilities = runtime
+    .providers()
+    .get_capabilities(provider.provider_id.clone())
+    .await?;
+if capabilities.fresh_session.availability
+    != runtrol_runtime_protocol::ProviderCapabilityAvailability::Available
+{
+    return Err(std::io::Error::other("Provider cannot start a fresh session").into());
+}
 let opened = runtime
     .sessions()
     .start(&runtrol_runtime_protocol::StartSessionParams {
@@ -30,6 +39,11 @@ let opened = runtime
     .await?;
 
 println!("{}", opened.session.session_id);
+let current = runtime
+    .sessions()
+    .get(opened.session.session_id.clone())
+    .await?;
+assert_eq!(current.session_id, opened.session.session_id);
 # Ok(())
 # }
 ```
