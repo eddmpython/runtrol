@@ -5,7 +5,7 @@
 넘어간다" 는 뜻이 아니다.
 
 Status: in progress. Scope grantability, default-deny dispatch, argument escaping, read-only provider configuration, browser rebinding defenses, exact egress allowlisting, the end-to-end Noise boundary, exact PC-bound pairing approval, durable device authorization restoration, Windows CurrentUser DPAPI protection for the PC identity, risk-bound remote approval authorization, and both provider-native approval mappings are implemented and verified. The paid Claude live approval smoke and the phone surface remain.
-The Runtime integration identity, app scope, and project root delta is defined by `3-embeddableAgentRuntime` and
+The Runtime integration identity, app scope, and project root delta is defined by [Runtime security](../../docs/runtimeSecurity.md) and
 remains unimplemented. The Mission-specific local and device scope delta is defined by `4-orchestrationGrowthOS` and
 remains unimplemented.
 

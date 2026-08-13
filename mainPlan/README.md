@@ -18,14 +18,16 @@
 | 폴더 | 상태 | 한 줄 | 왜 이 자리인가 |
 |---|---|---|---|
 | [0-securityPosture](0-securityPosture/) | 활성 | default-deny 권한 모델, 소켓 표면 (Windows named pipe / Unix socket), 승인 전달, 감사 로그, 킬 스위치. **공개 저장소라 "모르는 사람이 기본값으로 켠다" 가 기준선이다.** | **순서상의 한 칸이 아니라 나머지 전부가 딛는 바닥이다.** 첫 커밋부터 함께 갔고, 남은 Runtime 앱 권한이 3 번, Mission 권한이 4 번, 폰 표면 권한이 6 번에 걸려 있어 **마지막 뒤에 닫힌다.** 0 은 "먼저 하고 넘어간다" 가 아니라 "1~6 이 이것 위에서 돈다" 는 뜻이다 |
-| [3-embeddableAgentRuntime](3-embeddableAgentRuntime/) | 활성 | **Runtrol Runtime**을 공개 로컬 제품 경계로 만든다. 외부 IDE, 데스크톱 앱, 자동화 도구, 호스팅 서비스의 로컬 companion이 SDK 하나로 설치된 AI CLI, 모델, 관리 세션, 공식 native 세션, 입력, 이벤트, 승인을 provider 중립적으로 사용한다. | [automatic updates](../docs/automaticUpdates.md)가 독립 갱신과 롤백을 고정했으므로 이제 외부 제품에 안정된 Runtime을 약속할 수 있다. Mission과 PWA를 포함한 모든 표면이 같은 공개 계약을 먼저 써야 Core로 가는 사설 통로가 늘어나지 않는다 |
-| [4-orchestrationGrowthOS](4-orchestrationGrowthOS/) | 설계 | 명시적으로 승인한 Mission DAG가 provider-native 세션을 정확한 workspace에서 감독하고, 결정적 증거로 완료를 판정한다. 검증된 프로젝트 절차의 재사용은 별도 후속 slice다. | 3 번의 공개 Runtime 계약을 첫 번째 상위 제품이 실제로 사용한다. 풍부한 원격 표면보다 로컬에서 여러 provider를 실제 작업 하나로 운영하는 차별점을 먼저 검증한다 |
+| [4-orchestrationGrowthOS](4-orchestrationGrowthOS/) | 활성 | 명시적으로 승인한 Mission DAG가 provider-native 세션을 정확한 workspace에서 감독하고, 결정적 증거로 완료를 판정한다. 검증된 프로젝트 절차의 재사용은 별도 후속 slice다. | 완료된 공개 Runtime 계약을 첫 번째 상위 제품이 실제로 사용한다. 풍부한 원격 표면보다 로컬에서 여러 provider를 실제 작업 하나로 운영하는 차별점을 먼저 검증한다 |
 | [5-pwaConnection](5-pwaConnection/) | 활성 | **origin 과 transport 를 분리한다.** 불변 HTTPS origin 하나 + 4 단 전송 사다리 + Noise E2E + 데몬 직접 Web Push. | 공개된 [site deployment](../docs/siteDeployment.md)의 불변 origin과 0 번 보안 기반 위에서 성립한다. 3 번 Runtime과 4 번 로컬 Mission 계약을 먼저 닫은 뒤 남은 릴레이, 원격 리스너, push, 클라이언트를 완성한다 |
 | [6-pwaSurface](6-pwaSurface/) | 대기 | PWA 자체. 세션 제어가 본체이고, Mission은 조회·중단만 허용하는 보조 표면이다. | 5 번의 프레임 스트림이 확정되기 전에 화면을 얹으면 전송이 바뀔 때 화면을 다시 짓는다. 4 번의 로컬 전용 생성·통합·능력 승격 권한도 그대로 유지해야 한다 |
 
-3 번은 DartLab을 만드는 계획이 아니다. DartLab 같은 외부 제품이 각자 AI 엔진 접착층을 다시 만들지 않고 Runtrol을 그 로컬 엔진으로 채택하게 만드는 계획이다. 소비자는 작은 SDK를 넣고, 하나의 사용자별 Runtime 데몬이 이미 로그인된 CLI를 발견하고 감독한다. 소비자는 세션을 소유하지 않고, Runtrol은 모델 API 키나 transcript를 소유하지 않는다.
+공개 Runtime은 [protocol](../docs/runtimeProtocol.md), [integration](../docs/runtimeIntegration.md),
+[security](../docs/runtimeSecurity.md), [operations](../docs/runtimeOperations.md) 운영 문서로 승격됐다. 외부 제품은
+작은 SDK를 넣고 하나의 사용자별 Runtime을 통해 이미 로그인된 CLI를 발견하고 감독한다. 소비자는 세션을
+소유하지 않고, Runtrol은 모델 API 키나 transcript를 소유하지 않는다.
 
-VS Code 주력 표면, 공개 사이트, 자동 갱신은 [VS Code 운영 문서](../docs/vscodeSurface.md), [사이트 운영 문서](../docs/siteDeployment.md), [automatic updates](../docs/automaticUpdates.md)로 승격됐다. Marketplace에서 6개 네이티브 대상의 `Runtrol Studio 0.1.0`을 설치할 수 있다. 현재 순서는 Core를 외부 제품도 쓰는 공개 Runtime으로 고정하고, 그 위에서 로컬 감독형 Mission의 제품 가치를 실측한 다음 폰 연결과 표면을 닫는 것이다.
+VS Code 주력 표면, 공개 사이트, 자동 갱신은 [VS Code 운영 문서](../docs/vscodeSurface.md), [사이트 운영 문서](../docs/siteDeployment.md), [automatic updates](../docs/automaticUpdates.md)로 승격됐다. Marketplace에서 6개 네이티브 대상의 `Runtrol Studio 0.1.0`을 설치할 수 있다. 현재 순서는 공개 Runtime 위에서 로컬 감독형 Mission의 제품 가치를 실측한 다음 폰 연결과 표면을 닫는 것이다.
 
 ## 마일스톤 (같은 순서를 사용자 관점으로 본 것)
 
@@ -34,7 +36,7 @@ VS Code 주력 표면, 공개 사이트, 자동 갱신은 [VS Code 운영 문서
 | **M0 코어 슬라이스** (완료) | 공개 provider 경계 + Rust daemon + 세션 목록·시작·재개. 운영 정본은 [core runtime](../docs/coreRuntime.md) 이다 | 두 provider 의 세션이 한 명령에 뜨고 이어진다 |
 | **M1 PC 표면 통합** (완료) | 공개 PC 표면을 `Runtrol Studio` VS Code 확장 하나로 고정했다. 독립 데스크톱 GUI 코드와 실행 경로는 제거됐다 | **운영자가 별도 창 없이 VS Code에서 모든 세션을 다룬다** |
 | **M2 VS Code 배포** (완료) | 공개 Marketplace 설치와 [automatic updates](../docs/automaticUpdates.md) | 낯선 사람이 Marketplace에서 설치해 한 창으로 실물 CLI를 운영하고 다음 버전으로 안전하게 갱신한다 |
-| **M3 Embeddable Agent Runtime** | 3-embeddableAgentRuntime. 공개 protocol + 앱 등록·scope·root + Rust/TypeScript SDK + 관리 세션·공식 native 세션 + 독립 배포·롤백 | 저장소 밖 제품이 provider별 코드와 경로 설정 없이 설치된 두 CLI를 찾고, 세션을 시작·재개·감시·제어하며, Runtime과 독립적으로 갱신된다 |
+| **M3 Embeddable Agent Runtime** (완료) | 공개 protocol + 앱 등록·scope·root + Rust/TypeScript SDK + 관리 세션·공식 native 세션 + 독립 배포·롤백. 운영 정본은 [Runtime protocol](../docs/runtimeProtocol.md)과 연결 문서다 | 저장소 밖 packed 소비자가 private import 없이 SDK를 컴파일하고, Studio가 같은 공개 계약으로 세션을 시작·재개·감시·제어하며, 6개 Runtime 대상과 SDK가 독립 artifact로 검증된다 |
 | **M4 감독형 작업 운영** | 4-orchestrationGrowthOS. 명시적 Mission -> 증거 판정 -> bounded DAG -> 선택적 프로젝트 능력 재사용 | 한 목표를 두 provider가 격리된 worktree에서 수행하고, 대화 해석 없이 검증된 결과만 로컬에서 통합한다 |
 | **M5 폰** | 5-pwaConnection (릴레이 + E2E + push) -> 6-pwaSurface -> 폰 승인 | 밖에서 폰으로 내 세션을 잇고 승인한다. Mission은 조회·중단 범위만 원격에 연다 |
 

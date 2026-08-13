@@ -1,6 +1,6 @@
 # Orchestration and Growth OS
 
-Status: design complete, implementation waits for `3-embeddableAgentRuntime` to graduate.
+Status: active. The public Runtime contract has graduated to [Runtime protocol](../../docs/runtimeProtocol.md).
 
 Order 4: this initiative follows the stable update and rollback contract plus the public Runtime consumer boundary,
 then precedes the remaining phone connection and phone surface work. Existing phone security and transport
@@ -75,7 +75,7 @@ project-owned capability candidate.
 
 | Slice | User result | Entry condition | Exit condition |
 |---|---|---|---|
-| 0. Contract proof | A content-blind Mission can be activated without hidden prompt construction | `3-embeddableAgentRuntime` public contract is stable | Failure mutations prove the thin boundary and instruction byte identity |
+| 0. Contract proof | A content-blind Mission can be activated without hidden prompt construction | The public [Runtime protocol](../../docs/runtimeProtocol.md) is stable | Failure mutations prove the thin boundary and instruction byte identity |
 | 1. Evidence | One existing session run receives a bounded, metadata-only receipt | Slice 0 | Crash recovery, secret exclusion, and memory gates pass |
 | 2. Single-task Mission | One approved task opens or resumes in the exact workspace, waits for local Send, and passes declared gates | Slice 1 | Real provider journey completes through restart |
 | 3. Bounded DAG | At most two write branches use independent worktrees and join at manual integration | Slice 2 | Two real providers complete investigation, implementation, and independent review |

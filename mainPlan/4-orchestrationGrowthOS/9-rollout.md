@@ -4,7 +4,7 @@
 
 | Phase | Production result | Entry | Exit |
 |---|---|---|---|
-| 0. Falsify the contract | No production feature | `3-embeddableAgentRuntime` public contract stable | Thin boundary, instruction identity, state model, bounds, and topology survive failure probes |
+| 0. Falsify the contract | No production feature | The public [Runtime protocol](../../docs/runtimeProtocol.md) is stable | Thin boundary, instruction identity, state model, bounds, and topology survive failure probes |
 | 1. Ledger | Existing single session can produce metadata-only Run evidence | Phase 0 | Restart, retention, secret exclusion, update rollback, and memory gates pass |
 | 2. Single-task Mission | One reviewed Task prepares, waits for local Send, verifies, and recovers | Phase 1 | Real provider journey and VS Code minimal surface pass |
 | 3. Bounded DAG | Two isolated branches, independent review, one repair, manual integration | Phase 2 | Two-provider product journey and performance ratchet pass |
