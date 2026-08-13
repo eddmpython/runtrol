@@ -17,9 +17,10 @@ use runtrol_transport::{
     RelayOrigin, RelaySeed, RelaySocket, SessionBinding, SessionResponder, StaticKeypair,
 };
 use tokio::sync::{mpsc, oneshot, watch};
-use tokio::time::{Instant, sleep_until};
+use tokio::time::{Instant, MissedTickBehavior, interval, sleep_until};
 
 use crate::compose::DeviceAuthority;
+use crate::pairing_admin::{PairingAdmin, PairingOutcome, Reception};
 
 const ARRIVAL_QUEUE: usize = 8;
 const RECORD_QUEUE_PER_PHONE: usize = 2;
@@ -127,6 +128,7 @@ pub(crate) fn supervise(
     ingress: RelayIngress,
     identity: Arc<StaticKeypair>,
     device_authority: DeviceAuthority,
+    pairing_admin: PairingAdmin,
 ) -> (RelayHub, impl Future<Output = ()> + Send + 'static) {
     let (arriving, arrivals) = mpsc::channel(ARRIVAL_QUEUE);
     let (outgoing, outbound) = mpsc::channel(OUTBOUND_RECORD_QUEUE);
@@ -134,6 +136,7 @@ pub(crate) fn supervise(
         ingress,
         identity,
         device_authority,
+        pairing_admin,
         arriving,
         outgoing,
         outbound,
@@ -148,9 +151,17 @@ pub(crate) fn supervise_controlled(
     seed: Arc<RelaySeed>,
     identity: Arc<StaticKeypair>,
     device_authority: DeviceAuthority,
+    pairing_admin: PairingAdmin,
 ) -> (RelayHub, impl Future<Output = ()> + Send + 'static) {
     let (arriving, arrivals) = mpsc::channel(ARRIVAL_QUEUE);
-    let manager = controlled_manager(control, seed, identity, device_authority, arriving);
+    let manager = controlled_manager(
+        control,
+        seed,
+        identity,
+        device_authority,
+        pairing_admin,
+        arriving,
+    );
     (RelayHub { arrivals }, manager)
 }
 
@@ -159,6 +170,7 @@ async fn controlled_manager(
     seed: Arc<RelaySeed>,
     identity: Arc<StaticKeypair>,
     device_authority: DeviceAuthority,
+    pairing_admin: PairingAdmin,
     arriving: mpsc::Sender<RelayArrival>,
 ) {
     let mut configured = control.origin.subscribe();
@@ -186,8 +198,12 @@ async fn controlled_manager(
         };
         let ingress = RelayIngress::new(endpoint);
         let mut status = ingress.status();
-        let (mut hub, supervisor) =
-            supervise(ingress, Arc::clone(&identity), device_authority.clone());
+        let (mut hub, supervisor) = supervise(
+            ingress,
+            Arc::clone(&identity),
+            device_authority.clone(),
+            pairing_admin.clone(),
+        );
         tokio::pin!(supervisor);
         loop {
             tokio::select! {
@@ -331,6 +347,7 @@ struct RelaySupervisor {
     ingress: RelayIngress,
     identity: Arc<StaticKeypair>,
     device_authority: DeviceAuthority,
+    pairing_admin: PairingAdmin,
     arriving: mpsc::Sender<RelayArrival>,
     outgoing: mpsc::Sender<RelayOutbound>,
     outbound: mpsc::Receiver<RelayOutbound>,
@@ -368,7 +385,9 @@ impl RelaySupervisor {
             let link = self.next_link;
             self.next_link = self.next_link.wrapping_add(1).max(1);
             let origin: Box<str> = resolved.origin().as_str().into();
-            match self.drive(socket, link, &origin).await {
+            let driven = self.drive(socket, link, &origin).await;
+            self.pairing_admin.disconnect(link).await;
+            match driven {
                 Ok(()) => return,
                 Err(DriveError::Transport(error)) => {
                     self.report(RelayStage::Exchange, error);
@@ -384,6 +403,10 @@ impl RelaySupervisor {
         }
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one relay owner loop keeps socket routing, pairing decisions, and backpressure teardown in one place"
+    )]
     async fn drive(
         &mut self,
         mut socket: RelaySocket,
@@ -392,6 +415,9 @@ impl RelaySupervisor {
     ) -> Result<(), DriveError> {
         let mut peers = BTreeMap::<[u8; 32], RelayPeer>::new();
         let mut refused = BTreeSet::<[u8; 32]>::new();
+        let mut awaiting = BTreeSet::<[u8; 32]>::new();
+        let mut pairing_tick = interval(Duration::from_millis(100));
+        pairing_tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
         loop {
             tokio::select! {
                 received = socket.recv() => {
@@ -402,6 +428,7 @@ impl RelaySupervisor {
                     let Some(record) = envelope.into_record() else {
                         peers.remove(&peer_id);
                         refused.remove(&peer_id);
+                        awaiting.remove(&peer_id);
                         continue;
                     };
                     if let Some(peer) = peers.get(&peer_id) {
@@ -414,14 +441,29 @@ impl RelaySupervisor {
                     if refused.contains(&peer_id) {
                         continue;
                     }
-                    let Some(admitted) = admit_peer(
+                    if awaiting.contains(&peer_id) {
+                        continue;
+                    }
+                    let admitted = admit_peer(
                         &self.identity,
                         &self.device_authority,
                         origin,
                         peer_id,
                         &record,
-                    ) else {
-                        refused.insert(peer_id);
+                    );
+                    let Some(admitted) = admitted else {
+                        match self
+                            .pairing_admin
+                            .receive(&self.identity, link, peer_id, &record)
+                            .await
+                        {
+                            Reception::AwaitingApproval => {
+                                awaiting.insert(peer_id);
+                            }
+                            Reception::Refused => {
+                                refused.insert(peer_id);
+                            }
+                        }
                         continue;
                     };
                     socket
@@ -445,6 +487,48 @@ impl RelaySupervisor {
                         return Ok(());
                     }
                     peers.insert(peer_id, RelayPeer { incoming, _lifetime: lifetime });
+                }
+                _ = pairing_tick.tick() => {
+                    for outcome in self.pairing_admin.take_outcomes(link).await {
+                        match outcome {
+                            PairingOutcome::Denied { peer_id, .. } => {
+                                awaiting.remove(&peer_id);
+                                refused.insert(peer_id);
+                            }
+                            PairingOutcome::Approved(completed) => {
+                                if !awaiting.remove(&completed.peer_id) {
+                                    continue;
+                                }
+                                socket
+                                    .send(completed.peer_id, &completed.reply)
+                                    .await
+                                    .map_err(DriveError::Transport)?;
+                                let (incoming, records) = mpsc::channel(RECORD_QUEUE_PER_PHONE);
+                                let (lifetime, closed) = watch::channel(());
+                                let arrival = RelayArrival {
+                                    device: completed.device,
+                                    surface: RelaySurface {
+                                        link,
+                                        peer_id: completed.peer_id,
+                                        channel: completed.channel,
+                                        incoming: records,
+                                        outgoing: self.outgoing.clone(),
+                                        closed,
+                                    },
+                                };
+                                if self.arriving.send(arrival).await.is_err() {
+                                    return Ok(());
+                                }
+                                peers.insert(
+                                    completed.peer_id,
+                                    RelayPeer {
+                                        incoming,
+                                        _lifetime: lifetime,
+                                    },
+                                );
+                            }
+                        }
+                    }
                 }
                 outbound = self.outbound.recv() => {
                     let Some(outbound) = outbound else {

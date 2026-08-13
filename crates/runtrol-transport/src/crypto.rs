@@ -8,7 +8,7 @@ use std::fmt;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use hkdf::Hkdf;
-use runtrol_security::{DeviceId, GrantRequest, PairingIdentity, PcPresence};
+use runtrol_security::{DeviceId, DeviceScope, GrantRequest, PairingIdentity, PcPresence};
 use sha2::Sha256;
 use snow::params::{DHChoice, NoiseParams};
 use snow::resolvers::{CryptoResolver as _, DefaultResolver};
@@ -390,6 +390,7 @@ impl PendingPairing {
     pub fn approval_request(
         &self,
         identity: &PairingIdentity,
+        scopes: &[DeviceScope],
     ) -> Result<GrantRequest, CryptoError> {
         if identity.attempt_id() != self.attempt_id
             || identity.static_key() != self.remote_public.to_bytes()
@@ -398,6 +399,7 @@ impl PendingPairing {
         }
         Ok(GrantRequest::PairDevice {
             identity: identity.clone(),
+            scopes: scopes.to_vec(),
         })
     }
 
@@ -419,10 +421,11 @@ impl PendingPairing {
     pub fn approve(
         mut self,
         identity: &PairingIdentity,
+        scopes: &[DeviceScope],
         witness: &PcPresence,
         response_payload: &[u8],
     ) -> Result<ApprovedPairing, CryptoError> {
-        let request = self.approval_request(identity)?;
+        let request = self.approval_request(identity, scopes)?;
         witness
             .check(&request)
             .map_err(|_| CryptoError::PairingNeedsPcApproval)?;
@@ -476,6 +479,12 @@ impl ApprovedPairing {
     #[must_use]
     pub fn into_channel(self) -> Channel {
         self.channel
+    }
+
+    /// Consume the approval result into the values the relay coordinator must persist and route.
+    #[must_use]
+    pub fn into_relay_parts(self) -> (DeviceId, PublicKey, Channel, EncryptedRecord) {
+        (self.device_id, self.remote_public, self.channel, self.reply)
     }
 }
 

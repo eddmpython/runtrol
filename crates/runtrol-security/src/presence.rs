@@ -336,6 +336,8 @@ pub enum GrantRequest {
     PairDevice {
         /// Attempt, key, and display labels bound to this one decision.
         identity: PairingIdentity,
+        /// Initial authority shown in the same decision. Pairing with no retained authority is valid.
+        scopes: Vec<DeviceScope>,
     },
     /// Approve one exact public Runtime integration proposal.
     ApproveIntegration {
@@ -371,7 +373,7 @@ impl fmt::Display for GrantRequest {
                 }
                 Ok(())
             }
-            Self::PairDevice { identity } => {
+            Self::PairDevice { identity, scopes } => {
                 write!(
                     f,
                     "pair device '{}' on {} with key ",
@@ -381,7 +383,17 @@ impl fmt::Display for GrantRequest {
                 for byte in identity.static_key.iter().take(8) {
                     write!(f, "{byte:02x}")?;
                 }
-                f.write_str("...")
+                f.write_str("... and give it these permissions: ")?;
+                if scopes.is_empty() {
+                    return f.write_str("none");
+                }
+                for (index, scope) in scopes.iter().enumerate() {
+                    if index > 0 {
+                        f.write_str(", ")?;
+                    }
+                    write!(f, "{scope}")?;
+                }
+                Ok(())
             }
             Self::ApproveIntegration { proposal } => {
                 write!(

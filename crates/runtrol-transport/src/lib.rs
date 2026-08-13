@@ -23,7 +23,7 @@ pub use http::{
 };
 pub use hyper::StatusCode;
 pub use relay::{
-    RelayCredential, RelayEndpoint, RelayEnvelope, RelayError, RelayOrigin, RelayRoute, RelaySeed,
-    RelaySocket, ResolvedRelay,
+    RelayCredential, RelayEndpoint, RelayEnvelope, RelayError, RelayOrigin, RelayPairingMaterial,
+    RelayRoute, RelaySeed, RelaySocket, ResolvedRelay,
 };
 pub use websocket::{NoiseUpgrade, NoiseWebSocket, PendingNoiseWebSocket, WebSocketLinkError};

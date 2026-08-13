@@ -43,6 +43,15 @@ impl DeviceId {
     pub const fn as_bytes(&self) -> &[u8; 16] {
         self.0.as_bytes()
     }
+
+    /// Rebuild a device identifier from its canonical stored text.
+    #[must_use]
+    pub fn parse(text: &str) -> Option<Self> {
+        match Uuid::parse_str(text) {
+            Ok(id) => Self::from_bytes(*id.as_bytes()),
+            Err(_) => None,
+        }
+    }
 }
 
 impl fmt::Display for DeviceId {
@@ -128,6 +137,8 @@ mod tests {
     fn identifiers_round_trip_through_bytes() {
         let device = DeviceId::now();
         assert_eq!(Some(device), DeviceId::from_bytes(*device.as_bytes()));
+        assert_eq!(Some(device), DeviceId::parse(&device.to_string()));
+        assert_eq!(None, DeviceId::parse("not-a-device"));
         let root = WorkspaceRootId::now();
         assert_eq!(Some(root), WorkspaceRootId::from_bytes(*root.as_bytes()));
         assert_eq!(DeviceId::from_bytes([0; 16]), None);

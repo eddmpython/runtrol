@@ -86,6 +86,43 @@ pub enum Request {
         relay_origin: Option<Box<str>>,
     },
 
+    /// Create one short-lived phone pairing QR at the local VS Code surface.
+    PairingBegin,
+
+    /// List authenticated phone proposals awaiting a local decision.
+    PairingProposals,
+
+    /// Begin one exact local presence challenge for a phone and its initial scopes.
+    PairingApprovalBegin {
+        /// Opaque pending proposal identity.
+        proposal_id: Box<str>,
+        /// Exact initial scope names selected locally.
+        scopes: Vec<Box<str>>,
+    },
+
+    /// Answer and atomically spend one phone pairing challenge.
+    PairingApprovalFinish {
+        /// Opaque one-use local challenge identity.
+        challenge_id: Box<str>,
+        /// Phrase typed from the local VS Code prompt.
+        answer: Box<str>,
+    },
+
+    /// Deny one authenticated phone proposal locally.
+    PairingDeny {
+        /// Opaque pending proposal identity.
+        proposal_id: Box<str>,
+    },
+
+    /// List durable paired phones for local administration.
+    Devices,
+
+    /// Revoke one paired phone and all of its scopes locally.
+    DeviceRevoke {
+        /// Locally minted device identity.
+        device_id: Box<str>,
+    },
+
     /// List bounded pending public Runtime integration enrollments for local administration.
     IntegrationEnrollments,
 
@@ -476,6 +513,23 @@ pub enum Response {
 
     /// Current optional relay configuration and non-secret availability.
     RemoteConnection(RemoteConnection),
+
+    /// One secret-bearing QR value returned only to the local pairing command.
+    PairingInvitation(PairingInvitationLine),
+
+    /// Authenticated phone proposals awaiting local approval.
+    PairingProposals(Vec<PairingProposalLine>),
+
+    /// One exact local pairing challenge.
+    PairingApprovalChallenge {
+        /// Opaque one-use challenge identity.
+        challenge_id: Box<str>,
+        /// Complete exact action and random phrase for local display.
+        prompt: Box<str>,
+    },
+
+    /// Durable paired phones visible only at the machine.
+    Devices(Vec<DeviceLine>),
 
     /// Pending public Runtime integration enrollments visible only at the machine.
     IntegrationEnrollments(Vec<IntegrationEnrollmentLine>),
@@ -883,6 +937,77 @@ pub struct RemoteConnection {
     pub state: RemoteConnectionState,
     /// Failure boundary only when [`RemoteConnectionState::Offline`].
     pub stage: Option<RemoteConnectionStage>,
+}
+
+/// A secret-bearing PWA pairing URL.
+///
+/// Serialization deliberately emits a string for the VS Code surface, while diagnostics redact it so a debug path
+/// cannot copy the relay credential or one-time Noise secret into logs.
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(transparent)]
+pub struct PairingUrl(Box<str>);
+
+impl PairingUrl {
+    /// Wrap one URL created by the daemon's local pairing coordinator.
+    #[must_use]
+    pub fn new(url: impl Into<Box<str>>) -> Self {
+        Self(url.into())
+    }
+
+    /// Borrow the value for a local QR renderer.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl core::fmt::Debug for PairingUrl {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str("PairingUrl(..)")
+    }
+}
+
+/// One short-lived local QR invitation.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct PairingInvitationLine {
+    /// PWA route with all sensitive pairing material confined to the URL fragment.
+    pub pairing_url: PairingUrl,
+    /// Exclusive Unix millisecond expiry.
+    pub expires_at_ms: u64,
+    /// Short PC static-key fingerprint for comparison after pairing.
+    pub pc_key_fingerprint: Box<str>,
+}
+
+/// One PSK-authenticated phone waiting for the operator at the PC.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct PairingProposalLine {
+    /// Opaque proposal identity.
+    pub proposal_id: Box<str>,
+    /// Validated device name.
+    pub name: Box<str>,
+    /// Validated platform label.
+    pub platform: Box<str>,
+    /// Short authenticated static-key fingerprint.
+    pub key_fingerprint: Box<str>,
+    /// Every plain device scope this build permits the local operator to select.
+    pub available_scopes: Vec<Box<str>>,
+}
+
+/// One durable paired phone without credentials or conversation data.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct DeviceLine {
+    /// Locally minted device identity.
+    pub device_id: Box<str>,
+    /// Operator-approved name.
+    pub name: Box<str>,
+    /// Operator-approved platform.
+    pub platform: Box<str>,
+    /// Short pinned Noise-key fingerprint.
+    pub key_fingerprint: Box<str>,
+    /// Exact current scope names.
+    pub scopes: Vec<Box<str>>,
+    /// Pairing time in Unix milliseconds.
+    pub paired_at_ms: u64,
 }
 
 /// Closed remote connection state rendered without parsing prose.
@@ -1537,5 +1662,20 @@ mod tests {
         assert_eq!(agree(WIRE_VERSION), Ok(WIRE_VERSION));
         assert_eq!(agree(WIRE_VERSION + 1), Err(WIRE_VERSION));
         assert_eq!(agree(0), Err(WIRE_VERSION));
+    }
+
+    #[test]
+    fn pairing_urls_cross_the_wire_but_are_redacted_from_diagnostics() {
+        let secret = "https://example.invalid/runtrol/app/#pair=relay-secret";
+        let response = Response::PairingInvitation(PairingInvitationLine {
+            pairing_url: PairingUrl::new(secret),
+            expires_at_ms: 1_767_225_600_000,
+            pc_key_fingerprint: "public-key".into(),
+        });
+        let diagnostic = format!("{response:?}");
+        assert!(diagnostic.contains("PairingUrl(..)"));
+        assert!(!diagnostic.contains("relay-secret"));
+        let encoded = serde_json::to_string(&response).expect("wire serialization");
+        assert!(encoded.contains(secret));
     }
 }

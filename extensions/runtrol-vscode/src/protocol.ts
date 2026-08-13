@@ -1,4 +1,4 @@
-export const WIRE_VERSION = 20;
+export const WIRE_VERSION = 21;
 
 export type ProviderUpdateState = "current" | "available" | "observeOnly" | "notInstalled" | "unconfirmed";
 
@@ -136,12 +136,42 @@ export type RemoteConnection = {
   stage: "discovery" | "registration" | "connection" | "exchange" | null;
 };
 
+export type PairingInvitationLine = {
+  pairing_url: string;
+  expires_at_ms: number;
+  pc_key_fingerprint: string;
+};
+
+export type PairingProposalLine = {
+  proposal_id: string;
+  name: string;
+  platform: string;
+  key_fingerprint: string;
+  available_scopes: string[];
+};
+
+export type DeviceLine = {
+  device_id: string;
+  name: string;
+  platform: string;
+  key_fingerprint: string;
+  scopes: string[];
+  paired_at_ms: number;
+};
+
 export type Request =
   | { ask: "hello"; with: { wire: number } }
   | { ask: "providerUpdates" }
   | { ask: "providerUpdate"; with: { provider: string } }
   | { ask: "remoteConnection" }
   | { ask: "remoteConfigure"; with: { relay_origin: string | null } }
+  | { ask: "pairingBegin" }
+  | { ask: "pairingProposals" }
+  | { ask: "pairingApprovalBegin"; with: { proposal_id: string; scopes: string[] } }
+  | { ask: "pairingApprovalFinish"; with: { challenge_id: string; answer: string } }
+  | { ask: "pairingDeny"; with: { proposal_id: string } }
+  | { ask: "devices" }
+  | { ask: "deviceRevoke"; with: { device_id: string } }
   | { ask: "integrationEnrollments" }
   | {
       ask: "integrationApprovalBegin";
@@ -228,6 +258,13 @@ export type Response =
       };
     }
   | { say: "remoteConnection"; with: RemoteConnection }
+  | { say: "pairingInvitation"; with: PairingInvitationLine }
+  | { say: "pairingProposals"; with: PairingProposalLine[] }
+  | {
+      say: "pairingApprovalChallenge";
+      with: { challenge_id: string; prompt: string };
+    }
+  | { say: "devices"; with: DeviceLine[] }
   | { say: "integrationEnrollments"; with: IntegrationEnrollmentLine[] }
   | {
       say: "integrationApprovalChallenge";

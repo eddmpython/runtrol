@@ -80,6 +80,24 @@ impl RelaySeed {
     /// [`RelayError::InvalidOrigin`] for an unsupported origin or [`RelayError::KeyDerivation`] if `HKDF-SHA256`
     /// rejects a fixed output length.
     pub fn endpoint(&self, origin: &str) -> Result<RelayEndpoint, RelayError> {
+        let material = self.pairing_material(origin)?;
+        Ok(RelayEndpoint::new(
+            material.origin,
+            material.route,
+            material.credential,
+        ))
+    }
+
+    /// Derive the exact relay values a local pairing surface places in a short-lived QR fragment.
+    ///
+    /// The credential remains in a type with no diagnostic formatting. Calling its purpose-specific accessor is an
+    /// explicit secret release to the local pairing UI, never a general string conversion.
+    ///
+    /// # Errors
+    ///
+    /// [`RelayError::InvalidOrigin`] for an unsupported origin or [`RelayError::KeyDerivation`] if `HKDF-SHA256`
+    /// rejects a fixed output length.
+    pub fn pairing_material(&self, origin: &str) -> Result<RelayPairingMaterial, RelayError> {
         let origin = RelayOrigin::parse(origin)?;
         let derivation =
             hkdf::Hkdf::<sha2::Sha256>::from_prk(&self.0).map_err(|_| RelayError::KeyDerivation)?;
@@ -101,11 +119,41 @@ impl RelaySeed {
         derivation
             .expand(&credential_info, &mut *credential)
             .map_err(|_| RelayError::KeyDerivation)?;
-        Ok(RelayEndpoint::new(
+        Ok(RelayPairingMaterial {
             origin,
-            RelayRoute::from_bytes(route),
-            RelayCredential::from_bytes(*credential),
-        ))
+            route: RelayRoute::from_bytes(route),
+            credential: RelayCredential::from_bytes(*credential),
+        })
+    }
+}
+
+/// Stable per-origin relay material released only into one local pairing invitation.
+///
+/// The route is public. The credential is secret and the whole value deliberately has no `Debug`, `Display`,
+/// `Clone`, or serialization implementation.
+pub struct RelayPairingMaterial {
+    origin: RelayOrigin,
+    route: RelayRoute,
+    credential: RelayCredential,
+}
+
+impl RelayPairingMaterial {
+    /// Exact relay origin bound into subsequent session handshakes.
+    #[must_use]
+    pub fn origin(&self) -> &str {
+        self.origin.as_str()
+    }
+
+    /// Public stable route identifier.
+    #[must_use]
+    pub fn route(&self) -> &str {
+        self.route.as_str()
+    }
+
+    /// Secret route credential for one local QR fragment.
+    #[must_use]
+    pub fn pairing_credential(&self) -> &str {
+        &self.credential.0
     }
 }
 

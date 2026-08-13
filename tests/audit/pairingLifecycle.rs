@@ -87,7 +87,10 @@ fn a_pairing_finishes_only_after_exact_pc_presence() {
     let identity = pending
         .identity("Pixel 9", "Android")
         .expect("display identity");
-    let request = pending.approval_request(&identity).expect("bound request");
+    let approved_scopes = [DeviceScope::SessionList, DeviceScope::ApprovalRespondLow];
+    let request = pending
+        .approval_request(&identity, &approved_scopes)
+        .expect("bound request");
     let console = LocalConsole::claim().expect("one local surface");
     let challenge = PresenceChallenge::issue(&console, request).expect("presence challenge");
     let prompt = challenge.prompt();
@@ -98,7 +101,7 @@ fn a_pairing_finishes_only_after_exact_pc_presence() {
     let witness = challenge.answer(phrase).expect("physical approval");
 
     let approved = pending
-        .approve(&identity, &witness, b"pc identity")
+        .approve(&identity, &approved_scopes, &witness, b"pc identity")
         .expect("approved pairing");
     assert_eq!(approved.remote_public_key(), phone.public_key());
     assert_ne!(approved.device_id().as_bytes(), &[0; 16]);
@@ -110,7 +113,6 @@ fn a_pairing_finishes_only_after_exact_pc_presence() {
     let scratch = Scratch::make();
     let device = approved.device_id();
     let token = AccessToken::parse(TOKEN).expect("canonical bearer token");
-    let approved_scopes = [DeviceScope::SessionList, DeviceScope::ApprovalRespondLow];
     let row = DeviceRow {
         remote_static_key: approved.remote_public_key().to_bytes(),
         credential_fingerprint: token.fingerprint().to_bytes(),
@@ -203,7 +205,12 @@ fn a_pairing_finishes_only_after_exact_pc_presence() {
         .1;
     let generic_witness = generic.answer(generic_phrase).expect("generic presence");
     assert!(matches!(
-        unrelated_pending.approve(&unrelated_identity, &generic_witness, b"must not send"),
+        unrelated_pending.approve(
+            &unrelated_identity,
+            &approved_scopes,
+            &generic_witness,
+            b"must not send"
+        ),
         Err(CryptoError::PairingNeedsPcApproval)
     ));
 }

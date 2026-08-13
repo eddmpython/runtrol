@@ -10,7 +10,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::error::SecurityError;
 use crate::id::DeviceId;
-use crate::presence::{GrantRequest, PcPresence};
+use crate::presence::{GrantRequest, PairingIdentity, PcPresence};
 use crate::scope::{DeviceScope, LocalScope};
 
 /// Permission to do one local thing, once, now.
@@ -109,6 +109,35 @@ impl GrantLedger {
         let held = self.granted.entry(device).or_default();
         for scope in scopes {
             held.insert(*scope);
+        }
+        Ok(())
+    }
+
+    /// Give a newly paired identity exactly the authority shown in its pairing prompt.
+    ///
+    /// The device id is minted after the operator answers, so it cannot be part of the earlier prompt. The
+    /// authenticated pairing identity and exact scopes are. This separate path preserves that ordering without
+    /// treating a pairing witness as a generic device-grant witness.
+    ///
+    /// # Errors
+    ///
+    /// [`SecurityError::WitnessExpired`] for a stale witness, or [`SecurityError::WitnessMismatch`] when either the
+    /// paired identity or the requested scopes differ from what the operator read.
+    pub fn grant_pairing(
+        &mut self,
+        device: DeviceId,
+        scopes: &[DeviceScope],
+        identity: &PairingIdentity,
+        witness: &PcPresence,
+    ) -> Result<(), SecurityError> {
+        witness.check(&GrantRequest::PairDevice {
+            identity: identity.clone(),
+            scopes: scopes.to_vec(),
+        })?;
+        let held = self.granted.entry(device).or_default();
+        held.extend(scopes.iter().copied());
+        if held.is_empty() {
+            self.granted.remove(&device);
         }
         Ok(())
     }

@@ -44,6 +44,9 @@
     "onCommand:runtrol.refresh",
     "onCommand:runtrol.checkProviderUpdates",
     "onCommand:runtrol.remoteConnectionStatus",
+    "onCommand:runtrol.pairPhone",
+    "onCommand:runtrol.reviewPhonePairings",
+    "onCommand:runtrol.managePhones",
     "onCommand:runtrol.reviewIntegrations",
     "onCommand:runtrol.manageIntegrations",
     "onCommand:runtrol.reviewRuntimeRequests",
@@ -119,6 +122,21 @@
         "command": "runtrol.remoteConnectionStatus",
         "title": "Runtrol: Remote Connection Status",
         "icon": "$(remote)"
+      },
+      {
+        "command": "runtrol.pairPhone",
+        "title": "Runtrol: Pair a Phone",
+        "icon": "$(device-mobile)"
+      },
+      {
+        "command": "runtrol.reviewPhonePairings",
+        "title": "Runtrol: Review Phone Pairing Requests",
+        "icon": "$(pass-filled)"
+      },
+      {
+        "command": "runtrol.managePhones",
+        "title": "Runtrol: Manage Paired Phones",
+        "icon": "$(key)"
       },
       {
         "command": "runtrol.reviewIntegrations",
@@ -312,14 +330,24 @@
           "group": "navigation@2"
         },
         {
-          "command": "runtrol.reviewIntegrations",
+          "command": "runtrol.pairPhone",
           "when": "view == runtrol.providers",
           "group": "navigation@3"
         },
         {
-          "command": "runtrol.manageIntegrations",
+          "command": "runtrol.managePhones",
           "when": "view == runtrol.providers",
           "group": "navigation@4"
+        },
+        {
+          "command": "runtrol.reviewIntegrations",
+          "when": "view == runtrol.providers",
+          "group": "navigation@5"
+        },
+        {
+          "command": "runtrol.manageIntegrations",
+          "when": "view == runtrol.providers",
+          "group": "navigation@6"
         },
         {
           "command": "runtrol.reviewRuntimeRequests",
@@ -449,10 +477,12 @@
   "devDependencies": {
     "@runtrol/runtime-client": "file:../../clients/typescript",
     "@types/node": "^24.0.0",
+    "@types/qrcode": "^1.5.5",
     "@types/vscode": "^1.100.0",
     "@vscode/test-electron": "3.1.0",
     "@vscode/vsce": "3.9.3-5",
     "esbuild": "^0.25.0",
+    "qrcode": "^1.5.4",
     "typescript": "^5.9.0"
   }
 }

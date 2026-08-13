@@ -684,8 +684,12 @@ async fn serve_surfaces(
                 .pc_identity
                 .clone()
                 .ok_or(ServeError::PhoneIdentityUnavailable)?;
-            let (hub, supervisor) =
-                crate::relay::supervise(relay, identity, composed.device_authority.clone());
+            let (hub, supervisor) = crate::relay::supervise(
+                relay,
+                identity,
+                composed.device_authority.clone(),
+                composed.pairing_admin.clone(),
+            );
             connections.spawn(supervisor);
             Some(hub)
         }
@@ -696,6 +700,7 @@ async fn serve_surfaces(
                     Arc::clone(seed),
                     Arc::clone(identity),
                     composed.device_authority.clone(),
+                    composed.pairing_admin.clone(),
                 );
                 connections.spawn(supervisor);
                 Some(hub)
@@ -1621,6 +1626,8 @@ async fn converse(
             prepare_provider_updates(&conversation, &composed, &request).await
         } else if is_integration_admin(&request) {
             prepare_integration_admin(&conversation, &composed, &request).await
+        } else if crate::dispatch::is_pairing_admin(&request) {
+            crate::dispatch::prepare_pairing_admin(&conversation, &composed, &request).await
         } else if matches!(request, Request::MissionPrepareTask { .. }) {
             prepare_mission_workspace(&conversation, &composed, &request).await
         } else if matches!(request, Request::MissionVerifyTask { .. }) {

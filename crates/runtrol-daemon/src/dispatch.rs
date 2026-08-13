@@ -225,6 +225,11 @@ pub(crate) enum Prepared {
         /// Exact response for the bound request.
         response: Response,
     },
+    /// Local phone pairing administration completed outside the session owner.
+    PairingAdmin {
+        /// Exact response for the bound request.
+        response: Response,
+    },
     /// One exact Mission Task workspace was prepared outside the session owner.
     MissionWorkspace {
         /// Bound Mission identity.
@@ -626,6 +631,84 @@ pub(crate) const fn is_integration_admin(request: &Request) -> bool {
             | Request::RuntimeKeyRotationRequests
             | Request::RuntimeKeyRotationConfirm { .. }
     )
+}
+
+/// Whether a request belongs to local paired-phone administration.
+pub(crate) const fn is_pairing_admin(request: &Request) -> bool {
+    matches!(
+        request,
+        Request::PairingBegin
+            | Request::PairingProposals
+            | Request::PairingApprovalBegin { .. }
+            | Request::PairingApprovalFinish { .. }
+            | Request::PairingDeny { .. }
+            | Request::Devices
+            | Request::DeviceRevoke { .. }
+    )
+}
+
+/// Complete local phone pairing administration outside the one session owner.
+pub(crate) async fn prepare_pairing_admin(
+    conversation: &Conversation,
+    composed: &Composed,
+    request: &Request,
+) -> Prepared {
+    if !is_pairing_admin(request)
+        || !conversation.greeted()
+        || crate::scope::allowed(
+            conversation.caller(),
+            request,
+            &composed.device_authority.grants(),
+        )
+        .is_err()
+    {
+        return Prepared::None;
+    }
+    let response = match request {
+        Request::PairingBegin => composed
+            .pairing_admin
+            .begin(composed)
+            .await
+            .map(Response::PairingInvitation),
+        Request::PairingProposals => Ok(Response::PairingProposals(
+            composed.pairing_admin.proposals().await,
+        )),
+        Request::PairingApprovalBegin {
+            proposal_id,
+            scopes,
+        } => composed
+            .pairing_admin
+            .begin_approval(proposal_id, scopes)
+            .await
+            .map(
+                |(challenge_id, prompt)| Response::PairingApprovalChallenge {
+                    challenge_id,
+                    prompt,
+                },
+            ),
+        Request::PairingApprovalFinish {
+            challenge_id,
+            answer,
+        } => composed
+            .pairing_admin
+            .finish_approval(composed, challenge_id, answer)
+            .await
+            .map(|_| Response::Done),
+        Request::PairingDeny { proposal_id } => composed
+            .pairing_admin
+            .deny(proposal_id)
+            .await
+            .map(|()| Response::Done),
+        Request::Devices => Ok(Response::Devices(
+            crate::pairing_admin::PairingAdmin::devices(composed),
+        )),
+        Request::DeviceRevoke { device_id } => {
+            crate::pairing_admin::PairingAdmin::revoke(composed, device_id).map(|()| Response::Done)
+        }
+        _ => return Prepared::None,
+    }
+    .unwrap_or_else(|error| refuse(&error.to_string()));
+    Prepared::PairingAdmin { response }
 }
 
 /// Complete local integration administration outside the one session owner.
@@ -1088,6 +1171,19 @@ pub(crate) fn answer_prepared(
             }
         }
 
+        Request::PairingBegin
+        | Request::PairingProposals
+        | Request::PairingApprovalBegin { .. }
+        | Request::PairingApprovalFinish { .. }
+        | Request::PairingDeny { .. }
+        | Request::Devices
+        | Request::DeviceRevoke { .. } => match prepared {
+            Prepared::PairingAdmin { response } => Reply::One(response),
+            _ => Reply::One(refuse(
+                "paired-phone administration was not completed for this request",
+            )),
+        },
+
         Request::IntegrationEnrollments
         | Request::IntegrationApprovalBegin { .. }
         | Request::IntegrationApprovalFinish { .. }
@@ -1400,6 +1496,7 @@ fn bound(
         | Prepared::Consult { .. }
         | Prepared::ProviderUpdates { .. }
         | Prepared::IntegrationAdmin { .. }
+        | Prepared::PairingAdmin { .. }
         | Prepared::MissionWorkspace { .. }
         | Prepared::MissionVerification { .. }
         | Prepared::MissionIntegration { .. }

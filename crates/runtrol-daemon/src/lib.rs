@@ -21,6 +21,7 @@ pub mod dispatch;
 mod growth;
 mod integration_admin;
 mod mission;
+mod pairing_admin;
 mod provider_prepare;
 mod provider_update;
 mod relay;

@@ -146,7 +146,6 @@ impl DeviceAuthority {
             .cloned()
     }
 
-    #[cfg(test)]
     pub(crate) fn replace(&self, granted: GrantLedger, paired_devices: Vec<PairedDevice>) {
         self.current.send_replace(DeviceAuthoritySnapshot {
             granted: Arc::new(granted),
@@ -154,8 +153,7 @@ impl DeviceAuthority {
         });
     }
 
-    #[cfg(test)]
-    fn paired_devices(&self) -> Arc<[PairedDevice]> {
+    pub(crate) fn paired_devices(&self) -> Arc<[PairedDevice]> {
         Arc::clone(&self.current.borrow().paired_devices)
     }
 }
@@ -174,6 +172,8 @@ pub struct Composed {
     pub(crate) growth: Mutex<crate::growth::GrowthController>,
     /// Local-only pending approval challenges for public Runtime integrations.
     pub(crate) integration_admin: crate::integration_admin::IntegrationAdmin,
+    /// One-use phone pairing offers and local approval decisions.
+    pub(crate) pairing_admin: crate::pairing_admin::PairingAdmin,
     /// The guarantee that children die with this process.
     ///
     /// Shared, because every driver hands it to every child it starts, and held for the process lifetime because
@@ -250,6 +250,7 @@ impl Composed {
             missions: Mutex::new(missions),
             growth: Mutex::new(growth),
             integration_admin: crate::integration_admin::IntegrationAdmin::default(),
+            pairing_admin: crate::pairing_admin::PairingAdmin::default(),
             containment,
             registry,
             device_authority: DeviceAuthority::new(granted, paired_devices),
@@ -302,6 +303,7 @@ impl Composed {
             missions: Mutex::new(missions),
             growth: Mutex::new(growth),
             integration_admin: crate::integration_admin::IntegrationAdmin::default(),
+            pairing_admin: crate::pairing_admin::PairingAdmin::default(),
             containment: Arc::new(Containment::without_any()),
             registry,
             device_authority: DeviceAuthority::new(granted, paired_devices),
@@ -330,6 +332,17 @@ impl Composed {
             .as_ref()
             .ok_or(ComposeError::RelayIdentityUnavailable)?;
         Ok(crate::RelayIngress::new(seed.endpoint(origin)?))
+    }
+
+    /// Republish exactly the durable device authority after a local pairing or revocation transaction.
+    ///
+    /// # Errors
+    ///
+    /// The same fail-closed restoration errors as startup. The previous live snapshot remains installed on failure.
+    pub(crate) fn reload_device_authority(&self) -> Result<(), ComposeError> {
+        let (granted, paired_devices) = restore_device_authority(&self.store)?;
+        self.device_authority.replace(granted, paired_devices);
+        Ok(())
     }
 }
 

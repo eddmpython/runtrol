@@ -15,6 +15,7 @@ import {
 import { journeyApi, type JourneyApi } from "./journeyApi";
 import { MissionController } from "./mission/controller";
 import { MissionTree } from "./mission/tree";
+import { managePhones, pairPhone, reviewPhonePairings } from "./pairingAdministration";
 import type { RemoteConnection } from "./protocol";
 import { SelectionStore } from "./selectionStore";
 import { uniqueSessionTitle } from "./sessionDisplay";
@@ -201,6 +202,18 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
         const connection = await remoteConnection(client);
         await vscode.window.showInformationMessage(remoteConnectionMessage(connection));
       })),
+    ),
+    vscode.commands.registerCommand(
+      "runtrol.pairPhone",
+      () => run(() => afterReady(() => pairPhone(client))),
+    ),
+    vscode.commands.registerCommand(
+      "runtrol.reviewPhonePairings",
+      () => run(() => afterReady(() => reviewPhonePairings(client))),
+    ),
+    vscode.commands.registerCommand(
+      "runtrol.managePhones",
+      () => run(() => afterReady(() => managePhones(client))),
     ),
     vscode.commands.registerCommand(
       "runtrol.reviewIntegrations",

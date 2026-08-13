@@ -37,6 +37,7 @@ ed25519-dalek = { workspace = true }
 base64ct = { workspace = true }
 hmac = { workspace = true }
 sha2 = { workspace = true }
+zeroize = { workspace = true }
 # Serving is one task that owns the sessions and one task per connection, racing what they wait on against each
 # other. That needs a runtime, channels, and a way to race: this is where the daemon owns them, which is what keeps
 # the kernel free of any runtime decision at all.

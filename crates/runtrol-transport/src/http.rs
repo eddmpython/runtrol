@@ -60,6 +60,17 @@ pub type PhoneBody = BoxBody<Bytes, Infallible>;
 pub struct AccessToken([u8; TOKEN_BYTES]);
 
 impl AccessToken {
+    /// Generate a fresh 256-bit device credential from the operating-system random source.
+    ///
+    /// # Errors
+    ///
+    /// [`PhoneHttpError::RandomUnavailable`] when the operating system cannot provide randomness.
+    pub fn generate() -> Result<Self, PhoneHttpError> {
+        let mut bytes = [0_u8; TOKEN_BYTES];
+        getrandom::fill(&mut bytes).map_err(|_| PhoneHttpError::RandomUnavailable)?;
+        Ok(Self(bytes))
+    }
+
     /// Parse a canonical 256-bit token.
     ///
     /// # Errors
@@ -76,6 +87,17 @@ impl AccessToken {
         hasher.update(TOKEN_FINGERPRINT_DOMAIN);
         hasher.update(self.0);
         CredentialFingerprint(hasher.finalize().into())
+    }
+
+    /// Release the canonical token only to an encrypted pairing response.
+    #[must_use]
+    pub fn pairing_value(&self) -> String {
+        let mut encoded = String::with_capacity(TOKEN_HEX);
+        for byte in self.0 {
+            use core::fmt::Write as _;
+            let _infallible = write!(encoded, "{byte:02x}");
+        }
+        encoded
     }
 }
 
@@ -626,6 +648,10 @@ const fn hex_nibble(byte: u8) -> Option<u8> {
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum PhoneHttpError {
+    /// The operating system could not mint a credential.
+    #[error("the operating system could not generate a device credential")]
+    RandomUnavailable,
+
     /// Port zero cannot appear in an exact Host allowlist.
     #[error("phone HTTP policy needs the listener's assigned nonzero port")]
     InvalidPort,
@@ -659,6 +685,11 @@ mod tests {
         ));
         assert!(AccessToken::parse("short").is_err());
         assert!(AccessToken::parse(&canonical.to_ascii_uppercase()).is_err());
+
+        let generated = AccessToken::generate().expect("OS credential");
+        let pairing_value = generated.pairing_value();
+        assert_eq!(pairing_value.len(), TOKEN_HEX);
+        assert!(AccessToken::parse(&pairing_value).is_ok());
     }
 
     #[test]

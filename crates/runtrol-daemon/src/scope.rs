@@ -80,6 +80,13 @@ pub fn needed(request: &Request) -> Needed {
         | Request::Consult => Needed::Scope(DeviceScope::ConfigRead),
         Request::ProviderUpdate { .. } => Needed::AtTheMachine(LocalScope::ProviderUpdate),
         Request::RemoteConfigure { .. } => Needed::AtTheMachine(LocalScope::ConfigWrite),
+        Request::PairingBegin
+        | Request::PairingProposals
+        | Request::PairingApprovalBegin { .. }
+        | Request::PairingApprovalFinish { .. }
+        | Request::PairingDeny { .. }
+        | Request::Devices
+        | Request::DeviceRevoke { .. } => Needed::AtTheMachine(LocalScope::DevicePair),
         Request::IntegrationEnrollments
         | Request::IntegrationApprovalBegin { .. }
         | Request::IntegrationApprovalFinish { .. }
@@ -261,6 +268,23 @@ mod tests {
             Request::RemoteConnection,
             Request::RemoteConfigure {
                 relay_origin: Some("https://relay.example.com".into()),
+            },
+            Request::PairingBegin,
+            Request::PairingProposals,
+            Request::PairingApprovalBegin {
+                proposal_id: "pp_example".into(),
+                scopes: vec!["session.list".into()],
+            },
+            Request::PairingApprovalFinish {
+                challenge_id: "pac_example".into(),
+                answer: "typed phrase".into(),
+            },
+            Request::PairingDeny {
+                proposal_id: "pp_example".into(),
+            },
+            Request::Devices,
+            Request::DeviceRevoke {
+                device_id: "018f0000-0000-7000-8000-000000000000".into(),
             },
             Request::Start {
                 provider: "example".into(),
