@@ -43,6 +43,11 @@ Irreversible Runtime metadata removal remains locally confirmed. `sessions().for
 `presenceRequired`; approve the exact request in Runtrol Studio and retry the unchanged mutation request ID. This removes
 only the Runtime pointer, never provider-owned conversation state.
 
+Integration key replacement also requires local confirmation. Generate and securely retain the replacement identity,
+then call `integrations().rotateKey(requestId, previousKeyGeneration, replacement)`. After Runtrol Studio confirms the
+exact integration and replacement fingerprint, retry the same values. The returned credentials carry the incremented
+key generation and the previous key can no longer reconnect.
+
 Managed-session changes use a dedicated snapshot stream, so an integration does not poll or infer changes from
 provider output:
 

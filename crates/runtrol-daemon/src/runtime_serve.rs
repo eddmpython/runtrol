@@ -17,17 +17,17 @@ use runtrol_runtime_protocol::{
     MAX_REVISION_OFFERS, ProtocolRevision, ProviderCapabilityAvailability,
     ProviderCapabilityObservation, ProviderCapabilityProvenance, ProviderList,
     ProviderWatchEndReason, ProviderWatchEndedNotification, ProvidersChangedNotification,
-    RequestEnrollmentParams, RespondApprovalParams, ResumeSessionParams, RuntimeCapabilities,
-    RuntimeError, RuntimeErrorKind, RuntimeInstance, RuntimeLimits, RuntimeMethod,
-    RuntimeModelCatalog, RuntimeModelChoice, RuntimeProviderCapabilities, RuntimeReasoningChoice,
-    RuntimeSessionId, SessionIndexChangedNotification, SessionIndexEndReason,
-    SessionIndexEndedNotification, SessionWorkspaceAccess, StartSessionParams, SubmitInputParams,
-    SuccessResponse, WatchEnrollmentParams, WatchEventsParams, WatchEventsResult,
-    WatchProvidersParams, WatchProvidersResult, WatchSessionIndexParams, WatchSessionIndexResult,
-    negotiate,
+    RequestEnrollmentParams, RespondApprovalParams, ResumeSessionParams,
+    RotateIntegrationKeyParams, RuntimeCapabilities, RuntimeError, RuntimeErrorKind,
+    RuntimeInstance, RuntimeLimits, RuntimeMethod, RuntimeModelCatalog, RuntimeModelChoice,
+    RuntimeProviderCapabilities, RuntimeReasoningChoice, RuntimeSessionId,
+    SessionIndexChangedNotification, SessionIndexEndReason, SessionIndexEndedNotification,
+    SessionWorkspaceAccess, StartSessionParams, SubmitInputParams, SuccessResponse,
+    WatchEnrollmentParams, WatchEventsParams, WatchEventsResult, WatchProvidersParams,
+    WatchProvidersResult, WatchSessionIndexParams, WatchSessionIndexResult, negotiate,
 };
-use runtrol_store::EnrollmentKey;
 use runtrol_store::IntegrationAuditOutcome;
+use runtrol_store::{EnrollmentKey, IntegrationKeyRotation};
 use serde::Serialize;
 use tokio::sync::{Mutex, mpsc, oneshot, watch};
 
@@ -161,6 +161,14 @@ impl Answer {
         Self {
             response: success(id, result),
             close: false,
+            watching: None,
+        }
+    }
+
+    fn success_and_close<T: Serialize>(id: JsonRpcId, result: &T) -> Self {
+        Self {
+            response: success(id, result),
+            close: true,
             watching: None,
         }
     }
@@ -428,6 +436,9 @@ async fn dispatch_public(
                 watch_integration(state, composed, id, params)
             }
             RuntimeMethod::IntegrationsGetGrant => grant(state, composed, id, params),
+            RuntimeMethod::IntegrationsRotateKey => {
+                rotate_integration_key(state, composed, id, params).await
+            }
             RuntimeMethod::ProvidersList => providers_list(state, composed, providers, id, params),
             RuntimeMethod::ProvidersWatch => {
                 providers_watch(state, composed, provider_updates, id, params)
@@ -543,6 +554,7 @@ fn required_scope(method: RuntimeMethod) -> Option<AppScope> {
         | RuntimeMethod::IntegrationsRequestEnrollment
         | RuntimeMethod::IntegrationsWatchEnrollment
         | RuntimeMethod::IntegrationsGetGrant
+        | RuntimeMethod::IntegrationsRotateKey
         | RuntimeMethod::ProvidersChanged
         | RuntimeMethod::ProvidersWatchEnded
         | RuntimeMethod::SessionsEvent
@@ -741,6 +753,157 @@ fn grant(
     match authorized(state, &composed.store, None) {
         Ok(authority) => Answer::success(id, &authority.grant),
         Err(failure) => Answer::failure(id, failure),
+    }
+}
+
+async fn rotate_integration_key(
+    state: &mut PublicState,
+    composed: &Composed,
+    id: JsonRpcId,
+    params: serde_json::Value,
+) -> Answer {
+    let Ok(params) = serde_json::from_value::<RotateIntegrationKeyParams>(params) else {
+        return Answer::plain(
+            id,
+            RuntimeErrorKind::InvalidRequest,
+            "integration key rotation parameters are invalid",
+        );
+    };
+    let authority = match authorized(state, &composed.store, None) {
+        Ok(authority) => authority.clone(),
+        Err(failure) => return Answer::failure(id, failure),
+    };
+    let row = match composed.store.get_integration(authority.key) {
+        Ok(Some(row)) => row,
+        Ok(None) => {
+            return Answer::plain(
+                id,
+                RuntimeErrorKind::Unauthenticated,
+                "the integration grant no longer exists",
+            );
+        }
+        Err(_) => {
+            return Answer::plain(
+                id,
+                RuntimeErrorKind::Internal,
+                "Runtime could not read integration authority",
+            );
+        }
+    };
+    let new_public_key = match crate::runtime_auth::verify_key_rotation(&authority, &row, &params) {
+        Ok(key) => key,
+        Err(failure) => return Answer::failure(id, failure),
+    };
+    if row.key_generation == params.expected_key_generation + 1 && row.public_key == new_public_key
+    {
+        return match crate::runtime_auth::grant(authority.grant.integration_id, &row) {
+            Ok(grant) => Answer::success(id, &grant),
+            Err(failure) => Answer::failure(id, failure),
+        };
+    }
+    let confirmation = composed
+        .integration_admin
+        .request_key_rotation_confirmation(
+            authority.key,
+            &params.request_id,
+            params.expected_key_generation,
+            new_public_key,
+        )
+        .await;
+    match confirmation {
+        Ok(crate::integration_admin::KeyRotationConfirmation::Awaiting { confirmation_id }) => {
+            return Answer::operator_action(
+                id,
+                RuntimeErrorKind::PresenceRequired,
+                "approve the exact integration key replacement in Runtrol Studio, then retry this request",
+                "reviewRuntimeRequestsInRuntrolStudio",
+                confirmation_id.into(),
+            );
+        }
+        Ok(crate::integration_admin::KeyRotationConfirmation::Confirmed) => {}
+        Err(failure) => return key_rotation_confirmation_failure(id, failure),
+    }
+    key_rotation_answer(
+        id,
+        authority.grant.integration_id,
+        composed.store.rotate_integration_key(
+            authority.key,
+            params.expected_key_generation,
+            new_public_key,
+        ),
+    )
+}
+
+fn key_rotation_answer(
+    id: JsonRpcId,
+    integration_id: runtrol_runtime_protocol::IntegrationId,
+    outcome: Result<IntegrationKeyRotation, runtrol_store::StoreError>,
+) -> Answer {
+    match outcome {
+        Ok(IntegrationKeyRotation::Rotated(row)) => {
+            match crate::runtime_auth::grant(integration_id, &row) {
+                Ok(grant) => Answer::success_and_close(id, &grant),
+                Err(failure) => Answer::failure(id, failure),
+            }
+        }
+        Ok(IntegrationKeyRotation::Replayed(row)) => {
+            match crate::runtime_auth::grant(integration_id, &row) {
+                Ok(grant) => Answer::success(id, &grant),
+                Err(failure) => Answer::failure(id, failure),
+            }
+        }
+        Ok(IntegrationKeyRotation::Conflict) => Answer::plain(
+            id,
+            RuntimeErrorKind::IdempotencyConflict,
+            "the integration key generation changed before this rotation committed",
+        ),
+        Ok(IntegrationKeyRotation::Missing) => Answer::plain(
+            id,
+            RuntimeErrorKind::Unauthenticated,
+            "the integration grant no longer exists",
+        ),
+        Ok(IntegrationKeyRotation::Revoked) => Answer::failure(
+            id,
+            AuthorizationFailure {
+                kind: RuntimeErrorKind::IntegrationRevoked,
+                message: "the integration grant was revoked",
+            },
+        ),
+        Err(_) => Answer::plain(
+            id,
+            RuntimeErrorKind::Internal,
+            "Runtime could not rotate the integration key",
+        ),
+    }
+}
+
+fn key_rotation_confirmation_failure(
+    id: JsonRpcId,
+    failure: crate::integration_admin::KeyRotationConfirmationError,
+) -> Answer {
+    match failure {
+        crate::integration_admin::KeyRotationConfirmationError::InvalidRequestId => Answer::plain(
+            id,
+            RuntimeErrorKind::InvalidRequest,
+            "the key rotation request identity is invalid or outside its bounded lifetime",
+        ),
+        crate::integration_admin::KeyRotationConfirmationError::IdempotencyConflict => {
+            Answer::plain(
+                id,
+                RuntimeErrorKind::IdempotencyConflict,
+                "the key rotation request identity was already bound to different parameters",
+            )
+        }
+        crate::integration_admin::KeyRotationConfirmationError::ResourceExhausted => Answer::plain(
+            id,
+            RuntimeErrorKind::ResourceExhausted,
+            "too many integration key rotations are awaiting local confirmation",
+        ),
+        crate::integration_admin::KeyRotationConfirmationError::StateUnavailable => Answer::plain(
+            id,
+            RuntimeErrorKind::Internal,
+            "Runtime could not verify local key rotation confirmation state",
+        ),
     }
 }
 
@@ -2163,6 +2326,7 @@ fn parse_session_operation(
         | RuntimeMethod::IntegrationsRequestEnrollment
         | RuntimeMethod::IntegrationsWatchEnrollment
         | RuntimeMethod::IntegrationsGetGrant
+        | RuntimeMethod::IntegrationsRotateKey
         | RuntimeMethod::ProvidersList
         | RuntimeMethod::ProvidersWatch
         | RuntimeMethod::ProvidersChanged
@@ -3121,7 +3285,7 @@ listen = "stdio"
             let provider_updates = provider_updates.clone();
             async move {
                 let mut connections = tokio::task::JoinSet::new();
-                for _ in 0..4 {
+                for _ in 0..6 {
                     let connection = listener.accept().await.expect("accept public client");
                     connections.spawn(serve_connection(
                         connection,
@@ -3591,11 +3755,88 @@ listen = "stdio"
             runtrol_runtime_client::ClientError::Runtime(error)
                 if error.code == RuntimeErrorKind::ProviderUnavailable
         ));
+
+        let replacement = runtrol_runtime_client::IntegrationIdentity::from_secret_bytes([8; 32]);
+        let rotation_request = runtrol_runtime_protocol::MutationRequestId::now();
+        let rotation_presence = approved
+            .integrations()
+            .rotate_key(rotation_request.clone(), grant.key_generation, &replacement)
+            .await
+            .expect_err("integration key rotation requires exact local confirmation");
+        assert!(matches!(
+            rotation_presence,
+            runtrol_runtime_client::ClientError::Runtime(error)
+                if error.code == RuntimeErrorKind::PresenceRequired
+                && error.operator_action.as_deref()
+                    == Some("reviewRuntimeRequestsInRuntrolStudio")
+                && error.correlation_id.starts_with("rot_")
+        ));
+        assert_eq!(
+            composed
+                .store
+                .get_integration(integration)
+                .expect("read integration before local key confirmation")
+                .expect("integration exists")
+                .key_generation,
+            1
+        );
+        let Ok(pending_rotations) = composed
+            .integration_admin
+            .key_rotation_requests(&composed)
+            .await
+        else {
+            panic!("list exact key rotation for local presentation");
+        };
+        let pending_rotation = pending_rotations.first().expect("one pending key rotation");
+        assert_eq!(pending_rotation.current_key_generation, 1);
+        assert_eq!(
+            pending_rotation.integration_id.as_ref(),
+            "int_09090909090909090909090909090909"
+        );
+        assert!(
+            composed
+                .integration_admin
+                .confirm_key_rotation(&pending_rotation.confirmation_id)
+                .await
+                .is_ok(),
+            "confirm exact key rotation through local administration"
+        );
+        let rotated_credentials = approved
+            .integrations()
+            .rotate_key(rotation_request.clone(), grant.key_generation, &replacement)
+            .await
+            .expect("retry exact key rotation after local confirmation");
+        assert_eq!(rotated_credentials.grant().key_generation, 2);
         drop(approved);
-        let mut watching_client = locator
+        let old_key = locator
             .connect(
                 runtrol_runtime_client::ClientOptions::new("contract fixture", "1.0.0")
                     .with_credentials(credentials.clone()),
+            )
+            .await;
+        assert!(matches!(
+            old_key,
+            Err(runtrol_runtime_client::ClientError::Runtime(error))
+                if error.code == RuntimeErrorKind::Unauthenticated
+        ));
+        let mut rotated = locator
+            .connect(
+                runtrol_runtime_client::ClientOptions::new("contract fixture", "1.0.0")
+                    .with_credentials(rotated_credentials.clone()),
+            )
+            .await
+            .expect("the replacement key authenticates at its new generation");
+        let replayed_credentials = rotated
+            .integrations()
+            .rotate_key(rotation_request, grant.key_generation, &replacement)
+            .await
+            .expect("the replacement key can replay the completed rotation");
+        assert_eq!(replayed_credentials.grant(), rotated_credentials.grant());
+        drop(rotated);
+        let mut watching_client = locator
+            .connect(
+                runtrol_runtime_client::ClientOptions::new("contract fixture", "1.0.0")
+                    .with_credentials(rotated_credentials.clone()),
             )
             .await
             .expect("connect a dedicated index watcher");
@@ -3603,7 +3844,7 @@ listen = "stdio"
             let mut provider_watching_client = locator
                 .connect(
                     runtrol_runtime_client::ClientOptions::new("contract fixture", "1.0.0")
-                        .with_credentials(credentials),
+                        .with_credentials(rotated_credentials),
                 )
                 .await
                 .expect("connect a dedicated provider watcher");

@@ -85,7 +85,9 @@ pub fn needed(request: &Request) -> Needed {
         | Request::Integrations
         | Request::IntegrationRevoke { .. }
         | Request::RuntimeForgetRequests
-        | Request::RuntimeForgetConfirm { .. } => {
+        | Request::RuntimeForgetConfirm { .. }
+        | Request::RuntimeKeyRotationRequests
+        | Request::RuntimeKeyRotationConfirm { .. } => {
             Needed::AtTheMachine(LocalScope::IntegrationAdmin)
         }
         Request::Start {

@@ -1551,6 +1551,37 @@
       ],
       "type": "object"
     },
+    "RotateIntegrationKeyParams": {
+      "additionalProperties": false,
+      "description": "Replace one approved integration key after an exact local confirmation.",
+      "properties": {
+        "expectedKeyGeneration": {
+          "description": "Key generation observed before the rotation began.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "newKeyProof": {
+          "description": "Base64url signature by the new key over the canonical rotation payload.",
+          "type": "string"
+        },
+        "newPublicKey": {
+          "description": "Base64url Ed25519 verification key that will replace the current key.",
+          "type": "string"
+        },
+        "requestId": {
+          "$ref": "#/$defs/MutationRequestId",
+          "description": "Caller-owned idempotency identity retained across retries."
+        }
+      },
+      "required": [
+        "requestId",
+        "expectedKeyGeneration",
+        "newPublicKey",
+        "newKeyProof"
+      ],
+      "type": "object"
+    },
     "RuntimeApprovalKind": {
       "description": "Structural provider approval class.",
       "oneOf": [
@@ -2159,6 +2190,11 @@
         {
           "const": "integrations/getGrant",
           "description": "Read the authenticated integration's current grant.",
+          "type": "string"
+        },
+        {
+          "const": "integrations/rotateKey",
+          "description": "Replace the authenticated integration key after exact local confirmation.",
           "type": "string"
         },
         {
@@ -3035,6 +3071,9 @@
     "resume_session": {
       "$ref": "#/$defs/ResumeSessionParams"
     },
+    "rotate_integration_key": {
+      "$ref": "#/$defs/RotateIntegrationKeyParams"
+    },
     "runtime_event": {
       "$ref": "#/$defs/RuntimeEventNotification"
     },
@@ -3094,6 +3133,7 @@
     "watch_enrollment",
     "enrollment_decision",
     "integration_grant",
+    "rotate_integration_key",
     "runtime_locator",
     "provider_list",
     "get_provider_capabilities",

@@ -2,7 +2,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use runtrol_ipc::wire::{IntegrationEnrollmentLine, IntegrationLine, RuntimeForgetLine};
+use runtrol_ipc::wire::{
+    IntegrationEnrollmentLine, IntegrationLine, RuntimeForgetLine, RuntimeKeyRotationLine,
+};
 use runtrol_provider::{AbsPath, WallMs};
 use runtrol_runtime_protocol::{
     IDEMPOTENCY_WINDOW_MS, IntegrationId, MUTATION_CLOCK_SKEW_MS, MutationRequestId,
@@ -24,6 +26,8 @@ const MAX_APPROVAL_CHALLENGES: usize = 16;
 const APPROVAL_CHALLENGE_MS: u64 = runtrol_security::presence::CHALLENGE_WINDOW_MS;
 const MAX_FORGET_CONFIRMATIONS: usize = 64;
 const FORGET_CONFIRMATION_MS: u64 = 10 * 60_000;
+const MAX_KEY_ROTATION_CONFIRMATIONS: usize = 64;
+const KEY_ROTATION_CONFIRMATION_MS: u64 = 10 * 60_000;
 
 /// One local approval challenge returned to the VS Code surface.
 pub(crate) struct ApprovalChallenge {
@@ -47,6 +51,15 @@ struct PendingForgetConfirmation {
     confirmed: bool,
 }
 
+struct PendingKeyRotationConfirmation {
+    integration: IntegrationKey,
+    expected_key_generation: u64,
+    new_public_key: [u8; 32],
+    confirmation_id: Box<str>,
+    expires_at: WallMs,
+    confirmed: bool,
+}
+
 /// Whether one exact public forget request still needs a local approval action.
 #[derive(Clone)]
 pub(crate) enum ForgetConfirmation {
@@ -63,11 +76,29 @@ pub(crate) enum ForgetConfirmationError {
     StateUnavailable,
 }
 
+/// Whether one exact public key rotation still needs a local approval action.
+#[derive(Clone)]
+pub(crate) enum KeyRotationConfirmation {
+    Awaiting { confirmation_id: Box<str> },
+    Confirmed,
+}
+
+/// Closed admission failures for the bounded local key rotation confirmation table.
+#[derive(Clone, Copy)]
+pub(crate) enum KeyRotationConfirmationError {
+    InvalidRequestId,
+    IdempotencyConflict,
+    ResourceExhausted,
+    StateUnavailable,
+}
+
 /// Bounded one-use local integration approval state.
 #[derive(Default)]
 pub(crate) struct IntegrationAdmin {
     challenges: Mutex<BTreeMap<[u8; 16], PendingApproval>>,
     forget_confirmations: Mutex<BTreeMap<IntegrationMutationKey, PendingForgetConfirmation>>,
+    key_rotation_confirmations:
+        Mutex<BTreeMap<IntegrationMutationKey, PendingKeyRotationConfirmation>>,
 }
 
 impl IntegrationAdmin {
@@ -179,6 +210,97 @@ impl IntegrationAdmin {
             .values_mut()
             .find(|pending| pending.confirmation_id.as_ref() == confirmation_id)
             .ok_or_else(|| AdminError::invalid("the Runtime forget confirmation does not exist"))?;
+        pending.confirmed = true;
+        Ok(())
+    }
+
+    pub(crate) async fn request_key_rotation_confirmation(
+        &self,
+        integration: IntegrationKey,
+        request_id: &MutationRequestId,
+        expected_key_generation: u64,
+        new_public_key: [u8; 32],
+    ) -> Result<KeyRotationConfirmation, KeyRotationConfirmationError> {
+        let (key, now) = key_rotation_key(integration, request_id)?;
+        let mut confirmations = self.key_rotation_confirmations.lock().await;
+        confirmations.retain(|_, pending| pending.expires_at >= now);
+        if let Some(pending) = confirmations.get(&key) {
+            if pending.expected_key_generation != expected_key_generation
+                || pending.new_public_key != new_public_key
+            {
+                return Err(KeyRotationConfirmationError::IdempotencyConflict);
+            }
+            return Ok(if pending.confirmed {
+                KeyRotationConfirmation::Confirmed
+            } else {
+                KeyRotationConfirmation::Awaiting {
+                    confirmation_id: pending.confirmation_id.clone(),
+                }
+            });
+        }
+        if confirmations.len() >= MAX_KEY_ROTATION_CONFIRMATIONS {
+            return Err(KeyRotationConfirmationError::ResourceExhausted);
+        }
+        let confirmation_id = format!(
+            "rot_{}",
+            hex(&random_key().map_err(|_| KeyRotationConfirmationError::StateUnavailable)?)
+        )
+        .into_boxed_str();
+        confirmations.insert(
+            key,
+            PendingKeyRotationConfirmation {
+                integration,
+                expected_key_generation,
+                new_public_key,
+                confirmation_id: confirmation_id.clone(),
+                expires_at: now.plus_millis(KEY_ROTATION_CONFIRMATION_MS),
+                confirmed: false,
+            },
+        );
+        Ok(KeyRotationConfirmation::Awaiting { confirmation_id })
+    }
+
+    pub(crate) async fn key_rotation_requests(
+        &self,
+        composed: &Composed,
+    ) -> Result<Vec<RuntimeKeyRotationLine>, AdminError> {
+        let now = WallMs::now();
+        let mut confirmations = self.key_rotation_confirmations.lock().await;
+        confirmations.retain(|_, pending| pending.expires_at >= now);
+        confirmations
+            .values()
+            .filter(|pending| !pending.confirmed)
+            .map(|pending| {
+                let integration = composed
+                    .store
+                    .get_integration(pending.integration)
+                    .map_err(|_| AdminError::state())?
+                    .ok_or_else(AdminError::state)?;
+                Ok(RuntimeKeyRotationLine {
+                    confirmation_id: pending.confirmation_id.clone(),
+                    integration_id: integration_id(pending.integration).to_string().into(),
+                    integration_label: integration.label,
+                    current_key_generation: pending.expected_key_generation,
+                    new_key_fingerprint: fingerprint(&pending.new_public_key).into(),
+                    expires_at_ms: pending.expires_at.as_millis(),
+                })
+            })
+            .collect()
+    }
+
+    pub(crate) async fn confirm_key_rotation(
+        &self,
+        confirmation_id: &str,
+    ) -> Result<(), AdminError> {
+        let now = WallMs::now();
+        let mut confirmations = self.key_rotation_confirmations.lock().await;
+        confirmations.retain(|_, pending| pending.expires_at >= now);
+        let pending = confirmations
+            .values_mut()
+            .find(|pending| pending.confirmation_id.as_ref() == confirmation_id)
+            .ok_or_else(|| {
+                AdminError::invalid("the Runtime key rotation confirmation does not exist")
+            })?;
         pending.confirmed = true;
         Ok(())
     }
@@ -589,6 +711,25 @@ fn forget_key(
     }
     let Some(request_bytes) = request_id.to_bytes() else {
         return Err(ForgetConfirmationError::InvalidRequestId);
+    };
+    Ok((IntegrationMutationKey::new(integration, request_bytes), now))
+}
+
+fn key_rotation_key(
+    integration: IntegrationKey,
+    request_id: &MutationRequestId,
+) -> Result<(IntegrationMutationKey, WallMs), KeyRotationConfirmationError> {
+    let now = WallMs::now();
+    let Some(created_at) = request_id.unix_millis() else {
+        return Err(KeyRotationConfirmationError::InvalidRequestId);
+    };
+    if created_at > now.as_millis().saturating_add(MUTATION_CLOCK_SKEW_MS)
+        || created_at.saturating_add(IDEMPOTENCY_WINDOW_MS) < now.as_millis()
+    {
+        return Err(KeyRotationConfirmationError::InvalidRequestId);
+    }
+    let Some(request_bytes) = request_id.to_bytes() else {
+        return Err(KeyRotationConfirmationError::InvalidRequestId);
     };
     Ok((IntegrationMutationKey::new(integration, request_bytes), now))
 }

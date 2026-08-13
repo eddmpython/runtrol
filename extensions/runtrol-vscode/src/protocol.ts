@@ -1,4 +1,4 @@
-export const WIRE_VERSION = 11;
+export const WIRE_VERSION = 12;
 
 export type WorkspaceAccess = "exclusive" | "shared";
 
@@ -61,6 +61,15 @@ export type RuntimeForgetLine = {
   expires_at_ms: number;
 };
 
+export type RuntimeKeyRotationLine = {
+  confirmation_id: string;
+  integration_id: string;
+  integration_label: string;
+  current_key_generation: number;
+  new_key_fingerprint: string;
+  expires_at_ms: number;
+};
+
 export type SessionLine = {
   session: string;
   provider: string;
@@ -115,6 +124,8 @@ export type Request =
   | { ask: "integrationRevoke"; with: { integration_id: string } }
   | { ask: "runtimeForgetRequests" }
   | { ask: "runtimeForgetConfirm"; with: { confirmation_id: string } }
+  | { ask: "runtimeKeyRotationRequests" }
+  | { ask: "runtimeKeyRotationConfirm"; with: { confirmation_id: string } }
   | {
       ask: "start";
       with: {
@@ -167,6 +178,7 @@ export type Response =
   | { say: "integrationApproved"; with: { integration_id: string } }
   | { say: "integrations"; with: IntegrationLine[] }
   | { say: "runtimeForgetRequests"; with: RuntimeForgetLine[] }
+  | { say: "runtimeKeyRotationRequests"; with: RuntimeKeyRotationLine[] }
   | { say: "started"; with: { session: string } }
   | { say: "done" }
   | {

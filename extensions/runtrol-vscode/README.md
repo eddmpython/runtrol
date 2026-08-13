@@ -20,7 +20,7 @@ No Core path is required for a Marketplace installation. The extension verifies 
 - Run **Runtrol: Switch Session** for fast project, CLI, state, and path search.
 - Run **Runtrol: Start Session** to choose a discovered CLI and workspace.
 - Use **Open Conversation**, **Open Session Workspace**, **Interrupt Turn**, and **Close Session** from the view or Command Palette.
-- Use **Runtrol: Review Runtime Requests** to approve an exact external integration metadata-removal request. It never deletes provider-owned conversation state.
+- Use **Runtrol: Review Runtime Requests** to approve an exact external integration metadata-removal or key-rotation request. Metadata removal never deletes provider-owned conversation state, and key rotation shows the integration, current generation, and replacement fingerprint before confirmation.
 
 Fifteen sessions are the daily-use baseline and 30 sessions are the release load. At most eight sessions own a hot process, while exactly one selected session owns the full event stream and active renderer. Cold rows respond immediately and resume through the provider-native session identity.
 

@@ -37,6 +37,7 @@ import type {
   RequestEnrollmentParams,
   RespondApprovalParams,
   ResumeSessionParams,
+  RotateIntegrationKeyParams,
   RuntimeEventNotification,
   RuntimeMethod,
   RuntimeModelCatalog,
@@ -219,6 +220,34 @@ export class IntegrationClient {
 
   public grant(): Promise<IntegrationGrant> {
     return callRuntime(this.runtime, "integrations/getGrant", {}, "IntegrationGrant");
+  }
+
+  public async rotateKey(
+    requestId: MutationRequestId,
+    expectedKeyGeneration: number,
+    replacement: IntegrationIdentity,
+  ): Promise<IntegrationCredentials> {
+    const grant = this.runtime.initialization.grant;
+    if (!grant) {
+      throw new RuntimeProtocolError("integration key rotation requires an authenticated grant");
+    }
+    const unsigned: RotateIntegrationKeyParams = {
+      requestId,
+      expectedKeyGeneration,
+      newPublicKey: replacement.publicKeyBase64(),
+      newKeyProof: "",
+    };
+    const params: RotateIntegrationKeyParams = {
+      ...unsigned,
+      newKeyProof: replacement.signBase64(keyRotationSigningPayload(grant, unsigned)),
+    };
+    const rotated = await callRuntime<IntegrationGrant>(
+      this.runtime,
+      "integrations/rotateKey",
+      params,
+      "IntegrationGrant",
+    );
+    return new IntegrationCredentials(replacement, rotated);
   }
 }
 
@@ -707,5 +736,19 @@ function enrollmentSigningPayload(
     client,
     clientCapabilities: capabilities,
     manifest,
+  }));
+}
+
+function keyRotationSigningPayload(
+  grant: IntegrationGrant,
+  params: RotateIntegrationKeyParams,
+): Uint8Array {
+  return encoder.encode(JSON.stringify({
+    domain: "runtrol-runtime-key-rotation-v1",
+    integrationId: grant.integrationId,
+    grantGeneration: grant.grantGeneration,
+    requestId: params.requestId,
+    expectedKeyGeneration: params.expectedKeyGeneration,
+    newPublicKey: params.newPublicKey,
   }));
 }

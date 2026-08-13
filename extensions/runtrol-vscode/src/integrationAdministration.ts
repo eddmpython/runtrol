@@ -4,28 +4,60 @@ import type { CoreClient } from "./core/client";
 import type { IntegrationEnrollmentLine, IntegrationLine, Response } from "./protocol";
 
 export async function reviewRuntimeRequests(client: CoreClient): Promise<void> {
-  const response = await ask(client, { ask: "runtimeForgetRequests" });
-  if (response.say !== "runtimeForgetRequests") {
-    throw new Error(`the daemon answered Runtime request listing with ${response.say}`);
+  const forgets = await ask(client, { ask: "runtimeForgetRequests" });
+  if (forgets.say !== "runtimeForgetRequests") {
+    throw new Error(`the daemon answered Runtime forget listing with ${forgets.say}`);
   }
-  if (response.with.length === 0) {
+  const rotations = await ask(client, { ask: "runtimeKeyRotationRequests" });
+  if (rotations.say !== "runtimeKeyRotationRequests") {
+    throw new Error(`the daemon answered Runtime key rotation listing with ${rotations.say}`);
+  }
+  const requests = [
+    ...forgets.with.map((request) => ({
+      label: request.integration_label,
+      description: "Forget Runtime session pointer",
+      detail: `${request.session_id}  ${request.integration_id}`,
+      requestKind: "forget" as const,
+      request,
+    })),
+    ...rotations.with.map((request) => ({
+      label: request.integration_label,
+      description: "Rotate Runtime integration key",
+      detail: `Generation ${request.current_key_generation}  New key ${request.new_key_fingerprint}`,
+      requestKind: "rotation" as const,
+      request,
+    })),
+  ];
+  if (requests.length === 0) {
     await vscode.window.showInformationMessage("Runtrol: No Runtime request is waiting for review.");
     return;
   }
   const selected = await vscode.window.showQuickPick(
-    response.with.map((request) => ({
-      label: request.integration_label,
-      description: "Forget Runtime session pointer",
-      detail: `${request.session_id}  ${request.integration_id}`,
-      request,
-    })),
+    requests,
     {
       title: "Review a Runtrol Runtime request",
-      placeHolder: "Choose the local metadata removal request to inspect",
+      placeHolder: "Choose the exact local Runtime request to inspect",
       ignoreFocusOut: true,
     },
   );
   if (!selected) {
+    return;
+  }
+  if (selected.requestKind === "rotation") {
+    const confirmed = await vscode.window.showWarningMessage(
+      `Allow ${selected.request.integration_label} to replace integration key generation ${selected.request.current_key_generation} with ${selected.request.new_key_fingerprint}? Existing key credentials stop authenticating immediately.`,
+      { modal: true },
+      "Allow Key Rotation",
+    );
+    if (confirmed !== "Allow Key Rotation") {
+      return;
+    }
+    const decided = await ask(client, {
+      ask: "runtimeKeyRotationConfirm",
+      with: { confirmation_id: selected.request.confirmation_id },
+    });
+    expectDone(decided, "Runtime integration key rotation confirmation");
+    await vscode.window.showInformationMessage("Runtrol: The integration key rotation was confirmed.");
     return;
   }
   const confirmed = await vscode.window.showWarningMessage(

@@ -10,12 +10,12 @@ use crate::{
     ListModelsParams, ListNativeSessionsParams, ListPendingApprovalsParams, ManagedSessionList,
     NativeSessionCatalogue, PendingApprovalList, ProviderList, ProviderWatchEndedNotification,
     ProvidersChangedNotification, RequestEnrollmentParams, RespondApprovalParams,
-    ResumeSessionParams, RuntimeEventNotification, RuntimeLocatorRecord, RuntimeMethod,
-    RuntimeModelCatalog, RuntimeProviderCapabilities, ServerChallenge, SessionDescriptor,
-    SessionIndexChangedNotification, SessionIndexEndedNotification, SessionOpenResult,
-    StartSessionParams, SubmitInputParams, WatchEnrollmentParams, WatchEventsParams,
-    WatchEventsResult, WatchProvidersParams, WatchProvidersResult, WatchSessionIndexParams,
-    WatchSessionIndexResult,
+    ResumeSessionParams, RotateIntegrationKeyParams, RuntimeEventNotification,
+    RuntimeLocatorRecord, RuntimeMethod, RuntimeModelCatalog, RuntimeProviderCapabilities,
+    ServerChallenge, SessionDescriptor, SessionIndexChangedNotification,
+    SessionIndexEndedNotification, SessionOpenResult, StartSessionParams, SubmitInputParams,
+    WatchEnrollmentParams, WatchEventsParams, WatchEventsResult, WatchProvidersParams,
+    WatchProvidersResult, WatchSessionIndexParams, WatchSessionIndexResult,
 };
 
 /// Checked schema filename inside this package.
@@ -40,6 +40,7 @@ struct PublicProtocolSchema {
     watch_enrollment: WatchEnrollmentParams,
     enrollment_decision: EnrollmentDecision,
     integration_grant: IntegrationGrant,
+    rotate_integration_key: RotateIntegrationKeyParams,
     runtime_locator: RuntimeLocatorRecord,
     provider_list: ProviderList,
     get_provider_capabilities: GetProviderCapabilitiesParams,

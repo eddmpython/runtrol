@@ -52,6 +52,21 @@ pub struct IntegrationRow {
     pub revoked_at: Option<WallMs>,
 }
 
+/// Durable result of one exact integration key rotation attempt.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum IntegrationKeyRotation {
+    /// The old generation was current and the replacement committed.
+    Rotated(IntegrationRow),
+    /// The same replacement was already committed at the next generation.
+    Replayed(IntegrationRow),
+    /// The current generation or key does not match this request.
+    Conflict,
+    /// The integration identity does not exist.
+    Missing,
+    /// The integration was revoked before rotation.
+    Revoked,
+}
+
 /// Terminal or pending enrollment state.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EnrollmentState {
@@ -406,6 +421,61 @@ impl Store {
             .commit()
             .map_err(|error| engine("committing integration revocation", error))?;
         Ok(true)
+    }
+
+    /// Atomically replace one exact current public key and increment its key generation.
+    ///
+    /// A row already holding the proposed key at exactly the next generation is a successful replay.
+    ///
+    /// # Errors
+    ///
+    /// Codec, generation exhaustion, or engine failure.
+    pub fn rotate_integration_key(
+        &self,
+        key: IntegrationKey,
+        expected_generation: u64,
+        new_public_key: [u8; KEY_BYTES],
+    ) -> Result<IntegrationKeyRotation, StoreError> {
+        let write = self.begin_durable_write("rotating a Runtime integration key")?;
+        let outcome;
+        {
+            let mut table = write
+                .open_table(INTEGRATIONS)
+                .map_err(|error| engine("opening the integration grant table", error))?;
+            let Some(stored) = table
+                .get(key)
+                .map_err(|error| engine("reading an integration for key rotation", error))?
+            else {
+                return Ok(IntegrationKeyRotation::Missing);
+            };
+            let mut row = decode_integration(stored.value())?;
+            if row.revoked_at.is_some() {
+                return Ok(IntegrationKeyRotation::Revoked);
+            }
+            if row.key_generation == expected_generation.saturating_add(1)
+                && row.public_key == new_public_key
+            {
+                return Ok(IntegrationKeyRotation::Replayed(row));
+            }
+            if row.key_generation != expected_generation || row.public_key == new_public_key {
+                return Ok(IntegrationKeyRotation::Conflict);
+            }
+            row.key_generation = row
+                .key_generation
+                .checked_add(1)
+                .ok_or_else(|| integration_codec("key generation", "it is exhausted"))?;
+            row.public_key = new_public_key;
+            let encoded = encode_integration(&row)?;
+            drop(stored);
+            table
+                .insert(key, encoded.as_slice())
+                .map_err(|error| engine("writing integration key rotation", error))?;
+            outcome = IntegrationKeyRotation::Rotated(row);
+        }
+        write
+            .commit()
+            .map_err(|error| engine("committing integration key rotation", error))?;
+        Ok(outcome)
     }
 
     fn change_enrollment_state(
@@ -855,6 +925,61 @@ mod tests {
             .expect("exists");
         assert_eq!(revoked.grant_generation, 2);
         assert_eq!(revoked.revoked_at, Some(WallMs::from_millis(5)));
+    }
+
+    #[test]
+    fn key_rotation_is_atomic_and_exactly_replayable() {
+        let scratch = Scratch::make("key-rotation");
+        let pending = EnrollmentKey::from_bytes([10; 16]);
+        let integration = IntegrationKey::from_bytes([11; 16]);
+        scratch
+            .store
+            .create_enrollment(pending, &enrollment())
+            .expect("create enrollment");
+        let grant = IntegrationRow {
+            public_key: [1; 32],
+            client_instance_id: "fixture-instance".into(),
+            label: "Fixture".into(),
+            manifest_digest: [2; 32],
+            scopes: vec!["provider.read".into()],
+            roots: vec![IntegrationRootRow {
+                path: "C:/work".into(),
+                identity: [7; ROOT_IDENTITY_BYTES],
+            }],
+            key_generation: 1,
+            grant_generation: 1,
+            approved_at: WallMs::from_millis(3),
+            revoked_at: None,
+        };
+        scratch
+            .store
+            .approve_enrollment(pending, integration, &grant)
+            .expect("approve integration");
+        let rotated = scratch
+            .store
+            .rotate_integration_key(integration, 1, [9; 32])
+            .expect("rotate key");
+        assert!(matches!(
+            rotated,
+            IntegrationKeyRotation::Rotated(row)
+                if row.public_key == [9; 32]
+                    && row.key_generation == 2
+                    && row.grant_generation == 1
+        ));
+        assert!(matches!(
+            scratch
+                .store
+                .rotate_integration_key(integration, 1, [9; 32])
+                .expect("replay key rotation"),
+            IntegrationKeyRotation::Replayed(_)
+        ));
+        assert_eq!(
+            scratch
+                .store
+                .rotate_integration_key(integration, 1, [8; 32])
+                .expect("reject changed replay"),
+            IntegrationKeyRotation::Conflict
+        );
     }
 
     #[test]

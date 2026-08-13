@@ -122,6 +122,15 @@ pub enum Request {
         confirmation_id: Box<str>,
     },
 
+    /// List public Runtime integration-key rotations awaiting one local decision.
+    RuntimeKeyRotationRequests,
+
+    /// Confirm one exact public Runtime integration-key rotation at the machine.
+    RuntimeKeyRotationConfirm {
+        /// Opaque one-use local confirmation identity.
+        confirmation_id: Box<str>,
+    },
+
     /// Begin a conversation that does not exist yet.
     Start {
         /// Which CLI.
@@ -284,6 +293,9 @@ pub enum Response {
 
     /// Public Runtime session-forget requests awaiting one local decision.
     RuntimeForgetRequests(Vec<RuntimeForgetLine>),
+
+    /// Public Runtime integration-key rotations awaiting one local decision.
+    RuntimeKeyRotationRequests(Vec<RuntimeKeyRotationLine>),
 
     /// A session was started or resumed.
     Started {
@@ -466,6 +478,23 @@ pub struct RuntimeForgetLine {
     pub integration_label: Box<str>,
     /// Exact Runtime session pointer that would be removed.
     pub session_id: Box<str>,
+    /// Expiry in Unix milliseconds.
+    pub expires_at_ms: u64,
+}
+
+/// One public Runtime integration-key rotation safe for local presentation.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct RuntimeKeyRotationLine {
+    /// Opaque one-use local confirmation identity.
+    pub confirmation_id: Box<str>,
+    /// Integration asking to replace its public key.
+    pub integration_id: Box<str>,
+    /// Operator-approved integration label.
+    pub integration_label: Box<str>,
+    /// Exact key generation the request will replace.
+    pub current_key_generation: u64,
+    /// Short fingerprint of the proposed replacement key.
+    pub new_key_fingerprint: Box<str>,
     /// Expiry in Unix milliseconds.
     pub expires_at_ms: u64,
 }

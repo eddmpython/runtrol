@@ -6,7 +6,7 @@ use core::str::FromStr;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::{ClientCapabilities, ClientInfo, ProtocolRevision};
+use crate::{ClientCapabilities, ClientInfo, MutationRequestId, ProtocolRevision};
 
 macro_rules! opaque_id {
     ($name:ident, $docs:literal) => {
@@ -256,6 +256,20 @@ pub struct IntegrationGrant {
     pub grant_generation: u64,
 }
 
+/// Replace one approved integration key after an exact local confirmation.
+#[derive(Clone, Debug, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RotateIntegrationKeyParams {
+    /// Caller-owned idempotency identity retained across retries.
+    pub request_id: MutationRequestId,
+    /// Key generation observed before the rotation began.
+    pub expected_key_generation: u64,
+    /// Base64url Ed25519 verification key that will replace the current key.
+    pub new_public_key: String,
+    /// Base64url signature by the new key over the canonical rotation payload.
+    pub new_key_proof: String,
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct InitializationSigningPayload<'a> {
@@ -305,6 +319,17 @@ struct EnrollmentSigningPayload<'a> {
     manifest: &'a EnrollmentManifest,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct KeyRotationSigningPayload<'a> {
+    domain: &'static str,
+    integration_id: &'a IntegrationId,
+    grant_generation: u64,
+    request_id: &'a MutationRequestId,
+    expected_key_generation: u64,
+    new_public_key: &'a str,
+}
+
 /// Canonical bytes proving possession of the key proposed for enrollment.
 ///
 /// # Errors
@@ -326,6 +351,26 @@ pub fn enrollment_signing_payload(
         client,
         client_capabilities: capabilities,
         manifest,
+    })
+}
+
+/// Canonical bytes proving possession of a proposed replacement key.
+///
+/// # Errors
+///
+/// Serialization failure, which indicates a protocol implementation defect rather than caller data.
+pub fn key_rotation_signing_payload(
+    integration_id: &IntegrationId,
+    grant_generation: u64,
+    params: &RotateIntegrationKeyParams,
+) -> Result<Vec<u8>, serde_json::Error> {
+    serde_json::to_vec(&KeyRotationSigningPayload {
+        domain: "runtrol-runtime-key-rotation-v1",
+        integration_id,
+        grant_generation,
+        request_id: &params.request_id,
+        expected_key_generation: params.expected_key_generation,
+        new_public_key: &params.new_public_key,
     })
 }
 

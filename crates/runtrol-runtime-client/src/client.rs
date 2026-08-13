@@ -8,16 +8,16 @@ use runtrol_runtime_protocol::{
     ForgetSessionParams, GetProviderCapabilitiesParams, GetSessionParams, InitializeParams,
     InitializeResult, IntegrationAuthentication, IntegrationGrant, JsonRpcId, JsonRpcNotification,
     JsonRpcRequest, JsonRpcResponse, LaggedNotification, ListModelsParams,
-    ListNativeSessionsParams, ListPendingApprovalsParams, ManagedSessionList,
+    ListNativeSessionsParams, ListPendingApprovalsParams, ManagedSessionList, MutationRequestId,
     NativeSessionCatalogue, PendingApprovalList, PendingEnrollmentId, ProviderId, ProviderList,
     ProviderWatchEndedNotification, ProvidersChangedNotification, RequestEnrollmentParams,
-    RespondApprovalParams, ResumeSessionParams, RuntimeEventNotification, RuntimeMethod,
-    RuntimeModelCatalog, RuntimeProviderCapabilities, RuntimeSessionId, ServerChallenge,
-    SessionDescriptor, SessionIndexChangedNotification, SessionIndexEndedNotification,
-    SessionOpenResult, StartSessionParams, SubmitInputParams, SuccessResponse,
-    WatchEnrollmentParams, WatchEventsParams, WatchEventsResult, WatchProvidersParams,
-    WatchProvidersResult, WatchSessionIndexParams, WatchSessionIndexResult,
-    enrollment_signing_payload, initialization_signing_payload,
+    RespondApprovalParams, ResumeSessionParams, RotateIntegrationKeyParams,
+    RuntimeEventNotification, RuntimeMethod, RuntimeModelCatalog, RuntimeProviderCapabilities,
+    RuntimeSessionId, ServerChallenge, SessionDescriptor, SessionIndexChangedNotification,
+    SessionIndexEndedNotification, SessionOpenResult, StartSessionParams, SubmitInputParams,
+    SuccessResponse, WatchEnrollmentParams, WatchEventsParams, WatchEventsResult,
+    WatchProvidersParams, WatchProvidersResult, WatchSessionIndexParams, WatchSessionIndexResult,
+    enrollment_signing_payload, initialization_signing_payload, key_rotation_signing_payload,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -540,6 +540,46 @@ impl IntegrationClient<'_> {
         self.runtime
             .call(RuntimeMethod::IntegrationsGetGrant, &EmptyParams {})
             .await
+    }
+
+    /// Replace the authenticated integration key after local confirmation.
+    ///
+    /// Keep the replacement identity and request identity until a definite result is received. A retry after an
+    /// ambiguous response uses the same request identity and the generation observed before rotation.
+    ///
+    /// # Errors
+    ///
+    /// Missing authenticated grant, protocol encoding, transport, or Runtime refusal.
+    pub async fn rotate_key(
+        &mut self,
+        request_id: MutationRequestId,
+        expected_key_generation: u64,
+        replacement: &IntegrationIdentity,
+    ) -> Result<IntegrationCredentials, ClientError> {
+        let grant = self.runtime.initialized.grant.as_ref().ok_or_else(|| {
+            ClientError::Protocol(
+                "integration key rotation requires an authenticated grant".to_owned(),
+            )
+        })?;
+        let mut params = RotateIntegrationKeyParams {
+            request_id,
+            expected_key_generation,
+            new_public_key: replacement.public_key_base64(),
+            new_key_proof: String::new(),
+        };
+        let payload =
+            key_rotation_signing_payload(&grant.integration_id, grant.grant_generation, &params)
+                .map_err(|error| {
+                    ClientError::Protocol(format!(
+                        "key rotation proof payload cannot be encoded: {error}"
+                    ))
+                })?;
+        params.new_key_proof = replacement.sign_base64(&payload);
+        let rotated = self
+            .runtime
+            .call(RuntimeMethod::IntegrationsRotateKey, &params)
+            .await?;
+        Ok(IntegrationCredentials::new(replacement.clone(), rotated))
     }
 }
 
@@ -1104,6 +1144,7 @@ impl EventSubscription<'_> {
             | RuntimeMethod::IntegrationsRequestEnrollment
             | RuntimeMethod::IntegrationsWatchEnrollment
             | RuntimeMethod::IntegrationsGetGrant
+            | RuntimeMethod::IntegrationsRotateKey
             | RuntimeMethod::ProvidersList
             | RuntimeMethod::ProvidersWatch
             | RuntimeMethod::ProvidersGetCapabilities
@@ -1208,6 +1249,34 @@ mod tests {
         assert_eq!(
             identity.sign_base64(&payload),
             "cBrwv1dkWz6oG-YszAimU6leDfkNriZSKxUNSGYttRiH2dD0RJQsTklzpjzW3_qSIZYwrPeSPLHnCyW5fJ5sBQ"
+        );
+    }
+
+    #[test]
+    fn key_rotation_signature_matches_the_language_neutral_fixture() {
+        let identity = IntegrationIdentity::from_secret_bytes([8; 32]);
+        let mut params = RotateIntegrationKeyParams {
+            request_id: "019c2b97-5f29-7b00-8000-000000000000"
+                .parse()
+                .expect("valid fixture mutation identity"),
+            expected_key_generation: 2,
+            new_public_key: identity.public_key_base64(),
+            new_key_proof: String::new(),
+        };
+        let payload = key_rotation_signing_payload(
+            &runtrol_runtime_protocol::IntegrationId::new("int_09090909090909090909090909090909"),
+            3,
+            &params,
+        )
+        .expect("canonical key rotation payload");
+        params.new_key_proof = identity.sign_base64(&payload);
+        assert_eq!(
+            params.new_public_key,
+            "E5j2LG0aRXxRumpLXz29L2n8qTIWIY3ImX5Ba9F9k8o"
+        );
+        assert_eq!(
+            params.new_key_proof,
+            "c3ZY8ElvUR3lVmFrkVrP5AnALg7q9bgcgU5DP0e0MhZZFaY_jGvRTEiesBUXnQyOjLepXGnx3xqkBmw-gZ_5CA"
         );
     }
 

@@ -45,7 +45,9 @@ pub use integration_audit::{
 pub use integration_mutations::{
     INTEGRATION_MUTATION_MAX_ROWS, IntegrationMutationRow, IntegrationMutationState,
 };
-pub use integrations::{EnrollmentRow, EnrollmentState, IntegrationRootRow, IntegrationRow};
+pub use integrations::{
+    EnrollmentRow, EnrollmentState, IntegrationKeyRotation, IntegrationRootRow, IntegrationRow,
+};
 pub use open::{CACHE_BYTES, Store};
 pub use schema::{
     DeviceKey, EnrollmentKey, IntegrationAuditKey, IntegrationKey, IntegrationMutationKey,

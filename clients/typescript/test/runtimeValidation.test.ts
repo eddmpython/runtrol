@@ -3,6 +3,7 @@ import { test } from "node:test";
 
 import {
   FINALIZED_REVISIONS,
+  type IntegrationGrant,
   IntegrationIdentity,
   PUBLIC_LIMITS,
   RuntimeConnector,
@@ -29,7 +30,7 @@ function challenge(instanceId: string): object {
   };
 }
 
-function initialized(instanceId: string): object {
+function initialized(instanceId: string, grant?: object): object {
   return {
     jsonrpc: "2.0",
     id: 1,
@@ -50,9 +51,53 @@ function initialized(instanceId: string): object {
         sessionEvents: true,
       },
       limits: PUBLIC_LIMITS,
+      ...(grant ? { grant } : {}),
     },
   };
 }
+
+test("key rotation signs the replacement key and returns replacement credentials", async () => {
+  const instanceId = `rtm_${"6".repeat(32)}`;
+  const original = IntegrationIdentity.generate();
+  const replacement = IntegrationIdentity.fromPkcs8(Buffer.concat([
+    Buffer.from("302e020100300506032b657004220420", "hex"),
+    Buffer.alloc(32, 8),
+  ]));
+  const grant: IntegrationGrant = {
+    integrationId: "int_09090909090909090909090909090909",
+    scopes: ["provider.read"],
+    roots: [],
+    keyGeneration: 2,
+    grantGeneration: 3,
+  };
+  const rotated = { ...grant, keyGeneration: 3 };
+  const transport = new ScriptedRuntimeTransport([
+    challenge(instanceId),
+    initialized(instanceId, grant),
+    { jsonrpc: "2.0", id: 2, result: rotated },
+  ]);
+  const runtime = await new RuntimeConnector(scriptedTransportFactory(transport)).connect(
+    validatedLocator(instanceId, "fixture", "0.1.1"),
+    { name: "fixture", version: "1.0.0", credentials: { identity: original, grant } },
+  );
+  const requestId = "019c2b97-5f29-7b00-8000-000000000000";
+  const credentials = await runtime.integrations().rotateKey(requestId, 2, replacement);
+  assert.equal(credentials.identity, replacement);
+  assert.deepEqual(credentials.grant, rotated);
+  const sent = JSON.parse(new TextDecoder().decode(transport.sent[2])) as {
+    method: string;
+    params: { requestId: string; expectedKeyGeneration: number; newPublicKey: string; newKeyProof: string };
+  };
+  assert.equal(sent.method, "integrations/rotateKey");
+  assert.equal(sent.params.requestId, requestId);
+  assert.equal(sent.params.expectedKeyGeneration, 2);
+  assert.equal(sent.params.newPublicKey, "E5j2LG0aRXxRumpLXz29L2n8qTIWIY3ImX5Ba9F9k8o");
+  assert.equal(
+    sent.params.newKeyProof,
+    "c3ZY8ElvUR3lVmFrkVrP5AnALg7q9bgcgU5DP0e0MhZZFaY_jGvRTEiesBUXnQyOjLepXGnx3xqkBmw-gZ_5CA",
+  );
+  runtime.close();
+});
 
 test("hostile Runtime results are rejected by the generated public schema", () => {
   const instanceId = `rtm_${"1".repeat(32)}`;

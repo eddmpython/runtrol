@@ -7,10 +7,11 @@ use ed25519_dalek::{Signature, VerifyingKey};
 use runtrol_provider::WallMs;
 use runtrol_runtime_protocol::{
     AppScope, CHALLENGE_LIFETIME_MS, ClientCapabilities, ClientInfo, ENROLLMENT_LIFETIME_MS,
-    EnrollmentDecision, EnrollmentReceipt, IntegrationAuthentication, IntegrationGrant,
-    IntegrationId, MAX_PENDING_ENROLLMENTS, PendingEnrollmentId, ProtocolRevision,
-    RequestEnrollmentParams, RuntimeErrorKind, ServerChallenge, enrollment_signing_payload,
-    initialization_signing_payload,
+    EnrollmentDecision, EnrollmentReceipt, IDEMPOTENCY_WINDOW_MS, IntegrationAuthentication,
+    IntegrationGrant, IntegrationId, MAX_PENDING_ENROLLMENTS, MUTATION_CLOCK_SKEW_MS,
+    PendingEnrollmentId, ProtocolRevision, RequestEnrollmentParams, RotateIntegrationKeyParams,
+    RuntimeErrorKind, ServerChallenge, enrollment_signing_payload, initialization_signing_payload,
+    key_rotation_signing_payload,
 };
 use runtrol_store::{
     EnrollmentKey, EnrollmentRow, EnrollmentState, IntegrationKey, IntegrationRootRow,
@@ -159,6 +160,51 @@ pub(crate) fn refresh(
         grant: grant(current.grant.integration_id.clone(), &row)?,
         roots: row.roots,
     })
+}
+
+/// Verify a replacement-key proof against the exact current or already-rotated grant row.
+pub(crate) fn verify_key_rotation(
+    authority: &AuthorizedIntegration,
+    row: &IntegrationRow,
+    params: &RotateIntegrationKeyParams,
+) -> Result<[u8; 32], AuthorizationFailure> {
+    let now = WallMs::now().as_millis();
+    let Some(created_at) = params.request_id.unix_millis() else {
+        return Err(AuthorizationFailure::invalid(
+            "the key rotation request identity is malformed",
+        ));
+    };
+    if created_at > now.saturating_add(MUTATION_CLOCK_SKEW_MS)
+        || created_at.saturating_add(IDEMPOTENCY_WINDOW_MS) < now
+    {
+        return Err(AuthorizationFailure::invalid(
+            "the key rotation request identity is outside its bounded lifetime",
+        ));
+    }
+    if params.expected_key_generation == u64::MAX {
+        return Err(AuthorizationFailure::invalid(
+            "the expected integration key generation is exhausted",
+        ));
+    }
+    let new_public_key = decode_exact::<32>(&params.new_public_key, "new public key")?;
+    let first_attempt =
+        row.key_generation == params.expected_key_generation && row.public_key != new_public_key;
+    let completed_replay = row.key_generation == params.expected_key_generation + 1
+        && row.public_key == new_public_key;
+    if !first_attempt && !completed_replay {
+        return Err(AuthorizationFailure {
+            kind: RuntimeErrorKind::IdempotencyConflict,
+            message: "the key rotation request no longer matches the integration generation",
+        });
+    }
+    let payload = key_rotation_signing_payload(
+        &authority.grant.integration_id,
+        authority.grant.grant_generation,
+        params,
+    )
+    .map_err(|_| AuthorizationFailure::internal())?;
+    verify_signature(&new_public_key, &params.new_key_proof, &payload)?;
+    Ok(new_public_key)
 }
 
 /// Prove possession, apply enrollment bounds, and persist one opaque pending decision.
@@ -320,7 +366,7 @@ pub(crate) fn enrollment_decision(
     }
 }
 
-fn grant(
+pub(crate) fn grant(
     id: IntegrationId,
     row: &IntegrationRow,
 ) -> Result<IntegrationGrant, AuthorizationFailure> {

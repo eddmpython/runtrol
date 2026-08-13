@@ -563,6 +563,8 @@ pub(crate) const fn is_integration_admin(request: &Request) -> bool {
             | Request::IntegrationRevoke { .. }
             | Request::RuntimeForgetRequests
             | Request::RuntimeForgetConfirm { .. }
+            | Request::RuntimeKeyRotationRequests
+            | Request::RuntimeKeyRotationConfirm { .. }
     )
 }
 
@@ -623,6 +625,16 @@ pub(crate) async fn prepare_integration_admin(
         Request::RuntimeForgetConfirm { confirmation_id } => composed
             .integration_admin
             .confirm_forget(confirmation_id)
+            .await
+            .map(|()| Response::Done),
+        Request::RuntimeKeyRotationRequests => composed
+            .integration_admin
+            .key_rotation_requests(composed)
+            .await
+            .map(Response::RuntimeKeyRotationRequests),
+        Request::RuntimeKeyRotationConfirm { confirmation_id } => composed
+            .integration_admin
+            .confirm_key_rotation(confirmation_id)
             .await
             .map(|()| Response::Done),
         _ => return Prepared::None,
@@ -708,7 +720,9 @@ pub(crate) fn answer_prepared(
         | Request::Integrations
         | Request::IntegrationRevoke { .. }
         | Request::RuntimeForgetRequests
-        | Request::RuntimeForgetConfirm { .. } => match prepared {
+        | Request::RuntimeForgetConfirm { .. }
+        | Request::RuntimeKeyRotationRequests
+        | Request::RuntimeKeyRotationConfirm { .. } => match prepared {
             Prepared::IntegrationAdmin { response } => Reply::One(response),
             _ => Reply::One(refuse(
                 "integration administration was not completed for this request",

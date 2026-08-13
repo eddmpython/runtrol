@@ -27,6 +27,9 @@ pub enum RuntimeMethod {
     /// Read the authenticated integration's current grant.
     #[serde(rename = "integrations/getGrant")]
     IntegrationsGetGrant,
+    /// Replace the authenticated integration key after exact local confirmation.
+    #[serde(rename = "integrations/rotateKey")]
+    IntegrationsRotateKey,
     /// Read the structural provider inventory.
     #[serde(rename = "providers/list")]
     ProvidersList,
@@ -124,6 +127,7 @@ impl RuntimeMethod {
             Self::IntegrationsRequestEnrollment => "integrations/requestEnrollment",
             Self::IntegrationsWatchEnrollment => "integrations/watchEnrollment",
             Self::IntegrationsGetGrant => "integrations/getGrant",
+            Self::IntegrationsRotateKey => "integrations/rotateKey",
             Self::ProvidersList => "providers/list",
             Self::ProvidersWatch => "providers/watch",
             Self::ProvidersGetCapabilities => "providers/getCapabilities",
@@ -173,6 +177,7 @@ impl FromStr for RuntimeMethod {
             "integrations/requestEnrollment" => Ok(Self::IntegrationsRequestEnrollment),
             "integrations/watchEnrollment" => Ok(Self::IntegrationsWatchEnrollment),
             "integrations/getGrant" => Ok(Self::IntegrationsGetGrant),
+            "integrations/rotateKey" => Ok(Self::IntegrationsRotateKey),
             "providers/list" => Ok(Self::ProvidersList),
             "providers/watch" => Ok(Self::ProvidersWatch),
             "providers/getCapabilities" => Ok(Self::ProvidersGetCapabilities),
@@ -224,6 +229,7 @@ mod tests {
             RuntimeMethod::IntegrationsRequestEnrollment,
             RuntimeMethod::IntegrationsWatchEnrollment,
             RuntimeMethod::IntegrationsGetGrant,
+            RuntimeMethod::IntegrationsRotateKey,
             RuntimeMethod::ProvidersList,
             RuntimeMethod::ProvidersWatch,
             RuntimeMethod::ProvidersGetCapabilities,
