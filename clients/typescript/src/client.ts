@@ -8,6 +8,7 @@ import type {
   ClientInfo,
   ControlLease,
   ControlLeaseParams,
+  CoolSessionParams,
   EnrollmentDecision,
   EnrollmentManifest,
   EnrollmentReceipt,
@@ -294,6 +295,10 @@ export class SessionClient {
 
   public async interrupt(params: ControlLeaseParams): Promise<void> {
     requireEmpty(await callRuntime(this.runtime, "sessions/interrupt", params, undefined));
+  }
+
+  public async cool(params: CoolSessionParams): Promise<void> {
+    requireEmpty(await callRuntime(this.runtime, "sessions/cool", params, undefined));
   }
 
   public async watchEvents(params: WatchEventsParams): Promise<EventSubscription> {

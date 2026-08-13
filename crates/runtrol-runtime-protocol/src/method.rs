@@ -72,6 +72,9 @@ pub enum RuntimeMethod {
     /// Interrupt one exact controlled live session.
     #[serde(rename = "sessions/interrupt")]
     SessionsInterrupt,
+    /// Release one idle hot provider process while retaining its managed pointer.
+    #[serde(rename = "sessions/cool")]
+    SessionsCool,
     /// One normalized event notification.
     #[serde(rename = "sessions/event")]
     SessionsEvent,
@@ -109,6 +112,7 @@ impl RuntimeMethod {
             Self::SessionsSubmitInput => "sessions/submitInput",
             Self::SessionsWatchEvents => "sessions/watchEvents",
             Self::SessionsInterrupt => "sessions/interrupt",
+            Self::SessionsCool => "sessions/cool",
             Self::SessionsEvent => "sessions/event",
             Self::SessionsLagged => "sessions/lagged",
             Self::PanicStop => "runtime/panicStop",
@@ -148,6 +152,7 @@ impl FromStr for RuntimeMethod {
             "sessions/submitInput" => Ok(Self::SessionsSubmitInput),
             "sessions/watchEvents" => Ok(Self::SessionsWatchEvents),
             "sessions/interrupt" => Ok(Self::SessionsInterrupt),
+            "sessions/cool" => Ok(Self::SessionsCool),
             "sessions/event" => Ok(Self::SessionsEvent),
             "sessions/lagged" => Ok(Self::SessionsLagged),
             "runtime/panicStop" => Ok(Self::PanicStop),
@@ -189,6 +194,7 @@ mod tests {
             RuntimeMethod::SessionsSubmitInput,
             RuntimeMethod::SessionsWatchEvents,
             RuntimeMethod::SessionsInterrupt,
+            RuntimeMethod::SessionsCool,
             RuntimeMethod::SessionsEvent,
             RuntimeMethod::SessionsLagged,
             RuntimeMethod::PanicStop,

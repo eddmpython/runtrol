@@ -3,8 +3,8 @@
 use base64ct::{Base64UrlUnpadded, Encoding as _};
 use runtrol_runtime_protocol::{
     AcquireControlParams, AdoptNativeSessionParams, AppScope, CHALLENGE_LIFETIME_MS,
-    ClientCapabilities, ClientInfo, ControlLease, ControlLeaseParams, EnrollmentDecision,
-    EnrollmentManifest, EnrollmentReceipt, ErrorResponse, FINALIZED_REVISIONS,
+    ClientCapabilities, ClientInfo, ControlLease, ControlLeaseParams, CoolSessionParams,
+    EnrollmentDecision, EnrollmentManifest, EnrollmentReceipt, ErrorResponse, FINALIZED_REVISIONS,
     GetProviderCapabilitiesParams, GetSessionParams, InitializeParams, InitializeResult,
     IntegrationAuthentication, IntegrationGrant, JsonRpcId, JsonRpcNotification, JsonRpcRequest,
     JsonRpcResponse, LaggedNotification, ListModelsParams, ListNativeSessionsParams,
@@ -743,6 +743,19 @@ impl SessionClient<'_> {
         Ok(())
     }
 
+    /// Release one exact idle provider process while retaining its managed session pointer.
+    ///
+    /// # Errors
+    ///
+    /// Public client and Runtime failures, including stale lifecycle, lease conflicts, and ambiguous cleanup.
+    pub async fn cool(&mut self, params: &CoolSessionParams) -> Result<(), ClientError> {
+        let _: EmptyResult = self
+            .runtime
+            .call(RuntimeMethod::SessionsCool, params)
+            .await?;
+        Ok(())
+    }
+
     /// Convert this connection into one bounded event subscription after the acknowledgement.
     ///
     /// The returned borrow prevents another request from sharing the dedicated stream connection.
@@ -845,6 +858,7 @@ impl EventSubscription<'_> {
             | RuntimeMethod::SessionsSubmitInput
             | RuntimeMethod::SessionsWatchEvents
             | RuntimeMethod::SessionsInterrupt
+            | RuntimeMethod::SessionsCool
             | RuntimeMethod::PanicStop => Err(ClientError::Protocol(
                 "the dedicated session stream received a non-event method".to_owned(),
             )),

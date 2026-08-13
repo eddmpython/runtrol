@@ -8,18 +8,18 @@ use runtrol_core::WorkspaceClaim;
 use runtrol_ipc::transport::Connection;
 use runtrol_provider::{CloseMode, Disposition, OpenIntent, WorkspaceAccess};
 use runtrol_runtime_protocol::{
-    AcquireControlParams, AdoptNativeSessionParams, AppScope, ControlLeaseParams, ErrorResponse,
-    FINALIZED_REVISIONS, GetProviderCapabilitiesParams, GetSessionParams, InitializeParams,
-    InitializeResult, JsonRpcId, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse,
-    LaggedNotification, ListModelsParams, ListNativeSessionsParams, MAX_MODEL_SELECTION_BYTES,
-    MAX_NATIVE_ADOPTION_TOKEN_BYTES, MAX_NATIVE_PUBLIC_CURSOR_BYTES, MAX_PAGE_ITEMS,
-    MAX_REVISION_OFFERS, ProtocolRevision, ProviderCapabilityAvailability,
-    ProviderCapabilityObservation, ProviderCapabilityProvenance, RequestEnrollmentParams,
-    ResumeSessionParams, RuntimeCapabilities, RuntimeError, RuntimeErrorKind, RuntimeInstance,
-    RuntimeLimits, RuntimeMethod, RuntimeModelCatalog, RuntimeModelChoice,
-    RuntimeProviderCapabilities, RuntimeReasoningChoice, RuntimeSessionId, SessionWorkspaceAccess,
-    StartSessionParams, SubmitInputParams, SuccessResponse, WatchEnrollmentParams,
-    WatchEventsParams, WatchEventsResult, negotiate,
+    AcquireControlParams, AdoptNativeSessionParams, AppScope, ControlLeaseParams,
+    CoolSessionParams, ErrorResponse, FINALIZED_REVISIONS, GetProviderCapabilitiesParams,
+    GetSessionParams, InitializeParams, InitializeResult, JsonRpcId, JsonRpcNotification,
+    JsonRpcRequest, JsonRpcResponse, LaggedNotification, ListModelsParams,
+    ListNativeSessionsParams, MAX_MODEL_SELECTION_BYTES, MAX_NATIVE_ADOPTION_TOKEN_BYTES,
+    MAX_NATIVE_PUBLIC_CURSOR_BYTES, MAX_PAGE_ITEMS, MAX_REVISION_OFFERS, ProtocolRevision,
+    ProviderCapabilityAvailability, ProviderCapabilityObservation, ProviderCapabilityProvenance,
+    RequestEnrollmentParams, ResumeSessionParams, RuntimeCapabilities, RuntimeError,
+    RuntimeErrorKind, RuntimeInstance, RuntimeLimits, RuntimeMethod, RuntimeModelCatalog,
+    RuntimeModelChoice, RuntimeProviderCapabilities, RuntimeReasoningChoice, RuntimeSessionId,
+    SessionWorkspaceAccess, StartSessionParams, SubmitInputParams, SuccessResponse,
+    WatchEnrollmentParams, WatchEventsParams, WatchEventsResult, negotiate,
 };
 use runtrol_store::EnrollmentKey;
 use runtrol_store::IntegrationAuditOutcome;
@@ -33,8 +33,8 @@ use crate::runtime_auth::{
 };
 use crate::runtime_control::{
     RuntimeAgentGuard, RuntimeAsked, RuntimeControlFailure, RuntimeControlReply,
-    RuntimeControlRequest, RuntimeOpenCompletion, RuntimeOpenGuard, RuntimeOpenRequest,
-    RuntimeReturned, cursor_to_public,
+    RuntimeControlRequest, RuntimeCoolGuard, RuntimeCooling, RuntimeOpenCompletion,
+    RuntimeOpenGuard, RuntimeOpenRequest, RuntimeReturned, cursor_to_public,
 };
 use crate::runtime_inventory::{
     RuntimeInventoryFailure, RuntimeSessionCatalogue, authorized_roots, authorized_workspace,
@@ -382,7 +382,8 @@ async fn dispatch_public(
             | RuntimeMethod::SessionsReleaseControl
             | RuntimeMethod::SessionsSubmitInput
             | RuntimeMethod::SessionsWatchEvents
-            | RuntimeMethod::SessionsInterrupt => {
+            | RuntimeMethod::SessionsInterrupt
+            | RuntimeMethod::SessionsCool => {
                 session_operation(
                     state, composed, sessions, asking, returning, method, id, params,
                 )
@@ -421,7 +422,9 @@ fn required_scope(method: RuntimeMethod) -> Option<AppScope> {
             Some(AppScope::SessionInputWrite)
         }
         RuntimeMethod::SessionsWatchEvents => Some(AppScope::SessionOutputRead),
-        RuntimeMethod::SessionsInterrupt => Some(AppScope::SessionStop),
+        RuntimeMethod::SessionsInterrupt | RuntimeMethod::SessionsCool => {
+            Some(AppScope::SessionStop)
+        }
         RuntimeMethod::SessionsRenewControl
         | RuntimeMethod::SessionsReleaseControl
         | RuntimeMethod::Initialize
@@ -1184,7 +1187,8 @@ async fn open_session(
         RuntimeControlReply::Lease(_)
         | RuntimeControlReply::Done
         | RuntimeControlReply::Watching { .. }
-        | RuntimeControlReply::Sending { .. } => Answer::plain(
+        | RuntimeControlReply::Sending { .. }
+        | RuntimeControlReply::Cooling(_) => Answer::plain(
             id,
             RuntimeErrorKind::Internal,
             "the session owner returned a mismatched open response",
@@ -1708,6 +1712,7 @@ enum ParsedSessionOperation {
         subscription_id: String,
     },
     Interrupt(ControlLeaseParams),
+    Cool(CoolSessionParams),
 }
 
 impl ParsedSessionOperation {
@@ -1719,6 +1724,7 @@ impl ParsedSessionOperation {
             }
             Self::Submit(params) => &params.session_id,
             Self::Watch { params, .. } => &params.session_id,
+            Self::Cool(params) => &params.session_id,
         }
     }
 
@@ -1737,6 +1743,7 @@ impl ParsedSessionOperation {
                 subscription_id,
             },
             Self::Interrupt(params) => RuntimeControlRequest::Interrupt { session, params },
+            Self::Cool(params) => RuntimeControlRequest::Cool { session, params },
         }
     }
 }
@@ -1770,6 +1777,9 @@ fn parse_session_operation(
         RuntimeMethod::SessionsInterrupt => serde_json::from_value(params)
             .map(ParsedSessionOperation::Interrupt)
             .map_err(|_| "session interrupt parameters are invalid"),
+        RuntimeMethod::SessionsCool => serde_json::from_value(params)
+            .map(ParsedSessionOperation::Cool)
+            .map_err(|_| "session cooling parameters are invalid"),
         RuntimeMethod::Initialize
         | RuntimeMethod::Initialized
         | RuntimeMethod::Challenge
@@ -1814,12 +1824,58 @@ async fn runtime_control_answer(
                 "the Runtime session owner stopped",
             ),
         },
+        RuntimeControlReply::Cooling(cooling) => {
+            match perform_runtime_cool(cooling, returning.clone()).await {
+                Some(Ok(())) => Answer::success(id, &EmptyResult {}),
+                Some(Err(failure)) => control_failure(id, failure),
+                None => Answer::plain(
+                    id,
+                    RuntimeErrorKind::RuntimeUnavailable,
+                    "the Runtime session owner stopped",
+                ),
+            }
+        }
         RuntimeControlReply::Opened(result) => Answer::success(id, &result),
         RuntimeControlReply::Opening(_) => Answer::plain(
             id,
             RuntimeErrorKind::Internal,
             "a session open reservation reached the ordinary control response path",
         ),
+    }
+}
+
+#[expect(
+    clippy::manual_ok_err,
+    reason = "Result::ok is forbidden because owner channel loss must remain explicit"
+)]
+async fn perform_runtime_cool(
+    cooling: RuntimeCooling,
+    returning: mpsc::UnboundedSender<RuntimeReturned>,
+) -> Option<Result<(), RuntimeControlFailure>> {
+    let RuntimeCooling {
+        mutation,
+        agent: handed_agent,
+        reservation,
+    } = cooling;
+    let guard = RuntimeCoolGuard::new(mutation, reservation, returning.clone());
+    let agent = handed_agent;
+    let outcome = agent.close(CloseMode::graceful()).await;
+    let reservation = guard.take()?;
+    let (answered, hearing) = oneshot::channel();
+    if returning
+        .send(RuntimeReturned::Cooled {
+            mutation,
+            reservation,
+            outcome,
+            answered,
+        })
+        .is_err()
+    {
+        return None;
+    }
+    match hearing.await {
+        Ok(result) => Some(result),
+        Err(_) => None,
     }
 }
 
@@ -2491,6 +2547,7 @@ listen = "stdio"
                     AppScope::SessionNativeDiscover,
                     AppScope::SessionStart,
                     AppScope::SessionResume,
+                    AppScope::SessionStop,
                 ],
                 vec![
                     project.to_string(),
@@ -2525,6 +2582,7 @@ listen = "stdio"
                         AppScope::SessionNativeDiscover.as_str().into(),
                         AppScope::SessionStart.as_str().into(),
                         AppScope::SessionResume.as_str().into(),
+                        AppScope::SessionStop.as_str().into(),
                     ],
                     roots: vec![
                         runtrol_store::IntegrationRootRow {
@@ -2687,6 +2745,23 @@ listen = "stdio"
             runtrol_runtime_client::ClientError::Runtime(error)
                 if error.code == RuntimeErrorKind::SessionConflict
         ));
+        let cool = runtrol_runtime_protocol::CoolSessionParams {
+            request_id: runtrol_runtime_protocol::MutationRequestId::now(),
+            session_id: resumed.session.session_id.clone(),
+            expected_session_generation: resumed.session.session_generation,
+            lease_id: resumed.control.lease_id.clone(),
+            lease_generation: resumed.control.lease_generation,
+        };
+        approved
+            .sessions()
+            .cool(&cool)
+            .await
+            .expect("cool the exact idle resumed session");
+        approved
+            .sessions()
+            .cool(&cool)
+            .await
+            .expect("replay the completed cool mutation");
         let denied_root = approved
             .providers()
             .list_native_sessions(runtrol_runtime_protocol::ListNativeSessionsParams {

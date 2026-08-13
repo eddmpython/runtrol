@@ -162,6 +162,22 @@ pub struct SubmitInputParams {
 /// Interrupt one exact controlled session.
 pub type InterruptParams = ControlLeaseParams;
 
+/// Cool one exact idle session while retaining its provider-native pointer.
+#[derive(Clone, Debug, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CoolSessionParams {
+    /// Caller-minted idempotency identity.
+    pub request_id: MutationRequestId,
+    /// Exact Runtime-managed session.
+    pub session_id: RuntimeSessionId,
+    /// Lifecycle generation visible when the user chose to cool the session.
+    pub expected_session_generation: u64,
+    /// Opaque lease identity returned on acquisition.
+    pub lease_id: String,
+    /// Exact current lease generation.
+    pub lease_generation: u64,
+}
+
 /// Public reconnect cursor over the existing bounded Runtime replay ring.
 #[derive(Clone, Debug, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

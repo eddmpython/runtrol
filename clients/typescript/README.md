@@ -51,4 +51,11 @@ const opened = await runtime.sessions().start({
 console.log(opened.session.sessionId);
 const current = await runtime.sessions().get(opened.session.sessionId);
 console.log(current.lifecycle);
+await runtime.sessions().cool({
+  requestId: newMutationRequestId(),
+  sessionId: opened.session.sessionId,
+  expectedSessionGeneration: opened.session.sessionGeneration,
+  leaseId: opened.control.leaseId,
+  leaseGeneration: opened.control.leaseGeneration,
+});
 ```

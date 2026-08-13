@@ -44,6 +44,16 @@ let current = runtime
     .get(opened.session.session_id.clone())
     .await?;
 assert_eq!(current.session_id, opened.session.session_id);
+runtime
+    .sessions()
+    .cool(&runtrol_runtime_protocol::CoolSessionParams {
+        request_id: runtrol_runtime_protocol::MutationRequestId::now(),
+        session_id: opened.session.session_id,
+        expected_session_generation: opened.session.session_generation,
+        lease_id: opened.control.lease_id,
+        lease_generation: opened.control.lease_generation,
+    })
+    .await?;
 # Ok(())
 # }
 ```

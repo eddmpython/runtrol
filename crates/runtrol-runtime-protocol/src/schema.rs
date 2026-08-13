@@ -4,14 +4,14 @@ use schemars::{JsonSchema, schema_for};
 
 use crate::{
     AcquireControlParams, AdoptNativeSessionParams, ControlLease, ControlLeaseParams,
-    EnrollmentDecision, EnrollmentReceipt, GetProviderCapabilitiesParams, GetSessionParams,
-    InitializeParams, InitializeResult, IntegrationGrant, JsonRpcNotification, JsonRpcRequest,
-    JsonRpcResponse, LaggedNotification, ListModelsParams, ListNativeSessionsParams,
-    ManagedSessionList, NativeSessionCatalogue, ProviderList, RequestEnrollmentParams,
-    ResumeSessionParams, RuntimeEventNotification, RuntimeLocatorRecord, RuntimeMethod,
-    RuntimeModelCatalog, RuntimeProviderCapabilities, ServerChallenge, SessionDescriptor,
-    SessionOpenResult, StartSessionParams, SubmitInputParams, WatchEnrollmentParams,
-    WatchEventsParams, WatchEventsResult,
+    CoolSessionParams, EnrollmentDecision, EnrollmentReceipt, GetProviderCapabilitiesParams,
+    GetSessionParams, InitializeParams, InitializeResult, IntegrationGrant, JsonRpcNotification,
+    JsonRpcRequest, JsonRpcResponse, LaggedNotification, ListModelsParams,
+    ListNativeSessionsParams, ManagedSessionList, NativeSessionCatalogue, ProviderList,
+    RequestEnrollmentParams, ResumeSessionParams, RuntimeEventNotification, RuntimeLocatorRecord,
+    RuntimeMethod, RuntimeModelCatalog, RuntimeProviderCapabilities, ServerChallenge,
+    SessionDescriptor, SessionOpenResult, StartSessionParams, SubmitInputParams,
+    WatchEnrollmentParams, WatchEventsParams, WatchEventsResult,
 };
 
 /// Checked schema filename inside this package.
@@ -54,6 +54,7 @@ struct PublicProtocolSchema {
     acquire_control: AcquireControlParams,
     control_lease: ControlLease,
     control_lease_params: ControlLeaseParams,
+    cool_session: CoolSessionParams,
     submit_input: SubmitInputParams,
     watch_events: WatchEventsParams,
     watch_events_result: WatchEventsResult,

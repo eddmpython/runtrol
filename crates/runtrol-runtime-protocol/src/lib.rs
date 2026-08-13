@@ -53,10 +53,11 @@ pub use rpc::{
 };
 pub use schema::{PUBLIC_SCHEMA_NAME, public_schema};
 pub use session::{
-    AcquireControlParams, CONTROL_LEASE_LIFETIME_MS, ControlLease, ControlLeaseParams, EventCursor,
-    EventGap, IDEMPOTENCY_WINDOW_MS, InterruptParams, LaggedNotification, MAX_IDEMPOTENCY_RECORDS,
-    MUTATION_CLOCK_SKEW_MS, MutationRequestId, MutationRequestIdError, RuntimeEventNotification,
-    SubmitInputParams, WatchEventsParams, WatchEventsResult,
+    AcquireControlParams, CONTROL_LEASE_LIFETIME_MS, ControlLease, ControlLeaseParams,
+    CoolSessionParams, EventCursor, EventGap, IDEMPOTENCY_WINDOW_MS, InterruptParams,
+    LaggedNotification, MAX_IDEMPOTENCY_RECORDS, MUTATION_CLOCK_SKEW_MS, MutationRequestId,
+    MutationRequestIdError, RuntimeEventNotification, SubmitInputParams, WatchEventsParams,
+    WatchEventsResult,
 };
 pub use session_open::{
     AdoptNativeSessionParams, MAX_MODEL_SELECTION_BYTES, ResumeSessionParams, SessionOpenResult,

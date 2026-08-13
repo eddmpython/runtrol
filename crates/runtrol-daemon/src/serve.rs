@@ -850,6 +850,13 @@ async fn serve_surfaces(
                                 completion,
                             );
                         }
+                        crate::runtime_control::RuntimeControlReply::Cooling(cooling) => {
+                            schedule_abandoned_runtime_cool(
+                                &mut connections,
+                                &runtime_returning,
+                                cooling,
+                            );
+                        }
                         _ => {}
                     }
                 }
@@ -902,13 +909,52 @@ async fn serve_surfaces(
                         taken,
                         &outcome,
                     );
-                    if answered.send(result).is_err() {}
+                    let _ignored = answered.send(result);
                 }
                 crate::runtime_control::RuntimeReturned::Abandoned { mutation, lease } => {
                     crate::runtime_control::RuntimeControl::abandon_command(
                         &mut sessions,
                         mutation,
                         lease,
+                    );
+                    publish_session_index(
+                        &session_index,
+                        &runtime_sessions,
+                        &composed,
+                        &sessions,
+                        &provider_update_notices,
+                    );
+                }
+                crate::runtime_control::RuntimeReturned::Cooled {
+                    mutation,
+                    reservation,
+                    outcome,
+                    answered,
+                } => {
+                    let result = runtime_control.finish_cool(
+                        &composed.store,
+                        &mut sessions,
+                        mutation,
+                        reservation,
+                        &outcome,
+                    );
+                    let _ignored = answered.send(result);
+                    publish_session_index(
+                        &session_index,
+                        &runtime_sessions,
+                        &composed,
+                        &sessions,
+                        &provider_update_notices,
+                    );
+                }
+                crate::runtime_control::RuntimeReturned::CoolAbandoned {
+                    mutation,
+                    reservation,
+                } => {
+                    crate::runtime_control::RuntimeControl::abandon_cool(
+                        &mut sessions,
+                        mutation,
+                        reservation,
                     );
                     publish_session_index(
                         &session_index,
@@ -1072,6 +1118,25 @@ async fn serve_surfaces(
     connections.abort_all();
     while connections.join_next().await.is_some() {}
     outcome
+}
+
+fn schedule_abandoned_runtime_cool(
+    tasks: &mut JoinSet<()>,
+    returning: &mpsc::UnboundedSender<crate::runtime_control::RuntimeReturned>,
+    cooling: crate::runtime_control::RuntimeCooling,
+) {
+    let returning = returning.clone();
+    tasks.spawn(async move {
+        let crate::runtime_control::RuntimeCooling {
+            mutation,
+            agent: handed_agent,
+            reservation,
+        } = cooling;
+        let guard = crate::runtime_control::RuntimeCoolGuard::new(mutation, reservation, returning);
+        let agent = handed_agent;
+        drop(agent.close(CloseMode::graceful()).await);
+        drop(guard);
+    });
 }
 
 fn deliver_runtime_open_completion(

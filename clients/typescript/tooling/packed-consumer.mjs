@@ -37,6 +37,7 @@ try {
     import {
       RuntimeConnector,
       newMutationRequestId,
+      type CoolSessionParams,
       type ListNativeSessionsParams,
       type ProviderId,
       type RuntimeClient,
@@ -61,6 +62,14 @@ try {
       access: "exclusive",
     };
     void runtime.sessions().start(start);
+    const cool: CoolSessionParams = {
+      requestId: newMutationRequestId(),
+      sessionId: session,
+      expectedSessionGeneration: 1,
+      leaseId: "opaque-lease",
+      leaseGeneration: 1,
+    };
+    void runtime.sessions().cool(cool);
     // @ts-expect-error raw protocol dispatch is not part of the public client API
     runtime.call("providers/list", {});
   `);

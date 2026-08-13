@@ -16,10 +16,10 @@ use runtrol_provider::{
     StreamId, WallMs, WatchCursor,
 };
 use runtrol_runtime_protocol::{
-    AcquireControlParams, CONTROL_LEASE_LIFETIME_MS, ControlLease, ControlLeaseParams, EventCursor,
-    IDEMPOTENCY_WINDOW_MS, LifecycleState, MAX_INPUT_BYTES, MUTATION_CLOCK_SKEW_MS,
-    MutationRequestId, RuntimeErrorKind, RuntimeMethod, SessionDescriptor, SessionOpenResult,
-    SubmitInputParams, WatchEventsParams, WatchEventsResult,
+    AcquireControlParams, CONTROL_LEASE_LIFETIME_MS, ControlLease, ControlLeaseParams,
+    CoolSessionParams, EventCursor, IDEMPOTENCY_WINDOW_MS, LifecycleState, MAX_INPUT_BYTES,
+    MUTATION_CLOCK_SKEW_MS, MutationRequestId, RuntimeErrorKind, RuntimeMethod, SessionDescriptor,
+    SessionOpenResult, SubmitInputParams, WatchEventsParams, WatchEventsResult,
 };
 use runtrol_store::{
     IntegrationKey, IntegrationMutationKey, IntegrationMutationRow, IntegrationMutationState, Store,
@@ -57,6 +57,10 @@ pub(crate) enum RuntimeControlRequest {
         session: SessionId,
         params: ControlLeaseParams,
     },
+    Cool {
+        session: SessionId,
+        params: CoolSessionParams,
+    },
     Watch {
         session: SessionId,
         params: WatchEventsParams,
@@ -77,6 +81,7 @@ pub(crate) enum RuntimeControlReply {
         taken: TakenAgent,
         command: AgentCommand,
     },
+    Cooling(RuntimeCooling),
     Opening(Box<RuntimeOpening>),
     Opened(SessionOpenResult),
     Failed(RuntimeControlFailure),
@@ -114,6 +119,13 @@ pub(crate) struct RuntimeOpening {
     lease_generation: u64,
 }
 
+/// One accepted cool mutation whose provider cleanup must run outside the session owner.
+pub(crate) struct RuntimeCooling {
+    pub(crate) mutation: IntegrationMutationKey,
+    pub(crate) agent: Box<dyn Agent>,
+    pub(crate) reservation: ClosingReservation,
+}
+
 /// Cleanup authority returned to the connection because process stopping must not block the owner.
 pub(crate) enum RuntimeOpenCleanup {
     Open(OpenReservation),
@@ -140,6 +152,16 @@ pub(crate) enum RuntimeReturned {
     Abandoned {
         mutation: IntegrationMutationKey,
         lease: runtrol_core::AgentLease,
+    },
+    Cooled {
+        mutation: IntegrationMutationKey,
+        reservation: ClosingReservation,
+        outcome: Result<(), runtrol_provider::ProviderError>,
+        answered: oneshot::Sender<Result<(), RuntimeControlFailure>>,
+    },
+    CoolAbandoned {
+        mutation: IntegrationMutationKey,
+        reservation: ClosingReservation,
     },
     Opened {
         opening: RuntimeOpening,
@@ -237,6 +259,42 @@ impl Drop for RuntimeAgentGuard {
             drop(self.returning.send(RuntimeReturned::Abandoned {
                 mutation: self.mutation,
                 lease,
+            }));
+        }
+    }
+}
+
+/// Cancellation guard for a provider process already removed from the live manager for cooling.
+pub(crate) struct RuntimeCoolGuard {
+    mutation: IntegrationMutationKey,
+    reservation: Option<ClosingReservation>,
+    returning: mpsc::UnboundedSender<RuntimeReturned>,
+}
+
+impl RuntimeCoolGuard {
+    pub(crate) fn new(
+        mutation: IntegrationMutationKey,
+        reservation: ClosingReservation,
+        returning: mpsc::UnboundedSender<RuntimeReturned>,
+    ) -> Self {
+        Self {
+            mutation,
+            reservation: Some(reservation),
+            returning,
+        }
+    }
+
+    pub(crate) fn take(mut self) -> Option<ClosingReservation> {
+        self.reservation.take()
+    }
+}
+
+impl Drop for RuntimeCoolGuard {
+    fn drop(&mut self) {
+        if let Some(reservation) = self.reservation.take() {
+            drop(self.returning.send(RuntimeReturned::CoolAbandoned {
+                mutation: self.mutation,
+                reservation,
             }));
         }
     }
@@ -348,6 +406,9 @@ impl RuntimeControl {
             }
             RuntimeControlRequest::Interrupt { session, params } => {
                 self.interrupt(store, sessions, integration, session, &params)
+            }
+            RuntimeControlRequest::Cool { session, params } => {
+                self.cool(store, sessions, integration, session, &params)
             }
             RuntimeControlRequest::Watch {
                 session,
@@ -621,6 +682,31 @@ impl RuntimeControl {
         sessions.abandon_agent(lease);
     }
 
+    /// Finish provider cleanup for an accepted cool mutation.
+    pub(crate) fn finish_cool(
+        &mut self,
+        store: &Store,
+        sessions: &mut SessionManager,
+        mutation: IntegrationMutationKey,
+        reservation: ClosingReservation,
+        outcome: &Result<(), runtrol_provider::ProviderError>,
+    ) -> Result<(), RuntimeControlFailure> {
+        sessions.release_closing(reservation);
+        match outcome {
+            Ok(()) => self.finish(store, mutation, MutationOutcome::Done),
+            Err(_) => Err(RuntimeControlFailure::outcome_unknown()),
+        }
+    }
+
+    /// Release a cancelled cool reservation while preserving its ambiguous mutation record.
+    pub(crate) fn abandon_cool(
+        sessions: &mut SessionManager,
+        _mutation: IntegrationMutationKey,
+        reservation: ClosingReservation,
+    ) {
+        sessions.release_closing(reservation);
+    }
+
     fn acquire(
         &mut self,
         store: &Store,
@@ -857,6 +943,70 @@ impl RuntimeControl {
         }
     }
 
+    fn cool(
+        &mut self,
+        store: &Store,
+        sessions: &mut SessionManager,
+        integration: IntegrationKey,
+        session: SessionId,
+        params: &CoolSessionParams,
+    ) -> RuntimeControlReply {
+        let authenticator = self.authenticate_cool(params);
+        let mutation = match self.begin(
+            store,
+            integration,
+            RuntimeMethod::SessionsCool,
+            &params.request_id,
+            authenticator,
+        ) {
+            Ok(Begun::New(key)) => key,
+            Ok(Begun::Replay(reply)) => return *reply,
+            Err(failure) => return RuntimeControlReply::Failed(failure),
+        };
+        if let Err(failure) = self.verify_lease_values(
+            sessions,
+            integration,
+            session,
+            &params.lease_id,
+            params.lease_generation,
+        ) {
+            return self.deny(store, mutation, failure);
+        }
+        let Some(live) = sessions.live_session(session) else {
+            return self.deny(store, mutation, not_live());
+        };
+        if public_lifecycle(live.state.lifecycle()) != LifecycleState::HotIdle
+            || live.state.generation() != params.expected_session_generation
+        {
+            return self.deny(
+                store,
+                mutation,
+                RuntimeControlFailure::new(
+                    RuntimeErrorKind::SessionConflict,
+                    "only the exact observed idle session can be cooled",
+                ),
+            );
+        }
+        match sessions.close(session) {
+            Ok(closing) => {
+                self.leases.remove(&session);
+                RuntimeControlReply::Cooling(RuntimeCooling {
+                    mutation,
+                    agent: closing.agent,
+                    reservation: closing.reservation,
+                })
+            }
+            Err(_) => self.deny(
+                store,
+                mutation,
+                RuntimeControlFailure::new(
+                    RuntimeErrorKind::SessionConflict,
+                    "the session cannot be cooled in its current state",
+                ),
+            ),
+        }
+    }
+
     fn watch(
         sessions: &mut SessionManager,
         session: SessionId,
@@ -1074,6 +1224,15 @@ impl RuntimeControl {
         finish_mac(mac)
     }
 
+    fn authenticate_cool(&self, params: &CoolSessionParams) -> [u8; 32] {
+        let mut mac = self.mac(RuntimeMethod::SessionsCool);
+        feed(&mut mac, params.session_id.as_str().as_bytes());
+        feed(&mut mac, &params.expected_session_generation.to_le_bytes());
+        feed(&mut mac, params.lease_id.as_bytes());
+        feed(&mut mac, &params.lease_generation.to_le_bytes());
+        finish_mac(mac)
+    }
+
     fn authenticate_open(&self, request: &RuntimeOpenRequest) -> [u8; 32] {
         let mut mac = self.mac(request.method);
         feed(&mut mac, request.provider.as_str().as_bytes());
@@ -1287,6 +1446,10 @@ async fn discard_fixture_open_completion(
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "the fixture owner exhaustively mirrors every production owner handoff and cancellation path"
+)]
 pub(crate) async fn fixture_runtime_owner(
     composed: std::sync::Arc<crate::Composed>,
     mut asked: mpsc::Receiver<RuntimeAsked>,
@@ -1311,6 +1474,19 @@ pub(crate) async fn fixture_runtime_owner(
                             let TakenAgent { agent, lease } = taken;
                             drop(agent);
                             sessions.abandon_agent(lease);
+                        }
+                        RuntimeControlReply::Cooling(cooling) => {
+                            let RuntimeCooling {
+                                mutation,
+                                agent,
+                                reservation,
+                            } = cooling;
+                            drop(agent.close(runtrol_provider::CloseMode::graceful()).await);
+                            RuntimeControl::abandon_cool(
+                                &mut sessions,
+                                mutation,
+                                reservation,
+                            );
                         }
                         _ => {}
                     }
@@ -1370,6 +1546,27 @@ pub(crate) async fn fixture_runtime_owner(
                     }
                     RuntimeReturned::Abandoned { mutation, lease } => {
                         RuntimeControl::abandon_command(&mut sessions, mutation, lease);
+                    }
+                    RuntimeReturned::Cooled {
+                        mutation,
+                        reservation,
+                        outcome,
+                        answered,
+                    } => {
+                        let result = control.finish_cool(
+                            &composed.store,
+                            &mut sessions,
+                            mutation,
+                            reservation,
+                            &outcome,
+                        );
+                        if answered.send(result).is_err() {}
+                    }
+                    RuntimeReturned::CoolAbandoned {
+                        mutation,
+                        reservation,
+                    } => {
+                        RuntimeControl::abandon_cool(&mut sessions, mutation, reservation);
                     }
                 }
             }
@@ -1609,6 +1806,120 @@ mod tests {
 
         drop((control, sessions, store));
         std::fs::remove_dir_all(directory).expect("clean fixture directory");
+    }
+
+    #[tokio::test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one lifecycle fixture proves lease binding, asynchronous cleanup, replay, and conflict together"
+    )]
+    async fn cooling_requires_the_exact_idle_lease_and_replays_only_after_cleanup() {
+        let directory = std::env::temp_dir().join(format!(
+            "runtrol-runtime-cool-{}-{}",
+            std::process::id(),
+            SessionId::now()
+        ));
+        std::fs::create_dir_all(&directory).expect("create cooling fixture");
+        let workspace =
+            AbsPath::canonicalize(directory.to_str().expect("UTF-8 fixture")).expect("workspace");
+        let store_path = workspace.join("state.redb").expect("store path");
+        let store = Store::open(&store_path).expect("open store");
+        let session = SessionId::now();
+        let mut sessions = SessionManager::new();
+        sessions
+            .start(
+                &QuietProvider,
+                OpenIntent {
+                    session,
+                    workspace,
+                    disposition: Disposition::Fresh,
+                    model: None,
+                    permission: None,
+                },
+                WorkspaceAccess::Shared,
+            )
+            .await
+            .expect("start cooling fixture");
+        let integration = IntegrationKey::from_bytes([6; 16]);
+        let mut control = RuntimeControl::new().expect("control authority");
+        let generation = sessions.state(session).expect("live state").generation();
+        let acquire = AcquireControlParams {
+            request_id: MutationRequestId::now(),
+            session_id: runtrol_runtime_protocol::RuntimeSessionId::new(session.to_string()),
+            expected_lifecycle: LifecycleState::HotIdle,
+            expected_session_generation: generation,
+        };
+        let RuntimeControlReply::Lease(lease) = control.answer(
+            &store,
+            &mut sessions,
+            integration,
+            RuntimeControlRequest::Acquire {
+                session,
+                params: acquire,
+            },
+        ) else {
+            panic!("expected control lease");
+        };
+        let params = CoolSessionParams {
+            request_id: MutationRequestId::now(),
+            session_id: lease.session_id.clone(),
+            expected_session_generation: generation,
+            lease_id: lease.lease_id,
+            lease_generation: lease.lease_generation,
+        };
+        let RuntimeControlReply::Cooling(cooling) = control.answer(
+            &store,
+            &mut sessions,
+            integration,
+            RuntimeControlRequest::Cool {
+                session,
+                params: params.clone(),
+            },
+        ) else {
+            panic!("expected provider cooling handoff");
+        };
+        assert!(sessions.live_session(session).is_none());
+        let RuntimeCooling {
+            mutation,
+            agent,
+            reservation,
+        } = cooling;
+        let outcome = agent.close(CloseMode::graceful()).await;
+        control
+            .finish_cool(&store, &mut sessions, mutation, reservation, &outcome)
+            .expect("finish provider cooling");
+        assert!(matches!(
+            control.answer(
+                &store,
+                &mut sessions,
+                integration,
+                RuntimeControlRequest::Cool {
+                    session,
+                    params: params.clone(),
+                },
+            ),
+            RuntimeControlReply::Done
+        ));
+
+        let mut changed = params;
+        changed.expected_session_generation = changed.expected_session_generation.saturating_add(1);
+        assert!(matches!(
+            control.answer(
+                &store,
+                &mut sessions,
+                integration,
+                RuntimeControlRequest::Cool {
+                    session,
+                    params: changed,
+                },
+            ),
+            RuntimeControlReply::Failed(RuntimeControlFailure {
+                kind: RuntimeErrorKind::IdempotencyConflict,
+                ..
+            })
+        ));
+        drop((control, sessions, store));
+        std::fs::remove_dir_all(directory).expect("clean cooling fixture");
     }
 
     #[tokio::test]

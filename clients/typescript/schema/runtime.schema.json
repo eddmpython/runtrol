@@ -334,6 +334,44 @@
       ],
       "type": "object"
     },
+    "CoolSessionParams": {
+      "additionalProperties": false,
+      "description": "Cool one exact idle session while retaining its provider-native pointer.",
+      "properties": {
+        "expectedSessionGeneration": {
+          "description": "Lifecycle generation visible when the user chose to cool the session.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "leaseGeneration": {
+          "description": "Exact current lease generation.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "leaseId": {
+          "description": "Opaque lease identity returned on acquisition.",
+          "type": "string"
+        },
+        "requestId": {
+          "$ref": "#/$defs/MutationRequestId",
+          "description": "Caller-minted idempotency identity."
+        },
+        "sessionId": {
+          "$ref": "#/$defs/RuntimeSessionId",
+          "description": "Exact Runtime-managed session."
+        }
+      },
+      "required": [
+        "requestId",
+        "sessionId",
+        "expectedSessionGeneration",
+        "leaseId",
+        "leaseGeneration"
+      ],
+      "type": "object"
+    },
     "EnrollmentDecision": {
       "description": "Current enrollment decision.",
       "oneOf": [
@@ -1847,6 +1885,11 @@
           "type": "string"
         },
         {
+          "const": "sessions/cool",
+          "description": "Release one idle hot provider process while retaining its managed pointer.",
+          "type": "string"
+        },
+        {
           "const": "sessions/event",
           "description": "One normalized event notification.",
           "type": "string"
@@ -2400,6 +2443,9 @@
     "control_lease_params": {
       "$ref": "#/$defs/ControlLeaseParams"
     },
+    "cool_session": {
+      "$ref": "#/$defs/CoolSessionParams"
+    },
     "enrollment_decision": {
       "$ref": "#/$defs/EnrollmentDecision"
     },
@@ -2522,6 +2568,7 @@
     "acquire_control",
     "control_lease",
     "control_lease_params",
+    "cool_session",
     "submit_input",
     "watch_events",
     "watch_events_result",
