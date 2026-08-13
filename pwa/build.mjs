@@ -27,7 +27,7 @@ await cp(
   join(output, "assets", "event-presentation.json"),
 );
 
-for (const file of ["app.js", "bytes.js", "core.js", "identityStore.js", "noise.js", "pairing.js", "presentation.js", "push.js", "records.js", "relay.js"]) {
+for (const file of ["app.js", "bytes.js", "core.js", "identityStore.js", "missions.js", "noise.js", "pairing.js", "presentation.js", "push.js", "records.js", "relay.js"]) {
   const source = await readFile(join(output, "src", file), "utf8");
   if (source.includes("\u2013") || source.includes("\u2014")) {
     throw new Error(`${file} contains forbidden punctuation`);

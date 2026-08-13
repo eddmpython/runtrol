@@ -2,6 +2,7 @@ import { openDeviceStore } from "./identityStore.js";
 import { consumePairingFragment } from "./pairing.js";
 import { CoreClient, CoreFailure, readDeviceAuthority, withCore } from "./core.js";
 import { keyFingerprint, pairThroughRelay } from "./relay.js";
+import { missionActions, readMissionCatalogue, readMissionSnapshot } from "./missions.js";
 import { disablePush, enablePush, pushAvailable, synchronizePush } from "./push.js";
 import {
   approvalOptions,
@@ -13,14 +14,17 @@ import {
 
 const MAX_VISIBLE_EVENTS = 400;
 const MAX_VISIBLE_CHARACTERS = 256 * 1024;
+const MAX_VISIBLE_MISSION_TASKS = 200;
 const state = {
   store: null,
   identity: null,
   connection: null,
   pairing: null,
   sessions: [],
+  missions: [],
   providers: [],
   selected: null,
+  selectedMission: null,
   watchGeneration: 0,
   cursor: null,
   presentation: null,
@@ -32,12 +36,19 @@ const state = {
 const status = element("connection-status");
 const setup = element("setup");
 const sessionsView = element("sessions-view");
+const sessionBrowser = element("session-browser");
+const missionBrowser = element("mission-browser");
 const sessionList = element("session-list");
+const missionList = element("mission-list");
 const sessionDetail = element("session-detail");
+const missionDetail = element("mission-detail");
 const output = element("output");
 const composer = element("composer");
 const prompt = element("prompt");
 const refresh = element("refresh");
+const refreshMissions = element("refresh-missions");
+const sessionsTab = element("show-sessions");
+const missionsTab = element("show-missions");
 const panic = element("panic");
 const forget = element("forget-device");
 const notifications = element("notifications");
@@ -71,6 +82,12 @@ async function boot() {
 
 function bindActions() {
   refresh.addEventListener("click", () => refreshSessions());
+  refreshMissions.addEventListener("click", () => runAction(async () => refreshMissionCatalogue()));
+  sessionsTab.addEventListener("click", () => activateSurface("sessions"));
+  missionsTab.addEventListener("click", () => runAction(async () => {
+    activateSurface("missions");
+    await refreshMissionCatalogue();
+  }));
   panic.addEventListener("click", () => runAction(async () => {
     if (!state.connection) throw new Error("Pair this phone before using panic stop.");
     if (!confirm("Stop every supervised session on the PC now?")) return;
@@ -126,6 +143,9 @@ function bindActions() {
     state.watchGeneration += 1;
     sessionDetail.hidden = true;
   });
+  element("back-to-missions").addEventListener("click", () => {
+    missionDetail.hidden = true;
+  });
   element("resume-session").addEventListener("click", () => runAction(async () => {
     if (!state.selected?.native) throw new Error("This session has no provider resume identity.");
     await withCore(state.connection, state.identity, (client) => client.resume(state.selected));
@@ -141,6 +161,18 @@ function bindActions() {
       if (response.say === "started") await refreshSessions(response.with.session);
     });
   });
+  element("pause-mission").addEventListener("click", () => runAction(async () => {
+    await changeMission((client, mission) => client.pauseMission(mission));
+  }));
+  element("resume-mission").addEventListener("click", () => runAction(async () => {
+    await changeMission((client, mission) => client.resumeMission(mission));
+  }));
+  element("cancel-mission").addEventListener("click", () => runAction(async () => {
+    const mission = state.selectedMission?.mission;
+    if (!mission) return;
+    if (!confirm(`Cancel ${safeVisibleText(mission.name)} and release its exact reservations?`)) return;
+    await changeMission((client, selected) => client.cancelMission(selected));
+  }));
 }
 
 async function showPairing() {
@@ -185,11 +217,14 @@ async function showPairing() {
 
 function showUnpaired() {
   state.watchGeneration += 1;
+  state.missions = [];
+  state.selectedMission = null;
   setup.hidden = false;
   sessionsView.hidden = true;
   panic.disabled = true;
   forget.hidden = true;
   notifications.hidden = true;
+  missionsTab.hidden = true;
   setup.innerHTML = `
     <div class="setup-card">
       <p class="eyebrow">PHONE CONTROL SURFACE</p>
@@ -206,6 +241,7 @@ async function showSessions() {
   panic.disabled = false;
   forget.hidden = false;
   notifications.hidden = !pushAvailable() || state.serviceWorker === null;
+  activateSurface("sessions");
   await refreshSessions();
 }
 
@@ -227,6 +263,7 @@ async function refreshSessions(preferredSession = null) {
       client.close();
     }
     populateProviders();
+    configureSurfaceTabs();
     await synchronizeNotifications();
     renderSessions();
     const selected = state.sessions.find((session) => session.session === (preferredSession ?? state.selected?.session));
@@ -302,12 +339,152 @@ function renderSessions() {
   }
 }
 
+function configureSurfaceTabs() {
+  const missionsAllowed = hasScope("mission.read");
+  missionsTab.hidden = !missionsAllowed;
+  if (!missionsAllowed && !missionBrowser.hidden) activateSurface("sessions");
+}
+
+function activateSurface(surface) {
+  const missions = surface === "missions";
+  sessionBrowser.hidden = missions;
+  missionBrowser.hidden = !missions;
+  sessionsTab.setAttribute("aria-pressed", String(!missions));
+  missionsTab.setAttribute("aria-pressed", String(missions));
+  if (missions) {
+    state.watchGeneration += 1;
+    sessionDetail.hidden = true;
+  } else {
+    missionDetail.hidden = true;
+    sessionDetail.hidden = state.selected === null;
+  }
+}
+
+async function refreshMissionCatalogue(preferredMission = state.selectedMission?.mission?.mission_id ?? null) {
+  if (!hasScope("mission.read")) throw new Error("This phone cannot read Mission status.");
+  setStatus("Connecting to PC", "connecting");
+  const response = await withCore(state.connection, state.identity, (client) => client.listMissions());
+  if (response.say !== "missions") {
+    throw new Error("Core returned no Mission list");
+  }
+  state.missions = readMissionCatalogue(response.with);
+  renderMissions();
+  const selected = state.missions.find((mission) => mission.mission_id === preferredMission)
+    ?? state.missions[0];
+  if (selected) await selectMission(selected);
+  else {
+    state.selectedMission = null;
+    missionDetail.hidden = true;
+  }
+  setStatus("PC online", "online");
+}
+
+function renderMissions() {
+  missionList.replaceChildren();
+  element("mission-count").textContent = String(state.missions.length);
+  for (const mission of state.missions) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = `mission-row${mission.mission_id === state.selectedMission?.mission?.mission_id ? " selected" : ""}`;
+    const dot = document.createElement("span");
+    dot.className = `state-dot ${safeVisibleText(mission.state)}`;
+    const labels = document.createElement("span");
+    const title = document.createElement("strong");
+    title.textContent = safeVisibleText(mission.name);
+    const project = document.createElement("small");
+    project.textContent = safeVisibleText(mission.project);
+    labels.append(title, project);
+    const progress = document.createElement("b");
+    progress.textContent = `${Number(mission.passed_tasks) || 0}/${Number(mission.total_tasks) || 0}`;
+    button.append(dot, labels, progress);
+    button.addEventListener("click", () => runAction(async () => selectMission(mission)));
+    missionList.append(button);
+  }
+}
+
+async function selectMission(mission) {
+  state.watchGeneration += 1;
+  sessionDetail.hidden = true;
+  const response = await withCore(
+    state.connection,
+    state.identity,
+    (client) => client.getMission(mission.mission_id),
+  );
+  if (response.say !== "mission") throw new Error("Core returned no Mission snapshot");
+  renderMissionSnapshot(readMissionSnapshot(response.with));
+}
+
+function renderMissionSnapshot(snapshot) {
+  state.selectedMission = snapshot;
+  missionDetail.hidden = false;
+  element("selected-mission-state").textContent = safeVisibleText(snapshot.mission.state).toUpperCase();
+  element("selected-mission-title").textContent = safeVisibleText(snapshot.mission.name);
+  element("selected-mission-project").textContent = safeVisibleText(snapshot.mission.project);
+  element("mission-progress").textContent = `${Number(snapshot.mission.passed_tasks) || 0} of ${Number(snapshot.mission.total_tasks) || 0}`;
+  element("mission-awaiting").textContent = String(Number(snapshot.mission.awaiting_input) || 0);
+  element("mission-source").textContent = safeVisibleText(snapshot.mission_ref);
+  element("mission-policy").textContent = safeVisibleText(snapshot.policy_sha256);
+
+  const actions = missionActions(snapshot.mission, state.connection.scopes);
+  element("pause-mission").hidden = !actions.pause;
+  element("resume-mission").hidden = !actions.resume;
+  element("cancel-mission").hidden = !actions.cancel;
+
+  const tasks = element("mission-tasks");
+  tasks.replaceChildren();
+  for (const row of snapshot.tasks.slice(0, MAX_VISIBLE_MISSION_TASKS)) {
+    const card = document.createElement("article");
+    card.className = "mission-task";
+    const title = document.createElement("h3");
+    title.textContent = safeVisibleText(row.key);
+    const stateLine = document.createElement("p");
+    stateLine.textContent = `${safeVisibleText(row.state)}  ${safeVisibleText(row.workspace_mode)}  ${safeVisibleText(row.provider_selector)}`;
+    const source = document.createElement("p");
+    source.textContent = safeVisibleText(row.instruction_ref);
+    const gates = document.createElement("p");
+    gates.textContent = `${Number(row.passed_gates) || 0} gates passed, ${Number(row.failed_gates) || 0} failed`;
+    card.append(title, stateLine, source, gates);
+    if (row.receipt_id) {
+      const receipt = document.createElement("p");
+      receipt.textContent = `Receipt ${safeVisibleText(row.receipt_id)}`;
+      card.append(receipt);
+    }
+    tasks.append(card);
+  }
+  if (snapshot.tasks.length > MAX_VISIBLE_MISSION_TASKS) {
+    const bounded = document.createElement("p");
+    bounded.className = "quiet";
+    bounded.textContent = `${snapshot.tasks.length - MAX_VISIBLE_MISSION_TASKS} more Tasks remain in the bounded Core snapshot.`;
+    tasks.append(bounded);
+  }
+  renderMissions();
+}
+
+async function changeMission(request) {
+  const mission = state.selectedMission?.mission;
+  if (!mission) throw new Error("Choose a Mission first.");
+  const response = await withCore(
+    state.connection,
+    state.identity,
+    (client) => request(client, mission.mission_id),
+  );
+  if (response.say !== "mission") throw new Error("Core returned no Mission snapshot");
+  const snapshot = readMissionSnapshot(response.with);
+  const current = snapshot.mission;
+  state.missions = state.missions.map((row) => (
+    row.mission_id === current.mission_id ? current : row
+  ));
+  renderMissionSnapshot(snapshot);
+  setStatus("PC online", "online");
+}
+
 function selectSession(session) {
   state.selected = session;
   state.cursor = null;
   state.watchGeneration += 1;
   output.replaceChildren();
   visibleCharacters = 0;
+  missionDetail.hidden = true;
   sessionDetail.hidden = false;
   element("selected-title").textContent = safeVisibleText(session.label || workspaceName(session.workspace));
   element("selected-provider").textContent = safeVisibleText(session.provider);
