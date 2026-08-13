@@ -10,7 +10,7 @@ The public surfaces share product contracts and brand assets, not a mandatory co
 | VS Code extension | Native VS Code navigation plus one bounded editor Webview for the selected live session | Gives the conversation editor width while keeping renderer cost independent of logical session count |
 | Phone PWA | Static HTML, CSS, browser JavaScript, WebCrypto, IndexedDB, and a service worker | Keeps the installed origin dependency-free while implementing the exact Noise record and reconnect contracts used by Core |
 
-The previous desktop-window frontend was removed when the PC surface became VS Code-only. A static distribution page and the phone PWA do not carry an application component runtime. Both reuse the canonical brand assets and the PWA renders only its bounded current session view.
+The previous desktop-window frontend was removed when the PC surface became VS Code-only. A static distribution page and the phone PWA do not carry an application component runtime. Both reuse the canonical brand assets and the PWA renders only one bounded current session view or bounded Mission metadata view.
 
 ## Shared contracts
 
@@ -48,3 +48,14 @@ Webview code must use the VS Code state and message boundary already covered by 
 [`pwa/`](../pwa/) is an installable static application under the permanent Pages origin. It consumes pairing material only from a URL fragment, removes that fragment immediately, keeps its non-extractable X25519 private key and connection secrets in IndexedDB, and accepts the current device authority from each authenticated Core greeting. It stores no conversation content. The service worker caches only the application shell.
 
 The phone uses the relay transport in the current release. Noise IKpsk1 protects the one-use pairing exchange and Noise IK protects every later session. The relay receives routing presence and encrypted records only. Web Push is a separate content-free wake path: the service worker renders one generic notification and reconnects through the normal encrypted stream when opened. Direct LAN and peer-to-peer routing remain later connection optimizations and must not be implied by the current UI.
+
+The Mission tab exists only when the authenticated greeting holds `mission.read`. It validates a closed set of
+Mission and Task states, bounds the catalogue and snapshot, renders with text nodes, and shows pause, safe resume, or
+cancel only when the current state and matching exact scope both permit that action. Mission creation, reviewed
+start, Task instruction submission, integration, archive, Gate registration, and capability trust changes remain
+local-only VS Code actions.
+
+`phoneDrivesPcSmoke` and `approvalRoundtripSmoke` execute the same shipped WebCrypto, Noise, record, and CoreClient
+modules in a headless phone process. They connect to the production daemon, drive an installed real CLI, observe
+streamed output or a real permission request, close the session, and verify process cleanup. The deterministic local
+model fixture discards request bodies, so these gates do not claim account-backed model behavior.

@@ -17,16 +17,14 @@
 
 | 폴더 | 상태 | 한 줄 | 왜 이 자리인가 |
 |---|---|---|---|
-| [0-securityPosture](0-securityPosture/) | 활성 | default-deny 권한 모델, 소켓 표면 (Windows named pipe / Unix socket), 승인 전달, 감사 로그, 킬 스위치. **공개 저장소라 "모르는 사람이 기본값으로 켠다" 가 기준선이다.** | **순서상의 한 칸이 아니라 나머지 전부가 딛는 바닥이다.** 첫 커밋부터 함께 갔고, 남은 Runtime 앱 권한이 3 번, Mission 권한이 4 번, 폰 표면 권한이 6 번에 걸려 있어 **마지막 뒤에 닫힌다.** 0 은 "먼저 하고 넘어간다" 가 아니라 "1~6 이 이것 위에서 돈다" 는 뜻이다 |
-| [5-pwaConnection](5-pwaConnection/) | 완료 | **origin 과 transport 를 분리한다.** 불변 HTTPS origin, 릴레이, Noise E2E, 내용 없는 Web Push가 구현됐다. 선택적 직결 경로는 정확성에 필요하지 않은 후속 최적화다. | 공개된 [site deployment](../docs/siteDeployment.md)의 불변 origin과 0 번 보안 기반 위에서 성립한다. 완료된 공개 Runtime과 로컬 Mission 계약 위에서 폰 연결을 완성했다 |
-| [6-pwaSurface](6-pwaSurface/) | 활성 | 세션 제어 PWA가 구현됐고 Mission 조회 및 중단 표면과 실물 종단 게이트가 남았다. | 5 번의 릴레이 프레임과 정확한 기기 권한 위에 서며 4 번의 로컬 전용 생성, 통합, 능력 승격 권한을 그대로 유지한다 |
+| [6-pwaSurface](6-pwaSurface/) | 활성 | 세션과 Mission 감독 표면, 실물 CLI 세션 및 승인 게이트까지 구현됐다. iOS 홈화면 설치와 Web Push 실기기 운영 검증이 남았다. | 완성된 릴레이, Noise, Web Push와 정확한 기기 권한 위에 서며 로컬 전용 Mission 생성, 통합, 능력 승격 권한을 그대로 유지한다 |
 
 공개 Runtime은 [protocol](../docs/runtimeProtocol.md), [integration](../docs/runtimeIntegration.md),
 [security](../docs/runtimeSecurity.md), [operations](../docs/runtimeOperations.md) 운영 문서로 승격됐다. 외부 제품은
 작은 SDK를 넣고 하나의 사용자별 Runtime을 통해 이미 로그인된 CLI를 발견하고 감독한다. 소비자는 세션을
 소유하지 않고, Runtrol은 모델 API 키나 transcript를 소유하지 않는다.
 
-VS Code 주력 표면, 공개 사이트, 자동 갱신은 [VS Code 운영 문서](../docs/vscodeSurface.md), [사이트 운영 문서](../docs/siteDeployment.md), [automatic updates](../docs/automaticUpdates.md)로 승격됐다. Marketplace에서 6개 네이티브 대상의 `Runtrol Studio 0.1.0`을 설치할 수 있다. 감독형 Mission과 프로젝트 Capability 신뢰 계약은 [Mission 운영 문서](../docs/missionOperations.md)와 [Capability 신뢰 문서](../docs/capabilityTrust.md)로 승격됐다. 현재 순서는 이 로컬 권한 경계를 유지하며 폰 연결과 표면을 닫는 것이다.
+VS Code 주력 표면, 공개 사이트, 자동 갱신은 [VS Code 운영 문서](../docs/vscodeSurface.md), [사이트 운영 문서](../docs/siteDeployment.md), [automatic updates](../docs/automaticUpdates.md)로 승격됐다. Marketplace에서 6개 네이티브 대상의 `Runtrol Studio 0.1.0`을 설치할 수 있다. 감독형 Mission과 프로젝트 Capability 신뢰 계약은 [Mission 운영 문서](../docs/missionOperations.md)와 [Capability 신뢰 문서](../docs/capabilityTrust.md)로 승격됐다. 폰 연결과 보안 기반도 [frontend stack](../docs/frontendStack.md), [site deployment](../docs/siteDeployment.md), [security](../SECURITY.md)로 승격됐으며, 남은 이니셔티브는 iOS 실기기 운영 검증이다.
 
 ## 마일스톤 (같은 순서를 사용자 관점으로 본 것)
 
@@ -37,7 +35,7 @@ VS Code 주력 표면, 공개 사이트, 자동 갱신은 [VS Code 운영 문서
 | **M2 VS Code 배포** (완료) | 공개 Marketplace 설치와 [automatic updates](../docs/automaticUpdates.md) | 낯선 사람이 Marketplace에서 설치해 한 창으로 실물 CLI를 운영하고 다음 버전으로 안전하게 갱신한다 |
 | **M3 Embeddable Agent Runtime** (완료) | 공개 protocol + 앱 등록·scope·root + Rust/TypeScript SDK + 관리 세션·공식 native 세션 + 독립 배포·롤백. 운영 정본은 [Runtime protocol](../docs/runtimeProtocol.md)과 연결 문서다 | 저장소 밖 packed 소비자가 private import 없이 SDK를 컴파일하고, Studio가 같은 공개 계약으로 세션을 시작·재개·감시·제어하며, 6개 Runtime 대상과 SDK가 독립 artifact로 검증된다 |
 | **M4 감독형 작업 운영** (완료) | 명시적 Mission -> 증거 판정 -> bounded DAG -> 선택적 프로젝트 능력 재사용. 운영 정본은 [Mission 운영](../docs/missionOperations.md)과 [Capability 신뢰](../docs/capabilityTrust.md)다 | 한 목표를 두 provider가 격리된 worktree에서 수행하고, 대화 해석 없이 검증된 결과만 로컬에서 통합한다 |
-| **M5 폰** | 5-pwaConnection (릴레이 + E2E + push) -> 6-pwaSurface -> 폰 승인 | 밖에서 폰으로 내 세션을 잇고 승인한다. Mission은 조회·중단 범위만 원격에 연다 |
+| **M5 폰** | 릴레이 + E2E + push + PWA 감독 표면 + 폰 승인 | 밖에서 폰으로 내 세션을 잇고 승인한다. Mission은 조회·중단 범위만 원격에 연다 |
 
 왜 이 순서인가.
 

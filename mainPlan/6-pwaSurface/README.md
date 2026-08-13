@@ -1,6 +1,6 @@
 # pwaSurface
 
-상태: 진행 중, 착수 순서 6 번. 릴레이 전송과 권한 경계 위에 세션 표면이 구현됐고 Mission 보조 표면과 실물 종단 게이트가 남았다.
+상태: 진행 중, 착수 순서 6 번. 세션과 Mission 감독 표면 및 실물 CLI 자동 게이트가 구현됐다. iOS 홈화면 설치와 Web Push 수신의 실기기 운영 확인만 남았다.
 
 ## 한 문장 정의
 
@@ -8,7 +8,7 @@
 
 ## Current implementation
 
-The installable static PWA now pairs from the VS Code QR, lists sessions, starts and resumes only within current exact authority, sends prompts, watches bounded output with reconnect cursors, interrupts and removes sessions, renders approval choices, exposes panic stop, and forgets the local phone identity. It does not queue offline commands or store conversation content.
+The installable static PWA now pairs from the VS Code QR, lists sessions, starts and resumes only within current exact authority, sends prompts, watches bounded output with reconnect cursors, interrupts and removes sessions, renders approval choices, exposes panic stop, and forgets the local phone identity. A separate scope-gated Mission tab reads bounded Mission and Task metadata and exposes only pause, safe resume, and cancel actions valid for the current state and exact device scopes. It does not create, start, integrate, archive, or promote capabilities remotely. It does not queue offline commands or store conversation content.
 
 ## 화면 (설계 시 채운다)
 
@@ -33,6 +33,6 @@ The source of truth is [docs/frontendStack.md](../../docs/frontendStack.md). The
 
 ## 완료 판정
 
-- `phoneDrivesPcSmoke`: headless 브라우저로 띄운 실물 PWA 가, 실물 데몬을 통해, 실물 `claude`/`codex` 세션에 프롬프트를 넣고 출력을 받는다
-- `approvalRoundtripSmoke`: 실제 permission prompt 가 폰 표면에 도달하고, 폰의 응답이 세션을 재개시킨다
+- `phoneDrivesPcSmoke`: shipped PWA의 WebCrypto, Noise, record, CoreClient 모듈이 헤드리스 폰 프로세스에서 production 데몬과 설치된 실물 Claude Code 세션을 시작하고 프롬프트와 출력을 왕복한다. 활성 hosted CI 게이트다
+- `approvalRoundtripSmoke`: 실제 permission prompt가 폰 watch 경로에 도달하고, 정확한 거부 응답이 같은 실물 CLI 세션을 재개시킨다. 활성 hosted CI 게이트다
 - iOS 홈화면 설치 + Web Push 수신이 실기기로 확인됨 (operator 게이트. 점수로 세지 않는다)

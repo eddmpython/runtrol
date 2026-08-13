@@ -6,9 +6,21 @@ starts before routing, stays default-deny after authentication, and never treats
 
 ## Current exposure
 
-The shipping command and VS Code surfaces use the operating system local endpoint. The browser-reachable phone
-plane is not enabled by default and is not yet exposed by the product binary. Its HTTP admission layer exists so
-the relay, pairing, and PWA work can only be connected behind the rules below.
+The shipping command and VS Code surfaces use the operating system local endpoint. Remote access is disabled until
+the operator configures one exact HTTPS relay origin in VS Code and approves a phone pairing. When enabled, the
+daemon creates only an outbound relay connection and accepts a phone surface only after a relay-bound Noise
+handshake authenticates a restored paired-device key. The relay receives routing metadata and ciphertext, not a
+model credential or readable conversation.
+
+The optional direct browser ingress accepts only an explicitly supplied loopback listener. The product binary does
+not open a public inbound TCP listener, and the ingress constructor refuses a non-loopback address.
+
+## Local endpoint boundary
+
+Windows uses a named pipe with an owner-only DACL, an explicit network deny entry, remote-client rejection, and
+client process token validation. Linux and macOS use a Unix socket under an owner-only runtime directory, create the
+socket with owner-only permissions, and validate the peer user identifier. Loopback is never treated as local-user
+authentication.
 
 ## Invariants
 
@@ -27,6 +39,7 @@ the relay, pairing, and PWA work can only be connected behind the rules below.
 |---|---|---|
 | Local command endpoint | Owner-only OS endpoint | No |
 | Browser-reachable listener | Disabled | No |
+| Outbound relay connection | Disabled until one exact HTTPS origin is configured locally | No |
 | Browser bind address when enabled | Loopback | No |
 | LAN bind | One explicit interface address | No |
 | Host allowlist | Exact loopback names and assigned port | No |
@@ -37,18 +50,20 @@ the relay, pairing, and PWA work can only be connected behind the rules below.
 | Credentialed CORS | Never | No |
 | Browser protocol header | `X-Runtrol-Proto: 1` required | No |
 | State-changing browser fetch metadata | `same-origin` or `none` required | No |
-| WebSocket authentication | Before the HTTP 101 response | No |
+| WebSocket boundary | Host, Origin, fetch metadata, and subprotocol before 101; paired Noise key before Core data | No |
 | Unknown, duplicate, or malformed security header | Deny | No |
 | Outbound phone destination | Empty exact IP and port allowlist | No |
 | Relay payload | Fresh Noise IK ciphertext for every link | No |
 | Remote workspace | A PC-registered workspace root only | No |
 | Provider credentials | Owned by the child CLI | No |
 
-The phone-facing HTTP wrapper validates Host before Origin and routing. It accepts one exact header value, rejects
-duplicates, requires an explicit HTTPS Origin, requires the non-simple protocol header, establishes a device caller
-from an Authorization bearer credential, and removes Cookie before any handler runs. Every response removes
-`Set-Cookie`, wildcard or handler-supplied CORS origin values, and `Access-Control-Allow-Credentials`. It then adds
-only the exact configured origin and `Vary: Origin`.
+The phone-facing HTTP wrapper validates Host before Origin and routing. Routed HTTP requests accept one exact header
+value, reject duplicates, require an explicit HTTPS Origin and the non-simple protocol header, establish a device
+caller from an Authorization bearer credential, and remove Cookie before any handler runs. A WebSocket upgrade is
+admitted only for the exact path, Origin, fetch metadata, and Noise subprotocol. It grants no caller. The paired
+static key establishes the caller after the upgrade and before any Core request is accepted. Every HTTP response
+removes `Set-Cookie`, wildcard or handler-supplied CORS origin values, and
+`Access-Control-Allow-Credentials`, then adds only the exact configured origin and `Vary: Origin`.
 
 The phone channel uses `Noise_IK_25519_AESGCM_SHA256` with pinned X25519 static keys. Its prologue binds the link
 kind, relay origin, and peer identity so a captured relay handshake cannot move to a direct link. Pairing uses
@@ -92,6 +107,16 @@ logging API and that drivers and storage name no provider-owned transcript path.
 
 The `pairingLifecycle` gate proves the 120-second lifetime, single use, five-attempt lockout, prompt-injection
 defense, exact witness binding, and an encrypted round trip that becomes possible only after PC approval.
+
+The `phoneDrivesPcSmoke` and `approvalRoundtripSmoke` gates run the shipped PWA WebCrypto, Noise, record, and Core
+client modules in a headless phone process. They cross the production daemon and an installed real CLI, prove exact
+device, workspace, provider, and approval authority, and require every process they start to be gone afterward. The
+model endpoint is a deterministic loopback fixture that discards request bodies.
+
+Web Push contains no event or conversation body. The daemon stores each browser-issued capability endpoint as
+device-bound protected ciphertext and sends an empty HTTP body only to the exact supported push-service origins.
+The service worker displays one generic wake notification and fetches actual state through the authenticated Noise
+channel.
 
 ## Reporting a vulnerability
 
