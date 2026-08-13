@@ -4,7 +4,7 @@
 
 [한국어](README.md) | [English](README_EN.md) | 中文 | [日本語](README_JA.md)
 
-> 状态：**内核和主要 VS Code 扩展已经实现，`Runtrol Studio 0.1.0` 已面向六个原生目标公开发布。** 实时会话索引、真实 Extension Host 和每秒 3,000 帧 Webview 性能门槛、已安装真实 CLI 的完整操作旅程、全新 Marketplace 安装，以及保留活动会话的 VSIX 升级与回滚都已验证。独立桌面 GUI 代码和执行路径已经删除，VS Code 扩展是唯一 PC 界面。[Marketplace 扩展](https://marketplace.visualstudio.com/items?itemName=runtrol.runtrol-studio)和 [GitHub Pages 站点](https://eddmpython.github.io/runtrol/)已经上线。手机 PWA 与自动更新倡议仍未完成。
+> 状态：**内核和主要 VS Code 扩展已经实现，`Runtrol Studio 0.1.0` 已面向六个原生目标公开发布。** 实时会话索引、真实 Extension Host 和每秒 3,000 帧 Webview 性能门槛、已安装真实 CLI 的完整操作旅程、全新 Marketplace 安装，以及保留活动会话的 VSIX 升级与回滚都已验证。独立桌面 GUI 代码和执行路径已经删除，VS Code 扩展是唯一 PC 界面。已确认 provider 渠道的自动更新也具备进程互斥与精确回滚。[Marketplace 扩展](https://marketplace.visualstudio.com/items?itemName=runtrol.runtrol-studio)和 [GitHub Pages 站点](https://eddmpython.github.io/runtrol/)已经上线。剩余的主要界面是手机 PWA。
 > 下面多数分数为 0，不是因为没有代码，而是因为还没有门禁去断言那些轴。
 
 The security boundary and default-deny settings are documented in [SECURITY.md](SECURITY.md).
@@ -44,7 +44,7 @@ active subscription 与 Code-hot workspace 始终有界。streaming 与后台工
 | 断了也活着 | 0/10 | 远程手机端到端门禁尚未实现。 | 手机锁屏、网络中断或 runtrol 重启后，PC 会话仍可通过官方 resume surface 恢复。保留窗口内按精确 cursor 接续，窗口外明确显示 gap，绝不静默跳过。 |
 | 常驻成本 | 6/10 | 三个 hosted 操作系统都用同一个棘轮测量真实 debug daemon 的 idle RSS 与十秒 idle CPU。没有第二种独立证据，因此上限仍为 6。 | 整天开着，用户也察觉不到它的存在。电池、风扇、任务管理器里都看不见。 |
 | 到哪都一样 | 0/10 | 未实现。 | 在 Windows、macOS、Linux 上安装方式与操作方式相同。Windows 用户无需知道 WSL 或 tmux 是什么。 |
-| 自动保持最新 | 5/10 | `vscodeUpgradeRollback` 将 VSIX 中的 packaged Core 原子替换到稳定路径，并在三个操作系统的 CI 中验证扩展升级与回滚期间原有 daemon、provider PID、session 与 workspace 都继续存活。provider 更新尚未实现，因此证据仍处于 mock 层。 | 应用与已安装的代理 CLI 会自行保持最新；若更新破坏了会话，在用户动手之前它已经回滚。用户不存在需要关心版本的时刻。 |
+| 自动保持最新 | 5/10 | `vscodeUpgradeRollback` 在三个操作系统中验证 VSIX 与 Core 替换期间的会话连续性。`cliUpdateRehearsal` 通过确定性 fixture 验证已确认 provider 更新的失败、精确恢复与防振荡。托管 CI 不会修改带真实账户的 provider 安装，因此证据仍处于 mock 层。 | 应用与已安装的代理 CLI 会自行保持最新；若更新破坏了会话，在用户动手之前它已经回滚。用户不存在需要关心版本的时刻。 |
 | 自动识别模型 | 6/10 | hosted `modelDetectionSmoke --require-all` 在无凭据环境中安装当前真实 CLI，检查 Codex 的 `model/list` 与包含隔离 provider-owned option cache sentinel 的 Claude partial catalogue，并拒绝在 production source 中硬编码观测 identifier。它不证明特定账户的实际可用性，因此一种 live gate 的上限为 6。 | 当前账户实际可用的模型原样出现在列表中，出现新模型时无需修改 runtrol 就会显示。 |
 | 会话之间不互踩 | 5/10 | 真实 Git metadata 与 production Core admission 会把同一 worktree 的子目录视为一个 writer，并原子拒绝 opening、live、closing 状态下重叠的预约。linked worktree 与操作员明确允许的共享启动保持独立。provider 是 fixture，因此属于 mock 层。 | 哪个会话在哪个文件夹改了什么始终可以区分；第二个会话将要触碰同一文件夹时，在开始前就会收到警告；供应商提供隔离手段（worktree）时，可直接在开始界面使用。 |
 | AI 互相咨询 | 3/10 | 开关通过两个真实 CLI 各自的官方命令完成接线、验证与复原，并已手动实测一次真实回合中的咨询接收（2026-08-03）。`crossConsultSmoke` 驱动真实的订阅 CLI，因此在操作者自己的机器上运行；没有 hosted CI 门禁，所以停在 manual 层。 | 一个开关让两个 CLI 通过各自的官方表面（MCP）相互注册，一个 AI 在回合中直接获取另一个 AI 的意见。接线只通过各 CLI 自己的官方命令完成（不直接写配置文件），对话内容依然不经过 runtrol，用户不需要知道 MCP 是什么。 |

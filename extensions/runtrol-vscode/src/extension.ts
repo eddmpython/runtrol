@@ -75,6 +75,10 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
     vscode.window.registerTreeDataProvider("runtrol.providers", providers),
     vscode.commands.registerCommand("runtrol.refresh", () => run(() => afterReady(() => controller.refresh()))),
     vscode.commands.registerCommand(
+      "runtrol.checkProviderUpdates",
+      () => run(() => afterReady(() => controller.checkProviderUpdates())),
+    ),
+    vscode.commands.registerCommand(
       "runtrol.switchSession",
       () => run(() => afterReady(() => controller.switchSession())),
     ),

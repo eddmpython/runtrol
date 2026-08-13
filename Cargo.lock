@@ -736,7 +736,10 @@ dependencies = [
  "runtrol-security",
  "runtrol-store",
  "runtrol-transport",
+ "runtrol-update",
  "runtrol-vault",
+ "semver",
+ "serde",
  "serde_json",
  "thiserror 2.0.19",
  "tokio",
@@ -828,6 +831,9 @@ name = "runtrol-update"
 version = "0.1.1"
 dependencies = [
  "semver",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.19",
 ]
 
 [[package]]

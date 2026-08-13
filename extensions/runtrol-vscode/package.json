@@ -41,6 +41,7 @@
     "onView:runtrol.sessions",
     "onView:runtrol.providers",
     "onCommand:runtrol.refresh",
+    "onCommand:runtrol.checkProviderUpdates",
     "onCommand:runtrol.switchSession",
     "onCommand:runtrol.startSession",
     "onCommand:runtrol.selectSession",
@@ -77,6 +78,11 @@
         "command": "runtrol.refresh",
         "title": "Runtrol: Refresh Sessions",
         "icon": "$(refresh)"
+      },
+      {
+        "command": "runtrol.checkProviderUpdates",
+        "title": "Runtrol: Check Provider Updates",
+        "icon": "$(cloud-download)"
       },
       {
         "command": "runtrol.switchSession",
@@ -139,6 +145,11 @@
           "command": "runtrol.refresh",
           "when": "view == runtrol.sessions || view == runtrol.providers",
           "group": "navigation@3"
+        },
+        {
+          "command": "runtrol.checkProviderUpdates",
+          "when": "view == runtrol.providers",
+          "group": "navigation@2"
         }
       ],
       "view/item/context": [

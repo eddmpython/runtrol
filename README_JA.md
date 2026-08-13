@@ -4,7 +4,7 @@
 
 [한국어](README.md) | [English](README_EN.md) | [中文](README_ZH.md) | 日本語
 
-> ステータス: **コアと主力 VS Code 拡張を実装し、`Runtrol Studio 0.1.0` を六つの native target 向けに公開した。** live session index、実物 Extension Host と秒間 3,000 frame Webview の性能 ratchet、インストール済み実物 CLI の完全な操作 journey、Marketplace からの clean install、active session を維持する VSIX upgrade と rollback を検証済みである。独立したデスクトップ GUI のコードと実行経路は削除され、VS Code 拡張が唯一の PC surface である。[Marketplace 拡張](https://marketplace.visualstudio.com/items?itemName=runtrol.runtrol-studio)と [GitHub Pages サイト](https://eddmpython.github.io/runtrol/)は公開済みである。スマートフォン PWA と自動更新イニシアチブはまだ残っている。以下のスコアの多くが 0 なのは、コードがないからではなく、その軸を断言するゲートがまだない
+> ステータス: **コアと主力 VS Code 拡張を実装し、`Runtrol Studio 0.1.0` を六つの native target 向けに公開した。** live session index、実物 Extension Host と秒間 3,000 frame Webview の性能 ratchet、インストール済み実物 CLI の完全な操作 journey、Marketplace からの clean install、active session を維持する VSIX upgrade と rollback を検証済みである。独立したデスクトップ GUI のコードと実行経路は削除され、VS Code 拡張が唯一の PC surface である。確認済み provider channel の自動更新には process exclusion と正確な rollback も実装した。[Marketplace 拡張](https://marketplace.visualstudio.com/items?itemName=runtrol.runtrol-studio)と [GitHub Pages サイト](https://eddmpython.github.io/runtrol/)は公開済みである。残る主要 surface はスマートフォン PWA である。以下のスコアの多くが 0 なのは、コードがないからではなく、その軸を断言するゲートがまだない
 > からである。
 
 The security boundary and default-deny settings are documented in [SECURITY.md](SECURITY.md).
@@ -45,7 +45,7 @@ streaming と background 作業が入力、スクロール、セッション切�
 | 切れても生き残る | 0/10 | リモートのスマートフォンを含む end-to-end ゲートは未実装。 | スマートフォンのロック、ネットワーク切断、runtrol 再起動の後も、PC セッションは公式 resume surface から復旧できる。保持範囲内は正確な cursor から続き、範囲外は黙って飛ばさず明示的な gap になる。 |
 | 常駐コスト | 6/10 | 三つの hosted OS が一つの ratchet で実物 debug daemon の idle RSS と 10 秒間の idle CPU を測る。独立した二種類目の証拠がないため、上限は 6 のままである。 | 一日中つけっぱなしでも、ユーザーはその存在に気づかない。バッテリーにも、ファンにも、タスクマネージャーにも見えない。 |
 | どこでも同じやり方 | 0/10 | 未実装。 | Windows、macOS、Linux でインストール方法も操作も同じ。Windows ユーザーが WSL や tmux を知る必要がない。 |
-| 勝手に最新 | 5/10 | `vscodeUpgradeRollback` が VSIX の packaged Core を安定パスへ原子的に置換し、拡張の更新とロールバック中も元の daemon、provider PID、session、workspace が生存することを三つの OS の CI で検証する。provider 更新はまだないため mock 層である。 | アプリとインストール済みのエージェント CLI が自動で最新を保ち、更新がセッションを壊したらユーザーが手を触れる前に戻っている。ユーザーがバージョンを気にする瞬間が存在しない。 |
+| 勝手に最新 | 5/10 | `vscodeUpgradeRollback` は三つの OS で VSIX と Core 置換中の session continuity を検証する。`cliUpdateRehearsal` は決定的 fixture により、確認済み provider 更新の失敗、正確な復元、振動防止を検証する。hosted CI は実アカウントの provider installation を変更しないため、証拠は mock 層のままである。 | アプリとインストール済みのエージェント CLI が自動で最新を保ち、更新がセッションを壊したらユーザーが手を触れる前に戻っている。ユーザーがバージョンを気にする瞬間が存在しない。 |
 | モデル自動認識 | 6/10 | hosted `modelDetectionSmoke --require-all` は資格情報なしで最新の実物 CLI を導入し、Codex の `model/list` と隔離した provider-owned option cache sentinel を含む Claude partial catalogue を検査し、観測した identifier が production source にハードコードされていないことを確認する。特定アカウントでの利用可否までは証明しないため、live gate 一種類の上限 6 である。 | いまこのアカウントで実際に使えるモデルがそのまま一覧に出て、新しいモデルが出ても runtrol を直さずに現れる。 |
 | セッション同士が踏まない | 5/10 | 実際の Git metadata と production Core admission が同じ worktree の下位フォルダを一つの writer として扱い、opening、live、closing の重複予約を原子的に拒否する。linked worktree と運用者が明示した共有開始は区別する。provider は fixture なので mock 層である。 | どのセッションがどのフォルダで何を変えているかが常に区別でき、二つ目のセッションが同じフォルダに触れそうなときは開始前に警告され、プロバイダーが隔離手段（ワークツリー）を出しているなら開始画面でそのまま使える。 |
 | AI 同士が相談し合う | 3/10 | トグルが実物の二つの CLI を各自の公式コマンドで配線・検証・復元し、実際のターン中の相談受信まで手動で実測した（2026-08-03）。`crossConsultSmoke` は実物のサブスクリプション CLI を動かすため運用者のマシンで走り、hosted CI ゲートがないので manual 層。 | トグル一つで二つの CLI が互いを公式表面（MCP）で登録し、一方の AI がターン中にもう一方の意見を直接受け取る。配線は各 CLI 自身の公式コマンドだけで作り（設定ファイルを直接書かない）、会話本文は依然として runtrol を通らない。ユーザーは MCP という概念を知らなくていい。 |

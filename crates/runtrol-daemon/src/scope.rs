@@ -74,7 +74,10 @@ pub fn needed(request: &Request) -> Needed {
 
         Request::List | Request::WatchSessions => Needed::Scope(DeviceScope::SessionList),
         // Model discovery and consult status both read configuration and touch nothing.
-        Request::Models { .. } | Request::Consult => Needed::Scope(DeviceScope::ConfigRead),
+        Request::Models { .. } | Request::ProviderUpdates | Request::Consult => {
+            Needed::Scope(DeviceScope::ConfigRead)
+        }
+        Request::ProviderUpdate { .. } => Needed::AtTheMachine(LocalScope::ProviderUpdate),
         Request::Start {
             workspace_access: WorkspaceAccess::Shared,
             ..
@@ -201,6 +204,10 @@ mod tests {
             Request::List,
             Request::WatchSessions,
             Request::Models {
+                provider: "example".into(),
+            },
+            Request::ProviderUpdates,
+            Request::ProviderUpdate {
                 provider: "example".into(),
             },
             Request::Start {

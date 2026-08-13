@@ -127,6 +127,10 @@ GATES: dict[str, tuple[str, list[str]]] = {
         "확증된 provider 갱신 채널 계약",
         ["cargo", "test", "-p", "runtrol-audit", "--test", "channelVerdict"],
     ),
+    "cliUpdateRehearsal": (
+        "provider 갱신 실패와 정확한 롤백 리허설",
+        ["cargo", "test", "-p", "runtrol-audit", "--test", "cliUpdateRehearsal"],
+    ),
     "vscodeHostPerformanceSelftest": (
         "VS Code Extension Host 성능 게이트 자체 검증",
         [*PY, f"{HOOKS}/vscodeHostPerformance.py", "--selftest"],

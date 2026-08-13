@@ -66,6 +66,17 @@ pub enum Request {
         provider: Box<str>,
     },
 
+    /// Inspect update ownership and registry freshness for every provider.
+    ///
+    /// This starts package-manager queries, so it is explicit rather than part of the greeting or session list.
+    ProviderUpdates,
+
+    /// Update one installed provider to the greatest plain release in its confirmed registry.
+    ProviderUpdate {
+        /// Provider whose existing package may change.
+        provider: Box<str>,
+    },
+
     /// Begin a conversation that does not exist yet.
     Start {
         /// Which CLI.
@@ -200,6 +211,12 @@ pub enum Response {
     /// The model choices one provider can honestly offer now.
     Models(ModelCatalog),
 
+    /// Current provider package ownership and available release status.
+    ProviderUpdates(Vec<ProviderUpdateLine>),
+
+    /// Result of one locally authorized provider update attempt.
+    ProviderUpdated(ProviderUpdateResult),
+
     /// A session was started or resumed.
     Started {
         /// runtrol's own name for it.
@@ -328,6 +345,68 @@ pub struct ProviderLine {
     /// A sentence rather than a flag, because "this build has no driver for that protocol" and "nothing declares that
     /// kind" send the operator in different directions.
     pub why_not: Option<Box<str>>,
+}
+
+/// One provider's independently verified update state.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct ProviderUpdateLine {
+    /// Provider identifier from the runtime registry.
+    pub provider: Box<str>,
+    /// Current closed state.
+    pub state: ProviderUpdateState,
+    /// Discovered package identifier when ownership is confirmed.
+    pub package: Option<Box<str>>,
+    /// Installed semantic version when ownership is confirmed.
+    pub installed: Option<Box<str>>,
+    /// Greatest plain registry release when newer than the installed copy.
+    pub target: Option<Box<str>>,
+    /// Greatest earlier plain release when the registry proves one.
+    pub rollback: Option<Box<str>>,
+    /// Bounded runtrol-owned explanation when the state is not actionable.
+    pub why: Option<Box<str>>,
+}
+
+/// Provider update status rendered by every surface without parsing prose.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ProviderUpdateState {
+    /// The installed release is the greatest plain release in its confirmed registry.
+    Current,
+    /// A newer plain release exists in the confirmed registry.
+    Available,
+    /// The provider owns the update mechanism and runtrol only observes it.
+    ObserveOnly,
+    /// No provider invocation is installed.
+    NotInstalled,
+    /// Ownership or registry evidence is absent or contradictory.
+    Unconfirmed,
+}
+
+/// Closed provider update result.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct ProviderUpdateResult {
+    /// Provider whose package was inspected or changed.
+    pub provider: Box<str>,
+    /// Exact bounded outcome.
+    pub outcome: ProviderUpdateOutcome,
+    /// Version installed before the attempt.
+    pub from: Box<str>,
+    /// Version requested from the confirmed registry.
+    pub to: Box<str>,
+    /// Runtrol-owned explanation when a rollback was necessary.
+    pub why: Option<Box<str>>,
+}
+
+/// What one provider update did.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ProviderUpdateOutcome {
+    /// The installed release was already current, so no package command ran.
+    AlreadyCurrent,
+    /// The requested release was installed and independently rediscovered.
+    Updated,
+    /// Verification failed and the exact previous release was restored.
+    RolledBack,
 }
 
 /// A session listing that can report one damaged row without hiding every readable row.

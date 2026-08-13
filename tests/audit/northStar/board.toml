@@ -116,8 +116,8 @@ gate = [{ name = "crossPlatformMatrix", kind = "smoke" }]
 
 [[axis]]
 key = "currentWithoutAsking"
-# The Marketplace package journey is active on all hosted operating systems. Its provider counterpart still uses a
-# deterministic ACP fixture, and provider update execution is not complete yet.
+# The Marketplace package journey is active on all hosted operating systems. Provider update policy now has a
+# deterministic package-tree failure and exact rollback rehearsal, but it does not mutate account-backed real CLIs.
 tier = "mock"
 additives = []
 name = { ko = "알아서 최신", en = "Current without asking", zh = "自动保持最新", ja = "勝手に最新" }

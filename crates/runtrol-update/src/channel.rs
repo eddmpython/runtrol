@@ -24,8 +24,6 @@ pub struct ChannelObservation {
     pub package_root: PathBuf,
     /// Executable currently resolved on the operator's path.
     pub executable: PathBuf,
-    /// Provider-declared update action split into arguments for comparison only. It is never executed.
-    pub declared_argv: Vec<String>,
 }
 
 /// A channel that passed declaration, path ownership, and argv comparison.
@@ -79,7 +77,7 @@ pub enum ChannelVerdict {
     Unconfirmed(String),
 }
 
-/// Compare a provider declaration with independent filesystem and owned-argv evidence.
+/// Compare a compiled channel declaration with independent filesystem ownership evidence.
 #[must_use]
 pub fn confirm_channel(observation: &ChannelObservation) -> ChannelVerdict {
     if observation.declared == ChannelId::SelfManaged {
@@ -98,35 +96,22 @@ pub fn confirm_channel(observation: &ChannelObservation) -> ChannelVerdict {
     if !is_under(&observation.executable, &observation.package_root) {
         return ChannelVerdict::GhostInstall;
     }
-    let expected = [
-        "npm".to_owned(),
-        "install".to_owned(),
-        "-g".to_owned(),
-        observation.package.clone(),
-    ];
-    if observation.declared_argv != expected {
-        return ChannelVerdict::Unconfirmed(
-            "the provider declaration differs from the owned npm adapter".to_owned(),
-        );
-    }
     ChannelVerdict::Confirmed(ConfirmedChannel {
         channel: ChannelId::Npm,
         package: observation.package.clone(),
     })
 }
 
-/// The exact earlier release a package manager may reinstall.
+/// Whether the registry proves that the exact installed release can be restored.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RollbackVerdict {
-    /// The greatest plain release lower than the installed version.
+    /// The exact installed release is still available for reinstallation.
     Available(Version),
-    /// The registry proves there is no earlier plain release.
-    Unavailable,
     /// The installed version is not in this registry, so this channel may own another copy.
     Undetermined,
 }
 
-/// Select a rollback by semantic version order, never registry publication order.
+/// Confirm the exact installed plain release without trusting registry publication order.
 #[must_use]
 pub fn select_rollback<'a>(
     published: impl IntoIterator<Item = &'a str>,
@@ -150,11 +135,7 @@ pub fn select_rollback<'a>(
     if !versions.iter().any(|version| version == &installed) {
         return RollbackVerdict::Undetermined;
     }
-    versions
-        .into_iter()
-        .filter(|version| version < &installed)
-        .max()
-        .map_or(RollbackVerdict::Unavailable, RollbackVerdict::Available)
+    RollbackVerdict::Available(installed)
 }
 
 fn valid_package(package: &str) -> bool {

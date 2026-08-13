@@ -40,5 +40,5 @@ listen = "stdio"
 under_home = [".codex"]
 
 [update]
-# It updates itself. A hint only: whatever performs an update probes first and believes what it finds.
-hint = "self"
+# The built-in adapter may use npm only after the resolved entry point and package metadata independently agree.
+hint = "npm"

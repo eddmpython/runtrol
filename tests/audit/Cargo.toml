@@ -82,6 +82,10 @@ path = "providerContract.rs"
 name = "channelVerdict"
 path = "channelVerdict.rs"
 
+[[test]]
+name = "cliUpdateRehearsal"
+path = "cliUpdateRehearsal.rs"
+
 # **주의 (실측)**: `[lints] workspace = true` 와 per-crate 재정의는 공존할 수 없다
 # (cargo hard error). 게이트 헬퍼는 자유 함수라서 clippy 의 `allow-*-in-tests` hatch 가
 # 덮지 않으므로, 이 crate 는 워크스페이스 표를 상속하지 않고 자기 표를 쓴다.

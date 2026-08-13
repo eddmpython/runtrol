@@ -112,6 +112,9 @@ supported credentialless contract is available, Marketplace publication is a del
 pinned `vsce` client and a short-lived Marketplace-only credential. The credential must be removed from `vsce` and
 revoked after publication. No Marketplace secret is stored in the repository or release workflow.
 
+Extension and provider update ownership, safe scheduling, exact rollback, and the local-only update command are
+specified in [automatic updates](automaticUpdates.md).
+
 ## Verification entry points
 
 | Gate or command | Contract |
@@ -121,6 +124,8 @@ revoked after publication. No Marketplace secret is stored in the repository or 
 | `vscodeRealProviderJourney` | installed provider discovery and a complete real CLI control journey |
 | `vscodePackage` | six-target SSOT, exact archive contents, Core bytes, workflow integrity, and listing metadata |
 | `vscodeUpgradeRollback` | active-session continuity across official VSIX upgrade and rollback |
+| `channelVerdict` | confirmed provider package ownership and closed update arguments |
+| `cliUpdateRehearsal` | failed provider target and exact verified rollback transaction |
 | `node tooling/installed-package.mjs --marketplace` | public Marketplace download, isolated activation, bundled Core, refresh, and view opening |
 
 Every verifier uses an isolated profile marker and terminates only exact owned process identities. It must never close

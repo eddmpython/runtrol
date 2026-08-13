@@ -264,9 +264,37 @@ pub enum LocalScope {
     /// Concurrent writers can overwrite each other's repository changes. Accepting that collision is a per-action
     /// decision at the PC, never an authority a remote device can retain.
     WorkspaceShare,
+    /// Update an already installed provider through its confirmed package channel.
+    ///
+    /// Updating executable code changes what later sessions run. A remote device cannot trigger that supply-chain
+    /// action, even when it may start sessions for the same provider.
+    ProviderUpdate,
+    /// Reinstall the exact previously verified provider version after a failed update.
+    ///
+    /// A rollback is a downgrade primitive and therefore remains a separate local capability from updating.
+    ProviderRollback,
+    /// Install a provider that is not already present.
+    ///
+    /// A new install creates executable authority where none existed, so approving an update must never imply it.
+    ProviderInstall,
 }
 
 impl LocalScope {
+    /// Every local-only capability in stable order.
+    ///
+    /// Published so scope audits iterate the product vocabulary rather than maintaining a second list in tests.
+    pub const EVERY: &'static [Self] = &[
+        Self::DevicePair,
+        Self::ConfigWrite,
+        Self::ApprovalAuto,
+        Self::ModeDangerous,
+        Self::ConsultWire,
+        Self::WorkspaceShare,
+        Self::ProviderUpdate,
+        Self::ProviderRollback,
+        Self::ProviderInstall,
+    ];
+
     /// A stable name, for messages and for the audit record.
     #[must_use]
     pub const fn name(&self) -> &'static str {
@@ -277,6 +305,9 @@ impl LocalScope {
             Self::ModeDangerous => "mode.dangerous",
             Self::ConsultWire => "consult.wire",
             Self::WorkspaceShare => "workspace.share",
+            Self::ProviderUpdate => "provider.update",
+            Self::ProviderRollback => "provider.rollback",
+            Self::ProviderInstall => "provider.install",
         }
     }
 }
@@ -350,23 +381,12 @@ mod tests {
         assert_eq!(published, by_hand);
     }
 
-    fn every_local_scope() -> Vec<LocalScope> {
-        vec![
-            LocalScope::DevicePair,
-            LocalScope::ConfigWrite,
-            LocalScope::ApprovalAuto,
-            LocalScope::ModeDangerous,
-            LocalScope::ConsultWire,
-            LocalScope::WorkspaceShare,
-        ]
-    }
-
     #[test]
     fn no_name_is_shared_between_the_two_walls() {
         // A shared name would let an audit line or a config key be read as either kind, which is the
         // one ambiguity this split exists to remove.
         for device in every_device_scope() {
-            for local in every_local_scope() {
+            for local in LocalScope::EVERY {
                 assert_ne!(
                     device.name(),
                     local.name(),
@@ -402,6 +422,9 @@ mod tests {
         assert_eq!(DeviceScope::ModeAcceptEdits.name(), "mode.acceptEdits");
         assert_eq!(LocalScope::ModeDangerous.name(), "mode.dangerous");
         assert_eq!(LocalScope::WorkspaceShare.name(), "workspace.share");
+        assert_eq!(LocalScope::ProviderUpdate.name(), "provider.update");
+        assert_eq!(LocalScope::ProviderRollback.name(), "provider.rollback");
+        assert_eq!(LocalScope::ProviderInstall.name(), "provider.install");
     }
 
     #[test]

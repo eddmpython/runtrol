@@ -168,6 +168,9 @@ jobs:
       - name: 확증된 provider 갱신 채널 계약
         if: needs.detect.outputs.hasWorkspace == 'true'
         run: cargo test -p runtrol-audit --test channelVerdict
+      - name: provider 갱신 실패와 정확한 롤백 리허설
+        if: needs.detect.outputs.hasWorkspace == 'true'
+        run: cargo test -p runtrol-audit --test cliUpdateRehearsal
       - name: VS Code 이벤트 표현 게이트 자체 검증
         if: needs.detect.outputs.hasWorkspace == 'true'
         run: python -X utf8 tests/audit/vscodeEventCoverage.py --selftest

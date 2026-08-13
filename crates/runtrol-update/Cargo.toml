@@ -11,6 +11,9 @@ publish = false
 
 [dependencies]
 semver = { workspace = true }
+serde = { workspace = true, features = ["std", "derive"] }
+serde_json = { workspace = true, features = ["std"] }
+thiserror = { workspace = true }
 
 [lints]
 workspace = true

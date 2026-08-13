@@ -2,8 +2,8 @@
 
 The rule is enforced as a closed list of production files that may mutate the filesystem. A path
 cannot be proven safe from a string search after it has been assembled at runtime, so the gate
-controls the capability instead: storage, runtrol home creation, the probe cache, local endpoint
-cleanup, and Unix process guards are the only existing disk writers. Provider drivers and
+controls the capability instead: storage, runtrol home creation, the probe cache, the provider
+update safety journal, local endpoint cleanup, and Unix process guards are the only existing disk writers. Provider drivers and
 orchestration code have no direct filesystem mutation API available in their source.
 
 Official provider commands are still allowed. They are child processes and own their configuration;
@@ -43,6 +43,8 @@ MAY_MUTATE_DISK = {
     "the update rename dance against its own disposable copy, never a provider file",
     "crates/runtrol-daemon/src/crash.rs": "the detached daemon's panic hook appends to its own "
     "bounded crash file inside the runtrol home",
+    "crates/runtrol-daemon/src/provider_update.rs": "owns the bounded provider update version floor "
+    "and rollback pin journal inside the runtrol home; provider package changes still go through npm",
 }
 MAY_MUTATE_PREFIXES = {
     "crates/runtrol-store/src/": "the database crate owns runtrol's session pointer store",

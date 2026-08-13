@@ -18,6 +18,7 @@
 //! | `providers/` | the manifest loader, last in the discovery order and therefore able to shadow |
 //! | `process-guards/` | child supervision, containing only bounded process identity records |
 //! | the probe cache | the binary-identity cache of what each installed CLI can do |
+//! | the provider update journal | verified version floors and rollback pins, never provider content |
 //! | the machine identity vault | the per-user OS protector and Noise handshake assembly |
 //! | the daemon crash file | the detached daemon's panic hook writes it; the operator and gates read it |
 //! | the endpoint | the daemon binds it, the CLI connects to it |
@@ -53,6 +54,9 @@ const PROCESS_GUARDS: &str = "process-guards";
 /// What each installed CLI was found to support, keyed by its version.
 const PROBE_CACHE: &str = "probe.json";
 
+/// Verified provider versions and targets paused after an automatic rollback.
+const PROVIDER_UPDATES: &str = "provider-updates.json";
+
 /// The operating-system-protected long-lived machine identity.
 const MACHINE_IDENTITY: &str = "machine-identity.vault";
 
@@ -78,6 +82,8 @@ pub struct Layout {
     process_guards: AbsPath,
     /// The probe cache file.
     probe_cache: AbsPath,
+    /// Verified provider version floors and rollback pins.
+    provider_updates: AbsPath,
     /// The operating-system-protected machine identity.
     machine_identity: AbsPath,
     /// Where the detached daemon's panic hook records why it died.
@@ -107,6 +113,7 @@ impl Layout {
             providers: entry(PROVIDERS)?,
             process_guards: entry(PROCESS_GUARDS)?,
             probe_cache: entry(PROBE_CACHE)?,
+            provider_updates: entry(PROVIDER_UPDATES)?,
             machine_identity: entry(MACHINE_IDENTITY)?,
             daemon_crash_log: entry(DAEMON_CRASH_LOG)?,
             endpoint: Endpoint::of(&root)?,
@@ -144,6 +151,12 @@ impl Layout {
         &self.probe_cache
     }
 
+    /// The bounded provider update safety journal.
+    #[must_use]
+    pub const fn provider_updates(&self) -> &AbsPath {
+        &self.provider_updates
+    }
+
     /// The operating-system-protected long-lived machine identity.
     #[must_use]
     pub const fn machine_identity(&self) -> &AbsPath {
@@ -175,6 +188,7 @@ impl Layout {
             &self.providers,
             &self.process_guards,
             &self.probe_cache,
+            &self.provider_updates,
             &self.machine_identity,
             &self.daemon_crash_log,
         ]

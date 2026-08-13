@@ -4,7 +4,7 @@
 
 runtrol discovers facts from the installed CLI at the moment a product action needs them. Daemon startup reads manifests and storage only. It does not start every provider process before showing the first session list.
 
-Discovery owns executable resolution, binary identity, reported version, consumed flags, runtime capabilities, model choices, and surface drift. It never reads or stores a transcript. Installation, replacement, update smoke tests, session-boundary deferral, and rollback belong to the `autoUpdate` initiative.
+Discovery owns executable resolution, binary identity, reported version, consumed flags, runtime capabilities, model choices, and surface drift. It never reads or stores a transcript. Installation, replacement, update probes, session-boundary exclusion, and rollback are specified in [automatic updates](automaticUpdates.md).
 
 ## Discovery ladder
 

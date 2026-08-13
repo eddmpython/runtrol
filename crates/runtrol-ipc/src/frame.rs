@@ -31,7 +31,7 @@ use bytes::{BufMut as _, Bytes};
 /// One byte, sent once when a connection opens. Not per frame: a version on every frame would pay for the whole
 /// conversation to answer a question that is settled at hello, and it would let one connection change meaning
 /// halfway through, which nothing should be able to do.
-pub const WIRE_VERSION: u8 = 8;
+pub const WIRE_VERSION: u8 = 9;
 
 /// How many bytes of payload one frame may carry.
 ///
@@ -349,10 +349,11 @@ mod tests {
             other => panic!("expected a refusal naming both sides, got {other:?}"),
         }
 
-        let message = check_version(9)
+        let another = WIRE_VERSION.checked_add(2).expect("fixture version fits");
+        let message = check_version(another)
             .expect_err("a version this build does not speak")
             .to_string();
-        assert!(message.contains('9'), "{message}");
+        assert!(message.contains(&another.to_string()), "{message}");
         assert!(message.contains(&WIRE_VERSION.to_string()), "{message}");
     }
 

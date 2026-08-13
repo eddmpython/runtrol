@@ -18,6 +18,7 @@ pub mod compose;
 mod consult;
 mod crash;
 pub mod dispatch;
+mod provider_update;
 pub mod scope;
 pub mod serve;
 

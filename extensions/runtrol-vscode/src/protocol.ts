@@ -1,4 +1,4 @@
-export const WIRE_VERSION = 8;
+export const WIRE_VERSION = 9;
 
 export type WorkspaceAccess = "exclusive" | "shared";
 
@@ -18,6 +18,18 @@ export type ProviderLine = {
   display_name: string;
   usable: boolean;
   why_not: string | null;
+};
+
+export type ProviderUpdateState = "current" | "available" | "observeOnly" | "notInstalled" | "unconfirmed";
+
+export type ProviderUpdateLine = {
+  provider: string;
+  state: ProviderUpdateState;
+  package: string | null;
+  installed: string | null;
+  target: string | null;
+  rollback: string | null;
+  why: string | null;
 };
 
 export type SessionLine = {
@@ -61,6 +73,8 @@ export type Request =
   | { ask: "list" }
   | { ask: "watchSessions" }
   | { ask: "models"; with: { provider: string } }
+  | { ask: "providerUpdates" }
+  | { ask: "providerUpdate"; with: { provider: string } }
   | {
       ask: "start";
       with: {
@@ -94,6 +108,17 @@ export type Response =
   | { say: "welcome"; with: { wire: number; providers: ProviderLine[] } }
   | { say: "sessions"; with: SessionListing }
   | { say: "models"; with: ModelCatalog }
+  | { say: "providerUpdates"; with: ProviderUpdateLine[] }
+  | {
+      say: "providerUpdated";
+      with: {
+        provider: string;
+        outcome: "alreadyCurrent" | "updated" | "rolledBack";
+        from: string;
+        to: string;
+        why: string | null;
+      };
+    }
   | { say: "started"; with: { session: string } }
   | { say: "done" }
   | {

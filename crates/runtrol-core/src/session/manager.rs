@@ -110,6 +110,17 @@ pub enum SessionError {
         opened: AbsPath,
     },
 
+    /// Provider opening resolved to a different provider than the atomic process reservation.
+    #[error("session {session} opened provider {opened}, not reserved provider {reserved}")]
+    ProviderReservationMismatch {
+        /// The session being opened.
+        session: SessionId,
+        /// Provider named by the process reservation.
+        reserved: ProviderId,
+        /// Provider handed to the attach operation.
+        opened: ProviderId,
+    },
+
     /// The project and working-tree identity could not be established safely.
     #[error(transparent)]
     Project(#[from] ProjectError),
@@ -128,6 +139,20 @@ pub enum SessionError {
     /// No new agent handoff generation can be minted without reusing an old one.
     #[error("agent handoff generation is exhausted")]
     AgentLeaseGenerationExhausted,
+
+    /// This provider is reserved for an update and cannot start another process.
+    #[error("provider {provider} is being updated")]
+    ProviderUpdating {
+        /// Provider whose executable tree is reserved.
+        provider: ProviderId,
+    },
+
+    /// A provider process is live, opening, or closing, so its package tree cannot be changed safely.
+    #[error("provider {provider} still has a live, opening, or closing process")]
+    ProviderBusyForUpdate {
+        /// Provider whose process prevents the update.
+        provider: ProviderId,
+    },
 
     /// Every session with a process is busy, so starting another would have to interrupt one.
     #[error(transparent)]
@@ -247,6 +272,21 @@ pub struct ClosingReservation {
     generation: u64,
 }
 
+/// Opaque proof that no process for one provider may start while its package tree changes.
+#[derive(Debug, PartialEq, Eq)]
+pub struct ProviderUpdateReservation {
+    provider: ProviderId,
+    generation: u64,
+}
+
+impl ProviderUpdateReservation {
+    /// Provider whose process set is reserved.
+    #[must_use]
+    pub const fn provider(&self) -> ProviderId {
+        self.provider
+    }
+}
+
 impl ClosingReservation {
     /// Which session still owns the slot.
     #[must_use]
@@ -274,6 +314,7 @@ struct HeldReservation {
     generation: u64,
     state: ReservationState,
     project: ProjectIdentity,
+    provider: Option<ProviderId>,
 }
 
 /// The result of reserving a process slot.
@@ -345,6 +386,8 @@ pub struct SessionManager {
     next_agent_lease: u64,
     /// Agents temporarily moved out for provider I/O.
     in_flight: BTreeMap<SessionId, u64>,
+    /// Providers whose package trees are being changed outside the session owner.
+    updating_providers: BTreeMap<ProviderId, u64>,
     /// Which session spoke last, so the next round of listening starts past it.
     ///
     /// Kept as a name rather than a position: a position would move under a session that ended, and this is asked
@@ -376,6 +419,7 @@ impl SessionManager {
             next_reservation: 0,
             next_agent_lease: 0,
             in_flight: BTreeMap::new(),
+            updating_providers: BTreeMap::new(),
             after: None,
         }
     }
@@ -455,7 +499,7 @@ impl SessionManager {
         let ReservedOpen {
             reservation,
             displaced,
-        } = self.reserve_open(intent.session, claim)?;
+        } = self.reserve_open_for_provider(provider.id(), intent.session, claim)?;
         let mut opening = OpeningGuard {
             manager: self,
             reservation: Some(reservation),
@@ -519,6 +563,34 @@ impl SessionManager {
         session: SessionId,
         claim: WorkspaceClaim,
     ) -> Result<ReservedOpen, SessionError> {
+        self.reserve_open_inner(None, session, claim)
+    }
+
+    /// Reserve a process slot for a known provider while excluding its update lease.
+    ///
+    /// # Errors
+    ///
+    /// The same errors as [`Self::reserve_open`], plus [`SessionError::ProviderUpdating`].
+    pub fn reserve_open_for_provider(
+        &mut self,
+        provider: ProviderId,
+        session: SessionId,
+        claim: WorkspaceClaim,
+    ) -> Result<ReservedOpen, SessionError> {
+        self.reserve_open_inner(Some(provider), session, claim)
+    }
+
+    fn reserve_open_inner(
+        &mut self,
+        provider: Option<ProviderId>,
+        session: SessionId,
+        claim: WorkspaceClaim,
+    ) -> Result<ReservedOpen, SessionError> {
+        if let Some(provider) = provider
+            && self.updating_providers.contains_key(&provider)
+        {
+            return Err(SessionError::ProviderUpdating { provider });
+        }
         if self.live.contains_key(&session) || self.opening.contains_key(&session) {
             return Err(SessionError::AlreadyLive { session });
         }
@@ -564,6 +636,7 @@ impl SessionManager {
                         generation: closing_generation,
                         state: ReservationState::Closing,
                         project: live.project,
+                        provider: Some(live.identity.provider()),
                     },
                 );
                 Some(ClosingSession {
@@ -582,6 +655,7 @@ impl SessionManager {
                 generation,
                 state: ReservationState::Opening,
                 project,
+                provider,
             },
         );
         Ok(ReservedOpen {
@@ -601,6 +675,49 @@ impl SessionManager {
             .map_err(ProjectError::from)?;
         let claim = WorkspaceClaim::discover(workspace, WorkspaceAccess::Shared)?;
         self.reserve_open(session, claim)
+    }
+
+    /// Reserve one provider after proving it has no live, opening, or closing process.
+    ///
+    /// # Errors
+    ///
+    /// [`SessionError::ProviderBusyForUpdate`] when any process or reservation still names the provider, or
+    /// [`SessionError::ProviderUpdating`] when another update already owns it.
+    pub fn reserve_provider_update(
+        &mut self,
+        provider: ProviderId,
+    ) -> Result<ProviderUpdateReservation, SessionError> {
+        if self.updating_providers.contains_key(&provider) {
+            return Err(SessionError::ProviderUpdating { provider });
+        }
+        if self
+            .live
+            .values()
+            .any(|live| live.identity.provider() == provider)
+            || self
+                .opening
+                .values()
+                .any(|held| held.provider == Some(provider))
+        {
+            return Err(SessionError::ProviderBusyForUpdate { provider });
+        }
+        let generation = self.allocate_reservation_generation()?;
+        self.updating_providers.insert(provider, generation);
+        Ok(ProviderUpdateReservation {
+            provider,
+            generation,
+        })
+    }
+
+    /// Release the exact provider update lease after package-manager work ends.
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "the opaque update ownership proof is deliberately consumed"
+    )]
+    pub fn release_provider_update(&mut self, reservation: ProviderUpdateReservation) {
+        if self.updating_providers.get(&reservation.provider) == Some(&reservation.generation) {
+            self.updating_providers.remove(&reservation.provider);
+        }
     }
 
     /// Release a slot whose provider open was abandoned or failed.
@@ -681,6 +798,9 @@ impl SessionManager {
                 reservation,
             });
         };
+        if let Some(error) = provider_reservation_mismatch(held, provider, session) {
+            return Err(attach_error(error, agent, reservation));
+        }
         if held.project.workspace() != &intent.workspace {
             return Err(AttachError {
                 error: SessionError::WorkspaceReservationMismatch {
@@ -1215,6 +1335,7 @@ impl SessionManager {
                 generation,
                 state: ReservationState::Closing,
                 project: live.project,
+                provider: Some(live.identity.provider()),
             },
         );
         Ok(ClosingSession {
@@ -1329,6 +1450,31 @@ impl SessionManager {
 
 fn held_matches(held: Option<&HeldReservation>, generation: u64, state: ReservationState) -> bool {
     held.is_some_and(|held| held.generation == generation && held.state == state)
+}
+
+fn provider_reservation_mismatch(
+    held: &HeldReservation,
+    opened: ProviderId,
+    session: SessionId,
+) -> Option<SessionError> {
+    let reserved = held.provider?;
+    (reserved != opened).then_some(SessionError::ProviderReservationMismatch {
+        session,
+        reserved,
+        opened,
+    })
+}
+
+fn attach_error(
+    error: SessionError,
+    agent: Box<dyn Agent>,
+    reservation: OpenReservation,
+) -> AttachError {
+    AttachError {
+        error,
+        agent,
+        reservation,
+    }
 }
 
 impl Default for SessionManager {
@@ -1651,6 +1797,108 @@ mod tests {
                 .is_ok(),
             "the operator explicitly accepted concurrent writers"
         );
+    }
+
+    #[test]
+    fn provider_update_exclusion_blocks_only_its_provider_until_released() {
+        let mut manager = SessionManager::new();
+        let provider = an_id();
+        let other = ProviderId::parse("other").expect("the test provider id is valid");
+        let update = manager
+            .reserve_provider_update(provider)
+            .expect("an idle provider can be reserved for update");
+
+        assert!(matches!(
+            manager.reserve_open_for_provider(
+                provider,
+                SessionId::now(),
+                claim("same", WorkspaceAccess::Shared),
+            ),
+            Err(SessionError::ProviderUpdating { provider: blocked }) if blocked == provider
+        ));
+        let other_open = manager
+            .reserve_open_for_provider(
+                other,
+                SessionId::now(),
+                claim("other", WorkspaceAccess::Shared),
+            )
+            .expect("a different provider remains available");
+        manager.cancel_open(other_open.reservation);
+
+        manager.release_provider_update(update);
+        assert!(
+            manager
+                .reserve_open_for_provider(
+                    provider,
+                    SessionId::now(),
+                    claim("same", WorkspaceAccess::Shared),
+                )
+                .is_ok(),
+            "releasing the exact update lease admits the provider again"
+        );
+    }
+
+    #[test]
+    fn every_same_provider_process_phase_blocks_an_update() {
+        let mut manager = SessionManager::new();
+        let provider = an_id();
+        let session = SessionId::now();
+        let identity = claim("provider", WorkspaceAccess::Shared);
+        let intent = intent_at(session, identity.identity().workspace().clone());
+        let reserved = manager
+            .reserve_open_for_provider(provider, session, identity)
+            .expect("reserve the provider process");
+
+        assert!(matches!(
+            manager.reserve_provider_update(provider),
+            Err(SessionError::ProviderBusyForUpdate { provider: busy }) if busy == provider
+        ));
+        manager
+            .attach_opened(reserved.reservation, provider, &intent, an_agent(session))
+            .expect("attach the provider process");
+        assert!(matches!(
+            manager.reserve_provider_update(provider),
+            Err(SessionError::ProviderBusyForUpdate { provider: busy }) if busy == provider
+        ));
+
+        let closing = manager.close(session).expect("begin provider cleanup");
+        assert!(matches!(
+            manager.reserve_provider_update(provider),
+            Err(SessionError::ProviderBusyForUpdate { provider: busy }) if busy == provider
+        ));
+        manager.release_closing(closing.reservation);
+        let update = manager
+            .reserve_provider_update(provider)
+            .expect("finished process cleanup admits the update");
+        manager.release_provider_update(update);
+    }
+
+    #[test]
+    fn an_opened_process_cannot_change_the_provider_it_reserved() {
+        let mut manager = SessionManager::new();
+        let session = SessionId::now();
+        let provider = an_id();
+        let other = ProviderId::parse("other").expect("the test provider id is valid");
+        let identity = claim("provider", WorkspaceAccess::Shared);
+        let intent = intent_at(session, identity.identity().workspace().clone());
+        let reserved = manager
+            .reserve_open_for_provider(provider, session, identity)
+            .expect("reserve the provider process");
+
+        let error = manager
+            .attach_opened(reserved.reservation, other, &intent, an_agent(session))
+            .expect_err("the provider binding changed");
+        let (error, agent, reservation) = error.into_parts();
+        assert!(matches!(
+            error,
+            SessionError::ProviderReservationMismatch {
+                session: refused,
+                reserved,
+                opened,
+            } if refused == session && reserved == provider && opened == other
+        ));
+        drop(agent);
+        manager.cancel_open(reservation);
     }
 
     #[test]

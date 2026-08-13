@@ -8,6 +8,7 @@ import type {
   ModelCatalog,
   ModelChoice,
   ProviderLine,
+  ProviderUpdateLine,
   Response,
   SessionLine,
   WorkspaceAccess,
@@ -27,6 +28,7 @@ export class Controller implements vscode.Disposable {
   private watchReady: Promise<void> = Promise.resolve();
   private conversationVisible = false;
   private disposed = false;
+  private readonly seenWarnings = new Set<string>();
 
   constructor(
     private readonly context: vscode.ExtensionContext,
@@ -65,6 +67,88 @@ export class Controller implements vscode.Disposable {
       throw new Error(`the daemon answered list with ${response.say}`);
     }
     this.applyListing(response.with.sessions, response.with.warnings, providers);
+  }
+
+  async checkProviderUpdates(): Promise<void> {
+    const { response } = await this.client.once({ ask: "providerUpdates" });
+    if (response.say === "failed") {
+      throw new Error(response.with.message);
+    }
+    if (response.say !== "providerUpdates") {
+      throw new Error(`Core answered provider update inspection with ${response.say}`);
+    }
+    const choices: Array<vscode.QuickPickItem & { update: ProviderUpdateLine }> = response.with.map((line) => {
+      const provider = this.state.providers.find((candidate) => candidate.id === line.provider);
+      const label = provider?.display_name ?? line.provider;
+      switch (line.state) {
+        case "current":
+          return {
+            label,
+            description: `Current ${line.installed ?? ""}`.trim(),
+            detail: line.package ?? undefined,
+            update: line,
+          };
+        case "available":
+          return {
+            label,
+            description: `${line.installed ?? "unknown"} to ${line.target ?? "new release"}`,
+            detail: line.rollback ? `Rollback available: ${line.rollback}` : "No earlier registry release",
+            update: line,
+          };
+        case "observeOnly":
+          return { label, description: "Provider-managed", detail: line.why ?? undefined, update: line };
+        case "notInstalled":
+          return { label, description: "Not installed", detail: line.why ?? undefined, update: line };
+        case "unconfirmed":
+          return { label, description: "Update channel unconfirmed", detail: line.why ?? undefined, update: line };
+      }
+    });
+    const picked = await vscode.window.showQuickPick(choices, {
+      title: "Provider update status",
+      placeHolder: choices.length === 0 ? "No providers are declared" : "Select an available provider to update",
+    });
+    if (!picked || picked.update.state !== "available") {
+      return;
+    }
+    if (!picked.update.rollback) {
+      await vscode.window.showWarningMessage(
+        `${picked.label} cannot be updated because no exact rollback release is available.`,
+      );
+      return;
+    }
+    const confirmed = await vscode.window.showWarningMessage(
+      `Update ${picked.label} from ${picked.update.installed ?? "the installed release"} to ${picked.update.target ?? "the latest release"}?`,
+      { modal: true },
+      "Update provider",
+    );
+    if (confirmed !== "Update provider") {
+      return;
+    }
+    const updated = await this.client.once({
+      ask: "providerUpdate",
+      with: { provider: picked.update.provider },
+    });
+    if (updated.response.say === "failed") {
+      throw new Error(updated.response.with.message);
+    }
+    if (updated.response.say !== "providerUpdated") {
+      throw new Error(`Core answered provider update with ${updated.response.say}`);
+    }
+    const result = updated.response.with;
+    if (result.outcome === "updated") {
+      const message = `${picked.label} was updated from ${result.from} to ${result.to}.`;
+      if (result.why) {
+        await vscode.window.showWarningMessage(`${message} ${result.why}`);
+      } else {
+        await vscode.window.showInformationMessage(message);
+      }
+    } else if (result.outcome === "rolledBack") {
+      await vscode.window.showWarningMessage(
+        `${picked.label} was restored to ${result.to} after update verification failed. ${result.why ?? ""}`.trim(),
+      );
+    } else {
+      await vscode.window.showInformationMessage(`${picked.label} is already current at ${result.to}.`);
+    }
   }
 
   async switchSession(): Promise<void> {
@@ -472,7 +556,10 @@ export class Controller implements vscode.Disposable {
     const selected = this.state.selected?.session ?? null;
     this.state.replace(sessions, providers);
     for (const warning of warnings) {
-      this.conversation.status(warning, "warning");
+      if (!this.seenWarnings.has(warning)) {
+        this.seenWarnings.add(warning);
+        this.conversation.status(warning, "warning");
+      }
     }
     if (selected && !this.state.selected) {
       this.pauseWatch();

@@ -4,7 +4,7 @@
 
 한국어 | [English](README_EN.md) | [中文](README_ZH.md) | [日本語](README_JA.md)
 
-> 상태: **코어와 주력 VS Code 확장을 구현했고 `Runtrol Studio 0.1.0`을 6개 네이티브 플랫폼 대상으로 공개했다.** 실시간 세션 인덱스, 실물 Extension Host와 초당 3,000 프레임 Webview 성능 ratchet, 설치된 실물 CLI의 전체 조작 여정, 깨끗한 Marketplace 설치, 활성 세션을 보존하는 VSIX 갱신과 롤백을 검증했다. 독립 데스크톱 GUI 코드와 실행 경로는 제거됐고 PC 표면은 VS Code 확장 하나다. [Marketplace 확장](https://marketplace.visualstudio.com/items?itemName=runtrol.runtrol-studio)과 [GitHub Pages 사이트](https://eddmpython.github.io/runtrol/)가 공개되어 있다. 휴대폰 PWA와 자동 갱신 이니셔티브는 아직 남았다.
+> 상태: **코어와 주력 VS Code 확장을 구현했고 `Runtrol Studio 0.1.0`을 6개 네이티브 플랫폼 대상으로 공개했다.** 실시간 세션 인덱스, 실물 Extension Host와 초당 3,000 프레임 Webview 성능 ratchet, 설치된 실물 CLI의 전체 조작 여정, 깨끗한 Marketplace 설치, 활성 세션을 보존하는 VSIX 갱신과 롤백을 검증했다. 독립 데스크톱 GUI 코드와 실행 경로는 제거됐고 PC 표면은 VS Code 확장 하나다. 확증된 provider 채널의 자동 갱신, 배타 실행, 정확한 롤백도 구현했다. [Marketplace 확장](https://marketplace.visualstudio.com/items?itemName=runtrol.runtrol-studio)과 [GitHub Pages 사이트](https://eddmpython.github.io/runtrol/)가 공개되어 있다. 남은 큰 표면은 휴대폰 PWA다.
 > 아래 점수 대부분이 0 인 것은 코드가 없어서가 아니라 그 축을 단언하는 게이트가 아직 없어서다.
 
 보안 경계와 기본 거부 설정은 [SECURITY.md](SECURITY.md)에 정리되어 있다.
@@ -45,7 +45,7 @@ Code-hot workspace는 bounded 상태를 유지한다. streaming과 background �
 | 끊겨도 살아남기 | 0/10 | 원격 폰 종단 게이트는 미구현이다. | 폰이 잠기거나 네트워크가 끊기거나 runtrol 을 재시작해도 PC 세션은 공식 resume surface 로 복구된다. bounded window 안은 exact cursor 로 이어지고, 밖은 조용히 건너뛰지 않고 명시적 gap 으로 보인다. |
 | 상주 비용 | 6/10 | 세 hosted OS가 실제 debug daemon의 idle RSS와 10초 유휴 CPU를 하나의 ratchet으로 측정한다. 독립된 두 번째 증거 종류가 없어 천장은 6이다. | 하루 종일 켜 두어도 사용자가 존재를 눈치채지 못한다. 배터리, 팬, 작업 관리자 어디에서도 눈에 띄지 않는다. |
 | 어디서나 같은 방법 | 0/10 | 미구현. | Windows, macOS, Linux 에서 설치 방법과 조작이 같다. Windows 사용자가 WSL 이나 tmux 를 알 필요가 없다. |
-| 알아서 최신 | 5/10 | `vscodeUpgradeRollback` 이 Marketplace VSIX의 packaged Core를 안정 경로에 원자 교체하고, 확장 갱신과 롤백 동안 원래 daemon, provider PID, 세션, workspace가 살아남는 것을 세 운영체제 CI에서 검증한다. provider 갱신이 아직 없어 mock 층이다. | 앱과 설치된 에이전트 CLI 가 알아서 최신이고, 업데이트가 세션을 깨면 사용자가 손대기 전에 되돌아가 있다. 사용자가 버전을 신경 쓰는 순간이 없다. |
+| 알아서 최신 | 5/10 | `vscodeUpgradeRollback` 이 세 운영체제에서 VSIX와 Core 교체 중 세션 생존을 검증한다. `cliUpdateRehearsal` 은 확증된 provider 갱신의 실패, 정확한 원복, 진동 방지를 결정론 fixture로 검증한다. 실계정 provider 설치를 CI에서 바꾸지는 않으므로 mock 층이다. | 앱과 설치된 에이전트 CLI 가 알아서 최신이고, 업데이트가 세션을 깨면 사용자가 손대기 전에 되돌아가 있다. 사용자가 버전을 신경 쓰는 순간이 없다. |
 | 모델 자동 인식 | 6/10 | hosted `modelDetectionSmoke --require-all` 은 자격증명 없이 최신 실물 CLI 를 설치해 Codex `model/list` 와 격리된 provider-owned option cache sentinel 을 포함한 Claude partial catalogue 를 검사하고, 관측한 identifier 가 production source 에 하드코딩되지 않았음을 확인한다. 특정 계정의 실제 사용 가능 여부는 주장하지 않아 live 한 종류의 천장 6 이다. | 지금 이 계정으로 쓸 수 있는 모델이 목록에 그대로 뜨고, 새 모델이 나와도 runtrol 을 고치지 않아도 뜬다. |
 | 세션끼리 안 밟기 | 5/10 | 실제 Git metadata와 production Core admission이 같은 worktree의 하위 폴더를 한 writer로 묶고, opening, live, closing 예약의 겹침을 원자적으로 거부한다. linked worktree와 운영자가 명시한 공유 시작은 구분한다. provider가 fixture라 mock 층이다. | 어느 세션이 어느 폴더에서 무엇을 고치는지 항상 구분되고, 두 세션이 같은 폴더를 만지게 되면 시작 전에 경고받으며, 공급자가 격리 수단 (워크트리) 을 내주면 시작 화면에서 그대로 쓴다. |
 | AI 끼리 서로 자문 | 3/10 | 토글이 실물 두 CLI 를 각자의 공식 명령으로 배선·검증·원상복구하고, 실제 턴 중 자문 수신까지 수기 실측했다 (2026-08-03). `crossConsultSmoke` 는 실물 구독 CLI 를 몰므로 운영자 기계에서 돌고, hosted CI 게이트가 없어 manual 층이다. | 토글 하나로 두 CLI 가 서로를 공식 표면 (MCP) 으로 등록해, 한 AI 가 턴 중에 다른 AI 의 의견을 직접 받아온다. 배선은 CLI 자신의 공식 명령으로만 만들고 (설정 파일을 직접 쓰지 않는다), 대화 본문은 여전히 runtrol 을 지나지 않는다. 사용자가 MCP 라는 개념을 몰라도 된다. |

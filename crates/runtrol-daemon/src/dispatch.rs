@@ -77,6 +77,13 @@ pub(crate) enum Reply {
         /// The exact command to write.
         command: AgentCommand,
     },
+    /// One provider has no process and is reserved while its package manager runs outside the owner.
+    Updating {
+        /// Provider whose confirmed package may change.
+        provider: ProviderId,
+        /// Opaque exclusion proof released only after verification or rollback finishes.
+        reservation: runtrol_core::ProviderUpdateReservation,
+    },
 }
 
 /// One process wait handed out by the single session owner.
@@ -208,6 +215,11 @@ pub(crate) enum Prepared {
         provider: ProviderId,
         /// The completed model result.
         result: Result<ModelCatalog, Response>,
+    },
+    /// Provider update inspection completed outside the session owner.
+    ProviderUpdates {
+        /// The complete bounded status list.
+        response: Response,
     },
     /// A fresh session process was opened for this exact provider.
     Start {
@@ -519,6 +531,23 @@ pub(crate) async fn prepare_consult(
     }
 }
 
+/// Complete explicit provider update inspection outside the session owner.
+pub(crate) async fn prepare_provider_updates(
+    conversation: &Conversation,
+    composed: &Composed,
+    request: &Request,
+) -> Prepared {
+    if !matches!(request, Request::ProviderUpdates)
+        || !conversation.greeted()
+        || crate::scope::allowed(&conversation.caller, request, &composed.granted).is_err()
+    {
+        return Prepared::None;
+    }
+    Prepared::ProviderUpdates {
+        response: Response::ProviderUpdates(crate::provider_update::inspect_all(composed).await),
+    }
+}
+
 /// Answer one request after any slow provider discovery has completed elsewhere.
 #[expect(
     clippy::too_many_lines,
@@ -568,6 +597,26 @@ pub(crate) fn answer_prepared(
         Request::WatchSessions => Reply::WatchingSessions,
 
         Request::Models { provider } => models(&provider, prepared),
+
+        Request::ProviderUpdates => match prepared {
+            Prepared::ProviderUpdates { response } => Reply::One(response),
+            _ => Reply::One(refuse(
+                "provider update inspection was not completed for this request",
+            )),
+        },
+
+        Request::ProviderUpdate { provider } => {
+            let Ok(provider) = ProviderId::parse(&provider) else {
+                return Reply::One(refuse("the update request names an invalid provider"));
+            };
+            match sessions.reserve_provider_update(provider) {
+                Ok(reservation) => Reply::Updating {
+                    provider,
+                    reservation,
+                },
+                Err(error) => Reply::One(from_session_error(&error)),
+            }
+        }
 
         Request::Start {
             provider,
@@ -837,7 +886,7 @@ fn bound(
 ) -> Result<Prepared, Reply> {
     let matches = match &prepared {
         // A consult answer never belongs to a provider request; its own binding is checked where it is used.
-        Prepared::None | Prepared::Consult { .. } => false,
+        Prepared::None | Prepared::Consult { .. } | Prepared::ProviderUpdates { .. } => false,
         Prepared::Invalid { kind, provider, .. } => {
             *kind == requested_kind && provider.as_ref() == requested_provider
         }
@@ -1927,6 +1976,7 @@ mod tests {
             Reply::Stopping { how, .. } => format!("a process still stopping, {how:?}"),
             Reply::Cleaning { agents, .. } => format!("{} processes still stopping", agents.len()),
             Reply::Sending { .. } => "a provider command in flight".to_owned(),
+            Reply::Updating { provider, .. } => format!("provider {provider} updating"),
         }
     }
 }

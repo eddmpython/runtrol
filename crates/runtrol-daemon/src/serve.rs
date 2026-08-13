@@ -33,17 +33,18 @@
 
 use core::future::Future;
 use core::time::Duration;
+use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
 use runtrol_core::{
-    AgentLease, ClosingReservation, OpenReservation, ReservedOpen, SessionError, SessionManager,
-    TakenAgent, WorkspaceClaim,
+    AgentLease, ClosingReservation, OpenReservation, ProviderUpdateReservation, ReservedOpen,
+    SessionError, SessionManager, TakenAgent, WorkspaceClaim,
 };
 use runtrol_ipc::transport::{Connection, Listener, TransportError};
 use runtrol_ipc::wire::{Request, Response, WireError};
 use runtrol_provider::{
-    AbsPath, AgentCommand, CloseMode, ProviderError, SessionId, WorkspaceAccess,
+    AbsPath, AgentCommand, CloseMode, ProviderError, ProviderId, SessionId, WorkspaceAccess,
 };
 use runtrol_transport::{
     CryptoError, LinkKind, NoiseUpgrade, NoiseWebSocket, PhoneHttp, PhoneHttpError, SessionBinding,
@@ -52,11 +53,13 @@ use runtrol_transport::{
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{Mutex, mpsc, oneshot, watch};
 use tokio::task::JoinSet;
+use tokio::time::Instant;
 
 use crate::compose::Composed;
 use crate::dispatch::{
     Cleanup, CleanupReservation, Conversation, Discovered, Prepared, PreparedKind, Reply,
-    answer_prepared, complete_prepare_for, discover, needs_driver, prepare_consult, refuse,
+    answer_prepared, complete_prepare_for, discover, needs_driver, prepare_consult,
+    prepare_provider_updates, refuse,
 };
 
 /// How many answered requests may be waiting to reach the one task that answers them.
@@ -78,6 +81,15 @@ pub const MAX_BLOCKING_PROVIDER_OPERATIONS: usize = runtrol_core::session::MAX_H
 /// normal catalogue response, while deliberately bounding multi-page enumeration rather than adding every internal
 /// page timeout together. It also bounds a child that stops reading stdin or a driver that never returns.
 pub const MODEL_PREPARATION_BUDGET_MS: u64 = 300_000;
+
+/// Delay before the first automatic provider update check, outside activation and idle measurement windows.
+const PROVIDER_UPDATE_INITIAL_DELAY: Duration = Duration::from_mins(5);
+
+/// Frequency for checking providers after the first delayed pass.
+const PROVIDER_UPDATE_INTERVAL: Duration = Duration::from_hours(1);
+
+/// Maximum time an available provider update may remain blocked by its own live processes before surfacing a warning.
+const PROVIDER_UPDATE_DEFER_LIMIT: Duration = Duration::from_hours(24);
 
 /// Noise handshakes admitted by HTTP but not yet mapped to a paired device.
 const PHONE_UPGRADE_QUEUE: usize = 16;
@@ -247,12 +259,23 @@ struct Asked {
 /// A connection asking the session owner for a bounded process slot.
 enum ReservationAsked {
     Reserve {
+        provider: runtrol_provider::ProviderId,
         session: SessionId,
         claim: WorkspaceClaim,
         answered: oneshot::Sender<Result<ReservedOpen, SessionError>>,
     },
+    ReserveProviderUpdate {
+        provider: ProviderId,
+        answered: oneshot::Sender<Result<ProviderUpdateReservation, SessionError>>,
+    },
     CancelOpen(OpenReservation),
     ReleaseClosing(ClosingReservation),
+    ReleaseProviderUpdate(ProviderUpdateReservation),
+}
+
+struct AutomaticUpdateNotice {
+    provider: ProviderId,
+    message: Box<str>,
 }
 
 /// Cancels a pending slot if connection preparation is abandoned.
@@ -281,6 +304,177 @@ impl Drop for ReservationGuard {
             };
             drop(self.cancelling.send(message));
         }
+    }
+}
+
+/// Releases one provider's package-tree exclusion when an update finishes or is cancelled.
+struct ProviderUpdateGuard {
+    reservation: Option<ProviderUpdateReservation>,
+    releasing: mpsc::UnboundedSender<ReservationAsked>,
+}
+
+impl Drop for ProviderUpdateGuard {
+    fn drop(&mut self) {
+        if let Some(reservation) = self.reservation.take() {
+            drop(
+                self.releasing
+                    .send(ReservationAsked::ReleaseProviderUpdate(reservation)),
+            );
+        }
+    }
+}
+
+async fn automatic_provider_updates(
+    composed: Arc<Composed>,
+    discovering: Arc<Mutex<()>>,
+    reserving: mpsc::UnboundedSender<ReservationAsked>,
+    notices: mpsc::UnboundedSender<AutomaticUpdateNotice>,
+) {
+    tokio::time::sleep(PROVIDER_UPDATE_INITIAL_DELAY).await;
+    let mut deferred = BTreeMap::<ProviderId, (Instant, bool)>::new();
+    let mut session_pins = BTreeMap::<ProviderId, Box<str>>::new();
+    loop {
+        let statuses = {
+            let _gate = discovering.lock().await;
+            crate::provider_update::inspect_all(&composed).await
+        };
+        for status in statuses {
+            let Ok(provider) = ProviderId::parse(&status.provider) else {
+                continue;
+            };
+            if status.state != runtrol_ipc::wire::ProviderUpdateState::Available {
+                deferred.remove(&provider);
+                continue;
+            }
+            let Some(target) = status.target.as_deref() else {
+                continue;
+            };
+            match session_pins.get(&provider) {
+                Some(pinned) if pinned.as_ref() == target => continue,
+                Some(_) => {
+                    session_pins.remove(&provider);
+                }
+                None => {}
+            }
+            match crate::provider_update::is_automatic_pinned(&composed, provider, target) {
+                Ok(true) => continue,
+                Ok(false) => {}
+                Err(why) => {
+                    drop(notices.send(AutomaticUpdateNotice {
+                        provider,
+                        message: format!(
+                            "automatic provider update is paused because its safety journal cannot be read: {why}"
+                        )
+                        .into_boxed_str(),
+                    }));
+                    continue;
+                }
+            }
+
+            let _gate = discovering.lock().await;
+            let (answered, hearing) = oneshot::channel();
+            if reserving
+                .send(ReservationAsked::ReserveProviderUpdate { provider, answered })
+                .is_err()
+            {
+                return;
+            }
+            let reservation = match hearing.await {
+                Ok(Ok(reservation)) => {
+                    deferred.remove(&provider);
+                    reservation
+                }
+                Ok(Err(
+                    SessionError::ProviderBusyForUpdate { .. }
+                    | SessionError::ProviderUpdating { .. },
+                )) => {
+                    let waiting = deferred.entry(provider).or_insert((Instant::now(), false));
+                    if !waiting.1 && waiting.0.elapsed() >= PROVIDER_UPDATE_DEFER_LIMIT {
+                        waiting.1 = true;
+                        drop(notices.send(AutomaticUpdateNotice {
+                            provider,
+                            message: "a provider update has waited 24 hours for its sessions to close; close those sessions or run the VS Code update command when ready"
+                                .into(),
+                        }));
+                    }
+                    continue;
+                }
+                Ok(Err(error)) => {
+                    drop(notices.send(AutomaticUpdateNotice {
+                        provider,
+                        message: format!("automatic provider update could not reserve its process boundary: {error}")
+                            .into_boxed_str(),
+                    }));
+                    continue;
+                }
+                Err(_) => return,
+            };
+            let releasing = ProviderUpdateGuard {
+                reservation: Some(reservation),
+                releasing: reserving.clone(),
+            };
+            let response = crate::provider_update::apply_latest(&composed, provider).await;
+            drop(releasing);
+            track_automatic_pin(&mut session_pins, provider, target, &response);
+            if let Some(message) = automatic_update_message(provider, &response) {
+                drop(notices.send(AutomaticUpdateNotice { provider, message }));
+            }
+        }
+        tokio::time::sleep(PROVIDER_UPDATE_INTERVAL).await;
+    }
+}
+
+fn track_automatic_pin(
+    pins: &mut BTreeMap<ProviderId, Box<str>>,
+    provider: ProviderId,
+    target: &str,
+    response: &Response,
+) {
+    if let Response::ProviderUpdated(result) = response {
+        match result.outcome {
+            runtrol_ipc::wire::ProviderUpdateOutcome::RolledBack => {
+                pins.insert(provider, target.into());
+            }
+            runtrol_ipc::wire::ProviderUpdateOutcome::AlreadyCurrent
+            | runtrol_ipc::wire::ProviderUpdateOutcome::Updated => {
+                pins.remove(&provider);
+            }
+        }
+    }
+}
+
+fn automatic_update_message(provider: ProviderId, response: &Response) -> Option<Box<str>> {
+    match response {
+        Response::ProviderUpdated(result) => match result.outcome {
+            runtrol_ipc::wire::ProviderUpdateOutcome::AlreadyCurrent => None,
+            runtrol_ipc::wire::ProviderUpdateOutcome::Updated => Some(
+                match &result.why {
+                    Some(why) => format!(
+                        "provider {provider} updated from {} to {}, but needs attention: {why}",
+                        result.from, result.to
+                    ),
+                    None => format!(
+                        "provider {provider} updated from {} to {}",
+                        result.from, result.to
+                    ),
+                }
+                .into_boxed_str(),
+            ),
+            runtrol_ipc::wire::ProviderUpdateOutcome::RolledBack => Some(
+                format!(
+                    "provider {provider} update failed and restored {}: {}",
+                    result.to,
+                    result.why.as_deref().unwrap_or("verification failed")
+                )
+                .into_boxed_str(),
+            ),
+        },
+        Response::Failed(error) => {
+            Some(format!("provider {provider} update failed: {}", error.message).into_boxed_str())
+        }
+        _ => Some(
+            format!("provider {provider} update returned an unexpected result").into_boxed_str(),
+        ),
     }
 }
 
@@ -386,9 +580,13 @@ async fn serve_surfaces(
     let (asking, mut asked) = mpsc::channel::<Asked>(ASKED_QUEUE);
     let (reserving, mut reservations) = mpsc::unbounded_channel::<ReservationAsked>();
     let (returning, mut returned) = mpsc::unbounded_channel::<AgentReturned>();
-    let initial_index = Arc::<[u8]>::from(encode_response(&crate::dispatch::list(
-        &composed, &sessions,
-    )));
+    let (noticing_updates, mut update_notices) = mpsc::unbounded_channel::<AutomaticUpdateNotice>();
+    let mut provider_update_notices = BTreeMap::<ProviderId, Box<str>>::new();
+    let initial_index = Arc::<[u8]>::from(encode_session_index(
+        &composed,
+        &sessions,
+        &provider_update_notices,
+    ));
     let (session_index, _initial_index_receiver) = watch::channel(initial_index);
     // ProbeCache replaces one file atomically but is deliberately not a database. Serializing provider preparation
     // keeps two connections from publishing stale snapshots over each other and bounds temporary provider processes.
@@ -397,6 +595,12 @@ async fn serve_surfaces(
     let discovering = Arc::new(Mutex::new(()));
     let mut connections = JoinSet::new();
     let (upgrading, mut upgrades) = mpsc::channel::<NoiseUpgrade>(PHONE_UPGRADE_QUEUE);
+    connections.spawn(automatic_provider_updates(
+        Arc::clone(&composed),
+        Arc::clone(&discovering),
+        reserving.clone(),
+        noticing_updates,
+    ));
 
     let outcome = loop {
         tokio::select! {
@@ -488,9 +692,14 @@ async fn serve_surfaces(
             }
 
             Some(reservation) = reservations.recv() => match reservation {
-                ReservationAsked::Reserve { session, claim, answered } => {
-                    let reserved = sessions.reserve_open(session, claim);
-                    publish_session_index(&session_index, &composed, &sessions);
+                ReservationAsked::Reserve { provider, session, claim, answered } => {
+                    let reserved = sessions.reserve_open_for_provider(provider, session, claim);
+                    publish_session_index(
+                        &session_index,
+                        &composed,
+                        &sessions,
+                        &provider_update_notices,
+                    );
                     if let Err(Ok(abandoned)) = answered.send(reserved) {
                         abandon_reserved(
                             &mut sessions,
@@ -500,9 +709,19 @@ async fn serve_surfaces(
                         );
                     }
                 }
+                ReservationAsked::ReserveProviderUpdate { provider, answered } => {
+                    let reserved = sessions.reserve_provider_update(provider);
+                    if let Err(Ok(abandoned)) = answered.send(reserved) {
+                        sessions.release_provider_update(abandoned);
+                    }
+                }
                 ReservationAsked::CancelOpen(reservation) => sessions.cancel_open(reservation),
                 ReservationAsked::ReleaseClosing(reservation) => {
                     sessions.release_closing(reservation);
+                    runtrol_childproc::footprint::release_unused_memory();
+                }
+                ReservationAsked::ReleaseProviderUpdate(reservation) => {
+                    sessions.release_provider_update(reservation);
                     runtrol_childproc::footprint::release_unused_memory();
                 }
             },
@@ -532,7 +751,12 @@ async fn serve_surfaces(
                     &mut sessions,
                 );
                 if changes_index || abandoned_agent {
-                    publish_session_index(&session_index, &composed, &sessions);
+                    publish_session_index(
+                        &session_index,
+                        &composed,
+                        &sessions,
+                        &provider_update_notices,
+                    );
                 }
             }
 
@@ -552,7 +776,12 @@ async fn serve_surfaces(
                 }
                 AgentReturned::Abandoned(lease) => {
                     sessions.abandon_agent(lease);
-                    publish_session_index(&session_index, &composed, &sessions);
+                    publish_session_index(
+                        &session_index,
+                        &composed,
+                        &sessions,
+                        &provider_update_notices,
+                    );
                 }
             },
 
@@ -573,8 +802,24 @@ async fn serve_surfaces(
                     }
                 }
                 if pumped.index_changed {
-                    publish_session_index(&session_index, &composed, &sessions);
+                    publish_session_index(
+                        &session_index,
+                        &composed,
+                        &sessions,
+                        &provider_update_notices,
+                    );
                 }
+            }
+
+            Some(notice) = update_notices.recv() => {
+                provider_update_notices.insert(notice.provider, notice.message);
+                publish_session_index(
+                    &session_index,
+                    &composed,
+                    &sessions,
+                    &provider_update_notices,
+                );
+                provider_update_notices.clear();
             }
 
             Some(_finished) = connections.join_next(), if !connections.is_empty() => {}
@@ -674,6 +919,10 @@ fn abandon_reply(
             sessions.abandon_agent(lease);
             true
         }
+        Reply::Updating { reservation, .. } => {
+            drop(cancelling.send(ReservationAsked::ReleaseProviderUpdate(reservation)));
+            false
+        }
         Reply::One(_) | Reply::Watching(_) | Reply::WatchingSessions => false,
     }
 }
@@ -718,6 +967,13 @@ fn requested_workspace(request: &Request) -> Option<(&str, WorkspaceAccess)> {
             workspace_access,
             ..
         } => Some((workspace, *workspace_access)),
+        _ => None,
+    }
+}
+
+fn requested_provider(request: &Request) -> Option<&str> {
+    match request {
+        Request::Start { provider, .. } | Request::Resume { provider, .. } => Some(provider),
         _ => None,
     }
 }
@@ -822,10 +1078,28 @@ async fn converse(
                     continue;
                 }
             };
+            let Some(provider_text) = requested_provider(&request) else {
+                continue;
+            };
+            let Ok(provider) = runtrol_provider::ProviderId::parse(provider_text) else {
+                if write(
+                    &mut connection,
+                    &refuse(&format!(
+                        "{provider_text:?} is not a provider name runtrol accepts"
+                    )),
+                )
+                .await
+                .is_err()
+                {
+                    return;
+                }
+                continue;
+            };
             let session = SessionId::now();
             let (answered, hearing) = oneshot::channel();
             if reserving
                 .send(ReservationAsked::Reserve {
+                    provider,
                     session,
                     claim,
                     answered,
@@ -873,8 +1147,13 @@ async fn converse(
             None
         };
 
-        let mut preparation_gate = if needs_driver(&request) || crate::consult::is_consult(&request)
-        {
+        let provider_update = matches!(&request, Request::ProviderUpdate { .. });
+        let mut preparation_gate = if needs_driver(&request)
+            || crate::consult::is_consult(&request)
+            || matches!(
+                request,
+                Request::ProviderUpdates | Request::ProviderUpdate { .. }
+            ) {
             Some(discovering.lock().await)
         } else {
             None
@@ -893,14 +1172,25 @@ async fn converse(
             // The whole consult exchange runs here in the connection's own task, behind the same gate that
             // bounds temporary provider processes, so a toggle never stops a running session's events.
             prepare_consult(&conversation, &composed, &request).await
+        } else if matches!(request, Request::ProviderUpdates) {
+            prepare_provider_updates(&conversation, &composed, &request).await
         } else {
             let discovered = if preparation_gate.is_some() {
                 discover(&conversation, &composed, &request).await
             } else {
                 Discovered::None
             };
-            drop(preparation_gate.take());
+            if !provider_update {
+                drop(preparation_gate.take());
+            }
             complete_prepare_for(&request, discovered, reserved_session).await
+        };
+        // A provider update keeps the shared discovery gate through package mutation and verification. Its update
+        // reservation blocks session processes, while this guard blocks short-lived probes that have no session slot.
+        let _provider_update_gate = if provider_update {
+            preparation_gate.take()
+        } else {
+            None
         };
         drop(preparation_gate);
         let (answered, hearing) = oneshot::channel();
@@ -957,6 +1247,21 @@ async fn converse(
                 }
                 relay_session_index(&mut connection, &mut session_index).await;
                 return;
+            }
+
+            Reply::Updating {
+                provider,
+                reservation,
+            } => {
+                let releasing = ProviderUpdateGuard {
+                    reservation: Some(reservation),
+                    releasing: reserving.clone(),
+                };
+                let response = crate::provider_update::apply_latest(&composed, provider).await;
+                drop(releasing);
+                if write(&mut connection, &response).await.is_err() {
+                    return;
+                }
             }
 
             // The wait the owner task handed over. Done here so that closing one session does not stop every other
@@ -1186,8 +1491,13 @@ fn publish_session_index(
     session_index: &watch::Sender<Arc<[u8]>>,
     composed: &Composed,
     sessions: &SessionManager,
+    provider_update_notices: &BTreeMap<ProviderId, Box<str>>,
 ) {
-    let next = Arc::<[u8]>::from(encode_response(&crate::dispatch::list(composed, sessions)));
+    let next = Arc::<[u8]>::from(encode_session_index(
+        composed,
+        sessions,
+        provider_update_notices,
+    ));
     session_index.send_if_modified(|current| {
         if current.as_ref() == next.as_ref() {
             return false;
@@ -1195,6 +1505,20 @@ fn publish_session_index(
         *current = next;
         true
     });
+}
+
+fn encode_session_index(
+    composed: &Composed,
+    sessions: &SessionManager,
+    provider_update_notices: &BTreeMap<ProviderId, Box<str>>,
+) -> Vec<u8> {
+    let mut response = crate::dispatch::list(composed, sessions);
+    if let Response::Sessions(listing) = &mut response {
+        listing
+            .warnings
+            .extend(provider_update_notices.values().cloned());
+    }
+    encode_response(&response)
 }
 
 /// Write one answer.
@@ -2377,7 +2701,7 @@ mod tests {
                 ReservationAsked::ReleaseClosing(reservation) => {
                     sessions.release_closing(reservation);
                 }
-                ReservationAsked::Reserve { .. } => panic!("a slot release was expected"),
+                _ => panic!("a slot release was expected"),
             }
         }
         assert!(sessions.reserve_open_for_tests(SessionId::now()).is_ok());
@@ -2488,7 +2812,7 @@ mod tests {
             ReservationAsked::ReleaseClosing(reservation) => {
                 sessions.release_closing(reservation);
             }
-            ReservationAsked::Reserve { .. } => panic!("a slot release was expected"),
+            _ => panic!("a slot release was expected"),
         }
         assert!(sessions.reserve_open_for_tests(SessionId::now()).is_ok());
     }
@@ -2528,5 +2852,31 @@ mod tests {
         let read: Response =
             serde_json::from_slice(bytes).expect("the last resort must be readable");
         assert!(matches!(read, Response::Failed(_)));
+    }
+
+    #[test]
+    fn an_automatic_rollback_stays_pinned_when_the_journal_cannot_be_saved() {
+        let provider = ProviderId::parse("test").expect("valid provider");
+        let mut pins = BTreeMap::new();
+        let rolled_back = Response::ProviderUpdated(runtrol_ipc::wire::ProviderUpdateResult {
+            provider: provider.as_str().into(),
+            outcome: runtrol_ipc::wire::ProviderUpdateOutcome::RolledBack,
+            from: "1.0.0".into(),
+            to: "1.0.0".into(),
+            why: Some("the rollback pin was not saved".into()),
+        });
+
+        track_automatic_pin(&mut pins, provider, "2.0.0", &rolled_back);
+        assert_eq!(pins.get(&provider).map(AsRef::as_ref), Some("2.0.0"));
+
+        let updated = Response::ProviderUpdated(runtrol_ipc::wire::ProviderUpdateResult {
+            provider: provider.as_str().into(),
+            outcome: runtrol_ipc::wire::ProviderUpdateOutcome::Updated,
+            from: "1.0.0".into(),
+            to: "2.0.0".into(),
+            why: None,
+        });
+        track_automatic_pin(&mut pins, provider, "2.0.0", &updated);
+        assert!(!pins.contains_key(&provider));
     }
 }
