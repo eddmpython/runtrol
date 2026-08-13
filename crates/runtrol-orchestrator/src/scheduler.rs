@@ -28,6 +28,17 @@ pub enum Eligibility {
     Terminal,
 }
 
+/// Content-free Task fact used to rebuild scheduler admission after daemon restart.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RecoveryTaskState {
+    /// Durable passing evidence exists.
+    Passed,
+    /// The Task may be admitted after dependency and pause checks.
+    Open,
+    /// The Task cannot execute again.
+    Terminal,
+}
+
 /// Atomic reservation of all resources required before session preparation.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Reservation {
@@ -119,6 +130,64 @@ impl Scheduler {
             states,
             reservations: BTreeMap::new(),
             paused: false,
+            cancelled: false,
+        })
+    }
+
+    /// Rebuild admission from durable Task facts without recreating an active Run or submitting input.
+    ///
+    /// # Errors
+    /// Returns [`SchedulerError::InvalidBudget`] for a zero global budget or
+    /// [`SchedulerError::RecoveryMismatch`] when a durable Task identity is missing.
+    pub fn recover(
+        mission: ValidatedMission,
+        budget: ResourceBudget,
+        recovered: &BTreeMap<TaskId, RecoveryTaskState>,
+        paused: bool,
+    ) -> Result<Self, SchedulerError> {
+        if budget.max_hot_providers == 0 {
+            return Err(SchedulerError::InvalidBudget);
+        }
+        if mission
+            .tasks
+            .iter()
+            .any(|task| !recovered.contains_key(&task.id))
+            || recovered.len() != mission.tasks.len()
+        {
+            return Err(SchedulerError::RecoveryMismatch);
+        }
+        let completed: BTreeSet<&str> = mission
+            .tasks
+            .iter()
+            .filter(|task| recovered.get(&task.id) == Some(&RecoveryTaskState::Passed))
+            .map(|task| task.key.as_ref())
+            .collect();
+        let states = mission
+            .tasks
+            .iter()
+            .map(|task| {
+                let state = match recovered.get(&task.id) {
+                    Some(RecoveryTaskState::Passed) => Eligibility::Passed,
+                    Some(RecoveryTaskState::Terminal) | None => Eligibility::Terminal,
+                    Some(RecoveryTaskState::Open)
+                        if task
+                            .depends_on
+                            .iter()
+                            .all(|dependency| completed.contains(dependency.as_ref())) =>
+                    {
+                        Eligibility::Ready
+                    }
+                    Some(RecoveryTaskState::Open) => Eligibility::Waiting,
+                };
+                (task.key.clone(), state)
+            })
+            .collect();
+        Ok(Self {
+            mission,
+            budget,
+            states,
+            reservations: BTreeMap::new(),
+            paused,
             cancelled: false,
         })
     }
@@ -218,6 +287,58 @@ impl Scheduler {
         Ok(effects)
     }
 
+    /// Release one failed Run and return its exact Task to eligibility for a locally approved retry.
+    ///
+    /// # Errors
+    /// Returns [`SchedulerError::NotReserved`] when the exact Run owns no reservation.
+    pub fn retry(&mut self, run_id: RunId) -> Result<SchedulerEffect, SchedulerError> {
+        let key = self
+            .reservations
+            .iter()
+            .find_map(|(key, reservation)| (reservation.run_id == run_id).then(|| key.clone()))
+            .ok_or(SchedulerError::NotReserved)?;
+        self.reservations.remove(&key);
+        self.states.insert(key, Eligibility::Ready);
+        Ok(SchedulerEffect::ReleaseResources { run_id })
+    }
+
+    /// Release one terminal failed Run without making its Task eligible again.
+    ///
+    /// # Errors
+    /// Returns [`SchedulerError::NotReserved`] when the exact Run owns no reservation.
+    pub fn fail(&mut self, run_id: RunId) -> Result<SchedulerEffect, SchedulerError> {
+        let key = self
+            .reservations
+            .iter()
+            .find_map(|(key, reservation)| (reservation.run_id == run_id).then(|| key.clone()))
+            .ok_or(SchedulerError::NotReserved)?;
+        self.reservations.remove(&key);
+        self.states.insert(key, Eligibility::Terminal);
+        Ok(SchedulerEffect::ReleaseResources { run_id })
+    }
+
+    /// Reopen one locally reviewed blocked or retryable Task after recovery.
+    ///
+    /// # Errors
+    /// Returns [`SchedulerError::NotReserved`] when the Task is unknown or dependencies are not passed.
+    pub fn reopen(&mut self, task_id: TaskId) -> Result<(), SchedulerError> {
+        let task = self
+            .mission
+            .tasks
+            .iter()
+            .find(|task| task.id == task_id)
+            .ok_or(SchedulerError::NotReserved)?;
+        let ready = task
+            .depends_on
+            .iter()
+            .all(|dependency| self.states.get(dependency.as_ref()) == Some(&Eligibility::Passed));
+        if !ready {
+            return Err(SchedulerError::NothingReady);
+        }
+        self.states.insert(task.key.clone(), Eligibility::Ready);
+        Ok(())
+    }
+
     /// Pause all new reservation admission.
     pub const fn pause(&mut self) {
         self.paused = true;
@@ -304,6 +425,9 @@ pub enum SchedulerError {
     /// Exact Task or Run has no active reservation.
     #[error("task or run is not reserved")]
     NotReserved,
+    /// Durable Task identities did not exactly match the reviewed Mission.
+    #[error("durable task identities do not match the reviewed mission")]
+    RecoveryMismatch,
 }
 
 #[cfg(test)]

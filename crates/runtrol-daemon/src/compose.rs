@@ -28,6 +28,7 @@ use runtrol_provider::WallMs;
 use runtrol_security::{DeviceId, DeviceLabels, DeviceScope, GrantLedger};
 use runtrol_store::{DeviceRow, Store};
 use runtrol_transport::{CredentialFingerprint, PublicKey, StaticKeypair};
+use tokio::sync::Mutex;
 
 /// The daemon could not be assembled.
 #[derive(Debug, thiserror::Error)]
@@ -51,6 +52,14 @@ pub enum ComposeError {
     /// The separate Mission evidence and recovery ledger could not be opened or trusted.
     #[error(transparent)]
     Ledger(#[from] runtrol_ledger::LedgerError),
+
+    /// The local fixed Mission Gate registry could not be restored safely.
+    #[error("cannot restore the Mission Gate registry: {0}")]
+    MissionGates(String),
+
+    /// The local exact-digest capability trust index could not be restored safely.
+    #[error("cannot restore the capability trust index: {0}")]
+    CapabilityTrust(String),
 
     /// The per-user operating-system vault could not protect or restore the machine identity.
     #[error(transparent)]
@@ -100,6 +109,10 @@ pub struct Composed {
     pub store: Store,
     /// Bounded metadata-only Mission evidence and recovery state.
     pub ledger: Ledger,
+    /// Local Mission validation, scheduler, and `GateDefinition` registry state.
+    pub(crate) missions: Mutex<crate::mission::MissionController>,
+    /// Local project capability candidate and exact-digest trust state.
+    pub(crate) growth: Mutex<crate::growth::GrowthController>,
     /// Local-only pending approval challenges for public Runtime integrations.
     pub(crate) integration_admin: crate::integration_admin::IntegrationAdmin,
     /// The guarantee that children die with this process.
@@ -147,12 +160,27 @@ impl Composed {
             home.paths().process_guards().as_std_path(),
         )?);
         let registry = load(&home, builtin);
+        let mut missions =
+            crate::mission::MissionController::open(home.paths().mission_gates().clone())
+                .map_err(ComposeError::MissionGates)?;
+        let runtime_ids: Vec<Box<str>> = registry
+            .usable()
+            .map(|provider| provider.id().as_str().into())
+            .collect();
+        let mut growth =
+            crate::growth::GrowthController::open(home.paths().capability_trust().clone())
+                .map_err(ComposeError::CapabilityTrust)?;
+        missions
+            .recover(&ledger, &runtime_ids, &mut growth)
+            .map_err(ComposeError::MissionGates)?;
         let (granted, paired_devices) = restore_device_authority(&store)?;
         let pc_identity = load_machine_identity(&home)?;
         Ok(Self {
             home,
             store,
             ledger,
+            missions: Mutex::new(missions),
+            growth: Mutex::new(growth),
             integration_admin: crate::integration_admin::IntegrationAdmin::default(),
             containment,
             registry,
@@ -182,12 +210,27 @@ impl Composed {
         let registry = load(&home, builtin);
         let store = Store::open(home.paths().database())?;
         let ledger = Ledger::open(home.paths().mission_ledger())?;
+        let mut missions =
+            crate::mission::MissionController::open(home.paths().mission_gates().clone())
+                .map_err(ComposeError::MissionGates)?;
+        let runtime_ids: Vec<Box<str>> = registry
+            .usable()
+            .map(|provider| provider.id().as_str().into())
+            .collect();
+        let mut growth =
+            crate::growth::GrowthController::open(home.paths().capability_trust().clone())
+                .map_err(ComposeError::CapabilityTrust)?;
+        missions
+            .recover(&ledger, &runtime_ids, &mut growth)
+            .map_err(ComposeError::MissionGates)?;
         let (granted, paired_devices) = restore_device_authority(&store)?;
         let pc_identity = load_machine_identity(&home)?;
         Ok(Self {
             home,
             store,
             ledger,
+            missions: Mutex::new(missions),
+            growth: Mutex::new(growth),
             integration_admin: crate::integration_admin::IntegrationAdmin::default(),
             containment: Arc::new(Containment::without_any()),
             registry,

@@ -54,4 +54,4 @@ pub use error::SpawnError;
 pub use footprint::resident_bytes;
 pub use handoff::keep_handles_to_ourselves;
 pub use resolve::{LauncherKept, Program, ProgramKind, resolve};
-pub use run::{MAX_OUTPUT_BYTES, Output, capture, capture_with_input};
+pub use run::{MAX_OUTPUT_BYTES, Output, capture, capture_in, capture_with_input};

@@ -18,6 +18,8 @@
 //! | `providers/` | the manifest loader, last in the discovery order and therefore able to shadow |
 //! | `process-guards/` | child supervision, containing only bounded process identity records |
 //! | the probe cache | the binary-identity cache of what each installed CLI can do |
+//! | the Mission gate registry | fixed local Gate definitions, without process output |
+//! | the capability trust index | exact local digest approvals, without capability bodies |
 //! | the provider update journal | verified version floors and rollback pins, never provider content |
 //! | the machine identity vault | the per-user OS protector and Noise handshake assembly |
 //! | the daemon crash file | the detached daemon's panic hook writes it; the operator and gates read it |
@@ -48,6 +50,12 @@ const DATABASE: &str = "runtrol.redb";
 
 /// Separate bounded Mission evidence and recovery ledger.
 const MISSION_LEDGER: &str = "mission-ledger.redb";
+
+/// Fixed local Mission Gate definitions.
+const MISSION_GATES: &str = "mission-gates.json";
+
+/// Exact local capability approvals and states.
+const CAPABILITY_TRUST: &str = "capability-trust.json";
 
 /// Provider manifests the operator wrote.
 const PROVIDERS: &str = "providers";
@@ -88,6 +96,10 @@ pub struct Layout {
     database: AbsPath,
     /// Separate Mission evidence ledger file.
     mission_ledger: AbsPath,
+    /// Fixed local Mission Gate registry.
+    mission_gates: AbsPath,
+    /// Exact local capability approval index.
+    capability_trust: AbsPath,
     /// The operator's manifest directory.
     providers: AbsPath,
     /// Bounded durable process identities for restart recovery.
@@ -129,6 +141,8 @@ impl Layout {
         Ok(Self {
             database: entry(DATABASE)?,
             mission_ledger: entry(MISSION_LEDGER)?,
+            mission_gates: entry(MISSION_GATES)?,
+            capability_trust: entry(CAPABILITY_TRUST)?,
             providers: entry(PROVIDERS)?,
             process_guards: entry(PROCESS_GUARDS)?,
             probe_cache: entry(PROBE_CACHE)?,
@@ -159,6 +173,18 @@ impl Layout {
     #[must_use]
     pub const fn mission_ledger(&self) -> &AbsPath {
         &self.mission_ledger
+    }
+
+    /// Fixed local Mission Gate registry.
+    #[must_use]
+    pub const fn mission_gates(&self) -> &AbsPath {
+        &self.mission_gates
+    }
+
+    /// Exact local capability approval index.
+    #[must_use]
+    pub const fn capability_trust(&self) -> &AbsPath {
+        &self.capability_trust
     }
 
     /// The directory the operator puts their own provider manifests in.
@@ -232,6 +258,8 @@ impl Layout {
         vec![
             &self.database,
             &self.mission_ledger,
+            &self.mission_gates,
+            &self.capability_trust,
             &self.providers,
             &self.process_guards,
             &self.probe_cache,

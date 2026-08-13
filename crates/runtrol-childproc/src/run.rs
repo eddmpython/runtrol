@@ -28,6 +28,7 @@ use crate::argv;
 use crate::contain::{Containment, TrackedCommand};
 use crate::error::SpawnError;
 use crate::resolve::Program;
+use runtrol_provider::AbsPath;
 use tokio::io::{AsyncRead, AsyncReadExt};
 
 /// How much of a program's output runtrol will hold.
@@ -93,7 +94,25 @@ pub async fn capture(
     within: Duration,
     contained_by: &Containment,
 ) -> Result<Output, SpawnError> {
-    capture_exchange(program, args, None, within, contained_by).await
+    capture_exchange(program, args, None, None, within, contained_by).await
+}
+
+/// Run a resolved program in one exact canonical directory and read its bounded output.
+///
+/// This is the fixed-argument gate boundary. The directory is a typed absolute path rather than an argument or
+/// shell fragment, so a gate cannot reinterpret it.
+///
+/// # Errors
+///
+/// The same errors as [`capture`].
+pub async fn capture_in(
+    program: &Program,
+    args: &[String],
+    directory: &AbsPath,
+    within: Duration,
+    contained_by: &Containment,
+) -> Result<Output, SpawnError> {
+    capture_exchange(program, args, None, Some(directory), within, contained_by).await
 }
 
 /// Run a resolved program, hand it `input` on standard input, close the pipe, and read what it said.
@@ -113,7 +132,7 @@ pub async fn capture_with_input(
     within: Duration,
     contained_by: &Containment,
 ) -> Result<Output, SpawnError> {
-    capture_exchange(program, args, Some(input), within, contained_by).await
+    capture_exchange(program, args, Some(input), None, within, contained_by).await
 }
 
 /// One bounded question, with or without bytes on standard input.
@@ -121,6 +140,7 @@ async fn capture_exchange(
     program: &Program,
     args: &[String],
     input: Option<&[u8]>,
+    directory: Option<&AbsPath>,
     within: Duration,
     contained_by: &Containment,
 ) -> Result<Output, SpawnError> {
@@ -142,6 +162,9 @@ async fn capture_exchange(
         // The child must not outlive the answer. Without this the process is reaped only when the handle is
         // dropped, and a timeout would leave it running.
         .kill_on_drop(true);
+    if let Some(directory) = directory {
+        command.current_dir(directory.as_std_path());
+    }
     let (mut child, mut child_guard) = command.spawn(contained_by)?;
     let writing = match input {
         Some(bytes) => {

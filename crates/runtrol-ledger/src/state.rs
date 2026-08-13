@@ -134,10 +134,10 @@ impl TaskState {
                     | Self::Cancelled
             ) | (
                 Self::AwaitingApproval,
-                Self::Running | Self::Failed | Self::Cancelled
+                Self::Running | Self::Blocked | Self::Failed | Self::Cancelled
             ) | (
                 Self::Verifying,
-                Self::Passed | Self::Retryable | Self::Failed | Self::Cancelled
+                Self::Blocked | Self::Passed | Self::Retryable | Self::Failed | Self::Cancelled
             ) | (
                 Self::Retryable | Self::Blocked,
                 Self::Eligible | Self::Failed | Self::Cancelled

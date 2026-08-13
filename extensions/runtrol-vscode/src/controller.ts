@@ -298,6 +298,15 @@ export class Controller implements vscode.Disposable {
     await this.runtime.submitInput(runtimeAction(session), written);
   }
 
+  async submitResolvedInput(sessionId: string, text: string): Promise<void> {
+    await this.refresh();
+    const session = this.state.sessions.find((candidate) => candidate.sessionId === sessionId);
+    if (!session) {
+      throw new Error("the Mission session is no longer listed by Runtime");
+    }
+    await this.runtime.submitInput(runtimeAction(session), text);
+  }
+
   async interrupt(): Promise<void> {
     const session = this.requireSelected();
     await this.runtime.interrupt(runtimeAction(session));

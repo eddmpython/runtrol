@@ -1,4 +1,4 @@
-export const WIRE_VERSION = 13;
+export const WIRE_VERSION = 16;
 
 export type ProviderUpdateState = "current" | "available" | "observeOnly" | "notInstalled" | "unconfirmed";
 
@@ -51,6 +51,75 @@ export type RuntimeKeyRotationLine = {
   expires_at_ms: number;
 };
 
+export type MissionLine = {
+  mission_id: string;
+  name: string;
+  project: string;
+  state: string;
+  passed_tasks: number;
+  total_tasks: number;
+  awaiting_input: number;
+};
+
+export type MissionTaskLine = {
+  task_id: string;
+  key: string;
+  state: string;
+  instruction_ref: string;
+  instruction_sha256: string;
+  workspace_mode: "readOnlyBase" | "isolatedWorktree" | "unavailableAfterRestart";
+  provider_selector: string;
+  output_roots: string[];
+  gate_refs: string[];
+  session_id: string | null;
+  workspace: string | null;
+  base_commit: string | null;
+  receipt_id: string | null;
+  passed_gates: number;
+  failed_gates: number;
+};
+
+export type MissionSnapshot = {
+  mission: MissionLine;
+  mission_sha256: string;
+  mission_ref: string;
+  tasks: MissionTaskLine[];
+};
+
+export type MissionWorkspace = {
+  mission_id: string;
+  task_id: string;
+  workspace: string;
+  base_commit: string;
+};
+
+export type MissionInstruction = {
+  mission_id: string;
+  task_id: string;
+  session_id: string;
+  instruction: string;
+  instruction_sha256: string;
+};
+
+export type CapabilityLine = {
+  project: string;
+  capability_id: string;
+  kind: "skill" | "gateRecipe" | "playbook";
+  state: string;
+  version_sha256: string;
+  source_ref: string;
+  source_receipt_id: string;
+  verification_receipt_id: string | null;
+  verification_gates: Array<{
+    gate_id: string;
+    definition_sha256: string;
+    outcome: string;
+    duration_ms: number;
+  }>;
+  active_version_sha256: string | null;
+  approved_versions: string[];
+};
+
 export type WireError = {
   message: string;
   retryable: boolean;
@@ -83,6 +152,52 @@ export type Request =
   | { ask: "runtimeForgetConfirm"; with: { confirmation_id: string } }
   | { ask: "runtimeKeyRotationRequests" }
   | { ask: "runtimeKeyRotationConfirm"; with: { confirmation_id: string } }
+  | {
+      ask: "missionRegisterGate";
+      with: { gate_id: string; program: string; arguments: string[]; timeout_ms: number };
+    }
+  | { ask: "missionValidate"; with: { project: string; mission_ref: string } }
+  | { ask: "missionList" }
+  | { ask: "missionGet"; with: { mission_id: string } }
+  | { ask: "missionStart"; with: { mission_id: string; mission_sha256: string } }
+  | { ask: "missionPrepareTask"; with: { mission_id: string; task_id: string } }
+  | { ask: "missionPause"; with: { mission_id: string } }
+  | { ask: "missionResumeSafe"; with: { mission_id: string } }
+  | { ask: "missionCancel"; with: { mission_id: string } }
+  | {
+      ask: "missionBindSession";
+      with: {
+        mission_id: string;
+        task_id: string;
+        session_id: string;
+        provider_runtime_id: string;
+        native_session_id: string | null;
+        workspace: string;
+      };
+    }
+  | {
+      ask: "missionSendTaskInstruction";
+      with: { mission_id: string; task_id: string; instruction_sha256: string };
+    }
+  | { ask: "missionVerifyTask"; with: { mission_id: string; task_id: string } }
+  | { ask: "missionRetryTask"; with: { mission_id: string; task_id: string } }
+  | { ask: "capabilityPropose"; with: { project: string; candidate_ref: string } }
+  | { ask: "capabilityList" }
+  | {
+      ask: "capabilityVerify";
+      with: { project: string; capability_id: string; version_sha256: string };
+    }
+  | {
+      ask: "capabilityApprove";
+      with: { project: string; capability_id: string; version_sha256: string };
+    }
+  | { ask: "capabilityReject"; with: { project: string; capability_id: string } }
+  | { ask: "capabilityQuarantine"; with: { project: string; capability_id: string } }
+  | {
+      ask: "capabilityRollback";
+      with: { project: string; capability_id: string; version_sha256: string };
+    }
+  | { ask: "capabilityArchive"; with: { project: string; capability_id: string } }
   | { ask: "rename"; with: { session: string; label: string | null } };
 
 export type Response =
@@ -107,6 +222,11 @@ export type Response =
   | { say: "integrations"; with: IntegrationLine[] }
   | { say: "runtimeForgetRequests"; with: RuntimeForgetLine[] }
   | { say: "runtimeKeyRotationRequests"; with: RuntimeKeyRotationLine[] }
+  | { say: "missions"; with: MissionLine[] }
+  | { say: "mission"; with: MissionSnapshot }
+  | { say: "missionWorkspace"; with: MissionWorkspace }
+  | { say: "missionInstruction"; with: MissionInstruction }
+  | { say: "capabilities"; with: CapabilityLine[] }
   | { say: "done" }
   | { say: "failed"; with: WireError };
 

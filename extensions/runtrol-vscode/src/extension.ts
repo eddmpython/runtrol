@@ -1,5 +1,6 @@
 import * as vscode from "vscode";
 
+import { CandidateController } from "./capability/controller";
 import { ConversationView, type WebviewPerformance } from "./conversationView";
 import { Controller } from "./controller";
 import { CoreClient } from "./core/client";
@@ -12,6 +13,8 @@ import {
   reviewRuntimeRequests,
 } from "./integrationAdministration";
 import { journeyApi, type JourneyApi } from "./journeyApi";
+import { MissionController } from "./mission/controller";
+import { MissionTree } from "./mission/tree";
 import { SelectionStore } from "./selectionStore";
 import { uniqueSessionTitle } from "./sessionDisplay";
 import { RuntimeState } from "./state";
@@ -76,18 +79,109 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
     (visible) => controller.conversationVisibilityChanged(visible),
   );
   controller = new Controller(context, client, runtime, state, conversation, selection);
+  const missionController = new MissionController(client, controller, state);
+  const candidateController = new CandidateController(client);
+  const missions = new MissionTree(missionController);
   const sessions = new SessionsTree(state);
   const providers = new ProvidersTree(state);
 
   context.subscriptions.push(
     state,
     controller,
+    missionController,
+    candidateController,
     conversation,
+    missions,
     sessions,
     providers,
     vscode.window.registerTreeDataProvider("runtrol.sessions", sessions),
+    vscode.window.registerTreeDataProvider("runtrol.missions", missions),
     vscode.window.registerTreeDataProvider("runtrol.providers", providers),
-    vscode.commands.registerCommand("runtrol.refresh", () => run(() => afterReady(() => controller.refresh()))),
+    vscode.workspace.registerTextDocumentContentProvider("runtrol-mission", missionController.documentProvider()),
+    vscode.commands.registerCommand(
+      "runtrol.refresh",
+      () => run(() => afterReady(async () => Promise.all([controller.refresh(), missionController.refresh()]).then(() => undefined))),
+    ),
+    vscode.commands.registerCommand(
+      "runtrol.validateMission",
+      () => run(() => afterReady(() => missionController.validateMission())),
+    ),
+    vscode.commands.registerCommand(
+      "runtrol.registerMissionGate",
+      () => run(() => afterReady(() => missionController.registerGate())),
+    ),
+    vscode.commands.registerCommand(
+      "runtrol.openMission",
+      (item) => run(() => afterReady(() => missionController.openMission(item))),
+    ),
+    vscode.commands.registerCommand(
+      "runtrol.startMission",
+      (item) => run(() => afterReady(() => missionController.startMission(item))),
+    ),
+    vscode.commands.registerCommand(
+      "runtrol.prepareMissionTask",
+      (item) => run(() => afterReady(() => missionController.prepareTask(item))),
+    ),
+    vscode.commands.registerCommand(
+      "runtrol.sendTaskInstruction",
+      (item) => run(() => afterReady(() => missionController.sendTaskInstruction(item))),
+    ),
+    vscode.commands.registerCommand(
+      "runtrol.verifyMissionTask",
+      (item) => run(() => afterReady(() => missionController.verifyTask(item))),
+    ),
+    vscode.commands.registerCommand(
+      "runtrol.retryMissionTask",
+      (item) => run(() => afterReady(() => missionController.retryTask(item))),
+    ),
+    vscode.commands.registerCommand(
+      "runtrol.pauseMission",
+      (item) => run(() => afterReady(() => missionController.pauseMission(item))),
+    ),
+    vscode.commands.registerCommand(
+      "runtrol.resumeMission",
+      (item) => run(() => afterReady(() => missionController.resumeMission(item))),
+    ),
+    vscode.commands.registerCommand(
+      "runtrol.cancelMission",
+      (item) => run(() => afterReady(() => missionController.cancelMission(item))),
+    ),
+    vscode.commands.registerCommand(
+      "runtrol.openTaskSession",
+      (item) => run(() => afterReady(() => missionController.openTaskSession(item))),
+    ),
+    vscode.commands.registerCommand(
+      "runtrol.proposeCapability",
+      () => run(() => afterReady(() => candidateController.propose())),
+    ),
+    vscode.commands.registerCommand(
+      "runtrol.capabilityInbox",
+      () => run(() => afterReady(() => candidateController.inbox())),
+    ),
+    vscode.commands.registerCommand(
+      "runtrol.verifyCapability",
+      () => run(() => afterReady(() => candidateController.verify())),
+    ),
+    vscode.commands.registerCommand(
+      "runtrol.approveCapability",
+      () => run(() => afterReady(() => candidateController.approve())),
+    ),
+    vscode.commands.registerCommand(
+      "runtrol.rejectCapability",
+      () => run(() => afterReady(() => candidateController.reject())),
+    ),
+    vscode.commands.registerCommand(
+      "runtrol.quarantineCapability",
+      () => run(() => afterReady(() => candidateController.quarantine())),
+    ),
+    vscode.commands.registerCommand(
+      "runtrol.rollbackCapability",
+      () => run(() => afterReady(() => candidateController.rollback())),
+    ),
+    vscode.commands.registerCommand(
+      "runtrol.archiveCapability",
+      () => run(() => afterReady(() => candidateController.archive())),
+    ),
     vscode.commands.registerCommand(
       "runtrol.checkProviderUpdates",
       () => run(() => afterReady(() => controller.checkProviderUpdates())),
@@ -147,7 +241,7 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
     }),
   );
 
-  lifecycle = runtime.initialize().then(() => controller.initialize());
+  lifecycle = runtime.initialize().then(() => controller.initialize()).then(() => missionController.initialize());
   void run(() => lifecycle);
   return {
     get ready() {

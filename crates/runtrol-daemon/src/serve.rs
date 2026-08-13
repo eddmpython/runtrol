@@ -59,7 +59,8 @@ use crate::compose::Composed;
 use crate::dispatch::{
     Cleanup, CleanupReservation, Conversation, Discovered, Prepared, PreparedKind, Reply,
     answer_prepared, complete_prepare_for, discover, is_integration_admin, needs_driver,
-    prepare_consult, prepare_integration_admin, prepare_provider_updates, refuse,
+    prepare_capability_verification, prepare_consult, prepare_integration_admin,
+    prepare_mission_verification, prepare_mission_workspace, prepare_provider_updates, refuse,
 };
 
 /// How many answered requests may be waiting to reach the one task that answers them.
@@ -1526,6 +1527,12 @@ async fn converse(
             prepare_provider_updates(&conversation, &composed, &request).await
         } else if is_integration_admin(&request) {
             prepare_integration_admin(&conversation, &composed, &request).await
+        } else if matches!(request, Request::MissionPrepareTask { .. }) {
+            prepare_mission_workspace(&conversation, &composed, &request).await
+        } else if matches!(request, Request::MissionVerifyTask { .. }) {
+            prepare_mission_verification(&conversation, &composed, &request).await
+        } else if matches!(request, Request::CapabilityVerify { .. }) {
+            prepare_capability_verification(&conversation, &composed, &request).await
         } else {
             let discovered = if preparation_gate.is_some() {
                 discover(&conversation, &composed, &request).await

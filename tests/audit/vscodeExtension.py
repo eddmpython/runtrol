@@ -88,7 +88,8 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
             "workspaceCollisions",
             '"Start here anyway"',
         ],
-        "core/client.ts": ["watchSessions", "commandConnection", "commandTail"],
+        "core/client.ts": ["commandConnection", "commandTail"],
+        "runtimeClient.ts": ["watchSessions", "watchSessionIndexWithReconnectSystem"],
         "core/locator.ts": ['["endpoint"]', 'candidates.push("runtrol")'],
         "core/managedCore.ts": [
             "createReadStream",
@@ -136,7 +137,8 @@ def selftest() -> int:
             'private watchAbort; private indexAbort; this.watchAbort?.abort(); reconnect workspaceCollisions '
             '"Start here anyway"'
         ),
-        "core/client.ts": "watchSessions commandConnection commandTail",
+        "core/client.ts": "commandConnection commandTail",
+        "runtimeClient.ts": "watchSessions watchSessionIndexWithReconnectSystem",
         "core/locator.ts": '["endpoint"] candidates.push("runtrol")',
         "core/managedCore.ts": (
             "createReadStream copyFile(source, incoming) link(executable, preserved) "

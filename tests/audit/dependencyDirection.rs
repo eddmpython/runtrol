@@ -35,6 +35,8 @@ const ALLOWED_EDGES: &[(&str, &[&str])] = &[
             "runtrol-ledger",
         ],
     ),
+    // Project capability inspection and trust metadata cannot see sessions, drivers, or transports.
+    ("runtrol-growth", &["runtrol-provider"]),
     // L0. The vocabulary. The semver-stable surface a third-party provider author depends on.
     ("runtrol-provider", &[]),
     // L1. The techniques. Each knows the vocabulary and nothing else.
@@ -81,6 +83,8 @@ const ALLOWED_EDGES: &[(&str, &[&str])] = &[
             "runtrol-update",
             "runtrol-runtime-protocol",
             "runtrol-ledger",
+            "runtrol-orchestrator",
+            "runtrol-growth",
         ],
     ),
     // L3. The command surface asks the daemon. It never opens storage itself, which the exclusive lock

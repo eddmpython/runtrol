@@ -17,7 +17,7 @@ fn receipt_input() -> ReceiptInput {
         finish_tree: "tree-fixture".into(),
         provider_observation: ProviderObservation {
             runtime_id: "opaque-runtime".into(),
-            binary_fingerprint: [2; 32],
+            binary_fingerprint: Some([2; 32]),
             model: None,
             native_session_id: "opaque-native-session".into(),
         },

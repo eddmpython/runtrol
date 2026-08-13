@@ -143,6 +143,176 @@ pub enum Request {
         confirmation_id: Box<str>,
     },
 
+    /// Register one fixed deterministic gate for local Mission validation.
+    MissionRegisterGate {
+        /// Stable project-local gate identity.
+        gate_id: Box<str>,
+        /// Executable resolved by daemon composition.
+        program: Box<str>,
+        /// Fixed argument vector, never shell source.
+        arguments: Vec<Box<str>>,
+        /// Hard timeout.
+        timeout_ms: u64,
+    },
+
+    /// Load and validate one exact project Mission file without starting work.
+    MissionValidate {
+        /// Canonical project directory selected at the PC.
+        project: Box<str>,
+        /// Project-relative Mission TOML path.
+        mission_ref: Box<str>,
+    },
+
+    /// List bounded Mission status metadata.
+    MissionList,
+
+    /// Read one exact Mission snapshot.
+    MissionGet {
+        /// Runtrol Mission identity.
+        mission_id: Box<str>,
+    },
+
+    /// Approve and start one exact validated Mission locally.
+    MissionStart {
+        /// Runtrol Mission identity.
+        mission_id: Box<str>,
+        /// Digest shown during local review.
+        mission_sha256: Box<str>,
+    },
+
+    /// Resolve and, when required, create the exact Task worktree before a public Runtime session starts.
+    MissionPrepareTask {
+        /// Runtrol Mission identity.
+        mission_id: Box<str>,
+        /// Generated Task identity.
+        task_id: Box<str>,
+    },
+
+    /// Pause new reservations for one Mission.
+    MissionPause {
+        /// Runtrol Mission identity.
+        mission_id: Box<str>,
+    },
+
+    /// Resume one Mission only without widening its reviewed contract.
+    MissionResumeSafe {
+        /// Runtrol Mission identity.
+        mission_id: Box<str>,
+    },
+
+    /// Cancel one Mission and release exact owned reservations.
+    MissionCancel {
+        /// Runtrol Mission identity.
+        mission_id: Box<str>,
+    },
+
+    /// Bind one prepared Task to the exact public Runtime session opened by Studio.
+    MissionBindSession {
+        /// Runtrol Mission identity.
+        mission_id: Box<str>,
+        /// Generated Task identity.
+        task_id: Box<str>,
+        /// Public Runtime managed session identity.
+        session_id: Box<str>,
+        /// Opaque runtime-discovered provider identity.
+        provider_runtime_id: Box<str>,
+        /// Provider-owned resume identity when already observed.
+        native_session_id: Option<Box<str>>,
+        /// Exact canonical workspace or worktree.
+        workspace: Box<str>,
+    },
+
+    /// Read exact reviewed instruction bytes after one explicit local Send action.
+    MissionSendTaskInstruction {
+        /// Runtrol Mission identity.
+        mission_id: Box<str>,
+        /// Generated Task identity.
+        task_id: Box<str>,
+        /// Digest shown on the button the operator pressed.
+        instruction_sha256: Box<str>,
+    },
+
+    /// Seal declared Artifacts and execute exact fixed Gates for one completed Task turn.
+    MissionVerifyTask {
+        /// Runtrol Mission identity.
+        mission_id: Box<str>,
+        /// Generated Task identity.
+        task_id: Box<str>,
+    },
+
+    /// Locally approve another bounded Run after a retryable verification result.
+    MissionRetryTask {
+        /// Runtrol Mission identity.
+        mission_id: Box<str>,
+        /// Generated Task identity.
+        task_id: Box<str>,
+    },
+
+    /// Import one explicit project capability candidate into the local inbox.
+    CapabilityPropose {
+        /// Canonical project root selected locally.
+        project: Box<str>,
+        /// Project-relative candidate directory.
+        candidate_ref: Box<str>,
+    },
+
+    /// List bounded local capability trust metadata.
+    CapabilityList,
+
+    /// Run the candidate's exact fixed independent verification Gates.
+    CapabilityVerify {
+        /// Canonical project root.
+        project: Box<str>,
+        /// Stable capability identity.
+        capability_id: Box<str>,
+        /// Exact candidate version shown to the operator.
+        version_sha256: Box<str>,
+    },
+
+    /// Activate one independently verified exact digest after local review.
+    CapabilityApprove {
+        /// Canonical project root.
+        project: Box<str>,
+        /// Stable capability identity.
+        capability_id: Box<str>,
+        /// Exact verified version shown during approval.
+        version_sha256: Box<str>,
+    },
+
+    /// Reject one exact candidate locally.
+    CapabilityReject {
+        /// Canonical project root.
+        project: Box<str>,
+        /// Stable capability identity.
+        capability_id: Box<str>,
+    },
+
+    /// Remove one active exact version from reuse selection.
+    CapabilityQuarantine {
+        /// Canonical project root.
+        project: Box<str>,
+        /// Stable capability identity.
+        capability_id: Box<str>,
+    },
+
+    /// Reactivate one retained prior approved version locally.
+    CapabilityRollback {
+        /// Canonical project root.
+        project: Box<str>,
+        /// Stable capability identity.
+        capability_id: Box<str>,
+        /// Exact prior approved digest.
+        version_sha256: Box<str>,
+    },
+
+    /// Move one capability version out of the active inbox while retaining project files.
+    CapabilityArchive {
+        /// Canonical project root.
+        project: Box<str>,
+        /// Stable capability identity.
+        capability_id: Box<str>,
+    },
+
     /// Begin a conversation that does not exist yet.
     Start {
         /// Which CLI.
@@ -308,6 +478,21 @@ pub enum Response {
 
     /// Public Runtime integration-key rotations awaiting one local decision.
     RuntimeKeyRotationRequests(Vec<RuntimeKeyRotationLine>),
+
+    /// Bounded Mission catalogue.
+    Missions(Vec<MissionLine>),
+
+    /// One exact Mission and Task state snapshot.
+    Mission(Box<MissionSnapshot>),
+
+    /// Exact canonical workspace prepared for one Task.
+    MissionWorkspace(Box<MissionWorkspace>),
+
+    /// Exact reviewed instruction bytes returned only to one local Send action.
+    MissionInstruction(Box<MissionInstruction>),
+
+    /// Bounded metadata-only capability inbox and active version list.
+    Capabilities(Vec<CapabilityLine>),
 
     /// A session was started or resumed.
     Started {
@@ -511,6 +696,141 @@ pub struct RuntimeKeyRotationLine {
     pub new_key_fingerprint: Box<str>,
     /// Expiry in Unix milliseconds.
     pub expires_at_ms: u64,
+}
+
+/// One bounded Mission catalogue row.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct MissionLine {
+    /// Runtrol Mission identity.
+    pub mission_id: Box<str>,
+    /// Project-owned display name.
+    pub name: Box<str>,
+    /// Canonical project path identity.
+    pub project: Box<str>,
+    /// Closed Mission state name.
+    pub state: Box<str>,
+    /// Passed Tasks.
+    pub passed_tasks: u16,
+    /// Total Tasks.
+    pub total_tasks: u16,
+    /// Tasks waiting for one local Send action.
+    pub awaiting_input: u16,
+}
+
+/// One exact Mission snapshot.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct MissionSnapshot {
+    /// Catalogue metadata.
+    pub mission: MissionLine,
+    /// Exact reviewed Mission digest.
+    pub mission_sha256: Box<str>,
+    /// Project-relative Mission source file.
+    pub mission_ref: Box<str>,
+    /// Bounded Task rows.
+    pub tasks: Vec<MissionTaskLine>,
+}
+
+/// One bounded Task row without instruction or conversation bodies.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct MissionTaskLine {
+    /// Generated durable Task identity.
+    pub task_id: Box<str>,
+    /// Stable project Task key.
+    pub key: Box<str>,
+    /// Closed Task state name.
+    pub state: Box<str>,
+    /// Project-relative reviewed instruction file.
+    pub instruction_ref: Box<str>,
+    /// Exact reviewed instruction digest.
+    pub instruction_sha256: Box<str>,
+    /// `readOnlyBase` or `isolatedWorktree`.
+    pub workspace_mode: Box<str>,
+    /// Opaque runtime choice or `operatorChoice`.
+    pub provider_selector: Box<str>,
+    /// Declared output claims.
+    pub output_roots: Vec<Box<str>>,
+    /// Exact deterministic gate references.
+    pub gate_refs: Vec<Box<str>>,
+    /// Public Runtime session identity after preparation.
+    pub session_id: Option<Box<str>>,
+    /// Exact workspace or worktree after preparation.
+    pub workspace: Option<Box<str>>,
+    /// Exact base commit after workspace preparation.
+    pub base_commit: Option<Box<str>>,
+    /// Content-addressed passing Receipt, when evidence passed.
+    pub receipt_id: Option<Box<str>>,
+    /// Passed deterministic Gate count across retained Runs.
+    pub passed_gates: u16,
+    /// Failed deterministic Gate count across retained Runs.
+    pub failed_gates: u16,
+}
+
+/// Exact workspace result used by Studio to start one public Runtime session.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct MissionWorkspace {
+    /// Runtrol Mission identity.
+    pub mission_id: Box<str>,
+    /// Generated Task identity.
+    pub task_id: Box<str>,
+    /// Canonical base worktree or Mission-owned linked worktree.
+    pub workspace: Box<str>,
+    /// Exact Git commit resolved from the reviewed base reference.
+    pub base_commit: Box<str>,
+}
+
+/// Exact bytes and public Runtime target returned after one local Send action.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct MissionInstruction {
+    /// Runtrol Mission identity.
+    pub mission_id: Box<str>,
+    /// Generated Task identity.
+    pub task_id: Box<str>,
+    /// Public Runtime session identity selected during preparation.
+    pub session_id: Box<str>,
+    /// Exact reviewed UTF-8 bytes with no transformation.
+    pub instruction: Box<str>,
+    /// SHA-256 of the returned bytes.
+    pub instruction_sha256: Box<str>,
+}
+
+/// One local capability trust row without candidate bodies.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct CapabilityLine {
+    /// Canonical project root.
+    pub project: Box<str>,
+    /// Stable capability identity.
+    pub capability_id: Box<str>,
+    /// `skill`, `gateRecipe`, or `playbook`.
+    pub kind: Box<str>,
+    /// Closed local trust state.
+    pub state: Box<str>,
+    /// Exact current full-tree digest.
+    pub version_sha256: Box<str>,
+    /// Current project-relative candidate, active, or archive path.
+    pub source_ref: Box<str>,
+    /// Source passing Receipt identity.
+    pub source_receipt_id: Box<str>,
+    /// Passing independent verification Receipt identity, when complete.
+    pub verification_receipt_id: Option<Box<str>>,
+    /// Most recent bounded fixed-Gate verification facts.
+    pub verification_gates: Vec<CapabilityGateLine>,
+    /// Exact approved version currently exposed from the active project path.
+    pub active_version_sha256: Option<Box<str>>,
+    /// Retained approved versions available for rollback review.
+    pub approved_versions: Vec<Box<str>>,
+}
+
+/// One capability verification Gate fact without process output.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct CapabilityGateLine {
+    /// Stable local Gate identity.
+    pub gate_id: Box<str>,
+    /// Exact locally approved Gate definition digest.
+    pub definition_sha256: Box<str>,
+    /// Closed outcome label.
+    pub outcome: Box<str>,
+    /// Observed duration in milliseconds.
+    pub duration_ms: u64,
 }
 
 /// One provider's independently verified update state.

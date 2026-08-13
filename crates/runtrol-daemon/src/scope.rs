@@ -91,6 +91,32 @@ pub fn needed(request: &Request) -> Needed {
         | Request::RuntimeKeyRotationConfirm { .. } => {
             Needed::AtTheMachine(LocalScope::IntegrationAdmin)
         }
+        Request::MissionRegisterGate { .. } => Needed::AtTheMachine(LocalScope::GateRegister),
+        Request::MissionValidate { .. } => Needed::AtTheMachine(LocalScope::MissionCreate),
+        Request::MissionList | Request::MissionGet { .. } => {
+            Needed::Scope(DeviceScope::MissionRead)
+        }
+        Request::MissionStart { .. }
+        | Request::MissionPrepareTask { .. }
+        | Request::MissionBindSession { .. } => Needed::AtTheMachine(LocalScope::MissionStart),
+        Request::MissionSendTaskInstruction { .. } => {
+            Needed::AtTheMachine(LocalScope::MissionSendTaskInstruction)
+        }
+        Request::MissionVerifyTask { .. } => Needed::AtTheMachine(LocalScope::MissionIntegrate),
+        Request::MissionRetryTask { .. } => Needed::AtTheMachine(LocalScope::MissionRetryTask),
+        Request::CapabilityPropose { .. }
+        | Request::CapabilityList
+        | Request::CapabilityVerify { .. }
+        | Request::CapabilityApprove { .. }
+        | Request::CapabilityReject { .. }
+        | Request::CapabilityQuarantine { .. } => {
+            Needed::AtTheMachine(LocalScope::CapabilityPromote)
+        }
+        Request::CapabilityRollback { .. } => Needed::AtTheMachine(LocalScope::CapabilityRollback),
+        Request::CapabilityArchive { .. } => Needed::AtTheMachine(LocalScope::CapabilityArchive),
+        Request::MissionPause { .. } => Needed::Scope(DeviceScope::MissionPause),
+        Request::MissionResumeSafe { .. } => Needed::Scope(DeviceScope::MissionResumeSafe),
+        Request::MissionCancel { .. } => Needed::Scope(DeviceScope::MissionCancel),
         Request::Start {
             workspace_access: WorkspaceAccess::Shared,
             ..

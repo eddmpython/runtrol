@@ -168,6 +168,12 @@ pub struct MissionRecord {
     pub id: MissionId,
     /// Digest of the closed Mission file.
     pub mission_sha256: [u8; 32],
+    /// Project-owned display name.
+    #[serde(default)]
+    pub display_name: Box<str>,
+    /// Project-relative Mission source path.
+    #[serde(default)]
+    pub mission_ref: Box<str>,
     /// Canonical project identity.
     pub project_id: Box<str>,
     /// Current state.
@@ -183,6 +189,8 @@ impl MissionRecord {
         Self {
             id: MissionId::now(),
             mission_sha256,
+            display_name: "".into(),
+            mission_ref: "".into(),
             project_id,
             state: MissionState::Draft,
             transitions: Vec::new(),
@@ -224,10 +232,22 @@ pub struct TaskRecord {
     pub id: TaskId,
     /// Owning Mission.
     pub mission_id: MissionId,
+    /// Stable project Task key.
+    #[serde(default)]
+    pub task_key: Box<str>,
     /// Digest of reviewed instruction bytes.
     pub instruction_sha256: [u8; 32],
     /// Project-relative instruction path.
     pub instruction_ref: Box<str>,
+    /// Canonical prepared worktree identity, when preparation committed.
+    #[serde(default)]
+    pub workspace_id: Option<Box<str>>,
+    /// Exact reviewed base commit, when Git preparation committed.
+    #[serde(default)]
+    pub base_commit: Option<Box<str>>,
+    /// Whether Runtrol created the linked worktree and therefore owns cleanup.
+    #[serde(default)]
+    pub workspace_owned: bool,
     /// Current state.
     pub state: TaskState,
     /// Idempotent state journal.
@@ -245,8 +265,12 @@ impl TaskRecord {
         Self {
             id: TaskId::now(),
             mission_id,
+            task_key: "".into(),
             instruction_sha256,
             instruction_ref,
+            workspace_id: None,
+            base_commit: None,
+            workspace_owned: false,
             state: TaskState::Pending,
             transitions: Vec::new(),
         }
@@ -338,8 +362,8 @@ pub struct RunRecord {
     pub session_id: SessionId,
     /// Opaque provider runtime observation.
     pub provider_runtime_id: Box<str>,
-    /// Exact provider binary fingerprint.
-    pub binary_fingerprint: [u8; 32],
+    /// Exact provider binary fingerprint, filled before evidence can pass.
+    pub binary_fingerprint: Option<[u8; 32]>,
     /// Canonical working-tree identity.
     pub working_tree_id: Box<str>,
     /// Reviewed instruction digest.

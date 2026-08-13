@@ -39,6 +39,7 @@
   "icon": "resources/icon.png",
   "activationEvents": [
     "onView:runtrol.sessions",
+    "onView:runtrol.missions",
     "onView:runtrol.providers",
     "onCommand:runtrol.refresh",
     "onCommand:runtrol.checkProviderUpdates",
@@ -52,7 +53,27 @@
     "onCommand:runtrol.renameSession",
     "onCommand:runtrol.openWorkspace",
     "onCommand:runtrol.interrupt",
-    "onCommand:runtrol.closeSession"
+    "onCommand:runtrol.closeSession",
+    "onCommand:runtrol.validateMission",
+    "onCommand:runtrol.registerMissionGate",
+    "onCommand:runtrol.openMission",
+    "onCommand:runtrol.startMission",
+    "onCommand:runtrol.prepareMissionTask",
+    "onCommand:runtrol.sendTaskInstruction",
+    "onCommand:runtrol.verifyMissionTask",
+    "onCommand:runtrol.retryMissionTask",
+    "onCommand:runtrol.pauseMission",
+    "onCommand:runtrol.resumeMission",
+    "onCommand:runtrol.cancelMission",
+    "onCommand:runtrol.openTaskSession",
+    "onCommand:runtrol.proposeCapability",
+    "onCommand:runtrol.capabilityInbox",
+    "onCommand:runtrol.verifyCapability",
+    "onCommand:runtrol.approveCapability",
+    "onCommand:runtrol.rejectCapability",
+    "onCommand:runtrol.quarantineCapability",
+    "onCommand:runtrol.rollbackCapability",
+    "onCommand:runtrol.archiveCapability"
   ],
   "contributes": {
     "viewsContainers": {
@@ -69,6 +90,10 @@
         {
           "id": "runtrol.sessions",
           "name": "Sessions"
+        },
+        {
+          "id": "runtrol.missions",
+          "name": "Missions"
         },
         {
           "id": "runtrol.providers",
@@ -140,6 +165,105 @@
         "command": "runtrol.closeSession",
         "title": "Runtrol: Close Session",
         "icon": "$(close)"
+      },
+      {
+        "command": "runtrol.validateMission",
+        "title": "Runtrol: Validate Mission",
+        "icon": "$(new-file)"
+      },
+      {
+        "command": "runtrol.registerMissionGate",
+        "title": "Runtrol: Register Mission Gate",
+        "icon": "$(tools)"
+      },
+      {
+        "command": "runtrol.openMission",
+        "title": "Runtrol: Open Mission"
+      },
+      {
+        "command": "runtrol.startMission",
+        "title": "Runtrol: Start Reviewed Mission",
+        "icon": "$(play)"
+      },
+      {
+        "command": "runtrol.prepareMissionTask",
+        "title": "Runtrol: Prepare Mission Task",
+        "icon": "$(vm-running)"
+      },
+      {
+        "command": "runtrol.sendTaskInstruction",
+        "title": "Runtrol: Send Task Instruction",
+        "icon": "$(send)"
+      },
+      {
+        "command": "runtrol.verifyMissionTask",
+        "title": "Runtrol: Verify Mission Task",
+        "icon": "$(beaker)"
+      },
+      {
+        "command": "runtrol.retryMissionTask",
+        "title": "Runtrol: Retry Mission Task",
+        "icon": "$(redo)"
+      },
+      {
+        "command": "runtrol.pauseMission",
+        "title": "Runtrol: Pause Mission",
+        "icon": "$(debug-pause)"
+      },
+      {
+        "command": "runtrol.resumeMission",
+        "title": "Runtrol: Resume Mission Safely",
+        "icon": "$(debug-continue)"
+      },
+      {
+        "command": "runtrol.cancelMission",
+        "title": "Runtrol: Cancel Mission",
+        "icon": "$(debug-stop)"
+      },
+      {
+        "command": "runtrol.openTaskSession",
+        "title": "Runtrol: Open Task Session",
+        "icon": "$(comment-discussion)"
+      },
+      {
+        "command": "runtrol.proposeCapability",
+        "title": "Runtrol: Propose Project Capability",
+        "icon": "$(new-folder)"
+      },
+      {
+        "command": "runtrol.capabilityInbox",
+        "title": "Runtrol: Open Capability Candidate Inbox",
+        "icon": "$(inbox)"
+      },
+      {
+        "command": "runtrol.verifyCapability",
+        "title": "Runtrol: Verify Capability Candidate",
+        "icon": "$(beaker)"
+      },
+      {
+        "command": "runtrol.approveCapability",
+        "title": "Runtrol: Approve Exact Capability Digest",
+        "icon": "$(verified-filled)"
+      },
+      {
+        "command": "runtrol.rejectCapability",
+        "title": "Runtrol: Reject Capability Candidate",
+        "icon": "$(close)"
+      },
+      {
+        "command": "runtrol.quarantineCapability",
+        "title": "Runtrol: Quarantine Capability",
+        "icon": "$(shield)"
+      },
+      {
+        "command": "runtrol.rollbackCapability",
+        "title": "Runtrol: Roll Back Capability",
+        "icon": "$(history)"
+      },
+      {
+        "command": "runtrol.archiveCapability",
+        "title": "Runtrol: Archive Capability",
+        "icon": "$(archive)"
       }
     ],
     "menus": {
@@ -183,6 +307,26 @@
           "command": "runtrol.reviewRuntimeRequests",
           "when": "view == runtrol.sessions",
           "group": "navigation@4"
+        },
+        {
+          "command": "runtrol.validateMission",
+          "when": "view == runtrol.missions",
+          "group": "navigation@1"
+        },
+        {
+          "command": "runtrol.registerMissionGate",
+          "when": "view == runtrol.missions",
+          "group": "navigation@2"
+        },
+        {
+          "command": "runtrol.refresh",
+          "when": "view == runtrol.missions",
+          "group": "navigation@3"
+        },
+        {
+          "command": "runtrol.capabilityInbox",
+          "when": "view == runtrol.missions",
+          "group": "navigation@4"
         }
       ],
       "view/item/context": [
@@ -200,6 +344,46 @@
           "command": "runtrol.closeSession",
           "when": "view == runtrol.sessions && viewItem == runtrol.session",
           "group": "inline@3"
+        },
+        {
+          "command": "runtrol.startMission",
+          "when": "view == runtrol.missions && viewItem == runtrol.mission.validated",
+          "group": "inline@1"
+        },
+        {
+          "command": "runtrol.pauseMission",
+          "when": "view == runtrol.missions && viewItem == runtrol.mission.running",
+          "group": "inline@2"
+        },
+        {
+          "command": "runtrol.resumeMission",
+          "when": "view == runtrol.missions && viewItem == runtrol.mission.paused",
+          "group": "inline@2"
+        },
+        {
+          "command": "runtrol.cancelMission",
+          "when": "view == runtrol.missions && (viewItem == runtrol.mission.running || viewItem == runtrol.mission.paused || viewItem == runtrol.mission.blocked)",
+          "group": "inline@3"
+        },
+        {
+          "command": "runtrol.prepareMissionTask",
+          "when": "view == runtrol.missions && viewItem == runtrol.missionTask.reserved",
+          "group": "inline@1"
+        },
+        {
+          "command": "runtrol.sendTaskInstruction",
+          "when": "view == runtrol.missions && viewItem == runtrol.missionTask.awaitingInput.session",
+          "group": "inline@1"
+        },
+        {
+          "command": "runtrol.verifyMissionTask",
+          "when": "view == runtrol.missions && viewItem == runtrol.missionTask.running.session",
+          "group": "inline@1"
+        },
+        {
+          "command": "runtrol.retryMissionTask",
+          "when": "view == runtrol.missions && (viewItem == runtrol.missionTask.retryable || viewItem == runtrol.missionTask.retryable.session)",
+          "group": "inline@1"
         }
       ]
     },

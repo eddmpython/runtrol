@@ -8,9 +8,9 @@ use runtrol_provider::AbsPath;
 use sha2::{Digest as _, Sha256};
 
 use crate::{
-    GateRegistry, InstructionRef, MAX_GATE_REFS, MAX_INSTRUCTION_BYTES, MAX_MISSION_BYTES,
-    MAX_OUTPUT_ROOTS, MAX_TASK_KEY_BYTES, MISSION_SCHEMA, MissionSpec, ProviderSelector, TaskSpec,
-    WorkspaceMode,
+    CapabilitySelection, GateRegistry, InstructionRef, MAX_CAPABILITY_REFS, MAX_GATE_REFS,
+    MAX_INSTRUCTION_BYTES, MAX_MISSION_BYTES, MAX_OUTPUT_ROOTS, MAX_TASK_KEY_BYTES, MISSION_SCHEMA,
+    MissionSpec, ProviderSelector, TaskSpec, WorkspaceMode,
 };
 
 /// Stable structural validation failure class.
@@ -32,6 +32,8 @@ pub enum FindingCode {
     OutputOverlap,
     /// Exact gate is absent from the local registry.
     Gate,
+    /// Exact capability ID and version are not locally active for this project.
+    Capability,
     /// Provider selection is not a current runtime observation.
     Provider,
     /// A write Task did not request an isolated worktree.
@@ -67,7 +69,7 @@ pub struct ValidatedTask {
     /// Exact local gate references.
     pub gate_refs: Vec<Box<str>>,
     /// Exact approved capability versions.
-    pub capability_versions: Vec<Box<str>>,
+    pub capability_versions: Vec<CapabilitySelection>,
 }
 
 /// Closed Mission plus its resolved exact identities.
@@ -98,6 +100,7 @@ impl MissionValidator {
         project: &ProjectIdentity,
         gates: &GateRegistry,
         runtime_ids: &[Box<str>],
+        approved_capabilities: &[CapabilitySelection],
     ) -> Result<ValidatedMission, Vec<MissionFinding>> {
         let mut findings = Vec::new();
         if source.is_empty() || source.len() > MAX_MISSION_BYTES {
@@ -150,6 +153,7 @@ impl MissionValidator {
                     findings.push(finding(FindingCode::Gate, Some(&task.id)));
                 }
             }
+            validate_capabilities(task, approved_capabilities, &mut findings);
             let provider_selector = resolve_provider(&task.provider_selector, runtime_ids)
                 .map_err(|code| finding(code, Some(&task.id)));
             let instruction = resolve_instruction(project_root, task)
@@ -193,6 +197,28 @@ impl MissionValidator {
             spec,
             tasks,
         })
+    }
+}
+
+fn validate_capabilities(
+    task: &TaskSpec,
+    approved: &[CapabilitySelection],
+    findings: &mut Vec<MissionFinding>,
+) {
+    let unique = task
+        .capability_versions
+        .iter()
+        .collect::<BTreeSet<_>>()
+        .len();
+    if task.capability_versions.len() > MAX_CAPABILITY_REFS
+        || unique != task.capability_versions.len()
+        || task.capability_versions.iter().any(|selection| {
+            !valid_task_key(&selection.capability_id)
+                || parse_digest(&selection.version_sha256).is_none()
+                || !approved.contains(selection)
+        })
+    {
+        findings.push(finding(FindingCode::Capability, Some(&task.id)));
     }
 }
 
@@ -520,6 +546,7 @@ gate_refs = ["check"]
             &scratch.project(),
             &gates(),
             &["fixture-runtime".into()],
+            &[],
         )
         .expect("valid Mission");
         assert_eq!(validated.tasks.len(), 2);
@@ -545,6 +572,7 @@ gate_refs = ["check"]
             &scratch.project(),
             &gates(),
             &["fixture-runtime".into()],
+            &[],
         )
         .expect_err("invalid Mission");
         assert!(
@@ -571,6 +599,7 @@ gate_refs = ["check"]
             &scratch.project(),
             &gates(),
             &["fixture-runtime".into()],
+            &[],
         )
         .expect_err("digest change must fail");
         assert!(
@@ -578,5 +607,49 @@ gate_refs = ["check"]
                 .iter()
                 .any(|finding| finding.code == FindingCode::Instruction)
         );
+    }
+
+    #[test]
+    fn capability_selection_requires_exact_local_id_and_digest() {
+        let scratch = Scratch::make();
+        let mission = String::from_utf8(scratch.mission("\"first\"", "tests"))
+            .expect("Mission UTF-8")
+            .replacen(
+                "gate_refs = [\"check\"]",
+                concat!(
+                    "gate_refs = [\"check\"]\n",
+                    "capability_versions = [{ capability_id = \"reviewed-skill\", ",
+                    "version_sha256 = \"1111111111111111111111111111111111111111111111111111111111111111\" }]"
+                ),
+                1,
+            );
+        let selection = CapabilitySelection {
+            capability_id: "reviewed-skill".into(),
+            version_sha256: "1111111111111111111111111111111111111111111111111111111111111111"
+                .into(),
+        };
+        let findings = MissionValidator::validate(
+            mission.as_bytes(),
+            &scratch.canonical,
+            &scratch.project(),
+            &gates(),
+            &["fixture-runtime".into()],
+            &[],
+        )
+        .expect_err("unapproved capability must fail");
+        assert!(
+            findings
+                .iter()
+                .any(|finding| finding.code == FindingCode::Capability)
+        );
+        MissionValidator::validate(
+            mission.as_bytes(),
+            &scratch.canonical,
+            &scratch.project(),
+            &gates(),
+            &["fixture-runtime".into()],
+            &[selection],
+        )
+        .expect("exact approved capability");
     }
 }

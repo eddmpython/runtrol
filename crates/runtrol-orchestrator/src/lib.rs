@@ -14,11 +14,12 @@ pub use gate::{
 };
 pub use handoff::{ArtifactManifest, ArtifactManifestEntry, Handoff, HandoffError};
 pub use scheduler::{
-    Eligibility, LocalInstructionSubmission, Reservation, ResourceBudget, Scheduler,
-    SchedulerEffect, SchedulerError,
+    Eligibility, LocalInstructionSubmission, RecoveryTaskState, Reservation, ResourceBudget,
+    Scheduler, SchedulerEffect, SchedulerError,
 };
 pub use spec::{
-    InstructionRef, MissionLimits, MissionSpec, ProviderSelector, TaskSpec, WorkspaceMode,
+    CapabilitySelection, InstructionRef, MissionLimits, MissionSpec, ProviderSelector, TaskSpec,
+    WorkspaceMode,
 };
 pub use validate::{
     FindingCode, MissionFinding, MissionValidator, ValidatedMission, ValidatedTask,
@@ -36,3 +37,5 @@ pub const MAX_TASK_KEY_BYTES: usize = 64;
 pub const MAX_OUTPUT_ROOTS: usize = 32;
 /// Maximum deterministic gates declared by one Task.
 pub const MAX_GATE_REFS: usize = 64;
+/// Maximum exact project capability selections declared by one Task.
+pub const MAX_CAPABILITY_REFS: usize = 32;

@@ -888,8 +888,10 @@ dependencies = [
  "runtrol-childproc",
  "runtrol-core",
  "runtrol-drivers",
+ "runtrol-growth",
  "runtrol-ipc",
  "runtrol-ledger",
+ "runtrol-orchestrator",
  "runtrol-provider",
  "runtrol-runtime-client",
  "runtrol-runtime-protocol",
@@ -919,6 +921,17 @@ dependencies = [
  "sha2 0.10.9",
  "thiserror 2.0.19",
  "tokio",
+ "toml",
+]
+
+[[package]]
+name = "runtrol-growth"
+version = "0.1.1"
+dependencies = [
+ "runtrol-provider",
+ "serde",
+ "sha2 0.10.9",
+ "thiserror 2.0.19",
  "toml",
 ]
 

@@ -62,9 +62,19 @@ pub struct TaskSpec {
     pub output_roots: Vec<Box<str>>,
     /// Exact local registry IDs.
     pub gate_refs: Vec<Box<str>>,
-    /// Exact approved capability version digests selected during review.
+    /// Exact approved project capabilities selected during review.
     #[serde(default)]
-    pub capability_versions: Vec<Box<str>>,
+    pub capability_versions: Vec<CapabilitySelection>,
+}
+
+/// One explicit project capability selection with no implicit content injection.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(deny_unknown_fields)]
+pub struct CapabilitySelection {
+    /// Stable project capability identity.
+    pub capability_id: Box<str>,
+    /// Exact lowercase full-tree digest approved locally.
+    pub version_sha256: Box<str>,
 }
 
 /// Workspace collision posture.

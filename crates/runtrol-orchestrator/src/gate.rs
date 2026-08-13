@@ -4,10 +4,12 @@ use std::collections::BTreeMap;
 
 use runtrol_ledger::{GateRunId, RunId};
 use runtrol_security::LocalScope;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 
 /// Symbolic working directory owned by the Mission contract.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub enum WorkingDirectoryRule {
     /// Exact Task working tree.
     TaskWorktree,
@@ -16,7 +18,8 @@ pub enum WorkingDirectoryRule {
 }
 
 /// Fixed local deterministic command definition.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct GateDefinition {
     /// Stable reference used by Mission files.
     pub id: Box<str>,
@@ -99,6 +102,11 @@ impl GateRegistry {
     #[must_use]
     pub fn get(&self, id: &str) -> Option<&GateDefinition> {
         self.definitions.get(id)
+    }
+
+    /// Every fixed definition in stable identity order.
+    pub fn definitions(&self) -> impl Iterator<Item = &GateDefinition> {
+        self.definitions.values()
     }
 
     /// Produce a typed launch request for daemon execution.

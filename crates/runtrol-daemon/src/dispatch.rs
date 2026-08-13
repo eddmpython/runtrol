@@ -222,6 +222,35 @@ pub(crate) enum Prepared {
         /// Exact response for the bound request.
         response: Response,
     },
+    /// One exact Mission Task workspace was prepared outside the session owner.
+    MissionWorkspace {
+        /// Bound Mission identity.
+        mission_id: Box<str>,
+        /// Bound Task identity.
+        task_id: Box<str>,
+        /// Exact preparation result.
+        response: Response,
+    },
+    /// One exact Mission Task verification completed outside the session owner.
+    MissionVerification {
+        /// Bound Mission identity.
+        mission_id: Box<str>,
+        /// Bound Task identity.
+        task_id: Box<str>,
+        /// Exact verification result.
+        response: Response,
+    },
+    /// One exact capability candidate verification completed outside the session owner.
+    CapabilityVerification {
+        /// Bound canonical project text.
+        project: Box<str>,
+        /// Bound stable capability identity.
+        capability_id: Box<str>,
+        /// Bound exact candidate digest.
+        version_sha256: Box<str>,
+        /// Exact verification result.
+        response: Response,
+    },
     /// A fresh session process was opened for this exact provider.
     Start {
         /// The provider whose process was opened.
@@ -657,6 +686,125 @@ pub(crate) async fn prepare_integration_admin(
     Prepared::IntegrationAdmin { response }
 }
 
+/// Create or resolve one Mission Task workspace outside the single session owner.
+pub(crate) async fn prepare_mission_workspace(
+    conversation: &Conversation,
+    composed: &Composed,
+    request: &Request,
+) -> Prepared {
+    let Request::MissionPrepareTask {
+        mission_id,
+        task_id,
+    } = request
+    else {
+        return Prepared::None;
+    };
+    if !conversation.greeted()
+        || crate::scope::allowed(conversation.caller(), request, &composed.granted).is_err()
+    {
+        return Prepared::None;
+    }
+    let response = crate::mission::prepare_workspace(
+        &composed.missions,
+        &composed.ledger,
+        &composed.containment,
+        mission_id,
+        task_id,
+    )
+    .await;
+    Prepared::MissionWorkspace {
+        mission_id: mission_id.clone(),
+        task_id: task_id.clone(),
+        response,
+    }
+}
+
+/// Run exact Artifact sealing and Gate execution outside the single session owner.
+pub(crate) async fn prepare_mission_verification(
+    conversation: &Conversation,
+    composed: &Composed,
+    request: &Request,
+) -> Prepared {
+    let Request::MissionVerifyTask {
+        mission_id,
+        task_id,
+    } = request
+    else {
+        return Prepared::None;
+    };
+    if !conversation.greeted()
+        || crate::scope::allowed(conversation.caller(), request, &composed.granted).is_err()
+    {
+        return Prepared::None;
+    }
+    Prepared::MissionVerification {
+        mission_id: mission_id.clone(),
+        task_id: task_id.clone(),
+        response: crate::mission::prepare_verification(composed, mission_id, task_id).await,
+    }
+}
+
+/// Run one capability candidate's reviewed fixed Gates outside the single session owner.
+pub(crate) async fn prepare_capability_verification(
+    conversation: &Conversation,
+    composed: &Composed,
+    request: &Request,
+) -> Prepared {
+    let Request::CapabilityVerify {
+        project,
+        capability_id,
+        version_sha256,
+    } = request
+    else {
+        return Prepared::None;
+    };
+    if !conversation.greeted()
+        || crate::scope::allowed(conversation.caller(), request, &composed.granted).is_err()
+    {
+        return Prepared::None;
+    }
+    let gate_ids = {
+        let growth = composed.growth.lock().await;
+        growth.verification_gate_ids(project, capability_id, version_sha256)
+    };
+    let response = match gate_ids {
+        Ok(gate_ids) => {
+            let gates = {
+                let missions = composed.missions.lock().await;
+                missions.gate_requests(&gate_ids, runtrol_ledger::RunId::now())
+            };
+            match gates {
+                Ok(gates) => {
+                    let intent = {
+                        let mut growth = composed.growth.lock().await;
+                        growth.verification_intent(project, capability_id, version_sha256, gates)
+                    };
+                    match intent {
+                        Ok(intent) => {
+                            let results =
+                                crate::growth::run_verification(&composed.containment, &intent)
+                                    .await;
+                            let mut growth = composed.growth.lock().await;
+                            growth
+                                .commit_verification(&intent, &results)
+                                .unwrap_or_else(refuse)
+                        }
+                        Err(message) => refuse(message),
+                    }
+                }
+                Err(message) => refuse(message),
+            }
+        }
+        Err(message) => refuse(message),
+    };
+    Prepared::CapabilityVerification {
+        project: project.clone(),
+        capability_id: capability_id.clone(),
+        version_sha256: version_sha256.clone(),
+        response,
+    }
+}
+
 /// Answer one request after any slow provider discovery has completed elsewhere.
 #[expect(
     clippy::too_many_lines,
@@ -712,6 +860,98 @@ pub(crate) fn answer_prepared(
             _ => Reply::One(refuse(
                 "provider update inspection was not completed for this request",
             )),
+        },
+
+        mission @ (Request::MissionRegisterGate { .. }
+        | Request::MissionValidate { .. }
+        | Request::MissionList
+        | Request::MissionGet { .. }
+        | Request::MissionStart { .. }
+        | Request::MissionPause { .. }
+        | Request::MissionResumeSafe { .. }
+        | Request::MissionCancel { .. }
+        | Request::MissionBindSession { .. }
+        | Request::MissionSendTaskInstruction { .. }
+        | Request::MissionRetryTask { .. }) => {
+            let runtime_ids: Vec<Box<str>> = composed
+                .registry
+                .usable()
+                .map(|provider| provider.id().as_str().into())
+                .collect();
+            let approved_capabilities = if let Request::MissionValidate { project, .. } = &mission {
+                let Ok(mut growth) = composed.growth.try_lock() else {
+                    return Reply::One(refuse("the capability controller lock is damaged"));
+                };
+                match growth.approved_capabilities(project) {
+                    Ok(capabilities) => capabilities,
+                    Err(message) => return Reply::One(refuse(&message)),
+                }
+            } else {
+                Vec::new()
+            };
+            match composed.missions.try_lock() {
+                Ok(mut controller) => Reply::One(controller.answer(
+                    &composed.ledger,
+                    &runtime_ids,
+                    &approved_capabilities,
+                    &mission,
+                )),
+                Err(_) => Reply::One(refuse("the Mission controller lock is damaged")),
+            }
+        }
+
+        Request::MissionPrepareTask {
+            mission_id,
+            task_id,
+        } => match prepared {
+            Prepared::MissionWorkspace {
+                mission_id: prepared_mission,
+                task_id: prepared_task,
+                response,
+            } if prepared_mission == mission_id && prepared_task == task_id => Reply::One(response),
+            other => mismatched(other),
+        },
+
+        Request::MissionVerifyTask {
+            mission_id,
+            task_id,
+        } => match prepared {
+            Prepared::MissionVerification {
+                mission_id: prepared_mission,
+                task_id: prepared_task,
+                response,
+            } if prepared_mission == mission_id && prepared_task == task_id => Reply::One(response),
+            other => mismatched(other),
+        },
+
+        Request::CapabilityVerify {
+            project,
+            capability_id,
+            version_sha256,
+        } => match prepared {
+            Prepared::CapabilityVerification {
+                project: prepared_project,
+                capability_id: prepared_capability,
+                version_sha256: prepared_version,
+                response,
+            } if prepared_project == project
+                && prepared_capability == capability_id
+                && prepared_version == version_sha256 =>
+            {
+                Reply::One(response)
+            }
+            other => mismatched(other),
+        },
+
+        capability @ (Request::CapabilityPropose { .. }
+        | Request::CapabilityList
+        | Request::CapabilityApprove { .. }
+        | Request::CapabilityReject { .. }
+        | Request::CapabilityQuarantine { .. }
+        | Request::CapabilityRollback { .. }
+        | Request::CapabilityArchive { .. }) => match composed.growth.try_lock() {
+            Ok(mut controller) => Reply::One(controller.answer(&capability)),
+            Err(_) => Reply::One(refuse("the capability controller lock is damaged")),
         },
 
         Request::ProviderUpdate { provider } => {
@@ -1015,7 +1255,10 @@ fn bound(
         Prepared::None
         | Prepared::Consult { .. }
         | Prepared::ProviderUpdates { .. }
-        | Prepared::IntegrationAdmin { .. } => false,
+        | Prepared::IntegrationAdmin { .. }
+        | Prepared::MissionWorkspace { .. }
+        | Prepared::MissionVerification { .. }
+        | Prepared::CapabilityVerification { .. } => false,
         Prepared::Invalid { kind, provider, .. } => {
             *kind == requested_kind && provider.as_ref() == requested_provider
         }
