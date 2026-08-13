@@ -77,6 +77,15 @@ pub enum Request {
         provider: Box<str>,
     },
 
+    /// Read the optional remote relay origin and its current connection state.
+    RemoteConnection,
+
+    /// Set or clear the relay origin from the local VS Code surface.
+    RemoteConfigure {
+        /// Exact lowercase HTTPS origin, or no value to disable remote connections.
+        relay_origin: Option<Box<str>>,
+    },
+
     /// List bounded pending public Runtime integration enrollments for local administration.
     IntegrationEnrollments,
 
@@ -464,6 +473,9 @@ pub enum Response {
 
     /// Result of one locally authorized provider update attempt.
     ProviderUpdated(ProviderUpdateResult),
+
+    /// Current optional relay configuration and non-secret availability.
+    RemoteConnection(RemoteConnection),
 
     /// Pending public Runtime integration enrollments visible only at the machine.
     IntegrationEnrollments(Vec<IntegrationEnrollmentLine>),
@@ -862,6 +874,45 @@ pub struct CapabilityGateLine {
     pub duration_ms: u64,
 }
 
+/// Optional relay origin and current non-secret availability.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct RemoteConnection {
+    /// Exact configured HTTPS origin, or no value when the relay is disabled.
+    pub relay_origin: Option<Box<str>>,
+    /// Current closed state.
+    pub state: RemoteConnectionState,
+    /// Failure boundary only when [`RemoteConnectionState::Offline`].
+    pub stage: Option<RemoteConnectionStage>,
+}
+
+/// Closed remote connection state rendered without parsing prose.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RemoteConnectionState {
+    /// No relay origin is configured.
+    Disabled,
+    /// DNS, registration, ticket, TLS, or WebSocket setup is in progress.
+    Connecting,
+    /// The PC relay WebSocket is ready to authenticate phones.
+    Online,
+    /// The last attempt failed and the bounded retry supervisor remains active.
+    Offline,
+}
+
+/// Non-secret boundary at which the last relay attempt failed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RemoteConnectionStage {
+    /// DNS resolution or exact destination admission.
+    Discovery,
+    /// Idempotent route registration.
+    Registration,
+    /// Ticket, TLS, or WebSocket connection.
+    Connection,
+    /// Established ciphertext exchange.
+    Exchange,
+}
+
 /// One provider's independently verified update state.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct ProviderUpdateLine {
@@ -1099,6 +1150,10 @@ mod tests {
             Request::WatchSessions,
             Request::Models {
                 provider: "claude".into(),
+            },
+            Request::RemoteConnection,
+            Request::RemoteConfigure {
+                relay_origin: Some("https://relay.example.com".into()),
             },
             Request::Start {
                 provider: "claude".into(),

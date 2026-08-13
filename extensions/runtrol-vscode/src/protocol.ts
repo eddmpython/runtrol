@@ -1,4 +1,4 @@
-export const WIRE_VERSION = 19;
+export const WIRE_VERSION = 20;
 
 export type ProviderUpdateState = "current" | "available" | "observeOnly" | "notInstalled" | "unconfirmed";
 
@@ -130,10 +130,18 @@ export type WireError = {
   needs_the_operator: boolean;
 };
 
+export type RemoteConnection = {
+  relay_origin: string | null;
+  state: "disabled" | "connecting" | "online" | "offline";
+  stage: "discovery" | "registration" | "connection" | "exchange" | null;
+};
+
 export type Request =
   | { ask: "hello"; with: { wire: number } }
   | { ask: "providerUpdates" }
   | { ask: "providerUpdate"; with: { provider: string } }
+  | { ask: "remoteConnection" }
+  | { ask: "remoteConfigure"; with: { relay_origin: string | null } }
   | { ask: "integrationEnrollments" }
   | {
       ask: "integrationApprovalBegin";
@@ -219,6 +227,7 @@ export type Response =
         why: string | null;
       };
     }
+  | { say: "remoteConnection"; with: RemoteConnection }
   | { say: "integrationEnrollments"; with: IntegrationEnrollmentLine[] }
   | {
       say: "integrationApprovalChallenge";

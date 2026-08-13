@@ -14,7 +14,7 @@ use bytes::Bytes;
 use runtrol_security::DeviceId;
 use runtrol_transport::{
     Channel, CryptoError, EncryptedRecord, MAX_TRANSPORT_FRAME, RelayEndpoint, RelayError,
-    RelaySocket, SessionBinding, SessionResponder, StaticKeypair,
+    RelayOrigin, RelaySeed, RelaySocket, SessionBinding, SessionResponder, StaticKeypair,
 };
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio::time::{Instant, sleep_until};
@@ -31,12 +31,47 @@ const RETRY_JITTER_MILLIS: u64 = 250;
 /// Non-secret state of the optional remote relay path.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RelayStatus {
+    /// The VS Code surface has not configured a relay origin.
+    Disabled,
     /// The daemon has not yet completed one authenticated relay connection.
     Connecting,
     /// The PC WebSocket is connected and ready to authenticate paired phones.
     Online,
     /// The last attempt failed at a named, non-secret boundary and is being retried.
     Offline(RelayStage),
+}
+
+#[derive(Clone)]
+pub(crate) struct RelayControl {
+    origin: watch::Sender<Option<Box<str>>>,
+    status: watch::Sender<RelayStatus>,
+}
+
+impl RelayControl {
+    pub(crate) fn new() -> Self {
+        let (origin, _origin_initial) = watch::channel(None);
+        let (status, _status_initial) = watch::channel(RelayStatus::Disabled);
+        Self { origin, status }
+    }
+
+    pub(crate) fn configure(&self, origin: Option<&str>) -> Result<(), RelayError> {
+        let origin = match origin {
+            Some(origin) => Some(RelayOrigin::parse(origin)?.as_str().into()),
+            None => None,
+        };
+        let status = if origin.is_some() {
+            RelayStatus::Connecting
+        } else {
+            RelayStatus::Disabled
+        };
+        self.origin.send_replace(origin);
+        self.status.send_replace(status);
+        Ok(())
+    }
+
+    pub(crate) fn view(&self) -> (Option<Box<str>>, RelayStatus) {
+        (self.origin.borrow().clone(), *self.status.borrow())
+    }
 }
 
 /// Stable stage names suitable for a local status surface.
@@ -106,6 +141,80 @@ pub(crate) fn supervise(
         next_link: 1,
     };
     (RelayHub { arrivals }, supervisor.run())
+}
+
+pub(crate) fn supervise_controlled(
+    control: RelayControl,
+    seed: Arc<RelaySeed>,
+    identity: Arc<StaticKeypair>,
+    paired_devices: Arc<[PairedDevice]>,
+) -> (RelayHub, impl Future<Output = ()> + Send + 'static) {
+    let (arriving, arrivals) = mpsc::channel(ARRIVAL_QUEUE);
+    let manager = controlled_manager(control, seed, identity, paired_devices, arriving);
+    (RelayHub { arrivals }, manager)
+}
+
+async fn controlled_manager(
+    control: RelayControl,
+    seed: Arc<RelaySeed>,
+    identity: Arc<StaticKeypair>,
+    paired_devices: Arc<[PairedDevice]>,
+    arriving: mpsc::Sender<RelayArrival>,
+) {
+    let mut configured = control.origin.subscribe();
+    loop {
+        let origin = configured.borrow().clone();
+        let Some(origin) = origin else {
+            control.status.send_replace(RelayStatus::Disabled);
+            if configured.changed().await.is_err() {
+                return;
+            }
+            continue;
+        };
+        let endpoint = match seed.endpoint(&origin) {
+            Ok(endpoint) => endpoint,
+            Err(error) => {
+                control
+                    .status
+                    .send_replace(RelayStatus::Offline(RelayStage::Discovery));
+                drop(error);
+                if configured.changed().await.is_err() {
+                    return;
+                }
+                continue;
+            }
+        };
+        let ingress = RelayIngress::new(endpoint);
+        let mut status = ingress.status();
+        let (mut hub, supervisor) =
+            supervise(ingress, Arc::clone(&identity), Arc::clone(&paired_devices));
+        tokio::pin!(supervisor);
+        loop {
+            tokio::select! {
+                changed = configured.changed() => {
+                    if changed.is_err() {
+                        return;
+                    }
+                    break;
+                }
+                changed = status.changed() => {
+                    if changed.is_err() {
+                        break;
+                    }
+                    control.status.send_replace(*status.borrow());
+                }
+                arrival = hub.accept() => {
+                    let Some(arrival) = arrival else {
+                        break;
+                    };
+                    if arriving.send(arrival).await.is_err() {
+                        return;
+                    }
+                }
+                () = &mut supervisor => break,
+            }
+        }
+    }
 }
 
 pub(crate) struct RelaySurface {
@@ -487,6 +596,31 @@ mod tests {
 
         let (_initiator, first) = handshake(&pc, &phone, peer_id, b"early request");
         assert!(admit_peer(&pc, &[paired], ORIGIN, peer_id, &first).is_none());
+    }
+
+    #[test]
+    fn live_control_accepts_only_an_exact_origin_and_clears_without_restart() {
+        let control = RelayControl::new();
+        assert_eq!(control.view(), (None, RelayStatus::Disabled));
+        assert!(
+            control
+                .configure(Some("https://Relay.example.com"))
+                .is_err()
+        );
+        assert_eq!(control.view(), (None, RelayStatus::Disabled));
+
+        control
+            .configure(Some("https://relay.example.com"))
+            .expect("canonical origin");
+        assert_eq!(
+            control.view(),
+            (
+                Some("https://relay.example.com".into()),
+                RelayStatus::Connecting
+            )
+        );
+        control.configure(None).expect("disable");
+        assert_eq!(control.view(), (None, RelayStatus::Disabled));
     }
 
     #[tokio::test]

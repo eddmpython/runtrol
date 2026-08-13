@@ -690,7 +690,21 @@ async fn serve_surfaces(
             connections.spawn(supervisor);
             Some(hub)
         }
-        None => None,
+        None => match (&composed.pc_identity, &composed.relay_seed) {
+            (Some(identity), Some(seed)) => {
+                let paired_devices: Arc<[crate::compose::PairedDevice]> =
+                    composed.paired_devices.clone().into();
+                let (hub, supervisor) = crate::relay::supervise_controlled(
+                    composed.relay_control.clone(),
+                    Arc::clone(seed),
+                    Arc::clone(identity),
+                    paired_devices,
+                );
+                connections.spawn(supervisor);
+                Some(hub)
+            }
+            _ => None,
+        },
     };
     let (upgrading, mut upgrades) = mpsc::channel::<NoiseUpgrade>(PHONE_UPGRADE_QUEUE);
     connections.spawn(automatic_provider_updates(

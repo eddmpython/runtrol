@@ -143,6 +143,8 @@ pub struct Composed {
     ///
     /// It cannot reveal or reconstruct the PC Noise private key and has no diagnostic representation.
     pub relay_seed: Option<Arc<RelaySeed>>,
+    /// Local-only live control for the optional relay origin and its non-secret status.
+    pub(crate) relay_control: crate::relay::RelayControl,
     /// The table that turns a kind into a driver.
     ///
     /// Kept because building a driver is deferred: it needs a resolved program, which needs a probe, which happens when
@@ -205,6 +207,7 @@ impl Composed {
             paired_devices,
             pc_identity: machine_identity.noise,
             relay_seed: machine_identity.relay,
+            relay_control: crate::relay::RelayControl::new(),
             kinds: builtin.kinds,
         })
     }
@@ -257,6 +260,7 @@ impl Composed {
             paired_devices,
             pc_identity: machine_identity.noise,
             relay_seed: machine_identity.relay,
+            relay_control: crate::relay::RelayControl::new(),
             kinds: builtin.kinds,
         })
     }

@@ -43,6 +43,7 @@
     "onView:runtrol.providers",
     "onCommand:runtrol.refresh",
     "onCommand:runtrol.checkProviderUpdates",
+    "onCommand:runtrol.remoteConnectionStatus",
     "onCommand:runtrol.reviewIntegrations",
     "onCommand:runtrol.manageIntegrations",
     "onCommand:runtrol.reviewRuntimeRequests",
@@ -113,6 +114,11 @@
         "command": "runtrol.checkProviderUpdates",
         "title": "Runtrol: Check Provider Updates",
         "icon": "$(cloud-download)"
+      },
+      {
+        "command": "runtrol.remoteConnectionStatus",
+        "title": "Runtrol: Remote Connection Status",
+        "icon": "$(remote)"
       },
       {
         "command": "runtrol.reviewIntegrations",
@@ -422,6 +428,12 @@
           "type": "boolean",
           "default": true,
           "description": "Open the selected session's workspace or worktree in this window."
+        },
+        "runtrol.relayOrigin": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "description": "Exact HTTPS origin of the ciphertext relay. Empty disables phone connections. Changes apply to the running Core without ending sessions."
         }
       }
     }

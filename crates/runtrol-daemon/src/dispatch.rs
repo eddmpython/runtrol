@@ -25,7 +25,10 @@
 use runtrol_core::registry::KindStatus;
 use runtrol_core::session::SessionError;
 use runtrol_core::{ClosingReservation, OpenReservation, SessionManager, SessionView, TakenAgent};
-use runtrol_ipc::wire::{ProviderLine, Request, Response, SessionLine, SessionListing, WireError};
+use runtrol_ipc::wire::{
+    ProviderLine, RemoteConnection, RemoteConnectionStage, RemoteConnectionState, Request,
+    Response, SessionLine, SessionListing, WireError,
+};
 use runtrol_provider::{
     AbsPath, Agent, AgentCommand, CloseMode, ContentBlock, Disposition, ModelCatalog,
     NativeSessionId, OpenIntent, Provider, ProviderId, SessionId, WallMs,
@@ -1020,6 +1023,22 @@ pub(crate) fn answer_prepared(
             }
         }
 
+        Request::RemoteConnection => Reply::One(remote_connection(composed)),
+
+        Request::RemoteConfigure { relay_origin } => {
+            if relay_origin.is_some()
+                && (composed.pc_identity.is_none() || composed.relay_seed.is_none())
+            {
+                return Reply::One(refuse(
+                    "remote connection requires a protected machine identity",
+                ));
+            }
+            match composed.relay_control.configure(relay_origin.as_deref()) {
+                Ok(()) => Reply::One(remote_connection(composed)),
+                Err(error) => Reply::One(refuse(&error.to_string())),
+            }
+        }
+
         Request::IntegrationEnrollments
         | Request::IntegrationApprovalBegin { .. }
         | Request::IntegrationApprovalFinish { .. }
@@ -1169,6 +1188,29 @@ pub(crate) fn answer_prepared(
         // would report something as carried out when nothing happened.
         other => Reply::One(refuse(&format!("this daemon has no binding for {other:?}"))),
     }
+}
+
+fn remote_connection(composed: &Composed) -> Response {
+    let (relay_origin, status) = composed.relay_control.view();
+    let (state, failure_boundary) = match status {
+        crate::RelayStatus::Disabled => (RemoteConnectionState::Disabled, None),
+        crate::RelayStatus::Connecting => (RemoteConnectionState::Connecting, None),
+        crate::RelayStatus::Online => (RemoteConnectionState::Online, None),
+        crate::RelayStatus::Offline(stage) => (
+            RemoteConnectionState::Offline,
+            Some(match stage {
+                crate::RelayStage::Discovery => RemoteConnectionStage::Discovery,
+                crate::RelayStage::Registration => RemoteConnectionStage::Registration,
+                crate::RelayStage::Connection => RemoteConnectionStage::Connection,
+                crate::RelayStage::Exchange => RemoteConnectionStage::Exchange,
+            }),
+        ),
+    };
+    Response::RemoteConnection(RemoteConnection {
+        relay_origin,
+        state,
+        stage: failure_boundary,
+    })
 }
 
 /// Commit a session process that was opened by its connection task.

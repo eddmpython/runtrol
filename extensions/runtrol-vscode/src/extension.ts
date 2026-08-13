@@ -15,6 +15,7 @@ import {
 import { journeyApi, type JourneyApi } from "./journeyApi";
 import { MissionController } from "./mission/controller";
 import { MissionTree } from "./mission/tree";
+import type { RemoteConnection } from "./protocol";
 import { SelectionStore } from "./selectionStore";
 import { uniqueSessionTitle } from "./sessionDisplay";
 import { RuntimeState } from "./state";
@@ -195,6 +196,13 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
       () => run(() => afterReady(() => controller.checkProviderUpdates())),
     ),
     vscode.commands.registerCommand(
+      "runtrol.remoteConnectionStatus",
+      () => run(() => afterReady(async () => {
+        const connection = await remoteConnection(client);
+        await vscode.window.showInformationMessage(remoteConnectionMessage(connection));
+      })),
+    ),
+    vscode.commands.registerCommand(
       "runtrol.reviewIntegrations",
       () => run(() => afterReady(() => reviewIntegrationEnrollments(client))),
     ),
@@ -244,13 +252,24 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
           locator.invalidate();
           await controller.reconnect();
         });
-        void run(() => lifecycle);
+        void run(async () => {
+          await lifecycle;
+          await configureRemoteConnection(client);
+        });
+      } else if (event.affectsConfiguration("runtrol.relayOrigin")) {
+        void run(() => afterReady(async () => {
+          await configureRemoteConnection(client);
+        }));
       }
     }),
   );
 
   lifecycle = runtime.initialize().then(() => controller.initialize()).then(() => missionController.initialize());
   void run(() => lifecycle);
+  void run(async () => {
+    await lifecycle;
+    await configureRemoteConnection(client);
+  });
   return {
     get ready() {
       return lifecycle;
@@ -336,6 +355,46 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
 }
 
 export function deactivate(): void {}
+
+async function configureRemoteConnection(client: CoreClient): Promise<RemoteConnection> {
+  const configured = vscode.workspace
+    .getConfiguration("runtrol")
+    .get<string>("relayOrigin", "")
+    .trim();
+  const { response } = await client.once({
+    ask: "remoteConfigure",
+    with: { relay_origin: configured || null },
+  });
+  return readRemoteConnection(response);
+}
+
+async function remoteConnection(client: CoreClient): Promise<RemoteConnection> {
+  const { response } = await client.once({ ask: "remoteConnection" });
+  return readRemoteConnection(response);
+}
+
+function readRemoteConnection(response: Awaited<ReturnType<CoreClient["once"]>>["response"]): RemoteConnection {
+  if (response.say === "failed") {
+    throw new Error(response.with.message);
+  }
+  if (response.say !== "remoteConnection") {
+    throw new Error(`the Core answered remote connection status with ${response.say}`);
+  }
+  return response.with;
+}
+
+function remoteConnectionMessage(connection: RemoteConnection): string {
+  if (connection.state === "disabled") {
+    return "Runtrol phone connection is disabled. Set runtrol.relayOrigin to enable it.";
+  }
+  if (connection.state === "online") {
+    return `Runtrol phone connection is online through ${connection.relay_origin ?? "the configured relay"}.`;
+  }
+  if (connection.state === "connecting") {
+    return `Runtrol phone connection is connecting to ${connection.relay_origin ?? "the configured relay"}.`;
+  }
+  return `Runtrol phone connection is retrying after ${connection.stage ?? "relay"} failure.`;
+}
 
 async function run(action: () => Promise<void>): Promise<void> {
   try {

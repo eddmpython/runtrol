@@ -74,10 +74,12 @@ pub fn needed(request: &Request) -> Needed {
 
         Request::List | Request::WatchSessions => Needed::Scope(DeviceScope::SessionList),
         // Model discovery and consult status both read configuration and touch nothing.
-        Request::Models { .. } | Request::ProviderUpdates | Request::Consult => {
-            Needed::Scope(DeviceScope::ConfigRead)
-        }
+        Request::Models { .. }
+        | Request::ProviderUpdates
+        | Request::RemoteConnection
+        | Request::Consult => Needed::Scope(DeviceScope::ConfigRead),
         Request::ProviderUpdate { .. } => Needed::AtTheMachine(LocalScope::ProviderUpdate),
+        Request::RemoteConfigure { .. } => Needed::AtTheMachine(LocalScope::ConfigWrite),
         Request::IntegrationEnrollments
         | Request::IntegrationApprovalBegin { .. }
         | Request::IntegrationApprovalFinish { .. }
@@ -255,6 +257,10 @@ mod tests {
             Request::ProviderUpdates,
             Request::ProviderUpdate {
                 provider: "example".into(),
+            },
+            Request::RemoteConnection,
+            Request::RemoteConfigure {
+                relay_origin: Some("https://relay.example.com".into()),
             },
             Request::Start {
                 provider: "example".into(),
