@@ -11,6 +11,7 @@ use runtrol_growth::{
     CapabilityVerification, InspectedCandidate, TrustIndex, digest_text, inspect,
 };
 use runtrol_ipc::wire::{CapabilityGateLine, CapabilityLine, Request, Response};
+use runtrol_ledger::{Ledger, MissionId, ReceiptId, RunId, TaskId};
 use runtrol_orchestrator::{CapabilitySelection, GateOutcome, GateRequest};
 use runtrol_provider::AbsPath;
 use sha2::{Digest as _, Sha256};
@@ -47,16 +48,16 @@ impl GrowthController {
         })
     }
 
-    pub(crate) fn answer(&mut self, request: &Request) -> Response {
-        self.try_answer(request).unwrap_or_else(failed)
+    pub(crate) fn answer(&mut self, ledger: &Ledger, request: &Request) -> Response {
+        self.try_answer(ledger, request).unwrap_or_else(failed)
     }
 
-    fn try_answer(&mut self, request: &Request) -> Result<Response, &'static str> {
+    fn try_answer(&mut self, ledger: &Ledger, request: &Request) -> Result<Response, &'static str> {
         match request {
             Request::CapabilityPropose {
                 project,
                 candidate_ref,
-            } => self.propose(project, candidate_ref),
+            } => self.propose(ledger, project, candidate_ref),
             Request::CapabilityList => {
                 self.refresh_tamper()?;
                 Ok(self.list())
@@ -87,11 +88,17 @@ impl GrowthController {
         }
     }
 
-    fn propose(&mut self, project: &str, candidate_ref: &str) -> Result<Response, &'static str> {
+    fn propose(
+        &mut self,
+        ledger: &Ledger,
+        project: &str,
+        candidate_ref: &str,
+    ) -> Result<Response, &'static str> {
         let project =
             AbsPath::canonicalize(project).map_err(|_| "the capability project is unavailable")?;
         let candidate = inspect(&project, candidate_ref)
             .map_err(|_| "the capability candidate did not validate")?;
+        verify_provenance(ledger, &candidate)?;
         self.index
             .propose(&candidate)
             .map_err(|_| "the capability candidate conflicts with current trust state")?;
@@ -506,6 +513,103 @@ impl GrowthController {
     }
 }
 
+fn verify_provenance(ledger: &Ledger, candidate: &InspectedCandidate) -> Result<(), &'static str> {
+    let mission_id: MissionId = candidate
+        .manifest
+        .source_mission_id
+        .parse()
+        .map_err(|_| "the capability source Mission identity is invalid")?;
+    let task_id: TaskId = candidate
+        .manifest
+        .source_task_id
+        .parse()
+        .map_err(|_| "the capability source Task identity is invalid")?;
+    let run_id: RunId = candidate
+        .manifest
+        .source_run_id
+        .parse()
+        .map_err(|_| "the capability source Run identity is invalid")?;
+    let receipt_id: ReceiptId = candidate
+        .manifest
+        .source_receipt_id
+        .parse()
+        .map_err(|_| "the capability source Receipt identity is invalid")?;
+    let author_run_id: RunId = candidate
+        .verification
+        .author_run_id
+        .parse()
+        .map_err(|_| "the capability author Run identity is invalid")?;
+    let verifier_run_id: RunId = candidate
+        .verification
+        .verifier_run_id
+        .parse()
+        .map_err(|_| "the capability verifier Run identity is invalid")?;
+    if author_run_id != run_id || verifier_run_id == author_run_id {
+        return Err("the capability author and verifier provenance is inconsistent");
+    }
+    let listed = ledger
+        .list(runtrol_ledger::MAX_QUERY_MISSIONS)
+        .map_err(|_| "the Mission evidence ledger cannot be read")?;
+    if listed.truncated {
+        return Err("the capability provenance query exceeded its fixed bound");
+    }
+    let source = listed
+        .missions
+        .iter()
+        .find(|snapshot| snapshot.mission.id == mission_id)
+        .ok_or("the capability source Mission evidence is unavailable")?;
+    if !source
+        .tasks
+        .iter()
+        .any(|task| task.id == task_id && task.mission_id == mission_id)
+        || !source
+            .runs
+            .iter()
+            .any(|run| run.id == run_id && run.task_id == task_id)
+    {
+        return Err("the capability source Task or Run evidence does not match");
+    }
+    let source_receipt = source
+        .receipts
+        .iter()
+        .find(|(id, _)| *id == receipt_id)
+        .map(|(_, receipt)| receipt)
+        .ok_or("the capability source Receipt is unavailable")?;
+    let candidate_prefix = format!("{}/", candidate.candidate_ref);
+    let policy_sha256 = parse_digest(&candidate.manifest.policy_sha256)?;
+    if source_receipt.mission_id != mission_id
+        || source_receipt.task_id != task_id
+        || source_receipt.run_id != run_id
+        || source_receipt.project_id.as_ref() != candidate.project.as_str()
+        || source_receipt.policy_sha256 != policy_sha256
+        || source_receipt.outcome.as_ref() != "passed"
+        || !candidate
+            .files
+            .iter()
+            .filter(|file| {
+                file.path.as_ref() != "capability.toml" && file.path.as_ref() != "verify.toml"
+            })
+            .all(|file| {
+                let expected_path = format!("{candidate_prefix}{}", file.path);
+                source_receipt.artifacts.iter().any(|artifact| {
+                    artifact.path.as_ref() == expected_path
+                        && artifact.sha256 == file.sha256
+                        && artifact.size == file.size
+                })
+            })
+    {
+        return Err("the capability source Receipt does not bind the candidate output");
+    }
+    if !listed.missions.iter().any(|snapshot| {
+        snapshot.receipts.iter().any(|(_, receipt)| {
+            receipt.run_id == verifier_run_id && receipt.outcome.as_ref() == "passed"
+        })
+    }) {
+        return Err("the independent verifier Run has no passing Receipt");
+    }
+    Ok(())
+}
+
 struct Activation {
     active_ref: Box<str>,
     archived_prior: Option<([u8; 32], Box<str>)>,
@@ -797,13 +901,26 @@ fn failed(message: &'static str) -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use runtrol_ledger::RunId;
+    use runtrol_ledger::{
+        ArtifactEvidence, GateEvidence, LedgerSnapshot, MissionRecord, ProviderObservation,
+        Receipt, ReceiptInput, RunOutcome, RunRecord, TaskRecord,
+    };
     use runtrol_orchestrator::{GateDefinition, GateRegistry, WorkingDirectoryRule};
+    use runtrol_provider::SessionId;
     use runtrol_security::LocalScope;
 
     struct Scratch {
         root: std::path::PathBuf,
         project: AbsPath,
+        ledger: Ledger,
+    }
+
+    struct Provenance {
+        mission: MissionId,
+        task: TaskId,
+        author_run: RunId,
+        verifier_run: RunId,
+        source_receipt: ReceiptId,
     }
 
     impl Scratch {
@@ -826,7 +943,13 @@ mod tests {
             std::fs::write(root.join("fixtures/input.txt"), b"fixed input\n").expect("fixed input");
             let project =
                 AbsPath::canonicalize(root.to_str().expect("UTF-8 fixture")).expect("project");
-            Self { root, project }
+            let ledger_path = project.join("mission-ledger.redb").expect("ledger path");
+            let ledger = Ledger::open(&ledger_path).expect("ledger");
+            Self {
+                root,
+                project,
+                ledger,
+            }
         }
 
         fn write_candidate(&self, name: &str, body: &[u8], parent: Option<&str>) -> [u8; 32] {
@@ -835,6 +958,7 @@ mod tests {
             std::fs::create_dir_all(&path).expect("candidate parent");
             std::fs::write(path.join("SKILL.md"), body).expect("Skill body");
             let content_sha256 = payload_digest(body);
+            let provenance = self.add_provenance(&relative, body);
             let parent = parent.map_or_else(String::new, |digest| {
                 format!("parent_version = \"{digest}\"\n")
             });
@@ -845,33 +969,112 @@ mod tests {
                     "kind = \"skill\"\n",
                     "scope = \"project\"\n",
                     "content_sha256 = \"{}\"\n",
-                    "source_mission_id = \"msn_fixture\"\n",
-                    "source_task_id = \"tsk_fixture\"\n",
-                    "source_run_id = \"run_author\"\n",
-                    "source_receipt_id = \"rcp_source\"\n",
+                    "source_mission_id = \"{}\"\n",
+                    "source_task_id = \"{}\"\n",
+                    "source_run_id = \"{}\"\n",
+                    "source_receipt_id = \"{}\"\n",
                     "policy_sha256 = \"2222222222222222222222222222222222222222222222222222222222222222\"\n",
                     "{}",
                     "license = \"MIT\"\n"
                 ),
                 digest_text(&content_sha256),
+                provenance.mission,
+                provenance.task,
+                provenance.author_run,
+                provenance.source_receipt,
                 parent,
             );
             std::fs::write(path.join("capability.toml"), manifest).expect("manifest");
             std::fs::write(
                 path.join("verify.toml"),
-                concat!(
-                    "schema = \"runtrol.dev/capability-verification/v1alpha1\"\n",
-                    "author_run_id = \"run_author\"\n",
-                    "verifier_run_id = \"run_verifier\"\n",
-                    "replay_instruction_ref = \"instructions/replay.md\"\n",
-                    "fixture_ref = \"fixtures/input.txt\"\n",
-                    "gate_refs = [\"cap-check\"]\n"
+                format!(
+                    concat!(
+                        "schema = \"runtrol.dev/capability-verification/v1alpha1\"\n",
+                        "author_run_id = \"{}\"\n",
+                        "verifier_run_id = \"{}\"\n",
+                        "replay_instruction_ref = \"instructions/replay.md\"\n",
+                        "fixture_ref = \"fixtures/input.txt\"\n",
+                        "gate_refs = [\"cap-check\"]\n"
+                    ),
+                    provenance.author_run, provenance.verifier_run,
                 ),
             )
             .expect("verification plan");
             inspect(&self.project, &relative)
                 .expect("inspect candidate")
                 .version_sha256
+        }
+
+        fn add_provenance(&self, candidate_ref: &str, body: &[u8]) -> Provenance {
+            let listed = self
+                .ledger
+                .list(runtrol_ledger::MAX_QUERY_MISSIONS)
+                .expect("list fixture evidence");
+            let mut snapshot = listed.missions.into_iter().next().unwrap_or_else(|| {
+                let mission = MissionRecord::draft([7; 32], self.project.as_str().into());
+                LedgerSnapshot {
+                    mission,
+                    tasks: Vec::new(),
+                    runs: Vec::new(),
+                    gate_runs: Vec::new(),
+                    artifacts: Vec::new(),
+                    receipts: Vec::new(),
+                    compacted: false,
+                }
+            });
+            let mission_id = snapshot.mission.id;
+            let body_sha256: [u8; 32] = Sha256::digest(body).into();
+            let author_task = TaskRecord::pending(
+                mission_id,
+                format!("{candidate_ref}/SKILL.md").into(),
+                body_sha256,
+            );
+            let verifier_task = TaskRecord::pending(
+                mission_id,
+                "instructions/replay.md".into(),
+                Sha256::digest(b"replay exact fixture\n").into(),
+            );
+            let author_run = passing_run(author_task.id, self.project.as_str(), body_sha256);
+            let verifier_run = passing_run(
+                verifier_task.id,
+                self.project.as_str(),
+                Sha256::digest(b"replay exact fixture\n").into(),
+            );
+            let artifact_path = format!("{candidate_ref}/SKILL.md");
+            let (source_receipt_id, source_receipt) = passing_receipt(
+                mission_id,
+                author_task.id,
+                &author_run,
+                self.project.as_str(),
+                &artifact_path,
+                body_sha256,
+                u64::try_from(body.len()).expect("bounded body"),
+            );
+            let (verifier_receipt_id, verifier_receipt) = passing_receipt(
+                mission_id,
+                verifier_task.id,
+                &verifier_run,
+                self.project.as_str(),
+                &artifact_path,
+                body_sha256,
+                u64::try_from(body.len()).expect("bounded body"),
+            );
+            snapshot.tasks.extend([author_task, verifier_task]);
+            snapshot
+                .runs
+                .extend([author_run.clone(), verifier_run.clone()]);
+            snapshot.receipts.extend([
+                (source_receipt_id, source_receipt),
+                (verifier_receipt_id, verifier_receipt),
+            ]);
+            self.ledger.put(&snapshot).expect("commit fixture evidence");
+            Provenance {
+                mission: mission_id,
+                task: author_run.task_id,
+                author_run: author_run.id,
+                verifier_run: verifier_run.id,
+                source_receipt: source_receipt_id,
+            }
         }
     }
 
@@ -892,6 +1095,61 @@ mod tests {
                 .to_be_bytes(),
         );
         hasher.finalize().into()
+    }
+
+    fn passing_run(task_id: TaskId, project: &str, instruction_sha256: [u8; 32]) -> RunRecord {
+        RunRecord {
+            id: RunId::now(),
+            task_id,
+            attempt: 1,
+            session_id: SessionId::now(),
+            provider_runtime_id: "fixture-runtime".into(),
+            binary_fingerprint: Some([8; 32]),
+            working_tree_id: project.into(),
+            instruction_sha256,
+            policy_sha256: [0x22; 32],
+            submission_action_id: Some(format!("fixture-{}", RunId::now()).into()),
+            outcome: Some(RunOutcome::Passed),
+        }
+    }
+
+    fn passing_receipt(
+        mission_id: MissionId,
+        task_id: TaskId,
+        run: &RunRecord,
+        project: &str,
+        artifact_path: &str,
+        artifact_sha256: [u8; 32],
+        artifact_size: u64,
+    ) -> (ReceiptId, Receipt) {
+        Receipt::seal(ReceiptInput {
+            mission_id,
+            task_id,
+            run_id: run.id,
+            project_id: project.into(),
+            instruction_sha256: run.instruction_sha256,
+            base_commit: "fixture-base".into(),
+            finish_tree: "fixture-finish".into(),
+            provider_observation: ProviderObservation {
+                runtime_id: run.provider_runtime_id.clone(),
+                binary_fingerprint: run.binary_fingerprint.expect("fixture fingerprint"),
+                model: None,
+                native_session_id: "native-fixture".into(),
+            },
+            artifacts: vec![ArtifactEvidence {
+                path: artifact_path.into(),
+                sha256: artifact_sha256,
+                size: artifact_size,
+            }],
+            gates: vec![GateEvidence {
+                id: "provenance-check".into(),
+                definition_sha256: [9; 32],
+                status: "passed".into(),
+            }],
+            capability_versions: Vec::new(),
+            policy_sha256: [0x22; 32],
+        })
+        .expect("seal fixture Receipt")
     }
 
     fn gate() -> GateRequest {
@@ -915,10 +1173,13 @@ mod tests {
     }
 
     fn propose(controller: &mut GrowthController, scratch: &Scratch, name: &str) -> Response {
-        controller.answer(&Request::CapabilityPropose {
-            project: scratch.project.as_str().into(),
-            candidate_ref: format!(".runtrol/capabilities/candidates/{name}").into(),
-        })
+        controller.answer(
+            &scratch.ledger,
+            &Request::CapabilityPropose {
+                project: scratch.project.as_str().into(),
+                candidate_ref: format!(".runtrol/capabilities/candidates/{name}").into(),
+            },
+        )
     }
 
     fn verify_and_approve(controller: &mut GrowthController, scratch: &Scratch, version: [u8; 32]) {
@@ -952,11 +1213,14 @@ mod tests {
                 .is_some_and(|receipt| receipt.starts_with("rcp_"))
         );
         assert!(matches!(
-            controller.answer(&Request::CapabilityApprove {
-                project: scratch.project.as_str().into(),
-                capability_id: "reviewed-skill".into(),
-                version_sha256: version_text.into(),
-            }),
+            controller.answer(
+                &scratch.ledger,
+                &Request::CapabilityApprove {
+                    project: scratch.project.as_str().into(),
+                    capability_id: "reviewed-skill".into(),
+                    version_sha256: version_text.into(),
+                }
+            ),
             Response::Capabilities(_)
         ));
     }
@@ -1002,11 +1266,14 @@ mod tests {
                 .is_empty()
         );
         assert!(matches!(
-            controller.answer(&Request::CapabilityRollback {
-                project: scratch.project.as_str().into(),
-                capability_id: "reviewed-skill".into(),
-                version_sha256: digest_text(&first).into(),
-            }),
+            controller.answer(
+                &scratch.ledger,
+                &Request::CapabilityRollback {
+                    project: scratch.project.as_str().into(),
+                    capability_id: "reviewed-skill".into(),
+                    version_sha256: digest_text(&first).into(),
+                }
+            ),
             Response::Capabilities(_)
         ));
         let selected = controller
@@ -1022,5 +1289,30 @@ mod tests {
             digest_text(&first)
         );
         assert_eq!(std::fs::read(active).expect("restored bytes"), b"# First\n");
+    }
+
+    #[test]
+    fn proposal_requires_exact_source_and_independent_verifier_receipts() {
+        let scratch = Scratch::make();
+        scratch.write_candidate("untrusted", b"# Candidate\n", None);
+        let plan_path = scratch
+            .root
+            .join(".runtrol/capabilities/candidates/untrusted/verify.toml");
+        let plan = std::fs::read_to_string(&plan_path).expect("verification plan");
+        let author_line = plan
+            .lines()
+            .find(|line| line.starts_with("author_run_id"))
+            .expect("author line");
+        let changed = plan.replace(
+            author_line,
+            &format!("author_run_id = \"{}\"", RunId::now()),
+        );
+        std::fs::write(plan_path, changed).expect("change author provenance");
+        let trust_path = scratch.project.join("trust.json").expect("trust path");
+        let mut controller = GrowthController::open(trust_path).expect("controller");
+        let Response::Failed(refusal) = propose(&mut controller, &scratch, "untrusted") else {
+            panic!("untrusted provenance refusal");
+        };
+        assert!(refusal.message.contains("provenance"));
     }
 }

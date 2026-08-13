@@ -120,6 +120,24 @@ impl fmt::Debug for ReceiptId {
     }
 }
 
+impl FromStr for ReceiptId {
+    type Err = IdError;
+
+    fn from_str(text: &str) -> Result<Self, Self::Err> {
+        let hex = text.strip_prefix("rcp_").ok_or(IdError)?;
+        if hex.len() != 64 {
+            return Err(IdError);
+        }
+        let mut bytes = [0_u8; 32];
+        for (index, pair) in hex.as_bytes().chunks_exact(2).enumerate() {
+            let pair = core::str::from_utf8(pair).map_err(|_| IdError)?;
+            let slot = bytes.get_mut(index).ok_or(IdError)?;
+            *slot = u8::from_str_radix(pair, 16).map_err(|_| IdError)?;
+        }
+        Ok(Self(bytes))
+    }
+}
+
 impl Serialize for ReceiptId {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         serializer.collect_str(self)
@@ -129,21 +147,7 @@ impl Serialize for ReceiptId {
 impl<'de> Deserialize<'de> for ReceiptId {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let text = String::deserialize(deserializer)?;
-        let hex = text
-            .strip_prefix("rcp_")
-            .ok_or_else(|| serde::de::Error::custom(IdError))?;
-        if hex.len() != 64 {
-            return Err(serde::de::Error::custom(IdError));
-        }
-        let mut bytes = [0_u8; 32];
-        for (index, pair) in hex.as_bytes().chunks_exact(2).enumerate() {
-            let pair = core::str::from_utf8(pair).map_err(serde::de::Error::custom)?;
-            let slot = bytes
-                .get_mut(index)
-                .ok_or_else(|| serde::de::Error::custom(IdError))?;
-            *slot = u8::from_str_radix(pair, 16).map_err(|_| serde::de::Error::custom(IdError))?;
-        }
-        Ok(Self(bytes))
+        text.parse().map_err(serde::de::Error::custom)
     }
 }
 
@@ -176,6 +180,12 @@ pub struct MissionRecord {
     pub mission_ref: Box<str>,
     /// Canonical project identity.
     pub project_id: Box<str>,
+    /// Exact reviewed Mission and local Gate policy digest.
+    #[serde(default)]
+    pub policy_sha256: [u8; 32],
+    /// Exclusive Unix millisecond deadline for the local start approval.
+    #[serde(default)]
+    pub approval_expires_unix_ms: u64,
     /// Current state.
     pub state: MissionState,
     /// Idempotent state journal, compacted only after a terminal checkpoint.
@@ -192,6 +202,8 @@ impl MissionRecord {
             display_name: "".into(),
             mission_ref: "".into(),
             project_id,
+            policy_sha256: [0; 32],
+            approval_expires_unix_ms: 0,
             state: MissionState::Draft,
             transitions: Vec::new(),
         }

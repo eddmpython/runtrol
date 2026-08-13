@@ -65,6 +65,8 @@
     "onCommand:runtrol.pauseMission",
     "onCommand:runtrol.resumeMission",
     "onCommand:runtrol.cancelMission",
+    "onCommand:runtrol.completeMissionIntegration",
+    "onCommand:runtrol.archiveMission",
     "onCommand:runtrol.openTaskSession",
     "onCommand:runtrol.proposeCapability",
     "onCommand:runtrol.capabilityInbox",
@@ -221,6 +223,16 @@
         "icon": "$(debug-stop)"
       },
       {
+        "command": "runtrol.completeMissionIntegration",
+        "title": "Runtrol: Verify and Complete Mission Integration",
+        "icon": "$(verified-filled)"
+      },
+      {
+        "command": "runtrol.archiveMission",
+        "title": "Runtrol: Archive Mission",
+        "icon": "$(archive)"
+      },
+      {
         "command": "runtrol.openTaskSession",
         "title": "Runtrol: Open Task Session",
         "icon": "$(comment-discussion)"
@@ -364,6 +376,16 @@
           "command": "runtrol.cancelMission",
           "when": "view == runtrol.missions && (viewItem == runtrol.mission.running || viewItem == runtrol.mission.paused || viewItem == runtrol.mission.blocked)",
           "group": "inline@3"
+        },
+        {
+          "command": "runtrol.completeMissionIntegration",
+          "when": "view == runtrol.missions && viewItem == runtrol.mission.integrating",
+          "group": "inline@1"
+        },
+        {
+          "command": "runtrol.archiveMission",
+          "when": "view == runtrol.missions && (viewItem == runtrol.mission.completed || viewItem == runtrol.mission.failed || viewItem == runtrol.mission.cancelled)",
+          "group": "inline@2"
         },
         {
           "command": "runtrol.prepareMissionTask",

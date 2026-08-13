@@ -1,4 +1,4 @@
-export const WIRE_VERSION = 16;
+export const WIRE_VERSION = 18;
 
 export type ProviderUpdateState = "current" | "available" | "observeOnly" | "notInstalled" | "unconfirmed";
 
@@ -71,6 +71,7 @@ export type MissionTaskLine = {
   provider_selector: string;
   output_roots: string[];
   gate_refs: string[];
+  capability_versions: Array<{ capability_id: string; version_sha256: string }>;
   session_id: string | null;
   workspace: string | null;
   base_commit: string | null;
@@ -83,6 +84,8 @@ export type MissionSnapshot = {
   mission: MissionLine;
   mission_sha256: string;
   mission_ref: string;
+  policy_sha256: string;
+  approval_expires_unix_ms: number;
   tasks: MissionTaskLine[];
 };
 
@@ -181,6 +184,8 @@ export type Request =
     }
   | { ask: "missionVerifyTask"; with: { mission_id: string; task_id: string } }
   | { ask: "missionRetryTask"; with: { mission_id: string; task_id: string } }
+  | { ask: "missionCompleteIntegration"; with: { mission_id: string } }
+  | { ask: "missionArchive"; with: { mission_id: string } }
   | { ask: "capabilityPropose"; with: { project: string; candidate_ref: string } }
   | { ask: "capabilityList" }
   | {

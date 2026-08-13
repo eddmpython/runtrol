@@ -248,6 +248,18 @@ pub enum Request {
         task_id: Box<str>,
     },
 
+    /// Verify the integrated project tree and complete one all-passing Mission locally.
+    MissionCompleteIntegration {
+        /// Runtrol Mission identity.
+        mission_id: Box<str>,
+    },
+
+    /// Compact one completed, failed, or cancelled Mission into immutable history.
+    MissionArchive {
+        /// Runtrol Mission identity.
+        mission_id: Box<str>,
+    },
+
     /// Import one explicit project capability candidate into the local inbox.
     CapabilityPropose {
         /// Canonical project root selected locally.
@@ -726,6 +738,10 @@ pub struct MissionSnapshot {
     pub mission_sha256: Box<str>,
     /// Project-relative Mission source file.
     pub mission_ref: Box<str>,
+    /// Exact reviewed Mission and local Gate policy digest.
+    pub policy_sha256: Box<str>,
+    /// Exclusive Unix millisecond deadline for the local start approval.
+    pub approval_expires_unix_ms: u64,
     /// Bounded Task rows.
     pub tasks: Vec<MissionTaskLine>,
 }
@@ -751,6 +767,8 @@ pub struct MissionTaskLine {
     pub output_roots: Vec<Box<str>>,
     /// Exact deterministic gate references.
     pub gate_refs: Vec<Box<str>>,
+    /// Exact locally approved project capabilities selected by the reviewed Mission.
+    pub capability_versions: Vec<MissionCapabilityLine>,
     /// Public Runtime session identity after preparation.
     pub session_id: Option<Box<str>>,
     /// Exact workspace or worktree after preparation.
@@ -763,6 +781,15 @@ pub struct MissionTaskLine {
     pub passed_gates: u16,
     /// Failed deterministic Gate count across retained Runs.
     pub failed_gates: u16,
+}
+
+/// One explicit Mission capability reference without capability body bytes.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct MissionCapabilityLine {
+    /// Stable project capability identity.
+    pub capability_id: Box<str>,
+    /// Exact approved full-tree digest.
+    pub version_sha256: Box<str>,
 }
 
 /// Exact workspace result used by Studio to start one public Runtime session.

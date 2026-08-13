@@ -4,14 +4,14 @@ use std::{
     collections::BTreeMap,
     io::{Read as _, Write as _},
     path::{Path, PathBuf},
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use runtrol_childproc::{Containment, SpawnError, capture, capture_in, resolve};
 use runtrol_core::ProjectIdentity;
 use runtrol_ipc::wire::{
-    MissionInstruction, MissionLine, MissionSnapshot, MissionTaskLine, MissionWorkspace, Request,
-    Response,
+    MissionCapabilityLine, MissionInstruction, MissionLine, MissionSnapshot, MissionTaskLine,
+    MissionWorkspace, Request, Response,
 };
 use runtrol_ledger::{
     ArtifactEvidence, ArtifactId, ArtifactRecord, GateEvidence, GateRunRecord, Ledger,
@@ -19,9 +19,10 @@ use runtrol_ledger::{
     ReceiptInput, RunOutcome, RunRecord, TaskRecord, TaskState,
 };
 use runtrol_orchestrator::{
-    CapabilitySelection, GateDefinition, GateOutcome, GateRegistry, GateRequest, MissionValidator,
-    ProviderSelector, RecoveryTaskState, ResourceBudget, Scheduler, SchedulerEffect,
-    SchedulerError, ValidatedMission, WorkingDirectoryRule, WorkspaceMode,
+    CapabilitySelection, GateDefinition, GateOutcome, GateRegistry, GateRequest,
+    MAX_INSTRUCTION_BYTES, MAX_MISSION_BYTES, MissionValidator, ProviderSelector,
+    RecoveryTaskState, ResourceBudget, Scheduler, SchedulerEffect, SchedulerError,
+    ValidatedMission, WorkingDirectoryRule, WorkspaceMode,
 };
 use runtrol_provider::AbsPath;
 use runtrol_security::LocalScope;
@@ -99,6 +100,20 @@ struct VerificationEvidence {
     gates: Vec<GateResult>,
 }
 
+#[derive(Clone, Debug)]
+struct IntegrationIntent {
+    mission_id: MissionId,
+    project: AbsPath,
+    expected_artifacts: Vec<ArtifactEvidence>,
+    gate_requests: Vec<GateRequest>,
+}
+
+#[derive(Debug)]
+struct IntegrationEvidence {
+    artifacts: Vec<ArtifactEvidence>,
+    gates: Vec<GateResult>,
+}
+
 /// Local controller. The ledger remains the durable Mission state SSOT.
 #[derive(Debug, Default)]
 pub(crate) struct MissionController {
@@ -116,6 +131,7 @@ struct GateFile {
 
 const GATE_FILE_SCHEMA: u8 = 1;
 const MAX_GATE_FILE_BYTES: u64 = 256 * 1024;
+const MISSION_START_APPROVAL_WINDOW: Duration = Duration::from_mins(5);
 
 impl MissionController {
     pub(crate) fn open(gate_path: AbsPath) -> Result<Self, String> {
@@ -258,7 +274,7 @@ impl MissionController {
             return Err("a recovered Mission source digest changed".to_owned());
         }
         let approved_capabilities = growth.approved_capabilities(project.as_str())?;
-        MissionValidator::validate(
+        let validated = MissionValidator::validate(
             &source,
             &project,
             &identity,
@@ -266,7 +282,11 @@ impl MissionController {
             runtime_ids,
             &approved_capabilities,
         )
-        .map_err(|_| "a recovered Mission no longer validates".to_owned())
+        .map_err(|_| "a recovered Mission no longer validates".to_owned())?;
+        if policy_digest(&self.gates, &validated) != snapshot.mission.policy_sha256 {
+            return Err("a recovered Mission policy digest changed".to_owned());
+        }
+        Ok(validated)
     }
 
     /// Answer one scope-authorized Mission request.
@@ -330,7 +350,7 @@ impl MissionController {
             Request::MissionStart {
                 mission_id,
                 mission_sha256,
-            } => self.start(ledger, mission_id, mission_sha256),
+            } => self.start(ledger, approved_capabilities, mission_id, mission_sha256),
             Request::MissionPause { mission_id } => self.pause(ledger, mission_id),
             Request::MissionResumeSafe { mission_id } => self.resume_safe(ledger, mission_id),
             Request::MissionCancel { mission_id } => self.cancel(ledger, mission_id),
@@ -354,11 +374,18 @@ impl MissionController {
                 mission_id,
                 task_id,
                 instruction_sha256,
-            } => self.send_instruction(ledger, mission_id, task_id, instruction_sha256),
+            } => self.send_instruction(
+                ledger,
+                approved_capabilities,
+                mission_id,
+                task_id,
+                instruction_sha256,
+            ),
             Request::MissionRetryTask {
                 mission_id,
                 task_id,
             } => self.retry_task(ledger, mission_id, task_id),
+            Request::MissionArchive { mission_id } => self.archive(ledger, mission_id),
             _ => Err("the request is not a Mission operation"),
         }
     }
@@ -432,6 +459,8 @@ impl MissionController {
             MissionRecord::draft(validated.mission_sha256, project_root.as_str().into());
         record.display_name = validated.spec.name.clone();
         record.mission_ref = mission_ref.into();
+        record.policy_sha256 = policy_digest(&self.gates, &validated);
+        record.approval_expires_unix_ms = approval_deadline()?;
         record
             .transition(
                 "validation".into(),
@@ -508,6 +537,7 @@ impl MissionController {
     fn start(
         &mut self,
         ledger: &Ledger,
+        approved_capabilities: &[CapabilitySelection],
         mission_id: &str,
         mission_sha256: &str,
     ) -> Result<Response, &'static str> {
@@ -525,6 +555,17 @@ impl MissionController {
             .snapshot(id)
             .map_err(|_| "the Mission ledger cannot be read")?
             .ok_or("the Mission does not exist")?;
+        if current_unix_ms()? >= snapshot.mission.approval_expires_unix_ms {
+            return Err("the local Mission start approval expired; validate it again");
+        }
+        ensure_review_current(
+            &active.validated,
+            &snapshot.mission.mission_ref,
+            approved_capabilities,
+        )?;
+        if policy_digest(&self.gates, &active.validated) != snapshot.mission.policy_sha256 {
+            return Err("the reviewed Mission Gate policy changed");
+        }
         snapshot
             .mission
             .transition(
@@ -642,6 +683,32 @@ impl MissionController {
         ledger
             .put(&snapshot)
             .map_err(|_| "the Mission cancellation could not be committed")?;
+        Ok(Self::snapshot_response(&snapshot, self.active.get(&id)))
+    }
+
+    fn archive(&mut self, ledger: &Ledger, mission_id: &str) -> Result<Response, &'static str> {
+        let id: MissionId = mission_id
+            .parse()
+            .map_err(|_| "the Mission identity is invalid")?;
+        let mut snapshot = ledger
+            .snapshot(id)
+            .map_err(|_| "the Mission ledger cannot be read")?
+            .ok_or("the Mission does not exist")?;
+        let before = snapshot.mission.state;
+        if !matches!(
+            before,
+            MissionState::Completed | MissionState::Failed | MissionState::Cancelled
+        ) {
+            return Err("only a completed, failed, or cancelled Mission can be archived");
+        }
+        snapshot
+            .mission
+            .transition("archive".into(), before, MissionState::Archived)
+            .map_err(|_| "the Mission cannot be archived")?;
+        snapshot.compact();
+        ledger
+            .put(&snapshot)
+            .map_err(|_| "the Mission archive could not be committed")?;
         Ok(Self::snapshot_response(&snapshot, self.active.get(&id)))
     }
 
@@ -888,6 +955,7 @@ impl MissionController {
     fn send_instruction(
         &mut self,
         ledger: &Ledger,
+        approved_capabilities: &[CapabilitySelection],
         mission_id: &str,
         task_id: &str,
         instruction_sha256: &str,
@@ -949,6 +1017,14 @@ impl MissionController {
             .snapshot(mission_id)
             .map_err(|_| "the Mission ledger cannot be read")?
             .ok_or("the Mission does not exist")?;
+        ensure_review_current(
+            &active.validated,
+            &snapshot.mission.mission_ref,
+            approved_capabilities,
+        )?;
+        if policy_digest(&self.gates, &active.validated) != snapshot.mission.policy_sha256 {
+            return Err("the reviewed Mission Gate policy changed");
+        }
         if snapshot.runs.iter().any(|run| run.id == submission.run_id) {
             return Err("the Task instruction already has a durable submission intent");
         }
@@ -981,7 +1057,7 @@ impl MissionController {
             binary_fingerprint: None,
             working_tree_id: workspace.workspace.as_str().into(),
             instruction_sha256: task.instruction.sha256,
-            policy_sha256: policy_digest(&self.gates, active),
+            policy_sha256: snapshot.mission.policy_sha256,
             submission_action_id: Some(format!("submit-{}", submission.run_id).into()),
             outcome: None,
         });
@@ -1281,6 +1357,135 @@ impl MissionController {
         ))
     }
 
+    fn integration_intent(
+        &self,
+        ledger: &Ledger,
+        mission_id: &str,
+    ) -> Result<IntegrationIntent, &'static str> {
+        let mission_id: MissionId = mission_id
+            .parse()
+            .map_err(|_| "the Mission identity is invalid")?;
+        let active = self
+            .active
+            .get(&mission_id)
+            .ok_or("the Mission must be revalidated after restart")?;
+        let snapshot = ledger
+            .snapshot(mission_id)
+            .map_err(|_| "the Mission ledger cannot be read")?
+            .ok_or("the Mission does not exist")?;
+        if snapshot.mission.state != MissionState::Integrating
+            || snapshot
+                .tasks
+                .iter()
+                .any(|task| task.state != TaskState::Passed)
+        {
+            return Err("the Mission is not ready for integrated-tree verification");
+        }
+        review_files_current(&active.validated, &snapshot.mission.mission_ref)?;
+        if policy_digest(&self.gates, &active.validated) != snapshot.mission.policy_sha256 {
+            return Err("the reviewed Mission Gate policy changed");
+        }
+        let mut artifacts = BTreeMap::new();
+        for (_, receipt) in &snapshot.receipts {
+            for artifact in &receipt.artifacts {
+                if artifacts
+                    .insert(artifact.path.clone(), artifact.clone())
+                    .is_some_and(|prior| prior != *artifact)
+                {
+                    return Err("passing Task Receipts disagree about an integrated Artifact");
+                }
+            }
+        }
+        if artifacts.is_empty() {
+            return Err("the Mission has no passing Artifact evidence to integrate");
+        }
+        let run_id = snapshot
+            .receipts
+            .last()
+            .map(|(_, receipt)| receipt.run_id)
+            .ok_or("the Mission has no passing Run for integration Gates")?;
+        let mut gate_ids: Vec<&str> = active
+            .validated
+            .tasks
+            .iter()
+            .flat_map(|task| task.gate_refs.iter().map(AsRef::as_ref))
+            .collect();
+        gate_ids.sort_unstable();
+        gate_ids.dedup();
+        let gate_requests = gate_ids
+            .into_iter()
+            .map(|gate| {
+                self.gates
+                    .request(gate, run_id)
+                    .map_err(|_| "an integration GateDefinition is unavailable")
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(IntegrationIntent {
+            mission_id,
+            project: active.validated.project.worktree().clone(),
+            expected_artifacts: artifacts.into_values().collect(),
+            gate_requests,
+        })
+    }
+
+    fn commit_integration(
+        &mut self,
+        ledger: &Ledger,
+        intent: &IntegrationIntent,
+        mut evidence: IntegrationEvidence,
+    ) -> Result<Response, &'static str> {
+        let active = self
+            .active
+            .get_mut(&intent.mission_id)
+            .ok_or("the Mission changed while integration verification ran")?;
+        let mut snapshot = ledger
+            .snapshot(intent.mission_id)
+            .map_err(|_| "the Mission ledger cannot be read")?
+            .ok_or("the Mission does not exist")?;
+        if snapshot.mission.state != MissionState::Integrating {
+            return Err("the Mission left integration review");
+        }
+        evidence
+            .artifacts
+            .sort_by(|left, right| left.path.cmp(&right.path));
+        if evidence.artifacts != intent.expected_artifacts
+            || evidence
+                .gates
+                .iter()
+                .any(|gate| gate.outcome != GateOutcome::Passed)
+            || evidence.gates.len() != intent.gate_requests.len()
+        {
+            return Err("the integrated tree does not match passing Task evidence and Gates");
+        }
+        for gate in evidence.gates {
+            snapshot.gate_runs.push(GateRunRecord {
+                id: gate.request.gate_run_id,
+                run_id: gate.request.run_id,
+                gate_id: gate.request.definition.id,
+                definition_sha256: gate.request.definition_sha256,
+                outcome: gate_outcome(gate.outcome).into(),
+                duration_ms: gate.duration_ms,
+            });
+        }
+        snapshot
+            .mission
+            .transition(
+                "integration-passed".into(),
+                MissionState::Integrating,
+                MissionState::Completed,
+            )
+            .map_err(|_| "the Mission cannot complete integration")?;
+        snapshot.compact();
+        active.scheduler = None;
+        ledger
+            .put(&snapshot)
+            .map_err(|_| "the integrated Mission completion could not be committed")?;
+        Ok(Self::snapshot_response(
+            &snapshot,
+            self.active.get(&intent.mission_id),
+        ))
+    }
+
     fn retry_task(
         &mut self,
         ledger: &Ledger,
@@ -1555,8 +1760,31 @@ pub(crate) async fn prepare_verification(
         return commit_verification_failure(composed, &intent, Vec::new()).await;
     };
     let finish_tree = artifact_identity(&artifacts);
-    let mut gates = Vec::with_capacity(intent.gate_requests.len());
-    for request in &intent.gate_requests {
+    let gates = execute_gates(
+        &composed.containment,
+        &intent.workspace,
+        &intent.gate_requests,
+    )
+    .await;
+    let evidence = VerificationEvidence {
+        binary_fingerprint,
+        artifacts,
+        finish_tree,
+        gates,
+    };
+    let mut controller = composed.missions.lock().await;
+    controller
+        .commit_verification(&composed.ledger, &intent, Ok(evidence))
+        .unwrap_or_else(failed)
+}
+
+async fn execute_gates(
+    containment: &Containment,
+    workspace: &AbsPath,
+    requests: &[GateRequest],
+) -> Vec<GateResult> {
+    let mut gates = Vec::with_capacity(requests.len());
+    for request in requests {
         let started = Instant::now();
         let outcome = match resolve(&request.definition.program) {
             Ok(program) => {
@@ -1569,9 +1797,9 @@ pub(crate) async fn prepare_verification(
                 match capture_in(
                     &program,
                     &arguments,
-                    &intent.workspace,
+                    workspace,
                     Duration::from_millis(request.definition.timeout_ms),
-                    &composed.containment,
+                    containment,
                 )
                 .await
                 {
@@ -1589,15 +1817,45 @@ pub(crate) async fn prepare_verification(
             duration_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
         });
     }
-    let evidence = VerificationEvidence {
-        binary_fingerprint,
-        artifacts,
-        finish_tree,
-        gates,
+    gates
+}
+
+/// Verify the manually integrated project tree against passing Task Receipts and fixed Gates.
+pub(crate) async fn prepare_integration(
+    composed: &crate::compose::Composed,
+    mission_id: &str,
+) -> Response {
+    let intent = {
+        let controller = composed.missions.lock().await;
+        match controller.integration_intent(&composed.ledger, mission_id) {
+            Ok(intent) => intent,
+            Err(message) => return failed(message),
+        }
     };
+    let workspace = intent.project.clone();
+    let roots = intent
+        .expected_artifacts
+        .iter()
+        .map(|artifact| artifact.path.clone())
+        .collect::<Vec<_>>();
+    let Ok(Ok(artifacts)) =
+        tokio::task::spawn_blocking(move || collect_artifacts_at(&workspace, &roots)).await
+    else {
+        return failed("the integrated Artifact tree could not be sealed");
+    };
+    let gates = execute_gates(
+        &composed.containment,
+        &intent.project,
+        &intent.gate_requests,
+    )
+    .await;
     let mut controller = composed.missions.lock().await;
     controller
-        .commit_verification(&composed.ledger, &intent, Ok(evidence))
+        .commit_integration(
+            &composed.ledger,
+            &intent,
+            IntegrationEvidence { artifacts, gates },
+        )
         .unwrap_or_else(failed)
 }
 
@@ -1613,10 +1871,16 @@ async fn commit_verification_failure(
 }
 
 fn collect_artifacts(intent: &VerificationIntent) -> Result<Vec<ArtifactEvidence>, &'static str> {
+    collect_artifacts_at(&intent.workspace, &intent.output_roots)
+}
+
+fn collect_artifacts_at(
+    workspace: &AbsPath,
+    output_roots: &[Box<str>],
+) -> Result<Vec<ArtifactEvidence>, &'static str> {
     let mut files = Vec::new();
-    for root in &intent.output_roots {
-        let path = intent
-            .workspace
+    for root in output_roots {
+        let path = workspace
             .join(root)
             .map_err(|_| "a declared Artifact path is invalid")?;
         collect_files(path.as_std_path(), &mut files)?;
@@ -1641,7 +1905,7 @@ fn collect_artifacts(intent: &VerificationIntent) -> Result<Vec<ArtifactEvidence
             return Err("the declared Artifact bytes exceed the evidence bound");
         }
         let relative = path
-            .strip_prefix(intent.workspace.as_std_path())
+            .strip_prefix(workspace.as_std_path())
             .map_err(|_| "a declared Artifact escaped its Task workspace")?;
         let relative = relative
             .to_str()
@@ -1706,13 +1970,29 @@ fn hash_file(path: &Path) -> Result<[u8; 32], &'static str> {
 fn artifact_identity(artifacts: &[ArtifactEvidence]) -> Box<str> {
     let mut hasher = Sha256::new();
     for artifact in artifacts {
-        hasher.update(artifact.path.len().to_be_bytes());
+        let path_len = u64::try_from(artifact.path.len()).unwrap_or(u64::MAX);
+        hasher.update(path_len.to_be_bytes());
         hasher.update(artifact.path.as_bytes());
         hasher.update(artifact.sha256);
         hasher.update(artifact.size.to_be_bytes());
     }
     let digest: [u8; 32] = hasher.finalize().into();
     format!("snapshot:{}", hex(&digest)).into()
+}
+
+fn current_unix_ms() -> Result<u64, &'static str> {
+    let elapsed = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|_| "the system clock cannot issue a Mission approval")?;
+    u64::try_from(elapsed.as_millis()).map_err(|_| "the system clock exceeded the approval range")
+}
+
+fn approval_deadline() -> Result<u64, &'static str> {
+    let now = current_unix_ms()?;
+    let window = u64::try_from(MISSION_START_APPROVAL_WINDOW.as_millis())
+        .map_err(|_| "the Mission approval window exceeded its bound")?;
+    now.checked_add(window)
+        .ok_or("the Mission approval deadline exceeded its bound")
 }
 
 async fn run_workspace_preparation(
@@ -1875,9 +2155,76 @@ const fn gate_outcome(outcome: GateOutcome) -> &'static str {
     }
 }
 
-fn policy_digest(gates: &GateRegistry, active: &ActiveMission) -> [u8; 32] {
-    let mut gate_ids: Vec<&str> = active
-        .validated
+fn ensure_review_current(
+    validated: &ValidatedMission,
+    mission_ref: &str,
+    approved_capabilities: &[CapabilitySelection],
+) -> Result<(), &'static str> {
+    if validated.tasks.iter().any(|task| {
+        task.capability_versions
+            .iter()
+            .any(|selection| !approved_capabilities.contains(selection))
+    }) {
+        return Err("a selected capability is no longer exactly approved and active");
+    }
+    review_files_current(validated, mission_ref)
+}
+
+fn review_files_current(
+    validated: &ValidatedMission,
+    mission_ref: &str,
+) -> Result<(), &'static str> {
+    let mission = read_review_file(validated.project.worktree(), mission_ref, MAX_MISSION_BYTES)?;
+    if Sha256::digest(&mission).as_slice() != validated.mission_sha256 {
+        return Err("the Mission file bytes changed after review");
+    }
+    for task in &validated.tasks {
+        let instruction = read_review_file(
+            validated.project.worktree(),
+            &task.instruction.path,
+            MAX_INSTRUCTION_BYTES,
+        )?;
+        if Sha256::digest(instruction).as_slice() != task.instruction.sha256 {
+            return Err("a Task instruction file changed after review");
+        }
+    }
+    Ok(())
+}
+
+fn read_review_file(root: &AbsPath, relative: &str, limit: usize) -> Result<Vec<u8>, &'static str> {
+    if !safe_relative(relative) {
+        return Err("a reviewed project file path is invalid");
+    }
+    let path = root
+        .join(relative)
+        .map_err(|_| "a reviewed project file path is invalid")?;
+    let canonical = AbsPath::canonicalize(path.as_str())
+        .map_err(|_| "a reviewed project file is unavailable")?;
+    if !canonical.is_under(root) {
+        return Err("a reviewed project file escaped the project");
+    }
+    let metadata = std::fs::symlink_metadata(canonical.as_std_path())
+        .map_err(|_| "a reviewed project file is unavailable")?;
+    if !metadata.is_file()
+        || metadata.file_type().is_symlink()
+        || usize::try_from(metadata.len()).map_or(true, |size| size > limit)
+    {
+        return Err("a reviewed project file is not a bounded regular file");
+    }
+    let file = std::fs::File::open(canonical.as_std_path())
+        .map_err(|_| "a reviewed project file cannot be read")?;
+    let mut bytes = Vec::new();
+    file.take(u64::try_from(limit).unwrap_or(u64::MAX) + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| "a reviewed project file cannot be read")?;
+    if bytes.len() > limit {
+        return Err("a reviewed project file exceeds its byte bound");
+    }
+    Ok(bytes)
+}
+
+fn policy_digest(gates: &GateRegistry, validated: &ValidatedMission) -> [u8; 32] {
+    let mut gate_ids: Vec<&str> = validated
         .tasks
         .iter()
         .flat_map(|task| task.gate_refs.iter().map(AsRef::as_ref))
@@ -1885,12 +2232,16 @@ fn policy_digest(gates: &GateRegistry, active: &ActiveMission) -> [u8; 32] {
     gate_ids.sort_unstable();
     gate_ids.dedup();
     let mut hasher = Sha256::new();
-    hasher.update(active.validated.mission_sha256);
+    hasher.update(validated.mission_sha256);
     for gate_id in gate_ids {
         if let Some(definition) = gates.get(gate_id) {
             hasher.update(definition.digest());
         }
-        hasher.update(gate_id.len().to_be_bytes());
+        hasher.update(
+            u64::try_from(gate_id.len())
+                .unwrap_or(u64::MAX)
+                .to_be_bytes(),
+        );
         hasher.update(gate_id.as_bytes());
     }
     hasher.finalize().into()
@@ -1938,6 +2289,8 @@ fn snapshot_of(snapshot: &LedgerSnapshot, active: Option<&ActiveMission>) -> Mis
         mission: line_of(snapshot, active),
         mission_sha256: hex(&snapshot.mission.mission_sha256).into(),
         mission_ref: snapshot.mission.mission_ref.clone(),
+        policy_sha256: hex(&snapshot.mission.policy_sha256).into(),
+        approval_expires_unix_ms: snapshot.mission.approval_expires_unix_ms,
         tasks: snapshot
             .tasks
             .iter()
@@ -2020,6 +2373,15 @@ fn task_line(
         ),
         output_roots: resolved.map_or_else(Vec::new, |task| task.output_roots.clone()),
         gate_refs: resolved.map_or_else(Vec::new, |task| task.gate_refs.clone()),
+        capability_versions: resolved.map_or_else(Vec::new, |task| {
+            task.capability_versions
+                .iter()
+                .map(|selection| MissionCapabilityLine {
+                    capability_id: selection.capability_id.clone(),
+                    version_sha256: selection.version_sha256.clone(),
+                })
+                .collect()
+        }),
         session_id: binding.map(|binding| binding.runtime_session.clone()),
         workspace: workspace.map(|binding| binding.workspace.as_str().into()),
         base_commit: workspace.map(|binding| binding.base_commit.clone()),
@@ -2307,6 +2669,167 @@ gate_refs = ["fixture-check"]
         let task = verified.tasks.first().expect("one verified Task");
         assert_eq!(task.state.as_ref(), "passed");
         assert!(task.receipt_id.is_some());
+        let integration = controller
+            .integration_intent(&scratch.ledger, &verified.mission.mission_id)
+            .expect("integration intent");
+        let gates = integration
+            .gate_requests
+            .iter()
+            .cloned()
+            .map(|request| GateResult {
+                request,
+                outcome: GateOutcome::Passed,
+                duration_ms: 3,
+            })
+            .collect();
+        let completed = controller
+            .commit_integration(
+                &scratch.ledger,
+                &integration,
+                IntegrationEvidence {
+                    artifacts: integration.expected_artifacts.clone(),
+                    gates,
+                },
+            )
+            .expect("complete integration");
+        let Response::Mission(completed) = completed else {
+            panic!("completed Mission");
+        };
+        assert_eq!(completed.mission.state.as_ref(), "completed");
+        let archived = controller.answer(
+            &scratch.ledger,
+            &[],
+            &[],
+            &Request::MissionArchive {
+                mission_id: completed.mission.mission_id.clone(),
+            },
+        );
+        let Response::Mission(archived) = archived else {
+            panic!("archived Mission");
+        };
+        assert_eq!(archived.mission.state.as_ref(), "archived");
+    }
+
+    #[test]
+    fn reviewed_start_rechecks_mission_bytes_and_gate_policy() {
+        let scratch = Scratch::make();
+        scratch.write_mission();
+        let mut controller = MissionController::default();
+        assert!(matches!(
+            controller.answer(
+                &scratch.ledger,
+                &[],
+                &[],
+                &Request::MissionRegisterGate {
+                    gate_id: "fixture-check".into(),
+                    program: "fixture".into(),
+                    arguments: Vec::new(),
+                    timeout_ms: 1_000,
+                },
+            ),
+            Response::Done
+        ));
+        let Response::Mission(validated) = controller.answer(
+            &scratch.ledger,
+            &[],
+            &[],
+            &Request::MissionValidate {
+                project: scratch.project.as_str().into(),
+                mission_ref: "mission.toml".into(),
+            },
+        ) else {
+            panic!("validated Mission");
+        };
+        let start = Request::MissionStart {
+            mission_id: validated.mission.mission_id.clone(),
+            mission_sha256: validated.mission_sha256.clone(),
+        };
+        std::fs::write(
+            scratch.project.as_std_path().join("mission.toml"),
+            b"changed\n",
+        )
+        .expect("change Mission");
+        let Response::Failed(changed) = controller.answer(&scratch.ledger, &[], &[], &start) else {
+            panic!("changed Mission refusal");
+        };
+        assert!(changed.message.contains("changed after review"));
+
+        scratch.write_mission();
+        assert!(matches!(
+            controller.answer(
+                &scratch.ledger,
+                &[],
+                &[],
+                &Request::MissionRegisterGate {
+                    gate_id: "fixture-check".into(),
+                    program: "fixture".into(),
+                    arguments: vec!["changed".into()],
+                    timeout_ms: 1_000,
+                },
+            ),
+            Response::Done
+        ));
+        let Response::Failed(changed) = controller.answer(&scratch.ledger, &[], &[], &start) else {
+            panic!("changed policy refusal");
+        };
+        assert!(changed.message.contains("Gate policy changed"));
+    }
+
+    #[test]
+    fn reviewed_start_refuses_an_expired_local_approval() {
+        let scratch = Scratch::make();
+        scratch.write_mission();
+        let mut controller = MissionController::default();
+        assert!(matches!(
+            controller.answer(
+                &scratch.ledger,
+                &[],
+                &[],
+                &Request::MissionRegisterGate {
+                    gate_id: "fixture-check".into(),
+                    program: "fixture".into(),
+                    arguments: Vec::new(),
+                    timeout_ms: 1_000,
+                },
+            ),
+            Response::Done
+        ));
+        let Response::Mission(validated) = controller.answer(
+            &scratch.ledger,
+            &[],
+            &[],
+            &Request::MissionValidate {
+                project: scratch.project.as_str().into(),
+                mission_ref: "mission.toml".into(),
+            },
+        ) else {
+            panic!("validated Mission");
+        };
+        let mission_id: MissionId = validated
+            .mission
+            .mission_id
+            .parse()
+            .expect("Mission identity");
+        let mut snapshot = scratch
+            .ledger
+            .snapshot(mission_id)
+            .expect("read Mission")
+            .expect("stored Mission");
+        snapshot.mission.approval_expires_unix_ms = 1;
+        scratch.ledger.put(&snapshot).expect("expire approval");
+
+        let Response::Failed(expired) = controller.answer(
+            &scratch.ledger,
+            &[],
+            &[],
+            &Request::MissionStart {
+                mission_id: validated.mission.mission_id.clone(),
+                mission_sha256: validated.mission_sha256.clone(),
+            },
+        ) else {
+            panic!("expired approval refusal");
+        };
+        assert!(expired.message.contains("approval expired"));
     }
 
     #[tokio::test]

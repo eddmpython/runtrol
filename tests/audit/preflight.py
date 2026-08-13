@@ -155,6 +155,14 @@ GATES: dict[str, tuple[str, list[str]]] = {
         "Mission 증거는 식별자와 digest만 저장",
         [*PY, f"{HOOKS}/evidenceBoundary.py"],
     ),
+    "missionGrowthContractsSelftest": (
+        "Mission 및 Capability 계약 게이트 자체 검증",
+        [*PY, f"{HOOKS}/missionGrowthContracts.py", "--selftest"],
+    ),
+    "missionGrowthContracts": (
+        "Mission 실행, 복구, 로컬 승인, 명시적 Capability 재사용",
+        [*PY, f"{HOOKS}/missionGrowthContracts.py"],
+    ),
     "vscodePackageSelftest": (
         "VS Code 플랫폼 패키지 게이트 자체 검증",
         [*PY, f"{HOOKS}/vscodePackage.py", "--selftest"],

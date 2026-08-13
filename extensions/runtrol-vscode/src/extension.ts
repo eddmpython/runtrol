@@ -147,6 +147,14 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
       (item) => run(() => afterReady(() => missionController.cancelMission(item))),
     ),
     vscode.commands.registerCommand(
+      "runtrol.completeMissionIntegration",
+      (item) => run(() => afterReady(() => missionController.completeIntegration(item))),
+    ),
+    vscode.commands.registerCommand(
+      "runtrol.archiveMission",
+      (item) => run(() => afterReady(() => missionController.archiveMission(item))),
+    ),
+    vscode.commands.registerCommand(
       "runtrol.openTaskSession",
       (item) => run(() => afterReady(() => missionController.openTaskSession(item))),
     ),

@@ -260,6 +260,47 @@ export class MissionController implements vscode.Disposable {
     await this.acceptSnapshot(snapshot, true);
   }
 
+  async completeIntegration(selection?: MissionSelection): Promise<void> {
+    const mission = selection?.mission ?? await this.pickMission("Complete Mission Integration");
+    if (!mission) return;
+    if (mission.state !== "integrating") {
+      throw new Error("the Mission is not waiting for integrated-tree verification");
+    }
+    const action = await vscode.window.showWarningMessage(
+      `Verify the integrated project tree and complete ${mission.name}?`,
+      {
+        modal: true,
+        detail: "Current project Artifacts must exactly match passing Task Receipts. Every reviewed Gate runs again before completion.",
+      },
+      "Verify and complete",
+    );
+    if (action !== "Verify and complete") return;
+    const snapshot = requireResponse((await this.client.once({
+      ask: "missionCompleteIntegration",
+      with: { mission_id: mission.mission_id },
+    })).response, "mission");
+    await this.acceptSnapshot(snapshot, true);
+  }
+
+  async archiveMission(selection?: MissionSelection): Promise<void> {
+    const mission = selection?.mission ?? await this.pickMission("Archive Mission");
+    if (!mission) return;
+    if (!["completed", "failed", "cancelled"].includes(mission.state)) {
+      throw new Error("only a completed, failed, or cancelled Mission can be archived");
+    }
+    const action = await vscode.window.showWarningMessage(
+      `Compact ${mission.name} into immutable local history?`,
+      { modal: true },
+      "Archive Mission",
+    );
+    if (action !== "Archive Mission") return;
+    const snapshot = requireResponse((await this.client.once({
+      ask: "missionArchive",
+      with: { mission_id: mission.mission_id },
+    })).response, "mission");
+    await this.acceptSnapshot(snapshot, true);
+  }
+
   async openTaskSession(selection?: MissionSelection): Promise<void> {
     const selected = await this.resolveTask(selection, [], "Open Task Session");
     if (!selected?.task.session_id) {
@@ -406,6 +447,10 @@ function missionDocument(snapshot: MissionSnapshot): string {
     "",
     `Mission SHA-256: ${inline(snapshot.mission_sha256)}`,
     "",
+    `Policy SHA-256: ${inline(snapshot.policy_sha256)}`,
+    "",
+    `Start approval expires: ${inline(new Date(snapshot.approval_expires_unix_ms).toISOString())}`,
+    "",
     `Progress: ${snapshot.mission.passed_tasks}/${snapshot.mission.total_tasks}`,
     "",
     "## Tasks",
@@ -428,6 +473,8 @@ function missionDocument(snapshot: MissionSnapshot): string {
       `Outputs: ${task.output_roots.map(inline).join(", ")}`,
       "",
       `Gates: ${task.gate_refs.map(inline).join(", ")}  Passed ${task.passed_gates}  Failed ${task.failed_gates}`,
+      "",
+      `Capabilities: ${task.capability_versions.map((capability) => `${inline(capability.capability_id)} at ${inline(capability.version_sha256)}`).join(", ") || "none"}`,
       "",
       `Receipt: ${inline(task.receipt_id ?? "not sealed")}`,
       "",

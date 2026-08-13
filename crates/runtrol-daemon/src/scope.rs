@@ -102,8 +102,11 @@ pub fn needed(request: &Request) -> Needed {
         Request::MissionSendTaskInstruction { .. } => {
             Needed::AtTheMachine(LocalScope::MissionSendTaskInstruction)
         }
-        Request::MissionVerifyTask { .. } => Needed::AtTheMachine(LocalScope::MissionIntegrate),
+        Request::MissionVerifyTask { .. } | Request::MissionCompleteIntegration { .. } => {
+            Needed::AtTheMachine(LocalScope::MissionIntegrate)
+        }
         Request::MissionRetryTask { .. } => Needed::AtTheMachine(LocalScope::MissionRetryTask),
+        Request::MissionArchive { .. } => Needed::AtTheMachine(LocalScope::MissionArchive),
         Request::CapabilityPropose { .. }
         | Request::CapabilityList
         | Request::CapabilityVerify { .. }
@@ -235,6 +238,10 @@ mod tests {
     ///
     /// Written out rather than generated, because the point of the list is that a person compared it against the
     /// wire vocabulary. `scopeWall.py` compares it again, mechanically, which is what catches the day nobody did.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the explicit wire request inventory must remain visible to the scope audit"
+    )]
     fn every_request() -> Vec<Request> {
         vec![
             Request::Hello {
@@ -296,6 +303,96 @@ mod tests {
             Request::ConsultUnwire {
                 from: "claude".into(),
                 to: "codex".into(),
+            },
+            Request::MissionRegisterGate {
+                gate_id: "check".into(),
+                program: "cargo".into(),
+                arguments: vec!["test".into()],
+                timeout_ms: 1_000,
+            },
+            Request::MissionValidate {
+                project: "/work".into(),
+                mission_ref: "mission.toml".into(),
+            },
+            Request::MissionList,
+            Request::MissionGet {
+                mission_id: "msn_fixture".into(),
+            },
+            Request::MissionStart {
+                mission_id: "msn_fixture".into(),
+                mission_sha256: "11".repeat(32).into(),
+            },
+            Request::MissionPrepareTask {
+                mission_id: "msn_fixture".into(),
+                task_id: "tsk_fixture".into(),
+            },
+            Request::MissionBindSession {
+                mission_id: "msn_fixture".into(),
+                task_id: "tsk_fixture".into(),
+                session_id: SessionId::now().to_string().into(),
+                provider_runtime_id: "fixture".into(),
+                native_session_id: None,
+                workspace: "/work".into(),
+            },
+            Request::MissionSendTaskInstruction {
+                mission_id: "msn_fixture".into(),
+                task_id: "tsk_fixture".into(),
+                instruction_sha256: "22".repeat(32).into(),
+            },
+            Request::MissionVerifyTask {
+                mission_id: "msn_fixture".into(),
+                task_id: "tsk_fixture".into(),
+            },
+            Request::MissionRetryTask {
+                mission_id: "msn_fixture".into(),
+                task_id: "tsk_fixture".into(),
+            },
+            Request::MissionCompleteIntegration {
+                mission_id: "msn_fixture".into(),
+            },
+            Request::MissionArchive {
+                mission_id: "msn_fixture".into(),
+            },
+            Request::MissionPause {
+                mission_id: "msn_fixture".into(),
+            },
+            Request::MissionResumeSafe {
+                mission_id: "msn_fixture".into(),
+            },
+            Request::MissionCancel {
+                mission_id: "msn_fixture".into(),
+            },
+            Request::CapabilityPropose {
+                project: "/work".into(),
+                candidate_ref: ".runtrol/capabilities/candidates/one".into(),
+            },
+            Request::CapabilityList,
+            Request::CapabilityVerify {
+                project: "/work".into(),
+                capability_id: "reviewed-skill".into(),
+                version_sha256: "33".repeat(32).into(),
+            },
+            Request::CapabilityApprove {
+                project: "/work".into(),
+                capability_id: "reviewed-skill".into(),
+                version_sha256: "33".repeat(32).into(),
+            },
+            Request::CapabilityReject {
+                project: "/work".into(),
+                capability_id: "reviewed-skill".into(),
+            },
+            Request::CapabilityQuarantine {
+                project: "/work".into(),
+                capability_id: "reviewed-skill".into(),
+            },
+            Request::CapabilityRollback {
+                project: "/work".into(),
+                capability_id: "reviewed-skill".into(),
+                version_sha256: "44".repeat(32).into(),
+            },
+            Request::CapabilityArchive {
+                project: "/work".into(),
+                capability_id: "reviewed-skill".into(),
             },
         ]
     }
@@ -399,6 +496,39 @@ mod tests {
             other => panic!("shared workspace start was not refused as never-remote: {other:?}"),
         }
         assert!(allowed(&Caller::AtTheMachine, &request, &ledger).is_ok());
+    }
+
+    #[test]
+    fn mission_expansion_and_capability_changes_are_never_remote() {
+        let ledger = GrantLedger::new();
+        let caller = Caller::Device {
+            device: DeviceId::now(),
+        };
+        for request in every_request() {
+            if matches!(
+                needed(&request),
+                Needed::AtTheMachine(
+                    LocalScope::MissionCreate
+                        | LocalScope::MissionStart
+                        | LocalScope::MissionRetryTask
+                        | LocalScope::MissionSendTaskInstruction
+                        | LocalScope::MissionIntegrate
+                        | LocalScope::MissionArchive
+                        | LocalScope::GateRegister
+                        | LocalScope::CapabilityPromote
+                        | LocalScope::CapabilityRollback
+                        | LocalScope::CapabilityArchive
+                )
+            ) {
+                assert!(
+                    matches!(
+                        allowed(&caller, &request, &ledger),
+                        Err(WallRefusal::NeverRemote { .. })
+                    ),
+                    "{request:?} was not permanently local"
+                );
+            }
+        }
     }
 
     #[test]

@@ -240,6 +240,13 @@ pub(crate) enum Prepared {
         /// Exact verification result.
         response: Response,
     },
+    /// One exact Mission integrated-tree verification completed outside the session owner.
+    MissionIntegration {
+        /// Bound Mission identity.
+        mission_id: Box<str>,
+        /// Exact integration result.
+        response: Response,
+    },
     /// One exact capability candidate verification completed outside the session owner.
     CapabilityVerification {
         /// Bound canonical project text.
@@ -744,6 +751,26 @@ pub(crate) async fn prepare_mission_verification(
     }
 }
 
+/// Verify one manually integrated Mission tree outside the single session owner.
+pub(crate) async fn prepare_mission_integration(
+    conversation: &Conversation,
+    composed: &Composed,
+    request: &Request,
+) -> Prepared {
+    let Request::MissionCompleteIntegration { mission_id } = request else {
+        return Prepared::None;
+    };
+    if !conversation.greeted()
+        || crate::scope::allowed(conversation.caller(), request, &composed.granted).is_err()
+    {
+        return Prepared::None;
+    }
+    Prepared::MissionIntegration {
+        mission_id: mission_id.clone(),
+        response: crate::mission::prepare_integration(composed, mission_id).await,
+    }
+}
+
 /// Run one capability candidate's reviewed fixed Gates outside the single session owner.
 pub(crate) async fn prepare_capability_verification(
     conversation: &Conversation,
@@ -872,17 +899,35 @@ pub(crate) fn answer_prepared(
         | Request::MissionCancel { .. }
         | Request::MissionBindSession { .. }
         | Request::MissionSendTaskInstruction { .. }
-        | Request::MissionRetryTask { .. }) => {
+        | Request::MissionRetryTask { .. }
+        | Request::MissionArchive { .. }) => {
             let runtime_ids: Vec<Box<str>> = composed
                 .registry
                 .usable()
                 .map(|provider| provider.id().as_str().into())
                 .collect();
-            let approved_capabilities = if let Request::MissionValidate { project, .. } = &mission {
+            let capability_project = match &mission {
+                Request::MissionValidate { project, .. } => Some(project.clone()),
+                Request::MissionStart { mission_id, .. }
+                | Request::MissionSendTaskInstruction { mission_id, .. } => {
+                    let Ok(id) = mission_id.parse::<runtrol_ledger::MissionId>() else {
+                        return Reply::One(refuse("the Mission identity is invalid"));
+                    };
+                    match composed.ledger.snapshot(id) {
+                        Ok(Some(snapshot)) => Some(snapshot.mission.project_id),
+                        Ok(None) => return Reply::One(refuse("the Mission does not exist")),
+                        Err(_) => {
+                            return Reply::One(refuse("the Mission ledger cannot be read"));
+                        }
+                    }
+                }
+                _ => None,
+            };
+            let approved_capabilities = if let Some(project) = capability_project {
                 let Ok(mut growth) = composed.growth.try_lock() else {
                     return Reply::One(refuse("the capability controller lock is damaged"));
                 };
-                match growth.approved_capabilities(project) {
+                match growth.approved_capabilities(&project) {
                     Ok(capabilities) => capabilities,
                     Err(message) => return Reply::One(refuse(&message)),
                 }
@@ -924,6 +969,14 @@ pub(crate) fn answer_prepared(
             other => mismatched(other),
         },
 
+        Request::MissionCompleteIntegration { mission_id } => match prepared {
+            Prepared::MissionIntegration {
+                mission_id: prepared_mission,
+                response,
+            } if prepared_mission == mission_id => Reply::One(response),
+            other => mismatched(other),
+        },
+
         Request::CapabilityVerify {
             project,
             capability_id,
@@ -950,7 +1003,7 @@ pub(crate) fn answer_prepared(
         | Request::CapabilityQuarantine { .. }
         | Request::CapabilityRollback { .. }
         | Request::CapabilityArchive { .. }) => match composed.growth.try_lock() {
-            Ok(mut controller) => Reply::One(controller.answer(&capability)),
+            Ok(mut controller) => Reply::One(controller.answer(&composed.ledger, &capability)),
             Err(_) => Reply::One(refuse("the capability controller lock is damaged")),
         },
 
@@ -1258,6 +1311,7 @@ fn bound(
         | Prepared::IntegrationAdmin { .. }
         | Prepared::MissionWorkspace { .. }
         | Prepared::MissionVerification { .. }
+        | Prepared::MissionIntegration { .. }
         | Prepared::CapabilityVerification { .. } => false,
         Prepared::Invalid { kind, provider, .. } => {
             *kind == requested_kind && provider.as_ref() == requested_provider
