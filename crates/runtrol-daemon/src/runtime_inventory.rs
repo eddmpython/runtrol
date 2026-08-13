@@ -214,6 +214,35 @@ impl RuntimeSessionCatalogue {
         Ok(session.session)
     }
 
+    /// Resolve the provider pointer and exact current workspace needed to heat one managed session.
+    pub(crate) fn authorized_managed_session(
+        &self,
+        authority: &AuthorizedIntegration,
+        requested: &runtrol_runtime_protocol::RuntimeSessionId,
+    ) -> Result<AuthorizedManagedSession, RuntimeInventoryFailure> {
+        if !self.available {
+            return Err(RuntimeInventoryFailure::Unavailable);
+        }
+        let roots = approved_roots(authority)?;
+        let session = self
+            .sessions
+            .iter()
+            .find(|session| session.descriptor.session_id.as_str() == requested.as_str())
+            .ok_or(RuntimeInventoryFailure::SessionNotFound)?;
+        let workspace = AbsPath::canonicalize(&session.workspace)
+            .map_err(|_| RuntimeInventoryFailure::SessionNotFound)?;
+        if !roots.iter().any(|root| workspace.is_under(&root.path)) {
+            return Err(RuntimeInventoryFailure::SessionNotFound);
+        }
+        Ok(AuthorizedManagedSession {
+            session: session.session,
+            provider: session.provider,
+            native: session.native.clone(),
+            descriptor: session.descriptor.clone(),
+            workspace,
+        })
+    }
+
     /// Find an authorized managed pointer by the only safe native merge key.
     pub(crate) fn managed_as(
         &self,
@@ -246,6 +275,20 @@ pub(crate) struct AuthorizedRoot {
     pub(crate) identity: [u8; 24],
 }
 
+/// One current canonical workspace proven to remain below a locally approved root.
+pub(crate) struct AuthorizedWorkspace {
+    pub(crate) path: AbsPath,
+}
+
+/// One managed session resolved without disclosing anything outside the caller's roots.
+pub(crate) struct AuthorizedManagedSession {
+    pub(crate) session: runtrol_provider::SessionId,
+    pub(crate) provider: CoreProviderId,
+    pub(crate) native: Option<Box<str>>,
+    pub(crate) descriptor: SessionDescriptor,
+    pub(crate) workspace: AbsPath,
+}
+
 /// Resolve one caller-selected root only when it still names the locally approved object.
 pub(crate) fn authorized_root(
     authority: &AuthorizedIntegration,
@@ -262,6 +305,20 @@ pub(crate) fn authorized_roots(
     authority: &AuthorizedIntegration,
 ) -> Result<Vec<AuthorizedRoot>, RuntimeInventoryFailure> {
     approved_roots(authority)
+}
+
+/// Resolve any exact current workspace under the integration's current approved roots.
+pub(crate) fn authorized_workspace(
+    authority: &AuthorizedIntegration,
+    requested: &str,
+) -> Result<AuthorizedWorkspace, RuntimeInventoryFailure> {
+    let workspace = AbsPath::canonicalize(requested)
+        .map_err(|_| RuntimeInventoryFailure::RootAuthorityChanged)?;
+    let roots = approved_roots(authority)?;
+    if !roots.iter().any(|root| workspace.is_under(&root.path)) {
+        return Err(RuntimeInventoryFailure::RootAuthorityChanged);
+    }
+    Ok(AuthorizedWorkspace { path: workspace })
 }
 
 fn approved_roots(

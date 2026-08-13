@@ -10,8 +10,9 @@ use runtrol_provider::{
     ProviderId as CoreProviderId, WallMs,
 };
 use runtrol_runtime_protocol::{
-    CatalogueCoverage, CatalogueSource, MAX_NATIVE_PUBLIC_CURSOR_BYTES, NATIVE_CURSOR_LIFETIME_MS,
-    NativeResumeCapability, NativeSessionCatalogue, NativeSessionDescriptor, ProviderId,
+    CatalogueCoverage, CatalogueSource, MAX_NATIVE_ADOPTION_TOKEN_BYTES,
+    MAX_NATIVE_PUBLIC_CURSOR_BYTES, NATIVE_CURSOR_LIFETIME_MS, NativeResumeCapability,
+    NativeSessionCatalogue, NativeSessionDescriptor, ProviderId,
 };
 use sha2::{Digest as _, Sha256};
 
@@ -19,6 +20,7 @@ use crate::runtime_auth::AuthorizedIntegration;
 use crate::runtime_inventory::{AuthorizedRoot, RuntimeInventoryFailure, RuntimeSessionCatalogue};
 
 const CURSOR_VERSION: u8 = 1;
+const ADOPTION_VERSION: u8 = 2;
 const CURSOR_TAG_BYTES: usize = 32;
 const MAX_CURSOR_PAGES: usize = 32;
 const MAX_REASON_BYTES: usize = 4 * 1024;
@@ -134,6 +136,130 @@ impl NativeCursorCodec {
             .map_err(|_| NativeCursorFailure::Invalid)?;
         decode_body(body, authority, provider, root, binary_identity)
     }
+
+    /// Bind one adoptable observation to its integration, provider binary, approved root, identity, and workspace.
+    pub(crate) fn seal_adoption(
+        &self,
+        authority: &AuthorizedIntegration,
+        provider: CoreProviderId,
+        root: &AuthorizedRoot,
+        binary_identity: [u8; 32],
+        native_session_id: &str,
+        workspace: &AbsPath,
+    ) -> Result<String, NativeCursorFailure> {
+        if native_session_id.len() > runtrol_provider::MAX_NATIVE_CURSOR_BYTES {
+            return Err(NativeCursorFailure::Invalid);
+        }
+        let mut body = Vec::with_capacity(224_usize.saturating_add(native_session_id.len()));
+        body.push(ADOPTION_VERSION);
+        body.extend_from_slice(&authority.key.to_bytes());
+        body.extend_from_slice(&authority.grant.key_generation.to_be_bytes());
+        body.extend_from_slice(&authority.grant.grant_generation.to_be_bytes());
+        body.extend_from_slice(&digest(provider.as_str()));
+        body.extend_from_slice(&digest(root.path.as_str()));
+        body.extend_from_slice(&root.identity);
+        body.extend_from_slice(&binary_identity);
+        body.extend_from_slice(&digest(workspace.as_str()));
+        body.extend_from_slice(
+            &WallMs::now()
+                .as_millis()
+                .saturating_add(NATIVE_CURSOR_LIFETIME_MS)
+                .to_be_bytes(),
+        );
+        let length =
+            u16::try_from(native_session_id.len()).map_err(|_| NativeCursorFailure::Invalid)?;
+        body.extend_from_slice(&length.to_be_bytes());
+        body.extend_from_slice(native_session_id.as_bytes());
+        let mut mac = self.authenticator.clone();
+        mac.update(&body);
+        body.extend_from_slice(&mac.finalize().into_bytes());
+        let encoded = Base64UrlUnpadded::encode_string(&body);
+        if encoded.len() > MAX_NATIVE_ADOPTION_TOKEN_BYTES {
+            return Err(NativeCursorFailure::Invalid);
+        }
+        Ok(encoded)
+    }
+
+    /// Verify one adoption proof only against current grant roots and the exact prepared provider binary.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "adoption proof verification binds every independent authority and provider observation dimension"
+    )]
+    pub(crate) fn open_adoption(
+        &self,
+        authority: &AuthorizedIntegration,
+        approved_roots: &[AuthorizedRoot],
+        provider: CoreProviderId,
+        binary_identity: [u8; 32],
+        native_session_id: &str,
+        workspace: &AbsPath,
+        encoded: &str,
+    ) -> Result<(), NativeCursorFailure> {
+        if encoded.len() > MAX_NATIVE_ADOPTION_TOKEN_BYTES {
+            return Err(NativeCursorFailure::Invalid);
+        }
+        let decoded =
+            Base64UrlUnpadded::decode_vec(encoded).map_err(|_| NativeCursorFailure::Invalid)?;
+        let body_length = decoded
+            .len()
+            .checked_sub(CURSOR_TAG_BYTES)
+            .ok_or(NativeCursorFailure::Invalid)?;
+        let (body, tag) = decoded.split_at(body_length);
+        let mut mac = self.authenticator.clone();
+        mac.update(body);
+        mac.verify_slice(tag)
+            .map_err(|_| NativeCursorFailure::Invalid)?;
+        decode_adoption(
+            body,
+            authority,
+            approved_roots,
+            provider,
+            binary_identity,
+            native_session_id,
+            workspace,
+        )
+    }
+}
+
+fn decode_adoption(
+    body: &[u8],
+    authority: &AuthorizedIntegration,
+    approved_roots: &[AuthorizedRoot],
+    provider: CoreProviderId,
+    binary_identity: [u8; 32],
+    native_session_id: &str,
+    workspace: &AbsPath,
+) -> Result<(), NativeCursorFailure> {
+    let mut cursor = Cursor { bytes: body, at: 0 };
+    if cursor.byte()? != ADOPTION_VERSION
+        || cursor.fixed::<16>()? != authority.key.to_bytes()
+        || cursor.u64()? != authority.grant.key_generation
+        || cursor.u64()? != authority.grant.grant_generation
+        || cursor.fixed::<32>()? != digest(provider.as_str())
+    {
+        return Err(NativeCursorFailure::Invalid);
+    }
+    let root_digest = cursor.fixed::<32>()?;
+    let root_identity = cursor.fixed::<24>()?;
+    if !approved_roots
+        .iter()
+        .any(|root| digest(root.path.as_str()) == root_digest && root.identity == root_identity)
+        || cursor.fixed::<32>()? != binary_identity
+        || cursor.fixed::<32>()? != digest(workspace.as_str())
+    {
+        return Err(NativeCursorFailure::Invalid);
+    }
+    if cursor.u64()? <= WallMs::now().as_millis() {
+        return Err(NativeCursorFailure::Expired);
+    }
+    let native_length = usize::from(cursor.u16()?);
+    if native_length > runtrol_provider::MAX_NATIVE_CURSOR_BYTES
+        || cursor.take(native_length)? != native_session_id.as_bytes()
+        || cursor.at != body.len()
+    {
+        return Err(NativeCursorFailure::Invalid);
+    }
+    Ok(())
 }
 
 fn decode_body(
@@ -225,12 +351,18 @@ impl<'a> Cursor<'a> {
 }
 
 /// Convert one provider page only after every path is canonical and inside current approved roots.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "catalogue authorization binds caller, root, provider, binary, workspace, managed merge, and proof authority"
+)]
 pub(crate) fn authorize_catalogue(
+    codec: &NativeCursorCodec,
     authority: &AuthorizedIntegration,
     selected_root: &AuthorizedRoot,
     approved_roots: &[AuthorizedRoot],
     managed: &RuntimeSessionCatalogue,
     provider: CoreProviderId,
+    binary_identity: [u8; 32],
     catalogue: ProviderCatalogue,
 ) -> Result<NativeSessionCatalogue, RuntimeInventoryFailure> {
     if catalogue.sessions.len() > runtrol_provider::MAX_NATIVE_SESSION_ITEMS
@@ -289,6 +421,24 @@ pub(crate) fn authorize_catalogue(
             continue;
         }
         let already_managed_as = managed.managed_as(authority, provider, &entry.native)?;
+        let resume = map_resume(entry.resume);
+        let adoption_token =
+            if resume == NativeResumeCapability::Available && already_managed_as.is_none() {
+                Some(
+                    codec
+                        .seal_adoption(
+                            authority,
+                            provider,
+                            selected_root,
+                            binary_identity,
+                            entry.native.as_str(),
+                            &cwd,
+                        )
+                        .map_err(|_| RuntimeInventoryFailure::Unavailable)?,
+                )
+            } else {
+                None
+            };
         sessions.push(NativeSessionDescriptor {
             native_session_id: entry.native.to_string(),
             cwd: cwd.to_string(),
@@ -298,8 +448,9 @@ pub(crate) fn authorize_catalogue(
                 .collect(),
             title: entry.title.map(String::from),
             updated_at: entry.updated_at.map(String::from),
-            resume: map_resume(entry.resume),
+            resume,
             already_managed_as,
+            adoption_token,
         });
     }
     let coverage = map_coverage(catalogue.coverage, omitted)?;
@@ -487,11 +638,13 @@ mod tests {
         let managed = RuntimeSessionCatalogue::one_for_tests(provider, "native-1", &project);
         let native = || NativeSessionId::new("native-1").expect("valid native");
         let public = authorize_catalogue(
+            &NativeCursorCodec::new().expect("random codec"),
             &authority,
             &root,
             std::slice::from_ref(&root),
             &managed,
             provider,
+            [4; 32],
             ProviderCatalogue {
                 coverage: NativeCatalogueCoverage::Complete {
                     source: NativeCatalogueSource::OfficialProtocol,

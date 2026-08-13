@@ -160,6 +160,12 @@ pub struct RuntimeLimits {
     pub max_frame_bytes: usize,
     /// Maximum caller input bytes.
     pub max_input_bytes: usize,
+    /// Maximum opaque model selection bytes on session start.
+    pub max_model_selection_bytes: usize,
+    /// Maximum authenticated native adoption token bytes.
+    pub max_native_adoption_token_bytes: usize,
+    /// Maximum wrapped native catalogue cursor bytes.
+    pub max_native_public_cursor_bytes: usize,
     /// Maximum items in one catalogue page.
     pub max_page_items: u16,
     /// Maximum subscriptions on one connection.
@@ -178,6 +184,8 @@ pub struct RuntimeLimits {
     pub idempotency_window_ms: u64,
     /// Maximum retained mutation identities across integrations.
     pub max_idempotency_records: u16,
+    /// Lifetime of native catalogue cursors and adoption observations.
+    pub native_cursor_lifetime_ms: u64,
 }
 
 impl Default for RuntimeLimits {
@@ -185,6 +193,9 @@ impl Default for RuntimeLimits {
         Self {
             max_frame_bytes: MAX_FRAME_BYTES,
             max_input_bytes: MAX_INPUT_BYTES,
+            max_model_selection_bytes: crate::MAX_MODEL_SELECTION_BYTES,
+            max_native_adoption_token_bytes: crate::MAX_NATIVE_ADOPTION_TOKEN_BYTES,
+            max_native_public_cursor_bytes: crate::MAX_NATIVE_PUBLIC_CURSOR_BYTES,
             max_page_items: MAX_PAGE_ITEMS,
             max_subscriptions: MAX_SUBSCRIPTIONS,
             challenge_lifetime_ms: crate::CHALLENGE_LIFETIME_MS,
@@ -194,6 +205,7 @@ impl Default for RuntimeLimits {
             control_lease_lifetime_ms: crate::CONTROL_LEASE_LIFETIME_MS,
             idempotency_window_ms: crate::IDEMPOTENCY_WINDOW_MS,
             max_idempotency_records: crate::MAX_IDEMPOTENCY_RECORDS,
+            native_cursor_lifetime_ms: crate::NATIVE_CURSOR_LIFETIME_MS,
         }
     }
 }
@@ -236,6 +248,18 @@ mod tests {
         let limits = RuntimeLimits::default();
         assert_eq!(limits.max_frame_bytes, MAX_FRAME_BYTES);
         assert_eq!(limits.max_input_bytes, MAX_INPUT_BYTES);
+        assert_eq!(
+            limits.max_model_selection_bytes,
+            crate::MAX_MODEL_SELECTION_BYTES
+        );
+        assert_eq!(
+            limits.max_native_adoption_token_bytes,
+            crate::MAX_NATIVE_ADOPTION_TOKEN_BYTES
+        );
+        assert_eq!(
+            limits.max_native_public_cursor_bytes,
+            crate::MAX_NATIVE_PUBLIC_CURSOR_BYTES
+        );
         assert_eq!(limits.max_page_items, MAX_PAGE_ITEMS);
         assert_eq!(limits.max_subscriptions, MAX_SUBSCRIPTIONS);
         assert_eq!(limits.challenge_lifetime_ms, crate::CHALLENGE_LIFETIME_MS);
@@ -253,6 +277,10 @@ mod tests {
         assert_eq!(
             limits.max_idempotency_records,
             crate::MAX_IDEMPOTENCY_RECORDS
+        );
+        assert_eq!(
+            limits.native_cursor_lifetime_ms,
+            crate::NATIVE_CURSOR_LIFETIME_MS
         );
     }
 

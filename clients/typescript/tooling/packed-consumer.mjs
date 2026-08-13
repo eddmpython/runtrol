@@ -36,9 +36,11 @@ try {
   await writeFile(join(consumer, "verify.ts"), `
     import {
       RuntimeConnector,
+      newMutationRequestId,
       type ListNativeSessionsParams,
       type ProviderId,
       type RuntimeClient,
+      type StartSessionParams,
     } from "@runtrol/runtime-client";
     import { ScriptedRuntimeTransport } from "@runtrol/runtime-client/testing";
     const provider: ProviderId = "opaque-provider";
@@ -48,6 +50,13 @@ try {
     declare const runtime: RuntimeClient;
     const nativePage: ListNativeSessionsParams = { providerId: provider, root: "C:/opaque-root" };
     void runtime.providers().listNativeSessions(nativePage);
+    const start: StartSessionParams = {
+      requestId: newMutationRequestId(),
+      providerId: provider,
+      workspace: "C:/opaque-root",
+      access: "exclusive",
+    };
+    void runtime.sessions().start(start);
     // @ts-expect-error raw protocol dispatch is not part of the public client API
     runtime.call("providers/list", {});
   `);

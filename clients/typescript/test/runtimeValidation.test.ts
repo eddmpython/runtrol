@@ -7,6 +7,7 @@ import {
   PUBLIC_LIMITS,
   RuntimeConnector,
   RuntimeProtocolError,
+  newMutationRequestId,
 } from "../src/index.js";
 import {
   ScriptedRuntimeTransport,
@@ -116,11 +117,63 @@ test("native catalogues reject conversation-shaped extension fields", async () =
   runtime.close();
 });
 
+test("session open results reject conversation-shaped extension fields", async () => {
+  const instanceId = `rtm_${"4".repeat(32)}`;
+  const transport = new ScriptedRuntimeTransport([
+    challenge(instanceId),
+    initialized(instanceId),
+    {
+      jsonrpc: "2.0",
+      id: 2,
+      result: {
+        session: {
+          sessionId: "019c2b97-5f29-7b00-8000-000000000001",
+          providerId: "provider",
+          lifecycle: "hotIdle",
+          sessionGeneration: 1,
+          transcript: [],
+        },
+        control: {
+          leaseId: "lease_fixture",
+          sessionId: "019c2b97-5f29-7b00-8000-000000000001",
+          sessionGeneration: 1,
+          leaseGeneration: 1,
+          expiresAtMs: Date.now() + 30_000,
+        },
+      },
+    },
+  ]);
+  const runtime = await new RuntimeConnector(scriptedTransportFactory(transport)).connect(
+    validatedLocator(instanceId, "fixture", "0.1.1"),
+    { name: "fixture", version: "1.0.0" },
+  );
+  await assert.rejects(
+    runtime.sessions().start({
+      requestId: "019c2b97-5f29-7b00-8000-000000000000",
+      providerId: "provider",
+      workspace: "C:/work",
+      access: "exclusive",
+    }),
+    RuntimeProtocolError,
+  );
+  runtime.close();
+});
+
 test("integration identities round trip only through explicit private bytes", () => {
   const identity = IntegrationIdentity.generate();
   const restored = IntegrationIdentity.fromPkcs8(identity.exportPkcs8());
   assert.equal(restored.publicKeyBase64(), identity.publicKeyBase64());
   assert.equal(Buffer.from(restored.signBase64(Buffer.from("fixture")), "base64url").length, 64);
+});
+
+test("mutation request identities are canonical UUIDv7 values", (context) => {
+  context.mock.method(Date, "now", () => 1_999_999_999_990);
+  const requestId = newMutationRequestId();
+  assert.match(
+    requestId,
+    /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+  );
+  assert.equal(Number.parseInt(requestId.replaceAll("-", "").slice(0, 12), 16), Date.now());
 });
 
 test("initialization signing matches the language-neutral fixture", async (context) => {

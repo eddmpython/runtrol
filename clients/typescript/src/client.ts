@@ -1,5 +1,8 @@
+import { randomBytes } from "node:crypto";
+
 import type {
   AcquireControlParams,
+  AdoptNativeSessionParams,
   AppScope,
   ClientCapabilities,
   ClientInfo,
@@ -18,15 +21,19 @@ import type {
   ListModelsParams,
   ListNativeSessionsParams,
   ManagedSessionList,
+  MutationRequestId,
   NativeSessionCatalogue,
   PendingEnrollmentId,
   ProviderId,
   ProviderList,
   RequestEnrollmentParams,
+  ResumeSessionParams,
   RuntimeEventNotification,
   RuntimeMethod,
   RuntimeModelCatalog,
   ServerChallenge,
+  SessionOpenResult,
+  StartSessionParams,
   SubmitInputParams,
   WatchEventsParams,
   WatchEventsResult,
@@ -47,6 +54,19 @@ import {
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder("utf-8", { fatal: true });
+
+export function newMutationRequestId(): MutationRequestId {
+  const bytes = randomBytes(16);
+  let timestamp = Date.now();
+  for (let index = 5; index >= 0; index -= 1) {
+    bytes[index] = timestamp & 0xff;
+    timestamp = Math.floor(timestamp / 256);
+  }
+  bytes[6] = 0x70 | (bytes[6]! & 0x0f);
+  bytes[8] = 0x80 | (bytes[8]! & 0x3f);
+  const hex = bytes.toString("hex");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
 
 export interface ClientOptions {
   readonly name: string;
@@ -209,6 +229,28 @@ export class SessionClient {
 
   public list(): Promise<ManagedSessionList> {
     return callRuntime(this.runtime, "sessions/list", {}, "ManagedSessionList");
+  }
+
+  public start(params: StartSessionParams): Promise<SessionOpenResult> {
+    if (
+      params.model !== undefined
+      && params.model !== null
+      && Buffer.byteLength(params.model, "utf8") > PUBLIC_LIMITS.maxModelSelectionBytes
+    ) {
+      throw new RuntimeProtocolError("session model selection exceeds the public byte limit");
+    }
+    return callRuntime(this.runtime, "sessions/start", params, "SessionOpenResult");
+  }
+
+  public adoptNative(params: AdoptNativeSessionParams): Promise<SessionOpenResult> {
+    if (Buffer.byteLength(params.adoptionToken, "utf8") > PUBLIC_LIMITS.maxNativeAdoptionTokenBytes) {
+      throw new RuntimeProtocolError("native adoption proof exceeds the public byte limit");
+    }
+    return callRuntime(this.runtime, "sessions/adoptNative", params, "SessionOpenResult");
+  }
+
+  public resume(params: ResumeSessionParams): Promise<SessionOpenResult> {
+    return callRuntime(this.runtime, "sessions/resume", params, "SessionOpenResult");
   }
 
   public acquireControl(params: AcquireControlParams): Promise<ControlLease> {

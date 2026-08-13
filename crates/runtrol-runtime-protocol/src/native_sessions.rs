@@ -8,6 +8,9 @@ use crate::{ProviderId, RuntimeSessionId};
 /// Maximum public cursor bytes after Runtime wraps provider context and authenticity.
 pub const MAX_NATIVE_PUBLIC_CURSOR_BYTES: usize = 8 * 1024;
 
+/// Maximum encoded bytes for one Runtime-authenticated native adoption proof.
+pub const MAX_NATIVE_ADOPTION_TOKEN_BYTES: usize = 2 * 1024;
+
 /// Lifetime of one boot-local native catalogue cursor.
 pub const NATIVE_CURSOR_LIFETIME_MS: u64 = 5 * 60_000;
 
@@ -90,6 +93,9 @@ pub struct NativeSessionDescriptor {
     /// Existing Runtime pointer matched only by provider and native identity.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub already_managed_as: Option<RuntimeSessionId>,
+    /// Short-lived Runtime proof required to adopt this exact authorized observation.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub adoption_token: Option<String>,
 }
 
 /// One bounded provider-native session page after authorization and filtering.
@@ -126,6 +132,7 @@ mod tests {
                 updated_at: None,
                 resume: NativeResumeCapability::Available,
                 already_managed_as: None,
+                adoption_token: Some("opaque-runtime-proof".to_owned()),
             }],
             next_cursor: None,
         })

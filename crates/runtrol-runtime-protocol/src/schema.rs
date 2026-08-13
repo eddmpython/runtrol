@@ -3,13 +3,13 @@
 use schemars::{JsonSchema, schema_for};
 
 use crate::{
-    AcquireControlParams, ControlLease, ControlLeaseParams, EnrollmentDecision, EnrollmentReceipt,
-    InitializeParams, InitializeResult, IntegrationGrant, JsonRpcNotification, JsonRpcRequest,
-    JsonRpcResponse, LaggedNotification, ListModelsParams, ListNativeSessionsParams,
-    ManagedSessionList, NativeSessionCatalogue, ProviderList, RequestEnrollmentParams,
-    RuntimeEventNotification, RuntimeLocatorRecord, RuntimeMethod, RuntimeModelCatalog,
-    ServerChallenge, SubmitInputParams, WatchEnrollmentParams, WatchEventsParams,
-    WatchEventsResult,
+    AcquireControlParams, AdoptNativeSessionParams, ControlLease, ControlLeaseParams,
+    EnrollmentDecision, EnrollmentReceipt, InitializeParams, InitializeResult, IntegrationGrant,
+    JsonRpcNotification, JsonRpcRequest, JsonRpcResponse, LaggedNotification, ListModelsParams,
+    ListNativeSessionsParams, ManagedSessionList, NativeSessionCatalogue, ProviderList,
+    RequestEnrollmentParams, ResumeSessionParams, RuntimeEventNotification, RuntimeLocatorRecord,
+    RuntimeMethod, RuntimeModelCatalog, ServerChallenge, SessionOpenResult, StartSessionParams,
+    SubmitInputParams, WatchEnrollmentParams, WatchEventsParams, WatchEventsResult,
 };
 
 /// Checked schema filename inside this package.
@@ -41,6 +41,10 @@ struct PublicProtocolSchema {
     list_native_sessions: ListNativeSessionsParams,
     native_session_catalogue: NativeSessionCatalogue,
     managed_session_list: ManagedSessionList,
+    start_session: StartSessionParams,
+    adopt_native_session: AdoptNativeSessionParams,
+    resume_session: ResumeSessionParams,
+    session_open_result: SessionOpenResult,
     acquire_control: AcquireControlParams,
     control_lease: ControlLease,
     control_lease_params: ControlLeaseParams,

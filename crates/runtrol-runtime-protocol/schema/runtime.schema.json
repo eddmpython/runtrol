@@ -31,6 +31,45 @@
       ],
       "type": "object"
     },
+    "AdoptNativeSessionParams": {
+      "additionalProperties": false,
+      "description": "Adopt one exact native catalogue observation into Runtime supervision.",
+      "properties": {
+        "access": {
+          "$ref": "#/$defs/SessionWorkspaceAccess",
+          "description": "Writer collision posture for the working tree."
+        },
+        "adoptionToken": {
+          "description": "Short-lived Runtime proof issued with the authorized native catalogue entry.",
+          "type": "string"
+        },
+        "nativeSessionId": {
+          "description": "Provider-owned opaque session identity returned unchanged.",
+          "type": "string"
+        },
+        "providerId": {
+          "$ref": "#/$defs/ProviderId",
+          "description": "Opaque provider identity returned with the native catalogue entry."
+        },
+        "requestId": {
+          "$ref": "#/$defs/MutationRequestId",
+          "description": "Caller-minted mutation identity."
+        },
+        "workspace": {
+          "description": "Exact canonical workspace returned with the native catalogue entry.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "requestId",
+        "providerId",
+        "nativeSessionId",
+        "workspace",
+        "access",
+        "adoptionToken"
+      ],
+      "type": "object"
+    },
     "AppScope": {
       "description": "Public integration authority, separate from remote device scopes.",
       "oneOf": [
@@ -949,6 +988,13 @@
           },
           "type": "array"
         },
+        "adoptionToken": {
+          "description": "Short-lived Runtime proof required to adopt this exact authorized observation.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "alreadyManagedAs": {
           "anyOf": [
             {
@@ -1064,6 +1110,47 @@
       "required": [
         "manifest",
         "signature"
+      ],
+      "type": "object"
+    },
+    "ResumeSessionParams": {
+      "additionalProperties": false,
+      "description": "Heat one existing Runtime-managed cold session.",
+      "properties": {
+        "access": {
+          "$ref": "#/$defs/SessionWorkspaceAccess",
+          "description": "Writer collision posture for the working tree."
+        },
+        "expectedLifecycle": {
+          "$ref": "#/$defs/LifecycleState",
+          "description": "Lifecycle visible when the caller chose to resume."
+        },
+        "expectedSessionGeneration": {
+          "description": "Lifecycle generation visible when the caller chose to resume.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "requestId": {
+          "$ref": "#/$defs/MutationRequestId",
+          "description": "Caller-minted mutation identity."
+        },
+        "sessionId": {
+          "$ref": "#/$defs/RuntimeSessionId",
+          "description": "Exact Runtime-managed session."
+        },
+        "workspace": {
+          "description": "Exact current managed workspace, reauthorized before provider I/O.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "requestId",
+        "sessionId",
+        "expectedLifecycle",
+        "expectedSessionGeneration",
+        "workspace",
+        "access"
       ],
       "type": "object"
     },
@@ -1421,6 +1508,24 @@
           "minimum": 0,
           "type": "integer"
         },
+        "maxModelSelectionBytes": {
+          "description": "Maximum opaque model selection bytes on session start.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "maxNativeAdoptionTokenBytes": {
+          "description": "Maximum authenticated native adoption token bytes.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "maxNativePublicCursorBytes": {
+          "description": "Maximum wrapped native catalogue cursor bytes.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
         "maxPageItems": {
           "description": "Maximum items in one catalogue page.",
           "format": "uint16",
@@ -1448,11 +1553,20 @@
           "maximum": 65535,
           "minimum": 0,
           "type": "integer"
+        },
+        "nativeCursorLifetimeMs": {
+          "description": "Lifetime of native catalogue cursors and adoption observations.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
         }
       },
       "required": [
         "maxFrameBytes",
         "maxInputBytes",
+        "maxModelSelectionBytes",
+        "maxNativeAdoptionTokenBytes",
+        "maxNativePublicCursorBytes",
         "maxPageItems",
         "maxSubscriptions",
         "challengeLifetimeMs",
@@ -1461,7 +1575,8 @@
         "maxRevisionOffers",
         "controlLeaseLifetimeMs",
         "idempotencyWindowMs",
-        "maxIdempotencyRecords"
+        "maxIdempotencyRecords",
+        "nativeCursorLifetimeMs"
       ],
       "type": "object"
     },
@@ -1559,6 +1674,21 @@
         {
           "const": "sessions/list",
           "description": "Read the Runtime-managed session catalogue.",
+          "type": "string"
+        },
+        {
+          "const": "sessions/start",
+          "description": "Start one fresh provider-native session under an approved root.",
+          "type": "string"
+        },
+        {
+          "const": "sessions/adoptNative",
+          "description": "Adopt one officially listed native session into Runtime supervision.",
+          "type": "string"
+        },
+        {
+          "const": "sessions/resume",
+          "description": "Heat one existing Runtime-managed cold session.",
           "type": "string"
         },
         {
@@ -1864,6 +1994,76 @@
       ],
       "type": "object"
     },
+    "SessionOpenResult": {
+      "additionalProperties": false,
+      "description": "One newly supervised or reheated session and its initial controller authority.",
+      "properties": {
+        "control": {
+          "$ref": "#/$defs/ControlLease",
+          "description": "Initial short-lived control lease held by the integration that opened it."
+        },
+        "session": {
+          "$ref": "#/$defs/SessionDescriptor",
+          "description": "Current structural managed-session descriptor."
+        }
+      },
+      "required": [
+        "session",
+        "control"
+      ],
+      "type": "object"
+    },
+    "SessionWorkspaceAccess": {
+      "description": "Whether a newly heated process must be the only writer for its working tree.",
+      "oneOf": [
+        {
+          "const": "exclusive",
+          "description": "Refuse any overlapping opening, live, or closing writer.",
+          "type": "string"
+        },
+        {
+          "const": "shared",
+          "description": "The local operator explicitly approved concurrent writers for this operation.",
+          "type": "string"
+        }
+      ]
+    },
+    "StartSessionParams": {
+      "additionalProperties": false,
+      "description": "Start a new provider-native session in one exact authorized workspace.",
+      "properties": {
+        "access": {
+          "$ref": "#/$defs/SessionWorkspaceAccess",
+          "description": "Writer collision posture for the working tree."
+        },
+        "model": {
+          "description": "Exact opaque model choice previously returned by Runtime, or provider default when absent.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "providerId": {
+          "$ref": "#/$defs/ProviderId",
+          "description": "Opaque provider identity returned by Runtime inventory."
+        },
+        "requestId": {
+          "$ref": "#/$defs/MutationRequestId",
+          "description": "Caller-minted mutation identity."
+        },
+        "workspace": {
+          "description": "Exact workspace path under a current approved root.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "requestId",
+        "providerId",
+        "workspace",
+        "access"
+      ],
+      "type": "object"
+    },
     "SubmitInputParams": {
       "additionalProperties": false,
       "description": "Submit caller-owned input under one exact control lease.",
@@ -2009,6 +2209,9 @@
     "acquire_control": {
       "$ref": "#/$defs/AcquireControlParams"
     },
+    "adopt_native_session": {
+      "$ref": "#/$defs/AdoptNativeSessionParams"
+    },
     "challenge": {
       "$ref": "#/$defs/ServerChallenge"
     },
@@ -2069,11 +2272,20 @@
     "response": {
       "$ref": "#/$defs/JsonRpcResponse"
     },
+    "resume_session": {
+      "$ref": "#/$defs/ResumeSessionParams"
+    },
     "runtime_event": {
       "$ref": "#/$defs/RuntimeEventNotification"
     },
     "runtime_locator": {
       "$ref": "#/$defs/RuntimeLocatorRecord"
+    },
+    "session_open_result": {
+      "$ref": "#/$defs/SessionOpenResult"
+    },
+    "start_session": {
+      "$ref": "#/$defs/StartSessionParams"
     },
     "submit_input": {
       "$ref": "#/$defs/SubmitInputParams"
@@ -2108,6 +2320,10 @@
     "list_native_sessions",
     "native_session_catalogue",
     "managed_session_list",
+    "start_session",
+    "adopt_native_session",
+    "resume_session",
+    "session_open_result",
     "acquire_control",
     "control_lease",
     "control_lease_params",
@@ -2130,9 +2346,13 @@
     "maxFrameBytes": 16842752,
     "maxIdempotencyRecords": 2048,
     "maxInputBytes": 1048576,
+    "maxModelSelectionBytes": 4096,
+    "maxNativeAdoptionTokenBytes": 2048,
+    "maxNativePublicCursorBytes": 8192,
     "maxPageItems": 100,
     "maxPendingEnrollments": 64,
     "maxRevisionOffers": 16,
-    "maxSubscriptions": 32
+    "maxSubscriptions": 32,
+    "nativeCursorLifetimeMs": 300000
   }
 }

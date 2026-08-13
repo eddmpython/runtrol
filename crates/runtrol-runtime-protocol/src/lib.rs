@@ -14,6 +14,7 @@ mod revision;
 mod rpc;
 mod schema;
 mod session;
+mod session_open;
 
 pub use error::{RuntimeError, RuntimeErrorKind};
 pub use integration::{
@@ -32,9 +33,9 @@ pub use models::{
     ListModelsParams, RuntimeModelCatalog, RuntimeModelChoice, RuntimeReasoningChoice,
 };
 pub use native_sessions::{
-    CatalogueCoverage, CatalogueSource, ListNativeSessionsParams, MAX_NATIVE_PUBLIC_CURSOR_BYTES,
-    NATIVE_CURSOR_LIFETIME_MS, NativeResumeCapability, NativeSessionCatalogue,
-    NativeSessionDescriptor,
+    CatalogueCoverage, CatalogueSource, ListNativeSessionsParams, MAX_NATIVE_ADOPTION_TOKEN_BYTES,
+    MAX_NATIVE_PUBLIC_CURSOR_BYTES, NATIVE_CURSOR_LIFETIME_MS, NativeResumeCapability,
+    NativeSessionCatalogue, NativeSessionDescriptor,
 };
 pub use revision::{
     FINALIZED_REVISIONS, ProtocolRevision, REVISION_2026_08_13, RevisionError, negotiate,
@@ -50,6 +51,10 @@ pub use session::{
     EventGap, IDEMPOTENCY_WINDOW_MS, InterruptParams, LaggedNotification, MAX_IDEMPOTENCY_RECORDS,
     MUTATION_CLOCK_SKEW_MS, MutationRequestId, MutationRequestIdError, RuntimeEventNotification,
     SubmitInputParams, WatchEventsParams, WatchEventsResult,
+};
+pub use session_open::{
+    AdoptNativeSessionParams, MAX_MODEL_SELECTION_BYTES, ResumeSessionParams, SessionOpenResult,
+    SessionWorkspaceAccess, StartSessionParams,
 };
 
 /// Maximum JSON payload bytes in one public Runtime frame.

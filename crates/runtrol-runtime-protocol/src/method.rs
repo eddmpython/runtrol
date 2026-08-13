@@ -39,6 +39,15 @@ pub enum RuntimeMethod {
     /// Read the Runtime-managed session catalogue.
     #[serde(rename = "sessions/list")]
     SessionsList,
+    /// Start one fresh provider-native session under an approved root.
+    #[serde(rename = "sessions/start")]
+    SessionsStart,
+    /// Adopt one officially listed native session into Runtime supervision.
+    #[serde(rename = "sessions/adoptNative")]
+    SessionsAdoptNative,
+    /// Heat one existing Runtime-managed cold session.
+    #[serde(rename = "sessions/resume")]
+    SessionsResume,
     /// Acquire the one renewable write lease for a live session.
     #[serde(rename = "sessions/acquireControl")]
     SessionsAcquireControl,
@@ -83,6 +92,9 @@ impl RuntimeMethod {
             Self::ProvidersListModels => "providers/listModels",
             Self::ProvidersListNativeSessions => "providers/listNativeSessions",
             Self::SessionsList => "sessions/list",
+            Self::SessionsStart => "sessions/start",
+            Self::SessionsAdoptNative => "sessions/adoptNative",
+            Self::SessionsResume => "sessions/resume",
             Self::SessionsAcquireControl => "sessions/acquireControl",
             Self::SessionsRenewControl => "sessions/renewControl",
             Self::SessionsReleaseControl => "sessions/releaseControl",
@@ -117,6 +129,9 @@ impl FromStr for RuntimeMethod {
             "providers/listModels" => Ok(Self::ProvidersListModels),
             "providers/listNativeSessions" => Ok(Self::ProvidersListNativeSessions),
             "sessions/list" => Ok(Self::SessionsList),
+            "sessions/start" => Ok(Self::SessionsStart),
+            "sessions/adoptNative" => Ok(Self::SessionsAdoptNative),
+            "sessions/resume" => Ok(Self::SessionsResume),
             "sessions/acquireControl" => Ok(Self::SessionsAcquireControl),
             "sessions/renewControl" => Ok(Self::SessionsRenewControl),
             "sessions/releaseControl" => Ok(Self::SessionsReleaseControl),
@@ -151,7 +166,11 @@ mod tests {
             RuntimeMethod::IntegrationsGetGrant,
             RuntimeMethod::ProvidersList,
             RuntimeMethod::ProvidersListModels,
+            RuntimeMethod::ProvidersListNativeSessions,
             RuntimeMethod::SessionsList,
+            RuntimeMethod::SessionsStart,
+            RuntimeMethod::SessionsAdoptNative,
+            RuntimeMethod::SessionsResume,
             RuntimeMethod::SessionsAcquireControl,
             RuntimeMethod::SessionsRenewControl,
             RuntimeMethod::SessionsReleaseControl,

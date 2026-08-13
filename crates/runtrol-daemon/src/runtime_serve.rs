@@ -4,16 +4,20 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::Duration;
 
+use runtrol_core::WorkspaceClaim;
 use runtrol_ipc::transport::Connection;
+use runtrol_provider::{CloseMode, Disposition, OpenIntent, WorkspaceAccess};
 use runtrol_runtime_protocol::{
-    AcquireControlParams, AppScope, ControlLeaseParams, ErrorResponse, FINALIZED_REVISIONS,
-    InitializeParams, InitializeResult, JsonRpcId, JsonRpcNotification, JsonRpcRequest,
-    JsonRpcResponse, LaggedNotification, ListModelsParams, ListNativeSessionsParams,
+    AcquireControlParams, AdoptNativeSessionParams, AppScope, ControlLeaseParams, ErrorResponse,
+    FINALIZED_REVISIONS, InitializeParams, InitializeResult, JsonRpcId, JsonRpcNotification,
+    JsonRpcRequest, JsonRpcResponse, LaggedNotification, ListModelsParams,
+    ListNativeSessionsParams, MAX_MODEL_SELECTION_BYTES, MAX_NATIVE_ADOPTION_TOKEN_BYTES,
     MAX_NATIVE_PUBLIC_CURSOR_BYTES, MAX_PAGE_ITEMS, MAX_REVISION_OFFERS, ProtocolRevision,
-    RequestEnrollmentParams, RuntimeCapabilities, RuntimeError, RuntimeErrorKind, RuntimeInstance,
-    RuntimeLimits, RuntimeMethod, RuntimeModelCatalog, RuntimeModelChoice, RuntimeReasoningChoice,
-    RuntimeSessionId, SubmitInputParams, SuccessResponse, WatchEnrollmentParams, WatchEventsParams,
-    WatchEventsResult, negotiate,
+    RequestEnrollmentParams, ResumeSessionParams, RuntimeCapabilities, RuntimeError,
+    RuntimeErrorKind, RuntimeInstance, RuntimeLimits, RuntimeMethod, RuntimeModelCatalog,
+    RuntimeModelChoice, RuntimeReasoningChoice, RuntimeSessionId, SessionWorkspaceAccess,
+    StartSessionParams, SubmitInputParams, SuccessResponse, WatchEnrollmentParams,
+    WatchEventsParams, WatchEventsResult, negotiate,
 };
 use runtrol_store::EnrollmentKey;
 use runtrol_store::IntegrationAuditOutcome;
@@ -27,9 +31,12 @@ use crate::runtime_auth::{
 };
 use crate::runtime_control::{
     RuntimeAgentGuard, RuntimeAsked, RuntimeControlFailure, RuntimeControlReply,
-    RuntimeControlRequest, RuntimeReturned, cursor_to_public,
+    RuntimeControlRequest, RuntimeOpenCompletion, RuntimeOpenGuard, RuntimeOpenRequest,
+    RuntimeReturned, cursor_to_public,
 };
-use crate::runtime_inventory::{RuntimeInventoryFailure, RuntimeSessionCatalogue};
+use crate::runtime_inventory::{
+    RuntimeInventoryFailure, RuntimeSessionCatalogue, authorized_roots, authorized_workspace,
+};
 use crate::runtime_native_sessions::{NativeCursorCodec, NativeCursorFailure};
 
 /// Serve one public connection until it closes or violates the public frame contract.
@@ -347,6 +354,23 @@ async fn dispatch_public(
                 .await
             }
             RuntimeMethod::SessionsList => sessions_list(state, composed, sessions, id, params),
+            RuntimeMethod::SessionsStart
+            | RuntimeMethod::SessionsAdoptNative
+            | RuntimeMethod::SessionsResume => {
+                open_session(
+                    state,
+                    composed,
+                    discovering,
+                    native_cursors,
+                    sessions,
+                    asking,
+                    returning,
+                    method,
+                    id,
+                    params,
+                )
+                .await
+            }
             RuntimeMethod::SessionsAcquireControl
             | RuntimeMethod::SessionsRenewControl
             | RuntimeMethod::SessionsReleaseControl
@@ -381,6 +405,10 @@ fn required_scope(method: RuntimeMethod) -> Option<AppScope> {
         RuntimeMethod::ProvidersListModels => Some(AppScope::ModelRead),
         RuntimeMethod::ProvidersListNativeSessions => Some(AppScope::SessionNativeDiscover),
         RuntimeMethod::SessionsList => Some(AppScope::SessionList),
+        RuntimeMethod::SessionsStart => Some(AppScope::SessionStart),
+        RuntimeMethod::SessionsAdoptNative | RuntimeMethod::SessionsResume => {
+            Some(AppScope::SessionResume)
+        }
         RuntimeMethod::SessionsAcquireControl | RuntimeMethod::SessionsSubmitInput => {
             Some(AppScope::SessionInputWrite)
         }
@@ -746,11 +774,13 @@ async fn list_native_sessions(
                 .map_err(|_| NativeDiscoveryFailure::Provider)?;
             let next = catalogue.next_cursor.clone();
             let mut public = crate::runtime_native_sessions::authorize_catalogue(
+                native_cursors,
                 &authority,
                 &selected_root,
                 &approved_roots,
                 managed,
                 provider,
+                prepared.binary_identity,
                 catalogue,
             )
             .map_err(NativeDiscoveryFailure::Inventory)?;
@@ -952,6 +982,586 @@ async fn session_operation(
     runtime_control_answer(id, reply, returning).await
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the public open boundary keeps closed parsing, live authority, workspace identity, and owner reservation ordering together"
+)]
+async fn open_session(
+    state: &mut PublicState,
+    composed: &Composed,
+    discovering: &Mutex<()>,
+    native_cursors: &NativeCursorCodec,
+    sessions: &RuntimeSessionCatalogue,
+    asking: &mpsc::Sender<RuntimeAsked>,
+    returning: &mpsc::UnboundedSender<RuntimeReturned>,
+    method: RuntimeMethod,
+    id: JsonRpcId,
+    params: serde_json::Value,
+) -> Answer {
+    let authority = match authorized(state, &composed.store, required_scope(method)) {
+        Ok(authority) => authority.clone(),
+        Err(failure) => return Answer::failure(id, failure),
+    };
+    let request = match build_open_request(method, params, &authority, sessions) {
+        Ok(request) => request,
+        Err(OpenAdmissionFailure::Control(failure)) => return control_failure(id, failure),
+        Err(OpenAdmissionFailure::Inventory(failure)) => return inventory_failure(id, failure),
+    };
+    let (answered, hearing) = oneshot::channel();
+    if asking
+        .send(RuntimeAsked {
+            integration: authority.key,
+            request: RuntimeControlRequest::PrepareOpen(request),
+            answered,
+        })
+        .await
+        .is_err()
+    {
+        return Answer::plain(
+            id,
+            RuntimeErrorKind::RuntimeUnavailable,
+            "the Runtime session owner stopped",
+        );
+    }
+    let Ok(reply) = hearing.await else {
+        return Answer::plain(
+            id,
+            RuntimeErrorKind::RuntimeUnavailable,
+            "the Runtime session owner stopped",
+        );
+    };
+    match reply {
+        RuntimeControlReply::Opening(opening) => {
+            perform_runtime_open(
+                state,
+                composed,
+                discovering,
+                native_cursors,
+                returning,
+                *opening,
+                id,
+            )
+            .await
+        }
+        RuntimeControlReply::Opened(result) => Answer::success(id, &result),
+        RuntimeControlReply::Failed(failure) => control_failure(id, failure),
+        RuntimeControlReply::Lease(_)
+        | RuntimeControlReply::Done
+        | RuntimeControlReply::Watching { .. }
+        | RuntimeControlReply::Sending { .. } => Answer::plain(
+            id,
+            RuntimeErrorKind::Internal,
+            "the session owner returned a mismatched open response",
+        ),
+    }
+}
+
+enum OpenAdmissionFailure {
+    Control(RuntimeControlFailure),
+    Inventory(RuntimeInventoryFailure),
+}
+
+#[expect(
+    clippy::too_many_lines,
+    reason = "closed start, adoption, and resume shapes share one explicit authority-to-owner admission boundary"
+)]
+fn build_open_request(
+    method: RuntimeMethod,
+    params: serde_json::Value,
+    authority: &AuthorizedIntegration,
+    sessions: &RuntimeSessionCatalogue,
+) -> Result<RuntimeOpenRequest, OpenAdmissionFailure> {
+    match method {
+        RuntimeMethod::SessionsStart => {
+            let params: StartSessionParams = serde_json::from_value(params).map_err(|_| {
+                OpenAdmissionFailure::Control(invalid_open("session start parameters are invalid"))
+            })?;
+            let provider = parse_open_provider(&params.provider_id)?;
+            let workspace = authorized_workspace(authority, &params.workspace)
+                .map_err(OpenAdmissionFailure::Inventory)?;
+            let access = public_open_access(params.access)?;
+            let model = params.model.map(validate_model_selection).transpose()?;
+            let claim = WorkspaceClaim::discover(workspace.path.clone(), access)
+                .map_err(|_| OpenAdmissionFailure::Control(workspace_conflict()))?;
+            Ok(RuntimeOpenRequest {
+                method,
+                request_id: params.request_id,
+                provider,
+                session: None,
+                native: None,
+                workspace: workspace.path,
+                claim,
+                model,
+                expected: None,
+                proof: None,
+            })
+        }
+        RuntimeMethod::SessionsAdoptNative => {
+            let params: AdoptNativeSessionParams =
+                serde_json::from_value(params).map_err(|_| {
+                    OpenAdmissionFailure::Control(invalid_open(
+                        "native session adoption parameters are invalid",
+                    ))
+                })?;
+            let provider = parse_open_provider(&params.provider_id)?;
+            let native = runtrol_provider::NativeSessionId::new(&params.native_session_id)
+                .map_err(|_| {
+                    OpenAdmissionFailure::Control(invalid_open(
+                        "native session identity is invalid",
+                    ))
+                })?;
+            if params.adoption_token.len() > MAX_NATIVE_ADOPTION_TOKEN_BYTES {
+                return Err(OpenAdmissionFailure::Control(invalid_open(
+                    "native session adoption proof is oversized",
+                )));
+            }
+            let workspace = authorized_workspace(authority, &params.workspace)
+                .map_err(OpenAdmissionFailure::Inventory)?;
+            let access = public_open_access(params.access)?;
+            let claim = WorkspaceClaim::discover(workspace.path.clone(), access)
+                .map_err(|_| OpenAdmissionFailure::Control(workspace_conflict()))?;
+            Ok(RuntimeOpenRequest {
+                method,
+                request_id: params.request_id,
+                provider,
+                session: None,
+                native: Some(native),
+                workspace: workspace.path,
+                claim,
+                model: None,
+                expected: None,
+                proof: Some(params.adoption_token.into()),
+            })
+        }
+        RuntimeMethod::SessionsResume => {
+            let params: ResumeSessionParams = serde_json::from_value(params).map_err(|_| {
+                OpenAdmissionFailure::Control(invalid_open("session resume parameters are invalid"))
+            })?;
+            let managed = sessions
+                .authorized_managed_session(authority, &params.session_id)
+                .map_err(OpenAdmissionFailure::Inventory)?;
+            let workspace = authorized_workspace(authority, &params.workspace)
+                .map_err(OpenAdmissionFailure::Inventory)?;
+            if workspace.path != managed.workspace
+                || params.expected_lifecycle != managed.descriptor.lifecycle
+                || params.expected_session_generation != managed.descriptor.session_generation
+            {
+                return Err(OpenAdmissionFailure::Control(session_changed()));
+            }
+            let Some(native) = managed.native else {
+                return Err(OpenAdmissionFailure::Control(RuntimeControlFailure::new(
+                    RuntimeErrorKind::CapabilityUnavailable,
+                    "the managed session has no provider-native resume identity",
+                )));
+            };
+            let native = runtrol_provider::NativeSessionId::new(&native).map_err(|_| {
+                OpenAdmissionFailure::Control(RuntimeControlFailure::new(
+                    RuntimeErrorKind::CapabilityUnavailable,
+                    "the managed session has no usable provider-native resume identity",
+                ))
+            })?;
+            let access = public_open_access(params.access)?;
+            let claim = WorkspaceClaim::discover(workspace.path.clone(), access)
+                .map_err(|_| OpenAdmissionFailure::Control(workspace_conflict()))?;
+            Ok(RuntimeOpenRequest {
+                method,
+                request_id: params.request_id,
+                provider: managed.provider,
+                session: Some(managed.session),
+                native: Some(native),
+                workspace: workspace.path,
+                claim,
+                model: None,
+                expected: Some((
+                    params.expected_lifecycle,
+                    params.expected_session_generation,
+                )),
+                proof: None,
+            })
+        }
+        _ => Err(OpenAdmissionFailure::Control(invalid_open(
+            "the method is not a session open operation",
+        ))),
+    }
+}
+
+fn parse_open_provider(
+    provider: &runtrol_runtime_protocol::ProviderId,
+) -> Result<runtrol_provider::ProviderId, OpenAdmissionFailure> {
+    runtrol_provider::ProviderId::parse(provider.as_str()).map_err(|_| {
+        OpenAdmissionFailure::Control(invalid_open("the selected provider identity is invalid"))
+    })
+}
+
+fn public_open_access(
+    access: SessionWorkspaceAccess,
+) -> Result<WorkspaceAccess, OpenAdmissionFailure> {
+    match access {
+        SessionWorkspaceAccess::Exclusive => Ok(WorkspaceAccess::Exclusive),
+        SessionWorkspaceAccess::Shared => {
+            Err(OpenAdmissionFailure::Control(RuntimeControlFailure::new(
+                RuntimeErrorKind::PresenceRequired,
+                "shared writer admission requires a local operator action",
+            )))
+        }
+    }
+}
+
+fn validate_model_selection(value: String) -> Result<Box<str>, OpenAdmissionFailure> {
+    if value.is_empty()
+        || value.len() > MAX_MODEL_SELECTION_BYTES
+        || value.chars().any(char::is_control)
+    {
+        return Err(OpenAdmissionFailure::Control(invalid_open(
+            "the model selection is empty, oversized, or invalid",
+        )));
+    }
+    Ok(value.into())
+}
+
+#[expect(
+    clippy::too_many_lines,
+    reason = "one open future owns displaced cleanup, authority refresh, provider preparation, official selection checks, cancellation, and owner return"
+)]
+async fn perform_runtime_open(
+    state: &mut PublicState,
+    composed: &Composed,
+    discovering: &Mutex<()>,
+    native_cursors: &NativeCursorCodec,
+    returning: &mpsc::UnboundedSender<RuntimeReturned>,
+    opening: crate::runtime_control::RuntimeOpening,
+    id: JsonRpcId,
+) -> Answer {
+    let mut guard = RuntimeOpenGuard::new(opening, returning.clone());
+    if let Some(displaced) = guard.take_displaced_agent()
+        && displaced
+            .close(CloseMode::Graceful { grace_ms: 0 })
+            .await
+            .is_err()
+    {
+        return send_open_denied(
+            id,
+            guard,
+            returning,
+            RuntimeControlFailure::new(
+                RuntimeErrorKind::RuntimeUnavailable,
+                "the displaced idle provider process could not be stopped safely",
+            ),
+        )
+        .await;
+    }
+    let method = match guard.opening() {
+        Some(opening) => opening.method,
+        None => return control_failure(id, RuntimeControlFailure::outcome_unknown()),
+    };
+    let authority = match authorized(state, &composed.store, required_scope(method)) {
+        Ok(authority) => authority.clone(),
+        Err(failure) => {
+            return send_open_denied(
+                id,
+                guard,
+                returning,
+                RuntimeControlFailure::new(failure.kind, failure.message),
+            )
+            .await;
+        }
+    };
+    let workspace = match guard.opening() {
+        Some(opening) => opening.workspace.clone(),
+        None => return control_failure(id, RuntimeControlFailure::outcome_unknown()),
+    };
+    match authorized_workspace(&authority, workspace.as_str()) {
+        Ok(current) if current.path == workspace => {}
+        Ok(_) | Err(_) => {
+            return send_open_denied(
+                id,
+                guard,
+                returning,
+                RuntimeControlFailure::new(
+                    RuntimeErrorKind::RootDenied,
+                    "the session workspace no longer has its approved root authority",
+                ),
+            )
+            .await;
+        }
+    }
+    let provider = match guard.opening() {
+        Some(opening) => opening.provider,
+        None => return control_failure(id, RuntimeControlFailure::outcome_unknown()),
+    };
+    let prepared = {
+        let _gate = discovering.lock().await;
+        crate::provider_prepare::prepared_driver(composed, provider).await
+    };
+    let Ok(prepared) = prepared else {
+        return send_open_denied(
+            id,
+            guard,
+            returning,
+            RuntimeControlFailure::new(
+                RuntimeErrorKind::ProviderUnavailable,
+                "the selected provider could not be prepared",
+            ),
+        )
+        .await;
+    };
+    if method == RuntimeMethod::SessionsAdoptNative {
+        let Ok(roots) = authorized_roots(&authority) else {
+            return send_open_denied(
+                id,
+                guard,
+                returning,
+                RuntimeControlFailure::new(
+                    RuntimeErrorKind::RootDenied,
+                    "an approved project root no longer has local authority",
+                ),
+            )
+            .await;
+        };
+        let verified = guard.opening().is_some_and(|opening| {
+            let (Some(native), Some(proof)) = (&opening.native, &opening.proof) else {
+                return false;
+            };
+            native_cursors
+                .open_adoption(
+                    &authority,
+                    &roots,
+                    provider,
+                    prepared.binary_identity,
+                    native.as_str(),
+                    &opening.workspace,
+                    proof,
+                )
+                .is_ok()
+        });
+        if !verified {
+            return send_open_denied(
+                id,
+                guard,
+                returning,
+                RuntimeControlFailure::new(
+                    RuntimeErrorKind::CapabilityUnavailable,
+                    "the native catalogue observation expired or no longer matches the provider",
+                ),
+            )
+            .await;
+        }
+    }
+    if let Some(model) = guard.opening().and_then(|opening| opening.model.as_deref()) {
+        let discovered = prepared.driver.models().await;
+        if !discovered.is_ok_and(|catalogue| model_is_current(&catalogue, model)) {
+            return send_open_denied(
+                id,
+                guard,
+                returning,
+                RuntimeControlFailure::new(
+                    RuntimeErrorKind::ModelUnavailable,
+                    "the selected model is not present in the provider's current catalogue",
+                ),
+            )
+            .await;
+        }
+    }
+    let intent = match guard.opening() {
+        Some(opening) => OpenIntent {
+            session: opening.session,
+            workspace: opening.workspace.clone(),
+            disposition: if opening.method == RuntimeMethod::SessionsStart {
+                Disposition::Fresh
+            } else {
+                let Some(native) = &opening.native else {
+                    return send_open_denied(
+                        id,
+                        guard,
+                        returning,
+                        RuntimeControlFailure::new(
+                            RuntimeErrorKind::CapabilityUnavailable,
+                            "the session has no provider-native resume identity",
+                        ),
+                    )
+                    .await;
+                };
+                Disposition::Resume {
+                    native: native.as_str().into(),
+                }
+            },
+            model: opening.model.clone(),
+            permission: None,
+        },
+        None => return control_failure(id, RuntimeControlFailure::outcome_unknown()),
+    };
+    let opened = tokio::time::timeout(
+        Duration::from_millis(crate::serve::MODEL_PREPARATION_BUDGET_MS),
+        prepared.driver.open(intent.clone()),
+    )
+    .await;
+    match opened {
+        Ok(Ok(agent)) => {
+            let still_authorized = match authorized(state, &composed.store, required_scope(method))
+            {
+                Ok(authority) => authorized_workspace(authority, workspace.as_str())
+                    .is_ok_and(|current| current.path == workspace),
+                Err(_) => false,
+            };
+            if !still_authorized {
+                drop(agent.close(CloseMode::Kill).await);
+                return send_open_unknown(id, guard, returning).await;
+            }
+            send_opened(id, guard, returning, intent, agent).await
+        }
+        Ok(Err(_)) | Err(_) => send_open_unknown(id, guard, returning).await,
+    }
+}
+
+fn model_is_current(catalogue: &runtrol_provider::ModelCatalog, selected: &str) -> bool {
+    match catalogue {
+        runtrol_provider::ModelCatalog::Known { models } => {
+            models.iter().any(|model| model.id.as_ref() == selected)
+        }
+        runtrol_provider::ModelCatalog::Aliases { aliases, .. } => {
+            aliases.iter().any(|alias| alias.as_ref() == selected)
+        }
+        runtrol_provider::ModelCatalog::Partial {
+            aliases, models, ..
+        } => {
+            aliases.iter().any(|alias| alias.as_ref() == selected)
+                || models.iter().any(|model| model.id.as_ref() == selected)
+        }
+        _ => false,
+    }
+}
+
+async fn send_open_denied(
+    id: JsonRpcId,
+    guard: RuntimeOpenGuard,
+    returning: &mpsc::UnboundedSender<RuntimeReturned>,
+    failure: RuntimeControlFailure,
+) -> Answer {
+    let Some(opening) = guard.take() else {
+        return control_failure(id, RuntimeControlFailure::outcome_unknown());
+    };
+    let (answered, hearing) = oneshot::channel();
+    if returning
+        .send(RuntimeReturned::OpenDenied {
+            opening,
+            failure,
+            answered,
+        })
+        .is_err()
+    {
+        return runtime_owner_stopped(id);
+    }
+    match hearing.await {
+        Ok(completion) => finish_open_completion(id, completion, returning).await,
+        Err(_) => runtime_owner_stopped(id),
+    }
+}
+
+async fn send_open_unknown(
+    id: JsonRpcId,
+    guard: RuntimeOpenGuard,
+    returning: &mpsc::UnboundedSender<RuntimeReturned>,
+) -> Answer {
+    let Some(opening) = guard.take() else {
+        return control_failure(id, RuntimeControlFailure::outcome_unknown());
+    };
+    let (answered, hearing) = oneshot::channel();
+    if returning
+        .send(RuntimeReturned::OpenUnknown { opening, answered })
+        .is_err()
+    {
+        return runtime_owner_stopped(id);
+    }
+    match hearing.await {
+        Ok(completion) => finish_open_completion(id, completion, returning).await,
+        Err(_) => runtime_owner_stopped(id),
+    }
+}
+
+async fn send_opened(
+    id: JsonRpcId,
+    guard: RuntimeOpenGuard,
+    returning: &mpsc::UnboundedSender<RuntimeReturned>,
+    intent: OpenIntent,
+    agent: Box<dyn runtrol_provider::Agent>,
+) -> Answer {
+    let Some(opening) = guard.take() else {
+        drop(agent);
+        return control_failure(id, RuntimeControlFailure::outcome_unknown());
+    };
+    let (answered, hearing) = oneshot::channel();
+    if returning
+        .send(RuntimeReturned::Opened {
+            opening,
+            intent,
+            agent,
+            answered,
+        })
+        .is_err()
+    {
+        return runtime_owner_stopped(id);
+    }
+    match hearing.await {
+        Ok(completion) => finish_open_completion(id, completion, returning).await,
+        Err(_) => runtime_owner_stopped(id),
+    }
+}
+
+async fn finish_open_completion(
+    id: JsonRpcId,
+    completion: RuntimeOpenCompletion,
+    returning: &mpsc::UnboundedSender<RuntimeReturned>,
+) -> Answer {
+    match completion {
+        RuntimeOpenCompletion::Answer(Ok(result)) => Answer::success(id, &result),
+        RuntimeOpenCompletion::Answer(Err(failure)) => control_failure(id, failure),
+        RuntimeOpenCompletion::Cleanup { agent, reservation } => {
+            drop(agent.close(CloseMode::Kill).await);
+            let (answered, hearing) = oneshot::channel();
+            if returning
+                .send(RuntimeReturned::OpenCleaned {
+                    reservation,
+                    answered,
+                })
+                .is_err()
+            {
+                return runtime_owner_stopped(id);
+            }
+            match hearing.await {
+                Ok(Ok(result)) => Answer::success(id, &result),
+                Ok(Err(failure)) => control_failure(id, failure),
+                Err(_) => runtime_owner_stopped(id),
+            }
+        }
+    }
+}
+
+fn runtime_owner_stopped(id: JsonRpcId) -> Answer {
+    Answer::plain(
+        id,
+        RuntimeErrorKind::RuntimeUnavailable,
+        "the Runtime session owner stopped",
+    )
+}
+
+const fn invalid_open(message: &'static str) -> RuntimeControlFailure {
+    RuntimeControlFailure::new(RuntimeErrorKind::InvalidRequest, message)
+}
+
+const fn workspace_conflict() -> RuntimeControlFailure {
+    RuntimeControlFailure::new(
+        RuntimeErrorKind::WorkspaceConflict,
+        "the workspace identity could not be established safely",
+    )
+}
+
+const fn session_changed() -> RuntimeControlFailure {
+    RuntimeControlFailure::new(
+        RuntimeErrorKind::SessionConflict,
+        "the session changed after the caller observed it",
+    )
+}
+
 enum ParsedSessionOperation {
     Acquire(AcquireControlParams),
     Renew(ControlLeaseParams),
@@ -1034,6 +1644,9 @@ fn parse_session_operation(
         | RuntimeMethod::ProvidersListModels
         | RuntimeMethod::ProvidersListNativeSessions
         | RuntimeMethod::SessionsList
+        | RuntimeMethod::SessionsStart
+        | RuntimeMethod::SessionsAdoptNative
+        | RuntimeMethod::SessionsResume
         | RuntimeMethod::SessionsEvent
         | RuntimeMethod::SessionsLagged
         | RuntimeMethod::PanicStop => Err("the method is not a session operation"),
@@ -1063,6 +1676,12 @@ async fn runtime_control_answer(
                 "the Runtime session owner stopped",
             ),
         },
+        RuntimeControlReply::Opened(result) => Answer::success(id, &result),
+        RuntimeControlReply::Opening(_) => Answer::plain(
+            id,
+            RuntimeErrorKind::Internal,
+            "a session open reservation reached the ordinary control response path",
+        ),
     }
 }
 
@@ -1404,6 +2023,42 @@ listen = "stdio"
         provider: runtrol_provider::ProviderId,
     }
 
+    struct NativeFixtureAgent {
+        session: runtrol_provider::SessionId,
+        native: String,
+    }
+
+    #[async_trait::async_trait]
+    impl runtrol_provider::Agent for NativeFixtureAgent {
+        fn session(&self) -> runtrol_provider::SessionId {
+            self.session
+        }
+
+        fn native(&self) -> Option<&str> {
+            Some(&self.native)
+        }
+
+        async fn send(
+            &mut self,
+            _command: runtrol_provider::AgentCommand,
+        ) -> Result<(), runtrol_provider::ProviderError> {
+            Ok(())
+        }
+
+        async fn next(
+            &mut self,
+        ) -> Option<Result<runtrol_provider::Produced, runtrol_provider::ProviderError>> {
+            core::future::pending().await
+        }
+
+        async fn close(
+            self: Box<Self>,
+            _how: runtrol_provider::CloseMode,
+        ) -> Result<(), runtrol_provider::ProviderError> {
+            Ok(())
+        }
+    }
+
     #[async_trait::async_trait]
     impl runtrol_provider::Provider for NativeFixtureProvider {
         fn id(&self) -> runtrol_provider::ProviderId {
@@ -1445,13 +2100,23 @@ listen = "stdio"
 
         async fn open(
             &self,
-            _intent: runtrol_provider::OpenIntent,
+            intent: runtrol_provider::OpenIntent,
         ) -> Result<Box<dyn runtrol_provider::Agent>, runtrol_provider::ProviderError> {
-            Err(runtrol_provider::ProviderError::Unsupported {
-                provider: self.provider,
-                what: "opening a fixture session".to_owned(),
-                why: "this fixture exists only for native catalogue discovery",
-            })
+            let native = match &intent.disposition {
+                runtrol_provider::Disposition::Fresh => intent.session.to_string(),
+                runtrol_provider::Disposition::Resume { native } => native.to_string(),
+                other => {
+                    return Err(runtrol_provider::ProviderError::Unsupported {
+                        provider: self.provider,
+                        what: format!("opening with {other:?}"),
+                        why: "the fixture supports only fresh and resumed sessions",
+                    });
+                }
+            };
+            Ok(Box::new(NativeFixtureAgent {
+                session: intent.session,
+                native,
+            }))
         }
     }
 
@@ -1562,6 +2227,28 @@ listen = "stdio"
         let project_identity = runtrol_security::ProjectRootIdentity::read(&project)
             .expect("read approved project identity")
             .to_bytes();
+        let start_project_path = directory.join("start-project");
+        std::fs::create_dir(&start_project_path).expect("create session start project");
+        let start_project = runtrol_provider::AbsPath::canonicalize(
+            start_project_path
+                .to_str()
+                .expect("UTF-8 session start project"),
+        )
+        .expect("canonical session start project");
+        let start_project_identity = runtrol_security::ProjectRootIdentity::read(&start_project)
+            .expect("read session start project identity")
+            .to_bytes();
+        let resume_project_path = directory.join("resume-project");
+        std::fs::create_dir(&resume_project_path).expect("create session resume project");
+        let resume_project = runtrol_provider::AbsPath::canonicalize(
+            resume_project_path
+                .to_str()
+                .expect("UTF-8 session resume project"),
+        )
+        .expect("canonical session resume project");
+        let resume_project_identity = runtrol_security::ProjectRootIdentity::read(&resume_project)
+            .expect("read session resume project identity")
+            .to_bytes();
         let endpoint = if cfg!(windows) {
             format!(r"\\.\pipe\runtrol-runtime-public-{}", std::process::id())
         } else {
@@ -1598,12 +2285,17 @@ listen = "stdio"
             crate::runtime_inventory::RuntimeSessionCatalogue::one_for_tests(
                 fixture_provider,
                 "fixture-native-one",
-                &project,
+                &resume_project,
             ),
         );
         let (_publishing, watching) = watch::channel(sessions);
-        let (runtime_asking, _runtime_asked) = mpsc::channel(1);
-        let (runtime_returning, _runtime_returned) = mpsc::unbounded_channel();
+        let (runtime_asking, runtime_asked) = mpsc::channel(1);
+        let (runtime_returning, runtime_returned) = mpsc::unbounded_channel();
+        let owning = tokio::spawn(crate::runtime_control::fixture_runtime_owner(
+            Arc::clone(&composed),
+            runtime_asked,
+            runtime_returned,
+        ));
         let discovering = Arc::new(Mutex::new(()));
         let native_cursors =
             Arc::new(NativeCursorCodec::new().expect("create native catalogue cursor authority"));
@@ -1658,8 +2350,14 @@ listen = "stdio"
                     AppScope::ProviderRead,
                     AppScope::ModelRead,
                     AppScope::SessionNativeDiscover,
+                    AppScope::SessionStart,
+                    AppScope::SessionResume,
                 ],
-                vec![project.to_string()],
+                vec![
+                    project.to_string(),
+                    start_project.to_string(),
+                    resume_project.to_string(),
+                ],
             ))
             .await
             .expect("request enrollment");
@@ -1685,11 +2383,23 @@ listen = "stdio"
                         AppScope::ProviderRead.as_str().into(),
                         AppScope::ModelRead.as_str().into(),
                         AppScope::SessionNativeDiscover.as_str().into(),
+                        AppScope::SessionStart.as_str().into(),
+                        AppScope::SessionResume.as_str().into(),
                     ],
-                    roots: vec![runtrol_store::IntegrationRootRow {
-                        path: project.as_str().into(),
-                        identity: project_identity,
-                    }],
+                    roots: vec![
+                        runtrol_store::IntegrationRootRow {
+                            path: project.as_str().into(),
+                            identity: project_identity,
+                        },
+                        runtrol_store::IntegrationRootRow {
+                            path: start_project.as_str().into(),
+                            identity: start_project_identity,
+                        },
+                        runtrol_store::IntegrationRootRow {
+                            path: resume_project.as_str().into(),
+                            identity: resume_project_identity,
+                        },
+                    ],
                     key_generation: 1,
                     grant_generation: 1,
                     approved_at: runtrol_provider::WallMs::now(),
@@ -1746,6 +2456,74 @@ listen = "stdio"
                 .first()
                 .is_some_and(|session| session.already_managed_as.is_some())
         );
+        let managed_session = first
+            .sessions
+            .first()
+            .and_then(|session| session.already_managed_as.clone())
+            .expect("managed native fixture identity");
+        let stored_session = managed_session
+            .as_str()
+            .parse::<runtrol_provider::SessionId>()
+            .expect("managed Runtime session identity");
+        let now = runtrol_provider::WallMs::now();
+        composed
+            .store
+            .put_session(
+                stored_session,
+                &runtrol_store::SessionRow {
+                    provider: fixture_provider,
+                    native: runtrol_provider::NativeSessionId::new("fixture-native-one")
+                        .expect("fixture native identity"),
+                    cwd: resume_project.clone(),
+                    label: None,
+                    created_at: now,
+                    last_seen_at: now,
+                    pinned: false,
+                    archived: false,
+                    forked_from: None,
+                    live: None,
+                },
+            )
+            .expect("store managed resume pointer");
+        let resume_params = runtrol_runtime_protocol::ResumeSessionParams {
+            request_id: runtrol_runtime_protocol::MutationRequestId::now(),
+            session_id: managed_session.clone(),
+            expected_lifecycle: runtrol_runtime_protocol::LifecycleState::Cold,
+            expected_session_generation: 0,
+            workspace: resume_project.to_string(),
+            access: runtrol_runtime_protocol::SessionWorkspaceAccess::Exclusive,
+        };
+        let resumed = approved
+            .sessions()
+            .resume(&resume_params)
+            .await
+            .expect("resume an exact managed cold session");
+        assert_eq!(resumed.session.session_id, managed_session);
+        assert_eq!(
+            approved
+                .sessions()
+                .resume(&resume_params)
+                .await
+                .expect("replay exact session resume"),
+            resumed
+        );
+        let stale_resume = approved
+            .sessions()
+            .resume(&runtrol_runtime_protocol::ResumeSessionParams {
+                request_id: runtrol_runtime_protocol::MutationRequestId::now(),
+                session_id: managed_session,
+                expected_lifecycle: runtrol_runtime_protocol::LifecycleState::Cold,
+                expected_session_generation: 1,
+                workspace: resume_project.to_string(),
+                access: runtrol_runtime_protocol::SessionWorkspaceAccess::Exclusive,
+            })
+            .await
+            .expect_err("stale resume generation is rejected");
+        assert!(matches!(
+            stale_resume,
+            runtrol_runtime_client::ClientError::Runtime(error)
+                if error.code == RuntimeErrorKind::SessionConflict
+        ));
         let denied_root = approved
             .providers()
             .list_native_sessions(runtrol_runtime_protocol::ListNativeSessionsParams {
@@ -1790,6 +2568,91 @@ listen = "stdio"
             .expect("second native catalogue page");
         assert_eq!(second.sessions.len(), 1);
         assert!(second.next_cursor.is_none());
+        let native = second.sessions.first().expect("second native session");
+        let adoption_token = native
+            .adoption_token
+            .clone()
+            .expect("unmanaged resumable session has an adoption proof");
+
+        let start_params = runtrol_runtime_protocol::StartSessionParams {
+            request_id: runtrol_runtime_protocol::MutationRequestId::now(),
+            provider_id: runtrol_runtime_protocol::ProviderId::new("native-fixture"),
+            workspace: start_project.to_string(),
+            access: runtrol_runtime_protocol::SessionWorkspaceAccess::Exclusive,
+            model: None,
+        };
+        let started = approved
+            .sessions()
+            .start(&start_params)
+            .await
+            .expect("start an authorized fresh session");
+        let repeated = approved
+            .sessions()
+            .start(&start_params)
+            .await
+            .expect("replay the exact session start");
+        assert_eq!(repeated, started);
+        let mut changed_start = start_params.clone();
+        changed_start.model = Some("changed-model".to_owned());
+        let conflict = approved
+            .sessions()
+            .start(&changed_start)
+            .await
+            .expect_err("changed start parameters cannot reuse a mutation identity");
+        assert!(matches!(
+            conflict,
+            runtrol_runtime_client::ClientError::Runtime(error)
+                if error.code == RuntimeErrorKind::IdempotencyConflict
+        ));
+        let shared = approved
+            .sessions()
+            .start(&runtrol_runtime_protocol::StartSessionParams {
+                request_id: runtrol_runtime_protocol::MutationRequestId::now(),
+                provider_id: runtrol_runtime_protocol::ProviderId::new("native-fixture"),
+                workspace: start_project.to_string(),
+                access: runtrol_runtime_protocol::SessionWorkspaceAccess::Shared,
+                model: None,
+            })
+            .await
+            .expect_err("public shared writer admission requires local presence");
+        assert!(matches!(
+            shared,
+            runtrol_runtime_client::ClientError::Runtime(error)
+                if error.code == RuntimeErrorKind::PresenceRequired
+        ));
+
+        let mut invalid_token = adoption_token.clone();
+        invalid_token.push('x');
+        let invalid_adoption = approved
+            .sessions()
+            .adopt_native(&runtrol_runtime_protocol::AdoptNativeSessionParams {
+                request_id: runtrol_runtime_protocol::MutationRequestId::now(),
+                provider_id: runtrol_runtime_protocol::ProviderId::new("native-fixture"),
+                native_session_id: native.native_session_id.clone(),
+                workspace: project.to_string(),
+                access: runtrol_runtime_protocol::SessionWorkspaceAccess::Exclusive,
+                adoption_token: invalid_token,
+            })
+            .await
+            .expect_err("modified adoption proof is rejected");
+        assert!(matches!(
+            invalid_adoption,
+            runtrol_runtime_client::ClientError::Runtime(error)
+                if error.code == RuntimeErrorKind::CapabilityUnavailable
+        ));
+        let adopted = approved
+            .sessions()
+            .adopt_native(&runtrol_runtime_protocol::AdoptNativeSessionParams {
+                request_id: runtrol_runtime_protocol::MutationRequestId::now(),
+                provider_id: runtrol_runtime_protocol::ProviderId::new("native-fixture"),
+                native_session_id: native.native_session_id.clone(),
+                workspace: project.to_string(),
+                access: runtrol_runtime_protocol::SessionWorkspaceAccess::Exclusive,
+                adoption_token,
+            })
+            .await
+            .expect("adopt an exact native catalogue observation");
+        assert_eq!(adopted.session.provider_id.as_str(), "native-fixture");
         let unavailable = approved
             .providers()
             .list_models(runtrol_runtime_protocol::ProviderId::new("not-registered"))
@@ -1818,6 +2681,7 @@ listen = "stdio"
         ));
         drop(approved);
         serving.await.expect("public server task finishes");
+        owning.await.expect("Runtime owner task finishes");
         drop(published);
         drop(composed);
         drop(std::fs::remove_dir_all(directory));

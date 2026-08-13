@@ -2,15 +2,16 @@
 
 use base64ct::{Base64UrlUnpadded, Encoding as _};
 use runtrol_runtime_protocol::{
-    AcquireControlParams, AppScope, CHALLENGE_LIFETIME_MS, ClientCapabilities, ClientInfo,
-    ControlLease, ControlLeaseParams, EnrollmentDecision, EnrollmentManifest, EnrollmentReceipt,
-    ErrorResponse, FINALIZED_REVISIONS, InitializeParams, InitializeResult,
-    IntegrationAuthentication, IntegrationGrant, JsonRpcId, JsonRpcNotification, JsonRpcRequest,
-    JsonRpcResponse, LaggedNotification, ListModelsParams, ListNativeSessionsParams,
-    ManagedSessionList, NativeSessionCatalogue, PendingEnrollmentId, ProviderId, ProviderList,
-    RequestEnrollmentParams, RuntimeEventNotification, RuntimeMethod, RuntimeModelCatalog,
-    RuntimeSessionId, ServerChallenge, SubmitInputParams, SuccessResponse, WatchEnrollmentParams,
-    WatchEventsParams, WatchEventsResult, enrollment_signing_payload,
+    AcquireControlParams, AdoptNativeSessionParams, AppScope, CHALLENGE_LIFETIME_MS,
+    ClientCapabilities, ClientInfo, ControlLease, ControlLeaseParams, EnrollmentDecision,
+    EnrollmentManifest, EnrollmentReceipt, ErrorResponse, FINALIZED_REVISIONS, InitializeParams,
+    InitializeResult, IntegrationAuthentication, IntegrationGrant, JsonRpcId, JsonRpcNotification,
+    JsonRpcRequest, JsonRpcResponse, LaggedNotification, ListModelsParams,
+    ListNativeSessionsParams, ManagedSessionList, NativeSessionCatalogue, PendingEnrollmentId,
+    ProviderId, ProviderList, RequestEnrollmentParams, ResumeSessionParams,
+    RuntimeEventNotification, RuntimeMethod, RuntimeModelCatalog, RuntimeSessionId,
+    ServerChallenge, SessionOpenResult, StartSessionParams, SubmitInputParams, SuccessResponse,
+    WatchEnrollmentParams, WatchEventsParams, WatchEventsResult, enrollment_signing_payload,
     initialization_signing_payload,
 };
 use serde::Serialize;
@@ -598,6 +599,48 @@ impl SessionClient<'_> {
             .await
     }
 
+    /// Start one fresh provider-native session under an exact authorized workspace.
+    ///
+    /// # Errors
+    ///
+    /// Public client and Runtime failures, including stale provider inventory, root denial, and ambiguous provider I/O.
+    pub async fn start(
+        &mut self,
+        params: &StartSessionParams,
+    ) -> Result<SessionOpenResult, ClientError> {
+        self.runtime
+            .call(RuntimeMethod::SessionsStart, params)
+            .await
+    }
+
+    /// Adopt one exact provider-native catalogue observation into Runtime supervision.
+    ///
+    /// # Errors
+    ///
+    /// Public client and Runtime failures, including expired adoption proof and ambiguous provider I/O.
+    pub async fn adopt_native(
+        &mut self,
+        params: &AdoptNativeSessionParams,
+    ) -> Result<SessionOpenResult, ClientError> {
+        self.runtime
+            .call(RuntimeMethod::SessionsAdoptNative, params)
+            .await
+    }
+
+    /// Heat one observed cold Runtime-managed session.
+    ///
+    /// # Errors
+    ///
+    /// Public client and Runtime failures, including changed lifecycle generation and ambiguous provider I/O.
+    pub async fn resume(
+        &mut self,
+        params: &ResumeSessionParams,
+    ) -> Result<SessionOpenResult, ClientError> {
+        self.runtime
+            .call(RuntimeMethod::SessionsResume, params)
+            .await
+    }
+
     /// Atomically acquire one renewable write-control lease against the observed session generation.
     ///
     /// # Errors
@@ -759,6 +802,9 @@ impl EventSubscription<'_> {
             | RuntimeMethod::ProvidersListModels
             | RuntimeMethod::ProvidersListNativeSessions
             | RuntimeMethod::SessionsList
+            | RuntimeMethod::SessionsStart
+            | RuntimeMethod::SessionsAdoptNative
+            | RuntimeMethod::SessionsResume
             | RuntimeMethod::SessionsAcquireControl
             | RuntimeMethod::SessionsRenewControl
             | RuntimeMethod::SessionsReleaseControl

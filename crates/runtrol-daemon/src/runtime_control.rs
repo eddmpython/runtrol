@@ -7,13 +7,19 @@ use std::collections::BTreeMap;
 use std::str::FromStr as _;
 
 use hmac::{Hmac, Mac as _};
-use runtrol_core::{Lifecycle, SessionManager, SessionView, TakenAgent};
-use runtrol_provider::{AgentCommand, ContentBlock, SessionId, StreamId, WallMs, WatchCursor};
+use runtrol_core::{
+    ClosingReservation, OpenReservation, SessionManager, SessionView, TakenAgent, WorkspaceClaim,
+};
+use runtrol_core::{Lifecycle, SessionError};
+use runtrol_provider::{
+    AbsPath, Agent, AgentCommand, ContentBlock, NativeSessionId, OpenIntent, ProviderId, SessionId,
+    StreamId, WallMs, WatchCursor,
+};
 use runtrol_runtime_protocol::{
     AcquireControlParams, CONTROL_LEASE_LIFETIME_MS, ControlLease, ControlLeaseParams, EventCursor,
     IDEMPOTENCY_WINDOW_MS, LifecycleState, MAX_INPUT_BYTES, MUTATION_CLOCK_SKEW_MS,
-    MutationRequestId, RuntimeErrorKind, RuntimeMethod, SubmitInputParams, WatchEventsParams,
-    WatchEventsResult,
+    MutationRequestId, RuntimeErrorKind, RuntimeMethod, SessionDescriptor, SessionOpenResult,
+    SubmitInputParams, WatchEventsParams, WatchEventsResult,
 };
 use runtrol_store::{
     IntegrationKey, IntegrationMutationKey, IntegrationMutationRow, IntegrationMutationState, Store,
@@ -30,6 +36,7 @@ pub(crate) struct RuntimeAsked {
 
 /// Public session operations after scope, root, and public identity authorization.
 pub(crate) enum RuntimeControlRequest {
+    PrepareOpen(RuntimeOpenRequest),
     Acquire {
         session: SessionId,
         params: AcquireControlParams,
@@ -70,7 +77,56 @@ pub(crate) enum RuntimeControlReply {
         taken: TakenAgent,
         command: AgentCommand,
     },
+    Opening(Box<RuntimeOpening>),
+    Opened(SessionOpenResult),
     Failed(RuntimeControlFailure),
+}
+
+/// One authorized open mutation before it reserves Core process authority.
+pub(crate) struct RuntimeOpenRequest {
+    pub(crate) method: RuntimeMethod,
+    pub(crate) request_id: MutationRequestId,
+    pub(crate) provider: ProviderId,
+    pub(crate) session: Option<SessionId>,
+    pub(crate) native: Option<NativeSessionId>,
+    pub(crate) workspace: AbsPath,
+    pub(crate) claim: WorkspaceClaim,
+    pub(crate) model: Option<Box<str>>,
+    pub(crate) expected: Option<(LifecycleState, u64)>,
+    pub(crate) proof: Option<Box<str>>,
+}
+
+/// One mutation intent and reserved Core slot handed to a connection for slow provider work.
+pub(crate) struct RuntimeOpening {
+    pub(crate) mutation: IntegrationMutationKey,
+    pub(crate) integration: IntegrationKey,
+    pub(crate) method: RuntimeMethod,
+    pub(crate) provider: ProviderId,
+    pub(crate) session: SessionId,
+    pub(crate) native: Option<NativeSessionId>,
+    pub(crate) workspace: AbsPath,
+    pub(crate) model: Option<Box<str>>,
+    pub(crate) proof: Option<Box<str>>,
+    pub(crate) reservation: OpenReservation,
+    pub(crate) displaced_agent: Option<Box<dyn Agent>>,
+    pub(crate) displaced_reservation: Option<ClosingReservation>,
+    lease_id: String,
+    lease_generation: u64,
+}
+
+/// Cleanup authority returned to the connection because process stopping must not block the owner.
+pub(crate) enum RuntimeOpenCleanup {
+    Open(OpenReservation),
+    Closing(ClosingReservation),
+}
+
+/// Intermediate result from attaching an asynchronously opened provider process.
+pub(crate) enum RuntimeOpenCompletion {
+    Answer(Result<SessionOpenResult, RuntimeControlFailure>),
+    Cleanup {
+        agent: Box<dyn Agent>,
+        reservation: RuntimeOpenCleanup,
+    },
 }
 
 /// A provider command returning to the session owner.
@@ -85,6 +141,69 @@ pub(crate) enum RuntimeReturned {
         mutation: IntegrationMutationKey,
         lease: runtrol_core::AgentLease,
     },
+    Opened {
+        opening: RuntimeOpening,
+        intent: OpenIntent,
+        agent: Box<dyn Agent>,
+        answered: oneshot::Sender<RuntimeOpenCompletion>,
+    },
+    OpenDenied {
+        opening: RuntimeOpening,
+        failure: RuntimeControlFailure,
+        answered: oneshot::Sender<RuntimeOpenCompletion>,
+    },
+    OpenUnknown {
+        opening: RuntimeOpening,
+        answered: oneshot::Sender<RuntimeOpenCompletion>,
+    },
+    OpenAbandoned {
+        opening: RuntimeOpening,
+    },
+    OpenCleaned {
+        reservation: RuntimeOpenCleanup,
+        answered: oneshot::Sender<Result<SessionOpenResult, RuntimeControlFailure>>,
+    },
+}
+
+/// Cancellation guard for one process slot and durable pending mutation held outside the owner task.
+pub(crate) struct RuntimeOpenGuard {
+    opening: Option<RuntimeOpening>,
+    returning: mpsc::UnboundedSender<RuntimeReturned>,
+}
+
+impl RuntimeOpenGuard {
+    pub(crate) fn new(
+        opening: RuntimeOpening,
+        returning: mpsc::UnboundedSender<RuntimeReturned>,
+    ) -> Self {
+        Self {
+            opening: Some(opening),
+            returning,
+        }
+    }
+
+    pub(crate) fn take(mut self) -> Option<RuntimeOpening> {
+        self.opening.take()
+    }
+
+    pub(crate) fn opening(&self) -> Option<&RuntimeOpening> {
+        self.opening.as_ref()
+    }
+
+    pub(crate) fn take_displaced_agent(&mut self) -> Option<Box<dyn Agent>> {
+        self.opening.as_mut()?.displaced_agent.take()
+    }
+}
+
+impl Drop for RuntimeOpenGuard {
+    fn drop(&mut self) {
+        if let Some(opening) = self.opening.take() {
+            drop(
+                self.returning
+                    .send(RuntimeReturned::OpenAbandoned { opening }),
+            );
+        }
+    }
 }
 
 /// Guard that reports cancellation while a provider process is outside the owner.
@@ -131,7 +250,7 @@ pub(crate) struct RuntimeControlFailure {
 }
 
 impl RuntimeControlFailure {
-    const fn new(kind: RuntimeErrorKind, message: &'static str) -> Self {
+    pub(crate) const fn new(kind: RuntimeErrorKind, message: &'static str) -> Self {
         Self { kind, message }
     }
 
@@ -142,7 +261,7 @@ impl RuntimeControlFailure {
         )
     }
 
-    const fn outcome_unknown() -> Self {
+    pub(crate) const fn outcome_unknown() -> Self {
         Self::new(
             RuntimeErrorKind::OutcomeUnknown,
             "the mutation may have happened and cannot be repeated safely",
@@ -161,6 +280,7 @@ enum MutationOutcome {
     Pending,
     Lease(ControlLease),
     Done,
+    Open(SessionOpenResult),
     Failed(RuntimeControlFailure),
 }
 
@@ -211,6 +331,9 @@ impl RuntimeControl {
         request: RuntimeControlRequest,
     ) -> RuntimeControlReply {
         match request {
+            RuntimeControlRequest::PrepareOpen(request) => {
+                self.prepare_open(store, sessions, integration, request)
+            }
             RuntimeControlRequest::Acquire { session, params } => {
                 self.acquire(store, sessions, integration, session, &params)
             }
@@ -231,6 +354,238 @@ impl RuntimeControl {
                 params,
                 subscription_id,
             } => Self::watch(sessions, session, &params, subscription_id),
+        }
+    }
+
+    /// Attach one provider process, persist any known structural pointer, and grant initiating integration control.
+    pub(crate) fn finish_open(
+        &mut self,
+        store: &Store,
+        sessions: &mut SessionManager,
+        opening: RuntimeOpening,
+        intent: &OpenIntent,
+        agent: Box<dyn Agent>,
+    ) -> RuntimeOpenCompletion {
+        let RuntimeOpening {
+            mutation,
+            integration,
+            provider,
+            session,
+            reservation,
+            displaced_agent: _,
+            displaced_reservation,
+            lease_id,
+            lease_generation,
+            ..
+        } = opening;
+        if let Some(displaced_reservation) = displaced_reservation {
+            sessions.release_closing(displaced_reservation);
+        }
+        let attached = match sessions.attach_opened(reservation, provider, intent, agent) {
+            Ok(attached) => attached,
+            Err(error) => {
+                let (_error, agent, reservation) = error.into_parts();
+                return RuntimeOpenCompletion::Cleanup {
+                    agent,
+                    reservation: RuntimeOpenCleanup::Open(reservation),
+                };
+            }
+        };
+        if crate::dispatch::persist_live_from_store(store, sessions, attached.session).is_err() {
+            return match sessions.close(attached.session) {
+                Ok(closing) => RuntimeOpenCompletion::Cleanup {
+                    agent: closing.agent,
+                    reservation: RuntimeOpenCleanup::Closing(closing.reservation),
+                },
+                Err(_) => {
+                    RuntimeOpenCompletion::Answer(Err(RuntimeControlFailure::outcome_unknown()))
+                }
+            };
+        }
+        let Some(live) = sessions.live_session(session) else {
+            return RuntimeOpenCompletion::Answer(Err(RuntimeControlFailure::outcome_unknown()));
+        };
+        let control = ControlLease {
+            lease_id,
+            session_id: runtrol_runtime_protocol::RuntimeSessionId::new(session.to_string()),
+            session_generation: live.state.generation(),
+            lease_generation,
+            expires_at_ms: WallMs::now()
+                .as_millis()
+                .saturating_add(CONTROL_LEASE_LIFETIME_MS),
+        };
+        self.leases.insert(
+            session,
+            LeaseState {
+                integration,
+                public: control.clone(),
+                stream: live.stream,
+            },
+        );
+        let result = SessionOpenResult {
+            session: SessionDescriptor {
+                session_id: control.session_id.clone(),
+                provider_id: runtrol_runtime_protocol::ProviderId::new(provider.as_str()),
+                lifecycle: public_lifecycle(live.state.lifecycle()),
+                session_generation: live.state.generation(),
+                label: None,
+            },
+            control,
+        };
+        match self.finish(store, mutation, MutationOutcome::Open(result.clone())) {
+            Ok(()) => RuntimeOpenCompletion::Answer(Ok(result)),
+            Err(failure) => RuntimeOpenCompletion::Answer(Err(failure)),
+        }
+    }
+
+    /// Finish a deterministic pre-provider refusal and release both held Core slots.
+    pub(crate) fn deny_open(
+        &mut self,
+        store: &Store,
+        sessions: &mut SessionManager,
+        opening: RuntimeOpening,
+        failure: RuntimeControlFailure,
+    ) -> RuntimeOpenCompletion {
+        let mutation = opening.mutation;
+        release_opening(sessions, opening);
+        match self.deny(store, mutation, failure) {
+            RuntimeControlReply::Failed(failure) => RuntimeOpenCompletion::Answer(Err(failure)),
+            _ => RuntimeOpenCompletion::Answer(Err(RuntimeControlFailure::internal())),
+        }
+    }
+
+    /// Release an ambiguous or cancelled open while deliberately preserving its pending ledger row.
+    pub(crate) fn abandon_open(
+        sessions: &mut SessionManager,
+        opening: RuntimeOpening,
+    ) -> RuntimeOpenCompletion {
+        let RuntimeOpening {
+            reservation,
+            displaced_agent,
+            displaced_reservation,
+            ..
+        } = opening;
+        sessions.cancel_open(reservation);
+        match (displaced_agent, displaced_reservation) {
+            (Some(agent), Some(reservation)) => RuntimeOpenCompletion::Cleanup {
+                agent,
+                reservation: RuntimeOpenCleanup::Closing(reservation),
+            },
+            (None, Some(reservation)) => {
+                sessions.release_closing(reservation);
+                RuntimeOpenCompletion::Answer(Err(RuntimeControlFailure::outcome_unknown()))
+            }
+            (Some(agent), None) => {
+                drop(agent);
+                RuntimeOpenCompletion::Answer(Err(RuntimeControlFailure::outcome_unknown()))
+            }
+            (None, None) => {
+                RuntimeOpenCompletion::Answer(Err(RuntimeControlFailure::outcome_unknown()))
+            }
+        }
+    }
+
+    /// Release one slot only after its process cleanup completed outside the owner task.
+    pub(crate) fn finish_open_cleanup(
+        sessions: &mut SessionManager,
+        reservation: RuntimeOpenCleanup,
+    ) -> Result<SessionOpenResult, RuntimeControlFailure> {
+        match reservation {
+            RuntimeOpenCleanup::Open(reservation) => sessions.cancel_open(reservation),
+            RuntimeOpenCleanup::Closing(reservation) => sessions.release_closing(reservation),
+        }
+        Err(RuntimeControlFailure::outcome_unknown())
+    }
+
+    fn prepare_open(
+        &mut self,
+        store: &Store,
+        sessions: &mut SessionManager,
+        integration: IntegrationKey,
+        request: RuntimeOpenRequest,
+    ) -> RuntimeControlReply {
+        let authenticator = self.authenticate_open(&request);
+        let mutation = match self.begin(
+            store,
+            integration,
+            request.method,
+            &request.request_id,
+            authenticator,
+        ) {
+            Ok(Begun::New(key)) => key,
+            Ok(Begun::Replay(reply)) => return *reply,
+            Err(failure) => return RuntimeControlReply::Failed(failure),
+        };
+        if let Some((expected_lifecycle, expected_generation)) = request.expected {
+            let Some(expected_session) = request.session else {
+                return self.deny(store, mutation, session_conflict());
+            };
+            let current = sessions.live_session(expected_session);
+            let current_lifecycle = current.as_ref().map_or(LifecycleState::Cold, |live| {
+                public_lifecycle(live.state.lifecycle())
+            });
+            let current_generation = current.as_ref().map_or(0, |live| live.state.generation());
+            if current_lifecycle != expected_lifecycle || current_generation != expected_generation
+            {
+                return self.deny(store, mutation, session_conflict());
+            }
+        }
+        let session = request.session.unwrap_or_else(SessionId::now);
+        if request.method == RuntimeMethod::SessionsAdoptNative {
+            let Some(native) = request.native.as_ref() else {
+                return self.deny(store, mutation, session_conflict());
+            };
+            match store.find_by_native(request.provider, native) {
+                Ok(Some(_)) => return self.deny(store, mutation, session_conflict()),
+                Ok(None) => {}
+                Err(_) => return self.deny(store, mutation, RuntimeControlFailure::internal()),
+            }
+        }
+        if request.method == RuntimeMethod::SessionsResume {
+            let stored = match store.get_session(session) {
+                Ok(Some(stored)) => stored,
+                Ok(None) => return self.deny(store, mutation, not_live()),
+                Err(_) => return self.deny(store, mutation, RuntimeControlFailure::internal()),
+            };
+            if stored.provider != request.provider
+                || Some(&stored.native) != request.native.as_ref()
+                || stored.cwd != request.workspace
+            {
+                return self.deny(store, mutation, session_conflict());
+            }
+        }
+        let lease_generation = match self.allocate_lease_generation() {
+            Ok(generation) => generation,
+            Err(failure) => return self.deny(store, mutation, failure),
+        };
+        let lease_id = match random_label("lease_") {
+            Ok(lease_id) => lease_id,
+            Err(failure) => return self.deny(store, mutation, failure),
+        };
+        match sessions.reserve_open_for_provider(request.provider, session, request.claim) {
+            Ok(reserved) => {
+                let (displaced_agent, displaced_reservation) =
+                    reserved.displaced.map_or((None, None), |displaced| {
+                        (Some(displaced.agent), Some(displaced.reservation))
+                    });
+                RuntimeControlReply::Opening(Box::new(RuntimeOpening {
+                    mutation,
+                    integration,
+                    method: request.method,
+                    provider: request.provider,
+                    session,
+                    native: request.native,
+                    workspace: request.workspace,
+                    model: request.model,
+                    proof: request.proof,
+                    reservation: reserved.reservation,
+                    displaced_agent,
+                    displaced_reservation,
+                    lease_id,
+                    lease_generation,
+                }))
+            }
+            Err(error) => self.deny(store, mutation, open_failure(&error)),
         }
     }
 
@@ -656,7 +1011,7 @@ impl RuntimeControl {
     ) -> Result<(), RuntimeControlFailure> {
         let state = match outcome {
             MutationOutcome::Pending => return Err(RuntimeControlFailure::internal()),
-            MutationOutcome::Lease(_) | MutationOutcome::Done => {
+            MutationOutcome::Lease(_) | MutationOutcome::Done | MutationOutcome::Open(_) => {
                 IntegrationMutationState::Completed
             }
             MutationOutcome::Failed(_) => IntegrationMutationState::Denied,
@@ -719,6 +1074,38 @@ impl RuntimeControl {
         finish_mac(mac)
     }
 
+    fn authenticate_open(&self, request: &RuntimeOpenRequest) -> [u8; 32] {
+        let mut mac = self.mac(request.method);
+        feed(&mut mac, request.provider.as_str().as_bytes());
+        feed(&mut mac, request.workspace.as_str().as_bytes());
+        feed(&mut mac, &[workspace_access_byte(request.claim.access())]);
+        if let Some(session) = request.session {
+            feed(&mut mac, session.as_bytes());
+        } else {
+            feed(&mut mac, &[]);
+        }
+        feed(
+            &mut mac,
+            request
+                .native
+                .as_ref()
+                .map_or(&[][..], |native| native.as_str().as_bytes()),
+        );
+        feed(
+            &mut mac,
+            request.model.as_deref().map_or(&[][..], str::as_bytes),
+        );
+        feed(
+            &mut mac,
+            request.proof.as_deref().map_or(&[][..], str::as_bytes),
+        );
+        if let Some((lifecycle, generation)) = request.expected {
+            feed(&mut mac, &[lifecycle_byte(lifecycle)]);
+            feed(&mut mac, &generation.to_le_bytes());
+        }
+        finish_mac(mac)
+    }
+
     fn mac(&self, method: RuntimeMethod) -> Hmac<Sha256> {
         let mut mac = self.authenticator.clone();
         feed(&mut mac, b"runtrol-runtime-mutation-v1");
@@ -739,6 +1126,7 @@ fn compare_replay(
         MutationOutcome::Pending => Err(RuntimeControlFailure::outcome_unknown()),
         MutationOutcome::Lease(lease) => Ok(RuntimeControlReply::Lease(lease.clone())),
         MutationOutcome::Done => Ok(RuntimeControlReply::Done),
+        MutationOutcome::Open(result) => Ok(RuntimeControlReply::Opened(result.clone())),
         MutationOutcome::Failed(failure) => Ok(RuntimeControlReply::Failed(*failure)),
     }
 }
@@ -809,10 +1197,53 @@ const fn lifecycle_byte(lifecycle: LifecycleState) -> u8 {
     }
 }
 
+const fn workspace_access_byte(access: runtrol_provider::WorkspaceAccess) -> u8 {
+    match access {
+        runtrol_provider::WorkspaceAccess::Exclusive => 0,
+        runtrol_provider::WorkspaceAccess::Shared => 1,
+    }
+}
+
+fn release_opening(sessions: &mut SessionManager, opening: RuntimeOpening) {
+    sessions.cancel_open(opening.reservation);
+    if let Some(displaced_reservation) = opening.displaced_reservation {
+        sessions.release_closing(displaced_reservation);
+    }
+}
+
+fn open_failure(error: &SessionError) -> RuntimeControlFailure {
+    match error {
+        SessionError::WorkspaceOccupied { .. } => RuntimeControlFailure::new(
+            RuntimeErrorKind::WorkspaceConflict,
+            "the working tree already has an incompatible writer",
+        ),
+        SessionError::NoRoom(_) | SessionError::OpeningCapacityReserved => {
+            RuntimeControlFailure::new(
+                RuntimeErrorKind::ResourceExhausted,
+                "the bounded hot session capacity is busy",
+            )
+        }
+        SessionError::ProviderUpdating { .. } | SessionError::ProviderBusyForUpdate { .. } => {
+            RuntimeControlFailure::new(
+                RuntimeErrorKind::ProviderUnavailable,
+                "the selected provider is changing and cannot open a session",
+            )
+        }
+        _ => session_conflict(),
+    }
+}
+
 const fn not_live() -> RuntimeControlFailure {
     RuntimeControlFailure::new(
         RuntimeErrorKind::SessionNotFound,
         "the authorized Runtime session is not live",
+    )
+}
+
+const fn session_conflict() -> RuntimeControlFailure {
+    RuntimeControlFailure::new(
+        RuntimeErrorKind::SessionConflict,
+        "the session or native pointer changed after the caller observed it",
     )
 }
 
@@ -845,6 +1276,108 @@ const fn invalid_request_id() -> RuntimeControlFailure {
 }
 
 #[cfg(test)]
+async fn discard_fixture_open_completion(
+    sessions: &mut SessionManager,
+    completion: RuntimeOpenCompletion,
+) {
+    if let RuntimeOpenCompletion::Cleanup { agent, reservation } = completion {
+        drop(agent.close(runtrol_provider::CloseMode::Kill).await);
+        drop(RuntimeControl::finish_open_cleanup(sessions, reservation));
+    }
+}
+
+#[cfg(test)]
+pub(crate) async fn fixture_runtime_owner(
+    composed: std::sync::Arc<crate::Composed>,
+    mut asked: mpsc::Receiver<RuntimeAsked>,
+    mut returned: mpsc::UnboundedReceiver<RuntimeReturned>,
+) {
+    let mut control = RuntimeControl::new().expect("Runtime control");
+    let mut sessions = SessionManager::new();
+    loop {
+        tokio::select! {
+            request = asked.recv() => {
+                let Some(RuntimeAsked { integration, request, answered }) = request else {
+                    break;
+                };
+                let reply = control.answer(&composed.store, &mut sessions, integration, request);
+                if let Err(reply) = answered.send(reply) {
+                    match reply {
+                        RuntimeControlReply::Opening(opening) => {
+                            let completion = RuntimeControl::abandon_open(&mut sessions, *opening);
+                            discard_fixture_open_completion(&mut sessions, completion).await;
+                        }
+                        RuntimeControlReply::Sending { taken, .. } => {
+                            let TakenAgent { agent, lease } = taken;
+                            drop(agent);
+                            sessions.abandon_agent(lease);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            returned = returned.recv() => {
+                let Some(returned) = returned else {
+                    break;
+                };
+                match returned {
+                    RuntimeReturned::Opened { opening, intent, agent, answered } => {
+                        let completion = control.finish_open(
+                            &composed.store,
+                            &mut sessions,
+                            opening,
+                            &intent,
+                            agent,
+                        );
+                        if let Err(completion) = answered.send(completion) {
+                            discard_fixture_open_completion(&mut sessions, completion).await;
+                        }
+                    }
+                    RuntimeReturned::OpenDenied { opening, failure, answered } => {
+                        let completion = control.deny_open(
+                            &composed.store,
+                            &mut sessions,
+                            opening,
+                            failure,
+                        );
+                        if let Err(completion) = answered.send(completion) {
+                            discard_fixture_open_completion(&mut sessions, completion).await;
+                        }
+                    }
+                    RuntimeReturned::OpenUnknown { opening, answered } => {
+                        let completion = RuntimeControl::abandon_open(&mut sessions, opening);
+                        if let Err(completion) = answered.send(completion) {
+                            discard_fixture_open_completion(&mut sessions, completion).await;
+                        }
+                    }
+                    RuntimeReturned::OpenAbandoned { opening } => {
+                        let completion = RuntimeControl::abandon_open(&mut sessions, opening);
+                        discard_fixture_open_completion(&mut sessions, completion).await;
+                    }
+                    RuntimeReturned::OpenCleaned { reservation, answered } => {
+                        let result = RuntimeControl::finish_open_cleanup(&mut sessions, reservation);
+                        drop(answered.send(result));
+                    }
+                    RuntimeReturned::Finished { mutation, taken, outcome, answered } => {
+                        let result = control.finish_command(
+                            &composed.store,
+                            &mut sessions,
+                            mutation,
+                            taken,
+                            &outcome,
+                        );
+                        let _ignored = answered.send(result);
+                    }
+                    RuntimeReturned::Abandoned { mutation, lease } => {
+                        RuntimeControl::abandon_command(&mut sessions, mutation, lease);
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use async_trait::async_trait;
     use runtrol_provider::{
@@ -863,7 +1396,7 @@ mod tests {
         }
 
         fn native(&self) -> Option<&str> {
-            None
+            Some("runtime-control-native")
         }
 
         async fn send(&mut self, _command: AgentCommand) -> Result<(), ProviderError> {
@@ -890,6 +1423,192 @@ mod tests {
         async fn open(&self, intent: OpenIntent) -> Result<Box<dyn Agent>, ProviderError> {
             Ok(Box::new(QuietAgent(intent.session)))
         }
+    }
+
+    #[tokio::test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one fixture proves successful attach, durable pointer, exact replay, conflict, cancellation, and restart ambiguity together"
+    )]
+    async fn open_commits_replays_and_keeps_cancelled_provider_work_ambiguous() {
+        let directory = std::env::temp_dir().join(format!(
+            "runtrol-runtime-open-{}-{}",
+            std::process::id(),
+            SessionId::now()
+        ));
+        let first_directory = directory.join("first");
+        let second_directory = directory.join("second");
+        std::fs::create_dir_all(&first_directory).expect("create first workspace");
+        std::fs::create_dir_all(&second_directory).expect("create second workspace");
+        let first = AbsPath::canonicalize(first_directory.to_str().expect("UTF-8 first path"))
+            .expect("first workspace");
+        let second = AbsPath::canonicalize(second_directory.to_str().expect("UTF-8 second path"))
+            .expect("second workspace");
+        let store_path = AbsPath::canonicalize(directory.to_str().expect("UTF-8 fixture path"))
+            .expect("fixture root")
+            .join("state.redb")
+            .expect("store path");
+        let store = Store::open(&store_path).expect("open store");
+        let integration = IntegrationKey::from_bytes([9; 16]);
+        let provider = ProviderId::parse("runtime-control-fixture").expect("provider");
+        let request_id = MutationRequestId::now();
+        let mut control = RuntimeControl::new().expect("control authority");
+        let mut sessions = SessionManager::new();
+
+        let request = RuntimeOpenRequest {
+            method: RuntimeMethod::SessionsStart,
+            request_id: request_id.clone(),
+            provider,
+            session: None,
+            native: None,
+            workspace: first.clone(),
+            claim: WorkspaceClaim::discover(first.clone(), WorkspaceAccess::Exclusive)
+                .expect("first claim"),
+            model: None,
+            expected: None,
+            proof: None,
+        };
+        let RuntimeControlReply::Opening(opening) = control.answer(
+            &store,
+            &mut sessions,
+            integration,
+            RuntimeControlRequest::PrepareOpen(request),
+        ) else {
+            panic!("expected an open reservation");
+        };
+        let session = opening.session;
+        let intent = OpenIntent {
+            session,
+            workspace: first.clone(),
+            disposition: Disposition::Fresh,
+            model: None,
+            permission: None,
+        };
+        let RuntimeOpenCompletion::Answer(Ok(opened)) = control.finish_open(
+            &store,
+            &mut sessions,
+            *opening,
+            &intent,
+            Box::new(QuietAgent(session)),
+        ) else {
+            panic!("expected an attached public session");
+        };
+        assert_eq!(opened.session.session_id.as_str(), session.to_string());
+        assert_eq!(opened.control.session_id, opened.session.session_id);
+        assert!(
+            store
+                .get_session(session)
+                .expect("read optional stored pointer")
+                .is_none(),
+            "fresh native identity becomes durable only with its first provider event"
+        );
+
+        let repeated = RuntimeOpenRequest {
+            method: RuntimeMethod::SessionsStart,
+            request_id: request_id.clone(),
+            provider,
+            session: None,
+            native: None,
+            workspace: first.clone(),
+            claim: WorkspaceClaim::discover(first.clone(), WorkspaceAccess::Exclusive)
+                .expect("replay claim"),
+            model: None,
+            expected: None,
+            proof: None,
+        };
+        assert!(matches!(
+            control.answer(
+                &store,
+                &mut sessions,
+                integration,
+                RuntimeControlRequest::PrepareOpen(repeated),
+            ),
+            RuntimeControlReply::Opened(result) if result == opened
+        ));
+
+        let changed = RuntimeOpenRequest {
+            method: RuntimeMethod::SessionsStart,
+            request_id,
+            provider,
+            session: None,
+            native: None,
+            workspace: first.clone(),
+            claim: WorkspaceClaim::discover(first, WorkspaceAccess::Exclusive)
+                .expect("changed claim"),
+            model: Some("different-model".into()),
+            expected: None,
+            proof: None,
+        };
+        assert!(matches!(
+            control.answer(
+                &store,
+                &mut sessions,
+                integration,
+                RuntimeControlRequest::PrepareOpen(changed),
+            ),
+            RuntimeControlReply::Failed(RuntimeControlFailure {
+                kind: RuntimeErrorKind::IdempotencyConflict,
+                ..
+            })
+        ));
+
+        let cancelled_id = MutationRequestId::now();
+        let cancelled = RuntimeOpenRequest {
+            method: RuntimeMethod::SessionsStart,
+            request_id: cancelled_id.clone(),
+            provider,
+            session: None,
+            native: None,
+            workspace: second.clone(),
+            claim: WorkspaceClaim::discover(second.clone(), WorkspaceAccess::Exclusive)
+                .expect("second claim"),
+            model: None,
+            expected: None,
+            proof: None,
+        };
+        let RuntimeControlReply::Opening(cancelled_opening) = control.answer(
+            &store,
+            &mut sessions,
+            integration,
+            RuntimeControlRequest::PrepareOpen(cancelled),
+        ) else {
+            panic!("expected cancellable reservation");
+        };
+        assert!(matches!(
+            RuntimeControl::abandon_open(&mut sessions, *cancelled_opening),
+            RuntimeOpenCompletion::Answer(Err(RuntimeControlFailure {
+                kind: RuntimeErrorKind::OutcomeUnknown,
+                ..
+            }))
+        ));
+        let replay_cancelled = RuntimeOpenRequest {
+            method: RuntimeMethod::SessionsStart,
+            request_id: cancelled_id,
+            provider,
+            session: None,
+            native: None,
+            workspace: second.clone(),
+            claim: WorkspaceClaim::discover(second, WorkspaceAccess::Exclusive)
+                .expect("cancelled replay claim"),
+            model: None,
+            expected: None,
+            proof: None,
+        };
+        assert!(matches!(
+            control.answer(
+                &store,
+                &mut sessions,
+                integration,
+                RuntimeControlRequest::PrepareOpen(replay_cancelled),
+            ),
+            RuntimeControlReply::Failed(RuntimeControlFailure {
+                kind: RuntimeErrorKind::OutcomeUnknown,
+                ..
+            })
+        ));
+
+        drop((control, sessions, store));
+        std::fs::remove_dir_all(directory).expect("clean fixture directory");
     }
 
     #[tokio::test]

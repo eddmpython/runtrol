@@ -28,3 +28,21 @@ const receipt = await runtime.integrations().request({
 console.log(receipt.pendingId);
 runtime.close();
 ```
+
+After local approval and an authenticated reconnect, start requests keep their UUIDv7 identity so an uncertain retry
+cannot silently create another provider session:
+
+```ts
+import { newMutationRequestId } from "@runtrol/runtime-client";
+
+const provider = (await runtime.providers().list()).providers.at(0);
+if (!provider) throw new Error("No provider is installed");
+const opened = await runtime.sessions().start({
+  requestId: newMutationRequestId(),
+  providerId: provider.providerId,
+  workspace: approvedWorkspace,
+  access: "exclusive",
+});
+
+console.log(opened.session.sessionId);
+```

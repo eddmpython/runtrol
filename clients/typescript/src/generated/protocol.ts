@@ -9,14 +9,21 @@ export const PUBLIC_LIMITS = {
   "maxFrameBytes": 16842752,
   "maxIdempotencyRecords": 2048,
   "maxInputBytes": 1048576,
+  "maxModelSelectionBytes": 4096,
+  "maxNativeAdoptionTokenBytes": 2048,
+  "maxNativePublicCursorBytes": 8192,
   "maxPageItems": 100,
   "maxPendingEnrollments": 64,
   "maxRevisionOffers": 16,
-  "maxSubscriptions": 32
+  "maxSubscriptions": 32,
+  "nativeCursorLifetimeMs": 300000
 } as const;
 
 /** Acquire control only if the caller still sees this exact live state. */
 export interface AcquireControlParams { readonly expectedLifecycle: LifecycleState; readonly expectedSessionGeneration: number; readonly requestId: MutationRequestId; readonly sessionId: RuntimeSessionId; }
+
+/** Adopt one exact native catalogue observation into Runtime supervision. */
+export interface AdoptNativeSessionParams { readonly access: SessionWorkspaceAccess; readonly adoptionToken: string; readonly nativeSessionId: string; readonly providerId: ProviderId; readonly requestId: MutationRequestId; readonly workspace: string; }
 
 /** Public integration authority, separate from remote device scopes. */
 export type AppScope = "provider.read" | "model.read" | "session.list" | "session.native.discover" | "session.output.read" | "session.start" | "session.resume" | "session.input.write" | "session.stop" | "approval.respond.low" | "approval.respond.high" | "session.delete";
@@ -115,7 +122,7 @@ export type NativeResumeCapability = "available" | "unavailable" | "unknown";
 export interface NativeSessionCatalogue { readonly coverage: CatalogueCoverage; readonly nextCursor?: string | null; readonly providerId: ProviderId; readonly sessions: ReadonlyArray<NativeSessionDescriptor>; }
 
 /** One root-authorized official provider-native session. */
-export interface NativeSessionDescriptor { readonly additionalDirectories: ReadonlyArray<string>; readonly alreadyManagedAs?: RuntimeSessionId | null; readonly cwd: string; readonly nativeSessionId: string; readonly resume: NativeResumeCapability; readonly title?: string | null; readonly updatedAt?: string | null; }
+export interface NativeSessionDescriptor { readonly additionalDirectories: ReadonlyArray<string>; readonly adoptionToken?: string | null; readonly alreadyManagedAs?: RuntimeSessionId | null; readonly cwd: string; readonly nativeSessionId: string; readonly resume: NativeResumeCapability; readonly title?: string | null; readonly updatedAt?: string | null; }
 
 /** An opaque pending local enrollment decision. */
 export type PendingEnrollmentId = string;
@@ -134,6 +141,9 @@ export interface ProviderList { readonly providers: ReadonlyArray<ProviderDescri
 
 /** Prove possession of the key attached to a new enrollment. */
 export interface RequestEnrollmentParams { readonly manifest: EnrollmentManifest; readonly signature: string; }
+
+/** Heat one existing Runtime-managed cold session. */
+export interface ResumeSessionParams { readonly access: SessionWorkspaceAccess; readonly expectedLifecycle: LifecycleState; readonly expectedSessionGeneration: number; readonly requestId: MutationRequestId; readonly sessionId: RuntimeSessionId; readonly workspace: string; }
 
 /** Public product capabilities for the selected revision. */
 export interface RuntimeCapabilities { readonly integrationEnrollment: boolean; readonly managedSessionList: boolean; readonly modelDiscovery: boolean; readonly nativeSessionCatalogue: boolean; readonly providerInventory: boolean; readonly sessionControl: boolean; readonly sessionEvents: boolean; }
@@ -154,13 +164,13 @@ export interface RuntimeEventNotification { readonly event: unknown; readonly ev
 export interface RuntimeInstance { readonly instanceId: string; readonly platform: string; readonly version: string; }
 
 /** Numeric public bounds advertised during initialization. */
-export interface RuntimeLimits { readonly challengeLifetimeMs: number; readonly controlLeaseLifetimeMs: number; readonly enrollmentLifetimeMs: number; readonly idempotencyWindowMs: number; readonly maxFrameBytes: number; readonly maxIdempotencyRecords: number; readonly maxInputBytes: number; readonly maxPageItems: number; readonly maxPendingEnrollments: number; readonly maxRevisionOffers: number; readonly maxSubscriptions: number; }
+export interface RuntimeLimits { readonly challengeLifetimeMs: number; readonly controlLeaseLifetimeMs: number; readonly enrollmentLifetimeMs: number; readonly idempotencyWindowMs: number; readonly maxFrameBytes: number; readonly maxIdempotencyRecords: number; readonly maxInputBytes: number; readonly maxModelSelectionBytes: number; readonly maxNativeAdoptionTokenBytes: number; readonly maxNativePublicCursorBytes: number; readonly maxPageItems: number; readonly maxPendingEnrollments: number; readonly maxRevisionOffers: number; readonly maxSubscriptions: number; readonly nativeCursorLifetimeMs: number; }
 
 /** Operational bootstrap data published only after the public endpoint is ready. */
 export interface RuntimeLocatorRecord { readonly endpoint: string; readonly endpointKind: RuntimeEndpointKind; readonly instanceId: string; readonly processId: number; readonly runtimeVersion: string; readonly schema: number; }
 
 /** A public Runtime method implemented by the initial read-only boundary. */
-export type RuntimeMethod = "runtime/initialize" | "runtime/initialized" | "runtime/challenge" | "integrations/requestEnrollment" | "integrations/watchEnrollment" | "integrations/getGrant" | "providers/list" | "providers/listModels" | "providers/listNativeSessions" | "sessions/list" | "sessions/acquireControl" | "sessions/renewControl" | "sessions/releaseControl" | "sessions/submitInput" | "sessions/watchEvents" | "sessions/interrupt" | "sessions/event" | "sessions/lagged" | "runtime/panicStop";
+export type RuntimeMethod = "runtime/initialize" | "runtime/initialized" | "runtime/challenge" | "integrations/requestEnrollment" | "integrations/watchEnrollment" | "integrations/getGrant" | "providers/list" | "providers/listModels" | "providers/listNativeSessions" | "sessions/list" | "sessions/start" | "sessions/adoptNative" | "sessions/resume" | "sessions/acquireControl" | "sessions/renewControl" | "sessions/releaseControl" | "sessions/submitInput" | "sessions/watchEvents" | "sessions/interrupt" | "sessions/event" | "sessions/lagged" | "runtime/panicStop";
 
 /** The current model information Runtime can truthfully expose. */
 export type RuntimeModelCatalog = { readonly coverage: "known"; readonly models: ReadonlyArray<RuntimeModelChoice>; } | { readonly aliases: ReadonlyArray<string>; readonly coverage: "aliases"; readonly why: string; } | { readonly aliases: ReadonlyArray<string>; readonly coverage: "partial"; readonly models: ReadonlyArray<RuntimeModelChoice>; readonly why: string; } | { readonly coverage: "unknown"; readonly why: string; } | { readonly coverage: "unsupported"; readonly why: string; };
@@ -179,6 +189,15 @@ export interface ServerChallenge { readonly expiresAtMs: number; readonly instan
 
 /** One Runtime-managed session in the immediate catalogue. */
 export interface SessionDescriptor { readonly label?: string | null; readonly lifecycle: LifecycleState; readonly providerId: ProviderId; readonly sessionGeneration: number; readonly sessionId: RuntimeSessionId; }
+
+/** One newly supervised or reheated session and its initial controller authority. */
+export interface SessionOpenResult { readonly control: ControlLease; readonly session: SessionDescriptor; }
+
+/** Whether a newly heated process must be the only writer for its working tree. */
+export type SessionWorkspaceAccess = "exclusive" | "shared";
+
+/** Start a new provider-native session in one exact authorized workspace. */
+export interface StartSessionParams { readonly access: SessionWorkspaceAccess; readonly model?: string | null; readonly providerId: ProviderId; readonly requestId: MutationRequestId; readonly workspace: string; }
 
 /** Submit caller-owned input under one exact control lease. */
 export interface SubmitInputParams { readonly input: string; readonly leaseGeneration: number; readonly leaseId: string; readonly requestId: MutationRequestId; readonly sessionId: RuntimeSessionId; }

@@ -828,23 +828,38 @@ async fn serve_surfaces(
                     integration,
                     request,
                 );
-                if let Err(crate::runtime_control::RuntimeControlReply::Sending {
-                    mutation: _,
-                    taken,
-                    command: _,
-                }) = answered.send(reply)
-                {
-                    let runtrol_core::TakenAgent { agent, lease } = taken;
-                    drop(agent);
-                    sessions.abandon_agent(lease);
-                    publish_session_index(
-                        &session_index,
-                        &runtime_sessions,
-                        &composed,
-                        &sessions,
-                        &provider_update_notices,
-                    );
+                if let Err(reply) = answered.send(reply) {
+                    match reply {
+                        crate::runtime_control::RuntimeControlReply::Sending {
+                            mutation: _,
+                            taken,
+                            command: _,
+                        } => {
+                            let runtrol_core::TakenAgent { agent, lease } = taken;
+                            drop(agent);
+                            sessions.abandon_agent(lease);
+                        }
+                        crate::runtime_control::RuntimeControlReply::Opening(opening) => {
+                            let completion = crate::runtime_control::RuntimeControl::abandon_open(
+                                &mut sessions,
+                                *opening,
+                            );
+                            schedule_runtime_open_cleanup(
+                                &mut connections,
+                                &runtime_returning,
+                                completion,
+                            );
+                        }
+                        _ => {}
+                    }
                 }
+                publish_session_index(
+                    &session_index,
+                    &runtime_sessions,
+                    &composed,
+                    &sessions,
+                    &provider_update_notices,
+                );
             }
 
             Some(returned_agent) = returned.recv() => match returned_agent {
@@ -903,6 +918,112 @@ async fn serve_surfaces(
                         &provider_update_notices,
                     );
                 }
+                crate::runtime_control::RuntimeReturned::Opened {
+                    opening,
+                    intent,
+                    agent,
+                    answered,
+                } => {
+                    let completion = runtime_control.finish_open(
+                        &composed.store,
+                        &mut sessions,
+                        opening,
+                        &intent,
+                        agent,
+                    );
+                    deliver_runtime_open_completion(
+                        &mut connections,
+                        &runtime_returning,
+                        answered,
+                        completion,
+                    );
+                    publish_session_index(
+                        &session_index,
+                        &runtime_sessions,
+                        &composed,
+                        &sessions,
+                        &provider_update_notices,
+                    );
+                }
+                crate::runtime_control::RuntimeReturned::OpenDenied {
+                    opening,
+                    failure,
+                    answered,
+                } => {
+                    let completion = runtime_control.deny_open(
+                        &composed.store,
+                        &mut sessions,
+                        opening,
+                        failure,
+                    );
+                    deliver_runtime_open_completion(
+                        &mut connections,
+                        &runtime_returning,
+                        answered,
+                        completion,
+                    );
+                    publish_session_index(
+                        &session_index,
+                        &runtime_sessions,
+                        &composed,
+                        &sessions,
+                        &provider_update_notices,
+                    );
+                }
+                crate::runtime_control::RuntimeReturned::OpenUnknown { opening, answered } => {
+                    let completion = crate::runtime_control::RuntimeControl::abandon_open(
+                        &mut sessions,
+                        opening,
+                    );
+                    deliver_runtime_open_completion(
+                        &mut connections,
+                        &runtime_returning,
+                        answered,
+                        completion,
+                    );
+                    publish_session_index(
+                        &session_index,
+                        &runtime_sessions,
+                        &composed,
+                        &sessions,
+                        &provider_update_notices,
+                    );
+                }
+                crate::runtime_control::RuntimeReturned::OpenAbandoned { opening } => {
+                    let completion = crate::runtime_control::RuntimeControl::abandon_open(
+                        &mut sessions,
+                        opening,
+                    );
+                    schedule_runtime_open_cleanup(
+                        &mut connections,
+                        &runtime_returning,
+                        completion,
+                    );
+                    publish_session_index(
+                        &session_index,
+                        &runtime_sessions,
+                        &composed,
+                        &sessions,
+                        &provider_update_notices,
+                    );
+                }
+                crate::runtime_control::RuntimeReturned::OpenCleaned {
+                    reservation,
+                    answered,
+                } => {
+                    let result = crate::runtime_control::RuntimeControl::finish_open_cleanup(
+                        &mut sessions,
+                        reservation,
+                    );
+                    drop(answered.send(result));
+                    publish_session_index(
+                        &session_index,
+                        &runtime_sessions,
+                        &composed,
+                        &sessions,
+                        &provider_update_notices,
+                    );
+                }
             },
 
             // Events reach watchers through the session's own fan-out. This arm keeps the provider stream moving.
@@ -951,6 +1072,39 @@ async fn serve_surfaces(
     connections.abort_all();
     while connections.join_next().await.is_some() {}
     outcome
+}
+
+fn deliver_runtime_open_completion(
+    tasks: &mut JoinSet<()>,
+    returning: &mpsc::UnboundedSender<crate::runtime_control::RuntimeReturned>,
+    answered: oneshot::Sender<crate::runtime_control::RuntimeOpenCompletion>,
+    completion: crate::runtime_control::RuntimeOpenCompletion,
+) {
+    if let Err(completion) = answered.send(completion) {
+        schedule_runtime_open_cleanup(tasks, returning, completion);
+    }
+}
+
+fn schedule_runtime_open_cleanup(
+    tasks: &mut JoinSet<()>,
+    returning: &mpsc::UnboundedSender<crate::runtime_control::RuntimeReturned>,
+    completion: crate::runtime_control::RuntimeOpenCompletion,
+) {
+    let crate::runtime_control::RuntimeOpenCompletion::Cleanup { agent, reservation } = completion
+    else {
+        return;
+    };
+    let returning = returning.clone();
+    tasks.spawn(async move {
+        drop(agent.close(CloseMode::Kill).await);
+        let (answered, _hearing) = oneshot::channel();
+        drop(
+            returning.send(crate::runtime_control::RuntimeReturned::OpenCleaned {
+                reservation,
+                answered,
+            }),
+        );
+    });
 }
 
 /// Release an unanswered reservation without exposing an extra live process during displaced cleanup.

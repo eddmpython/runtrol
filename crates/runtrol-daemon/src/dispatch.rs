@@ -1150,6 +1150,15 @@ pub(crate) fn persist_live(
     sessions: &SessionManager,
     session: SessionId,
 ) -> Result<(), StoreError> {
+    persist_live_from_store(&composed.store, sessions, session)
+}
+
+/// Persist one live pointer against an explicit store for public Runtime composition.
+pub(crate) fn persist_live_from_store(
+    store: &runtrol_store::Store,
+    sessions: &SessionManager,
+    session: SessionId,
+) -> Result<(), StoreError> {
     let Some(live) = sessions.live_session(session) else {
         return Ok(());
     };
@@ -1161,19 +1170,19 @@ pub(crate) fn persist_live(
         why: "the live provider identifier is not storable",
     })?;
 
-    let prior_session = composed.store.find_by_native(live.provider, &native)?;
+    let prior_session = store.find_by_native(live.provider, &native)?;
     let prior_row = match prior_session {
-        Some(prior) => composed.store.get_session(prior)?,
-        None => composed.store.get_session(session)?,
+        Some(prior) => store.get_session(prior)?,
+        None => store.get_session(session)?,
     };
     if let Some(prior) = prior_session
         && prior != session
     {
-        composed.store.remove_session(prior)?;
+        store.remove_session(prior)?;
     }
 
     let now = WallMs::now();
-    composed.store.put_session(
+    store.put_session(
         session,
         &StoredSession {
             provider: live.provider,
