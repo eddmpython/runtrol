@@ -57,6 +57,7 @@ try {
     void runtime.providers().getCapabilities(provider);
     const session: RuntimeSessionId = "opaque-session";
     void runtime.sessions().get(session);
+    void runtime.sessions().watchIndex();
     const start: StartSessionParams = {
       requestId: newMutationRequestId(),
       providerId: provider,

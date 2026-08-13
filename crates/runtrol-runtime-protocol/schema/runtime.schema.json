@@ -2103,6 +2103,11 @@
           "type": "string"
         },
         {
+          "const": "sessions/watchIndex",
+          "description": "Watch authorized managed-session index snapshots without polling.",
+          "type": "string"
+        },
+        {
           "const": "sessions/get",
           "description": "Read one exact Runtime-managed session descriptor.",
           "type": "string"
@@ -2165,6 +2170,16 @@
         {
           "const": "approvals/respond",
           "description": "Answer one exact pending provider approval.",
+          "type": "string"
+        },
+        {
+          "const": "sessions/indexChanged",
+          "description": "One changed managed-session index snapshot.",
+          "type": "string"
+        },
+        {
+          "const": "sessions/indexEnded",
+          "description": "Final managed-session index subscription reason.",
           "type": "string"
         },
         {
@@ -2494,6 +2509,69 @@
       ],
       "type": "object"
     },
+    "SessionIndexChangedNotification": {
+      "additionalProperties": false,
+      "description": "A changed authorized managed-session snapshot.",
+      "properties": {
+        "snapshot": {
+          "$ref": "#/$defs/ManagedSessionList",
+          "description": "New complete authorized snapshot."
+        },
+        "subscriptionId": {
+          "description": "Opaque connection-local subscription identity.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "subscriptionId",
+        "snapshot"
+      ],
+      "type": "object"
+    },
+    "SessionIndexEndReason": {
+      "description": "Why a managed-session index subscription ended.",
+      "oneOf": [
+        {
+          "const": "integrationRevoked",
+          "description": "The integration grant was revoked.",
+          "type": "string"
+        },
+        {
+          "const": "authorityChanged",
+          "description": "Scope, roots, or integration generations changed and require authenticated reconnect.",
+          "type": "string"
+        },
+        {
+          "const": "rootDenied",
+          "description": "A previously approved filesystem root no longer names the approved object.",
+          "type": "string"
+        },
+        {
+          "const": "runtimeUnavailable",
+          "description": "The Runtime catalogue became unavailable.",
+          "type": "string"
+        }
+      ]
+    },
+    "SessionIndexEndedNotification": {
+      "additionalProperties": false,
+      "description": "Final typed reason for retiring a managed-session index subscription.",
+      "properties": {
+        "reason": {
+          "$ref": "#/$defs/SessionIndexEndReason",
+          "description": "Structural terminal reason."
+        },
+        "subscriptionId": {
+          "description": "Opaque connection-local subscription identity.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "subscriptionId",
+        "reason"
+      ],
+      "type": "object"
+    },
     "SessionOpenResult": {
       "additionalProperties": false,
       "description": "One newly supervised or reheated session and its initial controller authority.",
@@ -2701,6 +2779,30 @@
         "liveAt"
       ],
       "type": "object"
+    },
+    "WatchSessionIndexParams": {
+      "additionalProperties": false,
+      "description": "Install one dedicated managed-session index subscription.",
+      "type": "object"
+    },
+    "WatchSessionIndexResult": {
+      "additionalProperties": false,
+      "description": "Initial authorized snapshot and connection-local subscription identity.",
+      "properties": {
+        "snapshot": {
+          "$ref": "#/$defs/ManagedSessionList",
+          "description": "Exact authorized snapshot at the subscription boundary."
+        },
+        "subscriptionId": {
+          "description": "Opaque connection-local subscription identity.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "subscriptionId",
+        "snapshot"
+      ],
+      "type": "object"
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -2805,6 +2907,12 @@
     "session_descriptor": {
       "$ref": "#/$defs/SessionDescriptor"
     },
+    "session_index_changed": {
+      "$ref": "#/$defs/SessionIndexChangedNotification"
+    },
+    "session_index_ended": {
+      "$ref": "#/$defs/SessionIndexEndedNotification"
+    },
     "session_open_result": {
       "$ref": "#/$defs/SessionOpenResult"
     },
@@ -2822,6 +2930,12 @@
     },
     "watch_events_result": {
       "$ref": "#/$defs/WatchEventsResult"
+    },
+    "watch_session_index": {
+      "$ref": "#/$defs/WatchSessionIndexParams"
+    },
+    "watch_session_index_result": {
+      "$ref": "#/$defs/WatchSessionIndexResult"
     }
   },
   "required": [
@@ -2863,7 +2977,11 @@
     "lagged",
     "list_pending_approvals",
     "pending_approvals",
-    "respond_approval"
+    "respond_approval",
+    "watch_session_index",
+    "watch_session_index_result",
+    "session_index_changed",
+    "session_index_ended"
   ],
   "title": "PublicProtocolSchema",
   "type": "object",

@@ -11,8 +11,9 @@ use crate::{
     NativeSessionCatalogue, PendingApprovalList, ProviderList, RequestEnrollmentParams,
     RespondApprovalParams, ResumeSessionParams, RuntimeEventNotification, RuntimeLocatorRecord,
     RuntimeMethod, RuntimeModelCatalog, RuntimeProviderCapabilities, ServerChallenge,
-    SessionDescriptor, SessionOpenResult, StartSessionParams, SubmitInputParams,
-    WatchEnrollmentParams, WatchEventsParams, WatchEventsResult,
+    SessionDescriptor, SessionIndexChangedNotification, SessionIndexEndedNotification,
+    SessionOpenResult, StartSessionParams, SubmitInputParams, WatchEnrollmentParams,
+    WatchEventsParams, WatchEventsResult, WatchSessionIndexParams, WatchSessionIndexResult,
 };
 
 /// Checked schema filename inside this package.
@@ -64,6 +65,10 @@ struct PublicProtocolSchema {
     list_pending_approvals: ListPendingApprovalsParams,
     pending_approvals: PendingApprovalList,
     respond_approval: RespondApprovalParams,
+    watch_session_index: WatchSessionIndexParams,
+    watch_session_index_result: WatchSessionIndexResult,
+    session_index_changed: SessionIndexChangedNotification,
+    session_index_ended: SessionIndexEndedNotification,
 }
 
 /// Generate the language-neutral public schema from the Rust DTOs.

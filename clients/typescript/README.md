@@ -29,6 +29,17 @@ console.log(receipt.pendingId);
 runtime.close();
 ```
 
+Managed-session changes use a dedicated snapshot stream, so an integration does not poll or infer changes from
+provider output:
+
+```ts
+const index = await runtime.sessions().watchIndex();
+console.log(index.started.snapshot.sessions);
+const next = await index.next();
+if (next.kind === "changed") console.log(next.changed.snapshot.sessions);
+if (next.kind === "ended") console.log(next.ended.reason);
+```
+
 After local approval and an authenticated reconnect, start requests keep their UUIDv7 identity so an uncertain retry
 cannot silently create another provider session:
 

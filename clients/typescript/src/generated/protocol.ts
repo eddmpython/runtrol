@@ -215,7 +215,7 @@ export interface RuntimeLimits { readonly challengeLifetimeMs: number; readonly 
 export interface RuntimeLocatorRecord { readonly endpoint: string; readonly endpointKind: RuntimeEndpointKind; readonly instanceId: string; readonly processId: number; readonly runtimeVersion: string; readonly schema: number; }
 
 /** A public Runtime method implemented by the initial read-only boundary. */
-export type RuntimeMethod = "runtime/initialize" | "runtime/initialized" | "runtime/challenge" | "integrations/requestEnrollment" | "integrations/watchEnrollment" | "integrations/getGrant" | "providers/list" | "providers/getCapabilities" | "providers/listModels" | "providers/listNativeSessions" | "sessions/list" | "sessions/get" | "sessions/start" | "sessions/adoptNative" | "sessions/resume" | "sessions/acquireControl" | "sessions/renewControl" | "sessions/releaseControl" | "sessions/submitInput" | "sessions/watchEvents" | "sessions/interrupt" | "sessions/cool" | "approvals/listPending" | "approvals/respond" | "sessions/event" | "sessions/lagged" | "runtime/panicStop";
+export type RuntimeMethod = "runtime/initialize" | "runtime/initialized" | "runtime/challenge" | "integrations/requestEnrollment" | "integrations/watchEnrollment" | "integrations/getGrant" | "providers/list" | "providers/getCapabilities" | "providers/listModels" | "providers/listNativeSessions" | "sessions/list" | "sessions/watchIndex" | "sessions/get" | "sessions/start" | "sessions/adoptNative" | "sessions/resume" | "sessions/acquireControl" | "sessions/renewControl" | "sessions/releaseControl" | "sessions/submitInput" | "sessions/watchEvents" | "sessions/interrupt" | "sessions/cool" | "approvals/listPending" | "approvals/respond" | "sessions/indexChanged" | "sessions/indexEnded" | "sessions/event" | "sessions/lagged" | "runtime/panicStop";
 
 /** The current model information Runtime can truthfully expose. */
 export type RuntimeModelCatalog = { readonly coverage: "known"; readonly models: ReadonlyArray<RuntimeModelChoice>; } | { readonly aliases: ReadonlyArray<string>; readonly coverage: "aliases"; readonly why: string; } | { readonly aliases: ReadonlyArray<string>; readonly coverage: "partial"; readonly models: ReadonlyArray<RuntimeModelChoice>; readonly why: string; } | { readonly coverage: "unknown"; readonly why: string; } | { readonly coverage: "unsupported"; readonly why: string; };
@@ -237,6 +237,15 @@ export interface ServerChallenge { readonly expiresAtMs: number; readonly instan
 
 /** One Runtime-managed session in the immediate catalogue. */
 export interface SessionDescriptor { readonly label?: string | null; readonly lifecycle: LifecycleState; readonly providerId: ProviderId; readonly sessionGeneration: number; readonly sessionId: RuntimeSessionId; }
+
+/** A changed authorized managed-session snapshot. */
+export interface SessionIndexChangedNotification { readonly snapshot: ManagedSessionList; readonly subscriptionId: string; }
+
+/** Why a managed-session index subscription ended. */
+export type SessionIndexEndReason = "integrationRevoked" | "authorityChanged" | "rootDenied" | "runtimeUnavailable";
+
+/** Final typed reason for retiring a managed-session index subscription. */
+export interface SessionIndexEndedNotification { readonly reason: SessionIndexEndReason; readonly subscriptionId: string; }
 
 /** One newly supervised or reheated session and its initial controller authority. */
 export interface SessionOpenResult { readonly control: ControlLease; readonly session: SessionDescriptor; }
@@ -261,3 +270,9 @@ export interface WatchEventsParams { readonly after?: EventCursor | null; readon
 
 /** Event subscription boundary returned before replay or live delivery. */
 export interface WatchEventsResult { readonly gap?: EventGap | null; readonly liveAt: EventCursor; readonly sessionId: RuntimeSessionId; readonly startsAt: EventCursor; readonly subscriptionId: string; }
+
+/** Install one dedicated managed-session index subscription. */
+export type WatchSessionIndexParams = Readonly<Record<string, never>>;
+
+/** Initial authorized snapshot and connection-local subscription identity. */
+export interface WatchSessionIndexResult { readonly snapshot: ManagedSessionList; readonly subscriptionId: string; }

@@ -785,7 +785,11 @@ async fn serve_surfaces(
                 let Asked { mut conversation, request, prepared, reservation, answered } = ask;
                 let changes_index = matches!(
                     &request,
-                    Request::Start { .. } | Request::Resume { .. } | Request::Close { .. }
+                    Request::Start { .. }
+                        | Request::Resume { .. }
+                        | Request::Close { .. }
+                        | Request::IntegrationApprovalFinish { .. }
+                        | Request::IntegrationRevoke { .. }
                 );
                 let reservation = reservation.and_then(ReservationGuard::take);
                 let reply = answer_prepared(

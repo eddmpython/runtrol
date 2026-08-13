@@ -132,6 +132,55 @@ pub struct ManagedSessionList {
     pub warnings: Vec<String>,
 }
 
+/// Install one dedicated managed-session index subscription.
+#[derive(Clone, Debug, Default, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WatchSessionIndexParams {}
+
+/// Initial authorized snapshot and connection-local subscription identity.
+#[derive(Clone, Debug, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WatchSessionIndexResult {
+    /// Opaque connection-local subscription identity.
+    pub subscription_id: String,
+    /// Exact authorized snapshot at the subscription boundary.
+    pub snapshot: ManagedSessionList,
+}
+
+/// A changed authorized managed-session snapshot.
+#[derive(Clone, Debug, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SessionIndexChangedNotification {
+    /// Opaque connection-local subscription identity.
+    pub subscription_id: String,
+    /// New complete authorized snapshot.
+    pub snapshot: ManagedSessionList,
+}
+
+/// Why a managed-session index subscription ended.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SessionIndexEndReason {
+    /// The integration grant was revoked.
+    IntegrationRevoked,
+    /// Scope, roots, or integration generations changed and require authenticated reconnect.
+    AuthorityChanged,
+    /// A previously approved filesystem root no longer names the approved object.
+    RootDenied,
+    /// The Runtime catalogue became unavailable.
+    RuntimeUnavailable,
+}
+
+/// Final typed reason for retiring a managed-session index subscription.
+#[derive(Clone, Debug, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SessionIndexEndedNotification {
+    /// Opaque connection-local subscription identity.
+    pub subscription_id: String,
+    /// Structural terminal reason.
+    pub reason: SessionIndexEndReason,
+}
+
 /// Select one exact Runtime-managed session.
 #[derive(Clone, Debug, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

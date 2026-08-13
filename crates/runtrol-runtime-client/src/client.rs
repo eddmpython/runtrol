@@ -12,9 +12,10 @@ use runtrol_runtime_protocol::{
     PendingEnrollmentId, ProviderId, ProviderList, RequestEnrollmentParams, RespondApprovalParams,
     ResumeSessionParams, RuntimeEventNotification, RuntimeMethod, RuntimeModelCatalog,
     RuntimeProviderCapabilities, RuntimeSessionId, ServerChallenge, SessionDescriptor,
-    SessionOpenResult, StartSessionParams, SubmitInputParams, SuccessResponse,
-    WatchEnrollmentParams, WatchEventsParams, WatchEventsResult, enrollment_signing_payload,
-    initialization_signing_payload,
+    SessionIndexChangedNotification, SessionIndexEndedNotification, SessionOpenResult,
+    StartSessionParams, SubmitInputParams, SuccessResponse, WatchEnrollmentParams,
+    WatchEventsParams, WatchEventsResult, WatchSessionIndexParams, WatchSessionIndexResult,
+    enrollment_signing_payload, initialization_signing_payload,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -623,6 +624,26 @@ impl SessionClient<'_> {
             .await
     }
 
+    /// Convert this connection into one managed-session index subscription after its initial snapshot.
+    ///
+    /// # Errors
+    ///
+    /// Public client and Runtime failures, including changed root authority or missing list scope.
+    pub async fn watch_index(&mut self) -> Result<SessionIndexSubscription<'_>, ClientError> {
+        let started: WatchSessionIndexResult = self
+            .runtime
+            .call(
+                RuntimeMethod::SessionsWatchIndex,
+                &WatchSessionIndexParams::default(),
+            )
+            .await?;
+        Ok(SessionIndexSubscription {
+            runtime: self.runtime,
+            subscription_id: started.subscription_id.clone(),
+            started,
+        })
+    }
+
     /// Read one exact Runtime-managed session descriptor.
     ///
     /// # Errors
@@ -820,6 +841,86 @@ impl ApprovalClient<'_> {
     }
 }
 
+/// One managed-session index notification.
+pub enum SessionIndexNotification {
+    /// The authorized snapshot changed.
+    Changed(SessionIndexChangedNotification),
+    /// The subscription ended with a typed authority or Runtime reason.
+    Ended(SessionIndexEndedNotification),
+}
+
+/// One dedicated managed-session index stream borrowed from an initialized Runtime connection.
+pub struct SessionIndexSubscription<'client> {
+    runtime: &'client mut RuntimeClient,
+    subscription_id: String,
+    started: WatchSessionIndexResult,
+}
+
+impl SessionIndexSubscription<'_> {
+    /// Initial authorized snapshot acknowledged before notifications begin.
+    #[must_use]
+    pub const fn started(&self) -> &WatchSessionIndexResult {
+        &self.started
+    }
+
+    /// Wait for a changed snapshot or terminal reason.
+    ///
+    /// # Errors
+    ///
+    /// Transport failure or a notification that violates the selected public revision.
+    pub async fn next(&mut self) -> Result<SessionIndexNotification, ClientError> {
+        let payload = self.runtime.connection.receive().await?;
+        let notification: JsonRpcNotification =
+            serde_json::from_slice(&payload).map_err(|error| {
+                ClientError::Protocol(format!(
+                    "session index notification is not valid public JSON-RPC: {error}"
+                ))
+            })?;
+        if notification.jsonrpc != "2.0" {
+            return Err(ClientError::Protocol(
+                "session index notification JSON-RPC version is not 2.0".to_owned(),
+            ));
+        }
+        let method = notification.method.parse::<RuntimeMethod>().map_err(|_| {
+            ClientError::Protocol("session index notification method is unknown".to_owned())
+        })?;
+        match method {
+            RuntimeMethod::SessionsIndexChanged => {
+                let changed: SessionIndexChangedNotification =
+                    serde_json::from_value(notification.params).map_err(|error| {
+                        ClientError::Protocol(format!(
+                            "session index change notification has the wrong shape: {error}"
+                        ))
+                    })?;
+                self.validate_subscription(&changed.subscription_id)?;
+                Ok(SessionIndexNotification::Changed(changed))
+            }
+            RuntimeMethod::SessionsIndexEnded => {
+                let ended: SessionIndexEndedNotification =
+                    serde_json::from_value(notification.params).map_err(|error| {
+                        ClientError::Protocol(format!(
+                            "session index end notification has the wrong shape: {error}"
+                        ))
+                    })?;
+                self.validate_subscription(&ended.subscription_id)?;
+                Ok(SessionIndexNotification::Ended(ended))
+            }
+            _ => Err(ClientError::Protocol(
+                "the dedicated session index stream received a different method".to_owned(),
+            )),
+        }
+    }
+
+    fn validate_subscription(&self, subscription_id: &str) -> Result<(), ClientError> {
+        if subscription_id != self.subscription_id {
+            return Err(ClientError::Protocol(
+                "session index notification target does not match its subscription".to_owned(),
+            ));
+        }
+        Ok(())
+    }
+}
+
 /// One dedicated bounded event stream borrowed from an initialized Runtime connection.
 pub struct EventSubscription<'client> {
     runtime: &'client mut RuntimeClient,
@@ -888,6 +989,7 @@ impl EventSubscription<'_> {
             | RuntimeMethod::ProvidersListModels
             | RuntimeMethod::ProvidersListNativeSessions
             | RuntimeMethod::SessionsList
+            | RuntimeMethod::SessionsWatchIndex
             | RuntimeMethod::SessionsGet
             | RuntimeMethod::SessionsStart
             | RuntimeMethod::SessionsAdoptNative
@@ -901,6 +1003,8 @@ impl EventSubscription<'_> {
             | RuntimeMethod::SessionsCool
             | RuntimeMethod::ApprovalsListPending
             | RuntimeMethod::ApprovalsRespond
+            | RuntimeMethod::SessionsIndexChanged
+            | RuntimeMethod::SessionsIndexEnded
             | RuntimeMethod::PanicStop => Err(ClientError::Protocol(
                 "the dedicated session stream received a non-event method".to_owned(),
             )),

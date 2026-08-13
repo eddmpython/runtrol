@@ -41,11 +41,14 @@ import type {
   RuntimeSessionId,
   ServerChallenge,
   SessionDescriptor,
+  SessionIndexChangedNotification,
+  SessionIndexEndedNotification,
   SessionOpenResult,
   StartSessionParams,
   SubmitInputParams,
   WatchEventsParams,
   WatchEventsResult,
+  WatchSessionIndexResult,
 } from "./generated/protocol.js";
 import { FINALIZED_REVISIONS, PUBLIC_LIMITS } from "./generated/protocol.js";
 import {
@@ -259,6 +262,16 @@ export class SessionClient {
     return callRuntime(this.runtime, "sessions/get", params, "SessionDescriptor");
   }
 
+  public async watchIndex(): Promise<SessionIndexSubscription> {
+    const started = await callRuntime<WatchSessionIndexResult>(
+      this.runtime,
+      "sessions/watchIndex",
+      {},
+      "WatchSessionIndexResult",
+    );
+    return new SessionIndexSubscription(beginStream(this.runtime), started);
+  }
+
   public start(params: StartSessionParams): Promise<SessionOpenResult> {
     if (
       params.model !== undefined
@@ -336,6 +349,48 @@ export class ApprovalClient {
       throw new RuntimeProtocolError("approval subject digest must be exactly 32 bytes");
     }
     requireEmpty(await callRuntime(this.runtime, "approvals/respond", params, undefined));
+  }
+}
+
+export type SessionIndexNotification =
+  | { readonly kind: "changed"; readonly changed: SessionIndexChangedNotification }
+  | { readonly kind: "ended"; readonly ended: SessionIndexEndedNotification };
+
+export class SessionIndexSubscription {
+  public constructor(
+    private readonly transport: RuntimeTransport,
+    public readonly started: WatchSessionIndexResult,
+  ) {}
+
+  public async next(): Promise<SessionIndexNotification> {
+    const decoded = decodeJson(await this.transport.receive());
+    const notification = validatePublic<JsonRpcNotification>("JsonRpcNotification", decoded);
+    if (notification.jsonrpc !== "2.0") {
+      throw new RuntimeProtocolError("session index notification JSON-RPC version is not 2.0");
+    }
+    if (notification.method === "sessions/indexChanged") {
+      const changed = validatePublic<SessionIndexChangedNotification>(
+        "SessionIndexChangedNotification",
+        notification.params,
+      );
+      this.validateTarget(changed.subscriptionId);
+      return { kind: "changed", changed };
+    }
+    if (notification.method === "sessions/indexEnded") {
+      const ended = validatePublic<SessionIndexEndedNotification>(
+        "SessionIndexEndedNotification",
+        notification.params,
+      );
+      this.validateTarget(ended.subscriptionId);
+      return { kind: "ended", ended };
+    }
+    throw new RuntimeProtocolError("dedicated session index stream received a different method");
+  }
+
+  private validateTarget(subscriptionId: string): void {
+    if (subscriptionId !== this.started.subscriptionId) {
+      throw new RuntimeProtocolError("session index notification target does not match its subscription");
+    }
   }
 }
 

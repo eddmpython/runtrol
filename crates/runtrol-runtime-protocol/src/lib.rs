@@ -36,7 +36,8 @@ pub use integration::{
 pub use inventory::{
     GetSessionParams, InstallationObservation, InstallationState, LifecycleState,
     ManagedSessionList, ProviderDescriptor, ProviderId, ProviderList, RuntimeSessionId,
-    SessionDescriptor,
+    SessionDescriptor, SessionIndexChangedNotification, SessionIndexEndReason,
+    SessionIndexEndedNotification, WatchSessionIndexParams, WatchSessionIndexResult,
 };
 pub use locator::{RUNTIME_LOCATOR_SCHEMA, RuntimeEndpointKind, RuntimeLocatorRecord};
 pub use method::RuntimeMethod;

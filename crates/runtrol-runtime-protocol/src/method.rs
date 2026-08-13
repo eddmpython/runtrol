@@ -42,6 +42,9 @@ pub enum RuntimeMethod {
     /// Read the Runtime-managed session catalogue.
     #[serde(rename = "sessions/list")]
     SessionsList,
+    /// Watch authorized managed-session index snapshots without polling.
+    #[serde(rename = "sessions/watchIndex")]
+    SessionsWatchIndex,
     /// Read one exact Runtime-managed session descriptor.
     #[serde(rename = "sessions/get")]
     SessionsGet,
@@ -81,6 +84,12 @@ pub enum RuntimeMethod {
     /// Answer one exact pending provider approval.
     #[serde(rename = "approvals/respond")]
     ApprovalsRespond,
+    /// One changed managed-session index snapshot.
+    #[serde(rename = "sessions/indexChanged")]
+    SessionsIndexChanged,
+    /// Final managed-session index subscription reason.
+    #[serde(rename = "sessions/indexEnded")]
+    SessionsIndexEnded,
     /// One normalized event notification.
     #[serde(rename = "sessions/event")]
     SessionsEvent,
@@ -108,6 +117,7 @@ impl RuntimeMethod {
             Self::ProvidersListModels => "providers/listModels",
             Self::ProvidersListNativeSessions => "providers/listNativeSessions",
             Self::SessionsList => "sessions/list",
+            Self::SessionsWatchIndex => "sessions/watchIndex",
             Self::SessionsGet => "sessions/get",
             Self::SessionsStart => "sessions/start",
             Self::SessionsAdoptNative => "sessions/adoptNative",
@@ -121,6 +131,8 @@ impl RuntimeMethod {
             Self::SessionsCool => "sessions/cool",
             Self::ApprovalsListPending => "approvals/listPending",
             Self::ApprovalsRespond => "approvals/respond",
+            Self::SessionsIndexChanged => "sessions/indexChanged",
+            Self::SessionsIndexEnded => "sessions/indexEnded",
             Self::SessionsEvent => "sessions/event",
             Self::SessionsLagged => "sessions/lagged",
             Self::PanicStop => "runtime/panicStop",
@@ -150,6 +162,7 @@ impl FromStr for RuntimeMethod {
             "providers/listModels" => Ok(Self::ProvidersListModels),
             "providers/listNativeSessions" => Ok(Self::ProvidersListNativeSessions),
             "sessions/list" => Ok(Self::SessionsList),
+            "sessions/watchIndex" => Ok(Self::SessionsWatchIndex),
             "sessions/get" => Ok(Self::SessionsGet),
             "sessions/start" => Ok(Self::SessionsStart),
             "sessions/adoptNative" => Ok(Self::SessionsAdoptNative),
@@ -163,6 +176,8 @@ impl FromStr for RuntimeMethod {
             "sessions/cool" => Ok(Self::SessionsCool),
             "approvals/listPending" => Ok(Self::ApprovalsListPending),
             "approvals/respond" => Ok(Self::ApprovalsRespond),
+            "sessions/indexChanged" => Ok(Self::SessionsIndexChanged),
+            "sessions/indexEnded" => Ok(Self::SessionsIndexEnded),
             "sessions/event" => Ok(Self::SessionsEvent),
             "sessions/lagged" => Ok(Self::SessionsLagged),
             "runtime/panicStop" => Ok(Self::PanicStop),
@@ -194,6 +209,7 @@ mod tests {
             RuntimeMethod::ProvidersListModels,
             RuntimeMethod::ProvidersListNativeSessions,
             RuntimeMethod::SessionsList,
+            RuntimeMethod::SessionsWatchIndex,
             RuntimeMethod::SessionsGet,
             RuntimeMethod::SessionsStart,
             RuntimeMethod::SessionsAdoptNative,
@@ -207,6 +223,8 @@ mod tests {
             RuntimeMethod::SessionsCool,
             RuntimeMethod::ApprovalsListPending,
             RuntimeMethod::ApprovalsRespond,
+            RuntimeMethod::SessionsIndexChanged,
+            RuntimeMethod::SessionsIndexEnded,
             RuntimeMethod::SessionsEvent,
             RuntimeMethod::SessionsLagged,
             RuntimeMethod::PanicStop,
