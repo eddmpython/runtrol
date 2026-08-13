@@ -22,6 +22,7 @@ mod integration_admin;
 mod provider_update;
 mod runtime_audit;
 mod runtime_auth;
+mod runtime_control;
 mod runtime_inventory;
 mod runtime_locator;
 mod runtime_serve;

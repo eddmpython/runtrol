@@ -294,6 +294,8 @@ pub struct SessionState {
     last_seen: WallMs,
     /// Since when nothing has arrived, once that has gone on long enough to be worth showing.
     quiet_since: Option<WallMs>,
+    /// Monotonic lifecycle generation for rejecting stale external control actions.
+    generation: u64,
 }
 
 impl SessionState {
@@ -304,6 +306,7 @@ impl SessionState {
             lifecycle: Lifecycle::Detached,
             last_seen: at,
             quiet_since: None,
+            generation: 0,
         }
     }
 
@@ -325,6 +328,12 @@ impl SessionState {
         self.quiet_since
     }
 
+    /// Monotonic lifecycle generation.
+    #[must_use]
+    pub const fn generation(&self) -> u64 {
+        self.generation
+    }
+
     /// Whether it looks stuck.
     ///
     /// A presentation question, never a lifecycle one. A session can look stuck and have a turn running, which
@@ -342,7 +351,14 @@ impl SessionState {
     ///
     /// [`Refused`] when the observation cannot have happened.
     pub fn observe(&mut self, observed: Observed, at: WallMs) -> Result<(), Refused> {
-        self.lifecycle = self.lifecycle.after(observed, at)?;
+        let next = self.lifecycle.after(observed, at)?;
+        if next != self.lifecycle {
+            self.generation = self.generation.checked_add(1).ok_or(Refused {
+                from: self.lifecycle.name(),
+                observed: "advanced past its lifecycle generation limit",
+            })?;
+        }
+        self.lifecycle = next;
         self.last_seen = at;
         self.quiet_since = None;
         Ok(())

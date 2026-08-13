@@ -600,6 +600,12 @@ async fn serve_surfaces(
     let (asking, mut asked) = mpsc::channel::<Asked>(ASKED_QUEUE);
     let (reserving, mut reservations) = mpsc::unbounded_channel::<ReservationAsked>();
     let (returning, mut returned) = mpsc::unbounded_channel::<AgentReturned>();
+    let (runtime_asking, mut runtime_asked) =
+        mpsc::channel::<crate::runtime_control::RuntimeAsked>(ASKED_QUEUE);
+    let (runtime_returning, mut runtime_returned) =
+        mpsc::unbounded_channel::<crate::runtime_control::RuntimeReturned>();
+    let mut runtime_control = crate::runtime_control::RuntimeControl::new()
+        .map_err(|error| ServeError::RuntimeBootstrap(error.message.to_owned()))?;
     let (noticing_updates, mut update_notices) = mpsc::unbounded_channel::<AutomaticUpdateNotice>();
     let mut provider_update_notices = BTreeMap::<ProviderId, Box<str>>::new();
     let initial_index = Arc::<[u8]>::from(encode_session_index(
@@ -638,6 +644,8 @@ async fn serve_surfaces(
                     runtime_instance.clone(),
                     Arc::clone(&composed),
                     runtime_sessions.subscribe(),
+                    runtime_asking.clone(),
+                    runtime_returning.clone(),
                 ));
             }
 
@@ -799,6 +807,37 @@ async fn serve_surfaces(
                 }
             }
 
+            Some(ask) = runtime_asked.recv() => {
+                let crate::runtime_control::RuntimeAsked {
+                    integration,
+                    request,
+                    answered,
+                } = ask;
+                let reply = runtime_control.answer(
+                    &composed.store,
+                    &mut sessions,
+                    integration,
+                    request,
+                );
+                if let Err(crate::runtime_control::RuntimeControlReply::Sending {
+                    mutation: _,
+                    taken,
+                    command: _,
+                }) = answered.send(reply)
+                {
+                    let runtrol_core::TakenAgent { agent, lease } = taken;
+                    drop(agent);
+                    sessions.abandon_agent(lease);
+                    publish_session_index(
+                        &session_index,
+                        &runtime_sessions,
+                        &composed,
+                        &sessions,
+                        &provider_update_notices,
+                    );
+                }
+            }
+
             Some(returned_agent) = returned.recv() => match returned_agent {
                 AgentReturned::Finished { lease, agent, outcome, answered } => {
                     let response = match sessions.return_agent(lease, agent) {
@@ -815,6 +854,38 @@ async fn serve_surfaces(
                 }
                 AgentReturned::Abandoned(lease) => {
                     sessions.abandon_agent(lease);
+                    publish_session_index(
+                        &session_index,
+                        &runtime_sessions,
+                        &composed,
+                        &sessions,
+                        &provider_update_notices,
+                    );
+                }
+            },
+
+            Some(returned_agent) = runtime_returned.recv() => match returned_agent {
+                crate::runtime_control::RuntimeReturned::Finished {
+                    mutation,
+                    taken,
+                    outcome,
+                    answered,
+                } => {
+                    let result = runtime_control.finish_command(
+                        &composed.store,
+                        &mut sessions,
+                        mutation,
+                        taken,
+                        &outcome,
+                    );
+                    if answered.send(result).is_err() {}
+                }
+                crate::runtime_control::RuntimeReturned::Abandoned { mutation, lease } => {
+                    crate::runtime_control::RuntimeControl::abandon_command(
+                        &mut sessions,
+                        mutation,
+                        lease,
+                    );
                     publish_session_index(
                         &session_index,
                         &runtime_sessions,

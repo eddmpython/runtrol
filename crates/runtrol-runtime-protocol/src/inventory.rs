@@ -115,6 +115,8 @@ pub struct SessionDescriptor {
     pub provider_id: ProviderId,
     /// Current supervision state.
     pub lifecycle: LifecycleState,
+    /// Monotonic lifecycle generation used to reject stale control actions.
+    pub session_generation: u64,
     /// Operator-owned label, never derived from conversation content.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,

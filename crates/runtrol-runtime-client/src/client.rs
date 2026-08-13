@@ -2,12 +2,14 @@
 
 use base64ct::{Base64UrlUnpadded, Encoding as _};
 use runtrol_runtime_protocol::{
-    AppScope, CHALLENGE_LIFETIME_MS, ClientCapabilities, ClientInfo, EnrollmentDecision,
-    EnrollmentManifest, EnrollmentReceipt, ErrorResponse, FINALIZED_REVISIONS, InitializeParams,
-    InitializeResult, IntegrationAuthentication, IntegrationGrant, JsonRpcId, JsonRpcNotification,
-    JsonRpcRequest, JsonRpcResponse, ManagedSessionList, PendingEnrollmentId, ProviderList,
-    RequestEnrollmentParams, RuntimeMethod, ServerChallenge, SuccessResponse,
-    WatchEnrollmentParams, enrollment_signing_payload, initialization_signing_payload,
+    AcquireControlParams, AppScope, CHALLENGE_LIFETIME_MS, ClientCapabilities, ClientInfo,
+    ControlLease, ControlLeaseParams, EnrollmentDecision, EnrollmentManifest, EnrollmentReceipt,
+    ErrorResponse, FINALIZED_REVISIONS, InitializeParams, InitializeResult,
+    IntegrationAuthentication, IntegrationGrant, JsonRpcId, JsonRpcNotification, JsonRpcRequest,
+    JsonRpcResponse, LaggedNotification, ManagedSessionList, PendingEnrollmentId, ProviderList,
+    RequestEnrollmentParams, RuntimeEventNotification, RuntimeMethod, RuntimeSessionId,
+    ServerChallenge, SubmitInputParams, SuccessResponse, WatchEnrollmentParams, WatchEventsParams,
+    WatchEventsResult, enrollment_signing_payload, initialization_signing_payload,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -562,6 +564,199 @@ impl SessionClient<'_> {
             .call(RuntimeMethod::SessionsList, &EmptyParams {})
             .await
     }
+
+    /// Atomically acquire one renewable write-control lease against the observed session generation.
+    ///
+    /// # Errors
+    ///
+    /// Public client and Runtime failures, including stale lifecycle and control conflicts.
+    pub async fn acquire_control(
+        &mut self,
+        params: &AcquireControlParams,
+    ) -> Result<ControlLease, ClientError> {
+        self.runtime
+            .call(RuntimeMethod::SessionsAcquireControl, params)
+            .await
+    }
+
+    /// Renew one exact current lease generation.
+    ///
+    /// # Errors
+    ///
+    /// Public client and Runtime failures, including expired or stale leases.
+    pub async fn renew_control(
+        &mut self,
+        params: &ControlLeaseParams,
+    ) -> Result<ControlLease, ClientError> {
+        self.runtime
+            .call(RuntimeMethod::SessionsRenewControl, params)
+            .await
+    }
+
+    /// Release one exact current lease generation.
+    ///
+    /// # Errors
+    ///
+    /// Public client and Runtime failures, including expired or stale leases.
+    pub async fn release_control(
+        &mut self,
+        params: &ControlLeaseParams,
+    ) -> Result<(), ClientError> {
+        let _: EmptyResult = self
+            .runtime
+            .call(RuntimeMethod::SessionsReleaseControl, params)
+            .await?;
+        Ok(())
+    }
+
+    /// Forward caller-owned input unchanged under one exact lease generation.
+    ///
+    /// # Errors
+    ///
+    /// Public client and Runtime failures. An ambiguous provider boundary returns `outcomeUnknown`.
+    pub async fn submit_input(&mut self, params: &SubmitInputParams) -> Result<(), ClientError> {
+        let _: EmptyResult = self
+            .runtime
+            .call(RuntimeMethod::SessionsSubmitInput, params)
+            .await?;
+        Ok(())
+    }
+
+    /// Ask the provider to interrupt one exact controlled session.
+    ///
+    /// # Errors
+    ///
+    /// Public client and Runtime failures. The request never invents a turn outcome.
+    pub async fn interrupt(&mut self, params: &ControlLeaseParams) -> Result<(), ClientError> {
+        let _: EmptyResult = self
+            .runtime
+            .call(RuntimeMethod::SessionsInterrupt, params)
+            .await?;
+        Ok(())
+    }
+
+    /// Convert this connection into one bounded event subscription after the acknowledgement.
+    ///
+    /// The returned borrow prevents another request from sharing the dedicated stream connection.
+    ///
+    /// # Errors
+    ///
+    /// Public client and Runtime failures, including an invalid or unavailable replay cursor.
+    pub async fn watch_events<'client>(
+        &'client mut self,
+        params: &WatchEventsParams,
+    ) -> Result<EventSubscription<'client>, ClientError> {
+        let started: WatchEventsResult = self
+            .runtime
+            .call(RuntimeMethod::SessionsWatchEvents, params)
+            .await?;
+        Ok(EventSubscription {
+            runtime: self.runtime,
+            subscription_id: started.subscription_id.clone(),
+            session_id: started.session_id.clone(),
+            started,
+        })
+    }
+}
+
+/// One dedicated bounded event stream borrowed from an initialized Runtime connection.
+pub struct EventSubscription<'client> {
+    runtime: &'client mut RuntimeClient,
+    subscription_id: String,
+    session_id: RuntimeSessionId,
+    started: WatchEventsResult,
+}
+
+impl EventSubscription<'_> {
+    /// Exact replay and live boundary acknowledged before notifications begin.
+    #[must_use]
+    pub const fn started(&self) -> &WatchEventsResult {
+        &self.started
+    }
+
+    /// Wait for the next normalized event or explicit lag boundary.
+    ///
+    /// # Errors
+    ///
+    /// Transport failure or a notification that violates the selected public revision.
+    pub async fn next(&mut self) -> Result<SessionNotification, ClientError> {
+        let payload = self.runtime.connection.receive().await?;
+        let notification: JsonRpcNotification =
+            serde_json::from_slice(&payload).map_err(|error| {
+                ClientError::Protocol(format!(
+                    "session notification is not valid public JSON-RPC: {error}"
+                ))
+            })?;
+        if notification.jsonrpc != "2.0" {
+            return Err(ClientError::Protocol(
+                "session notification JSON-RPC version is not 2.0".to_owned(),
+            ));
+        }
+        let method = notification.method.parse::<RuntimeMethod>().map_err(|_| {
+            ClientError::Protocol("session notification method is unknown".to_owned())
+        })?;
+        match method {
+            RuntimeMethod::SessionsEvent => {
+                let event: RuntimeEventNotification = serde_json::from_value(notification.params)
+                    .map_err(|error| {
+                    ClientError::Protocol(format!(
+                        "session event notification has the wrong shape: {error}"
+                    ))
+                })?;
+                self.validate_target(&event.subscription_id, &event.session_id)?;
+                Ok(SessionNotification::Event(event))
+            }
+            RuntimeMethod::SessionsLagged => {
+                let lagged: LaggedNotification = serde_json::from_value(notification.params)
+                    .map_err(|error| {
+                        ClientError::Protocol(format!(
+                            "session lag notification has the wrong shape: {error}"
+                        ))
+                    })?;
+                self.validate_target(&lagged.subscription_id, &lagged.session_id)?;
+                Ok(SessionNotification::Lagged(lagged))
+            }
+            RuntimeMethod::Initialize
+            | RuntimeMethod::Initialized
+            | RuntimeMethod::Challenge
+            | RuntimeMethod::IntegrationsRequestEnrollment
+            | RuntimeMethod::IntegrationsWatchEnrollment
+            | RuntimeMethod::IntegrationsGetGrant
+            | RuntimeMethod::ProvidersList
+            | RuntimeMethod::SessionsList
+            | RuntimeMethod::SessionsAcquireControl
+            | RuntimeMethod::SessionsRenewControl
+            | RuntimeMethod::SessionsReleaseControl
+            | RuntimeMethod::SessionsSubmitInput
+            | RuntimeMethod::SessionsWatchEvents
+            | RuntimeMethod::SessionsInterrupt
+            | RuntimeMethod::PanicStop => Err(ClientError::Protocol(
+                "the dedicated session stream received a non-event method".to_owned(),
+            )),
+        }
+    }
+
+    fn validate_target(
+        &self,
+        subscription_id: &str,
+        session_id: &RuntimeSessionId,
+    ) -> Result<(), ClientError> {
+        if subscription_id != self.subscription_id || session_id != &self.session_id {
+            return Err(ClientError::Protocol(
+                "session notification target does not match its subscription".to_owned(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// One item on a dedicated public session stream.
+#[derive(Clone, Debug, PartialEq)]
+pub enum SessionNotification {
+    /// One normalized provider-neutral event and its next reconnect boundary.
+    Event(RuntimeEventNotification),
+    /// The subscriber fell behind the bounded queue and must reconnect from the named boundary.
+    Lagged(LaggedNotification),
 }
 
 #[cfg(test)]

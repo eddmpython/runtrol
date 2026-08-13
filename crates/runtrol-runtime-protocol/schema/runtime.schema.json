@@ -1,5 +1,36 @@
 {
   "$defs": {
+    "AcquireControlParams": {
+      "additionalProperties": false,
+      "description": "Acquire control only if the caller still sees this exact live state.",
+      "properties": {
+        "expectedLifecycle": {
+          "$ref": "#/$defs/LifecycleState",
+          "description": "Lifecycle state visible when the user chose the action."
+        },
+        "expectedSessionGeneration": {
+          "description": "Lifecycle generation visible when the user chose the action.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "requestId": {
+          "$ref": "#/$defs/MutationRequestId",
+          "description": "Caller-minted mutation identity."
+        },
+        "sessionId": {
+          "$ref": "#/$defs/RuntimeSessionId",
+          "description": "Exact Runtime-managed session."
+        }
+      },
+      "required": [
+        "requestId",
+        "sessionId",
+        "expectedLifecycle",
+        "expectedSessionGeneration"
+      ],
+      "type": "object"
+    },
     "AppScope": {
       "description": "Public integration authority, separate from remote device scopes.",
       "oneOf": [
@@ -93,6 +124,77 @@
       "required": [
         "name",
         "version"
+      ],
+      "type": "object"
+    },
+    "ControlLease": {
+      "additionalProperties": false,
+      "description": "One opaque renewable control authority for one live session incarnation.",
+      "properties": {
+        "expiresAtMs": {
+          "description": "Wall-clock expiry in Unix milliseconds.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "leaseGeneration": {
+          "description": "Monotonic lease generation required on renewal and mutations.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "leaseId": {
+          "description": "Opaque unguessable lease identity.",
+          "type": "string"
+        },
+        "sessionGeneration": {
+          "description": "Session lifecycle generation observed when the lease was acquired.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "sessionId": {
+          "$ref": "#/$defs/RuntimeSessionId",
+          "description": "Exact controlled session."
+        }
+      },
+      "required": [
+        "leaseId",
+        "sessionId",
+        "sessionGeneration",
+        "leaseGeneration",
+        "expiresAtMs"
+      ],
+      "type": "object"
+    },
+    "ControlLeaseParams": {
+      "additionalProperties": false,
+      "description": "Renew or release one exact lease generation.",
+      "properties": {
+        "leaseGeneration": {
+          "description": "Exact current lease generation.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "leaseId": {
+          "description": "Opaque lease identity returned on acquisition.",
+          "type": "string"
+        },
+        "requestId": {
+          "$ref": "#/$defs/MutationRequestId",
+          "description": "Caller-minted mutation identity."
+        },
+        "sessionId": {
+          "$ref": "#/$defs/RuntimeSessionId",
+          "description": "Exact Runtime-managed session."
+        }
+      },
+      "required": [
+        "requestId",
+        "sessionId",
+        "leaseId",
+        "leaseGeneration"
       ],
       "type": "object"
     },
@@ -244,6 +346,53 @@
         "jsonrpc",
         "id",
         "error"
+      ],
+      "type": "object"
+    },
+    "EventCursor": {
+      "additionalProperties": false,
+      "description": "Public reconnect cursor over the existing bounded Runtime replay ring.",
+      "properties": {
+        "epoch": {
+          "description": "Live process attachment generation.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "seq": {
+          "description": "Dense next event sequence.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "stream": {
+          "description": "Runtime-minted stream identity.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "stream",
+        "epoch",
+        "seq"
+      ],
+      "type": "object"
+    },
+    "EventGap": {
+      "additionalProperties": false,
+      "description": "Explicit replay gap when the requested cursor fell outside the bounded ring.",
+      "properties": {
+        "liveAt": {
+          "$ref": "#/$defs/EventCursor",
+          "description": "Oldest boundary Runtime can serve now."
+        },
+        "requested": {
+          "$ref": "#/$defs/EventCursor",
+          "description": "Cursor the consumer requested."
+        }
+      },
+      "required": [
+        "requested",
+        "liveAt"
       ],
       "type": "object"
     },
@@ -535,6 +684,30 @@
       ],
       "description": "A response is exactly one success or one failure."
     },
+    "LaggedNotification": {
+      "additionalProperties": false,
+      "description": "A slow subscriber was retired at an exact missing boundary.",
+      "properties": {
+        "nextExpected": {
+          "$ref": "#/$defs/EventCursor",
+          "description": "First event the subscriber did not receive."
+        },
+        "sessionId": {
+          "$ref": "#/$defs/RuntimeSessionId",
+          "description": "Exact watched session."
+        },
+        "subscriptionId": {
+          "description": "Opaque connection-local subscription identity.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "subscriptionId",
+        "sessionId",
+        "nextExpected"
+      ],
+      "type": "object"
+    },
     "LifecycleState": {
       "description": "Structural Runtime supervision state without conversation meaning.",
       "oneOf": [
@@ -584,6 +757,10 @@
         "warnings"
       ],
       "type": "object"
+    },
+    "MutationRequestId": {
+      "description": "A caller-minted UUIDv7 identifying one state-changing request.",
+      "type": "string"
     },
     "PendingEnrollmentId": {
       "description": "An opaque pending local enrollment decision.",
@@ -672,12 +849,22 @@
         "providerInventory": {
           "description": "Fast provider inventory method is implemented.",
           "type": "boolean"
+        },
+        "sessionControl": {
+          "description": "Renewable single-writer session control is implemented.",
+          "type": "boolean"
+        },
+        "sessionEvents": {
+          "description": "Bounded replay followed by live normalized events is implemented.",
+          "type": "boolean"
         }
       },
       "required": [
         "integrationEnrollment",
         "providerInventory",
-        "managedSessionList"
+        "managedSessionList",
+        "sessionControl",
+        "sessionEvents"
       ],
       "type": "object"
     },
@@ -872,6 +1059,39 @@
         }
       ]
     },
+    "RuntimeEventNotification": {
+      "additionalProperties": false,
+      "description": "One provider-neutral normalized event notification.",
+      "properties": {
+        "event": {
+          "description": "Existing normalized structural event, transported without interpretation by Runtime."
+        },
+        "eventRevision": {
+          "$ref": "#/$defs/ProtocolRevision",
+          "description": "Public event vocabulary revision."
+        },
+        "nextExpected": {
+          "$ref": "#/$defs/EventCursor",
+          "description": "Next exact reconnect boundary."
+        },
+        "sessionId": {
+          "$ref": "#/$defs/RuntimeSessionId",
+          "description": "Exact watched session."
+        },
+        "subscriptionId": {
+          "description": "Opaque connection-local subscription identity.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "subscriptionId",
+        "sessionId",
+        "eventRevision",
+        "event",
+        "nextExpected"
+      ],
+      "type": "object"
+    },
     "RuntimeInstance": {
       "additionalProperties": false,
       "description": "Public Runtime instance facts used to reject a stale or replaced locator.",
@@ -906,8 +1126,20 @@
           "minimum": 0,
           "type": "integer"
         },
+        "controlLeaseLifetimeMs": {
+          "description": "Lifetime of one renewable control lease.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
         "enrollmentLifetimeMs": {
           "description": "Lifetime of one pending local integration enrollment.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "idempotencyWindowMs": {
+          "description": "Maximum age of a mutation identity with a known outcome.",
           "format": "uint64",
           "minimum": 0,
           "type": "integer"
@@ -915,6 +1147,13 @@
         "maxFrameBytes": {
           "description": "Maximum frame payload before allocation.",
           "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "maxIdempotencyRecords": {
+          "description": "Maximum retained mutation identities across integrations.",
+          "format": "uint16",
+          "maximum": 65535,
           "minimum": 0,
           "type": "integer"
         },
@@ -961,7 +1200,10 @@
         "challengeLifetimeMs",
         "enrollmentLifetimeMs",
         "maxPendingEnrollments",
-        "maxRevisionOffers"
+        "maxRevisionOffers",
+        "controlLeaseLifetimeMs",
+        "idempotencyWindowMs",
+        "maxIdempotencyRecords"
       ],
       "type": "object"
     },
@@ -1006,6 +1248,46 @@
         {
           "const": "sessions/list",
           "description": "Read the Runtime-managed session catalogue.",
+          "type": "string"
+        },
+        {
+          "const": "sessions/acquireControl",
+          "description": "Acquire the one renewable write lease for a live session.",
+          "type": "string"
+        },
+        {
+          "const": "sessions/renewControl",
+          "description": "Renew one exact control lease generation.",
+          "type": "string"
+        },
+        {
+          "const": "sessions/releaseControl",
+          "description": "Voluntarily release one exact control lease generation.",
+          "type": "string"
+        },
+        {
+          "const": "sessions/submitInput",
+          "description": "Submit caller-owned input without rewriting or implicit retry.",
+          "type": "string"
+        },
+        {
+          "const": "sessions/watchEvents",
+          "description": "Watch the existing bounded normalized event stream.",
+          "type": "string"
+        },
+        {
+          "const": "sessions/interrupt",
+          "description": "Interrupt one exact controlled live session.",
+          "type": "string"
+        },
+        {
+          "const": "sessions/event",
+          "description": "One normalized event notification.",
+          "type": "string"
+        },
+        {
+          "const": "sessions/lagged",
+          "description": "A bounded subscription was retired after lagging.",
           "type": "string"
         },
         {
@@ -1069,6 +1351,12 @@
           "$ref": "#/$defs/ProviderId",
           "description": "Opaque provider selection value."
         },
+        "sessionGeneration": {
+          "description": "Monotonic lifecycle generation used to reject stale control actions.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
         "sessionId": {
           "$ref": "#/$defs/RuntimeSessionId",
           "description": "Stable Runtime selection value."
@@ -1077,7 +1365,44 @@
       "required": [
         "sessionId",
         "providerId",
-        "lifecycle"
+        "lifecycle",
+        "sessionGeneration"
+      ],
+      "type": "object"
+    },
+    "SubmitInputParams": {
+      "additionalProperties": false,
+      "description": "Submit caller-owned input under one exact control lease.",
+      "properties": {
+        "input": {
+          "description": "Caller-owned input transported without prefix, suffix, or rewriting.",
+          "type": "string"
+        },
+        "leaseGeneration": {
+          "description": "Exact current lease generation.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "leaseId": {
+          "description": "Opaque lease identity returned on acquisition.",
+          "type": "string"
+        },
+        "requestId": {
+          "$ref": "#/$defs/MutationRequestId",
+          "description": "Caller-minted idempotency identity."
+        },
+        "sessionId": {
+          "$ref": "#/$defs/RuntimeSessionId",
+          "description": "Exact Runtime-managed session."
+        }
+      },
+      "required": [
+        "requestId",
+        "sessionId",
+        "leaseId",
+        "leaseGeneration",
+        "input"
       ],
       "type": "object"
     },
@@ -1117,13 +1442,87 @@
         "pendingId"
       ],
       "type": "object"
+    },
+    "WatchEventsParams": {
+      "additionalProperties": false,
+      "description": "Install one bounded event subscription on a dedicated connection.",
+      "properties": {
+        "after": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EventCursor"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Next expected event, or no cursor for the current bounded tail."
+        },
+        "sessionId": {
+          "$ref": "#/$defs/RuntimeSessionId",
+          "description": "Exact Runtime-managed session."
+        }
+      },
+      "required": [
+        "sessionId"
+      ],
+      "type": "object"
+    },
+    "WatchEventsResult": {
+      "additionalProperties": false,
+      "description": "Event subscription boundary returned before replay or live delivery.",
+      "properties": {
+        "gap": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EventGap"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Explicit bounded replay miss."
+        },
+        "liveAt": {
+          "$ref": "#/$defs/EventCursor",
+          "description": "Boundary between replay and newly published events."
+        },
+        "sessionId": {
+          "$ref": "#/$defs/RuntimeSessionId",
+          "description": "Exact watched session."
+        },
+        "startsAt": {
+          "$ref": "#/$defs/EventCursor",
+          "description": "First delivered boundary."
+        },
+        "subscriptionId": {
+          "description": "Opaque connection-local subscription identity.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "subscriptionId",
+        "sessionId",
+        "startsAt",
+        "liveAt"
+      ],
+      "type": "object"
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "description": "Root containing every type admitted by the initial public boundary.",
   "properties": {
+    "acquire_control": {
+      "$ref": "#/$defs/AcquireControlParams"
+    },
     "challenge": {
       "$ref": "#/$defs/ServerChallenge"
+    },
+    "control_lease": {
+      "$ref": "#/$defs/ControlLease"
+    },
+    "control_lease_params": {
+      "$ref": "#/$defs/ControlLeaseParams"
     },
     "enrollment_decision": {
       "$ref": "#/$defs/EnrollmentDecision"
@@ -1139,6 +1538,9 @@
     },
     "integration_grant": {
       "$ref": "#/$defs/IntegrationGrant"
+    },
+    "lagged": {
+      "$ref": "#/$defs/LaggedNotification"
     },
     "managed_session_list": {
       "$ref": "#/$defs/ManagedSessionList"
@@ -1161,8 +1563,20 @@
     "response": {
       "$ref": "#/$defs/JsonRpcResponse"
     },
+    "runtime_event": {
+      "$ref": "#/$defs/RuntimeEventNotification"
+    },
+    "submit_input": {
+      "$ref": "#/$defs/SubmitInputParams"
+    },
     "watch_enrollment": {
       "$ref": "#/$defs/WatchEnrollmentParams"
+    },
+    "watch_events": {
+      "$ref": "#/$defs/WatchEventsParams"
+    },
+    "watch_events_result": {
+      "$ref": "#/$defs/WatchEventsResult"
     }
   },
   "required": [
@@ -1179,7 +1593,15 @@
     "enrollment_decision",
     "integration_grant",
     "provider_list",
-    "managed_session_list"
+    "managed_session_list",
+    "acquire_control",
+    "control_lease",
+    "control_lease_params",
+    "submit_input",
+    "watch_events",
+    "watch_events_result",
+    "runtime_event",
+    "lagged"
   ],
   "title": "PublicProtocolSchema",
   "type": "object"

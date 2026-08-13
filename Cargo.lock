@@ -879,6 +879,7 @@ dependencies = [
  "ed25519-dalek",
  "fastwebsockets",
  "getrandom 0.4.3",
+ "hmac",
  "http-body-util",
  "hyper",
  "hyper-util",
@@ -897,6 +898,7 @@ dependencies = [
  "semver",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "thiserror 2.0.19",
  "tokio",
 ]
@@ -968,6 +970,7 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.19",
+ "uuid",
 ]
 
 [[package]]

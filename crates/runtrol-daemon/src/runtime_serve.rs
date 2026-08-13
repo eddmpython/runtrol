@@ -5,20 +5,26 @@ use std::sync::Arc;
 
 use runtrol_ipc::transport::Connection;
 use runtrol_runtime_protocol::{
-    AppScope, ErrorResponse, FINALIZED_REVISIONS, InitializeParams, InitializeResult, JsonRpcId,
-    JsonRpcNotification, JsonRpcRequest, JsonRpcResponse, MAX_REVISION_OFFERS,
+    AcquireControlParams, AppScope, ControlLeaseParams, ErrorResponse, FINALIZED_REVISIONS,
+    InitializeParams, InitializeResult, JsonRpcId, JsonRpcNotification, JsonRpcRequest,
+    JsonRpcResponse, LaggedNotification, MAX_REVISION_OFFERS, ProtocolRevision,
     RequestEnrollmentParams, RuntimeCapabilities, RuntimeError, RuntimeErrorKind, RuntimeInstance,
-    RuntimeLimits, RuntimeMethod, SuccessResponse, WatchEnrollmentParams, negotiate,
+    RuntimeLimits, RuntimeMethod, RuntimeSessionId, SubmitInputParams, SuccessResponse,
+    WatchEnrollmentParams, WatchEventsParams, WatchEventsResult, negotiate,
 };
 use runtrol_store::EnrollmentKey;
 use runtrol_store::IntegrationAuditOutcome;
 use serde::Serialize;
-use tokio::sync::watch;
+use tokio::sync::{mpsc, oneshot, watch};
 
 use crate::Composed;
 use crate::runtime_auth::{
     AuthorizationFailure, AuthorizedIntegration, ClientContext, authenticate, challenge,
     enrollment_decision, refresh, request_enrollment,
+};
+use crate::runtime_control::{
+    RuntimeAgentGuard, RuntimeAsked, RuntimeControlFailure, RuntimeControlReply,
+    RuntimeControlRequest, RuntimeReturned, cursor_to_public,
 };
 use crate::runtime_inventory::{RuntimeInventoryFailure, RuntimeSessionCatalogue};
 
@@ -28,6 +34,8 @@ pub(crate) async fn serve_connection(
     instance_id: String,
     composed: Arc<Composed>,
     sessions: watch::Receiver<Arc<RuntimeSessionCatalogue>>,
+    asking: mpsc::Sender<RuntimeAsked>,
+    returning: mpsc::UnboundedSender<RuntimeReturned>,
 ) {
     let Ok(challenge) = challenge(&instance_id) else {
         return;
@@ -65,18 +73,26 @@ pub(crate) async fn serve_connection(
         let Ok(request) = serde_json::from_slice::<JsonRpcRequest>(&payload) else {
             return;
         };
+        let catalogue = Arc::clone(&sessions.borrow());
         let answered = answer(
             &mut state,
             &instance_id,
             &composed,
-            &sessions.borrow(),
+            &catalogue,
+            &asking,
+            &returning,
             request,
-        );
+        )
+        .await;
         if send_response(&mut connection, &answered.response)
             .await
             .is_err()
             || answered.close
         {
+            return;
+        }
+        if let Some(watching) = answered.watching {
+            relay_events(&mut connection, watching).await;
             return;
         }
     }
@@ -105,6 +121,7 @@ enum PublicAuthority {
 struct Answer {
     response: JsonRpcResponse,
     close: bool,
+    watching: Option<Watching>,
 }
 
 impl Answer {
@@ -112,6 +129,7 @@ impl Answer {
         Self {
             response: success(id, result),
             close: false,
+            watching: None,
         }
     }
 
@@ -120,6 +138,7 @@ impl Answer {
         Self {
             response: failure_response(id, failure.kind, failure.message),
             close,
+            watching: None,
         }
     }
 
@@ -127,15 +146,40 @@ impl Answer {
         Self {
             response: failure_response(id, code, message),
             close: false,
+            watching: None,
+        }
+    }
+
+    fn watching(
+        id: JsonRpcId,
+        result: &WatchEventsResult,
+        view: Box<runtrol_core::SessionView>,
+    ) -> Self {
+        Self {
+            response: success(id, result),
+            close: false,
+            watching: Some(Watching {
+                subscription_id: result.subscription_id.clone(),
+                session_id: result.session_id.clone(),
+                view,
+            }),
         }
     }
 }
 
-fn answer(
+struct Watching {
+    subscription_id: String,
+    session_id: RuntimeSessionId,
+    view: Box<runtrol_core::SessionView>,
+}
+
+async fn answer(
     state: &mut PublicState,
     instance_id: &str,
     composed: &Composed,
     sessions: &RuntimeSessionCatalogue,
+    asking: &mpsc::Sender<RuntimeAsked>,
+    returning: &mpsc::UnboundedSender<RuntimeReturned>,
     request: JsonRpcRequest,
 ) -> Answer {
     let id = request.id;
@@ -192,10 +236,13 @@ fn answer(
         instance_id,
         composed,
         sessions,
+        asking,
+        returning,
         method,
         id,
         request.params,
-    );
+    )
+    .await;
     let (outcome, reason) = match &answered.response {
         JsonRpcResponse::Success(_) => (IntegrationAuditOutcome::Allowed, "allowed"),
         JsonRpcResponse::Error(error) => {
@@ -219,11 +266,17 @@ fn answer(
     answered
 }
 
-fn dispatch_public(
+#[expect(
+    clippy::too_many_arguments,
+    reason = "public dispatch keeps connection authority, immutable catalogues, owner channels, and the exact JSON-RPC request together"
+)]
+async fn dispatch_public(
     state: &mut PublicState,
     instance_id: &str,
     composed: &Composed,
     sessions: &RuntimeSessionCatalogue,
+    asking: &mpsc::Sender<RuntimeAsked>,
+    returning: &mpsc::UnboundedSender<RuntimeReturned>,
     method: RuntimeMethod,
     id: JsonRpcId,
     params: serde_json::Value,
@@ -257,7 +310,21 @@ fn dispatch_public(
             RuntimeMethod::IntegrationsGetGrant => grant(state, composed, id, params),
             RuntimeMethod::ProvidersList => providers(state, composed, id, params),
             RuntimeMethod::SessionsList => sessions_list(state, composed, sessions, id, params),
-            RuntimeMethod::Initialized | RuntimeMethod::Challenge => Answer::plain(
+            RuntimeMethod::SessionsAcquireControl
+            | RuntimeMethod::SessionsRenewControl
+            | RuntimeMethod::SessionsReleaseControl
+            | RuntimeMethod::SessionsSubmitInput
+            | RuntimeMethod::SessionsWatchEvents
+            | RuntimeMethod::SessionsInterrupt => {
+                session_operation(
+                    state, composed, sessions, asking, returning, method, id, params,
+                )
+                .await
+            }
+            RuntimeMethod::Initialized
+            | RuntimeMethod::Challenge
+            | RuntimeMethod::SessionsEvent
+            | RuntimeMethod::SessionsLagged => Answer::plain(
                 id,
                 RuntimeErrorKind::InvalidRequest,
                 "the method is not a client request in the current state",
@@ -275,12 +342,21 @@ fn required_scope(method: RuntimeMethod) -> Option<AppScope> {
     match method {
         RuntimeMethod::ProvidersList => Some(AppScope::ProviderRead),
         RuntimeMethod::SessionsList => Some(AppScope::SessionList),
-        RuntimeMethod::Initialize
+        RuntimeMethod::SessionsAcquireControl | RuntimeMethod::SessionsSubmitInput => {
+            Some(AppScope::SessionInputWrite)
+        }
+        RuntimeMethod::SessionsWatchEvents => Some(AppScope::SessionOutputRead),
+        RuntimeMethod::SessionsInterrupt => Some(AppScope::SessionStop),
+        RuntimeMethod::SessionsRenewControl
+        | RuntimeMethod::SessionsReleaseControl
+        | RuntimeMethod::Initialize
         | RuntimeMethod::Initialized
         | RuntimeMethod::Challenge
         | RuntimeMethod::IntegrationsRequestEnrollment
         | RuntimeMethod::IntegrationsWatchEnrollment
         | RuntimeMethod::IntegrationsGetGrant
+        | RuntimeMethod::SessionsEvent
+        | RuntimeMethod::SessionsLagged
         | RuntimeMethod::PanicStop => None,
     }
 }
@@ -308,6 +384,7 @@ fn audit_unavailable(id: JsonRpcId) -> Answer {
             "Runtime authorization audit storage is unavailable",
         ),
         close: true,
+        watching: None,
     }
 }
 
@@ -383,6 +460,8 @@ fn initialize(
             integration_enrollment: true,
             provider_inventory: true,
             managed_session_list: true,
+            session_control: true,
+            session_events: true,
         },
         limits: RuntimeLimits::default(),
         grant: granted,
@@ -517,9 +596,338 @@ fn sessions_list(
                 RuntimeErrorKind::RootDenied,
                 "an approved project root no longer names the directory approved locally",
             ),
+            Err(RuntimeInventoryFailure::SessionNotFound) => Answer::plain(
+                id,
+                RuntimeErrorKind::SessionNotFound,
+                "the Runtime session does not exist in the integration grant",
+            ),
         },
         Err(failure) => Answer::failure(id, failure),
     }
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one public session boundary keeps authorization, catalogue resolution, owner handoff, and response identity visible together"
+)]
+async fn session_operation(
+    state: &mut PublicState,
+    composed: &Composed,
+    sessions: &RuntimeSessionCatalogue,
+    asking: &mpsc::Sender<RuntimeAsked>,
+    returning: &mpsc::UnboundedSender<RuntimeReturned>,
+    method: RuntimeMethod,
+    id: JsonRpcId,
+    params: serde_json::Value,
+) -> Answer {
+    let parsed = match parse_session_operation(method, params) {
+        Ok(parsed) => parsed,
+        Err(message) => return Answer::plain(id, RuntimeErrorKind::InvalidRequest, message),
+    };
+    let authority = match authorized(state, &composed.store, required_scope(method)) {
+        Ok(authority) => authority.clone(),
+        Err(failure) => return Answer::failure(id, failure),
+    };
+    let session = match sessions.authorized_session(&authority, parsed.session_id()) {
+        Ok(session) => session,
+        Err(failure) => return inventory_failure(id, failure),
+    };
+    let request = parsed.into_owner_request(session);
+    let (answered, hearing) = oneshot::channel();
+    if asking
+        .send(RuntimeAsked {
+            integration: authority.key,
+            request,
+            answered,
+        })
+        .await
+        .is_err()
+    {
+        return Answer::plain(
+            id,
+            RuntimeErrorKind::RuntimeUnavailable,
+            "the Runtime session owner stopped",
+        );
+    }
+    let Ok(reply) = hearing.await else {
+        return Answer::plain(
+            id,
+            RuntimeErrorKind::RuntimeUnavailable,
+            "the Runtime session owner stopped",
+        );
+    };
+    runtime_control_answer(id, reply, returning).await
+}
+
+enum ParsedSessionOperation {
+    Acquire(AcquireControlParams),
+    Renew(ControlLeaseParams),
+    Release(ControlLeaseParams),
+    Submit(SubmitInputParams),
+    Watch {
+        params: WatchEventsParams,
+        subscription_id: String,
+    },
+    Interrupt(ControlLeaseParams),
+}
+
+impl ParsedSessionOperation {
+    fn session_id(&self) -> &RuntimeSessionId {
+        match self {
+            Self::Acquire(params) => &params.session_id,
+            Self::Renew(params) | Self::Release(params) | Self::Interrupt(params) => {
+                &params.session_id
+            }
+            Self::Submit(params) => &params.session_id,
+            Self::Watch { params, .. } => &params.session_id,
+        }
+    }
+
+    fn into_owner_request(self, session: runtrol_provider::SessionId) -> RuntimeControlRequest {
+        match self {
+            Self::Acquire(params) => RuntimeControlRequest::Acquire { session, params },
+            Self::Renew(params) => RuntimeControlRequest::Renew { session, params },
+            Self::Release(params) => RuntimeControlRequest::Release { session, params },
+            Self::Submit(params) => RuntimeControlRequest::Submit { session, params },
+            Self::Watch {
+                params,
+                subscription_id,
+            } => RuntimeControlRequest::Watch {
+                session,
+                params,
+                subscription_id,
+            },
+            Self::Interrupt(params) => RuntimeControlRequest::Interrupt { session, params },
+        }
+    }
+}
+
+fn parse_session_operation(
+    method: RuntimeMethod,
+    params: serde_json::Value,
+) -> Result<ParsedSessionOperation, &'static str> {
+    match method {
+        RuntimeMethod::SessionsAcquireControl => serde_json::from_value(params)
+            .map(ParsedSessionOperation::Acquire)
+            .map_err(|_| "session control acquisition parameters are invalid"),
+        RuntimeMethod::SessionsRenewControl => serde_json::from_value(params)
+            .map(ParsedSessionOperation::Renew)
+            .map_err(|_| "session control renewal parameters are invalid"),
+        RuntimeMethod::SessionsReleaseControl => serde_json::from_value(params)
+            .map(ParsedSessionOperation::Release)
+            .map_err(|_| "session control release parameters are invalid"),
+        RuntimeMethod::SessionsSubmitInput => serde_json::from_value(params)
+            .map(ParsedSessionOperation::Submit)
+            .map_err(|_| "session input parameters are invalid"),
+        RuntimeMethod::SessionsWatchEvents => {
+            let params = serde_json::from_value(params)
+                .map_err(|_| "session event watch parameters are invalid")?;
+            Ok(ParsedSessionOperation::Watch {
+                params,
+                subscription_id: random_subscription_id()
+                    .map_err(|_| "Runtime could not allocate a subscription identity")?,
+            })
+        }
+        RuntimeMethod::SessionsInterrupt => serde_json::from_value(params)
+            .map(ParsedSessionOperation::Interrupt)
+            .map_err(|_| "session interrupt parameters are invalid"),
+        RuntimeMethod::Initialize
+        | RuntimeMethod::Initialized
+        | RuntimeMethod::Challenge
+        | RuntimeMethod::IntegrationsRequestEnrollment
+        | RuntimeMethod::IntegrationsWatchEnrollment
+        | RuntimeMethod::IntegrationsGetGrant
+        | RuntimeMethod::ProvidersList
+        | RuntimeMethod::SessionsList
+        | RuntimeMethod::SessionsEvent
+        | RuntimeMethod::SessionsLagged
+        | RuntimeMethod::PanicStop => Err("the method is not a session operation"),
+    }
+}
+
+async fn runtime_control_answer(
+    id: JsonRpcId,
+    reply: RuntimeControlReply,
+    returning: &mpsc::UnboundedSender<RuntimeReturned>,
+) -> Answer {
+    match reply {
+        RuntimeControlReply::Lease(lease) => Answer::success(id, &lease),
+        RuntimeControlReply::Done => Answer::success(id, &EmptyResult {}),
+        RuntimeControlReply::Watching { result, view } => Answer::watching(id, &result, view),
+        RuntimeControlReply::Failed(failure) => control_failure(id, failure),
+        RuntimeControlReply::Sending {
+            mutation,
+            taken,
+            command,
+        } => match perform_runtime_command(mutation, taken, command, returning.clone()).await {
+            Some(Ok(())) => Answer::success(id, &EmptyResult {}),
+            Some(Err(failure)) => control_failure(id, failure),
+            None => Answer::plain(
+                id,
+                RuntimeErrorKind::RuntimeUnavailable,
+                "the Runtime session owner stopped",
+            ),
+        },
+    }
+}
+
+#[expect(
+    clippy::manual_ok_err,
+    reason = "Result::ok is forbidden because owner channel loss must remain explicit"
+)]
+async fn perform_runtime_command(
+    mutation: runtrol_store::IntegrationMutationKey,
+    taken: runtrol_core::TakenAgent,
+    command: runtrol_provider::AgentCommand,
+    returning: mpsc::UnboundedSender<RuntimeReturned>,
+) -> Option<Result<(), RuntimeControlFailure>> {
+    let runtrol_core::TakenAgent {
+        agent: handed_agent,
+        lease,
+    } = taken;
+    let guard = RuntimeAgentGuard::new(mutation, lease, returning.clone());
+    let mut agent = handed_agent;
+    let outcome = agent.send(command).await;
+    let lease = guard.take()?;
+    let (answered, hearing) = oneshot::channel();
+    if returning
+        .send(RuntimeReturned::Finished {
+            mutation,
+            taken: runtrol_core::TakenAgent { agent, lease },
+            outcome,
+            answered,
+        })
+        .is_err()
+    {
+        return None;
+    }
+    match hearing.await {
+        Ok(result) => Some(result),
+        Err(_) => None,
+    }
+}
+
+fn control_failure(id: JsonRpcId, failure: RuntimeControlFailure) -> Answer {
+    Answer::plain(id, failure.kind, failure.message)
+}
+
+fn inventory_failure(id: JsonRpcId, failure: RuntimeInventoryFailure) -> Answer {
+    match failure {
+        RuntimeInventoryFailure::Unavailable => Answer::plain(
+            id,
+            RuntimeErrorKind::Internal,
+            "the managed session catalogue is temporarily unavailable",
+        ),
+        RuntimeInventoryFailure::RootAuthorityChanged => Answer::plain(
+            id,
+            RuntimeErrorKind::RootDenied,
+            "an approved project root no longer names the directory approved locally",
+        ),
+        RuntimeInventoryFailure::SessionNotFound => Answer::plain(
+            id,
+            RuntimeErrorKind::SessionNotFound,
+            "the Runtime session does not exist in the integration grant",
+        ),
+    }
+}
+
+fn random_subscription_id() -> Result<String, getrandom::Error> {
+    let mut bytes = [0_u8; 16];
+    getrandom::fill(&mut bytes)?;
+    let mut output = String::from("sub_");
+    for byte in bytes {
+        use core::fmt::Write as _;
+        if write!(&mut output, "{byte:02x}").is_err() {
+            return Ok(String::new());
+        }
+    }
+    Ok(output)
+}
+
+async fn relay_events(connection: &mut Connection, mut watching: Watching) {
+    while let Some(item) = watching.view.recv().await {
+        match item {
+            runtrol_core::WatchItem::Event(event) => {
+                let positioned = event.event();
+                let next = runtrol_runtime_protocol::EventCursor {
+                    stream: watching.view.start().live_at.stream.to_string(),
+                    epoch: positioned.epoch,
+                    seq: positioned.seq.wrapping_add(1),
+                };
+                let Ok(wire) = event.wire() else {
+                    return;
+                };
+                let Ok((prefix, suffix)) = event_notification_edges(
+                    &watching.subscription_id,
+                    &watching.session_id,
+                    &next,
+                ) else {
+                    return;
+                };
+                if connection
+                    .send_parts(&[&prefix, wire.as_str().as_bytes(), &suffix])
+                    .await
+                    .is_err()
+                {
+                    return;
+                }
+            }
+            runtrol_core::WatchItem::Lagged(cursor) => {
+                let notification = LaggedNotification {
+                    subscription_id: watching.subscription_id,
+                    session_id: watching.session_id,
+                    next_expected: cursor_to_public(cursor),
+                };
+                drop(
+                    send_notification(connection, RuntimeMethod::SessionsLagged, &notification)
+                        .await,
+                );
+                return;
+            }
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct EventNotificationParams<'a> {
+    subscription_id: &'a str,
+    session_id: &'a RuntimeSessionId,
+    event_revision: ProtocolRevision,
+    event: (),
+    next_expected: &'a runtrol_runtime_protocol::EventCursor,
+}
+
+fn event_notification_edges(
+    subscription_id: &str,
+    session_id: &RuntimeSessionId,
+    next_expected: &runtrol_runtime_protocol::EventCursor,
+) -> Result<(Vec<u8>, Vec<u8>), serde_json::Error> {
+    let notification = JsonRpcNotification {
+        jsonrpc: "2.0".to_owned(),
+        method: RuntimeMethod::SessionsEvent.to_string(),
+        params: serde_json::to_value(EventNotificationParams {
+            subscription_id,
+            session_id,
+            event_revision: runtrol_runtime_protocol::REVISION_2026_08_13,
+            event: (),
+            next_expected,
+        })?,
+    };
+    let mut encoded = serde_json::to_vec(&notification)?;
+    let needle = b"\"event\":null";
+    let Some(start) = encoded
+        .windows(needle.len())
+        .position(|window| window == needle)
+    else {
+        return Err(serde_json::Error::io(std::io::Error::other(
+            "event placeholder disappeared",
+        )));
+    };
+    let value_start = start.saturating_add(b"\"event\":".len());
+    let suffix = encoded.split_off(value_start.saturating_add(4));
+    encoded.truncate(value_start);
+    Ok((encoded, suffix))
 }
 
 fn authorized<'a>(
@@ -661,6 +1069,32 @@ mod tests {
     use base64ct::Encoding as _;
 
     #[test]
+    fn public_event_wrapper_preserves_the_existing_event_bytes() {
+        let session = RuntimeSessionId::new("session_fixture");
+        let next = runtrol_runtime_protocol::EventCursor {
+            stream: "019c0000-0000-7000-8000-000000000001".to_owned(),
+            epoch: 2,
+            seq: 9,
+        };
+        let event = br#"{"body":{"text":"exact caller and provider bytes"}}"#;
+        let (prefix, suffix) =
+            event_notification_edges("sub_fixture", &session, &next).expect("event edges");
+        let mut frame = prefix;
+        frame.extend_from_slice(event);
+        frame.extend_from_slice(&suffix);
+        let notification: JsonRpcNotification =
+            serde_json::from_slice(&frame).expect("valid notification");
+        assert_eq!(notification.method, RuntimeMethod::SessionsEvent.as_str());
+        assert_eq!(
+            notification.params.get("event"),
+            Some(&serde_json::json!({
+                "body": {"text": "exact caller and provider bytes"}
+            }))
+        );
+        assert!(frame.windows(event.len()).any(|window| window == event));
+    }
+
+    #[test]
     fn private_control_names_never_enter_the_public_method_table() {
         for private in [
             "hello",
@@ -715,6 +1149,8 @@ mod tests {
         );
         let sessions = Arc::new(crate::runtime_inventory::RuntimeSessionCatalogue::unavailable());
         let (_publishing, watching) = watch::channel(sessions);
+        let (runtime_asking, _runtime_asked) = mpsc::channel(1);
+        let (runtime_returning, _runtime_returned) = mpsc::unbounded_channel();
         let serving = tokio::spawn({
             let composed = Arc::clone(&composed);
             async move {
@@ -725,6 +1161,8 @@ mod tests {
                         instance.to_owned(),
                         Arc::clone(&composed),
                         watching.clone(),
+                        runtime_asking.clone(),
+                        runtime_returning.clone(),
                     )
                     .await;
                 }

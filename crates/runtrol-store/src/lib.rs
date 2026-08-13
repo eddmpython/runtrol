@@ -22,12 +22,14 @@
 //! - [`devices`] paired-device authorization, durable revocation, and fail-closed damage reporting
 //! - [`integrations`] public Runtime enrollments and exact app grants, without any consumer private key
 //! - [`integration_audit`] bounded public Runtime authorization metadata without caller or provider content
+//! - [`integration_mutations`] bounded durable mutation ambiguity records without caller input
 //! - [`error`] why the database could not be opened, read, or trusted
 
 pub mod codec;
 pub mod devices;
 pub mod error;
 mod integration_audit;
+mod integration_mutations;
 pub mod integrations;
 pub mod open;
 pub mod schema;
@@ -40,9 +42,13 @@ pub use integration_audit::{
     INTEGRATION_AUDIT_MAX_BYTES, INTEGRATION_AUDIT_MAX_ROW_BYTES, INTEGRATION_AUDIT_MAX_ROWS,
     IntegrationAuditOutcome, IntegrationAuditRow,
 };
+pub use integration_mutations::{
+    INTEGRATION_MUTATION_MAX_ROWS, IntegrationMutationRow, IntegrationMutationState,
+};
 pub use integrations::{EnrollmentRow, EnrollmentState, IntegrationRootRow, IntegrationRow};
 pub use open::{CACHE_BYTES, Store};
 pub use schema::{
-    DeviceKey, EnrollmentKey, IntegrationAuditKey, IntegrationKey, SCHEMA_VERSION, SessionKey,
+    DeviceKey, EnrollmentKey, IntegrationAuditKey, IntegrationKey, IntegrationMutationKey,
+    SCHEMA_VERSION, SessionKey,
 };
 pub use sessions::{Cursor, ListedSessions};

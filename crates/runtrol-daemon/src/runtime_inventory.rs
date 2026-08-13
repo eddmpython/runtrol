@@ -18,10 +18,13 @@ pub(crate) enum RuntimeInventoryFailure {
     Unavailable,
     /// At least one granted root no longer names the approved filesystem object.
     RootAuthorityChanged,
+    /// The session is absent or outside this integration's approved roots.
+    SessionNotFound,
 }
 
 /// One public session plus the canonicalization input required for grant filtering.
 pub(crate) struct RuntimeSessionRecord {
+    session: runtrol_provider::SessionId,
     descriptor: SessionDescriptor,
     workspace: Box<str>,
 }
@@ -99,10 +102,12 @@ pub(crate) fn sessions(
             .sessions
             .into_iter()
             .map(|session| RuntimeSessionRecord {
+                session: session.session,
                 descriptor: SessionDescriptor {
                     session_id: RuntimeSessionId::new(session.session.to_string()),
                     provider_id: ProviderId::new(session.provider.as_str()),
                     lifecycle: session.lifecycle.public(session.hot),
+                    session_generation: session.generation,
                     label: session.label.map(Into::into),
                 },
                 workspace: session.workspace,
@@ -131,19 +136,7 @@ impl RuntimeSessionCatalogue {
         if !self.available {
             return Err(RuntimeInventoryFailure::Unavailable);
         }
-        let mut roots = Vec::with_capacity(authority.roots.len());
-        for root in &authority.roots {
-            let approved = AbsPath::new(&root.path)
-                .map_err(|_| RuntimeInventoryFailure::RootAuthorityChanged)?;
-            let current = AbsPath::canonicalize(&root.path)
-                .map_err(|_| RuntimeInventoryFailure::RootAuthorityChanged)?;
-            let identity = ProjectRootIdentity::read(&current)
-                .map_err(|_| RuntimeInventoryFailure::RootAuthorityChanged)?;
-            if current != approved || identity.to_bytes() != root.identity {
-                return Err(RuntimeInventoryFailure::RootAuthorityChanged);
-            }
-            roots.push(current);
-        }
+        let roots = approved_roots(authority)?;
         let sessions = self
             .sessions
             .iter()
@@ -167,6 +160,48 @@ impl RuntimeSessionCatalogue {
         };
         Ok(ManagedSessionList { sessions, warnings })
     }
+
+    /// Resolve one authorized public session identity without revealing sessions outside the grant.
+    pub(crate) fn authorized_session(
+        &self,
+        authority: &AuthorizedIntegration,
+        requested: &runtrol_runtime_protocol::RuntimeSessionId,
+    ) -> Result<runtrol_provider::SessionId, RuntimeInventoryFailure> {
+        if !self.available {
+            return Err(RuntimeInventoryFailure::Unavailable);
+        }
+        let roots = approved_roots(authority)?;
+        let session = self
+            .sessions
+            .iter()
+            .find(|session| session.descriptor.session_id.as_str() == requested.as_str())
+            .ok_or(RuntimeInventoryFailure::SessionNotFound)?;
+        let workspace = AbsPath::canonicalize(&session.workspace)
+            .map_err(|_| RuntimeInventoryFailure::SessionNotFound)?;
+        if !roots.iter().any(|root| workspace.is_under(root)) {
+            return Err(RuntimeInventoryFailure::SessionNotFound);
+        }
+        Ok(session.session)
+    }
+}
+
+fn approved_roots(
+    authority: &AuthorizedIntegration,
+) -> Result<Vec<AbsPath>, RuntimeInventoryFailure> {
+    let mut roots = Vec::with_capacity(authority.roots.len());
+    for root in &authority.roots {
+        let approved =
+            AbsPath::new(&root.path).map_err(|_| RuntimeInventoryFailure::RootAuthorityChanged)?;
+        let current = AbsPath::canonicalize(&root.path)
+            .map_err(|_| RuntimeInventoryFailure::RootAuthorityChanged)?;
+        let identity = ProjectRootIdentity::read(&current)
+            .map_err(|_| RuntimeInventoryFailure::RootAuthorityChanged)?;
+        if current != approved || identity.to_bytes() != root.identity {
+            return Err(RuntimeInventoryFailure::RootAuthorityChanged);
+        }
+        roots.push(current);
+    }
+    Ok(roots)
 }
 
 #[cfg(test)]
@@ -204,10 +239,12 @@ mod tests {
         };
         let catalogue = RuntimeSessionCatalogue {
             sessions: vec![RuntimeSessionRecord {
+                session: runtrol_provider::SessionId::now(),
                 descriptor: SessionDescriptor {
                     session_id: RuntimeSessionId::new("session_fixture"),
                     provider_id: ProviderId::new("provider_fixture"),
                     lifecycle: LifecycleState::Cold,
+                    session_generation: 0,
                     label: None,
                 },
                 workspace: project.as_str().into(),

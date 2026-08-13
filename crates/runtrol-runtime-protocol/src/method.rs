@@ -33,6 +33,30 @@ pub enum RuntimeMethod {
     /// Read the Runtime-managed session catalogue.
     #[serde(rename = "sessions/list")]
     SessionsList,
+    /// Acquire the one renewable write lease for a live session.
+    #[serde(rename = "sessions/acquireControl")]
+    SessionsAcquireControl,
+    /// Renew one exact control lease generation.
+    #[serde(rename = "sessions/renewControl")]
+    SessionsRenewControl,
+    /// Voluntarily release one exact control lease generation.
+    #[serde(rename = "sessions/releaseControl")]
+    SessionsReleaseControl,
+    /// Submit caller-owned input without rewriting or implicit retry.
+    #[serde(rename = "sessions/submitInput")]
+    SessionsSubmitInput,
+    /// Watch the existing bounded normalized event stream.
+    #[serde(rename = "sessions/watchEvents")]
+    SessionsWatchEvents,
+    /// Interrupt one exact controlled live session.
+    #[serde(rename = "sessions/interrupt")]
+    SessionsInterrupt,
+    /// One normalized event notification.
+    #[serde(rename = "sessions/event")]
+    SessionsEvent,
+    /// A bounded subscription was retired after lagging.
+    #[serde(rename = "sessions/lagged")]
+    SessionsLagged,
     /// Stop every supervised process in the safe direction.
     #[serde(rename = "runtime/panicStop")]
     PanicStop,
@@ -51,6 +75,14 @@ impl RuntimeMethod {
             Self::IntegrationsGetGrant => "integrations/getGrant",
             Self::ProvidersList => "providers/list",
             Self::SessionsList => "sessions/list",
+            Self::SessionsAcquireControl => "sessions/acquireControl",
+            Self::SessionsRenewControl => "sessions/renewControl",
+            Self::SessionsReleaseControl => "sessions/releaseControl",
+            Self::SessionsSubmitInput => "sessions/submitInput",
+            Self::SessionsWatchEvents => "sessions/watchEvents",
+            Self::SessionsInterrupt => "sessions/interrupt",
+            Self::SessionsEvent => "sessions/event",
+            Self::SessionsLagged => "sessions/lagged",
             Self::PanicStop => "runtime/panicStop",
         }
     }
@@ -75,6 +107,14 @@ impl FromStr for RuntimeMethod {
             "integrations/getGrant" => Ok(Self::IntegrationsGetGrant),
             "providers/list" => Ok(Self::ProvidersList),
             "sessions/list" => Ok(Self::SessionsList),
+            "sessions/acquireControl" => Ok(Self::SessionsAcquireControl),
+            "sessions/renewControl" => Ok(Self::SessionsRenewControl),
+            "sessions/releaseControl" => Ok(Self::SessionsReleaseControl),
+            "sessions/submitInput" => Ok(Self::SessionsSubmitInput),
+            "sessions/watchEvents" => Ok(Self::SessionsWatchEvents),
+            "sessions/interrupt" => Ok(Self::SessionsInterrupt),
+            "sessions/event" => Ok(Self::SessionsEvent),
+            "sessions/lagged" => Ok(Self::SessionsLagged),
             "runtime/panicStop" => Ok(Self::PanicStop),
             _ => Err(UnknownMethod(value.to_owned())),
         }
@@ -101,6 +141,14 @@ mod tests {
             RuntimeMethod::IntegrationsGetGrant,
             RuntimeMethod::ProvidersList,
             RuntimeMethod::SessionsList,
+            RuntimeMethod::SessionsAcquireControl,
+            RuntimeMethod::SessionsRenewControl,
+            RuntimeMethod::SessionsReleaseControl,
+            RuntimeMethod::SessionsSubmitInput,
+            RuntimeMethod::SessionsWatchEvents,
+            RuntimeMethod::SessionsInterrupt,
+            RuntimeMethod::SessionsEvent,
+            RuntimeMethod::SessionsLagged,
             RuntimeMethod::PanicStop,
         ] {
             assert_eq!(method.as_str().parse(), Ok(method));

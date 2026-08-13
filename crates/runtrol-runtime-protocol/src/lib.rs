@@ -10,6 +10,7 @@ mod method;
 mod revision;
 mod rpc;
 mod schema;
+mod session;
 
 pub use error::{RuntimeError, RuntimeErrorKind};
 pub use integration::{
@@ -32,6 +33,12 @@ pub use rpc::{
     RuntimeLimits, SuccessResponse,
 };
 pub use schema::{PUBLIC_SCHEMA_NAME, public_schema};
+pub use session::{
+    AcquireControlParams, CONTROL_LEASE_LIFETIME_MS, ControlLease, ControlLeaseParams, EventCursor,
+    EventGap, IDEMPOTENCY_WINDOW_MS, InterruptParams, LaggedNotification, MAX_IDEMPOTENCY_RECORDS,
+    MUTATION_CLOCK_SKEW_MS, MutationRequestId, MutationRequestIdError, RuntimeEventNotification,
+    SubmitInputParams, WatchEventsParams, WatchEventsResult,
+};
 
 /// Maximum JSON payload bytes in one public Runtime frame.
 pub const MAX_FRAME_BYTES: usize = 16 * 1024 * 1024 + 64 * 1024;

@@ -129,6 +129,10 @@ pub struct RuntimeInstance {
 }
 
 /// Public product capabilities for the selected revision.
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "the negotiated public wire needs independent closed capability flags"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RuntimeCapabilities {
@@ -138,6 +142,10 @@ pub struct RuntimeCapabilities {
     pub provider_inventory: bool,
     /// Fast managed session snapshot is implemented.
     pub managed_session_list: bool,
+    /// Renewable single-writer session control is implemented.
+    pub session_control: bool,
+    /// Bounded replay followed by live normalized events is implemented.
+    pub session_events: bool,
 }
 
 /// Numeric public bounds advertised during initialization.
@@ -160,6 +168,12 @@ pub struct RuntimeLimits {
     pub max_pending_enrollments: u16,
     /// Maximum finalized protocol revisions accepted in one offer.
     pub max_revision_offers: u16,
+    /// Lifetime of one renewable control lease.
+    pub control_lease_lifetime_ms: u64,
+    /// Maximum age of a mutation identity with a known outcome.
+    pub idempotency_window_ms: u64,
+    /// Maximum retained mutation identities across integrations.
+    pub max_idempotency_records: u16,
 }
 
 impl Default for RuntimeLimits {
@@ -173,6 +187,9 @@ impl Default for RuntimeLimits {
             enrollment_lifetime_ms: crate::ENROLLMENT_LIFETIME_MS,
             max_pending_enrollments: crate::MAX_PENDING_ENROLLMENTS,
             max_revision_offers: crate::MAX_REVISION_OFFERS,
+            control_lease_lifetime_ms: crate::CONTROL_LEASE_LIFETIME_MS,
+            idempotency_window_ms: crate::IDEMPOTENCY_WINDOW_MS,
+            max_idempotency_records: crate::MAX_IDEMPOTENCY_RECORDS,
         }
     }
 }
@@ -224,6 +241,15 @@ mod tests {
             crate::MAX_PENDING_ENROLLMENTS
         );
         assert_eq!(limits.max_revision_offers, crate::MAX_REVISION_OFFERS);
+        assert_eq!(
+            limits.control_lease_lifetime_ms,
+            crate::CONTROL_LEASE_LIFETIME_MS
+        );
+        assert_eq!(limits.idempotency_window_ms, crate::IDEMPOTENCY_WINDOW_MS);
+        assert_eq!(
+            limits.max_idempotency_records,
+            crate::MAX_IDEMPOTENCY_RECORDS
+        );
     }
 
     #[test]

@@ -1430,6 +1430,7 @@ impl SessionManager {
             workspace: &live.workspace,
             tier: Tier::Hot,
             state: &live.state,
+            stream: live.hub.live_at().stream,
         })
     }
 
@@ -1444,6 +1445,7 @@ impl SessionManager {
             workspace: &live.workspace,
             tier: Tier::Hot,
             state: &live.state,
+            stream: live.hub.live_at().stream,
         })
     }
 }
@@ -1498,6 +1500,8 @@ pub struct LiveSession<'manager> {
     pub tier: Tier,
     /// What it is doing.
     pub state: &'manager SessionState,
+    /// Volatile process incarnation used to invalidate authority across close and reopen.
+    pub stream: runtrol_provider::StreamId,
 }
 
 /// A notice runtrol originates.

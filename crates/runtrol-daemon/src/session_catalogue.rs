@@ -16,6 +16,7 @@ pub(crate) struct ManagedSession {
     pub(crate) workspace: Box<str>,
     pub(crate) hot: bool,
     pub(crate) lifecycle: ManagedLifecycle,
+    pub(crate) generation: u64,
     pub(crate) looks_stuck: bool,
 }
 
@@ -91,6 +92,7 @@ pub(crate) fn read(
                 workspace: row.cwd.as_str().into(),
                 hot: false,
                 lifecycle: ManagedLifecycle::Detached,
+                generation: 0,
                 looks_stuck: false,
             },
         );
@@ -109,6 +111,7 @@ pub(crate) fn read(
                 workspace: one.workspace.as_str().into(),
                 hot: one.tier.has_a_process(),
                 lifecycle: one.state.lifecycle().into(),
+                generation: one.state.generation(),
                 looks_stuck: one.state.looks_stuck(),
             },
         );

@@ -3,9 +3,11 @@
 use schemars::{JsonSchema, schema_for};
 
 use crate::{
-    EnrollmentDecision, EnrollmentReceipt, InitializeParams, InitializeResult, IntegrationGrant,
-    JsonRpcNotification, JsonRpcRequest, JsonRpcResponse, ManagedSessionList, ProviderList,
-    RequestEnrollmentParams, RuntimeMethod, ServerChallenge, WatchEnrollmentParams,
+    AcquireControlParams, ControlLease, ControlLeaseParams, EnrollmentDecision, EnrollmentReceipt,
+    InitializeParams, InitializeResult, IntegrationGrant, JsonRpcNotification, JsonRpcRequest,
+    JsonRpcResponse, LaggedNotification, ManagedSessionList, ProviderList, RequestEnrollmentParams,
+    RuntimeEventNotification, RuntimeMethod, ServerChallenge, SubmitInputParams,
+    WatchEnrollmentParams, WatchEventsParams, WatchEventsResult,
 };
 
 /// Checked schema filename inside this package.
@@ -32,6 +34,14 @@ struct PublicProtocolSchema {
     integration_grant: IntegrationGrant,
     provider_list: ProviderList,
     managed_session_list: ManagedSessionList,
+    acquire_control: AcquireControlParams,
+    control_lease: ControlLease,
+    control_lease_params: ControlLeaseParams,
+    submit_input: SubmitInputParams,
+    watch_events: WatchEventsParams,
+    watch_events_result: WatchEventsResult,
+    runtime_event: RuntimeEventNotification,
+    lagged: LaggedNotification,
 }
 
 /// Generate the language-neutral public schema from the Rust DTOs.

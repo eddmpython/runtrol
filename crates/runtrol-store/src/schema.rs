@@ -44,6 +44,9 @@ const T_ENROLLMENT_KEY: &str = "runtrol::EnrollmentKey@1";
 /// Type name for [`IntegrationAuditKey`], version included.
 const T_INTEGRATION_AUDIT_KEY: &str = "runtrol::IntegrationAuditKey@1";
 
+/// Type name for [`IntegrationMutationKey`], version included.
+const T_INTEGRATION_MUTATION_KEY: &str = "runtrol::IntegrationMutationKey@1";
+
 /// Key of the `meta` entry holding the schema version.
 pub const META_SCHEMA_VERSION: &str = "schema_version";
 
@@ -75,6 +78,10 @@ pub const ENROLLMENTS: TableDefinition<'static, EnrollmentKey, &[u8]> =
 /// Bounded operational authorization metadata. It cannot contain conversation or provider payload bytes.
 pub const INTEGRATION_AUDIT: TableDefinition<'static, IntegrationAuditKey, &[u8]> =
     TableDefinition::new("integration_audit");
+
+/// Bounded durable mutation intents. Rows contain keyed authenticators, never caller input.
+pub const INTEGRATION_MUTATIONS: TableDefinition<'static, IntegrationMutationKey, &[u8]> =
+    TableDefinition::new("integration_mutations");
 
 /// Provider identifier and native session identifier, to the runtrol session.
 ///
@@ -314,6 +321,66 @@ fixed_key!(
     "A time-ordered bounded public Runtime authorization audit key."
 );
 
+/// One integration and one caller-minted UUIDv7 mutation identity.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+pub struct IntegrationMutationKey([u8; 32]);
+
+impl IntegrationMutationKey {
+    /// Join an integration identity and mutation UUID bytes into one exact key.
+    #[must_use]
+    pub fn new(integration: IntegrationKey, request: [u8; 16]) -> Self {
+        let integration = integration.to_bytes();
+        let mut bytes = [0_u8; 32];
+        for (slot, byte) in bytes.iter_mut().zip(integration.into_iter().chain(request)) {
+            *slot = byte;
+        }
+        Self(bytes)
+    }
+
+    /// Lowest scan key.
+    pub const FIRST: Self = Self([0; 32]);
+
+    /// Highest scan key.
+    pub const LAST: Self = Self([0xFF; 32]);
+}
+
+impl Value for IntegrationMutationKey {
+    type SelfType<'a> = Self;
+    type AsBytes<'a> = [u8; 32];
+
+    fn fixed_width() -> Option<usize> {
+        Some(32)
+    }
+
+    fn from_bytes<'a>(data: &'a [u8]) -> Self
+    where
+        Self: 'a,
+    {
+        let mut bytes = [0_u8; 32];
+        for (slot, byte) in bytes.iter_mut().zip(data) {
+            *slot = *byte;
+        }
+        Self(bytes)
+    }
+
+    fn as_bytes<'a, 'b: 'a>(value: &'a Self) -> [u8; 32]
+    where
+        Self: 'b,
+    {
+        value.0
+    }
+
+    fn type_name() -> TypeName {
+        TypeName::new(T_INTEGRATION_MUTATION_KEY)
+    }
+}
+
+impl Key for IntegrationMutationKey {
+    fn compare(left: &[u8], right: &[u8]) -> Ordering {
+        left.cmp(right)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -335,6 +402,7 @@ mod tests {
         assert!(T_INTEGRATION_KEY.ends_with(&suffix));
         assert!(T_ENROLLMENT_KEY.ends_with(&suffix));
         assert!(T_INTEGRATION_AUDIT_KEY.ends_with(&suffix));
+        assert!(T_INTEGRATION_MUTATION_KEY.ends_with(&suffix));
     }
 
     #[test]
