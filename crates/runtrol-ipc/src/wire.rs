@@ -777,6 +777,8 @@ pub struct MissionTaskLine {
     pub base_commit: Option<Box<str>>,
     /// Content-addressed passing Receipt, when evidence passed.
     pub receipt_id: Option<Box<str>>,
+    /// Exact Run named by the latest passing Receipt.
+    pub run_id: Option<Box<str>>,
     /// Passed deterministic Gate count across retained Runs.
     pub passed_gates: u16,
     /// Failed deterministic Gate count across retained Runs.

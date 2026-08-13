@@ -478,6 +478,8 @@ function missionDocument(snapshot: MissionSnapshot): string {
       "",
       `Receipt: ${inline(task.receipt_id ?? "not sealed")}`,
       "",
+      `Run: ${inline(task.run_id ?? "not sealed")}`,
+      "",
     );
   }
   lines.push(

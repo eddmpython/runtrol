@@ -364,6 +364,12 @@ jobs:
         env:
           TMPDIR: ${{ matrix.os == 'macos-latest' && '/tmp' || runner.temp }}
         run: python -X utf8 tests/audit/vscodeRealProviderJourney.py --require-external
+      - name: 실물 두 provider Mission 여정 게이트 자체 검증
+        run: python -X utf8 tests/audit/missionLiveJourney.py --selftest
+      - name: 실물 두 provider의 검토, 실행, Receipt, 통합, 보관 여정
+        env:
+          TMPDIR: ${{ matrix.os == 'macos-latest' && '/tmp' || runner.temp }}
+        run: python -X utf8 tests/audit/missionLiveJourney.py --require-external
       - name: 실물 Codex 고정 판본 설치
         run: npm install --global @openai/codex@0.146.0
       - name: 고정 판본 credential-free 모델 fixture 준비

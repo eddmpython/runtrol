@@ -163,6 +163,14 @@ GATES: dict[str, tuple[str, list[str]]] = {
         "Mission 실행, 복구, 로컬 승인, 명시적 Capability 재사용",
         [*PY, f"{HOOKS}/missionGrowthContracts.py"],
     ),
+    "missionLiveJourneySelftest": (
+        "실물 두 provider Mission 여정 게이트 자체 검증",
+        [*PY, f"{HOOKS}/missionLiveJourney.py", "--selftest"],
+    ),
+    "missionLiveJourney": (
+        "실물 두 provider의 검토, 실행, Receipt, 통합, 보관 여정",
+        [*PY, f"{HOOKS}/missionLiveJourney.py", "--require-external"],
+    ),
     "vscodePackageSelftest": (
         "VS Code 플랫폼 패키지 게이트 자체 검증",
         [*PY, f"{HOOKS}/vscodePackage.py", "--selftest"],
@@ -385,6 +393,8 @@ SUITES: dict[str, tuple[str, ...]] = {
         "vscodeHostPerformance",
         "vscodeRealProviderJourneySelftest",
         "vscodeRealProviderJourney",
+        "missionLiveJourneySelftest",
+        "missionLiveJourney",
         "vscodeUpgradeRollbackSelftest",
         "vscodeUpgradeRollback",
         "vscodeEventCoverageSelftest",
@@ -423,6 +433,8 @@ CARGO_GATES = frozenset(
         "cargoBuild",
         "vscodeHostPerformance",
         "vscodeRealProviderJourney",
+        "missionLiveJourneySelftest",
+        "missionLiveJourney",
         "vscodeUpgradeRollback",
         "cargoTest",
         "sessionOverlapGuard",
@@ -488,8 +500,12 @@ def skipReasonFor(name: str) -> str | None:
         return f"{CROSS_TARGET} 미설치 (rustup target add {CROSS_TARGET})"
     if name == "externalAcpSmoke" and shutil.which("opencode") is None:
         return "독립 ACP CLI 미설치 (npm install --global opencode-ai@1.2.27)"
-    if name in {"claudeApprovalSmoke", "vscodeRealProviderJourney"} and shutil.which("claude") is None:
+    if name == "missionLiveJourney" and shutil.which("opencode") is None:
+        return "독립 ACP CLI 미설치 (npm install --global opencode-ai@1.2.27)"
+    if name in {"claudeApprovalSmoke", "vscodeRealProviderJourney", "missionLiveJourney"} and shutil.which("claude") is None:
         return "Claude Code 미설치 (npm install --global @anthropic-ai/claude-code@2.1.220)"
+    if name == "missionLiveJourney" and shutil.which("node") is None:
+        return "node 없음"
     return None
 
 

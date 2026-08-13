@@ -1078,6 +1078,7 @@ impl MissionController {
         ledger: &Ledger,
         mission_id: &str,
         task_id: &str,
+        native_session_id: &str,
     ) -> Result<VerificationIntent, &'static str> {
         let mission_id: MissionId = mission_id
             .parse()
@@ -1087,7 +1088,7 @@ impl MissionController {
             .map_err(|_| "the Task identity is invalid")?;
         let active = self
             .active
-            .get(&mission_id)
+            .get_mut(&mission_id)
             .ok_or("the Mission must be revalidated after restart")?;
         let task = active
             .validated
@@ -1097,12 +1098,19 @@ impl MissionController {
             .ok_or("the Task does not exist")?;
         let binding = active
             .sessions
-            .get(&task_id)
+            .get_mut(&task_id)
             .ok_or("the Task has no public Runtime session")?;
-        let native_session_id = binding
+        if native_session_id.is_empty() {
+            return Err("the public Runtime session has no provider-native identity");
+        }
+        if binding
             .native_session
-            .clone()
-            .unwrap_or_else(|| binding.runtime_session.clone());
+            .as_deref()
+            .is_some_and(|reviewed| reviewed != native_session_id)
+        {
+            return Err("the provider-native session identity changed before verification");
+        }
+        binding.native_session = Some(native_session_id.into());
         let workspace = active
             .workspaces
             .get(&task_id)
@@ -1149,15 +1157,33 @@ impl MissionController {
             run_id,
             workspace: workspace.workspace.clone(),
             base_commit: workspace.base_commit.clone(),
-            project_id: active.validated.spec.project_id.clone(),
+            project_id: active.validated.project.worktree().as_str().into(),
             provider_runtime_id: binding.provider_runtime.clone(),
-            native_session_id,
+            native_session_id: native_session_id.into(),
             instruction_sha256: task.instruction.sha256,
             policy_sha256,
             output_roots: task.output_roots.clone(),
             gate_requests,
             capability_versions,
         })
+    }
+
+    fn runtime_session_id(
+        &self,
+        mission_id: &str,
+        task_id: &str,
+    ) -> Result<Box<str>, &'static str> {
+        let mission_id: MissionId = mission_id
+            .parse()
+            .map_err(|_| "the Mission identity is invalid")?;
+        let task_id: runtrol_ledger::TaskId = task_id
+            .parse()
+            .map_err(|_| "the Task identity is invalid")?;
+        self.active
+            .get(&mission_id)
+            .and_then(|active| active.sessions.get(&task_id))
+            .map(|binding| binding.runtime_session.clone())
+            .ok_or("the Task has no public Runtime session")
     }
 
     #[expect(
@@ -1738,9 +1764,25 @@ pub(crate) async fn prepare_verification(
     mission_id: &str,
     task_id: &str,
 ) -> Response {
+    let runtime_session = {
+        let controller = composed.missions.lock().await;
+        match controller.runtime_session_id(mission_id, task_id) {
+            Ok(session) => session,
+            Err(message) => return failed(message),
+        }
+    };
+    let Ok(runtime_session) = runtime_session.parse::<runtrol_provider::SessionId>() else {
+        return failed("the Task public Runtime session identity is invalid");
+    };
+    let native_session = match composed.store.get_session(runtime_session) {
+        Ok(Some(session)) => session.native.to_string(),
+        Ok(None) => return failed("the Task public Runtime session has no durable native pointer"),
+        Err(_) => return failed("the Task public Runtime session pointer cannot be read"),
+    };
     let intent = {
         let mut controller = composed.missions.lock().await;
-        match controller.verification_intent(&composed.ledger, mission_id, task_id) {
+        match controller.verification_intent(&composed.ledger, mission_id, task_id, &native_session)
+        {
             Ok(intent) => intent,
             Err(message) => return failed(message),
         }
@@ -2391,6 +2433,12 @@ fn task_line(
             .rev()
             .find(|(_, receipt)| receipt.task_id == task.id)
             .map(|(id, _)| id.to_string().into()),
+        run_id: snapshot
+            .receipts
+            .iter()
+            .rev()
+            .find(|(_, receipt)| receipt.task_id == task.id)
+            .map(|(_, receipt)| receipt.run_id.to_string().into()),
         passed_gates: u16::try_from(passed_gates).unwrap_or(u16::MAX),
         failed_gates: u16::try_from(failed_gates).unwrap_or(u16::MAX),
     }
@@ -2615,7 +2663,7 @@ gate_refs = ["fixture-check"]
                 task_id: task_id.clone(),
                 session_id: runtime_session.clone().into(),
                 provider_runtime_id: "fixture-provider".into(),
-                native_session_id: Some("native-fixture".into()),
+                native_session_id: None,
                 workspace: scratch.project.as_str().into(),
             },
         );
@@ -2639,8 +2687,14 @@ gate_refs = ["fixture-check"]
         );
         assert_eq!(sent.session_id.as_ref(), runtime_session);
         let intent = controller
-            .verification_intent(&scratch.ledger, &sent.mission_id, &sent.task_id)
+            .verification_intent(
+                &scratch.ledger,
+                &sent.mission_id,
+                &sent.task_id,
+                "native-fixture",
+            )
             .expect("verification intent");
+        assert_eq!(intent.native_session_id.as_ref(), "native-fixture");
         let gate = intent.gate_requests.first().expect("one Gate").clone();
         let verified = controller
             .commit_verification(

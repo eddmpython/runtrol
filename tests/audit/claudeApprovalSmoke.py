@@ -528,6 +528,21 @@ def claudeProgram() -> str | None:
     for name in CLAUDE_NAMES:
         found = shutil.which(name)
         if found is not None:
+            if sys.platform == "win32" and Path(found).suffix.casefold() == ".cmd":
+                wrapper = Path(found)
+                for raw_line in wrapper.read_text(encoding="utf-8", errors="ignore").splitlines():
+                    line = raw_line.strip()
+                    if not line.startswith('"') or '"' not in line[1:]:
+                        continue
+                    target, remainder = line[1:].split('"', 1)
+                    if remainder.strip() != "%*":
+                        continue
+                    expanded = target.replace("%dp0%", str(wrapper.parent)).replace(
+                        "%DP0%", str(wrapper.parent)
+                    )
+                    native = Path(expanded)
+                    if native.suffix.casefold() == ".exe" and native.is_file():
+                        return str(native)
             return found
     return None
 

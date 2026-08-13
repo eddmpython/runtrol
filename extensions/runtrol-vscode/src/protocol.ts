@@ -1,4 +1,4 @@
-export const WIRE_VERSION = 18;
+export const WIRE_VERSION = 19;
 
 export type ProviderUpdateState = "current" | "available" | "observeOnly" | "notInstalled" | "unconfirmed";
 
@@ -76,6 +76,7 @@ export type MissionTaskLine = {
   workspace: string | null;
   base_commit: string | null;
   receipt_id: string | null;
+  run_id: string | null;
   passed_gates: number;
   failed_gates: number;
 };

@@ -2,7 +2,8 @@
 
 use runtrol_ledger::{
     ArtifactEvidence, GateEvidence, Ledger, LedgerSnapshot, MissionId, MissionRecord, MissionState,
-    ProviderObservation, Receipt, ReceiptError, ReceiptInput, RunId, TaskId, TransitionApplied,
+    ProviderObservation, Receipt, ReceiptError, ReceiptInput, RunId, TaskId, TaskRecord,
+    TransitionApplied,
 };
 use runtrol_provider::AbsPath;
 
@@ -17,7 +18,7 @@ fn receipt_input() -> ReceiptInput {
         finish_tree: "tree-fixture".into(),
         provider_observation: ProviderObservation {
             runtime_id: "opaque-runtime".into(),
-            binary_fingerprint: Some([2; 32]),
+            binary_fingerprint: [2; 32],
             model: None,
             native_session_id: "opaque-native-session".into(),
         },
@@ -170,4 +171,74 @@ fn durable_snapshot_survives_reopen() {
         .expect("snapshot exists");
     assert_eq!(recovered, snapshot);
     std::fs::remove_dir_all(root).expect("remove scratch");
+}
+
+#[test]
+fn one_hundred_mission_snapshot_with_one_thousand_tasks_stays_below_fifty_ms_p95() {
+    let suffix = format!(
+        "{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("time after epoch")
+            .as_nanos()
+    );
+    let root = std::env::temp_dir().join(format!("runtrol-mission-scale-gate-{suffix}"));
+    std::fs::create_dir_all(&root).expect("create scale scratch");
+    let database = AbsPath::canonicalize(root.to_str().expect("UTF-8 scratch"))
+        .expect("canonical scale scratch")
+        .join("mission.redb")
+        .expect("scale database path");
+    let ledger = Ledger::open(&database).expect("open scale ledger");
+    for mission_index in 0_u16..100 {
+        let mut mission = MissionRecord::draft([7; 32], format!("project-{mission_index}").into());
+        mission.display_name = format!("Mission {mission_index:03}").into();
+        let tasks = (0_u16..10)
+            .map(|task_index| {
+                let mut task = TaskRecord::pending(
+                    mission.id,
+                    format!("instructions/{task_index}.md").into(),
+                    [u8::try_from(task_index).expect("fixture index fits"); 32],
+                );
+                task.task_key = format!("task-{task_index}").into();
+                task
+            })
+            .collect();
+        ledger
+            .put(&LedgerSnapshot {
+                mission,
+                tasks,
+                runs: Vec::new(),
+                gate_runs: Vec::new(),
+                artifacts: Vec::new(),
+                receipts: Vec::new(),
+                compacted: false,
+            })
+            .expect("write scale Mission");
+    }
+
+    let mut samples = Vec::with_capacity(20);
+    for _trial in 0..20 {
+        let started = std::time::Instant::now();
+        let listed = ledger.list(100).expect("list scale Missions");
+        samples.push(started.elapsed());
+        assert!(!listed.truncated);
+        assert_eq!(listed.missions.len(), 100);
+        assert_eq!(
+            listed
+                .missions
+                .iter()
+                .map(|snapshot| snapshot.tasks.len())
+                .sum::<usize>(),
+            1_000
+        );
+    }
+    samples.sort_unstable();
+    let p95 = samples[18];
+    assert!(
+        p95 <= std::time::Duration::from_millis(50),
+        "100 Mission and 1,000 Task snapshot p95 was {p95:?}"
+    );
+    drop(ledger);
+    std::fs::remove_dir_all(root).expect("remove scale scratch");
 }
