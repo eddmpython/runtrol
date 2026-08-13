@@ -684,21 +684,18 @@ async fn serve_surfaces(
                 .pc_identity
                 .clone()
                 .ok_or(ServeError::PhoneIdentityUnavailable)?;
-            let paired_devices: Arc<[crate::compose::PairedDevice]> =
-                composed.paired_devices.clone().into();
-            let (hub, supervisor) = crate::relay::supervise(relay, identity, paired_devices);
+            let (hub, supervisor) =
+                crate::relay::supervise(relay, identity, composed.device_authority.clone());
             connections.spawn(supervisor);
             Some(hub)
         }
         None => match (&composed.pc_identity, &composed.relay_seed) {
             (Some(identity), Some(seed)) => {
-                let paired_devices: Arc<[crate::compose::PairedDevice]> =
-                    composed.paired_devices.clone().into();
                 let (hub, supervisor) = crate::relay::supervise_controlled(
                     composed.relay_control.clone(),
                     Arc::clone(seed),
                     Arc::clone(identity),
-                    paired_devices,
+                    composed.device_authority.clone(),
                 );
                 connections.spawn(supervisor);
                 Some(hub)
@@ -803,9 +800,8 @@ async fn serve_surfaces(
                     let remote = pending.remote_public_key();
                     let Some(device) = services
                         .composed
-                        .paired_devices
-                        .iter()
-                        .find(|paired| paired.remote_static_key == remote)
+                        .device_authority
+                        .paired_device(remote)
                         .map(|paired| paired.id)
                     else {
                         return;
@@ -1474,9 +1470,11 @@ async fn converse(
         // second reconstruction behind session work made every surface pay owner contention for immutable state.
         // Greeting and scope stay in front of the fast path, just as they are in answer_prepared.
         if matches!(request, Request::List) && conversation.greeted() {
-            if let Err(refusal) =
-                crate::scope::allowed(conversation.caller(), &request, &composed.granted)
-            {
+            if let Err(refusal) = crate::scope::allowed(
+                conversation.caller(),
+                &request,
+                &composed.device_authority.grants(),
+            ) {
                 if write(&mut connection, &refuse(&refusal.to_string()))
                     .await
                     .is_err()
@@ -1494,7 +1492,12 @@ async fn converse(
 
         let reservation = if matches!(request, Request::Start { .. } | Request::Resume { .. })
             && conversation.greeted()
-            && crate::scope::allowed(conversation.caller(), &request, &composed.granted).is_ok()
+            && crate::scope::allowed(
+                conversation.caller(),
+                &request,
+                &composed.device_authority.grants(),
+            )
+            .is_ok()
         {
             let Some((workspace, access)) = requested_workspace(&request) else {
                 if write(
@@ -2255,15 +2258,16 @@ mod tests {
             )
             .expect("canonical credential");
             composed.pc_identity = Some(Arc::new(pc));
-            composed.granted =
-                GrantLedger::from_persisted([(device, vec![DeviceScope::SessionList])]);
-            composed.paired_devices = vec![crate::compose::PairedDevice {
-                id: device,
-                remote_static_key: phone.public_key(),
-                credential_fingerprint: token.fingerprint(),
-                labels: DeviceLabels::new("Test phone", "Browser").expect("device labels"),
-                paired_at: WallMs::from_millis(1_767_225_600_000),
-            }];
+            composed.device_authority.replace(
+                GrantLedger::from_persisted([(device, vec![DeviceScope::SessionList])]),
+                vec![crate::compose::PairedDevice {
+                    id: device,
+                    remote_static_key: phone.public_key(),
+                    credential_fingerprint: token.fingerprint(),
+                    labels: DeviceLabels::new("Test phone", "Browser").expect("device labels"),
+                    paired_at: WallMs::from_millis(1_767_225_600_000),
+                }],
+            );
 
             let address = composed.home.paths().endpoint().address().to_owned();
             let mut listener = Listener::bind(&address)

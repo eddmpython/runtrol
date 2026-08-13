@@ -35,7 +35,7 @@ impl LocalAuthorization {
 }
 
 /// What each paired device is allowed to do.
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct GrantLedger {
     /// Devices that hold at least one scope. A device with no scopes is not stored, so absence and
     /// emptiness are the same state and there is only one way to be unauthorized.

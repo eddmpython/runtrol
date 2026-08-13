@@ -19,7 +19,7 @@ use runtrol_transport::{
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio::time::{Instant, sleep_until};
 
-use crate::compose::PairedDevice;
+use crate::compose::DeviceAuthority;
 
 const ARRIVAL_QUEUE: usize = 8;
 const RECORD_QUEUE_PER_PHONE: usize = 2;
@@ -126,14 +126,14 @@ impl RelayHub {
 pub(crate) fn supervise(
     ingress: RelayIngress,
     identity: Arc<StaticKeypair>,
-    paired_devices: Arc<[PairedDevice]>,
+    device_authority: DeviceAuthority,
 ) -> (RelayHub, impl Future<Output = ()> + Send + 'static) {
     let (arriving, arrivals) = mpsc::channel(ARRIVAL_QUEUE);
     let (outgoing, outbound) = mpsc::channel(OUTBOUND_RECORD_QUEUE);
     let supervisor = RelaySupervisor {
         ingress,
         identity,
-        paired_devices,
+        device_authority,
         arriving,
         outgoing,
         outbound,
@@ -147,10 +147,10 @@ pub(crate) fn supervise_controlled(
     control: RelayControl,
     seed: Arc<RelaySeed>,
     identity: Arc<StaticKeypair>,
-    paired_devices: Arc<[PairedDevice]>,
+    device_authority: DeviceAuthority,
 ) -> (RelayHub, impl Future<Output = ()> + Send + 'static) {
     let (arriving, arrivals) = mpsc::channel(ARRIVAL_QUEUE);
-    let manager = controlled_manager(control, seed, identity, paired_devices, arriving);
+    let manager = controlled_manager(control, seed, identity, device_authority, arriving);
     (RelayHub { arrivals }, manager)
 }
 
@@ -158,7 +158,7 @@ async fn controlled_manager(
     control: RelayControl,
     seed: Arc<RelaySeed>,
     identity: Arc<StaticKeypair>,
-    paired_devices: Arc<[PairedDevice]>,
+    device_authority: DeviceAuthority,
     arriving: mpsc::Sender<RelayArrival>,
 ) {
     let mut configured = control.origin.subscribe();
@@ -187,7 +187,7 @@ async fn controlled_manager(
         let ingress = RelayIngress::new(endpoint);
         let mut status = ingress.status();
         let (mut hub, supervisor) =
-            supervise(ingress, Arc::clone(&identity), Arc::clone(&paired_devices));
+            supervise(ingress, Arc::clone(&identity), device_authority.clone());
         tokio::pin!(supervisor);
         loop {
             tokio::select! {
@@ -330,7 +330,7 @@ struct RelayPeer {
 struct RelaySupervisor {
     ingress: RelayIngress,
     identity: Arc<StaticKeypair>,
-    paired_devices: Arc<[PairedDevice]>,
+    device_authority: DeviceAuthority,
     arriving: mpsc::Sender<RelayArrival>,
     outgoing: mpsc::Sender<RelayOutbound>,
     outbound: mpsc::Receiver<RelayOutbound>,
@@ -416,7 +416,7 @@ impl RelaySupervisor {
                     }
                     let Some(admitted) = admit_peer(
                         &self.identity,
-                        &self.paired_devices,
+                        &self.device_authority,
                         origin,
                         peer_id,
                         &record,
@@ -515,7 +515,7 @@ enum DriveError {
 
 fn admit_peer(
     identity: &StaticKeypair,
-    paired_devices: &[PairedDevice],
+    device_authority: &DeviceAuthority,
     origin: &str,
     peer_id: [u8; 32],
     first: &EncryptedRecord,
@@ -533,9 +533,7 @@ fn admit_peer(
         Err(_invalid_handshake) => return None,
     };
     let remote = pending.remote_public_key();
-    let device = paired_devices
-        .iter()
-        .find(|device| device.remote_static_key == remote)?;
+    let device = device_authority.paired_device(remote)?;
     let (channel, reply, payload) = match pending.approve(remote, &[]) {
         Ok(approved) => approved,
         Err(_invalid_identity) => return None,
@@ -553,10 +551,11 @@ fn admit_peer(
 #[cfg(test)]
 mod tests {
     use runtrol_provider::WallMs;
-    use runtrol_security::DeviceLabels;
+    use runtrol_security::{DeviceLabels, GrantLedger};
     use runtrol_transport::{CredentialFingerprint, InitiatorHandshake};
 
     use super::*;
+    use crate::compose::PairedDevice;
 
     const ORIGIN: &str = "https://relay.runtrol.test";
 
@@ -568,6 +567,10 @@ mod tests {
             labels: DeviceLabels::new("Pocket", "Test OS").expect("valid labels"),
             paired_at: WallMs::from_millis(1_767_225_600_000),
         }
+    }
+
+    fn authority(paired_devices: Vec<PairedDevice>) -> DeviceAuthority {
+        DeviceAuthority::new(GrantLedger::new(), paired_devices)
     }
 
     fn handshake(
@@ -589,13 +592,14 @@ mod tests {
         let phone = StaticKeypair::generate().expect("phone identity");
         let stranger = StaticKeypair::generate().expect("stranger identity");
         let paired = paired_device(phone.public_key());
+        let authority = authority(vec![paired]);
         let peer_id = [3; 32];
 
         let (_initiator, first) = handshake(&pc, &stranger, peer_id, &[]);
-        assert!(admit_peer(&pc, std::slice::from_ref(&paired), ORIGIN, peer_id, &first).is_none());
+        assert!(admit_peer(&pc, &authority, ORIGIN, peer_id, &first).is_none());
 
         let (_initiator, first) = handshake(&pc, &phone, peer_id, b"early request");
-        assert!(admit_peer(&pc, &[paired], ORIGIN, peer_id, &first).is_none());
+        assert!(admit_peer(&pc, &authority, ORIGIN, peer_id, &first).is_none());
     }
 
     #[test]
@@ -628,11 +632,13 @@ mod tests {
         let pc = StaticKeypair::generate().expect("PC identity");
         let phone = StaticKeypair::generate().expect("phone identity");
         let paired = paired_device(phone.public_key());
+        let device = paired.id;
+        let authority = authority(vec![paired]);
         let peer_id = [5; 32];
         let (initiator, first) = handshake(&pc, &phone, peer_id, &[]);
-        let admitted = admit_peer(&pc, std::slice::from_ref(&paired), ORIGIN, peer_id, &first)
-            .expect("paired phone admitted");
-        assert_eq!(admitted.device, paired.id);
+        let admitted =
+            admit_peer(&pc, &authority, ORIGIN, peer_id, &first).expect("paired phone admitted");
+        assert_eq!(admitted.device, device);
         let (mut phone_channel, payload) = initiator
             .finish(&admitted.reply)
             .expect("phone completes handshake");

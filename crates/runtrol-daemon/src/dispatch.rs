@@ -355,7 +355,12 @@ async fn answer(
 ) -> Reply {
     let reserved = if matches!(request, Request::Start { .. } | Request::Resume { .. })
         && conversation.greeted
-        && crate::scope::allowed(&conversation.caller, &request, &composed.granted).is_ok()
+        && crate::scope::allowed(
+            &conversation.caller,
+            &request,
+            &composed.device_authority.grants(),
+        )
+        .is_ok()
     {
         let session = SessionId::now();
         match sessions.reserve_open_for_tests(session) {
@@ -409,7 +414,12 @@ pub(crate) async fn discover(
 ) -> Discovered {
     if !needs_driver(request)
         || !conversation.greeted
-        || crate::scope::allowed(&conversation.caller, request, &composed.granted).is_err()
+        || crate::scope::allowed(
+            &conversation.caller,
+            request,
+            &composed.device_authority.grants(),
+        )
+        .is_err()
     {
         return Discovered::None;
     }
@@ -560,7 +570,12 @@ pub(crate) async fn prepare_consult(
     request: &Request,
 ) -> Prepared {
     if !conversation.greeted()
-        || crate::scope::allowed(&conversation.caller, request, &composed.granted).is_err()
+        || crate::scope::allowed(
+            &conversation.caller,
+            request,
+            &composed.device_authority.grants(),
+        )
+        .is_err()
     {
         return Prepared::None;
     }
@@ -581,7 +596,12 @@ pub(crate) async fn prepare_provider_updates(
 ) -> Prepared {
     if !matches!(request, Request::ProviderUpdates)
         || !conversation.greeted()
-        || crate::scope::allowed(&conversation.caller, request, &composed.granted).is_err()
+        || crate::scope::allowed(
+            &conversation.caller,
+            request,
+            &composed.device_authority.grants(),
+        )
+        .is_err()
     {
         return Prepared::None;
     }
@@ -616,7 +636,12 @@ pub(crate) async fn prepare_integration_admin(
 ) -> Prepared {
     if !is_integration_admin(request)
         || !conversation.greeted()
-        || crate::scope::allowed(conversation.caller(), request, &composed.granted).is_err()
+        || crate::scope::allowed(
+            conversation.caller(),
+            request,
+            &composed.device_authority.grants(),
+        )
+        .is_err()
     {
         return Prepared::None;
     }
@@ -710,7 +735,12 @@ pub(crate) async fn prepare_mission_workspace(
         return Prepared::None;
     };
     if !conversation.greeted()
-        || crate::scope::allowed(conversation.caller(), request, &composed.granted).is_err()
+        || crate::scope::allowed(
+            conversation.caller(),
+            request,
+            &composed.device_authority.grants(),
+        )
+        .is_err()
     {
         return Prepared::None;
     }
@@ -743,7 +773,12 @@ pub(crate) async fn prepare_mission_verification(
         return Prepared::None;
     };
     if !conversation.greeted()
-        || crate::scope::allowed(conversation.caller(), request, &composed.granted).is_err()
+        || crate::scope::allowed(
+            conversation.caller(),
+            request,
+            &composed.device_authority.grants(),
+        )
+        .is_err()
     {
         return Prepared::None;
     }
@@ -764,7 +799,12 @@ pub(crate) async fn prepare_mission_integration(
         return Prepared::None;
     };
     if !conversation.greeted()
-        || crate::scope::allowed(conversation.caller(), request, &composed.granted).is_err()
+        || crate::scope::allowed(
+            conversation.caller(),
+            request,
+            &composed.device_authority.grants(),
+        )
+        .is_err()
     {
         return Prepared::None;
     }
@@ -789,7 +829,12 @@ pub(crate) async fn prepare_capability_verification(
         return Prepared::None;
     };
     if !conversation.greeted()
-        || crate::scope::allowed(conversation.caller(), request, &composed.granted).is_err()
+        || crate::scope::allowed(
+            conversation.caller(),
+            request,
+            &composed.device_authority.grants(),
+        )
+        .is_err()
     {
         return Prepared::None;
     }
@@ -850,7 +895,11 @@ pub(crate) fn answer_prepared(
 ) -> Reply {
     // Before anything else looks at the request. A wall consulted after some other branch has acted is a wall on
     // the way out, and the thing it was supposed to prevent has already happened.
-    if let Err(refusal) = crate::scope::allowed(&conversation.caller, &request, &composed.granted) {
+    if let Err(refusal) = crate::scope::allowed(
+        &conversation.caller,
+        &request,
+        &composed.device_authority.grants(),
+    ) {
         return Reply::One(refuse(&refusal.to_string()));
     }
 
@@ -1114,7 +1163,7 @@ pub(crate) fn answer_prepared(
             subject_digest,
         } => match sessions.take_for_answer_approval(
             conversation.caller(),
-            &composed.granted,
+            &composed.device_authority.grants(),
             session,
             approval,
             option,

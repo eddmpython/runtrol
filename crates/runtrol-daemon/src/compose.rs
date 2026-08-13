@@ -28,7 +28,7 @@ use runtrol_provider::WallMs;
 use runtrol_security::{DeviceId, DeviceLabels, DeviceScope, GrantLedger};
 use runtrol_store::{DeviceRow, Store};
 use runtrol_transport::{CredentialFingerprint, PublicKey, RelaySeed, StaticKeypair};
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, watch};
 
 /// The daemon could not be assembled.
 #[derive(Debug, thiserror::Error)]
@@ -109,6 +109,57 @@ pub struct PairedDevice {
     pub paired_at: WallMs,
 }
 
+#[derive(Clone)]
+struct DeviceAuthoritySnapshot {
+    granted: Arc<GrantLedger>,
+    paired_devices: Arc<[PairedDevice]>,
+}
+
+/// Live paired-device authority shared by every local and relay connection.
+///
+/// A watch value makes each read one immutable snapshot. Pairing can publish a replacement only after the durable
+/// authorization row is committed, while existing provider processes and session ownership remain untouched.
+#[derive(Clone)]
+pub(crate) struct DeviceAuthority {
+    current: watch::Sender<DeviceAuthoritySnapshot>,
+}
+
+impl DeviceAuthority {
+    pub(crate) fn new(granted: GrantLedger, paired_devices: Vec<PairedDevice>) -> Self {
+        let (current, _initial) = watch::channel(DeviceAuthoritySnapshot {
+            granted: Arc::new(granted),
+            paired_devices: paired_devices.into(),
+        });
+        Self { current }
+    }
+
+    pub(crate) fn grants(&self) -> Arc<GrantLedger> {
+        Arc::clone(&self.current.borrow().granted)
+    }
+
+    pub(crate) fn paired_device(&self, remote_static_key: PublicKey) -> Option<PairedDevice> {
+        self.current
+            .borrow()
+            .paired_devices
+            .iter()
+            .find(|device| device.remote_static_key == remote_static_key)
+            .cloned()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn replace(&self, granted: GrantLedger, paired_devices: Vec<PairedDevice>) {
+        self.current.send_replace(DeviceAuthoritySnapshot {
+            granted: Arc::new(granted),
+            paired_devices: paired_devices.into(),
+        });
+    }
+
+    #[cfg(test)]
+    fn paired_devices(&self) -> Arc<[PairedDevice]> {
+        Arc::clone(&self.current.borrow().paired_devices)
+    }
+}
+
 /// Everything a running daemon holds.
 pub struct Composed {
     /// runtrol's own directory, and every path inside it.
@@ -130,10 +181,8 @@ pub struct Composed {
     pub containment: Arc<Containment>,
     /// Which providers exist, and what this build can do about each.
     pub registry: ProviderRegistry,
-    /// Who has been granted what, reconstructed from durable rows before any remote listener exists.
-    pub granted: GrantLedger,
-    /// Paired Noise and HTTP identities, reconstructed beside the grant ledger from the same durable rows.
-    pub paired_devices: Vec<PairedDevice>,
+    /// Paired identities and their grants, reconstructed before listeners and replaceable after durable pairing.
+    pub(crate) device_authority: DeviceAuthority,
     /// The stable PC Noise identity, protected by the current user's operating-system vault.
     ///
     /// Windows uses DPAPI, macOS uses Keychain Services, and Unix uses Secret Service. No platform uses a raw-key
@@ -203,8 +252,7 @@ impl Composed {
             integration_admin: crate::integration_admin::IntegrationAdmin::default(),
             containment,
             registry,
-            granted,
-            paired_devices,
+            device_authority: DeviceAuthority::new(granted, paired_devices),
             pc_identity: machine_identity.noise,
             relay_seed: machine_identity.relay,
             relay_control: crate::relay::RelayControl::new(),
@@ -256,8 +304,7 @@ impl Composed {
             integration_admin: crate::integration_admin::IntegrationAdmin::default(),
             containment: Arc::new(Containment::without_any()),
             registry,
-            granted,
-            paired_devices,
+            device_authority: DeviceAuthority::new(granted, paired_devices),
             pc_identity: machine_identity.noise,
             relay_seed: machine_identity.relay,
             relay_control: crate::relay::RelayControl::new(),
@@ -621,10 +668,12 @@ mod tests {
 
         let restored = Composed::for_tests(&scratch.root, runtrol_drivers::builtin())
             .expect("restored assembly");
-        assert!(restored.granted.holds(device, DeviceScope::SessionList));
-        assert_eq!(restored.granted.scopes_of(device).len(), 1);
-        assert_eq!(restored.paired_devices.len(), 1);
-        let paired = restored.paired_devices.first().expect("restored device");
+        let grants = restored.device_authority.grants();
+        assert!(grants.holds(device, DeviceScope::SessionList));
+        assert_eq!(grants.scopes_of(device).len(), 1);
+        let paired_devices = restored.device_authority.paired_devices();
+        assert_eq!(paired_devices.len(), 1);
+        let paired = paired_devices.first().expect("restored device");
         assert_eq!(paired.id, device);
         assert_eq!(paired.labels.name(), "Pixel 9");
         assert_eq!(
