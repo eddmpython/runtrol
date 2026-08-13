@@ -798,6 +798,40 @@ mod tests {
     }
 
     #[test]
+    fn initialization_signature_matches_the_language_neutral_fixture() {
+        let identity = IntegrationIdentity::from_secret_bytes([7; 32]);
+        let challenge = ServerChallenge {
+            instance_id: "rtm_0123456789abcdef0123456789abcdef".to_owned(),
+            nonce_id: "nonce_0123456789abcdef0123456789abcdef".to_owned(),
+            nonce: Base64UrlUnpadded::encode_string(&[3; 32]),
+            expires_at_ms: 2_000_000_000_000,
+        };
+        let client = ClientInfo {
+            name: "fixture".to_owned(),
+            version: "1.0.0".to_owned(),
+        };
+        let capabilities = ClientCapabilities::default();
+        let authentication = IntegrationAuthentication {
+            integration_id: runtrol_runtime_protocol::IntegrationId::new("int_fixture"),
+            key_generation: 2,
+            grant_generation: 3,
+            signature: String::new(),
+        };
+        let payload = initialization_signing_payload(
+            &challenge,
+            &[runtrol_runtime_protocol::REVISION_2026_08_13],
+            &client,
+            &capabilities,
+            &authentication,
+        )
+        .expect("canonical signing payload");
+        assert_eq!(
+            identity.sign_base64(&payload),
+            "cBrwv1dkWz6oG-YszAimU6leDfkNriZSKxUNSGYttRiH2dD0RJQsTklzpjzW3_qSIZYwrPeSPLHnCyW5fJ5sBQ"
+        );
+    }
+
+    #[test]
     fn identity_round_trips_through_explicit_secret_storage() {
         let identity = IntegrationIdentity::from_secret_bytes([7; 32]);
         let restored = IntegrationIdentity::from_secret_bytes(identity.secret_bytes());

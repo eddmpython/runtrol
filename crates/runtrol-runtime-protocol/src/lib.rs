@@ -6,6 +6,7 @@
 mod error;
 mod integration;
 mod inventory;
+mod locator;
 mod method;
 mod models;
 mod revision;
@@ -24,6 +25,7 @@ pub use inventory::{
     InstallationObservation, InstallationState, LifecycleState, ManagedSessionList,
     ProviderDescriptor, ProviderId, ProviderList, RuntimeSessionId, SessionDescriptor,
 };
+pub use locator::{RUNTIME_LOCATOR_SCHEMA, RuntimeEndpointKind, RuntimeLocatorRecord};
 pub use method::RuntimeMethod;
 pub use models::{
     ListModelsParams, RuntimeModelCatalog, RuntimeModelChoice, RuntimeReasoningChoice,

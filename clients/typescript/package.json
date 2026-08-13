@@ -1,0 +1,47 @@
+{
+  "name": "@runtrol/runtime-client",
+  "version": "0.1.1",
+  "description": "Typed Node.js client for the shared local Runtrol Runtime.",
+  "type": "module",
+  "types": "./dist/src/index.d.ts",
+  "sideEffects": false,
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/eddmpython/runtrol.git",
+    "directory": "clients/typescript"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "import": "./dist/src/index.js"
+    },
+    "./testing": {
+      "types": "./dist/src/testing.d.ts",
+      "import": "./dist/src/testing.js"
+    },
+    "./schema": "./schema/runtime.schema.json"
+  },
+  "files": [
+    "dist/src",
+    "schema",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "generate": "node tooling/generate.mjs",
+    "generate:check": "node tooling/generate.mjs --check",
+    "check": "npm run generate:check && tsc --noEmit",
+    "build": "npm run generate:check && tsc -p tsconfig.build.json",
+    "test": "npm run build && node --test dist/test/*.test.js && node tooling/packed-consumer.mjs",
+    "test:packed": "npm run build && node tooling/packed-consumer.mjs",
+    "pack:check": "npm pack --dry-run"
+  },
+  "devDependencies": {
+    "@types/node": "24.10.1",
+    "typescript": "5.9.3"
+  }
+}

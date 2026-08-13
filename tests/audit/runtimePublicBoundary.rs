@@ -45,6 +45,40 @@ fn rust_sources(relative: &str) -> String {
         .join("\n")
 }
 
+fn text_sources(relative: &str, extensions: &[&str]) -> String {
+    fn collect(path: &Path, extensions: &[&str], found: &mut Vec<PathBuf>) {
+        for entry in std::fs::read_dir(path)
+            .unwrap_or_else(|error| panic!("cannot read {}: {error}", path.display()))
+        {
+            let path = entry
+                .unwrap_or_else(|error| panic!("cannot read source entry: {error}"))
+                .path();
+            if path.is_dir() {
+                collect(&path, extensions, found);
+            } else if path
+                .extension()
+                .and_then(|extension| extension.to_str())
+                .is_some_and(|extension| extensions.contains(&extension))
+            {
+                found.push(path);
+            }
+        }
+    }
+
+    let source_root = root().join(relative);
+    let mut paths = Vec::new();
+    collect(&source_root, extensions, &mut paths);
+    paths.sort();
+    paths
+        .into_iter()
+        .map(|path| {
+            std::fs::read_to_string(&path)
+                .unwrap_or_else(|error| panic!("cannot read {}: {error}", path.display()))
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 #[test]
 fn publishable_crates_import_no_private_runtime_authority() {
     let protocol = rust_sources("crates/runtrol-runtime-protocol");
@@ -122,6 +156,25 @@ fn public_daemon_dispatch_cannot_deserialize_private_control_requests() {
         assert!(
             !source.contains(forbidden),
             "public Runtime dispatcher reaches private boundary {forbidden:?}"
+        );
+    }
+}
+
+#[test]
+fn publishable_typescript_client_imports_no_private_runtime_authority() {
+    let source = text_sources("clients/typescript/src", &["ts"]);
+    for forbidden in [
+        "extensions/runtrol-vscode",
+        "runtrol-core",
+        "runtrol-daemon",
+        "runtrol-drivers",
+        "runtrol-ipc",
+        "runtrol-store",
+        "runtrol-vault",
+    ] {
+        assert!(
+            !source.contains(forbidden),
+            "public TypeScript client reaches private authority {forbidden:?}"
         );
     }
 }

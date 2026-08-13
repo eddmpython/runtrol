@@ -62,6 +62,8 @@ ALLOWED_ROOT: frozenset[str] = frozenset(
         "mainPlan",
         "assets",
         "extensions",
+        # Public SDK packages distributed independently from the product surfaces.
+        "clients",
         # Rust 워크스페이스
         "Cargo.toml",
         "Cargo.lock",

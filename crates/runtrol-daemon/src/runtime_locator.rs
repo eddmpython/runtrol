@@ -3,9 +3,9 @@
 use std::path::{Path, PathBuf};
 
 use runtrol_provider::AbsPath;
+use runtrol_runtime_protocol::{RUNTIME_LOCATOR_SCHEMA, RuntimeEndpointKind, RuntimeLocatorRecord};
 use serde::{Deserialize, Serialize};
 
-const SCHEMA: u32 = 1;
 const MAX_RECORD_BYTES: u64 = 8 * 1024;
 
 /// Runtime identity, locator publication, or cleanup failed closed.
@@ -30,22 +30,11 @@ struct InstanceRecord {
     instance_id: String,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct LocatorRecord {
-    schema: u32,
-    instance_id: String,
-    endpoint_kind: String,
-    endpoint: String,
-    runtime_version: String,
-    process_id: u32,
-}
-
 /// Load the durable installed-Runtime identity or mint it exactly once for a new home.
 pub(crate) fn load_or_create_instance(path: &AbsPath) -> Result<String, RuntimeBootstrapError> {
     if path.as_std_path().exists() {
         let record: InstanceRecord = read_bounded(path.as_std_path())?;
-        if record.schema != SCHEMA || !valid_instance(&record.instance_id) {
+        if record.schema != RUNTIME_LOCATOR_SCHEMA || !valid_instance(&record.instance_id) {
             return Err(RuntimeBootstrapError::Malformed {
                 path: path.as_str().to_owned(),
                 detail: "unsupported schema or invalid instance identity".to_owned(),
@@ -68,7 +57,7 @@ pub(crate) fn load_or_create_instance(path: &AbsPath) -> Result<String, RuntimeB
     write_new(
         path.as_std_path(),
         &InstanceRecord {
-            schema: SCHEMA,
+            schema: RUNTIME_LOCATOR_SCHEMA,
             instance_id: instance_id.clone(),
         },
     )?;
@@ -89,10 +78,10 @@ impl PublishedLocator {
         endpoint: &str,
     ) -> Result<Self, RuntimeBootstrapError> {
         ensure_replaceable(path.as_std_path())?;
-        let record = LocatorRecord {
-            schema: SCHEMA,
+        let record = RuntimeLocatorRecord {
+            schema: RUNTIME_LOCATOR_SCHEMA,
             instance_id: instance_id.to_owned(),
-            endpoint_kind: endpoint_kind().to_owned(),
+            endpoint_kind: endpoint_kind(),
             endpoint: endpoint.to_owned(),
             runtime_version: env!("CARGO_PKG_VERSION").to_owned(),
             process_id: std::process::id(),
@@ -107,7 +96,7 @@ impl PublishedLocator {
 
 impl Drop for PublishedLocator {
     fn drop(&mut self) {
-        let Ok(record) = read_bounded::<LocatorRecord>(&self.path) else {
+        let Ok(record) = read_bounded::<RuntimeLocatorRecord>(&self.path) else {
             return;
         };
         if record.instance_id == self.instance_id {
@@ -220,13 +209,13 @@ fn valid_instance(instance_id: &str) -> bool {
 }
 
 #[cfg(windows)]
-const fn endpoint_kind() -> &'static str {
-    "namedPipe"
+const fn endpoint_kind() -> RuntimeEndpointKind {
+    RuntimeEndpointKind::NamedPipe
 }
 
 #[cfg(unix)]
-const fn endpoint_kind() -> &'static str {
-    "unixSocket"
+const fn endpoint_kind() -> RuntimeEndpointKind {
+    RuntimeEndpointKind::UnixSocket
 }
 
 #[cfg(test)]
@@ -277,7 +266,7 @@ mod tests {
         let instance = "rtm_0123456789abcdef0123456789abcdef";
         let guard =
             PublishedLocator::publish(&path, instance, "local-endpoint").expect("publish locator");
-        let record: LocatorRecord = read_bounded(path.as_std_path()).expect("read locator");
+        let record: RuntimeLocatorRecord = read_bounded(path.as_std_path()).expect("read locator");
         assert_eq!(record.instance_id, instance);
         drop(guard);
         assert!(!path.as_std_path().exists());
@@ -290,10 +279,10 @@ mod tests {
         let instance = "rtm_0123456789abcdef0123456789abcdef";
         write_new(
             path.as_std_path(),
-            &LocatorRecord {
-                schema: SCHEMA,
+            &RuntimeLocatorRecord {
+                schema: RUNTIME_LOCATOR_SCHEMA,
                 instance_id: instance.to_owned(),
-                endpoint_kind: endpoint_kind().to_owned(),
+                endpoint_kind: endpoint_kind(),
                 endpoint: "first".to_owned(),
                 runtime_version: env!("CARGO_PKG_VERSION").to_owned(),
                 process_id: std::process::id(),
@@ -301,7 +290,8 @@ mod tests {
         )
         .expect("first locator");
         let second = PublishedLocator::publish(&path, instance, "second").expect("replace locator");
-        let record: LocatorRecord = read_bounded(path.as_std_path()).expect("read replacement");
+        let record: RuntimeLocatorRecord =
+            read_bounded(path.as_std_path()).expect("read replacement");
         assert_eq!(record.endpoint, "second");
         drop(second);
     }

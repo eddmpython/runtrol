@@ -6,9 +6,9 @@ use crate::{
     AcquireControlParams, ControlLease, ControlLeaseParams, EnrollmentDecision, EnrollmentReceipt,
     InitializeParams, InitializeResult, IntegrationGrant, JsonRpcNotification, JsonRpcRequest,
     JsonRpcResponse, LaggedNotification, ListModelsParams, ManagedSessionList, ProviderList,
-    RequestEnrollmentParams, RuntimeEventNotification, RuntimeMethod, RuntimeModelCatalog,
-    ServerChallenge, SubmitInputParams, WatchEnrollmentParams, WatchEventsParams,
-    WatchEventsResult,
+    RequestEnrollmentParams, RuntimeEventNotification, RuntimeLocatorRecord, RuntimeMethod,
+    RuntimeModelCatalog, ServerChallenge, SubmitInputParams, WatchEnrollmentParams,
+    WatchEventsParams, WatchEventsResult,
 };
 
 /// Checked schema filename inside this package.
@@ -33,6 +33,7 @@ struct PublicProtocolSchema {
     watch_enrollment: WatchEnrollmentParams,
     enrollment_decision: EnrollmentDecision,
     integration_grant: IntegrationGrant,
+    runtime_locator: RuntimeLocatorRecord,
     provider_list: ProviderList,
     list_models: ListModelsParams,
     model_catalogue: RuntimeModelCatalog,
@@ -54,5 +55,16 @@ struct PublicProtocolSchema {
 /// A serialization failure from `serde_json`. The schema graph contains no fallible user data, so such a failure is a
 /// release tooling defect rather than a Runtime request failure.
 pub fn public_schema() -> Result<serde_json::Value, serde_json::Error> {
-    serde_json::to_value(schema_for!(PublicProtocolSchema))
+    let mut schema = serde_json::to_value(schema_for!(PublicProtocolSchema))?;
+    if let Some(root) = schema.as_object_mut() {
+        root.insert(
+            "x-runtrol-finalized-revisions".to_owned(),
+            serde_json::to_value(crate::FINALIZED_REVISIONS)?,
+        );
+        root.insert(
+            "x-runtrol-limits".to_owned(),
+            serde_json::to_value(crate::RuntimeLimits::default())?,
+        );
+    }
+    Ok(schema)
 }

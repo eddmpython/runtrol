@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
-use serde::Deserialize;
+use runtrol_runtime_protocol::{RUNTIME_LOCATOR_SCHEMA, RuntimeEndpointKind, RuntimeLocatorRecord};
 
 const LOCATOR_FILE: &str = "runtime.locator.json";
 const RUNTIME_FOLDER: &str = "runtrol";
@@ -66,9 +66,9 @@ impl RuntimeLocator {
 
         let bytes = std::fs::read(&self.path)
             .map_err(|error| LocatorError::Io(io_detail("reading the Runtime locator", &error)))?;
-        let record: LocatorRecord = serde_json::from_slice(&bytes)
+        let record: RuntimeLocatorRecord = serde_json::from_slice(&bytes)
             .map_err(|error| LocatorError::Malformed(error.to_string()))?;
-        record.validate(&self.path)?;
+        validate_record(&record, &self.path)?;
         Ok(LocatorState::Running(ValidatedLocator {
             instance_id: record.instance_id,
             endpoint: record.endpoint,
@@ -101,61 +101,41 @@ pub struct ValidatedLocator {
     pub(crate) runtime_version: String,
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct LocatorRecord {
-    schema: u32,
-    instance_id: String,
-    endpoint_kind: EndpointKind,
-    endpoint: String,
-    runtime_version: String,
-    process_id: u32,
-}
-
-impl LocatorRecord {
-    fn validate(&self, locator_path: &Path) -> Result<(), LocatorError> {
-        if self.schema != 1 {
-            return Err(LocatorError::Malformed(format!(
-                "unsupported Runtime locator schema {}",
-                self.schema
-            )));
-        }
-        if self.instance_id.is_empty() || self.instance_id.len() > 128 {
-            return Err(LocatorError::Malformed(
-                "Runtime instance identity is empty or oversized".to_owned(),
-            ));
-        }
-        if self.runtime_version.is_empty() || self.runtime_version.len() > 128 {
-            return Err(LocatorError::Malformed(
-                "Runtime version is empty or oversized".to_owned(),
-            ));
-        }
-        if self.process_id == 0
-            || self.endpoint.is_empty()
-            || self.endpoint.len() > MAX_ENDPOINT_BYTES
-        {
-            return Err(LocatorError::Malformed(
-                "Runtime process or endpoint is invalid".to_owned(),
-            ));
-        }
-        validate_endpoint(self.endpoint_kind, &self.endpoint, locator_path)
+fn validate_record(record: &RuntimeLocatorRecord, locator_path: &Path) -> Result<(), LocatorError> {
+    if record.schema != RUNTIME_LOCATOR_SCHEMA {
+        return Err(LocatorError::Malformed(format!(
+            "unsupported Runtime locator schema {}",
+            record.schema
+        )));
     }
-}
-
-#[derive(Clone, Copy, Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-enum EndpointKind {
-    NamedPipe,
-    UnixSocket,
+    if record.instance_id.is_empty() || record.instance_id.len() > 128 {
+        return Err(LocatorError::Malformed(
+            "Runtime instance identity is empty or oversized".to_owned(),
+        ));
+    }
+    if record.runtime_version.is_empty() || record.runtime_version.len() > 128 {
+        return Err(LocatorError::Malformed(
+            "Runtime version is empty or oversized".to_owned(),
+        ));
+    }
+    if record.process_id == 0
+        || record.endpoint.is_empty()
+        || record.endpoint.len() > MAX_ENDPOINT_BYTES
+    {
+        return Err(LocatorError::Malformed(
+            "Runtime process or endpoint is invalid".to_owned(),
+        ));
+    }
+    validate_endpoint(record.endpoint_kind, &record.endpoint, locator_path)
 }
 
 #[cfg(windows)]
 fn validate_endpoint(
-    kind: EndpointKind,
+    kind: RuntimeEndpointKind,
     endpoint: &str,
     _locator_path: &Path,
 ) -> Result<(), LocatorError> {
-    if !matches!(kind, EndpointKind::NamedPipe)
+    if !matches!(kind, RuntimeEndpointKind::NamedPipe)
         || !endpoint.starts_with(r"\\.\pipe\runtrol-runtime-")
     {
         return Err(LocatorError::Unsafe(
@@ -167,11 +147,11 @@ fn validate_endpoint(
 
 #[cfg(unix)]
 fn validate_endpoint(
-    kind: EndpointKind,
+    kind: RuntimeEndpointKind,
     endpoint: &str,
     locator_path: &Path,
 ) -> Result<(), LocatorError> {
-    if !matches!(kind, EndpointKind::UnixSocket) {
+    if !matches!(kind, RuntimeEndpointKind::UnixSocket) {
         return Err(LocatorError::Unsafe(
             "the Runtime locator does not name a Unix socket".to_owned(),
         ));
@@ -545,7 +525,7 @@ mod tests {
         )
         .expect("write unknown field");
         assert!(
-            serde_json::from_slice::<LocatorRecord>(
+            serde_json::from_slice::<RuntimeLocatorRecord>(
                 &std::fs::read(&path).expect("read hostile record")
             )
             .is_err()

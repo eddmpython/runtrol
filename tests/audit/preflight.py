@@ -107,6 +107,14 @@ GATES: dict[str, tuple[str, list[str]]] = {
         "VS Code 확장 thin boundary, 타입 검사, 테스트, 번들",
         [*PY, f"{HOOKS}/vscodeExtension.py"],
     ),
+    "runtimeClientSdkSelftest": (
+        "공개 TypeScript Runtime SDK 게이트 자체 검증",
+        [*PY, f"{HOOKS}/runtimeClientSdk.py", "--selftest"],
+    ),
+    "runtimeClientSdk": (
+        "공개 TypeScript Runtime SDK 생성, 계약, 외부 패키지 소비",
+        [*PY, f"{HOOKS}/runtimeClientSdk.py"],
+    ),
     "vscodePackageSelftest": (
         "VS Code 플랫폼 패키지 게이트 자체 검증",
         [*PY, f"{HOOKS}/vscodePackage.py", "--selftest"],
@@ -317,6 +325,8 @@ SUITES: dict[str, tuple[str, ...]] = {
         "readmeParity",
         "vscodeExtensionSelftest",
         "vscodeExtension",
+        "runtimeClientSdkSelftest",
+        "runtimeClientSdk",
         "vscodeHostPerformanceSelftest",
         "vscodeHostPerformance",
         "vscodeRealProviderJourneySelftest",
@@ -399,6 +409,7 @@ def skipReasonFor(name: str) -> str | None:
             return "Cargo.toml 없음 (부트스트랩 단계)"
     if name in {
         "vscodeExtension",
+        "runtimeClientSdk",
         "vscodeHostPerformance",
         "vscodeRealProviderJourney",
         "vscodeUpgradeRollback",
@@ -406,6 +417,7 @@ def skipReasonFor(name: str) -> str | None:
         return "npm 없음"
     if name in {
         "vscodeExtension",
+        "runtimeClientSdk",
         "vscodeHostPerformance",
         "vscodeRealProviderJourney",
         "vscodeUpgradeRollback",
