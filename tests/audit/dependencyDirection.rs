@@ -26,6 +26,15 @@ const ALLOWED_EDGES: &[(&str, &[&str])] = &[
     ("runtrol-runtime-client", &["runtrol-runtime-protocol"]),
     // Mission evidence accepts provider identities but no conversation-capable events or control layers.
     ("runtrol-ledger", &["runtrol-provider"]),
+    (
+        "runtrol-orchestrator",
+        &[
+            "runtrol-provider",
+            "runtrol-security",
+            "runtrol-core",
+            "runtrol-ledger",
+        ],
+    ),
     // L0. The vocabulary. The semver-stable surface a third-party provider author depends on.
     ("runtrol-provider", &[]),
     // L1. The techniques. Each knows the vocabulary and nothing else.
@@ -152,6 +161,16 @@ const FORBIDDEN_TRANSITIVE: &[(&str, &str, &str)] = &[
         "runtrol-ledger",
         "runtrol-drivers",
         "Mission evidence cannot discover or interpret a provider implementation",
+    ),
+    (
+        "runtrol-orchestrator",
+        "runtrol-drivers",
+        "the Mission kernel emits provider-neutral effects and cannot call a provider implementation",
+    ),
+    (
+        "runtrol-orchestrator",
+        "runtrol-ipc",
+        "the Mission kernel is independent from private and remote transports",
     ),
     (
         "runtrol-ledger",

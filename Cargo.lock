@@ -821,6 +821,7 @@ dependencies = [
  "runtrol-childproc",
  "runtrol-core",
  "runtrol-ledger",
+ "runtrol-orchestrator",
  "runtrol-provider",
  "runtrol-security",
  "runtrol-store",
@@ -945,6 +946,20 @@ dependencies = [
  "sha2 0.10.9",
  "thiserror 2.0.19",
  "uuid",
+]
+
+[[package]]
+name = "runtrol-orchestrator"
+version = "0.1.1"
+dependencies = [
+ "runtrol-core",
+ "runtrol-ledger",
+ "runtrol-provider",
+ "runtrol-security",
+ "serde",
+ "sha2 0.10.9",
+ "thiserror 2.0.19",
+ "toml",
 ]
 
 [[package]]
