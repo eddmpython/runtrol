@@ -20,9 +20,9 @@ pub mod state;
 pub mod tier;
 
 pub use manager::{
-    AgentLease, AttachError, AttachedSession, ClosingReservation, ClosingSession, LiveSession,
-    OpenReservation, ProviderUpdateReservation, Pumped, ReservedOpen, SessionError, SessionManager,
-    TakenAgent,
+    AgentLease, ApprovalAuthority, AttachError, AttachedSession, ClosingReservation,
+    ClosingSession, LiveSession, OpenReservation, ProviderUpdateReservation, Pumped, ReservedOpen,
+    SessionError, SessionManager, TakenAgent,
 };
 pub use mint::Identity;
 pub use state::{CloseReason, FailureCode, Lifecycle, Observed, Refused, SessionState};

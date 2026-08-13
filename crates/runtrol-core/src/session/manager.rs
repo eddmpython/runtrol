@@ -213,6 +213,21 @@ pub enum SessionError {
     Security(#[from] SecurityError),
 }
 
+/// Provider approval authority already established by the calling product boundary.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ApprovalAuthority {
+    /// One-action low-risk responses only.
+    Low,
+    /// High-risk and standing responses, including low-risk responses.
+    High,
+}
+
+impl ApprovalAuthority {
+    const fn may_answer_high(self) -> bool {
+        matches!(self, Self::High)
+    }
+}
+
 /// One live session: its driver, its event hub, its names, and what it is doing.
 struct Live {
     /// The driver.
@@ -1165,6 +1180,74 @@ impl SessionManager {
         option: OptionId,
         subject_digest: [u8; 32],
     ) -> Result<(TakenAgent, AgentCommand), SessionError> {
+        let may_answer_high = caller.may(DeviceScope::ApprovalRespondHigh, ledger).is_ok();
+        let (command, required_scope) =
+            self.approval_command(session, approval, option, subject_digest, may_answer_high)?;
+        caller.may(required_scope, ledger)?;
+        let taken = self.take_agent(session)?;
+        Ok((taken, command))
+    }
+
+    /// Borrow every normalized approval that the live driver still holds.
+    ///
+    /// # Errors
+    ///
+    /// Refuses a session that is not live or whose agent is carrying out another provider command.
+    pub fn pending_approvals(
+        &self,
+        session: SessionId,
+    ) -> Result<Vec<runtrol_provider::ApprovalRequest>, SessionError> {
+        let live = self
+            .live
+            .get(&session)
+            .ok_or(SessionError::NotLive { session })?;
+        let agent = live
+            .agent
+            .as_ref()
+            .ok_or(SessionError::AgentInFlight { session })?;
+        Ok(agent.approvals().into_iter().cloned().collect())
+    }
+
+    /// Validate an approval under authority established by a non-device product boundary and move its agent out.
+    ///
+    /// # Errors
+    ///
+    /// Refuses stale, expired, unavailable, or insufficiently authorized answers and a session already carrying out
+    /// another provider command.
+    pub fn take_for_answer_approval_with_authority(
+        &mut self,
+        authority: ApprovalAuthority,
+        session: SessionId,
+        approval: ApprovalId,
+        option: OptionId,
+        subject_digest: [u8; 32],
+    ) -> Result<(TakenAgent, AgentCommand), SessionError> {
+        let (command, required_scope) = self.approval_command(
+            session,
+            approval,
+            option,
+            subject_digest,
+            authority.may_answer_high(),
+        )?;
+        if required_scope == DeviceScope::ApprovalRespondHigh && !authority.may_answer_high() {
+            return Err(SessionError::ApprovalOptionUnavailable {
+                approval,
+                option,
+                why: "the caller may not answer a high-risk request",
+            });
+        }
+        let taken = self.take_agent(session)?;
+        Ok((taken, command))
+    }
+
+    fn approval_command(
+        &self,
+        session: SessionId,
+        approval: ApprovalId,
+        option: OptionId,
+        subject_digest: [u8; 32],
+        may_answer_high: bool,
+    ) -> Result<(AgentCommand, DeviceScope), SessionError> {
         let live = self
             .live
             .get(&session)
@@ -1187,7 +1270,6 @@ impl SessionManager {
             .iter()
             .find(|candidate| candidate.id == option)
             .ok_or(SessionError::ApprovalOptionNotOffered { approval, option })?;
-        let may_answer_high = caller.may(DeviceScope::ApprovalRespondHigh, ledger).is_ok();
         if let Some(why) = request
             .offerable(may_answer_high)
             .into_iter()
@@ -1206,15 +1288,13 @@ impl SessionManager {
             } else {
                 DeviceScope::ApprovalRespondLow
             };
-        caller.may(required_scope, ledger)?;
-        let taken = self.take_agent(session)?;
         Ok((
-            taken,
             AgentCommand::Answer {
                 id: approval,
                 option,
                 subject_digest,
             },
+            required_scope,
         ))
     }
 

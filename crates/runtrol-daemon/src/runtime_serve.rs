@@ -4,7 +4,7 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::Duration;
 
-use runtrol_core::WorkspaceClaim;
+use runtrol_core::{ApprovalAuthority, WorkspaceClaim};
 use runtrol_ipc::transport::Connection;
 use runtrol_provider::{CloseMode, Disposition, OpenIntent, WorkspaceAccess};
 use runtrol_runtime_protocol::{
@@ -12,10 +12,11 @@ use runtrol_runtime_protocol::{
     CoolSessionParams, ErrorResponse, FINALIZED_REVISIONS, GetProviderCapabilitiesParams,
     GetSessionParams, InitializeParams, InitializeResult, JsonRpcId, JsonRpcNotification,
     JsonRpcRequest, JsonRpcResponse, LaggedNotification, ListModelsParams,
-    ListNativeSessionsParams, MAX_MODEL_SELECTION_BYTES, MAX_NATIVE_ADOPTION_TOKEN_BYTES,
-    MAX_NATIVE_PUBLIC_CURSOR_BYTES, MAX_PAGE_ITEMS, MAX_REVISION_OFFERS, ProtocolRevision,
-    ProviderCapabilityAvailability, ProviderCapabilityObservation, ProviderCapabilityProvenance,
-    RequestEnrollmentParams, ResumeSessionParams, RuntimeCapabilities, RuntimeError,
+    ListNativeSessionsParams, ListPendingApprovalsParams, MAX_MODEL_SELECTION_BYTES,
+    MAX_NATIVE_ADOPTION_TOKEN_BYTES, MAX_NATIVE_PUBLIC_CURSOR_BYTES, MAX_PAGE_ITEMS,
+    MAX_REVISION_OFFERS, ProtocolRevision, ProviderCapabilityAvailability,
+    ProviderCapabilityObservation, ProviderCapabilityProvenance, RequestEnrollmentParams,
+    RespondApprovalParams, ResumeSessionParams, RuntimeCapabilities, RuntimeError,
     RuntimeErrorKind, RuntimeInstance, RuntimeLimits, RuntimeMethod, RuntimeModelCatalog,
     RuntimeModelChoice, RuntimeProviderCapabilities, RuntimeReasoningChoice, RuntimeSessionId,
     SessionWorkspaceAccess, StartSessionParams, SubmitInputParams, SuccessResponse,
@@ -32,7 +33,7 @@ use crate::runtime_auth::{
     enrollment_decision, refresh, request_enrollment,
 };
 use crate::runtime_control::{
-    RuntimeAgentGuard, RuntimeAsked, RuntimeControlFailure, RuntimeControlReply,
+    ApprovalScopes, RuntimeAgentGuard, RuntimeAsked, RuntimeControlFailure, RuntimeControlReply,
     RuntimeControlRequest, RuntimeCoolGuard, RuntimeCooling, RuntimeOpenCompletion,
     RuntimeOpenGuard, RuntimeOpenRequest, RuntimeReturned, cursor_to_public,
 };
@@ -383,7 +384,9 @@ async fn dispatch_public(
             | RuntimeMethod::SessionsSubmitInput
             | RuntimeMethod::SessionsWatchEvents
             | RuntimeMethod::SessionsInterrupt
-            | RuntimeMethod::SessionsCool => {
+            | RuntimeMethod::SessionsCool
+            | RuntimeMethod::ApprovalsListPending
+            | RuntimeMethod::ApprovalsRespond => {
                 session_operation(
                     state, composed, sessions, asking, returning, method, id, params,
                 )
@@ -421,11 +424,14 @@ fn required_scope(method: RuntimeMethod) -> Option<AppScope> {
         RuntimeMethod::SessionsAcquireControl | RuntimeMethod::SessionsSubmitInput => {
             Some(AppScope::SessionInputWrite)
         }
-        RuntimeMethod::SessionsWatchEvents => Some(AppScope::SessionOutputRead),
+        RuntimeMethod::SessionsWatchEvents | RuntimeMethod::ApprovalsListPending => {
+            Some(AppScope::SessionOutputRead)
+        }
         RuntimeMethod::SessionsInterrupt | RuntimeMethod::SessionsCool => {
             Some(AppScope::SessionStop)
         }
-        RuntimeMethod::SessionsRenewControl
+        RuntimeMethod::ApprovalsRespond
+        | RuntimeMethod::SessionsRenewControl
         | RuntimeMethod::SessionsReleaseControl
         | RuntimeMethod::Initialize
         | RuntimeMethod::Initialized
@@ -1090,11 +1096,28 @@ async fn session_operation(
         Ok(authority) => authority.clone(),
         Err(failure) => return Answer::failure(id, failure),
     };
+    let approval_scopes = ApprovalScopes {
+        low: authority
+            .grant
+            .scopes
+            .contains(&AppScope::ApprovalRespondLow),
+        high: authority
+            .grant
+            .scopes
+            .contains(&AppScope::ApprovalRespondHigh),
+    };
+    if method == RuntimeMethod::ApprovalsRespond && !approval_scopes.low && !approval_scopes.high {
+        return Answer::plain(
+            id,
+            RuntimeErrorKind::ScopeDenied,
+            "the integration lacks an approval response scope",
+        );
+    }
     let session = match sessions.authorized_session(&authority, parsed.session_id()) {
         Ok(session) => session,
         Err(failure) => return inventory_failure(id, failure),
     };
-    let request = parsed.into_owner_request(session);
+    let request = parsed.into_owner_request(session, approval_scopes);
     let (answered, hearing) = oneshot::channel();
     if asking
         .send(RuntimeAsked {
@@ -1186,6 +1209,7 @@ async fn open_session(
         RuntimeControlReply::Failed(failure) => control_failure(id, failure),
         RuntimeControlReply::Lease(_)
         | RuntimeControlReply::Done
+        | RuntimeControlReply::Approvals(_)
         | RuntimeControlReply::Watching { .. }
         | RuntimeControlReply::Sending { .. }
         | RuntimeControlReply::Cooling(_) => Answer::plain(
@@ -1713,6 +1737,8 @@ enum ParsedSessionOperation {
     },
     Interrupt(ControlLeaseParams),
     Cool(CoolSessionParams),
+    ListApprovals(ListPendingApprovalsParams),
+    RespondApproval(RespondApprovalParams),
 }
 
 impl ParsedSessionOperation {
@@ -1725,10 +1751,16 @@ impl ParsedSessionOperation {
             Self::Submit(params) => &params.session_id,
             Self::Watch { params, .. } => &params.session_id,
             Self::Cool(params) => &params.session_id,
+            Self::ListApprovals(params) => &params.session_id,
+            Self::RespondApproval(params) => &params.session_id,
         }
     }
 
-    fn into_owner_request(self, session: runtrol_provider::SessionId) -> RuntimeControlRequest {
+    fn into_owner_request(
+        self,
+        session: runtrol_provider::SessionId,
+        scopes: ApprovalScopes,
+    ) -> RuntimeControlRequest {
         match self {
             Self::Acquire(params) => RuntimeControlRequest::Acquire { session, params },
             Self::Renew(params) => RuntimeControlRequest::Renew { session, params },
@@ -1744,6 +1776,20 @@ impl ParsedSessionOperation {
             },
             Self::Interrupt(params) => RuntimeControlRequest::Interrupt { session, params },
             Self::Cool(params) => RuntimeControlRequest::Cool { session, params },
+            Self::ListApprovals(params) => RuntimeControlRequest::ListApprovals {
+                session,
+                params,
+                scopes,
+            },
+            Self::RespondApproval(params) => RuntimeControlRequest::RespondApproval {
+                session,
+                params,
+                authority: if scopes.high {
+                    ApprovalAuthority::High
+                } else {
+                    ApprovalAuthority::Low
+                },
+            },
         }
     }
 }
@@ -1780,6 +1826,12 @@ fn parse_session_operation(
         RuntimeMethod::SessionsCool => serde_json::from_value(params)
             .map(ParsedSessionOperation::Cool)
             .map_err(|_| "session cooling parameters are invalid"),
+        RuntimeMethod::ApprovalsListPending => serde_json::from_value(params)
+            .map(ParsedSessionOperation::ListApprovals)
+            .map_err(|_| "pending approval list parameters are invalid"),
+        RuntimeMethod::ApprovalsRespond => serde_json::from_value(params)
+            .map(ParsedSessionOperation::RespondApproval)
+            .map_err(|_| "approval response parameters are invalid"),
         RuntimeMethod::Initialize
         | RuntimeMethod::Initialized
         | RuntimeMethod::Challenge
@@ -1809,6 +1861,7 @@ async fn runtime_control_answer(
     match reply {
         RuntimeControlReply::Lease(lease) => Answer::success(id, &lease),
         RuntimeControlReply::Done => Answer::success(id, &EmptyResult {}),
+        RuntimeControlReply::Approvals(approvals) => Answer::success(id, &approvals),
         RuntimeControlReply::Watching { result, view } => Answer::watching(id, &result, view),
         RuntimeControlReply::Failed(failure) => control_failure(id, failure),
         RuntimeControlReply::Sending {

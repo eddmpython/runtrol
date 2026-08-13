@@ -3,6 +3,7 @@
 //! This crate owns the negotiated wire vocabulary. It deliberately knows nothing about Core, provider drivers,
 //! storage, daemon composition, or first-party product surfaces.
 
+mod approval;
 mod capability;
 mod error;
 mod integration;
@@ -17,6 +18,10 @@ mod schema;
 mod session;
 mod session_open;
 
+pub use approval::{
+    ListPendingApprovalsParams, PendingApproval, PendingApprovalList, RespondApprovalParams,
+    RuntimeApprovalKind, RuntimeApprovalOption, RuntimeApprovalOptionKind, RuntimeApprovalRisk,
+};
 pub use capability::{
     CapabilityFreshness, GetProviderCapabilitiesParams, ProviderCapabilityAvailability,
     ProviderCapabilityObservation, ProviderCapabilityProvenance, RuntimeProviderCapabilities,

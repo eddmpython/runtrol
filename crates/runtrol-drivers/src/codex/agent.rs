@@ -509,6 +509,10 @@ impl Agent for CodexAgent {
         self.approvals.get(id)
     }
 
+    fn approvals(&self) -> Vec<&ApprovalRequest> {
+        self.approvals.all()
+    }
+
     async fn send(&mut self, command: AgentCommand) -> Result<(), ProviderError> {
         match command {
             AgentCommand::Prompt(blocks) => {

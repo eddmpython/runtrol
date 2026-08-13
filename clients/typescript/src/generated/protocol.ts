@@ -121,6 +121,9 @@ export interface ListModelsParams { readonly providerId: ProviderId; }
 /** Select one provider and one exact approved root for explicit native discovery. */
 export interface ListNativeSessionsParams { readonly cursor?: string | null; readonly providerId: ProviderId; readonly root: string; }
 
+/** Current control lease required to inspect pending approvals for one session. */
+export interface ListPendingApprovalsParams { readonly leaseGeneration: number; readonly leaseId: string; readonly sessionId: RuntimeSessionId; }
+
 /** A bounded Runtime-managed session snapshot. */
 export interface ManagedSessionList { readonly sessions: ReadonlyArray<SessionDescriptor>; readonly warnings: ReadonlyArray<string>; }
 
@@ -135,6 +138,12 @@ export interface NativeSessionCatalogue { readonly coverage: CatalogueCoverage; 
 
 /** One root-authorized official provider-native session. */
 export interface NativeSessionDescriptor { readonly additionalDirectories: ReadonlyArray<string>; readonly adoptionToken?: string | null; readonly alreadyManagedAs?: RuntimeSessionId | null; readonly cwd: string; readonly nativeSessionId: string; readonly resume: NativeResumeCapability; readonly title?: string | null; readonly updatedAt?: string | null; }
+
+/** One provider-neutral approval request retained by the live driver. */
+export interface PendingApproval { readonly approvalId: string; readonly expiresAtMs: number; readonly kind: RuntimeApprovalKind; readonly options: ReadonlyArray<RuntimeApprovalOption>; readonly risk: RuntimeApprovalRisk; readonly subject: unknown; readonly subjectDigest: ReadonlyArray<number>; readonly subjectIncomplete: boolean; }
+
+/** Every provider approval still pending for the exact controlled session. */
+export interface PendingApprovalList { readonly approvals: ReadonlyArray<PendingApproval>; }
 
 /** An opaque pending local enrollment decision. */
 export type PendingEnrollmentId = string;
@@ -163,8 +172,23 @@ export interface ProviderList { readonly providers: ReadonlyArray<ProviderDescri
 /** Prove possession of the key attached to a new enrollment. */
 export interface RequestEnrollmentParams { readonly manifest: EnrollmentManifest; readonly signature: string; }
 
+/** Answer one exact provider approval under the current control lease. */
+export interface RespondApprovalParams { readonly approvalId: string; readonly leaseGeneration: number; readonly leaseId: string; readonly optionId: number; readonly requestId: MutationRequestId; readonly sessionId: RuntimeSessionId; readonly subjectDigest: ReadonlyArray<number>; }
+
 /** Heat one existing Runtime-managed cold session. */
 export interface ResumeSessionParams { readonly access: SessionWorkspaceAccess; readonly expectedLifecycle: LifecycleState; readonly expectedSessionGeneration: number; readonly requestId: MutationRequestId; readonly sessionId: RuntimeSessionId; readonly workspace: string; }
+
+/** Structural provider approval class. */
+export type RuntimeApprovalKind = "command" | "fileChange" | "permissions" | "elicitation" | "network" | "other";
+
+/** One provider-offered approval option and its current availability. */
+export interface RuntimeApprovalOption { readonly kind: RuntimeApprovalOptionKind; readonly label: string; readonly optionId: number; readonly unavailable?: string | null; }
+
+/** Structural effect of one provider-offered option. */
+export type RuntimeApprovalOptionKind = "allowOnce" | "allowAlways" | "rejectOnce" | "rejectAlways";
+
+/** Authority class derived from the pending request and selected option. */
+export type RuntimeApprovalRisk = "low" | "high";
 
 /** Public product capabilities for the selected revision. */
 export interface RuntimeCapabilities { readonly integrationEnrollment: boolean; readonly managedSessionList: boolean; readonly modelDiscovery: boolean; readonly nativeSessionCatalogue: boolean; readonly providerInventory: boolean; readonly sessionControl: boolean; readonly sessionEvents: boolean; }
@@ -191,7 +215,7 @@ export interface RuntimeLimits { readonly challengeLifetimeMs: number; readonly 
 export interface RuntimeLocatorRecord { readonly endpoint: string; readonly endpointKind: RuntimeEndpointKind; readonly instanceId: string; readonly processId: number; readonly runtimeVersion: string; readonly schema: number; }
 
 /** A public Runtime method implemented by the initial read-only boundary. */
-export type RuntimeMethod = "runtime/initialize" | "runtime/initialized" | "runtime/challenge" | "integrations/requestEnrollment" | "integrations/watchEnrollment" | "integrations/getGrant" | "providers/list" | "providers/getCapabilities" | "providers/listModels" | "providers/listNativeSessions" | "sessions/list" | "sessions/get" | "sessions/start" | "sessions/adoptNative" | "sessions/resume" | "sessions/acquireControl" | "sessions/renewControl" | "sessions/releaseControl" | "sessions/submitInput" | "sessions/watchEvents" | "sessions/interrupt" | "sessions/cool" | "sessions/event" | "sessions/lagged" | "runtime/panicStop";
+export type RuntimeMethod = "runtime/initialize" | "runtime/initialized" | "runtime/challenge" | "integrations/requestEnrollment" | "integrations/watchEnrollment" | "integrations/getGrant" | "providers/list" | "providers/getCapabilities" | "providers/listModels" | "providers/listNativeSessions" | "sessions/list" | "sessions/get" | "sessions/start" | "sessions/adoptNative" | "sessions/resume" | "sessions/acquireControl" | "sessions/renewControl" | "sessions/releaseControl" | "sessions/submitInput" | "sessions/watchEvents" | "sessions/interrupt" | "sessions/cool" | "approvals/listPending" | "approvals/respond" | "sessions/event" | "sessions/lagged" | "runtime/panicStop";
 
 /** The current model information Runtime can truthfully expose. */
 export type RuntimeModelCatalog = { readonly coverage: "known"; readonly models: ReadonlyArray<RuntimeModelChoice>; } | { readonly aliases: ReadonlyArray<string>; readonly coverage: "aliases"; readonly why: string; } | { readonly aliases: ReadonlyArray<string>; readonly coverage: "partial"; readonly models: ReadonlyArray<RuntimeModelChoice>; readonly why: string; } | { readonly coverage: "unknown"; readonly why: string; } | { readonly coverage: "unsupported"; readonly why: string; };

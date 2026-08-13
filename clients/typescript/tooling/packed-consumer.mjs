@@ -38,10 +38,12 @@ try {
       RuntimeConnector,
       newMutationRequestId,
       type CoolSessionParams,
+      type ListPendingApprovalsParams,
       type ListNativeSessionsParams,
       type ProviderId,
       type RuntimeClient,
       type RuntimeSessionId,
+      type RespondApprovalParams,
       type StartSessionParams,
     } from "@runtrol/runtime-client";
     import { ScriptedRuntimeTransport } from "@runtrol/runtime-client/testing";
@@ -70,6 +72,22 @@ try {
       leaseGeneration: 1,
     };
     void runtime.sessions().cool(cool);
+    const pending: ListPendingApprovalsParams = {
+      sessionId: session,
+      leaseId: "opaque-lease",
+      leaseGeneration: 1,
+    };
+    void runtime.approvals().listPending(pending);
+    const response: RespondApprovalParams = {
+      requestId: newMutationRequestId(),
+      sessionId: session,
+      leaseId: "opaque-lease",
+      leaseGeneration: 1,
+      approvalId: "opaque-approval",
+      optionId: 0,
+      subjectDigest: new Array(32).fill(0),
+    };
+    void runtime.approvals().respond(response);
     // @ts-expect-error raw protocol dispatch is not part of the public client API
     runtime.call("providers/list", {});
   `);

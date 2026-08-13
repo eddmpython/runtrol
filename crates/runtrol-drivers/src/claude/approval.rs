@@ -169,6 +169,13 @@ impl ApprovalBook {
         self.pending.get(&approval).map(|pending| &pending.request)
     }
 
+    pub(super) fn all(&self) -> Vec<&ApprovalRequest> {
+        self.pending
+            .values()
+            .map(|pending| &pending.request)
+            .collect()
+    }
+
     pub(super) fn open(
         &mut self,
         incoming: IncomingApproval,

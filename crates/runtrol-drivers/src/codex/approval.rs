@@ -96,6 +96,13 @@ impl ApprovalBook {
         self.pending.get(&approval).map(|pending| &pending.request)
     }
 
+    pub(super) fn all(&self) -> Vec<&ApprovalRequest> {
+        self.pending
+            .values()
+            .map(|pending| &pending.request)
+            .collect()
+    }
+
     /// Retain a shared reference to the newest item payload that can make a later file approval meaningful.
     pub(super) fn observe(&mut self, method: &str, params: &Bytes) {
         if !matches!(method, ITEM_STARTED | FILE_PATCH_UPDATED) {

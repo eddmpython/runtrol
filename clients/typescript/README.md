@@ -59,3 +59,27 @@ await runtime.sessions().cool({
   leaseGeneration: opened.control.leaseGeneration,
 });
 ```
+
+Pending approvals remain bound to the current control lease. Risk comes from the provider request retained by
+Runtime, never from caller input:
+
+```ts
+const pending = await runtime.approvals().listPending({
+  sessionId: opened.session.sessionId,
+  leaseId: opened.control.leaseId,
+  leaseGeneration: opened.control.leaseGeneration,
+});
+const approval = pending.approvals.at(0);
+const option = approval?.options.find((candidate) => candidate.unavailable == null);
+if (approval && option) {
+  await runtime.approvals().respond({
+    requestId: newMutationRequestId(),
+    sessionId: opened.session.sessionId,
+    leaseId: opened.control.leaseId,
+    leaseGeneration: opened.control.leaseGeneration,
+    approvalId: approval.approvalId,
+    optionId: option.optionId,
+    subjectDigest: approval.subjectDigest,
+  });
+}
+```

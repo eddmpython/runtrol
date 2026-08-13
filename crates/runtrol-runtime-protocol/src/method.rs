@@ -75,6 +75,12 @@ pub enum RuntimeMethod {
     /// Release one idle hot provider process while retaining its managed pointer.
     #[serde(rename = "sessions/cool")]
     SessionsCool,
+    /// Read pending structured provider approvals for one controlled session.
+    #[serde(rename = "approvals/listPending")]
+    ApprovalsListPending,
+    /// Answer one exact pending provider approval.
+    #[serde(rename = "approvals/respond")]
+    ApprovalsRespond,
     /// One normalized event notification.
     #[serde(rename = "sessions/event")]
     SessionsEvent,
@@ -113,6 +119,8 @@ impl RuntimeMethod {
             Self::SessionsWatchEvents => "sessions/watchEvents",
             Self::SessionsInterrupt => "sessions/interrupt",
             Self::SessionsCool => "sessions/cool",
+            Self::ApprovalsListPending => "approvals/listPending",
+            Self::ApprovalsRespond => "approvals/respond",
             Self::SessionsEvent => "sessions/event",
             Self::SessionsLagged => "sessions/lagged",
             Self::PanicStop => "runtime/panicStop",
@@ -153,6 +161,8 @@ impl FromStr for RuntimeMethod {
             "sessions/watchEvents" => Ok(Self::SessionsWatchEvents),
             "sessions/interrupt" => Ok(Self::SessionsInterrupt),
             "sessions/cool" => Ok(Self::SessionsCool),
+            "approvals/listPending" => Ok(Self::ApprovalsListPending),
+            "approvals/respond" => Ok(Self::ApprovalsRespond),
             "sessions/event" => Ok(Self::SessionsEvent),
             "sessions/lagged" => Ok(Self::SessionsLagged),
             "runtime/panicStop" => Ok(Self::PanicStop),
@@ -195,6 +205,8 @@ mod tests {
             RuntimeMethod::SessionsWatchEvents,
             RuntimeMethod::SessionsInterrupt,
             RuntimeMethod::SessionsCool,
+            RuntimeMethod::ApprovalsListPending,
+            RuntimeMethod::ApprovalsRespond,
             RuntimeMethod::SessionsEvent,
             RuntimeMethod::SessionsLagged,
             RuntimeMethod::PanicStop,

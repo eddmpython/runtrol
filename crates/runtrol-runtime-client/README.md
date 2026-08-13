@@ -58,6 +58,45 @@ runtime
 # }
 ```
 
+Approval risk and option availability are derived from the request held by the live provider driver. A consumer
+echoes only the exact identifiers and digest returned by `list_pending`:
+
+```rust,no_run
+# async fn approvals(
+#     runtime: &mut runtrol_runtime_client::RuntimeClient,
+#     control: runtrol_runtime_protocol::ControlLease,
+# ) -> Result<(), Box<dyn std::error::Error>> {
+let pending = runtime
+    .approvals()
+    .list_pending(&runtrol_runtime_protocol::ListPendingApprovalsParams {
+        session_id: control.session_id.clone(),
+        lease_id: control.lease_id.clone(),
+        lease_generation: control.lease_generation,
+    })
+    .await?;
+if let Some(approval) = pending.approvals.first()
+    && let Some(option) = approval
+        .options
+        .iter()
+        .find(|candidate| candidate.unavailable.is_none())
+{
+    runtime
+        .approvals()
+        .respond(&runtrol_runtime_protocol::RespondApprovalParams {
+            request_id: runtrol_runtime_protocol::MutationRequestId::now(),
+            session_id: control.session_id,
+            lease_id: control.lease_id,
+            lease_generation: control.lease_generation,
+            approval_id: approval.approval_id.clone(),
+            option_id: option.option_id,
+            subject_digest: approval.subject_digest,
+        })
+        .await?;
+}
+# Ok(())
+# }
+```
+
 Keep the same mutation request identity when retrying an uncertain transport outcome. Runtime returns the exact known
 result, an idempotency conflict, or an explicit unknown outcome. It never reruns an ambiguous provider mutation
 automatically.

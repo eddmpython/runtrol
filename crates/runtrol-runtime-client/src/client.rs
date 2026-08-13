@@ -8,10 +8,11 @@ use runtrol_runtime_protocol::{
     GetProviderCapabilitiesParams, GetSessionParams, InitializeParams, InitializeResult,
     IntegrationAuthentication, IntegrationGrant, JsonRpcId, JsonRpcNotification, JsonRpcRequest,
     JsonRpcResponse, LaggedNotification, ListModelsParams, ListNativeSessionsParams,
-    ManagedSessionList, NativeSessionCatalogue, PendingEnrollmentId, ProviderId, ProviderList,
-    RequestEnrollmentParams, ResumeSessionParams, RuntimeEventNotification, RuntimeMethod,
-    RuntimeModelCatalog, RuntimeProviderCapabilities, RuntimeSessionId, ServerChallenge,
-    SessionDescriptor, SessionOpenResult, StartSessionParams, SubmitInputParams, SuccessResponse,
+    ListPendingApprovalsParams, ManagedSessionList, NativeSessionCatalogue, PendingApprovalList,
+    PendingEnrollmentId, ProviderId, ProviderList, RequestEnrollmentParams, RespondApprovalParams,
+    ResumeSessionParams, RuntimeEventNotification, RuntimeMethod, RuntimeModelCatalog,
+    RuntimeProviderCapabilities, RuntimeSessionId, ServerChallenge, SessionDescriptor,
+    SessionOpenResult, StartSessionParams, SubmitInputParams, SuccessResponse,
     WatchEnrollmentParams, WatchEventsParams, WatchEventsResult, enrollment_signing_payload,
     initialization_signing_payload,
 };
@@ -221,6 +222,11 @@ impl RuntimeClient {
     /// Runtime-managed session operations.
     pub fn sessions(&mut self) -> SessionClient<'_> {
         SessionClient { runtime: self }
+    }
+
+    /// Structured provider approval operations for controlled sessions.
+    pub fn approvals(&mut self) -> ApprovalClient<'_> {
+        ApprovalClient { runtime: self }
     }
 
     /// Bind an approved grant returned on this connection to its consumer-owned signing identity.
@@ -780,6 +786,40 @@ impl SessionClient<'_> {
     }
 }
 
+/// Typed structured provider approval methods.
+pub struct ApprovalClient<'a> {
+    runtime: &'a mut RuntimeClient,
+}
+
+impl ApprovalClient<'_> {
+    /// Read every pending normalized request under one exact current control lease.
+    ///
+    /// # Errors
+    ///
+    /// Public client and Runtime failures, including missing output scope and stale control authority.
+    pub async fn list_pending(
+        &mut self,
+        params: &ListPendingApprovalsParams,
+    ) -> Result<PendingApprovalList, ClientError> {
+        self.runtime
+            .call(RuntimeMethod::ApprovalsListPending, params)
+            .await
+    }
+
+    /// Answer one exact pending request without accepting caller-supplied risk.
+    ///
+    /// # Errors
+    ///
+    /// Public client and Runtime failures, including stale subjects, unavailable options, expiry, and scope denial.
+    pub async fn respond(&mut self, params: &RespondApprovalParams) -> Result<(), ClientError> {
+        let _: EmptyResult = self
+            .runtime
+            .call(RuntimeMethod::ApprovalsRespond, params)
+            .await?;
+        Ok(())
+    }
+}
+
 /// One dedicated bounded event stream borrowed from an initialized Runtime connection.
 pub struct EventSubscription<'client> {
     runtime: &'client mut RuntimeClient,
@@ -859,6 +899,8 @@ impl EventSubscription<'_> {
             | RuntimeMethod::SessionsWatchEvents
             | RuntimeMethod::SessionsInterrupt
             | RuntimeMethod::SessionsCool
+            | RuntimeMethod::ApprovalsListPending
+            | RuntimeMethod::ApprovalsRespond
             | RuntimeMethod::PanicStop => Err(ClientError::Protocol(
                 "the dedicated session stream received a non-event method".to_owned(),
             )),

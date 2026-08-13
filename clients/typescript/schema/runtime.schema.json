@@ -975,6 +975,32 @@
       ],
       "type": "object"
     },
+    "ListPendingApprovalsParams": {
+      "additionalProperties": false,
+      "description": "Current control lease required to inspect pending approvals for one session.",
+      "properties": {
+        "leaseGeneration": {
+          "description": "Exact current lease generation.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "leaseId": {
+          "description": "Opaque current lease identity.",
+          "type": "string"
+        },
+        "sessionId": {
+          "$ref": "#/$defs/RuntimeSessionId",
+          "description": "Exact controlled Runtime session."
+        }
+      },
+      "required": [
+        "sessionId",
+        "leaseId",
+        "leaseGeneration"
+      ],
+      "type": "object"
+    },
     "ManagedSessionList": {
       "additionalProperties": false,
       "description": "A bounded Runtime-managed session snapshot.",
@@ -1122,6 +1148,84 @@
       ],
       "type": "object"
     },
+    "PendingApproval": {
+      "additionalProperties": false,
+      "description": "One provider-neutral approval request retained by the live driver.",
+      "properties": {
+        "approvalId": {
+          "description": "Runtrol-owned approval identity.",
+          "type": "string"
+        },
+        "expiresAtMs": {
+          "description": "Provider request expiry in Unix milliseconds.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "kind": {
+          "$ref": "#/$defs/RuntimeApprovalKind",
+          "description": "Structural provider request class."
+        },
+        "options": {
+          "description": "Every provider-offered option without silently hiding unavailable choices.",
+          "items": {
+            "$ref": "#/$defs/RuntimeApprovalOption"
+          },
+          "type": "array"
+        },
+        "risk": {
+          "$ref": "#/$defs/RuntimeApprovalRisk",
+          "description": "Risk computed from the held provider request."
+        },
+        "subject": {
+          "description": "Provider-normalized subject that must be presented for meaningful consent."
+        },
+        "subjectDigest": {
+          "description": "Exact subject digest required in the response.",
+          "items": {
+            "format": "uint8",
+            "maximum": 255,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "maxItems": 32,
+          "minItems": 32,
+          "type": "array"
+        },
+        "subjectIncomplete": {
+          "description": "Whether Runtime could not bind the complete subject.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "approvalId",
+        "kind",
+        "risk",
+        "options",
+        "subject",
+        "subjectIncomplete",
+        "subjectDigest",
+        "expiresAtMs"
+      ],
+      "type": "object"
+    },
+    "PendingApprovalList": {
+      "additionalProperties": false,
+      "description": "Every provider approval still pending for the exact controlled session.",
+      "properties": {
+        "approvals": {
+          "description": "Bounded pending requests in provider order.",
+          "items": {
+            "$ref": "#/$defs/PendingApproval"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "approvals"
+      ],
+      "type": "object"
+    },
     "PendingEnrollmentId": {
       "description": "An opaque pending local enrollment decision.",
       "type": "string"
@@ -1266,6 +1370,62 @@
       ],
       "type": "object"
     },
+    "RespondApprovalParams": {
+      "additionalProperties": false,
+      "description": "Answer one exact provider approval under the current control lease.",
+      "properties": {
+        "approvalId": {
+          "description": "Exact pending approval identity.",
+          "type": "string"
+        },
+        "leaseGeneration": {
+          "description": "Exact current lease generation.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "leaseId": {
+          "description": "Opaque current lease identity.",
+          "type": "string"
+        },
+        "optionId": {
+          "description": "Exact provider-offered option identity.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "requestId": {
+          "$ref": "#/$defs/MutationRequestId",
+          "description": "Caller-minted idempotency identity."
+        },
+        "sessionId": {
+          "$ref": "#/$defs/RuntimeSessionId",
+          "description": "Exact controlled Runtime session."
+        },
+        "subjectDigest": {
+          "description": "Digest returned by `approvals/listPending`.",
+          "items": {
+            "format": "uint8",
+            "maximum": 255,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "maxItems": 32,
+          "minItems": 32,
+          "type": "array"
+        }
+      },
+      "required": [
+        "requestId",
+        "sessionId",
+        "leaseId",
+        "leaseGeneration",
+        "approvalId",
+        "optionId",
+        "subjectDigest"
+      ],
+      "type": "object"
+    },
     "ResumeSessionParams": {
       "additionalProperties": false,
       "description": "Heat one existing Runtime-managed cold session.",
@@ -1306,6 +1466,114 @@
         "access"
       ],
       "type": "object"
+    },
+    "RuntimeApprovalKind": {
+      "description": "Structural provider approval class.",
+      "oneOf": [
+        {
+          "const": "command",
+          "description": "Run a command.",
+          "type": "string"
+        },
+        {
+          "const": "fileChange",
+          "description": "Change files.",
+          "type": "string"
+        },
+        {
+          "const": "permissions",
+          "description": "Widen permissions.",
+          "type": "string"
+        },
+        {
+          "const": "elicitation",
+          "description": "Answer a provider question.",
+          "type": "string"
+        },
+        {
+          "const": "network",
+          "description": "Reach the network.",
+          "type": "string"
+        },
+        {
+          "const": "other",
+          "description": "A structural class unknown to this revision.",
+          "type": "string"
+        }
+      ]
+    },
+    "RuntimeApprovalOption": {
+      "additionalProperties": false,
+      "description": "One provider-offered approval option and its current availability.",
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/RuntimeApprovalOptionKind",
+          "description": "Structural effect of choosing the option."
+        },
+        "label": {
+          "description": "Provider-owned presentation label transported verbatim.",
+          "type": "string"
+        },
+        "optionId": {
+          "description": "Runtrol-owned option identity within this approval.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "unavailable": {
+          "description": "Safe Runtime-owned reason the current integration cannot choose it.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "optionId",
+        "label",
+        "kind"
+      ],
+      "type": "object"
+    },
+    "RuntimeApprovalOptionKind": {
+      "description": "Structural effect of one provider-offered option.",
+      "oneOf": [
+        {
+          "const": "allowOnce",
+          "description": "Allow only this action.",
+          "type": "string"
+        },
+        {
+          "const": "allowAlways",
+          "description": "Create a standing allowance.",
+          "type": "string"
+        },
+        {
+          "const": "rejectOnce",
+          "description": "Reject only this action.",
+          "type": "string"
+        },
+        {
+          "const": "rejectAlways",
+          "description": "Create a standing rejection.",
+          "type": "string"
+        }
+      ]
+    },
+    "RuntimeApprovalRisk": {
+      "description": "Authority class derived from the pending request and selected option.",
+      "oneOf": [
+        {
+          "const": "low",
+          "description": "One action with no standing policy change.",
+          "type": "string"
+        },
+        {
+          "const": "high",
+          "description": "Code execution, destructive action, or standing policy change.",
+          "type": "string"
+        }
+      ]
     },
     "RuntimeCapabilities": {
       "additionalProperties": false,
@@ -1887,6 +2155,16 @@
         {
           "const": "sessions/cool",
           "description": "Release one idle hot provider process while retaining its managed pointer.",
+          "type": "string"
+        },
+        {
+          "const": "approvals/listPending",
+          "description": "Read pending structured provider approvals for one controlled session.",
+          "type": "string"
+        },
+        {
+          "const": "approvals/respond",
+          "description": "Answer one exact pending provider approval.",
           "type": "string"
         },
         {
@@ -2476,6 +2754,9 @@
     "list_native_sessions": {
       "$ref": "#/$defs/ListNativeSessionsParams"
     },
+    "list_pending_approvals": {
+      "$ref": "#/$defs/ListPendingApprovalsParams"
+    },
     "managed_session_list": {
       "$ref": "#/$defs/ManagedSessionList"
     },
@@ -2491,6 +2772,9 @@
     "notification": {
       "$ref": "#/$defs/JsonRpcNotification"
     },
+    "pending_approvals": {
+      "$ref": "#/$defs/PendingApprovalList"
+    },
     "provider_capabilities": {
       "$ref": "#/$defs/RuntimeProviderCapabilities"
     },
@@ -2502,6 +2786,9 @@
     },
     "request_enrollment": {
       "$ref": "#/$defs/RequestEnrollmentParams"
+    },
+    "respond_approval": {
+      "$ref": "#/$defs/RespondApprovalParams"
     },
     "response": {
       "$ref": "#/$defs/JsonRpcResponse"
@@ -2573,7 +2860,10 @@
     "watch_events",
     "watch_events_result",
     "runtime_event",
-    "lagged"
+    "lagged",
+    "list_pending_approvals",
+    "pending_approvals",
+    "respond_approval"
   ],
   "title": "PublicProtocolSchema",
   "type": "object",

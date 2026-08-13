@@ -8,18 +8,23 @@ use std::str::FromStr as _;
 
 use hmac::{Hmac, Mac as _};
 use runtrol_core::{
-    ClosingReservation, OpenReservation, SessionManager, SessionView, TakenAgent, WorkspaceClaim,
+    ApprovalAuthority, ClosingReservation, OpenReservation, SessionManager, SessionView,
+    TakenAgent, WorkspaceClaim,
 };
 use runtrol_core::{Lifecycle, SessionError};
 use runtrol_provider::{
-    AbsPath, Agent, AgentCommand, ContentBlock, NativeSessionId, OpenIntent, ProviderId, SessionId,
+    AbsPath, Agent, AgentCommand, ApprovalId, ApprovalKind, ApprovalRequest, ContentBlock,
+    NativeSessionId, OpenIntent, OptionId, PermissionOptionKind, ProviderId, RiskClass, SessionId,
     StreamId, WallMs, WatchCursor,
 };
 use runtrol_runtime_protocol::{
     AcquireControlParams, CONTROL_LEASE_LIFETIME_MS, ControlLease, ControlLeaseParams,
-    CoolSessionParams, EventCursor, IDEMPOTENCY_WINDOW_MS, LifecycleState, MAX_INPUT_BYTES,
-    MUTATION_CLOCK_SKEW_MS, MutationRequestId, RuntimeErrorKind, RuntimeMethod, SessionDescriptor,
-    SessionOpenResult, SubmitInputParams, WatchEventsParams, WatchEventsResult,
+    CoolSessionParams, EventCursor, IDEMPOTENCY_WINDOW_MS, LifecycleState,
+    ListPendingApprovalsParams, MAX_INPUT_BYTES, MUTATION_CLOCK_SKEW_MS, MutationRequestId,
+    PendingApproval, PendingApprovalList, RespondApprovalParams, RuntimeApprovalKind,
+    RuntimeApprovalOption, RuntimeApprovalOptionKind, RuntimeApprovalRisk, RuntimeErrorKind,
+    RuntimeMethod, SessionDescriptor, SessionOpenResult, SubmitInputParams, WatchEventsParams,
+    WatchEventsResult,
 };
 use runtrol_store::{
     IntegrationKey, IntegrationMutationKey, IntegrationMutationRow, IntegrationMutationState, Store,
@@ -61,6 +66,16 @@ pub(crate) enum RuntimeControlRequest {
         session: SessionId,
         params: CoolSessionParams,
     },
+    ListApprovals {
+        session: SessionId,
+        params: ListPendingApprovalsParams,
+        scopes: ApprovalScopes,
+    },
+    RespondApproval {
+        session: SessionId,
+        params: RespondApprovalParams,
+        authority: ApprovalAuthority,
+    },
     Watch {
         session: SessionId,
         params: WatchEventsParams,
@@ -72,6 +87,7 @@ pub(crate) enum RuntimeControlRequest {
 pub(crate) enum RuntimeControlReply {
     Lease(ControlLease),
     Done,
+    Approvals(PendingApprovalList),
     Watching {
         result: WatchEventsResult,
         view: Box<SessionView>,
@@ -124,6 +140,13 @@ pub(crate) struct RuntimeCooling {
     pub(crate) mutation: IntegrationMutationKey,
     pub(crate) agent: Box<dyn Agent>,
     pub(crate) reservation: ClosingReservation,
+}
+
+/// Approval scopes derived from the current integration grant, never caller input.
+#[derive(Clone, Copy)]
+pub(crate) struct ApprovalScopes {
+    pub(crate) low: bool,
+    pub(crate) high: bool,
 }
 
 /// Cleanup authority returned to the connection because process stopping must not block the owner.
@@ -410,6 +433,16 @@ impl RuntimeControl {
             RuntimeControlRequest::Cool { session, params } => {
                 self.cool(store, sessions, integration, session, &params)
             }
+            RuntimeControlRequest::ListApprovals {
+                session,
+                params,
+                scopes,
+            } => self.list_approvals(sessions, integration, session, &params, scopes),
+            RuntimeControlRequest::RespondApproval {
+                session,
+                params,
+                authority,
+            } => self.respond_approval(store, sessions, integration, session, &params, authority),
             RuntimeControlRequest::Watch {
                 session,
                 params,
@@ -1007,6 +1040,97 @@ impl RuntimeControl {
         }
     }
 
+    fn list_approvals(
+        &self,
+        sessions: &SessionManager,
+        integration: IntegrationKey,
+        session: SessionId,
+        params: &ListPendingApprovalsParams,
+        scopes: ApprovalScopes,
+    ) -> RuntimeControlReply {
+        if let Err(failure) = self.verify_lease_values(
+            sessions,
+            integration,
+            session,
+            &params.lease_id,
+            params.lease_generation,
+        ) {
+            return RuntimeControlReply::Failed(failure);
+        }
+        let Ok(requests) = sessions.pending_approvals(session) else {
+            return RuntimeControlReply::Failed(RuntimeControlFailure::new(
+                RuntimeErrorKind::SessionConflict,
+                "pending approvals are unavailable while another provider command is in flight",
+            ));
+        };
+        let approvals = match requests
+            .into_iter()
+            .map(|request| pending_approval(&request, scopes))
+            .collect::<Result<Vec<_>, _>>()
+        {
+            Ok(approvals) => approvals,
+            Err(failure) => return RuntimeControlReply::Failed(failure),
+        };
+        RuntimeControlReply::Approvals(PendingApprovalList { approvals })
+    }
+
+    fn respond_approval(
+        &mut self,
+        store: &Store,
+        sessions: &mut SessionManager,
+        integration: IntegrationKey,
+        session: SessionId,
+        params: &RespondApprovalParams,
+        authority: ApprovalAuthority,
+    ) -> RuntimeControlReply {
+        let authenticator = self.authenticate_approval_response(params);
+        let mutation = match self.begin(
+            store,
+            integration,
+            RuntimeMethod::ApprovalsRespond,
+            &params.request_id,
+            authenticator,
+        ) {
+            Ok(Begun::New(key)) => key,
+            Ok(Begun::Replay(reply)) => return *reply,
+            Err(failure) => return RuntimeControlReply::Failed(failure),
+        };
+        if let Err(failure) = self.verify_lease_values(
+            sessions,
+            integration,
+            session,
+            &params.lease_id,
+            params.lease_generation,
+        ) {
+            return self.deny(store, mutation, failure);
+        }
+        let Ok(approval) = ApprovalId::from_str(&params.approval_id) else {
+            return self.deny(
+                store,
+                mutation,
+                RuntimeControlFailure::new(
+                    RuntimeErrorKind::ApprovalOptionInvalid,
+                    "the approval identity is invalid or no longer pending",
+                ),
+            );
+        };
+        let option = OptionId(params.option_id);
+        match sessions.take_for_answer_approval_with_authority(
+            authority,
+            session,
+            approval,
+            option,
+            params.subject_digest,
+        ) {
+            Ok((taken, command)) => RuntimeControlReply::Sending {
+                mutation,
+                taken,
+                command,
+            },
+            Err(error) => self.deny(store, mutation, approval_failure(&error)),
+        }
+    }
+
     fn watch(
         sessions: &mut SessionManager,
         session: SessionId,
@@ -1207,6 +1331,17 @@ impl RuntimeControl {
         finish_mac(mac)
     }
 
+    fn authenticate_approval_response(&self, params: &RespondApprovalParams) -> [u8; 32] {
+        let mut mac = self.mac(RuntimeMethod::ApprovalsRespond);
+        feed(&mut mac, params.session_id.as_str().as_bytes());
+        feed(&mut mac, params.lease_id.as_bytes());
+        feed(&mut mac, &params.lease_generation.to_le_bytes());
+        feed(&mut mac, params.approval_id.as_bytes());
+        feed(&mut mac, &params.option_id.to_le_bytes());
+        feed(&mut mac, &params.subject_digest);
+        finish_mac(mac)
+    }
+
     fn authenticate_lease(&self, method: RuntimeMethod, params: &ControlLeaseParams) -> [u8; 32] {
         let mut mac = self.mac(method);
         feed(&mut mac, params.session_id.as_str().as_bytes());
@@ -1388,6 +1523,94 @@ fn open_failure(error: &SessionError) -> RuntimeControlFailure {
                 "the selected provider is changing and cannot open a session",
             )
         }
+        _ => session_conflict(),
+    }
+}
+
+fn pending_approval(
+    request: &ApprovalRequest,
+    scopes: ApprovalScopes,
+) -> Result<PendingApproval, RuntimeControlFailure> {
+    let options = request
+        .offerable(scopes.high)
+        .into_iter()
+        .map(|offered| {
+            let unavailable = if !scopes.low && !scopes.high {
+                Some("the integration has no approval response scope".to_owned())
+            } else {
+                offered.unavailable.map(str::to_owned)
+            };
+            RuntimeApprovalOption {
+                option_id: offered.option.id.0,
+                label: offered.option.label.into(),
+                kind: public_approval_option_kind(offered.option.kind),
+                unavailable,
+            }
+        })
+        .collect();
+    let subject = serde_json::to_value(&request.subject).map_err(|_| {
+        RuntimeControlFailure::new(
+            RuntimeErrorKind::Internal,
+            "the normalized approval subject could not be transported",
+        )
+    })?;
+    Ok(PendingApproval {
+        approval_id: request.id.to_string(),
+        kind: public_approval_kind(request.kind),
+        risk: match request.risk {
+            RiskClass::Low => RuntimeApprovalRisk::Low,
+            RiskClass::High => RuntimeApprovalRisk::High,
+        },
+        options,
+        subject,
+        subject_incomplete: request.subject_incomplete,
+        subject_digest: request.subject_digest,
+        expires_at_ms: request.expires_at.as_millis(),
+    })
+}
+
+const fn public_approval_kind(kind: ApprovalKind) -> RuntimeApprovalKind {
+    match kind {
+        ApprovalKind::Command => RuntimeApprovalKind::Command,
+        ApprovalKind::FileChange => RuntimeApprovalKind::FileChange,
+        ApprovalKind::Permissions => RuntimeApprovalKind::Permissions,
+        ApprovalKind::Elicitation => RuntimeApprovalKind::Elicitation,
+        ApprovalKind::Network => RuntimeApprovalKind::Network,
+        _ => RuntimeApprovalKind::Other,
+    }
+}
+
+const fn public_approval_option_kind(kind: PermissionOptionKind) -> RuntimeApprovalOptionKind {
+    match kind {
+        PermissionOptionKind::AllowOnce => RuntimeApprovalOptionKind::AllowOnce,
+        PermissionOptionKind::AllowAlways => RuntimeApprovalOptionKind::AllowAlways,
+        PermissionOptionKind::RejectOnce => RuntimeApprovalOptionKind::RejectOnce,
+        PermissionOptionKind::RejectAlways => RuntimeApprovalOptionKind::RejectAlways,
+    }
+}
+
+fn approval_failure(error: &SessionError) -> RuntimeControlFailure {
+    match error {
+        SessionError::ApprovalExpired { .. } => RuntimeControlFailure::new(
+            RuntimeErrorKind::ApprovalExpired,
+            "the pending approval expired before the response was accepted",
+        ),
+        SessionError::ApprovalNotPending { .. }
+        | SessionError::ApprovalSubjectChanged { .. }
+        | SessionError::ApprovalOptionNotOffered { .. }
+        | SessionError::ApprovalOptionUnavailable { .. } => RuntimeControlFailure::new(
+            RuntimeErrorKind::ApprovalOptionInvalid,
+            "the approval, subject, or option is no longer an available exact choice",
+        ),
+        SessionError::NotLive { .. } => not_live(),
+        SessionError::AgentInFlight { .. } => RuntimeControlFailure::new(
+            RuntimeErrorKind::SessionConflict,
+            "another provider command is already in flight for the session",
+        ),
+        SessionError::Security(_) => RuntimeControlFailure::new(
+            RuntimeErrorKind::ScopeDenied,
+            "the integration lacks the approval authority required by the pending request",
+        ),
         _ => session_conflict(),
     }
 }
@@ -1578,8 +1801,8 @@ pub(crate) async fn fixture_runtime_owner(
 mod tests {
     use async_trait::async_trait;
     use runtrol_provider::{
-        AbsPath, Agent, CloseMode, Disposition, OpenIntent, Produced, Provider, ProviderError,
-        ProviderId, WorkspaceAccess,
+        AbsPath, Agent, ApprovalOption, CloseMode, Disposition, Opaque, OpenIntent,
+        PermissionOptionKind, Produced, Provider, ProviderError, ProviderId, WorkspaceAccess,
     };
 
     use super::*;
@@ -1620,6 +1843,257 @@ mod tests {
         async fn open(&self, intent: OpenIntent) -> Result<Box<dyn Agent>, ProviderError> {
             Ok(Box::new(QuietAgent(intent.session)))
         }
+    }
+
+    struct ApprovalAgent {
+        session: SessionId,
+        approval: ApprovalRequest,
+    }
+
+    #[async_trait]
+    impl Agent for ApprovalAgent {
+        fn session(&self) -> SessionId {
+            self.session
+        }
+
+        fn native(&self) -> Option<&str> {
+            Some("runtime-approval-native")
+        }
+
+        fn approval(&self, id: ApprovalId) -> Option<&ApprovalRequest> {
+            (self.approval.id == id).then_some(&self.approval)
+        }
+
+        fn approvals(&self) -> Vec<&ApprovalRequest> {
+            vec![&self.approval]
+        }
+
+        async fn send(&mut self, _command: AgentCommand) -> Result<(), ProviderError> {
+            Ok(())
+        }
+
+        async fn next(&mut self) -> Option<Result<Produced, ProviderError>> {
+            core::future::pending().await
+        }
+
+        async fn close(self: Box<Self>, _how: CloseMode) -> Result<(), ProviderError> {
+            Ok(())
+        }
+    }
+
+    struct ApprovalProvider;
+
+    #[async_trait]
+    impl Provider for ApprovalProvider {
+        fn id(&self) -> ProviderId {
+            ProviderId::parse("runtime-approval-fixture").expect("valid fixture provider")
+        }
+
+        async fn open(&self, intent: OpenIntent) -> Result<Box<dyn Agent>, ProviderError> {
+            Ok(Box::new(ApprovalAgent {
+                session: intent.session,
+                approval: ApprovalRequest {
+                    id: ApprovalId::now(),
+                    turn: None,
+                    tool_call: None,
+                    kind: ApprovalKind::Command,
+                    risk: RiskClass::High,
+                    options: vec![
+                        ApprovalOption {
+                            id: OptionId(0),
+                            label: "allow once".into(),
+                            kind: PermissionOptionKind::AllowOnce,
+                        },
+                        ApprovalOption {
+                            id: OptionId(1),
+                            label: "reject once".into(),
+                            kind: PermissionOptionKind::RejectOnce,
+                        },
+                    ],
+                    subject: Opaque::owned(r#"{"command":"cargo test"}"#.to_owned()),
+                    subject_incomplete: false,
+                    subject_digest: [7; 32],
+                    expires_at: WallMs::now().plus_millis(90_000),
+                },
+            }))
+        }
+    }
+
+    #[tokio::test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one approval fixture proves lease binding, risk authority, exact response fields, and replay together"
+    )]
+    async fn approvals_bind_listing_and_response_to_the_exact_lease_and_held_risk() {
+        let directory = std::env::temp_dir().join(format!(
+            "runtrol-runtime-approval-{}-{}",
+            std::process::id(),
+            SessionId::now()
+        ));
+        std::fs::create_dir_all(&directory).expect("create approval fixture");
+        let workspace =
+            AbsPath::canonicalize(directory.to_str().expect("UTF-8 fixture")).expect("workspace");
+        let store_path = workspace.join("state.redb").expect("store path");
+        let store = Store::open(&store_path).expect("open store");
+        let session = SessionId::now();
+        let mut sessions = SessionManager::new();
+        sessions
+            .start(
+                &ApprovalProvider,
+                OpenIntent {
+                    session,
+                    workspace,
+                    disposition: Disposition::Fresh,
+                    model: None,
+                    permission: None,
+                },
+                WorkspaceAccess::Shared,
+            )
+            .await
+            .expect("start approval fixture");
+        let integration = IntegrationKey::from_bytes([8; 16]);
+        let mut control = RuntimeControl::new().expect("control authority");
+        let generation = sessions.state(session).expect("live state").generation();
+        let RuntimeControlReply::Lease(lease) = control.answer(
+            &store,
+            &mut sessions,
+            integration,
+            RuntimeControlRequest::Acquire {
+                session,
+                params: AcquireControlParams {
+                    request_id: MutationRequestId::now(),
+                    session_id: runtrol_runtime_protocol::RuntimeSessionId::new(
+                        session.to_string(),
+                    ),
+                    expected_lifecycle: LifecycleState::HotIdle,
+                    expected_session_generation: generation,
+                },
+            },
+        ) else {
+            panic!("expected control lease");
+        };
+        let list = ListPendingApprovalsParams {
+            session_id: lease.session_id.clone(),
+            lease_id: lease.lease_id.clone(),
+            lease_generation: lease.lease_generation,
+        };
+        let RuntimeControlReply::Approvals(low_list) = control.answer(
+            &store,
+            &mut sessions,
+            integration,
+            RuntimeControlRequest::ListApprovals {
+                session,
+                params: list.clone(),
+                scopes: ApprovalScopes {
+                    low: true,
+                    high: false,
+                },
+            },
+        ) else {
+            panic!("expected pending approval list");
+        };
+        let low_pending = low_list.approvals.first().expect("one pending approval");
+        assert_eq!(low_pending.risk, RuntimeApprovalRisk::High);
+        assert!(
+            low_pending
+                .options
+                .iter()
+                .all(|option| option.unavailable.is_some())
+        );
+        let RuntimeControlReply::Approvals(high_list) = control.answer(
+            &store,
+            &mut sessions,
+            integration,
+            RuntimeControlRequest::ListApprovals {
+                session,
+                params: list,
+                scopes: ApprovalScopes {
+                    low: false,
+                    high: true,
+                },
+            },
+        ) else {
+            panic!("expected high-authority pending approval list");
+        };
+        let pending = high_list.approvals.first().expect("one pending approval");
+        assert!(
+            pending
+                .options
+                .iter()
+                .all(|option| option.unavailable.is_none())
+        );
+
+        let response = RespondApprovalParams {
+            request_id: MutationRequestId::now(),
+            session_id: lease.session_id,
+            lease_id: lease.lease_id,
+            lease_generation: lease.lease_generation,
+            approval_id: pending.approval_id.clone(),
+            option_id: 0,
+            subject_digest: pending.subject_digest,
+        };
+        assert!(matches!(
+            control.answer(
+                &store,
+                &mut sessions,
+                integration,
+                RuntimeControlRequest::RespondApproval {
+                    session,
+                    params: response.clone(),
+                    authority: ApprovalAuthority::Low,
+                },
+            ),
+            RuntimeControlReply::Failed(RuntimeControlFailure {
+                kind: RuntimeErrorKind::ApprovalOptionInvalid,
+                ..
+            })
+        ));
+        let mut high_response = response;
+        high_response.request_id = MutationRequestId::now();
+        let RuntimeControlReply::Sending {
+            mutation,
+            taken,
+            command:
+                AgentCommand::Answer {
+                    id,
+                    option,
+                    subject_digest,
+                },
+        } = control.answer(
+            &store,
+            &mut sessions,
+            integration,
+            RuntimeControlRequest::RespondApproval {
+                session,
+                params: high_response.clone(),
+                authority: ApprovalAuthority::High,
+            },
+        )
+        else {
+            panic!("expected exact high-risk response handoff");
+        };
+        assert_eq!(id.to_string(), high_response.approval_id);
+        assert_eq!(option, OptionId(0));
+        assert_eq!(subject_digest, [7; 32]);
+        control
+            .finish_command(&store, &mut sessions, mutation, taken, &Ok(()))
+            .expect("finish approval response");
+        assert!(matches!(
+            control.answer(
+                &store,
+                &mut sessions,
+                integration,
+                RuntimeControlRequest::RespondApproval {
+                    session,
+                    params: high_response,
+                    authority: ApprovalAuthority::High,
+                },
+            ),
+            RuntimeControlReply::Done
+        ));
+
+        drop((control, sessions, store));
+        std::fs::remove_dir_all(directory).expect("clean approval fixture");
     }
 
     #[tokio::test]

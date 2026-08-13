@@ -130,6 +130,14 @@ pub trait Agent: Send + Sync {
         None
     }
 
+    /// Every provider approval still pending for this session.
+    ///
+    /// The returned references borrow driver-owned normalized requests. Implementations must keep the collection
+    /// bounded and must not reconstruct requests from provider transcript storage.
+    fn approvals(&self) -> Vec<&ApprovalRequest> {
+        Vec::new()
+    }
+
     /// Hand a command to the provider.
     ///
     /// Returns when it has been handed over. **Not when the work is done**: what finishes a turn is an event, not

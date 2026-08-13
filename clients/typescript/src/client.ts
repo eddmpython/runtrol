@@ -23,13 +23,16 @@ import type {
   LaggedNotification,
   ListModelsParams,
   ListNativeSessionsParams,
+  ListPendingApprovalsParams,
   ManagedSessionList,
   MutationRequestId,
   NativeSessionCatalogue,
   PendingEnrollmentId,
+  PendingApprovalList,
   ProviderId,
   ProviderList,
   RequestEnrollmentParams,
+  RespondApprovalParams,
   ResumeSessionParams,
   RuntimeEventNotification,
   RuntimeMethod,
@@ -155,6 +158,10 @@ export class RuntimeClient {
 
   public sessions(): SessionClient {
     return new SessionClient(this);
+  }
+
+  public approvals(): ApprovalClient {
+    return new ApprovalClient(this);
   }
 
   public credentials(grant: IntegrationGrant): IntegrationCredentials {
@@ -309,6 +316,26 @@ export class SessionClient {
       "WatchEventsResult",
     );
     return new EventSubscription(beginStream(this.runtime), started);
+  }
+}
+
+export class ApprovalClient {
+  public constructor(private readonly runtime: RuntimeClient) {}
+
+  public listPending(params: ListPendingApprovalsParams): Promise<PendingApprovalList> {
+    return callRuntime(
+      this.runtime,
+      "approvals/listPending",
+      params,
+      "PendingApprovalList",
+    );
+  }
+
+  public async respond(params: RespondApprovalParams): Promise<void> {
+    if (params.subjectDigest.length !== 32) {
+      throw new RuntimeProtocolError("approval subject digest must be exactly 32 bytes");
+    }
+    requireEmpty(await callRuntime(this.runtime, "approvals/respond", params, undefined));
   }
 }
 

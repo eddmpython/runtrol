@@ -36,8 +36,8 @@ pub use registry::{
     KindEntry, KindStatus, KindTable, Origin, Provider, ProviderRegistry, RegistryError,
 };
 pub use session::{
-    AgentLease, AttachError, AttachedSession, CloseReason, ClosingReservation, ClosingSession,
-    FailureCode, Identity, Lifecycle, LiveSession, Observed, OpenReservation,
+    AgentLease, ApprovalAuthority, AttachError, AttachedSession, CloseReason, ClosingReservation,
+    ClosingSession, FailureCode, Identity, Lifecycle, LiveSession, Observed, OpenReservation,
     ProviderUpdateReservation, Pumped, ReservedOpen, SessionError, SessionManager, SessionState,
     TakenAgent, Tier,
 };

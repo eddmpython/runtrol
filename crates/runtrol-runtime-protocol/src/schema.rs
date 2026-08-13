@@ -7,8 +7,9 @@ use crate::{
     CoolSessionParams, EnrollmentDecision, EnrollmentReceipt, GetProviderCapabilitiesParams,
     GetSessionParams, InitializeParams, InitializeResult, IntegrationGrant, JsonRpcNotification,
     JsonRpcRequest, JsonRpcResponse, LaggedNotification, ListModelsParams,
-    ListNativeSessionsParams, ManagedSessionList, NativeSessionCatalogue, ProviderList,
-    RequestEnrollmentParams, ResumeSessionParams, RuntimeEventNotification, RuntimeLocatorRecord,
+    ListNativeSessionsParams, ListPendingApprovalsParams, ManagedSessionList,
+    NativeSessionCatalogue, PendingApprovalList, ProviderList, RequestEnrollmentParams,
+    RespondApprovalParams, ResumeSessionParams, RuntimeEventNotification, RuntimeLocatorRecord,
     RuntimeMethod, RuntimeModelCatalog, RuntimeProviderCapabilities, ServerChallenge,
     SessionDescriptor, SessionOpenResult, StartSessionParams, SubmitInputParams,
     WatchEnrollmentParams, WatchEventsParams, WatchEventsResult,
@@ -60,6 +61,9 @@ struct PublicProtocolSchema {
     watch_events_result: WatchEventsResult,
     runtime_event: RuntimeEventNotification,
     lagged: LaggedNotification,
+    list_pending_approvals: ListPendingApprovalsParams,
+    pending_approvals: PendingApprovalList,
+    respond_approval: RespondApprovalParams,
 }
 
 /// Generate the language-neutral public schema from the Rust DTOs.
