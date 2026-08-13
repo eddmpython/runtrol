@@ -1,6 +1,6 @@
 import * as vscode from "vscode";
 
-import type { SessionLine } from "./protocol";
+import type { SessionLine } from "./runtimeTypes";
 import { sessionTitle } from "./sessionDisplay";
 
 type ViewAction =

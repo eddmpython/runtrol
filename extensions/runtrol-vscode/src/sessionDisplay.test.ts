@@ -1,23 +1,28 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import type { ProviderLine, SessionLine } from "./protocol";
+import type { ProviderLine, SessionLine } from "./runtimeTypes";
 import { sessionContext, sessionTitle, uniqueSessionTitle } from "./sessionDisplay";
 
 const PROVIDERS: ProviderLine[] = [
-  { id: "claude", display_name: "Claude Code", usable: true, why_not: null },
+  {
+    providerId: "claude",
+    displayName: "Claude Code",
+    installation: { state: "usable", version: "1.0.0" },
+  },
 ];
 
 function session(overrides: Partial<SessionLine> = {}): SessionLine {
   return {
-    session: "019fcafe-0000-7000-8000-123456abcdef",
-    provider: "claude",
-    native: "provider-session-123456",
+    sessionId: "019fcafe-0000-7000-8000-123456abcdef",
+    providerId: "claude",
+    nativeSessionId: "provider-session-123456",
     label: null,
     workspace: "C:\\work\\runtrol",
     hot: true,
-    doing: "idle",
-    looks_stuck: false,
+    lifecycle: "hotIdle",
+    looksStuck: false,
+    sessionGeneration: 1,
     ...overrides,
   };
 }
@@ -36,8 +41,8 @@ test("an operator name becomes primary without hiding project context", () => {
 test("duplicate fallback names gain a short stable discriminator only when needed", () => {
   const first = session();
   const second = session({
-    session: "019fcafe-0000-7000-8000-fedcba654321",
-    native: "provider-session-654321",
+    sessionId: "019fcafe-0000-7000-8000-fedcba654321",
+    nativeSessionId: "provider-session-654321",
   });
   assert.equal(uniqueSessionTitle(first, [first], PROVIDERS), "runtrol · Claude Code");
   assert.equal(uniqueSessionTitle(first, [first, second], PROVIDERS), "runtrol · Claude Code · #123456");

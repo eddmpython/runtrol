@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 
-import type { ProviderLine, SessionLine } from "./protocol";
+import type { ProviderLine, SessionLine } from "./runtimeTypes";
+import { sessionStateLabel } from "./runtimeProjection";
 import { orderedSessions } from "./sessionNavigation";
 import { sessionContext, uniqueSessionTitle } from "./sessionDisplay";
 import { RuntimeState } from "./state";
@@ -14,12 +15,13 @@ export class SessionItem extends vscode.TreeItem {
   ) {
     const title = uniqueSessionTitle(session, sessions, providers);
     super(title, vscode.TreeItemCollapsibleState.None);
-    this.description = `${session.doing}${session.looks_stuck ? " · needs attention" : ""}`;
+    const state = sessionStateLabel(session);
+    this.description = `${state}${session.looksStuck ? " · needs attention" : ""}`;
     this.tooltip = [
       title,
       sessionContext(session, providers),
       session.workspace,
-      `State: ${session.doing}`,
+      `State: ${state}`,
     ].join("\n");
     this.contextValue = "runtrol.session";
     this.command = {
@@ -28,8 +30,8 @@ export class SessionItem extends vscode.TreeItem {
       arguments: [this],
     };
     this.iconPath = new vscode.ThemeIcon(
-      session.looks_stuck ? "warning" : session.hot ? "circle-filled" : "circle-outline",
-      session.looks_stuck
+      session.looksStuck ? "warning" : session.hot ? "circle-filled" : "circle-outline",
+      session.looksStuck
         ? new vscode.ThemeColor("problemsWarningIcon.foreground")
         : selected
           ? new vscode.ThemeColor("charts.green")
@@ -52,11 +54,11 @@ export class SessionsTree implements vscode.TreeDataProvider<SessionItem>, vscod
   }
 
   getChildren(): SessionItem[] {
-    const selected = this.state.selected?.session ?? null;
+    const selected = this.state.selected?.sessionId ?? null;
     return orderedSessions(this.state.sessions, selected)
       .map((session) => new SessionItem(
         session,
-        session.session === selected,
+        session.sessionId === selected,
         this.state.sessions,
         this.state.providers,
       ));
@@ -70,12 +72,13 @@ export class SessionsTree implements vscode.TreeDataProvider<SessionItem>, vscod
 
 class ProviderItem extends vscode.TreeItem {
   constructor(provider: ProviderLine) {
-    super(provider.display_name, vscode.TreeItemCollapsibleState.None);
-    this.description = provider.usable ? "Ready" : "Unavailable";
-    this.tooltip = provider.why_not ?? `${provider.display_name} is ready`;
+    super(provider.displayName, vscode.TreeItemCollapsibleState.None);
+    const usable = provider.installation.state === "usable";
+    this.description = usable ? "Ready" : "Unavailable";
+    this.tooltip = provider.installation.why ?? `${provider.displayName} is ready`;
     this.iconPath = new vscode.ThemeIcon(
-      provider.usable ? "terminal" : "circle-slash",
-      provider.usable ? undefined : new vscode.ThemeColor("disabledForeground"),
+      usable ? "terminal" : "circle-slash",
+      usable ? undefined : new vscode.ThemeColor("disabledForeground"),
     );
   }
 }

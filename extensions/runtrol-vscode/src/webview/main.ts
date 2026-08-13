@@ -10,16 +10,9 @@ import {
 } from "./presentation";
 import { afterFrameOrDelay } from "./renderReady";
 import { sessionTitle } from "../sessionDisplay";
+import { sessionStateLabel } from "../runtimeProjection";
+import type { SessionLine as Session } from "../runtimeTypes";
 
-type Session = {
-  session: string;
-  provider: string;
-  native: string | null;
-  label?: string | null;
-  workspace: string;
-  hot: boolean;
-  doing: string;
-};
 
 type FrameEnvelope = {
   generation: number;
@@ -170,7 +163,7 @@ function reset(session: Session | null, displayTitle: string | null, nextGenerat
   prompt.value = "";
   resizePrompt();
   if (session) {
-    appendMessage("meta", `Connected to ${session.doing}`);
+    appendMessage("meta", `Connected to ${sessionStateLabel(session)}`);
   }
   afterFrameOrDelay(
     {
@@ -190,7 +183,7 @@ function reset(session: Session | null, displayTitle: string | null, nextGenerat
 function renderSession(session: Session | null, displayTitle: string | null): void {
   title.textContent = session ? displayTitle || sessionTitle(session) : "No active session";
   sessionPath.textContent = session?.workspace ?? "Choose a session from the Runtrol sidebar.";
-  sessionState.textContent = session?.doing ?? "";
+  sessionState.textContent = session ? sessionStateLabel(session) : "";
   sessionState.className = session ? (session.hot ? "hot" : "cold") : "";
   const interactive = session?.hot === true;
   prompt.disabled = !interactive;

@@ -1,27 +1,25 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import type { ProviderLine, SessionLine } from "./protocol";
+import type { ProviderLine, SessionLine } from "./runtimeTypes";
 import { providerRowsEqual, sessionRowsEqual } from "./stateRows";
 
 const SESSION: SessionLine = {
-  session: "session-1",
-  provider: "provider-1",
-  native: "native-1",
+  sessionId: "session-1",
+  providerId: "provider-1",
+  nativeSessionId: "native-1",
   label: "Release repair",
   workspace: "C:\\work",
   hot: true,
-  doing: "working",
-  looks_stuck: false,
-  runtime_lifecycle: "hotRunning",
-  session_generation: 1,
+  lifecycle: "hotRunning",
+  looksStuck: false,
+  sessionGeneration: 1,
 };
 
 const PROVIDER: ProviderLine = {
-  id: "provider-1",
-  display_name: "Provider One",
-  usable: true,
-  why_not: null,
+  providerId: "provider-1",
+  displayName: "Provider One",
+  installation: { state: "usable", version: "1.0.0" },
 };
 
 test("equal snapshots do not require a state publication", () => {
@@ -31,16 +29,15 @@ test("equal snapshots do not require a state publication", () => {
 
 test("every visible session field invalidates the snapshot", () => {
   for (const changed of [
-    { session: "session-2" },
-    { provider: "provider-2" },
-    { native: null },
+    { sessionId: "session-2" },
+    { providerId: "provider-2" },
+    { nativeSessionId: null },
     { label: null },
     { workspace: "C:\\other" },
     { hot: false },
-    { doing: "waiting" },
-    { looks_stuck: true },
-    { runtime_lifecycle: "hotIdle" as const },
-    { session_generation: 2 },
+    { lifecycle: "hotIdle" as const },
+    { looksStuck: true },
+    { sessionGeneration: 2 },
   ]) {
     assert.equal(sessionRowsEqual([SESSION], [{ ...SESSION, ...changed }]), false);
   }
@@ -49,10 +46,9 @@ test("every visible session field invalidates the snapshot", () => {
 
 test("every visible provider field invalidates the snapshot", () => {
   for (const changed of [
-    { id: "provider-2" },
-    { display_name: "Provider Two" },
-    { usable: false },
-    { why_not: "missing" },
+    { providerId: "provider-2" },
+    { displayName: "Provider Two" },
+    { installation: { state: "missing" as const, why: "missing" } },
   ]) {
     assert.equal(providerRowsEqual([PROVIDER], [{ ...PROVIDER, ...changed }]), false);
   }

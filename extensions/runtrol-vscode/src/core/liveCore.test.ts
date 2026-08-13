@@ -12,7 +12,7 @@ import { WIRE_VERSION } from "../protocol";
 
 const core = process.env.RUNTROL_TEST_CORE;
 
-test("the extension framing greets and lists through a real core", { skip: !core }, async () => {
+test("the extension framing greets and retains one private admin connection", { skip: !core }, async () => {
   const home = await mkdtemp(path.join(os.tmpdir(), "runtrol-vscode-live-"));
   let endpoint = "";
   try {
@@ -21,21 +21,6 @@ test("the extension framing greets and lists through a real core", { skip: !core
     await transport.send({ ask: "hello", with: { wire: WIRE_VERSION } });
     const welcome = JSON.parse((await transport.receive()).toString("utf8"));
     assert.equal(welcome.say, "welcome");
-    assert.ok(Array.isArray(welcome.with.providers));
-
-    await transport.send({ ask: "list" });
-    const listing = JSON.parse((await transport.receive()).toString("utf8"));
-    assert.equal(listing.say, "sessions");
-    assert.deepEqual(listing.with.sessions, []);
-
-    const index = await FrameTransport.connect(endpoint);
-    await index.send({ ask: "hello", with: { wire: WIRE_VERSION } });
-    assert.equal(JSON.parse((await index.receive()).toString("utf8")).say, "welcome");
-    await index.send({ ask: "watchSessions" });
-    assert.equal(JSON.parse((await index.receive()).toString("utf8")).say, "watchingSessions");
-    const snapshot = JSON.parse((await index.receive()).toString("utf8"));
-    assert.equal(snapshot.say, "sessions");
-    assert.deepEqual(snapshot.with.sessions, []);
 
     let locations = 0;
     const client = new CoreClient({
@@ -45,15 +30,13 @@ test("the extension framing greets and lists through a real core", { skip: !core
       },
     } as CoreLocator);
     for (let attempt = 0; attempt < 40; attempt += 1) {
-      const refreshed = await client.once({ ask: "list" });
-      assert.equal(refreshed.response.say, "sessions", `refresh ${attempt} lists sessions`);
+      await client.ensureRuntime();
     }
     assert.equal(locations, 1, "refreshes reuse one greeted command connection");
     client.dispose();
 
     await transport.send({ ask: "stopEverything" });
     await assert.rejects(transport.receive(), /closed|connection/i);
-    index.close();
   } finally {
     if (endpoint) {
       await stopIfRunning(endpoint);

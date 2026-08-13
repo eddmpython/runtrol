@@ -1,10 +1,10 @@
-import type { ProviderLine, SessionLine } from "./protocol";
+import type { ProviderLine, SessionLine } from "./runtimeTypes";
 
-type SessionNameSource = Pick<SessionLine, "provider" | "label" | "workspace">;
+type SessionNameSource = Pick<SessionLine, "providerId" | "label" | "workspace">;
 
 export function sessionTitle(
   session: SessionNameSource,
-  providerName = readableProvider(session.provider),
+  providerName = readableProvider(session.providerId),
 ): string {
   const label = session.label?.trim();
   return label || `${workspaceName(session.workspace)} · ${providerName}`;
@@ -15,12 +15,12 @@ export function uniqueSessionTitle(
   sessions: readonly SessionLine[],
   providers: readonly ProviderLine[] = [],
 ): string {
-  const providerName = providerDisplayName(session.provider, providers);
+  const providerName = providerDisplayName(session.providerId, providers);
   const title = sessionTitle(session, providerName);
   const duplicates = sessions.filter(
     (candidate) => sessionTitle(
       candidate,
-      providerDisplayName(candidate.provider, providers),
+      providerDisplayName(candidate.providerId, providers),
     ) === title,
   );
   return duplicates.length > 1 ? `${title} · #${shortIdentity(session)}` : title;
@@ -30,12 +30,12 @@ export function sessionContext(
   session: SessionLine,
   providers: readonly ProviderLine[] = [],
 ): string {
-  const provider = providerDisplayName(session.provider, providers);
+  const provider = providerDisplayName(session.providerId, providers);
   return `${workspaceName(session.workspace)} · ${provider}`;
 }
 
 export function providerDisplayName(provider: string, providers: readonly ProviderLine[] = []): string {
-  return providers.find((candidate) => candidate.id === provider)?.display_name ?? readableProvider(provider);
+  return providers.find((candidate) => candidate.providerId === provider)?.displayName ?? readableProvider(provider);
 }
 
 export function workspaceName(workspace: string): string {
@@ -44,7 +44,7 @@ export function workspaceName(workspace: string): string {
 }
 
 function shortIdentity(session: SessionLine): string {
-  const identity = session.native || session.session;
+  const identity = session.nativeSessionId || session.sessionId;
   const compact = identity.replaceAll(/[^A-Za-z0-9]/g, "");
   return (compact.slice(-6) || identity.slice(-6)).toUpperCase();
 }

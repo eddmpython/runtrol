@@ -1,6 +1,6 @@
 import path from "node:path";
 
-import type { SessionLine } from "./protocol";
+import type { SessionLine } from "./runtimeTypes";
 
 export type WorkspaceRelation = "same" | "candidateContainsSession" | "sessionContainsCandidate";
 

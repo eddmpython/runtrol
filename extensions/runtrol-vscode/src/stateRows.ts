@@ -1,4 +1,4 @@
-import type { ProviderLine, SessionLine } from "./protocol";
+import type { ProviderLine, SessionLine } from "./runtimeTypes";
 
 export function sessionRowsEqual(left: readonly SessionLine[], right: readonly SessionLine[]): boolean {
   if (left.length !== right.length) {
@@ -7,16 +7,15 @@ export function sessionRowsEqual(left: readonly SessionLine[], right: readonly S
   return left.every((value, index) => {
     const candidate = right[index];
     return candidate !== undefined
-      && value.session === candidate.session
-      && value.provider === candidate.provider
-      && value.native === candidate.native
+      && value.sessionId === candidate.sessionId
+      && value.providerId === candidate.providerId
+      && value.nativeSessionId === candidate.nativeSessionId
       && value.label === candidate.label
       && value.workspace === candidate.workspace
       && value.hot === candidate.hot
-      && value.doing === candidate.doing
-      && value.looks_stuck === candidate.looks_stuck
-      && value.runtime_lifecycle === candidate.runtime_lifecycle
-      && value.session_generation === candidate.session_generation;
+      && value.lifecycle === candidate.lifecycle
+      && value.looksStuck === candidate.looksStuck
+      && value.sessionGeneration === candidate.sessionGeneration;
   });
 }
 
@@ -27,9 +26,10 @@ export function providerRowsEqual(left: readonly ProviderLine[], right: readonly
   return left.every((value, index) => {
     const candidate = right[index];
     return candidate !== undefined
-      && value.id === candidate.id
-      && value.display_name === candidate.display_name
-      && value.usable === candidate.usable
-      && value.why_not === candidate.why_not;
+      && value.providerId === candidate.providerId
+      && value.displayName === candidate.displayName
+      && value.installation.state === candidate.installation.state
+      && value.installation.version === candidate.installation.version
+      && value.installation.why === candidate.installation.why;
   });
 }

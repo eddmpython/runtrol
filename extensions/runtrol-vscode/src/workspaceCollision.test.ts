@@ -1,19 +1,20 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import type { SessionLine } from "./protocol";
+import type { SessionLine } from "./runtimeTypes";
 import { workspaceCollisions } from "./workspaceCollision";
 
 function session(workspace: string, hot = true, id = workspace): SessionLine {
   return {
-    session: id,
-    provider: "fixture",
-    native: null,
+    sessionId: id,
+    providerId: "fixture",
+    nativeSessionId: null,
     label: null,
     workspace,
     hot,
-    doing: hot ? "running" : "detached",
-    looks_stuck: false,
+    lifecycle: hot ? "hotRunning" : "cold",
+    looksStuck: false,
+    sessionGeneration: 1,
   };
 }
 
@@ -26,7 +27,7 @@ test("same, parent, and child workspaces collide on segment boundaries", () => {
   ];
   const collisions = workspaceCollisions("/work/repo/", sessions, "linux");
   assert.deepEqual(
-    collisions.map(({ session: active, relation }) => [active.session, relation]),
+    collisions.map(({ session: active, relation }) => [active.sessionId, relation]),
     [
       ["same", "same"],
       ["child", "candidateContainsSession"],
@@ -44,7 +45,7 @@ test("Windows casing and separators cannot create a second workspace identity", 
     ],
     "win32",
   );
-  assert.deepEqual(collisions.map(({ session: active }) => active.session), ["windows"]);
+  assert.deepEqual(collisions.map(({ session: active }) => active.sessionId), ["windows"]);
 });
 
 test("detached sessions are choices, not active writer collisions", () => {

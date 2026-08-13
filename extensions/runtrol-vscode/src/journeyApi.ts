@@ -2,7 +2,7 @@ import * as vscode from "vscode";
 
 import { ConversationView } from "./conversationView";
 import { Controller } from "./controller";
-import type { ProviderLine, SessionLine } from "./protocol";
+import type { ProviderLine, SessionLine } from "./runtimeTypes";
 import { RuntimeState } from "./state";
 
 export type JourneyApi = {
@@ -53,7 +53,7 @@ export function journeyApi(
       await controller.selectedWatchReady();
     }),
     openWorkspace: (session) => afterReady(async () => {
-      const selected = state.sessions.find((candidate) => candidate.session === session);
+      const selected = state.sessions.find((candidate) => candidate.sessionId === session);
       if (!selected) {
         throw new Error("that session is no longer listed");
       }
@@ -61,8 +61,8 @@ export function journeyApi(
     }),
     close: (session, now = false) => afterReady(() => controller.closeResolvedSession(session, now)),
     verifySelected: (session) => afterReady(async () => {
-      if (state.selected?.session !== session) {
-        throw new Error(`selected ${state.selected?.session ?? "no session"}, expected ${session}`);
+      if (state.selected?.sessionId !== session) {
+        throw new Error(`selected ${state.selected?.sessionId ?? "no session"}, expected ${session}`);
       }
       await Promise.all([
         controller.selectedWatchReady(),

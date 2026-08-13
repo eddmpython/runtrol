@@ -160,7 +160,7 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
     measureSessionManagement: process.env.RUNTROL_VSCODE_PERFORMANCE === "1"
       ? (sessionIds) => afterReady(async () => {
         const expected = new Set(sessionIds);
-        const managed = state.sessions.filter((session) => expected.has(session.session));
+        const managed = state.sessions.filter((session) => expected.has(session.sessionId));
         const initialHot = managed.filter((session) => session.hot);
         const cold = managed.find((session) => !session.hot);
         if (expected.size !== 30 || managed.length !== expected.size || initialHot.length !== 8 || !cold) {
@@ -170,7 +170,7 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
         }
 
         const resumeStarted = performance.now();
-        await controller.select(cold.session, false);
+        await controller.select(cold.sessionId, false);
         await Promise.all([
           controller.selectedWatchReady(),
           conversation.waitForCurrentRender(),
@@ -180,17 +180,14 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
         if (
           !resumed
           || !resumed.hot
-          || resumed.session === cold.session
-          || resumed.provider !== cold.provider
-          || resumed.native !== cold.native
+          || resumed.sessionId !== cold.sessionId
+          || resumed.providerId !== cold.providerId
+          || resumed.nativeSessionId !== cold.nativeSessionId
           || resumed.workspace !== cold.workspace
-          || state.sessions.some((session) => session.session === cold.session)
         ) {
-          throw new Error("selecting a cold row did not replace it with the same provider-owned hot session");
+          throw new Error("selecting a cold row did not heat the same Runtime-managed session");
         }
-        const current = state.sessions.filter(
-          (session) => expected.has(session.session) || session.session === resumed.session,
-        );
+        const current = state.sessions.filter((session) => expected.has(session.sessionId));
         const hot = current.filter((session) => session.hot);
         if (current.length !== 30 || hot.length !== 8) {
           throw new Error(`cold resume changed the 30-session and eight-hot bounds to ${current.length} and ${hot.length}`);
@@ -199,7 +196,7 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
         for (let round = 0; round < 2; round += 1) {
           for (const session of hot) {
             const started = performance.now();
-            await controller.select(session.session, false);
+            await controller.select(session.sessionId, false);
             await Promise.all([
               controller.selectedWatchReady(),
               conversation.waitForCurrentRender(),
@@ -212,17 +209,17 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
           hotSessionCount: hot.length,
           coldResumeMs,
           sessionSwitchP95Ms: percentile(samples, 0.95),
-          resumedFrom: cold.session,
-          resumedTo: resumed.session,
-          restoreSession: state.selected?.session ?? "",
+          resumedFrom: cold.sessionId,
+          resumedTo: resumed.sessionId,
+          restoreSession: state.selected?.sessionId ?? "",
           restoreWorkspace: state.selected?.workspace ?? "",
         };
       })
       : undefined,
     verifyRestoredSession: process.env.RUNTROL_VSCODE_PERFORMANCE === "1"
       ? (sessionId) => afterReady(async () => {
-        if (state.selected?.session !== sessionId) {
-          throw new Error(`restored ${state.selected?.session ?? "no session"}, expected ${sessionId}`);
+        if (state.selected?.sessionId !== sessionId) {
+          throw new Error(`restored ${state.selected?.sessionId ?? "no session"}, expected ${sessionId}`);
         }
         await Promise.all([
           within(controller.selectedWatchReady(), 10_000, "selected-session watch handshake"),

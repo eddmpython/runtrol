@@ -1,4 +1,5 @@
-import type { ProviderLine, SessionLine } from "./protocol";
+import type { ProviderLine, SessionLine } from "./runtimeTypes";
+import { sessionStateLabel } from "./runtimeProjection";
 import { sessionContext, uniqueSessionTitle, workspaceName } from "./sessionDisplay";
 
 export type SessionChoice = {
@@ -20,8 +21,8 @@ export function orderedSessions(
     }
     return ordinalCompare(folderName(left), folderName(right))
       || ordinalCompare(left.workspace, right.workspace)
-      || ordinalCompare(left.provider, right.provider)
-      || ordinalCompare(left.session, right.session);
+      || ordinalCompare(left.providerId, right.providerId)
+      || ordinalCompare(left.sessionId, right.sessionId);
   });
 }
 
@@ -32,28 +33,28 @@ export function sessionChoices(
 ): SessionChoice[] {
   return orderedSessions(sessions, selected).map((session) => ({
     label: `${icon(session, selected)} ${uniqueSessionTitle(session, sessions, providers)}`,
-    description: session.doing,
+    description: sessionStateLabel(session),
     detail: `${sessionContext(session, providers)} · ${session.workspace}`,
-    picked: session.session === selected,
+    picked: session.sessionId === selected,
     session,
   }));
 }
 
 function sessionRank(session: SessionLine, selected: string | null): number {
-  if (session.session === selected) {
+  if (session.sessionId === selected) {
     return 0;
   }
-  if (session.looks_stuck) {
+  if (session.looksStuck) {
     return 1;
   }
   return session.hot ? 2 : 3;
 }
 
 function icon(session: SessionLine, selected: string | null): string {
-  if (session.session === selected) {
+  if (session.sessionId === selected) {
     return "$(check)";
   }
-  if (session.looks_stuck) {
+  if (session.looksStuck) {
     return "$(warning)";
   }
   return session.hot ? "$(circle-filled)" : "$(circle-outline)";

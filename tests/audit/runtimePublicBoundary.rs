@@ -180,8 +180,12 @@ fn publishable_typescript_client_imports_no_private_runtime_authority() {
 }
 
 #[test]
-fn studio_public_read_modules_use_the_package_and_not_private_ipc() {
-    for relative in ["runtimeClient.ts", "runtimeProjection.ts"] {
+fn studio_public_session_modules_use_the_package_and_not_private_ipc() {
+    for relative in [
+        "runtimeClient.ts",
+        "runtimeProjection.ts",
+        "runtimeTypes.ts",
+    ] {
         let path = root().join("extensions/runtrol-vscode/src").join(relative);
         let source = std::fs::read_to_string(&path)
             .unwrap_or_else(|error| panic!("cannot read {}: {error}", path.display()));
@@ -200,5 +204,42 @@ fn studio_public_read_modules_use_the_package_and_not_private_ipc() {
                 "Studio public read module {relative} imports private IPC declaration {forbidden:?}"
             );
         }
+    }
+}
+
+#[test]
+fn studio_private_protocol_cannot_redeclare_public_session_contracts() {
+    let protocol_path = root().join("extensions/runtrol-vscode/src/protocol.ts");
+    let protocol = std::fs::read_to_string(&protocol_path)
+        .unwrap_or_else(|error| panic!("cannot read {}: {error}", protocol_path.display()));
+    for forbidden in [
+        "type SessionLine",
+        "type ProviderLine",
+        "type ModelCatalog",
+        "type WatchCursor",
+        "ask: \"list\"",
+        "ask: \"watchSessions\"",
+        "ask: \"models\"",
+        "ask: \"start\"",
+        "ask: \"resume\"",
+        "ask: \"prompt\"",
+        "ask: \"answerApproval\"",
+        "ask: \"interrupt\"",
+        "ask: \"watch\"",
+    ] {
+        assert!(
+            !protocol.contains(forbidden),
+            "Studio private protocol redeclares public Runtime contract {forbidden:?}"
+        );
+    }
+
+    let client_path = root().join("extensions/runtrol-vscode/src/core/client.ts");
+    let client = std::fs::read_to_string(&client_path)
+        .unwrap_or_else(|error| panic!("cannot read {}: {error}", client_path.display()));
+    for forbidden in ["watchSessions(", "watch("] {
+        assert!(
+            !client.contains(forbidden),
+            "Studio private Core client exposes public watch operation {forbidden:?}"
+        );
     }
 }

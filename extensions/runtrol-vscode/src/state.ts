@@ -1,6 +1,6 @@
 import * as vscode from "vscode";
 
-import type { ProviderLine, SessionLine, WatchCursor } from "./protocol";
+import type { ProviderLine, SessionLine, WatchCursor } from "./runtimeTypes";
 import { providerRowsEqual, sessionRowsEqual } from "./stateRows";
 
 export class RuntimeState implements vscode.Disposable {
@@ -21,7 +21,7 @@ export class RuntimeState implements vscode.Disposable {
   }
 
   get selected(): SessionLine | null {
-    return this.sessionRows.find((session) => session.session === this.selectedId) ?? null;
+    return this.sessionRows.find((session) => session.sessionId === this.selectedId) ?? null;
   }
 
   replace(sessions: readonly SessionLine[], providers: readonly ProviderLine[]): void {
@@ -30,7 +30,7 @@ export class RuntimeState implements vscode.Disposable {
     }
     this.sessionRows = sessions;
     this.providerRows = providers;
-    if (this.selectedId && !sessions.some((session) => session.session === this.selectedId)) {
+    if (this.selectedId && !sessions.some((session) => session.sessionId === this.selectedId)) {
       this.selectedId = null;
     }
     this.changedEmitter.fire();

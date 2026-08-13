@@ -5,25 +5,23 @@ import * as vscode from "vscode";
 import { ConversationView } from "./conversationView";
 import { CoreClient } from "./core/client";
 import type {
+  ProviderUpdateLine,
+  Response,
+} from "./protocol";
+import type {
   ModelCatalog,
   ModelChoice,
   ProviderLine,
-  ProviderUpdateLine,
-  Response,
   SessionLine,
   WorkspaceAccess,
-} from "./protocol";
+} from "./runtimeTypes";
 import { SelectionStore } from "./selectionStore";
 import { sessionTitle } from "./sessionDisplay";
 import { sessionChoices } from "./sessionNavigation";
 import { RuntimeState } from "./state";
 import { SessionItem } from "./trees";
 import { StudioRuntimeClient } from "./runtimeClient";
-import {
-  projectModelCatalog,
-  projectProviders,
-  projectSessions,
-} from "./runtimeProjection";
+import { sessionStateLabel } from "./runtimeProjection";
 import { workspaceCollisions, type WorkspaceCollision } from "./workspaceCollision";
 
 export class Controller implements vscode.Disposable {
@@ -55,7 +53,7 @@ export class Controller implements vscode.Disposable {
     await this.refresh();
     this.startSessionIndexWatch();
     const remembered = await this.selection.load();
-    const selected = this.state.sessions.find((session) => session.session === remembered)
+    const selected = this.state.sessions.find((session) => session.sessionId === remembered)
       ?? this.state.sessions.find((session) => session.hot)
       ?? null;
     if (selected) {
@@ -68,9 +66,9 @@ export class Controller implements vscode.Disposable {
   async refresh(): Promise<void> {
     const inventory = await this.runtime.inventory();
     this.applyListing(
-      projectSessions(inventory.sessions),
+      inventory.sessions.sessions,
       inventory.sessions.warnings,
-      projectProviders(inventory.providers),
+      inventory.providers.providers,
     );
   }
 
@@ -83,8 +81,8 @@ export class Controller implements vscode.Disposable {
       throw new Error(`Core answered provider update inspection with ${response.say}`);
     }
     const choices: Array<vscode.QuickPickItem & { update: ProviderUpdateLine }> = response.with.map((line) => {
-      const provider = this.state.providers.find((candidate) => candidate.id === line.provider);
-      const label = provider?.display_name ?? line.provider;
+      const provider = this.state.providers.find((candidate) => candidate.providerId === line.provider);
+      const label = provider?.displayName ?? line.provider;
       switch (line.state) {
         case "current":
           return {
@@ -157,7 +155,7 @@ export class Controller implements vscode.Disposable {
   }
 
   async switchSession(): Promise<void> {
-    const selected = this.state.selected?.session ?? null;
+    const selected = this.state.selected?.sessionId ?? null;
     const picked = await vscode.window.showQuickPick(
       sessionChoices(this.state.sessions, selected, this.state.providers),
       {
@@ -168,7 +166,7 @@ export class Controller implements vscode.Disposable {
       },
     );
     if (picked) {
-      await this.select(picked.session);
+      await this.select(picked.session.sessionId);
     }
   }
 
@@ -200,8 +198,10 @@ export class Controller implements vscode.Disposable {
     follow: boolean,
     reveal: boolean,
   ): Promise<void> {
-    const id = typeof value === "string" ? value : value instanceof SessionItem ? value.session.session : value.session;
-    let session = this.state.sessions.find((candidate) => candidate.session === id);
+    const id = typeof value === "string" ? value : value instanceof SessionItem
+      ? value.session.sessionId
+      : value.sessionId;
+    let session = this.state.sessions.find((candidate) => candidate.sessionId === id);
     if (!session) {
       throw new Error("that session is no longer listed");
     }
@@ -210,14 +210,14 @@ export class Controller implements vscode.Disposable {
     }
     if (!session.hot) {
       this.pauseWatch();
-      this.state.select(session.session);
+      this.state.select(session.sessionId);
       this.conversation.reset(session);
       this.conversation.status("Resuming the provider-owned session...", "info");
       session = await this.resumeSession(session);
     }
-    const stored = this.selection.save(session.session);
+    const stored = this.selection.save(session.sessionId);
     this.pauseWatch();
-    this.state.select(session.session);
+    this.state.select(session.sessionId);
     this.conversation.reset(session);
 
     const follows = vscode.workspace.getConfiguration("runtrol").get<boolean>("followWorkspace", true);
@@ -233,12 +233,12 @@ export class Controller implements vscode.Disposable {
   }
 
   private async resumeSession(session: SessionLine): Promise<SessionLine> {
-    if (!session.native) {
+    if (!session.nativeSessionId) {
       throw new Error("that cold session has no provider-owned conversation identifier to resume");
     }
     const opened = await this.runtime.resume(runtimeAction(session), "exclusive");
     await this.refresh();
-    const resumed = this.state.sessions.find((candidate) => candidate.session === opened.sessionId);
+    const resumed = this.state.sessions.find((candidate) => candidate.sessionId === opened.sessionId);
     if (!resumed) {
       throw new Error("the resumed session is absent from the current session index");
     }
@@ -260,7 +260,7 @@ export class Controller implements vscode.Disposable {
       return;
     }
     await this.startResolvedSession(
-      provider.id,
+      provider.providerId,
       selectedWorkspace.workspace,
       model,
       selectedWorkspace.access,
@@ -275,11 +275,11 @@ export class Controller implements vscode.Disposable {
     access: WorkspaceAccess,
     follow: boolean,
   ): Promise<string> {
-    const provider = this.state.providers.find((candidate) => candidate.id === providerId);
-    if (!provider?.usable) {
+    const provider = this.state.providers.find((candidate) => candidate.providerId === providerId);
+    if (provider?.installation.state !== "usable") {
       throw new Error(`the installed provider ${providerId} is not usable`);
     }
-    const opened = await this.runtime.start(provider.id, workspace, access, model);
+    const opened = await this.runtime.start(provider.providerId, workspace, access, model);
     await this.refresh();
     await this.select(opened.sessionId, follow);
     return opened.sessionId;
@@ -333,12 +333,12 @@ export class Controller implements vscode.Disposable {
     const normalized = label.trim() || null;
     const { response } = await this.client.once({
       ask: "rename",
-      with: { session: session.session, label: normalized },
+      with: { session: session.sessionId, label: normalized },
     });
     requireDone(response, "rename");
     await this.refresh();
-    const renamed = this.state.sessions.find((candidate) => candidate.session === session.session);
-    if (renamed && this.state.selected?.session === renamed.session) {
+    const renamed = this.state.sessions.find((candidate) => candidate.sessionId === session.sessionId);
+    if (renamed && this.state.selected?.sessionId === renamed.sessionId) {
       this.conversation.updateSession(renamed);
     }
   }
@@ -356,7 +356,7 @@ export class Controller implements vscode.Disposable {
   async close(value?: SessionItem | SessionLine): Promise<void> {
     const session = value instanceof SessionItem ? value.session : value ?? this.requireSelected();
     const choice = await vscode.window.showWarningMessage(
-      `Close the ${session.provider} session in ${path.basename(session.workspace)}?`,
+      `Close the ${session.providerId} session in ${path.basename(session.workspace)}?`,
       { modal: true },
       "Close gracefully",
       "Stop now",
@@ -368,14 +368,16 @@ export class Controller implements vscode.Disposable {
   }
 
   async closeResolvedSession(value: SessionItem | SessionLine | string, now: boolean): Promise<void> {
-    const id = typeof value === "string" ? value : value instanceof SessionItem ? value.session.session : value.session;
-    const session = this.state.sessions.find((candidate) => candidate.session === id);
+    const id = typeof value === "string" ? value : value instanceof SessionItem
+      ? value.session.sessionId
+      : value.sessionId;
+    const session = this.state.sessions.find((candidate) => candidate.sessionId === id);
     if (!session) {
       throw new Error("that session is no longer listed");
     }
     const { response } = await this.client.once({
       ask: "close",
-      with: { session: session.session, now },
+      with: { session: session.sessionId, now },
     });
     requireDone(response, "close");
     await this.refresh();
@@ -387,7 +389,7 @@ export class Controller implements vscode.Disposable {
 
   async openWorkspace(value?: SessionItem | SessionLine): Promise<void> {
     const session = value instanceof SessionItem ? value.session : value ?? this.requireSelected();
-    await this.selection.save(session.session);
+    await this.selection.save(session.sessionId);
     if (workspaceIsOpen(session.workspace)) {
       await vscode.commands.executeCommand("workbench.view.explorer");
       return;
@@ -435,16 +437,16 @@ export class Controller implements vscode.Disposable {
 
   private async watchLoop(session: SessionLine, signal: AbortSignal, ready: () => void): Promise<void> {
     let retryMs = 250;
-    while (!signal.aborted && !this.disposed && this.state.selected?.session === session.session) {
+    while (!signal.aborted && !this.disposed && this.state.selected?.sessionId === session.sessionId) {
       try {
         await this.runtime.watchEvents(
-          session.session,
-          this.state.cursor(session.session),
+          session.sessionId,
+          this.state.cursor(session.sessionId),
           {
             started: ready,
             event: (payload, nextExpected) => {
               if (this.conversation.frame(payload)) {
-                this.state.advance(session.session, nextExpected);
+                this.state.advance(session.sessionId, nextExpected);
                 return true;
               } else {
                 this.pauseWatch();
@@ -452,7 +454,7 @@ export class Controller implements vscode.Disposable {
               }
             },
             gap: (nextExpected, message) => {
-              this.state.advance(session.session, nextExpected);
+              this.state.advance(session.sessionId, nextExpected);
               this.conversation.status(message, "warning");
             },
           },
@@ -503,7 +505,7 @@ export class Controller implements vscode.Disposable {
         await Promise.race([
           this.runtime.watchSessions(
             (listing) => this.applyListing(
-              projectSessions(listing),
+              listing.sessions,
               listing.warnings,
               this.state.providers,
             ),
@@ -513,7 +515,7 @@ export class Controller implements vscode.Disposable {
             (providers) => this.applyListing(
               this.state.sessions,
               [],
-              projectProviders(providers),
+              providers.providers,
             ),
             watching,
           ),
@@ -535,7 +537,7 @@ export class Controller implements vscode.Disposable {
     warnings: readonly string[],
     providers: readonly ProviderLine[],
   ): void {
-    const selected = this.state.selected?.session ?? null;
+    const selected = this.state.selected?.sessionId ?? null;
     this.state.replace(sessions, providers);
     for (const warning of warnings) {
       if (!this.seenWarnings.has(warning)) {
@@ -556,13 +558,13 @@ export class Controller implements vscode.Disposable {
   }
 
   private async chooseModel(provider: ProviderLine): Promise<string | null | undefined> {
-    const choices = modelChoices(projectModelCatalog(await this.runtime.models(provider.id)));
+    const choices = modelChoices(await this.runtime.models(provider.providerId));
     if (choices.length === 0) {
       return null;
     }
     const selected = await vscode.window.showQuickPick(
       [{ label: "Provider default", id: null, description: "Let the installed CLI choose" }, ...choices],
-      { title: `Model for ${provider.display_name}`, placeHolder: "Select a runtime-discovered model" },
+      { title: `Model for ${provider.displayName}`, placeHolder: "Select a runtime-discovered model" },
     );
     return selected?.id;
   }
@@ -628,13 +630,10 @@ type StartWorkspace = {
 };
 
 function runtimeAction(session: SessionLine) {
-  if (session.runtime_lifecycle === undefined || session.session_generation === undefined) {
-    throw new Error("the session is missing its public Runtime lifecycle generation");
-  }
   return {
-    sessionId: session.session,
-    lifecycle: session.runtime_lifecycle,
-    generation: session.session_generation,
+    sessionId: session.sessionId,
+    lifecycle: session.lifecycle,
+    generation: session.sessionGeneration,
     workspace: session.workspace,
   };
 }
@@ -668,12 +667,16 @@ function forbiddenLabelCharacter(character: string): boolean {
 }
 
 async function chooseProvider(providers: readonly ProviderLine[]): Promise<ProviderLine | null> {
-  const usable = providers.filter((provider) => provider.usable);
+  const usable = providers.filter((provider) => provider.installation.state === "usable");
   if (usable.length === 0) {
     throw new Error("no installed coding-agent CLI is currently usable");
   }
   const selected = await vscode.window.showQuickPick(
-    usable.map((provider) => ({ label: provider.display_name, description: provider.id, provider })),
+    usable.map((provider) => ({
+      label: provider.displayName,
+      description: provider.providerId,
+      provider,
+    })),
     { title: "Start a runtrol session", placeHolder: "Select an installed CLI" },
   );
   return selected?.provider ?? null;
@@ -707,7 +710,7 @@ async function chooseCollision(collisions: readonly WorkspaceCollision[]): Promi
   const selected = await vscode.window.showQuickPick(
     collisions.map(({ session }) => ({
       label: path.basename(session.workspace) || session.workspace,
-      description: `${session.provider}  ${session.doing}`,
+      description: `${session.providerId}  ${sessionStateLabel(session)}`,
       detail: session.workspace,
       session,
     })),
@@ -719,7 +722,7 @@ async function chooseCollision(collisions: readonly WorkspaceCollision[]): Promi
 function collisionDetail(collisions: readonly WorkspaceCollision[]): string {
   const visible = collisions
     .slice(0, 3)
-    .map(({ session }) => `${session.provider}: ${session.workspace}`)
+    .map(({ session }) => `${session.providerId}: ${session.workspace}`)
     .join("\n");
   const remaining = collisions.length > 3 ? `\n${collisions.length - 3} more running sessions` : "";
   return "Starting another agent here can modify the same files. Focus an existing session, choose a separate "
@@ -771,8 +774,12 @@ async function chooseAlternateWorkspace(
 }
 
 function modelChoices(catalog: ModelCatalog): Array<{ label: string; id: string; description?: string }> {
-  const models: ModelChoice[] = catalog.kind === "known" || catalog.kind === "partial" ? catalog.models : [];
-  const aliases = catalog.kind === "aliases" || catalog.kind === "partial" ? catalog.aliases : [];
+  const models: ModelChoice[] = catalog.coverage === "known" || catalog.coverage === "partial"
+    ? [...catalog.models]
+    : [];
+  const aliases = catalog.coverage === "aliases" || catalog.coverage === "partial"
+    ? catalog.aliases
+    : [];
   return [
     ...models.map((model) => ({
       label: model.displayName,

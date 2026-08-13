@@ -5,18 +5,7 @@ import * as vscode from "vscode";
 
 import { extensionUnderTest } from "./extensionUnderTest.test";
 import { Watcher, type EndFact } from "./realProviderWatch.test";
-
-type SessionLine = {
-  session: string;
-  provider: string;
-  workspace: string;
-  hot: boolean;
-};
-
-type ProviderLine = {
-  id: string;
-  usable: boolean;
-};
+import type { ProviderLine, SessionLine } from "../runtimeTypes";
 
 type JourneyApi = {
   providers(): readonly ProviderLine[];
@@ -101,7 +90,9 @@ async function journey(resultPath: string): Promise<void> {
   if (!api.journey) {
     throw new Error("the real-provider journey API is unavailable");
   }
-  const providerDetected = api.journey.providers().some((item) => item.id === provider && item.usable);
+  const providerDetected = api.journey.providers().some(
+    (item) => item.providerId === provider && item.installation.state === "usable",
+  );
   if (!providerDetected) {
     throw new Error(`the installed provider ${provider} was not discovered as usable`);
   }
@@ -160,12 +151,12 @@ async function journey(resultPath: string): Promise<void> {
     await api.journey.verifySelected(secondSession);
     const listed = api.journey.sessions();
     if (!listed.some(
-      (session) => session.session === firstSession && samePath(session.workspace, firstWorkspace),
+      (session) => session.sessionId === firstSession && samePath(session.workspace, firstWorkspace),
     )) {
       throw new Error("the first installed-provider session lost its workspace binding");
     }
     if (!listed.some(
-      (session) => session.session === secondSession && samePath(session.workspace, secondWorkspace),
+      (session) => session.sessionId === secondSession && samePath(session.workspace, secondWorkspace),
     )) {
       throw new Error("the second installed-provider session lost its workspace binding");
     }
@@ -207,7 +198,8 @@ async function restore(checkpoint: SwitchingCheckpoint, resultPath: string): Pro
   await api.journey.close(checkpoint.secondSession, true);
   await api.journey.close(checkpoint.firstSession, true);
   if (api.journey.sessions().some(
-    (session) => session.session === checkpoint.firstSession || session.session === checkpoint.secondSession,
+    (session) => session.sessionId === checkpoint.firstSession
+      || session.sessionId === checkpoint.secondSession,
   )) {
     throw new Error("a session remained listed after the extension closed both exact sessions");
   }

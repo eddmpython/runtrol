@@ -1,25 +1,5 @@
 export const WIRE_VERSION = 13;
 
-export type WorkspaceAccess = "exclusive" | "shared";
-
-export type WatchCursor = {
-  stream: string;
-  epoch: number;
-  seq: number;
-};
-
-export type WatchGap = {
-  requested: WatchCursor;
-  live_at: WatchCursor;
-};
-
-export type ProviderLine = {
-  id: string;
-  display_name: string;
-  usable: boolean;
-  why_not: string | null;
-};
-
 export type ProviderUpdateState = "current" | "available" | "observeOnly" | "notInstalled" | "unconfirmed";
 
 export type ProviderUpdateLine = {
@@ -71,38 +51,6 @@ export type RuntimeKeyRotationLine = {
   expires_at_ms: number;
 };
 
-export type SessionLine = {
-  session: string;
-  provider: string;
-  native: string | null;
-  label?: string | null;
-  workspace: string;
-  hot: boolean;
-  doing: string;
-  looks_stuck: boolean;
-  runtime_lifecycle?: "hotIdle" | "hotRunning" | "cold" | "failed";
-  session_generation?: number;
-};
-
-export type SessionListing = {
-  sessions: SessionLine[];
-  warnings: string[];
-};
-
-export type ModelChoice = {
-  id: string;
-  displayName: string;
-  description: string;
-  isDefault: boolean;
-  reasoningEfforts: Array<{ id: string; description: string }>;
-};
-
-export type ModelCatalog =
-  | { kind: "known"; models: ModelChoice[] }
-  | { kind: "aliases"; aliases: string[]; why: string }
-  | { kind: "partial"; aliases: string[]; models: ModelChoice[]; why: string }
-  | { kind: "unknown"; why: string };
-
 export type WireError = {
   message: string;
   retryable: boolean;
@@ -111,9 +59,6 @@ export type WireError = {
 
 export type Request =
   | { ask: "hello"; with: { wire: number } }
-  | { ask: "list" }
-  | { ask: "watchSessions" }
-  | { ask: "models"; with: { provider: string } }
   | { ask: "providerUpdates" }
   | { ask: "providerUpdate"; with: { provider: string } }
   | { ask: "integrationEnrollments" }
@@ -138,39 +83,11 @@ export type Request =
   | { ask: "runtimeForgetConfirm"; with: { confirmation_id: string } }
   | { ask: "runtimeKeyRotationRequests" }
   | { ask: "runtimeKeyRotationConfirm"; with: { confirmation_id: string } }
-  | {
-      ask: "start";
-      with: {
-        provider: string;
-        workspace: string;
-        workspace_access: WorkspaceAccess;
-        model: string | null;
-        permission: string | null;
-      };
-    }
-  | {
-      ask: "resume";
-      with: {
-        provider: string;
-        native: string;
-        workspace: string;
-        workspace_access: WorkspaceAccess;
-      };
-    }
-  | { ask: "prompt"; with: { session: string; text: string } }
   | { ask: "rename"; with: { session: string; label: string | null } }
-  | {
-      ask: "answerApproval";
-      with: { session: string; approval: string; option: number; subject_digest: number[] };
-    }
-  | { ask: "interrupt"; with: { session: string } }
-  | { ask: "watch"; with: { session: string; after: WatchCursor | null } }
   | { ask: "close"; with: { session: string; now: boolean } };
 
 export type Response =
-  | { say: "welcome"; with: { wire: number; providers: ProviderLine[] } }
-  | { say: "sessions"; with: SessionListing }
-  | { say: "models"; with: ModelCatalog }
+  | { say: "welcome"; with: { wire: number } }
   | { say: "providerUpdates"; with: ProviderUpdateLine[] }
   | {
       say: "providerUpdated";
@@ -191,15 +108,7 @@ export type Response =
   | { say: "integrations"; with: IntegrationLine[] }
   | { say: "runtimeForgetRequests"; with: RuntimeForgetLine[] }
   | { say: "runtimeKeyRotationRequests"; with: RuntimeKeyRotationLine[] }
-  | { say: "started"; with: { session: string } }
   | { say: "done" }
-  | {
-      say: "watching";
-      with: { starts_at: WatchCursor; live_at: WatchCursor; gap: WatchGap | null };
-    }
-  | { say: "watchingSessions" }
-  | { say: "event"; with: { payload: unknown; next_expected: WatchCursor } }
-  | { say: "lagged"; with: { next_expected: WatchCursor } }
   | { say: "failed"; with: WireError };
 
 export function requestHello(): Request {
@@ -215,8 +124,4 @@ export function readResponse(value: unknown): Response {
     throw new Error("the daemon response has no string discriminator");
   }
   return value as Response;
-}
-
-export function failureMessage(response: Response): string | null {
-  return response.say === "failed" ? response.with.message : null;
 }
