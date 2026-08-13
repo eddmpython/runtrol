@@ -1,13 +1,14 @@
 # securityPosture
 
-순서 0: **한 칸이 아니라 1~6 이 딛는 바닥이다.** 첫 커밋부터 함께 갔고, 남은 항목이 3 번 (Runtime 앱
-권한), 4 번 (Mission 권한), 6 번 (폰 표면) 에 걸려 있으므로 마지막 뒤에 닫힌다. 0 은 "먼저 끝내고
+순서 0: **한 칸이 아니라 1~6 이 딛는 바닥이다.** 첫 커밋부터 함께 갔고, 남은 항목이 6 번 (폰 표면)에
+걸려 있으므로 마지막 뒤에 닫힌다. 0 은 "먼저 끝내고
 넘어간다" 는 뜻이 아니다.
 
 Status: in progress. Scope grantability, default-deny dispatch, argument escaping, read-only provider configuration, browser rebinding defenses, exact egress allowlisting, the end-to-end Noise boundary, exact PC-bound pairing approval, durable device authorization restoration, Windows CurrentUser DPAPI protection for the PC identity, risk-bound remote approval authorization, and both provider-native approval mappings are implemented and verified. The paid Claude live approval smoke and the phone surface remain.
-The Runtime integration identity, app scope, and project root delta is defined by [Runtime security](../../docs/runtimeSecurity.md) and
-remains unimplemented. The Mission-specific local and device scope delta is defined by `4-orchestrationGrowthOS` and
-remains unimplemented.
+The Runtime integration identity, app scope, and project root boundary is implemented as defined by
+[Runtime security](../../docs/runtimeSecurity.md). Mission expansion and every capability mutation are local-only,
+while device scope remains default-deny, as defined by [Mission operations](../../docs/missionOperations.md) and
+[project capability trust](../../docs/capabilityTrust.md).
 
 ## 한 문장 정의
 

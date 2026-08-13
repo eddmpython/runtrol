@@ -13,9 +13,16 @@ runtrol does not discover, derive, read, index, or persist provider transcript p
 conversation from provider files. Drivers normalize only the fields required for supervision, routing, consent,
 health, usage, and continuity. Everything else stays opaque.
 
-The redb database contains runtrol metadata only: runtrol and provider-native session identifiers, lifecycle data,
-operator labels and pins, and local authorization metadata. It contains no prompts, replies, event history, or
-transcript copy. Deleting the runtrol home removes that metadata, not the provider's own conversation record.
+The ordinary redb database contains runtrol metadata only: runtrol and provider-native session identifiers, lifecycle
+data, operator labels and pins, and local authorization metadata. A separate Mission ledger contains Mission, Task,
+Run, Gate, Artifact, Receipt, and transition metadata. A bounded capability trust index contains project identity,
+candidate state, exact digests, verification evidence, and retained approved versions. None of these stores contains
+prompts, replies, event history, Gate output, environment values, credentials, or a transcript copy.
+
+Mission files, instructions, handoffs, outputs, and capability bodies remain project files. Provider-native
+conversations remain provider files. Deleting the Runtrol home removes session pointers, Mission evidence, and local
+capability trust, but does not remove either class of owner data. The operational details are
+[Mission operations](missionOperations.md) and [project capability trust](capabilityTrust.md).
 
 ## Runtime and admission
 

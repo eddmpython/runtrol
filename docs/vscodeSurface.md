@@ -57,6 +57,30 @@ the original daemon and provider processes instead of making a versioned extensi
 | `controller.ts` | user actions, one watch lifetime, workspace binding | transcript discovery or agent loops |
 | `conversationView.ts` | one editor panel, CSP, and Extension Host to Webview transport | retained conversation state or a second live renderer |
 | `webview/` | bounded active rendering and input | durable storage or background sessions |
+| `mission/controller.ts` and `mission/tree.ts` | Mission review, local actions, Task rows, and one native editor document | provider input without local Send or optimistic completion |
+| `capability/controller.ts` | candidate inbox, native diff review, and exact local trust actions | capability text injection or user-wide trust |
+
+## Mission and capability surface
+
+The Missions tree is part of the existing Runtrol activity container. It lists Core snapshots and exposes actions only
+when the matching state permits them. Validation selects a project Mission file. Start shows the exact Mission digest,
+Task count, and the fact that no instruction is sent automatically. Each reserved Task must be prepared, bound to its
+exact public Runtime session, and submitted through its own local `Send Task Instruction` action.
+
+The reusable `runtrol-mission:` editor document shows the Mission source and digest, approval expiry, progress, Task
+state, instruction and policy digests, provider and session identities, workspace and base commit, selected capability
+versions, Gate counts, and the latest passing Run and Receipt IDs. It uses VS Code's text document surface and does not
+create another Webview or another provider stream.
+
+Pause, safe resume, cancel, bounded retry, integrated-tree verification, completion, and archive are explicit local
+commands. Integration remains unavailable until every Task has passed. The extension does not merge or edit project
+files.
+
+The Capability Candidate Inbox uses a native quick pick and Markdown review document. Verification and approval name
+one exact project version. Approval opens the built-in VS Code file or diff review first. Reject, quarantine, rollback,
+and archive are also modal local actions. Candidate bodies stay in project files, and no action injects those bodies
+into a Task. The detailed contracts are [Mission operations](missionOperations.md) and
+[project capability trust](capabilityTrust.md).
 
 ## Performance contract
 
@@ -122,6 +146,8 @@ specified in [automatic updates](automaticUpdates.md).
 | `vscodeExtension` | thin extension boundary, TypeScript, framing, storage, queue, renderer, and bundle limits |
 | `vscodeHostPerformance` | real 30-session Extension Host and Webview responsiveness on three operating systems |
 | `vscodeRealProviderJourney` | installed provider discovery and a complete real CLI control journey |
+| `missionGrowthContracts` | Mission state, exact Send, evidence, integration, capability trust, local scope, tamper, and rollback |
+| `missionLiveJourney` | two installed provider CLIs complete five reviewed Tasks and an explicit reuse, tamper, and rollback journey through production IPC |
 | `vscodePackage` | six-target SSOT, exact archive contents, Core bytes, workflow integrity, and listing metadata |
 | `vscodeUpgradeRollback` | active-session continuity across official VSIX upgrade and rollback |
 | `channelVerdict` | confirmed provider package ownership and closed update arguments |

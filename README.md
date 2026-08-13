@@ -4,7 +4,7 @@
 
 한국어 | [English](README_EN.md) | [中文](README_ZH.md) | [日本語](README_JA.md)
 
-> 상태: **코어와 주력 VS Code 확장을 구현했고 `Runtrol Studio 0.1.0`을 6개 네이티브 플랫폼 대상으로 공개했다.** 실시간 세션 인덱스, 실물 Extension Host와 초당 3,000 프레임 Webview 성능 ratchet, 설치된 실물 CLI의 전체 조작 여정, 깨끗한 Marketplace 설치, 활성 세션을 보존하는 VSIX 갱신과 롤백을 검증했다. 독립 데스크톱 GUI 코드와 실행 경로는 제거됐고 PC 표면은 VS Code 확장 하나다. 공개 Runtime 프로토콜, Rust와 TypeScript SDK, 외부 패키지 소비 게이트, 서명된 standalone Runtime 6개 대상 배포 파이프라인도 구현했다. 확증된 provider 채널의 자동 갱신, 배타 실행, 정확한 롤백도 구현했다. [Marketplace 확장](https://marketplace.visualstudio.com/items?itemName=runtrol.runtrol-studio)과 [GitHub Pages 사이트](https://eddmpython.github.io/runtrol/)가 공개되어 있다. 남은 큰 표면은 휴대폰 PWA다.
+> 상태: **코어와 주력 VS Code 확장을 구현했고 `Runtrol Studio 0.1.0`을 6개 네이티브 플랫폼 대상으로 공개했다.** 실시간 세션 인덱스, 실물 Extension Host와 초당 3,000 프레임 Webview 성능 ratchet, 설치된 실물 CLI의 전체 조작 여정, 깨끗한 Marketplace 설치, 활성 세션을 보존하는 VSIX 갱신과 롤백을 검증했다. 독립 데스크톱 GUI 코드와 실행 경로는 제거됐고 PC 표면은 VS Code 확장 하나다. 공개 Runtime 프로토콜, Rust와 TypeScript SDK, 외부 패키지 소비 게이트, 서명된 standalone Runtime 6개 대상 배포 파이프라인도 구현했다. 확증된 provider 채널의 자동 갱신, 배타 실행, 정확한 롤백도 구현했다. 로컬 Mission DAG, 결정적 Receipt, 수동 통합, 프로젝트 Capability의 명시적 재사용과 변조 롤백도 두 설치형 CLI의 헤드리스 여정으로 검증했다. [Marketplace 확장](https://marketplace.visualstudio.com/items?itemName=runtrol.runtrol-studio)과 [GitHub Pages 사이트](https://eddmpython.github.io/runtrol/)가 공개되어 있다. 남은 큰 표면은 휴대폰 PWA다.
 > 아래 점수 대부분이 0 인 것은 코드가 없어서가 아니라 그 축을 단언하는 게이트가 아직 없어서다.
 
 보안 경계와 기본 거부 설정은 [SECURITY.md](SECURITY.md)에 정리되어 있다.
