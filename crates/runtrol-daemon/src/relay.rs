@@ -650,6 +650,7 @@ mod tests {
             credential_fingerprint: CredentialFingerprint::from_bytes([7; 32]),
             labels: DeviceLabels::new("Pocket", "Test OS").expect("valid labels"),
             roots: Vec::new(),
+            push_endpoint: None,
             paired_at: WallMs::from_millis(1_767_225_600_000),
         }
     }

@@ -1023,6 +1023,7 @@ pub(crate) fn answer_prepared(
                         composed,
                         &conversation.caller,
                     ),
+                    push_public_key: push_public_key(composed, &conversation.caller),
                 })
             }
             Err(ours) => Reply::One(refuse(&format!(
@@ -1215,6 +1216,12 @@ pub(crate) fn answer_prepared(
             )),
         },
 
+        Request::PushSubscription { endpoint } => Reply::One(set_push_subscription(
+            composed,
+            &conversation.caller,
+            endpoint.as_deref(),
+        )),
+
         Request::IntegrationEnrollments
         | Request::IntegrationApprovalBegin { .. }
         | Request::IntegrationApprovalFinish { .. }
@@ -1364,6 +1371,47 @@ pub(crate) fn answer_prepared(
         // would report something as carried out when nothing happened.
         other => Reply::One(refuse(&format!("this daemon has no binding for {other:?}"))),
     }
+}
+
+fn push_public_key(composed: &Composed, caller: &Caller) -> Option<Box<str>> {
+    if !matches!(caller, Caller::Device { .. }) {
+        return None;
+    }
+    composed
+        .push_identity
+        .as_ref()
+        .map(|identity| identity.application_server_key().into_boxed_str())
+}
+
+fn set_push_subscription(composed: &Composed, caller: &Caller, endpoint: Option<&str>) -> Response {
+    let Caller::Device { device } = caller else {
+        return refuse("push subscriptions belong only to an authenticated paired phone");
+    };
+    let key = runtrol_store::DeviceKey::from_bytes(*device.as_bytes());
+    let mut row = match composed.store.get_device(key) {
+        Ok(Some(row)) => row,
+        Ok(None) => return refuse("this phone is no longer paired"),
+        Err(_) => return refuse("the device authorization store cannot be read"),
+    };
+    row.push_endpoint = match endpoint {
+        None => None,
+        Some(endpoint) => {
+            let Some(identity) = &composed.push_identity else {
+                return refuse("push delivery requires a protected machine identity");
+            };
+            match identity.seal_endpoint(*device.as_bytes(), endpoint) {
+                Ok(encrypted) => Some(encrypted.into_boxed_slice()),
+                Err(error) => return refuse(&error.to_string()),
+            }
+        }
+    };
+    if composed.store.put_device(key, &row).is_err() {
+        return refuse("the push subscription could not be saved");
+    }
+    if composed.reload_device_authority().is_err() {
+        return refuse("the updated device authorization could not be restored");
+    }
+    Response::Done
 }
 
 fn remote_connection(composed: &Composed) -> Response {
@@ -1796,6 +1844,8 @@ pub(crate) fn refuse(message: &str) -> Response {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use async_trait::async_trait;
     use runtrol_provider::{Produced, ProviderError};
 
@@ -1899,6 +1949,28 @@ mod tests {
             .expect("store the pointer");
     }
 
+    fn store_test_phone(composed: &Composed, device: runtrol_security::DeviceId) {
+        composed
+            .store
+            .put_device(
+                runtrol_store::DeviceKey::from_bytes(*device.as_bytes()),
+                &runtrol_store::DeviceRow {
+                    remote_static_key: [0x73; 32],
+                    credential_fingerprint: [0x74; 32],
+                    name: "Test phone".into(),
+                    platform: "Web Push".into(),
+                    scopes: vec!["session.output.read".into()],
+                    roots: Vec::new(),
+                    push_endpoint: None,
+                    paired_at: WallMs::now(),
+                },
+            )
+            .expect("store paired phone");
+        composed
+            .reload_device_authority()
+            .expect("restore paired phone");
+    }
+
     #[tokio::test]
     async fn nothing_can_be_asked_before_the_wire_format_is_agreed() {
         // Acting on a request from a build that speaks a different format means acting on somebody else's meaning, and
@@ -1941,15 +2013,125 @@ mod tests {
                 wire,
                 providers,
                 device,
+                push_public_key,
             }) => {
                 assert_eq!(wire, runtrol_ipc::WIRE_VERSION);
                 assert!(!providers.is_empty(), "a fresh install has providers");
                 assert!(providers.iter().any(|one| one.usable));
                 assert!(device.is_none());
+                assert!(push_public_key.is_none());
             }
             other => panic!("expected a welcome, got {}", shape(&other)),
         }
         assert!(conversation.greeted());
+        clean(composed, &path);
+    }
+
+    #[tokio::test]
+    async fn an_authenticated_phone_owns_one_encrypted_push_subscription() {
+        let (mut composed, path) = composed_for("push-subscription");
+        composed.push_identity = Some(Arc::new(
+            runtrol_transport::PushIdentity::derive(&[0x71; 32]).expect("test push identity"),
+        ));
+        let device = runtrol_security::DeviceId::now();
+        let key = runtrol_store::DeviceKey::from_bytes(*device.as_bytes());
+        store_test_phone(&composed, device);
+
+        let mut sessions = SessionManager::new();
+        let mut phone = Conversation::from_device(device);
+        assert!(matches!(
+            answer(
+                &mut phone,
+                &composed,
+                &mut sessions,
+                Request::Hello {
+                    wire: runtrol_ipc::WIRE_VERSION,
+                },
+            )
+            .await,
+            Reply::One(Response::Welcome {
+                push_public_key: Some(_),
+                ..
+            })
+        ));
+
+        let endpoint = "https://fcm.googleapis.com/fcm/send/private-capability";
+        assert!(matches!(
+            answer(
+                &mut phone,
+                &composed,
+                &mut sessions,
+                Request::PushSubscription {
+                    endpoint: Some(endpoint.into()),
+                },
+            )
+            .await,
+            Reply::One(Response::Done)
+        ));
+        let stored = composed
+            .store
+            .get_device(key)
+            .expect("read paired phone")
+            .expect("paired phone remains");
+        let sealed = stored.push_endpoint.expect("encrypted subscription");
+        assert!(
+            !sealed
+                .windows(endpoint.len())
+                .any(|window| window == endpoint.as_bytes())
+        );
+        composed
+            .push_identity
+            .as_ref()
+            .expect("push identity")
+            .validate_stored_endpoint(*device.as_bytes(), &sealed)
+            .expect("same phone restores subscription");
+        assert_eq!(composed.device_authority.push_targets().len(), 1);
+
+        let mut local = Conversation::at_the_machine();
+        assert!(matches!(
+            answer(
+                &mut local,
+                &composed,
+                &mut sessions,
+                Request::Hello {
+                    wire: runtrol_ipc::WIRE_VERSION,
+                },
+            )
+            .await,
+            Reply::One(Response::Welcome { .. })
+        ));
+        assert!(matches!(
+            answer(
+                &mut local,
+                &composed,
+                &mut sessions,
+                Request::PushSubscription {
+                    endpoint: Some(endpoint.into()),
+                },
+            )
+            .await,
+            Reply::One(Response::Failed(_))
+        ));
+
+        assert!(matches!(
+            answer(
+                &mut phone,
+                &composed,
+                &mut sessions,
+                Request::PushSubscription { endpoint: None },
+            )
+            .await,
+            Reply::One(Response::Done)
+        ));
+        assert!(
+            composed
+                .store
+                .get_device(key)
+                .expect("read cleared phone")
+                .expect("paired phone remains")
+                .push_endpoint
+                .is_none()
+        );
         clean(composed, &path);
     }
 

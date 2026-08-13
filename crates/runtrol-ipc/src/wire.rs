@@ -143,6 +143,12 @@ pub enum Request {
         answer: Box<str>,
     },
 
+    /// Replace or clear this authenticated phone's bodyless Web Push subscription.
+    PushSubscription {
+        /// Browser-issued HTTPS push capability URL, or no value to disable delivery.
+        endpoint: Option<Box<str>>,
+    },
+
     /// List bounded pending public Runtime integration enrollments for local administration.
     IntegrationEnrollments,
 
@@ -519,6 +525,8 @@ pub enum Response {
         providers: Vec<ProviderLine>,
         /// Current caller authority when this is an authenticated paired-device connection.
         device: Option<Box<DeviceAuthorityLine>>,
+        /// Stable VAPID application-server key on authenticated paired-device connections.
+        push_public_key: Option<Box<str>>,
     },
 
     /// The sessions and any damaged rows the daemon could not read.
@@ -1337,6 +1345,9 @@ mod tests {
                 challenge_id: "dac_example".into(),
                 answer: "typed phrase here".into(),
             },
+            Request::PushSubscription {
+                endpoint: Some("https://fcm.googleapis.com/fcm/send/example".into()),
+            },
             Request::Start {
                 provider: "claude".into(),
                 workspace: "/work".into(),
@@ -1638,6 +1649,7 @@ mod tests {
                 },
             ],
             device: None,
+            push_public_key: None,
         };
         let encoded = serde_json::to_string(&response).expect("writable");
         let back: Response = serde_json::from_str(&encoded).expect("readable");

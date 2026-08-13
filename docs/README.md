@@ -19,7 +19,7 @@
 | [missionOperations.md](missionOperations.md) | reviewed Mission schema, local authority, Task scheduling, worktrees, evidence Receipts, integration, recovery, bounds, and verification |
 | [capabilityTrust.md](capabilityTrust.md) | project capability schemas, provenance, independent verification, exact approval, explicit reuse, tamper detection, and rollback |
 | [productSurfaces.md](productSurfaces.md) | public surface ownership, the VS Code-only PC decision, 30-session interaction contract, GitHub Pages distribution, and phone PWA boundary |
-| [phonePwa.md](phonePwa.md) | phone pairing, relay transport, durable device authority, browser storage, reconnect, and current release limits |
+| [phonePwa.md](phonePwa.md) | phone pairing, relay transport, durable device authority, bodyless Web Push, browser storage, reconnect, and current release limits |
 | [vscodeSurface.md](vscodeSurface.md) | the public VS Code runtime, module boundaries, 30-session and performance contracts, six-target distribution, and verification entry points |
 | [siteDeployment.md](siteDeployment.md) | live GitHub Pages origin, dependency-free build, failure mutations, release-link truth, workflow permissions, and visual direction |
 | [crossConsult.md](crossConsult.md) | the consult toggle: official-command wiring, control-name judgements, tools/list verification, the measured direction asymmetry, and the at-machine-only capability |

@@ -92,6 +92,9 @@ sha2 = { version = "0.10.9", default-features = false }
 sha1 = { version = "0.10.7", default-features = false }
 hmac = { version = "0.12.1", default-features = false }
 zeroize = { version = "1.9.0", features = ["zeroize_derive"] }
+# VAPID uses ES256, while push capability URLs are encrypted before they enter the metadata store.
+p256 = { version = "0.13.2", default-features = false, features = ["ecdsa", "std"] }
+aes-gcm = { version = "0.10.3", default-features = false, features = ["aes", "alloc", "zeroize"] }
 # Per-user native secret stores on macOS and Unix. Windows keeps its existing DPAPI envelope.
 keyring = { version = "4.1.6", default-features = true }
 

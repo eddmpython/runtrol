@@ -638,6 +638,7 @@ fn complete_approval(
             .map(|scope| scope.to_string().into())
             .collect(),
         roots: Vec::new(),
+        push_endpoint: None,
         paired_at: WallMs::now(),
     };
     composed
@@ -993,6 +994,7 @@ mod tests {
                     platform: "Test OS".into(),
                     scopes: vec!["session.list".into()],
                     roots: Vec::new(),
+                    push_endpoint: None,
                     paired_at: WallMs::now(),
                 },
             )

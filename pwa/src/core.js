@@ -1,7 +1,7 @@
 import { text, utf8 } from "./bytes.js";
 import { connectThroughRelay } from "./relay.js";
 
-export const WIRE_VERSION = 22;
+export const WIRE_VERSION = 23;
 
 export class CoreClient {
   static async connect(connection, identity, dependencies) {
@@ -78,6 +78,10 @@ export class CoreClient {
 
   stopEverything() {
     return this.exchange({ ask: "stopEverything" });
+  }
+
+  setPushSubscription(endpoint) {
+    return this.exchange({ ask: "pushSubscription", with: { endpoint } });
   }
 
   answerApproval(session, approval, option, subjectDigest) {

@@ -299,7 +299,7 @@ impl RelayEndpoint {
         }
         if addresses
             .iter()
-            .any(|address| !public_relay_address(address.ip()))
+            .any(|address| !crate::egress::public_internet_address(address.ip()))
         {
             return Err(RelayError::PrivateAddress);
         }
@@ -731,25 +731,6 @@ fn valid_dns_name(host: &str) -> bool {
         })
 }
 
-fn public_relay_address(address: IpAddr) -> bool {
-    match address {
-        IpAddr::V4(address) => {
-            !address.is_private()
-                && !address.is_loopback()
-                && !address.is_link_local()
-                && !address.is_broadcast()
-                && !address.is_documentation()
-                && !address.is_unspecified()
-        }
-        IpAddr::V6(address) => {
-            !address.is_loopback()
-                && !address.is_unspecified()
-                && !address.is_unique_local()
-                && !address.is_unicast_link_local()
-        }
-    }
-}
-
 fn tls_config() -> Arc<ClientConfig> {
     static CONFIG: OnceLock<Arc<ClientConfig>> = OnceLock::new();
     Arc::clone(CONFIG.get_or_init(|| {
@@ -925,12 +906,12 @@ mod tests {
             "fc00::1".parse().expect("IPv6 private"),
             "fe80::1".parse().expect("IPv6 link local"),
         ] {
-            assert!(!public_relay_address(address));
+            assert!(!crate::egress::public_internet_address(address));
         }
-        assert!(public_relay_address(
+        assert!(crate::egress::public_internet_address(
             "1.1.1.1".parse().expect("public IPv4")
         ));
-        assert!(public_relay_address(
+        assert!(crate::egress::public_internet_address(
             "2606:4700:4700::1111".parse().expect("public IPv6")
         ));
     }

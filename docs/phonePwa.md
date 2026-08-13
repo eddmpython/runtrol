@@ -4,7 +4,7 @@ The phone application is a paired control surface for the same Core that Runtrol
 
 ## Current release
 
-The application is served from `/runtrol/app/` on the permanent GitHub Pages origin. The supported connection path is the ciphertext relay. Direct LAN and peer-to-peer routes, Web Push, and remote Mission views are not part of this release.
+The application is served from `/runtrol/app/` on the permanent GitHub Pages origin. The supported connection path is the ciphertext relay. Content-free Web Push wakes the installed application when Core publishes an event that needs attention. Direct LAN and peer-to-peer routes and remote Mission views are not part of this release.
 
 Pairing begins only from `Runtrol: Pair a Phone` in VS Code. The QR carries a 120-second one-use pairing secret in the URL fragment. The PWA validates the complete fragment contract and removes it from the visible URL and history before opening any durable storage. Noise IKpsk1 authenticates the first device exchange. VS Code then displays the authenticated phone key and exact initial scopes and requires the operator to type the local three-word presence phrase.
 
@@ -22,9 +22,20 @@ IndexedDB contains only the non-extractable X25519 private key, its public key, 
 
 The selected session owns one bounded live event view. Reconnect uses the exact Core cursor and reports an explicit gap when retained events are no longer available. ANSI control sequences are removed, bidirectional controls are expanded visibly, and approval options remain visible when unavailable so missing authority is not mistaken for a missing provider choice.
 
+## Web Push
+
+Notifications are enabled only by an explicit phone action. The browser subscription is bound to the stable P-256 VAPID public key returned by the authenticated PC. The PWA sends only the browser-issued endpoint through the existing Noise channel. It does not send content-encryption keys because Core deliberately sends an empty push body.
+
+Core derives separate VAPID signing and endpoint-storage keys from the operating-system-protected PC identity. The subscription endpoint is a bearer capability, so it is validated against the reviewed FCM and Apple push hosts, encrypted with device-bound authenticated encryption, and authenticated again during daemon restoration. Plain endpoint bytes are never stored.
+
+For an approval, blocked session, failure, or abnormal detach, Core selects only subscribed devices that hold `session.output.read`, resolves the reviewed push host, rejects the complete DNS answer set if any address is non-public, applies exact egress admission, authenticates WebPKI TLS, and sends an empty HTTP/2 POST with bounded VAPID authorization. The service worker ignores push data and always renders the same generic notification. Session, provider, workspace, prompt, approval subject, output, and identifiers never enter the push request or notification. The reconnect stream remains authoritative if delivery fails.
+
+iOS and iPadOS require adding the application to the Home Screen before notification permission can be granted. Browser subscription removal and `Forget this PC` both clear the server-side capability when Core is reachable. A locally removed browser subscription is already unusable if Core is offline.
+
 ## Verification
 
-- `npm --prefix pwa test` checks pairing-fragment handling, display hardening, canonical record framing, relay admission, explicit Core requests, and current-authority replacement.
+- `npm --prefix pwa test` checks pairing-fragment handling, display hardening, canonical record framing, relay admission, explicit Core requests, current-authority replacement, VAPID binding, and subscription removal.
 - `cargo test -p runtrol-audit --test pwaInterop` runs a real WebCrypto peer against the production Rust transport for Noise IKpsk1 pairing, Noise IK reconnection, and bidirectional encrypted frames.
+- `cargo test -p runtrol-audit --test webPushContract` verifies device-bound encrypted endpoint storage, stable VAPID public-key shape, the empty production request body, and the generic service-worker notification boundary.
 - daemon and security tests verify exact scope, root, provider, filesystem-identity, persistence, and Start and Resume enforcement.
 - `npm --prefix site run build` publishes the reviewed application under `/app/` and holds the complete Pages artifact under the repository byte budget.

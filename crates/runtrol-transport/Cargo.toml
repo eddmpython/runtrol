@@ -14,7 +14,7 @@ runtrol-security = { workspace = true }
 
 bytes = { workspace = true }
 thiserror = { workspace = true }
-hyper = { workspace = true, features = ["client", "http1", "server"] }
+hyper = { workspace = true, features = ["client", "http1", "http2", "server"] }
 hyper-util = { workspace = true, features = ["tokio"] }
 http-body-util = { workspace = true }
 fastwebsockets = { workspace = true }
@@ -28,6 +28,8 @@ sha1 = { workspace = true }
 zeroize = { workspace = true }
 getrandom = { workspace = true }
 base64ct = { workspace = true }
+p256 = { workspace = true }
+aes-gcm = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true, features = ["std"] }
 

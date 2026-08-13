@@ -91,6 +91,9 @@ pub fn needed(request: &Request) -> Needed {
         | Request::DeviceRevoke { .. }
         | Request::DeviceAuthorityBegin { .. }
         | Request::DeviceAuthorityFinish { .. } => Needed::AtTheMachine(LocalScope::DevicePair),
+        Request::PushSubscription { .. } => Needed::Anyone(
+            "an authenticated phone may replace only its own push endpoint, which grants no machine capability",
+        ),
         Request::IntegrationEnrollments
         | Request::IntegrationApprovalBegin { .. }
         | Request::IntegrationApprovalFinish { .. }
@@ -341,6 +344,9 @@ mod tests {
             Request::DeviceAuthorityFinish {
                 challenge_id: "dac_example".into(),
                 answer: "typed phrase".into(),
+            },
+            Request::PushSubscription {
+                endpoint: Some("https://fcm.googleapis.com/fcm/send/example".into()),
             },
             Request::Start {
                 provider: "example".into(),

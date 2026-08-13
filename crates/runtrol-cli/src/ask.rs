@@ -250,6 +250,7 @@ mod tests {
                         wire: runtrol_ipc::WIRE_VERSION,
                         providers: Vec::new(),
                         device: None,
+                        push_public_key: None,
                     })
                     .expect("writable");
                     drop(connection.send(&welcome).await);
@@ -309,6 +310,7 @@ mod tests {
                     wire: runtrol_ipc::WIRE_VERSION,
                     providers: Vec::new(),
                     device: None,
+                    push_public_key: None,
                 })
                 .expect("writable");
                 if connection.recv().await.is_ok() {

@@ -18,7 +18,7 @@
 | 폴더 | 상태 | 한 줄 | 왜 이 자리인가 |
 |---|---|---|---|
 | [0-securityPosture](0-securityPosture/) | 활성 | default-deny 권한 모델, 소켓 표면 (Windows named pipe / Unix socket), 승인 전달, 감사 로그, 킬 스위치. **공개 저장소라 "모르는 사람이 기본값으로 켠다" 가 기준선이다.** | **순서상의 한 칸이 아니라 나머지 전부가 딛는 바닥이다.** 첫 커밋부터 함께 갔고, 남은 Runtime 앱 권한이 3 번, Mission 권한이 4 번, 폰 표면 권한이 6 번에 걸려 있어 **마지막 뒤에 닫힌다.** 0 은 "먼저 하고 넘어간다" 가 아니라 "1~6 이 이것 위에서 돈다" 는 뜻이다 |
-| [5-pwaConnection](5-pwaConnection/) | 활성 | **origin 과 transport 를 분리한다.** 불변 HTTPS origin, 릴레이, Noise E2E가 구현됐고 Web Push와 선택적 직결 경로가 남았다. | 공개된 [site deployment](../docs/siteDeployment.md)의 불변 origin과 0 번 보안 기반 위에서 성립한다. 완료된 공개 Runtime과 로컬 Mission 계약 위에서 남은 push와 직결 최적화를 완성한다 |
+| [5-pwaConnection](5-pwaConnection/) | 완료 | **origin 과 transport 를 분리한다.** 불변 HTTPS origin, 릴레이, Noise E2E, 내용 없는 Web Push가 구현됐다. 선택적 직결 경로는 정확성에 필요하지 않은 후속 최적화다. | 공개된 [site deployment](../docs/siteDeployment.md)의 불변 origin과 0 번 보안 기반 위에서 성립한다. 완료된 공개 Runtime과 로컬 Mission 계약 위에서 폰 연결을 완성했다 |
 | [6-pwaSurface](6-pwaSurface/) | 활성 | 세션 제어 PWA가 구현됐고 Mission 조회 및 중단 표면과 실물 종단 게이트가 남았다. | 5 번의 릴레이 프레임과 정확한 기기 권한 위에 서며 4 번의 로컬 전용 생성, 통합, 능력 승격 권한을 그대로 유지한다 |
 
 공개 Runtime은 [protocol](../docs/runtimeProtocol.md), [integration](../docs/runtimeIntegration.md),

@@ -1,4 +1,4 @@
-const CACHE_NAME = "runtrol-phone-v1";
+const CACHE_NAME = "runtrol-phone-v2";
 const APP_SHELL = [
   "./",
   "index.html",
@@ -11,6 +11,7 @@ const APP_SHELL = [
   "src/noise.js",
   "src/pairing.js",
   "src/presentation.js",
+  "src/push.js",
   "src/records.js",
   "src/relay.js",
   "assets/event-presentation.json",
@@ -36,4 +37,22 @@ self.addEventListener("fetch", (event) => {
   const url = new URL(event.request.url);
   if (event.request.method !== "GET" || url.origin !== self.location.origin) return;
   event.respondWith(caches.match(event.request).then((cached) => cached ?? fetch(event.request)));
+});
+
+self.addEventListener("push", (event) => {
+  event.waitUntil(self.registration.showNotification("Runtrol needs attention", {
+    body: "Open Runtrol to check your PC.",
+    icon: "assets/brand/icon-192.png",
+    badge: "assets/brand/icon-192.png",
+    tag: "runtrol-attention",
+    renotify: true,
+  }));
+});
+
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  event.waitUntil(self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((clients) => {
+    const current = clients.find((client) => "focus" in client);
+    return current ? current.focus() : self.clients.openWindow("./");
+  }));
 });

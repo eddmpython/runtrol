@@ -3,8 +3,9 @@
 //! # What is stored
 //!
 //! The locally minted device id, authenticated Noise public key, a one-way bearer-token fingerprint, validated
-//! display labels, exact stable scope strings, and pairing time. The bearer token itself is never accepted by this
-//! crate, so it cannot be written accidentally. Conversation content has no field and no table here.
+//! display labels, exact stable scope strings, pairing time, and an optional opaque encrypted push capability. The
+//! bearer token itself is never accepted by this crate, so it cannot be written accidentally. Conversation content
+//! has no field and no table here.
 //!
 //! # Why damaged rows stop startup
 //!
@@ -24,7 +25,8 @@ const FINGERPRINT_BYTES: usize = 32;
 const ROOT_ID_BYTES: usize = 16;
 const ROOT_IDENTITY_BYTES: usize = 24;
 const LEGACY_DEVICE_ROW_VERSION: u8 = 1;
-const DEVICE_ROW_VERSION: u8 = 2;
+const ROOTS_DEVICE_ROW_VERSION: u8 = 2;
+const DEVICE_ROW_VERSION: u8 = 3;
 
 /// One exact locally approved workspace root attached to a paired device.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -55,6 +57,11 @@ pub struct DeviceRow {
     pub scopes: Vec<Box<str>>,
     /// Exact workspace roots required by parameterized start and resume scopes.
     pub roots: Vec<DeviceRootRow>,
+    /// Opaque device-bound AEAD ciphertext for the push capability URL.
+    ///
+    /// Encryption and validation belong to the transport identity. The store has no type capable of holding the
+    /// plaintext endpoint.
+    pub push_endpoint: Option<Box<[u8]>>,
     /// When exact PC presence approved this device.
     pub paired_at: WallMs,
 }
@@ -87,13 +94,23 @@ impl DeviceRow {
             write_text(&mut out, "root path", &root.path)?;
             out.extend_from_slice(&root.identity);
         }
+        match &self.push_endpoint {
+            None => out.push(0),
+            Some(encrypted) => {
+                out.push(1);
+                write_bytes(&mut out, "encrypted push endpoint", encrypted)?;
+            }
+        }
         Ok(out)
     }
 
     fn decode(bytes: &[u8]) -> Result<Self, StoreError> {
         let mut cursor = DeviceCursor::new(bytes);
         let version = cursor.byte("row version")?;
-        if !matches!(version, LEGACY_DEVICE_ROW_VERSION | DEVICE_ROW_VERSION) {
+        if !matches!(
+            version,
+            LEGACY_DEVICE_ROW_VERSION | ROOTS_DEVICE_ROW_VERSION | DEVICE_ROW_VERSION
+        ) {
             return Err(StoreError::DeviceCodec {
                 field: "row version",
                 why: "written by a different schema version than this build understands",
@@ -111,7 +128,7 @@ impl DeviceRow {
             scopes.push(cursor.text("scope")?.into());
         }
         let mut roots = Vec::new();
-        if version == DEVICE_ROW_VERSION {
+        if version >= ROOTS_DEVICE_ROW_VERSION {
             let root_count = usize::from(cursor.u16("root count")?);
             roots.reserve(root_count);
             for _ in 0..root_count {
@@ -122,6 +139,20 @@ impl DeviceRow {
                 });
             }
         }
+        let push_endpoint = if version == DEVICE_ROW_VERSION {
+            match cursor.byte("encrypted push endpoint presence")? {
+                0 => None,
+                1 => Some(cursor.bytes("encrypted push endpoint")?.into()),
+                _ => {
+                    return Err(StoreError::DeviceCodec {
+                        field: "encrypted push endpoint presence",
+                        why: "not zero or one",
+                    });
+                }
+            }
+        } else {
+            None
+        };
 
         if !cursor.is_finished() {
             return Err(StoreError::DeviceCodec {
@@ -137,6 +168,7 @@ impl DeviceRow {
             platform,
             scopes,
             roots,
+            push_endpoint,
             paired_at,
         })
     }
@@ -296,6 +328,16 @@ fn write_text(out: &mut Vec<u8>, field: &'static str, text: &str) -> Result<(), 
     Ok(())
 }
 
+fn write_bytes(out: &mut Vec<u8>, field: &'static str, bytes: &[u8]) -> Result<(), StoreError> {
+    let len = u16::try_from(bytes.len()).map_err(|_| StoreError::DeviceCodec {
+        field,
+        why: "longer than 65535 bytes, which this field cannot describe",
+    })?;
+    out.extend_from_slice(&len.to_le_bytes());
+    out.extend_from_slice(bytes);
+    Ok(())
+}
+
 struct DeviceCursor<'a> {
     bytes: &'a [u8],
     at: usize,
@@ -374,6 +416,11 @@ impl<'a> DeviceCursor<'a> {
             why: "not valid UTF-8",
         })
     }
+
+    fn bytes(&mut self, field: &'static str) -> Result<&'a [u8], StoreError> {
+        let len = usize::from(self.u16(field)?);
+        self.take(field, len)
+    }
 }
 
 #[cfg(test)]
@@ -418,6 +465,7 @@ mod tests {
             platform: "Android".into(),
             scopes: vec!["session.list".into(), "provider(example)".into()],
             roots: Vec::new(),
+            push_endpoint: None,
             paired_at: WallMs::from_millis(1_767_225_600_000),
         }
     }
@@ -452,11 +500,32 @@ mod tests {
         if let Some(version) = encoded.first_mut() {
             *version = LEGACY_DEVICE_ROW_VERSION;
         }
-        encoded.truncate(encoded.len() - size_of::<u16>());
+        encoded.truncate(encoded.len() - size_of::<u16>() - 1);
 
         let restored = DeviceRow::decode(&encoded).expect("legacy row remains readable");
         assert_eq!(restored.name.as_ref(), "legacy phone");
         assert!(restored.roots.is_empty());
+        assert!(restored.push_endpoint.is_none());
+    }
+
+    #[test]
+    fn a_roots_only_device_row_restores_without_a_push_capability() {
+        let mut encoded = a_row("roots-only").encode().expect("encodable");
+        if let Some(version) = encoded.first_mut() {
+            *version = ROOTS_DEVICE_ROW_VERSION;
+        }
+        encoded.truncate(encoded.len() - 1);
+
+        let restored = DeviceRow::decode(&encoded).expect("v2 row remains readable");
+        assert!(restored.push_endpoint.is_none());
+    }
+
+    #[test]
+    fn encrypted_push_capability_round_trips_as_opaque_bytes() {
+        let mut row = a_row("push phone");
+        row.push_endpoint = Some(vec![0xA5; 48].into_boxed_slice());
+        let restored = DeviceRow::decode(&row.encode().expect("encodable")).expect("decodable");
+        assert_eq!(restored, row);
     }
 
     #[test]

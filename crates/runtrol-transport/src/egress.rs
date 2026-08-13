@@ -4,7 +4,7 @@
 //! immutable policy approves one exact IP address and port. The actual operating-system dial exists only here.
 
 use std::collections::BTreeSet;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 
 use tokio::net::TcpStream;
 
@@ -66,6 +66,29 @@ impl EgressPolicy {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ApprovedDestination {
     address: SocketAddr,
+}
+
+/// Whether a resolved address stays outside local, private, link-local, documentation, and unspecified ranges.
+///
+/// DNS-derived phone egress uses this one predicate before exact socket capabilities are minted. TLS still
+/// authenticates the DNS name after the approved address is connected.
+pub(crate) fn public_internet_address(address: IpAddr) -> bool {
+    match address {
+        IpAddr::V4(address) => {
+            !address.is_private()
+                && !address.is_loopback()
+                && !address.is_link_local()
+                && !address.is_broadcast()
+                && !address.is_documentation()
+                && !address.is_unspecified()
+        }
+        IpAddr::V6(address) => {
+            !address.is_loopback()
+                && !address.is_unspecified()
+                && !address.is_unique_local()
+                && !address.is_unicast_link_local()
+        }
+    }
 }
 
 /// A default-deny egress decision or connection failure.

@@ -1,4 +1,4 @@
-export const WIRE_VERSION = 22;
+export const WIRE_VERSION = 23;
 
 export type PrivateProviderLine = {
   id: string;
@@ -266,6 +266,7 @@ export type Response =
         wire: number;
         providers: PrivateProviderLine[];
         device: { scopes: string[]; roots: string[]; providers: string[] } | null;
+        push_public_key: string | null;
       };
     }
   | { say: "providerUpdates"; with: ProviderUpdateLine[] }

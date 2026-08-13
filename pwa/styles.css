@@ -87,6 +87,7 @@ input, select, textarea { width: 100%; padding: 11px 12px; background: var(--car
 
 footer { min-height: 54px; padding: 8px max(14px, env(safe-area-inset-right)) max(8px, env(safe-area-inset-bottom)) max(14px, env(safe-area-inset-left)); display: flex; align-items: center; justify-content: space-between; gap: 12px; border-top: 1px solid var(--line); color: var(--muted); font-size: 11px; }
 footer button { min-height: 36px; font-size: 11px; }
+.footer-actions { display: flex; align-items: center; gap: 8px; }
 
 @media (max-width: 760px) {
   header { grid-template-columns: 1fr auto; }

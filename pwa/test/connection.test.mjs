@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { base64UrlEncode, concat, equalBytes, utf8 } from "../src/bytes.js";
+import { base64UrlDecode, base64UrlEncode, concat, equalBytes, utf8 } from "../src/bytes.js";
 import { CoreClient, readDeviceAuthority, WIRE_VERSION } from "../src/core.js";
 import { validateConnection } from "../src/identityStore.js";
 import { consumePairingFragment, parsePairingValue } from "../src/pairing.js";
 import { approvalOptions, exactSubject, safeVisibleText } from "../src/presentation.js";
+import { disablePush, enablePush, synchronizePush } from "../src/push.js";
 import { RecordChannel, decodeRecord, encodeRecord } from "../src/records.js";
 import { requestTicket } from "../src/relay.js";
 
@@ -100,16 +101,44 @@ test("Core client greets first and keeps every request explicit", async () => {
     { say: "welcome", with: { wire: WIRE_VERSION, providers: [] } },
     { say: "sessions", with: { sessions: [], warnings: [] } },
     { say: "done" },
+    { say: "done" },
   ]);
   const client = new CoreClient(channel);
   const welcome = await client.exchange({ ask: "hello", with: { wire: WIRE_VERSION } });
   assert.equal(welcome.say, "welcome");
   await client.list();
   await client.stopEverything();
+  await client.setPushSubscription("https://fcm.googleapis.com/fcm/send/capability");
   assert.deepEqual(channel.sent.map((bytes) => JSON.parse(new TextDecoder().decode(bytes))), [
     { ask: "hello", with: { wire: WIRE_VERSION } },
     { ask: "list" },
     { ask: "stopEverything" },
+    { ask: "pushSubscription", with: { endpoint: "https://fcm.googleapis.com/fcm/send/capability" } },
+  ]);
+});
+
+test("push subscription is VAPID-bound and Core receives only the capability endpoint", async () => {
+  const key = base64UrlEncode(Uint8Array.from({ length: 65 }, (_, index) => index));
+  const calls = [];
+  const subscription = fakeSubscription(key, calls);
+  const registration = {
+    pushManager: {
+      getSubscription: async () => subscription,
+      subscribe: async () => assert.fail("an existing matching subscription must be reused"),
+    },
+  };
+  const client = { setPushSubscription: async (endpoint) => calls.push(["core", endpoint]) };
+  assert.deepEqual(await synchronizePush(client, key, registration), {
+    enabled: true,
+    reason: "Notifications are on.",
+  });
+  await enablePush(client, key, registration);
+  await disablePush(client, registration);
+  assert.deepEqual(calls, [
+    ["core", "https://fcm.googleapis.com/fcm/send/capability"],
+    ["core", "https://fcm.googleapis.com/fcm/send/capability"],
+    ["unsubscribe"],
+    ["core", null],
   ]);
 });
 
@@ -194,6 +223,18 @@ class FakeChannel {
   }
 
   close() {}
+}
+
+function fakeSubscription(encodedKey, calls) {
+  const key = base64UrlDecode(encodedKey, 65);
+  return {
+    endpoint: "https://fcm.googleapis.com/fcm/send/capability",
+    options: { applicationServerKey: key.buffer },
+    unsubscribe: async () => {
+      calls.push(["unsubscribe"]);
+      return true;
+    },
+  };
 }
 
 assert.equal(equalBytes(new Uint8Array([1]), new Uint8Array([1])), true);

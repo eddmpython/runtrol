@@ -36,6 +36,7 @@ use core::time::Duration;
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use runtrol_core::{
     AgentLease, ClosingReservation, OpenReservation, ProviderUpdateReservation, ReservedOpen,
@@ -678,6 +679,7 @@ async fn serve_surfaces(
     // process slots are bounded separately by MAX_HOT.
     let discovering = Arc::new(Mutex::new(()));
     let mut connections = JoinSet::new();
+    let push_wake_active = Arc::new(AtomicBool::new(false));
     let mut relay_hub = match relay {
         Some(relay) => {
             let identity = composed
@@ -1176,6 +1178,7 @@ async fn serve_surfaces(
             // Events reach watchers through the session's own fan-out. This arm keeps the provider stream moving.
             pumped = sessions.pump_any() => {
                 if let Some(published) = pumped.published {
+                    let should_wake = published.event.body.deserves_a_notification();
                     if let Err(error) = crate::dispatch::persist_live(&composed, &sessions, pumped.session) {
                         break Err(error.into());
                     }
@@ -1187,6 +1190,9 @@ async fn serve_surfaces(
                         },
                     ) {
                         break Err(error.into());
+                    }
+                    if should_wake {
+                        schedule_push_wakes(&mut connections, &composed, &push_wake_active);
                     }
                 }
                 if pumped.index_changed {
@@ -1220,6 +1226,42 @@ async fn serve_surfaces(
     connections.abort_all();
     while connections.join_next().await.is_some() {}
     outcome
+}
+
+fn schedule_push_wakes(
+    tasks: &mut JoinSet<()>,
+    composed: &Arc<Composed>,
+    active: &Arc<AtomicBool>,
+) {
+    let Some(identity) = composed.push_identity.clone() else {
+        return;
+    };
+    let targets = composed.device_authority.push_targets();
+    if targets.is_empty()
+        || active
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+    {
+        return;
+    }
+    let guard = PushWakeGuard(Arc::clone(active));
+    tasks.spawn(async move {
+        let _guard = guard;
+        for (device, endpoint) in targets {
+            if identity.wake(*device.as_bytes(), &endpoint).await.is_err() {
+                // Push is a redundant doorbell. The authoritative Core event remains in the bounded reconnect
+                // stream, so a delivery failure must not stop the daemon or the provider session.
+            }
+        }
+    });
+}
+
+struct PushWakeGuard(Arc<AtomicBool>);
+
+impl Drop for PushWakeGuard {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
+    }
 }
 
 fn schedule_abandoned_runtime_cool(
@@ -2287,6 +2329,7 @@ mod tests {
                     credential_fingerprint: token.fingerprint(),
                     labels: DeviceLabels::new("Test phone", "Browser").expect("device labels"),
                     roots: Vec::new(),
+                    push_endpoint: None,
                     paired_at: WallMs::from_millis(1_767_225_600_000),
                 }],
             );

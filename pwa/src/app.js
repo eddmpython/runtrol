@@ -2,6 +2,7 @@ import { openDeviceStore } from "./identityStore.js";
 import { consumePairingFragment } from "./pairing.js";
 import { CoreClient, CoreFailure, readDeviceAuthority, withCore } from "./core.js";
 import { keyFingerprint, pairThroughRelay } from "./relay.js";
+import { disablePush, enablePush, pushAvailable, synchronizePush } from "./push.js";
 import {
   approvalOptions,
   contentText,
@@ -23,6 +24,9 @@ const state = {
   watchGeneration: 0,
   cursor: null,
   presentation: null,
+  pushPublicKey: null,
+  pushSynchronized: false,
+  serviceWorker: null,
 };
 
 const status = element("connection-status");
@@ -36,6 +40,7 @@ const prompt = element("prompt");
 const refresh = element("refresh");
 const panic = element("panic");
 const forget = element("forget-device");
+const notifications = element("notifications");
 let visibleCharacters = 0;
 
 await boot();
@@ -50,7 +55,7 @@ async function boot() {
     state.store = await openDeviceStore();
     state.identity = await state.store.identity();
     state.connection = await state.store.connection();
-    registerServiceWorker();
+    state.serviceWorker = registerServiceWorker();
     bindActions();
     if (state.pairing) {
       await showPairing();
@@ -76,10 +81,27 @@ function bindActions() {
   forget.addEventListener("click", () => runAction(async () => {
     if (!confirm("Forget this PC and remove the phone identity from this device?")) return;
     state.watchGeneration += 1;
+    await forgetPushSubscription();
     await state.store.forget();
     state.connection = null;
     state.identity = await state.store.identity();
     showUnpaired();
+  }));
+  notifications.addEventListener("click", () => runAction(async () => {
+    if (!state.connection || !state.pushPublicKey || !state.serviceWorker) return;
+    const registration = await state.serviceWorker;
+    if (!registration) throw new Error("Install support is unavailable.");
+    if (notifications.dataset.enabled === "true") {
+      await withCore(state.connection, state.identity, (client) => disablePush(client, registration));
+      renderNotificationState(false, "Notifications are off.");
+      return;
+    }
+    await withCore(state.connection, state.identity, (client) => enablePush(
+      client,
+      state.pushPublicKey,
+      registration,
+    ));
+    renderNotificationState(true, "Notifications are on.");
   }));
   composer.addEventListener("submit", (event) => {
     event.preventDefault();
@@ -167,6 +189,7 @@ function showUnpaired() {
   sessionsView.hidden = true;
   panic.disabled = true;
   forget.hidden = true;
+  notifications.hidden = true;
   setup.innerHTML = `
     <div class="setup-card">
       <p class="eyebrow">PHONE CONTROL SURFACE</p>
@@ -182,6 +205,7 @@ async function showSessions() {
   sessionsView.hidden = false;
   panic.disabled = false;
   forget.hidden = false;
+  notifications.hidden = !pushAvailable() || state.serviceWorker === null;
   await refreshSessions();
 }
 
@@ -192,6 +216,7 @@ async function refreshSessions(preferredSession = null) {
     const client = await CoreClient.connect(state.connection, state.identity);
     try {
       state.providers = (client.welcome.providers ?? []).filter((provider) => provider.usable);
+      state.pushPublicKey = client.welcome.push_public_key ?? null;
       const authority = readDeviceAuthority(client.welcome.device);
       state.connection = Object.freeze({ ...state.connection, ...authority });
       await state.store.saveConnection(state.connection);
@@ -202,6 +227,7 @@ async function refreshSessions(preferredSession = null) {
       client.close();
     }
     populateProviders();
+    await synchronizeNotifications();
     renderSessions();
     const selected = state.sessions.find((session) => session.session === (preferredSession ?? state.selected?.session));
     if (selected) selectSession(selected);
@@ -211,6 +237,51 @@ async function refreshSessions(preferredSession = null) {
   } catch (error) {
     setStatus(failureMessage(error, "PC offline"), "offline");
   }
+}
+
+async function synchronizeNotifications() {
+  if (!pushAvailable() || !state.serviceWorker || !state.pushPublicKey) {
+    notifications.hidden = true;
+    return;
+  }
+  notifications.hidden = false;
+  if (state.pushSynchronized) return;
+  state.pushSynchronized = true;
+  const registration = await state.serviceWorker;
+  if (!registration) {
+    notifications.hidden = true;
+    return;
+  }
+  const result = await withCore(state.connection, state.identity, (client) => synchronizePush(
+    client,
+    state.pushPublicKey,
+    registration,
+  ));
+  renderNotificationState(result.enabled, result.reason);
+}
+
+function renderNotificationState(enabled, reason) {
+  notifications.dataset.enabled = String(enabled);
+  notifications.textContent = enabled ? "Disable notifications" : "Enable notifications";
+  notifications.title = reason;
+}
+
+async function forgetPushSubscription() {
+  if (!pushAvailable() || !state.serviceWorker) return;
+  const registration = await state.serviceWorker;
+  if (!registration) return;
+  const subscription = await registration.pushManager.getSubscription();
+  if (subscription) await subscription.unsubscribe();
+  if (state.connection) {
+    try {
+      await withCore(state.connection, state.identity, (client) => client.setPushSubscription(null));
+    } catch {
+      // Browser unsubscribe invalidates the bearer capability. An unreachable PC cannot deliver through it, and
+      // forgetting the local identity must still finish while that PC is offline.
+    }
+  }
+  state.pushSynchronized = false;
+  state.pushPublicKey = null;
 }
 
 function renderSessions() {
@@ -446,10 +517,12 @@ function wait(milliseconds) {
 
 function registerServiceWorker() {
   if ("serviceWorker" in navigator) {
-    navigator.serviceWorker.register("service-worker.js").catch((error) => {
+    return navigator.serviceWorker.register("service-worker.js").catch((error) => {
       setStatus(`Install support failed: ${error instanceof Error ? error.message : String(error)}`, "offline");
+      return null;
     });
   }
+  return null;
 }
 
 function element(id) {

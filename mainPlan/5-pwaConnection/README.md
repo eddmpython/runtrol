@@ -1,9 +1,9 @@
 # pwaConnection
 
-상태: 진행 중, 착수 순서 5 번 ([site deployment](../../docs/siteDeployment.md)가 불변 origin을 확정했다).
+상태: 완료, 착수 순서 5 번 ([site deployment](../../docs/siteDeployment.md)가 불변 origin을 확정했다).
 The permanent Pages origin, default relay shape, and device blast-radius rule are fixed in production code.
 
-Phone-facing HTTP admission, rebinding defenses, exact egress allowlisting, Noise IK session encryption, the 120-second single-use Noise IKpsk1 pairing lifecycle with exact PC approval, durable exact device authority, fail-closed daemon restoration, native identity protection, relay service, reconnecting daemon listener, and the WebCrypto PWA relay client are implemented. Web Push and the optional direct LAN and peer-to-peer routes remain.
+Phone-facing HTTP admission, rebinding defenses, exact egress allowlisting, Noise IK session encryption, the 120-second single-use Noise IKpsk1 pairing lifecycle with exact PC approval, durable exact device authority, fail-closed daemon restoration, native identity protection, relay service, reconnecting daemon listener, the WebCrypto PWA relay client, and content-free Web Push are implemented. Optional direct LAN and peer-to-peer routes remain later transport optimizations and are not v0.1 correctness dependencies.
 
 운영자가 첫 지시에서 "pwa 와 연결할 아이디어가 아직없다. 똑똑한 방법이 있을까 고민중이다" 라고 한 그 자리다. 이 문서가 그 답이다.
 

@@ -75,6 +75,10 @@ pub enum ComposeError {
     #[error(transparent)]
     Relay(#[from] runtrol_transport::RelayError),
 
+    /// VAPID and encrypted push-storage material could not be derived from the protected machine identity.
+    #[error("cannot derive the phone push identity: {0}")]
+    Push(runtrol_transport::PushError),
+
     /// A headless test composition has no production native machine secret.
     #[error("relay ingress requires a protected machine identity")]
     RelayIdentityUnavailable,
@@ -109,6 +113,8 @@ pub struct PairedDevice {
     pub labels: DeviceLabels,
     /// Exact path and filesystem identities behind parameterized workspace scopes.
     pub roots: Vec<PairedRoot>,
+    /// Opaque device-bound ciphertext for this phone's push capability URL.
+    pub push_endpoint: Option<Box<[u8]>>,
     /// When exact PC presence approved the pairing.
     pub paired_at: WallMs,
 }
@@ -207,6 +213,26 @@ impl DeviceAuthority {
     pub(crate) fn paired_devices(&self) -> Arc<[PairedDevice]> {
         Arc::clone(&self.current.borrow().paired_devices)
     }
+
+    /// Snapshot every device that registered a doorbell and may read the event stream it announces.
+    pub(crate) fn push_targets(&self) -> Vec<(DeviceId, Box<[u8]>)> {
+        let snapshot = self.current.borrow();
+        snapshot
+            .paired_devices
+            .iter()
+            .filter(|device| {
+                snapshot
+                    .granted
+                    .holds(device.id, DeviceScope::SessionOutputRead)
+            })
+            .filter_map(|device| {
+                device
+                    .push_endpoint
+                    .as_ref()
+                    .map(|endpoint| (device.id, endpoint.clone()))
+            })
+            .collect()
+    }
 }
 
 /// Everything a running daemon holds.
@@ -243,6 +269,8 @@ pub struct Composed {
     ///
     /// It cannot reveal or reconstruct the PC Noise private key and has no diagnostic representation.
     pub relay_seed: Option<Arc<RelaySeed>>,
+    /// Stable VAPID identity and device-bound push endpoint protector.
+    pub push_identity: Option<Arc<runtrol_transport::PushIdentity>>,
     /// Local-only live control for the optional relay origin and its non-secret status.
     pub(crate) relay_control: crate::relay::RelayControl,
     /// The table that turns a kind into a driver.
@@ -255,6 +283,7 @@ pub struct Composed {
 struct LoadedMachineIdentity {
     noise: Option<Arc<StaticKeypair>>,
     relay: Option<Arc<RelaySeed>>,
+    push: Option<Arc<runtrol_transport::PushIdentity>>,
 }
 
 impl Composed {
@@ -292,8 +321,9 @@ impl Composed {
         missions
             .recover(&ledger, &runtime_ids, &mut growth)
             .map_err(ComposeError::MissionGates)?;
-        let (granted, paired_devices) = restore_device_authority(&store)?;
         let machine_identity = load_machine_identity(&home)?;
+        let (granted, paired_devices) =
+            restore_device_authority(&store, machine_identity.push.as_deref())?;
         Ok(Self {
             home,
             store,
@@ -307,6 +337,7 @@ impl Composed {
             device_authority: DeviceAuthority::new(granted, paired_devices),
             pc_identity: machine_identity.noise,
             relay_seed: machine_identity.relay,
+            push_identity: machine_identity.push,
             relay_control: crate::relay::RelayControl::new(),
             kinds: builtin.kinds,
         })
@@ -345,8 +376,9 @@ impl Composed {
         missions
             .recover(&ledger, &runtime_ids, &mut growth)
             .map_err(ComposeError::MissionGates)?;
-        let (granted, paired_devices) = restore_device_authority(&store)?;
         let machine_identity = load_machine_identity_for_tests(&home)?;
+        let (granted, paired_devices) =
+            restore_device_authority(&store, machine_identity.push.as_deref())?;
         Ok(Self {
             home,
             store,
@@ -360,6 +392,7 @@ impl Composed {
             device_authority: DeviceAuthority::new(granted, paired_devices),
             pc_identity: machine_identity.noise,
             relay_seed: machine_identity.relay,
+            push_identity: machine_identity.push,
             relay_control: crate::relay::RelayControl::new(),
             kinds: builtin.kinds,
         })
@@ -391,7 +424,8 @@ impl Composed {
     ///
     /// The same fail-closed restoration errors as startup. The previous live snapshot remains installed on failure.
     pub(crate) fn reload_device_authority(&self) -> Result<(), ComposeError> {
-        let (granted, paired_devices) = restore_device_authority(&self.store)?;
+        let (granted, paired_devices) =
+            restore_device_authority(&self.store, self.push_identity.as_deref())?;
         self.device_authority.replace(granted, paired_devices);
         Ok(())
     }
@@ -401,9 +435,12 @@ fn load_machine_identity(home: &RuntrolHome) -> Result<LoadedMachineIdentity, Co
     let secret = runtrol_vault::MachineSecret::load_or_create(home.paths().machine_identity())?;
     let identity = StaticKeypair::from_private(secret.as_bytes())?;
     let relay_seed = RelaySeed::derive(secret.as_bytes())?;
+    let push =
+        runtrol_transport::PushIdentity::derive(secret.as_bytes()).map_err(ComposeError::Push)?;
     Ok(LoadedMachineIdentity {
         noise: Some(Arc::new(identity)),
         relay: Some(Arc::new(relay_seed)),
+        push: Some(Arc::new(push)),
     })
 }
 
@@ -423,11 +460,13 @@ fn load_machine_identity_for_tests(_: &RuntrolHome) -> Result<LoadedMachineIdent
     Ok(LoadedMachineIdentity {
         noise: None,
         relay: None,
+        push: None,
     })
 }
 
 fn restore_device_authority(
     store: &Store,
+    push_identity: Option<&runtrol_transport::PushIdentity>,
 ) -> Result<(GrantLedger, Vec<PairedDevice>), ComposeError> {
     let listed = store.list_devices()?;
     if let Some((_, error)) = listed.unreadable.into_iter().next() {
@@ -447,6 +486,7 @@ fn restore_device_authority(
             platform,
             scopes: stored_scopes,
             roots: stored_roots,
+            push_endpoint,
             paired_at,
         } = row;
         if remote_static_key.iter().all(|byte| *byte == 0) {
@@ -469,6 +509,20 @@ fn restore_device_authority(
                 }
             })?);
         }
+        if let Some(endpoint) = &push_endpoint {
+            let Some(identity) = push_identity else {
+                return Err(ComposeError::StoredDevice {
+                    device,
+                    why: "the encrypted push endpoint has no protected machine identity",
+                });
+            };
+            identity
+                .validate_stored_endpoint(*device.as_bytes(), endpoint)
+                .map_err(|_| ComposeError::StoredDevice {
+                    device,
+                    why: "the encrypted push endpoint cannot be authenticated",
+                })?;
+        }
 
         grants.push((device, scopes));
         devices.push(PairedDevice {
@@ -477,6 +531,7 @@ fn restore_device_authority(
             credential_fingerprint: CredentialFingerprint::from_bytes(credential_fingerprint),
             labels,
             roots: restore_device_roots(device, stored_roots)?,
+            push_endpoint,
             paired_at,
         });
     }
@@ -556,6 +611,7 @@ mod tests {
             platform: "Android".into(),
             scopes,
             roots: Vec::new(),
+            push_endpoint: None,
             paired_at: WallMs::from_millis(1_767_225_600_000),
         }
     }

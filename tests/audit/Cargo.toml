@@ -79,6 +79,10 @@ name = "pwaInterop"
 path = "pwaInterop.rs"
 
 [[test]]
+name = "webPushContract"
+path = "webPushContract.rs"
+
+[[test]]
 name = "productionSource"
 path = "productionSource.rs"
 
