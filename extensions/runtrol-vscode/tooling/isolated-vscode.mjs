@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { createReadStream } from "node:fs";
+import { createReadStream, mkdirSync, realpathSync } from "node:fs";
 import { readdir } from "node:fs/promises";
 import path from "node:path";
 
@@ -25,19 +25,47 @@ export const isolatedLaunchArguments = Object.freeze([
 
 export function isolatedRuntimeState(root, baseEnvironment = process.env) {
   const environment = { ...baseEnvironment };
+  const canonicalRoot = realpathSync.native(root);
   let home;
   if (process.platform === "win32") {
-    environment.LOCALAPPDATA = root;
-    home = path.join(root, "runtrol");
+    environment.LOCALAPPDATA = canonicalRoot;
+    home = path.join(canonicalRoot, "runtrol");
   } else if (process.platform === "darwin") {
-    environment.HOME = root;
-    home = path.join(root, "Library", "Application Support", "runtrol");
+    environment.HOME = canonicalRoot;
+    environment.CFFIXED_USER_HOME = canonicalRoot;
+    configureMacOSKeychain(canonicalRoot, environment, baseEnvironment);
+    home = path.join(canonicalRoot, "Library", "Application Support", "runtrol");
   } else {
-    environment.XDG_STATE_HOME = root;
-    home = path.join(root, "runtrol");
+    environment.XDG_STATE_HOME = canonicalRoot;
+    home = path.join(canonicalRoot, "runtrol");
   }
   environment.RUNTROL_HOME = home;
   return { environment, home };
+}
+
+function configureMacOSKeychain(root, environment, baseEnvironment) {
+  const keychain = baseEnvironment.RUNTROL_TEST_MACOS_KEYCHAIN;
+  const password = baseEnvironment.RUNTROL_TEST_MACOS_KEYCHAIN_PASSWORD;
+  if (!keychain || !password) return;
+
+  mkdirSync(path.join(root, "Library", "Preferences"), { recursive: true });
+  for (const arguments_ of [
+    ["list-keychains", "-d", "user", "-s", keychain],
+    ["default-keychain", "-d", "user", "-s", keychain],
+    ["unlock-keychain", "-p", password, keychain],
+  ]) {
+    const configured = spawnSync("/usr/bin/security", arguments_, {
+      env: environment,
+      encoding: "utf8",
+      windowsHide: true,
+    });
+    if (configured.status !== 0) {
+      throw new Error(
+        `isolated macOS keychain setup failed: ${configured.error?.message ?? `exit ${String(configured.status)}`}\n`
+        + `${configured.stdout ?? ""}${configured.stderr ?? ""}`,
+      );
+    }
+  }
 }
 
 export function isolatedExtensionTestArguments(options) {

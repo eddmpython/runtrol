@@ -149,6 +149,18 @@ jobs:
       - name: VS Code 확장 의존성
         if: needs.detect.outputs.hasWorkspace == 'true'
         run: npm --prefix extensions/runtrol-vscode ci
+      - name: Linux 네이티브 자격 증명 저장소
+        if: needs.detect.outputs.hasWorkspace == 'true'
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gnome-keyring
+          dbus_address="$(dbus-daemon --session --fork --print-address=1)"
+          echo "DBUS_SESSION_BUS_ADDRESS=$dbus_address" >> "$GITHUB_ENV"
+          export DBUS_SESSION_BUS_ADDRESS="$dbus_address"
+          keyring_environment="$(printf 'runtrol-ci' | gnome-keyring-daemon --components=secrets --daemonize --unlock)"
+          eval "$keyring_environment"
+          echo "GNOME_KEYRING_CONTROL=$GNOME_KEYRING_CONTROL" >> "$GITHUB_ENV"
       - name: 공개 TypeScript Runtime SDK 게이트 자체 검증
         if: needs.detect.outputs.hasWorkspace == 'true'
         run: python -X utf8 tests/audit/runtimeClientSdk.py --selftest
@@ -319,7 +331,12 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y gnome-keyring
-          gnome-keyring-daemon --components=secrets --daemonize --unlock <<< 'runtrol-ci'
+          dbus_address="$(dbus-daemon --session --fork --print-address=1)"
+          echo "DBUS_SESSION_BUS_ADDRESS=$dbus_address" >> "$GITHUB_ENV"
+          export DBUS_SESSION_BUS_ADDRESS="$dbus_address"
+          keyring_environment="$(printf 'runtrol-ci' | gnome-keyring-daemon --components=secrets --daemonize --unlock)"
+          eval "$keyring_environment"
+          echo "GNOME_KEYRING_CONTROL=$GNOME_KEYRING_CONTROL" >> "$GITHUB_ENV"
       - name: macOS 네이티브 자격 증명 저장소
         if: matrix.os == 'macos-latest'
         shell: bash
@@ -330,6 +347,8 @@ jobs:
           security unlock-keychain -p 'runtrol-ci' "$keychain"
           security default-keychain -d user -s "$keychain"
           security list-keychains -d user -s "$keychain"
+          echo "RUNTROL_TEST_MACOS_KEYCHAIN=$keychain" >> "$GITHUB_ENV"
+          echo "RUNTROL_TEST_MACOS_KEYCHAIN_PASSWORD=runtrol-ci" >> "$GITHUB_ENV"
       - uses: actions/cache@v4
         with:
           path: extensions/runtrol-vscode/.vscode-test

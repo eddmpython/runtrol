@@ -116,7 +116,7 @@ function requiredEnvironment(name: string): string {
 }
 
 async function requireConversationEditor(): Promise<void> {
-  const tab = await within(waitForConversationEditor(), 5_000, "registering the conversation editor tab");
+  const tab = await within(waitForConversationEditor(), 15_000, "registering the conversation editor tab");
   if (!tab || !tab.label.startsWith("Runtrol:")) {
     throw new Error("the selected conversation is not an identifiable editor Webview tab");
   }

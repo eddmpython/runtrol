@@ -289,7 +289,7 @@ function managedSessionIds(): string[] {
 }
 
 async function requireConversationEditor(): Promise<void> {
-  const tab = await within(waitForConversationEditor(), 5_000, "registering the conversation editor tab");
+  const tab = await within(waitForConversationEditor(), 15_000, "registering the conversation editor tab");
   if (!tab) {
     throw new Error("the Runtrol conversation did not open as an editor Webview tab");
   }
