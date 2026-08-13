@@ -4,10 +4,10 @@ use base64ct::{Base64UrlUnpadded, Encoding as _};
 use runtrol_runtime_protocol::{
     AcquireControlParams, AdoptNativeSessionParams, AppScope, CHALLENGE_LIFETIME_MS,
     ClientCapabilities, ClientInfo, ControlLease, ControlLeaseParams, CoolSessionParams,
-    EnrollmentDecision, EnrollmentManifest, EnrollmentReceipt, ErrorResponse, FINALIZED_REVISIONS,
-    ForgetSessionParams, GetProviderCapabilitiesParams, GetSessionParams, InitializeParams,
-    InitializeResult, IntegrationAuthentication, IntegrationGrant, JsonRpcId, JsonRpcNotification,
-    JsonRpcRequest, JsonRpcResponse, LaggedNotification, ListModelsParams,
+    EnrollmentDecision, EnrollmentManifest, EnrollmentReceipt, ErrorResponse, EventCursor,
+    FINALIZED_REVISIONS, ForgetSessionParams, GetProviderCapabilitiesParams, GetSessionParams,
+    InitializeParams, InitializeResult, IntegrationAuthentication, IntegrationGrant, JsonRpcId,
+    JsonRpcNotification, JsonRpcRequest, JsonRpcResponse, LaggedNotification, ListModelsParams,
     ListNativeSessionsParams, ListPendingApprovalsParams, ManagedSessionList, MutationRequestId,
     NativeSessionCatalogue, PendingApprovalList, PendingEnrollmentId, ProviderId, ProviderList,
     ProviderWatchEndedNotification, ProvidersChangedNotification, RequestEnrollmentParams,
@@ -21,11 +21,12 @@ use runtrol_runtime_protocol::{
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
+use std::time::Duration;
 
 use crate::ClientError;
 use crate::connection::Connection;
 use crate::identity::{IntegrationCredentials, IntegrationIdentity};
-use crate::locator::{LocatorState, RuntimeLocator, ValidatedLocator};
+use crate::locator::{LocatorError, LocatorState, RuntimeLocator, ValidatedLocator};
 
 /// Safe client metadata and optional consumer-owned integration identity.
 #[derive(Clone, Debug)]
@@ -78,6 +79,55 @@ pub struct EnrollmentProposal {
     requested_roots: Vec<String>,
 }
 
+/// Capped reconnect admission for connection establishment only.
+///
+/// Runtime mutations are never retried by this policy.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ReconnectPolicy {
+    initial_delay: Duration,
+    maximum_delay: Duration,
+    deadline: Duration,
+}
+
+impl ReconnectPolicy {
+    /// Construct a bounded exponential reconnect policy.
+    ///
+    /// # Errors
+    ///
+    /// A zero duration, an initial delay above the maximum, or a maximum delay above the total deadline.
+    pub fn new(
+        initial_delay: Duration,
+        maximum_delay: Duration,
+        deadline: Duration,
+    ) -> Result<Self, ClientError> {
+        if initial_delay.is_zero()
+            || maximum_delay.is_zero()
+            || deadline.is_zero()
+            || initial_delay > maximum_delay
+            || maximum_delay > deadline
+        {
+            return Err(ClientError::Protocol(
+                "reconnect delays must be nonzero and ordered within the deadline".to_owned(),
+            ));
+        }
+        Ok(Self {
+            initial_delay,
+            maximum_delay,
+            deadline,
+        })
+    }
+}
+
+impl Default for ReconnectPolicy {
+    fn default() -> Self {
+        Self {
+            initial_delay: Duration::from_millis(100),
+            maximum_delay: Duration::from_secs(2),
+            deadline: Duration::from_secs(30),
+        }
+    }
+}
+
 impl EnrollmentProposal {
     /// Create a closed proposal. Runtime validates bounds and canonicalizes roots during local approval.
     #[must_use]
@@ -114,6 +164,76 @@ impl RuntimeLocator {
         };
         RuntimeClient::connect(locator, options).await
     }
+
+    /// Connect with capped exponential backoff and jitter for transient locator or transport failures.
+    ///
+    /// Each attempt re-reads the owner-validated locator, so a restarted Runtime may publish a replacement endpoint.
+    /// Authentication, protocol, enrollment, revocation, and other non-retryable failures return immediately. This
+    /// helper establishes a connection only and never retries a Runtime operation.
+    ///
+    /// # Errors
+    ///
+    /// The first non-retryable failure or the last transient failure observed at the policy deadline.
+    pub async fn connect_with_retry(
+        &self,
+        options: ClientOptions,
+        policy: ReconnectPolicy,
+    ) -> Result<RuntimeClient, ClientError> {
+        let deadline = tokio::time::Instant::now() + policy.deadline;
+        let mut delay = policy.initial_delay;
+        loop {
+            match self.connect(options.clone()).await {
+                Ok(client) => return Ok(client),
+                Err(error) if retryable_connection_failure(&error) => {
+                    let now = tokio::time::Instant::now();
+                    if now >= deadline {
+                        return Err(error);
+                    }
+                    tokio::time::sleep(jittered(delay).min(deadline - now)).await;
+                    delay = delay.saturating_mul(2).min(policy.maximum_delay);
+                }
+                Err(error) => return Err(error),
+            }
+        }
+    }
+
+    /// Open a read-only event stream that reconnects from the last cursor explicitly accepted by the consumer.
+    ///
+    /// The reconnect path sends only `sessions/watchEvents`. It never retries input, approval, lease, or lifecycle
+    /// mutations.
+    ///
+    /// # Errors
+    ///
+    /// Connection, authentication, scope, cursor, or subscription admission failure.
+    pub async fn watch_events_with_reconnect(
+        &self,
+        options: ClientOptions,
+        params: WatchEventsParams,
+        policy: ReconnectPolicy,
+    ) -> Result<ReconnectingEventSubscription, ClientError> {
+        ReconnectingEventSubscription::open(self.clone(), options, params, policy).await
+    }
+}
+
+fn retryable_connection_failure(error: &ClientError) -> bool {
+    match error {
+        ClientError::Transport { .. } | ClientError::Locator(LocatorError::Io(_)) => true,
+        ClientError::Runtime(error) => error.retryable,
+        ClientError::Locator(
+            LocatorError::Environment { .. } | LocatorError::Malformed(_) | LocatorError::Unsafe(_),
+        )
+        | ClientError::Protocol(_) => false,
+    }
+}
+
+fn jittered(delay: Duration) -> Duration {
+    let mut random = [0_u8; 2];
+    if getrandom::fill(&mut random).is_err() {
+        return delay;
+    }
+    let basis_points = 7_500_u128 + (u128::from(u16::from_le_bytes(random)) % 5_001);
+    let nanos = delay.as_nanos().saturating_mul(basis_points) / 10_000;
+    Duration::from_nanos(u64::try_from(nanos).unwrap_or(u64::MAX))
 }
 
 /// One initialized public connection. It owns no Runtime or provider session.
@@ -1102,92 +1222,111 @@ impl EventSubscription<'_> {
     ///
     /// Transport failure or a notification that violates the selected public revision.
     pub async fn next(&mut self) -> Result<SessionNotification, ClientError> {
-        let payload = self.runtime.connection.receive().await?;
-        let notification: JsonRpcNotification =
-            serde_json::from_slice(&payload).map_err(|error| {
-                ClientError::Protocol(format!(
-                    "session notification is not valid public JSON-RPC: {error}"
-                ))
-            })?;
-        if notification.jsonrpc != "2.0" {
-            return Err(ClientError::Protocol(
-                "session notification JSON-RPC version is not 2.0".to_owned(),
-            ));
-        }
-        let method = notification.method.parse::<RuntimeMethod>().map_err(|_| {
-            ClientError::Protocol("session notification method is unknown".to_owned())
-        })?;
-        match method {
-            RuntimeMethod::SessionsEvent => {
-                let event: RuntimeEventNotification = serde_json::from_value(notification.params)
-                    .map_err(|error| {
+        receive_session_notification(self.runtime, &self.subscription_id, &self.session_id).await
+    }
+}
+
+async fn receive_session_notification(
+    runtime: &mut RuntimeClient,
+    subscription_id: &str,
+    session_id: &RuntimeSessionId,
+) -> Result<SessionNotification, ClientError> {
+    let payload = runtime.connection.receive().await?;
+    let notification: JsonRpcNotification = serde_json::from_slice(&payload).map_err(|error| {
+        ClientError::Protocol(format!(
+            "session notification is not valid public JSON-RPC: {error}"
+        ))
+    })?;
+    if notification.jsonrpc != "2.0" {
+        return Err(ClientError::Protocol(
+            "session notification JSON-RPC version is not 2.0".to_owned(),
+        ));
+    }
+    let method = notification
+        .method
+        .parse::<RuntimeMethod>()
+        .map_err(|_| ClientError::Protocol("session notification method is unknown".to_owned()))?;
+    match method {
+        RuntimeMethod::SessionsEvent => {
+            let event: RuntimeEventNotification = serde_json::from_value(notification.params)
+                .map_err(|error| {
                     ClientError::Protocol(format!(
                         "session event notification has the wrong shape: {error}"
                     ))
                 })?;
-                self.validate_target(&event.subscription_id, &event.session_id)?;
-                Ok(SessionNotification::Event(event))
-            }
-            RuntimeMethod::SessionsLagged => {
-                let lagged: LaggedNotification = serde_json::from_value(notification.params)
-                    .map_err(|error| {
-                        ClientError::Protocol(format!(
-                            "session lag notification has the wrong shape: {error}"
-                        ))
-                    })?;
-                self.validate_target(&lagged.subscription_id, &lagged.session_id)?;
-                Ok(SessionNotification::Lagged(lagged))
-            }
-            RuntimeMethod::Initialize
-            | RuntimeMethod::Initialized
-            | RuntimeMethod::Challenge
-            | RuntimeMethod::IntegrationsRequestEnrollment
-            | RuntimeMethod::IntegrationsWatchEnrollment
-            | RuntimeMethod::IntegrationsGetGrant
-            | RuntimeMethod::IntegrationsRotateKey
-            | RuntimeMethod::ProvidersList
-            | RuntimeMethod::ProvidersWatch
-            | RuntimeMethod::ProvidersGetCapabilities
-            | RuntimeMethod::ProvidersListModels
-            | RuntimeMethod::ProvidersListNativeSessions
-            | RuntimeMethod::SessionsList
-            | RuntimeMethod::SessionsWatchIndex
-            | RuntimeMethod::SessionsGet
-            | RuntimeMethod::SessionsStart
-            | RuntimeMethod::SessionsAdoptNative
-            | RuntimeMethod::SessionsResume
-            | RuntimeMethod::SessionsAcquireControl
-            | RuntimeMethod::SessionsRenewControl
-            | RuntimeMethod::SessionsReleaseControl
-            | RuntimeMethod::SessionsSubmitInput
-            | RuntimeMethod::SessionsWatchEvents
-            | RuntimeMethod::SessionsInterrupt
-            | RuntimeMethod::SessionsCool
-            | RuntimeMethod::SessionsForget
-            | RuntimeMethod::ApprovalsListPending
-            | RuntimeMethod::ApprovalsRespond
-            | RuntimeMethod::SessionsIndexChanged
-            | RuntimeMethod::SessionsIndexEnded
-            | RuntimeMethod::ProvidersChanged
-            | RuntimeMethod::ProvidersWatchEnded
-            | RuntimeMethod::PanicStop => Err(ClientError::Protocol(
-                "the dedicated session stream received a non-event method".to_owned(),
-            )),
+            validate_session_notification_target(
+                subscription_id,
+                session_id,
+                &event.subscription_id,
+                &event.session_id,
+            )?;
+            Ok(SessionNotification::Event(event))
         }
+        RuntimeMethod::SessionsLagged => {
+            let lagged: LaggedNotification =
+                serde_json::from_value(notification.params).map_err(|error| {
+                    ClientError::Protocol(format!(
+                        "session lag notification has the wrong shape: {error}"
+                    ))
+                })?;
+            validate_session_notification_target(
+                subscription_id,
+                session_id,
+                &lagged.subscription_id,
+                &lagged.session_id,
+            )?;
+            Ok(SessionNotification::Lagged(lagged))
+        }
+        RuntimeMethod::Initialize
+        | RuntimeMethod::Initialized
+        | RuntimeMethod::Challenge
+        | RuntimeMethod::IntegrationsRequestEnrollment
+        | RuntimeMethod::IntegrationsWatchEnrollment
+        | RuntimeMethod::IntegrationsGetGrant
+        | RuntimeMethod::IntegrationsRotateKey
+        | RuntimeMethod::ProvidersList
+        | RuntimeMethod::ProvidersWatch
+        | RuntimeMethod::ProvidersGetCapabilities
+        | RuntimeMethod::ProvidersListModels
+        | RuntimeMethod::ProvidersListNativeSessions
+        | RuntimeMethod::SessionsList
+        | RuntimeMethod::SessionsWatchIndex
+        | RuntimeMethod::SessionsGet
+        | RuntimeMethod::SessionsStart
+        | RuntimeMethod::SessionsAdoptNative
+        | RuntimeMethod::SessionsResume
+        | RuntimeMethod::SessionsAcquireControl
+        | RuntimeMethod::SessionsRenewControl
+        | RuntimeMethod::SessionsReleaseControl
+        | RuntimeMethod::SessionsSubmitInput
+        | RuntimeMethod::SessionsWatchEvents
+        | RuntimeMethod::SessionsInterrupt
+        | RuntimeMethod::SessionsCool
+        | RuntimeMethod::SessionsForget
+        | RuntimeMethod::ApprovalsListPending
+        | RuntimeMethod::ApprovalsRespond
+        | RuntimeMethod::SessionsIndexChanged
+        | RuntimeMethod::SessionsIndexEnded
+        | RuntimeMethod::ProvidersChanged
+        | RuntimeMethod::ProvidersWatchEnded
+        | RuntimeMethod::PanicStop => Err(ClientError::Protocol(
+            "the dedicated session stream received a non-event method".to_owned(),
+        )),
     }
+}
 
-    fn validate_target(
-        &self,
-        subscription_id: &str,
-        session_id: &RuntimeSessionId,
-    ) -> Result<(), ClientError> {
-        if subscription_id != self.subscription_id || session_id != &self.session_id {
-            return Err(ClientError::Protocol(
-                "session notification target does not match its subscription".to_owned(),
-            ));
-        }
-        Ok(())
+fn validate_session_notification_target(
+    expected_subscription_id: &str,
+    expected_session_id: &RuntimeSessionId,
+    subscription_id: &str,
+    session_id: &RuntimeSessionId,
+) -> Result<(), ClientError> {
+    if subscription_id != expected_subscription_id || session_id != expected_session_id {
+        return Err(ClientError::Protocol(
+            "session notification target does not match its subscription".to_owned(),
+        ));
     }
+    Ok(())
 }
 
 /// One item on a dedicated public session stream.
@@ -1199,15 +1338,526 @@ pub enum SessionNotification {
     Lagged(LaggedNotification),
 }
 
+/// One notification from an event stream that can replace its read-only connection.
+#[derive(Clone, Debug, PartialEq)]
+pub enum ReconnectingSessionNotification {
+    /// One normalized event. The consumer must accept its cursor before reading again.
+    Event(RuntimeEventNotification),
+    /// The bounded live queue was lost. Reconnect begins from the supplied safe boundary.
+    Lagged(LaggedNotification),
+    /// A replacement connection installed a new replay and live boundary.
+    Reconnected(WatchEventsResult),
+}
+
+/// A read-only event stream that restores only an explicitly accepted cursor.
+pub struct ReconnectingEventSubscription {
+    locator: RuntimeLocator,
+    options: ClientOptions,
+    policy: ReconnectPolicy,
+    session_id: RuntimeSessionId,
+    accepted: Option<EventCursor>,
+    pending: Option<EventCursor>,
+    runtime: Option<RuntimeClient>,
+    subscription_id: String,
+    started: WatchEventsResult,
+}
+
+impl ReconnectingEventSubscription {
+    async fn open(
+        locator: RuntimeLocator,
+        options: ClientOptions,
+        params: WatchEventsParams,
+        policy: ReconnectPolicy,
+    ) -> Result<Self, ClientError> {
+        let accepted = params.after;
+        let (runtime, started) = open_event_stream(
+            &locator,
+            &options,
+            &params.session_id,
+            accepted.clone(),
+            policy,
+        )
+        .await?;
+        Ok(Self {
+            locator,
+            options,
+            policy,
+            session_id: params.session_id,
+            accepted,
+            pending: None,
+            runtime: Some(runtime),
+            subscription_id: started.subscription_id.clone(),
+            started,
+        })
+    }
+
+    /// Initial replay and live boundary.
+    #[must_use]
+    pub const fn started(&self) -> &WatchEventsResult {
+        &self.started
+    }
+
+    /// Mark one delivered event as consumed and safe for reconnect.
+    ///
+    /// # Errors
+    ///
+    /// The cursor is not the exact pending event boundary.
+    pub fn accept(&mut self, next_expected: &EventCursor) -> Result<(), ClientError> {
+        if self.pending.as_ref() != Some(next_expected) {
+            return Err(ClientError::Protocol(
+                "accepted event cursor does not match the pending event".to_owned(),
+            ));
+        }
+        self.accepted = Some(next_expected.clone());
+        self.pending = None;
+        Ok(())
+    }
+
+    /// Wait for an event, lag boundary, or successful replacement connection.
+    ///
+    /// # Errors
+    ///
+    /// An unaccepted event, a non-retryable protocol failure, or reconnect deadline exhaustion.
+    pub async fn next(&mut self) -> Result<ReconnectingSessionNotification, ClientError> {
+        if self.pending.is_some() {
+            return Err(ClientError::Protocol(
+                "accept the current event before reading another one".to_owned(),
+            ));
+        }
+        let Some(runtime) = self.runtime.as_mut() else {
+            let started = self.reconnect().await?;
+            return Ok(ReconnectingSessionNotification::Reconnected(started));
+        };
+        match receive_session_notification(runtime, &self.subscription_id, &self.session_id).await {
+            Ok(SessionNotification::Event(event)) => {
+                self.pending = Some(event.next_expected.clone());
+                Ok(ReconnectingSessionNotification::Event(event))
+            }
+            Ok(SessionNotification::Lagged(lagged)) => {
+                self.accepted = Some(lagged.next_expected.clone());
+                self.runtime = None;
+                Ok(ReconnectingSessionNotification::Lagged(lagged))
+            }
+            Err(error) if retryable_connection_failure(&error) => {
+                self.runtime = None;
+                let started = self.reconnect().await?;
+                Ok(ReconnectingSessionNotification::Reconnected(started))
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    async fn reconnect(&mut self) -> Result<WatchEventsResult, ClientError> {
+        let (runtime, started) = open_event_stream(
+            &self.locator,
+            &self.options,
+            &self.session_id,
+            self.accepted.clone(),
+            self.policy,
+        )
+        .await?;
+        self.subscription_id.clone_from(&started.subscription_id);
+        self.started = started.clone();
+        self.runtime = Some(runtime);
+        Ok(started)
+    }
+}
+
+async fn open_event_stream(
+    locator: &RuntimeLocator,
+    options: &ClientOptions,
+    session_id: &RuntimeSessionId,
+    after: Option<EventCursor>,
+    policy: ReconnectPolicy,
+) -> Result<(RuntimeClient, WatchEventsResult), ClientError> {
+    let deadline = tokio::time::Instant::now() + policy.deadline;
+    let mut delay = policy.initial_delay;
+    loop {
+        let attempt = async {
+            let mut runtime = locator.connect(options.clone()).await?;
+            let started = runtime
+                .call(
+                    RuntimeMethod::SessionsWatchEvents,
+                    &WatchEventsParams {
+                        session_id: session_id.clone(),
+                        after: after.clone(),
+                    },
+                )
+                .await?;
+            Ok((runtime, started))
+        }
+        .await;
+        match attempt {
+            Ok(opened) => return Ok(opened),
+            Err(error) if retryable_connection_failure(&error) => {
+                let now = tokio::time::Instant::now();
+                if now >= deadline {
+                    return Err(error);
+                }
+                tokio::time::sleep(jittered(delay).min(deadline - now)).await;
+                delay = delay.saturating_mul(2).min(policy.maximum_delay);
+            }
+            Err(error) => return Err(error),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::io::{AsyncRead, AsyncReadExt as _, AsyncWrite, AsyncWriteExt as _};
+
+    #[cfg(windows)]
+    mod fake_transport {
+        use tokio::net::windows::named_pipe::{NamedPipeServer, ServerOptions};
+
+        pub(super) type Stream = NamedPipeServer;
+
+        pub(super) struct Listener {
+            endpoint: String,
+            waiting: Option<NamedPipeServer>,
+        }
+
+        impl Listener {
+            pub(super) fn bind() -> (Self, String) {
+                let endpoint = format!(
+                    r"\\.\pipe\runtrol-runtime-client-reconnect-{}",
+                    std::process::id()
+                );
+                let waiting = ServerOptions::new()
+                    .first_pipe_instance(true)
+                    .reject_remote_clients(true)
+                    .create(&endpoint)
+                    .expect("create reconnect test pipe");
+                (
+                    Self {
+                        endpoint: endpoint.clone(),
+                        waiting: Some(waiting),
+                    },
+                    endpoint,
+                )
+            }
+
+            pub(super) async fn accept(&mut self) -> Stream {
+                let waiting = match self.waiting.take() {
+                    Some(waiting) => waiting,
+                    None => ServerOptions::new()
+                        .reject_remote_clients(true)
+                        .create(&self.endpoint)
+                        .expect("create replacement reconnect test pipe"),
+                };
+                waiting.connect().await.expect("accept reconnect client");
+                waiting
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    mod fake_transport {
+        use std::path::PathBuf;
+        use tokio::net::{UnixListener, UnixStream};
+
+        pub(super) type Stream = UnixStream;
+
+        pub(super) struct Listener {
+            inner: UnixListener,
+            directory: PathBuf,
+        }
+
+        impl Listener {
+            pub(super) fn bind() -> (Self, String) {
+                let directory = std::env::temp_dir().join(format!(
+                    "runtrol-runtime-client-reconnect-{}",
+                    std::process::id()
+                ));
+                drop(std::fs::remove_dir_all(&directory));
+                std::fs::create_dir_all(&directory).expect("create reconnect test directory");
+                let endpoint = directory.join("runtrol-runtime.sock");
+                let inner = UnixListener::bind(&endpoint).expect("bind reconnect test socket");
+                (
+                    Self { inner, directory },
+                    endpoint.to_string_lossy().into_owned(),
+                )
+            }
+
+            pub(super) async fn accept(&mut self) -> Stream {
+                self.inner
+                    .accept()
+                    .await
+                    .expect("accept reconnect client")
+                    .0
+            }
+        }
+
+        impl Drop for Listener {
+            fn drop(&mut self) {
+                drop(std::fs::remove_dir_all(&self.directory));
+            }
+        }
+    }
+
+    async fn receive_test_frame(stream: &mut (impl AsyncRead + Unpin)) -> Vec<u8> {
+        let mut header = [0_u8; 4];
+        stream
+            .read_exact(&mut header)
+            .await
+            .expect("read test frame header");
+        let length = usize::try_from(u32::from_be_bytes(header)).expect("test frame length");
+        let mut payload = vec![0_u8; length];
+        stream
+            .read_exact(&mut payload)
+            .await
+            .expect("read test frame payload");
+        payload
+    }
+
+    async fn send_test_json(stream: &mut (impl AsyncWrite + Unpin), value: &impl Serialize) {
+        let payload = serde_json::to_vec(value).expect("encode test frame");
+        let length = u32::try_from(payload.len()).expect("bounded test frame length");
+        stream
+            .write_all(&length.to_be_bytes())
+            .await
+            .expect("write test frame header");
+        stream
+            .write_all(&payload)
+            .await
+            .expect("write test frame payload");
+        stream.flush().await.expect("flush test frame");
+    }
+
+    async fn serve_reconnect_fixture(
+        mut stream: fake_transport::Stream,
+        instance_id: &str,
+        expected_after: EventCursor,
+        next_expected: EventCursor,
+        session_id: &RuntimeSessionId,
+        subscription_id: &str,
+        send_event: bool,
+    ) -> WatchEventsParams {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("test clock follows Unix epoch");
+        let challenge = JsonRpcNotification {
+            jsonrpc: "2.0".to_owned(),
+            method: RuntimeMethod::Challenge.to_string(),
+            params: serde_json::to_value(ServerChallenge {
+                instance_id: instance_id.to_owned(),
+                nonce_id: "nonce_0123456789abcdef0123456789abcdef".to_owned(),
+                nonce: Base64UrlUnpadded::encode_string(&[3; 32]),
+                expires_at_ms: u64::try_from(now.as_millis())
+                    .expect("test milliseconds fit u64")
+                    .saturating_add(1_000),
+            })
+            .expect("encode challenge"),
+        };
+        send_test_json(&mut stream, &challenge).await;
+
+        let initialize: JsonRpcRequest =
+            serde_json::from_slice(&receive_test_frame(&mut stream).await)
+                .expect("decode initialize request");
+        assert_eq!(initialize.method, RuntimeMethod::Initialize.to_string());
+        let initialized = runtrol_runtime_protocol::InitializeResult {
+            selected_revision: runtrol_runtime_protocol::REVISION_2026_08_13,
+            runtime: runtrol_runtime_protocol::RuntimeInstance {
+                instance_id: instance_id.to_owned(),
+                version: "0.1.1".to_owned(),
+                platform: "test".to_owned(),
+            },
+            server_capabilities: runtrol_runtime_protocol::RuntimeCapabilities {
+                integration_enrollment: true,
+                provider_inventory: true,
+                managed_session_list: true,
+                model_discovery: true,
+                native_session_catalogue: true,
+                session_control: true,
+                session_events: true,
+            },
+            limits: runtrol_runtime_protocol::RuntimeLimits::default(),
+            grant: None,
+        };
+        send_test_json(
+            &mut stream,
+            &JsonRpcResponse::Success(SuccessResponse {
+                jsonrpc: "2.0".to_owned(),
+                id: initialize.id,
+                result: serde_json::to_value(initialized).expect("encode initialization result"),
+            }),
+        )
+        .await;
+
+        let initialized: JsonRpcNotification =
+            serde_json::from_slice(&receive_test_frame(&mut stream).await)
+                .expect("decode initialized notification");
+        assert_eq!(initialized.method, RuntimeMethod::Initialized.to_string());
+        let watch: JsonRpcRequest = serde_json::from_slice(&receive_test_frame(&mut stream).await)
+            .expect("decode watch request");
+        assert_eq!(watch.method, RuntimeMethod::SessionsWatchEvents.to_string());
+        let params: WatchEventsParams =
+            serde_json::from_value(watch.params).expect("decode watch parameters");
+        assert_eq!(params.after, Some(expected_after.clone()));
+        let started = WatchEventsResult {
+            subscription_id: subscription_id.to_owned(),
+            session_id: session_id.clone(),
+            starts_at: expected_after,
+            live_at: next_expected.clone(),
+            gap: None,
+        };
+        send_test_json(
+            &mut stream,
+            &JsonRpcResponse::Success(SuccessResponse {
+                jsonrpc: "2.0".to_owned(),
+                id: watch.id,
+                result: serde_json::to_value(started).expect("encode watch result"),
+            }),
+        )
+        .await;
+        if send_event {
+            send_test_json(
+                &mut stream,
+                &JsonRpcNotification {
+                    jsonrpc: "2.0".to_owned(),
+                    method: RuntimeMethod::SessionsEvent.to_string(),
+                    params: serde_json::to_value(RuntimeEventNotification {
+                        subscription_id: subscription_id.to_owned(),
+                        session_id: session_id.clone(),
+                        event_revision: runtrol_runtime_protocol::REVISION_2026_08_13,
+                        event: serde_json::json!({"type": "fixture"}),
+                        next_expected,
+                    })
+                    .expect("encode event notification"),
+                },
+            )
+            .await;
+        }
+        params
+    }
 
     #[test]
     fn client_options_contain_no_endpoint_or_provider_choice() {
         let options = ClientOptions::new("fixture", "1.0.0");
         assert_eq!(options.name, "fixture");
         assert_eq!(options.version, "1.0.0");
+    }
+
+    #[test]
+    fn reconnect_policy_is_bounded_and_retries_only_transient_failures() {
+        assert!(
+            ReconnectPolicy::new(
+                Duration::from_millis(10),
+                Duration::from_millis(100),
+                Duration::from_secs(1),
+            )
+            .is_ok()
+        );
+        assert!(
+            ReconnectPolicy::new(
+                Duration::ZERO,
+                Duration::from_millis(100),
+                Duration::from_secs(1),
+            )
+            .is_err()
+        );
+        assert!(retryable_connection_failure(&ClientError::Transport {
+            doing: "testing reconnect",
+            detail: "temporarily unavailable".to_owned(),
+        }));
+        assert!(!retryable_connection_failure(&ClientError::Protocol(
+            "closed contract failure".to_owned(),
+        )));
+        let base = Duration::from_millis(100);
+        let delayed = jittered(base);
+        assert!(delayed >= Duration::from_millis(75));
+        assert!(delayed <= Duration::from_millis(125));
+    }
+
+    #[tokio::test]
+    async fn reconnecting_event_stream_restores_only_the_accepted_cursor() {
+        let (mut listener, endpoint) = fake_transport::Listener::bind();
+        let instance_id = "rtm_0123456789abcdef0123456789abcdef";
+        let session_id = RuntimeSessionId::new("session_reconnect_fixture");
+        let initial = EventCursor {
+            stream: "019c0000-0000-7000-8000-000000000001".to_owned(),
+            epoch: 2,
+            seq: 4,
+        };
+        let accepted = EventCursor {
+            stream: initial.stream.clone(),
+            epoch: initial.epoch,
+            seq: 5,
+        };
+        let server = tokio::spawn({
+            let initial = initial.clone();
+            let accepted = accepted.clone();
+            let session_id = session_id.clone();
+            async move {
+                let first = listener.accept().await;
+                let first_params = serve_reconnect_fixture(
+                    first,
+                    instance_id,
+                    initial,
+                    accepted.clone(),
+                    &session_id,
+                    "sub_first",
+                    true,
+                )
+                .await;
+                let second = listener.accept().await;
+                let second_params = serve_reconnect_fixture(
+                    second,
+                    instance_id,
+                    accepted.clone(),
+                    accepted,
+                    &session_id,
+                    "sub_second",
+                    false,
+                )
+                .await;
+                (first_params, second_params)
+            }
+        });
+
+        let locator = RuntimeLocator::for_testing_endpoint(instance_id, endpoint, "0.1.1");
+        let policy = ReconnectPolicy::new(
+            Duration::from_millis(1),
+            Duration::from_millis(5),
+            Duration::from_secs(2),
+        )
+        .expect("valid reconnect policy");
+        let mut subscription = locator
+            .watch_events_with_reconnect(
+                ClientOptions::new("reconnect fixture", "1.0.0"),
+                WatchEventsParams {
+                    session_id,
+                    after: Some(initial.clone()),
+                },
+                policy,
+            )
+            .await
+            .expect("open reconnecting event stream");
+        let event = subscription.next().await.expect("receive first event");
+        assert!(matches!(
+            event,
+            ReconnectingSessionNotification::Event(RuntimeEventNotification {
+                ref next_expected,
+                ..
+            }) if next_expected == &accepted
+        ));
+        assert!(matches!(
+            subscription.next().await,
+            Err(ClientError::Protocol(_))
+        ));
+        subscription.accept(&accepted).expect("accept exact cursor");
+        let reconnected = subscription.next().await.expect("reconnect event stream");
+        assert!(matches!(
+            reconnected,
+            ReconnectingSessionNotification::Reconnected(WatchEventsResult {
+                ref starts_at,
+                ..
+            }) if starts_at == &accepted
+        ));
+        let (first_params, second_params) = server.await.expect("join reconnect fixture");
+        assert_eq!(first_params.after, Some(initial));
+        assert_eq!(second_params.after, Some(accepted));
     }
 
     #[test]

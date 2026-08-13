@@ -13,6 +13,8 @@ const MAX_ENDPOINT_BYTES: usize = 1024;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RuntimeLocator {
     path: PathBuf,
+    #[cfg(test)]
+    fixture: Option<ValidatedLocator>,
 }
 
 impl RuntimeLocator {
@@ -27,6 +29,8 @@ impl RuntimeLocator {
     pub fn system() -> Result<Self, LocatorError> {
         Ok(Self {
             path: system_state_root()?.join(RUNTIME_FOLDER).join(LOCATOR_FILE),
+            #[cfg(test)]
+            fixture: None,
         })
     }
 
@@ -36,6 +40,10 @@ impl RuntimeLocator {
     ///
     /// A typed missing, unsafe, malformed, or I/O state.
     pub fn inspect(&self) -> Result<LocatorState, LocatorError> {
+        #[cfg(test)]
+        if let Some(locator) = &self.fixture {
+            return Ok(LocatorState::Running(locator.clone()));
+        }
         let metadata = match std::fs::symlink_metadata(&self.path) {
             Ok(metadata) => metadata,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -80,7 +88,27 @@ impl RuntimeLocator {
     #[cfg(any(test, feature = "testing"))]
     #[must_use]
     pub fn for_testing(path: impl Into<PathBuf>) -> Self {
-        Self { path: path.into() }
+        Self {
+            path: path.into(),
+            #[cfg(test)]
+            fixture: None,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn for_testing_endpoint(
+        instance_id: impl Into<String>,
+        endpoint: impl Into<String>,
+        runtime_version: impl Into<String>,
+    ) -> Self {
+        Self {
+            path: PathBuf::new(),
+            fixture: Some(ValidatedLocator {
+                instance_id: instance_id.into(),
+                endpoint: endpoint.into(),
+                runtime_version: runtime_version.into(),
+            }),
+        }
     }
 }
 

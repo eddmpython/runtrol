@@ -48,6 +48,16 @@ then call `integrations().rotateKey(requestId, previousKeyGeneration, replacemen
 exact integration and replacement fingerprint, retry the same values. The returned credentials carry the incremented
 key generation and the previous key can no longer reconnect.
 
+`connectSystemWithRetry` retries only connection establishment with capped exponential backoff, jitter, and a total
+deadline. It reads and validates the system locator again for every attempt. Authentication, protocol, enrollment,
+and authorization failures return immediately.
+
+Use `watchEventsWithReconnectSystem` for a read-only event stream that survives Runtime endpoint replacement. After
+consuming an event, call `accept(event.event.nextExpected)` before reading another. Reconnection uses only that accepted
+cursor and returns a `reconnected` item with the full start boundary and any replay gap. The wrapper never acquires
+control or retries input, approval, interrupt, or lifecycle mutations. `watchEventsWithReconnect` provides the same
+cursor contract for callers that already own a fixed validated locator.
+
 Managed-session changes use a dedicated snapshot stream, so an integration does not poll or infer changes from
 provider output:
 

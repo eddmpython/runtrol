@@ -12,6 +12,7 @@ import type {
   EnrollmentDecision,
   EnrollmentManifest,
   EnrollmentReceipt,
+  EventCursor,
   ForgetSessionParams,
   GetProviderCapabilitiesParams,
   GetSessionParams,
@@ -57,8 +58,10 @@ import type {
 } from "./generated/protocol.js";
 import { FINALIZED_REVISIONS, PUBLIC_LIMITS } from "./generated/protocol.js";
 import {
+  RuntimeLocatorError,
   RuntimeProtocolError,
   RuntimeRequestError,
+  RuntimeTransportError,
 } from "./errors.js";
 import { IntegrationCredentials, IntegrationIdentity } from "./identity.js";
 import { RuntimeLocator, type ValidatedLocator } from "./locator.js";
@@ -98,6 +101,13 @@ export interface EnrollmentProposal {
   readonly manifestDigest: Uint8Array;
   readonly requestedScopes: ReadonlyArray<AppScope>;
   readonly requestedRoots: ReadonlyArray<string>;
+}
+
+export interface ReconnectPolicy {
+  readonly initialDelayMs?: number;
+  readonly maximumDelayMs?: number;
+  readonly deadlineMs?: number;
+  readonly signal?: AbortSignal;
 }
 
 interface RuntimeClientState {
@@ -141,6 +151,54 @@ export class RuntimeConnector {
       });
     }
     return this.connect(state.locator, options);
+  }
+
+  public connectWithRetry(
+    locator: ValidatedLocator,
+    options: ClientOptions,
+    policy: ReconnectPolicy = {},
+  ): Promise<RuntimeClient> {
+    return retryConnection(() => this.connect(locator, options), policy);
+  }
+
+  public connectSystemWithRetry(
+    options: ClientOptions,
+    policy: ReconnectPolicy = {},
+  ): Promise<RuntimeClient> {
+    return retryConnection(() => this.connectSystem(options), policy);
+  }
+
+  public async watchEventsWithReconnect(
+    locator: ValidatedLocator,
+    options: ClientOptions,
+    params: WatchEventsParams,
+    policy: ReconnectPolicy = {},
+  ): Promise<ReconnectingEventSubscription> {
+    const subscription = new ReconnectingEventSubscription(
+      this,
+      locator,
+      options,
+      params,
+      policy,
+    );
+    await subscription.initialize();
+    return subscription;
+  }
+
+  public async watchEventsWithReconnectSystem(
+    options: ClientOptions,
+    params: WatchEventsParams,
+    policy: ReconnectPolicy = {},
+  ): Promise<ReconnectingEventSubscription> {
+    const subscription = new ReconnectingEventSubscription(
+      this,
+      null,
+      options,
+      params,
+      policy,
+    );
+    await subscription.initialize();
+    return subscription;
   }
 }
 
@@ -487,6 +545,10 @@ export type SessionNotification =
   | { readonly kind: "event"; readonly event: RuntimeEventNotification }
   | { readonly kind: "lagged"; readonly lagged: LaggedNotification };
 
+export type ReconnectingSessionNotification =
+  | SessionNotification
+  | { readonly kind: "reconnected"; readonly started: WatchEventsResult };
+
 export class EventSubscription {
   public constructor(
     private readonly transport: RuntimeTransport,
@@ -515,10 +577,113 @@ export class EventSubscription {
     throw new RuntimeProtocolError("dedicated session stream received a non-event method");
   }
 
+  public close(): void {
+    this.transport.close();
+  }
+
   private validateTarget(subscriptionId: string, sessionId: string): void {
     if (subscriptionId !== this.started.subscriptionId || sessionId !== this.started.sessionId) {
       throw new RuntimeProtocolError("session notification target does not match its subscription");
     }
+  }
+}
+
+export class ReconnectingEventSubscription {
+  readonly #abort = new AbortController();
+  readonly #policy: ReconnectPolicy;
+  #accepted: EventCursor | null;
+  #current: { runtime: RuntimeClient; subscription: EventSubscription } | null = null;
+  #pending: EventCursor | null = null;
+  #started: WatchEventsResult | null = null;
+
+  public constructor(
+    private readonly connector: RuntimeConnector,
+    private readonly locator: ValidatedLocator | null,
+    private readonly options: ClientOptions,
+    private readonly params: WatchEventsParams,
+    policy: ReconnectPolicy,
+  ) {
+    const signal = policy.signal
+      ? AbortSignal.any([policy.signal, this.#abort.signal])
+      : this.#abort.signal;
+    this.#policy = { ...policy, signal };
+    this.#accepted = params.after ? copyCursor(params.after) : null;
+  }
+
+  public async initialize(): Promise<void> {
+    await this.#open();
+  }
+
+  public get started(): WatchEventsResult {
+    if (!this.#started) throw new RuntimeProtocolError("reconnecting event stream is not initialized");
+    return this.#started;
+  }
+
+  public accept(nextExpected: EventCursor): void {
+    if (!this.#pending || !sameCursor(this.#pending, nextExpected)) {
+      throw new RuntimeProtocolError("accepted event cursor does not match the pending event");
+    }
+    this.#accepted = copyCursor(nextExpected);
+    this.#pending = null;
+  }
+
+  public async next(): Promise<ReconnectingSessionNotification> {
+    if (this.#pending) {
+      throw new RuntimeProtocolError("accept the current event before reading another one");
+    }
+    for (;;) {
+      this.#policy.signal?.throwIfAborted();
+      if (!this.#current) {
+        const started = await this.#open();
+        return { kind: "reconnected", started };
+      }
+      try {
+        const notification = await this.#current.subscription.next();
+        if (notification.kind === "event") {
+          this.#pending = copyCursor(notification.event.nextExpected);
+        } else {
+          this.#accepted = copyCursor(notification.lagged.nextExpected);
+          this.#closeCurrent();
+        }
+        return notification;
+      } catch (error) {
+        this.#closeCurrent();
+        if (!retryableConnectionFailure(error)) throw error;
+        const started = await this.#open();
+        return { kind: "reconnected", started };
+      }
+    }
+  }
+
+  public close(): void {
+    this.#abort.abort(new RuntimeTransportError("reconnecting event stream was closed"));
+    this.#closeCurrent();
+  }
+
+  async #open(): Promise<WatchEventsResult> {
+    const opened = await retryConnection(async () => {
+      const runtime = this.locator
+        ? await this.connector.connect(this.locator, this.options)
+        : await this.connector.connectSystem(this.options);
+      try {
+        const subscription = await runtime.sessions().watchEvents({
+          sessionId: this.params.sessionId,
+          ...(this.#accepted ? { after: this.#accepted } : {}),
+        });
+        return { runtime, subscription };
+      } catch (error) {
+        runtime.close();
+        throw error;
+      }
+    }, this.#policy);
+    this.#current = opened;
+    this.#started = opened.subscription.started;
+    return opened.subscription.started;
+  }
+
+  #closeCurrent(): void {
+    this.#current?.subscription.close();
+    this.#current = null;
   }
 }
 
@@ -587,6 +752,77 @@ function runtimeState(runtime: RuntimeClient): RuntimeClientState {
   const state = runtimeStates.get(runtime);
   if (!state) throw new RuntimeProtocolError("RuntimeClient was not initialized by this SDK");
   return state;
+}
+
+async function retryConnection<T>(
+  connect: () => Promise<T>,
+  policy: ReconnectPolicy,
+): Promise<T> {
+  const initialDelayMs = boundedDelay(policy.initialDelayMs ?? 100, "initialDelayMs");
+  const maximumDelayMs = boundedDelay(policy.maximumDelayMs ?? 2_000, "maximumDelayMs");
+  const deadlineMs = boundedDelay(policy.deadlineMs ?? 30_000, "deadlineMs");
+  if (initialDelayMs > maximumDelayMs || maximumDelayMs > deadlineMs) {
+    throw new RuntimeProtocolError(
+      "reconnect delays must be ordered within the total deadline",
+    );
+  }
+  const deadline = performance.now() + deadlineMs;
+  let delayMs = initialDelayMs;
+  for (;;) {
+    policy.signal?.throwIfAborted();
+    try {
+      return await connect();
+    } catch (error) {
+      if (!retryableConnectionFailure(error)) throw error;
+      const remainingMs = deadline - performance.now();
+      if (remainingMs <= 0) throw error;
+      await abortableDelay(Math.min(jitteredDelay(delayMs), remainingMs), policy.signal);
+      delayMs = Math.min(delayMs * 2, maximumDelayMs);
+    }
+  }
+}
+
+function sameCursor(left: EventCursor, right: EventCursor): boolean {
+  return left.stream === right.stream && left.epoch === right.epoch && left.seq === right.seq;
+}
+
+function copyCursor(cursor: EventCursor): EventCursor {
+  return { stream: cursor.stream, epoch: cursor.epoch, seq: cursor.seq };
+}
+
+function boundedDelay(value: number, name: string): number {
+  if (!Number.isSafeInteger(value) || value <= 0 || value > 300_000) {
+    throw new RuntimeProtocolError(`${name} must be a positive integer no greater than 300000`);
+  }
+  return value;
+}
+
+function retryableConnectionFailure(error: unknown): boolean {
+  if (error instanceof RuntimeTransportError) return true;
+  if (error instanceof RuntimeLocatorError) return error.code === "io";
+  return error instanceof RuntimeRequestError && error.failure.retryable;
+}
+
+function jitteredDelay(delayMs: number): number {
+  const sample = randomBytes(2).readUInt16LE(0);
+  return Math.max(1, Math.floor(delayMs * (0.75 + (sample / 0xffff) * 0.5)));
+}
+
+function abortableDelay(delayMs: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    signal?.throwIfAborted();
+    const timeout = setTimeout(done, delayMs);
+    const abort = () => {
+      clearTimeout(timeout);
+      signal?.removeEventListener("abort", abort);
+      reject(signal?.reason ?? new RuntimeTransportError("Runtime reconnect was aborted"));
+    };
+    function done(): void {
+      signal?.removeEventListener("abort", abort);
+      resolve();
+    }
+    signal?.addEventListener("abort", abort, { once: true });
+  });
 }
 
 async function callRuntime<T>(

@@ -18,6 +18,15 @@ Keep the replacement identity, mutation request ID, and previous key generation 
 integration ID and replacement fingerprint in Runtrol Studio. Retry those unchanged values to receive credentials for
 the incremented key generation. The previous key stops authenticating as soon as the rotation commits.
 
+`RuntimeLocator::connect_with_retry` retries only connection establishment with capped exponential backoff, jitter,
+and a total deadline. It reads the validated locator again for every attempt so a restarted Runtime can publish a new
+endpoint. Authentication, protocol, and authorization failures return immediately.
+
+`RuntimeLocator::watch_events_with_reconnect` applies the same bound to a dedicated read-only event stream. Call
+`accept` with the exact `next_expected` cursor after consuming each event. A replacement connection resumes only from
+that accepted cursor, and its `Reconnected` item carries the complete `WatchEventsResult`, including any replay gap.
+The wrapper never acquires control or retries input, approval, interrupt, or lifecycle mutations.
+
 After local enrollment approval, a consumer can reconnect with its credentials and start a provider-neutral session:
 
 ```rust,no_run
