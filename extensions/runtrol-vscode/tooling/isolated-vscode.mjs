@@ -23,6 +23,23 @@ export const isolatedLaunchArguments = Object.freeze([
   "--disable-updates",
 ]);
 
+export function isolatedRuntimeState(root, baseEnvironment = process.env) {
+  const environment = { ...baseEnvironment };
+  let home;
+  if (process.platform === "win32") {
+    environment.LOCALAPPDATA = root;
+    home = path.join(root, "runtrol");
+  } else if (process.platform === "darwin") {
+    environment.HOME = root;
+    home = path.join(root, "Library", "Application Support", "runtrol");
+  } else {
+    environment.XDG_STATE_HOME = root;
+    home = path.join(root, "runtrol");
+  }
+  environment.RUNTROL_HOME = home;
+  return { environment, home };
+}
+
 export function isolatedExtensionTestArguments(options) {
   return [
     options.workspace,

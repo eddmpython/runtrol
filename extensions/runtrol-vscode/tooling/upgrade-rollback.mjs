@@ -7,12 +7,14 @@ import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
 
 import { extensionIdentifier, extensionRoot } from "./extension-manifest.mjs";
+import { approveNextTestIntegration } from "./integration-approval.mjs";
 import {
   acquireVSCode,
   fileDigest,
   findInstalledExtension,
   installVSIX,
   isolatedProfileSettings,
+  isolatedRuntimeState,
   runInstalledExtensionTest,
   terminateExactProcesses,
   uninstallExtension,
@@ -38,9 +40,11 @@ const temporary = await mkdtemp(path.join(temporaryRoot, "runtrol-vscode-upgrade
 const userData = path.join(temporary, "user-data");
 const extensions = path.join(temporary, "extensions");
 const verifier = path.join(temporary, "verifier");
-const runtrolHome = path.join(temporary, "runtrol-home");
+const runtimeState = isolatedRuntimeState(temporary);
+const runtrolHome = runtimeState.home;
 const workspace = path.join(temporary, "workspace");
 const resultPath = path.join(temporary, "phase-result.json");
+const integrationApproval = path.join(temporary, "integration-approved");
 const testEntry = path.join(verifier, "upgradeRollback.test.cjs");
 const managedCore = path.join(
   userData,
@@ -58,7 +62,7 @@ const selectionFile = path.join(
   "selected-session.json",
 );
 const pathKey = Object.keys(process.env).find((name) => name.toLowerCase() === "path") ?? "PATH";
-const environment = { ...process.env, RUNTROL_HOME: runtrolHome };
+const environment = runtimeState.environment;
 environment[pathKey] = `${path.dirname(fixture)}${path.delimiter}${process.env[pathKey] ?? ""}`;
 let session = null;
 let daemonPid = null;
@@ -229,12 +233,13 @@ listen = "stdio"
 
 async function runPhase(vscodeExecutablePath, phase, version, selectedSession) {
   await rm(resultPath, { force: true });
-  await runInstalledExtensionTest({
+  const host = runInstalledExtensionTest({
     vscodeExecutablePath,
     verifierRoot: verifier,
     testEntry,
     environment: {
       ...environment,
+      RUNTROL_TEST_EXTERNAL_INTEGRATION_APPROVAL: integrationApproval,
       RUNTROL_VSCODE_PERFORMANCE: "1",
       RUNTROL_VSCODE_RESULT: resultPath,
       RUNTROL_VSCODE_PHASE: phase,
@@ -247,6 +252,17 @@ async function runPhase(vscodeExecutablePath, phase, version, selectedSession) {
     userData,
     extensions,
   });
+  if (phase === "bootstrap") {
+    await Promise.all([
+      host,
+      approveNextTestIntegration(managedCore, {
+        ...environment,
+        RUNTROL_TEST_EXTERNAL_INTEGRATION_APPROVAL: integrationApproval,
+      }),
+    ]);
+  } else {
+    await host;
+  }
   const result = JSON.parse(await readFile(resultPath, "utf8"));
   if (typeof result.failure === "string") {
     throw new Error(

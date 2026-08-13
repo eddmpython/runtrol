@@ -347,20 +347,19 @@ mod platform {
         SDDL_REVISION_1,
     };
     use windows_sys::Win32::Security::{
-        EqualSid, GetTokenInformation, PSECURITY_DESCRIPTOR, PSID, RevertToSelf,
-        SECURITY_ATTRIBUTES, TOKEN_QUERY, TOKEN_USER, TokenUser,
+        EqualSid, GetTokenInformation, PSECURITY_DESCRIPTOR, PSID, SECURITY_ATTRIBUTES,
+        TOKEN_QUERY, TOKEN_USER, TokenUser,
     };
     use windows_sys::Win32::Storage::FileSystem::{
         CREATE_NEW, CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_FLAG_FIRST_PIPE_INSTANCE,
         FILE_FLAG_OVERLAPPED, FILE_SHARE_READ, PIPE_ACCESS_DUPLEX,
     };
     use windows_sys::Win32::System::Pipes::{
-        CreateNamedPipeW, GetNamedPipeClientProcessId, ImpersonateNamedPipeClient,
-        PIPE_READMODE_BYTE, PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_BYTE, PIPE_UNLIMITED_INSTANCES,
-        PIPE_WAIT,
+        CreateNamedPipeW, GetNamedPipeClientProcessId, PIPE_READMODE_BYTE,
+        PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_BYTE, PIPE_UNLIMITED_INSTANCES, PIPE_WAIT,
     };
     use windows_sys::Win32::System::Threading::{
-        GetCurrentProcess, GetCurrentThread, OpenProcessToken, OpenThreadToken,
+        GetCurrentProcess, OpenProcess, OpenProcessToken, PROCESS_QUERY_LIMITED_INFORMATION,
     };
 
     use super::TransportError;
@@ -484,7 +483,7 @@ mod platform {
                             detail: std::io::Error::last_os_error().to_string(),
                         });
                     }
-                    match pipe_client_is_current_user(waiting.as_raw_handle()) {
+                    match pipe_client_is_current_user(peer) {
                         Ok(true) => {}
                         Ok(false) => continue,
                         Err(error) => {
@@ -771,71 +770,46 @@ mod platform {
         reason = "the current process pseudo-handle is borrowed only long enough to open one owned query token"
     )]
     fn process_user() -> std::io::Result<OwnedTokenUser> {
+        // SAFETY: GetCurrentProcess returns a valid pseudo-handle borrowed only for this call.
+        process_handle_user(unsafe { GetCurrentProcess() })
+    }
+
+    #[expect(
+        unsafe_code,
+        reason = "the connected pipe reports one client PID whose process token is opened read-only and owned for the bounded SID comparison"
+    )]
+    fn process_user_for_pid(process_id: u32) -> std::io::Result<OwnedTokenUser> {
+        // SAFETY: the process identifier came from the live connected pipe. The returned query-only handle is checked
+        // and transferred to `OwnedHandle` exactly once.
+        let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, process_id) };
+        if process.is_null() {
+            return Err(std::io::Error::last_os_error());
+        }
+        let process = OwnedHandle(process);
+        process_handle_user(process.0)
+    }
+
+    #[expect(
+        unsafe_code,
+        reason = "a borrowed live process handle is used only to open one owned query token"
+    )]
+    fn process_handle_user(process: HANDLE) -> std::io::Result<OwnedTokenUser> {
         let mut token: HANDLE = core::ptr::null_mut();
-        // SAFETY: GetCurrentProcess returns a valid pseudo-handle and `token` is a writable output pointer.
-        if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &raw mut token) } == 0
-            || token.is_null()
+        // SAFETY: `process` is a borrowed live process handle and `token` is a writable output pointer.
+        if unsafe { OpenProcessToken(process, TOKEN_QUERY, &raw mut token) } == 0 || token.is_null()
         {
             return Err(std::io::Error::last_os_error());
         }
         OwnedTokenUser::read(OwnedHandle(token).0)
     }
 
-    /// Impersonation is scoped to one synchronous check and always reverted before this function returns.
-    struct RevertGuard(bool);
-
-    impl RevertGuard {
-        #[expect(
-            unsafe_code,
-            reason = "RevertToSelf ends the pipe-client impersonation started in the same function"
-        )]
-        fn revert(mut self) -> std::io::Result<()> {
-            // SAFETY: the active flag is set only after successful ImpersonateNamedPipeClient on this thread.
-            if self.0 && unsafe { RevertToSelf() } == 0 {
-                return Err(std::io::Error::last_os_error());
-            }
-            self.0 = false;
-            Ok(())
-        }
-    }
-
-    impl Drop for RevertGuard {
-        #[expect(
-            unsafe_code,
-            reason = "panic cleanup must end a pipe-client impersonation before the worker thread is reused"
-        )]
-        fn drop(&mut self) {
-            if self.0 {
-                // SAFETY: the active flag is set only after successful impersonation on this thread.
-                let reverted = unsafe { RevertToSelf() };
-                debug_assert_ne!(reverted, 0, "RevertToSelf failed during cleanup");
-            }
-        }
-    }
-
     #[expect(
         unsafe_code,
-        reason = "Windows exposes the connected pipe client token only through thread impersonation and token handle calls; every handle and impersonation lifetime is bounded here"
+        reason = "Windows compares two validated TOKEN_USER SID pointers whose owned buffers stay live for the call"
     )]
-    fn pipe_client_is_current_user(pipe: HANDLE) -> std::io::Result<bool> {
+    fn pipe_client_is_current_user(process_id: u32) -> std::io::Result<bool> {
         let current = process_user()?;
-        // SAFETY: `pipe` is a live connected named-pipe server handle borrowed for this synchronous call.
-        if unsafe { ImpersonateNamedPipeClient(pipe) } == 0 {
-            return Err(std::io::Error::last_os_error());
-        }
-        let reverting = RevertGuard(true);
-        let mut token: HANDLE = core::ptr::null_mut();
-        // SAFETY: the current thread is impersonating the connected client and `token` is writable.
-        let opened = unsafe { OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, 1, &raw mut token) };
-        let peer_token = if opened == 0 || token.is_null() {
-            let failure = std::io::Error::last_os_error();
-            reverting.revert()?;
-            return Err(failure);
-        } else {
-            OwnedHandle(token)
-        };
-        reverting.revert()?;
-        let peer = OwnedTokenUser::read(peer_token.0)?;
+        let peer = process_user_for_pid(process_id)?;
         // SAFETY: both SID pointers belong to live TOKEN_USER buffers for the duration of the comparison.
         Ok(unsafe { EqualSid(current.sid(), peer.sid()) } != 0)
     }

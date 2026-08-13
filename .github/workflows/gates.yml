@@ -311,6 +311,13 @@ jobs:
           cache-dependency-path: extensions/runtrol-vscode/package-lock.json
       - name: VS Code 확장 의존성
         run: npm --prefix extensions/runtrol-vscode ci
+      - name: Linux 네이티브 자격 증명 저장소
+        if: matrix.os == 'ubuntu-latest'
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gnome-keyring
+          gnome-keyring-daemon --components=secrets --daemonize --unlock <<< 'runtrol-ci'
       - uses: actions/cache@v4
         with:
           path: extensions/runtrol-vscode/.vscode-test

@@ -37,14 +37,36 @@ impl ProjectRootIdentity {
 #[cfg(unix)]
 mod platform {
     use std::os::unix::fs::MetadataExt as _;
+    use std::time::UNIX_EPOCH;
+
+    use sha2::{Digest as _, Sha256};
 
     use super::{AbsPath, ProjectRootIdentity, io};
 
     pub(super) fn read(path: &AbsPath) -> Result<ProjectRootIdentity, io::Error> {
         let metadata = std::fs::metadata(path.as_std_path())?;
+        let created = metadata.created().map_err(|error| {
+            io::Error::new(
+                error.kind(),
+                format!("the filesystem cannot report a stable directory creation time: {error}"),
+            )
+        })?;
+        let created = created.duration_since(UNIX_EPOCH).map_err(|error| {
+            io::Error::other(format!(
+                "the directory creation time precedes the Unix epoch: {error}"
+            ))
+        })?;
+        let mut digest = Sha256::new();
+        digest.update(b"runtrol/project-root-identity/unix/2");
+        digest.update(metadata.dev().to_le_bytes());
+        digest.update(metadata.ino().to_le_bytes());
+        digest.update(created.as_secs().to_le_bytes());
+        digest.update(created.subsec_nanos().to_le_bytes());
+        let digest = digest.finalize();
         let mut bytes = [0_u8; 24];
-        bytes[..8].copy_from_slice(&metadata.dev().to_le_bytes());
-        bytes[8..16].copy_from_slice(&metadata.ino().to_le_bytes());
+        for (target, source) in bytes.iter_mut().zip(digest) {
+            *target = source;
+        }
         Ok(ProjectRootIdentity(bytes))
     }
 }

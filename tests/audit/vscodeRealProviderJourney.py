@@ -494,7 +494,12 @@ def exercise(claude: str) -> None:
     binary = provider_gate.buildBinary()
     with tempfile.TemporaryDirectory(prefix="runtrol-vscode-real-provider-") as raw_root:
         root = Path(raw_root).resolve()
-        home = root / "runtrol-home"
+        if sys.platform == "win32":
+            home = root / "runtrol"
+        elif sys.platform == "darwin":
+            home = root / "Library" / "Application Support" / "runtrol"
+        else:
+            home = root / "runtrol"
         first_workspace = root / "workspace-one"
         second_workspace = root / "workspace-two"
         config = root / "claude-config"
@@ -525,6 +530,12 @@ def exercise(claude: str) -> None:
                 }
             )
             host_env = hostEnvironment(dict(os.environ), env)
+            if sys.platform == "win32":
+                host_env["LOCALAPPDATA"] = str(root)
+            elif sys.platform == "darwin":
+                host_env["HOME"] = str(root)
+            else:
+                host_env["XDG_STATE_HOME"] = str(root)
             cli_probed = provider_gate.probeClaude(claude, env)
             daemon = provider_gate.startDaemon(binary, env, home)
             daemon_generation = processGeneration(daemon.pid)

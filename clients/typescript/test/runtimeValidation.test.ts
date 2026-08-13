@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createPublicKey, verify } from "node:crypto";
 import { test } from "node:test";
 
 import {
@@ -283,7 +284,7 @@ test("mutation request identities are canonical UUIDv7 values", (context) => {
   assert.equal(Number.parseInt(requestId.replaceAll("-", "").slice(0, 12), 16), Date.now());
 });
 
-test("initialization signing matches the language-neutral fixture", async (context) => {
+test("initialization signing canonicalizes Runtime challenge field order", async (context) => {
   context.mock.method(Date, "now", () => 1_999_999_999_990);
   const instanceId = "rtm_0123456789abcdef0123456789abcdef";
   const nonceId = "nonce_0123456789abcdef0123456789abcdef";
@@ -304,7 +305,7 @@ test("initialization signing matches the language-neutral fixture", async (conte
     {
       jsonrpc: "2.0",
       method: "runtime/challenge",
-      params: { instanceId, nonceId, nonce, expiresAtMs: 2_000_000_000_000 },
+      params: { expiresAtMs: 2_000_000_000_000, instanceId, nonce, nonceId },
     },
     {
       ...initialized(instanceId),
@@ -328,6 +329,77 @@ test("initialization signing matches the language-neutral fixture", async (conte
   assert.equal(
     request.params.authentication.signature,
     "cBrwv1dkWz6oG-YszAimU6leDfkNriZSKxUNSGYttRiH2dD0RJQsTklzpjzW3_qSIZYwrPeSPLHnCyW5fJ5sBQ",
+  );
+  runtime.close();
+});
+
+test("enrollment signing canonicalizes Runtime challenge field order", async (context) => {
+  context.mock.method(Date, "now", () => 1_999_999_999_990);
+  const instanceId = "rtm_0123456789abcdef0123456789abcdef";
+  const nonceId = "nonce_0123456789abcdef0123456789abcdef";
+  const nonce = Buffer.alloc(32, 3).toString("base64url");
+  const identity = IntegrationIdentity.fromPkcs8(Buffer.concat([
+    Buffer.from("302e020100300506032b657004220420", "hex"),
+    Buffer.alloc(32, 7),
+  ]));
+  const transport = new ScriptedRuntimeTransport([
+    {
+      jsonrpc: "2.0",
+      method: "runtime/challenge",
+      params: { expiresAtMs: 2_000_000_000_000, instanceId, nonce, nonceId },
+    },
+    initialized(instanceId),
+    {
+      jsonrpc: "2.0",
+      id: 2,
+      result: {
+        pendingId: `enr_${"1".repeat(32)}`,
+        expiresAtMs: 2_000_000_030_000,
+      },
+    },
+  ]);
+  const runtime = await new RuntimeConnector(scriptedTransportFactory(transport)).connect(
+    validatedLocator(instanceId, "fixture", "0.1.1"),
+    { name: "fixture", version: "1.0.0", identity },
+  );
+  await runtime.integrations().request({
+    clientInstanceId: "fixture-instance",
+    manifestDigest: Buffer.alloc(32, 5),
+    requestedScopes: ["provider.read"],
+    requestedRoots: ["C:/work"],
+  });
+  const request = JSON.parse(new TextDecoder().decode(transport.sent[2])) as {
+    params: {
+      manifest: {
+        clientInstanceId: string;
+        publicKey: string;
+        manifestDigest: string;
+        requestedScopes: ReadonlyArray<string>;
+        requestedRoots: ReadonlyArray<string>;
+      };
+      signature: string;
+    };
+  };
+  const payload = Buffer.from(JSON.stringify({
+    domain: "runtrol-runtime-enrollment-v1",
+    challenge: { instanceId, nonceId, nonce, expiresAtMs: 2_000_000_000_000 },
+    supportedRevisions: FINALIZED_REVISIONS,
+    selectedRevision: FINALIZED_REVISIONS[0],
+    client: { name: "fixture", version: "1.0.0" },
+    clientCapabilities: { opaqueEventExtensions: false },
+    manifest: request.params.manifest,
+  }));
+  const publicKey = createPublicKey({
+    key: Buffer.concat([
+      Buffer.from("302a300506032b6570032100", "hex"),
+      Buffer.from(identity.publicKeyBase64(), "base64url"),
+    ]),
+    format: "der",
+    type: "spki",
+  });
+  assert.equal(
+    verify(null, payload, publicKey, Buffer.from(request.params.signature, "base64url")),
+    true,
   );
   runtime.close();
 });

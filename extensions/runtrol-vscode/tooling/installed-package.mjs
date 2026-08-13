@@ -18,6 +18,7 @@ import {
   extensionRoot,
   packageManifest,
 } from "./extension-manifest.mjs";
+import { approveNextTestIntegration } from "./integration-approval.mjs";
 import {
   acquireVSCode,
   fileDigest,
@@ -25,6 +26,7 @@ import {
   installMarketplaceExtension,
   installVSIX,
   isolatedProfileSettings,
+  isolatedRuntimeState,
   runInstalledExtensionTest,
   terminateExactProcesses,
 } from "./isolated-vscode.mjs";
@@ -44,7 +46,9 @@ if (archive) {
 const temporaryRoot = process.platform === "darwin" ? "/tmp" : os.tmpdir();
 const temporary = await mkdtemp(path.join(temporaryRoot, "runtrol-vscode-package-"));
 const resultPath = path.join(temporary, "result.json");
-const runtrolHome = path.join(temporary, "runtrol-home");
+const integrationApproval = path.join(temporary, "integration-approved");
+const runtimeState = isolatedRuntimeState(temporary);
+const runtrolHome = runtimeState.home;
 const userData = path.join(temporary, "user-data");
 const extensions = path.join(temporary, "extensions");
 const verifier = path.join(temporary, "verifier");
@@ -112,22 +116,27 @@ try {
     process.platform === "win32" ? "runtrol.exe" : "runtrol",
   );
 
-  await runInstalledExtensionTest({
-    vscodeExecutablePath: vscode.executable,
-    verifierRoot: verifier,
-    testEntry,
-    environment: {
-      RUNTROL_HOME: runtrolHome,
-      RUNTROL_TEST_EXTENSION_ID: extensionIdentifier,
-      RUNTROL_VSCODE_RESULT: resultPath,
-      RUNTROL_TEST_EXTENSION_VERSION: packageManifest.version,
-      RUNTROL_TEST_EXTENSION_TARGET: target,
-      RUNTROL_TEST_INSTALLED_ROOT: extensions,
-    },
-    workspace: repositoryRoot,
-    userData,
-    extensions,
-  });
+  const environment = {
+    ...runtimeState.environment,
+    RUNTROL_TEST_EXTERNAL_INTEGRATION_APPROVAL: integrationApproval,
+    RUNTROL_TEST_EXTENSION_ID: extensionIdentifier,
+    RUNTROL_VSCODE_RESULT: resultPath,
+    RUNTROL_TEST_EXTENSION_VERSION: packageManifest.version,
+    RUNTROL_TEST_EXTENSION_TARGET: target,
+    RUNTROL_TEST_INSTALLED_ROOT: extensions,
+  };
+  await Promise.all([
+    runInstalledExtensionTest({
+      vscodeExecutablePath: vscode.executable,
+      verifierRoot: verifier,
+      testEntry,
+      environment,
+      workspace: repositoryRoot,
+      userData,
+      extensions,
+    }),
+    approveNextTestIntegration(managedCore, environment),
+  ]);
 
   const result = JSON.parse(await readFile(resultPath, "utf8"));
   if (typeof result.failure === "string") {

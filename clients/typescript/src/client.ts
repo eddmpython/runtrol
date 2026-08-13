@@ -1204,7 +1204,7 @@ function initializationSigningPayload(
 ): Uint8Array {
   return encoder.encode(JSON.stringify({
     domain: "runtrol-runtime-initialize-v1",
-    challenge,
+    challenge: canonicalChallenge(challenge),
     supportedRevisions,
     client,
     clientCapabilities: capabilities,
@@ -1224,13 +1224,22 @@ function enrollmentSigningPayload(
 ): Uint8Array {
   return encoder.encode(JSON.stringify({
     domain: "runtrol-runtime-enrollment-v1",
-    challenge,
+    challenge: canonicalChallenge(challenge),
     supportedRevisions,
     selectedRevision,
     client,
     clientCapabilities: capabilities,
     manifest,
   }));
+}
+
+function canonicalChallenge(challenge: ServerChallenge): ServerChallenge {
+  return {
+    instanceId: challenge.instanceId,
+    nonceId: challenge.nonceId,
+    nonce: challenge.nonce,
+    expiresAtMs: challenge.expiresAtMs,
+  };
 }
 
 function keyRotationSigningPayload(

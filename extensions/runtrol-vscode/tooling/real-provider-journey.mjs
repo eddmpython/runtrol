@@ -5,6 +5,7 @@ import path from "node:path";
 import { build } from "esbuild";
 
 import { extensionIdentifier, extensionRoot } from "./extension-manifest.mjs";
+import { approveNextTestIntegration } from "./integration-approval.mjs";
 import {
   isolatedExtensionTestArguments,
   isolatedProfileSettings,
@@ -20,6 +21,11 @@ const secondWorkspace = requiredEnvironment("RUNTROL_VSCODE_WORKSPACE_TWO");
 const userData = requiredEnvironment("RUNTROL_VSCODE_USER_DATA");
 const extensions = requiredEnvironment("RUNTROL_VSCODE_EXTENSIONS");
 const configuredVscode = requiredEnvironment("RUNTROL_TEST_VSCODE_EXECUTABLE");
+const integrationApproval = path.join(path.dirname(resultPath), "integration-approved");
+const testEnvironment = {
+  ...process.env,
+  RUNTROL_TEST_EXTERNAL_INTEGRATION_APPROVAL: integrationApproval,
+};
 
 await Promise.all([
   stat(core),
@@ -64,7 +70,10 @@ try {
     logLevel: "silent",
   });
 
-  await runHost(firstWorkspace, "switching");
+  await Promise.all([
+    runHost(firstWorkspace, "switching"),
+    approveNextTestIntegration(core, testEnvironment),
+  ]);
   let result = await readResult();
   if (typeof result.failure === "string") {
     throw new Error(
@@ -99,7 +108,10 @@ async function runHost(workspace, expectedStage) {
     extensionRoot,
   });
   const child = spawn(vscode, arguments_, {
-    env: { ...process.env, RUNTROL_TEST_EXTENSION_ID: extensionIdentifier },
+    env: {
+      ...testEnvironment,
+      RUNTROL_TEST_EXTENSION_ID: extensionIdentifier,
+    },
     stdio: "inherit",
     windowsHide: true,
   });

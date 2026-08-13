@@ -8,7 +8,12 @@ import { runTests } from "@vscode/test-electron";
 import { build } from "esbuild";
 
 import { extensionIdentifier, extensionRoot } from "./extension-manifest.mjs";
-import { isolatedLaunchArguments, isolatedProfileSettings } from "./isolated-vscode.mjs";
+import { approveNextTestIntegration } from "./integration-approval.mjs";
+import {
+  isolatedLaunchArguments,
+  isolatedProfileSettings,
+  isolatedRuntimeState,
+} from "./isolated-vscode.mjs";
 
 const repositoryRoot = fileURLToPath(new URL("../../../", import.meta.url));
 const core = process.env.RUNTROL_TEST_CORE
@@ -40,7 +45,9 @@ const output = path.join(extensionRoot, ".test-dist");
 const testEntry = path.join(output, "extensionHost.test.cjs");
 const resultPath = path.join(temporary, "result.json");
 const restoreResultPath = path.join(temporary, "restore-result.json");
-const runtrolHome = path.join(temporary, "runtrol-home");
+const integrationApproval = path.join(temporary, "integration-approved");
+const runtimeState = isolatedRuntimeState(temporary);
+const runtrolHome = runtimeState.home;
 const userData = path.join(temporary, "user");
 const measureExtensions = path.join(temporary, "extensions-measure");
 const restoreExtensions = path.join(temporary, "extensions-restore");
@@ -84,7 +91,7 @@ await writeFile(
   "utf8",
 );
 const pathKey = Object.keys(process.env).find((name) => name.toLowerCase() === "path") ?? "PATH";
-const coreEnvironment = { ...process.env, RUNTROL_HOME: runtrolHome };
+const coreEnvironment = runtimeState.environment;
 coreEnvironment.RUNTROL_ACP_FIXTURE_UNIQUE_SESSIONS = "1";
 coreEnvironment[pathKey] = `${path.dirname(fixture)}${path.delimiter}${process.env[pathKey] ?? ""}`;
 let daemon = null;
@@ -142,6 +149,7 @@ try {
     ...coreEnvironment,
     RUNTROL_TEST_CORE: core,
     RUNTROL_TEST_EXTENSION_ID: extensionIdentifier,
+    RUNTROL_TEST_EXTERNAL_INTEGRATION_APPROVAL: integrationApproval,
     RUNTROL_VSCODE_PERFORMANCE: "1",
     RUNTROL_VSCODE_RESULT: resultPath,
     RUNTROL_VSCODE_PHASE: "measure",
@@ -150,14 +158,17 @@ try {
   const installed = process.env.RUNTROL_TEST_VSCODE_EXECUTABLE;
   let resumedAdopted = false;
   try {
-    await runHost(
-      installed,
-      testEntry,
-      resultPath,
-      testEnvironment,
-      repositoryRoot,
-      measureExtensions,
-    );
+    await Promise.all([
+      runHost(
+        installed,
+        testEntry,
+        resultPath,
+        testEnvironment,
+        repositoryRoot,
+        measureExtensions,
+      ),
+      approveNextTestIntegration(core, testEnvironment),
+    ]);
   } finally {
     const progress = await readFile(resultPath, "utf8")
       .then((contents) => JSON.parse(contents))
