@@ -139,6 +139,22 @@ GATES: dict[str, tuple[str, list[str]]] = {
         "공개 Runtime 프로토콜, 연동, 보안, 운영 문서 대조",
         [*PY, f"{HOOKS}/runtimeDocumentation.py"],
     ),
+    "orchestrationThinBoundarySelftest": (
+        "Mission thin boundary 검출기 자체 검증",
+        [*PY, f"{HOOKS}/orchestrationThinBoundary.py", "--selftest"],
+    ),
+    "orchestrationThinBoundary": (
+        "Mission 계층은 내용 비저장, provider 중립",
+        [*PY, f"{HOOKS}/orchestrationThinBoundary.py"],
+    ),
+    "evidenceBoundarySelftest": (
+        "Mission 증거 경계 검출기 자체 검증",
+        [*PY, f"{HOOKS}/evidenceBoundary.py", "--selftest"],
+    ),
+    "evidenceBoundary": (
+        "Mission 증거는 식별자와 digest만 저장",
+        [*PY, f"{HOOKS}/evidenceBoundary.py"],
+    ),
     "vscodePackageSelftest": (
         "VS Code 플랫폼 패키지 게이트 자체 검증",
         [*PY, f"{HOOKS}/vscodePackage.py", "--selftest"],

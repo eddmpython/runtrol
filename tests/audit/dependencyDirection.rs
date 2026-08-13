@@ -24,6 +24,8 @@ const ALLOWED_EDGES: &[(&str, &[&str])] = &[
     ("runtrol-runtime-protocol", &[]),
     // Public consumer SDK. Its only workspace dependency is the public wire contract.
     ("runtrol-runtime-client", &["runtrol-runtime-protocol"]),
+    // Mission evidence accepts provider identities but no conversation-capable events or control layers.
+    ("runtrol-ledger", &["runtrol-provider"]),
     // L0. The vocabulary. The semver-stable surface a third-party provider author depends on.
     ("runtrol-provider", &[]),
     // L1. The techniques. Each knows the vocabulary and nothing else.
@@ -69,6 +71,7 @@ const ALLOWED_EDGES: &[(&str, &[&str])] = &[
             "runtrol-vault",
             "runtrol-update",
             "runtrol-runtime-protocol",
+            "runtrol-ledger",
         ],
     ),
     // L3. The command surface asks the daemon. It never opens storage itself, which the exclusive lock
@@ -144,6 +147,16 @@ const FORBIDDEN_TRANSITIVE: &[(&str, &str, &str)] = &[
         "runtrol-runtime-client",
         "runtrol-core",
         "the public SDK speaks only the public protocol and cannot supervise sessions or import private Core types",
+    ),
+    (
+        "runtrol-ledger",
+        "runtrol-drivers",
+        "Mission evidence cannot discover or interpret a provider implementation",
+    ),
+    (
+        "runtrol-ledger",
+        "runtrol-store",
+        "Mission evidence owns a separate bounded file and cannot enter the session store",
     ),
     (
         "runtrol-runtime-client",

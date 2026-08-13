@@ -21,6 +21,7 @@ cargo_metadata = { workspace = true }
 # process reporting on itself would report what its allocator believes rather than what it holds.
 runtrol-childproc = { workspace = true }
 runtrol-core = { workspace = true }
+runtrol-ledger = { workspace = true }
 runtrol-provider = { workspace = true }
 runtrol-security = { workspace = true }
 runtrol-store = { workspace = true }
@@ -33,6 +34,10 @@ tokio = { workspace = true, features = ["io-util", "macros", "net", "rt", "sync"
 [[test]]
 name = "dependencyDirection"
 path = "dependencyDirection.rs"
+
+[[test]]
+name = "missionLedger"
+path = "missionLedger.rs"
 
 [[test]]
 name = "runtimePublicBoundary"

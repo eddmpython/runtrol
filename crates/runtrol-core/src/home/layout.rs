@@ -46,6 +46,9 @@ use crate::home::HomeError;
 /// The database. One file, opened by exactly one process at a time.
 const DATABASE: &str = "runtrol.redb";
 
+/// Separate bounded Mission evidence and recovery ledger.
+const MISSION_LEDGER: &str = "mission-ledger.redb";
+
 /// Provider manifests the operator wrote.
 const PROVIDERS: &str = "providers";
 
@@ -83,6 +86,8 @@ pub struct Layout {
     root: AbsPath,
     /// The database file.
     database: AbsPath,
+    /// Separate Mission evidence ledger file.
+    mission_ledger: AbsPath,
     /// The operator's manifest directory.
     providers: AbsPath,
     /// Bounded durable process identities for restart recovery.
@@ -123,6 +128,7 @@ impl Layout {
 
         Ok(Self {
             database: entry(DATABASE)?,
+            mission_ledger: entry(MISSION_LEDGER)?,
             providers: entry(PROVIDERS)?,
             process_guards: entry(PROCESS_GUARDS)?,
             probe_cache: entry(PROBE_CACHE)?,
@@ -147,6 +153,12 @@ impl Layout {
     #[must_use]
     pub const fn database(&self) -> &AbsPath {
         &self.database
+    }
+
+    /// The separate bounded Mission evidence ledger.
+    #[must_use]
+    pub const fn mission_ledger(&self) -> &AbsPath {
+        &self.mission_ledger
     }
 
     /// The directory the operator puts their own provider manifests in.
@@ -219,6 +231,7 @@ impl Layout {
     fn everything(&self) -> Vec<&AbsPath> {
         vec![
             &self.database,
+            &self.mission_ledger,
             &self.providers,
             &self.process_guards,
             &self.probe_cache,

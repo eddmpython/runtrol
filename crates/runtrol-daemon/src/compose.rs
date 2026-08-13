@@ -23,6 +23,7 @@ use runtrol_childproc::Containment;
 use runtrol_core::registry::{KindEntry, KindTable, ProviderRegistry};
 use runtrol_core::{HomeError, RuntrolHome};
 use runtrol_drivers::{Builtin, DriverKind};
+use runtrol_ledger::Ledger;
 use runtrol_provider::WallMs;
 use runtrol_security::{DeviceId, DeviceLabels, DeviceScope, GrantLedger};
 use runtrol_store::{DeviceRow, Store};
@@ -46,6 +47,10 @@ pub enum ComposeError {
     /// The session-pointer store could not be opened or trusted.
     #[error(transparent)]
     Store(#[from] runtrol_store::StoreError),
+
+    /// The separate Mission evidence and recovery ledger could not be opened or trusted.
+    #[error(transparent)]
+    Ledger(#[from] runtrol_ledger::LedgerError),
 
     /// The per-user operating-system vault could not protect or restore the machine identity.
     #[error(transparent)]
@@ -93,6 +98,8 @@ pub struct Composed {
     pub home: RuntrolHome,
     /// The minimal session-pointer database. It has no type capable of holding conversation content.
     pub store: Store,
+    /// Bounded metadata-only Mission evidence and recovery state.
+    pub ledger: Ledger,
     /// Local-only pending approval challenges for public Runtime integrations.
     pub(crate) integration_admin: crate::integration_admin::IntegrationAdmin,
     /// The guarantee that children die with this process.
@@ -135,6 +142,7 @@ impl Composed {
         };
 
         let store = Store::open(home.paths().database())?;
+        let ledger = Ledger::open(home.paths().mission_ledger())?;
         let containment = Arc::new(Containment::establish_tracked(
             home.paths().process_guards().as_std_path(),
         )?);
@@ -144,6 +152,7 @@ impl Composed {
         Ok(Self {
             home,
             store,
+            ledger,
             integration_admin: crate::integration_admin::IntegrationAdmin::default(),
             containment,
             registry,
@@ -172,11 +181,13 @@ impl Composed {
         let home = RuntrolHome::open_at(home)?;
         let registry = load(&home, builtin);
         let store = Store::open(home.paths().database())?;
+        let ledger = Ledger::open(home.paths().mission_ledger())?;
         let (granted, paired_devices) = restore_device_authority(&store)?;
         let pc_identity = load_machine_identity(&home)?;
         Ok(Self {
             home,
             store,
+            ledger,
             integration_admin: crate::integration_admin::IntegrationAdmin::default(),
             containment: Arc::new(Containment::without_any()),
             registry,

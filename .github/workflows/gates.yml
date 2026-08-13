@@ -173,6 +173,18 @@ jobs:
       - name: 공개 Runtime 프로토콜, 연동, 보안, 운영 문서 대조
         if: needs.detect.outputs.hasWorkspace == 'true'
         run: python -X utf8 tests/audit/runtimeDocumentation.py
+      - name: Mission thin boundary 검출기 자체 검증
+        if: needs.detect.outputs.hasWorkspace == 'true'
+        run: python -X utf8 tests/audit/orchestrationThinBoundary.py --selftest
+      - name: Mission 계층은 내용 비저장, provider 중립
+        if: needs.detect.outputs.hasWorkspace == 'true'
+        run: python -X utf8 tests/audit/orchestrationThinBoundary.py
+      - name: Mission 증거 경계 검출기 자체 검증
+        if: needs.detect.outputs.hasWorkspace == 'true'
+        run: python -X utf8 tests/audit/evidenceBoundary.py --selftest
+      - name: Mission 증거는 식별자와 digest만 저장
+        if: needs.detect.outputs.hasWorkspace == 'true'
+        run: python -X utf8 tests/audit/evidenceBoundary.py
       - name: VS Code 확장 게이트 자체 검증
         if: needs.detect.outputs.hasWorkspace == 'true'
         run: python -X utf8 tests/audit/vscodeExtension.py --selftest
