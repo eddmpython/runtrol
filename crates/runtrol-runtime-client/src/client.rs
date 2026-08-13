@@ -11,13 +11,14 @@ use runtrol_runtime_protocol::{
     ListNativeSessionsParams, ListPendingApprovalsParams, ManagedSessionList, MutationRequestId,
     NativeSessionCatalogue, PendingApprovalList, PendingEnrollmentId, ProviderId, ProviderList,
     ProviderWatchEndedNotification, ProvidersChangedNotification, RequestEnrollmentParams,
-    RespondApprovalParams, ResumeSessionParams, RotateIntegrationKeyParams,
-    RuntimeEventNotification, RuntimeMethod, RuntimeModelCatalog, RuntimeProviderCapabilities,
-    RuntimeSessionId, ServerChallenge, SessionDescriptor, SessionIndexChangedNotification,
-    SessionIndexEndedNotification, SessionOpenResult, StartSessionParams, SubmitInputParams,
-    SuccessResponse, WatchEnrollmentParams, WatchEventsParams, WatchEventsResult,
-    WatchProvidersParams, WatchProvidersResult, WatchSessionIndexParams, WatchSessionIndexResult,
-    enrollment_signing_payload, initialization_signing_payload, key_rotation_signing_payload,
+    RespondApprovalParams, ResumeSessionParams, RotateIntegrationKeyParams, RuntimeError,
+    RuntimeErrorKind, RuntimeEventNotification, RuntimeMethod, RuntimeModelCatalog,
+    RuntimeProviderCapabilities, RuntimeSessionId, ServerChallenge, SessionDescriptor,
+    SessionIndexChangedNotification, SessionIndexEndedNotification, SessionOpenResult,
+    StartSessionParams, SubmitInputParams, SuccessResponse, WatchEnrollmentParams,
+    WatchEventsParams, WatchEventsResult, WatchProvidersParams, WatchProvidersResult,
+    WatchSessionIndexParams, WatchSessionIndexResult, enrollment_signing_payload,
+    initialization_signing_payload, key_rotation_signing_payload,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -412,6 +413,22 @@ impl RuntimeClient {
     ) -> Result<R, ClientError> {
         call_connection(&mut self.connection, &mut self.next_id, method, params).await
     }
+
+    async fn call_mutation<P: Serialize, R: DeserializeOwned>(
+        &mut self,
+        method: RuntimeMethod,
+        request_id: &MutationRequestId,
+        params: &P,
+    ) -> Result<R, ClientError> {
+        match self.call(method, params).await {
+            Err(ClientError::Transport { .. }) => Err(ClientError::Runtime(RuntimeError::plain(
+                RuntimeErrorKind::OutcomeUnknown,
+                "Runtime connection ended while the mutation outcome was unresolved",
+                request_id.as_str(),
+            ))),
+            result => result,
+        }
+    }
 }
 
 async fn receive_challenge(
@@ -723,7 +740,11 @@ impl IntegrationClient<'_> {
         params.new_key_proof = replacement.sign_base64(&payload);
         let rotated = self
             .runtime
-            .call(RuntimeMethod::IntegrationsRotateKey, &params)
+            .call_mutation(
+                RuntimeMethod::IntegrationsRotateKey,
+                &params.request_id,
+                &params,
+            )
             .await?;
         Ok(IntegrationCredentials::new(replacement.clone(), rotated))
     }
@@ -1052,7 +1073,7 @@ impl SessionClient<'_> {
         params: &StartSessionParams,
     ) -> Result<SessionOpenResult, ClientError> {
         self.runtime
-            .call(RuntimeMethod::SessionsStart, params)
+            .call_mutation(RuntimeMethod::SessionsStart, &params.request_id, params)
             .await
     }
 
@@ -1066,7 +1087,11 @@ impl SessionClient<'_> {
         params: &AdoptNativeSessionParams,
     ) -> Result<SessionOpenResult, ClientError> {
         self.runtime
-            .call(RuntimeMethod::SessionsAdoptNative, params)
+            .call_mutation(
+                RuntimeMethod::SessionsAdoptNative,
+                &params.request_id,
+                params,
+            )
             .await
     }
 
@@ -1080,7 +1105,7 @@ impl SessionClient<'_> {
         params: &ResumeSessionParams,
     ) -> Result<SessionOpenResult, ClientError> {
         self.runtime
-            .call(RuntimeMethod::SessionsResume, params)
+            .call_mutation(RuntimeMethod::SessionsResume, &params.request_id, params)
             .await
     }
 
@@ -1094,7 +1119,11 @@ impl SessionClient<'_> {
         params: &AcquireControlParams,
     ) -> Result<ControlLease, ClientError> {
         self.runtime
-            .call(RuntimeMethod::SessionsAcquireControl, params)
+            .call_mutation(
+                RuntimeMethod::SessionsAcquireControl,
+                &params.request_id,
+                params,
+            )
             .await
     }
 
@@ -1108,7 +1137,11 @@ impl SessionClient<'_> {
         params: &ControlLeaseParams,
     ) -> Result<ControlLease, ClientError> {
         self.runtime
-            .call(RuntimeMethod::SessionsRenewControl, params)
+            .call_mutation(
+                RuntimeMethod::SessionsRenewControl,
+                &params.request_id,
+                params,
+            )
             .await
     }
 
@@ -1123,7 +1156,11 @@ impl SessionClient<'_> {
     ) -> Result<(), ClientError> {
         let _: EmptyResult = self
             .runtime
-            .call(RuntimeMethod::SessionsReleaseControl, params)
+            .call_mutation(
+                RuntimeMethod::SessionsReleaseControl,
+                &params.request_id,
+                params,
+            )
             .await?;
         Ok(())
     }
@@ -1136,7 +1173,11 @@ impl SessionClient<'_> {
     pub async fn submit_input(&mut self, params: &SubmitInputParams) -> Result<(), ClientError> {
         let _: EmptyResult = self
             .runtime
-            .call(RuntimeMethod::SessionsSubmitInput, params)
+            .call_mutation(
+                RuntimeMethod::SessionsSubmitInput,
+                &params.request_id,
+                params,
+            )
             .await?;
         Ok(())
     }
@@ -1149,7 +1190,7 @@ impl SessionClient<'_> {
     pub async fn interrupt(&mut self, params: &ControlLeaseParams) -> Result<(), ClientError> {
         let _: EmptyResult = self
             .runtime
-            .call(RuntimeMethod::SessionsInterrupt, params)
+            .call_mutation(RuntimeMethod::SessionsInterrupt, &params.request_id, params)
             .await?;
         Ok(())
     }
@@ -1162,7 +1203,7 @@ impl SessionClient<'_> {
     pub async fn cool(&mut self, params: &CoolSessionParams) -> Result<(), ClientError> {
         let _: EmptyResult = self
             .runtime
-            .call(RuntimeMethod::SessionsCool, params)
+            .call_mutation(RuntimeMethod::SessionsCool, &params.request_id, params)
             .await?;
         Ok(())
     }
@@ -1178,7 +1219,7 @@ impl SessionClient<'_> {
     pub async fn forget(&mut self, params: &ForgetSessionParams) -> Result<(), ClientError> {
         let _: EmptyResult = self
             .runtime
-            .call(RuntimeMethod::SessionsForget, params)
+            .call_mutation(RuntimeMethod::SessionsForget, &params.request_id, params)
             .await?;
         Ok(())
     }
@@ -1235,7 +1276,7 @@ impl ApprovalClient<'_> {
     pub async fn respond(&mut self, params: &RespondApprovalParams) -> Result<(), ClientError> {
         let _: EmptyResult = self
             .runtime
-            .call(RuntimeMethod::ApprovalsRespond, params)
+            .call_mutation(RuntimeMethod::ApprovalsRespond, &params.request_id, params)
             .await?;
         Ok(())
     }
@@ -1787,7 +1828,10 @@ mod tests {
 
     #[cfg(windows)]
     mod fake_transport {
+        use std::sync::atomic::{AtomicU64, Ordering};
         use tokio::net::windows::named_pipe::{NamedPipeServer, ServerOptions};
+
+        static NEXT_ENDPOINT: AtomicU64 = AtomicU64::new(1);
 
         pub(super) type Stream = NamedPipeServer;
 
@@ -1799,8 +1843,9 @@ mod tests {
         impl Listener {
             pub(super) fn bind() -> (Self, String) {
                 let endpoint = format!(
-                    r"\\.\pipe\runtrol-runtime-client-reconnect-{}",
-                    std::process::id()
+                    r"\\.\pipe\runtrol-runtime-client-reconnect-{}-{}",
+                    std::process::id(),
+                    NEXT_ENDPOINT.fetch_add(1, Ordering::Relaxed)
                 );
                 let waiting = ServerOptions::new()
                     .first_pipe_instance(true)
@@ -1833,7 +1878,10 @@ mod tests {
     #[cfg(unix)]
     mod fake_transport {
         use std::path::PathBuf;
+        use std::sync::atomic::{AtomicU64, Ordering};
         use tokio::net::{UnixListener, UnixStream};
+
+        static NEXT_ENDPOINT: AtomicU64 = AtomicU64::new(1);
 
         pub(super) type Stream = UnixStream;
 
@@ -1845,8 +1893,9 @@ mod tests {
         impl Listener {
             pub(super) fn bind() -> (Self, String) {
                 let directory = std::env::temp_dir().join(format!(
-                    "runtrol-runtime-client-reconnect-{}",
-                    std::process::id()
+                    "runtrol-runtime-client-reconnect-{}-{}",
+                    std::process::id(),
+                    NEXT_ENDPOINT.fetch_add(1, Ordering::Relaxed)
                 ));
                 drop(std::fs::remove_dir_all(&directory));
                 std::fs::create_dir_all(&directory).expect("create reconnect test directory");
@@ -1901,6 +1950,68 @@ mod tests {
             .await
             .expect("write test frame payload");
         stream.flush().await.expect("flush test frame");
+    }
+
+    async fn serve_mutation_disconnect_fixture(
+        mut stream: fake_transport::Stream,
+        instance_id: &str,
+    ) -> JsonRpcRequest {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("test clock follows Unix epoch");
+        let challenge = JsonRpcNotification {
+            jsonrpc: "2.0".to_owned(),
+            method: RuntimeMethod::Challenge.to_string(),
+            params: serde_json::to_value(ServerChallenge {
+                instance_id: instance_id.to_owned(),
+                nonce_id: "nonce_0123456789abcdef0123456789abcdef".to_owned(),
+                nonce: Base64UrlUnpadded::encode_string(&[3; 32]),
+                expires_at_ms: u64::try_from(now.as_millis())
+                    .expect("test milliseconds fit u64")
+                    .saturating_add(1_000),
+            })
+            .expect("encode challenge"),
+        };
+        send_test_json(&mut stream, &challenge).await;
+
+        let initialize: JsonRpcRequest =
+            serde_json::from_slice(&receive_test_frame(&mut stream).await)
+                .expect("decode initialize request");
+        let initialized = InitializeResult {
+            selected_revision: runtrol_runtime_protocol::REVISION_2026_08_13,
+            runtime: runtrol_runtime_protocol::RuntimeInstance {
+                instance_id: instance_id.to_owned(),
+                version: "0.1.1".to_owned(),
+                platform: "test".to_owned(),
+            },
+            server_capabilities: runtrol_runtime_protocol::RuntimeCapabilities {
+                integration_enrollment: true,
+                provider_inventory: true,
+                managed_session_list: true,
+                model_discovery: true,
+                native_session_catalogue: true,
+                session_control: true,
+                session_events: true,
+            },
+            limits: runtrol_runtime_protocol::RuntimeLimits::default(),
+            grant: None,
+        };
+        send_test_json(
+            &mut stream,
+            &JsonRpcResponse::Success(SuccessResponse {
+                jsonrpc: "2.0".to_owned(),
+                id: initialize.id,
+                result: serde_json::to_value(initialized).expect("encode initialization result"),
+            }),
+        )
+        .await;
+
+        let initialized: JsonRpcNotification =
+            serde_json::from_slice(&receive_test_frame(&mut stream).await)
+                .expect("decode initialized notification");
+        assert_eq!(initialized.method, RuntimeMethod::Initialized.to_string());
+        serde_json::from_slice(&receive_test_frame(&mut stream).await)
+            .expect("decode mutation request")
     }
 
     async fn serve_reconnect_fixture(
@@ -2136,6 +2247,47 @@ mod tests {
         let (first_params, second_params) = server.await.expect("join reconnect fixture");
         assert_eq!(first_params.after, Some(initial));
         assert_eq!(second_params.after, Some(accepted));
+    }
+
+    #[tokio::test]
+    async fn mutation_transport_loss_returns_original_request_identity() {
+        let (mut listener, endpoint) = fake_transport::Listener::bind();
+        let instance_id = "rtm_1123456789abcdef0123456789abcdef";
+        let request_id: MutationRequestId = "019c2b97-5f29-7b00-8000-000000000004"
+            .parse()
+            .expect("valid fixture mutation identity");
+        let server = tokio::spawn(async move {
+            let stream = listener.accept().await;
+            serve_mutation_disconnect_fixture(stream, instance_id).await
+        });
+
+        let locator = RuntimeLocator::for_testing_endpoint(instance_id, endpoint, "0.1.1");
+        let mut runtime = locator
+            .connect(ClientOptions::new("mutation fixture", "1.0.0"))
+            .await
+            .expect("connect mutation fixture");
+        let result = runtime
+            .sessions()
+            .submit_input(&SubmitInputParams {
+                request_id: request_id.clone(),
+                session_id: RuntimeSessionId::new("session_fixture"),
+                lease_id: "lease_fixture".to_owned(),
+                lease_generation: 4,
+                input: "unchanged fixture input".to_owned(),
+            })
+            .await;
+        let ClientError::Runtime(error) = result.expect_err("transport loss is ambiguous") else {
+            panic!("mutation transport loss returned the wrong failure kind");
+        };
+        assert_eq!(error.code, RuntimeErrorKind::OutcomeUnknown);
+        assert_eq!(error.correlation_id, request_id.as_str());
+        assert!(!error.retryable);
+
+        let sent = server.await.expect("join mutation fixture");
+        assert_eq!(sent.method, RuntimeMethod::SessionsSubmitInput.to_string());
+        let sent: SubmitInputParams =
+            serde_json::from_value(sent.params).expect("decode mutation parameters");
+        assert_eq!(sent.request_id, request_id);
     }
 
     #[test]

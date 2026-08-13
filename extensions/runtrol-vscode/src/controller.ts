@@ -236,23 +236,9 @@ export class Controller implements vscode.Disposable {
     if (!session.native) {
       throw new Error("that cold session has no provider-owned conversation identifier to resume");
     }
-    const { response } = await this.client.once({
-      ask: "resume",
-      with: {
-        provider: session.provider,
-        native: session.native,
-        workspace: session.workspace,
-        workspace_access: "exclusive",
-      },
-    });
-    if (response.say === "failed") {
-      throw new Error(response.with.message);
-    }
-    if (response.say !== "started") {
-      throw new Error(`the daemon answered resume with ${response.say}`);
-    }
+    const opened = await this.runtime.resume(runtimeAction(session), "exclusive");
     await this.refresh();
-    const resumed = this.state.sessions.find((candidate) => candidate.session === response.with.session);
+    const resumed = this.state.sessions.find((candidate) => candidate.session === opened.sessionId);
     if (!resumed) {
       throw new Error("the resumed session is absent from the current session index");
     }
@@ -293,25 +279,10 @@ export class Controller implements vscode.Disposable {
     if (!provider?.usable) {
       throw new Error(`the installed provider ${providerId} is not usable`);
     }
-    const { response } = await this.client.once({
-      ask: "start",
-      with: {
-        provider: provider.id,
-        workspace,
-        workspace_access: access,
-        model,
-        permission: null,
-      },
-    });
-    if (response.say === "failed") {
-      throw new Error(response.with.message);
-    }
-    if (response.say !== "started") {
-      throw new Error(`the daemon answered start with ${response.say}`);
-    }
+    const opened = await this.runtime.start(provider.id, workspace, access, model);
     await this.refresh();
-    await this.select(response.with.session, follow);
-    return response.with.session;
+    await this.select(opened.sessionId, follow);
+    return opened.sessionId;
   }
 
   async prompt(text?: string): Promise<void> {
@@ -324,20 +295,12 @@ export class Controller implements vscode.Disposable {
     if (!written?.trim()) {
       return;
     }
-    const { response } = await this.client.once({
-      ask: "prompt",
-      with: { session: session.session, text: written },
-    });
-    requireDone(response, "prompt");
+    await this.runtime.submitInput(runtimeAction(session), written);
   }
 
   async interrupt(): Promise<void> {
     const session = this.requireSelected();
-    const { response } = await this.client.once({
-      ask: "interrupt",
-      with: { session: session.session },
-    });
-    requireDone(response, "interrupt");
+    await this.runtime.interrupt(runtimeAction(session));
   }
 
   openConversation(): void {
@@ -382,16 +345,12 @@ export class Controller implements vscode.Disposable {
 
   async answerApproval(approval: string, option: number, subjectDigest: number[]): Promise<void> {
     const session = this.requireSelected();
-    const { response } = await this.client.once({
-      ask: "answerApproval",
-      with: {
-        session: session.session,
-        approval,
-        option,
-        subject_digest: subjectDigest,
-      },
-    });
-    requireDone(response, "answer approval");
+    await this.runtime.answerApproval(
+      runtimeAction(session),
+      approval,
+      option,
+      subjectDigest,
+    );
   }
 
   async close(value?: SessionItem | SessionLine): Promise<void> {
@@ -667,6 +626,18 @@ type StartWorkspace = {
   workspace: string;
   access: WorkspaceAccess;
 };
+
+function runtimeAction(session: SessionLine) {
+  if (session.runtime_lifecycle === undefined || session.session_generation === undefined) {
+    throw new Error("the session is missing its public Runtime lifecycle generation");
+  }
+  return {
+    sessionId: session.session,
+    lifecycle: session.runtime_lifecycle,
+    generation: session.session_generation,
+    workspace: session.workspace,
+  };
+}
 
 function requireDone(response: Response, operation: string): void {
   if (response.say === "failed") {

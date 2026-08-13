@@ -38,6 +38,8 @@ test("public Runtime inventory projects every Studio presentation field", () => 
     hot: true,
     doing: "busy",
     looks_stuck: true,
+    runtime_lifecycle: "hotRunning",
+    session_generation: 3,
   }]);
 });
 

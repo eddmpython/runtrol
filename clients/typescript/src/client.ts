@@ -347,7 +347,7 @@ export class IntegrationClient {
       ...unsigned,
       newKeyProof: replacement.signBase64(keyRotationSigningPayload(grant, unsigned)),
     };
-    const rotated = await callRuntime<IntegrationGrant>(
+    const rotated = await callMutation<IntegrationGrant>(
       this.runtime,
       "integrations/rotateKey",
       params,
@@ -555,49 +555,49 @@ export class SessionClient {
     ) {
       throw new RuntimeProtocolError("session model selection exceeds the public byte limit");
     }
-    return callRuntime(this.runtime, "sessions/start", params, "SessionOpenResult");
+    return callMutation(this.runtime, "sessions/start", params, "SessionOpenResult");
   }
 
   public adoptNative(params: AdoptNativeSessionParams): Promise<SessionOpenResult> {
     if (Buffer.byteLength(params.adoptionToken, "utf8") > PUBLIC_LIMITS.maxNativeAdoptionTokenBytes) {
       throw new RuntimeProtocolError("native adoption proof exceeds the public byte limit");
     }
-    return callRuntime(this.runtime, "sessions/adoptNative", params, "SessionOpenResult");
+    return callMutation(this.runtime, "sessions/adoptNative", params, "SessionOpenResult");
   }
 
   public resume(params: ResumeSessionParams): Promise<SessionOpenResult> {
-    return callRuntime(this.runtime, "sessions/resume", params, "SessionOpenResult");
+    return callMutation(this.runtime, "sessions/resume", params, "SessionOpenResult");
   }
 
   public acquireControl(params: AcquireControlParams): Promise<ControlLease> {
-    return callRuntime(this.runtime, "sessions/acquireControl", params, "ControlLease");
+    return callMutation(this.runtime, "sessions/acquireControl", params, "ControlLease");
   }
 
   public renewControl(params: ControlLeaseParams): Promise<ControlLease> {
-    return callRuntime(this.runtime, "sessions/renewControl", params, "ControlLease");
+    return callMutation(this.runtime, "sessions/renewControl", params, "ControlLease");
   }
 
   public async releaseControl(params: ControlLeaseParams): Promise<void> {
-    requireEmpty(await callRuntime(this.runtime, "sessions/releaseControl", params, undefined));
+    requireEmpty(await callMutation(this.runtime, "sessions/releaseControl", params, undefined));
   }
 
   public async submitInput(params: SubmitInputParams): Promise<void> {
     if (Buffer.byteLength(params.input, "utf8") > PUBLIC_LIMITS.maxInputBytes) {
       throw new RuntimeProtocolError("session input exceeds the public byte limit");
     }
-    requireEmpty(await callRuntime(this.runtime, "sessions/submitInput", params, undefined));
+    requireEmpty(await callMutation(this.runtime, "sessions/submitInput", params, undefined));
   }
 
   public async interrupt(params: ControlLeaseParams): Promise<void> {
-    requireEmpty(await callRuntime(this.runtime, "sessions/interrupt", params, undefined));
+    requireEmpty(await callMutation(this.runtime, "sessions/interrupt", params, undefined));
   }
 
   public async cool(params: CoolSessionParams): Promise<void> {
-    requireEmpty(await callRuntime(this.runtime, "sessions/cool", params, undefined));
+    requireEmpty(await callMutation(this.runtime, "sessions/cool", params, undefined));
   }
 
   public async forget(params: ForgetSessionParams): Promise<void> {
-    requireEmpty(await callRuntime(this.runtime, "sessions/forget", params, undefined));
+    requireEmpty(await callMutation(this.runtime, "sessions/forget", params, undefined));
   }
 
   public async watchEvents(params: WatchEventsParams): Promise<EventSubscription> {
@@ -627,7 +627,7 @@ export class ApprovalClient {
     if (params.subjectDigest.length !== 32) {
       throw new RuntimeProtocolError("approval subject digest must be exactly 32 bytes");
     }
-    requireEmpty(await callRuntime(this.runtime, "approvals/respond", params, undefined));
+    requireEmpty(await callMutation(this.runtime, "approvals/respond", params, undefined));
   }
 }
 
@@ -1058,6 +1058,25 @@ async function callRuntime<T>(
     throw new RuntimeProtocolError("event subscription owns this Runtime connection");
   }
   return callOn<T>(state.transport, state, method, params, resultSchema);
+}
+
+async function callMutation<T>(
+  runtime: RuntimeClient,
+  method: RuntimeMethod,
+  params: { readonly requestId: MutationRequestId },
+  resultSchema?: string,
+): Promise<T> {
+  try {
+    return await callRuntime<T>(runtime, method, params, resultSchema);
+  } catch (error) {
+    if (!(error instanceof RuntimeTransportError)) throw error;
+    throw new RuntimeRequestError({
+      code: "outcomeUnknown",
+      correlationId: params.requestId,
+      message: "Runtime connection ended while the mutation outcome was unresolved",
+      retryable: false,
+    });
+  }
 }
 
 function beginStream(runtime: RuntimeClient): RuntimeTransport {

@@ -28,6 +28,8 @@ export function projectSession(session: SessionDescriptor) {
     hot: session.hot,
     doing: lifecycleName(session),
     looks_stuck: session.looksStuck,
+    runtime_lifecycle: session.lifecycle,
+    session_generation: session.sessionGeneration,
   };
 }
 

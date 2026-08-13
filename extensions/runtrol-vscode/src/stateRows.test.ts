@@ -13,6 +13,8 @@ const SESSION: SessionLine = {
   hot: true,
   doing: "working",
   looks_stuck: false,
+  runtime_lifecycle: "hotRunning",
+  session_generation: 1,
 };
 
 const PROVIDER: ProviderLine = {
@@ -37,6 +39,8 @@ test("every visible session field invalidates the snapshot", () => {
     { hot: false },
     { doing: "waiting" },
     { looks_stuck: true },
+    { runtime_lifecycle: "hotIdle" as const },
+    { session_generation: 2 },
   ]) {
     assert.equal(sessionRowsEqual([SESSION], [{ ...SESSION, ...changed }]), false);
   }

@@ -6,6 +6,7 @@ import {
   PUBLIC_LIMITS,
   RuntimeConnector,
   RuntimeProtocolError,
+  RuntimeRequestError,
   RuntimeTransportError,
 } from "../src/index.js";
 import {
@@ -90,6 +91,41 @@ test("connection retry returns a protocol failure without a second attempt", asy
     RuntimeProtocolError,
   );
   assert.equal(attempts, 1);
+});
+
+test("mutation transport loss returns outcomeUnknown with the original request identity", async () => {
+  const instanceId = `rtm_${"d".repeat(32)}`;
+  const requestId = "019c2b97-5f29-7b00-8000-000000000004";
+  const transport = new DisconnectingTransport(framesForInitialization(instanceId));
+  const runtime = await new RuntimeConnector(async () => transport).connect(
+    validatedLocator(instanceId, "fixture", "0.1.1"),
+    { name: "fixture", version: "1.0.0" },
+  );
+
+  await assert.rejects(
+    runtime.sessions().submitInput({
+      requestId,
+      sessionId: "session_fixture",
+      leaseId: "lease_fixture",
+      leaseGeneration: 4,
+      input: "unchanged fixture input",
+    }),
+    (error: unknown) => {
+      assert.ok(error instanceof RuntimeRequestError);
+      assert.equal(error.failure.code, "outcomeUnknown");
+      assert.equal(error.failure.correlationId, requestId);
+      assert.equal(error.failure.retryable, false);
+      return true;
+    },
+  );
+  assert.equal(transport.sent.length, 3);
+  const sent = JSON.parse(new TextDecoder().decode(transport.sent[2])) as {
+    method: string;
+    params: { requestId: string };
+  };
+  assert.equal(sent.method, "sessions/submitInput");
+  assert.equal(sent.params.requestId, requestId);
+  runtime.close();
 });
 
 test("event reconnect resumes only from the last explicitly accepted cursor", async () => {

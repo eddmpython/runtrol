@@ -79,6 +79,8 @@ export type SessionLine = {
   hot: boolean;
   doing: string;
   looks_stuck: boolean;
+  runtime_lifecycle?: "hotIdle" | "hotRunning" | "cold" | "failed";
+  session_generation?: number;
 };
 
 export type SessionListing = {

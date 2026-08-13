@@ -14,7 +14,9 @@ export function sessionRowsEqual(left: readonly SessionLine[], right: readonly S
       && value.workspace === candidate.workspace
       && value.hot === candidate.hot
       && value.doing === candidate.doing
-      && value.looks_stuck === candidate.looks_stuck;
+      && value.looks_stuck === candidate.looks_stuck
+      && value.runtime_lifecycle === candidate.runtime_lifecycle
+      && value.session_generation === candidate.session_generation;
   });
 }
 

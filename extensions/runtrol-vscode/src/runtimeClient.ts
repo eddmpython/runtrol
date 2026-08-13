@@ -4,14 +4,18 @@ import {
   IntegrationCredentials,
   IntegrationIdentity,
   RuntimeConnector,
+  newMutationRequestId,
   type AppScope,
   type ClientOptions,
+  type ControlLease,
   type EventCursor,
   type IntegrationGrant,
   type ManagedSessionList,
   type ProviderList,
   type RuntimeClient,
   type RuntimeModelCatalog,
+  type SessionDescriptor,
+  type SessionWorkspaceAccess,
 } from "@runtrol/runtime-client";
 import * as vscode from "vscode";
 
@@ -49,11 +53,19 @@ export type RuntimeEventHandlers = {
   gap(nextExpected: EventCursor, message: string): void;
 };
 
+export type RuntimeSessionAction = {
+  sessionId: string;
+  lifecycle: "hotIdle" | "hotRunning" | "cold" | "failed";
+  generation: number;
+  workspace: string;
+};
+
 export class StudioRuntimeClient implements vscode.Disposable {
   private readonly connector = new RuntimeConnector();
   private command: RuntimeClient | null = null;
   private options: ClientOptions | null = null;
   private commandTail: Promise<void> = Promise.resolve();
+  private readonly controls = new Map<string, ControlLease>();
 
   constructor(
     private readonly context: vscode.ExtensionContext,
@@ -83,6 +95,97 @@ export class StudioRuntimeClient implements vscode.Disposable {
 
   async models(providerId: string): Promise<RuntimeModelCatalog> {
     return this.read((runtime) => runtime.providers().listModels(providerId));
+  }
+
+  async start(
+    providerId: string,
+    workspace: string,
+    access: SessionWorkspaceAccess,
+    model: string | null,
+  ): Promise<SessionDescriptor> {
+    return this.mutate(async (runtime) => {
+      const opened = await runtime.sessions().start({
+        requestId: newMutationRequestId(),
+        providerId,
+        workspace,
+        access,
+        ...(model ? { model } : {}),
+      });
+      this.controls.set(opened.session.sessionId, opened.control);
+      return opened.session;
+    });
+  }
+
+  async resume(session: RuntimeSessionAction, access: SessionWorkspaceAccess): Promise<SessionDescriptor> {
+    return this.mutate(async (runtime) => {
+      const opened = await runtime.sessions().resume({
+        requestId: newMutationRequestId(),
+        sessionId: session.sessionId,
+        expectedLifecycle: session.lifecycle,
+        expectedSessionGeneration: session.generation,
+        workspace: session.workspace,
+        access,
+      });
+      this.controls.set(opened.session.sessionId, opened.control);
+      return opened.session;
+    });
+  }
+
+  async submitInput(session: RuntimeSessionAction, input: string): Promise<void> {
+    await this.mutate(async (runtime) => {
+      const lease = await this.ensureControl(runtime, session);
+      await runtime.sessions().submitInput({
+        requestId: newMutationRequestId(),
+        sessionId: session.sessionId,
+        leaseId: lease.leaseId,
+        leaseGeneration: lease.leaseGeneration,
+        input,
+      });
+    });
+  }
+
+  async interrupt(session: RuntimeSessionAction): Promise<void> {
+    await this.mutate(async (runtime) => {
+      const lease = await this.ensureControl(runtime, session);
+      await runtime.sessions().interrupt({
+        requestId: newMutationRequestId(),
+        sessionId: session.sessionId,
+        leaseId: lease.leaseId,
+        leaseGeneration: lease.leaseGeneration,
+      });
+    });
+  }
+
+  async answerApproval(
+    session: RuntimeSessionAction,
+    approvalId: string,
+    optionId: number,
+    subjectDigest: readonly number[],
+  ): Promise<void> {
+    await this.mutate(async (runtime) => {
+      const lease = await this.ensureControl(runtime, session);
+      const pending = await runtime.approvals().listPending({
+        sessionId: session.sessionId,
+        leaseId: lease.leaseId,
+        leaseGeneration: lease.leaseGeneration,
+      });
+      const approval = pending.approvals.find((candidate) => candidate.approvalId === approvalId);
+      if (!approval || !sameBytes(approval.subjectDigest, subjectDigest)) {
+        throw new Error("the selected approval is no longer pending with the same subject");
+      }
+      if (!approval.options.some((option) => option.optionId === optionId && option.unavailable == null)) {
+        throw new Error("the selected approval option is no longer available");
+      }
+      await runtime.approvals().respond({
+        requestId: newMutationRequestId(),
+        sessionId: session.sessionId,
+        leaseId: lease.leaseId,
+        leaseGeneration: lease.leaseGeneration,
+        approvalId,
+        optionId,
+        subjectDigest: [...subjectDigest],
+      });
+    });
   }
 
   async watchProviders(
@@ -183,6 +286,7 @@ export class StudioRuntimeClient implements vscode.Disposable {
     await this.serial(async () => {
       this.command?.close();
       this.command = null;
+      this.controls.clear();
       if (this.options) {
         this.command = await this.connector.connectSystemWithRetry(this.options);
       }
@@ -192,6 +296,7 @@ export class StudioRuntimeClient implements vscode.Disposable {
   dispose(): void {
     this.command?.close();
     this.command = null;
+    this.controls.clear();
   }
 
   private read<T>(operation: (runtime: RuntimeClient) => Promise<T>): Promise<T> {
@@ -205,6 +310,57 @@ export class StudioRuntimeClient implements vscode.Disposable {
         throw error;
       }
     });
+  }
+
+  private mutate<T>(operation: (runtime: RuntimeClient) => Promise<T>): Promise<T> {
+    return this.serial(async () => {
+      const runtime = await this.commandClient();
+      try {
+        return await operation(runtime);
+      } catch (error) {
+        runtime.close();
+        this.command = null;
+        this.controls.clear();
+        throw error;
+      }
+    });
+  }
+
+  private async ensureControl(
+    runtime: RuntimeClient,
+    session: RuntimeSessionAction,
+  ): Promise<ControlLease> {
+    const current = this.controls.get(session.sessionId);
+    if (
+      current
+      && current.sessionGeneration === session.generation
+      && current.expiresAtMs > Date.now() + 5_000
+    ) {
+      return current;
+    }
+    if (
+      current
+      && current.sessionGeneration === session.generation
+      && current.expiresAtMs > Date.now()
+    ) {
+      const renewed = await runtime.sessions().renewControl({
+        requestId: newMutationRequestId(),
+        sessionId: session.sessionId,
+        leaseId: current.leaseId,
+        leaseGeneration: current.leaseGeneration,
+      });
+      this.controls.set(session.sessionId, renewed);
+      return renewed;
+    }
+    this.controls.delete(session.sessionId);
+    const acquired = await runtime.sessions().acquireControl({
+      requestId: newMutationRequestId(),
+      sessionId: session.sessionId,
+      expectedLifecycle: session.lifecycle,
+      expectedSessionGeneration: session.generation,
+    });
+    this.controls.set(session.sessionId, acquired);
+    return acquired;
   }
 
   private async commandClient(): Promise<RuntimeClient> {
@@ -310,4 +466,8 @@ function validGrant(value: unknown): value is IntegrationGrant {
     && grant.roots.every((root) => typeof root === "string")
     && Number.isSafeInteger(grant.keyGeneration)
     && Number.isSafeInteger(grant.grantGeneration);
+}
+
+function sameBytes(left: readonly number[], right: readonly number[]): boolean {
+  return left.length === right.length && left.every((byte, index) => byte === right[index]);
 }
