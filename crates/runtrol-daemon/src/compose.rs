@@ -24,9 +24,11 @@ use runtrol_core::registry::{KindEntry, KindTable, ProviderRegistry};
 use runtrol_core::{HomeError, RuntrolHome};
 use runtrol_drivers::{Builtin, DriverKind};
 use runtrol_ledger::Ledger;
-use runtrol_provider::WallMs;
-use runtrol_security::{DeviceId, DeviceLabels, DeviceScope, GrantLedger};
-use runtrol_store::{DeviceRow, Store};
+use runtrol_provider::{AbsPath, ProviderId, WallMs};
+use runtrol_security::{
+    Caller, DeviceId, DeviceLabels, DeviceScope, GrantLedger, ProjectRootIdentity, WorkspaceRootId,
+};
+use runtrol_store::{DeviceRootRow, DeviceRow, Store};
 use runtrol_transport::{CredentialFingerprint, PublicKey, RelaySeed, StaticKeypair};
 use tokio::sync::{Mutex, watch};
 
@@ -105,8 +107,18 @@ pub struct PairedDevice {
     pub credential_fingerprint: CredentialFingerprint,
     /// Validated labels safe for local display.
     pub labels: DeviceLabels,
+    /// Exact path and filesystem identities behind parameterized workspace scopes.
+    pub roots: Vec<PairedRoot>,
     /// When exact PC presence approved the pairing.
     pub paired_at: WallMs,
+}
+
+/// One locally approved workspace root attached to a paired device.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PairedRoot {
+    pub(crate) id: WorkspaceRootId,
+    pub(crate) path: AbsPath,
+    pub(crate) identity: ProjectRootIdentity,
 }
 
 #[derive(Clone)]
@@ -144,6 +156,45 @@ impl DeviceAuthority {
             .iter()
             .find(|device| device.remote_static_key == remote_static_key)
             .cloned()
+    }
+
+    pub(crate) fn authorize_open(
+        &self,
+        caller: &Caller,
+        provider: ProviderId,
+        workspace: &str,
+    ) -> Result<(), &'static str> {
+        let Caller::Device { device } = caller else {
+            return Ok(());
+        };
+        let snapshot = self.current.borrow();
+        if !snapshot
+            .granted
+            .holds(*device, DeviceScope::Provider(provider))
+        {
+            return Err("this phone is not approved for the requested provider");
+        }
+        let paired = snapshot
+            .paired_devices
+            .iter()
+            .find(|paired| paired.id == *device)
+            .ok_or("this phone is no longer paired")?;
+        let current = AbsPath::canonicalize(workspace)
+            .map_err(|_| "the requested workspace cannot be resolved")?;
+        let allowed = paired.roots.iter().any(|root| {
+            snapshot
+                .granted
+                .holds(*device, DeviceScope::Workspace(root.id))
+                && current.is_under(&root.path)
+                && AbsPath::canonicalize(root.path.as_str()).is_ok_and(|path| path == root.path)
+                && ProjectRootIdentity::read(&root.path)
+                    .is_ok_and(|identity| identity == root.identity)
+        });
+        if allowed {
+            Ok(())
+        } else {
+            Err("this phone is not approved for the requested workspace")
+        }
     }
 
     pub(crate) fn replace(&self, granted: GrantLedger, paired_devices: Vec<PairedDevice>) {
@@ -395,6 +446,7 @@ fn restore_device_authority(
             name,
             platform,
             scopes: stored_scopes,
+            roots: stored_roots,
             paired_at,
         } = row;
         if remote_static_key.iter().all(|byte| *byte == 0) {
@@ -424,11 +476,37 @@ fn restore_device_authority(
             remote_static_key: PublicKey::from_bytes(remote_static_key),
             credential_fingerprint: CredentialFingerprint::from_bytes(credential_fingerprint),
             labels,
+            roots: restore_device_roots(device, stored_roots)?,
             paired_at,
         });
     }
 
     Ok((GrantLedger::from_persisted(grants), devices))
+}
+
+fn restore_device_roots(
+    device: DeviceId,
+    stored: Vec<DeviceRootRow>,
+) -> Result<Vec<PairedRoot>, ComposeError> {
+    let mut roots = Vec::with_capacity(stored.len());
+    for root in stored {
+        let Some(id) = WorkspaceRootId::from_bytes(root.id) else {
+            return Err(ComposeError::StoredDevice {
+                device,
+                why: "a workspace root identity is not a locally minted UUIDv7",
+            });
+        };
+        let path = AbsPath::new(&root.path).map_err(|_| ComposeError::StoredDevice {
+            device,
+            why: "a workspace root path is not absolute UTF-8",
+        })?;
+        roots.push(PairedRoot {
+            id,
+            path,
+            identity: ProjectRootIdentity::from_bytes(root.identity),
+        });
+    }
+    Ok(roots)
 }
 
 /// Read the providers this machine declares.
@@ -477,6 +555,7 @@ mod tests {
             name: name.into(),
             platform: "Android".into(),
             scopes,
+            roots: Vec::new(),
             paired_at: WallMs::from_millis(1_767_225_600_000),
         }
     }

@@ -1,9 +1,9 @@
 # pwaConnection
 
 상태: 진행 중, 착수 순서 5 번 ([site deployment](../../docs/siteDeployment.md)가 불변 origin을 확정했다).
-아래 "운영자 결정 대기" 1 번 (도메인 소유) 이 곧 2 번의 일이다.
+The permanent Pages origin, default relay shape, and device blast-radius rule are fixed in production code.
 
-Phone-facing HTTP admission, rebinding defenses, exact egress allowlisting, Noise IK session encryption, the 120-second single-use Noise IKpsk1 pairing lifecycle with exact PC approval, durable device authorization rows, fail-closed daemon startup restoration, and the Windows CurrentUser DPAPI PC Noise identity vault are implemented. Relay service, the daemon remote listener, non-Windows native identity protectors, the PWA client, and push remain.
+Phone-facing HTTP admission, rebinding defenses, exact egress allowlisting, Noise IK session encryption, the 120-second single-use Noise IKpsk1 pairing lifecycle with exact PC approval, durable exact device authority, fail-closed daemon restoration, native identity protection, relay service, reconnecting daemon listener, and the WebCrypto PWA relay client are implemented. Web Push and the optional direct LAN and peer-to-peer routes remain.
 
 운영자가 첫 지시에서 "pwa 와 연결할 아이디어가 아직없다. 똑똑한 방법이 있을까 고민중이다" 라고 한 그 자리다. 이 문서가 그 답이다.
 
@@ -145,11 +145,11 @@ WebRTC 는 `str0m` 이지 `webrtc-rs` 가 아니다 (후자는 무겁고 콜백�
 
 **Happy 의 API 키 사고가 runtrol 의 불변식을 정당화한다: 자식 CLI 의 자격증명에 아예 손대지 않는다.**
 
-## 운영자 결정 대기 3 건
+## Fixed operator decisions
 
-1. 도메인·origin 하나를 영원히 소유할 것인가 (이 설계 전체의 전제다)
-2. v0.1 에서 기본 릴레이를 운영할 것인가, BYO 릴레이를 요구할 것인가
-3. 침해된 폰의 blast radius 를 어디까지 허용하는가 (기본값은 PC 에 등록된 workspace 루트 밖에서 세션 시작 금지)
+1. The permanent origin is the existing GitHub Pages origin.
+2. v0.1 uses the default ciphertext relay, while the relay origin remains replaceable local configuration.
+3. A phone cannot start or resume outside exact VS Code-approved workspace roots and runtime-discovered provider identities.
 
 ## 원본
 

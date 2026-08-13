@@ -1,4 +1,11 @@
-export const WIRE_VERSION = 21;
+export const WIRE_VERSION = 22;
+
+export type PrivateProviderLine = {
+  id: string;
+  display_name: string;
+  usable: boolean;
+  why_not: string | null;
+};
 
 export type ProviderUpdateState = "current" | "available" | "observeOnly" | "notInstalled" | "unconfirmed";
 
@@ -156,6 +163,9 @@ export type DeviceLine = {
   platform: string;
   key_fingerprint: string;
   scopes: string[];
+  available_scopes: string[];
+  roots: string[];
+  providers: string[];
   paired_at_ms: number;
 };
 
@@ -172,6 +182,11 @@ export type Request =
   | { ask: "pairingDeny"; with: { proposal_id: string } }
   | { ask: "devices" }
   | { ask: "deviceRevoke"; with: { device_id: string } }
+  | {
+      ask: "deviceAuthorityBegin";
+      with: { device_id: string; scopes: string[]; roots: string[]; providers: string[] };
+    }
+  | { ask: "deviceAuthorityFinish"; with: { challenge_id: string; answer: string } }
   | { ask: "integrationEnrollments" }
   | {
       ask: "integrationApprovalBegin";
@@ -245,7 +260,14 @@ export type Request =
   | { ask: "rename"; with: { session: string; label: string | null } };
 
 export type Response =
-  | { say: "welcome"; with: { wire: number } }
+  | {
+      say: "welcome";
+      with: {
+        wire: number;
+        providers: PrivateProviderLine[];
+        device: { scopes: string[]; roots: string[]; providers: string[] } | null;
+      };
+    }
   | { say: "providerUpdates"; with: ProviderUpdateLine[] }
   | {
       say: "providerUpdated";
@@ -265,6 +287,7 @@ export type Response =
       with: { challenge_id: string; prompt: string };
     }
   | { say: "devices"; with: DeviceLine[] }
+  | { say: "deviceAuthorityChallenge"; with: { challenge_id: string; prompt: string } }
   | { say: "integrationEnrollments"; with: IntegrationEnrollmentLine[] }
   | {
       say: "integrationApprovalChallenge";

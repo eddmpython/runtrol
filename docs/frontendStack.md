@@ -8,9 +8,9 @@ The public surfaces share product contracts and brand assets, not a mandatory co
 |---|---|---|
 | GitHub Pages landing | Static HTML, CSS, and small browser JavaScript | Main content works without JavaScript, no package runtime is needed, and the complete output stays under a hard byte budget |
 | VS Code extension | Native VS Code navigation plus one bounded editor Webview for the selected live session | Gives the conversation editor width while keeping renderer cost independent of logical session count |
-| Phone PWA | Chosen when the production transport contract is complete | The client must follow the encrypted frame and reconnect boundary instead of shaping that boundary around a premature UI |
+| Phone PWA | Static HTML, CSS, browser JavaScript, WebCrypto, IndexedDB, and a service worker | Keeps the installed origin dependency-free while implementing the exact Noise record and reconnect contracts used by Core |
 
-The previous desktop-window frontend was removed when the PC surface became VS Code-only. A static distribution page does not need to carry an application component runtime. The phone PWA may still reuse interaction patterns, tokens, and accessible primitives where that improves the production result.
+The previous desktop-window frontend was removed when the PC surface became VS Code-only. A static distribution page and the phone PWA do not carry an application component runtime. Both reuse the canonical brand assets and the PWA renders only its bounded current session view.
 
 ## Shared contracts
 
@@ -30,7 +30,7 @@ All public surfaces must satisfy these rules:
 
 [`site/`](../site/) contains the dependency-free source. `build.mjs` copies only the reviewed source and canonical brand assets into `site/dist`, creates `.nojekyll`, and rejects output above 250,000 bytes. `test.mjs` verifies the English static default, four locale dictionaries, the live Marketplace route, latest-release native VSIX selection, CDN independence, and forbidden punctuation. It also proves that five injected defects fail before the valid source passes.
 
-The landing uses one source object for the repository and latest-release endpoint. A manual download becomes active only when the GitHub API returns a `.vsix` asset, and `release-assets.mjs` matches the runtime operating system and architecture to one of the six native packages. An unknown target opens the tagged release instead of guessing. The page never hardcodes a release version.
+The landing uses one source object for the repository and latest-release endpoint. A manual download becomes active only when the GitHub API returns a `.vsix` asset, and `release-assets.mjs` matches the runtime operating system and architecture to one of the six native packages. An unknown target opens the tagged release instead of guessing. The page never hardcodes a release version. The same build copies the reviewed PWA output to `/app/` and measures both surfaces against the one byte budget.
 
 ## VS Code implementation
 
@@ -42,3 +42,9 @@ ordering, fuzzy metadata search, workspace following, hot process bounds, and co
 contracts, not styling preferences.
 
 Webview code must use the VS Code state and message boundary already covered by extension gates. It must not introduce a second transcript store or provider-specific product branch.
+
+## Phone implementation
+
+[`pwa/`](../pwa/) is an installable static application under the permanent Pages origin. It consumes pairing material only from a URL fragment, removes that fragment immediately, keeps its non-extractable X25519 private key and connection secrets in IndexedDB, and accepts the current device authority from each authenticated Core greeting. It stores no conversation content. The service worker caches only the application shell.
+
+The phone uses the relay transport in the current release. Noise IKpsk1 protects the one-use pairing exchange and Noise IK protects every later session. The relay receives routing presence and encrypted records only. Direct LAN, peer-to-peer routing, and Web Push are later connection layers and must not be implied by the current UI.

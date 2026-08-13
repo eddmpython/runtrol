@@ -1,16 +1,14 @@
 # pwaSurface
 
-상태: 대기, 착수 순서 6 번 ([5-pwaConnection](../5-pwaConnection/README.md) 선행. 전송 계층이 서기 전에 화면을 짓지 않는다).
+상태: 진행 중, 착수 순서 6 번. 릴레이 전송과 권한 경계 위에 세션 표면이 구현됐고 Mission 보조 표면과 실물 종단 게이트가 남았다.
 
 ## 한 문장 정의
 
 **폰에서 내 PC 의 세션 목록을 보고, 새 세션을 열고, 지시를 넣고, 출력을 실시간으로 보고, 승인 요청에 답하는 설치형 웹앱.**
 
-## 왜 지금 짓지 않는가
+## Current implementation
 
-CLAUDE.md 강행규칙 `바닥부터. 부채 금지`. 전송과 권한 모델이 서기 전에 화면을 얹으면, 나중에 전송이 바뀔 때 화면을 다시 짓는다. `pwaConnection` 의 프레임 스트림 (이벤트 로그 + 커서) 이 확정된 뒤 착수한다.
-
-다만 **origin 은 지금 확정해야 한다.** origin 이 곧 사용자의 신원이고 push 구독이고 설치된 앱이기 때문이다 (`pwaConnection` 참조). 그것만 선행 결정 사항이다.
+The installable static PWA now pairs from the VS Code QR, lists sessions, starts and resumes only within current exact authority, sends prompts, watches bounded output with reconnect cursors, interrupts and removes sessions, renders approval choices, exposes panic stop, and forgets the local phone identity. It does not queue offline commands or store conversation content.
 
 ## 화면 (설계 시 채운다)
 
@@ -23,9 +21,9 @@ CLAUDE.md 강행규칙 `바닥부터. 부채 금지`. 전송과 권한 모델이
 | 기기 관리 | 페어링된 기기 목록, 개별 폐기 | (보안) |
 | 패닉 | 전 세션 kill. 권한 없이 항상 가능 | (보안) |
 
-## 컴포넌트 층
+## Component layer
 
-**정본은 [docs/frontendStack.md](../../docs/frontendStack.md) 다.** Astryx + StyleX 를 데스크톱·랜딩과 공유한다. 폰 화면과 PC 화면이 같은 시각 언어를 갖는 것이 규율이 아니라 구조로 보장된다.
+The source of truth is [docs/frontendStack.md](../../docs/frontendStack.md). The PWA uses dependency-free HTML, CSS, and browser JavaScript, and reuses the canonical brand assets and interaction contracts without creating a second desktop application stack.
 
 ## 하지 않는 것
 

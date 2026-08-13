@@ -28,6 +28,8 @@ use runtrol_ipc::wire::Request;
 use runtrol_provider::WorkspaceAccess;
 use runtrol_security::{Caller, DeviceScope, GrantLedger, LocalScope, SecurityError};
 
+use crate::compose::DeviceAuthority;
+
 /// What a request needs.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Needed {
@@ -86,7 +88,9 @@ pub fn needed(request: &Request) -> Needed {
         | Request::PairingApprovalFinish { .. }
         | Request::PairingDeny { .. }
         | Request::Devices
-        | Request::DeviceRevoke { .. } => Needed::AtTheMachine(LocalScope::DevicePair),
+        | Request::DeviceRevoke { .. }
+        | Request::DeviceAuthorityBegin { .. }
+        | Request::DeviceAuthorityFinish { .. } => Needed::AtTheMachine(LocalScope::DevicePair),
         Request::IntegrationEnrollments
         | Request::IntegrationApprovalBegin { .. }
         | Request::IntegrationApprovalFinish { .. }
@@ -205,6 +209,41 @@ pub fn allowed(
     }
 }
 
+/// Apply the ordinary scope wall plus parameterized provider and workspace authority.
+///
+/// # Errors
+///
+/// The same refusals as [`allowed`], plus a fail-closed contextual refusal for a remote start or resume outside its
+/// exact locally approved provider and workspace roots.
+pub(crate) fn allowed_with_authority(
+    caller: &Caller,
+    request: &Request,
+    authority: &DeviceAuthority,
+) -> Result<(), WallRefusal> {
+    let grants = authority.grants();
+    allowed(caller, request, &grants)?;
+    let (provider, workspace) = match request {
+        Request::Start {
+            provider,
+            workspace,
+            ..
+        }
+        | Request::Resume {
+            provider,
+            workspace,
+            ..
+        } => (provider.as_ref(), workspace.as_ref()),
+        _ => return Ok(()),
+    };
+    let provider =
+        runtrol_provider::ProviderId::parse(provider).map_err(|_| WallRefusal::DeviceBoundary {
+            why: "the requested provider identity is invalid",
+        })?;
+    authority
+        .authorize_open(caller, provider, workspace)
+        .map_err(|why| WallRefusal::DeviceBoundary { why })
+}
+
 /// Why the wall said no.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
@@ -233,6 +272,13 @@ pub enum WallRefusal {
     NeverRemote {
         /// Which capability, in the audit vocabulary.
         capability: LocalScope,
+    },
+
+    /// A parameterized remote provider or workspace boundary did not match current durable authority.
+    #[error("{why}")]
+    DeviceBoundary {
+        /// Stable refusal safe to show without revealing any authority the caller did not name.
+        why: &'static str,
     },
 }
 
@@ -285,6 +331,16 @@ mod tests {
             Request::Devices,
             Request::DeviceRevoke {
                 device_id: "018f0000-0000-7000-8000-000000000000".into(),
+            },
+            Request::DeviceAuthorityBegin {
+                device_id: "018f0000-0000-7000-8000-000000000000".into(),
+                scopes: vec!["session.list".into()],
+                roots: vec!["/work".into()],
+                providers: vec!["example".into()],
+            },
+            Request::DeviceAuthorityFinish {
+                challenge_id: "dac_example".into(),
+                answer: "typed phrase".into(),
             },
             Request::Start {
                 provider: "example".into(),

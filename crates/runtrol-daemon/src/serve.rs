@@ -1471,14 +1471,28 @@ async fn converse(
             }
         };
 
+        if let Err(refusal) = crate::scope::allowed_with_authority(
+            conversation.caller(),
+            &request,
+            &composed.device_authority,
+        ) {
+            if write(&mut connection, &refuse(&refusal.to_string()))
+                .await
+                .is_err()
+            {
+                return;
+            }
+            continue;
+        }
+
         // The owner has already published the exact current listing as encoded wire bytes. A refresh that queued a
         // second reconstruction behind session work made every surface pay owner contention for immutable state.
         // Greeting and scope stay in front of the fast path, just as they are in answer_prepared.
         if matches!(request, Request::List) && conversation.greeted() {
-            if let Err(refusal) = crate::scope::allowed(
+            if let Err(refusal) = crate::scope::allowed_with_authority(
                 conversation.caller(),
                 &request,
-                &composed.device_authority.grants(),
+                &composed.device_authority,
             ) {
                 if write(&mut connection, &refuse(&refusal.to_string()))
                     .await
@@ -1497,10 +1511,10 @@ async fn converse(
 
         let reservation = if matches!(request, Request::Start { .. } | Request::Resume { .. })
             && conversation.greeted()
-            && crate::scope::allowed(
+            && crate::scope::allowed_with_authority(
                 conversation.caller(),
                 &request,
-                &composed.device_authority.grants(),
+                &composed.device_authority,
             )
             .is_ok()
         {
@@ -2272,6 +2286,7 @@ mod tests {
                     remote_static_key: phone.public_key(),
                     credential_fingerprint: token.fingerprint(),
                     labels: DeviceLabels::new("Test phone", "Browser").expect("device labels"),
+                    roots: Vec::new(),
                     paired_at: WallMs::from_millis(1_767_225_600_000),
                 }],
             );

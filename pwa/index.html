@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="theme-color" content="#101514">
+    <meta name="color-scheme" content="dark light">
+    <meta name="referrer" content="no-referrer">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src https: wss:; img-src 'self'; style-src 'self'; script-src 'self'; worker-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'">
+    <meta name="description" content="A scoped, end-to-end encrypted phone control surface for runtrol.">
+    <link rel="manifest" href="manifest.webmanifest">
+    <link rel="icon" href="assets/brand/favicon.svg" type="image/svg+xml">
+    <link rel="apple-touch-icon" href="assets/brand/apple-touch-icon.png">
+    <link rel="stylesheet" href="styles.css">
+    <script type="module" src="src/app.js"></script>
+    <title>runtrol phone</title>
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to sessions</a>
+    <header>
+      <a class="brand" href="../" aria-label="runtrol home">
+        <img class="brand-dark" src="assets/brand/lockup-dark.svg" width="153" height="32" alt="runtrol">
+        <img class="brand-light" src="assets/brand/lockup-light.svg" width="153" height="32" alt="runtrol">
+      </a>
+      <span id="connection-status" data-state="connecting" aria-live="polite">Starting</span>
+      <button id="panic" class="panic" type="button">Stop all</button>
+    </header>
+
+    <main id="main">
+      <section id="setup" class="setup" aria-live="polite"></section>
+
+      <section id="sessions-view" class="shell" hidden>
+        <nav class="session-pane" aria-label="Sessions">
+          <div class="pane-heading">
+            <div><p class="eyebrow">SESSIONS</p><h1><span id="session-count">0</span> on this PC</h1></div>
+            <button id="refresh" type="button">Refresh</button>
+          </div>
+          <div id="session-list" class="session-list"></div>
+          <form id="new-session" class="new-session">
+            <h2>Start a session</h2>
+            <label>Provider<select id="new-provider"></select></label>
+            <label>Approved workspace<select id="new-workspace"></select></label>
+            <p id="new-session-help" class="quiet"></p>
+            <button id="start-session" type="submit">Start</button>
+          </form>
+        </nav>
+
+        <section id="session-detail" class="session-detail" hidden>
+          <div class="detail-heading">
+            <button id="back-to-sessions" class="back" type="button">Sessions</button>
+            <div>
+              <p class="eyebrow" id="selected-provider"></p>
+              <h2 id="selected-title"></h2>
+              <p id="selected-workspace" class="path"></p>
+            </div>
+            <div class="detail-actions">
+              <button id="resume-session" type="button">Resume</button>
+              <button id="interrupt" type="button">Interrupt</button>
+              <button id="delete-session" type="button">Remove</button>
+            </div>
+          </div>
+          <div id="output" class="output" aria-live="polite" aria-label="Selected session output"></div>
+          <form id="composer" class="composer">
+            <label class="sr-only" for="prompt">Prompt</label>
+            <textarea id="prompt" rows="2" placeholder="Send unchanged text to the provider CLI"></textarea>
+            <button id="send" class="primary" type="submit">Send</button>
+          </form>
+        </section>
+      </section>
+    </main>
+
+    <footer>
+      <span>Provider-owned conversation</span>
+      <button id="forget-device" type="button">Forget this PC</button>
+    </footer>
+  </body>
+</html>

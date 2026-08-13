@@ -123,6 +123,26 @@ pub enum Request {
         device_id: Box<str>,
     },
 
+    /// Begin replacing one paired phone's exact scopes, workspace roots, and providers locally.
+    DeviceAuthorityBegin {
+        /// Locally minted device identity.
+        device_id: Box<str>,
+        /// Complete plain scope replacement.
+        scopes: Vec<Box<str>>,
+        /// Exact workspace paths selected at the PC.
+        roots: Vec<Box<str>>,
+        /// Exact runtime-discovered provider identities selected at the PC.
+        providers: Vec<Box<str>>,
+    },
+
+    /// Answer and atomically spend one device authority replacement challenge.
+    DeviceAuthorityFinish {
+        /// Opaque one-use local challenge identity.
+        challenge_id: Box<str>,
+        /// Phrase typed from the local VS Code prompt.
+        answer: Box<str>,
+    },
+
     /// List bounded pending public Runtime integration enrollments for local administration.
     IntegrationEnrollments,
 
@@ -497,6 +517,8 @@ pub enum Response {
         /// Including the ones it cannot serve. An operator with a perfectly good manifest for a kind this build has no
         /// driver for should see it marked rather than wonder where it went.
         providers: Vec<ProviderLine>,
+        /// Current caller authority when this is an authenticated paired-device connection.
+        device: Option<Box<DeviceAuthorityLine>>,
     },
 
     /// The sessions and any damaged rows the daemon could not read.
@@ -530,6 +552,14 @@ pub enum Response {
 
     /// Durable paired phones visible only at the machine.
     Devices(Vec<DeviceLine>),
+
+    /// One exact local paired-device authority replacement challenge.
+    DeviceAuthorityChallenge {
+        /// Opaque one-use challenge identity.
+        challenge_id: Box<str>,
+        /// Complete scopes, paths, providers, and random phrase for local display.
+        prompt: Box<str>,
+    },
 
     /// Pending public Runtime integration enrollments visible only at the machine.
     IntegrationEnrollments(Vec<IntegrationEnrollmentLine>),
@@ -1006,8 +1036,25 @@ pub struct DeviceLine {
     pub key_fingerprint: Box<str>,
     /// Exact current scope names.
     pub scopes: Vec<Box<str>>,
+    /// Every plain device scope this build permits the local operator to select.
+    pub available_scopes: Vec<Box<str>>,
+    /// Canonical workspace paths currently approved for this device.
+    pub roots: Vec<Box<str>>,
+    /// Runtime-discovered provider identities currently approved for this device.
+    pub providers: Vec<Box<str>>,
     /// Pairing time in Unix milliseconds.
     pub paired_at_ms: u64,
+}
+
+/// Current authority disclosed only to the paired device that owns it.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct DeviceAuthorityLine {
+    /// Exact current plain scope names.
+    pub scopes: Vec<Box<str>>,
+    /// Canonical workspace roots currently approved for this device.
+    pub roots: Vec<Box<str>>,
+    /// Runtime-discovered provider identities currently approved for this device.
+    pub providers: Vec<Box<str>>,
 }
 
 /// Closed remote connection state rendered without parsing prose.
@@ -1279,6 +1326,16 @@ mod tests {
             Request::RemoteConnection,
             Request::RemoteConfigure {
                 relay_origin: Some("https://relay.example.com".into()),
+            },
+            Request::DeviceAuthorityBegin {
+                device_id: "018f0000-0000-7000-8000-000000000000".into(),
+                scopes: vec!["session.start".into()],
+                roots: vec!["/work".into()],
+                providers: vec!["claude".into()],
+            },
+            Request::DeviceAuthorityFinish {
+                challenge_id: "dac_example".into(),
+                answer: "typed phrase here".into(),
             },
             Request::Start {
                 provider: "claude".into(),
@@ -1580,6 +1637,7 @@ mod tests {
                     why_not: Some("this build has no driver for that protocol".into()),
                 },
             ],
+            device: None,
         };
         let encoded = serde_json::to_string(&response).expect("writable");
         let back: Response = serde_json::from_str(&encoded).expect("readable");

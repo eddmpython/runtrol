@@ -20,7 +20,8 @@ function validateHtml(candidate) {
     "the public Marketplace route must be statically available",
   );
   assert.match(candidate, /Install from Marketplace/u, "the public Marketplace action must be visible");
-  assert.match(candidate, /Secure phone app in progress/u, "unfinished PWA state must be honest");
+  assert.match(candidate, /Secure phone app available/u, "the shipped PWA state must be visible");
+  assert.match(candidate, /href="app\/"/u, "the phone app route must be statically available");
   assert.doesNotMatch(candidate, /<link[^>]+(?:fonts\.googleapis|cdn\.)/u, "external style or font CDN is forbidden");
   assert.doesNotMatch(candidate, /<script[^>]+https?:\/\//u, "external script CDN is forbidden");
 }
@@ -74,7 +75,7 @@ expectFailure(
   html.replaceAll("itemName=runtrol.runtrol-studio", "itemName=runtrol.wrong-extension"),
   "wrong Marketplace identity",
 );
-expectFailure(validateHtml, html.replace("Secure phone app in progress", "Install phone app"), "false PWA claim");
+expectFailure(validateHtml, html.replace("Secure phone app available", "Phone app unavailable"), "missing PWA claim");
 expectFailure(
   validateScript,
   script.replace("selectTargetVsix(assets, target)", "assets.at(0)"),

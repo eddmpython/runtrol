@@ -4,7 +4,7 @@
 
 [한국어](README.md) | [English](README_EN.md) | [中文](README_ZH.md) | 日本語
 
-> ステータス: **コアと主力 VS Code 拡張を実装し、`Runtrol Studio 0.1.0` を六つの native target 向けに公開した。** live session index、実物 Extension Host と秒間 3,000 frame Webview の性能 ratchet、インストール済み実物 CLI の完全な操作 journey、Marketplace からの clean install、active session を維持する VSIX upgrade と rollback を検証済みである。独立したデスクトップ GUI のコードと実行経路は削除され、VS Code 拡張が唯一の PC surface である。公開 Runtime protocol、Rust と TypeScript SDK、外部 packed consumer gate、署名付き六 target standalone Runtime release pipeline も実装した。確認済み provider channel の自動更新には process exclusion と正確な rollback も実装した。[Marketplace 拡張](https://marketplace.visualstudio.com/items?itemName=runtrol.runtrol-studio)と [GitHub Pages サイト](https://eddmpython.github.io/runtrol/)は公開済みである。残る主要 surface はスマートフォン PWA である。以下のスコアの多くが 0 なのは、コードがないからではなく、その軸を断言するゲートがまだない
+> ステータス: **コアと主力 VS Code 拡張を実装し、`Runtrol Studio 0.1.0` を六つの native target 向けに公開した。** live session index、実物 Extension Host と秒間 3,000 frame Webview の性能 ratchet、インストール済み実物 CLI の完全な操作 journey、Marketplace からの clean install、active session を維持する VSIX upgrade と rollback を検証済みである。独立したデスクトップ GUI のコードと実行経路は削除され、VS Code 拡張が唯一の PC surface である。公開 Runtime protocol、Rust と TypeScript SDK、外部 packed consumer gate、署名付き六 target standalone Runtime release pipeline も実装した。確認済み provider channel の自動更新には process exclusion と正確な rollback も実装した。[Marketplace 拡張](https://marketplace.visualstudio.com/items?itemName=runtrol.runtrol-studio)、[GitHub Pages サイト](https://eddmpython.github.io/runtrol/)、リレー接続のスマートフォン PWA を実装した。残る主要なスマートフォン作業は Web Push と実機の end-to-end ゲートである。以下のスコアの多くが 0 なのは、コードがないからではなく、その軸を断言するゲートがまだない
 > からである。
 
 The security boundary and default-deny settings are documented in [SECURITY.md](SECURITY.md).
@@ -38,10 +38,10 @@ streaming と background 作業が入力、スクロール、セッション切�
 |---|---:|---|---|
 | 一つのセッション一覧 | 5/10 | hosted CI が実物 VS Code Extension Host で開始、二つの workspace 切り替え、正確な選択復元、再接続、中断、終了を検証する。相手は決定論的な loopback model なので mock 層に留まる。 | プロバイダーが Claude Code でも Codex でも、その次の何かでも、いま自分の PC で生きているセッションが一つの一覧に並び、開始・再開・削除がそこで完結する。 |
 | 即座の反応 | 5/10 | 実物 VS Code Extension Host が production bundle を測る。一つの ratchet が実物 30 セッション一覧、最大 8 個の hot ACP process、provider-native cold resume、毎秒 3,000 個の raw frame、Core watch の確認と Webview paint まで終えた session 切り替え、workspace 変更後の正確な選択復元を覆う。transport の相手は mock なので、この tier に留まる。 | 一覧が待ち時間なく現れ、会話は押した瞬間に開き、長い出力が流れてもスクロールと入力が途切れない。ユーザーが読み込みを意識する瞬間が存在しない。 |
-| スマホから自分の PC のセッションへ | 0/10 | 未実装。 | スマートフォンを PC に一度つないでおけば、席を離れた後もその PC で動いているセッションに新しい指示を入れ、出力をリアルタイムで見られる。プロバイダーアカウントのプランや認証方式がこの体験を妨げない。 |
+| スマホから自分の PC のセッションへ | 0/10 | リレー PWA と Rust および WebCrypto の相互運用ゲートは実装済みである。実機から実物 CLI までを結ぶ active gate がないため、スコアはまだ 0 である。 | スマートフォンを PC に一度つないでおけば、席を離れた後もその PC で動いているセッションに新しい指示を入れ、出力をリアルタイムで見られる。プロバイダーアカウントのプランや認証方式がこの体験を妨げない。 |
 | プロバイダー拡張性 | 5/10 | hosted CI は外部ドライバーの公開契約、三つの OS 上の汎用 ACP fixture、独立配布 ACP 実装による二つの turn と native load、実物 Claude Code の hidden approval 拒否往復を検証する。model endpoint はローカル mock である。scheduled CI は最新 CLI で parser probe と同じ approval journey を繰り返すが、アカウント model の動作や event 全表面は主張しない。 | 新しい CLI が出たらアダプターを一つ足すだけで、PC 画面もスマホ画面も操作方法もそのまま。ユーザーはプロバイダーが増えたことを一覧が長くなったこととしてだけ知る。 |
 | 会話を通さない | 6/10 | `egressContract` は実物の loopback socket で正確な送信 allowlist と production Noise IK、IKpsk1 境界を動かす。prompt の標本は relay capture や診断文字列に平文で現れず、transport は disk と log の API を持たず、driver と storage は provider の transcript path を知らない。実物のスマートフォンと relay を結ぶ live gate がないため、天井は 6 である。 | ユーザーのプロンプトとモデルの応答は、PC とプロバイダーの間、そしてユーザー自身のデバイスの間だけを往復する。runtrol はその本文を保存せず、途中のどのサーバーも読める形でそれを受け取らない。 |
-| スマホで承認 | 0/10 | 未実装。 | エージェントが危険な操作の前で止まるとスマートフォンに表示され、そこで許可または拒否すると PC のセッションがただちに続く。 |
+| スマホで承認 | 0/10 | PWA はリスク権限に結び付いた選択肢と正確な承認対象を表示する。実物 provider 承認の完全なスマートフォン往復ゲートがないため、スコアはまだ 0 である。 | エージェントが危険な操作の前で止まるとスマートフォンに表示され、そこで許可または拒否すると PC のセッションがただちに続く。 |
 | 切れても生き残る | 0/10 | リモートのスマートフォンを含む end-to-end ゲートは未実装。 | スマートフォンのロック、ネットワーク切断、runtrol 再起動の後も、PC セッションは公式 resume surface から復旧できる。保持範囲内は正確な cursor から続き、範囲外は黙って飛ばさず明示的な gap になる。 |
 | 常駐コスト | 6/10 | 三つの hosted OS が一つの ratchet で実物 debug daemon の idle RSS と 10 秒間の idle CPU を測る。独立した二種類目の証拠がないため、上限は 6 のままである。 | 一日中つけっぱなしでも、ユーザーはその存在に気づかない。バッテリーにも、ファンにも、タスクマネージャーにも見えない。 |
 | どこでも同じやり方 | 0/10 | 未実装。 | Windows、macOS、Linux でインストール方法も操作も同じ。Windows ユーザーが WSL や tmux を知る必要がない。 |
@@ -115,7 +115,7 @@ streaming と background 作業が入力、スクロール、セッション切�
 | | |
 |---|---|
 | **PC（Windows、macOS、Linux）** | [VS Code Marketplace から `Runtrol Studio`](https://marketplace.visualstudio.com/items?itemName=runtrol.runtrol-studio) をインストールする。x64 と ARM64 に対応し、独立したデスクトップアプリは配布しない |
-| **モバイル** | スマートフォン PWA を開発中。安全なペアリングと通信ゲートを通過した後にのみ、恒久的な GitHub Pages オリジンでインストール操作を提供する |
+| **モバイル** | [恒久的な GitHub Pages オリジンのスマートフォン PWA](https://eddmpython.github.io/runtrol/app/)。まず VS Code の一回限りの QR でペアリングする |
 
 公開リリース `0.1.0` と六つの platform VSIX は [GitHub Releases](https://github.com/eddmpython/runtrol/releases/tag/vscode-v0.1.0) からも取得できる。
 
@@ -157,7 +157,7 @@ Rust は目的ではなく、上の表の三つの軸のための手段である
 | `crates/` | 製品コア（Rust）。デーモン、プロバイダーアダプター、トランスポート。独立 GUI crate は存在しない | 実装済み |
 | [`clients/typescript/`](clients/typescript/) | 外部製品向け公開 Runtime TypeScript SDK | packed consumer 検証済み |
 | [`extensions/runtrol-vscode/`](extensions/runtrol-vscode/) | 唯一の PC surface `Runtrol Studio` | 30 session のリリース負荷を検証、0.1.0 公開済み |
-| `pwa/` | モバイル PWA | 未作成 |
+| [`pwa/`](pwa/) | モバイル PWA | リレー接続、セッション制御、承認 surface を実装済み |
 | [`site/`](site/) | [依存関係のない GitHub Pages ランディング](https://eddmpython.github.io/runtrol/) | 公開済み |
 | [`assets/brand/`](assets/brand/) | ロゴ。SVG が正本で、favicon・アイコン・ソーシャルカードはそこから派生する | |
 | [`docs/`](docs/README.md) | 運用ドキュメントの正本 | |

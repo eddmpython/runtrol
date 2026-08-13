@@ -45,7 +45,9 @@ THE_REQUEST = "Request"
 REFUSAL = "Needed::Unknown"
 
 # The call that asks the wall, and the function it has to be first inside.
-ASKS_THE_WALL = re.compile(r"crate::scope::allowed\(|scope::allowed\(")
+ASKS_THE_WALL = re.compile(
+    r"crate::scope::allowed(?:_with_authority)?\(|scope::allowed(?:_with_authority)?\("
+)
 THE_BOUNDARY_NAME = "answer_prepared"
 THE_BOUNDARY = re.compile(
     rf"^\s*pub\(crate\)\s+(?:async\s+)?fn\s+{THE_BOUNDARY_NAME}\s*\("

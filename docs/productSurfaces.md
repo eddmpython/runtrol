@@ -42,7 +42,7 @@ The GitHub Pages site uses English as its static default so installation instruc
 
 The primary PC action is the VS Code Marketplace listing. A manual action is enabled only when the latest GitHub Release contains an actual `.vsix` asset produced by the verified release workflow. An unpublished artifact must be shown as pending, never as a working download.
 
-The phone action uses the same permanent GitHub Pages origin. It remains unavailable until the production pairing, remote listener, route selection, and encrypted transport gates pass. A private network route such as Tailscale can be selected when available, but it is neither the identity system nor a required dependency.
+The phone action uses `/runtrol/app/` on the same permanent GitHub Pages origin. Its current production route is the end-to-end encrypted relay. Pairing starts from a one-use QR displayed in VS Code, and all later workspace, provider, and action authority remains editable only in VS Code. Direct private-network routes and Web Push are not part of the current release.
 
 ## Visual contract
 

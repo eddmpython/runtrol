@@ -767,7 +767,10 @@ fn validate_narrowing(
     Ok(())
 }
 
-fn approve_roots(roots: &[Box<str>], deny: &DenyList) -> Result<Vec<WorkspaceRoot>, AdminError> {
+pub(crate) fn approve_roots(
+    roots: &[Box<str>],
+    deny: &DenyList,
+) -> Result<Vec<WorkspaceRoot>, AdminError> {
     roots
         .iter()
         .map(|root| {
@@ -778,7 +781,7 @@ fn approve_roots(roots: &[Box<str>], deny: &DenyList) -> Result<Vec<WorkspaceRoo
         .collect()
 }
 
-fn deny_list(composed: &Composed) -> Result<DenyList, AdminError> {
+pub(crate) fn deny_list(composed: &Composed) -> Result<DenyList, AdminError> {
     let variable = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
     let home = std::env::var(variable)
         .map_err(|_| AdminError::unavailable("the operator home directory is unavailable"))?;

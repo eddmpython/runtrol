@@ -249,6 +249,7 @@ mod tests {
                     let welcome = serde_json::to_vec(&Response::Welcome {
                         wire: runtrol_ipc::WIRE_VERSION,
                         providers: Vec::new(),
+                        device: None,
                     })
                     .expect("writable");
                     drop(connection.send(&welcome).await);
@@ -307,6 +308,7 @@ mod tests {
                 let welcome = serde_json::to_vec(&Response::Welcome {
                     wire: runtrol_ipc::WIRE_VERSION,
                     providers: Vec::new(),
+                    device: None,
                 })
                 .expect("writable");
                 if connection.recv().await.is_ok() {

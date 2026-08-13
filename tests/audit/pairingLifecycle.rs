@@ -122,6 +122,7 @@ fn a_pairing_finishes_only_after_exact_pc_presence() {
             .iter()
             .map(|scope| scope.to_string().into())
             .collect(),
+        roots: Vec::new(),
         paired_at: WallMs::now(),
     };
     let store = Store::open(&scratch.database).expect("open authorization store");

@@ -36,7 +36,7 @@ pub mod schema;
 pub mod sessions;
 
 pub use codec::{LiveProcess, SessionRow};
-pub use devices::{DeviceRow, ListedDevices};
+pub use devices::{DeviceRootRow, DeviceRow, ListedDevices};
 pub use error::StoreError;
 pub use integration_audit::{
     INTEGRATION_AUDIT_MAX_BYTES, INTEGRATION_AUDIT_MAX_ROW_BYTES, INTEGRATION_AUDIT_MAX_ROWS,

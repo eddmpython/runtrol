@@ -9,9 +9,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::error::SecurityError;
-use crate::id::DeviceId;
+use crate::id::{DeviceId, WorkspaceRootId};
 use crate::presence::{GrantRequest, PairingIdentity, PcPresence};
 use crate::scope::{DeviceScope, LocalScope};
+use runtrol_provider::{AbsPath, ProviderId};
 
 /// Permission to do one local thing, once, now.
 ///
@@ -138,6 +139,36 @@ impl GrantLedger {
         held.extend(scopes.iter().copied());
         if held.is_empty() {
             self.granted.remove(&device);
+        }
+        Ok(())
+    }
+
+    /// Replace one device's complete plain and parameterized authority after exact PC review.
+    ///
+    /// # Errors
+    ///
+    /// A stale witness or one issued for any different scope, root, or provider set is refused.
+    pub fn replace_device_authority(
+        &mut self,
+        device: DeviceId,
+        scopes: &[DeviceScope],
+        roots: &[(WorkspaceRootId, AbsPath)],
+        providers: &[ProviderId],
+        witness: &PcPresence,
+    ) -> Result<(), SecurityError> {
+        witness.check(&GrantRequest::DeviceAuthority {
+            device,
+            scopes: scopes.to_vec(),
+            roots: roots.to_vec(),
+            providers: providers.to_vec(),
+        })?;
+        let mut replacement: BTreeSet<DeviceScope> = scopes.iter().copied().collect();
+        replacement.extend(roots.iter().map(|(id, _)| DeviceScope::Workspace(*id)));
+        replacement.extend(providers.iter().copied().map(DeviceScope::Provider));
+        if replacement.is_empty() {
+            self.granted.remove(&device);
+        } else {
+            self.granted.insert(device, replacement);
         }
         Ok(())
     }
@@ -325,6 +356,67 @@ mod tests {
 
         assert!(matches!(
             ledger.grant(other_device, &scopes, &witness),
+            Err(SecurityError::WitnessMismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn a_device_authority_witness_cannot_change_a_root_or_provider() {
+        let device = DeviceId::now();
+        let root_id = WorkspaceRootId::now();
+        let approved_path = AbsPath::canonicalize(".").expect("workspace is canonical");
+        let other_path =
+            AbsPath::canonicalize("../runtrol-store").expect("other path is canonical");
+        let approved_provider = ProviderId::parse("approved").expect("provider id");
+        let other_provider = ProviderId::parse("other").expect("provider id");
+        let scopes = [DeviceScope::SessionStart];
+        let roots = [(root_id, approved_path.clone())];
+        let providers = [approved_provider];
+
+        let witness = witness_for(GrantRequest::DeviceAuthority {
+            device,
+            scopes: scopes.to_vec(),
+            roots: roots.to_vec(),
+            providers: providers.to_vec(),
+        });
+        let mut ledger = GrantLedger::new();
+        ledger
+            .replace_device_authority(device, &scopes, &roots, &providers, &witness)
+            .expect("the exact replacement is accepted");
+        assert!(ledger.holds(device, DeviceScope::Workspace(root_id)));
+        assert!(ledger.holds(device, DeviceScope::Provider(approved_provider)));
+
+        let changed_provider_witness = witness_for(GrantRequest::DeviceAuthority {
+            device,
+            scopes: scopes.to_vec(),
+            roots: roots.to_vec(),
+            providers: providers.to_vec(),
+        });
+        assert!(matches!(
+            GrantLedger::new().replace_device_authority(
+                device,
+                &scopes,
+                &roots,
+                &[other_provider],
+                &changed_provider_witness,
+            ),
+            Err(SecurityError::WitnessMismatch { .. })
+        ));
+
+        let changed_root_witness = witness_for(GrantRequest::DeviceAuthority {
+            device,
+            scopes: scopes.to_vec(),
+            roots: roots.to_vec(),
+            providers: providers.to_vec(),
+        });
+        assert!(matches!(
+            GrantLedger::new().replace_device_authority(
+                device,
+                &scopes,
+                &[(root_id, other_path)],
+                &providers,
+                &changed_root_witness,
+            ),
             Err(SecurityError::WitnessMismatch { .. })
         ));
     }

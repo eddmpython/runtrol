@@ -709,6 +709,10 @@ h1 {
   display: block;
 }
 
+.phone-open {
+  margin-top: 22px;
+}
+
 .phone-status strong {
   font-size: 14px;
 }

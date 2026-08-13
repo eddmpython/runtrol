@@ -1,0 +1,11 @@
+{
+  "name": "runtrol-phone",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The installable runtrol phone control surface.",
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "test": "node --test test/connection.test.mjs"
+  }
+}

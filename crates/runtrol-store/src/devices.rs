@@ -17,10 +17,25 @@ use runtrol_provider::WallMs;
 
 use crate::error::StoreError;
 use crate::open::Store;
-use crate::schema::{DEVICES, DeviceKey, SCHEMA_VERSION};
+use crate::schema::{DEVICES, DeviceKey};
 
 const KEY_BYTES: usize = 32;
 const FINGERPRINT_BYTES: usize = 32;
+const ROOT_ID_BYTES: usize = 16;
+const ROOT_IDENTITY_BYTES: usize = 24;
+const LEGACY_DEVICE_ROW_VERSION: u8 = 1;
+const DEVICE_ROW_VERSION: u8 = 2;
+
+/// One exact locally approved workspace root attached to a paired device.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeviceRootRow {
+    /// Stable identity used by the parameterized device scope.
+    pub id: [u8; ROOT_ID_BYTES],
+    /// Canonical operator-approved path.
+    pub path: Box<str>,
+    /// Platform filesystem identity observed during local approval.
+    pub identity: [u8; ROOT_IDENTITY_BYTES],
+}
 
 /// Everything runtrol stores about one paired device.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -38,6 +53,8 @@ pub struct DeviceRow {
     /// The store deliberately does not depend on the security crate. That missing edge prevents persistence from
     /// becoming a second authority model.
     pub scopes: Vec<Box<str>>,
+    /// Exact workspace roots required by parameterized start and resume scopes.
+    pub roots: Vec<DeviceRootRow>,
     /// When exact PC presence approved this device.
     pub paired_at: WallMs,
 }
@@ -45,7 +62,7 @@ pub struct DeviceRow {
 impl DeviceRow {
     fn encode(&self) -> Result<Vec<u8>, StoreError> {
         let mut out = Vec::with_capacity(160);
-        out.push(SCHEMA_VERSION);
+        out.push(DEVICE_ROW_VERSION);
         out.extend_from_slice(&self.remote_static_key);
         out.extend_from_slice(&self.credential_fingerprint);
         write_text(&mut out, "device name", &self.name)?;
@@ -60,13 +77,23 @@ impl DeviceRow {
         for scope in &self.scopes {
             write_text(&mut out, "scope", scope)?;
         }
+        let root_count = u16::try_from(self.roots.len()).map_err(|_| StoreError::DeviceCodec {
+            field: "root count",
+            why: "more than 65535 roots cannot be represented",
+        })?;
+        out.extend_from_slice(&root_count.to_le_bytes());
+        for root in &self.roots {
+            out.extend_from_slice(&root.id);
+            write_text(&mut out, "root path", &root.path)?;
+            out.extend_from_slice(&root.identity);
+        }
         Ok(out)
     }
 
     fn decode(bytes: &[u8]) -> Result<Self, StoreError> {
         let mut cursor = DeviceCursor::new(bytes);
         let version = cursor.byte("row version")?;
-        if version != SCHEMA_VERSION {
+        if !matches!(version, LEGACY_DEVICE_ROW_VERSION | DEVICE_ROW_VERSION) {
             return Err(StoreError::DeviceCodec {
                 field: "row version",
                 why: "written by a different schema version than this build understands",
@@ -83,6 +110,18 @@ impl DeviceRow {
         for _ in 0..scope_count {
             scopes.push(cursor.text("scope")?.into());
         }
+        let mut roots = Vec::new();
+        if version == DEVICE_ROW_VERSION {
+            let root_count = usize::from(cursor.u16("root count")?);
+            roots.reserve(root_count);
+            for _ in 0..root_count {
+                roots.push(DeviceRootRow {
+                    id: cursor.fixed("root id")?,
+                    path: cursor.text("root path")?.into(),
+                    identity: cursor.fixed("root identity")?,
+                });
+            }
+        }
 
         if !cursor.is_finished() {
             return Err(StoreError::DeviceCodec {
@@ -97,6 +136,7 @@ impl DeviceRow {
             name,
             platform,
             scopes,
+            roots,
             paired_at,
         })
     }
@@ -377,6 +417,7 @@ mod tests {
             name: name.into(),
             platform: "Android".into(),
             scopes: vec!["session.list".into(), "provider(example)".into()],
+            roots: Vec::new(),
             paired_at: WallMs::from_millis(1_767_225_600_000),
         }
     }
@@ -391,13 +432,31 @@ mod tests {
     fn a_device_authorization_round_trips() {
         let scratch = Scratch::make("roundtrip");
         let device = key(1);
-        let row = a_row("Pixel 9");
+        let mut row = a_row("Pixel 9");
+        row.roots.push(DeviceRootRow {
+            id: [0x33; ROOT_ID_BYTES],
+            path: "C:\\work".into(),
+            identity: [0x44; ROOT_IDENTITY_BYTES],
+        });
 
         scratch.store.put_device(device, &row).expect("stored");
         assert_eq!(
             scratch.store.get_device(device).expect("readable"),
             Some(row)
         );
+    }
+
+    #[test]
+    fn a_legacy_device_row_restores_with_no_parameterized_roots() {
+        let mut encoded = a_row("legacy phone").encode().expect("encodable");
+        if let Some(version) = encoded.first_mut() {
+            *version = LEGACY_DEVICE_ROW_VERSION;
+        }
+        encoded.truncate(encoded.len() - size_of::<u16>());
+
+        let restored = DeviceRow::decode(&encoded).expect("legacy row remains readable");
+        assert_eq!(restored.name.as_ref(), "legacy phone");
+        assert!(restored.roots.is_empty());
     }
 
     #[test]

@@ -232,6 +232,7 @@ mod tests {
                     why_not: Some("this build has no driver for that protocol".into()),
                 },
             ],
+            device: None,
         };
         let lines = render(&response);
         assert_eq!(lines.len(), 2, "both are shown");

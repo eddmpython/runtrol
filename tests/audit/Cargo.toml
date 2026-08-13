@@ -16,6 +16,7 @@ autotests = false
 
 [dev-dependencies]
 async-trait = { workspace = true }
+base64ct = { workspace = true }
 cargo_metadata = { workspace = true }
 # Asking the operating system what a process holds. The budget is a number this gate measures against, and a
 # process reporting on itself would report what its allocator believes rather than what it holds.
@@ -29,6 +30,8 @@ runtrol-transport = { path = "../../crates/runtrol-transport" }
 runtrol-vault = { workspace = true }
 runtrol-update = { workspace = true }
 semver = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true, features = ["std"] }
 tokio = { workspace = true, features = ["io-util", "macros", "net", "rt", "sync"] }
 
 [[test]]
@@ -70,6 +73,10 @@ path = "egressContract.rs"
 [[test]]
 name = "pairingLifecycle"
 path = "pairingLifecycle.rs"
+
+[[test]]
+name = "pwaInterop"
+path = "pwaInterop.rs"
 
 [[test]]
 name = "productionSource"

@@ -24,10 +24,10 @@
 use core::fmt;
 use core::sync::atomic::{AtomicBool, Ordering};
 
-use runtrol_provider::{AbsPath, WallMs};
+use runtrol_provider::{AbsPath, ProviderId, WallMs};
 
 use crate::error::SecurityError;
-use crate::id::DeviceId;
+use crate::id::{DeviceId, WorkspaceRootId};
 use crate::scope::{DeviceScope, LocalScope};
 
 const DEVICE_NAME_MAX_CHARS: usize = 64;
@@ -332,6 +332,17 @@ pub enum GrantRequest {
         /// Exactly which scopes. Anything not listed here is not authorized by the witness.
         scopes: Vec<DeviceScope>,
     },
+    /// Replace one device's complete authority, including exact workspace and provider parameters.
+    DeviceAuthority {
+        /// Which paired device.
+        device: DeviceId,
+        /// Complete plain scope set.
+        scopes: Vec<DeviceScope>,
+        /// Exact approved root identities and paths shown to the operator.
+        roots: Vec<(WorkspaceRootId, AbsPath)>,
+        /// Exact runtime-discovered providers shown to the operator.
+        providers: Vec<ProviderId>,
+    },
     /// Pair one Noise-authenticated device after showing its exact identity on this PC.
     PairDevice {
         /// Attempt, key, and display labels bound to this one decision.
@@ -370,6 +381,36 @@ impl fmt::Display for GrantRequest {
                         f.write_str(", ")?;
                     }
                     write!(f, "{scope}")?;
+                }
+                Ok(())
+            }
+            Self::DeviceAuthority {
+                device,
+                scopes,
+                roots,
+                providers,
+            } => {
+                write!(f, "replace device {device} authority with permissions: ")?;
+                write_scopes(f, scopes)?;
+                f.write_str("; workspace roots: ")?;
+                if roots.is_empty() {
+                    f.write_str("none")?;
+                }
+                for (index, (_, path)) in roots.iter().enumerate() {
+                    if index > 0 {
+                        f.write_str(", ")?;
+                    }
+                    write!(f, "{path}")?;
+                }
+                f.write_str("; providers: ")?;
+                if providers.is_empty() {
+                    f.write_str("none")?;
+                }
+                for (index, provider) in providers.iter().enumerate() {
+                    if index > 0 {
+                        f.write_str(", ")?;
+                    }
+                    write!(f, "{provider}")?;
                 }
                 Ok(())
             }
@@ -426,6 +467,19 @@ impl fmt::Display for GrantRequest {
             }
         }
     }
+}
+
+fn write_scopes(f: &mut fmt::Formatter<'_>, scopes: &[DeviceScope]) -> fmt::Result {
+    if scopes.is_empty() {
+        return f.write_str("none");
+    }
+    for (index, scope) in scopes.iter().enumerate() {
+        if index > 0 {
+            f.write_str(", ")?;
+        }
+        write!(f, "{scope}")?;
+    }
+    Ok(())
 }
 
 fn checked_label(

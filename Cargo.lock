@@ -1357,6 +1357,7 @@ name = "runtrol-audit"
 version = "0.1.1"
 dependencies = [
  "async-trait",
+ "base64ct",
  "cargo_metadata",
  "runtrol-childproc",
  "runtrol-core",
@@ -1368,6 +1369,8 @@ dependencies = [
  "runtrol-update",
  "runtrol-vault",
  "semver",
+ "serde",
+ "serde_json",
  "tokio",
 ]
 

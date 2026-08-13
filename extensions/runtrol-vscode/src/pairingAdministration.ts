@@ -64,10 +64,10 @@ export async function managePhones(client: CoreClient): Promise<void> {
     devices.map((device) => ({
       label: device.name,
       description: device.platform,
-      detail: `${device.scopes.length} permissions, key ${device.key_fingerprint}`,
+      detail: `${device.scopes.length} permissions, ${device.roots.length} workspaces, ${device.providers.length} providers, key ${device.key_fingerprint}`,
       device,
     })),
-    { title: "Paired phones", placeHolder: "Choose a phone to inspect or revoke" },
+    { title: "Paired phones", placeHolder: "Choose a phone to inspect or change" },
   );
   if (!selected) return;
   await showDevice(client, selected.device);
@@ -155,10 +155,15 @@ async function showDevice(client: CoreClient, device: DeviceLine): Promise<void>
     `${device.name} on ${device.platform}`,
     {
       modal: true,
-      detail: `Key ${device.key_fingerprint}\nPaired ${new Date(device.paired_at_ms).toLocaleString()}\nPermissions:\n${device.scopes.join("\n") || "none"}`,
+      detail: deviceDetail(device),
     },
+    "Change authority",
     "Revoke phone",
   );
+  if (choice === "Change authority") {
+    await changeAuthority(client, device);
+    return;
+  }
   if (choice !== "Revoke phone") return;
   const confirmed = await vscode.window.showWarningMessage(
     `Revoke ${device.name}?`,
@@ -171,6 +176,106 @@ async function showDevice(client: CoreClient, device: DeviceLine): Promise<void>
     "done",
   );
   await vscode.window.showInformationMessage(`Runtrol: ${device.name} was revoked.`);
+}
+
+async function changeAuthority(client: CoreClient, device: DeviceLine): Promise<void> {
+  const scopes = await vscode.window.showQuickPick(
+    device.available_scopes.map((scope) => ({
+      label: scope,
+      description: scopeDescription(scope),
+      picked: device.scopes.includes(scope),
+    })),
+    {
+      canPickMany: true,
+      title: `Permissions for ${device.name}`,
+      placeHolder: "This replaces the complete permission set",
+    },
+  );
+  if (!scopes) return;
+
+  const rootCandidates = new Map<string, { label: string; description: string; picked: boolean }>();
+  for (const root of device.roots) {
+    rootCandidates.set(root, { label: root, description: "Currently approved", picked: true });
+  }
+  for (const folder of vscode.workspace.workspaceFolders ?? []) {
+    const path = folder.uri.fsPath;
+    const current = rootCandidates.get(path);
+    rootCandidates.set(path, {
+      label: path,
+      description: current ? "Currently approved and open" : `Open workspace: ${folder.name}`,
+      picked: current?.picked ?? false,
+    });
+  }
+  const roots = await vscode.window.showQuickPick([...rootCandidates.values()], {
+    canPickMany: true,
+    title: `Workspace roots for ${device.name}`,
+    placeHolder: "Only these directory trees may be started or resumed",
+  });
+  if (!roots) return;
+
+  const availableProviders = await client.availableProviders();
+  const providers = await vscode.window.showQuickPick(
+    availableProviders.map((provider) => ({
+      label: provider.display_name,
+      description: provider.id,
+      provider: provider.id,
+      picked: device.providers.includes(provider.id),
+    })),
+    {
+      canPickMany: true,
+      title: `Providers for ${device.name}`,
+      placeHolder: "Only these discovered providers may be started or resumed",
+    },
+  );
+  if (!providers) return;
+
+  const challenge = expect(
+    await client.once({
+      ask: "deviceAuthorityBegin",
+      with: {
+        device_id: device.device_id,
+        scopes: scopes.map((scope) => scope.label),
+        roots: roots.map((root) => root.label),
+        providers: providers.map((provider) => provider.provider),
+      },
+    }),
+    "deviceAuthorityChallenge",
+  );
+  const answer = await vscode.window.showInputBox({
+    title: `Replace authority for ${device.name}`,
+    prompt: challenge.prompt,
+    placeHolder: "Type the exact three-word phrase",
+    ignoreFocusOut: true,
+    validateInput: (value) => value.trim().split(/\s+/u).length === 3 ? undefined : "Type all three words shown above.",
+  });
+  if (answer === undefined) {
+    await client.once({
+      ask: "deviceAuthorityFinish",
+      with: { challenge_id: challenge.challenge_id, answer: "" },
+    }).catch(() => undefined);
+    return;
+  }
+  expect(
+    await client.once({
+      ask: "deviceAuthorityFinish",
+      with: { challenge_id: challenge.challenge_id, answer },
+    }),
+    "done",
+  );
+  await vscode.window.showInformationMessage(`Runtrol: ${device.name} authority was replaced.`);
+}
+
+function deviceDetail(device: DeviceLine): string {
+  return [
+    `Key ${device.key_fingerprint}`,
+    `Paired ${new Date(device.paired_at_ms).toLocaleString()}`,
+    "Permissions:",
+    device.scopes.join("\n") || "none",
+    "Workspace roots:",
+    device.roots.join("\n") || "none",
+    "Providers:",
+    device.providers.join("\n") || "none",
+  ].join("\n");
 }
 
 type ResponseWithValue = Exclude<Response, { say: "done" }>;

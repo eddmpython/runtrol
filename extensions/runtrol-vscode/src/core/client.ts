@@ -2,6 +2,7 @@ import { FrameTransport } from "./framing";
 import type { CoreLocator } from "./locator";
 import {
   type Request,
+  type PrivateProviderLine,
   type Response,
   readResponse,
   requestHello,
@@ -9,6 +10,7 @@ import {
 
 type Connected = {
   transport: FrameTransport;
+  providers: PrivateProviderLine[];
 };
 
 export class CoreClient {
@@ -19,6 +21,11 @@ export class CoreClient {
 
   async ensureRuntime(): Promise<void> {
     await this.command();
+  }
+
+  async availableProviders(): Promise<PrivateProviderLine[]> {
+    const connected = await this.command();
+    return connected.providers.filter((provider) => provider.usable);
   }
 
   once(request: Request): Promise<{ response: Response }> {
@@ -55,7 +62,7 @@ export class CoreClient {
       if (welcome.say !== "welcome") {
         throw new Error(`the daemon greeted with ${welcome.say}`);
       }
-      return { transport };
+      return { transport, providers: welcome.with.providers };
     } catch (error) {
       transport.close();
       throw error;

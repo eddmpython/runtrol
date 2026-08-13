@@ -644,6 +644,8 @@ pub(crate) const fn is_pairing_admin(request: &Request) -> bool {
             | Request::PairingDeny { .. }
             | Request::Devices
             | Request::DeviceRevoke { .. }
+            | Request::DeviceAuthorityBegin { .. }
+            | Request::DeviceAuthorityFinish { .. }
     )
 }
 
@@ -705,6 +707,29 @@ pub(crate) async fn prepare_pairing_admin(
         Request::DeviceRevoke { device_id } => {
             crate::pairing_admin::PairingAdmin::revoke(composed, device_id).map(|()| Response::Done)
         }
+        Request::DeviceAuthorityBegin {
+            device_id,
+            scopes,
+            roots,
+            providers,
+        } => composed
+            .pairing_admin
+            .begin_authority(composed, device_id, scopes, roots, providers)
+            .await
+            .map(
+                |(challenge_id, prompt)| Response::DeviceAuthorityChallenge {
+                    challenge_id,
+                    prompt,
+                },
+            ),
+        Request::DeviceAuthorityFinish {
+            challenge_id,
+            answer,
+        } => composed
+            .pairing_admin
+            .finish_authority(composed, challenge_id, answer)
+            .await
+            .map(|()| Response::Done),
         _ => return Prepared::None,
     }
     .unwrap_or_else(|error| refuse(&error.to_string()));
@@ -978,10 +1003,10 @@ pub(crate) fn answer_prepared(
 ) -> Reply {
     // Before anything else looks at the request. A wall consulted after some other branch has acted is a wall on
     // the way out, and the thing it was supposed to prevent has already happened.
-    if let Err(refusal) = crate::scope::allowed(
+    if let Err(refusal) = crate::scope::allowed_with_authority(
         &conversation.caller,
         &request,
-        &composed.device_authority.grants(),
+        &composed.device_authority,
     ) {
         return Reply::One(refuse(&refusal.to_string()));
     }
@@ -994,6 +1019,10 @@ pub(crate) fn answer_prepared(
                 Reply::One(Response::Welcome {
                     wire: agreed,
                     providers: providers_of(composed),
+                    device: crate::pairing_admin::PairingAdmin::self_authority(
+                        composed,
+                        &conversation.caller,
+                    ),
                 })
             }
             Err(ours) => Reply::One(refuse(&format!(
@@ -1177,7 +1206,9 @@ pub(crate) fn answer_prepared(
         | Request::PairingApprovalFinish { .. }
         | Request::PairingDeny { .. }
         | Request::Devices
-        | Request::DeviceRevoke { .. } => match prepared {
+        | Request::DeviceRevoke { .. }
+        | Request::DeviceAuthorityBegin { .. }
+        | Request::DeviceAuthorityFinish { .. } => match prepared {
             Prepared::PairingAdmin { response } => Reply::One(response),
             _ => Reply::One(refuse(
                 "paired-phone administration was not completed for this request",
@@ -1906,10 +1937,15 @@ mod tests {
         )
         .await
         {
-            Reply::One(Response::Welcome { wire, providers }) => {
+            Reply::One(Response::Welcome {
+                wire,
+                providers,
+                device,
+            }) => {
                 assert_eq!(wire, runtrol_ipc::WIRE_VERSION);
                 assert!(!providers.is_empty(), "a fresh install has providers");
                 assert!(providers.iter().any(|one| one.usable));
+                assert!(device.is_none());
             }
             other => panic!("expected a welcome, got {}", shape(&other)),
         }
