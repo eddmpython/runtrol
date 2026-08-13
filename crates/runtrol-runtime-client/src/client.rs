@@ -213,6 +213,32 @@ impl RuntimeLocator {
     ) -> Result<ReconnectingEventSubscription, ClientError> {
         ReconnectingEventSubscription::open(self.clone(), options, params, policy).await
     }
+
+    /// Open a provider snapshot stream that replaces a lost read-only connection.
+    ///
+    /// # Errors
+    ///
+    /// Connection, authentication, scope, or subscription admission failure.
+    pub async fn watch_providers_with_reconnect(
+        &self,
+        options: ClientOptions,
+        policy: ReconnectPolicy,
+    ) -> Result<ReconnectingProviderSubscription, ClientError> {
+        ReconnectingProviderSubscription::open(self.clone(), options, policy).await
+    }
+
+    /// Open a managed-session snapshot stream that replaces a lost read-only connection.
+    ///
+    /// # Errors
+    ///
+    /// Connection, authentication, scope, root, or subscription admission failure.
+    pub async fn watch_session_index_with_reconnect(
+        &self,
+        options: ClientOptions,
+        policy: ReconnectPolicy,
+    ) -> Result<ReconnectingSessionIndexSubscription, ClientError> {
+        ReconnectingSessionIndexSubscription::open(self.clone(), options, policy).await
+    }
 }
 
 fn retryable_connection_failure(error: &ClientError) -> bool {
@@ -818,55 +844,150 @@ impl ProviderSubscription<'_> {
     ///
     /// Transport failure or a notification that violates the selected public revision.
     pub async fn next(&mut self) -> Result<ProviderNotification, ClientError> {
-        let payload = self.runtime.connection.receive().await?;
-        let notification: JsonRpcNotification =
-            serde_json::from_slice(&payload).map_err(|error| {
-                ClientError::Protocol(format!(
-                    "provider notification is not valid public JSON-RPC: {error}"
-                ))
-            })?;
-        if notification.jsonrpc != "2.0" {
+        receive_provider_notification(self.runtime, &self.subscription_id).await
+    }
+}
+
+async fn receive_provider_notification(
+    runtime: &mut RuntimeClient,
+    subscription_id: &str,
+) -> Result<ProviderNotification, ClientError> {
+    let payload = runtime.connection.receive().await?;
+    let notification: JsonRpcNotification = serde_json::from_slice(&payload).map_err(|error| {
+        ClientError::Protocol(format!(
+            "provider notification is not valid public JSON-RPC: {error}"
+        ))
+    })?;
+    if notification.jsonrpc != "2.0" {
+        return Err(ClientError::Protocol(
+            "provider notification JSON-RPC version is not 2.0".to_owned(),
+        ));
+    }
+    let method = notification
+        .method
+        .parse::<RuntimeMethod>()
+        .map_err(|_| ClientError::Protocol("provider notification method is unknown".to_owned()))?;
+    match method {
+        RuntimeMethod::ProvidersChanged => {
+            let changed: ProvidersChangedNotification = serde_json::from_value(notification.params)
+                .map_err(|error| {
+                    ClientError::Protocol(format!(
+                        "provider change notification has the wrong shape: {error}"
+                    ))
+                })?;
+            validate_subscription(
+                subscription_id,
+                &changed.subscription_id,
+                "provider notification target does not match its subscription",
+            )?;
+            Ok(ProviderNotification::Changed(changed))
+        }
+        RuntimeMethod::ProvidersWatchEnded => {
+            let ended: ProviderWatchEndedNotification = serde_json::from_value(notification.params)
+                .map_err(|error| {
+                    ClientError::Protocol(format!(
+                        "provider watch end notification has the wrong shape: {error}"
+                    ))
+                })?;
+            validate_subscription(
+                subscription_id,
+                &ended.subscription_id,
+                "provider notification target does not match its subscription",
+            )?;
+            Ok(ProviderNotification::Ended(ended))
+        }
+        _ => Err(ClientError::Protocol(
+            "the dedicated provider stream received a different method".to_owned(),
+        )),
+    }
+}
+
+/// One provider notification from a connection-replacing read stream.
+#[derive(Debug)]
+pub enum ReconnectingProviderNotification {
+    /// The complete provider snapshot changed.
+    Changed(ProvidersChangedNotification),
+    /// Runtime ended the subscription for a typed authority or lifecycle reason.
+    Ended(ProviderWatchEndedNotification),
+    /// A replacement connection installed a new complete snapshot.
+    Reconnected(WatchProvidersResult),
+}
+
+/// A provider snapshot stream that owns and replaces its read-only Runtime connection.
+pub struct ReconnectingProviderSubscription {
+    locator: RuntimeLocator,
+    options: ClientOptions,
+    policy: ReconnectPolicy,
+    runtime: Option<RuntimeClient>,
+    subscription_id: String,
+    started: WatchProvidersResult,
+    terminal: bool,
+}
+
+impl ReconnectingProviderSubscription {
+    async fn open(
+        locator: RuntimeLocator,
+        options: ClientOptions,
+        policy: ReconnectPolicy,
+    ) -> Result<Self, ClientError> {
+        let (runtime, started) = open_provider_stream(&locator, &options, policy).await?;
+        Ok(Self {
+            locator,
+            options,
+            policy,
+            runtime: Some(runtime),
+            subscription_id: started.subscription_id.clone(),
+            started,
+            terminal: false,
+        })
+    }
+
+    /// Initial complete provider snapshot.
+    #[must_use]
+    pub const fn started(&self) -> &WatchProvidersResult {
+        &self.started
+    }
+
+    /// Wait for a changed snapshot, terminal reason, or replacement snapshot.
+    ///
+    /// # Errors
+    ///
+    /// A non-retryable protocol failure or reconnect deadline exhaustion.
+    pub async fn next(&mut self) -> Result<ReconnectingProviderNotification, ClientError> {
+        if self.terminal {
             return Err(ClientError::Protocol(
-                "provider notification JSON-RPC version is not 2.0".to_owned(),
+                "provider subscription already ended".to_owned(),
             ));
         }
-        let method = notification.method.parse::<RuntimeMethod>().map_err(|_| {
-            ClientError::Protocol("provider notification method is unknown".to_owned())
-        })?;
-        match method {
-            RuntimeMethod::ProvidersChanged => {
-                let changed: ProvidersChangedNotification =
-                    serde_json::from_value(notification.params).map_err(|error| {
-                        ClientError::Protocol(format!(
-                            "provider change notification has the wrong shape: {error}"
-                        ))
-                    })?;
-                self.validate_subscription(&changed.subscription_id)?;
-                Ok(ProviderNotification::Changed(changed))
+        let Some(runtime) = self.runtime.as_mut() else {
+            let started = self.reconnect().await?;
+            return Ok(ReconnectingProviderNotification::Reconnected(started));
+        };
+        match receive_provider_notification(runtime, &self.subscription_id).await {
+            Ok(ProviderNotification::Changed(changed)) => {
+                Ok(ReconnectingProviderNotification::Changed(changed))
             }
-            RuntimeMethod::ProvidersWatchEnded => {
-                let ended: ProviderWatchEndedNotification =
-                    serde_json::from_value(notification.params).map_err(|error| {
-                        ClientError::Protocol(format!(
-                            "provider watch end notification has the wrong shape: {error}"
-                        ))
-                    })?;
-                self.validate_subscription(&ended.subscription_id)?;
-                Ok(ProviderNotification::Ended(ended))
+            Ok(ProviderNotification::Ended(ended)) => {
+                self.runtime = None;
+                self.terminal = true;
+                Ok(ReconnectingProviderNotification::Ended(ended))
             }
-            _ => Err(ClientError::Protocol(
-                "the dedicated provider stream received a different method".to_owned(),
-            )),
+            Err(error) if retryable_connection_failure(&error) => {
+                self.runtime = None;
+                let started = self.reconnect().await?;
+                Ok(ReconnectingProviderNotification::Reconnected(started))
+            }
+            Err(error) => Err(error),
         }
     }
 
-    fn validate_subscription(&self, subscription_id: &str) -> Result<(), ClientError> {
-        if subscription_id != self.subscription_id {
-            return Err(ClientError::Protocol(
-                "provider notification target does not match its subscription".to_owned(),
-            ));
-        }
-        Ok(())
+    async fn reconnect(&mut self) -> Result<WatchProvidersResult, ClientError> {
+        let (runtime, started) =
+            open_provider_stream(&self.locator, &self.options, self.policy).await?;
+        self.subscription_id.clone_from(&started.subscription_id);
+        self.started = started.clone();
+        self.runtime = Some(runtime);
+        Ok(started)
     }
 }
 
@@ -1149,55 +1270,149 @@ impl SessionIndexSubscription<'_> {
     ///
     /// Transport failure or a notification that violates the selected public revision.
     pub async fn next(&mut self) -> Result<SessionIndexNotification, ClientError> {
-        let payload = self.runtime.connection.receive().await?;
-        let notification: JsonRpcNotification =
-            serde_json::from_slice(&payload).map_err(|error| {
-                ClientError::Protocol(format!(
-                    "session index notification is not valid public JSON-RPC: {error}"
-                ))
-            })?;
-        if notification.jsonrpc != "2.0" {
+        receive_session_index_notification(self.runtime, &self.subscription_id).await
+    }
+}
+
+async fn receive_session_index_notification(
+    runtime: &mut RuntimeClient,
+    subscription_id: &str,
+) -> Result<SessionIndexNotification, ClientError> {
+    let payload = runtime.connection.receive().await?;
+    let notification: JsonRpcNotification = serde_json::from_slice(&payload).map_err(|error| {
+        ClientError::Protocol(format!(
+            "session index notification is not valid public JSON-RPC: {error}"
+        ))
+    })?;
+    if notification.jsonrpc != "2.0" {
+        return Err(ClientError::Protocol(
+            "session index notification JSON-RPC version is not 2.0".to_owned(),
+        ));
+    }
+    let method = notification.method.parse::<RuntimeMethod>().map_err(|_| {
+        ClientError::Protocol("session index notification method is unknown".to_owned())
+    })?;
+    match method {
+        RuntimeMethod::SessionsIndexChanged => {
+            let changed: SessionIndexChangedNotification =
+                serde_json::from_value(notification.params).map_err(|error| {
+                    ClientError::Protocol(format!(
+                        "session index change notification has the wrong shape: {error}"
+                    ))
+                })?;
+            validate_subscription(
+                subscription_id,
+                &changed.subscription_id,
+                "session index notification target does not match its subscription",
+            )?;
+            Ok(SessionIndexNotification::Changed(changed))
+        }
+        RuntimeMethod::SessionsIndexEnded => {
+            let ended: SessionIndexEndedNotification = serde_json::from_value(notification.params)
+                .map_err(|error| {
+                    ClientError::Protocol(format!(
+                        "session index end notification has the wrong shape: {error}"
+                    ))
+                })?;
+            validate_subscription(
+                subscription_id,
+                &ended.subscription_id,
+                "session index notification target does not match its subscription",
+            )?;
+            Ok(SessionIndexNotification::Ended(ended))
+        }
+        _ => Err(ClientError::Protocol(
+            "the dedicated session index stream received a different method".to_owned(),
+        )),
+    }
+}
+
+/// One session-index notification from a connection-replacing read stream.
+#[derive(Debug)]
+pub enum ReconnectingSessionIndexNotification {
+    /// The complete authorized session snapshot changed.
+    Changed(SessionIndexChangedNotification),
+    /// Runtime ended the subscription for a typed authority or lifecycle reason.
+    Ended(SessionIndexEndedNotification),
+    /// A replacement connection installed a new complete authorized snapshot.
+    Reconnected(WatchSessionIndexResult),
+}
+
+/// A managed-session snapshot stream that owns and replaces its read-only Runtime connection.
+pub struct ReconnectingSessionIndexSubscription {
+    locator: RuntimeLocator,
+    options: ClientOptions,
+    policy: ReconnectPolicy,
+    runtime: Option<RuntimeClient>,
+    subscription_id: String,
+    started: WatchSessionIndexResult,
+    terminal: bool,
+}
+
+impl ReconnectingSessionIndexSubscription {
+    async fn open(
+        locator: RuntimeLocator,
+        options: ClientOptions,
+        policy: ReconnectPolicy,
+    ) -> Result<Self, ClientError> {
+        let (runtime, started) = open_session_index_stream(&locator, &options, policy).await?;
+        Ok(Self {
+            locator,
+            options,
+            policy,
+            runtime: Some(runtime),
+            subscription_id: started.subscription_id.clone(),
+            started,
+            terminal: false,
+        })
+    }
+
+    /// Initial complete authorized session snapshot.
+    #[must_use]
+    pub const fn started(&self) -> &WatchSessionIndexResult {
+        &self.started
+    }
+
+    /// Wait for a changed snapshot, terminal reason, or replacement snapshot.
+    ///
+    /// # Errors
+    ///
+    /// A non-retryable protocol failure or reconnect deadline exhaustion.
+    pub async fn next(&mut self) -> Result<ReconnectingSessionIndexNotification, ClientError> {
+        if self.terminal {
             return Err(ClientError::Protocol(
-                "session index notification JSON-RPC version is not 2.0".to_owned(),
+                "session index subscription already ended".to_owned(),
             ));
         }
-        let method = notification.method.parse::<RuntimeMethod>().map_err(|_| {
-            ClientError::Protocol("session index notification method is unknown".to_owned())
-        })?;
-        match method {
-            RuntimeMethod::SessionsIndexChanged => {
-                let changed: SessionIndexChangedNotification =
-                    serde_json::from_value(notification.params).map_err(|error| {
-                        ClientError::Protocol(format!(
-                            "session index change notification has the wrong shape: {error}"
-                        ))
-                    })?;
-                self.validate_subscription(&changed.subscription_id)?;
-                Ok(SessionIndexNotification::Changed(changed))
+        let Some(runtime) = self.runtime.as_mut() else {
+            let started = self.reconnect().await?;
+            return Ok(ReconnectingSessionIndexNotification::Reconnected(started));
+        };
+        match receive_session_index_notification(runtime, &self.subscription_id).await {
+            Ok(SessionIndexNotification::Changed(changed)) => {
+                Ok(ReconnectingSessionIndexNotification::Changed(changed))
             }
-            RuntimeMethod::SessionsIndexEnded => {
-                let ended: SessionIndexEndedNotification =
-                    serde_json::from_value(notification.params).map_err(|error| {
-                        ClientError::Protocol(format!(
-                            "session index end notification has the wrong shape: {error}"
-                        ))
-                    })?;
-                self.validate_subscription(&ended.subscription_id)?;
-                Ok(SessionIndexNotification::Ended(ended))
+            Ok(SessionIndexNotification::Ended(ended)) => {
+                self.runtime = None;
+                self.terminal = true;
+                Ok(ReconnectingSessionIndexNotification::Ended(ended))
             }
-            _ => Err(ClientError::Protocol(
-                "the dedicated session index stream received a different method".to_owned(),
-            )),
+            Err(error) if retryable_connection_failure(&error) => {
+                self.runtime = None;
+                let started = self.reconnect().await?;
+                Ok(ReconnectingSessionIndexNotification::Reconnected(started))
+            }
+            Err(error) => Err(error),
         }
     }
 
-    fn validate_subscription(&self, subscription_id: &str) -> Result<(), ClientError> {
-        if subscription_id != self.subscription_id {
-            return Err(ClientError::Protocol(
-                "session index notification target does not match its subscription".to_owned(),
-            ));
-        }
-        Ok(())
+    async fn reconnect(&mut self) -> Result<WatchSessionIndexResult, ClientError> {
+        let (runtime, started) =
+            open_session_index_stream(&self.locator, &self.options, self.policy).await?;
+        self.subscription_id.clone_from(&started.subscription_id);
+        self.started = started.clone();
+        self.runtime = Some(runtime);
+        Ok(started)
     }
 }
 
@@ -1325,6 +1540,17 @@ fn validate_session_notification_target(
         return Err(ClientError::Protocol(
             "session notification target does not match its subscription".to_owned(),
         ));
+    }
+    Ok(())
+}
+
+fn validate_subscription(
+    expected: &str,
+    actual: &str,
+    mismatch: &'static str,
+) -> Result<(), ClientError> {
+    if actual != expected {
+        return Err(ClientError::Protocol(mismatch.to_owned()));
     }
     Ok(())
 }
@@ -1470,20 +1696,72 @@ async fn open_event_stream(
     after: Option<EventCursor>,
     policy: ReconnectPolicy,
 ) -> Result<(RuntimeClient, WatchEventsResult), ClientError> {
+    open_read_stream(locator, options, policy, || {
+        let params = WatchEventsParams {
+            session_id: session_id.clone(),
+            after: after.clone(),
+        };
+        async move |runtime: &mut RuntimeClient| {
+            runtime
+                .call(RuntimeMethod::SessionsWatchEvents, &params)
+                .await
+        }
+    })
+    .await
+}
+
+async fn open_provider_stream(
+    locator: &RuntimeLocator,
+    options: &ClientOptions,
+    policy: ReconnectPolicy,
+) -> Result<(RuntimeClient, WatchProvidersResult), ClientError> {
+    open_read_stream(locator, options, policy, || {
+        async move |runtime: &mut RuntimeClient| {
+            runtime
+                .call(
+                    RuntimeMethod::ProvidersWatch,
+                    &WatchProvidersParams::default(),
+                )
+                .await
+        }
+    })
+    .await
+}
+
+async fn open_session_index_stream(
+    locator: &RuntimeLocator,
+    options: &ClientOptions,
+    policy: ReconnectPolicy,
+) -> Result<(RuntimeClient, WatchSessionIndexResult), ClientError> {
+    open_read_stream(locator, options, policy, || {
+        async move |runtime: &mut RuntimeClient| {
+            runtime
+                .call(
+                    RuntimeMethod::SessionsWatchIndex,
+                    &WatchSessionIndexParams::default(),
+                )
+                .await
+        }
+    })
+    .await
+}
+
+async fn open_read_stream<R, Factory, Operation>(
+    locator: &RuntimeLocator,
+    options: &ClientOptions,
+    policy: ReconnectPolicy,
+    mut factory: Factory,
+) -> Result<(RuntimeClient, R), ClientError>
+where
+    Factory: FnMut() -> Operation,
+    Operation: for<'client> AsyncFnOnce(&'client mut RuntimeClient) -> Result<R, ClientError>,
+{
     let deadline = tokio::time::Instant::now() + policy.deadline;
     let mut delay = policy.initial_delay;
     loop {
         let attempt = async {
             let mut runtime = locator.connect(options.clone()).await?;
-            let started = runtime
-                .call(
-                    RuntimeMethod::SessionsWatchEvents,
-                    &WatchEventsParams {
-                        session_id: session_id.clone(),
-                        after: after.clone(),
-                    },
-                )
-                .await?;
+            let started = factory()(&mut runtime).await?;
             Ok((runtime, started))
         }
         .await;

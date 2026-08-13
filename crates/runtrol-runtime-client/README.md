@@ -27,6 +27,10 @@ endpoint. Authentication, protocol, and authorization failures return immediatel
 that accepted cursor, and its `Reconnected` item carries the complete `WatchEventsResult`, including any replay gap.
 The wrapper never acquires control or retries input, approval, interrupt, or lifecycle mutations.
 
+`watch_providers_with_reconnect` and `watch_session_index_with_reconnect` replace lost read-only snapshot streams and
+surface the new complete snapshot as `Reconnected`. A typed end reason remains terminal and is never changed into a
+silent retry.
+
 After local enrollment approval, a consumer can reconnect with its credentials and start a provider-neutral session:
 
 ```rust,no_run

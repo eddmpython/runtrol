@@ -251,7 +251,7 @@ export type RuntimeSessionId = string;
 export interface ServerChallenge { readonly expiresAtMs: number; readonly instanceId: string; readonly nonce: string; readonly nonceId: string; }
 
 /** One Runtime-managed session in the immediate catalogue. */
-export interface SessionDescriptor { readonly label?: string | null; readonly lifecycle: LifecycleState; readonly providerId: ProviderId; readonly sessionGeneration: number; readonly sessionId: RuntimeSessionId; }
+export interface SessionDescriptor { readonly hot: boolean; readonly label?: string | null; readonly lifecycle: LifecycleState; readonly looksStuck: boolean; readonly nativeSessionId?: string | null; readonly providerId: ProviderId; readonly sessionGeneration: number; readonly sessionId: RuntimeSessionId; readonly workspace: string; }
 
 /** A changed authorized managed-session snapshot. */
 export interface SessionIndexChangedNotification { readonly snapshot: ManagedSessionList; readonly subscriptionId: string; }

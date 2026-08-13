@@ -168,6 +168,105 @@ test("event reconnect resumes only from the last explicitly accepted cursor", as
   subscription.close();
 });
 
+test("provider snapshot reconnect publishes the replacement snapshot", async () => {
+  const instanceId = `rtm_${"b".repeat(32)}`;
+  const first = new DisconnectingTransport([
+    ...framesForInitialization(instanceId),
+    {
+      jsonrpc: "2.0",
+      id: 2,
+      result: { subscriptionId: "providers_first", snapshot: { providers: [] } },
+    },
+  ]);
+  const second = new DisconnectingTransport([
+    ...framesForInitialization(instanceId),
+    {
+      jsonrpc: "2.0",
+      id: 2,
+      result: {
+        subscriptionId: "providers_second",
+        snapshot: {
+          providers: [{
+            providerId: "fixture",
+            displayName: "Fixture",
+            installation: { state: "usable", version: "1.0.0" },
+          }],
+        },
+      },
+    },
+  ]);
+  const transports = [first, second];
+  const connector = new RuntimeConnector(async () => {
+    const transport = transports.shift();
+    if (!transport) throw new RuntimeTransportError("fixture transports exhausted");
+    return transport;
+  });
+  const subscription = await connector.watchProvidersWithReconnect(
+    validatedLocator(instanceId, "fixture", "0.1.1"),
+    { name: "fixture", version: "1.0.0" },
+    { initialDelayMs: 1, maximumDelayMs: 2, deadlineMs: 100 },
+  );
+  const reconnected = await subscription.next();
+  assert.equal(reconnected.kind, "reconnected");
+  if (reconnected.kind !== "reconnected") throw new Error("provider reconnect disappeared");
+  assert.equal(reconnected.started.snapshot.providers[0]?.providerId, "fixture");
+  subscription.close();
+});
+
+test("session index reconnect publishes the replacement authorized snapshot", async () => {
+  const instanceId = `rtm_${"c".repeat(32)}`;
+  const first = new DisconnectingTransport([
+    ...framesForInitialization(instanceId),
+    {
+      jsonrpc: "2.0",
+      id: 2,
+      result: {
+        subscriptionId: "sessions_first",
+        snapshot: { sessions: [], warnings: [] },
+      },
+    },
+  ]);
+  const second = new DisconnectingTransport([
+    ...framesForInitialization(instanceId),
+    {
+      jsonrpc: "2.0",
+      id: 2,
+      result: {
+        subscriptionId: "sessions_second",
+        snapshot: {
+          sessions: [{
+            sessionId: "session_fixture",
+            providerId: "fixture",
+            nativeSessionId: "native_fixture",
+            workspace: "C:\\workspace",
+            hot: false,
+            lifecycle: "cold",
+            looksStuck: false,
+            sessionGeneration: 2,
+          }],
+          warnings: [],
+        },
+      },
+    },
+  ]);
+  const transports = [first, second];
+  const connector = new RuntimeConnector(async () => {
+    const transport = transports.shift();
+    if (!transport) throw new RuntimeTransportError("fixture transports exhausted");
+    return transport;
+  });
+  const subscription = await connector.watchSessionIndexWithReconnect(
+    validatedLocator(instanceId, "fixture", "0.1.1"),
+    { name: "fixture", version: "1.0.0" },
+    { initialDelayMs: 1, maximumDelayMs: 2, deadlineMs: 100 },
+  );
+  const reconnected = await subscription.next();
+  assert.equal(reconnected.kind, "reconnected");
+  if (reconnected.kind !== "reconnected") throw new Error("session reconnect disappeared");
+  assert.equal(reconnected.started.snapshot.sessions[0]?.workspace, "C:\\workspace");
+  subscription.close();
+});
+
 function framesForInitialization(instanceId: string): unknown[] {
   return [
     {

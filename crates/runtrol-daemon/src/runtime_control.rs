@@ -527,7 +527,11 @@ impl RuntimeControl {
             session: SessionDescriptor {
                 session_id: control.session_id.clone(),
                 provider_id: runtrol_runtime_protocol::ProviderId::new(provider.as_str()),
+                native_session_id: live.native.map(str::to_owned),
+                workspace: live.workspace.to_string(),
+                hot: true,
                 lifecycle: public_lifecycle(live.state.lifecycle()),
+                looks_stuck: live.state.looks_stuck(),
                 session_generation: live.state.generation(),
                 label: None,
             },

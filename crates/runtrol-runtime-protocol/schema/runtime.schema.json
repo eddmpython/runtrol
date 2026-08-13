@@ -2615,6 +2615,10 @@
       "additionalProperties": false,
       "description": "One Runtime-managed session in the immediate catalogue.",
       "properties": {
+        "hot": {
+          "description": "Whether Runtime currently owns a provider process for this session.",
+          "type": "boolean"
+        },
         "label": {
           "description": "Operator-owned label, never derived from conversation content.",
           "type": [
@@ -2625,6 +2629,17 @@
         "lifecycle": {
           "$ref": "#/$defs/LifecycleState",
           "description": "Current supervision state."
+        },
+        "looksStuck": {
+          "description": "Structural stalled-turn hint derived by Core without interpreting conversation content.",
+          "type": "boolean"
+        },
+        "nativeSessionId": {
+          "description": "Provider-owned resume identity when the official live or stored pointer exposes one.",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "providerId": {
           "$ref": "#/$defs/ProviderId",
@@ -2639,12 +2654,19 @@
         "sessionId": {
           "$ref": "#/$defs/RuntimeSessionId",
           "description": "Stable Runtime selection value."
+        },
+        "workspace": {
+          "description": "Exact canonical workspace display path, already filtered through the integration's approved roots.",
+          "type": "string"
         }
       },
       "required": [
         "sessionId",
         "providerId",
+        "workspace",
+        "hot",
         "lifecycle",
+        "looksStuck",
         "sessionGeneration"
       ],
       "type": "object"

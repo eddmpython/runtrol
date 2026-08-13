@@ -200,6 +200,54 @@ export class RuntimeConnector {
     await subscription.initialize();
     return subscription;
   }
+
+  public async watchProvidersWithReconnect(
+    locator: ValidatedLocator,
+    options: ClientOptions,
+    policy: ReconnectPolicy = {},
+  ): Promise<ReconnectingProviderSubscription> {
+    const subscription = new ReconnectingProviderSubscription(
+      this,
+      locator,
+      options,
+      policy,
+    );
+    await subscription.initialize();
+    return subscription;
+  }
+
+  public async watchProvidersWithReconnectSystem(
+    options: ClientOptions,
+    policy: ReconnectPolicy = {},
+  ): Promise<ReconnectingProviderSubscription> {
+    const subscription = new ReconnectingProviderSubscription(this, null, options, policy);
+    await subscription.initialize();
+    return subscription;
+  }
+
+  public async watchSessionIndexWithReconnect(
+    locator: ValidatedLocator,
+    options: ClientOptions,
+    policy: ReconnectPolicy = {},
+  ): Promise<ReconnectingSessionIndexSubscription> {
+    const subscription = new ReconnectingSessionIndexSubscription(
+      this,
+      locator,
+      options,
+      policy,
+    );
+    await subscription.initialize();
+    return subscription;
+  }
+
+  public async watchSessionIndexWithReconnectSystem(
+    options: ClientOptions,
+    policy: ReconnectPolicy = {},
+  ): Promise<ReconnectingSessionIndexSubscription> {
+    const subscription = new ReconnectingSessionIndexSubscription(this, null, options, policy);
+    await subscription.initialize();
+    return subscription;
+  }
 }
 
 export class RuntimeClient {
@@ -355,6 +403,10 @@ export type ProviderNotification =
   | { readonly kind: "changed"; readonly changed: ProvidersChangedNotification }
   | { readonly kind: "ended"; readonly ended: ProviderWatchEndedNotification };
 
+export type ReconnectingProviderNotification =
+  | ProviderNotification
+  | { readonly kind: "reconnected"; readonly started: WatchProvidersResult };
+
 export class ProviderSubscription {
   public constructor(
     private readonly transport: RuntimeTransport,
@@ -386,10 +438,90 @@ export class ProviderSubscription {
     throw new RuntimeProtocolError("dedicated provider stream received a different method");
   }
 
+  public close(): void {
+    this.transport.close();
+  }
+
   private validateTarget(subscriptionId: string): void {
     if (subscriptionId !== this.started.subscriptionId) {
       throw new RuntimeProtocolError("provider notification target does not match its subscription");
     }
+  }
+}
+
+export class ReconnectingProviderSubscription {
+  readonly #abort = new AbortController();
+  readonly #policy: ReconnectPolicy;
+  #current: { runtime: RuntimeClient; subscription: ProviderSubscription } | null = null;
+  #started: WatchProvidersResult | null = null;
+  #terminal = false;
+
+  public constructor(
+    private readonly connector: RuntimeConnector,
+    private readonly locator: ValidatedLocator | null,
+    private readonly options: ClientOptions,
+    policy: ReconnectPolicy,
+  ) {
+    const signal = policy.signal
+      ? AbortSignal.any([policy.signal, this.#abort.signal])
+      : this.#abort.signal;
+    this.#policy = { ...policy, signal };
+  }
+
+  public async initialize(): Promise<void> {
+    await this.#open();
+  }
+
+  public get started(): WatchProvidersResult {
+    if (!this.#started) throw new RuntimeProtocolError("provider stream is not initialized");
+    return this.#started;
+  }
+
+  public async next(): Promise<ReconnectingProviderNotification> {
+    if (this.#terminal) throw new RuntimeProtocolError("provider subscription already ended");
+    if (!this.#current) {
+      const started = await this.#open();
+      return { kind: "reconnected", started };
+    }
+    try {
+      const notification = await this.#current.subscription.next();
+      if (notification.kind === "ended") {
+        this.#terminal = true;
+        this.#closeCurrent();
+      }
+      return notification;
+    } catch (error) {
+      this.#closeCurrent();
+      if (!retryableConnectionFailure(error)) throw error;
+      const started = await this.#open();
+      return { kind: "reconnected", started };
+    }
+  }
+
+  public close(): void {
+    this.#abort.abort(new RuntimeTransportError("reconnecting provider stream was closed"));
+    this.#closeCurrent();
+  }
+
+  async #open(): Promise<WatchProvidersResult> {
+    const opened = await retryConnection(async () => {
+      const runtime = await connectSelected(this.connector, this.locator, this.options);
+      try {
+        const subscription = await runtime.providers().watch();
+        return { runtime, subscription };
+      } catch (error) {
+        runtime.close();
+        throw error;
+      }
+    }, this.#policy);
+    this.#current = opened;
+    this.#started = opened.subscription.started;
+    return opened.subscription.started;
+  }
+
+  #closeCurrent(): void {
+    this.#current?.subscription.close();
+    this.#current = null;
   }
 }
 
@@ -503,6 +635,10 @@ export type SessionIndexNotification =
   | { readonly kind: "changed"; readonly changed: SessionIndexChangedNotification }
   | { readonly kind: "ended"; readonly ended: SessionIndexEndedNotification };
 
+export type ReconnectingSessionIndexNotification =
+  | SessionIndexNotification
+  | { readonly kind: "reconnected"; readonly started: WatchSessionIndexResult };
+
 export class SessionIndexSubscription {
   public constructor(
     private readonly transport: RuntimeTransport,
@@ -534,10 +670,90 @@ export class SessionIndexSubscription {
     throw new RuntimeProtocolError("dedicated session index stream received a different method");
   }
 
+  public close(): void {
+    this.transport.close();
+  }
+
   private validateTarget(subscriptionId: string): void {
     if (subscriptionId !== this.started.subscriptionId) {
       throw new RuntimeProtocolError("session index notification target does not match its subscription");
     }
+  }
+}
+
+export class ReconnectingSessionIndexSubscription {
+  readonly #abort = new AbortController();
+  readonly #policy: ReconnectPolicy;
+  #current: { runtime: RuntimeClient; subscription: SessionIndexSubscription } | null = null;
+  #started: WatchSessionIndexResult | null = null;
+  #terminal = false;
+
+  public constructor(
+    private readonly connector: RuntimeConnector,
+    private readonly locator: ValidatedLocator | null,
+    private readonly options: ClientOptions,
+    policy: ReconnectPolicy,
+  ) {
+    const signal = policy.signal
+      ? AbortSignal.any([policy.signal, this.#abort.signal])
+      : this.#abort.signal;
+    this.#policy = { ...policy, signal };
+  }
+
+  public async initialize(): Promise<void> {
+    await this.#open();
+  }
+
+  public get started(): WatchSessionIndexResult {
+    if (!this.#started) throw new RuntimeProtocolError("session index stream is not initialized");
+    return this.#started;
+  }
+
+  public async next(): Promise<ReconnectingSessionIndexNotification> {
+    if (this.#terminal) throw new RuntimeProtocolError("session index subscription already ended");
+    if (!this.#current) {
+      const started = await this.#open();
+      return { kind: "reconnected", started };
+    }
+    try {
+      const notification = await this.#current.subscription.next();
+      if (notification.kind === "ended") {
+        this.#terminal = true;
+        this.#closeCurrent();
+      }
+      return notification;
+    } catch (error) {
+      this.#closeCurrent();
+      if (!retryableConnectionFailure(error)) throw error;
+      const started = await this.#open();
+      return { kind: "reconnected", started };
+    }
+  }
+
+  public close(): void {
+    this.#abort.abort(new RuntimeTransportError("reconnecting session index was closed"));
+    this.#closeCurrent();
+  }
+
+  async #open(): Promise<WatchSessionIndexResult> {
+    const opened = await retryConnection(async () => {
+      const runtime = await connectSelected(this.connector, this.locator, this.options);
+      try {
+        const subscription = await runtime.sessions().watchIndex();
+        return { runtime, subscription };
+      } catch (error) {
+        runtime.close();
+        throw error;
+      }
+    }, this.#policy);
+    this.#current = opened;
+    this.#started = opened.subscription.started;
+    return opened.subscription.started;
+  }
+
+  #closeCurrent(): void {
+    this.#current?.subscription.close();
+    this.#current = null;
   }
 }
 
@@ -662,9 +878,7 @@ export class ReconnectingEventSubscription {
 
   async #open(): Promise<WatchEventsResult> {
     const opened = await retryConnection(async () => {
-      const runtime = this.locator
-        ? await this.connector.connect(this.locator, this.options)
-        : await this.connector.connectSystem(this.options);
+      const runtime = await connectSelected(this.connector, this.locator, this.options);
       try {
         const subscription = await runtime.sessions().watchEvents({
           sessionId: this.params.sessionId,
@@ -685,6 +899,14 @@ export class ReconnectingEventSubscription {
     this.#current?.subscription.close();
     this.#current = null;
   }
+}
+
+function connectSelected(
+  connector: RuntimeConnector,
+  locator: ValidatedLocator | null,
+  options: ClientOptions,
+): Promise<RuntimeClient> {
+  return locator ? connector.connect(locator, options) : connector.connectSystem(options);
 }
 
 async function initializeRuntime(

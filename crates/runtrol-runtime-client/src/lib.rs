@@ -11,8 +11,10 @@ mod locator;
 pub use client::{
     ApprovalClient, ClientOptions, EnrollmentProposal, EventSubscription, IntegrationClient,
     ProviderClient, ProviderNotification, ProviderSubscription, ReconnectPolicy,
-    ReconnectingEventSubscription, ReconnectingSessionNotification, RuntimeClient, SessionClient,
-    SessionIndexNotification, SessionIndexSubscription, SessionNotification,
+    ReconnectingEventSubscription, ReconnectingProviderNotification,
+    ReconnectingProviderSubscription, ReconnectingSessionIndexNotification,
+    ReconnectingSessionIndexSubscription, ReconnectingSessionNotification, RuntimeClient,
+    SessionClient, SessionIndexNotification, SessionIndexSubscription, SessionNotification,
 };
 pub use identity::{IntegrationCredentials, IntegrationIdentity};
 pub use locator::{LocatorError, LocatorState, RuntimeLocator, ValidatedLocator};

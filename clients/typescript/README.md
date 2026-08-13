@@ -58,6 +58,10 @@ cursor and returns a `reconnected` item with the full start boundary and any rep
 control or retries input, approval, interrupt, or lifecycle mutations. `watchEventsWithReconnect` provides the same
 cursor contract for callers that already own a fixed validated locator.
 
+`watchProvidersWithReconnectSystem` and `watchSessionIndexWithReconnectSystem` replace lost read-only snapshot
+streams and surface the new complete snapshot as a `reconnected` item. A typed end reason remains terminal. Fixed
+validated-locator variants are available for explicit test and host-managed locator lifecycles.
+
 Managed-session changes use a dedicated snapshot stream, so an integration does not poll or infer changes from
 provider output:
 

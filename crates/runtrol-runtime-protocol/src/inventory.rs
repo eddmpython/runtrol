@@ -160,8 +160,17 @@ pub struct SessionDescriptor {
     pub session_id: RuntimeSessionId,
     /// Opaque provider selection value.
     pub provider_id: ProviderId,
+    /// Provider-owned resume identity when the official live or stored pointer exposes one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub native_session_id: Option<String>,
+    /// Exact canonical workspace display path, already filtered through the integration's approved roots.
+    pub workspace: String,
+    /// Whether Runtime currently owns a provider process for this session.
+    pub hot: bool,
     /// Current supervision state.
     pub lifecycle: LifecycleState,
+    /// Structural stalled-turn hint derived by Core without interpreting conversation content.
+    pub looks_stuck: bool,
     /// Monotonic lifecycle generation used to reject stale control actions.
     pub session_generation: u64,
     /// Operator-owned label, never derived from conversation content.
