@@ -23,6 +23,7 @@ mod integration_admin;
 mod mission;
 mod provider_prepare;
 mod provider_update;
+mod relay;
 mod runtime_audit;
 mod runtime_auth;
 mod runtime_control;
@@ -36,10 +37,11 @@ mod session_catalogue;
 
 pub use compose::{ComposeError, Composed};
 pub use crash::record_panics_at;
+pub use relay::{RelayIngress, RelayStage, RelayStatus};
 pub use scope::{Needed, WallRefusal, allowed, needed};
 pub use serve::{
     MAX_BLOCKING_PROVIDER_OPERATIONS, MODEL_PREPARATION_BUDGET_MS, PhoneIngress, PhoneIngressError,
-    ServeError, serve, serve_with_phone,
+    ServeError, serve, serve_with_phone, serve_with_relay,
 };
 
 /// Where a daemon for this home listens.

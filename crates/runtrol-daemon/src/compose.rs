@@ -27,7 +27,7 @@ use runtrol_ledger::Ledger;
 use runtrol_provider::WallMs;
 use runtrol_security::{DeviceId, DeviceLabels, DeviceScope, GrantLedger};
 use runtrol_store::{DeviceRow, Store};
-use runtrol_transport::{CredentialFingerprint, PublicKey, StaticKeypair};
+use runtrol_transport::{CredentialFingerprint, PublicKey, RelaySeed, StaticKeypair};
 use tokio::sync::Mutex;
 
 /// The daemon could not be assembled.
@@ -68,6 +68,14 @@ pub enum ComposeError {
     /// Stored private key material could not reconstruct the configured Noise identity.
     #[error(transparent)]
     Crypto(#[from] runtrol_transport::CryptoError),
+
+    /// Relay-only route material could not be derived from the protected machine identity.
+    #[error(transparent)]
+    Relay(#[from] runtrol_transport::RelayError),
+
+    /// A headless test composition has no production native machine secret.
+    #[error("relay ingress requires a protected machine identity")]
+    RelayIdentityUnavailable,
 
     /// A stored key is not a locally minted device identifier.
     #[error("a stored device identifier is not a locally minted UUIDv7")]
@@ -131,11 +139,20 @@ pub struct Composed {
     /// Windows uses DPAPI, macOS uses Keychain Services, and Unix uses Secret Service. No platform uses a raw-key
     /// fallback.
     pub pc_identity: Option<Arc<StaticKeypair>>,
+    /// Domain-separated relay route material derived from the same protected machine secret.
+    ///
+    /// It cannot reveal or reconstruct the PC Noise private key and has no diagnostic representation.
+    pub relay_seed: Option<Arc<RelaySeed>>,
     /// The table that turns a kind into a driver.
     ///
     /// Kept because building a driver is deferred: it needs a resolved program, which needs a probe, which happens when
     /// something asks rather than at boot.
     pub kinds: &'static [DriverKind],
+}
+
+struct LoadedMachineIdentity {
+    noise: Option<Arc<StaticKeypair>>,
+    relay: Option<Arc<RelaySeed>>,
 }
 
 impl Composed {
@@ -174,7 +191,7 @@ impl Composed {
             .recover(&ledger, &runtime_ids, &mut growth)
             .map_err(ComposeError::MissionGates)?;
         let (granted, paired_devices) = restore_device_authority(&store)?;
-        let pc_identity = load_machine_identity(&home)?;
+        let machine_identity = load_machine_identity(&home)?;
         Ok(Self {
             home,
             store,
@@ -186,7 +203,8 @@ impl Composed {
             registry,
             granted,
             paired_devices,
-            pc_identity,
+            pc_identity: machine_identity.noise,
+            relay_seed: machine_identity.relay,
             kinds: builtin.kinds,
         })
     }
@@ -225,7 +243,7 @@ impl Composed {
             .recover(&ledger, &runtime_ids, &mut growth)
             .map_err(ComposeError::MissionGates)?;
         let (granted, paired_devices) = restore_device_authority(&store)?;
-        let pc_identity = load_machine_identity_for_tests(&home)?;
+        let machine_identity = load_machine_identity_for_tests(&home)?;
         Ok(Self {
             home,
             store,
@@ -237,7 +255,8 @@ impl Composed {
             registry,
             granted,
             paired_devices,
-            pc_identity,
+            pc_identity: machine_identity.noise,
+            relay_seed: machine_identity.relay,
             kinds: builtin.kinds,
         })
     }
@@ -247,18 +266,36 @@ impl Composed {
     pub fn driver_for(&self, kind: &str) -> Option<&'static DriverKind> {
         self.kinds.iter().find(|entry| entry.kind == kind)
     }
+
+    /// Build an optional remote ingress for one exact relay origin.
+    ///
+    /// # Errors
+    ///
+    /// [`ComposeError::RelayIdentityUnavailable`] without a production native identity, or [`ComposeError::Relay`]
+    /// when the origin or fixed key derivation is invalid.
+    pub fn relay_ingress(&self, origin: &str) -> Result<crate::RelayIngress, ComposeError> {
+        let seed = self
+            .relay_seed
+            .as_ref()
+            .ok_or(ComposeError::RelayIdentityUnavailable)?;
+        Ok(crate::RelayIngress::new(seed.endpoint(origin)?))
+    }
 }
 
-fn load_machine_identity(home: &RuntrolHome) -> Result<Option<Arc<StaticKeypair>>, ComposeError> {
+fn load_machine_identity(home: &RuntrolHome) -> Result<LoadedMachineIdentity, ComposeError> {
     let secret = runtrol_vault::MachineSecret::load_or_create(home.paths().machine_identity())?;
     let identity = StaticKeypair::from_private(secret.as_bytes())?;
-    Ok(Some(Arc::new(identity)))
+    let relay_seed = RelaySeed::derive(secret.as_bytes())?;
+    Ok(LoadedMachineIdentity {
+        noise: Some(Arc::new(identity)),
+        relay: Some(Arc::new(relay_seed)),
+    })
 }
 
 #[cfg(all(test, windows))]
 fn load_machine_identity_for_tests(
     home: &RuntrolHome,
-) -> Result<Option<Arc<StaticKeypair>>, ComposeError> {
+) -> Result<LoadedMachineIdentity, ComposeError> {
     load_machine_identity(home)
 }
 
@@ -267,10 +304,11 @@ fn load_machine_identity_for_tests(
     clippy::unnecessary_wraps,
     reason = "headless test runners may not expose the production desktop user's native secret service"
 )]
-fn load_machine_identity_for_tests(
-    _: &RuntrolHome,
-) -> Result<Option<Arc<StaticKeypair>>, ComposeError> {
-    Ok(None)
+fn load_machine_identity_for_tests(_: &RuntrolHome) -> Result<LoadedMachineIdentity, ComposeError> {
+    Ok(LoadedMachineIdentity {
+        noise: None,
+        relay: None,
+    })
 }
 
 fn restore_device_authority(

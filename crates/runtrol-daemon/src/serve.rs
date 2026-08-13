@@ -196,6 +196,7 @@ struct PhonePlane {
 enum SurfaceConnection {
     Local(Connection),
     Phone(Box<NoiseWebSocket>),
+    Relay(Box<crate::relay::RelaySurface>),
 }
 
 impl SurfaceConnection {
@@ -203,6 +204,7 @@ impl SurfaceConnection {
         match self {
             Self::Local(connection) => connection.recv().await.map_err(SurfaceError::from),
             Self::Phone(connection) => connection.recv().await.map_err(SurfaceError::from),
+            Self::Relay(connection) => connection.recv().await.map_err(SurfaceError::from),
         }
     }
 
@@ -210,6 +212,7 @@ impl SurfaceConnection {
         match self {
             Self::Local(connection) => connection.send(payload).await.map_err(SurfaceError::from),
             Self::Phone(connection) => connection.send(payload).await.map_err(SurfaceError::from),
+            Self::Relay(connection) => connection.send(payload).await.map_err(SurfaceError::from),
         }
     }
 
@@ -223,6 +226,10 @@ impl SurfaceConnection {
                 .send_parts(parts)
                 .await
                 .map_err(SurfaceError::from),
+            Self::Relay(connection) => connection
+                .send_parts(parts)
+                .await
+                .map_err(SurfaceError::from),
         }
     }
 }
@@ -233,6 +240,8 @@ enum SurfaceError {
     Local(#[from] TransportError),
     #[error(transparent)]
     Phone(#[from] WebSocketLinkError),
+    #[error(transparent)]
+    Relay(#[from] crate::relay::RelaySurfaceError),
 }
 
 struct ConnectionServices {
@@ -545,7 +554,40 @@ pub async fn serve_with_phone(
     ingress: PhoneIngress,
 ) -> Result<(), ServeError> {
     let phone = phone_plane(&composed, ingress)?;
-    serve_surfaces(composed, &mut listener, SessionManager::new(), Some(phone)).await
+    serve_surfaces(
+        composed,
+        &mut listener,
+        SessionManager::new(),
+        Some(phone),
+        None,
+    )
+    .await
+}
+
+/// Serve local surfaces and one reconnecting encrypted relay through the same session owner.
+///
+/// Relay unavailability never ends local service or a provider process. A remote surface is created only after a
+/// relay-bound Noise handshake authenticates one restored paired device.
+///
+/// # Errors
+///
+/// The same failures as [`serve`], plus [`ServeError::PhoneIdentityUnavailable`] when no protected PC key exists.
+pub async fn serve_with_relay(
+    composed: Composed,
+    mut listener: Listener,
+    ingress: crate::relay::RelayIngress,
+) -> Result<(), ServeError> {
+    if composed.pc_identity.is_none() {
+        return Err(ServeError::PhoneIdentityUnavailable);
+    }
+    serve_surfaces(
+        composed,
+        &mut listener,
+        SessionManager::new(),
+        None,
+        Some(ingress),
+    )
+    .await
 }
 
 fn phone_plane(composed: &Composed, ingress: PhoneIngress) -> Result<PhonePlane, ServeError> {
@@ -569,7 +611,7 @@ async fn serve_sessions(
     listener: &mut Listener,
     sessions: SessionManager,
 ) -> Result<(), ServeError> {
-    serve_surfaces(composed, listener, sessions, None).await
+    serve_surfaces(composed, listener, sessions, None, None).await
 }
 
 #[expect(
@@ -581,6 +623,7 @@ async fn serve_surfaces(
     listener: &mut Listener,
     mut sessions: SessionManager,
     phone: Option<PhonePlane>,
+    relay: Option<crate::relay::RelayIngress>,
 ) -> Result<(), ServeError> {
     let composed = Arc::new(composed);
     let runtime_instance =
@@ -635,6 +678,20 @@ async fn serve_surfaces(
     // process slots are bounded separately by MAX_HOT.
     let discovering = Arc::new(Mutex::new(()));
     let mut connections = JoinSet::new();
+    let mut relay_hub = match relay {
+        Some(relay) => {
+            let identity = composed
+                .pc_identity
+                .clone()
+                .ok_or(ServeError::PhoneIdentityUnavailable)?;
+            let paired_devices: Arc<[crate::compose::PairedDevice]> =
+                composed.paired_devices.clone().into();
+            let (hub, supervisor) = crate::relay::supervise(relay, identity, paired_devices);
+            connections.spawn(supervisor);
+            Some(hub)
+        }
+        None => None,
+    };
     let (upgrading, mut upgrades) = mpsc::channel::<NoiseUpgrade>(PHONE_UPGRADE_QUEUE);
     connections.spawn(automatic_provider_updates(
         Arc::clone(&composed),
@@ -748,6 +805,25 @@ async fn serve_surfaces(
                         services,
                     ).await;
                 });
+            }
+
+            arrived = accept_relay(relay_hub.as_mut()), if relay_hub.is_some() => {
+                let Some(arrival) = arrived else {
+                    relay_hub = None;
+                    continue;
+                };
+                connections.spawn(converse(
+                    SurfaceConnection::Relay(Box::new(arrival.surface)),
+                    Conversation::from_device(arrival.device),
+                    ConnectionServices {
+                        asking: asking.clone(),
+                        reserving: reserving.clone(),
+                        returning: returning.clone(),
+                        composed: Arc::clone(&composed),
+                        discovering: Arc::clone(&discovering),
+                        session_index: session_index.subscribe(),
+                    },
+                ));
             }
 
             Some(reservation) = reservations.recv() => match reservation {
@@ -1927,6 +2003,15 @@ async fn accept_phone(phone: Option<&PhonePlane>) -> Result<TcpStream, std::io::
     }
 }
 
+async fn accept_relay(
+    relay: Option<&mut crate::relay::RelayHub>,
+) -> Option<crate::relay::RelayArrival> {
+    match relay {
+        Some(relay) => relay.accept().await,
+        None => core::future::pending().await,
+    }
+}
+
 fn encode_response(response: &Response) -> Vec<u8> {
     serde_json::to_vec(response).unwrap_or_else(|error| {
         let said = refuse(&format!("this daemon could not write its own answer: {error}"));
@@ -2178,7 +2263,7 @@ mod tests {
             let phone_address = ingress.local_addr().expect("phone address");
             let phone_plane = phone_plane(&composed, ingress).expect("phone plane");
             let serving = tokio::spawn(async move {
-                serve_surfaces(composed, &mut listener, sessions, Some(phone_plane)).await
+                serve_surfaces(composed, &mut listener, sessions, Some(phone_plane), None).await
             });
             (
                 Self {

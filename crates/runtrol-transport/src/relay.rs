@@ -37,6 +37,9 @@ use crate::{ApprovedDestination, EgressPolicy, EncryptedRecord, MAX_ENCRYPTED_RE
 
 const TOKEN_BYTES: usize = 32;
 const TOKEN_TEXT_BYTES: usize = 43;
+const RELAY_SEED_SALT: &[u8] = b"runtrol/relay-seed/1";
+const RELAY_ROUTE_INFO: &[u8] = b"runtrol/relay-route/1";
+const RELAY_CREDENTIAL_INFO: &[u8] = b"runtrol/relay-credential/1";
 const PEER_ID_BYTES: usize = 32;
 const RELAY_PORT: u16 = 443;
 const RELAY_PROTOCOL: &str = "runtrol.relay.v1";
@@ -47,6 +50,64 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 const WEBSOCKET_GUID: &[u8] = b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 
 type RelayWebSocket = WebSocket<TokioIo<Upgraded>>;
+
+/// A domain-separated relay seed derived from the protected machine secret.
+///
+/// It deliberately implements neither `Debug`, `Display`, nor `Clone`. Per-origin route material is stable across
+/// daemon restarts but differs between relay operators.
+#[derive(Zeroize, ZeroizeOnDrop)]
+pub struct RelaySeed([u8; TOKEN_BYTES]);
+
+impl RelaySeed {
+    /// Derive relay-only key material from a protected machine secret.
+    ///
+    /// # Errors
+    ///
+    /// [`RelayError::KeyDerivation`] if `HKDF-SHA256` rejects the fixed output length.
+    pub fn derive(machine_secret: &[u8; TOKEN_BYTES]) -> Result<Self, RelayError> {
+        let derivation = hkdf::Hkdf::<sha2::Sha256>::new(Some(RELAY_SEED_SALT), machine_secret);
+        let mut seed = Zeroizing::new([0_u8; TOKEN_BYTES]);
+        derivation
+            .expand(b"runtrol relay seed", &mut *seed)
+            .map_err(|_| RelayError::KeyDerivation)?;
+        Ok(Self(*seed))
+    }
+
+    /// Derive one stable route and credential for an exact relay origin.
+    ///
+    /// # Errors
+    ///
+    /// [`RelayError::InvalidOrigin`] for an unsupported origin or [`RelayError::KeyDerivation`] if `HKDF-SHA256`
+    /// rejects a fixed output length.
+    pub fn endpoint(&self, origin: &str) -> Result<RelayEndpoint, RelayError> {
+        let origin = RelayOrigin::parse(origin)?;
+        let derivation =
+            hkdf::Hkdf::<sha2::Sha256>::from_prk(&self.0).map_err(|_| RelayError::KeyDerivation)?;
+        let mut route = [0_u8; TOKEN_BYTES];
+        let mut credential = Zeroizing::new([0_u8; TOKEN_BYTES]);
+        let mut route_info = Zeroizing::new(Vec::with_capacity(
+            RELAY_ROUTE_INFO.len() + origin.as_str().len(),
+        ));
+        route_info.extend_from_slice(RELAY_ROUTE_INFO);
+        route_info.extend_from_slice(origin.as_str().as_bytes());
+        derivation
+            .expand(&route_info, &mut route)
+            .map_err(|_| RelayError::KeyDerivation)?;
+        let mut credential_info = Zeroizing::new(Vec::with_capacity(
+            RELAY_CREDENTIAL_INFO.len() + origin.as_str().len(),
+        ));
+        credential_info.extend_from_slice(RELAY_CREDENTIAL_INFO);
+        credential_info.extend_from_slice(origin.as_str().as_bytes());
+        derivation
+            .expand(&credential_info, &mut *credential)
+            .map_err(|_| RelayError::KeyDerivation)?;
+        Ok(RelayEndpoint::new(
+            origin,
+            RelayRoute::from_bytes(route),
+            RelayCredential::from_bytes(*credential),
+        ))
+    }
+}
 
 /// One canonical HTTPS origin for a relay deployment.
 ///
@@ -125,8 +186,10 @@ pub struct RelayCredential(String);
 impl RelayCredential {
     /// Encode credential bytes without exposing a formatting implementation.
     #[must_use]
-    pub fn from_bytes(bytes: [u8; TOKEN_BYTES]) -> Self {
-        Self(Base64UrlUnpadded::encode_string(&bytes))
+    pub fn from_bytes(mut bytes: [u8; TOKEN_BYTES]) -> Self {
+        let encoded = Base64UrlUnpadded::encode_string(&bytes);
+        bytes.zeroize();
+        Self(encoded)
     }
 
     /// Parse a canonical unpadded base64url credential.
@@ -154,17 +217,17 @@ impl RelayCredential {
 pub struct RelayEndpoint {
     origin: RelayOrigin,
     route: RelayRoute,
-    credential: RelayCredential,
+    credential: Arc<RelayCredential>,
 }
 
 impl RelayEndpoint {
     /// Bind one origin, route, and credential into a connection configuration.
     #[must_use]
-    pub const fn new(origin: RelayOrigin, route: RelayRoute, credential: RelayCredential) -> Self {
+    pub fn new(origin: RelayOrigin, route: RelayRoute, credential: RelayCredential) -> Self {
         Self {
             origin,
             route,
-            credential,
+            credential: Arc::new(credential),
         }
     }
 
@@ -174,7 +237,7 @@ impl RelayEndpoint {
     ///
     /// [`RelayError::Resolve`] when DNS fails or returns no addresses, [`RelayError::PrivateAddress`] when any answer
     /// is not globally routable, or [`RelayError::Egress`] when an exact capability cannot be minted.
-    pub async fn resolve(self) -> Result<ResolvedRelay, RelayError> {
+    pub async fn resolve(&self) -> Result<ResolvedRelay, RelayError> {
         let resolved = timeout(
             CONNECT_TIMEOUT,
             tokio::net::lookup_host((&*self.origin.host, RELAY_PORT)),
@@ -198,7 +261,9 @@ impl RelayEndpoint {
             .map(|address| policy.approve(address).map_err(RelayError::from))
             .collect::<Result<Vec<_>, _>>()?;
         Ok(ResolvedRelay {
-            endpoint: self,
+            origin: self.origin.clone(),
+            route: self.route.clone(),
+            credential: Arc::clone(&self.credential),
             policy,
             destinations,
         })
@@ -207,7 +272,9 @@ impl RelayEndpoint {
 
 /// A relay whose DNS answers have been converted into exact egress capabilities.
 pub struct ResolvedRelay {
-    endpoint: RelayEndpoint,
+    origin: RelayOrigin,
+    route: RelayRoute,
+    credential: Arc<RelayCredential>,
     policy: EgressPolicy,
     destinations: Vec<ApprovedDestination>,
 }
@@ -216,7 +283,7 @@ impl ResolvedRelay {
     /// Borrow the canonical origin used by the WebSocket and Noise prologue.
     #[must_use]
     pub fn origin(&self) -> &RelayOrigin {
-        &self.endpoint.origin
+        &self.origin
     }
 
     /// Register this route idempotently. The service stores only the credential digest.
@@ -225,7 +292,7 @@ impl ResolvedRelay {
     ///
     /// [`RelayError`] when exact egress, TLS, HTTP, or the relay contract fails.
     pub async fn register(&self) -> Result<(), RelayError> {
-        let path = format!("/v1/routes/{}", self.endpoint.route.as_str());
+        let path = format!("/v1/routes/{}", self.route.as_str());
         let response = self.request(Method::PUT, &path, Bytes::new(), None).await?;
         if response.status == StatusCode::NO_CONTENT {
             Ok(())
@@ -243,7 +310,7 @@ impl ResolvedRelay {
     ///
     /// [`RelayError`] when ticket exchange, exact egress, TLS, WebSocket upgrade, or subprotocol selection fails.
     pub async fn connect_pc(&self) -> Result<RelaySocket, RelayError> {
-        let path = format!("/v1/routes/{}/tickets", self.endpoint.route.as_str());
+        let path = format!("/v1/routes/{}/tickets", self.route.as_str());
         let response = self
             .request(
                 Method::POST,
@@ -285,8 +352,8 @@ impl ResolvedRelay {
         let mut builder = Request::builder()
             .method(method)
             .uri(path)
-            .header(HOST, &*self.endpoint.origin.host)
-            .header(AUTHORIZATION, self.endpoint.credential.authorization()?);
+            .header(HOST, &*self.origin.host)
+            .header(AUTHORIZATION, self.credential.authorization()?);
         if let Some(content_type) = content_type {
             builder = builder.header(CONTENT_TYPE, content_type);
         }
@@ -315,11 +382,11 @@ impl ResolvedRelay {
         let driver = ConnectionDriver::new(tokio::spawn(connection.with_upgrades()));
         let key = fastwebsockets::handshake::generate_key();
         let protocol = ticket.protocol()?;
-        let path = format!("/v1/routes/{}/connect", self.endpoint.route.as_str());
+        let path = format!("/v1/routes/{}/connect", self.route.as_str());
         let request = Request::builder()
             .method(Method::GET)
             .uri(path)
-            .header(HOST, &*self.endpoint.origin.host)
+            .header(HOST, &*self.origin.host)
             .header(UPGRADE, "websocket")
             .header(CONNECTION, "upgrade")
             .header(SEC_WEBSOCKET_KEY, &key)
@@ -350,7 +417,7 @@ impl ResolvedRelay {
             let Ok(Ok(stream)) = connected else {
                 continue;
             };
-            let name = ServerName::try_from(self.endpoint.origin.host.to_string())
+            let name = ServerName::try_from(self.origin.host.to_string())
                 .map_err(|_| RelayError::InvalidOrigin)?;
             let secured = timeout(CONNECT_TIMEOUT, connector.connect(name, stream)).await;
             if let Ok(Ok(stream)) = secured {
@@ -654,6 +721,10 @@ fn tls_config() -> Arc<ClientConfig> {
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum RelayError {
+    /// Domain-separated route material could not be derived.
+    #[error("relay key derivation failed")]
+    KeyDerivation,
+
     /// The relay origin was not the exact supported HTTPS DNS shape.
     #[error("relay origin must be a canonical lowercase HTTPS DNS origin on port 443")]
     InvalidOrigin,
@@ -749,6 +820,26 @@ mod tests {
             credential,
         );
         assert!(!core::any::type_name_of_val(&endpoint).contains("CQkJ"));
+    }
+
+    #[test]
+    fn protected_machine_material_derives_stable_origin_scoped_routes() {
+        let first = RelaySeed::derive(&[0x5A; TOKEN_BYTES]).expect("first seed");
+        let second = RelaySeed::derive(&[0x5A; TOKEN_BYTES]).expect("second seed");
+        let first_endpoint = first
+            .endpoint("https://relay.example.com")
+            .expect("first endpoint");
+        let second_endpoint = second
+            .endpoint("https://relay.example.com")
+            .expect("second endpoint");
+        let other_endpoint = second
+            .endpoint("https://other.example.com")
+            .expect("other endpoint");
+
+        assert_eq!(first_endpoint.route, second_endpoint.route);
+        assert_eq!(first_endpoint.credential.0, second_endpoint.credential.0);
+        assert_ne!(first_endpoint.route, other_endpoint.route);
+        assert_ne!(first_endpoint.credential.0, other_endpoint.credential.0);
     }
 
     #[test]
