@@ -58,7 +58,7 @@ OK_MARKER = re.compile(r"(?://|#)\s*ok:")
 SAFETY_MARKER = re.compile(r"//\s*SAFETY:")
 LOOKBACK = 3
 
-SCAN_DIRS = ("crates", "pwa/src", "tests/audit")
+SCAN_DIRS = ("crates", "pwa/src", "relay/src", "tests/audit")
 SCAN_SUFFIXES = (".rs", ".ts", ".tsx", ".js", ".mjs", ".py")
 SKIP_PARTS = frozenset({"target", "node_modules", "_attempts", ".git", "dist"})
 

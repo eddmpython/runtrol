@@ -1,0 +1,58 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "runtrol-relay",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-13",
+  "compatibility_flags": ["nodejs_compat"],
+  "vars": {
+    "PWA_ORIGIN": "https://eddmpython.github.io",
+  },
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "RELAY_ROUTES",
+        "class_name": "RelayRoute",
+      },
+    ],
+  },
+  "exports": {
+    "RelayRoute": {
+      "type": "durable-object",
+      "storage": "sqlite",
+    },
+  },
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 0.1,
+  },
+  "env": {
+    "staging": {
+      "name": "runtrol-relay-staging",
+      "vars": {
+        "PWA_ORIGIN": "https://eddmpython.github.io",
+      },
+      "durable_objects": {
+        "bindings": [
+          {
+            "name": "RELAY_ROUTES",
+            "class_name": "RelayRoute",
+          },
+        ],
+      },
+    },
+    "production": {
+      "name": "runtrol-relay-production",
+      "vars": {
+        "PWA_ORIGIN": "https://eddmpython.github.io",
+      },
+      "durable_objects": {
+        "bindings": [
+          {
+            "name": "RELAY_ROUTES",
+            "class_name": "RelayRoute",
+          },
+        ],
+      },
+    },
+  },
+}

@@ -75,6 +75,8 @@ ALLOWED_ROOT: frozenset[str] = frozenset(
         "target",
         # PWA 와 GitHub Pages 랜딩
         "pwa",
+        # Independently deployable, untrusted ciphertext relay.
+        "relay",
         "site",
         # 게이트
         "tests",
