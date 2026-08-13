@@ -70,6 +70,45 @@ pub enum RuntimeErrorKind {
     Internal,
 }
 
+impl RuntimeErrorKind {
+    /// Stable lower-camel machine label used on the wire and in local audit metadata.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::RuntimeNotInstalled => "runtimeNotInstalled",
+            Self::RuntimeUnavailable => "runtimeUnavailable",
+            Self::ProtocolIncompatible => "protocolIncompatible",
+            Self::NotInitialized => "notInitialized",
+            Self::Unauthenticated => "unauthenticated",
+            Self::EnrollmentPending => "enrollmentPending",
+            Self::EnrollmentDenied => "enrollmentDenied",
+            Self::IntegrationRevoked => "integrationRevoked",
+            Self::ScopeDenied => "scopeDenied",
+            Self::PresenceRequired => "presenceRequired",
+            Self::RootDenied => "rootDenied",
+            Self::ProviderUnavailable => "providerUnavailable",
+            Self::CapabilityUnavailable => "capabilityUnavailable",
+            Self::ModelUnavailable => "modelUnavailable",
+            Self::NativeCatalogueUnsupported => "nativeCatalogueUnsupported",
+            Self::SessionNotFound => "sessionNotFound",
+            Self::SessionConflict => "sessionConflict",
+            Self::ControlConflict => "controlConflict",
+            Self::LeaseExpired => "leaseExpired",
+            Self::WorkspaceConflict => "workspaceConflict",
+            Self::ApprovalExpired => "approvalExpired",
+            Self::ApprovalOptionInvalid => "approvalOptionInvalid",
+            Self::IdempotencyConflict => "idempotencyConflict",
+            Self::OutcomeUnknown => "outcomeUnknown",
+            Self::ResourceExhausted => "resourceExhausted",
+            Self::RateLimited => "rateLimited",
+            Self::Gap => "gap",
+            Self::InvalidRequest => "invalidRequest",
+            Self::MethodNotFound => "methodNotFound",
+            Self::Internal => "internal",
+        }
+    }
+}
+
 /// A public failure with stable machine fields and bounded safe text.
 #[derive(Clone, Debug, PartialEq, JsonSchema, Serialize, Deserialize, thiserror::Error)]
 #[error("{code:?}: {message}")]

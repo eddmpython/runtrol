@@ -32,6 +32,9 @@ use crate::scope::{DeviceScope, LocalScope};
 
 const DEVICE_NAME_MAX_CHARS: usize = 64;
 const DEVICE_PLATFORM_MAX_CHARS: usize = 32;
+const INTEGRATION_TEXT_MAX_CHARS: usize = 128;
+const INTEGRATION_SCOPES_MAX: usize = 32;
+const INTEGRATION_ROOTS_MAX: usize = 32;
 
 /// How long a challenge stands open before it is a denial.
 ///
@@ -144,6 +147,127 @@ pub struct PairingIdentity {
     labels: DeviceLabels,
 }
 
+/// Exact public Runtime enrollment proposal shown and bound to one local approval.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct IntegrationProposal {
+    pending_id: [u8; 16],
+    public_key: [u8; 32],
+    manifest_digest: [u8; 32],
+    client_name: Box<str>,
+    client_version: Box<str>,
+    client_instance_id: Box<str>,
+    scopes: Vec<Box<str>>,
+    roots: Vec<AbsPath>,
+}
+
+impl IntegrationProposal {
+    /// Validate bounded display metadata after the daemon canonicalized every requested root.
+    ///
+    /// # Errors
+    ///
+    /// Unsafe or oversized display text, duplicated scope, or oversized authority proposal.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "every enrollment identity and authority field is bound into one physical-presence subject"
+    )]
+    pub fn new(
+        pending_id: [u8; 16],
+        public_key: [u8; 32],
+        manifest_digest: [u8; 32],
+        client_name: &str,
+        client_version: &str,
+        client_instance_id: &str,
+        scopes: Vec<Box<str>>,
+        roots: Vec<AbsPath>,
+    ) -> Result<Self, SecurityError> {
+        if scopes.is_empty()
+            || scopes.len() > INTEGRATION_SCOPES_MAX
+            || roots.len() > INTEGRATION_ROOTS_MAX
+        {
+            return Err(SecurityError::InvalidPairingIdentity {
+                field: "integration authority",
+                why: "it is empty or exceeds its item limit",
+            });
+        }
+        let mut unique = std::collections::BTreeSet::new();
+        for scope in &scopes {
+            if checked_label("integration scope", scope, INTEGRATION_TEXT_MAX_CHARS)?.as_ref()
+                != scope.as_ref()
+                || !unique.insert(scope.as_ref())
+            {
+                return Err(SecurityError::InvalidPairingIdentity {
+                    field: "integration scope",
+                    why: "it is not canonical or is duplicated",
+                });
+            }
+        }
+        Ok(Self {
+            pending_id,
+            public_key,
+            manifest_digest,
+            client_name: checked_label(
+                "integration client name",
+                client_name,
+                INTEGRATION_TEXT_MAX_CHARS,
+            )?,
+            client_version: checked_label(
+                "integration client version",
+                client_version,
+                INTEGRATION_TEXT_MAX_CHARS,
+            )?,
+            client_instance_id: checked_label(
+                "integration client instance",
+                client_instance_id,
+                INTEGRATION_TEXT_MAX_CHARS,
+            )?,
+            scopes,
+            roots,
+        })
+    }
+
+    /// Opaque pending identity.
+    #[must_use]
+    pub const fn pending_id(&self) -> [u8; 16] {
+        self.pending_id
+    }
+
+    /// Proposed verification key.
+    #[must_use]
+    pub const fn public_key(&self) -> [u8; 32] {
+        self.public_key
+    }
+
+    /// Exact manifest digest.
+    #[must_use]
+    pub const fn manifest_digest(&self) -> [u8; 32] {
+        self.manifest_digest
+    }
+
+    /// Safe client label.
+    #[must_use]
+    pub fn client_name(&self) -> &str {
+        &self.client_name
+    }
+
+    /// Consumer installed-instance identity.
+    #[must_use]
+    pub fn client_instance_id(&self) -> &str {
+        &self.client_instance_id
+    }
+
+    /// Exact requested scope names.
+    #[must_use]
+    pub fn scopes(&self) -> &[Box<str>] {
+        &self.scopes
+    }
+
+    /// Canonical exact requested roots.
+    #[must_use]
+    pub fn roots(&self) -> &[AbsPath] {
+        &self.roots
+    }
+}
+
 impl PairingIdentity {
     /// Validate identity metadata learned through an authenticated pairing proposal.
     ///
@@ -213,6 +337,11 @@ pub enum GrantRequest {
         /// Attempt, key, and display labels bound to this one decision.
         identity: PairingIdentity,
     },
+    /// Approve one exact public Runtime integration proposal.
+    ApproveIntegration {
+        /// Pending identity, public key, manifest, scopes, and canonical roots.
+        proposal: IntegrationProposal,
+    },
     /// Do one thing now that can never be delegated to a device.
     Local(LocalScope),
     /// Add a directory tree to the places work may happen.
@@ -253,6 +382,31 @@ impl fmt::Display for GrantRequest {
                     write!(f, "{byte:02x}")?;
                 }
                 f.write_str("...")
+            }
+            Self::ApproveIntegration { proposal } => {
+                write!(
+                    f,
+                    "approve Runtime integration '{}' version '{}' instance '{}' with key ",
+                    proposal.client_name, proposal.client_version, proposal.client_instance_id
+                )?;
+                for byte in proposal.public_key.iter().take(8) {
+                    write!(f, "{byte:02x}")?;
+                }
+                f.write_str(" for scopes ")?;
+                for (index, scope) in proposal.scopes.iter().enumerate() {
+                    if index > 0 {
+                        f.write_str(", ")?;
+                    }
+                    f.write_str(scope)?;
+                }
+                f.write_str(" and roots ")?;
+                for (index, root) in proposal.roots.iter().enumerate() {
+                    if index > 0 {
+                        f.write_str(", ")?;
+                    }
+                    write!(f, "{root}")?;
+                }
+                Ok(())
             }
             Self::Local(scope) => write!(f, "do one thing now, at this machine: {scope}"),
             Self::AddWorkspaceRoot { path } => {

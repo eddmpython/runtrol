@@ -4,6 +4,7 @@
 //! storage, daemon composition, or first-party product surfaces.
 
 mod error;
+mod integration;
 mod inventory;
 mod method;
 mod revision;
@@ -11,6 +12,12 @@ mod rpc;
 mod schema;
 
 pub use error::{RuntimeError, RuntimeErrorKind};
+pub use integration::{
+    AppScope, EnrollmentDecision, EnrollmentManifest, EnrollmentReceipt, IntegrationAuthentication,
+    IntegrationGrant, IntegrationId, PendingEnrollmentId, RequestEnrollmentParams, ServerChallenge,
+    UnknownAppScope, WatchEnrollmentParams, enrollment_signing_payload,
+    initialization_signing_payload,
+};
 pub use inventory::{
     InstallationObservation, InstallationState, LifecycleState, ManagedSessionList,
     ProviderDescriptor, ProviderId, ProviderList, RuntimeSessionId, SessionDescriptor,
@@ -37,3 +44,15 @@ pub const MAX_PAGE_ITEMS: u16 = 100;
 
 /// Maximum simultaneous subscriptions exposed to one client connection.
 pub const MAX_SUBSCRIPTIONS: u16 = 32;
+
+/// Lifetime of one server-first connection challenge.
+pub const CHALLENGE_LIFETIME_MS: u64 = 60_000;
+
+/// Lifetime of one local integration enrollment decision.
+pub const ENROLLMENT_LIFETIME_MS: u64 = 10 * 60_000;
+
+/// Maximum active pending integration enrollments in one Runtime home.
+pub const MAX_PENDING_ENROLLMENTS: u16 = 64;
+
+/// Maximum finalized protocol revisions one client may offer during initialization.
+pub const MAX_REVISION_OFFERS: u16 = 16;

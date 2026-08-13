@@ -35,6 +35,15 @@ const T_SESSION_KEY: &str = "runtrol::SessionKey@1";
 /// Type name for [`DeviceKey`], version included.
 const T_DEVICE_KEY: &str = "runtrol::DeviceKey@1";
 
+/// Type name for [`IntegrationKey`], version included.
+const T_INTEGRATION_KEY: &str = "runtrol::IntegrationKey@1";
+
+/// Type name for [`EnrollmentKey`], version included.
+const T_ENROLLMENT_KEY: &str = "runtrol::EnrollmentKey@1";
+
+/// Type name for [`IntegrationAuditKey`], version included.
+const T_INTEGRATION_AUDIT_KEY: &str = "runtrol::IntegrationAuditKey@1";
+
 /// Key of the `meta` entry holding the schema version.
 pub const META_SCHEMA_VERSION: &str = "schema_version";
 
@@ -54,6 +63,18 @@ pub const SESSIONS: TableDefinition<'static, SessionKey, &[u8]> = TableDefinitio
 ///
 /// Rows contain public identity material and a bearer-token fingerprint, never the bearer token itself.
 pub const DEVICES: TableDefinition<'static, DeviceKey, &[u8]> = TableDefinition::new("devices");
+
+/// Approved and revoked public Runtime integration grants. No private key or conversation content can fit a row.
+pub const INTEGRATIONS: TableDefinition<'static, IntegrationKey, &[u8]> =
+    TableDefinition::new("integrations");
+
+/// Bounded pending enrollment decisions, including their terminal approval or denial result.
+pub const ENROLLMENTS: TableDefinition<'static, EnrollmentKey, &[u8]> =
+    TableDefinition::new("enrollments");
+
+/// Bounded operational authorization metadata. It cannot contain conversation or provider payload bytes.
+pub const INTEGRATION_AUDIT: TableDefinition<'static, IntegrationAuditKey, &[u8]> =
+    TableDefinition::new("integration_audit");
 
 /// Provider identifier and native session identifier, to the runtrol session.
 ///
@@ -212,6 +233,87 @@ impl Key for DeviceKey {
     }
 }
 
+macro_rules! fixed_key {
+    ($name:ident, $type_name:ident, $docs:literal) => {
+        #[doc = $docs]
+        #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+        pub struct $name([u8; 16]);
+
+        impl $name {
+            /// Rebuild the key from its opaque identifier bytes.
+            #[must_use]
+            pub const fn from_bytes(bytes: [u8; 16]) -> Self {
+                Self(bytes)
+            }
+
+            /// Opaque identifier bytes.
+            #[must_use]
+            pub const fn to_bytes(self) -> [u8; 16] {
+                self.0
+            }
+
+            /// Lowest scan key.
+            pub const FIRST: Self = Self([0; 16]);
+
+            /// Highest scan key.
+            pub const LAST: Self = Self([0xFF; 16]);
+        }
+
+        impl Value for $name {
+            type SelfType<'a> = Self;
+            type AsBytes<'a> = [u8; 16];
+
+            fn fixed_width() -> Option<usize> {
+                Some(16)
+            }
+
+            fn from_bytes<'a>(data: &'a [u8]) -> Self
+            where
+                Self: 'a,
+            {
+                let mut bytes = [0_u8; 16];
+                for (slot, byte) in bytes.iter_mut().zip(data) {
+                    *slot = *byte;
+                }
+                Self(bytes)
+            }
+
+            fn as_bytes<'a, 'b: 'a>(value: &'a Self) -> [u8; 16]
+            where
+                Self: 'b,
+            {
+                value.0
+            }
+
+            fn type_name() -> TypeName {
+                TypeName::new($type_name)
+            }
+        }
+
+        impl Key for $name {
+            fn compare(left: &[u8], right: &[u8]) -> Ordering {
+                left.cmp(right)
+            }
+        }
+    };
+}
+
+fixed_key!(
+    IntegrationKey,
+    T_INTEGRATION_KEY,
+    "A public Runtime integration's opaque durable key."
+);
+fixed_key!(
+    EnrollmentKey,
+    T_ENROLLMENT_KEY,
+    "A pending public Runtime enrollment's opaque durable key."
+);
+fixed_key!(
+    IntegrationAuditKey,
+    T_INTEGRATION_AUDIT_KEY,
+    "A time-ordered bounded public Runtime authorization audit key."
+);
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -230,6 +332,9 @@ mod tests {
             T_DEVICE_KEY.ends_with(&suffix),
             "{T_DEVICE_KEY} does not carry schema version {SCHEMA_VERSION}"
         );
+        assert!(T_INTEGRATION_KEY.ends_with(&suffix));
+        assert!(T_ENROLLMENT_KEY.ends_with(&suffix));
+        assert!(T_INTEGRATION_AUDIT_KEY.ends_with(&suffix));
     }
 
     #[test]

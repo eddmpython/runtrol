@@ -221,6 +221,11 @@ pub(crate) enum Prepared {
         /// The complete bounded status list.
         response: Response,
     },
+    /// Local integration administration completed outside the session owner.
+    IntegrationAdmin {
+        /// Exact response for the bound request.
+        response: Response,
+    },
     /// A fresh session process was opened for this exact provider.
     Start {
         /// The provider whose process was opened.
@@ -548,6 +553,74 @@ pub(crate) async fn prepare_provider_updates(
     }
 }
 
+/// Whether the request belongs to local public-integration administration.
+pub(crate) const fn is_integration_admin(request: &Request) -> bool {
+    matches!(
+        request,
+        Request::IntegrationEnrollments
+            | Request::IntegrationApprovalBegin { .. }
+            | Request::IntegrationApprovalFinish { .. }
+            | Request::IntegrationEnrollmentDeny { .. }
+            | Request::Integrations
+            | Request::IntegrationRevoke { .. }
+    )
+}
+
+/// Complete local integration administration outside the one session owner.
+pub(crate) async fn prepare_integration_admin(
+    conversation: &Conversation,
+    composed: &Composed,
+    request: &Request,
+) -> Prepared {
+    if !is_integration_admin(request)
+        || !conversation.greeted()
+        || crate::scope::allowed(conversation.caller(), request, &composed.granted).is_err()
+    {
+        return Prepared::None;
+    }
+    let response = match request {
+        Request::IntegrationEnrollments => {
+            crate::integration_admin::IntegrationAdmin::enrollments(composed)
+                .map(Response::IntegrationEnrollments)
+        }
+        Request::IntegrationApprovalBegin {
+            pending_id,
+            scopes,
+            roots,
+        } => composed
+            .integration_admin
+            .begin(composed, pending_id, scopes, roots)
+            .await
+            .map(|challenge| Response::IntegrationApprovalChallenge {
+                challenge_id: challenge.challenge_id,
+                prompt: challenge.prompt,
+            }),
+        Request::IntegrationApprovalFinish {
+            challenge_id,
+            answer,
+        } => composed
+            .integration_admin
+            .finish(composed, challenge_id, answer)
+            .await
+            .map(|integration_id| Response::IntegrationApproved {
+                integration_id: integration_id.to_string().into(),
+            }),
+        Request::IntegrationEnrollmentDeny { pending_id } => {
+            crate::integration_admin::IntegrationAdmin::deny(composed, pending_id)
+                .map(|()| Response::Done)
+        }
+        Request::Integrations => crate::integration_admin::IntegrationAdmin::integrations(composed)
+            .map(Response::Integrations),
+        Request::IntegrationRevoke { integration_id } => {
+            crate::integration_admin::IntegrationAdmin::revoke(composed, integration_id)
+                .map(|()| Response::Done)
+        }
+        _ => return Prepared::None,
+    }
+    .unwrap_or_else(|error| refuse(&error.to_string()));
+    Prepared::IntegrationAdmin { response }
+}
+
 /// Answer one request after any slow provider discovery has completed elsewhere.
 #[expect(
     clippy::too_many_lines,
@@ -617,6 +690,18 @@ pub(crate) fn answer_prepared(
                 Err(error) => Reply::One(from_session_error(&error)),
             }
         }
+
+        Request::IntegrationEnrollments
+        | Request::IntegrationApprovalBegin { .. }
+        | Request::IntegrationApprovalFinish { .. }
+        | Request::IntegrationEnrollmentDeny { .. }
+        | Request::Integrations
+        | Request::IntegrationRevoke { .. } => match prepared {
+            Prepared::IntegrationAdmin { response } => Reply::One(response),
+            _ => Reply::One(refuse(
+                "integration administration was not completed for this request",
+            )),
+        },
 
         Request::Start {
             provider,
@@ -886,7 +971,10 @@ fn bound(
 ) -> Result<Prepared, Reply> {
     let matches = match &prepared {
         // A consult answer never belongs to a provider request; its own binding is checked where it is used.
-        Prepared::None | Prepared::Consult { .. } | Prepared::ProviderUpdates { .. } => false,
+        Prepared::None
+        | Prepared::Consult { .. }
+        | Prepared::ProviderUpdates { .. }
+        | Prepared::IntegrationAdmin { .. } => false,
         Prepared::Invalid { kind, provider, .. } => {
             *kind == requested_kind && provider.as_ref() == requested_provider
         }

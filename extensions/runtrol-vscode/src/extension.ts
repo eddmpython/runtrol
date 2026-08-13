@@ -4,6 +4,7 @@ import { ConversationView, type WebviewPerformance } from "./conversationView";
 import { Controller } from "./controller";
 import { CoreClient } from "./core/client";
 import { CoreLocator } from "./core/locator";
+import { manageIntegrations, reviewIntegrationEnrollments } from "./integrationAdministration";
 import { journeyApi, type JourneyApi } from "./journeyApi";
 import { SelectionStore } from "./selectionStore";
 import { uniqueSessionTitle } from "./sessionDisplay";
@@ -77,6 +78,14 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
     vscode.commands.registerCommand(
       "runtrol.checkProviderUpdates",
       () => run(() => afterReady(() => controller.checkProviderUpdates())),
+    ),
+    vscode.commands.registerCommand(
+      "runtrol.reviewIntegrations",
+      () => run(() => afterReady(() => reviewIntegrationEnrollments(client))),
+    ),
+    vscode.commands.registerCommand(
+      "runtrol.manageIntegrations",
+      () => run(() => afterReady(() => manageIntegrations(client))),
     ),
     vscode.commands.registerCommand(
       "runtrol.switchSession",

@@ -42,6 +42,8 @@
     "onView:runtrol.providers",
     "onCommand:runtrol.refresh",
     "onCommand:runtrol.checkProviderUpdates",
+    "onCommand:runtrol.reviewIntegrations",
+    "onCommand:runtrol.manageIntegrations",
     "onCommand:runtrol.switchSession",
     "onCommand:runtrol.startSession",
     "onCommand:runtrol.selectSession",
@@ -83,6 +85,16 @@
         "command": "runtrol.checkProviderUpdates",
         "title": "Runtrol: Check Provider Updates",
         "icon": "$(cloud-download)"
+      },
+      {
+        "command": "runtrol.reviewIntegrations",
+        "title": "Runtrol: Review Integration Requests",
+        "icon": "$(shield)"
+      },
+      {
+        "command": "runtrol.manageIntegrations",
+        "title": "Runtrol: Manage Runtime Integrations",
+        "icon": "$(key)"
       },
       {
         "command": "runtrol.switchSession",
@@ -150,6 +162,16 @@
           "command": "runtrol.checkProviderUpdates",
           "when": "view == runtrol.providers",
           "group": "navigation@2"
+        },
+        {
+          "command": "runtrol.reviewIntegrations",
+          "when": "view == runtrol.providers",
+          "group": "navigation@3"
+        },
+        {
+          "command": "runtrol.manageIntegrations",
+          "when": "view == runtrol.providers",
+          "group": "navigation@4"
         }
       ],
       "view/item/context": [

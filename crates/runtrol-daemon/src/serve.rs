@@ -58,8 +58,8 @@ use tokio::time::Instant;
 use crate::compose::Composed;
 use crate::dispatch::{
     Cleanup, CleanupReservation, Conversation, Discovered, Prepared, PreparedKind, Reply,
-    answer_prepared, complete_prepare_for, discover, needs_driver, prepare_consult,
-    prepare_provider_updates, refuse,
+    answer_prepared, complete_prepare_for, discover, is_integration_admin, needs_driver,
+    prepare_consult, prepare_integration_admin, prepare_provider_updates, refuse,
 };
 
 /// How many answered requests may be waiting to reach the one task that answers them.
@@ -608,6 +608,10 @@ async fn serve_surfaces(
         &provider_update_notices,
     ));
     let (session_index, _initial_index_receiver) = watch::channel(initial_index);
+    let initial_runtime_sessions =
+        Arc::new(crate::runtime_inventory::sessions(&composed, &sessions)?);
+    let (runtime_sessions, _initial_runtime_sessions_receiver) =
+        watch::channel(initial_runtime_sessions);
     // ProbeCache replaces one file atomically but is deliberately not a database. Serializing provider preparation
     // keeps two connections from publishing stale snapshots over each other and bounds temporary provider processes.
     // A Models request holds this gate through its provider call. Opens release it after discovery because their
@@ -632,6 +636,8 @@ async fn serve_surfaces(
                 connections.spawn(crate::runtime_serve::serve_connection(
                     connection,
                     runtime_instance.clone(),
+                    Arc::clone(&composed),
+                    runtime_sessions.subscribe(),
                 ));
             }
 
@@ -727,6 +733,7 @@ async fn serve_surfaces(
                     let reserved = sessions.reserve_open_for_provider(provider, session, claim);
                     publish_session_index(
                         &session_index,
+                        &runtime_sessions,
                         &composed,
                         &sessions,
                         &provider_update_notices,
@@ -784,6 +791,7 @@ async fn serve_surfaces(
                 if changes_index || abandoned_agent {
                     publish_session_index(
                         &session_index,
+                        &runtime_sessions,
                         &composed,
                         &sessions,
                         &provider_update_notices,
@@ -809,6 +817,7 @@ async fn serve_surfaces(
                     sessions.abandon_agent(lease);
                     publish_session_index(
                         &session_index,
+                        &runtime_sessions,
                         &composed,
                         &sessions,
                         &provider_update_notices,
@@ -835,6 +844,7 @@ async fn serve_surfaces(
                 if pumped.index_changed {
                     publish_session_index(
                         &session_index,
+                        &runtime_sessions,
                         &composed,
                         &sessions,
                         &provider_update_notices,
@@ -846,6 +856,7 @@ async fn serve_surfaces(
                 provider_update_notices.insert(notice.provider, notice.message);
                 publish_session_index(
                     &session_index,
+                    &runtime_sessions,
                     &composed,
                     &sessions,
                     &provider_update_notices,
@@ -1205,6 +1216,8 @@ async fn converse(
             prepare_consult(&conversation, &composed, &request).await
         } else if matches!(request, Request::ProviderUpdates) {
             prepare_provider_updates(&conversation, &composed, &request).await
+        } else if is_integration_admin(&request) {
+            prepare_integration_admin(&conversation, &composed, &request).await
         } else {
             let discovered = if preparation_gate.is_some() {
                 discover(&conversation, &composed, &request).await
@@ -1520,6 +1533,7 @@ async fn relay_session_index(
 /// Publish only a changed current index. The encoded bytes are shared by every subscriber.
 fn publish_session_index(
     session_index: &watch::Sender<Arc<[u8]>>,
+    runtime_sessions: &watch::Sender<Arc<crate::runtime_inventory::RuntimeSessionCatalogue>>,
     composed: &Composed,
     sessions: &SessionManager,
     provider_update_notices: &BTreeMap<ProviderId, Box<str>>,
@@ -1536,6 +1550,11 @@ fn publish_session_index(
         *current = next;
         true
     });
+    let public = match crate::runtime_inventory::sessions(composed, sessions) {
+        Ok(catalogue) => Arc::new(catalogue),
+        Err(_) => Arc::new(crate::runtime_inventory::RuntimeSessionCatalogue::unavailable()),
+    };
+    runtime_sessions.send_replace(public);
 }
 
 fn encode_session_index(

@@ -5,9 +5,14 @@
 
 mod client;
 mod connection;
+mod identity;
 mod locator;
 
-pub use client::{ClientOptions, ProviderClient, RuntimeClient, SessionClient};
+pub use client::{
+    ClientOptions, EnrollmentProposal, IntegrationClient, ProviderClient, RuntimeClient,
+    SessionClient,
+};
+pub use identity::{IntegrationCredentials, IntegrationIdentity};
 pub use locator::{LocatorError, LocatorState, RuntimeLocator, ValidatedLocator};
 pub use runtrol_runtime_protocol as protocol;
 

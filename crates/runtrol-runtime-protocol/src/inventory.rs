@@ -126,4 +126,6 @@ pub struct SessionDescriptor {
 pub struct ManagedSessionList {
     /// Sessions already known to Runtime.
     pub sessions: Vec<SessionDescriptor>,
+    /// Safe structural omissions that do not identify an unauthorized project.
+    pub warnings: Vec<String>,
 }

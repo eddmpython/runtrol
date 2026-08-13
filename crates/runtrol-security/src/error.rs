@@ -116,6 +116,19 @@ pub enum SecurityError {
         source: PathError,
     },
 
+    /// The operating system could resolve the path but could not identify that exact directory.
+    #[error(
+        "cannot bind the proposed workspace root {candidate} to its filesystem identity: {detail}"
+    )]
+    WorkspaceIdentityUnavailable {
+        /// The resolved candidate path.
+        candidate: AbsPath,
+        /// What class of operating-system failure occurred.
+        kind: std::io::ErrorKind,
+        /// What the operating system reported.
+        detail: String,
+    },
+
     /// A grant named a workspace root the operator has not configured.
     ///
     /// Refused rather than ignored. A root can be removed while a grant naming it still exists, and

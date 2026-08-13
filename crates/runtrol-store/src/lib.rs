@@ -20,11 +20,15 @@
 //! - [`codec`] the stored row, encoded by hand because the layout is a promise to a file on disk
 //! - [`sessions`] reading and writing rows, and the two durability settings and why there are two
 //! - [`devices`] paired-device authorization, durable revocation, and fail-closed damage reporting
+//! - [`integrations`] public Runtime enrollments and exact app grants, without any consumer private key
+//! - [`integration_audit`] bounded public Runtime authorization metadata without caller or provider content
 //! - [`error`] why the database could not be opened, read, or trusted
 
 pub mod codec;
 pub mod devices;
 pub mod error;
+mod integration_audit;
+pub mod integrations;
 pub mod open;
 pub mod schema;
 pub mod sessions;
@@ -32,6 +36,13 @@ pub mod sessions;
 pub use codec::{LiveProcess, SessionRow};
 pub use devices::{DeviceRow, ListedDevices};
 pub use error::StoreError;
+pub use integration_audit::{
+    INTEGRATION_AUDIT_MAX_BYTES, INTEGRATION_AUDIT_MAX_ROW_BYTES, INTEGRATION_AUDIT_MAX_ROWS,
+    IntegrationAuditOutcome, IntegrationAuditRow,
+};
+pub use integrations::{EnrollmentRow, EnrollmentState, IntegrationRootRow, IntegrationRow};
 pub use open::{CACHE_BYTES, Store};
-pub use schema::{DeviceKey, SCHEMA_VERSION, SessionKey};
+pub use schema::{
+    DeviceKey, EnrollmentKey, IntegrationAuditKey, IntegrationKey, SCHEMA_VERSION, SessionKey,
+};
 pub use sessions::{Cursor, ListedSessions};

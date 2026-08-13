@@ -5,12 +5,13 @@ repository is held to. A crate that writes its own table is a crate the table no
 silent in the worst way: nothing breaks, nothing warns, and a rule everybody believes is universal quietly applies
 to one crate fewer than they think.
 
-Five crates here have a real reason to opt out, each found by trying to do it the other way:
+Six crates here have a real reason to opt out, each found by trying to do it the other way:
 
 - `runtrol-childproc` contains the audited process-control FFI needed for containment.
 - `runtrol-vault` contains the audited Windows DPAPI FFI needed to protect the machine identity.
 - `runtrol-ipc` installs and verifies current-user Windows named-pipe and file ACLs.
 - `runtrol-runtime-client` validates the Windows locator owner and protected DACL before trusting it.
+- `runtrol-security` binds approved Windows project roots to stable filesystem identity.
 In these platform crates, `forbid` cannot be relaxed from inside a crate that inherits it, and cargo hard-errors
   on mixing inheritance with an override, so the table is written out with `deny` instead.
 - `runtrol-audit` holds gate helpers as free functions, which clippy's `allow-*-in-tests` escape does not cover.

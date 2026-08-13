@@ -277,6 +277,8 @@ pub enum LocalScope {
     ///
     /// A new install creates executable authority where none existed, so approving an update must never imply it.
     ProviderInstall,
+    /// Approve, deny, narrow, or revoke a public Runtime integration.
+    IntegrationAdmin,
 }
 
 impl LocalScope {
@@ -293,6 +295,7 @@ impl LocalScope {
         Self::ProviderUpdate,
         Self::ProviderRollback,
         Self::ProviderInstall,
+        Self::IntegrationAdmin,
     ];
 
     /// A stable name, for messages and for the audit record.
@@ -308,6 +311,7 @@ impl LocalScope {
             Self::ProviderUpdate => "provider.update",
             Self::ProviderRollback => "provider.rollback",
             Self::ProviderInstall => "provider.install",
+            Self::IntegrationAdmin => "integration.admin",
         }
     }
 }

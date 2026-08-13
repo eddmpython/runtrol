@@ -5,8 +5,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::{
-    MAX_FRAME_BYTES, MAX_INPUT_BYTES, MAX_PAGE_ITEMS, MAX_SUBSCRIPTIONS, ProtocolRevision,
-    RuntimeError,
+    IntegrationAuthentication, IntegrationGrant, MAX_FRAME_BYTES, MAX_INPUT_BYTES, MAX_PAGE_ITEMS,
+    MAX_SUBSCRIPTIONS, ProtocolRevision, RuntimeError,
 };
 
 /// A JSON-RPC request identifier.
@@ -111,6 +111,9 @@ pub struct InitializeParams {
     /// Closed client capability map.
     #[serde(default)]
     pub client_capabilities: ClientCapabilities,
+    /// Approved integration proof when reconnecting. Omit only to enroll.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub authentication: Option<IntegrationAuthentication>,
 }
 
 /// Public Runtime instance facts used to reject a stale or replaced locator.
@@ -129,6 +132,8 @@ pub struct RuntimeInstance {
 #[derive(Clone, Debug, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RuntimeCapabilities {
+    /// Local integration enrollment is implemented.
+    pub integration_enrollment: bool,
     /// Fast provider inventory method is implemented.
     pub provider_inventory: bool,
     /// Fast managed session snapshot is implemented.
@@ -147,6 +152,14 @@ pub struct RuntimeLimits {
     pub max_page_items: u16,
     /// Maximum subscriptions on one connection.
     pub max_subscriptions: u16,
+    /// Lifetime of one server-first challenge.
+    pub challenge_lifetime_ms: u64,
+    /// Lifetime of one pending local integration enrollment.
+    pub enrollment_lifetime_ms: u64,
+    /// Maximum active pending integration enrollments.
+    pub max_pending_enrollments: u16,
+    /// Maximum finalized protocol revisions accepted in one offer.
+    pub max_revision_offers: u16,
 }
 
 impl Default for RuntimeLimits {
@@ -156,6 +169,10 @@ impl Default for RuntimeLimits {
             max_input_bytes: MAX_INPUT_BYTES,
             max_page_items: MAX_PAGE_ITEMS,
             max_subscriptions: MAX_SUBSCRIPTIONS,
+            challenge_lifetime_ms: crate::CHALLENGE_LIFETIME_MS,
+            enrollment_lifetime_ms: crate::ENROLLMENT_LIFETIME_MS,
+            max_pending_enrollments: crate::MAX_PENDING_ENROLLMENTS,
+            max_revision_offers: crate::MAX_REVISION_OFFERS,
         }
     }
 }
@@ -172,6 +189,9 @@ pub struct InitializeResult {
     pub server_capabilities: RuntimeCapabilities,
     /// Numeric admission limits.
     pub limits: RuntimeLimits,
+    /// Current authority when initialization authenticated an approved integration.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub grant: Option<IntegrationGrant>,
 }
 
 #[cfg(test)]
@@ -197,6 +217,13 @@ mod tests {
         assert_eq!(limits.max_input_bytes, MAX_INPUT_BYTES);
         assert_eq!(limits.max_page_items, MAX_PAGE_ITEMS);
         assert_eq!(limits.max_subscriptions, MAX_SUBSCRIPTIONS);
+        assert_eq!(limits.challenge_lifetime_ms, crate::CHALLENGE_LIFETIME_MS);
+        assert_eq!(limits.enrollment_lifetime_ms, crate::ENROLLMENT_LIFETIME_MS);
+        assert_eq!(
+            limits.max_pending_enrollments,
+            crate::MAX_PENDING_ENROLLMENTS
+        );
+        assert_eq!(limits.max_revision_offers, crate::MAX_REVISION_OFFERS);
     }
 
     #[test]
@@ -208,6 +235,7 @@ mod tests {
                 version: "1.0.0".to_owned(),
             },
             client_capabilities: ClientCapabilities::default(),
+            authentication: None,
         };
         let value = serde_json::to_value(&params).expect("serializable");
         assert!(value.get("providers").is_none());

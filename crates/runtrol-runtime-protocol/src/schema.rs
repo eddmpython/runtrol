@@ -3,8 +3,9 @@
 use schemars::{JsonSchema, schema_for};
 
 use crate::{
-    InitializeParams, InitializeResult, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse,
-    ManagedSessionList, ProviderList, RuntimeMethod,
+    EnrollmentDecision, EnrollmentReceipt, InitializeParams, InitializeResult, IntegrationGrant,
+    JsonRpcNotification, JsonRpcRequest, JsonRpcResponse, ManagedSessionList, ProviderList,
+    RequestEnrollmentParams, RuntimeMethod, ServerChallenge, WatchEnrollmentParams,
 };
 
 /// Checked schema filename inside this package.
@@ -23,6 +24,12 @@ struct PublicProtocolSchema {
     response: JsonRpcResponse,
     initialize_params: InitializeParams,
     initialize_result: InitializeResult,
+    challenge: ServerChallenge,
+    request_enrollment: RequestEnrollmentParams,
+    enrollment_receipt: EnrollmentReceipt,
+    watch_enrollment: WatchEnrollmentParams,
+    enrollment_decision: EnrollmentDecision,
+    integration_grant: IntegrationGrant,
     provider_list: ProviderList,
     managed_session_list: ManagedSessionList,
 }

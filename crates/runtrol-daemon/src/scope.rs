@@ -78,6 +78,12 @@ pub fn needed(request: &Request) -> Needed {
             Needed::Scope(DeviceScope::ConfigRead)
         }
         Request::ProviderUpdate { .. } => Needed::AtTheMachine(LocalScope::ProviderUpdate),
+        Request::IntegrationEnrollments
+        | Request::IntegrationApprovalBegin { .. }
+        | Request::IntegrationApprovalFinish { .. }
+        | Request::IntegrationEnrollmentDeny { .. }
+        | Request::Integrations
+        | Request::IntegrationRevoke { .. } => Needed::AtTheMachine(LocalScope::IntegrationAdmin),
         Request::Start {
             workspace_access: WorkspaceAccess::Shared,
             ..

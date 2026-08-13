@@ -77,6 +77,42 @@ pub enum Request {
         provider: Box<str>,
     },
 
+    /// List bounded pending public Runtime integration enrollments for local administration.
+    IntegrationEnrollments,
+
+    /// Begin a physical-presence challenge for an exact narrowed enrollment grant.
+    IntegrationApprovalBegin {
+        /// Opaque pending enrollment identity.
+        pending_id: Box<str>,
+        /// Exact requested scopes retained by the operator.
+        scopes: Vec<Box<str>>,
+        /// Exact requested roots retained by the operator.
+        roots: Vec<Box<str>>,
+    },
+
+    /// Answer and atomically spend one integration approval challenge.
+    IntegrationApprovalFinish {
+        /// Opaque one-use local challenge identity.
+        challenge_id: Box<str>,
+        /// Phrase typed from the local VS Code prompt.
+        answer: Box<str>,
+    },
+
+    /// Deny one pending integration without granting authority.
+    IntegrationEnrollmentDeny {
+        /// Opaque pending enrollment identity.
+        pending_id: Box<str>,
+    },
+
+    /// List approved and revoked public Runtime integrations for local administration.
+    Integrations,
+
+    /// Revoke one integration and retire its current public connections on their next request.
+    IntegrationRevoke {
+        /// Opaque approved integration identity.
+        integration_id: Box<str>,
+    },
+
     /// Begin a conversation that does not exist yet.
     Start {
         /// Which CLI.
@@ -217,6 +253,26 @@ pub enum Response {
     /// Result of one locally authorized provider update attempt.
     ProviderUpdated(ProviderUpdateResult),
 
+    /// Pending public Runtime integration enrollments visible only at the machine.
+    IntegrationEnrollments(Vec<IntegrationEnrollmentLine>),
+
+    /// One exact local challenge that must be typed before approval.
+    IntegrationApprovalChallenge {
+        /// Opaque one-use challenge identity.
+        challenge_id: Box<str>,
+        /// Complete exact action and random phrase for local display.
+        prompt: Box<str>,
+    },
+
+    /// An enrollment became one durable integration grant.
+    IntegrationApproved {
+        /// Opaque approved integration identity.
+        integration_id: Box<str>,
+    },
+
+    /// Approved and revoked public Runtime integrations visible only at the machine.
+    Integrations(Vec<IntegrationLine>),
+
     /// A session was started or resumed.
     Started {
         /// runtrol's own name for it.
@@ -345,6 +401,46 @@ pub struct ProviderLine {
     /// A sentence rather than a flag, because "this build has no driver for that protocol" and "nothing declares that
     /// kind" send the operator in different directions.
     pub why_not: Option<Box<str>>,
+}
+
+/// One pending public Runtime integration proposal for local presentation.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct IntegrationEnrollmentLine {
+    /// Opaque pending identity.
+    pub pending_id: Box<str>,
+    /// Safe client display name.
+    pub client_name: Box<str>,
+    /// Safe client version text.
+    pub client_version: Box<str>,
+    /// Consumer installed-instance identity.
+    pub client_instance_id: Box<str>,
+    /// Short public-key fingerprint for operator comparison.
+    pub key_fingerprint: Box<str>,
+    /// Exact stable requested scopes.
+    pub scopes: Vec<Box<str>>,
+    /// Exact requested project paths before local canonicalization.
+    pub roots: Vec<Box<str>>,
+    /// Expiry in Unix milliseconds.
+    pub expires_at_ms: u64,
+}
+
+/// One durable public Runtime integration grant for local presentation.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct IntegrationLine {
+    /// Opaque integration identity.
+    pub integration_id: Box<str>,
+    /// Operator-approved label.
+    pub label: Box<str>,
+    /// Consumer installed-instance identity.
+    pub client_instance_id: Box<str>,
+    /// Exact current scopes.
+    pub scopes: Vec<Box<str>>,
+    /// Canonical current roots.
+    pub roots: Vec<Box<str>>,
+    /// Grant generation changed by narrowing or revocation.
+    pub grant_generation: u64,
+    /// Whether this grant is revoked.
+    pub revoked: bool,
 }
 
 /// One provider's independently verified update state.

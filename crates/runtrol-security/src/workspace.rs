@@ -26,6 +26,7 @@ use runtrol_provider::{AbsPath, PathError};
 
 use crate::error::SecurityError;
 use crate::id::WorkspaceRootId;
+use crate::root_identity::ProjectRootIdentity;
 
 /// A directory no configuration may open, and why.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -237,6 +238,8 @@ pub struct WorkspaceRoot {
     id: WorkspaceRootId,
     /// The canonical path.
     path: AbsPath,
+    /// The exact directory that occupied the path during approval.
+    identity: ProjectRootIdentity,
 }
 
 impl WorkspaceRoot {
@@ -249,7 +252,8 @@ impl WorkspaceRoot {
     ///
     /// [`SecurityError::WorkspaceUnresolvable`] when the OS cannot resolve it,
     /// [`SecurityError::WorkspaceNotADirectory`] when it is a file, and
-    /// [`SecurityError::WorkspaceDenied`] when it overlaps something on the deny list.
+    /// [`SecurityError::WorkspaceDenied`] when it overlaps something on the deny list, and
+    /// [`SecurityError::WorkspaceIdentityUnavailable`] when the OS cannot bind the exact directory.
     pub fn approve(candidate: &str, deny: &DenyList) -> Result<Self, SecurityError> {
         let path = AbsPath::canonicalize(candidate)
             .map_err(|source| SecurityError::WorkspaceUnresolvable { source })?;
@@ -268,9 +272,18 @@ impl WorkspaceRoot {
             });
         }
 
+        let identity = ProjectRootIdentity::read(&path).map_err(|source| {
+            SecurityError::WorkspaceIdentityUnavailable {
+                candidate: path.clone(),
+                kind: source.kind(),
+                detail: source.to_string(),
+            }
+        })?;
+
         Ok(Self {
             id: WorkspaceRootId::now(),
             path,
+            identity,
         })
     }
 
@@ -284,6 +297,12 @@ impl WorkspaceRoot {
     #[must_use]
     pub const fn path(&self) -> &AbsPath {
         &self.path
+    }
+
+    /// The exact filesystem object approved at this path.
+    #[must_use]
+    pub const fn identity(&self) -> ProjectRootIdentity {
+        self.identity
     }
 
     /// Whether `path` lies inside this root.
@@ -520,7 +539,25 @@ mod tests {
         let first = WorkspaceRoot::approve(project.as_str(), &deny).expect("approved");
         let second = WorkspaceRoot::approve(project.as_str(), &deny).expect("approved");
         assert_eq!(first.path(), second.path());
+        assert_eq!(first.identity(), second.identity());
         assert_ne!(first.id(), second.id());
+    }
+
+    #[test]
+    fn replacing_a_directory_at_the_same_path_changes_its_authority_identity() {
+        let home = Home::make("replacement");
+        let project = home.dir("projects/app");
+        let deny = home.deny_list();
+        let approved = WorkspaceRoot::approve(project.as_str(), &deny).expect("approved");
+        let retired = home
+            .root
+            .join("projects/retired")
+            .expect("valid retired path");
+        std::fs::rename(project.as_std_path(), retired.as_std_path()).expect("retire old root");
+        std::fs::create_dir(project.as_std_path()).expect("replace root at the same path");
+        let replacement = WorkspaceRoot::approve(project.as_str(), &deny).expect("replacement");
+        assert_eq!(approved.path(), replacement.path());
+        assert_ne!(approved.identity(), replacement.identity());
     }
 
     #[test]

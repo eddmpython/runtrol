@@ -39,6 +39,17 @@ impl ManagedLifecycle {
             Self::Closed => "closed",
         }
     }
+
+    pub(crate) const fn public(self, hot: bool) -> runtrol_runtime_protocol::LifecycleState {
+        use runtrol_runtime_protocol::LifecycleState;
+
+        match self {
+            Self::Running => LifecycleState::HotRunning,
+            Self::Idle if hot => LifecycleState::HotIdle,
+            Self::Failed => LifecycleState::Failed,
+            Self::Detached | Self::Idle | Self::Closed => LifecycleState::Cold,
+        }
+    }
 }
 
 impl From<&Lifecycle> for ManagedLifecycle {

@@ -17,6 +17,9 @@ runtrol-runtime-protocol = { workspace = true }
 serde = { workspace = true, features = ["std", "derive"] }
 serde_json = { workspace = true, features = ["std"] }
 thiserror = { workspace = true }
+getrandom = { workspace = true }
+ed25519-dalek = { workspace = true }
+base64ct = { workspace = true }
 tokio = { workspace = true, features = ["net", "io-util", "time"] }
 
 [target.'cfg(windows)'.dependencies]

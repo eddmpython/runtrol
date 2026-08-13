@@ -15,6 +15,18 @@ pub enum RuntimeMethod {
     /// Finish initialization before any inventory request.
     #[serde(rename = "runtime/initialized")]
     Initialized,
+    /// Server-first connection-bound authentication challenge notification.
+    #[serde(rename = "runtime/challenge")]
+    Challenge,
+    /// Create a bounded pending local enrollment.
+    #[serde(rename = "integrations/requestEnrollment")]
+    IntegrationsRequestEnrollment,
+    /// Read the current decision for the proved pending key.
+    #[serde(rename = "integrations/watchEnrollment")]
+    IntegrationsWatchEnrollment,
+    /// Read the authenticated integration's current grant.
+    #[serde(rename = "integrations/getGrant")]
+    IntegrationsGetGrant,
     /// Read the structural provider inventory.
     #[serde(rename = "providers/list")]
     ProvidersList,
@@ -33,6 +45,10 @@ impl RuntimeMethod {
         match self {
             Self::Initialize => "runtime/initialize",
             Self::Initialized => "runtime/initialized",
+            Self::Challenge => "runtime/challenge",
+            Self::IntegrationsRequestEnrollment => "integrations/requestEnrollment",
+            Self::IntegrationsWatchEnrollment => "integrations/watchEnrollment",
+            Self::IntegrationsGetGrant => "integrations/getGrant",
             Self::ProvidersList => "providers/list",
             Self::SessionsList => "sessions/list",
             Self::PanicStop => "runtime/panicStop",
@@ -53,6 +69,10 @@ impl FromStr for RuntimeMethod {
         match value {
             "runtime/initialize" => Ok(Self::Initialize),
             "runtime/initialized" => Ok(Self::Initialized),
+            "runtime/challenge" => Ok(Self::Challenge),
+            "integrations/requestEnrollment" => Ok(Self::IntegrationsRequestEnrollment),
+            "integrations/watchEnrollment" => Ok(Self::IntegrationsWatchEnrollment),
+            "integrations/getGrant" => Ok(Self::IntegrationsGetGrant),
             "providers/list" => Ok(Self::ProvidersList),
             "sessions/list" => Ok(Self::SessionsList),
             "runtime/panicStop" => Ok(Self::PanicStop),
@@ -75,6 +95,10 @@ mod tests {
         for method in [
             RuntimeMethod::Initialize,
             RuntimeMethod::Initialized,
+            RuntimeMethod::Challenge,
+            RuntimeMethod::IntegrationsRequestEnrollment,
+            RuntimeMethod::IntegrationsWatchEnrollment,
+            RuntimeMethod::IntegrationsGetGrant,
             RuntimeMethod::ProvidersList,
             RuntimeMethod::SessionsList,
             RuntimeMethod::PanicStop,

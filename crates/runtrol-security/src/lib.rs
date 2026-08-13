@@ -34,6 +34,7 @@ pub mod error;
 pub mod grant;
 pub mod id;
 pub mod presence;
+mod root_identity;
 pub mod scope;
 pub mod workspace;
 
@@ -42,7 +43,9 @@ pub use error::SecurityError;
 pub use grant::{GrantLedger, LocalAuthorization};
 pub use id::{DeviceId, WorkspaceRootId};
 pub use presence::{
-    DeviceLabels, GrantRequest, LocalConsole, PairingIdentity, PcPresence, PresenceChallenge,
+    DeviceLabels, GrantRequest, IntegrationProposal, LocalConsole, PairingIdentity, PcPresence,
+    PresenceChallenge,
 };
+pub use root_identity::ProjectRootIdentity;
 pub use scope::{DeviceScope, LocalScope, StoredScopeError};
 pub use workspace::{DeniedPath, DenyList, WorkspaceRoot};

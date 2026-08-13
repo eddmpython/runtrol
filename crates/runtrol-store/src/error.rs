@@ -87,6 +87,15 @@ pub enum StoreError {
         why: &'static str,
     },
 
+    /// A public Runtime integration or enrollment authority row is malformed.
+    #[error("a stored Runtime integration row is malformed at {field}: {why}")]
+    IntegrationCodec {
+        /// Field that failed closed.
+        field: &'static str,
+        /// Structural reason.
+        why: &'static str,
+    },
+
     /// The storage engine failed while runtrol was doing something specific.
     ///
     /// `doing` is required. An engine error without the operation that produced it tells the operator that
@@ -114,6 +123,7 @@ impl StoreError {
                 | Self::SchemaTooNew { .. }
                 | Self::SchemaTooOld { .. }
                 | Self::DeviceCodec { .. }
+                | Self::IntegrationCodec { .. }
         )
     }
 }

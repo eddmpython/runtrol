@@ -1,4 +1,4 @@
-export const WIRE_VERSION = 9;
+export const WIRE_VERSION = 10;
 
 export type WorkspaceAccess = "exclusive" | "shared";
 
@@ -30,6 +30,27 @@ export type ProviderUpdateLine = {
   target: string | null;
   rollback: string | null;
   why: string | null;
+};
+
+export type IntegrationEnrollmentLine = {
+  pending_id: string;
+  client_name: string;
+  client_version: string;
+  client_instance_id: string;
+  key_fingerprint: string;
+  scopes: string[];
+  roots: string[];
+  expires_at_ms: number;
+};
+
+export type IntegrationLine = {
+  integration_id: string;
+  label: string;
+  client_instance_id: string;
+  scopes: string[];
+  roots: string[];
+  grant_generation: number;
+  revoked: boolean;
 };
 
 export type SessionLine = {
@@ -75,6 +96,15 @@ export type Request =
   | { ask: "models"; with: { provider: string } }
   | { ask: "providerUpdates" }
   | { ask: "providerUpdate"; with: { provider: string } }
+  | { ask: "integrationEnrollments" }
+  | {
+      ask: "integrationApprovalBegin";
+      with: { pending_id: string; scopes: string[]; roots: string[] };
+    }
+  | { ask: "integrationApprovalFinish"; with: { challenge_id: string; answer: string } }
+  | { ask: "integrationEnrollmentDeny"; with: { pending_id: string } }
+  | { ask: "integrations" }
+  | { ask: "integrationRevoke"; with: { integration_id: string } }
   | {
       ask: "start";
       with: {
@@ -119,6 +149,13 @@ export type Response =
         why: string | null;
       };
     }
+  | { say: "integrationEnrollments"; with: IntegrationEnrollmentLine[] }
+  | {
+      say: "integrationApprovalChallenge";
+      with: { challenge_id: string; prompt: string };
+    }
+  | { say: "integrationApproved"; with: { integration_id: string } }
+  | { say: "integrations"; with: IntegrationLine[] }
   | { say: "started"; with: { session: string } }
   | { say: "done" }
   | {

@@ -13,6 +13,7 @@ and refactoring that no user can observe do not belong here.
 ### Added
 
 - Sessions can be given a short name from the VS Code session list. Automatic names combine the project and installed CLI, and only colliding names receive a short discriminator.
+- Local products can enroll with the owner-only Runtime endpoint and receive only the exact provider and project access approved in Runtrol Studio. Studio can review, narrow, deny, and revoke integrations without ending supervised sessions.
 
 ### Changed
 

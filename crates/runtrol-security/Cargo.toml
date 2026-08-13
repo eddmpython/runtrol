@@ -24,5 +24,37 @@ uuid = { workspace = true, features = ["std", "v7"] }
 getrandom = { workspace = true }
 thiserror = { workspace = true }
 
-[lints]
-workspace = true
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true, features = [
+    "Win32_Storage_FileSystem",
+] }
+
+# Stable directory identity on Windows requires one audited GetFileInformationByHandleEx boundary.
+# The workspace forbids unsafe and cannot relax it after inheritance, so this crate repeats the
+# table with deny and confines that call to the root identity platform module.
+[lints.rust]
+unsafe_code = "deny"
+let_underscore_drop = "deny"
+unused_must_use = "deny"
+unreachable_pub = "warn"
+missing_docs = "warn"
+
+[lints.clippy]
+all = { level = "deny", priority = -1 }
+pedantic = { level = "warn", priority = -2 }
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+unreachable = "deny"
+dbg_macro = "deny"
+print_stdout = "deny"
+print_stderr = "deny"
+indexing_slicing = "deny"
+let_underscore_must_use = "deny"
+unwrap_in_result = "deny"
+disallowed_methods = "deny"
+disallowed_types = "deny"
+disallowed_macros = "deny"
+self_named_module_files = "deny"

@@ -90,6 +90,10 @@ zeroize = { version = "1.9.0", features = ["zeroize_derive"] }
 semver = { version = "1.0.28", default-features = false, features = ["std"] }
 # Public Runtime schema generation. The checked JSON schema is derived from the Rust DTO source of truth.
 schemars = { version = "1.2.2", default-features = false, features = ["derive", "std"] }
+# Public Runtime integration identities sign connection-bound payloads. Runtime stores verifying keys only.
+ed25519-dalek = { version = "3.0.0", default-features = false, features = ["alloc", "fast", "zeroize"] }
+# Canonical unpadded base64url for public keys, nonces, digests, and signatures.
+base64ct = { version = "1.8.3", default-features = false, features = ["alloc"] }
 
 # Metadata store with no background worker. Version 4.1 includes the region allocator RSS fix and is the floor.
 # Earlier versions also use a different variable-width tuple encoding. See docs/coreRuntime.md.

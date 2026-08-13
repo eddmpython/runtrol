@@ -1,23 +1,35 @@
-//! Typed initialization and read-only Runtime operation groups.
+//! Typed initialization, enrollment, and read-only Runtime operation groups.
 
+use base64ct::{Base64UrlUnpadded, Encoding as _};
+use runtrol_runtime_protocol::{
+    AppScope, CHALLENGE_LIFETIME_MS, ClientCapabilities, ClientInfo, EnrollmentDecision,
+    EnrollmentManifest, EnrollmentReceipt, ErrorResponse, FINALIZED_REVISIONS, InitializeParams,
+    InitializeResult, IntegrationAuthentication, IntegrationGrant, JsonRpcId, JsonRpcNotification,
+    JsonRpcRequest, JsonRpcResponse, ManagedSessionList, PendingEnrollmentId, ProviderList,
+    RequestEnrollmentParams, RuntimeMethod, ServerChallenge, SuccessResponse,
+    WatchEnrollmentParams, enrollment_signing_payload, initialization_signing_payload,
+};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
 use crate::ClientError;
 use crate::connection::Connection;
+use crate::identity::{IntegrationCredentials, IntegrationIdentity};
 use crate::locator::{LocatorState, RuntimeLocator, ValidatedLocator};
-use runtrol_runtime_protocol::{
-    ClientCapabilities, ClientInfo, ErrorResponse, FINALIZED_REVISIONS, InitializeParams,
-    InitializeResult, JsonRpcId, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse,
-    ManagedSessionList, ProviderList, RuntimeMethod, SuccessResponse,
-};
 
-/// Safe client metadata used during public revision negotiation.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// Safe client metadata and optional consumer-owned integration identity.
+#[derive(Clone, Debug)]
 pub struct ClientOptions {
     name: String,
     version: String,
     capabilities: ClientCapabilities,
+    identity: Option<ClientIdentity>,
+}
+
+#[derive(Clone, Debug)]
+enum ClientIdentity {
+    Enrolling(IntegrationIdentity),
+    Approved(IntegrationCredentials),
 }
 
 impl ClientOptions {
@@ -28,16 +40,58 @@ impl ClientOptions {
             name: name.into(),
             version: version.into(),
             capabilities: ClientCapabilities::default(),
+            identity: None,
+        }
+    }
+
+    /// Attach a new or previously persisted identity for enrollment.
+    #[must_use]
+    pub fn with_identity(mut self, identity: IntegrationIdentity) -> Self {
+        self.identity = Some(ClientIdentity::Enrolling(identity));
+        self
+    }
+
+    /// Attach an approved identity and current generations for authenticated reconnect.
+    #[must_use]
+    pub fn with_credentials(mut self, credentials: IntegrationCredentials) -> Self {
+        self.identity = Some(ClientIdentity::Approved(credentials));
+        self
+    }
+}
+
+/// Exact public proposal signed for one local enrollment decision.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EnrollmentProposal {
+    client_instance_id: String,
+    manifest_digest: [u8; 32],
+    requested_scopes: Vec<AppScope>,
+    requested_roots: Vec<String>,
+}
+
+impl EnrollmentProposal {
+    /// Create a closed proposal. Runtime validates bounds and canonicalizes roots during local approval.
+    #[must_use]
+    pub fn new(
+        client_instance_id: impl Into<String>,
+        manifest_digest: [u8; 32],
+        requested_scopes: Vec<AppScope>,
+        requested_roots: Vec<String>,
+    ) -> Self {
+        Self {
+            client_instance_id: client_instance_id.into(),
+            manifest_digest,
+            requested_scopes,
+            requested_roots,
         }
     }
 }
 
 impl RuntimeLocator {
-    /// Connect, negotiate the newest common revision, prove the locator instance, and finish initialization.
+    /// Connect, validate the server-first challenge, negotiate, and finish initialization.
     ///
     /// # Errors
     ///
-    /// Locator validation, local transport, protocol, incompatibility, or Runtime failures.
+    /// Locator validation, local transport, protocol, incompatibility, signing, or Runtime failures.
     pub async fn connect(&self, options: ClientOptions) -> Result<RuntimeClient, ClientError> {
         let LocatorState::Running(locator) = self.inspect()? else {
             return Err(ClientError::Runtime(
@@ -57,6 +111,11 @@ pub struct RuntimeClient {
     connection: Connection,
     next_id: u64,
     initialized: InitializeResult,
+    challenge: ServerChallenge,
+    supported_revisions: Vec<runtrol_runtime_protocol::ProtocolRevision>,
+    client: ClientInfo,
+    capabilities: ClientCapabilities,
+    identity: Option<IntegrationIdentity>,
 }
 
 impl RuntimeClient {
@@ -65,48 +124,87 @@ impl RuntimeClient {
         options: ClientOptions,
     ) -> Result<Self, ClientError> {
         let mut connection = Connection::connect(&locator.endpoint).await?;
+        let challenge = receive_challenge(&mut connection, &locator).await?;
+        let supported_revisions = FINALIZED_REVISIONS.to_vec();
+        let client = ClientInfo {
+            name: options.name,
+            version: options.version,
+        };
+        let capabilities = options.capabilities;
+        let (identity, expected_grant) = match options.identity {
+            Some(ClientIdentity::Enrolling(identity)) => (Some(identity), None),
+            Some(ClientIdentity::Approved(credentials)) => {
+                let (identity, grant) = credentials.into_parts();
+                (Some(identity), Some(grant))
+            }
+            None => (None, None),
+        };
+        let authentication = match (&identity, &expected_grant) {
+            (Some(identity), Some(grant)) => {
+                let mut proof = IntegrationAuthentication {
+                    integration_id: grant.integration_id.clone(),
+                    key_generation: grant.key_generation,
+                    grant_generation: grant.grant_generation,
+                    signature: String::new(),
+                };
+                let payload = initialization_signing_payload(
+                    &challenge,
+                    &supported_revisions,
+                    &client,
+                    &capabilities,
+                    &proof,
+                )
+                .map_err(|error| {
+                    ClientError::Protocol(format!(
+                        "initialization proof payload cannot be encoded: {error}"
+                    ))
+                })?;
+                proof.signature = identity.sign_base64(&payload);
+                Some(proof)
+            }
+            (Some(_) | None, None) => None,
+            (None, Some(_)) => {
+                return Err(ClientError::Protocol(
+                    "approved integration generations have no signing identity".to_owned(),
+                ));
+            }
+        };
         let mut next_id = 1;
         let initialized: InitializeResult = call_connection(
             &mut connection,
             &mut next_id,
             RuntimeMethod::Initialize,
             &InitializeParams {
-                supported_revisions: FINALIZED_REVISIONS.to_vec(),
-                client: ClientInfo {
-                    name: options.name,
-                    version: options.version,
-                },
-                client_capabilities: options.capabilities,
+                supported_revisions: supported_revisions.clone(),
+                client: client.clone(),
+                client_capabilities: capabilities.clone(),
+                authentication,
             },
         )
         .await?;
-        if initialized.runtime.instance_id != locator.instance_id {
-            return Err(ClientError::Protocol(
-                "the Runtime instance does not match the locator".to_owned(),
-            ));
-        }
-        if initialized.runtime.version != locator.runtime_version {
-            return Err(ClientError::Protocol(
-                "the Runtime version does not match the locator".to_owned(),
-            ));
-        }
-        if !FINALIZED_REVISIONS.contains(&initialized.selected_revision) {
-            return Err(ClientError::Protocol(
-                "the Runtime selected a revision the client did not offer".to_owned(),
-            ));
-        }
+        validate_initialization(&initialized, &locator, expected_grant.as_ref())?;
         notify_connection(&mut connection, RuntimeMethod::Initialized, &EmptyParams {}).await?;
         Ok(Self {
             connection,
             next_id,
             initialized,
+            challenge,
+            supported_revisions,
+            client,
+            capabilities,
+            identity,
         })
     }
 
-    /// The selected revision, Runtime instance, capabilities, and limits.
+    /// The selected revision, Runtime instance, capabilities, limits, and authenticated grant.
     #[must_use]
     pub const fn initialization(&self) -> &InitializeResult {
         &self.initialized
+    }
+
+    /// Integration enrollment and grant operations.
+    pub fn integrations(&mut self) -> IntegrationClient<'_> {
+        IntegrationClient { runtime: self }
     }
 
     /// Provider inventory operations.
@@ -119,6 +217,33 @@ impl RuntimeClient {
         SessionClient { runtime: self }
     }
 
+    /// Bind an approved grant returned on this connection to its consumer-owned signing identity.
+    ///
+    /// # Errors
+    ///
+    /// The connection was created without an integration identity.
+    pub fn credentials(
+        &self,
+        grant: IntegrationGrant,
+    ) -> Result<IntegrationCredentials, ClientError> {
+        let Some(identity) = &self.identity else {
+            return Err(ClientError::Protocol(
+                "the connection has no integration identity to persist".to_owned(),
+            ));
+        };
+        Ok(IntegrationCredentials::new(identity.clone(), grant))
+    }
+
+    /// Stop every supervised process in the safe direction.
+    ///
+    /// # Errors
+    ///
+    /// Transport, protocol, or Runtime failure.
+    pub async fn panic_stop(&mut self) -> Result<(), ClientError> {
+        let _: EmptyResult = self.call(RuntimeMethod::PanicStop, &EmptyParams {}).await?;
+        Ok(())
+    }
+
     async fn call<P: Serialize, R: DeserializeOwned>(
         &mut self,
         method: RuntimeMethod,
@@ -126,6 +251,113 @@ impl RuntimeClient {
     ) -> Result<R, ClientError> {
         call_connection(&mut self.connection, &mut self.next_id, method, params).await
     }
+}
+
+async fn receive_challenge(
+    connection: &mut Connection,
+    locator: &ValidatedLocator,
+) -> Result<ServerChallenge, ClientError> {
+    let payload = connection.receive().await?;
+    let notification: JsonRpcNotification = serde_json::from_slice(&payload).map_err(|error| {
+        ClientError::Protocol(format!(
+            "the first Runtime frame is not a JSON-RPC notification: {error}"
+        ))
+    })?;
+    if notification.jsonrpc != "2.0"
+        || notification.method.parse::<RuntimeMethod>() != Ok(RuntimeMethod::Challenge)
+    {
+        return Err(ClientError::Protocol(
+            "the first Runtime frame is not the required challenge".to_owned(),
+        ));
+    }
+    let challenge: ServerChallenge =
+        serde_json::from_value(notification.params).map_err(|error| {
+            ClientError::Protocol(format!(
+                "the Runtime challenge has the wrong shape: {error}"
+            ))
+        })?;
+    validate_challenge(&challenge, locator)?;
+    Ok(challenge)
+}
+
+fn validate_challenge(
+    challenge: &ServerChallenge,
+    locator: &ValidatedLocator,
+) -> Result<(), ClientError> {
+    if challenge.instance_id != locator.instance_id {
+        return Err(ClientError::Protocol(
+            "the challenge Runtime instance does not match the locator".to_owned(),
+        ));
+    }
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|error| {
+            ClientError::Protocol(format!("system time precedes Unix epoch: {error}"))
+        })?;
+    let now_ms = u64::try_from(now.as_millis()).map_err(|_| {
+        ClientError::Protocol("system time does not fit Runtime milliseconds".to_owned())
+    })?;
+    if challenge.expires_at_ms <= now_ms {
+        return Err(ClientError::Protocol(
+            "the Runtime challenge is already expired".to_owned(),
+        ));
+    }
+    if challenge.expires_at_ms > now_ms.saturating_add(CHALLENGE_LIFETIME_MS) {
+        return Err(ClientError::Protocol(
+            "the Runtime challenge exceeds the public lifetime bound".to_owned(),
+        ));
+    }
+    let nonce = match Base64UrlUnpadded::decode_vec(&challenge.nonce) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            return Err(ClientError::Protocol(format!(
+                "the Runtime challenge nonce is malformed: {error}"
+            )));
+        }
+    };
+    if nonce.len() != 32
+        || challenge.nonce_id.len() != 38
+        || !challenge.nonce_id.starts_with("nonce_")
+        || !challenge
+            .nonce_id
+            .bytes()
+            .skip(6)
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+    {
+        return Err(ClientError::Protocol(
+            "the Runtime challenge nonce is malformed".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_initialization(
+    initialized: &InitializeResult,
+    locator: &ValidatedLocator,
+    expected_grant: Option<&IntegrationGrant>,
+) -> Result<(), ClientError> {
+    if initialized.runtime.instance_id != locator.instance_id {
+        return Err(ClientError::Protocol(
+            "the Runtime instance does not match the locator".to_owned(),
+        ));
+    }
+    if initialized.runtime.version != locator.runtime_version {
+        return Err(ClientError::Protocol(
+            "the Runtime version does not match the locator".to_owned(),
+        ));
+    }
+    if !FINALIZED_REVISIONS.contains(&initialized.selected_revision) {
+        return Err(ClientError::Protocol(
+            "the Runtime selected a revision the client did not offer".to_owned(),
+        ));
+    }
+    if initialized.grant.as_ref() != expected_grant {
+        return Err(ClientError::Protocol(
+            "the Runtime initialization grant does not match the authenticated credentials"
+                .to_owned(),
+        ));
+    }
+    Ok(())
 }
 
 async fn call_connection<P: Serialize, R: DeserializeOwned>(
@@ -215,6 +447,87 @@ fn validate_envelope(
 #[derive(Serialize)]
 struct EmptyParams {}
 
+#[derive(serde::Deserialize)]
+struct EmptyResult {}
+
+/// Typed integration enrollment methods.
+pub struct IntegrationClient<'a> {
+    runtime: &'a mut RuntimeClient,
+}
+
+impl IntegrationClient<'_> {
+    /// Prove possession and create one bounded local enrollment request.
+    ///
+    /// # Errors
+    ///
+    /// Missing identity, protocol encoding, transport, or Runtime refusal.
+    pub async fn request(
+        &mut self,
+        proposal: EnrollmentProposal,
+    ) -> Result<EnrollmentReceipt, ClientError> {
+        let Some(identity) = self.runtime.identity.as_ref() else {
+            return Err(ClientError::Protocol(
+                "integration enrollment requires a consumer-owned identity".to_owned(),
+            ));
+        };
+        let manifest = EnrollmentManifest {
+            client_instance_id: proposal.client_instance_id,
+            public_key: identity.public_key_base64(),
+            manifest_digest: Base64UrlUnpadded::encode_string(&proposal.manifest_digest),
+            requested_scopes: proposal.requested_scopes,
+            requested_roots: proposal.requested_roots,
+        };
+        let payload = enrollment_signing_payload(
+            &self.runtime.challenge,
+            &self.runtime.supported_revisions,
+            self.runtime.initialized.selected_revision,
+            &self.runtime.client,
+            &self.runtime.capabilities,
+            &manifest,
+        )
+        .map_err(|error| {
+            ClientError::Protocol(format!(
+                "enrollment proof payload cannot be encoded: {error}"
+            ))
+        })?;
+        let params = RequestEnrollmentParams {
+            manifest,
+            signature: identity.sign_base64(&payload),
+        };
+        self.runtime
+            .call(RuntimeMethod::IntegrationsRequestEnrollment, &params)
+            .await
+    }
+
+    /// Read the exact pending decision associated with this proved connection.
+    ///
+    /// # Errors
+    ///
+    /// Protocol, transport, or Runtime refusal.
+    pub async fn watch(
+        &mut self,
+        pending_id: PendingEnrollmentId,
+    ) -> Result<EnrollmentDecision, ClientError> {
+        self.runtime
+            .call(
+                RuntimeMethod::IntegrationsWatchEnrollment,
+                &WatchEnrollmentParams { pending_id },
+            )
+            .await
+    }
+
+    /// Read the authenticated integration's current grant.
+    ///
+    /// # Errors
+    ///
+    /// Protocol, transport, or Runtime refusal.
+    pub async fn grant(&mut self) -> Result<IntegrationGrant, ClientError> {
+        self.runtime
+            .call(RuntimeMethod::IntegrationsGetGrant, &EmptyParams {})
+            .await
+    }
+}
+
 /// Typed provider inventory methods.
 pub struct ProviderClient<'a> {
     runtime: &'a mut RuntimeClient,
@@ -225,7 +538,7 @@ impl ProviderClient<'_> {
     ///
     /// # Errors
     ///
-    /// Public client and Runtime failures, including `enrollmentPending` before authorization lands.
+    /// Public client and Runtime failures, including default denial before authorization.
     pub async fn list(&mut self) -> Result<ProviderList, ClientError> {
         self.runtime
             .call(RuntimeMethod::ProvidersList, &EmptyParams {})
@@ -243,7 +556,7 @@ impl SessionClient<'_> {
     ///
     /// # Errors
     ///
-    /// Public client and Runtime failures, including `enrollmentPending` before authorization lands.
+    /// Public client and Runtime failures, including default denial before authorization.
     pub async fn list(&mut self) -> Result<ManagedSessionList, ClientError> {
         self.runtime
             .call(RuntimeMethod::SessionsList, &EmptyParams {})
@@ -268,5 +581,12 @@ mod tests {
         assert!(validate_envelope("2.0", &expected, &JsonRpcId::Number(7)).is_ok());
         assert!(validate_envelope("1.0", &expected, &JsonRpcId::Number(7)).is_err());
         assert!(validate_envelope("2.0", &expected, &JsonRpcId::Number(8)).is_err());
+    }
+
+    #[test]
+    fn identity_round_trips_through_explicit_secret_storage() {
+        let identity = IntegrationIdentity::from_secret_bytes([7; 32]);
+        let restored = IntegrationIdentity::from_secret_bytes(identity.secret_bytes());
+        assert_eq!(identity.public_key_base64(), restored.public_key_base64());
     }
 }

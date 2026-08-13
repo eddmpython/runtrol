@@ -30,6 +30,8 @@ serde_json = { workspace = true }
 serde = { workspace = true, features = ["std", "derive"] }
 semver = { workspace = true }
 getrandom = { workspace = true }
+ed25519-dalek = { workspace = true }
+base64ct = { workspace = true }
 # Serving is one task that owns the sessions and one task per connection, racing what they wait on against each
 # other. That needs a runtime, channels, and a way to race: this is where the daemon owns them, which is what keeps
 # the kernel free of any runtime decision at all.

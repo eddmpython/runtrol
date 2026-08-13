@@ -93,6 +93,8 @@ pub struct Composed {
     pub home: RuntrolHome,
     /// The minimal session-pointer database. It has no type capable of holding conversation content.
     pub store: Store,
+    /// Local-only pending approval challenges for public Runtime integrations.
+    pub(crate) integration_admin: crate::integration_admin::IntegrationAdmin,
     /// The guarantee that children die with this process.
     ///
     /// Shared, because every driver hands it to every child it starts, and held for the process lifetime because
@@ -142,6 +144,7 @@ impl Composed {
         Ok(Self {
             home,
             store,
+            integration_admin: crate::integration_admin::IntegrationAdmin::default(),
             containment,
             registry,
             granted,
@@ -174,6 +177,7 @@ impl Composed {
         Ok(Self {
             home,
             store,
+            integration_admin: crate::integration_admin::IntegrationAdmin::default(),
             containment: Arc::new(Containment::without_any()),
             registry,
             granted,

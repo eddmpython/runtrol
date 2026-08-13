@@ -1,5 +1,70 @@
 {
   "$defs": {
+    "AppScope": {
+      "description": "Public integration authority, separate from remote device scopes.",
+      "oneOf": [
+        {
+          "const": "provider.read",
+          "description": "Read provider descriptors and structural capabilities.",
+          "type": "string"
+        },
+        {
+          "const": "model.read",
+          "description": "Read official model catalogues.",
+          "type": "string"
+        },
+        {
+          "const": "session.list",
+          "description": "List managed session metadata under approved roots.",
+          "type": "string"
+        },
+        {
+          "const": "session.native.discover",
+          "description": "Read official native-session catalogues.",
+          "type": "string"
+        },
+        {
+          "const": "session.output.read",
+          "description": "Read bounded live normalized events.",
+          "type": "string"
+        },
+        {
+          "const": "session.start",
+          "description": "Start sessions under approved roots.",
+          "type": "string"
+        },
+        {
+          "const": "session.resume",
+          "description": "Resume or adopt sessions under approved roots.",
+          "type": "string"
+        },
+        {
+          "const": "session.input.write",
+          "description": "Acquire control and submit caller-owned input.",
+          "type": "string"
+        },
+        {
+          "const": "session.stop",
+          "description": "Interrupt or cool one controlled session.",
+          "type": "string"
+        },
+        {
+          "const": "approval.respond.low",
+          "description": "Answer exact low-risk structured approvals.",
+          "type": "string"
+        },
+        {
+          "const": "approval.respond.high",
+          "description": "Answer supported high-risk approvals under additional local policy.",
+          "type": "string"
+        },
+        {
+          "const": "session.delete",
+          "description": "Forget a Runtime pointer without deleting provider state.",
+          "type": "string"
+        }
+      ]
+    },
     "ClientCapabilities": {
       "additionalProperties": false,
       "description": "Client features understood by the initial read-only revision.",
@@ -31,6 +96,133 @@
       ],
       "type": "object"
     },
+    "EnrollmentDecision": {
+      "description": "Current enrollment decision.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "Local approval has not happened yet.",
+          "properties": {
+            "state": {
+              "const": "pending",
+              "type": "string"
+            }
+          },
+          "required": [
+            "state"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Exact narrowed grant was approved.",
+          "properties": {
+            "grant": {
+              "$ref": "#/$defs/IntegrationGrant",
+              "description": "Grant ready for authenticated reconnect."
+            },
+            "state": {
+              "const": "approved",
+              "type": "string"
+            }
+          },
+          "required": [
+            "state",
+            "grant"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The local operator denied the request.",
+          "properties": {
+            "state": {
+              "const": "denied",
+              "type": "string"
+            }
+          },
+          "required": [
+            "state"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The bounded decision window elapsed.",
+          "properties": {
+            "state": {
+              "const": "expired",
+              "type": "string"
+            }
+          },
+          "required": [
+            "state"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "EnrollmentManifest": {
+      "additionalProperties": false,
+      "description": "Closed self-description and exact authority requested for first enrollment.",
+      "properties": {
+        "clientInstanceId": {
+          "description": "Consumer-minted installed-instance label, never authority by itself.",
+          "type": "string"
+        },
+        "manifestDigest": {
+          "description": "Base64url digest of the consumer's closed product manifest.",
+          "type": "string"
+        },
+        "publicKey": {
+          "description": "Base64url Ed25519 verifying key.",
+          "type": "string"
+        },
+        "requestedRoots": {
+          "description": "Exact requested project paths. Approval canonicalizes and may only narrow them.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "requestedScopes": {
+          "description": "Exact requested scopes. Approval may only narrow them.",
+          "items": {
+            "$ref": "#/$defs/AppScope"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "clientInstanceId",
+        "publicKey",
+        "manifestDigest",
+        "requestedScopes",
+        "requestedRoots"
+      ],
+      "type": "object"
+    },
+    "EnrollmentReceipt": {
+      "additionalProperties": false,
+      "description": "Enrollment was recorded without revealing Runtime inventory.",
+      "properties": {
+        "expiresAtMs": {
+          "description": "When the request expires in Unix milliseconds.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "pendingId": {
+          "$ref": "#/$defs/PendingEnrollmentId",
+          "description": "Opaque local decision identity."
+        }
+      },
+      "required": [
+        "pendingId",
+        "expiresAtMs"
+      ],
+      "type": "object"
+    },
     "ErrorResponse": {
       "additionalProperties": false,
       "description": "Failed JSON-RPC response.",
@@ -59,6 +251,17 @@
       "additionalProperties": false,
       "description": "Initialization is negotiation only. Inventory is a separate authorized request.",
       "properties": {
+        "authentication": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/IntegrationAuthentication"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Approved integration proof when reconnecting. Omit only to enroll."
+        },
         "client": {
           "$ref": "#/$defs/ClientInfo",
           "description": "Safe client metadata."
@@ -88,6 +291,17 @@
       "additionalProperties": false,
       "description": "Successful initialization before integration authorization.",
       "properties": {
+        "grant": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/IntegrationGrant"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Current authority when initialization authenticated an approved integration."
+        },
         "limits": {
           "$ref": "#/$defs/RuntimeLimits",
           "description": "Numeric admission limits."
@@ -160,6 +374,87 @@
           "type": "string"
         }
       ]
+    },
+    "IntegrationAuthentication": {
+      "additionalProperties": false,
+      "description": "Authentication for an approved integration during initialization.",
+      "properties": {
+        "grantGeneration": {
+          "description": "Grant generation expected by the client.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "integrationId": {
+          "$ref": "#/$defs/IntegrationId",
+          "description": "Approved integration."
+        },
+        "keyGeneration": {
+          "description": "Public key generation expected by the client.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "signature": {
+          "description": "Base64url Ed25519 signature over the canonical initialization payload.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "integrationId",
+        "keyGeneration",
+        "grantGeneration",
+        "signature"
+      ],
+      "type": "object"
+    },
+    "IntegrationGrant": {
+      "additionalProperties": false,
+      "description": "The caller's current approved authority.",
+      "properties": {
+        "grantGeneration": {
+          "description": "Generation invalidating already parsed requests after grant changes.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "integrationId": {
+          "$ref": "#/$defs/IntegrationId",
+          "description": "Stable integration identity."
+        },
+        "keyGeneration": {
+          "description": "Key generation required for signatures.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "roots": {
+          "description": "Canonical approved project paths.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "scopes": {
+          "description": "Exact current app scopes.",
+          "items": {
+            "$ref": "#/$defs/AppScope"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "integrationId",
+        "scopes",
+        "roots",
+        "keyGeneration",
+        "grantGeneration"
+      ],
+      "type": "object"
+    },
+    "IntegrationId": {
+      "description": "An operator-approved local integration instance.",
+      "type": "string"
     },
     "JsonRpcId": {
       "anyOf": [
@@ -275,12 +570,24 @@
             "$ref": "#/$defs/SessionDescriptor"
           },
           "type": "array"
+        },
+        "warnings": {
+          "description": "Safe structural omissions that do not identify an unauthorized project.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         }
       },
       "required": [
-        "sessions"
+        "sessions",
+        "warnings"
       ],
       "type": "object"
+    },
+    "PendingEnrollmentId": {
+      "description": "An opaque pending local enrollment decision.",
+      "type": "string"
     },
     "ProtocolRevision": {
       "description": "A finalized public Runtime contract date.",
@@ -331,10 +638,33 @@
       ],
       "type": "object"
     },
+    "RequestEnrollmentParams": {
+      "additionalProperties": false,
+      "description": "Prove possession of the key attached to a new enrollment.",
+      "properties": {
+        "manifest": {
+          "$ref": "#/$defs/EnrollmentManifest",
+          "description": "Closed proposal."
+        },
+        "signature": {
+          "description": "Base64url Ed25519 signature over the canonical enrollment payload.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "manifest",
+        "signature"
+      ],
+      "type": "object"
+    },
     "RuntimeCapabilities": {
       "additionalProperties": false,
       "description": "Public product capabilities for the selected revision.",
       "properties": {
+        "integrationEnrollment": {
+          "description": "Local integration enrollment is implemented.",
+          "type": "boolean"
+        },
         "managedSessionList": {
           "description": "Fast managed session snapshot is implemented.",
           "type": "boolean"
@@ -345,6 +675,7 @@
         }
       },
       "required": [
+        "integrationEnrollment",
         "providerInventory",
         "managedSessionList"
       ],
@@ -569,6 +900,18 @@
       "additionalProperties": false,
       "description": "Numeric public bounds advertised during initialization.",
       "properties": {
+        "challengeLifetimeMs": {
+          "description": "Lifetime of one server-first challenge.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "enrollmentLifetimeMs": {
+          "description": "Lifetime of one pending local integration enrollment.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
         "maxFrameBytes": {
           "description": "Maximum frame payload before allocation.",
           "format": "uint",
@@ -588,6 +931,20 @@
           "minimum": 0,
           "type": "integer"
         },
+        "maxPendingEnrollments": {
+          "description": "Maximum active pending integration enrollments.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "maxRevisionOffers": {
+          "description": "Maximum finalized protocol revisions accepted in one offer.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
         "maxSubscriptions": {
           "description": "Maximum subscriptions on one connection.",
           "format": "uint16",
@@ -600,7 +957,11 @@
         "maxFrameBytes",
         "maxInputBytes",
         "maxPageItems",
-        "maxSubscriptions"
+        "maxSubscriptions",
+        "challengeLifetimeMs",
+        "enrollmentLifetimeMs",
+        "maxPendingEnrollments",
+        "maxRevisionOffers"
       ],
       "type": "object"
     },
@@ -615,6 +976,26 @@
         {
           "const": "runtime/initialized",
           "description": "Finish initialization before any inventory request.",
+          "type": "string"
+        },
+        {
+          "const": "runtime/challenge",
+          "description": "Server-first connection-bound authentication challenge notification.",
+          "type": "string"
+        },
+        {
+          "const": "integrations/requestEnrollment",
+          "description": "Create a bounded pending local enrollment.",
+          "type": "string"
+        },
+        {
+          "const": "integrations/watchEnrollment",
+          "description": "Read the current decision for the proved pending key.",
+          "type": "string"
+        },
+        {
+          "const": "integrations/getGrant",
+          "description": "Read the authenticated integration's current grant.",
           "type": "string"
         },
         {
@@ -637,6 +1018,37 @@
     "RuntimeSessionId": {
       "description": "A stable Runtime-managed session identity.",
       "type": "string"
+    },
+    "ServerChallenge": {
+      "additionalProperties": false,
+      "description": "One connection-bound challenge sent before initialization.",
+      "properties": {
+        "expiresAtMs": {
+          "description": "Wall-clock expiry in Unix milliseconds.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "instanceId": {
+          "description": "Runtime instance named by the verified locator.",
+          "type": "string"
+        },
+        "nonce": {
+          "description": "Base64url random challenge bytes.",
+          "type": "string"
+        },
+        "nonceId": {
+          "description": "Opaque one-use nonce identity.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "instanceId",
+        "nonceId",
+        "nonce",
+        "expiresAtMs"
+      ],
+      "type": "object"
     },
     "SessionDescriptor": {
       "additionalProperties": false,
@@ -691,16 +1103,42 @@
         "result"
       ],
       "type": "object"
+    },
+    "WatchEnrollmentParams": {
+      "additionalProperties": false,
+      "description": "Read one pending decision on the same proved connection.",
+      "properties": {
+        "pendingId": {
+          "$ref": "#/$defs/PendingEnrollmentId",
+          "description": "Pending decision returned for this key."
+        }
+      },
+      "required": [
+        "pendingId"
+      ],
+      "type": "object"
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "description": "Root containing every type admitted by the initial public boundary.",
   "properties": {
+    "challenge": {
+      "$ref": "#/$defs/ServerChallenge"
+    },
+    "enrollment_decision": {
+      "$ref": "#/$defs/EnrollmentDecision"
+    },
+    "enrollment_receipt": {
+      "$ref": "#/$defs/EnrollmentReceipt"
+    },
     "initialize_params": {
       "$ref": "#/$defs/InitializeParams"
     },
     "initialize_result": {
       "$ref": "#/$defs/InitializeResult"
+    },
+    "integration_grant": {
+      "$ref": "#/$defs/IntegrationGrant"
     },
     "managed_session_list": {
       "$ref": "#/$defs/ManagedSessionList"
@@ -717,8 +1155,14 @@
     "request": {
       "$ref": "#/$defs/JsonRpcRequest"
     },
+    "request_enrollment": {
+      "$ref": "#/$defs/RequestEnrollmentParams"
+    },
     "response": {
       "$ref": "#/$defs/JsonRpcResponse"
+    },
+    "watch_enrollment": {
+      "$ref": "#/$defs/WatchEnrollmentParams"
     }
   },
   "required": [
@@ -728,6 +1172,12 @@
     "response",
     "initialize_params",
     "initialize_result",
+    "challenge",
+    "request_enrollment",
+    "enrollment_receipt",
+    "watch_enrollment",
+    "enrollment_decision",
+    "integration_grant",
     "provider_list",
     "managed_session_list"
   ],
