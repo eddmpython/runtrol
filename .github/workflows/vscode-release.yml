@@ -25,10 +25,10 @@ jobs:
       - name: Read the extension release SSOT
         id: manifest
         run: |
-          node <<'NODE'
-          const fs = require('fs');
-          const manifest = require('./extensions/runtrol-vscode/package.json');
-          const targets = require('./extensions/runtrol-vscode/release-targets.json');
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import { packageManifest as manifest } from './extensions/runtrol-vscode/tooling/extension-manifest.mjs';
+          const targets = JSON.parse(fs.readFileSync('./extensions/runtrol-vscode/release-targets.json', 'utf8'));
           const include = Object.entries(targets).map(([target, contract]) => ({ target, ...contract }));
           fs.appendFileSync(
             process.env.GITHUB_OUTPUT,

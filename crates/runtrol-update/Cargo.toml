@@ -1,0 +1,16 @@
+# Provider update channel verdicts and rollback version selection.
+[package]
+name = "runtrol-update"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[dependencies]
+semver = { workspace = true }
+
+[lints]
+workspace = true

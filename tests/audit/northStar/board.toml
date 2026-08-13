@@ -116,12 +116,14 @@ gate = [{ name = "crossPlatformMatrix", kind = "smoke" }]
 
 [[axis]]
 key = "currentWithoutAsking"
-tier = "none"
+# The Marketplace package journey is active on all hosted operating systems. Its provider counterpart still uses a
+# deterministic ACP fixture, and provider update execution is not complete yet.
+tier = "mock"
 additives = []
 name = { ko = "알아서 최신", en = "Current without asking", zh = "自动保持最新", ja = "勝手に最新" }
 gate = [
     { name = "cliUpdateRehearsal", kind = "smoke" },
-    { name = "appUpdateRehearsal", kind = "smoke" },
+    { name = "vscodeUpgradeRollback", kind = "smoke" },
 ]
 
 [[axis]]
@@ -206,6 +208,18 @@ category = "hygiene"
 name = "vscodePackage"
 status = "built"
 file = "vscodePackage.py"
+
+[[floor]]
+category = "hygiene"
+name = "versionSsot"
+status = "built"
+file = "versionSsot.py"
+
+[[floor]]
+category = "security"
+name = "channelVerdict"
+status = "built"
+file = "channelVerdict.rs"
 
 # The VS Code surface presents every event kind the vocabulary can produce. A floor because the failure it prevents
 # is the product speaking machine English at the operator mid-conversation, which shipped: twelve of the
@@ -349,12 +363,6 @@ category = "budget"
 name = "liveMemoryBudget"
 status = "built"
 file = "liveMemoryBudget.py"
-
-[[floor]]
-category = "release"
-name = "vscodeUpgradeRollback"
-status = "built"
-file = "vscodeUpgradeRollback.py"
 
 [[floor]]
 category = "resilience"

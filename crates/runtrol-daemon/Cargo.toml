@@ -1,7 +1,7 @@
 # The daemon: the composition root, the local listener, and request dispatch.
 [package]
 name = "runtrol-daemon"
-version = "0.0.0"
+version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

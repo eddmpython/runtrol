@@ -1,7 +1,7 @@
 # 감독자 커널. 세션 수명·계층·이벤트 순서·fan-out·manifest 로더·kind 레지스트리 seam.
 [package]
 name = "runtrol-core"
-version = "0.0.0"
+version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

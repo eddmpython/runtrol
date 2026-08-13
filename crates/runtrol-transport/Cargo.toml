@@ -1,7 +1,7 @@
 # Phone-facing transports. Security admission wraps a connection before any route sees a request.
 [package]
 name = "runtrol-transport"
-version = "0.0.0"
+version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

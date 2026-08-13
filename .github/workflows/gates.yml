@@ -159,6 +159,15 @@ jobs:
       - name: VS Code 릴리스 버전, 대상, 내용 allowlist 계약
         if: needs.detect.outputs.hasWorkspace == 'true'
         run: python -X utf8 tests/audit/vscodePackage.py
+      - name: 릴리스 버전 정본 자체 검증
+        if: needs.detect.outputs.hasWorkspace == 'true'
+        run: python -X utf8 tests/audit/versionSsot.py --selftest
+      - name: Cargo와 VS Code 릴리스 버전 단일 정본
+        if: needs.detect.outputs.hasWorkspace == 'true'
+        run: python -X utf8 tests/audit/versionSsot.py
+      - name: 확증된 provider 갱신 채널 계약
+        if: needs.detect.outputs.hasWorkspace == 'true'
+        run: cargo test -p runtrol-audit --test channelVerdict
       - name: VS Code 이벤트 표현 게이트 자체 검증
         if: needs.detect.outputs.hasWorkspace == 'true'
         run: python -X utf8 tests/audit/vscodeEventCoverage.py --selftest

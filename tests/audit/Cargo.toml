@@ -5,7 +5,7 @@
 # 명시 `[[test]]` 로 등록하면 `-D warnings` 아래에서도 `non_snake_case` 경고가 나지 않는다 (실측).
 [package]
 name = "runtrol-audit"
-version = "0.0.0"
+version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -26,6 +26,8 @@ runtrol-security = { workspace = true }
 runtrol-store = { workspace = true }
 runtrol-transport = { path = "../../crates/runtrol-transport" }
 runtrol-vault = { workspace = true }
+runtrol-update = { workspace = true }
+semver = { workspace = true }
 tokio = { workspace = true, features = ["io-util", "macros", "net", "rt", "sync"] }
 
 [[test]]
@@ -75,6 +77,10 @@ path = "noConsoleFlash.rs"
 [[test]]
 name = "providerContract"
 path = "providerContract.rs"
+
+[[test]]
+name = "channelVerdict"
+path = "channelVerdict.rs"
 
 # **주의 (실측)**: `[lints] workspace = true` 와 per-crate 재정의는 공존할 수 없다
 # (cargo hard error). 게이트 헬퍼는 자유 함수라서 clippy 의 `allow-*-in-tests` hatch 가

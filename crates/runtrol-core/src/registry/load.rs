@@ -177,6 +177,14 @@ impl Scan {
             }
         };
 
+        if !matches!(origin, Origin::BuiltIn) && manifest.update.is_some() {
+            self.rejected.push(Rejected {
+                origin: origin.clone(),
+                why: RegistryError::UpdateAuthority,
+            });
+            return;
+        }
+
         if let Err(error) = manifest.validate() {
             self.rejected.push(Rejected {
                 origin: origin.clone(),
@@ -438,6 +446,31 @@ mod tests {
             matches!(refusal.why, RegistryError::Invalid { .. }),
             "{refusal:?}"
         );
+    }
+
+    #[test]
+    fn an_on_disk_manifest_cannot_claim_update_authority() {
+        let scratch = Scratch::make("update-authority");
+        let body = format!("{}\n[update]\nhint = \"npm\"\n", text("thing", "Thing"));
+        let path = scratch.write("thing.toml", &body);
+
+        let mut scan = Scan::default();
+        scan.take_directory(&scratch.root);
+
+        assert!(scan.loaded.is_empty());
+        let refusal = scan.rejected.first().expect("the file must be refused");
+        assert_eq!(refusal.origin, Origin::File(path));
+        assert!(matches!(refusal.why, RegistryError::UpdateAuthority));
+    }
+
+    #[test]
+    fn a_compiled_manifest_may_declare_an_update_hint() {
+        let body = format!("{}\n[update]\nhint = \"self\"\n", text("thing", "Thing"));
+        let mut scan = Scan::default();
+        scan.take_built_in(&body);
+
+        assert_eq!(scan.loaded.len(), 1);
+        assert!(scan.rejected.is_empty());
     }
 
     #[test]

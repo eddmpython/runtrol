@@ -1,7 +1,7 @@
 # redb 스키마와 스키마 버전, 그리고 DB 파일을 여는 유일한 코드.
 [package]
 name = "runtrol-store"
-version = "0.0.0"
+version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

@@ -5,7 +5,7 @@
 # daemon and the command surface as libraries is also what lets an integration test link them, which a binary cannot.
 [package]
 name = "runtrol"
-version = "0.0.0"
+version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

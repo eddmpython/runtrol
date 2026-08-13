@@ -115,6 +115,18 @@ GATES: dict[str, tuple[str, list[str]]] = {
         "VS Code 릴리스 버전, 대상, 내용 allowlist 계약",
         [*PY, f"{HOOKS}/vscodePackage.py"],
     ),
+    "versionSsotSelftest": (
+        "릴리스 버전 정본 자체 검증",
+        [*PY, f"{HOOKS}/versionSsot.py", "--selftest"],
+    ),
+    "versionSsot": (
+        "Cargo와 VS Code 릴리스 버전 단일 정본",
+        [*PY, f"{HOOKS}/versionSsot.py"],
+    ),
+    "channelVerdict": (
+        "확증된 provider 갱신 채널 계약",
+        ["cargo", "test", "-p", "runtrol-audit", "--test", "channelVerdict"],
+    ),
     "vscodeHostPerformanceSelftest": (
         "VS Code Extension Host 성능 게이트 자체 검증",
         [*PY, f"{HOOKS}/vscodeHostPerformance.py", "--selftest"],

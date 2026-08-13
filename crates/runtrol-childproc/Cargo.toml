@@ -4,7 +4,7 @@
 # `unsafe_code = "forbid"`, which cannot be relaxed from inside the crate that inherits it
 [package]
 name = "runtrol-childproc"
-version = "0.0.0"
+version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

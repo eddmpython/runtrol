@@ -1,12 +1,10 @@
-import { cp, mkdir, mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
-import { fileURLToPath } from "node:url";
 import os from "node:os";
 import path from "node:path";
 
-import { extensionRoot, packageManifest } from "./extension-manifest.mjs";
+import { extensionRoot, packageManifest, repositoryRoot } from "./extension-manifest.mjs";
 
-const repositoryRoot = fileURLToPath(new URL("../../../", import.meta.url));
 const targets = JSON.parse(await readFile(path.join(extensionRoot, "release-targets.json"), "utf8"));
 const nativeTarget = `${process.platform}-${process.arch}`;
 const target = process.argv[2] ?? nativeTarget;
@@ -50,7 +48,7 @@ try {
     mkdir(stagedCore, { recursive: true }),
   ]);
   await Promise.all([
-    cp(path.join(extensionRoot, "package.json"), path.join(staging, "package.json")),
+    writeFile(path.join(staging, "package.json"), `${JSON.stringify(packageManifest, null, 2)}\n`, "utf8"),
     cp(path.join(extensionRoot, "README.md"), path.join(staging, "README.md")),
     cp(path.join(extensionRoot, ".vscodeignore"), path.join(staging, ".vscodeignore")),
     cp(path.join(extensionRoot, "dist"), stagedDist, { recursive: true }),

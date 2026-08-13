@@ -226,8 +226,12 @@ pub struct Manifest {
     #[serde(default)]
     pub models: ModelAliases,
     /// How this provider is likely to update itself.
+    ///
+    /// Optional rather than defaulted so the registry can distinguish an absent declaration from an on-disk
+    /// manifest trying to claim update authority. Only declarations compiled into the product may carry this
+    /// section.
     #[serde(default)]
-    pub update: UpdateSpec,
+    pub update: Option<UpdateSpec>,
     /// Where to degrade to when the primary surface is unusable.
     #[serde(default)]
     pub fallback: Option<FallbackSpec>,
@@ -602,7 +606,7 @@ argv = ["acp"]
             "the version query defaults, because it is the same nearly everywhere"
         );
         assert_eq!(manifest.transport.listen, Listen::Stdio);
-        assert_eq!(manifest.update.hint, UpdateHint::None);
+        assert!(manifest.update.is_none());
         assert!(manifest.fallback.is_none());
     }
 
@@ -642,7 +646,10 @@ argv = ["exec", "--json"]
         assert_eq!(manifest.bin.names.len(), 3);
         assert_eq!(manifest.probe.version.parse, VersionParse::SemverAnywhere);
         assert_eq!(manifest.models.aliases.len(), 2);
-        assert_eq!(manifest.update.hint, UpdateHint::Npm);
+        assert_eq!(
+            manifest.update.as_ref().map(|update| update.hint),
+            Some(UpdateHint::Npm)
+        );
         let fallback = manifest.fallback.expect("declared");
         assert_eq!(fallback.kind.as_str(), "exec-oneshot");
     }

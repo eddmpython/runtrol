@@ -71,6 +71,13 @@ pub enum RegistryError {
         /// Why a path could not be formed.
         source: PathError,
     },
+
+    /// An on-disk manifest tried to claim update authority.
+    ///
+    /// Update declarations select executable product code. Allowing a shadow manifest to carry one would turn
+    /// provider discovery into a command-execution extension point.
+    #[error("update declarations are accepted only from manifests compiled into runtrol")]
+    UpdateAuthority,
 }
 
 /// One provider, as declared.

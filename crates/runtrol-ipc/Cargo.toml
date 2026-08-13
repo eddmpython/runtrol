@@ -1,7 +1,7 @@
 # The frame format runtrol speaks to itself, and both ends of the local connection.
 [package]
 name = "runtrol-ipc"
-version = "0.0.0"
+version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

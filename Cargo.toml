@@ -13,6 +13,7 @@ members = [
     "crates/runtrol-ipc",
     "crates/runtrol-transport",
     "crates/runtrol-vault",
+    "crates/runtrol-update",
     "crates/runtrol-core",
     "crates/runtrol-drivers",
     "crates/runtrol-daemon",
@@ -22,6 +23,7 @@ members = [
 ]
 
 [workspace.package]
+version = "0.1.1"
 edition = "2024"
 # rust-toolchain.toml 의 핀과 같은 값. MSRV 를 증명하는 CI 잡이 없으면 더 낮은 값은
 # 검증되지 않은 주장이므로 적지 않는다 (더 낮은 MSRV 를 원하면 그것을 검증하는 잡을 먼저 만든다).
@@ -82,6 +84,9 @@ hkdf = { version = "0.12.4", default-features = false }
 sha2 = { version = "0.10.9", default-features = false }
 zeroize = { version = "1.9.0", features = ["zeroize_derive"] }
 
+# Provider package version ordering.
+semver = { version = "1.0.28", default-features = false, features = ["std"] }
+
 # Metadata store with no background worker. Version 4.1 includes the region allocator RSS fix and is the floor.
 # Earlier versions also use a different variable-width tuple encoding. See docs/coreRuntime.md.
 redb = "4.1.0"
@@ -101,6 +106,7 @@ runtrol-store = { path = "crates/runtrol-store" }
 runtrol-ipc = { path = "crates/runtrol-ipc" }
 runtrol-transport = { path = "crates/runtrol-transport" }
 runtrol-vault = { path = "crates/runtrol-vault" }
+runtrol-update = { path = "crates/runtrol-update" }
 runtrol-core = { path = "crates/runtrol-core" }
 runtrol-drivers = { path = "crates/runtrol-drivers" }
 runtrol-daemon = { path = "crates/runtrol-daemon" }

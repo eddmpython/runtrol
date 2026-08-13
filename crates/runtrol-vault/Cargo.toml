@@ -1,7 +1,7 @@
 # Per-user operating-system protection for runtrol's own machine identity.
 [package]
 name = "runtrol-vault"
-version = "0.0.0"
+version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

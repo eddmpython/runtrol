@@ -17,6 +17,7 @@ import hashlib
 import json
 import re
 import sys
+import tomllib
 import zipfile
 from pathlib import Path
 from typing import NamedTuple
@@ -37,6 +38,7 @@ EXPECTED_TARGETS = {
     "win32-arm64",
     "win32-x64",
 }
+WORKSPACE_VERSION = tomllib.loads((ROOT / "Cargo.toml").read_text(encoding="utf-8"))["workspace"]["package"]["version"]
 
 
 class ArchiveEntry(NamedTuple):
@@ -50,6 +52,7 @@ def sourceProblems(
     package: dict[str, object],
     targets: dict[str, object],
     packageScript: str,
+    extensionManifestScript: str,
     buildScript: str,
     releaseWorkflow: str,
     coreManifest: str,
@@ -60,8 +63,10 @@ def sourceProblems(
     """Return release-wiring defects that do not require a built binary."""
     found: list[str] = []
     version = package.get("version")
-    if not isinstance(version, str) or not SEMVER.fullmatch(version) or version == "0.0.0":
-        found.append("the extension version must be a publishable major.minor.patch other than 0.0.0")
+    if version != "0.0.0":
+        found.append("the checked-in extension version must be the derived-version placeholder 0.0.0")
+    if not isinstance(WORKSPACE_VERSION, str) or not SEMVER.fullmatch(WORKSPACE_VERSION) or WORKSPACE_VERSION == "0.0.0":
+        found.append("the workspace package version must be a publishable major.minor.patch other than 0.0.0")
     if package.get("publisher") != PUBLIC_PUBLISHER or package.get("name") != PUBLIC_EXTENSION_NAME:
         found.append("the public extension identity changed")
     if package.get("license") != "SEE LICENSE IN resources/LICENSE":
@@ -88,6 +93,7 @@ def sourceProblems(
             found.append(f"{target} has no native release runner")
     requiredPackageTokens = (
         "packageManifest.version",
+        "JSON.stringify(packageManifest",
         "release-targets.json",
         "target !== nativeTarget",
         '"--no-dependencies"',
@@ -99,6 +105,9 @@ def sourceProblems(
     for token in requiredPackageTokens:
         if token not in packageScript:
             found.append(f"package.mjs is missing release contract {token}")
+    for token in ("workspace\\.package", "sourceManifest.version !== \"0.0.0\"", "version: workspaceVersion"):
+        if token not in extensionManifestScript:
+            found.append(f"extension-manifest.mjs is missing version derivation contract {token}")
     if 'path.join(repositoryRoot, "LICENSE")' not in buildScript:
         found.append("build.mjs does not copy the repository license into package resources")
     requiredWorkflowTokens = (
@@ -319,7 +328,7 @@ def selftest() -> int:
         "name": PUBLIC_EXTENSION_NAME,
         "displayName": "Runtrol Studio",
         "publisher": PUBLIC_PUBLISHER,
-        "version": version,
+        "version": "0.0.0",
         "license": "SEE LICENSE IN resources/LICENSE",
         "homepage": "https://eddmpython.github.io/runtrol/",
         "bugs": {"url": "https://github.com/eddmpython/runtrol/issues"},
@@ -357,11 +366,12 @@ def selftest() -> int:
             "runner": f"{family}-native",
         }
     packageScript = (
-        "packageManifest.version release-targets.json target !== nativeTarget \"--no-dependencies\" "
+        "packageManifest.version JSON.stringify(packageManifest release-targets.json target !== nativeTarget \"--no-dependencies\" "
         "path.resolve(repositoryRoot, process.env.RUNTROL_CORE_BINARY) "
         "mkdtemp(path.join(os.tmpdir(), \"runtrol-vsix-\")) "
         "cp(source, path.join(stagedCore, targetContract.executable)) await rm(staging"
     )
+    extensionManifestScript = 'workspace\\.package sourceManifest.version !== "0.0.0" version: workspaceVersion'
     buildScript = 'path.join(repositoryRoot, "LICENSE")'
     releaseWorkflow = """
     cargo build --release -p runtrol --bin runtrol --target-dir target/vscode-release
@@ -378,6 +388,7 @@ def selftest() -> int:
         sourcePackage,
         targets,
         packageScript,
+        extensionManifestScript,
         buildScript,
         releaseWorkflow,
         coreManifest,
@@ -388,7 +399,7 @@ def selftest() -> int:
         print("[vscodePackage --selftest] FAIL. the green source contract was rejected.", file=sys.stderr)
         return 2
     brokenSource = dict(sourcePackage)
-    brokenSource["version"] = "0.0.0"
+    brokenSource["version"] = "0.1.0"
     floatingPublisher = {**sourcePackage, "devDependencies": {"@vscode/vsce": "^3.9.3"}}
     sourceMutations = (
         (brokenSource, releaseWorkflow, coreManifest),
@@ -407,6 +418,7 @@ def selftest() -> int:
             mutatedPackage,
             targets,
             packageScript,
+            extensionManifestScript,
             buildScript,
             mutatedWorkflow,
             mutatedManifest,
@@ -442,6 +454,7 @@ def sourceRun() -> int:
         package,
         targets,
         (EXTENSION / "tooling" / "package.mjs").read_text(encoding="utf-8"),
+        (EXTENSION / "tooling" / "extension-manifest.mjs").read_text(encoding="utf-8"),
         (EXTENSION / "tooling" / "build.mjs").read_text(encoding="utf-8"),
         (ROOT / ".github" / "workflows" / "vscode-release.yml").read_text(encoding="utf-8"),
         (ROOT / "crates" / "runtrol" / "Cargo.toml").read_text(encoding="utf-8"),
@@ -454,7 +467,7 @@ def sourceRun() -> int:
     found += listingProblems(package, (EXTENSION / "README.md").read_text(encoding="utf-8"))
     if found:
         return report("vscodePackage", found)
-    print(f"[vscodePackage] OK. release {package['version']} and six native targets are wired.")
+    print(f"[vscodePackage] OK. release {WORKSPACE_VERSION} and six native targets are wired.")
     return 0
 
 
@@ -471,7 +484,7 @@ def archiveRun(archive: Path, target: str, core: Path | None) -> int:
         found += archiveProblems(
             entries,
             target,
-            package["version"],
+            WORKSPACE_VERSION,
             (ROOT / "LICENSE").read_bytes(),
             coreBytes,
         )

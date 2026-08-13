@@ -33,6 +33,8 @@ const ALLOWED_EDGES: &[(&str, &[&str])] = &[
     // L1. Per-user machine secret protection. It knows only the path vocabulary and never transport, storage, or a
     // conversation-capable type.
     ("runtrol-vault", &["runtrol-provider"]),
+    // L1. Signed release and filesystem replacement primitives. It opens no socket and starts no provider.
+    ("runtrol-update", &[]),
     // L2. The kernel. **It cannot see the drivers** (see FORBIDDEN_TRANSITIVE below).
     (
         "runtrol-core",
