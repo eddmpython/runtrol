@@ -643,6 +643,7 @@ async fn serve_surfaces(
                     connection,
                     runtime_instance.clone(),
                     Arc::clone(&composed),
+                    Arc::clone(&discovering),
                     runtime_sessions.subscribe(),
                     runtime_asking.clone(),
                     runtime_returning.clone(),

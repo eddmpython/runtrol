@@ -19,6 +19,7 @@ mod consult;
 mod crash;
 pub mod dispatch;
 mod integration_admin;
+mod provider_prepare;
 mod provider_update;
 mod runtime_audit;
 mod runtime_auth;

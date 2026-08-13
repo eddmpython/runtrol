@@ -47,6 +47,11 @@ pub enum ModelCatalog {
         /// Why discovery is unavailable.
         why: Box<str>,
     },
+    /// The driver has no registered official model discovery capability.
+    Unsupported {
+        /// Why no official discovery capability is available.
+        why: Box<str>,
+    },
 }
 
 impl ModelCatalog {
@@ -54,6 +59,12 @@ impl ModelCatalog {
     #[must_use]
     pub fn unknown(why: impl Into<Box<str>>) -> Self {
         Self::Unknown { why: why.into() }
+    }
+
+    /// An honest answer for a driver with no official discovery binding.
+    #[must_use]
+    pub fn unsupported(why: impl Into<Box<str>>) -> Self {
+        Self::Unsupported { why: why.into() }
     }
 }
 
@@ -101,15 +112,17 @@ mod tests {
                 why: "the CLI exposes only a partial catalogue".into(),
             },
             ModelCatalog::unknown("the CLI exposes no discovery surface"),
+            ModelCatalog::unsupported("the driver exposes no official discovery surface"),
         ];
 
         let encoded = answers
             .iter()
             .map(|answer| serde_json::to_string(answer).expect("serializable"))
             .collect::<Vec<_>>();
-        for (answer, kind) in encoded
-            .iter()
-            .zip(["known", "aliases", "partial", "unknown"])
+        for (answer, kind) in
+            encoded
+                .iter()
+                .zip(["known", "aliases", "partial", "unknown", "unsupported"])
         {
             assert!(answer.contains(&format!(r#""kind":"{kind}""#)), "{answer}");
         }

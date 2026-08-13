@@ -30,6 +30,9 @@ pub enum RuntimeMethod {
     /// Read the structural provider inventory.
     #[serde(rename = "providers/list")]
     ProvidersList,
+    /// Discover the selected provider's current opaque model catalogue.
+    #[serde(rename = "providers/listModels")]
+    ProvidersListModels,
     /// Read the Runtime-managed session catalogue.
     #[serde(rename = "sessions/list")]
     SessionsList,
@@ -74,6 +77,7 @@ impl RuntimeMethod {
             Self::IntegrationsWatchEnrollment => "integrations/watchEnrollment",
             Self::IntegrationsGetGrant => "integrations/getGrant",
             Self::ProvidersList => "providers/list",
+            Self::ProvidersListModels => "providers/listModels",
             Self::SessionsList => "sessions/list",
             Self::SessionsAcquireControl => "sessions/acquireControl",
             Self::SessionsRenewControl => "sessions/renewControl",
@@ -106,6 +110,7 @@ impl FromStr for RuntimeMethod {
             "integrations/watchEnrollment" => Ok(Self::IntegrationsWatchEnrollment),
             "integrations/getGrant" => Ok(Self::IntegrationsGetGrant),
             "providers/list" => Ok(Self::ProvidersList),
+            "providers/listModels" => Ok(Self::ProvidersListModels),
             "sessions/list" => Ok(Self::SessionsList),
             "sessions/acquireControl" => Ok(Self::SessionsAcquireControl),
             "sessions/renewControl" => Ok(Self::SessionsRenewControl),
@@ -140,6 +145,7 @@ mod tests {
             RuntimeMethod::IntegrationsWatchEnrollment,
             RuntimeMethod::IntegrationsGetGrant,
             RuntimeMethod::ProvidersList,
+            RuntimeMethod::ProvidersListModels,
             RuntimeMethod::SessionsList,
             RuntimeMethod::SessionsAcquireControl,
             RuntimeMethod::SessionsRenewControl,

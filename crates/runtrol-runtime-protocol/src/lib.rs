@@ -7,6 +7,7 @@ mod error;
 mod integration;
 mod inventory;
 mod method;
+mod models;
 mod revision;
 mod rpc;
 mod schema;
@@ -24,6 +25,9 @@ pub use inventory::{
     ProviderDescriptor, ProviderId, ProviderList, RuntimeSessionId, SessionDescriptor,
 };
 pub use method::RuntimeMethod;
+pub use models::{
+    ListModelsParams, RuntimeModelCatalog, RuntimeModelChoice, RuntimeReasoningChoice,
+};
 pub use revision::{
     FINALIZED_REVISIONS, ProtocolRevision, REVISION_2026_08_13, RevisionError, negotiate,
 };

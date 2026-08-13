@@ -5,9 +5,10 @@ use schemars::{JsonSchema, schema_for};
 use crate::{
     AcquireControlParams, ControlLease, ControlLeaseParams, EnrollmentDecision, EnrollmentReceipt,
     InitializeParams, InitializeResult, IntegrationGrant, JsonRpcNotification, JsonRpcRequest,
-    JsonRpcResponse, LaggedNotification, ManagedSessionList, ProviderList, RequestEnrollmentParams,
-    RuntimeEventNotification, RuntimeMethod, ServerChallenge, SubmitInputParams,
-    WatchEnrollmentParams, WatchEventsParams, WatchEventsResult,
+    JsonRpcResponse, LaggedNotification, ListModelsParams, ManagedSessionList, ProviderList,
+    RequestEnrollmentParams, RuntimeEventNotification, RuntimeMethod, RuntimeModelCatalog,
+    ServerChallenge, SubmitInputParams, WatchEnrollmentParams, WatchEventsParams,
+    WatchEventsResult,
 };
 
 /// Checked schema filename inside this package.
@@ -33,6 +34,8 @@ struct PublicProtocolSchema {
     enrollment_decision: EnrollmentDecision,
     integration_grant: IntegrationGrant,
     provider_list: ProviderList,
+    list_models: ListModelsParams,
+    model_catalogue: RuntimeModelCatalog,
     managed_session_list: ManagedSessionList,
     acquire_control: AcquireControlParams,
     control_lease: ControlLease,

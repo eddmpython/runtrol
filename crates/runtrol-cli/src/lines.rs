@@ -109,6 +109,10 @@ pub fn render(response: &Response) -> Vec<String> {
             vec![format!("model catalogue unknown: {why}")]
         }
 
+        Response::Models(ModelCatalog::Unsupported { why }) => {
+            vec![format!("model catalogue unsupported: {why}")]
+        }
+
         Response::Started { session } => vec![session.to_string()],
 
         Response::Done => vec!["done".to_owned()],

@@ -2,20 +2,22 @@
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
+use std::time::Duration;
 
 use runtrol_ipc::transport::Connection;
 use runtrol_runtime_protocol::{
     AcquireControlParams, AppScope, ControlLeaseParams, ErrorResponse, FINALIZED_REVISIONS,
     InitializeParams, InitializeResult, JsonRpcId, JsonRpcNotification, JsonRpcRequest,
-    JsonRpcResponse, LaggedNotification, MAX_REVISION_OFFERS, ProtocolRevision,
+    JsonRpcResponse, LaggedNotification, ListModelsParams, MAX_REVISION_OFFERS, ProtocolRevision,
     RequestEnrollmentParams, RuntimeCapabilities, RuntimeError, RuntimeErrorKind, RuntimeInstance,
-    RuntimeLimits, RuntimeMethod, RuntimeSessionId, SubmitInputParams, SuccessResponse,
-    WatchEnrollmentParams, WatchEventsParams, WatchEventsResult, negotiate,
+    RuntimeLimits, RuntimeMethod, RuntimeModelCatalog, RuntimeModelChoice, RuntimeReasoningChoice,
+    RuntimeSessionId, SubmitInputParams, SuccessResponse, WatchEnrollmentParams, WatchEventsParams,
+    WatchEventsResult, negotiate,
 };
 use runtrol_store::EnrollmentKey;
 use runtrol_store::IntegrationAuditOutcome;
 use serde::Serialize;
-use tokio::sync::{mpsc, oneshot, watch};
+use tokio::sync::{Mutex, mpsc, oneshot, watch};
 
 use crate::Composed;
 use crate::runtime_auth::{
@@ -33,6 +35,7 @@ pub(crate) async fn serve_connection(
     mut connection: Connection,
     instance_id: String,
     composed: Arc<Composed>,
+    discovering: Arc<Mutex<()>>,
     sessions: watch::Receiver<Arc<RuntimeSessionCatalogue>>,
     asking: mpsc::Sender<RuntimeAsked>,
     returning: mpsc::UnboundedSender<RuntimeReturned>,
@@ -78,6 +81,7 @@ pub(crate) async fn serve_connection(
             &mut state,
             &instance_id,
             &composed,
+            &discovering,
             &catalogue,
             &asking,
             &returning,
@@ -173,10 +177,15 @@ struct Watching {
     view: Box<runtrol_core::SessionView>,
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one audited request keeps connection authority, discovery admission, session state, and owner channels explicit"
+)]
 async fn answer(
     state: &mut PublicState,
     instance_id: &str,
     composed: &Composed,
+    discovering: &Mutex<()>,
     sessions: &RuntimeSessionCatalogue,
     asking: &mpsc::Sender<RuntimeAsked>,
     returning: &mpsc::UnboundedSender<RuntimeReturned>,
@@ -235,6 +244,7 @@ async fn answer(
         state,
         instance_id,
         composed,
+        discovering,
         sessions,
         asking,
         returning,
@@ -274,6 +284,7 @@ async fn dispatch_public(
     state: &mut PublicState,
     instance_id: &str,
     composed: &Composed,
+    discovering: &Mutex<()>,
     sessions: &RuntimeSessionCatalogue,
     asking: &mpsc::Sender<RuntimeAsked>,
     returning: &mpsc::UnboundedSender<RuntimeReturned>,
@@ -309,6 +320,9 @@ async fn dispatch_public(
             }
             RuntimeMethod::IntegrationsGetGrant => grant(state, composed, id, params),
             RuntimeMethod::ProvidersList => providers(state, composed, id, params),
+            RuntimeMethod::ProvidersListModels => {
+                list_models(state, composed, discovering, id, params).await
+            }
             RuntimeMethod::SessionsList => sessions_list(state, composed, sessions, id, params),
             RuntimeMethod::SessionsAcquireControl
             | RuntimeMethod::SessionsRenewControl
@@ -341,6 +355,7 @@ async fn dispatch_public(
 fn required_scope(method: RuntimeMethod) -> Option<AppScope> {
     match method {
         RuntimeMethod::ProvidersList => Some(AppScope::ProviderRead),
+        RuntimeMethod::ProvidersListModels => Some(AppScope::ModelRead),
         RuntimeMethod::SessionsList => Some(AppScope::SessionList),
         RuntimeMethod::SessionsAcquireControl | RuntimeMethod::SessionsSubmitInput => {
             Some(AppScope::SessionInputWrite)
@@ -569,6 +584,103 @@ fn providers(
     }
 }
 
+async fn list_models(
+    state: &mut PublicState,
+    composed: &Composed,
+    discovering: &Mutex<()>,
+    id: JsonRpcId,
+    params: serde_json::Value,
+) -> Answer {
+    let Ok(params) = serde_json::from_value::<ListModelsParams>(params) else {
+        return Answer::plain(
+            id,
+            RuntimeErrorKind::InvalidRequest,
+            "model catalogue parameters are invalid",
+        );
+    };
+    if let Err(failure) = authorized(state, &composed.store, Some(AppScope::ModelRead)) {
+        return Answer::failure(id, failure);
+    }
+    let Ok(provider_id) = runtrol_provider::ProviderId::parse(params.provider_id.as_str()) else {
+        return Answer::plain(
+            id,
+            RuntimeErrorKind::InvalidRequest,
+            "the selected provider identity is invalid",
+        );
+    };
+    let discovered = tokio::time::timeout(
+        Duration::from_millis(crate::serve::MODEL_PREPARATION_BUDGET_MS),
+        async {
+            let _preparing = discovering.lock().await;
+            let driver = crate::provider_prepare::driver(composed, provider_id)
+                .await
+                .map_err(|_| ())?;
+            driver.models().await.map_err(|_| ())
+        },
+    )
+    .await;
+    match discovered {
+        Ok(Ok(catalogue)) => Answer::success(id, &model_catalogue(catalogue)),
+        Ok(Err(())) => Answer::plain(
+            id,
+            RuntimeErrorKind::ProviderUnavailable,
+            "the selected provider could not supply a model catalogue",
+        ),
+        Err(_) => Answer::plain(
+            id,
+            RuntimeErrorKind::RuntimeUnavailable,
+            "model catalogue discovery exceeded its bounded deadline",
+        ),
+    }
+}
+
+fn model_catalogue(catalogue: runtrol_provider::ModelCatalog) -> RuntimeModelCatalog {
+    match catalogue {
+        runtrol_provider::ModelCatalog::Known { models } => RuntimeModelCatalog::Known {
+            models: models.into_iter().map(model_choice).collect(),
+        },
+        runtrol_provider::ModelCatalog::Aliases { aliases, why } => RuntimeModelCatalog::Aliases {
+            aliases: aliases.into_iter().map(String::from).collect(),
+            why: String::from(why),
+        },
+        runtrol_provider::ModelCatalog::Partial {
+            aliases,
+            models,
+            why,
+        } => RuntimeModelCatalog::Partial {
+            aliases: aliases.into_iter().map(String::from).collect(),
+            models: models.into_iter().map(model_choice).collect(),
+            why: String::from(why),
+        },
+        runtrol_provider::ModelCatalog::Unknown { why } => RuntimeModelCatalog::Unknown {
+            why: String::from(why),
+        },
+        runtrol_provider::ModelCatalog::Unsupported { why } => RuntimeModelCatalog::Unsupported {
+            why: String::from(why),
+        },
+        _ => RuntimeModelCatalog::Unknown {
+            why: "the provider returned catalogue coverage unsupported by this Runtime".to_owned(),
+        },
+    }
+}
+
+fn model_choice(choice: runtrol_provider::ModelChoice) -> RuntimeModelChoice {
+    RuntimeModelChoice {
+        id: String::from(choice.id),
+        display_name: String::from(choice.display_name),
+        description: String::from(choice.description),
+        is_default: choice.is_default,
+        reasoning_efforts: choice
+            .reasoning_efforts
+            .into_iter()
+            .map(|effort| RuntimeReasoningChoice {
+                id: String::from(effort.id),
+                description: String::from(effort.description),
+            })
+            .collect(),
+    }
+}
+
 fn sessions_list(
     state: &mut PublicState,
     composed: &Composed,
@@ -738,6 +850,7 @@ fn parse_session_operation(
         | RuntimeMethod::IntegrationsWatchEnrollment
         | RuntimeMethod::IntegrationsGetGrant
         | RuntimeMethod::ProvidersList
+        | RuntimeMethod::ProvidersListModels
         | RuntimeMethod::SessionsList
         | RuntimeMethod::SessionsEvent
         | RuntimeMethod::SessionsLagged
@@ -1110,6 +1223,52 @@ mod tests {
         }
     }
 
+    #[test]
+    fn provider_model_catalogue_preserves_opaque_choices_and_coverage() {
+        let catalogue = model_catalogue(runtrol_provider::ModelCatalog::Partial {
+            aliases: vec!["provider-alias".into()],
+            models: vec![runtrol_provider::ModelChoice {
+                id: "provider-model".into(),
+                display_name: "Provider Model".into(),
+                description: "Provider description".into(),
+                is_default: true,
+                reasoning_efforts: vec![runtrol_provider::ReasoningChoice {
+                    id: "provider-effort".into(),
+                    description: "Provider effort".into(),
+                }],
+            }],
+            why: "the provider reports a partial list".into(),
+        });
+        let RuntimeModelCatalog::Partial {
+            aliases,
+            models,
+            why,
+        } = catalogue
+        else {
+            panic!("coverage must remain partial");
+        };
+        assert_eq!(aliases, ["provider-alias"]);
+        let model = models.first().expect("one mapped model");
+        assert_eq!(model.id, "provider-model");
+        assert_eq!(
+            model
+                .reasoning_efforts
+                .first()
+                .expect("one mapped reasoning effort")
+                .id,
+            "provider-effort"
+        );
+        assert_eq!(why, "the provider reports a partial list");
+
+        assert!(matches!(
+            model_catalogue(runtrol_provider::ModelCatalog::unsupported(
+                "no official discovery surface"
+            )),
+            RuntimeModelCatalog::Unsupported { why }
+                if why == "no official discovery surface"
+        ));
+    }
+
     #[tokio::test]
     #[expect(
         clippy::too_many_lines,
@@ -1151,8 +1310,10 @@ mod tests {
         let (_publishing, watching) = watch::channel(sessions);
         let (runtime_asking, _runtime_asked) = mpsc::channel(1);
         let (runtime_returning, _runtime_returned) = mpsc::unbounded_channel();
+        let discovering = Arc::new(Mutex::new(()));
         let serving = tokio::spawn({
             let composed = Arc::clone(&composed);
+            let discovering = Arc::clone(&discovering);
             async move {
                 for _ in 0..2 {
                     let connection = listener.accept().await.expect("accept public client");
@@ -1160,6 +1321,7 @@ mod tests {
                         connection,
                         instance.to_owned(),
                         Arc::clone(&composed),
+                        Arc::clone(&discovering),
                         watching.clone(),
                         runtime_asking.clone(),
                         runtime_returning.clone(),
@@ -1194,7 +1356,7 @@ mod tests {
             .request(runtrol_runtime_client::EnrollmentProposal::new(
                 "fixture-instance",
                 [3; 32],
-                vec![AppScope::ProviderRead],
+                vec![AppScope::ProviderRead, AppScope::ModelRead],
                 Vec::new(),
             ))
             .await
@@ -1217,7 +1379,10 @@ mod tests {
                     client_instance_id: "fixture-instance".into(),
                     label: "contract fixture".into(),
                     manifest_digest: [3; 32],
-                    scopes: vec![AppScope::ProviderRead.as_str().into()],
+                    scopes: vec![
+                        AppScope::ProviderRead.as_str().into(),
+                        AppScope::ModelRead.as_str().into(),
+                    ],
                     roots: Vec::new(),
                     key_generation: 1,
                     grant_generation: 1,
@@ -1259,6 +1424,16 @@ mod tests {
             .list()
             .await
             .expect("approved provider inventory");
+        let unavailable = approved
+            .providers()
+            .list_models(runtrol_runtime_protocol::ProviderId::new("not-registered"))
+            .await
+            .expect_err("an unknown provider cannot supply a model catalogue");
+        assert!(matches!(
+            unavailable,
+            runtrol_runtime_client::ClientError::Runtime(error)
+                if error.code == RuntimeErrorKind::ProviderUnavailable
+        ));
         assert!(
             composed
                 .store

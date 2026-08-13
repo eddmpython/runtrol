@@ -6,10 +6,11 @@ use runtrol_runtime_protocol::{
     ControlLease, ControlLeaseParams, EnrollmentDecision, EnrollmentManifest, EnrollmentReceipt,
     ErrorResponse, FINALIZED_REVISIONS, InitializeParams, InitializeResult,
     IntegrationAuthentication, IntegrationGrant, JsonRpcId, JsonRpcNotification, JsonRpcRequest,
-    JsonRpcResponse, LaggedNotification, ManagedSessionList, PendingEnrollmentId, ProviderList,
-    RequestEnrollmentParams, RuntimeEventNotification, RuntimeMethod, RuntimeSessionId,
-    ServerChallenge, SubmitInputParams, SuccessResponse, WatchEnrollmentParams, WatchEventsParams,
-    WatchEventsResult, enrollment_signing_payload, initialization_signing_payload,
+    JsonRpcResponse, LaggedNotification, ListModelsParams, ManagedSessionList, PendingEnrollmentId,
+    ProviderId, ProviderList, RequestEnrollmentParams, RuntimeEventNotification, RuntimeMethod,
+    RuntimeModelCatalog, RuntimeSessionId, ServerChallenge, SubmitInputParams, SuccessResponse,
+    WatchEnrollmentParams, WatchEventsParams, WatchEventsResult, enrollment_signing_payload,
+    initialization_signing_payload,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -546,6 +547,23 @@ impl ProviderClient<'_> {
             .call(RuntimeMethod::ProvidersList, &EmptyParams {})
             .await
     }
+
+    /// Explicitly discover one provider's current opaque model catalogue.
+    ///
+    /// # Errors
+    ///
+    /// Public client and Runtime failures, including unavailable providers and bounded discovery timeout.
+    pub async fn list_models(
+        &mut self,
+        provider_id: ProviderId,
+    ) -> Result<RuntimeModelCatalog, ClientError> {
+        self.runtime
+            .call(
+                RuntimeMethod::ProvidersListModels,
+                &ListModelsParams { provider_id },
+            )
+            .await
+    }
 }
 
 /// Typed Runtime-managed session methods.
@@ -723,6 +741,7 @@ impl EventSubscription<'_> {
             | RuntimeMethod::IntegrationsWatchEnrollment
             | RuntimeMethod::IntegrationsGetGrant
             | RuntimeMethod::ProvidersList
+            | RuntimeMethod::ProvidersListModels
             | RuntimeMethod::SessionsList
             | RuntimeMethod::SessionsAcquireControl
             | RuntimeMethod::SessionsRenewControl

@@ -733,6 +733,20 @@
         }
       ]
     },
+    "ListModelsParams": {
+      "additionalProperties": false,
+      "description": "Select one provider for explicit, potentially slow model discovery.",
+      "properties": {
+        "providerId": {
+          "$ref": "#/$defs/ProviderId",
+          "description": "Opaque provider identity returned by `providers/list`."
+        }
+      },
+      "required": [
+        "providerId"
+      ],
+      "type": "object"
+    },
     "ManagedSessionList": {
       "additionalProperties": false,
       "description": "A bounded Runtime-managed session snapshot.",
@@ -1246,6 +1260,11 @@
           "type": "string"
         },
         {
+          "const": "providers/listModels",
+          "description": "Discover the selected provider's current opaque model catalogue.",
+          "type": "string"
+        },
+        {
           "const": "sessions/list",
           "description": "Read the Runtime-managed session catalogue.",
           "type": "string"
@@ -1296,6 +1315,189 @@
           "type": "string"
         }
       ]
+    },
+    "RuntimeModelCatalog": {
+      "description": "The current model information Runtime can truthfully expose.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "An official provider surface returned a bounded authoritative list.",
+          "properties": {
+            "coverage": {
+              "const": "known",
+              "type": "string"
+            },
+            "models": {
+              "description": "Choices in provider order.",
+              "items": {
+                "$ref": "#/$defs/RuntimeModelChoice"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "coverage",
+            "models"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The provider exposes selectable aliases but no complete inventory.",
+          "properties": {
+            "aliases": {
+              "description": "Exact opaque tokens accepted by the provider.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "coverage": {
+              "const": "aliases",
+              "type": "string"
+            },
+            "why": {
+              "description": "Safe structural explanation of the limitation.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "coverage",
+            "aliases",
+            "why"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "An official or provider-owned surface returned a structurally limited list.",
+          "properties": {
+            "aliases": {
+              "description": "Exact opaque alias tokens accepted by the provider.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "coverage": {
+              "const": "partial",
+              "type": "string"
+            },
+            "models": {
+              "description": "Exact model options observed from the provider.",
+              "items": {
+                "$ref": "#/$defs/RuntimeModelChoice"
+              },
+              "type": "array"
+            },
+            "why": {
+              "description": "Safe structural explanation of the limitation.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "coverage",
+            "aliases",
+            "models",
+            "why"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Runtime probed but cannot currently interpret a catalogue structurally.",
+          "properties": {
+            "coverage": {
+              "const": "unknown",
+              "type": "string"
+            },
+            "why": {
+              "description": "Safe structural explanation of the unknown result.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "coverage",
+            "why"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The registered driver has no official model discovery capability.",
+          "properties": {
+            "coverage": {
+              "const": "unsupported",
+              "type": "string"
+            },
+            "why": {
+              "description": "Safe structural explanation of the missing capability.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "coverage",
+            "why"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "RuntimeModelChoice": {
+      "additionalProperties": false,
+      "description": "One opaque model selection reported by a provider.",
+      "properties": {
+        "description": {
+          "description": "Provider-supplied structural description.",
+          "type": "string"
+        },
+        "displayName": {
+          "description": "Provider-supplied presentation name.",
+          "type": "string"
+        },
+        "id": {
+          "description": "Exact value to return when starting a session.",
+          "type": "string"
+        },
+        "isDefault": {
+          "description": "Whether the provider currently marks this choice as its default.",
+          "type": "boolean"
+        },
+        "reasoningEfforts": {
+          "description": "Opaque reasoning choices reported for this model.",
+          "items": {
+            "$ref": "#/$defs/RuntimeReasoningChoice"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "displayName",
+        "description",
+        "isDefault",
+        "reasoningEfforts"
+      ],
+      "type": "object"
+    },
+    "RuntimeReasoningChoice": {
+      "additionalProperties": false,
+      "description": "One opaque reasoning-effort option reported by a provider.",
+      "properties": {
+        "description": {
+          "description": "Provider-supplied structural description.",
+          "type": "string"
+        },
+        "id": {
+          "description": "Exact value accepted by the provider.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "description"
+      ],
+      "type": "object"
     },
     "RuntimeSessionId": {
       "description": "A stable Runtime-managed session identity.",
@@ -1542,11 +1744,17 @@
     "lagged": {
       "$ref": "#/$defs/LaggedNotification"
     },
+    "list_models": {
+      "$ref": "#/$defs/ListModelsParams"
+    },
     "managed_session_list": {
       "$ref": "#/$defs/ManagedSessionList"
     },
     "method": {
       "$ref": "#/$defs/RuntimeMethod"
+    },
+    "model_catalogue": {
+      "$ref": "#/$defs/RuntimeModelCatalog"
     },
     "notification": {
       "$ref": "#/$defs/JsonRpcNotification"
@@ -1593,6 +1801,8 @@
     "enrollment_decision",
     "integration_grant",
     "provider_list",
+    "list_models",
+    "model_catalogue",
     "managed_session_list",
     "acquire_control",
     "control_lease",

@@ -22,13 +22,9 @@
 //! Consulted **before** the request is read for anything else, and before the greeting is answered. A check that ran
 //! after some other branch had already acted would be a check on the way out.
 
-use std::collections::BTreeMap;
-use std::sync::Arc;
-
 use runtrol_core::registry::KindStatus;
 use runtrol_core::session::SessionError;
 use runtrol_core::{ClosingReservation, OpenReservation, SessionManager, SessionView, TakenAgent};
-use runtrol_drivers::DriverContext;
 use runtrol_ipc::wire::{ProviderLine, Request, Response, SessionLine, SessionListing, WireError};
 use runtrol_provider::{
     AbsPath, Agent, AgentCommand, CloseMode, ContentBlock, Disposition, ModelCatalog,
@@ -399,7 +395,9 @@ pub(crate) async fn discover(
     Discovered::Driver {
         kind,
         provider: id,
-        driver: driver(composed, id, provider).await,
+        driver: crate::provider_prepare::driver(composed, id)
+            .await
+            .map_err(|error| refuse(error.message())),
     }
 }
 
@@ -1071,107 +1069,14 @@ async fn finish_cleanup(reply: Reply) -> (Reply, Vec<CleanupReservation>) {
     (Reply::One(response), reservations)
 }
 
-/// Build one declared and available driver, with runtime resolution owned by the probe.
-async fn driver(
-    composed: &Composed,
-    id: ProviderId,
-    provider: &str,
-) -> Result<Box<dyn Provider>, Response> {
-    let Some(declared) = composed.registry.get(id) else {
-        return Err(refuse(&format!("no provider called {provider}")));
-    };
-    match declared.kind {
-        KindStatus::Available => {}
-        KindStatus::Unavailable { why } => return Err(refuse(why)),
-        KindStatus::Unknown => {
-            return Err(refuse(&format!(
-                "{provider} names a kind nothing in this build declares"
-            )));
-        }
-    }
-
-    let Some(entry) = composed.driver_for(declared.manifest.kind.as_str()) else {
-        return Err(refuse("this build has no driver for that kind"));
-    };
-    let Some(make) = entry.make else {
-        return Err(refuse(
-            entry
-                .unavailable
-                .unwrap_or("this build cannot serve that kind"),
-        ));
-    };
-
-    let mut cache = runtrol_core::ProbeCache::open(composed.home.paths().probe_cache());
-    let bound_flags = entry.flags.iter().map(|flag| flag.flag).collect::<Vec<_>>();
-    // Resolution belongs to the probe, and the returned value is the exact program handed to the driver. Resolving
-    // again here would let a PATH change select a different executable from the one whose version and flags were read.
-    let (program, probed) = match runtrol_core::probe_program(
-        &declared.manifest,
-        &bound_flags,
-        &mut cache,
-        &composed.containment,
-    )
-    .await
-    {
-        Ok(probed) => probed,
-        Err(error) => return Err(refuse(&error.to_string())),
-    };
-    if let Err(error) = cache.save() {
-        return Err(refuse(&error.to_string()));
-    }
-
-    let checked = checked_flags(provider, entry, probed.flags)?;
-
-    Ok(make(&DriverContext {
-        provider: id,
-        models: declared.manifest.models.clone(),
-        program,
-        transport_argv: declared.manifest.transport.argv.clone(),
-        available_flags: checked.available,
-        unavailable_flags: checked.unavailable,
-        contained_by: Arc::clone(&composed.containment),
-    }))
-}
-
-/// Turn one parser observation into the exact optional surface a driver may use.
-#[derive(Debug)]
-struct CheckedFlags {
-    available: std::collections::BTreeSet<Box<str>>,
-    unavailable: BTreeMap<Box<str>, &'static str>,
-}
-
+#[cfg(test)]
 fn checked_flags(
     provider: &str,
     driver: &runtrol_drivers::DriverKind,
     observed: runtrol_core::Flags,
-) -> Result<CheckedFlags, Response> {
-    let available: std::collections::BTreeSet<Box<str>> = match observed {
-        runtrol_core::Flags::Observed(flags) => flags.into_iter().map(Into::into).collect(),
-        runtrol_core::Flags::Unknown { why } if driver.flags.iter().any(|flag| flag.required) => {
-            return Err(refuse(&format!(
-                "{provider} could not confirm the flags its driver requires: {why}"
-            )));
-        }
-        runtrol_core::Flags::Unknown { .. } => std::collections::BTreeSet::default(),
-    };
-    for required in driver.flags.iter().filter(|flag| flag.required) {
-        if !available.contains(required.flag) {
-            return Err(refuse(&format!(
-                "{provider} does not accept required flag {}: {}",
-                required.flag, required.without_it
-            )));
-        }
-    }
-    let unavailable = driver
-        .flags
-        .iter()
-        .filter(|flag| !flag.required && !available.contains(flag.flag))
-        .map(|flag| (Box::<str>::from(flag.flag), flag.without_it))
-        .collect();
-    Ok(CheckedFlags {
-        available,
-        unavailable,
-    })
+) -> Result<crate::provider_prepare::CheckedFlags, Response> {
+    crate::provider_prepare::checked_flags(provider, driver, observed)
+        .map_err(|error| refuse(error.message()))
 }
 
 /// Hand a command to a live session.

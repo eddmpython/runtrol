@@ -58,7 +58,7 @@ pub trait Provider: Send + Sync + 'static {
     /// detach a task or process that can outlive the future. Child processes must use kill-on-drop containment and a
     /// reader task must remain owned by a value dropped with this future.
     async fn models(&self) -> Result<ModelCatalog, ProviderError> {
-        Ok(ModelCatalog::unknown(
+        Ok(ModelCatalog::unsupported(
             "this driver does not provide model discovery",
         ))
     }
