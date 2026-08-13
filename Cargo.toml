@@ -14,6 +14,8 @@ members = [
     "crates/runtrol-transport",
     "crates/runtrol-vault",
     "crates/runtrol-update",
+    "crates/runtrol-runtime-protocol",
+    "crates/runtrol-runtime-client",
     "crates/runtrol-core",
     "crates/runtrol-drivers",
     "crates/runtrol-daemon",
@@ -86,6 +88,8 @@ zeroize = { version = "1.9.0", features = ["zeroize_derive"] }
 
 # Provider package version ordering.
 semver = { version = "1.0.28", default-features = false, features = ["std"] }
+# Public Runtime schema generation. The checked JSON schema is derived from the Rust DTO source of truth.
+schemars = { version = "1.2.2", default-features = false, features = ["derive", "std"] }
 
 # Metadata store with no background worker. Version 4.1 includes the region allocator RSS fix and is the floor.
 # Earlier versions also use a different variable-width tuple encoding. See docs/coreRuntime.md.
@@ -107,6 +111,8 @@ runtrol-ipc = { path = "crates/runtrol-ipc" }
 runtrol-transport = { path = "crates/runtrol-transport" }
 runtrol-vault = { path = "crates/runtrol-vault" }
 runtrol-update = { path = "crates/runtrol-update" }
+runtrol-runtime-protocol = { path = "crates/runtrol-runtime-protocol" }
+runtrol-runtime-client = { path = "crates/runtrol-runtime-client" }
 runtrol-core = { path = "crates/runtrol-core" }
 runtrol-drivers = { path = "crates/runtrol-drivers" }
 runtrol-daemon = { path = "crates/runtrol-daemon" }
@@ -118,7 +124,8 @@ runtrol-cli = { path = "crates/runtrol-cli" }
 # 그래서 재정의가 필요한 crate 는 자기 표를 통째로 쓴다. 어느 crate 가 그러는지는
 # `tests/audit/workspaceLints.rs` 가 고정한다.
 [workspace.lints.rust]
-# 검토된 플랫폼 FFI crate 만 "deny" 로 완화한다. 현재는 자식 프로세스 격리와 Windows DPAPI 경계다.
+# 검토된 플랫폼 FFI crate 만 "deny" 로 완화한다. 자식 프로세스 격리, Windows DPAPI, 소유자 전용 로컬
+# IPC 와 공개 Runtime 로케이터 검증 경계가 해당한다.
 unsafe_code = "forbid"
 # clippy 에서 rustc 로 승격된 lint 다. `[workspace.lints.clippy]` 에 적으면 경고가 난다.
 let_underscore_drop = "deny"

@@ -45,6 +45,10 @@ MAY_MUTATE_DISK = {
     "bounded crash file inside the runtrol home",
     "crates/runtrol-daemon/src/provider_update.rs": "owns the bounded provider update version floor "
     "and rollback pin journal inside the runtrol home; provider package changes still go through npm",
+    "crates/runtrol-daemon/src/runtime_locator.rs": "atomically owns the public Runtime instance and "
+    "locator records inside the runtrol home",
+    "crates/runtrol-runtime-protocol/src/bin/export_schema.rs": "writes only the generated checked "
+    "public Runtime schema from its Rust DTO source of truth",
 }
 MAY_MUTATE_PREFIXES = {
     "crates/runtrol-store/src/": "the database crate owns runtrol's session pointer store",

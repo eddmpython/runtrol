@@ -1099,56 +1099,26 @@ fn send(sessions: &mut SessionManager, session: SessionId, command: AgentCommand
 /// Joins runtrol's stored session pointers with the sessions that currently have a supervised process. Provider
 /// transcript storage is not consulted, so listing never discovers, derives, or reads a transcript path.
 pub(crate) fn list(composed: &Composed, sessions: &SessionManager) -> Response {
-    let stored = match composed.store.list_sessions() {
-        Ok(stored) => stored,
+    let catalogue = match crate::session_catalogue::read(composed, sessions) {
+        Ok(catalogue) => catalogue,
         Err(error) => return refuse(&error.to_string()),
     };
-    let mut joined = BTreeMap::new();
-    for (session, row) in stored.sessions {
-        if row.archived {
-            continue;
-        }
-        joined.insert(
-            session,
-            SessionLine {
-                session,
-                provider: row.provider.as_str().into(),
-                native: Some(row.native.as_str().into()),
-                label: row.label,
-                workspace: row.cwd.as_str().into(),
-                hot: false,
-                doing: "detached".into(),
-                looks_stuck: false,
-            },
-        );
-    }
-    for one in sessions.live_sessions() {
-        let label = joined
-            .get(&one.session)
-            .and_then(|stored: &SessionLine| stored.label.clone());
-        joined.insert(
-            one.session,
-            SessionLine {
-                session: one.session,
-                provider: one.provider.as_str().into(),
-                native: one.native.map(Into::into),
-                label,
-                workspace: one.workspace.as_str().into(),
-                hot: one.tier.has_a_process(),
-                doing: one.state.lifecycle().name().into(),
-                looks_stuck: one.state.looks_stuck(),
-            },
-        );
-    }
     Response::Sessions(SessionListing {
-        sessions: joined.into_values().collect(),
-        warnings: stored
-            .unreadable
+        sessions: catalogue
+            .sessions
             .into_iter()
-            .map(|(session, error)| {
-                format!("stored session {session} is unreadable: {error}").into()
+            .map(|session| SessionLine {
+                session: session.session,
+                provider: session.provider.as_str().into(),
+                native: session.native,
+                label: session.label,
+                workspace: session.workspace,
+                hot: session.hot,
+                doing: session.lifecycle.private_name().into(),
+                looks_stuck: session.looks_stuck,
             })
             .collect(),
+        warnings: catalogue.warnings,
     })
 }
 

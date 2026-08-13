@@ -1,0 +1,736 @@
+{
+  "$defs": {
+    "ClientCapabilities": {
+      "additionalProperties": false,
+      "description": "Client features understood by the initial read-only revision.",
+      "properties": {
+        "opaqueEventExtensions": {
+          "default": false,
+          "description": "Whether the client preserves bounded unknown optional event extensions.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "ClientInfo": {
+      "additionalProperties": false,
+      "description": "Safe client presentation metadata.",
+      "properties": {
+        "name": {
+          "description": "Product display name.",
+          "type": "string"
+        },
+        "version": {
+          "description": "Product version text.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "version"
+      ],
+      "type": "object"
+    },
+    "ErrorResponse": {
+      "additionalProperties": false,
+      "description": "Failed JSON-RPC response.",
+      "properties": {
+        "error": {
+          "$ref": "#/$defs/RuntimeError",
+          "description": "Stable public failure."
+        },
+        "id": {
+          "$ref": "#/$defs/JsonRpcId",
+          "description": "Request identifier copied unchanged."
+        },
+        "jsonrpc": {
+          "description": "Must be exactly `2.0`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "jsonrpc",
+        "id",
+        "error"
+      ],
+      "type": "object"
+    },
+    "InitializeParams": {
+      "additionalProperties": false,
+      "description": "Initialization is negotiation only. Inventory is a separate authorized request.",
+      "properties": {
+        "client": {
+          "$ref": "#/$defs/ClientInfo",
+          "description": "Safe client metadata."
+        },
+        "clientCapabilities": {
+          "$ref": "#/$defs/ClientCapabilities",
+          "default": {
+            "opaqueEventExtensions": false
+          },
+          "description": "Closed client capability map."
+        },
+        "supportedRevisions": {
+          "description": "Every finalized revision the client implements.",
+          "items": {
+            "$ref": "#/$defs/ProtocolRevision"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "supportedRevisions",
+        "client"
+      ],
+      "type": "object"
+    },
+    "InitializeResult": {
+      "additionalProperties": false,
+      "description": "Successful initialization before integration authorization.",
+      "properties": {
+        "limits": {
+          "$ref": "#/$defs/RuntimeLimits",
+          "description": "Numeric admission limits."
+        },
+        "runtime": {
+          "$ref": "#/$defs/RuntimeInstance",
+          "description": "Running instance proof."
+        },
+        "selectedRevision": {
+          "$ref": "#/$defs/ProtocolRevision",
+          "description": "Newest common finalized revision."
+        },
+        "serverCapabilities": {
+          "$ref": "#/$defs/RuntimeCapabilities",
+          "description": "Implemented product capabilities. Scope checks still apply."
+        }
+      },
+      "required": [
+        "selectedRevision",
+        "runtime",
+        "serverCapabilities",
+        "limits"
+      ],
+      "type": "object"
+    },
+    "InstallationObservation": {
+      "additionalProperties": false,
+      "description": "Structural provider installation evidence with no credentials or raw output.",
+      "properties": {
+        "state": {
+          "$ref": "#/$defs/InstallationState",
+          "description": "Current usable state."
+        },
+        "version": {
+          "description": "Provider-owned version text when the bounded probe supplied it.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "why": {
+          "description": "Safe structural reason when the provider is not usable.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "state"
+      ],
+      "type": "object"
+    },
+    "InstallationState": {
+      "description": "Whether an installed provider can currently be used.",
+      "oneOf": [
+        {
+          "const": "usable",
+          "description": "The registered discovery ladder found a usable program.",
+          "type": "string"
+        },
+        {
+          "const": "missing",
+          "description": "No program matching the registered discovery ladder was found.",
+          "type": "string"
+        },
+        {
+          "const": "unavailable",
+          "description": "A program was found but its supported surface could not be confirmed.",
+          "type": "string"
+        }
+      ]
+    },
+    "JsonRpcId": {
+      "anyOf": [
+        {
+          "description": "Connection-local numeric identifier.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "description": "Caller-owned opaque string identifier.",
+          "type": "string"
+        }
+      ],
+      "description": "A JSON-RPC request identifier."
+    },
+    "JsonRpcNotification": {
+      "additionalProperties": false,
+      "description": "One JSON-RPC notification with no response ID.",
+      "properties": {
+        "jsonrpc": {
+          "description": "Must be exactly `2.0`.",
+          "type": "string"
+        },
+        "method": {
+          "description": "Stable public method name.",
+          "type": "string"
+        },
+        "params": {
+          "default": null,
+          "description": "Method parameters."
+        }
+      },
+      "required": [
+        "jsonrpc",
+        "method"
+      ],
+      "type": "object"
+    },
+    "JsonRpcRequest": {
+      "additionalProperties": false,
+      "description": "One JSON-RPC request. Method parameter schemas remain closed at their typed decode boundary.",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/JsonRpcId",
+          "description": "Connection-local response correlation."
+        },
+        "jsonrpc": {
+          "description": "Must be exactly `2.0`.",
+          "type": "string"
+        },
+        "method": {
+          "description": "Stable public method name.",
+          "type": "string"
+        },
+        "params": {
+          "default": null,
+          "description": "Method parameters."
+        }
+      },
+      "required": [
+        "jsonrpc",
+        "id",
+        "method"
+      ],
+      "type": "object"
+    },
+    "JsonRpcResponse": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/SuccessResponse",
+          "description": "A typed result encoded in the envelope."
+        },
+        {
+          "$ref": "#/$defs/ErrorResponse",
+          "description": "A stable machine failure."
+        }
+      ],
+      "description": "A response is exactly one success or one failure."
+    },
+    "LifecycleState": {
+      "description": "Structural Runtime supervision state without conversation meaning.",
+      "oneOf": [
+        {
+          "const": "hotIdle",
+          "description": "A provider process is present and not currently in a turn.",
+          "type": "string"
+        },
+        {
+          "const": "hotRunning",
+          "description": "A provider process is in a turn.",
+          "type": "string"
+        },
+        {
+          "const": "cold",
+          "description": "Runtime has metadata but no provider process.",
+          "type": "string"
+        },
+        {
+          "const": "failed",
+          "description": "The last provider operation failed structurally.",
+          "type": "string"
+        }
+      ]
+    },
+    "ManagedSessionList": {
+      "additionalProperties": false,
+      "description": "A bounded Runtime-managed session snapshot.",
+      "properties": {
+        "sessions": {
+          "description": "Sessions already known to Runtime.",
+          "items": {
+            "$ref": "#/$defs/SessionDescriptor"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "sessions"
+      ],
+      "type": "object"
+    },
+    "ProtocolRevision": {
+      "description": "A finalized public Runtime contract date.",
+      "type": "string"
+    },
+    "ProviderDescriptor": {
+      "additionalProperties": false,
+      "description": "One provider in the fast inventory.",
+      "properties": {
+        "displayName": {
+          "description": "Provider or manifest supplied label for presentation only.",
+          "type": "string"
+        },
+        "installation": {
+          "$ref": "#/$defs/InstallationObservation",
+          "description": "Fast cached installation evidence. Listing does not start the provider."
+        },
+        "providerId": {
+          "$ref": "#/$defs/ProviderId",
+          "description": "Opaque selection value."
+        }
+      },
+      "required": [
+        "providerId",
+        "displayName",
+        "installation"
+      ],
+      "type": "object"
+    },
+    "ProviderId": {
+      "description": "An opaque provider identity discovered by Runtime.",
+      "type": "string"
+    },
+    "ProviderList": {
+      "additionalProperties": false,
+      "description": "A bounded provider inventory snapshot.",
+      "properties": {
+        "providers": {
+          "description": "Providers in registry order, including unavailable entries.",
+          "items": {
+            "$ref": "#/$defs/ProviderDescriptor"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "providers"
+      ],
+      "type": "object"
+    },
+    "RuntimeCapabilities": {
+      "additionalProperties": false,
+      "description": "Public product capabilities for the selected revision.",
+      "properties": {
+        "managedSessionList": {
+          "description": "Fast managed session snapshot is implemented.",
+          "type": "boolean"
+        },
+        "providerInventory": {
+          "description": "Fast provider inventory method is implemented.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "providerInventory",
+        "managedSessionList"
+      ],
+      "type": "object"
+    },
+    "RuntimeError": {
+      "additionalProperties": false,
+      "description": "A public failure with stable machine fields and bounded safe text.",
+      "properties": {
+        "code": {
+          "$ref": "#/$defs/RuntimeErrorKind",
+          "description": "Stable branch key."
+        },
+        "correlationId": {
+          "description": "Opaque correlation identifier with no content-derived data.",
+          "type": "string"
+        },
+        "message": {
+          "description": "Safe presentation text. Clients do not parse it.",
+          "type": "string"
+        },
+        "operatorAction": {
+          "description": "Optional stable local action name.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "retryable": {
+          "description": "Whether repeating later may succeed without changing parameters.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "code",
+        "message",
+        "retryable",
+        "correlationId"
+      ],
+      "type": "object"
+    },
+    "RuntimeErrorKind": {
+      "description": "A stable public failure category. Clients never branch on prose.",
+      "oneOf": [
+        {
+          "const": "runtimeNotInstalled",
+          "description": "No verified Runtime installation is present.",
+          "type": "string"
+        },
+        {
+          "const": "runtimeUnavailable",
+          "description": "The Runtime cannot currently be reached or trusted.",
+          "type": "string"
+        },
+        {
+          "const": "protocolIncompatible",
+          "description": "The client and Runtime share no finalized revision.",
+          "type": "string"
+        },
+        {
+          "const": "notInitialized",
+          "description": "A method was sent before initialization completed.",
+          "type": "string"
+        },
+        {
+          "const": "unauthenticated",
+          "description": "The connection has no enrolled integration identity.",
+          "type": "string"
+        },
+        {
+          "const": "enrollmentPending",
+          "description": "The integration is waiting for local approval.",
+          "type": "string"
+        },
+        {
+          "const": "enrollmentDenied",
+          "description": "The operator denied enrollment.",
+          "type": "string"
+        },
+        {
+          "const": "integrationRevoked",
+          "description": "The integration grant was revoked.",
+          "type": "string"
+        },
+        {
+          "const": "scopeDenied",
+          "description": "The integration grant lacks the method scope.",
+          "type": "string"
+        },
+        {
+          "const": "presenceRequired",
+          "description": "A private local action is required.",
+          "type": "string"
+        },
+        {
+          "const": "rootDenied",
+          "description": "The target is outside the approved project roots.",
+          "type": "string"
+        },
+        {
+          "const": "providerUnavailable",
+          "description": "The provider is not currently usable.",
+          "type": "string"
+        },
+        {
+          "const": "capabilityUnavailable",
+          "description": "The selected negotiated or provider capability is absent.",
+          "type": "string"
+        },
+        {
+          "const": "modelUnavailable",
+          "description": "The provider no longer accepts the model selection.",
+          "type": "string"
+        },
+        {
+          "const": "nativeCatalogueUnsupported",
+          "description": "The provider has no registered official native catalogue.",
+          "type": "string"
+        },
+        {
+          "const": "sessionNotFound",
+          "description": "The Runtime session does not exist in the caller's grant.",
+          "type": "string"
+        },
+        {
+          "const": "sessionConflict",
+          "description": "The requested lifecycle transition conflicts with current state.",
+          "type": "string"
+        },
+        {
+          "const": "controlConflict",
+          "description": "Another integration controls the session.",
+          "type": "string"
+        },
+        {
+          "const": "leaseExpired",
+          "description": "The supplied control lease has expired.",
+          "type": "string"
+        },
+        {
+          "const": "workspaceConflict",
+          "description": "The working tree already has an incompatible writer.",
+          "type": "string"
+        },
+        {
+          "const": "approvalExpired",
+          "description": "The pending approval has expired.",
+          "type": "string"
+        },
+        {
+          "const": "approvalOptionInvalid",
+          "description": "The chosen approval option is not currently offered.",
+          "type": "string"
+        },
+        {
+          "const": "idempotencyConflict",
+          "description": "One mutation ID was reused with different parameters.",
+          "type": "string"
+        },
+        {
+          "const": "outcomeUnknown",
+          "description": "A mutation may have happened and cannot be repeated safely.",
+          "type": "string"
+        },
+        {
+          "const": "resourceExhausted",
+          "description": "A bounded resource has reached its advertised limit.",
+          "type": "string"
+        },
+        {
+          "const": "rateLimited",
+          "description": "The caller exceeded a bounded admission rate.",
+          "type": "string"
+        },
+        {
+          "const": "gap",
+          "description": "A reconnect cursor is outside bounded replay.",
+          "type": "string"
+        },
+        {
+          "const": "invalidRequest",
+          "description": "The JSON-RPC request or its closed parameters are invalid.",
+          "type": "string"
+        },
+        {
+          "const": "methodNotFound",
+          "description": "The public method name does not exist.",
+          "type": "string"
+        },
+        {
+          "const": "internal",
+          "description": "Runtime failed without exposing private implementation detail.",
+          "type": "string"
+        }
+      ]
+    },
+    "RuntimeInstance": {
+      "additionalProperties": false,
+      "description": "Public Runtime instance facts used to reject a stale or replaced locator.",
+      "properties": {
+        "instanceId": {
+          "description": "Changes when a newly installed Runtime home is created.",
+          "type": "string"
+        },
+        "platform": {
+          "description": "Target class of the running artifact.",
+          "type": "string"
+        },
+        "version": {
+          "description": "Product version, not the compatibility decision.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "instanceId",
+        "version",
+        "platform"
+      ],
+      "type": "object"
+    },
+    "RuntimeLimits": {
+      "additionalProperties": false,
+      "description": "Numeric public bounds advertised during initialization.",
+      "properties": {
+        "maxFrameBytes": {
+          "description": "Maximum frame payload before allocation.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "maxInputBytes": {
+          "description": "Maximum caller input bytes.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "maxPageItems": {
+          "description": "Maximum items in one catalogue page.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "maxSubscriptions": {
+          "description": "Maximum subscriptions on one connection.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "maxFrameBytes",
+        "maxInputBytes",
+        "maxPageItems",
+        "maxSubscriptions"
+      ],
+      "type": "object"
+    },
+    "RuntimeMethod": {
+      "description": "A public Runtime method implemented by the initial read-only boundary.",
+      "oneOf": [
+        {
+          "const": "runtime/initialize",
+          "description": "Negotiate a public revision and bind the Runtime instance.",
+          "type": "string"
+        },
+        {
+          "const": "runtime/initialized",
+          "description": "Finish initialization before any inventory request.",
+          "type": "string"
+        },
+        {
+          "const": "providers/list",
+          "description": "Read the structural provider inventory.",
+          "type": "string"
+        },
+        {
+          "const": "sessions/list",
+          "description": "Read the Runtime-managed session catalogue.",
+          "type": "string"
+        },
+        {
+          "const": "runtime/panicStop",
+          "description": "Stop every supervised process in the safe direction.",
+          "type": "string"
+        }
+      ]
+    },
+    "RuntimeSessionId": {
+      "description": "A stable Runtime-managed session identity.",
+      "type": "string"
+    },
+    "SessionDescriptor": {
+      "additionalProperties": false,
+      "description": "One Runtime-managed session in the immediate catalogue.",
+      "properties": {
+        "label": {
+          "description": "Operator-owned label, never derived from conversation content.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "lifecycle": {
+          "$ref": "#/$defs/LifecycleState",
+          "description": "Current supervision state."
+        },
+        "providerId": {
+          "$ref": "#/$defs/ProviderId",
+          "description": "Opaque provider selection value."
+        },
+        "sessionId": {
+          "$ref": "#/$defs/RuntimeSessionId",
+          "description": "Stable Runtime selection value."
+        }
+      },
+      "required": [
+        "sessionId",
+        "providerId",
+        "lifecycle"
+      ],
+      "type": "object"
+    },
+    "SuccessResponse": {
+      "additionalProperties": false,
+      "description": "Successful JSON-RPC response.",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/JsonRpcId",
+          "description": "Request identifier copied unchanged."
+        },
+        "jsonrpc": {
+          "description": "Must be exactly `2.0`.",
+          "type": "string"
+        },
+        "result": {
+          "description": "Typed method result represented at the envelope boundary."
+        }
+      },
+      "required": [
+        "jsonrpc",
+        "id",
+        "result"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Root containing every type admitted by the initial public boundary.",
+  "properties": {
+    "initialize_params": {
+      "$ref": "#/$defs/InitializeParams"
+    },
+    "initialize_result": {
+      "$ref": "#/$defs/InitializeResult"
+    },
+    "managed_session_list": {
+      "$ref": "#/$defs/ManagedSessionList"
+    },
+    "method": {
+      "$ref": "#/$defs/RuntimeMethod"
+    },
+    "notification": {
+      "$ref": "#/$defs/JsonRpcNotification"
+    },
+    "provider_list": {
+      "$ref": "#/$defs/ProviderList"
+    },
+    "request": {
+      "$ref": "#/$defs/JsonRpcRequest"
+    },
+    "response": {
+      "$ref": "#/$defs/JsonRpcResponse"
+    }
+  },
+  "required": [
+    "method",
+    "request",
+    "notification",
+    "response",
+    "initialize_params",
+    "initialize_result",
+    "provider_list",
+    "managed_session_list"
+  ],
+  "title": "PublicProtocolSchema",
+  "type": "object"
+}

@@ -25,9 +25,46 @@ serde_json = { workspace = true, features = ["std", "raw_value"] }
 # here wants a network stack, and neither mechanism brings one.
 tokio = { workspace = true, features = ["net", "io-util", "time"] }
 
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Pipes",
+    "Win32_System_Threading",
+] }
+
 [dev-dependencies]
 # Both ends of the connection run in one test, so one of them is a task.
 tokio = { workspace = true, features = ["rt", "macros", "net", "io-util", "time"] }
 
-[lints]
-workspace = true
+# The owner-only Windows pipe needs one audited CreateNamedPipeW boundary because Tokio's safe builder does not
+# accept a SECURITY_ATTRIBUTES DACL. The workspace forbids unsafe and cannot be relaxed by inheritance, so this crate
+# repeats the table with deny and confines the calls to the Windows platform module.
+[lints.rust]
+unsafe_code = "deny"
+let_underscore_drop = "deny"
+unused_must_use = "deny"
+unreachable_pub = "warn"
+missing_docs = "warn"
+
+[lints.clippy]
+all = { level = "deny", priority = -1 }
+pedantic = { level = "warn", priority = -2 }
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+unreachable = "deny"
+dbg_macro = "deny"
+print_stdout = "deny"
+print_stderr = "deny"
+indexing_slicing = "deny"
+let_underscore_must_use = "deny"
+unwrap_in_result = "deny"
+disallowed_methods = "deny"
+disallowed_types = "deny"
+disallowed_macros = "deny"
+self_named_module_files = "deny"

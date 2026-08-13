@@ -19,8 +19,11 @@ mod consult;
 mod crash;
 pub mod dispatch;
 mod provider_update;
+mod runtime_locator;
+mod runtime_serve;
 pub mod scope;
 pub mod serve;
+mod session_catalogue;
 
 pub use compose::{ComposeError, Composed};
 pub use crash::record_panics_at;

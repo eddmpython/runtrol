@@ -12,21 +12,15 @@
 //! questions with documented calls. Choosing the familiar one would mean a local surface that cannot tell its own
 //! operator from anybody else logged in.
 //!
-//! # What protects the endpoint today, and what does not yet
+//! # What protects the endpoint
 //!
 //! **Remote clients are refused.** A named pipe is asked to reject them explicitly rather than relying on a default,
 //! because a default is something a later release may change.
 //!
-//! **The endpoint lives inside a directory only the operator can enter.** That is what makes the socket file
-//! unreachable on Unix rather than its own mode, which matters: setting a mode after binding leaves a window in which
-//! the file exists with whatever the process umask said, and closing that window needs a process-global setting no
-//! library should reach for.
-//!
-//! **Not yet: the security descriptor that narrows the pipe to the operator's own account, and asking the kernel who
-//! the peer is.** Both need the platform's security APIs, which have no safe wrapper, and this crate forbids `unsafe`.
-//! That is a boundary and not an oversight: the one crate allowed to write `unsafe` is the one that owns child
-//! processes, and these calls belong with it rather than here. Until then the endpoint is protected by the directory it
-//! sits in and by the refusal of remote clients, and this paragraph is the record of what that leaves open.
+//! **The endpoint admits the operator only.** Unix creates its parent at mode 0700, narrows the socket to 0600, and
+//! compares the peer UID with the socket owner. Windows installs an explicit current-user DACL at pipe creation,
+//! rejects remote clients, observes the peer process, impersonates the connected pipe client, and compares its token
+//! user SID with the daemon's. The Windows system calls are confined to audited unsafe blocks in this module.
 
 use bytes::{Bytes, BytesMut};
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
@@ -235,6 +229,8 @@ pub struct Listener {
     inner: platform::Listener,
     /// The address, kept for the error messages that have to name it.
     address: String,
+    /// Whether every accepted peer must be the endpoint owner.
+    owner_only: bool,
 }
 
 impl Listener {
@@ -261,8 +257,28 @@ impl Listener {
     )]
     pub async fn bind(address: &str) -> Result<Self, TransportError> {
         Ok(Self {
-            inner: platform::Listener::bind(address)?,
+            inner: platform::Listener::bind(address, false)?,
             address: address.to_owned(),
+            owner_only: false,
+        })
+    }
+
+    /// Start an endpoint whose OS object admits only the owning user and whose accepted peer is verified where the
+    /// platform exposes peer identity.
+    ///
+    /// # Errors
+    ///
+    /// [`TransportError::Bind`] when owner-only admission cannot be installed. It never falls back to the ordinary
+    /// listener because this constructor is an authorization boundary.
+    #[expect(
+        clippy::unused_async,
+        reason = "the endpoint has to be registered with the active Tokio I/O runtime"
+    )]
+    pub async fn bind_owner_only(address: &str) -> Result<Self, TransportError> {
+        Ok(Self {
+            inner: platform::Listener::bind(address, true)?,
+            address: address.to_owned(),
+            owner_only: true,
         })
     }
 
@@ -278,7 +294,7 @@ impl Listener {
     ///
     /// [`TransportError::Bind`] when the platform refuses to keep listening.
     pub async fn accept(&mut self) -> Result<Connection, TransportError> {
-        let stream = self.inner.accept(&self.address).await?;
+        let stream = self.inner.accept(&self.address, self.owner_only).await?;
         Ok(Connection {
             stream,
             pending: BytesMut::with_capacity(READ_BUFFER),
@@ -301,12 +317,50 @@ pub async fn connect(address: &str) -> Result<Connection, TransportError> {
     })
 }
 
+/// Create and durably write one new regular file with an explicit owner-only OS access policy.
+///
+/// The path must not exist. Callers publish the completed sibling with an atomic rename, so incomplete bytes never
+/// appear under the durable name.
+///
+/// # Errors
+///
+/// Returns the operating-system failure without falling back to inherited or process-umask permissions.
+pub fn create_owner_only_file(path: &std::path::Path, contents: &[u8]) -> std::io::Result<()> {
+    platform::create_owner_only_file(path, contents)
+}
+
 #[cfg(windows)]
 mod platform {
     //! A named pipe. Remote clients are refused explicitly rather than by default.
 
+    use std::io::Write as _;
+    use std::os::windows::io::{AsRawHandle as _, FromRawHandle as _};
+
     use tokio::net::windows::named_pipe::{
         ClientOptions, NamedPipeClient, NamedPipeServer, ServerOptions,
+    };
+    use windows_sys::Win32::Foundation::{
+        CloseHandle, GENERIC_WRITE, HANDLE, INVALID_HANDLE_VALUE, LocalFree,
+    };
+    use windows_sys::Win32::Security::Authorization::{
+        ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW,
+        SDDL_REVISION_1,
+    };
+    use windows_sys::Win32::Security::{
+        EqualSid, GetTokenInformation, PSECURITY_DESCRIPTOR, PSID, RevertToSelf,
+        SECURITY_ATTRIBUTES, TOKEN_QUERY, TOKEN_USER, TokenUser,
+    };
+    use windows_sys::Win32::Storage::FileSystem::{
+        CREATE_NEW, CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_FLAG_FIRST_PIPE_INSTANCE,
+        FILE_FLAG_OVERLAPPED, FILE_SHARE_READ, PIPE_ACCESS_DUPLEX,
+    };
+    use windows_sys::Win32::System::Pipes::{
+        CreateNamedPipeW, GetNamedPipeClientProcessId, ImpersonateNamedPipeClient,
+        PIPE_READMODE_BYTE, PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_BYTE, PIPE_UNLIMITED_INSTANCES,
+        PIPE_WAIT,
+    };
+    use windows_sys::Win32::System::Threading::{
+        GetCurrentProcess, GetCurrentThread, OpenProcessToken, OpenThreadToken,
     };
 
     use super::TransportError;
@@ -373,36 +427,88 @@ mod platform {
     pub(super) struct Listener {
         /// The instance waiting for the next client.
         next: Option<NamedPipeServer>,
+        /// Every instance receives the current-owner DACL when set.
+        owner_only: bool,
     }
 
     impl Listener {
-        pub(super) fn bind(address: &str) -> Result<Self, TransportError> {
-            let first = instance(address, true)?;
-            Ok(Self { next: Some(first) })
+        pub(super) fn bind(address: &str, owner_only: bool) -> Result<Self, TransportError> {
+            let first = instance(address, true, owner_only)?;
+            Ok(Self {
+                next: Some(first),
+                owner_only,
+            })
         }
 
-        pub(super) async fn accept(&mut self, address: &str) -> Result<Stream, TransportError> {
-            let waiting = match self.next.take() {
-                Some(one) => one,
-                // Only reachable if a previous accept failed after taking the instance. Creating one rather than
-                // refusing keeps a listener that had one bad moment usable.
-                None => instance(address, false)?,
-            };
-            waiting
-                .connect()
-                .await
-                .map_err(|error| TransportError::Bind {
+        #[expect(
+            unsafe_code,
+            reason = "Windows exposes the connected named-pipe client process only through a handle system call; the live handle and output pointer are bounded beside the call"
+        )]
+        pub(super) async fn accept(
+            &mut self,
+            address: &str,
+            owner_only: bool,
+        ) -> Result<Stream, TransportError> {
+            if owner_only != self.owner_only {
+                return Err(TransportError::Bind {
                     address: address.to_owned(),
-                    detail: error.to_string(),
-                })?;
-            // Created before the current one is handed over, so a client connecting right now finds an instance.
-            self.next = Some(instance(address, false)?);
-            Ok(Stream::Server(waiting))
+                    detail: "the listener's owner-only policy changed while accepting".to_owned(),
+                });
+            }
+            loop {
+                let waiting = match self.next.take() {
+                    Some(one) => one,
+                    // Only reachable if a previous accept failed after taking the instance. Creating one rather than
+                    // refusing keeps a listener that had one bad moment usable.
+                    None => instance(address, false, owner_only)?,
+                };
+                waiting
+                    .connect()
+                    .await
+                    .map_err(|error| TransportError::Bind {
+                        address: address.to_owned(),
+                        detail: error.to_string(),
+                    })?;
+                // Created before the current one is handed over, so a client connecting right now finds an instance.
+                self.next = Some(instance(address, false, owner_only)?);
+                if owner_only {
+                    let mut peer = 0_u32;
+                    // SAFETY: `waiting` owns a live connected pipe handle, and `peer` is a valid writable u32 for the
+                    // duration of the call. The call borrows the handle and does not close or retain it.
+                    let observed = unsafe {
+                        GetNamedPipeClientProcessId(waiting.as_raw_handle(), &raw mut peer)
+                    };
+                    if observed == 0 || peer == 0 {
+                        return Err(TransportError::Bind {
+                            address: address.to_owned(),
+                            detail: std::io::Error::last_os_error().to_string(),
+                        });
+                    }
+                    match pipe_client_is_current_user(waiting.as_raw_handle()) {
+                        Ok(true) => {}
+                        Ok(false) => continue,
+                        Err(error) => {
+                            return Err(TransportError::Bind {
+                                address: address.to_owned(),
+                                detail: error.to_string(),
+                            });
+                        }
+                    }
+                }
+                return Ok(Stream::Server(waiting));
+            }
         }
     }
 
     /// One pipe instance.
-    fn instance(address: &str, first: bool) -> Result<NamedPipeServer, TransportError> {
+    fn instance(
+        address: &str,
+        first: bool,
+        owner_only: bool,
+    ) -> Result<NamedPipeServer, TransportError> {
+        if owner_only {
+            return owner_only_instance(address, first);
+        }
         ServerOptions::new()
             .first_pipe_instance(first)
             // Explicit rather than relying on the default. A default is something a later release may change, and this
@@ -413,6 +519,341 @@ mod platform {
                 address: address.to_owned(),
                 detail: error.to_string(),
             })
+    }
+
+    /// One current-owner pipe instance. Tokio's safe builder has no security-attributes input, so the exact DACL is
+    /// installed at creation and the resulting overlapped handle is transferred to Tokio once.
+    #[expect(
+        unsafe_code,
+        reason = "Tokio has no safe SECURITY_ATTRIBUTES input; one owned overlapped handle is created with an explicit DACL and transferred exactly once"
+    )]
+    fn owner_only_instance(address: &str, first: bool) -> Result<NamedPipeServer, TransportError> {
+        let mut security =
+            SecurityDescriptor::current_owner().map_err(|error| TransportError::Bind {
+                address: address.to_owned(),
+                detail: error.to_string(),
+            })?;
+        let mut attributes = SECURITY_ATTRIBUTES {
+            nLength: u32::try_from(core::mem::size_of::<SECURITY_ATTRIBUTES>()).map_err(|_| {
+                TransportError::Bind {
+                    address: address.to_owned(),
+                    detail: "the Windows security attributes size does not fit u32".to_owned(),
+                }
+            })?,
+            lpSecurityDescriptor: security.as_mut_ptr(),
+            bInheritHandle: 0,
+        };
+        let wide: Vec<u16> = address.encode_utf16().chain(core::iter::once(0)).collect();
+        let mut open_mode = PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED;
+        if first {
+            open_mode |= FILE_FLAG_FIRST_PIPE_INSTANCE;
+        }
+        // SAFETY: `wide` is NUL terminated, `attributes` and its descriptor remain alive for the call, buffer sizes
+        // are bounded constants, and the returned handle is checked before ownership is transferred exactly once.
+        let handle = unsafe {
+            CreateNamedPipeW(
+                wide.as_ptr(),
+                open_mode,
+                PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,
+                PIPE_UNLIMITED_INSTANCES,
+                64 * 1024,
+                64 * 1024,
+                0,
+                &raw mut attributes,
+            )
+        };
+        if handle == INVALID_HANDLE_VALUE {
+            return Err(TransportError::Bind {
+                address: address.to_owned(),
+                detail: std::io::Error::last_os_error().to_string(),
+            });
+        }
+        // SAFETY: `CreateNamedPipeW` returned one owned, overlapped server handle. No other owner is constructed, and
+        // Tokio becomes solely responsible for closing it even if I/O registration fails.
+        unsafe { NamedPipeServer::from_raw_handle(handle) }.map_err(|error| TransportError::Bind {
+            address: address.to_owned(),
+            detail: error.to_string(),
+        })
+    }
+
+    pub(super) fn create_owner_only_file(
+        path: &std::path::Path,
+        contents: &[u8],
+    ) -> std::io::Result<()> {
+        create_owner_only_file_inner(path, contents)
+    }
+
+    #[expect(
+        unsafe_code,
+        reason = "Windows has no safe file-creation API that accepts the explicit owner-only SECURITY_ATTRIBUTES required before the path becomes visible"
+    )]
+    fn create_owner_only_file_inner(
+        path: &std::path::Path,
+        contents: &[u8],
+    ) -> std::io::Result<()> {
+        use std::os::windows::ffi::OsStrExt as _;
+
+        let mut security = SecurityDescriptor::current_owner()?;
+        let mut attributes = SECURITY_ATTRIBUTES {
+            nLength: u32::try_from(core::mem::size_of::<SECURITY_ATTRIBUTES>())
+                .map_err(|_| std::io::Error::other("security attributes size does not fit u32"))?,
+            lpSecurityDescriptor: security.as_mut_ptr(),
+            bInheritHandle: 0,
+        };
+        let wide: Vec<u16> = path
+            .as_os_str()
+            .encode_wide()
+            .chain(core::iter::once(0))
+            .collect();
+        // SAFETY: the path is NUL terminated, the descriptor remains alive for the call, and CREATE_NEW prevents
+        // following or replacing an existing path. The checked handle is transferred to File exactly once.
+        let handle = unsafe {
+            CreateFileW(
+                wide.as_ptr(),
+                GENERIC_WRITE,
+                FILE_SHARE_READ,
+                &raw mut attributes,
+                CREATE_NEW,
+                FILE_ATTRIBUTE_NORMAL,
+                core::ptr::null_mut(),
+            )
+        };
+        if handle == INVALID_HANDLE_VALUE {
+            return Err(std::io::Error::last_os_error());
+        }
+        // SAFETY: CreateFileW returned one owned synchronous file handle and no other owner is constructed.
+        let mut file = unsafe { std::fs::File::from_raw_handle(handle) };
+        file.write_all(contents)?;
+        file.sync_all()
+    }
+
+    /// A Windows self-relative security descriptor released through `LocalFree`.
+    struct SecurityDescriptor(PSECURITY_DESCRIPTOR);
+
+    impl SecurityDescriptor {
+        #[expect(
+            unsafe_code,
+            reason = "Windows allocates an SDDL security descriptor through an FFI output pointer that is checked and then owned by this RAII value"
+        )]
+        fn current_owner() -> std::io::Result<Self> {
+            let owner = process_user()?.sid_string()?;
+            // Only the exact process token user receives full control. No owner-rights alias, Everyone, anonymous,
+            // network, administrator, or SYSTEM ACE is present.
+            let sddl: Vec<u16> = format!("D:P(A;;GA;;;{owner})")
+                .encode_utf16()
+                .chain(core::iter::once(0))
+                .collect();
+            let mut descriptor: PSECURITY_DESCRIPTOR = core::ptr::null_mut();
+            // SAFETY: `sddl` is a valid NUL-terminated UTF-16 string and `descriptor` is a writable output pointer.
+            // Windows allocates the returned self-relative descriptor for `LocalFree`.
+            let converted = unsafe {
+                ConvertStringSecurityDescriptorToSecurityDescriptorW(
+                    sddl.as_ptr(),
+                    SDDL_REVISION_1,
+                    &raw mut descriptor,
+                    core::ptr::null_mut(),
+                )
+            };
+            if converted == 0 || descriptor.is_null() {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(Self(descriptor))
+        }
+
+        fn as_mut_ptr(&mut self) -> PSECURITY_DESCRIPTOR {
+            self.0
+        }
+    }
+
+    /// One handle returned by a Windows open call.
+    struct OwnedHandle(HANDLE);
+
+    impl Drop for OwnedHandle {
+        #[expect(
+            unsafe_code,
+            reason = "the non-null handle is owned by this value and CloseHandle is its release API"
+        )]
+        fn drop(&mut self) {
+            // SAFETY: successful token open calls return one owned non-null handle and this value is its only owner.
+            let closed = unsafe { CloseHandle(self.0) };
+            debug_assert_ne!(closed, 0, "CloseHandle did not release a token handle");
+        }
+    }
+
+    /// Aligned storage returned by `GetTokenInformation(TokenUser)`.
+    struct OwnedTokenUser {
+        storage: Vec<usize>,
+    }
+
+    impl OwnedTokenUser {
+        #[expect(
+            unsafe_code,
+            reason = "GetTokenInformation writes a bounded TOKEN_USER into aligned owned storage and both calls validate their output lengths"
+        )]
+        fn read(token: HANDLE) -> std::io::Result<Self> {
+            let mut needed = 0_u32;
+            // SAFETY: the first call intentionally supplies no output storage and only requests the required size.
+            unsafe {
+                GetTokenInformation(token, TokenUser, core::ptr::null_mut(), 0, &raw mut needed)
+            };
+            if needed == 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            let needed_usize = usize::try_from(needed)
+                .map_err(|_| std::io::Error::other("token user length does not fit usize"))?;
+            let words = needed_usize.div_ceil(core::mem::size_of::<usize>());
+            let mut storage = vec![0_usize; words];
+            // SAFETY: storage is aligned for TOKEN_USER, has at least `needed` writable bytes, and remains alive.
+            let read = unsafe {
+                GetTokenInformation(
+                    token,
+                    TokenUser,
+                    storage.as_mut_ptr().cast(),
+                    needed,
+                    &raw mut needed,
+                )
+            };
+            if read == 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(Self { storage })
+        }
+
+        #[expect(
+            unsafe_code,
+            reason = "the storage was populated as TOKEN_USER and owns the SID allocation it points into"
+        )]
+        fn sid(&self) -> PSID {
+            // SAFETY: `read` initialized the aligned buffer as TOKEN_USER and the buffer has not moved or been freed.
+            unsafe { (*self.storage.as_ptr().cast::<TOKEN_USER>()).User.Sid }
+        }
+
+        #[expect(
+            unsafe_code,
+            reason = "Windows converts the validated token SID into one LocalFree-owned UTF-16 allocation"
+        )]
+        fn sid_string(&self) -> std::io::Result<String> {
+            let mut text = core::ptr::null_mut();
+            // SAFETY: the SID belongs to this live token buffer and `text` is a writable output pointer.
+            if unsafe { ConvertSidToStringSidW(self.sid(), &raw mut text) } == 0 || text.is_null() {
+                return Err(std::io::Error::last_os_error());
+            }
+            let text = LocalWideString(text);
+            let mut length = 0_usize;
+            // SAFETY: ConvertSidToStringSidW returns a NUL-terminated UTF-16 allocation.
+            while unsafe { *text.0.add(length) } != 0 {
+                length = length
+                    .checked_add(1)
+                    .ok_or_else(|| std::io::Error::other("SID string length overflow"))?;
+            }
+            // SAFETY: the scan above found the terminator inside the Windows-owned SID string.
+            String::from_utf16(unsafe { core::slice::from_raw_parts(text.0, length) })
+                .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))
+        }
+    }
+
+    struct LocalWideString(*mut u16);
+
+    impl Drop for LocalWideString {
+        #[expect(
+            unsafe_code,
+            reason = "the pointer was returned by ConvertSidToStringSidW and LocalFree is its release API"
+        )]
+        fn drop(&mut self) {
+            // SAFETY: this value owns the allocation and no Windows call retains it.
+            let leftover = unsafe { LocalFree(self.0.cast()) };
+            debug_assert!(leftover.is_null(), "LocalFree did not release a SID string");
+        }
+    }
+
+    #[expect(
+        unsafe_code,
+        reason = "the current process pseudo-handle is borrowed only long enough to open one owned query token"
+    )]
+    fn process_user() -> std::io::Result<OwnedTokenUser> {
+        let mut token: HANDLE = core::ptr::null_mut();
+        // SAFETY: GetCurrentProcess returns a valid pseudo-handle and `token` is a writable output pointer.
+        if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &raw mut token) } == 0
+            || token.is_null()
+        {
+            return Err(std::io::Error::last_os_error());
+        }
+        OwnedTokenUser::read(OwnedHandle(token).0)
+    }
+
+    /// Impersonation is scoped to one synchronous check and always reverted before this function returns.
+    struct RevertGuard(bool);
+
+    impl RevertGuard {
+        #[expect(
+            unsafe_code,
+            reason = "RevertToSelf ends the pipe-client impersonation started in the same function"
+        )]
+        fn revert(mut self) -> std::io::Result<()> {
+            // SAFETY: the active flag is set only after successful ImpersonateNamedPipeClient on this thread.
+            if self.0 && unsafe { RevertToSelf() } == 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            self.0 = false;
+            Ok(())
+        }
+    }
+
+    impl Drop for RevertGuard {
+        #[expect(
+            unsafe_code,
+            reason = "panic cleanup must end a pipe-client impersonation before the worker thread is reused"
+        )]
+        fn drop(&mut self) {
+            if self.0 {
+                // SAFETY: the active flag is set only after successful impersonation on this thread.
+                let reverted = unsafe { RevertToSelf() };
+                debug_assert_ne!(reverted, 0, "RevertToSelf failed during cleanup");
+            }
+        }
+    }
+
+    #[expect(
+        unsafe_code,
+        reason = "Windows exposes the connected pipe client token only through thread impersonation and token handle calls; every handle and impersonation lifetime is bounded here"
+    )]
+    fn pipe_client_is_current_user(pipe: HANDLE) -> std::io::Result<bool> {
+        let current = process_user()?;
+        // SAFETY: `pipe` is a live connected named-pipe server handle borrowed for this synchronous call.
+        if unsafe { ImpersonateNamedPipeClient(pipe) } == 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        let reverting = RevertGuard(true);
+        let mut token: HANDLE = core::ptr::null_mut();
+        // SAFETY: the current thread is impersonating the connected client and `token` is writable.
+        let opened = unsafe { OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, 1, &raw mut token) };
+        let peer_token = if opened == 0 || token.is_null() {
+            let failure = std::io::Error::last_os_error();
+            reverting.revert()?;
+            return Err(failure);
+        } else {
+            OwnedHandle(token)
+        };
+        reverting.revert()?;
+        let peer = OwnedTokenUser::read(peer_token.0)?;
+        // SAFETY: both SID pointers belong to live TOKEN_USER buffers for the duration of the comparison.
+        Ok(unsafe { EqualSid(current.sid(), peer.sid()) } != 0)
+    }
+
+    impl Drop for SecurityDescriptor {
+        #[expect(
+            unsafe_code,
+            reason = "the pointer was returned by the SDDL converter, is owned by this value, and LocalFree is its only release API"
+        )]
+        fn drop(&mut self) {
+            // SAFETY: this pointer came from the successful conversion call above, has not been freed, and no pipe
+            // creation call retains it after returning.
+            let leftover = unsafe { LocalFree(self.0) };
+            debug_assert!(
+                leftover.is_null(),
+                "LocalFree did not release the security descriptor"
+            );
+        }
     }
 
     /// What the platform says when every instance of a pipe already has a client.
@@ -490,6 +931,22 @@ mod platform {
 
     use super::TransportError;
 
+    pub(super) fn create_owner_only_file(
+        path: &std::path::Path,
+        contents: &[u8],
+    ) -> std::io::Result<()> {
+        use std::io::Write as _;
+        use std::os::unix::fs::OpenOptionsExt as _;
+
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(path)?;
+        file.write_all(contents)?;
+        file.sync_all()
+    }
+
     /// The byte stream. One type for both ends here, unlike the other platform.
     pub(super) type Stream = UnixStream;
 
@@ -500,7 +957,23 @@ mod platform {
     }
 
     impl Listener {
-        pub(super) fn bind(address: &str) -> Result<Self, TransportError> {
+        pub(super) fn bind(address: &str, owner_only: bool) -> Result<Self, TransportError> {
+            use std::os::unix::fs::PermissionsExt as _;
+
+            if owner_only {
+                let Some(parent) = std::path::Path::new(address).parent() else {
+                    return Err(TransportError::Bind {
+                        address: address.to_owned(),
+                        detail: "the owner-only socket has no parent directory".to_owned(),
+                    });
+                };
+                std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700)).map_err(
+                    |error| TransportError::Bind {
+                        address: address.to_owned(),
+                        detail: error.to_string(),
+                    },
+                )?;
+            }
             // A socket file left by a daemon that is gone would refuse the bind. Removed first, and a failure to remove
             // is not reported here: the bind below is what decides, and it names the address either way.
             if std::path::Path::new(address).exists() {
@@ -510,10 +983,24 @@ mod platform {
                 address: address.to_owned(),
                 detail: error.to_string(),
             })?;
+            if owner_only {
+                std::fs::set_permissions(address, std::fs::Permissions::from_mode(0o600)).map_err(
+                    |error| TransportError::Bind {
+                        address: address.to_owned(),
+                        detail: error.to_string(),
+                    },
+                )?;
+            }
             Ok(Self { inner })
         }
 
-        pub(super) async fn accept(&mut self, address: &str) -> Result<Stream, TransportError> {
+        pub(super) async fn accept(
+            &mut self,
+            address: &str,
+            owner_only: bool,
+        ) -> Result<Stream, TransportError> {
+            use std::os::unix::fs::MetadataExt as _;
+
             let (stream, _peer) =
                 self.inner
                     .accept()
@@ -522,6 +1009,27 @@ mod platform {
                         address: address.to_owned(),
                         detail: error.to_string(),
                     })?;
+            if owner_only {
+                let expected = std::fs::metadata(address)
+                    .map_err(|error| TransportError::Bind {
+                        address: address.to_owned(),
+                        detail: error.to_string(),
+                    })?
+                    .uid();
+                let actual = stream
+                    .peer_cred()
+                    .map_err(|error| TransportError::Bind {
+                        address: address.to_owned(),
+                        detail: error.to_string(),
+                    })?
+                    .uid();
+                if actual != expected {
+                    return Err(TransportError::Bind {
+                        address: address.to_owned(),
+                        detail: "the Runtime socket peer does not match its owner".to_owned(),
+                    });
+                }
+            }
             Ok(stream)
         }
     }
@@ -587,6 +1095,26 @@ mod tests {
         assert_eq!(&*answer, b"{\"ask\":\"list\"}");
 
         serving.await.expect("the server finished");
+    }
+
+    #[tokio::test]
+    async fn an_owner_only_endpoint_accepts_its_current_user() {
+        let address = an_address("owner-only");
+        let mut listener = Listener::bind_owner_only(&address)
+            .await
+            .expect("the owner-only endpoint binds");
+        let serving = tokio::spawn(async move {
+            let mut connection = listener.accept().await.expect("the owner arrives");
+            connection
+                .recv()
+                .await
+                .expect("owner connection is readable")
+                .expect("owner frame arrives")
+        });
+
+        let mut client = connect(&address).await.expect("the owner connects");
+        client.send(b"owner").await.expect("owner frame writes");
+        assert_eq!(&*serving.await.expect("server task finishes"), b"owner");
     }
 
     #[tokio::test]

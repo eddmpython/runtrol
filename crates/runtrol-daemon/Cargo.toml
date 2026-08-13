@@ -20,6 +20,7 @@ runtrol-drivers = { workspace = true }
 runtrol-transport = { workspace = true }
 runtrol-vault = { workspace = true }
 runtrol-update = { workspace = true }
+runtrol-runtime-protocol = { workspace = true }
 
 thiserror = { workspace = true }
 bytes = { workspace = true }
@@ -28,6 +29,7 @@ bytes = { workspace = true }
 serde_json = { workspace = true }
 serde = { workspace = true, features = ["std", "derive"] }
 semver = { workspace = true }
+getrandom = { workspace = true }
 # Serving is one task that owns the sessions and one task per connection, racing what they wait on against each
 # other. That needs a runtime, channels, and a way to race: this is where the daemon owns them, which is what keeps
 # the kernel free of any runtime decision at all.
@@ -36,6 +38,7 @@ tokio = { workspace = true, features = ["net", "rt", "rt-multi-thread", "macros"
 [dev-dependencies]
 async-trait = { workspace = true }
 runtrol-core = { workspace = true, features = ["test-support"] }
+runtrol-runtime-client = { workspace = true, features = ["testing"] }
 fastwebsockets = { workspace = true }
 http-body-util = { workspace = true }
 hyper = { workspace = true, features = ["client", "http1"] }

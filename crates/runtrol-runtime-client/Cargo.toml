@@ -1,0 +1,61 @@
+# Public Rust client for one shared per-user Runtrol Runtime.
+[package]
+name = "runtrol-runtime-client"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = true
+
+[features]
+testing = []
+
+[dependencies]
+runtrol-runtime-protocol = { workspace = true }
+serde = { workspace = true, features = ["std", "derive"] }
+serde_json = { workspace = true, features = ["std"] }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["net", "io-util", "time"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_System_Threading",
+] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["net", "io-util", "time", "rt", "macros"] }
+
+# Windows exposes file owner and DACL inspection only through security-descriptor FFI. The public locator must verify
+# both before trusting an endpoint, so this crate repeats the workspace table with unsafe denied and confines every
+# call to the Windows-only locator validator.
+[lints.rust]
+unsafe_code = "deny"
+let_underscore_drop = "deny"
+unused_must_use = "deny"
+unreachable_pub = "warn"
+missing_docs = "warn"
+
+[lints.clippy]
+all = { level = "deny", priority = -1 }
+pedantic = { level = "warn", priority = -2 }
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+unreachable = "deny"
+dbg_macro = "deny"
+print_stdout = "deny"
+print_stderr = "deny"
+indexing_slicing = "deny"
+let_underscore_must_use = "deny"
+unwrap_in_result = "deny"
+disallowed_methods = "deny"
+disallowed_types = "deny"
+disallowed_macros = "deny"
+self_named_module_files = "deny"

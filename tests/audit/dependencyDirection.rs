@@ -20,6 +20,10 @@ use cargo_metadata::{DependencyKind, MetadataCommand, Package};
 ///
 /// An empty slice means a leaf: it depends on no workspace crate at all.
 const ALLOWED_EDGES: &[(&str, &[&str])] = &[
+    // Public Runtime vocabulary. It is provider-neutral and imports no private control or Core type.
+    ("runtrol-runtime-protocol", &[]),
+    // Public consumer SDK. Its only workspace dependency is the public wire contract.
+    ("runtrol-runtime-client", &["runtrol-runtime-protocol"]),
     // L0. The vocabulary. The semver-stable surface a third-party provider author depends on.
     ("runtrol-provider", &[]),
     // L1. The techniques. Each knows the vocabulary and nothing else.
@@ -64,6 +68,7 @@ const ALLOWED_EDGES: &[(&str, &[&str])] = &[
             "runtrol-transport",
             "runtrol-vault",
             "runtrol-update",
+            "runtrol-runtime-protocol",
         ],
     ),
     // L3. The command surface asks the daemon. It never opens storage itself, which the exclusive lock
@@ -134,6 +139,16 @@ const FORBIDDEN_TRANSITIVE: &[(&str, &str, &str)] = &[
         "runtrol-cli",
         "runtrol-core",
         "the command surface does not supervise a session itself",
+    ),
+    (
+        "runtrol-runtime-client",
+        "runtrol-core",
+        "the public SDK speaks only the public protocol and cannot supervise sessions or import private Core types",
+    ),
+    (
+        "runtrol-runtime-client",
+        "runtrol-ipc",
+        "the public SDK owns its public framing and cannot import the private control transport",
     ),
 ];
 

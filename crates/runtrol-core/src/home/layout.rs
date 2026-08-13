@@ -22,6 +22,7 @@
 //! | the machine identity vault | the per-user OS protector and Noise handshake assembly |
 //! | the daemon crash file | the detached daemon's panic hook writes it; the operator and gates read it |
 //! | the endpoint | the daemon binds it, the CLI connects to it |
+//! | the Runtime locator and endpoint | enrolled public SDK clients discover and connect to the separate surface |
 //!
 //! Deliberately absent: a general log directory. Where runtrol's ordinary diagnostics go has not
 //! been decided. The crash file is the one decided exception: a detached daemon's streams go
@@ -63,6 +64,12 @@ const MACHINE_IDENTITY: &str = "machine-identity.vault";
 /// Where the detached daemon's panic hook records why it died.
 const DAEMON_CRASH_LOG: &str = "daemon-crash.log";
 
+/// Atomic bootstrap record for the separate public Runtime endpoint.
+const RUNTIME_LOCATOR: &str = "runtime.locator.json";
+
+/// Durable identity of this installed Runtime home, regenerated after full uninstall.
+const RUNTIME_INSTANCE: &str = "runtime-instance.json";
+
 /// Directories runtrol creates when it opens a home.
 ///
 /// Created up front rather than on first write, so that `rm -rf $RUNTROL_HOME` followed by a start
@@ -88,8 +95,14 @@ pub struct Layout {
     machine_identity: AbsPath,
     /// Where the detached daemon's panic hook records why it died.
     daemon_crash_log: AbsPath,
+    /// Where public SDK clients find the running Runtime instance.
+    runtime_locator: AbsPath,
+    /// Durable identity that binds locators and initialization across ordinary restarts.
+    runtime_instance: AbsPath,
     /// Where the daemon listens.
     endpoint: Endpoint,
+    /// Where enrolled public Runtime clients connect.
+    runtime_endpoint: Endpoint,
 }
 
 impl Layout {
@@ -116,7 +129,10 @@ impl Layout {
             provider_updates: entry(PROVIDER_UPDATES)?,
             machine_identity: entry(MACHINE_IDENTITY)?,
             daemon_crash_log: entry(DAEMON_CRASH_LOG)?,
+            runtime_locator: entry(RUNTIME_LOCATOR)?,
+            runtime_instance: entry(RUNTIME_INSTANCE)?,
             endpoint: Endpoint::of(&root)?,
+            runtime_endpoint: Endpoint::runtime_of(&root)?,
             root,
         })
     }
@@ -169,10 +185,28 @@ impl Layout {
         &self.daemon_crash_log
     }
 
+    /// Atomic public Runtime bootstrap record.
+    #[must_use]
+    pub const fn runtime_locator(&self) -> &AbsPath {
+        &self.runtime_locator
+    }
+
+    /// Durable identity of this installed Runtime home.
+    #[must_use]
+    pub const fn runtime_instance(&self) -> &AbsPath {
+        &self.runtime_instance
+    }
+
     /// Where the daemon listens and the CLI connects.
     #[must_use]
     pub const fn endpoint(&self) -> &Endpoint {
         &self.endpoint
+    }
+
+    /// Dedicated public Runtime endpoint, separate from private control IPC.
+    #[must_use]
+    pub const fn runtime_endpoint(&self) -> &Endpoint {
+        &self.runtime_endpoint
     }
 
     /// The directories that have to exist before anything writes.
@@ -191,6 +225,8 @@ impl Layout {
             &self.provider_updates,
             &self.machine_identity,
             &self.daemon_crash_log,
+            &self.runtime_locator,
+            &self.runtime_instance,
         ]
     }
 }
@@ -198,6 +234,10 @@ impl Layout {
 /// The socket file the daemon binds on Unix.
 #[cfg(unix)]
 const SOCKET: &str = "runtrol.sock";
+
+/// The separate public Runtime socket file.
+#[cfg(unix)]
+const RUNTIME_SOCKET: &str = "runtrol-runtime.sock";
 
 /// How many bytes of socket path the kernel's address field holds, including the terminating NUL.
 ///
@@ -238,10 +278,18 @@ impl Endpoint {
 
     /// The socket file for a home directory.
     fn of(root: &AbsPath) -> Result<Self, HomeError> {
-        let path = root.join(SOCKET).map_err(|source| HomeError::Layout {
-            segment: SOCKET,
-            source,
-        })?;
+        Self::with_segment(root, SOCKET)
+    }
+
+    /// The public Runtime socket file for a home directory.
+    fn runtime_of(root: &AbsPath) -> Result<Self, HomeError> {
+        Self::with_segment(root, RUNTIME_SOCKET)
+    }
+
+    fn with_segment(root: &AbsPath, segment: &'static str) -> Result<Self, HomeError> {
+        let path = root
+            .join(segment)
+            .map_err(|source| HomeError::Layout { segment, source })?;
 
         // The NUL the kernel stores after the path is part of the field, so the usable length is one
         // less than the capacity.
@@ -282,6 +330,18 @@ impl Endpoint {
     fn of(root: &AbsPath) -> Result<Self, HomeError> {
         /// The namespace Windows requires for a pipe on this machine.
         const PREFIX: &str = r"\\.\pipe\runtrol-";
+
+        Ok(Self(format!("{PREFIX}{:016x}", fingerprint(root))))
+    }
+
+    /// The separate public Runtime pipe name for a home directory.
+    #[expect(
+        clippy::unnecessary_wraps,
+        reason = "one signature for both platforms keeps the cfg out of Layout::resolve"
+    )]
+    fn runtime_of(root: &AbsPath) -> Result<Self, HomeError> {
+        /// The dedicated public endpoint cannot share a method table with private control IPC.
+        const PREFIX: &str = r"\\.\pipe\runtrol-runtime-";
 
         Ok(Self(format!("{PREFIX}{:016x}", fingerprint(root))))
     }
@@ -372,6 +432,7 @@ mod tests {
         let first = Layout::resolve(abs("state/runtrol")).expect("resolve");
         let second = Layout::resolve(abs("state/runtrol")).expect("resolve");
         assert_eq!(first.endpoint(), second.endpoint());
+        assert_eq!(first.runtime_endpoint(), second.runtime_endpoint());
     }
 
     #[test]
@@ -381,6 +442,13 @@ mod tests {
         let first = Layout::resolve(abs("state/runtrol")).expect("resolve");
         let second = Layout::resolve(abs("other/runtrol")).expect("resolve");
         assert_ne!(first.endpoint(), second.endpoint());
+        assert_ne!(first.runtime_endpoint(), second.runtime_endpoint());
+    }
+
+    #[test]
+    fn private_control_and_public_runtime_have_distinct_endpoints() {
+        let layout = Layout::resolve(abs("state/runtrol")).expect("resolve");
+        assert_ne!(layout.endpoint(), layout.runtime_endpoint());
     }
 
     #[test]
@@ -398,6 +466,10 @@ mod tests {
         let socket = AbsPath::new(layout.endpoint().address()).expect("the address is a path here");
         assert!(socket.is_under(&root));
         assert_eq!(socket.file_name(), Some(SOCKET));
+        let runtime_socket = AbsPath::new(layout.runtime_endpoint().address())
+            .expect("the Runtime address is a path here");
+        assert!(runtime_socket.is_under(&root));
+        assert_eq!(runtime_socket.file_name(), Some(RUNTIME_SOCKET));
     }
 
     #[cfg(unix)]
@@ -427,6 +499,15 @@ mod tests {
             .expect("a local pipe name must carry the local namespace prefix");
         assert!(!tail.contains('\\'), "{name}");
         assert!(tail.starts_with("runtrol-"), "{name}");
+        let runtime_name = layout.runtime_endpoint().address();
+        let runtime_tail = runtime_name
+            .strip_prefix(r"\\.\pipe\")
+            .expect("a local Runtime pipe must carry the local namespace prefix");
+        assert!(!runtime_tail.contains('\\'), "{runtime_name}");
+        assert!(
+            runtime_tail.starts_with("runtrol-runtime-"),
+            "{runtime_name}"
+        );
     }
 
     #[cfg(windows)]

@@ -35,6 +35,10 @@ name = "dependencyDirection"
 path = "dependencyDirection.rs"
 
 [[test]]
+name = "runtimePublicBoundary"
+path = "runtimePublicBoundary.rs"
+
+[[test]]
 name = "sessionOverlapGuard"
 path = "sessionOverlapGuard.rs"
 

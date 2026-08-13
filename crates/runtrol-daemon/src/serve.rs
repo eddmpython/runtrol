@@ -179,6 +179,10 @@ pub enum ServeError {
     /// The bound phone listener could not accept another TCP connection.
     #[error("phone listener failed while accepting a connection: {0}")]
     PhoneAccept(#[source] std::io::Error),
+
+    /// Runtime instance identity or atomic locator publication failed.
+    #[error("Runtime public bootstrap failed: {0}")]
+    RuntimeBootstrap(String),
 }
 
 struct PhonePlane {
@@ -577,6 +581,22 @@ async fn serve_surfaces(
     phone: Option<PhonePlane>,
 ) -> Result<(), ServeError> {
     let composed = Arc::new(composed);
+    let runtime_instance =
+        crate::runtime_locator::load_or_create_instance(composed.home.paths().runtime_instance())
+            .map_err(|error| ServeError::RuntimeBootstrap(error.to_string()))?;
+    let runtime_address = composed
+        .home
+        .paths()
+        .runtime_endpoint()
+        .address()
+        .to_owned();
+    let mut runtime_listener = Listener::bind_owner_only(&runtime_address).await?;
+    let _runtime_locator = crate::runtime_locator::PublishedLocator::publish(
+        composed.home.paths().runtime_locator(),
+        &runtime_instance,
+        &runtime_address,
+    )
+    .map_err(|error| ServeError::RuntimeBootstrap(error.to_string()))?;
     let (asking, mut asked) = mpsc::channel::<Asked>(ASKED_QUEUE);
     let (reserving, mut reservations) = mpsc::unbounded_channel::<ReservationAsked>();
     let (returning, mut returned) = mpsc::unbounded_channel::<AgentReturned>();
@@ -604,6 +624,17 @@ async fn serve_surfaces(
 
     let outcome = loop {
         tokio::select! {
+            arrived = runtime_listener.accept() => {
+                let connection = match arrived {
+                    Ok(connection) => connection,
+                    Err(error) => break Err(error.into()),
+                };
+                connections.spawn(crate::runtime_serve::serve_connection(
+                    connection,
+                    runtime_instance.clone(),
+                ));
+            }
+
             arrived = listener.accept() => {
                 let connection = match arrived {
                     Ok(connection) => connection,
