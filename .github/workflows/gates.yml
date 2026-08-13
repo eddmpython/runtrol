@@ -427,6 +427,12 @@ jobs:
         env:
           TMPDIR: ${{ matrix.os == 'macos-latest' && '/tmp' || runner.temp }}
         run: python -X utf8 tests/audit/approvalRoundtripSmoke.py --require-external
+      - name: 헤드리스 폰 원격 단절 복원력 게이트 자체 검증
+        run: python -X utf8 tests/audit/remoteResilienceFaultInjection.py --selftest
+      - name: 헤드리스 폰 네트워크 단절과 Core 재시작 복원
+        env:
+          TMPDIR: ${{ matrix.os == 'macos-latest' && '/tmp' || runner.temp }}
+        run: python -X utf8 tests/audit/remoteResilienceFaultInjection.py --require-external
       - name: 제거 독립성 게이트 자체 검증
         run: python -X utf8 tests/audit/uninstallLeavesNoTrace.py --selftest
       - name: runtrol home 삭제 뒤 provider 세션 재개

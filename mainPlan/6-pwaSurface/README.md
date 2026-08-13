@@ -35,4 +35,5 @@ The source of truth is [docs/frontendStack.md](../../docs/frontendStack.md). The
 
 - `phoneDrivesPcSmoke`: shipped PWA의 WebCrypto, Noise, record, CoreClient 모듈이 헤드리스 폰 프로세스에서 production 데몬과 설치된 실물 Claude Code 세션을 시작하고 프롬프트와 출력을 왕복한다. 활성 hosted CI 게이트다
 - `approvalRoundtripSmoke`: 실제 permission prompt가 폰 watch 경로에 도달하고, 정확한 거부 응답이 같은 실물 CLI 세션을 재개시킨다. 활성 hosted CI 게이트다
+- `remoteResilienceFaultInjection`: 인증된 폰 watch socket 절단 뒤 exact cursor replay와 중복 부재를 확인하고, production Core 재시작 뒤 명시적 cross-stream gap과 provider native resume로 새 turn을 완료한다. 활성 hosted CI 게이트다
 - iOS 홈화면 설치 + Web Push 수신이 실기기로 확인됨 (operator 게이트. 점수로 세지 않는다)

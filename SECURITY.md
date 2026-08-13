@@ -108,10 +108,11 @@ logging API and that drivers and storage name no provider-owned transcript path.
 The `pairingLifecycle` gate proves the 120-second lifetime, single use, five-attempt lockout, prompt-injection
 defense, exact witness binding, and an encrypted round trip that becomes possible only after PC approval.
 
-The `phoneDrivesPcSmoke` and `approvalRoundtripSmoke` gates run the shipped PWA WebCrypto, Noise, record, and Core
-client modules in a headless phone process. They cross the production daemon and an installed real CLI, prove exact
-device, workspace, provider, and approval authority, and require every process they start to be gone afterward. The
-model endpoint is a deterministic loopback fixture that discards request bodies.
+The `phoneDrivesPcSmoke`, `approvalRoundtripSmoke`, and `remoteResilienceFaultInjection` gates run the shipped PWA
+WebCrypto, Noise, record, and Core client modules in a headless phone process. They cross the production daemon and
+an installed real CLI, prove exact device, workspace, provider, approval, reconnect, and resume authority, and require
+every process they start to be gone afterward. The model endpoint is a deterministic loopback fixture that discards
+request bodies.
 
 Web Push contains no event or conversation body. The daemon stores each browser-issued capability endpoint as
 device-bound protected ciphertext and sends an empty HTTP body only to the exact supported push-service origins.

@@ -10,9 +10,10 @@ import { RecordChannel, decodeRecord, encodeRecord } from "../src/records.js";
 import { RelayChannel } from "../src/relay.js";
 
 const mode = argv[2];
-if (!["drive", "approval"].includes(mode)) fail("live phone mode is invalid");
+if (!["drive", "approval", "resilience"].includes(mode)) fail("live phone mode is invalid");
 
 async function journey(identity, config, journeyMode) {
+  if (journeyMode === "resilience") return resilienceJourney(identity, config);
   const controller = await connectCore(identity, config);
   let watcher = null;
   let session = null;
@@ -65,6 +66,190 @@ async function journey(identity, config, journeyMode) {
     watcher?.close();
     controller.close();
   }
+}
+
+async function resilienceJourney(identity, config) {
+  let controller = await connectCore(identity, config);
+  let watcher = null;
+  let session = null;
+  let resumed = null;
+  const facts = new Set();
+  try {
+    const started = await controller.start(config.provider, config.workspace);
+    if (started.say !== "started" || typeof started.with?.session !== "string") {
+      throw new Error("Core did not start the resilience session");
+    }
+    session = started.with.session;
+    facts.add("started");
+
+    watcher = await connectCore(identity, config);
+    const firstStart = await watcher.beginWatch(session);
+    if (firstStart.gap !== null) throw new Error("the initial phone watch reported a gap");
+    const firstPrompt = await controller.prompt(session, "Return resilience turn one.");
+    if (firstPrompt.say !== "done") throw new Error("Core refused resilience turn one");
+    facts.add("prompted");
+    const first = await collectTurn(watcher, firstStart.starts_at);
+    facts.add("first_turn");
+    facts.add("output_seen");
+    facts.add("provider_ended");
+
+    const before = sessionRow(await controller.list(), session);
+    if (typeof before.native !== "string" || before.native.length === 0) {
+      throw new Error("the provider did not disclose its native session identity");
+    }
+
+    watcher.channel.socket.abort();
+    watcher = null;
+    facts.add("network_cut");
+    const secondPrompt = await controller.prompt(session, "Return resilience turn two.");
+    if (secondPrompt.say !== "done") throw new Error("Core refused resilience turn two");
+    await wait(500);
+
+    watcher = await connectCore(identity, config);
+    const replayStart = await watcher.beginWatch(session, first.cursor);
+    if (replayStart.gap !== null || !sameCursor(replayStart.starts_at, first.cursor)) {
+      throw new Error("bounded remote replay did not begin at the exact disconnected cursor");
+    }
+    const second = await collectTurn(watcher, first.cursor);
+    if (second.cursors.some((cursor) => sameCursor(cursor, first.cursor))) {
+      throw new Error("bounded remote replay duplicated the last delivered event");
+    }
+    facts.add("exact_replay");
+    facts.add("no_duplicate");
+
+    watcher.close();
+    watcher = null;
+    controller.close();
+    await wait(100);
+    writeLine({ control: "restart" });
+
+    controller = await reconnectCore(identity, config, 30_000);
+    facts.add("reconnected");
+    const restored = sessionRow(await controller.list(), session);
+    if (restored.native !== before.native) {
+      throw new Error("provider native identity changed across the Core restart");
+    }
+    facts.add("native_preserved");
+
+    const resumedAnswer = await controller.resume(restored);
+    if (resumedAnswer.say !== "started" || typeof resumedAnswer.with?.session !== "string") {
+      throw new Error("Core did not resume the provider-owned session after restart");
+    }
+    resumed = resumedAnswer.with.session;
+    if (resumed === session) throw new Error("Core reused the pre-restart session identity");
+    watcher = await connectCore(identity, config);
+    const restartStart = await watcher.beginWatch(resumed, second.cursor);
+    if (
+      restartStart.gap === null
+      || !sameCursor(restartStart.gap.requested, second.cursor)
+      || restartStart.starts_at.stream === second.cursor.stream
+    ) {
+      throw new Error("the Core restart did not expose an explicit cross-stream gap");
+    }
+    facts.add("explicit_gap");
+
+    const thirdPrompt = await controller.prompt(resumed, "Return resilience turn three.");
+    if (thirdPrompt.say !== "done") throw new Error("Core refused the resumed turn");
+    const third = await collectTurn(watcher, restartStart.starts_at);
+    if (third.cursor.stream === second.cursor.stream) {
+      throw new Error("the resumed provider reused the old event stream");
+    }
+    const after = sessionRow(await controller.list(), resumed);
+    if (after.native !== before.native) {
+      throw new Error("the resumed row lost the provider native identity");
+    }
+    facts.add("resumed_turn");
+
+    const closed = await controller.closeSession(resumed, true);
+    if (closed.say !== "done") throw new Error("Core did not close the resumed session");
+    facts.add("close_confirmed");
+    return { facts: [...facts] };
+  } finally {
+    watcher?.close();
+    controller?.close();
+  }
+}
+
+async function collectTurn(watcher, after) {
+  const cursors = [];
+  let cursor = readCursor(after);
+  let outputSeen = false;
+  const deadline = Date.now() + 60_000;
+  while (Date.now() < deadline) {
+    const response = await Promise.race([
+      watcher.nextWatch(),
+      timeout(5_000, "the resilience watch produced no event"),
+    ]);
+    if (response.say === "lagged") throw new Error("the resilience watch lagged");
+    const next = readCursor(response.with?.next_expected);
+    if (next.stream !== cursor.stream || next.epoch !== cursor.epoch || next.seq !== cursor.seq + 1) {
+      throw new Error("the resilience cursor sequence was not dense");
+    }
+    if (cursors.some((seen) => sameCursor(seen, next))) {
+      throw new Error("the resilience watch delivered a duplicate cursor");
+    }
+    cursors.push(next);
+    cursor = next;
+    const body = eventBody(response.with?.payload);
+    if (!body) throw new Error("the resilience watch returned a malformed event");
+    if (body.event === "agentMessageChunk" && deepText(body).includes("denial consumed")) {
+      outputSeen = true;
+    }
+    if (
+      outputSeen
+      && body.event === "turn"
+      && body.step === "ended"
+      && body.stop === "endTurn"
+      && body.declared_by?.by === "provider"
+    ) {
+      return { cursor, cursors };
+    }
+  }
+  throw new Error("the resilience turn did not reach provider-declared completion");
+}
+
+function sessionRow(response, session) {
+  if (response.say !== "sessions" || !Array.isArray(response.with?.sessions)) {
+    throw new Error("Core returned no session catalogue during resilience testing");
+  }
+  const row = response.with.sessions.find((candidate) => candidate?.session === session);
+  if (!row) throw new Error("the resilience session disappeared from the Core catalogue");
+  return row;
+}
+
+async function reconnectCore(identity, config, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  let delay = 100;
+  let lastError = null;
+  while (Date.now() < deadline) {
+    try {
+      return await connectCore(identity, config);
+    } catch (error) {
+      lastError = error;
+      await wait(delay);
+      delay = Math.min(delay * 2, 2_000);
+    }
+  }
+  throw new Error("the phone did not reconnect after the Core restart", { cause: lastError });
+}
+
+function readCursor(value) {
+  if (
+    value === null
+    || typeof value !== "object"
+    || typeof value.stream !== "string"
+    || !Number.isSafeInteger(value.epoch)
+    || !Number.isSafeInteger(value.seq)
+  ) {
+    throw new Error("Core returned a malformed watch cursor");
+  }
+  return { stream: value.stream, epoch: value.epoch, seq: value.seq };
+}
+
+function sameCursor(left, right) {
+  const a = readCursor(left);
+  const b = readCursor(right);
+  return a.stream === b.stream && a.epoch === b.epoch && a.seq === b.seq;
 }
 
 function inspectEvent(payload, evidence) {
@@ -242,6 +427,11 @@ class RawWebSocket {
     this.socket.unref();
   }
 
+  abort() {
+    this.socket.destroy();
+    this.socket.unref();
+  }
+
   accept(chunk) {
     this.buffer = Buffer.concat([this.buffer, chunk]);
     if (this.headerWaiter) {
@@ -332,6 +522,10 @@ async function readConfig() {
 
 function timeout(milliseconds, message) {
   return new Promise((_, reject) => setTimeout(() => reject(new Error(message)), milliseconds));
+}
+
+function wait(milliseconds) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
 function writeLine(value) {

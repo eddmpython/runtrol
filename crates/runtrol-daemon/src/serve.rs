@@ -2122,6 +2122,7 @@ mod tests {
     use runtrol_security::{
         DeviceId, DeviceLabels, DeviceScope, GrantLedger, ProjectRootIdentity, WorkspaceRootId,
     };
+    use runtrol_store::{DeviceKey, DeviceRootRow, DeviceRow, StoreError};
     use runtrol_transport::{
         AccessToken, Channel, EncryptedRecord, InitiatorHandshake, MAX_ENCRYPTED_RECORD_WIRE,
         NOISE_LINK_PATH, NOISE_LINK_PROTOCOL, PublicKey,
@@ -2271,6 +2272,12 @@ mod tests {
         address: String,
         home: String,
         serving: tokio::task::JoinHandle<Result<(), ServeError>>,
+    }
+
+    struct LivePhoneRestart {
+        home: String,
+        pc: Arc<StaticKeypair>,
+        phone_address: SocketAddr,
     }
 
     impl Running {
@@ -2461,6 +2468,162 @@ mod tests {
             )
         }
 
+        async fn start_resilient_live_phone(
+            remote_static_key: PublicKey,
+            workspace: &str,
+            provider: ProviderId,
+        ) -> (Self, LivePhoneRestart) {
+            let root = std::env::temp_dir().join(format!(
+                "runtrol-serve-live-resilience-{}",
+                std::process::id()
+            ));
+            if root.exists() {
+                std::fs::remove_dir_all(&root).expect("clear the previous resilience run");
+            }
+            let home = root
+                .to_str()
+                .expect("the temporary path is UTF-8")
+                .to_owned();
+            let mut composed =
+                crate::compose::Composed::for_tests(&home, runtrol_drivers::builtin())
+                    .expect("a fresh resilience home composes");
+            let pc = Arc::new(StaticKeypair::generate().expect("PC key"));
+            let device = DeviceId::now();
+            let root_id = WorkspaceRootId::now();
+            let root_path = AbsPath::canonicalize(workspace).expect("live workspace is canonical");
+            let root_identity =
+                ProjectRootIdentity::read(&root_path).expect("live workspace has stable identity");
+            let token = AccessToken::parse(
+                "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            )
+            .expect("canonical credential");
+            let scopes = [
+                DeviceScope::SessionList,
+                DeviceScope::SessionOutputRead,
+                DeviceScope::SessionInputWrite,
+                DeviceScope::SessionStart,
+                DeviceScope::SessionStop,
+                DeviceScope::SessionResume,
+                DeviceScope::SessionDelete,
+                DeviceScope::ModeDefault,
+                DeviceScope::Workspace(root_id),
+                DeviceScope::Provider(provider),
+            ];
+            composed
+                .store
+                .put_device(
+                    DeviceKey::from_bytes(*device.as_bytes()),
+                    &DeviceRow {
+                        remote_static_key: remote_static_key.to_bytes(),
+                        credential_fingerprint: token.fingerprint().to_bytes(),
+                        name: "Headless resilience phone".into(),
+                        platform: "Node WebCrypto".into(),
+                        scopes: scopes
+                            .iter()
+                            .map(|scope| scope.to_string().into())
+                            .collect(),
+                        roots: vec![DeviceRootRow {
+                            id: *root_id.as_bytes(),
+                            path: root_path.as_str().into(),
+                            identity: root_identity.to_bytes(),
+                        }],
+                        push_endpoint: None,
+                        paired_at: WallMs::from_millis(1_767_225_600_000),
+                    },
+                )
+                .expect("persist the approved resilience phone");
+            composed
+                .reload_device_authority()
+                .expect("restore the approved resilience phone");
+            composed.pc_identity = Some(Arc::clone(&pc));
+
+            let address = composed.home.paths().endpoint().address().to_owned();
+            let mut listener = Listener::bind(&address)
+                .await
+                .expect("the endpoint is free");
+            let tcp = TcpListener::bind("127.0.0.1:0")
+                .await
+                .expect("phone listener");
+            let ingress =
+                PhoneIngress::loopback(tcp, ["https://phone.runtrol.test"]).expect("phone ingress");
+            let phone_address = ingress.local_addr().expect("phone address");
+            let phone_plane = phone_plane(&composed, ingress).expect("phone plane");
+            let serving = tokio::spawn(async move {
+                serve_surfaces(
+                    composed,
+                    &mut listener,
+                    SessionManager::new(),
+                    Some(phone_plane),
+                    None,
+                )
+                .await
+            });
+            (
+                Self {
+                    address,
+                    home: home.clone(),
+                    serving,
+                },
+                LivePhoneRestart {
+                    home,
+                    pc,
+                    phone_address,
+                },
+            )
+        }
+
+        async fn restart_resilient_live_phone(seed: &LivePhoneRestart) -> Self {
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+            let mut composed = loop {
+                match crate::compose::Composed::for_tests(&seed.home, runtrol_drivers::builtin()) {
+                    Ok(composed) => break composed,
+                    Err(crate::compose::ComposeError::Store(StoreError::AlreadyOpen {
+                        ..
+                    })) if tokio::time::Instant::now() < deadline => {
+                        tokio::time::sleep(Duration::from_millis(10)).await;
+                    }
+                    Err(error) => panic!("the resilience home does not recompose: {error}"),
+                }
+            };
+            composed.pc_identity = Some(Arc::clone(&seed.pc));
+            assert_eq!(
+                composed.device_authority.paired_devices().len(),
+                1,
+                "the paired phone must restore from durable state"
+            );
+            let address = composed.home.paths().endpoint().address().to_owned();
+            let mut listener = Listener::bind(&address)
+                .await
+                .expect("the restarted endpoint is free");
+            let tcp = TcpListener::bind(seed.phone_address)
+                .await
+                .expect("the restarted phone listener is free");
+            let ingress =
+                PhoneIngress::loopback(tcp, ["https://phone.runtrol.test"]).expect("phone ingress");
+            let phone_plane = phone_plane(&composed, ingress).expect("phone plane");
+            let serving = tokio::spawn(async move {
+                serve_surfaces(
+                    composed,
+                    &mut listener,
+                    SessionManager::new(),
+                    Some(phone_plane),
+                    None,
+                )
+                .await
+            });
+            Self {
+                address,
+                home: seed.home.clone(),
+                serving,
+            }
+        }
+
+        async fn crash_preserving(self) {
+            self.serving.abort();
+            let stopped = self.serving.await;
+            assert!(stopped.is_err_and(|error| error.is_cancelled()));
+        }
+
         async fn caller(&self) -> Connection {
             runtrol_ipc::transport::connect(&self.address)
                 .await
@@ -2511,6 +2674,11 @@ mod tests {
     #[derive(Debug, serde::Deserialize)]
     struct LivePhoneEvidence {
         facts: BTreeSet<Box<str>>,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct LivePhoneControl {
+        control: Box<str>,
     }
 
     type BrowserSocket = WebSocket<TokioIo<Upgraded>>;
@@ -2674,10 +2842,57 @@ mod tests {
         caller
     }
 
-    async fn live_phone_journey(mode: &str) {
-        if !matches!(std::env::var("RUNTROL_PHONE_LIVE_MODE"), Ok(enabled) if enabled == mode) {
-            return;
+    fn live_phone_public_key(identity_line: &str) -> PublicKey {
+        let identity: LivePhoneIdentity =
+            serde_json::from_str(identity_line).expect("phone identity contract");
+        let decoded = Base64UrlUnpadded::decode_vec(&identity.phone_public)
+            .expect("phone public key is canonical base64url");
+        let remote_bytes: [u8; 32] = decoded
+            .try_into()
+            .expect("phone public key has the X25519 length");
+        PublicKey::from_bytes(remote_bytes)
+    }
+
+    async fn start_live_phone_runtime(
+        mode: &str,
+        phone: PublicKey,
+        workspace: &str,
+        provider: ProviderId,
+    ) -> (Running, SocketAddr, PublicKey, Option<LivePhoneRestart>) {
+        if mode == "resilience" {
+            let (running, restart) =
+                Running::start_resilient_live_phone(phone, workspace, provider).await;
+            let address = restart.phone_address;
+            let public = restart.pc.public_key();
+            (running, address, public, Some(restart))
+        } else {
+            let (running, address, public) =
+                Running::start_with_live_phone(&format!("live-{mode}"), phone, workspace, provider)
+                    .await;
+            (running, address, public, None)
         }
+    }
+
+    fn live_phone_config(
+        phone_address: SocketAddr,
+        pc_public: PublicKey,
+        workspace: &str,
+        provider: &str,
+    ) -> Vec<u8> {
+        let config = serde_json::json!({
+            "address": phone_address.to_string(),
+            "pc_public": Base64UrlUnpadded::encode_string(&pc_public.to_bytes()),
+            "workspace": workspace,
+            "provider": provider,
+        });
+        format!("{config}\n").into_bytes()
+    }
+
+    fn live_phone_enabled(mode: &str) -> bool {
+        matches!(std::env::var("RUNTROL_PHONE_LIVE_MODE"), Ok(enabled) if enabled == mode)
+    }
+
+    fn live_phone_inputs() -> (String, String, ProviderId, std::ffi::OsString, PathBuf) {
         let workspace = std::env::var("RUNTROL_PHONE_LIVE_WORKSPACE")
             .expect("the live gate supplies its isolated workspace");
         let provider_text = std::env::var("RUNTROL_PHONE_LIVE_PROVIDER")
@@ -2687,6 +2902,14 @@ mod tests {
         let node = std::env::var_os("RUNTROL_PHONE_LIVE_NODE").unwrap_or_else(|| "node".into());
         let script =
             PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../pwa/test/live-phone.mjs");
+        (workspace, provider_text, provider, node, script)
+    }
+
+    async fn live_phone_journey(mode: &str) {
+        if !live_phone_enabled(mode) {
+            return;
+        }
+        let (workspace, provider_text, provider, node, script) = live_phone_inputs();
         let mut child = tokio::process::Command::new(node)
             .arg(script)
             .arg(mode)
@@ -2712,30 +2935,32 @@ mod tests {
             .expect("phone identity timed out")
             .expect("read phone identity")
             .expect("phone exited before its identity");
-        let identity: LivePhoneIdentity =
-            serde_json::from_str(&identity_line).expect("phone identity contract");
-        let decoded = Base64UrlUnpadded::decode_vec(&identity.phone_public)
-            .expect("phone public key is canonical base64url");
-        let remote_bytes: [u8; 32] = decoded
-            .try_into()
-            .expect("phone public key has the X25519 length");
-        let (running, phone_address, pc_public) = Running::start_with_live_phone(
-            &format!("live-{mode}"),
-            PublicKey::from_bytes(remote_bytes),
+        let (mut running, phone_address, pc_public, restart) = start_live_phone_runtime(
+            mode,
+            live_phone_public_key(&identity_line),
             &workspace,
             provider,
         )
         .await;
-        let config = serde_json::json!({
-            "address": phone_address.to_string(),
-            "pc_public": Base64UrlUnpadded::encode_string(&pc_public.to_bytes()),
-            "workspace": workspace,
-            "provider": provider_text,
-        });
         let mut stdin = child.stdin.take().expect("phone stdin");
-        tokio::io::AsyncWriteExt::write_all(&mut stdin, format!("{config}\n").as_bytes())
-            .await
-            .expect("send live phone config");
+        tokio::io::AsyncWriteExt::write_all(
+            &mut stdin,
+            &live_phone_config(phone_address, pc_public, &workspace, &provider_text),
+        )
+        .await
+        .expect("send live phone config");
+        if let Some(restart) = restart.as_ref() {
+            let control_line = tokio::time::timeout(Duration::from_mins(1), lines.next_line())
+                .await
+                .expect("phone restart request timed out")
+                .expect("read phone restart request")
+                .expect("phone exited before requesting restart");
+            let control: LivePhoneControl =
+                serde_json::from_str(&control_line).expect("phone restart request contract");
+            assert_eq!(control.control.as_ref(), "restart");
+            running.crash_preserving().await;
+            running = Running::restart_resilient_live_phone(restart).await;
+        }
         tokio::io::AsyncWriteExt::shutdown(&mut stdin)
             .await
             .expect("close live phone config");
@@ -2797,6 +3022,19 @@ mod tests {
                 assert!(evidence.facts.contains(fact), "{evidence:?}");
             }
         }
+        if mode == "resilience" {
+            for fact in [
+                "network_cut",
+                "exact_replay",
+                "no_duplicate",
+                "reconnected",
+                "native_preserved",
+                "explicit_gap",
+                "resumed_turn",
+            ] {
+                assert!(evidence.facts.contains(fact), "{evidence:?}");
+            }
+        }
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -2807,6 +3045,11 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn phone_approval_resumes_a_real_cli() {
         live_phone_journey("approval").await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn phone_survives_network_and_core_restart() {
+        live_phone_journey("resilience").await;
     }
 
     #[tokio::test]

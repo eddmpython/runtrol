@@ -71,7 +71,7 @@ def verifyEvidence(evidence: Evidence) -> None:
 
 def selftest(mode: str, label: str) -> int:
     """Prove every retained acceptance fact can make the gate red."""
-    expected = 1 if mode == "drive" else 2
+    expected = {"drive": 1, "approval": 2, "resilience": 3}[mode]
     valid = Evidence(True, True, expected, expected, True, True, True, True)
     defects = (
         replace(valid, cli_probed=False),
@@ -139,11 +139,11 @@ def exercise(mode: str, require_external: bool) -> None:
         workspace.mkdir()
         config.mkdir()
         model_context = (
-            mission.RunningClaudeModel()
-            if mode == "drive"
-            else approval.RunningModel(target)
+            approval.RunningModel(target)
+            if mode == "approval"
+            else mission.RunningClaudeModel()
         )
-        expected_requests = 1 if mode == "drive" else 2
+        expected_requests = {"drive": 1, "approval": 2, "resilience": 3}[mode]
         with model_context as model:
             env = approval.environment(root, home, config, model, claude)
             operator_home = Path.home()
@@ -154,11 +154,11 @@ def exercise(mode: str, require_external: bool) -> None:
             env["RUNTROL_PHONE_LIVE_PROVIDER"] = approval.PROVIDER
             env["RUNTROL_PHONE_LIVE_NODE"] = node
             cli_probed = approval.probeClaude(claude, env)
-            test_name = (
-                "serve::tests::phone_drives_pc_through_a_real_cli"
-                if mode == "drive"
-                else "serve::tests::phone_approval_resumes_a_real_cli"
-            )
+            test_name = {
+                "drive": "serve::tests::phone_drives_pc_through_a_real_cli",
+                "approval": "serve::tests::phone_approval_resumes_a_real_cli",
+                "resilience": "serve::tests::phone_survives_network_and_core_restart",
+            }[mode]
             command = ["cargo", "test", "-p", "runtrol-daemon", test_name, "--", "--exact", "--nocapture"]
             output = root / "cargo-output.txt"
             with output.open("w+", encoding="utf-8") as captured:

@@ -4,7 +4,7 @@
 
 [한국어](README.md) | [English](README_EN.md) | [中文](README_ZH.md) | 日本語
 
-> ステータス: **コアと主力 VS Code 拡張を実装し、`Runtrol Studio 0.1.0` を六つの native target 向けに公開した。** live session index、実物 Extension Host と秒間 3,000 frame Webview の性能 ratchet、インストール済み実物 CLI の完全な操作 journey、Marketplace からの clean install、active session を維持する VSIX upgrade と rollback を検証済みである。独立したデスクトップ GUI のコードと実行経路は削除され、VS Code 拡張が唯一の PC surface である。公開 Runtime protocol、Rust と TypeScript SDK、外部 packed consumer gate、署名付き六 target standalone Runtime release pipeline も実装した。確認済み provider channel の自動更新には process exclusion と正確な rollback も実装した。[Marketplace 拡張](https://marketplace.visualstudio.com/items?itemName=runtrol.runtrol-studio)、[GitHub Pages サイト](https://eddmpython.github.io/runtrol/)、リレー接続のスマートフォン PWA、本文を持たない Web Push、Mission 監督 surface を実装した。active gate は shipped PWA module を production daemon とインストール済み実物 CLI に通し、session と approval journey を検証する。残る主要なスマートフォン作業は remote disconnect resilience と iOS 実機運用の検証である。以下のスコアの多くが 0 なのは、コードがないからではなく、その軸を断言するゲートがまだない
+> ステータス: **コアと主力 VS Code 拡張を実装し、`Runtrol Studio 0.1.0` を六つの native target 向けに公開した。** live session index、実物 Extension Host と秒間 3,000 frame Webview の性能 ratchet、インストール済み実物 CLI の完全な操作 journey、Marketplace からの clean install、active session を維持する VSIX upgrade と rollback を検証済みである。独立したデスクトップ GUI のコードと実行経路は削除され、VS Code 拡張が唯一の PC surface である。公開 Runtime protocol、Rust と TypeScript SDK、外部 packed consumer gate、署名付き六 target standalone Runtime release pipeline も実装した。確認済み provider channel の自動更新には process exclusion と正確な rollback も実装した。[Marketplace 拡張](https://marketplace.visualstudio.com/items?itemName=runtrol.runtrol-studio)、[GitHub Pages サイト](https://eddmpython.github.io/runtrol/)、リレー接続のスマートフォン PWA、本文を持たない Web Push、Mission 監督 surface を実装した。active gate は shipped PWA module を production daemon とインストール済み実物 CLI に通し、session、approval、remote disconnect recovery journey を検証する。残る主要なスマートフォン作業は iOS 実機運用の検証である。以下のスコアの多くが 0 なのは、コードがないからではなく、その軸を断言するゲートがまだない
 > からである。
 
 The security boundary and default-deny settings are documented in [SECURITY.md](SECURITY.md).
@@ -30,7 +30,7 @@ streaming と background 作業が入力、スクロール、セッション切�
 - **人間が常に最優先である。** 長い streaming、複数 agent、build、test の最中でも入力、スクロール、editor、ファイル移動が先に反応する。
 - **薄い境界は変わらない。** credential、transcript、model API key、conversation copy を所有しない。
 
-現在の合計は **61/140、平均 4.4/10** である。有効な CI ゲートが立つ軸は十一である。
+現在の合計は **66/140、平均 4.7/10** である。有効な CI ゲートが立つ軸は十二である。
 10 点は、実際の環境で完結した道筋が繰り返し検証された状態を指す。
 **manual 層を超えるスコアの根拠は CI で実際に動くゲートである。自動実行されない経路は、どれほど実装済みに見えても 3 点を超えない。**
 
@@ -42,7 +42,7 @@ streaming と background 作業が入力、スクロール、セッション切�
 | プロバイダー拡張性 | 5/10 | hosted CI は外部ドライバーの公開契約、三つの OS 上の汎用 ACP fixture、独立配布 ACP 実装による二つの turn と native load、実物 Claude Code の hidden approval 拒否往復を検証する。model endpoint はローカル mock である。scheduled CI は最新 CLI で parser probe と同じ approval journey を繰り返すが、アカウント model の動作や event 全表面は主張しない。 | 新しい CLI が出たらアダプターを一つ足すだけで、PC 画面もスマホ画面も操作方法もそのまま。ユーザーはプロバイダーが増えたことを一覧が長くなったこととしてだけ知る。 |
 | 会話を通さない | 6/10 | `egressContract` は実物の loopback socket で正確な送信 allowlist と production Noise IK、IKpsk1 境界を動かす。prompt の標本は relay capture や診断文字列に平文で現れず、transport は disk と log の API を持たず、driver と storage は provider の transcript path を知らない。実物のスマートフォンと relay を結ぶ live gate がないため、天井は 6 である。 | ユーザーのプロンプトとモデルの応答は、PC とプロバイダーの間、そしてユーザー自身のデバイスの間だけを往復する。runtrol はその本文を保存せず、途中のどのサーバーも読める形でそれを受け取らない。 |
 | スマホで承認 | 5/10 | active gate が実物 Claude Code の hidden Write approval を PWA watch path で受け、完全な subject、唯一の `rejectOnce`、32-byte digest を確認して拒否し、同じ provider turn の再開と終了を検証する。model counterpart は決定論的 loopback fixture なので mock 層である。 | エージェントが危険な操作の前で止まるとスマートフォンに表示され、そこで許可または拒否すると PC のセッションがただちに続く。 |
-| 切れても生き残る | 0/10 | リモートのスマートフォンを含む end-to-end ゲートは未実装。 | スマートフォンのロック、ネットワーク切断、runtrol 再起動の後も、PC セッションは公式 resume surface から復旧できる。保持範囲内は正確な cursor から続き、範囲外は黙って飛ばさず明示的な gap になる。 |
+| 切れても生き残る | 5/10 | shipped PWA module とインストール済み実物 CLI が network cut 後に exact cursor から replay し、Core restart 後は明示的 gap と native resume で続行する。model counterpart は mock である。 | スマートフォンのロック、ネットワーク切断、runtrol 再起動の後も、PC セッションは公式 resume surface から復旧できる。保持範囲内は正確な cursor から続き、範囲外は黙って飛ばさず明示的な gap になる。 |
 | 常駐コスト | 6/10 | 三つの hosted OS が一つの ratchet で実物 debug daemon の idle RSS と 10 秒間の idle CPU を測る。独立した二種類目の証拠がないため、上限は 6 のままである。 | 一日中つけっぱなしでも、ユーザーはその存在に気づかない。バッテリーにも、ファンにも、タスクマネージャーにも見えない。 |
 | どこでも同じやり方 | 0/10 | 未実装。 | Windows、macOS、Linux でインストール方法も操作も同じ。Windows ユーザーが WSL や tmux を知る必要がない。 |
 | 勝手に最新 | 5/10 | `vscodeUpgradeRollback` は三つの OS で VSIX と Core 置換中の session continuity を検証する。`cliUpdateRehearsal` は決定的 fixture により、確認済み provider 更新の失敗、正確な復元、振動防止を検証する。hosted CI は実アカウントの provider installation を変更しないため、証拠は mock 層のままである。 | アプリとインストール済みのエージェント CLI が自動で最新を保ち、更新がセッションを壊したらユーザーが手を触れる前に戻っている。ユーザーがバージョンを気にする瞬間が存在しない。 |

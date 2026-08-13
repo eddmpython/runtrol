@@ -315,6 +315,14 @@ GATES: dict[str, tuple[str, list[str]]] = {
         "헤드리스 폰의 실물 CLI 승인 거부와 턴 재개",
         [*PY, f"{HOOKS}/approvalRoundtripSmoke.py", "--require-external"],
     ),
+    "remoteResilienceFaultInjectionSelftest": (
+        "헤드리스 폰 원격 단절 복원력 게이트 자체 검증",
+        [*PY, f"{HOOKS}/remoteResilienceFaultInjection.py", "--selftest"],
+    ),
+    "remoteResilienceFaultInjection": (
+        "헤드리스 폰 네트워크 단절과 Core 재시작 복원",
+        [*PY, f"{HOOKS}/remoteResilienceFaultInjection.py", "--require-external"],
+    ),
     "uninstallLeavesNoTraceSelftest": (
         "제거 독립성 게이트 자체 검증",
         [*PY, f"{HOOKS}/uninstallLeavesNoTrace.py", "--selftest"],
@@ -415,6 +423,8 @@ SUITES: dict[str, tuple[str, ...]] = {
         "phoneDrivesPcSmoke",
         "approvalRoundtripSmokeSelftest",
         "approvalRoundtripSmoke",
+        "remoteResilienceFaultInjectionSelftest",
+        "remoteResilienceFaultInjection",
         "vscodeUpgradeRollbackSelftest",
         "vscodeUpgradeRollback",
         "vscodeEventCoverageSelftest",
@@ -466,6 +476,7 @@ CARGO_GATES = frozenset(
         "claudeApprovalSmoke",
         "phoneDrivesPcSmoke",
         "approvalRoundtripSmoke",
+        "remoteResilienceFaultInjection",
         "uninstallLeavesNoTraceSelftest",
         "uninstallLeavesNoTrace",
         "liveMemoryBudget",
@@ -529,10 +540,16 @@ def skipReasonFor(name: str) -> str | None:
         "claudeApprovalSmoke",
         "missionLiveJourney",
         "phoneDrivesPcSmoke",
+        "remoteResilienceFaultInjection",
         "vscodeRealProviderJourney",
     } and shutil.which("claude") is None:
         return "Claude Code 미설치 (npm install --global @anthropic-ai/claude-code@2.1.220)"
-    if name in {"approvalRoundtripSmoke", "missionLiveJourney", "phoneDrivesPcSmoke"} and shutil.which("node") is None:
+    if name in {
+        "approvalRoundtripSmoke",
+        "missionLiveJourney",
+        "phoneDrivesPcSmoke",
+        "remoteResilienceFaultInjection",
+    } and shutil.which("node") is None:
         return "node 없음"
     return None
 

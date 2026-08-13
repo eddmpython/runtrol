@@ -34,7 +34,7 @@ The primary extension install location is the public [Visual Studio Marketplace 
 
 The browser requests the latest `eddmpython/runtrol` GitHub Release and enables the manual button only when at least one `.vsix` asset exists. Runtime platform and architecture hints select the matching native package. When the browser cannot identify a supported target, the button opens the tagged release so the user can choose explicitly. The page never invents a version or links to a build artifact that does not exist.
 
-The phone application is published at `/runtrol/app/` under the same Pages origin. The Pages job runs its JavaScript contract tests before copying the PWA output into the site artifact. The Rust audit separately proves that the browser WebCrypto implementation and production Rust implementation complete both pairing and later Noise sessions in both directions, including consecutive transport records whose nonces are greater than zero. Separate active gates drive the shipped phone modules through the production daemon and an installed real CLI for session and approval journeys.
+The phone application is published at `/runtrol/app/` under the same Pages origin. The Pages job runs its JavaScript contract tests before copying the PWA output into the site artifact. The Rust audit separately proves that the browser WebCrypto implementation and production Rust implementation complete both pairing and later Noise sessions in both directions, including consecutive transport records whose nonces are greater than zero. Separate active gates drive the shipped phone modules through the production daemon and an installed real CLI for session, approval, and remote disconnection recovery journeys.
 
 ## Visual direction
 

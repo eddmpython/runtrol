@@ -95,7 +95,10 @@ gate = [{ name = "approvalRoundtripSmoke", kind = "smoke" }]
 
 [[axis]]
 key = "surviveDisconnection"
-tier = "none"
+# Hosted CI cuts the shipped phone watch transport, verifies exact cursor replay, aborts and recomposes the
+# production Core server, then continues one installed real CLI through its provider-native resume surface.
+# The model endpoint is deterministic and local, so this axis stops at mock.
+tier = "mock"
 additives = []
 name = { ko = "끊겨도 살아남기", en = "Survive disconnection", zh = "断了也活着", ja = "切れても生き残る" }
 gate = [{ name = "remoteResilienceFaultInjection", kind = "smoke" }]

@@ -4,7 +4,7 @@ The phone application is a paired control surface for the same Core that Runtrol
 
 ## Current release
 
-The application is served from `/runtrol/app/` on the permanent GitHub Pages origin. The supported connection path is the ciphertext relay. Content-free Web Push wakes the installed application when Core publishes an event that needs attention. Direct LAN and peer-to-peer routes and remote Mission views are not part of this release.
+The application is served from `/runtrol/app/` on the permanent GitHub Pages origin. The supported connection path is the ciphertext relay. Content-free Web Push wakes the installed application when Core publishes an event that needs attention. A scope-gated Mission view exposes bounded metadata plus pause, safe resume, and cancel actions. Direct LAN and peer-to-peer routes are not part of this release.
 
 Pairing begins only from `Runtrol: Pair a Phone` in VS Code. The QR carries a 120-second one-use pairing secret in the URL fragment. The PWA validates the complete fragment contract and removes it from the visible URL and history before opening any durable storage. Noise IKpsk1 authenticates the first device exchange. VS Code then displays the authenticated phone key and exact initial scopes and requires the operator to type the local three-word presence phrase.
 
@@ -22,6 +22,12 @@ IndexedDB contains only the non-extractable X25519 private key, its public key, 
 
 The selected session owns one bounded live event view. Reconnect uses the exact Core cursor and reports an explicit gap when retained events are no longer available. ANSI control sequences are removed, bidirectional controls are expanded visibly, and approval options remain visible when unavailable so missing authority is not mistaken for a missing provider choice.
 
+The active `remoteResilienceFaultInjection` gate cuts an authenticated phone watch socket and requires the retained
+suffix to resume from the exact cursor without a duplicate. It then aborts and recomposes the production server over
+the same durable home and device authorization, requires a cross-stream gap for the old cursor, and continues the
+installed real CLI through its provider-native resume surface. The deterministic model counterpart is local and
+discards request bodies.
+
 ## Web Push
 
 Notifications are enabled only by an explicit phone action. The browser subscription is bound to the stable P-256 VAPID public key returned by the authenticated PC. The PWA sends only the browser-issued endpoint through the existing Noise channel. It does not send content-encryption keys because Core deliberately sends an empty push body.
@@ -37,5 +43,6 @@ iOS and iPadOS require adding the application to the Home Screen before notifica
 - `npm --prefix pwa test` checks pairing-fragment handling, display hardening, canonical record framing, relay admission, explicit Core requests, current-authority replacement, VAPID binding, and subscription removal.
 - `cargo test -p runtrol-audit --test pwaInterop` runs a real WebCrypto peer against the production Rust transport for Noise IKpsk1 pairing, Noise IK reconnection, and bidirectional encrypted frames.
 - `cargo test -p runtrol-audit --test webPushContract` verifies device-bound encrypted endpoint storage, stable VAPID public-key shape, the empty production request body, and the generic service-worker notification boundary.
+- `python -X utf8 tests/audit/remoteResilienceFaultInjection.py --require-external` verifies exact replay after a network cut and explicit recovery through provider-native resume after a production Core restart.
 - daemon and security tests verify exact scope, root, provider, filesystem-identity, persistence, and Start and Resume enforcement.
 - `npm --prefix site run build` publishes the reviewed application under `/app/` and holds the complete Pages artifact under the repository byte budget.

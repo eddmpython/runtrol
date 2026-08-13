@@ -59,3 +59,7 @@ local-only VS Code actions.
 modules in a headless phone process. They connect to the production daemon, drive an installed real CLI, observe
 streamed output or a real permission request, close the session, and verify process cleanup. The deterministic local
 model fixture discards request bodies, so these gates do not claim account-backed model behavior.
+
+`remoteResilienceFaultInjection` uses the same modules and CLI boundary. It cuts the authenticated watch socket,
+requires exact bounded replay without duplicate cursors, recomposes the production Core over the same durable home,
+requires an explicit cross-stream gap, and continues through the provider-native resume surface.
