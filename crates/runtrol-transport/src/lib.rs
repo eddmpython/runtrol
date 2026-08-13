@@ -7,6 +7,7 @@
 pub mod crypto;
 pub mod egress;
 pub mod http;
+pub mod relay;
 pub mod websocket;
 
 pub use crypto::{
@@ -21,4 +22,8 @@ pub use http::{
     NOISE_LINK_PROTOCOL, PhoneBody, PhoneHttp, PhoneHttpError, response,
 };
 pub use hyper::StatusCode;
+pub use relay::{
+    RelayCredential, RelayEndpoint, RelayEnvelope, RelayError, RelayOrigin, RelayRoute,
+    RelaySocket, ResolvedRelay,
+};
 pub use websocket::{NoiseUpgrade, NoiseWebSocket, PendingNoiseWebSocket, WebSocketLinkError};

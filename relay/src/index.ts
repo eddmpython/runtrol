@@ -8,7 +8,7 @@ const TICKET_LIFETIME_MS = 30_000;
 const MAX_LIVE_TICKETS = 16;
 const MAX_PHONE_CONNECTIONS = 8;
 const MAX_ENCRYPTED_RECORD_WIRE = 65_538;
-const PEER_ID_BYTES = 16;
+const PEER_ID_BYTES = 32;
 
 type Role = "pc" | "phone";
 

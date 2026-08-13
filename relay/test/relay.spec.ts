@@ -59,7 +59,7 @@ describe("ciphertext relay", () => {
     const pc = await connect(pcTicket);
     const phone = await connect(phoneTicket);
     const peer = new Uint8Array(await receive(phone));
-    expect(peer.byteLength).toBe(16);
+    expect(peer.byteLength).toBe(32);
 
     const reused = await connectResponse(pcTicket);
     expect(reused.status).toBe(401);
@@ -118,7 +118,7 @@ describe("ciphertext relay", () => {
     expect(attachments.phone).toHaveLength(1);
     expect(attachments.phone[0]).toMatchObject({ role: "phone" });
     expect(typeof attachments.phone[0]?.peer).toBe("string");
-    expect(peer.byteLength).toBe(16);
+    expect(peer.byteLength).toBe(32);
   });
 });
 

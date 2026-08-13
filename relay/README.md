@@ -7,7 +7,7 @@ provider process, model credential, or transcript.
 ## Security boundary
 
 The Rust daemon and phone establish Noise over the relay. TLS protects delivery to the edge, but it is not the data
-security boundary. The relay can observe route presence, connection timing, frame sizes, and a random 128-bit peer
+security boundary. The relay can observe route presence, connection timing, frame sizes, and a random 256-bit peer
 identifier. It cannot decrypt the Noise records it forwards.
 
 The Durable Object stores only:
@@ -27,8 +27,8 @@ The public API is deliberately small:
 - `POST /v1/routes/{route}/tickets` exchanges that credential for a short-lived `pc` or `phone` ticket.
 - `GET /v1/routes/{route}/connect` upgrades with the `runtrol.relay.v1` protocol and a ticket protocol value.
 
-A phone receives its 16-byte peer identifier as the first binary message. Later phone messages are raw Noise
-records. The PC receives `peer_id || noise_record` and replies with the same envelope. An exact 16-byte PC message
+A phone receives its 32-byte peer identifier as the first binary message. Later phone messages are raw Noise
+records. The PC receives `peer_id || noise_record` and replies with the same envelope. An exact 32-byte PC message
 means that peer disconnected. Both clients bind the relay origin and peer identifier into the Noise prologue.
 
 Routing role and peer identifier live in serialized WebSocket attachments, so the object can use Cloudflare's
