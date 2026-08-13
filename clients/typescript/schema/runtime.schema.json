@@ -570,6 +570,32 @@
       ],
       "type": "object"
     },
+    "ForgetSessionParams": {
+      "additionalProperties": false,
+      "description": "Forget one cold Runtime pointer after an exact local close confirmation.",
+      "properties": {
+        "expectedSessionGeneration": {
+          "description": "Lifecycle generation visible when the caller requested removal.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "requestId": {
+          "$ref": "#/$defs/MutationRequestId",
+          "description": "Caller-minted idempotency identity retained across the local confirmation."
+        },
+        "sessionId": {
+          "$ref": "#/$defs/RuntimeSessionId",
+          "description": "Exact Runtime-managed session pointer to forget."
+        }
+      },
+      "required": [
+        "requestId",
+        "sessionId",
+        "expectedSessionGeneration"
+      ],
+      "type": "object"
+    },
     "GetProviderCapabilitiesParams": {
       "additionalProperties": false,
       "description": "Select one provider for explicit capability discovery.",
@@ -2226,6 +2252,11 @@
           "type": "string"
         },
         {
+          "const": "sessions/forget",
+          "description": "Forget one cold Runtime pointer after local confirmation.",
+          "type": "string"
+        },
+        {
           "const": "approvals/listPending",
           "description": "Read pending structured provider approvals for one controlled session.",
           "type": "string"
@@ -2929,6 +2960,9 @@
     "enrollment_receipt": {
       "$ref": "#/$defs/EnrollmentReceipt"
     },
+    "forget_session": {
+      "$ref": "#/$defs/ForgetSessionParams"
+    },
     "get_provider_capabilities": {
       "$ref": "#/$defs/GetProviderCapabilitiesParams"
     },
@@ -3079,6 +3113,7 @@
     "control_lease",
     "control_lease_params",
     "cool_session",
+    "forget_session",
     "submit_input",
     "watch_events",
     "watch_events_result",

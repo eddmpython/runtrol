@@ -9,9 +9,9 @@ use runtrol_ipc::transport::Connection;
 use runtrol_provider::{CloseMode, Disposition, OpenIntent, WorkspaceAccess};
 use runtrol_runtime_protocol::{
     AcquireControlParams, AdoptNativeSessionParams, AppScope, ControlLeaseParams,
-    CoolSessionParams, ErrorResponse, FINALIZED_REVISIONS, GetProviderCapabilitiesParams,
-    GetSessionParams, InitializeParams, InitializeResult, JsonRpcId, JsonRpcNotification,
-    JsonRpcRequest, JsonRpcResponse, LaggedNotification, ListModelsParams,
+    CoolSessionParams, ErrorResponse, FINALIZED_REVISIONS, ForgetSessionParams,
+    GetProviderCapabilitiesParams, GetSessionParams, InitializeParams, InitializeResult, JsonRpcId,
+    JsonRpcNotification, JsonRpcRequest, JsonRpcResponse, LaggedNotification, ListModelsParams,
     ListNativeSessionsParams, ListPendingApprovalsParams, MAX_MODEL_SELECTION_BYTES,
     MAX_NATIVE_ADOPTION_TOKEN_BYTES, MAX_NATIVE_PUBLIC_CURSOR_BYTES, MAX_PAGE_ITEMS,
     MAX_REVISION_OFFERS, ProtocolRevision, ProviderCapabilityAvailability,
@@ -177,6 +177,30 @@ impl Answer {
     fn plain(id: JsonRpcId, code: RuntimeErrorKind, message: &str) -> Self {
         Self {
             response: failure_response(id, code, message),
+            close: false,
+            watching: None,
+        }
+    }
+
+    fn operator_action(
+        id: JsonRpcId,
+        code: RuntimeErrorKind,
+        message: &str,
+        action: &str,
+        correlation_id: String,
+    ) -> Self {
+        Self {
+            response: JsonRpcResponse::Error(ErrorResponse {
+                jsonrpc: "2.0".to_owned(),
+                id,
+                error: RuntimeError {
+                    code,
+                    message: message.to_owned(),
+                    retryable: true,
+                    operator_action: Some(action.to_owned()),
+                    correlation_id,
+                },
+            }),
             close: false,
             watching: None,
         }
@@ -462,6 +486,9 @@ async fn dispatch_public(
                 )
                 .await
             }
+            RuntimeMethod::SessionsForget => {
+                forget_session(state, composed, sessions, asking, returning, id, params).await
+            }
             RuntimeMethod::Initialized
             | RuntimeMethod::Challenge
             | RuntimeMethod::ProvidersChanged
@@ -506,6 +533,7 @@ fn required_scope(method: RuntimeMethod) -> Option<AppScope> {
         RuntimeMethod::SessionsInterrupt | RuntimeMethod::SessionsCool => {
             Some(AppScope::SessionStop)
         }
+        RuntimeMethod::SessionsForget => Some(AppScope::SessionDelete),
         RuntimeMethod::ApprovalsRespond
         | RuntimeMethod::SessionsRenewControl
         | RuntimeMethod::SessionsReleaseControl
@@ -1308,6 +1336,139 @@ async fn session_operation(
     runtime_control_answer(id, reply, returning).await
 }
 
+async fn forget_session(
+    state: &mut PublicState,
+    composed: &Composed,
+    sessions: &RuntimeSessionCatalogue,
+    asking: &mpsc::Sender<RuntimeAsked>,
+    returning: &mpsc::UnboundedSender<RuntimeReturned>,
+    id: JsonRpcId,
+    params: serde_json::Value,
+) -> Answer {
+    let Ok(params) = serde_json::from_value::<ForgetSessionParams>(params) else {
+        return Answer::plain(
+            id,
+            RuntimeErrorKind::InvalidRequest,
+            "session forget parameters are invalid",
+        );
+    };
+    let authority = match authorized(state, &composed.store, Some(AppScope::SessionDelete)) {
+        Ok(authority) => authority.clone(),
+        Err(failure) => return Answer::failure(id, failure),
+    };
+    let Ok(session) = params
+        .session_id
+        .as_str()
+        .parse::<runtrol_provider::SessionId>()
+    else {
+        return Answer::plain(
+            id,
+            RuntimeErrorKind::InvalidRequest,
+            "the Runtime session identity is invalid",
+        );
+    };
+    let confirmation = match sessions.authorized_descriptor(&authority, &params.session_id) {
+        Ok(descriptor) => {
+            if descriptor.lifecycle != runtrol_runtime_protocol::LifecycleState::Cold
+                || descriptor.session_generation != params.expected_session_generation
+            {
+                return Answer::plain(
+                    id,
+                    RuntimeErrorKind::SessionConflict,
+                    "only the exact observed cold session pointer can be forgotten",
+                );
+            }
+            composed
+                .integration_admin
+                .request_forget_confirmation(
+                    authority.key,
+                    &params.request_id,
+                    session,
+                    params.expected_session_generation,
+                )
+                .await
+        }
+        Err(RuntimeInventoryFailure::SessionNotFound) => {
+            match composed
+                .integration_admin
+                .existing_forget_confirmation(
+                    authority.key,
+                    &params.request_id,
+                    session,
+                    params.expected_session_generation,
+                )
+                .await
+            {
+                Ok(Some(crate::integration_admin::ForgetConfirmation::Confirmed)) => {
+                    Ok(crate::integration_admin::ForgetConfirmation::Confirmed)
+                }
+                Ok(Some(crate::integration_admin::ForgetConfirmation::Awaiting { .. }) | None) => {
+                    return inventory_failure(id, RuntimeInventoryFailure::SessionNotFound);
+                }
+                Err(failure) => return forget_confirmation_failure(id, failure),
+            }
+        }
+        Err(failure) => return inventory_failure(id, failure),
+    };
+    match confirmation {
+        Ok(crate::integration_admin::ForgetConfirmation::Awaiting { confirmation_id }) => {
+            return Answer::operator_action(
+                id,
+                RuntimeErrorKind::PresenceRequired,
+                "approve the exact metadata removal in Runtrol Studio, then retry this request",
+                "reviewRuntimeRequestsInRuntrolStudio",
+                confirmation_id.into(),
+            );
+        }
+        Ok(crate::integration_admin::ForgetConfirmation::Confirmed) => {}
+        Err(failure) => return forget_confirmation_failure(id, failure),
+    }
+    let (answered, hearing) = oneshot::channel();
+    if asking
+        .send(RuntimeAsked {
+            integration: authority.key,
+            request: RuntimeControlRequest::Forget { session, params },
+            answered,
+        })
+        .await
+        .is_err()
+    {
+        return runtime_owner_stopped(id);
+    }
+    match hearing.await {
+        Ok(reply) => runtime_control_answer(id, reply, returning).await,
+        Err(_) => runtime_owner_stopped(id),
+    }
+}
+
+fn forget_confirmation_failure(
+    id: JsonRpcId,
+    failure: crate::integration_admin::ForgetConfirmationError,
+) -> Answer {
+    match failure {
+        crate::integration_admin::ForgetConfirmationError::InvalidRequestId => Answer::plain(
+            id,
+            RuntimeErrorKind::InvalidRequest,
+            "the forget request identity is invalid or outside its bounded lifetime",
+        ),
+        crate::integration_admin::ForgetConfirmationError::IdempotencyConflict => Answer::plain(
+            id,
+            RuntimeErrorKind::IdempotencyConflict,
+            "the forget request identity was already bound to different parameters",
+        ),
+        crate::integration_admin::ForgetConfirmationError::ResourceExhausted => Answer::plain(
+            id,
+            RuntimeErrorKind::ResourceExhausted,
+            "too many session forget requests are awaiting local confirmation",
+        ),
+        crate::integration_admin::ForgetConfirmationError::StateUnavailable => Answer::plain(
+            id,
+            RuntimeErrorKind::Internal,
+            "Runtime could not verify local forget confirmation state",
+        ),
+    }
+}
+
 #[expect(
     clippy::too_many_arguments,
     reason = "the public open boundary keeps closed parsing, live authority, workspace identity, and owner reservation ordering together"
@@ -2015,6 +2176,7 @@ fn parse_session_operation(
         | RuntimeMethod::SessionsStart
         | RuntimeMethod::SessionsAdoptNative
         | RuntimeMethod::SessionsResume
+        | RuntimeMethod::SessionsForget
         | RuntimeMethod::SessionsEvent
         | RuntimeMethod::SessionsLagged
         | RuntimeMethod::SessionsIndexChanged
@@ -3012,6 +3174,7 @@ listen = "stdio"
                     AppScope::SessionStart,
                     AppScope::SessionResume,
                     AppScope::SessionStop,
+                    AppScope::SessionDelete,
                 ],
                 vec![
                     project.to_string(),
@@ -3047,6 +3210,7 @@ listen = "stdio"
                         AppScope::SessionStart.as_str().into(),
                         AppScope::SessionResume.as_str().into(),
                         AppScope::SessionStop.as_str().into(),
+                        AppScope::SessionDelete.as_str().into(),
                     ],
                     roots: vec![
                         runtrol_store::IntegrationRootRow {
@@ -3226,6 +3390,68 @@ listen = "stdio"
             .cool(&cool)
             .await
             .expect("replay the completed cool mutation");
+        let cooled = approved
+            .sessions()
+            .get(resumed.session.session_id.clone())
+            .await
+            .expect("observe the cold pointer before requesting removal");
+        let forget = runtrol_runtime_protocol::ForgetSessionParams {
+            request_id: runtrol_runtime_protocol::MutationRequestId::now(),
+            session_id: resumed.session.session_id.clone(),
+            expected_session_generation: cooled.session_generation,
+        };
+        let presence = approved
+            .sessions()
+            .forget(&forget)
+            .await
+            .expect_err("forget requires the exact local approval action");
+        assert!(
+            matches!(
+                &presence,
+                runtrol_runtime_client::ClientError::Runtime(error)
+                    if error.code == RuntimeErrorKind::PresenceRequired
+                    && error.operator_action.as_deref()
+                        == Some("reviewRuntimeRequestsInRuntrolStudio")
+                        && error.correlation_id.starts_with("fgt_")
+            ),
+            "unexpected forget admission: {presence:?}"
+        );
+        let Ok(pending_forgets) = composed.integration_admin.forget_requests(&composed).await
+        else {
+            panic!("list exact forget for local presentation");
+        };
+        let pending_forget = pending_forgets.first().expect("one pending forget");
+        assert_eq!(
+            pending_forget.session_id.as_ref(),
+            stored_session.to_string()
+        );
+        assert_eq!(
+            pending_forget.integration_id.as_ref(),
+            "int_09090909090909090909090909090909"
+        );
+        assert!(
+            composed
+                .integration_admin
+                .confirm_forget(&pending_forget.confirmation_id)
+                .await
+                .is_ok(),
+            "confirm exact forget through local administration"
+        );
+        let Ok(remaining_forgets) = composed.integration_admin.forget_requests(&composed).await
+        else {
+            panic!("list confirmed forget state");
+        };
+        assert!(remaining_forgets.is_empty());
+        approved
+            .sessions()
+            .forget(&forget)
+            .await
+            .expect("retry exact forget after local close confirmation");
+        approved
+            .sessions()
+            .forget(&forget)
+            .await
+            .expect("replay completed forget mutation");
         let denied_root = approved
             .providers()
             .list_native_sessions(runtrol_runtime_protocol::ListNativeSessionsParams {

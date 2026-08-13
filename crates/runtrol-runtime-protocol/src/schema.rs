@@ -4,10 +4,10 @@ use schemars::{JsonSchema, schema_for};
 
 use crate::{
     AcquireControlParams, AdoptNativeSessionParams, ControlLease, ControlLeaseParams,
-    CoolSessionParams, EnrollmentDecision, EnrollmentReceipt, GetProviderCapabilitiesParams,
-    GetSessionParams, InitializeParams, InitializeResult, IntegrationGrant, JsonRpcNotification,
-    JsonRpcRequest, JsonRpcResponse, LaggedNotification, ListModelsParams,
-    ListNativeSessionsParams, ListPendingApprovalsParams, ManagedSessionList,
+    CoolSessionParams, EnrollmentDecision, EnrollmentReceipt, ForgetSessionParams,
+    GetProviderCapabilitiesParams, GetSessionParams, InitializeParams, InitializeResult,
+    IntegrationGrant, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse, LaggedNotification,
+    ListModelsParams, ListNativeSessionsParams, ListPendingApprovalsParams, ManagedSessionList,
     NativeSessionCatalogue, PendingApprovalList, ProviderList, ProviderWatchEndedNotification,
     ProvidersChangedNotification, RequestEnrollmentParams, RespondApprovalParams,
     ResumeSessionParams, RuntimeEventNotification, RuntimeLocatorRecord, RuntimeMethod,
@@ -59,6 +59,7 @@ struct PublicProtocolSchema {
     control_lease: ControlLease,
     control_lease_params: ControlLeaseParams,
     cool_session: CoolSessionParams,
+    forget_session: ForgetSessionParams,
     submit_input: SubmitInputParams,
     watch_events: WatchEventsParams,
     watch_events_result: WatchEventsResult,

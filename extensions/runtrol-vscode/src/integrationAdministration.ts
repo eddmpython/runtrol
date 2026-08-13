@@ -3,6 +3,47 @@ import * as vscode from "vscode";
 import type { CoreClient } from "./core/client";
 import type { IntegrationEnrollmentLine, IntegrationLine, Response } from "./protocol";
 
+export async function reviewRuntimeRequests(client: CoreClient): Promise<void> {
+  const response = await ask(client, { ask: "runtimeForgetRequests" });
+  if (response.say !== "runtimeForgetRequests") {
+    throw new Error(`the daemon answered Runtime request listing with ${response.say}`);
+  }
+  if (response.with.length === 0) {
+    await vscode.window.showInformationMessage("Runtrol: No Runtime request is waiting for review.");
+    return;
+  }
+  const selected = await vscode.window.showQuickPick(
+    response.with.map((request) => ({
+      label: request.integration_label,
+      description: "Forget Runtime session pointer",
+      detail: `${request.session_id}  ${request.integration_id}`,
+      request,
+    })),
+    {
+      title: "Review a Runtrol Runtime request",
+      placeHolder: "Choose the local metadata removal request to inspect",
+      ignoreFocusOut: true,
+    },
+  );
+  if (!selected) {
+    return;
+  }
+  const confirmed = await vscode.window.showWarningMessage(
+    `Allow ${selected.request.integration_label} to forget Runtime session ${selected.request.session_id}? Provider-owned conversation state is not deleted.`,
+    { modal: true },
+    "Allow Forget",
+  );
+  if (confirmed !== "Allow Forget") {
+    return;
+  }
+  const decided = await ask(client, {
+    ask: "runtimeForgetConfirm",
+    with: { confirmation_id: selected.request.confirmation_id },
+  });
+  expectDone(decided, "Runtime session forget confirmation");
+  await vscode.window.showInformationMessage("Runtrol: The Runtime metadata removal request was confirmed.");
+}
+
 export async function reviewIntegrationEnrollments(client: CoreClient): Promise<void> {
   const response = await ask(client, { ask: "integrationEnrollments" });
   if (response.say !== "integrationEnrollments") {

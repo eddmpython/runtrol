@@ -5,19 +5,19 @@ use runtrol_runtime_protocol::{
     AcquireControlParams, AdoptNativeSessionParams, AppScope, CHALLENGE_LIFETIME_MS,
     ClientCapabilities, ClientInfo, ControlLease, ControlLeaseParams, CoolSessionParams,
     EnrollmentDecision, EnrollmentManifest, EnrollmentReceipt, ErrorResponse, FINALIZED_REVISIONS,
-    GetProviderCapabilitiesParams, GetSessionParams, InitializeParams, InitializeResult,
-    IntegrationAuthentication, IntegrationGrant, JsonRpcId, JsonRpcNotification, JsonRpcRequest,
-    JsonRpcResponse, LaggedNotification, ListModelsParams, ListNativeSessionsParams,
-    ListPendingApprovalsParams, ManagedSessionList, NativeSessionCatalogue, PendingApprovalList,
-    PendingEnrollmentId, ProviderId, ProviderList, ProviderWatchEndedNotification,
-    ProvidersChangedNotification, RequestEnrollmentParams, RespondApprovalParams,
-    ResumeSessionParams, RuntimeEventNotification, RuntimeMethod, RuntimeModelCatalog,
-    RuntimeProviderCapabilities, RuntimeSessionId, ServerChallenge, SessionDescriptor,
-    SessionIndexChangedNotification, SessionIndexEndedNotification, SessionOpenResult,
-    StartSessionParams, SubmitInputParams, SuccessResponse, WatchEnrollmentParams,
-    WatchEventsParams, WatchEventsResult, WatchProvidersParams, WatchProvidersResult,
-    WatchSessionIndexParams, WatchSessionIndexResult, enrollment_signing_payload,
-    initialization_signing_payload,
+    ForgetSessionParams, GetProviderCapabilitiesParams, GetSessionParams, InitializeParams,
+    InitializeResult, IntegrationAuthentication, IntegrationGrant, JsonRpcId, JsonRpcNotification,
+    JsonRpcRequest, JsonRpcResponse, LaggedNotification, ListModelsParams,
+    ListNativeSessionsParams, ListPendingApprovalsParams, ManagedSessionList,
+    NativeSessionCatalogue, PendingApprovalList, PendingEnrollmentId, ProviderId, ProviderList,
+    ProviderWatchEndedNotification, ProvidersChangedNotification, RequestEnrollmentParams,
+    RespondApprovalParams, ResumeSessionParams, RuntimeEventNotification, RuntimeMethod,
+    RuntimeModelCatalog, RuntimeProviderCapabilities, RuntimeSessionId, ServerChallenge,
+    SessionDescriptor, SessionIndexChangedNotification, SessionIndexEndedNotification,
+    SessionOpenResult, StartSessionParams, SubmitInputParams, SuccessResponse,
+    WatchEnrollmentParams, WatchEventsParams, WatchEventsResult, WatchProvidersParams,
+    WatchProvidersResult, WatchSessionIndexParams, WatchSessionIndexResult,
+    enrollment_signing_payload, initialization_signing_payload,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -886,6 +886,22 @@ impl SessionClient<'_> {
         Ok(())
     }
 
+    /// Forget one Runtime pointer after the operator approves that exact removal locally.
+    ///
+    /// The first call normally returns `presenceRequired`. Retrying the same request identity after local approval
+    /// completes the idempotent public mutation without touching provider-owned conversation state.
+    ///
+    /// # Errors
+    ///
+    /// Public client and Runtime failures, including missing local confirmation or changed session generation.
+    pub async fn forget(&mut self, params: &ForgetSessionParams) -> Result<(), ClientError> {
+        let _: EmptyResult = self
+            .runtime
+            .call(RuntimeMethod::SessionsForget, params)
+            .await?;
+        Ok(())
+    }
+
     /// Convert this connection into one bounded event subscription after the acknowledgement.
     ///
     /// The returned borrow prevents another request from sharing the dedicated stream connection.
@@ -1106,6 +1122,7 @@ impl EventSubscription<'_> {
             | RuntimeMethod::SessionsWatchEvents
             | RuntimeMethod::SessionsInterrupt
             | RuntimeMethod::SessionsCool
+            | RuntimeMethod::SessionsForget
             | RuntimeMethod::ApprovalsListPending
             | RuntimeMethod::ApprovalsRespond
             | RuntimeMethod::SessionsIndexChanged

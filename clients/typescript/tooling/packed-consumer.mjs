@@ -38,6 +38,7 @@ try {
       RuntimeConnector,
       newMutationRequestId,
       type CoolSessionParams,
+      type ForgetSessionParams,
       type ListPendingApprovalsParams,
       type ListNativeSessionsParams,
       type ProviderId,
@@ -74,6 +75,12 @@ try {
       leaseGeneration: 1,
     };
     void runtime.sessions().cool(cool);
+    const forget: ForgetSessionParams = {
+      requestId: newMutationRequestId(),
+      sessionId: session,
+      expectedSessionGeneration: 1,
+    };
+    void runtime.sessions().forget(forget);
     const pending: ListPendingApprovalsParams = {
       sessionId: session,
       leaseId: "opaque-lease",

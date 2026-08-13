@@ -178,6 +178,18 @@ pub struct CoolSessionParams {
     pub lease_generation: u64,
 }
 
+/// Forget one cold Runtime pointer after an exact local close confirmation.
+#[derive(Clone, Debug, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ForgetSessionParams {
+    /// Caller-minted idempotency identity retained across the local confirmation.
+    pub request_id: MutationRequestId,
+    /// Exact Runtime-managed session pointer to forget.
+    pub session_id: RuntimeSessionId,
+    /// Lifecycle generation visible when the caller requested removal.
+    pub expected_session_generation: u64,
+}
+
 /// Public reconnect cursor over the existing bounded Runtime replay ring.
 #[derive(Clone, Debug, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

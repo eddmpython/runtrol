@@ -12,6 +12,7 @@ import type {
   EnrollmentDecision,
   EnrollmentManifest,
   EnrollmentReceipt,
+  ForgetSessionParams,
   GetProviderCapabilitiesParams,
   GetSessionParams,
   InitializeParams,
@@ -374,6 +375,10 @@ export class SessionClient {
 
   public async cool(params: CoolSessionParams): Promise<void> {
     requireEmpty(await callRuntime(this.runtime, "sessions/cool", params, undefined));
+  }
+
+  public async forget(params: ForgetSessionParams): Promise<void> {
+    requireEmpty(await callRuntime(this.runtime, "sessions/forget", params, undefined));
   }
 
   public async watchEvents(params: WatchEventsParams): Promise<EventSubscription> {

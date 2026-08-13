@@ -561,6 +561,8 @@ pub(crate) const fn is_integration_admin(request: &Request) -> bool {
             | Request::IntegrationEnrollmentDeny { .. }
             | Request::Integrations
             | Request::IntegrationRevoke { .. }
+            | Request::RuntimeForgetRequests
+            | Request::RuntimeForgetConfirm { .. }
     )
 }
 
@@ -613,6 +615,16 @@ pub(crate) async fn prepare_integration_admin(
             crate::integration_admin::IntegrationAdmin::revoke(composed, integration_id)
                 .map(|()| Response::Done)
         }
+        Request::RuntimeForgetRequests => composed
+            .integration_admin
+            .forget_requests(composed)
+            .await
+            .map(Response::RuntimeForgetRequests),
+        Request::RuntimeForgetConfirm { confirmation_id } => composed
+            .integration_admin
+            .confirm_forget(confirmation_id)
+            .await
+            .map(|()| Response::Done),
         _ => return Prepared::None,
     }
     .unwrap_or_else(|error| refuse(&error.to_string()));
@@ -694,7 +706,9 @@ pub(crate) fn answer_prepared(
         | Request::IntegrationApprovalFinish { .. }
         | Request::IntegrationEnrollmentDeny { .. }
         | Request::Integrations
-        | Request::IntegrationRevoke { .. } => match prepared {
+        | Request::IntegrationRevoke { .. }
+        | Request::RuntimeForgetRequests
+        | Request::RuntimeForgetConfirm { .. } => match prepared {
             Prepared::IntegrationAdmin { response } => Reply::One(response),
             _ => Reply::One(refuse(
                 "integration administration was not completed for this request",

@@ -19,7 +19,7 @@ use runtrol_provider::{
 };
 use runtrol_runtime_protocol::{
     AcquireControlParams, CONTROL_LEASE_LIFETIME_MS, ControlLease, ControlLeaseParams,
-    CoolSessionParams, EventCursor, IDEMPOTENCY_WINDOW_MS, LifecycleState,
+    CoolSessionParams, EventCursor, ForgetSessionParams, IDEMPOTENCY_WINDOW_MS, LifecycleState,
     ListPendingApprovalsParams, MAX_INPUT_BYTES, MUTATION_CLOCK_SKEW_MS, MutationRequestId,
     PendingApproval, PendingApprovalList, RespondApprovalParams, RuntimeApprovalKind,
     RuntimeApprovalOption, RuntimeApprovalOptionKind, RuntimeApprovalRisk, RuntimeErrorKind,
@@ -65,6 +65,10 @@ pub(crate) enum RuntimeControlRequest {
     Cool {
         session: SessionId,
         params: CoolSessionParams,
+    },
+    Forget {
+        session: SessionId,
+        params: ForgetSessionParams,
     },
     ListApprovals {
         session: SessionId,
@@ -432,6 +436,9 @@ impl RuntimeControl {
             }
             RuntimeControlRequest::Cool { session, params } => {
                 self.cool(store, sessions, integration, session, &params)
+            }
+            RuntimeControlRequest::Forget { session, params } => {
+                self.forget(store, sessions, integration, session, &params)
             }
             RuntimeControlRequest::ListApprovals {
                 session,
@@ -1040,6 +1047,48 @@ impl RuntimeControl {
         }
     }
 
+    fn forget(
+        &mut self,
+        store: &Store,
+        sessions: &SessionManager,
+        integration: IntegrationKey,
+        session: SessionId,
+        params: &ForgetSessionParams,
+    ) -> RuntimeControlReply {
+        let authenticator = self.authenticate_forget(params);
+        let mutation = match self.begin(
+            store,
+            integration,
+            RuntimeMethod::SessionsForget,
+            &params.request_id,
+            authenticator,
+        ) {
+            Ok(Begun::New(key)) => key,
+            Ok(Begun::Replay(reply)) => return *reply,
+            Err(failure) => return RuntimeControlReply::Failed(failure),
+        };
+        if sessions.live_session(session).is_some() {
+            return self.deny(
+                store,
+                mutation,
+                RuntimeControlFailure::new(
+                    RuntimeErrorKind::SessionConflict,
+                    "only the exact locally closed session pointer can be forgotten",
+                ),
+            );
+        }
+        match store.remove_session(session) {
+            Ok(_) => {
+                self.leases.remove(&session);
+                match self.finish(store, mutation, MutationOutcome::Done) {
+                    Ok(()) => RuntimeControlReply::Done,
+                    Err(failure) => RuntimeControlReply::Failed(failure),
+                }
+            }
+            Err(_) => self.deny(store, mutation, RuntimeControlFailure::internal()),
+        }
+    }
+
     fn list_approvals(
         &self,
         sessions: &SessionManager,
@@ -1365,6 +1414,13 @@ impl RuntimeControl {
         feed(&mut mac, &params.expected_session_generation.to_le_bytes());
         feed(&mut mac, params.lease_id.as_bytes());
         feed(&mut mac, &params.lease_generation.to_le_bytes());
+        finish_mac(mac)
+    }
+
+    fn authenticate_forget(&self, params: &ForgetSessionParams) -> [u8; 32] {
+        let mut mac = self.mac(RuntimeMethod::SessionsForget);
+        feed(&mut mac, params.session_id.as_str().as_bytes());
+        feed(&mut mac, &params.expected_session_generation.to_le_bytes());
         finish_mac(mac)
     }
 

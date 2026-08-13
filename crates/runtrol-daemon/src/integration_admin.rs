@@ -2,15 +2,18 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use runtrol_ipc::wire::{IntegrationEnrollmentLine, IntegrationLine};
+use runtrol_ipc::wire::{IntegrationEnrollmentLine, IntegrationLine, RuntimeForgetLine};
 use runtrol_provider::{AbsPath, WallMs};
-use runtrol_runtime_protocol::{IntegrationId, PendingEnrollmentId};
+use runtrol_runtime_protocol::{
+    IDEMPOTENCY_WINDOW_MS, IntegrationId, MUTATION_CLOCK_SKEW_MS, MutationRequestId,
+    PendingEnrollmentId,
+};
 use runtrol_security::{
     DenyList, GrantRequest, IntegrationProposal, LocalConsole, PresenceChallenge, WorkspaceRoot,
 };
 use runtrol_store::{
-    EnrollmentKey, EnrollmentState, IntegrationAuditOutcome, IntegrationKey, IntegrationRootRow,
-    IntegrationRow,
+    EnrollmentKey, EnrollmentState, IntegrationAuditOutcome, IntegrationKey,
+    IntegrationMutationKey, IntegrationRootRow, IntegrationRow,
 };
 use tokio::sync::Mutex;
 
@@ -19,6 +22,8 @@ use crate::runtime_auth::{enrollment_key, integration_id, integration_key, pendi
 
 const MAX_APPROVAL_CHALLENGES: usize = 16;
 const APPROVAL_CHALLENGE_MS: u64 = runtrol_security::presence::CHALLENGE_WINDOW_MS;
+const MAX_FORGET_CONFIRMATIONS: usize = 64;
+const FORGET_CONFIRMATION_MS: u64 = 10 * 60_000;
 
 /// One local approval challenge returned to the VS Code surface.
 pub(crate) struct ApprovalChallenge {
@@ -33,13 +38,151 @@ struct PendingApproval {
     expires_at: WallMs,
 }
 
+struct PendingForgetConfirmation {
+    integration: IntegrationKey,
+    session: runtrol_provider::SessionId,
+    expected_session_generation: u64,
+    confirmation_id: Box<str>,
+    expires_at: WallMs,
+    confirmed: bool,
+}
+
+/// Whether one exact public forget request still needs a local approval action.
+#[derive(Clone)]
+pub(crate) enum ForgetConfirmation {
+    Awaiting { confirmation_id: Box<str> },
+    Confirmed,
+}
+
+/// Closed admission failures for the bounded local forget confirmation table.
+#[derive(Clone, Copy)]
+pub(crate) enum ForgetConfirmationError {
+    InvalidRequestId,
+    IdempotencyConflict,
+    ResourceExhausted,
+    StateUnavailable,
+}
+
 /// Bounded one-use local integration approval state.
 #[derive(Default)]
 pub(crate) struct IntegrationAdmin {
     challenges: Mutex<BTreeMap<[u8; 16], PendingApproval>>,
+    forget_confirmations: Mutex<BTreeMap<IntegrationMutationKey, PendingForgetConfirmation>>,
 }
 
 impl IntegrationAdmin {
+    pub(crate) async fn existing_forget_confirmation(
+        &self,
+        integration: IntegrationKey,
+        request_id: &MutationRequestId,
+        session: runtrol_provider::SessionId,
+        expected_session_generation: u64,
+    ) -> Result<Option<ForgetConfirmation>, ForgetConfirmationError> {
+        let (key, now) = forget_key(integration, request_id)?;
+        let mut confirmations = self.forget_confirmations.lock().await;
+        confirmations.retain(|_, pending| pending.expires_at >= now);
+        let Some(pending) = confirmations.get(&key) else {
+            return Ok(None);
+        };
+        if pending.session != session
+            || pending.expected_session_generation != expected_session_generation
+        {
+            return Err(ForgetConfirmationError::IdempotencyConflict);
+        }
+        Ok(Some(if pending.confirmed {
+            ForgetConfirmation::Confirmed
+        } else {
+            ForgetConfirmation::Awaiting {
+                confirmation_id: pending.confirmation_id.clone(),
+            }
+        }))
+    }
+
+    pub(crate) async fn request_forget_confirmation(
+        &self,
+        integration: IntegrationKey,
+        request_id: &MutationRequestId,
+        session: runtrol_provider::SessionId,
+        expected_session_generation: u64,
+    ) -> Result<ForgetConfirmation, ForgetConfirmationError> {
+        let (key, now) = forget_key(integration, request_id)?;
+        let mut confirmations = self.forget_confirmations.lock().await;
+        confirmations.retain(|_, pending| pending.expires_at >= now);
+        if let Some(pending) = confirmations.get(&key) {
+            if pending.session != session
+                || pending.expected_session_generation != expected_session_generation
+            {
+                return Err(ForgetConfirmationError::IdempotencyConflict);
+            }
+            return Ok(if pending.confirmed {
+                ForgetConfirmation::Confirmed
+            } else {
+                ForgetConfirmation::Awaiting {
+                    confirmation_id: pending.confirmation_id.clone(),
+                }
+            });
+        }
+        if confirmations.len() >= MAX_FORGET_CONFIRMATIONS {
+            return Err(ForgetConfirmationError::ResourceExhausted);
+        }
+        let confirmation_id = format!(
+            "fgt_{}",
+            hex(&random_key().map_err(|_| { ForgetConfirmationError::StateUnavailable })?)
+        )
+        .into_boxed_str();
+        confirmations.insert(
+            key,
+            PendingForgetConfirmation {
+                integration,
+                session,
+                expected_session_generation,
+                confirmation_id: confirmation_id.clone(),
+                expires_at: now.plus_millis(FORGET_CONFIRMATION_MS),
+                confirmed: false,
+            },
+        );
+        Ok(ForgetConfirmation::Awaiting { confirmation_id })
+    }
+
+    pub(crate) async fn forget_requests(
+        &self,
+        composed: &Composed,
+    ) -> Result<Vec<RuntimeForgetLine>, AdminError> {
+        let now = WallMs::now();
+        let mut confirmations = self.forget_confirmations.lock().await;
+        confirmations.retain(|_, pending| pending.expires_at >= now);
+        confirmations
+            .values()
+            .filter(|pending| !pending.confirmed)
+            .map(|pending| {
+                let integration = composed
+                    .store
+                    .get_integration(pending.integration)
+                    .map_err(|_| AdminError::state())?
+                    .ok_or_else(AdminError::state)?;
+                Ok(RuntimeForgetLine {
+                    confirmation_id: pending.confirmation_id.clone(),
+                    integration_id: integration_id(pending.integration).to_string().into(),
+                    integration_label: integration.label,
+                    session_id: pending.session.to_string().into(),
+                    expires_at_ms: pending.expires_at.as_millis(),
+                })
+            })
+            .collect()
+    }
+
+    pub(crate) async fn confirm_forget(&self, confirmation_id: &str) -> Result<(), AdminError> {
+        let now = WallMs::now();
+        let mut confirmations = self.forget_confirmations.lock().await;
+        confirmations.retain(|_, pending| pending.expires_at >= now);
+        let pending = confirmations
+            .values_mut()
+            .find(|pending| pending.confirmation_id.as_ref() == confirmation_id)
+            .ok_or_else(|| AdminError::invalid("the Runtime forget confirmation does not exist"))?;
+        pending.confirmed = true;
+        Ok(())
+    }
+
     pub(crate) fn enrollments(
         composed: &Composed,
     ) -> Result<Vec<IntegrationEnrollmentLine>, AdminError> {
@@ -429,6 +572,25 @@ fn deny_list(composed: &Composed) -> Result<DenyList, AdminError> {
 fn parse_enrollment(value: &str) -> Result<EnrollmentKey, AdminError> {
     enrollment_key(&PendingEnrollmentId::new(value))
         .map_err(|_| AdminError::invalid("the pending enrollment identity is malformed"))
+}
+
+fn forget_key(
+    integration: IntegrationKey,
+    request_id: &MutationRequestId,
+) -> Result<(IntegrationMutationKey, WallMs), ForgetConfirmationError> {
+    let now = WallMs::now();
+    let Some(created_at) = request_id.unix_millis() else {
+        return Err(ForgetConfirmationError::InvalidRequestId);
+    };
+    if created_at > now.as_millis().saturating_add(MUTATION_CLOCK_SKEW_MS)
+        || created_at.saturating_add(IDEMPOTENCY_WINDOW_MS) < now.as_millis()
+    {
+        return Err(ForgetConfirmationError::InvalidRequestId);
+    }
+    let Some(request_bytes) = request_id.to_bytes() else {
+        return Err(ForgetConfirmationError::InvalidRequestId);
+    };
+    Ok((IntegrationMutationKey::new(integration, request_bytes), now))
 }
 
 fn random_key() -> Result<[u8; 16], AdminError> {

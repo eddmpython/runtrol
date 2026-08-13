@@ -113,6 +113,15 @@ pub enum Request {
         integration_id: Box<str>,
     },
 
+    /// List public Runtime session-forget requests awaiting one local decision.
+    RuntimeForgetRequests,
+
+    /// Confirm one exact public Runtime session-forget request at the machine.
+    RuntimeForgetConfirm {
+        /// Opaque one-use local confirmation identity.
+        confirmation_id: Box<str>,
+    },
+
     /// Begin a conversation that does not exist yet.
     Start {
         /// Which CLI.
@@ -272,6 +281,9 @@ pub enum Response {
 
     /// Approved and revoked public Runtime integrations visible only at the machine.
     Integrations(Vec<IntegrationLine>),
+
+    /// Public Runtime session-forget requests awaiting one local decision.
+    RuntimeForgetRequests(Vec<RuntimeForgetLine>),
 
     /// A session was started or resumed.
     Started {
@@ -441,6 +453,21 @@ pub struct IntegrationLine {
     pub grant_generation: u64,
     /// Whether this grant is revoked.
     pub revoked: bool,
+}
+
+/// One public Runtime session-forget request safe for local presentation.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct RuntimeForgetLine {
+    /// Opaque one-use local confirmation identity.
+    pub confirmation_id: Box<str>,
+    /// Integration asking to remove the Runtime pointer.
+    pub integration_id: Box<str>,
+    /// Operator-approved integration label.
+    pub integration_label: Box<str>,
+    /// Exact Runtime session pointer that would be removed.
+    pub session_id: Box<str>,
+    /// Expiry in Unix milliseconds.
+    pub expires_at_ms: u64,
 }
 
 /// One provider's independently verified update state.

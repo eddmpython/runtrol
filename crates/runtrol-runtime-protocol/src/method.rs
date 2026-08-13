@@ -81,6 +81,9 @@ pub enum RuntimeMethod {
     /// Release one idle hot provider process while retaining its managed pointer.
     #[serde(rename = "sessions/cool")]
     SessionsCool,
+    /// Forget one cold Runtime pointer after local confirmation.
+    #[serde(rename = "sessions/forget")]
+    SessionsForget,
     /// Read pending structured provider approvals for one controlled session.
     #[serde(rename = "approvals/listPending")]
     ApprovalsListPending,
@@ -139,6 +142,7 @@ impl RuntimeMethod {
             Self::SessionsWatchEvents => "sessions/watchEvents",
             Self::SessionsInterrupt => "sessions/interrupt",
             Self::SessionsCool => "sessions/cool",
+            Self::SessionsForget => "sessions/forget",
             Self::ApprovalsListPending => "approvals/listPending",
             Self::ApprovalsRespond => "approvals/respond",
             Self::SessionsIndexChanged => "sessions/indexChanged",
@@ -187,6 +191,7 @@ impl FromStr for RuntimeMethod {
             "sessions/watchEvents" => Ok(Self::SessionsWatchEvents),
             "sessions/interrupt" => Ok(Self::SessionsInterrupt),
             "sessions/cool" => Ok(Self::SessionsCool),
+            "sessions/forget" => Ok(Self::SessionsForget),
             "approvals/listPending" => Ok(Self::ApprovalsListPending),
             "approvals/respond" => Ok(Self::ApprovalsRespond),
             "sessions/indexChanged" => Ok(Self::SessionsIndexChanged),
@@ -237,6 +242,7 @@ mod tests {
             RuntimeMethod::SessionsWatchEvents,
             RuntimeMethod::SessionsInterrupt,
             RuntimeMethod::SessionsCool,
+            RuntimeMethod::SessionsForget,
             RuntimeMethod::ApprovalsListPending,
             RuntimeMethod::ApprovalsRespond,
             RuntimeMethod::SessionsIndexChanged,

@@ -83,7 +83,11 @@ pub fn needed(request: &Request) -> Needed {
         | Request::IntegrationApprovalFinish { .. }
         | Request::IntegrationEnrollmentDeny { .. }
         | Request::Integrations
-        | Request::IntegrationRevoke { .. } => Needed::AtTheMachine(LocalScope::IntegrationAdmin),
+        | Request::IntegrationRevoke { .. }
+        | Request::RuntimeForgetRequests
+        | Request::RuntimeForgetConfirm { .. } => {
+            Needed::AtTheMachine(LocalScope::IntegrationAdmin)
+        }
         Request::Start {
             workspace_access: WorkspaceAccess::Shared,
             ..

@@ -39,6 +39,10 @@ const providerUpdate = await providers.next();
 if (providerUpdate.kind === "changed") console.log(providerUpdate.changed.snapshot.providers);
 ```
 
+Irreversible Runtime metadata removal remains locally confirmed. `sessions().forget(params)` first returns
+`presenceRequired`; approve the exact request in Runtrol Studio and retry the unchanged mutation request ID. This removes
+only the Runtime pointer, never provider-owned conversation state.
+
 Managed-session changes use a dedicated snapshot stream, so an integration does not poll or infer changes from
 provider output:
 

@@ -70,6 +70,9 @@ export interface EventCursor { readonly epoch: number; readonly seq: number; rea
 /** Explicit replay gap when the requested cursor fell outside the bounded ring. */
 export interface EventGap { readonly liveAt: EventCursor; readonly requested: EventCursor; }
 
+/** Forget one cold Runtime pointer after an exact local close confirmation. */
+export interface ForgetSessionParams { readonly expectedSessionGeneration: number; readonly requestId: MutationRequestId; readonly sessionId: RuntimeSessionId; }
+
 /** Select one provider for explicit capability discovery. */
 export interface GetProviderCapabilitiesParams { readonly providerId: ProviderId; }
 
@@ -224,7 +227,7 @@ export interface RuntimeLimits { readonly challengeLifetimeMs: number; readonly 
 export interface RuntimeLocatorRecord { readonly endpoint: string; readonly endpointKind: RuntimeEndpointKind; readonly instanceId: string; readonly processId: number; readonly runtimeVersion: string; readonly schema: number; }
 
 /** A public Runtime method implemented by the initial read-only boundary. */
-export type RuntimeMethod = "runtime/initialize" | "runtime/initialized" | "runtime/challenge" | "integrations/requestEnrollment" | "integrations/watchEnrollment" | "integrations/getGrant" | "providers/list" | "providers/watch" | "providers/getCapabilities" | "providers/listModels" | "providers/listNativeSessions" | "sessions/list" | "sessions/watchIndex" | "sessions/get" | "sessions/start" | "sessions/adoptNative" | "sessions/resume" | "sessions/acquireControl" | "sessions/renewControl" | "sessions/releaseControl" | "sessions/submitInput" | "sessions/watchEvents" | "sessions/interrupt" | "sessions/cool" | "approvals/listPending" | "approvals/respond" | "sessions/indexChanged" | "sessions/indexEnded" | "providers/changed" | "providers/watchEnded" | "sessions/event" | "sessions/lagged" | "runtime/panicStop";
+export type RuntimeMethod = "runtime/initialize" | "runtime/initialized" | "runtime/challenge" | "integrations/requestEnrollment" | "integrations/watchEnrollment" | "integrations/getGrant" | "providers/list" | "providers/watch" | "providers/getCapabilities" | "providers/listModels" | "providers/listNativeSessions" | "sessions/list" | "sessions/watchIndex" | "sessions/get" | "sessions/start" | "sessions/adoptNative" | "sessions/resume" | "sessions/acquireControl" | "sessions/renewControl" | "sessions/releaseControl" | "sessions/submitInput" | "sessions/watchEvents" | "sessions/interrupt" | "sessions/cool" | "sessions/forget" | "approvals/listPending" | "approvals/respond" | "sessions/indexChanged" | "sessions/indexEnded" | "providers/changed" | "providers/watchEnded" | "sessions/event" | "sessions/lagged" | "runtime/panicStop";
 
 /** The current model information Runtime can truthfully expose. */
 export type RuntimeModelCatalog = { readonly coverage: "known"; readonly models: ReadonlyArray<RuntimeModelChoice>; } | { readonly aliases: ReadonlyArray<string>; readonly coverage: "aliases"; readonly why: string; } | { readonly aliases: ReadonlyArray<string>; readonly coverage: "partial"; readonly models: ReadonlyArray<RuntimeModelChoice>; readonly why: string; } | { readonly coverage: "unknown"; readonly why: string; } | { readonly coverage: "unsupported"; readonly why: string; };

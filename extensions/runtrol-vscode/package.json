@@ -44,6 +44,7 @@
     "onCommand:runtrol.checkProviderUpdates",
     "onCommand:runtrol.reviewIntegrations",
     "onCommand:runtrol.manageIntegrations",
+    "onCommand:runtrol.reviewRuntimeRequests",
     "onCommand:runtrol.switchSession",
     "onCommand:runtrol.startSession",
     "onCommand:runtrol.selectSession",
@@ -95,6 +96,11 @@
         "command": "runtrol.manageIntegrations",
         "title": "Runtrol: Manage Runtime Integrations",
         "icon": "$(key)"
+      },
+      {
+        "command": "runtrol.reviewRuntimeRequests",
+        "title": "Runtrol: Review Runtime Requests",
+        "icon": "$(checklist)"
       },
       {
         "command": "runtrol.switchSession",
@@ -171,6 +177,11 @@
         {
           "command": "runtrol.manageIntegrations",
           "when": "view == runtrol.providers",
+          "group": "navigation@4"
+        },
+        {
+          "command": "runtrol.reviewRuntimeRequests",
+          "when": "view == runtrol.sessions",
           "group": "navigation@4"
         }
       ],
