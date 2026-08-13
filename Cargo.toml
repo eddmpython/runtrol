@@ -89,6 +89,8 @@ hkdf = { version = "0.12.4", default-features = false }
 sha2 = { version = "0.10.9", default-features = false }
 hmac = { version = "0.12.1", default-features = false }
 zeroize = { version = "1.9.0", features = ["zeroize_derive"] }
+# Per-user native secret stores on macOS and Unix. Windows keeps its existing DPAPI envelope.
+keyring = { version = "4.1.6", default-features = true }
 
 # Provider package version ordering.
 semver = { version = "1.0.28", default-features = false, features = ["std"] }

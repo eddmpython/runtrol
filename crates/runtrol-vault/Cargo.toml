@@ -14,12 +14,16 @@ runtrol-provider = { workspace = true }
 getrandom = { workspace = true }
 thiserror = { workspace = true }
 zeroize = { workspace = true }
+sha2 = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { workspace = true, features = [
     "Win32_Foundation",
     "Win32_Security_Cryptography",
 ] }
+
+[target.'cfg(not(windows))'.dependencies]
+keyring = { workspace = true }
 
 # **Not `[lints] workspace = true`.** DPAPI exposes only a system-call interface, and the workspace table sets
 # `unsafe_code = "forbid"`, which cannot be relaxed by an inheriting crate. This crate therefore repeats the table

@@ -1,8 +1,9 @@
 //! Per-user operating-system protection for runtrol's long-lived machine identity.
 //!
 //! The vault owns no conversation data and accepts exactly one fixed-size secret. On Windows the file contains a
-//! DPAPI `CurrentUser` blob bound to runtrol-specific optional entropy. The plaintext exists only in zeroizing memory
-//! while daemon assembly derives the Noise keypair. Unsupported platforms refuse instead of writing a raw key.
+//! DPAPI `CurrentUser` blob bound to runtrol-specific optional entropy. On macOS and Unix the file contains only a
+//! path-bound lookup identifier for the current user's native Keychain or Secret Service entry. The plaintext exists
+//! only in zeroizing memory while daemon assembly derives the Noise keypair. No platform writes a raw-key fallback.
 
 mod platform;
 
@@ -33,8 +34,8 @@ impl MachineSecret {
     ///
     /// # Errors
     ///
-    /// [`VaultError`] when the platform has no implemented user protector, randomness is unavailable, the file is
-    /// malformed, DPAPI refuses it, or durable file I/O fails.
+    /// [`VaultError`] when the current user's native protector is unavailable, randomness is unavailable, the file
+    /// is malformed, the native user protector refuses it, or durable file I/O fails.
     pub fn load_or_create(path: &AbsPath) -> Result<Self, VaultError> {
         match std::fs::read(path.as_std_path()) {
             Ok(encoded) => Self::decode(path, &encoded),
@@ -56,7 +57,7 @@ impl MachineSecret {
     fn create(path: &AbsPath) -> Result<Self, VaultError> {
         let mut secret = Self([0; SECRET_BYTES]);
         getrandom::fill(&mut secret.0).map_err(|_| VaultError::RandomUnavailable)?;
-        let protected = platform::protect(&secret.0)?;
+        let protected = platform::protect(path, &secret.0)?;
         let encoded = encode(&protected);
         persist_new(path, &encoded)?;
         Ok(secret)
@@ -64,7 +65,7 @@ impl MachineSecret {
 
     fn decode(path: &AbsPath, encoded: &[u8]) -> Result<Self, VaultError> {
         let protected = decode_envelope(path, encoded)?;
-        let plaintext = Zeroizing::new(platform::unprotect(protected)?);
+        let plaintext = Zeroizing::new(platform::unprotect(path, protected)?);
         if plaintext.len() != SECRET_BYTES {
             return Err(VaultError::Malformed {
                 path: path.clone(),
@@ -172,10 +173,6 @@ fn temporary_path(path: &AbsPath) -> Result<PathBuf, VaultError> {
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum VaultError {
-    /// This platform's per-user protector is not implemented yet.
-    #[error("this platform has no implemented runtrol machine-identity protector")]
-    Unsupported,
-
     /// The operating system would not provide fresh secret material or a unique temporary name.
     #[error("the operating system could not generate fresh machine-identity material")]
     RandomUnavailable,
@@ -235,6 +232,14 @@ impl VaultError {
         Self::Platform {
             doing,
             detail: io::Error::last_os_error().to_string(),
+        }
+    }
+
+    #[cfg(not(windows))]
+    pub(crate) fn platform_detail(doing: &'static str, detail: impl Into<String>) -> Self {
+        Self::Platform {
+            doing,
+            detail: detail.into(),
         }
     }
 }

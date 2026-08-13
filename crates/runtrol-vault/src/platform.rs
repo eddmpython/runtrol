@@ -1,6 +1,7 @@
 //! Operating-system protection for the fixed-size machine identity payload.
 
 use crate::VaultError;
+use runtrol_provider::AbsPath;
 
 #[cfg(windows)]
 mod current {
@@ -11,11 +12,11 @@ mod current {
         CRYPT_INTEGER_BLOB, CRYPTPROTECT_UI_FORBIDDEN, CryptProtectData, CryptUnprotectData,
     };
 
-    use super::VaultError;
+    use super::{AbsPath, VaultError};
 
     const ENTROPY: &[u8] = b"runtrol/machine-identity/1";
 
-    pub(super) fn protect(plaintext: &[u8]) -> Result<Vec<u8>, VaultError> {
+    pub(super) fn protect(_: &AbsPath, plaintext: &[u8]) -> Result<Vec<u8>, VaultError> {
         apply(
             "protecting the machine identity",
             plaintext,
@@ -27,7 +28,7 @@ mod current {
         unsafe_code,
         reason = "DPAPI unprotection and its LocalAlloc output have no safe Windows API. pointer lifetimes and ownership are stated beside each block"
     )]
-    pub(super) fn unprotect(ciphertext: &[u8]) -> Result<Vec<u8>, VaultError> {
+    pub(super) fn unprotect(_: &AbsPath, ciphertext: &[u8]) -> Result<Vec<u8>, VaultError> {
         let input_len = u32::try_from(ciphertext.len()).map_err(|_| VaultError::Platform {
             doing: "unprotecting the machine identity",
             detail: "the protected blob is longer than DPAPI can represent".to_owned(),
@@ -187,21 +188,85 @@ mod current {
 
 #[cfg(not(windows))]
 mod current {
+    use keyring::Entry;
+    use runtrol_provider::AbsPath;
+    use sha2::{Digest as _, Sha256};
+
     use super::VaultError;
 
-    pub(super) fn protect(_: &[u8]) -> Result<Vec<u8>, VaultError> {
-        Err(VaultError::Unsupported)
+    const SERVICE: &str = "runtrol.machine-identity";
+    const ACCOUNT_DOMAIN: &[u8] = b"runtrol/native-vault-account/1";
+
+    pub(super) fn protect(path: &AbsPath, plaintext: &[u8]) -> Result<Vec<u8>, VaultError> {
+        let account = account_for(path);
+        let entry = entry(&account, "opening the native machine identity entry")?;
+        entry
+            .set_secret(plaintext)
+            .map_err(|error| platform("storing the native machine identity", error))?;
+        Ok(account.into_bytes())
     }
 
-    pub(super) fn unprotect(_: &[u8]) -> Result<Vec<u8>, VaultError> {
-        Err(VaultError::Unsupported)
+    pub(super) fn unprotect(path: &AbsPath, protected: &[u8]) -> Result<Vec<u8>, VaultError> {
+        let expected = account_for(path);
+        if protected != expected.as_bytes() {
+            return Err(VaultError::platform_detail(
+                "binding the native machine identity entry",
+                "the vault lookup identifier does not match its canonical path",
+            ));
+        }
+        entry(&expected, "opening the native machine identity entry")?
+            .get_secret()
+            .map_err(|error| platform("reading the native machine identity", error))
+    }
+
+    fn account_for(path: &AbsPath) -> String {
+        let mut hasher = Sha256::new();
+        hasher.update(ACCOUNT_DOMAIN);
+        hasher.update(path.as_str().as_bytes());
+        format!("{:x}", hasher.finalize())
+    }
+
+    fn entry(account: &str, doing: &'static str) -> Result<Entry, VaultError> {
+        Entry::new(SERVICE, account).map_err(|error| platform(doing, error))
+    }
+
+    fn platform(doing: &'static str, _: keyring::Error) -> VaultError {
+        VaultError::platform_detail(doing, "the native credential store refused the operation")
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn lookup_identifiers_are_canonical_path_bound_and_non_secret() {
+            let root = std::env::temp_dir().join("runtrol-native-vault-account-test");
+            std::fs::create_dir_all(&root).expect("create native vault account test directory");
+            let root = AbsPath::canonicalize(
+                root.to_str()
+                    .expect("native vault account test path is UTF-8"),
+            )
+            .expect("canonical native vault account test directory");
+            let first = root.join("first.vault").expect("valid first vault path");
+            let second = root.join("second.vault").expect("valid second vault path");
+
+            let first_account = account_for(&first);
+            assert_eq!(first_account.len(), 64);
+            assert!(
+                first_account
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+            );
+            assert_ne!(first_account, account_for(&second));
+            assert!(!first_account.contains(first.as_str()));
+        }
     }
 }
 
-pub(crate) fn protect(plaintext: &[u8]) -> Result<Vec<u8>, VaultError> {
-    current::protect(plaintext)
+pub(crate) fn protect(path: &AbsPath, plaintext: &[u8]) -> Result<Vec<u8>, VaultError> {
+    current::protect(path, plaintext)
 }
 
-pub(crate) fn unprotect(ciphertext: &[u8]) -> Result<Vec<u8>, VaultError> {
-    current::unprotect(ciphertext)
+pub(crate) fn unprotect(path: &AbsPath, ciphertext: &[u8]) -> Result<Vec<u8>, VaultError> {
+    current::unprotect(path, ciphertext)
 }

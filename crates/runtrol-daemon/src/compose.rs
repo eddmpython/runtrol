@@ -128,8 +128,8 @@ pub struct Composed {
     pub paired_devices: Vec<PairedDevice>,
     /// The stable PC Noise identity, protected by the current user's operating-system vault.
     ///
-    /// Windows has the production DPAPI implementation. Other platforms remain `None` until their native user
-    /// protector is implemented, and no raw-key file is used as a fallback.
+    /// Windows uses DPAPI, macOS uses Keychain Services, and Unix uses Secret Service. No platform uses a raw-key
+    /// fallback.
     pub pc_identity: Option<Arc<StaticKeypair>>,
     /// The table that turns a kind into a driver.
     ///
@@ -198,8 +198,9 @@ impl Composed {
     /// test with a process it is allowed to kill.
     ///
     /// So this exists, and what it hands back is honest about what it is: a containment that holds nothing, which
-    /// reports the weaker promise and refuses to claim a kill it did not perform. Everything else composing does is the
-    /// same code.
+    /// reports the weaker promise and refuses to claim a kill it did not perform. A headless non-Windows test also
+    /// omits the desktop user's native secret store and therefore exposes no PC remote identity. Production assembly
+    /// always requires the platform protector and never takes this path.
     ///
     /// # Errors
     ///
@@ -224,7 +225,7 @@ impl Composed {
             .recover(&ledger, &runtime_ids, &mut growth)
             .map_err(ComposeError::MissionGates)?;
         let (granted, paired_devices) = restore_device_authority(&store)?;
-        let pc_identity = load_machine_identity(&home)?;
+        let pc_identity = load_machine_identity_for_tests(&home)?;
         Ok(Self {
             home,
             store,
@@ -248,19 +249,27 @@ impl Composed {
     }
 }
 
-#[cfg(windows)]
 fn load_machine_identity(home: &RuntrolHome) -> Result<Option<Arc<StaticKeypair>>, ComposeError> {
     let secret = runtrol_vault::MachineSecret::load_or_create(home.paths().machine_identity())?;
     let identity = StaticKeypair::from_private(secret.as_bytes())?;
     Ok(Some(Arc::new(identity)))
 }
 
-#[cfg(not(windows))]
+#[cfg(all(test, windows))]
+fn load_machine_identity_for_tests(
+    home: &RuntrolHome,
+) -> Result<Option<Arc<StaticKeypair>>, ComposeError> {
+    load_machine_identity(home)
+}
+
+#[cfg(all(test, not(windows)))]
 #[expect(
     clippy::unnecessary_wraps,
-    reason = "the platform implementations keep one fallible assembly signature so adding a native protector cannot change callers"
+    reason = "headless test runners may not expose the production desktop user's native secret service"
 )]
-fn load_machine_identity(_: &RuntrolHome) -> Result<Option<Arc<StaticKeypair>>, ComposeError> {
+fn load_machine_identity_for_tests(
+    _: &RuntrolHome,
+) -> Result<Option<Arc<StaticKeypair>>, ComposeError> {
     Ok(None)
 }
 

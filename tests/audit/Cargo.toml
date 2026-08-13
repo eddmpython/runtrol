@@ -22,7 +22,6 @@ cargo_metadata = { workspace = true }
 runtrol-childproc = { workspace = true }
 runtrol-core = { workspace = true }
 runtrol-ledger = { workspace = true }
-runtrol-orchestrator = { workspace = true }
 runtrol-provider = { workspace = true }
 runtrol-security = { workspace = true }
 runtrol-store = { workspace = true }
