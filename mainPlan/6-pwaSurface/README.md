@@ -1,6 +1,6 @@
 # pwaSurface
 
-상태: 대기, 착수 순서 5 번 ([4-pwaConnection](../4-pwaConnection/README.md) 선행. 전송 계층이 서기 전에 화면을 짓지 않는다).
+상태: 대기, 착수 순서 6 번 ([5-pwaConnection](../5-pwaConnection/README.md) 선행. 전송 계층이 서기 전에 화면을 짓지 않는다).
 
 ## 한 문장 정의
 
