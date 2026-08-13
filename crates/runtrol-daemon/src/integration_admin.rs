@@ -7,15 +7,15 @@ use runtrol_ipc::wire::{
 };
 use runtrol_provider::{AbsPath, WallMs};
 use runtrol_runtime_protocol::{
-    IDEMPOTENCY_WINDOW_MS, IntegrationId, MUTATION_CLOCK_SKEW_MS, MutationRequestId,
+    AppScope, IDEMPOTENCY_WINDOW_MS, IntegrationId, MUTATION_CLOCK_SKEW_MS, MutationRequestId,
     PendingEnrollmentId,
 };
 use runtrol_security::{
     DenyList, GrantRequest, IntegrationProposal, LocalConsole, PresenceChallenge, WorkspaceRoot,
 };
 use runtrol_store::{
-    EnrollmentKey, EnrollmentState, IntegrationAuditOutcome, IntegrationKey,
-    IntegrationMutationKey, IntegrationRootRow, IntegrationRow,
+    EnrollmentKey, EnrollmentState, IntegrationAuditOutcome, IntegrationGrantChange,
+    IntegrationKey, IntegrationMutationKey, IntegrationRootRow, IntegrationRow,
 };
 use tokio::sync::Mutex;
 
@@ -345,6 +345,10 @@ impl IntegrationAdmin {
                 label: row.label,
                 client_instance_id: row.client_instance_id,
                 scopes: row.scopes,
+                available_scopes: AppScope::ALL
+                    .iter()
+                    .map(|scope| Box::<str>::from(scope.as_str()))
+                    .collect(),
                 roots: row.roots.into_iter().map(|root| root.path).collect(),
                 grant_generation: row.grant_generation,
                 revoked: row.revoked_at.is_some(),
@@ -634,6 +638,104 @@ impl IntegrationAdmin {
             )
             .map_err(|_| AdminError::state())?;
             Err(AdminError::invalid("the integration does not exist"))
+        }
+    }
+
+    pub(crate) fn change_grant(
+        composed: &Composed,
+        integration: &str,
+        expected_grant_generation: u64,
+        scopes: &[Box<str>],
+        roots: &[Box<str>],
+    ) -> Result<(), AdminError> {
+        let id = IntegrationId::new(integration);
+        let key = integration_key(&id)
+            .map_err(|_| AdminError::invalid("the integration identity is malformed"))?;
+        let row = composed
+            .store
+            .get_integration(key)
+            .map_err(|_| AdminError::state())?
+            .ok_or_else(|| AdminError::invalid("the integration does not exist"))?;
+        if row.revoked_at.is_some() {
+            return Err(AdminError::invalid("the integration is revoked"));
+        }
+        if row.grant_generation != expected_grant_generation {
+            return Err(AdminError::invalid(
+                "the integration grant changed before local review completed",
+            ));
+        }
+        let mut unique_scopes = BTreeSet::new();
+        if scopes.is_empty()
+            || scopes.len() > AppScope::ALL.len()
+            || !scopes.iter().all(|scope| {
+                scope.parse::<AppScope>().is_ok() && unique_scopes.insert(scope.as_ref())
+            })
+        {
+            return Err(AdminError::invalid(
+                "the replacement integration scopes are invalid or duplicated",
+            ));
+        }
+        if scopes
+            .iter()
+            .any(|scope| scope.starts_with("session.") || scope.starts_with("approval."))
+            && roots.is_empty()
+        {
+            return Err(AdminError::invalid(
+                "session authority requires at least one approved project root",
+            ));
+        }
+        let deny = deny_list(composed)?;
+        let approved = approve_roots(roots, &deny)?;
+        let mut unique_roots = BTreeSet::new();
+        if !approved
+            .iter()
+            .all(|root| unique_roots.insert(root.path().as_str()))
+        {
+            return Err(AdminError::invalid(
+                "the replacement project roots contain the same directory more than once",
+            ));
+        }
+        let roots = approved
+            .into_iter()
+            .map(|root| IntegrationRootRow {
+                path: root.path().as_str().into(),
+                identity: root.identity().to_bytes(),
+            })
+            .collect();
+        crate::runtime_audit::local(
+            &composed.store,
+            Some(key),
+            Some(row.key_generation),
+            "integrations/changeGrant",
+            IntegrationAuditOutcome::Attempted,
+            "attempted",
+        )
+        .map_err(|_| AdminError::state())?;
+        match composed
+            .store
+            .change_integration_grant(key, expected_grant_generation, scopes.to_vec(), roots)
+            .map_err(|_| AdminError::state())?
+        {
+            IntegrationGrantChange::Changed(_) | IntegrationGrantChange::Unchanged(_) => {
+                crate::runtime_audit::local(
+                    &composed.store,
+                    Some(key),
+                    Some(row.key_generation),
+                    "integrations/changeGrant",
+                    IntegrationAuditOutcome::Allowed,
+                    "allowed",
+                )
+                .map_err(|_| AdminError::state())
+            }
+            IntegrationGrantChange::Conflict => Err(AdminError::invalid(
+                "the integration grant changed before it could be committed",
+            )),
+            IntegrationGrantChange::Missing => {
+                Err(AdminError::invalid("the integration no longer exists"))
+            }
+            IntegrationGrantChange::Revoked => {
+                Err(AdminError::invalid("the integration was revoked"))
+            }
         }
     }
 }

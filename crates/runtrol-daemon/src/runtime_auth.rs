@@ -84,7 +84,7 @@ pub(crate) fn challenge(instance_id: &str) -> Result<ServerChallenge, Authorizat
     })
 }
 
-/// Verify an approved integration signature and its exact current generations.
+/// Verify an approved integration signature and return its current authority.
 pub(crate) fn authenticate(
     store: &Store,
     context: &ClientContext,
@@ -107,7 +107,7 @@ pub(crate) fn authenticate(
         });
     }
     if row.key_generation != authentication.key_generation
-        || row.grant_generation != authentication.grant_generation
+        || row.grant_generation < authentication.grant_generation
     {
         return Err(AuthorizationFailure::unauthenticated(
             "the integration generation is stale",

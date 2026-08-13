@@ -1,4 +1,4 @@
-export const WIRE_VERSION = 12;
+export const WIRE_VERSION = 13;
 
 export type WorkspaceAccess = "exclusive" | "shared";
 
@@ -48,6 +48,7 @@ export type IntegrationLine = {
   label: string;
   client_instance_id: string;
   scopes: string[];
+  available_scopes: string[];
   roots: string[];
   grant_generation: number;
   revoked: boolean;
@@ -124,6 +125,15 @@ export type Request =
   | { ask: "integrationEnrollmentDeny"; with: { pending_id: string } }
   | { ask: "integrations" }
   | { ask: "integrationRevoke"; with: { integration_id: string } }
+  | {
+      ask: "integrationGrantChange";
+      with: {
+        integration_id: string;
+        expected_grant_generation: number;
+        scopes: string[];
+        roots: string[];
+      };
+    }
   | { ask: "runtimeForgetRequests" }
   | { ask: "runtimeForgetConfirm"; with: { confirmation_id: string } }
   | { ask: "runtimeKeyRotationRequests" }

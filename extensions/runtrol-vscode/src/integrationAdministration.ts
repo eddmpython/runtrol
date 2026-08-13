@@ -119,7 +119,7 @@ export async function reviewIntegrationEnrollment(
   return await decideEnrollment(client, enrollment) === "approved";
 }
 
-export async function manageIntegrations(client: CoreClient): Promise<void> {
+export async function manageIntegrations(client: CoreClient): Promise<boolean> {
   const response = await ask(client, { ask: "integrations" });
   if (response.say !== "integrations") {
     throw new Error(`the daemon answered integration listing with ${response.say}`);
@@ -127,11 +127,30 @@ export async function manageIntegrations(client: CoreClient): Promise<void> {
   const active = response.with.filter((integration) => !integration.revoked);
   if (active.length === 0) {
     await vscode.window.showInformationMessage("Runtrol: No active Runtime integration is enrolled.");
-    return;
+    return false;
   }
   const selected = await pickIntegration(active);
   if (!selected) {
-    return;
+    return false;
+  }
+  const action = await vscode.window.showQuickPick(
+    [
+      {
+        label: "Edit permissions and project roots",
+        description: `Current grant generation ${selected.grant_generation}`,
+        action: "change" as const,
+      },
+      {
+        label: "Revoke integration",
+        description: "Refuse every future Runtime request",
+        action: "revoke" as const,
+      },
+    ],
+    { title: `Manage ${selected.label}`, ignoreFocusOut: true },
+  );
+  if (!action) return false;
+  if (action.action === "change") {
+    return changeIntegrationGrant(client, selected);
   }
   const confirmed = await vscode.window.showWarningMessage(
     `Revoke ${selected.label}? Its current Runtime connection will be refused on its next request. Supervised sessions will keep running.`,
@@ -139,7 +158,7 @@ export async function manageIntegrations(client: CoreClient): Promise<void> {
     "Revoke",
   );
   if (confirmed !== "Revoke") {
-    return;
+    return false;
   }
   const revoked = await ask(client, {
     ask: "integrationRevoke",
@@ -147,6 +166,95 @@ export async function manageIntegrations(client: CoreClient): Promise<void> {
   });
   expectDone(revoked, "integration revocation");
   await vscode.window.showInformationMessage(`Runtrol: Revoked ${selected.label}.`);
+  return true;
+}
+
+async function changeIntegrationGrant(
+  client: CoreClient,
+  integration: IntegrationLine,
+): Promise<boolean> {
+  const scopes = await vscode.window.showQuickPick(
+    integration.available_scopes.map((scope) => ({
+      label: scope,
+      picked: integration.scopes.includes(scope),
+    })),
+    {
+      title: `Choose permissions for ${integration.label}`,
+      canPickMany: true,
+      ignoreFocusOut: true,
+      placeHolder: "Select the complete replacement permission set",
+    },
+  );
+  if (!scopes) return false;
+  if (scopes.length === 0) {
+    await vscode.window.showWarningMessage("Runtrol: At least one integration permission is required.");
+    return false;
+  }
+
+  let roots = [...integration.roots];
+  const rootAction = await vscode.window.showQuickPick(
+    ["Keep current project roots", "Review project roots"],
+    { title: `Project authority for ${integration.label}`, ignoreFocusOut: true },
+  );
+  if (!rootAction) return false;
+  if (rootAction === "Review project roots") {
+    const retained = integration.roots.length === 0
+      ? []
+      : await vscode.window.showQuickPick(
+        integration.roots.map((root) => ({ label: root, picked: true })),
+        {
+          title: "Choose project roots to retain",
+          canPickMany: true,
+          ignoreFocusOut: true,
+        },
+      );
+    if (!retained) return false;
+    roots = retained.map(({ label }) => label);
+    const add = await vscode.window.showInformationMessage(
+      "Add more project roots to this integration?",
+      { modal: true },
+      "Add Project Roots",
+      "Use Selected Roots",
+    );
+    if (!add) return false;
+    if (add === "Add Project Roots") {
+      const selected = await vscode.window.showOpenDialog({
+        title: "Add Runtime integration project roots",
+        canSelectFiles: false,
+        canSelectFolders: true,
+        canSelectMany: true,
+        openLabel: "Add Project Roots",
+      });
+      if (!selected) return false;
+      roots.push(...selected.map((uri) => uri.fsPath));
+    }
+  }
+  roots = uniquePaths(roots);
+  const selectedScopes = scopes.map(({ label }) => label);
+  if (selectedScopes.some(scopeNeedsRoot) && roots.length === 0) {
+    await vscode.window.showWarningMessage(
+      "Runtrol: Session and approval permissions require at least one project root.",
+    );
+    return false;
+  }
+  const confirmed = await vscode.window.showWarningMessage(
+    `Replace ${integration.label}'s Runtime authority with permissions ${selectedScopes.join(", ")} and projects ${roots.length === 0 ? "none" : roots.join(", ")}? Active connections must authenticate again.`,
+    { modal: true },
+    "Replace Authority",
+  );
+  if (confirmed !== "Replace Authority") return false;
+  const changed = await ask(client, {
+    ask: "integrationGrantChange",
+    with: {
+      integration_id: integration.integration_id,
+      expected_grant_generation: integration.grant_generation,
+      scopes: selectedScopes,
+      roots,
+    },
+  });
+  expectDone(changed, "integration authority replacement");
+  await vscode.window.showInformationMessage(`Runtrol: Updated ${integration.label}'s Runtime authority.`);
+  return true;
 }
 
 async function decideEnrollment(
@@ -264,6 +372,20 @@ async function pickIntegration(integrations: readonly IntegrationLine[]): Promis
     },
   );
   return selected?.integration;
+}
+
+function scopeNeedsRoot(scope: string): boolean {
+  return scope.startsWith("session.") || scope.startsWith("approval.");
+}
+
+function uniquePaths(paths: readonly string[]): string[] {
+  const seen = new Set<string>();
+  return paths.filter((path) => {
+    const key = process.platform === "win32" ? path.toLocaleLowerCase("en-US") : path;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 async function ask(client: CoreClient, request: Parameters<CoreClient["once"]>[0]): Promise<Response> {

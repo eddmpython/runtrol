@@ -46,7 +46,8 @@ pub use integration_mutations::{
     INTEGRATION_MUTATION_MAX_ROWS, IntegrationMutationRow, IntegrationMutationState,
 };
 pub use integrations::{
-    EnrollmentRow, EnrollmentState, IntegrationKeyRotation, IntegrationRootRow, IntegrationRow,
+    EnrollmentRow, EnrollmentState, IntegrationGrantChange, IntegrationKeyRotation,
+    IntegrationRootRow, IntegrationRow,
 };
 pub use open::{CACHE_BYTES, Store};
 pub use schema::{

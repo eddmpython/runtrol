@@ -113,6 +113,18 @@ pub enum Request {
         integration_id: Box<str>,
     },
 
+    /// Replace one active integration's exact scopes and project roots after local review.
+    IntegrationGrantChange {
+        /// Opaque approved integration identity.
+        integration_id: Box<str>,
+        /// Grant generation shown when the operator began the review.
+        expected_grant_generation: u64,
+        /// Complete replacement scope set.
+        scopes: Vec<Box<str>>,
+        /// Complete replacement project-root set.
+        roots: Vec<Box<str>>,
+    },
+
     /// List public Runtime session-forget requests awaiting one local decision.
     RuntimeForgetRequests,
 
@@ -459,6 +471,8 @@ pub struct IntegrationLine {
     pub client_instance_id: Box<str>,
     /// Exact current scopes.
     pub scopes: Vec<Box<str>>,
+    /// Every scope this Runtime revision permits the local operator to grant.
+    pub available_scopes: Vec<Box<str>>,
     /// Canonical current roots.
     pub roots: Vec<Box<str>>,
     /// Grant generation changed by narrowing or revocation.

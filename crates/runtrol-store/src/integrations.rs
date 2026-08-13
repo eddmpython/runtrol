@@ -67,6 +67,21 @@ pub enum IntegrationKeyRotation {
     Revoked,
 }
 
+/// Durable result of one exact local integration authority replacement.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum IntegrationGrantChange {
+    /// The expected generation was current and the replacement committed.
+    Changed(IntegrationRow),
+    /// The supplied authority already matches the current row.
+    Unchanged(IntegrationRow),
+    /// The current generation no longer matches the local review.
+    Conflict,
+    /// The integration identity does not exist.
+    Missing,
+    /// The integration was revoked before the replacement.
+    Revoked,
+}
+
 /// Terminal or pending enrollment state.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EnrollmentState {
@@ -421,6 +436,59 @@ impl Store {
             .commit()
             .map_err(|error| engine("committing integration revocation", error))?;
         Ok(true)
+    }
+
+    /// Atomically replace one active integration's exact scopes and roots.
+    ///
+    /// # Errors
+    ///
+    /// Codec, generation exhaustion, or engine failure.
+    pub fn change_integration_grant(
+        &self,
+        key: IntegrationKey,
+        expected_generation: u64,
+        scopes: Vec<Box<str>>,
+        roots: Vec<IntegrationRootRow>,
+    ) -> Result<IntegrationGrantChange, StoreError> {
+        let write = self.begin_durable_write("changing a Runtime integration grant")?;
+        let outcome;
+        {
+            let mut table = write
+                .open_table(INTEGRATIONS)
+                .map_err(|error| engine("opening the integration grant table", error))?;
+            let Some(stored) = table
+                .get(key)
+                .map_err(|error| engine("reading an integration for grant change", error))?
+            else {
+                return Ok(IntegrationGrantChange::Missing);
+            };
+            let mut row = decode_integration(stored.value())?;
+            if row.revoked_at.is_some() {
+                return Ok(IntegrationGrantChange::Revoked);
+            }
+            if row.grant_generation != expected_generation {
+                return Ok(IntegrationGrantChange::Conflict);
+            }
+            if row.scopes == scopes && row.roots == roots {
+                return Ok(IntegrationGrantChange::Unchanged(row));
+            }
+            row.grant_generation = row
+                .grant_generation
+                .checked_add(1)
+                .ok_or_else(|| integration_codec("grant generation", "it is exhausted"))?;
+            row.scopes = scopes;
+            row.roots = roots;
+            let encoded = encode_integration(&row)?;
+            drop(stored);
+            table
+                .insert(key, encoded.as_slice())
+                .map_err(|error| engine("writing integration grant change", error))?;
+            outcome = IntegrationGrantChange::Changed(row);
+        }
+        write
+            .commit()
+            .map_err(|error| engine("committing integration grant change", error))?;
+        Ok(outcome)
     }
 
     /// Atomically replace one exact current public key and increment its key generation.
@@ -925,6 +993,75 @@ mod tests {
             .expect("exists");
         assert_eq!(revoked.grant_generation, 2);
         assert_eq!(revoked.revoked_at, Some(WallMs::from_millis(5)));
+    }
+
+    #[test]
+    fn integration_grant_change_is_atomic_and_generation_bound() {
+        let scratch = Scratch::make("grant-change");
+        let pending = EnrollmentKey::from_bytes([8; 16]);
+        let integration = IntegrationKey::from_bytes([9; 16]);
+        scratch
+            .store
+            .create_enrollment(pending, &enrollment())
+            .expect("create enrollment");
+        let grant = IntegrationRow {
+            public_key: [1; 32],
+            client_instance_id: "fixture-instance".into(),
+            label: "Fixture".into(),
+            manifest_digest: [2; 32],
+            scopes: vec!["provider.read".into()],
+            roots: Vec::new(),
+            key_generation: 1,
+            grant_generation: 1,
+            approved_at: WallMs::from_millis(3),
+            revoked_at: None,
+        };
+        scratch
+            .store
+            .approve_enrollment(pending, integration, &grant)
+            .expect("approve integration");
+        let changed_scopes = vec!["provider.read".into(), "session.list".into()];
+        let changed_roots = vec![IntegrationRootRow {
+            path: "C:/other".into(),
+            identity: [8; ROOT_IDENTITY_BYTES],
+        }];
+        assert!(matches!(
+            scratch
+                .store
+                .change_integration_grant(
+                    integration,
+                    1,
+                    changed_scopes.clone(),
+                    changed_roots.clone(),
+                )
+                .expect("change grant"),
+            IntegrationGrantChange::Changed(IntegrationRow {
+                grant_generation: 2,
+                ..
+            })
+        ));
+        assert_eq!(
+            scratch
+                .store
+                .change_integration_grant(
+                    integration,
+                    1,
+                    changed_scopes.clone(),
+                    changed_roots.clone(),
+                )
+                .expect("reject stale change"),
+            IntegrationGrantChange::Conflict
+        );
+        assert!(matches!(
+            scratch
+                .store
+                .change_integration_grant(integration, 2, changed_scopes, changed_roots)
+                .expect("accept unchanged grant"),
+            IntegrationGrantChange::Unchanged(IntegrationRow {
+                grant_generation: 2,
+                ..
+            })
+        ));
     }
 
     #[test]

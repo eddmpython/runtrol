@@ -96,7 +96,9 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
     ),
     vscode.commands.registerCommand(
       "runtrol.manageIntegrations",
-      () => run(() => afterReady(() => manageIntegrations(client))),
+      () => run(() => afterReady(async () => {
+        if (await manageIntegrations(client)) await controller.reconnect();
+      })),
     ),
     vscode.commands.registerCommand(
       "runtrol.reviewRuntimeRequests",

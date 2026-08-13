@@ -99,6 +99,34 @@ test("key rotation signs the replacement key and returns replacement credentials
   runtime.close();
 });
 
+test("authenticated reconnect accepts and exposes a newer locally approved grant", async () => {
+  const instanceId = `rtm_${"7".repeat(32)}`;
+  const identity = IntegrationIdentity.generate();
+  const previous: IntegrationGrant = {
+    integrationId: "int_07070707070707070707070707070707",
+    scopes: ["provider.read"],
+    roots: [],
+    keyGeneration: 1,
+    grantGeneration: 2,
+  };
+  const current: IntegrationGrant = {
+    ...previous,
+    scopes: ["provider.read", "session.list"],
+    roots: ["C:/work"],
+    grantGeneration: 3,
+  };
+  const transport = new ScriptedRuntimeTransport([
+    challenge(instanceId),
+    initialized(instanceId, current),
+  ]);
+  const runtime = await new RuntimeConnector(scriptedTransportFactory(transport)).connect(
+    validatedLocator(instanceId, "fixture", "0.1.1"),
+    { name: "fixture", version: "1.0.0", credentials: { identity, grant: previous } },
+  );
+  assert.deepEqual(runtime.initialization.grant, current);
+  runtime.close();
+});
+
 test("hostile Runtime results are rejected by the generated public schema", () => {
   const instanceId = `rtm_${"1".repeat(32)}`;
   assert.throws(

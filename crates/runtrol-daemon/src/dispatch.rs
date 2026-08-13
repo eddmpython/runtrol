@@ -561,6 +561,7 @@ pub(crate) const fn is_integration_admin(request: &Request) -> bool {
             | Request::IntegrationEnrollmentDeny { .. }
             | Request::Integrations
             | Request::IntegrationRevoke { .. }
+            | Request::IntegrationGrantChange { .. }
             | Request::RuntimeForgetRequests
             | Request::RuntimeForgetConfirm { .. }
             | Request::RuntimeKeyRotationRequests
@@ -617,6 +618,19 @@ pub(crate) async fn prepare_integration_admin(
             crate::integration_admin::IntegrationAdmin::revoke(composed, integration_id)
                 .map(|()| Response::Done)
         }
+        Request::IntegrationGrantChange {
+            integration_id,
+            expected_grant_generation,
+            scopes,
+            roots,
+        } => crate::integration_admin::IntegrationAdmin::change_grant(
+            composed,
+            integration_id,
+            *expected_grant_generation,
+            scopes,
+            roots,
+        )
+        .map(|()| Response::Done),
         Request::RuntimeForgetRequests => composed
             .integration_admin
             .forget_requests(composed)
@@ -719,6 +733,7 @@ pub(crate) fn answer_prepared(
         | Request::IntegrationEnrollmentDeny { .. }
         | Request::Integrations
         | Request::IntegrationRevoke { .. }
+        | Request::IntegrationGrantChange { .. }
         | Request::RuntimeForgetRequests
         | Request::RuntimeForgetConfirm { .. }
         | Request::RuntimeKeyRotationRequests

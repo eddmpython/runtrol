@@ -1135,9 +1135,26 @@ function validateInitialization(
   if (initialized.runtime.instanceId !== locator.instanceId
     || initialized.runtime.version !== locator.runtimeVersion
     || !FINALIZED_REVISIONS.includes(initialized.selectedRevision as never)
-    || JSON.stringify(initialized.grant ?? null) !== JSON.stringify(expectedGrant ?? null)) {
+    || !initializationGrantMatches(initialized.grant, expectedGrant)) {
     throw new RuntimeProtocolError("Runtime initialization does not match the locator or credentials");
   }
+}
+
+function initializationGrantMatches(
+  current: IntegrationGrant | null | undefined,
+  expected: IntegrationGrant | undefined,
+): boolean {
+  if (!expected) return current == null;
+  if (!current) return false;
+  if (
+    current.integrationId !== expected.integrationId
+    || current.keyGeneration !== expected.keyGeneration
+    || current.grantGeneration < expected.grantGeneration
+  ) {
+    return false;
+  }
+  return current.grantGeneration !== expected.grantGeneration
+    || JSON.stringify(current) === JSON.stringify(expected);
 }
 
 async function callOn<T>(

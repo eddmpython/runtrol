@@ -64,6 +64,7 @@ export class StudioRuntimeClient implements vscode.Disposable {
   private readonly connector = new RuntimeConnector();
   private command: RuntimeClient | null = null;
   private options: ClientOptions | null = null;
+  private stored: StoredIntegration | null = null;
   private commandTail: Promise<void> = Promise.resolve();
   private readonly controls = new Map<string, ControlLease>();
 
@@ -78,12 +79,13 @@ export class StudioRuntimeClient implements vscode.Disposable {
     const stored = await this.loadOrCreateIdentity();
     const identity = IntegrationIdentity.fromPkcs8(Buffer.from(stored.privateKeyPkcs8, "base64url"));
     const grant = stored.grant ?? await this.enroll(stored, identity);
+    this.stored = { ...stored, grant };
     this.options = {
       name: "Runtrol Studio",
       version: extensionVersion(this.context),
       credentials: new IntegrationCredentials(identity, grant),
     };
-    this.command = await this.connector.connectSystemWithRetry(this.options);
+    this.command = await this.connectCommand();
   }
 
   async inventory(): Promise<RuntimeInventory> {
@@ -288,7 +290,7 @@ export class StudioRuntimeClient implements vscode.Disposable {
       this.command = null;
       this.controls.clear();
       if (this.options) {
-        this.command = await this.connector.connectSystemWithRetry(this.options);
+        this.command = await this.connectCommand();
       }
     });
   }
@@ -364,8 +366,34 @@ export class StudioRuntimeClient implements vscode.Disposable {
   }
 
   private async commandClient(): Promise<RuntimeClient> {
-    this.command ??= await this.connector.connectSystemWithRetry(this.requireOptions());
+    this.command ??= await this.connectCommand();
     return this.command;
+  }
+
+  private async connectCommand(): Promise<RuntimeClient> {
+    const options = this.requireOptions();
+    const runtime = await this.connector.connectSystemWithRetry(options);
+    const current = runtime.initialization.grant;
+    const credentials = options.credentials;
+    if (!current || !credentials) {
+      runtime.close();
+      throw new Error("Runtrol Studio Runtime authentication returned no integration grant");
+    }
+    if (JSON.stringify(current) !== JSON.stringify(credentials.grant)) {
+      const stored = this.stored;
+      if (!stored) {
+        runtime.close();
+        throw new Error("Runtrol Studio has no integration identity to update");
+      }
+      const next = { ...stored, grant: current };
+      await this.context.secrets.store(SECRET_KEY, JSON.stringify(next));
+      this.stored = next;
+      this.options = {
+        ...options,
+        credentials: new IntegrationCredentials(credentials.identity, current),
+      };
+    }
+    return runtime;
   }
 
   private requireOptions(): ClientOptions {

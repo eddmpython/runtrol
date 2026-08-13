@@ -529,13 +529,29 @@ fn validate_initialization(
             "the Runtime selected a revision the client did not offer".to_owned(),
         ));
     }
-    if initialized.grant.as_ref() != expected_grant {
+    if !initialization_grant_matches(initialized.grant.as_ref(), expected_grant) {
         return Err(ClientError::Protocol(
             "the Runtime initialization grant does not match the authenticated credentials"
                 .to_owned(),
         ));
     }
     Ok(())
+}
+
+fn initialization_grant_matches(
+    current: Option<&IntegrationGrant>,
+    expected: Option<&IntegrationGrant>,
+) -> bool {
+    match (current, expected) {
+        (None, None) => true,
+        (Some(current), Some(expected)) => {
+            current.integration_id == expected.integration_id
+                && current.key_generation == expected.key_generation
+                && current.grant_generation >= expected.grant_generation
+                && (current.grant_generation != expected.grant_generation || current == expected)
+        }
+        (None, Some(_)) | (Some(_), None) => false,
+    }
 }
 
 async fn call_connection<P: Serialize, R: DeserializeOwned>(
@@ -2296,6 +2312,37 @@ mod tests {
         assert!(validate_envelope("2.0", &expected, &JsonRpcId::Number(7)).is_ok());
         assert!(validate_envelope("1.0", &expected, &JsonRpcId::Number(7)).is_err());
         assert!(validate_envelope("2.0", &expected, &JsonRpcId::Number(8)).is_err());
+    }
+
+    #[test]
+    fn authenticated_initialization_accepts_only_a_current_or_newer_matching_grant() {
+        let expected = IntegrationGrant {
+            integration_id: runtrol_runtime_protocol::IntegrationId::new("int_fixture"),
+            scopes: vec![AppScope::ProviderRead],
+            roots: vec!["C:/work".to_owned()],
+            key_generation: 2,
+            grant_generation: 3,
+        };
+        let mut current = expected.clone();
+        current.grant_generation = 4;
+        current.scopes.push(AppScope::SessionList);
+        assert!(initialization_grant_matches(
+            Some(&current),
+            Some(&expected)
+        ));
+
+        let mut wrong_key = current.clone();
+        wrong_key.key_generation = 3;
+        assert!(!initialization_grant_matches(
+            Some(&wrong_key),
+            Some(&expected)
+        ));
+        let mut same_generation_changed = expected.clone();
+        same_generation_changed.roots.push("C:/other".to_owned());
+        assert!(!initialization_grant_matches(
+            Some(&same_generation_changed),
+            Some(&expected)
+        ));
     }
 
     #[test]

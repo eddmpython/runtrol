@@ -84,6 +84,7 @@ pub fn needed(request: &Request) -> Needed {
         | Request::IntegrationEnrollmentDeny { .. }
         | Request::Integrations
         | Request::IntegrationRevoke { .. }
+        | Request::IntegrationGrantChange { .. }
         | Request::RuntimeForgetRequests
         | Request::RuntimeForgetConfirm { .. }
         | Request::RuntimeKeyRotationRequests

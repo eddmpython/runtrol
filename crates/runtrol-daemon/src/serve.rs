@@ -793,6 +793,7 @@ async fn serve_surfaces(
                         | Request::Close { .. }
                         | Request::IntegrationApprovalFinish { .. }
                         | Request::IntegrationRevoke { .. }
+                        | Request::IntegrationGrantChange { .. }
                 );
                 let reservation = reservation.and_then(ReservationGuard::take);
                 let reply = answer_prepared(
