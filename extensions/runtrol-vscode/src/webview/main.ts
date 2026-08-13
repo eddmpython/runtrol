@@ -9,10 +9,13 @@ import {
   type UnknownRecord,
 } from "./presentation";
 import { afterFrameOrDelay } from "./renderReady";
+import { sessionTitle } from "../sessionDisplay";
 
 type Session = {
   session: string;
   provider: string;
+  native: string | null;
+  label?: string | null;
   workspace: string;
   hot: boolean;
   doing: string;
@@ -24,7 +27,8 @@ type FrameEnvelope = {
 };
 
 type Incoming =
-  | { type: "reset"; session: Session | null; generation: number }
+  | { type: "reset"; session: Session | null; title: string | null; generation: number }
+  | { type: "session"; session: Session; title: string }
   | { type: "frames"; batch: FrameEnvelope[]; gap: boolean }
   | { type: "status"; message: string; kind: "info" | "warning" | "error" }
   | { type: "measureStart"; id: string }
@@ -76,6 +80,7 @@ const LOCALIZED_TEXT: Record<string, string> = {
 const vscode = acquireVsCodeApi();
 const title = element<HTMLElement>("session-title");
 const sessionPath = element<HTMLDivElement>("session-path");
+const sessionState = element<HTMLSpanElement>("session-state");
 const status = element<HTMLDivElement>("status");
 const conversation = element<HTMLElement>("conversation");
 const composer = element<HTMLFormElement>("composer");
@@ -95,7 +100,12 @@ let followsTail = true;
 
 window.addEventListener("message", ({ data }: MessageEvent<Incoming>) => {
   if (data.type === "reset") {
-    reset(data.session, data.generation);
+    reset(data.session, data.title, data.generation);
+    return;
+  }
+  if (data.type === "session") {
+    selected = data.session;
+    renderSession(data.session, data.title);
     return;
   }
   if (data.type === "status") {
@@ -129,8 +139,16 @@ composer.addEventListener("submit", (event) => {
   }
   vscode.postMessage({ type: "prompt", text });
   prompt.value = "";
+  resizePrompt();
   prompt.focus();
 });
+prompt.addEventListener("keydown", (event) => {
+  if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
+    event.preventDefault();
+    composer.requestSubmit();
+  }
+});
+prompt.addEventListener("input", resizePrompt);
 interrupt.addEventListener("click", () => vscode.postMessage({ type: "interrupt" }));
 close.addEventListener("click", () => vscode.postMessage({ type: "close" }));
 openWorkspace.addEventListener("click", () => vscode.postMessage({ type: "openWorkspace" }));
@@ -138,7 +156,7 @@ conversation.addEventListener("scroll", () => {
   followsTail = conversation.scrollHeight - conversation.scrollTop - conversation.clientHeight < 24;
 }, { passive: true });
 
-function reset(session: Session | null, nextGeneration: number): void {
+function reset(session: Session | null, displayTitle: string | null, nextGeneration: number): void {
   selected = session;
   generation = nextGeneration;
   pending.length = 0;
@@ -148,19 +166,9 @@ function reset(session: Session | null, nextGeneration: number): void {
   followsTail = true;
   status.textContent = "";
   status.className = "";
-  title.textContent = session ? `${folderName(session.workspace)}  ${session.provider}` : "No active session";
-  sessionPath.textContent = session?.workspace ?? "Select a session from the list.";
-  const interactive = session?.hot === true;
-  prompt.disabled = !interactive;
-  send.disabled = !interactive;
-  interrupt.disabled = !interactive;
-  close.disabled = !session;
-  openWorkspace.disabled = !session;
-  prompt.placeholder = !session
-    ? "Select a session to send a prompt"
-    : interactive
-      ? "Send unchanged text to the provider CLI"
-      : "Resuming the provider-owned session";
+  renderSession(session, displayTitle);
+  prompt.value = "";
+  resizePrompt();
   if (session) {
     appendMessage("meta", `Connected to ${session.doing}`);
   }
@@ -177,6 +185,24 @@ function reset(session: Session | null, nextGeneration: number): void {
       }
     },
   );
+}
+
+function renderSession(session: Session | null, displayTitle: string | null): void {
+  title.textContent = session ? displayTitle || sessionTitle(session) : "No active session";
+  sessionPath.textContent = session?.workspace ?? "Choose a session from the Runtrol sidebar.";
+  sessionState.textContent = session?.doing ?? "";
+  sessionState.className = session ? (session.hot ? "hot" : "cold") : "";
+  const interactive = session?.hot === true;
+  prompt.disabled = !interactive;
+  send.disabled = !interactive;
+  interrupt.disabled = !interactive;
+  close.disabled = !session;
+  openWorkspace.disabled = !session;
+  prompt.placeholder = !session
+    ? "Select a session to send a prompt"
+    : interactive
+      ? "Send unchanged text to the provider CLI"
+      : "Resuming the provider-owned session";
 }
 
 function enqueue(frames: readonly unknown[]): void {
@@ -521,9 +547,9 @@ function printable(value: unknown): string {
   }
 }
 
-function folderName(workspace: string): string {
-  const parts = workspace.replaceAll("\\", "/").split("/").filter(Boolean);
-  return parts.at(-1) ?? workspace;
+function resizePrompt(): void {
+  prompt.style.height = "auto";
+  prompt.style.height = `${Math.min(prompt.scrollHeight, 224)}px`;
 }
 
 function element<T extends HTMLElement>(id: string): T {

@@ -40,11 +40,12 @@
   "activationEvents": [
     "onView:runtrol.sessions",
     "onView:runtrol.providers",
-    "onView:runtrol.conversation",
     "onCommand:runtrol.refresh",
     "onCommand:runtrol.switchSession",
     "onCommand:runtrol.startSession",
     "onCommand:runtrol.selectSession",
+    "onCommand:runtrol.openConversation",
+    "onCommand:runtrol.renameSession",
     "onCommand:runtrol.openWorkspace",
     "onCommand:runtrol.interrupt",
     "onCommand:runtrol.closeSession"
@@ -68,11 +69,6 @@
         {
           "id": "runtrol.providers",
           "name": "Installed CLIs"
-        },
-        {
-          "id": "runtrol.conversation",
-          "name": "Active Session",
-          "type": "webview"
         }
       ]
     },
@@ -97,6 +93,16 @@
         "title": "Runtrol: Focus Session"
       },
       {
+        "command": "runtrol.openConversation",
+        "title": "Runtrol: Open Conversation",
+        "icon": "$(comment-discussion)"
+      },
+      {
+        "command": "runtrol.renameSession",
+        "title": "Runtrol: Rename Session",
+        "icon": "$(edit)"
+      },
+      {
         "command": "runtrol.openWorkspace",
         "title": "Runtrol: Open Session Workspace",
         "icon": "$(folder-opened)"
@@ -115,6 +121,11 @@
     "menus": {
       "view/title": [
         {
+          "command": "runtrol.openConversation",
+          "when": "view == runtrol.sessions",
+          "group": "navigation@0"
+        },
+        {
           "command": "runtrol.switchSession",
           "when": "view == runtrol.sessions",
           "group": "navigation@1"
@@ -132,14 +143,19 @@
       ],
       "view/item/context": [
         {
-          "command": "runtrol.openWorkspace",
+          "command": "runtrol.renameSession",
           "when": "view == runtrol.sessions && viewItem == runtrol.session",
           "group": "inline@1"
         },
         {
-          "command": "runtrol.closeSession",
+          "command": "runtrol.openWorkspace",
           "when": "view == runtrol.sessions && viewItem == runtrol.session",
           "group": "inline@2"
+        },
+        {
+          "command": "runtrol.closeSession",
+          "when": "view == runtrol.sessions && viewItem == runtrol.session",
+          "group": "inline@3"
         }
       ]
     },

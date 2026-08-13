@@ -33,13 +33,10 @@
 //! - [`handoff`] stops this process's own handles from travelling to what it starts. Measured: without it, a
 //!   command that starts a daemon hands that daemon the shell's own pipe, and the shell waits forever.
 //!
-//! - [`console`] hides a Windows console only when the desktop personality owns it alone. A terminal shared
-//!   with a shell stays visible, so the one executable remains a normal command-line program too.
 //! - [`console_window`] prevents background children from creating their own Windows console. On other
 //!   platforms it is deliberately a no-op, so every spawn boundary can apply one policy.
 
 pub mod argv;
-pub mod console;
 pub mod console_window;
 pub mod contain;
 pub mod error;
@@ -49,7 +46,6 @@ pub mod resolve;
 pub mod run;
 
 pub use argv::{MAX_ARGUMENT_LEN, check_all, check_one};
-pub use console::hide_if_private;
 pub use console_window::hide_console_window;
 #[cfg(unix)]
 pub use contain::bootstrap_if_requested;

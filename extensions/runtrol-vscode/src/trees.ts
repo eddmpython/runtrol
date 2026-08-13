@@ -1,19 +1,26 @@
-import path from "node:path";
-
 import * as vscode from "vscode";
 
 import type { ProviderLine, SessionLine } from "./protocol";
 import { orderedSessions } from "./sessionNavigation";
+import { sessionContext, uniqueSessionTitle } from "./sessionDisplay";
 import { RuntimeState } from "./state";
 
 export class SessionItem extends vscode.TreeItem {
-  constructor(readonly session: SessionLine, selected: boolean) {
-    const folder = path.basename(session.workspace) || session.workspace;
-    super(folder, vscode.TreeItemCollapsibleState.None);
-    this.description = `${session.provider}  ${session.doing}`;
-    this.tooltip = new vscode.MarkdownString(
-      `**${folder}**\n\n${session.workspace}\n\nProvider: ${session.provider}\n\nState: ${session.doing}`,
-    );
+  constructor(
+    readonly session: SessionLine,
+    selected: boolean,
+    sessions: readonly SessionLine[],
+    providers: readonly ProviderLine[],
+  ) {
+    const title = uniqueSessionTitle(session, sessions, providers);
+    super(title, vscode.TreeItemCollapsibleState.None);
+    this.description = `${session.doing}${session.looks_stuck ? " · needs attention" : ""}`;
+    this.tooltip = [
+      title,
+      sessionContext(session, providers),
+      session.workspace,
+      `State: ${session.doing}`,
+    ].join("\n");
     this.contextValue = "runtrol.session";
     this.command = {
       command: "runtrol.selectSession",
@@ -47,7 +54,12 @@ export class SessionsTree implements vscode.TreeDataProvider<SessionItem>, vscod
   getChildren(): SessionItem[] {
     const selected = this.state.selected?.session ?? null;
     return orderedSessions(this.state.sessions, selected)
-      .map((session) => new SessionItem(session, session.session === selected));
+      .map((session) => new SessionItem(
+        session,
+        session.session === selected,
+        this.state.sessions,
+        this.state.providers,
+      ));
   }
 
   dispose(): void {

@@ -33,6 +33,9 @@ the original daemon and provider processes instead of making a versioned extensi
 - Fifteen sessions are the daily-use baseline and 30 sessions are the release load.
 - At most eight sessions own hot provider processes.
 - Exactly one selected session owns the full watch and Webview renderer.
+- The sidebar owns session navigation. The selected conversation opens in one reusable editor tab with a bounded renderer and composer.
+- A hidden conversation pauses its watch at the last delivered cursor. Reopening waits for the new Webview document to become ready before replay continues.
+- An operator name is stored as bounded session metadata. Without one, the visible title is the workspace name plus the runtime-discovered provider name. A short stable suffix appears only when titles collide.
 - The selected session remains first. One fuzzy switcher searches project, provider, state, and workspace metadata.
 - Session-index subscribers receive one current snapshot and then only list-visible changes.
 - Selecting a cold session gives immediate feedback, resumes through its provider-native identity, and follows its
@@ -52,7 +55,7 @@ the original daemon and provider processes instead of making a versioned extensi
 | `state.ts` | provider, session, cursor, and selection metadata in memory | conversation frames |
 | `selectionStore.ts` | one bounded selected-session identifier | prompts, replies, or provider state |
 | `controller.ts` | user actions, one watch lifetime, workspace binding | transcript discovery or agent loops |
-| `conversationView.ts` | CSP and Extension Host to Webview transport | retained conversation state |
+| `conversationView.ts` | one editor panel, CSP, and Extension Host to Webview transport | retained conversation state or a second live renderer |
 | `webview/` | bounded active rendering and input | durable storage or background sessions |
 
 ## Performance contract
@@ -64,7 +67,7 @@ every trial. The shared ratchet currently caps:
 | Measure | Ceiling |
 |---|---:|
 | Ready activation | 1,000 ms |
-| Contributed view opening | 500 ms |
+| Runtrol navigation and conversation opening | 500 ms |
 | Refresh p95 | 50 ms |
 | Extension Host RSS growth | 48 MiB |
 | Loaded animation frame p95 | 40 ms |

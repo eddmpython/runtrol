@@ -100,6 +100,17 @@ pub enum Request {
         text: Box<str>,
     },
 
+    /// Give a session a short operator-owned display name, or clear it.
+    ///
+    /// The name is metadata only. It is never derived from conversation content and never changes the provider's
+    /// own session identifier.
+    Rename {
+        /// Which session.
+        session: SessionId,
+        /// The new display name. No value clears the custom name.
+        label: Option<Box<str>>,
+    },
+
     /// Choose one option from a provider approval that is still pending.
     AnswerApproval {
         /// Which session owns the approval.
@@ -337,6 +348,12 @@ pub struct SessionLine {
     pub provider: Box<str>,
     /// The provider's own name, once it has announced one.
     pub native: Option<Box<str>>,
+    /// A short name the operator gave this session.
+    ///
+    /// Absent until explicitly named. A surface derives a provider and workspace fallback without reading the
+    /// conversation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<Box<str>>,
     /// Where the agent works.
     ///
     /// On the wire because a surface has to be able to say which session is touching which folder, which is
@@ -505,6 +522,10 @@ mod tests {
             Request::Prompt {
                 session,
                 text: "hello".into(),
+            },
+            Request::Rename {
+                session,
+                label: Some("release repair".into()),
             },
             Request::AnswerApproval {
                 session,
@@ -809,6 +830,7 @@ mod tests {
             session: SessionId::now(),
             provider: "claude".into(),
             native: Some("some-name".into()),
+            label: Some("Fix release".into()),
             workspace: r"C:\work\dartlab".into(),
             hot: true,
             doing: "busy".into(),
@@ -818,6 +840,15 @@ mod tests {
         let back: SessionLine = serde_json::from_str(&encoded).expect("readable");
         assert!(back.looks_stuck);
         assert_eq!(&*back.doing, "busy", "quiet is not finished");
+
+        let mut previous: serde_json::Value = serde_json::from_str(&encoded).expect("JSON");
+        previous
+            .as_object_mut()
+            .expect("a session line is an object")
+            .remove("label");
+        let compatible: SessionLine =
+            serde_json::from_value(previous).expect("the additive field stays compatible");
+        assert_eq!(compatible.label, None);
     }
 
     #[test]

@@ -162,7 +162,7 @@ def buildArtifacts() -> tuple[Path, Path]:
     target = ROOT / "target" / "vscode-upgrade"
     command = [
         "cargo", "build", "-p", "runtrol", "--bin", "runtrol",
-        "--no-default-features", "--target-dir", str(target),
+        "--target-dir", str(target),
     ]
     built = runCommand(command, ROOT)
     if built.returncode != 0:

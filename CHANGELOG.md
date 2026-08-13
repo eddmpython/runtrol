@@ -10,7 +10,17 @@ and refactoring that no user can observe do not belong here.
 
 ## [Unreleased]
 
-No user-visible changes yet.
+### Added
+
+- Sessions can be given a short name from the VS Code session list. Automatic names combine the project and installed CLI, and only colliding names receive a short discriminator.
+
+### Changed
+
+- Selecting a session now opens one reusable conversation tab in the editor area. The wider layout keeps session state, workspace, output, approvals, and an expanding composer visible without squeezing the conversation into the sidebar.
+
+### Removed
+
+- The standalone desktop GUI, its `runtrol gui` execution path, Tauri dependencies, and GUI-only build and test jobs. Runtrol Studio in VS Code is now the only PC user interface.
 
 ## [0.1.1] - 2026-08-12
 

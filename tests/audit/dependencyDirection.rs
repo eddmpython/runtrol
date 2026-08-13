@@ -66,13 +66,6 @@ const ALLOWED_EDGES: &[(&str, &[&str])] = &[
     // L3. The command surface asks the daemon. It never opens storage itself, which the exclusive lock
     // would refuse anyway.
     ("runtrol-cli", &["runtrol-provider", "runtrol-ipc"]),
-    // L3. The window asks the daemon too, and reaches one the same way the command surface does rather than
-    // growing a second copy of "start one if none is listening". Like the command surface it cannot see the
-    // kernel or storage, so "the window supervises nothing" is a fact this table holds.
-    (
-        "runtrol-gui",
-        &["runtrol-provider", "runtrol-ipc", "runtrol-cli"],
-    ),
     // L4. The thin binary. It links everything, which is the one exception to all of the above, and
     // confining that exception to one short file is what lets this table be strict about everything else. The
     // edges past the two personalities are what being the program requires: naming which providers this build
@@ -82,7 +75,6 @@ const ALLOWED_EDGES: &[(&str, &[&str])] = &[
         "runtrol",
         &[
             "runtrol-cli",
-            "runtrol-gui",
             "runtrol-daemon",
             "runtrol-drivers",
             "runtrol-ipc",

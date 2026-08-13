@@ -28,14 +28,13 @@
 
 [[axis]]
 key = "oneSessionList"
-# Hosted Windows CI drives the production browser lifecycle and the actual Tauri product against
+# Hosted CI drives the production VS Code extension through the full session journey against
 # deterministic counterparts. Those counterparts are mocks, so this axis stops at the mock tier.
 tier = "mock"
 additives = []
 name = { ko = "하나의 세션 목록", en = "One session list", zh = "统一的会话列表", ja = "一つのセッション一覧" }
 gate = [
-    { name = "desktopLifecycleSmoke", kind = "smoke" },
-    { name = "actualShellSmoke", kind = "smoke" },
+    { name = "vscodeRealProviderJourney", kind = "smoke" },
     { name = "sessionLifecycleSmoke", kind = "operator" },
 ]
 
@@ -45,11 +44,7 @@ tier = "mock"
 additives = []
 name = { ko = "즉시 반응", en = "Instant response", zh = "即时响应", ja = "即座の反応" }
 gate = [
-    { name = "interactionLatencyBudget", kind = "bench" },
-    { name = "scrollUnderLoadSmoke", kind = "smoke" },
-    { name = "desktopConvenienceSmoke", kind = "smoke" },
-    { name = "desktopTextInputSmoke", kind = "smoke" },
-    { name = "desktopImeSmoke", kind = "operator" },
+    { name = "vscodeHostPerformance", kind = "bench" },
 ]
 
 [[axis]]
@@ -110,7 +105,6 @@ additives = []
 name = { ko = "상주 비용", en = "Cost of running", zh = "常驻成本", ja = "常駐コスト" }
 gate = [
     { name = "idleFootprintRatchet", kind = "bench" },
-    { name = "guiMemoryContract", kind = "bench" },
 ]
 
 [[axis]]
@@ -203,12 +197,6 @@ file = "workspaceLints.py"
 
 [[floor]]
 category = "modularity"
-name = "desktopThinBoundary"
-status = "built"
-file = "desktopThinBoundary.py"
-
-[[floor]]
-category = "modularity"
 name = "vscodeExtension"
 status = "built"
 file = "vscodeExtension.py"
@@ -219,23 +207,14 @@ name = "vscodePackage"
 status = "built"
 file = "vscodePackage.py"
 
-# One type scale and one brand source, held mechanically. A floor rather than an axis: a window that
-# invents its own sizes and draws its own logo is not worth a fraction of a point, it is a product that
-# does not look like itself. Both defects it watches shipped and were caught by an operator's eyes.
-[[floor]]
-category = "modularity"
-name = "desktopTypeScale"
-status = "built"
-file = "desktopTypeScale.py"
-
-# The window presents every event kind the vocabulary can produce. A floor because the failure it prevents
+# The VS Code surface presents every event kind the vocabulary can produce. A floor because the failure it prevents
 # is the product speaking machine English at the operator mid-conversation, which shipped: twelve of the
 # nineteen kinds had no presentation and arrived as their raw wire names.
 [[floor]]
 category = "modularity"
-name = "desktopEventCoverage"
+name = "vscodeEventCoverage"
 status = "built"
-file = "desktopEventCoverage.py"
+file = "vscodeEventCoverage.py"
 
 [[floor]]
 category = "cleanCode"
@@ -324,12 +303,6 @@ status = "built"
 file = "configReadOnly.py"
 
 [[floor]]
-category = "security"
-name = "desktopPersistenceSmoke"
-status = "built"
-file = "desktopPersistenceSmoke.py"
-
-[[floor]]
 category = "hygiene"
 name = "workspaceHygiene"
 status = "built"
@@ -352,12 +325,6 @@ category = "hygiene"
 name = "noConsoleFlash"
 status = "built"
 file = "noConsoleFlash.rs"
-
-[[floor]]
-category = "hygiene"
-name = "desktopConsolePolicy"
-status = "built"
-file = "desktopConsolePolicy.py"
 
 [[floor]]
 category = "scoreboard"
@@ -384,28 +351,10 @@ status = "built"
 file = "liveMemoryBudget.py"
 
 [[floor]]
-category = "budget"
-name = "vscodeHostPerformance"
-status = "built"
-file = "vscodeHostPerformance.py"
-
-[[floor]]
-category = "journey"
-name = "vscodeRealProviderJourney"
-status = "built"
-file = "vscodeRealProviderJourney.py"
-
-[[floor]]
 category = "release"
 name = "vscodeUpgradeRollback"
 status = "built"
 file = "vscodeUpgradeRollback.py"
-
-[[floor]]
-category = "transport"
-name = "reconnectContinuitySmoke"
-status = "built"
-file = "reconnectContinuitySmoke.py"
 
 [[floor]]
 category = "resilience"

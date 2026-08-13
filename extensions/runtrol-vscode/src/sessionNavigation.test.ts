@@ -9,6 +9,7 @@ function sessions(count: number): SessionLine[] {
     session: `session-${String(index + 1).padStart(2, "0")}`,
     provider: `provider-${index % 3}`,
     native: null,
+    label: null,
     workspace: `C:\\work\\project-${String(index + 1).padStart(2, "0")}`,
     hot: index < 8,
     doing: index < 8 ? "idle" : "cold",
@@ -26,7 +27,7 @@ test("thirty sessions keep the selection first and every session searchable", ()
   assert.equal(choices[0]?.picked, true);
   assert.equal(choices[1]?.session.looks_stuck, true);
   assert.equal(new Set(choices.map((choice) => choice.session.session)).size, 30);
-  assert.ok(choices.every((choice) => choice.detail === choice.session.workspace));
+  assert.ok(choices.every((choice) => choice.detail.includes(choice.session.workspace)));
 });
 
 test("hot and cold groups use deterministic folder ordering", () => {

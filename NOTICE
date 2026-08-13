@@ -8,18 +8,6 @@ remains under its own license. The list below is maintained as components are
 adopted and is not yet complete, because the product is at the design stage.
 
 --------------------------------------------------------------------------------
-Frontend (landing, PWA, desktop shell)
---------------------------------------------------------------------------------
-
-@astryxdesign/core and @astryxdesign/theme-neutral
-    MIT License.
-    React component library and theme.
-
-@stylexjs/stylex
-    MIT License.
-    https://github.com/facebook/stylex
-
---------------------------------------------------------------------------------
 Note on the agent CLIs
 --------------------------------------------------------------------------------
 

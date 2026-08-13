@@ -10,6 +10,7 @@ export function sessionRowsEqual(left: readonly SessionLine[], right: readonly S
       && value.session === candidate.session
       && value.provider === candidate.provider
       && value.native === candidate.native
+      && value.label === candidate.label
       && value.workspace === candidate.workspace
       && value.hot === candidate.hot
       && value.doing === candidate.doing

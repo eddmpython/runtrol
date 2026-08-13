@@ -98,12 +98,14 @@ async function measure(resultPath: string): Promise<Record<string, number | stri
     });
   }
   await within(
-    vscode.commands.executeCommand("runtrol.conversation.focus"),
+    vscode.commands.executeCommand("runtrol.openConversation"),
     5_000,
     "focusing the Runtrol Webview",
   );
+  await requireConversationEditor();
   const openViewMs = performance.now() - viewStarted;
   await checkpoint(resultPath, "view-open");
+  await hideAndRestoreConversation();
 
   for (let index = 0; index < 5; index += 1) {
     await within(api.refresh(), 5_000, "refresh warmup");
@@ -200,10 +202,11 @@ async function measureRestore(expected: string): Promise<{
       "opening the Runtrol view after reload",
     );
     await within(
-      vscode.commands.executeCommand("runtrol.conversation.focus"),
+      vscode.commands.executeCommand("runtrol.openConversation"),
       5_000,
       "focusing the Runtrol Webview after reload",
     );
+    await requireConversationEditor();
     viewAt = performance.now();
   })();
   await Promise.all([ready, view]);
@@ -283,4 +286,43 @@ function managedSessionIds(): string[] {
     throw new Error("RUNTROL_VSCODE_MANAGED_SESSIONS must contain 30 session identifiers");
   }
   return value;
+}
+
+async function requireConversationEditor(): Promise<void> {
+  const tab = await within(waitForConversationEditor(), 2_000, "registering the conversation editor tab");
+  if (!tab) {
+    throw new Error("the Runtrol conversation did not open as an editor Webview tab");
+  }
+  if (!tab.isActive) {
+    throw new Error("the Runtrol conversation editor tab is not active");
+  }
+  if (!tab.label.startsWith("Runtrol:")) {
+    throw new Error(`the conversation editor has an unreadable label: ${tab.label}`);
+  }
+}
+
+async function waitForConversationEditor(): Promise<vscode.Tab | null> {
+  for (;;) {
+    const tab = vscode.window.tabGroups.all
+      .flatMap((group) => group.tabs)
+      .find((candidate) => candidate.isActive && candidate.label.startsWith("Runtrol:"));
+    if (tab) {
+      return tab;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+}
+
+async function hideAndRestoreConversation(): Promise<void> {
+  const temporary = await vscode.workspace.openTextDocument({ content: "Runtrol editor lifecycle check\n" });
+  await vscode.window.showTextDocument(temporary, { preview: true });
+  if (vscode.window.tabGroups.activeTabGroup.activeTab?.label.startsWith("Runtrol:")) {
+    throw new Error("a text editor did not hide the Runtrol conversation tab");
+  }
+  await within(
+    vscode.commands.executeCommand("runtrol.openConversation"),
+    5_000,
+    "restoring the hidden Runtrol conversation",
+  );
+  await requireConversationEditor();
 }

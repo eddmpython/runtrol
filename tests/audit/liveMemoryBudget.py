@@ -29,9 +29,8 @@ from pathlib import Path
 import genericAcpSmoke as acp
 
 MIB = 1024 * 1024
-# The Linux executable maps its linked desktop runtime even while serving as the daemon. Hosted idle measurement is
-# 39.6 MiB, while the same single executable idles below 20 MiB elsewhere. Linux therefore gets enough transient room
-# for the 16 MiB provider input contract without weakening the 48 MiB ceiling on the other platforms.
+# Hosted Linux idle measurement is 39.6 MiB, while the same executable idles below 20 MiB elsewhere. Linux therefore
+# gets enough transient room for the 16 MiB provider input contract without weakening the 48 MiB ceiling elsewhere.
 HARD_CEILING = (64 if sys.platform.startswith("linux") else 48) * MIB
 HOT_INCREMENT = 10 * MIB
 # The macOS allocator retained 4.05 MiB after the real admitted journey on the hosted runner. Its ceiling includes one

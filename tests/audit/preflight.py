@@ -21,7 +21,6 @@ CI 와 같은 게이트를 로컬에서 돌린다. push 준비 보고 직전에 
 
 from __future__ import annotations
 
-import os
 import shutil
 import subprocess
 import sys
@@ -100,11 +99,6 @@ GATES: dict[str, tuple[str, list[str]]] = {
         [*PY, f"{HOOKS}/northStar/readmeParity.py", "--selftest"],
     ),
     "readmeParity": ("4 개 언어 README 점수판 대조", [*PY, f"{HOOKS}/northStar/readmeParity.py"]),
-    "frontendBuildSelftest": (
-        "프런트엔드 빌드 게이트 자체 검증",
-        [*PY, f"{HOOKS}/frontendBuild.py", "--selftest"],
-    ),
-    "frontendBuild": ("데스크톱 프런트엔드 타입 검사 + 번들", [*PY, f"{HOOKS}/frontendBuild.py"]),
     "vscodeExtensionSelftest": (
         "VS Code 확장 게이트 자체 검증",
         [*PY, f"{HOOKS}/vscodeExtension.py", "--selftest"],
@@ -145,29 +139,13 @@ GATES: dict[str, tuple[str, list[str]]] = {
         "활성 세션을 보존하는 VSIX 갱신과 롤백",
         [*PY, f"{HOOKS}/vscodeUpgradeRollback.py"],
     ),
-    "interactionLatencyBudgetSelftest": (
-        "데스크톱 상호작용 예산 게이트 자체 검증",
-        [*PY, f"{HOOKS}/interactionLatencyBudget.py", "--selftest"],
+    "vscodeEventCoverageSelftest": (
+        "VS Code 이벤트 표현 게이트 자체 검증",
+        [*PY, f"{HOOKS}/vscodeEventCoverage.py", "--selftest"],
     ),
-    "interactionLatencyBudget": (
-        "실물 브라우저 데스크톱 상호작용 예산",
-        [*PY, f"{HOOKS}/interactionLatencyBudget.py"],
-    ),
-    "scrollUnderLoadSmokeSelftest": (
-        "출력 폭주 게이트 자체 검증",
-        [*PY, f"{HOOKS}/scrollUnderLoadSmoke.py", "--selftest"],
-    ),
-    "scrollUnderLoadSmoke": (
-        "초당 3,000 프레임에서 스크롤과 입력",
-        [*PY, f"{HOOKS}/scrollUnderLoadSmoke.py"],
-    ),
-    "reconnectContinuitySmokeSelftest": (
-        "재접속 연속성 게이트 자체 검증",
-        [*PY, f"{HOOKS}/reconnectContinuitySmoke.py", "--selftest"],
-    ),
-    "reconnectContinuitySmoke": (
-        "마지막 프레임과 재접속 커서 연속성",
-        [*PY, f"{HOOKS}/reconnectContinuitySmoke.py"],
+    "vscodeEventCoverage": (
+        "provider 어휘의 모든 이벤트가 VS Code 표현을 갖는다",
+        [*PY, f"{HOOKS}/vscodeEventCoverage.py"],
     ),
     "liveMemoryBudgetSelftest": (
         "실시간 메모리 계약 자체 검증",
@@ -185,86 +163,6 @@ GATES: dict[str, tuple[str, list[str]]] = {
         "유휴 데몬 RSS와 CPU ratchet",
         [*PY, f"{HOOKS}/idleFootprintRatchet.py"],
     ),
-    "desktopConvenienceSmokeSelftest": (
-        "데스크톱 편의 계약 게이트 자체 검증",
-        [*PY, f"{HOOKS}/desktopConvenienceSmoke.py", "--selftest"],
-    ),
-    "desktopConvenienceSmoke": (
-        "마지막 공급자와 사용량 및 한도 표시",
-        [*PY, f"{HOOKS}/desktopConvenienceSmoke.py"],
-    ),
-    "desktopLifecycleSmokeSelftest": (
-        "데스크톱 세션 생명주기 게이트 자체 검증",
-        [*PY, f"{HOOKS}/desktopLifecycleSmoke.py", "--selftest"],
-    ),
-    "desktopLifecycleSmoke": (
-        "시작과 재개 및 확인된 목록 삭제",
-        [*PY, f"{HOOKS}/desktopLifecycleSmoke.py"],
-    ),
-    "desktopTextInputSmokeSelftest": (
-        "데스크톱 텍스트 입력 게이트 자체 검증",
-        [*PY, f"{HOOKS}/desktopTextInputSmoke.py", "--selftest"],
-    ),
-    "desktopTextInputSmoke": (
-        "Astryx 조합 입력과 선택 및 복사",
-        [*PY, f"{HOOKS}/desktopTextInputSmoke.py"],
-    ),
-    "desktopProductBuild": (
-        "production GUI와 workload fixture 단일 빌드",
-        [*PY, f"{HOOKS}/guiMemoryContract.py", "--build"],
-    ),
-    "desktopConsolePolicySelftest": (
-        "GUI 콘솔 정책 게이트 자체 검증",
-        [*PY, f"{HOOKS}/desktopConsolePolicy.py", "--selftest"],
-    ),
-    "desktopConsolePolicy": (
-        "GUI 전용 콘솔 숨김과 공유 콘솔 보존",
-        [*PY, f"{HOOKS}/desktopConsolePolicy.py", "--built-product"],
-    ),
-    "actualShellSmokeSelftest": (
-        "실제 제품 창 게이트 자체 검증",
-        [*PY, f"{HOOKS}/actualShellSmoke.py", "--selftest"],
-    ),
-    "actualShellSmoke": (
-        "제품 창의 Rust 명령과 로컬 IPC 및 이벤트 직렬화",
-        [*PY, f"{HOOKS}/actualShellSmoke.py", "--built-product"],
-    ),
-    "desktopThinBoundarySelftest": (
-        "데스크톱 무대화 경계 자체 검증",
-        [*PY, f"{HOOKS}/desktopThinBoundary.py", "--selftest"],
-    ),
-    "desktopThinBoundary": (
-        "데스크톱 저장 권한과 API 경계",
-        [*PY, f"{HOOKS}/desktopThinBoundary.py"],
-    ),
-    "desktopTypeScaleSelftest": (
-        "창 스타일시트 타입 스케일 게이트 자체 검증",
-        [*PY, f"{HOOKS}/desktopTypeScale.py", "--selftest"],
-    ),
-    "desktopTypeScale": (
-        "창 스타일시트가 테마 스케일과 브랜드 정본만 쓴다",
-        [*PY, f"{HOOKS}/desktopTypeScale.py"],
-    ),
-    "desktopEventCoverageSelftest": (
-        "창 이벤트 표현 게이트 자체 검증",
-        [*PY, f"{HOOKS}/desktopEventCoverage.py", "--selftest"],
-    ),
-    "desktopEventCoverage": (
-        "provider 어휘의 모든 이벤트가 창에 표현을 갖는다",
-        [*PY, f"{HOOKS}/desktopEventCoverage.py"],
-    ),
-    "desktopPersistenceSmokeSelftest": (
-        "데스크톱 대화 비저장 게이트 자체 검증",
-        [*PY, f"{HOOKS}/desktopPersistenceSmoke.py", "--selftest"],
-    ),
-    "desktopPersistenceSmoke": (
-        "새로고침 뒤 대화 프레임 비저장",
-        [*PY, f"{HOOKS}/desktopPersistenceSmoke.py"],
-    ),
-    "guiMemoryContractSelftest": (
-        "production GUI memory ratchet selftest",
-        [*PY, f"{HOOKS}/guiMemoryContract.py", "--selftest"],
-    ),
     "cargoFmt": ("cargo fmt --check", ["cargo", "fmt", "--all", "--check"]),
     "cargoClippy": (
         "cargo clippy (경고 = 실패)",
@@ -274,10 +172,6 @@ GATES: dict[str, tuple[str, list[str]]] = {
     # 죽은 상수, 도달 불가 variant, cfg 로 갈라진 함수) 이 전부 CI 에서만 드러나고 수정이
     # 두 번째 커밋으로 온다. 실제로 그렇게 됐고, 그래서 이 게이트가 있다.
     # 대상이 설치돼 있지 않으면 건너뛴다고 밝히고 건너뛴다.
-    # 데스크톱 셸을 링크하는 두 crate 는 뺀다. 다른 플랫폼용으로 **컴파일조차** 되지 않기 때문이다:
-    # Tauri 의 Linux 백엔드는 dbus·gtk·webkit2gtk 개발 라이브러리를 요구하고, Windows 기계에는 없다.
-    # 게이트의 목적은 우리가 쓴 cfg 분기를 보는 것이고, 그 분기를 가진 crate (runtrol-childproc 의
-    # job object 와 process group 이 대표다) 는 전부 그대로 검사된다. 이 둘에는 cfg 분기가 없다.
     "clippyCrossCfg": (
         "cargo clippy (다른 플랫폼 cfg 분기)",
         [
@@ -285,10 +179,6 @@ GATES: dict[str, tuple[str, list[str]]] = {
             "clippy",
             "--all-targets",
             "--workspace",
-            "--exclude",
-            "runtrol-gui",
-            "--exclude",
-            "runtrol",
             "--target",
             CROSS_TARGET,
             "--",
@@ -299,28 +189,6 @@ GATES: dict[str, tuple[str, list[str]]] = {
     "cargoBuild": (
         "memory budget gate product binary",
         ["cargo", "build", "-p", "runtrol", "--bin", "runtrol"],
-    ),
-    "guiMemoryContract": (
-        "production GUI and WebView memory smoke",
-        [
-            *PY,
-            f"{HOOKS}/guiMemoryContract.py",
-            "--profile",
-            "smoke",
-            "--record-auto",
-            "--budget",
-            f"{HOOKS}/guiMemorySmokeBudget.json",
-        ],
-    ),
-    "desktopRealProviderGuiSmokeSelftest": (
-        "실물 공급자 GUI 여정 게이트 자체 검증",
-        [*PY, f"{HOOKS}/desktopRealProviderGuiSmoke.py", "--selftest"],
-    ),
-    # 운영자 게이트. 실물 두 CLI 와 운영자가 준비한 기존 대화 메타데이터 파일을 요구하므로,
-    # 대상 파일이 선언된 기계에서만 돌고 없으면 건너뛴다고 밝히고 건너뛴다.
-    "desktopRealProviderGuiSmoke": (
-        "실물 두 공급자의 production GUI 생애주기 (운영자)",
-        [*PY, f"{HOOKS}/desktopRealProviderGuiSmoke.py", "--built-product"],
     ),
     "cargoTest": ("cargo test", ["cargo", "test", "--all"]),
     "sessionOverlapGuard": (
@@ -431,8 +299,6 @@ SUITES: dict[str, tuple[str, ...]] = {
         "northStarBoard",
         "readmeParitySelftest",
         "readmeParity",
-        "frontendBuildSelftest",
-        "frontendBuild",
         "vscodeExtensionSelftest",
         "vscodeExtension",
         "vscodeHostPerformanceSelftest",
@@ -441,63 +307,14 @@ SUITES: dict[str, tuple[str, ...]] = {
         "vscodeRealProviderJourney",
         "vscodeUpgradeRollbackSelftest",
         "vscodeUpgradeRollback",
-        "interactionLatencyBudgetSelftest",
-        "interactionLatencyBudget",
-        "scrollUnderLoadSmokeSelftest",
-        "scrollUnderLoadSmoke",
-        "reconnectContinuitySmokeSelftest",
-        "reconnectContinuitySmoke",
+        "vscodeEventCoverageSelftest",
+        "vscodeEventCoverage",
         "liveMemoryBudgetSelftest",
         "liveMemoryBudget",
         "idleFootprintRatchetSelftest",
         "idleFootprintRatchet",
-        "desktopConvenienceSmokeSelftest",
-        "desktopConvenienceSmoke",
-        "desktopLifecycleSmokeSelftest",
-        "desktopLifecycleSmoke",
-        "desktopTextInputSmokeSelftest",
-        "desktopTextInputSmoke",
-        "desktopProductBuild",
-        "desktopConsolePolicySelftest",
-        "desktopConsolePolicy",
-        "actualShellSmokeSelftest",
-        "actualShellSmoke",
-        "desktopThinBoundarySelftest",
-        "desktopThinBoundary",
-        "desktopTypeScaleSelftest",
-        "desktopTypeScale",
-        "desktopEventCoverageSelftest",
-        "desktopEventCoverage",
-        "desktopPersistenceSmokeSelftest",
-        "desktopPersistenceSmoke",
-        "guiMemoryContractSelftest",
         "cargoFmt",
         "cargoClippy",
-    ),
-    "desktop": (
-        "frontendBuildSelftest",
-        "frontendBuild",
-        "interactionLatencyBudgetSelftest",
-        "interactionLatencyBudget",
-        "scrollUnderLoadSmokeSelftest",
-        "scrollUnderLoadSmoke",
-        "reconnectContinuitySmokeSelftest",
-        "reconnectContinuitySmoke",
-        "desktopConvenienceSmokeSelftest",
-        "desktopConvenienceSmoke",
-        "desktopLifecycleSmokeSelftest",
-        "desktopLifecycleSmoke",
-        "desktopTextInputSmokeSelftest",
-        "desktopTextInputSmoke",
-        "desktopProductBuild",
-        "desktopConsolePolicySelftest",
-        "desktopConsolePolicy",
-        "actualShellSmokeSelftest",
-        "actualShellSmoke",
-        "desktopPersistenceSmokeSelftest",
-        "desktopPersistenceSmoke",
-        "guiMemoryContractSelftest",
-        "guiMemoryContract",
     ),
     "vscode": (
         "vscodeExtensionSelftest",
@@ -510,6 +327,8 @@ SUITES: dict[str, tuple[str, ...]] = {
         "vscodeRealProviderJourney",
         "vscodeUpgradeRollbackSelftest",
         "vscodeUpgradeRollback",
+        "vscodeEventCoverageSelftest",
+        "vscodeEventCoverage",
         "cargoFmt",
         "cargoClippy",
     ),
@@ -525,9 +344,6 @@ CARGO_GATES = frozenset(
         "vscodeHostPerformance",
         "vscodeRealProviderJourney",
         "vscodeUpgradeRollback",
-        "desktopProductBuild",
-        "guiMemoryContract",
-        "desktopRealProviderGuiSmoke",
         "cargoTest",
         "sessionOverlapGuard",
         "genericAcpSmokeSelftest",
@@ -541,8 +357,6 @@ CARGO_GATES = frozenset(
         "liveMemoryBudget",
         "idleFootprintRatchet",
         "resilienceFaultInjection",
-        "actualShellSmoke",
-        "desktopConsolePolicy",
         "audit",
         "cargoShear",
         "cargoDeny",
@@ -568,18 +382,6 @@ def skipReasonFor(name: str) -> str | None:
         if not hasCargoWorkspace():
             return "Cargo.toml 없음 (부트스트랩 단계)"
     if name in {
-        "frontendBuild",
-        "interactionLatencyBudget",
-        "scrollUnderLoadSmoke",
-        "reconnectContinuitySmoke",
-        "desktopLifecycleSmoke",
-        "desktopTextInputSmoke",
-        "desktopConsolePolicy",
-        "desktopPersistenceSmoke",
-        "actualShellSmoke",
-        "desktopProductBuild",
-        "guiMemoryContract",
-        "desktopRealProviderGuiSmoke",
         "vscodeExtension",
         "vscodeHostPerformance",
         "vscodeRealProviderJourney",
@@ -587,14 +389,6 @@ def skipReasonFor(name: str) -> str | None:
     } and shutil.which("npm") is None:
         return "npm 없음"
     if name in {
-        "interactionLatencyBudget",
-        "scrollUnderLoadSmoke",
-        "reconnectContinuitySmoke",
-        "desktopLifecycleSmoke",
-        "desktopTextInputSmoke",
-        "desktopPersistenceSmoke",
-        "desktopRealProviderGuiSmoke",
-        "desktopRealProviderGuiSmokeSelftest",
         "vscodeExtension",
         "vscodeHostPerformance",
         "vscodeRealProviderJourney",
@@ -603,16 +397,6 @@ def skipReasonFor(name: str) -> str | None:
         return "node 없음"
     if name == "audit" and not hasAuditCrate():
         return "tests/audit crate 없음"
-    if name in {
-        "actualShellSmoke",
-        "desktopConsolePolicy",
-        "desktopProductBuild",
-        "guiMemoryContract",
-        "desktopRealProviderGuiSmoke",
-    } and sys.platform != "win32":
-        return "실제 제품 창 게이트의 첫 러너는 Windows"
-    if name == "desktopRealProviderGuiSmoke" and not os.environ.get("RUNTROL_REAL_PROVIDER_TARGETS"):
-        return "RUNTROL_REAL_PROVIDER_TARGETS 미설정 (운영자가 실물 대상 파일을 준비했을 때만 돈다)"
     if name == "cargoShear" and shutil.which("cargo-shear") is None:
         return "cargo-shear 미설치 (cargo binstall cargo-shear)"
     if name == "cargoDeny" and shutil.which("cargo-deny") is None:

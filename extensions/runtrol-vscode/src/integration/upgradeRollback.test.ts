@@ -59,10 +59,11 @@ async function verifyPhase(resultPath: string): Promise<void> {
       `${phase} view opening`,
     );
     await within(
-      vscode.commands.executeCommand("runtrol.conversation.focus"),
+      vscode.commands.executeCommand("runtrol.openConversation"),
       5_000,
       `${phase} conversation focus`,
     );
+    await requireConversationEditor();
     if (!api.verifyRestoredSession) {
       throw new Error("the bounded restored-session verifier is unavailable");
     }
@@ -112,4 +113,23 @@ function requiredEnvironment(name: string): string {
     throw new Error(`${name} is required`);
   }
   return value;
+}
+
+async function requireConversationEditor(): Promise<void> {
+  const tab = await within(waitForConversationEditor(), 2_000, "registering the conversation editor tab");
+  if (!tab || !tab.label.startsWith("Runtrol:")) {
+    throw new Error("the selected conversation is not an identifiable editor Webview tab");
+  }
+}
+
+async function waitForConversationEditor(): Promise<vscode.Tab | null> {
+  for (;;) {
+    const tab = vscode.window.tabGroups.all
+      .flatMap((group) => group.tabs)
+      .find((candidate) => candidate.isActive && candidate.label.startsWith("Runtrol:"));
+    if (tab) {
+      return tab;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
 }

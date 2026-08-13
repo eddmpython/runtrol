@@ -604,6 +604,20 @@ pub(crate) fn answer_prepared(
             AgentCommand::Prompt(vec![ContentBlock::Text(text)]),
         ),
 
+        Request::Rename { session, label } => {
+            let label = match session_label(label) {
+                Ok(label) => label,
+                Err(why) => return Reply::One(refuse(why)),
+            };
+            match composed.store.set_session_label(session, label) {
+                Ok(true) => Reply::One(Response::Done),
+                Ok(false) => Reply::One(refuse(
+                    "the provider has not established this session yet, so its name cannot be saved",
+                )),
+                Err(error) => Reply::One(refuse(&error.to_string())),
+            }
+        }
+
         Request::Interrupt { session } => send(sessions, session, AgentCommand::Interrupt),
 
         Request::AnswerApproval {
@@ -1051,6 +1065,7 @@ pub(crate) fn list(composed: &Composed, sessions: &SessionManager) -> Response {
                 session,
                 provider: row.provider.as_str().into(),
                 native: Some(row.native.as_str().into()),
+                label: row.label,
                 workspace: row.cwd.as_str().into(),
                 hot: false,
                 doing: "detached".into(),
@@ -1059,12 +1074,16 @@ pub(crate) fn list(composed: &Composed, sessions: &SessionManager) -> Response {
         );
     }
     for one in sessions.live_sessions() {
+        let label = joined
+            .get(&one.session)
+            .and_then(|stored: &SessionLine| stored.label.clone());
         joined.insert(
             one.session,
             SessionLine {
                 session: one.session,
                 provider: one.provider.as_str().into(),
                 native: one.native.map(Into::into),
+                label,
                 workspace: one.workspace.as_str().into(),
                 hot: one.tier.has_a_process(),
                 doing: one.state.lifecycle().name().into(),
@@ -1082,6 +1101,33 @@ pub(crate) fn list(composed: &Composed, sessions: &SessionManager) -> Response {
             })
             .collect(),
     })
+}
+
+fn session_label(label: Option<Box<str>>) -> Result<Option<Box<str>>, &'static str> {
+    let Some(label) = label else {
+        return Ok(None);
+    };
+    let label = label.trim();
+    if label.is_empty() {
+        return Ok(None);
+    }
+    if label.chars().count() > 80 {
+        return Err("a session name must be at most 80 characters");
+    }
+    if label.chars().any(forbidden_label_character) {
+        return Err(
+            "a session name must be one visible line without bidirectional control characters",
+        );
+    }
+    Ok(Some(label.into()))
+}
+
+fn forbidden_label_character(character: char) -> bool {
+    character.is_control()
+        || matches!(
+            character,
+            '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}'
+        )
 }
 
 /// Persist the minimal pointer for one live session once its provider has named it.
@@ -1560,6 +1606,58 @@ mod tests {
                 .is_none(),
             "closing a cold row removes its pointer"
         );
+        clean(composed, &path);
+    }
+
+    #[tokio::test]
+    async fn renaming_changes_only_the_display_name_and_rejects_spoofing_controls() {
+        let (composed, path) = composed_for("rename-session");
+        let mut sessions = SessionManager::new();
+        let mut conversation = Conversation::at_the_machine();
+        greet(&mut conversation, &composed, &mut sessions).await;
+        let session = SessionId::now();
+        attach_and_store(&composed, &mut sessions, session, &path);
+
+        assert!(matches!(
+            answer(
+                &mut conversation,
+                &composed,
+                &mut sessions,
+                Request::Rename {
+                    session,
+                    label: Some("  Release repair  ".into()),
+                },
+            )
+            .await,
+            Reply::One(Response::Done)
+        ));
+        let renamed = composed
+            .store
+            .get_session(session)
+            .expect("the store remains readable")
+            .expect("the session remains present");
+        assert_eq!(renamed.label.as_deref(), Some("Release repair"));
+
+        match answer(
+            &mut conversation,
+            &composed,
+            &mut sessions,
+            Request::Rename {
+                session,
+                label: Some("safe\u{202E}fake".into()),
+            },
+        )
+        .await
+        {
+            Reply::One(Response::Failed(failure)) => {
+                assert!(
+                    failure.message.contains("bidirectional"),
+                    "{}",
+                    failure.message
+                );
+            }
+            other => panic!("expected a refusal, got {}", shape(&other)),
+        }
         clean(composed, &path);
     }
 

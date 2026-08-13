@@ -250,7 +250,7 @@ async function openView(): Promise<void> {
     "opening the Runtrol view",
   );
   await within(
-    vscode.commands.executeCommand("runtrol.conversation.focus"),
+    vscode.commands.executeCommand("runtrol.openConversation"),
     5_000,
     "focusing the Runtrol conversation",
   );

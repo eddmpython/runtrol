@@ -6,7 +6,7 @@ starts before routing, stays default-deny after authentication, and never treats
 
 ## Current exposure
 
-The shipping command and desktop surfaces use the operating system local endpoint. The browser-reachable phone
+The shipping command and VS Code surfaces use the operating system local endpoint. The browser-reachable phone
 plane is not enabled by default and is not yet exposed by the product binary. Its HTTP admission layer exists so
 the relay, pairing, and PWA work can only be connected behind the rules below.
 

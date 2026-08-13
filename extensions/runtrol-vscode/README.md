@@ -15,10 +15,11 @@ No Core path is required for a Marketplace installation. The extension verifies 
 
 ## Use
 
-- Select any session in the Runtrol view to focus it and follow its exact workspace.
+- Select any session in the Runtrol view to open its conversation in one editor tab and follow its exact workspace.
+- Use **Rename Session** on a row to replace the automatic `project · CLI` name with a short name of your own.
 - Run **Runtrol: Switch Session** for fast project, CLI, state, and path search.
 - Run **Runtrol: Start Session** to choose a discovered CLI and workspace.
-- Use **Open Session Workspace**, **Interrupt Turn**, and **Close Session** from the view or Command Palette.
+- Use **Open Conversation**, **Open Session Workspace**, **Interrupt Turn**, and **Close Session** from the view or Command Palette.
 
 Fifteen sessions are the daily-use baseline and 30 sessions are the release load. At most eight sessions own a hot process, while exactly one selected session owns the full event stream and active renderer. Cold rows respond immediately and resume through the provider-native session identity.
 
@@ -67,7 +68,7 @@ Set `runtrol.corePath` to a local debug or release executable while developing. 
 Build the Rust release binary, then run:
 
 ```text
-cargo build --release --bin runtrol --no-default-features --target-dir ../../target/vscode-release
+cargo build --release --bin runtrol --target-dir ../../target/vscode-release
 npm run package:native
 ```
 

@@ -1,17 +1,17 @@
 //! The runtrol executable. It picks a personality from argv and does nothing else.
 //!
-//! Logic does not go here. This file necessarily links every crate (one executable, three personalities), so it is the
+//! Logic does not go here. This file necessarily links the command and daemon crates, so it is the
 //! one place where every architectural boundary is invisible. Keeping it empty of decisions is what keeps those
 //! boundaries meaningful: the command surface is a crate that cannot see storage, the daemon is a crate a test can
 //! link, and this is neither.
 //!
-//! # Four personalities
+//! # Entry points
 //!
 //! - **A daemon**, asked for by name, which serves until it is stopped.
 //! - **A command**, which is everything else somebody types.
 //! - **A local endpoint reporter**, used by native surfaces that speak the framed IPC directly.
 //! - **A daemon started by a command**, which is the first one again, launched by the second when nothing is
-//!   listening. It is not a fifth thing to build: it is why the first is a subcommand rather than a separate program.
+//!   listening. It is why the first is a subcommand rather than a separate program.
 //!
 //! # Why one executable
 //!
@@ -25,8 +25,6 @@ use std::process::ExitCode;
 enum Personality {
     /// Serve, until stopped.
     Daemon,
-    /// Open the window.
-    Window,
     /// Ensure the daemon is reachable and print its exact local endpoint.
     Endpoint,
     /// Ask the daemon something and print the answer.
@@ -34,12 +32,6 @@ enum Personality {
     /// Say what the words could have been.
     Usage(String),
 }
-
-/// The word that opens the window.
-///
-/// Spelled here beside the daemon's word rather than inferred from how the program was invoked, for the same
-/// reason: a renamed file behaving differently is a surprise nobody asked for.
-const WINDOW_ARGUMENT: &str = "gui";
 
 /// The word native surfaces use to discover the daemon endpoint from its single owner.
 const ENDPOINT_ARGUMENT: &str = "endpoint";
@@ -87,20 +79,8 @@ fn main() -> ExitCode {
         return ExitCode::FAILURE;
     }
 
-    let personality = choose(&words);
-    if matches!(personality, Personality::Window)
-        && let Err(error) = runtrol_childproc::hide_if_private()
-    {
-        report(&format!(
-            "runtrol cannot prepare its desktop window: {error}"
-        ));
-        return ExitCode::FAILURE;
-    }
-    match personality {
+    match choose(&words) {
         Personality::Daemon => run(serving()),
-        // No runtime is built for this one. The window's own toolkit owns the main thread and brings a runtime
-        // with it, and wrapping it in a second would be two schedulers for one process.
-        Personality::Window => showing(),
         Personality::Endpoint => run(endpointing()),
         Personality::Command(words) => run(commanding(&words)),
         Personality::Usage(message) => {
@@ -114,13 +94,12 @@ fn main() -> ExitCode {
 fn choose(words: &[String]) -> Personality {
     match words.first().map(String::as_str) {
         None => Personality::Usage(
-            "runtrol <command>. try: gui, endpoint, list, start, resume, say, answer, stop, watch, close, consult, panic"
+            "runtrol <command>. try: endpoint, list, start, resume, say, answer, stop, watch, close, consult, panic"
                 .to_owned(),
         ),
         // Spelled as a subcommand rather than inferred from how the program was invoked. Inferring it from the
         // executable's own name would mean a renamed file behaving differently, which is a surprise nobody asked for.
         Some(word) if word == runtrol_cli::DAEMON_ARGUMENT => Personality::Daemon,
-        Some(word) if word == WINDOW_ARGUMENT => Personality::Window,
         Some(word) if word == ENDPOINT_ARGUMENT => Personality::Endpoint,
         Some(_) => Personality::Command(words.to_vec()),
     }
@@ -128,8 +107,8 @@ fn choose(words: &[String]) -> Personality {
 
 /// Run one personality on a runtime of its own.
 ///
-/// Built here rather than by an attribute on `main`, because the two personalities want different runtimes and an
-/// attribute can only say one thing. A command is one connection and some waiting; a daemon supervises processes.
+/// Built here rather than by an attribute on `main`, because entry-point selection happens before the runtime exists.
+/// A command is one connection and some waiting; a daemon supervises processes.
 fn run<Work>(work: Work) -> ExitCode
 where
     Work: FnOnce(&tokio::runtime::Runtime) -> ExitCode,
@@ -143,7 +122,7 @@ where
     }
 }
 
-/// Build the runtime shared by command and daemon personalities.
+/// Build the runtime shared by command, endpoint, and daemon personalities.
 fn supervisor_runtime() -> std::io::Result<tokio::runtime::Runtime> {
     tokio::runtime::Builder::new_current_thread()
         .max_blocking_threads(MAX_BLOCKING_THREADS)
@@ -179,50 +158,6 @@ fn serving() -> impl FnOnce(&tokio::runtime::Runtime) -> ExitCode {
             // not a failure of anything: the command that started this one reaches that one instead.
             Err(error) => {
                 report(&format!("runtrol stopped serving: {error}"));
-                ExitCode::FAILURE
-            }
-        }
-    }
-}
-
-/// Be the window.
-///
-/// Where the daemon listens and which program starts one are decided here and handed over, the same two values
-/// the command surface is given and for the same reason: a library that worked out "whatever process this is"
-/// would run the test runner inside a test.
-fn showing() -> ExitCode {
-    #[cfg(not(feature = "desktop"))]
-    {
-        report("this bundled runtrol Core has no desktop window; open Runtrol Studio in VS Code");
-        ExitCode::FAILURE
-    }
-
-    #[cfg(feature = "desktop")]
-    {
-        let address = match runtrol_daemon::endpoint(None) {
-            Ok(address) => address,
-            Err(error) => {
-                report(&format!(
-                    "cannot tell where runtrol keeps its files: {error}"
-                ));
-                return ExitCode::FAILURE;
-            }
-        };
-        let executable = match std::env::current_exe() {
-            Ok(executable) => executable,
-            Err(error) => {
-                report(&format!("cannot tell where runtrol itself is: {error}"));
-                return ExitCode::FAILURE;
-            }
-        };
-
-        match runtrol_gui::run(runtrol_gui::Reaching {
-            address,
-            runtrol: executable,
-        }) {
-            Ok(()) => ExitCode::SUCCESS,
-            Err(error) => {
-                report(&format!("runtrol could not open its window: {error}"));
                 ExitCode::FAILURE
             }
         }
@@ -407,6 +342,13 @@ mod tests {
             choose(&typed(ENDPOINT_ARGUMENT)),
             Personality::Endpoint
         ));
+    }
+
+    #[test]
+    fn standalone_gui_is_not_an_entry_point() {
+        let words = typed("gui");
+        assert!(matches!(choose(&words), Personality::Command(_)));
+        assert!(runtrol_cli::understand(&words, ".").is_err());
     }
 
     #[test]

@@ -20,23 +20,12 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
-    inputs:
-      interactiveIme:
-        description: Run the production Korean IME gate on a configured interactive Windows runner
-        required: false
-        type: boolean
-        default: false
-      guiMemoryCampaign:
-        description: Run the 24-hour production GUI memory campaign on a self-hosted Windows runner
-        required: false
-        default: false
-        type: boolean
   schedule:
     - cron: "17 3 * * *"
 
 concurrency:
-  group: gates-${{ github.ref }}-${{ github.event_name }}-${{ github.event.schedule || inputs.guiMemoryCampaign || 'ordinary' }}
-  cancel-in-progress: ${{ !inputs.guiMemoryCampaign }}
+  group: gates-${{ github.ref }}-${{ github.event_name }}-${{ github.event.schedule || 'ordinary' }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -139,11 +128,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - name: Linux desktop shell dependencies
-        if: needs.detect.outputs.hasWorkspace == 'true'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
       - name: 부트스트랩 알림
         if: needs.detect.outputs.hasWorkspace != 'true'
         run: |
@@ -159,21 +143,10 @@ jobs:
         with:
           node-version: "24"
           cache: npm
-          cache-dependency-path: |
-            crates/runtrol-gui/ui/package-lock.json
-            extensions/runtrol-vscode/package-lock.json
-      - name: 데스크톱 프런트엔드 의존성
-        if: needs.detect.outputs.hasWorkspace == 'true'
-        run: npm --prefix crates/runtrol-gui/ui ci
+          cache-dependency-path: extensions/runtrol-vscode/package-lock.json
       - name: VS Code 확장 의존성
         if: needs.detect.outputs.hasWorkspace == 'true'
         run: npm --prefix extensions/runtrol-vscode ci
-      - name: 프런트엔드 빌드 게이트 자체 검증
-        if: needs.detect.outputs.hasWorkspace == 'true'
-        run: python -X utf8 tests/audit/frontendBuild.py --selftest
-      - name: 데스크톱 프런트엔드
-        if: needs.detect.outputs.hasWorkspace == 'true'
-        run: python -X utf8 tests/audit/frontendBuild.py
       - name: VS Code 확장 게이트 자체 검증
         if: needs.detect.outputs.hasWorkspace == 'true'
         run: python -X utf8 tests/audit/vscodeExtension.py --selftest
@@ -186,6 +159,12 @@ jobs:
       - name: VS Code 릴리스 버전, 대상, 내용 allowlist 계약
         if: needs.detect.outputs.hasWorkspace == 'true'
         run: python -X utf8 tests/audit/vscodePackage.py
+      - name: VS Code 이벤트 표현 게이트 자체 검증
+        if: needs.detect.outputs.hasWorkspace == 'true'
+        run: python -X utf8 tests/audit/vscodeEventCoverage.py --selftest
+      - name: provider 어휘의 모든 이벤트가 VS Code 표현을 갖는다
+        if: needs.detect.outputs.hasWorkspace == 'true'
+        run: python -X utf8 tests/audit/vscodeEventCoverage.py
       - name: cargo fmt
         if: needs.detect.outputs.hasWorkspace == 'true'
         run: cargo fmt --all --check
@@ -198,7 +177,7 @@ jobs:
         if: needs.detect.outputs.hasWorkspace == 'true'
         run: |
           rustup target add x86_64-pc-windows-msvc
-          cargo clippy --all-targets --workspace --exclude runtrol-gui --exclude runtrol --target x86_64-pc-windows-msvc -- -D warnings
+          cargo clippy --all-targets --workspace --target x86_64-pc-windows-msvc -- -D warnings
       - name: memory budget gate product binary
         if: needs.detect.outputs.hasWorkspace == 'true'
         run: cargo build -p runtrol --bin runtrol
@@ -252,29 +231,18 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
-      - name: Linux desktop shell dependencies
-        if: matrix.os == 'ubuntu-latest'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev xvfb
       - uses: Swatinem/rust-cache@v2
       - uses: actions/setup-node@v5
         with:
           node-version: "24"
           cache: npm
-          cache-dependency-path: |
-            crates/runtrol-gui/ui/package-lock.json
-            extensions/runtrol-vscode/package-lock.json
-      - name: 데스크톱 프런트엔드 의존성
-        run: npm --prefix crates/runtrol-gui/ui ci
+          cache-dependency-path: extensions/runtrol-vscode/package-lock.json
       - name: VS Code 확장 의존성
         run: npm --prefix extensions/runtrol-vscode ci
       - uses: actions/cache@v4
         with:
           path: extensions/runtrol-vscode/.vscode-test
           key: vscode-test-${{ runner.os }}-${{ hashFiles('extensions/runtrol-vscode/package-lock.json') }}
-      - name: 데스크톱 프런트엔드
-        run: python -X utf8 tests/audit/frontendBuild.py
       - name: memory budget gate product binary
         run: cargo build -p runtrol --bin runtrol
       - name: VS Code Extension Host 성능 게이트 자체 검증
@@ -287,102 +255,16 @@ jobs:
         env:
           TMPDIR: ${{ matrix.os == 'macos-latest' && '/tmp' || runner.temp }}
         run: python -X utf8 tests/audit/vscodeUpgradeRollback.py
-      - name: 데스크톱 상호작용 예산 게이트 자체 검증
-        if: matrix.os == 'windows-latest'
-        run: python -X utf8 tests/audit/interactionLatencyBudget.py --selftest
-      - name: 실물 브라우저 데스크톱 상호작용 예산
-        if: matrix.os == 'windows-latest'
-        run: python -X utf8 tests/audit/interactionLatencyBudget.py
-      - name: 출력 폭주 게이트 자체 검증
-        if: matrix.os == 'windows-latest'
-        run: python -X utf8 tests/audit/scrollUnderLoadSmoke.py --selftest
-      - name: 초당 3,000 프레임에서 스크롤과 입력
-        if: matrix.os == 'windows-latest'
-        run: python -X utf8 tests/audit/scrollUnderLoadSmoke.py
-      - name: 재접속 연속성 게이트 자체 검증
-        if: matrix.os == 'windows-latest'
-        run: python -X utf8 tests/audit/reconnectContinuitySmoke.py --selftest
-      - name: 마지막 프레임과 재접속 커서 연속성
-        if: matrix.os == 'windows-latest'
-        run: python -X utf8 tests/audit/reconnectContinuitySmoke.py
+      - name: VS Code 이벤트 표현 게이트 자체 검증
+        run: python -X utf8 tests/audit/vscodeEventCoverage.py --selftest
+      - name: provider 어휘의 모든 이벤트가 VS Code 표현을 갖는다
+        run: python -X utf8 tests/audit/vscodeEventCoverage.py
       - name: 실시간 메모리 계약 자체 검증
         run: python -X utf8 tests/audit/liveMemoryBudget.py --selftest
       - name: hot 세션과 구독자 4개 RSS 상한
         env:
           TMPDIR: ${{ matrix.os == 'macos-latest' && '/tmp' || runner.temp }}
         run: python -X utf8 tests/audit/liveMemoryBudget.py
-      - name: 데스크톱 편의 계약 게이트 자체 검증
-        if: matrix.os == 'windows-latest'
-        run: python -X utf8 tests/audit/desktopConvenienceSmoke.py --selftest
-      - name: 마지막 공급자와 사용량 및 한도 표시
-        if: matrix.os == 'windows-latest'
-        run: python -X utf8 tests/audit/desktopConvenienceSmoke.py
-      - name: 데스크톱 세션 생명주기 게이트 자체 검증
-        if: matrix.os == 'windows-latest'
-        run: python -X utf8 tests/audit/desktopLifecycleSmoke.py --selftest
-      - name: 시작과 재개 및 확인된 목록 삭제
-        if: matrix.os == 'windows-latest'
-        run: python -X utf8 tests/audit/desktopLifecycleSmoke.py
-      - name: 데스크톱 텍스트 입력 게이트 자체 검증
-        if: matrix.os == 'windows-latest'
-        run: python -X utf8 tests/audit/desktopTextInputSmoke.py --selftest
-      - name: Astryx 조합 입력과 선택 및 복사
-        if: matrix.os == 'windows-latest'
-        run: python -X utf8 tests/audit/desktopTextInputSmoke.py
-      - name: production GUI와 workload fixture 단일 빌드
-        if: matrix.os == 'windows-latest'
-        run: python -X utf8 tests/audit/guiMemoryContract.py --build
-      - name: GUI 콘솔 정책 게이트 자체 검증
-        if: matrix.os == 'windows-latest'
-        run: python -X utf8 tests/audit/desktopConsolePolicy.py --selftest
-      - name: GUI 전용 콘솔 숨김과 공유 콘솔 보존
-        if: matrix.os == 'windows-latest'
-        run: python -X utf8 tests/audit/desktopConsolePolicy.py --built-product
-      - name: 실제 제품 창 게이트 자체 검증
-        if: matrix.os == 'windows-latest'
-        run: python -X utf8 tests/audit/actualShellSmoke.py --selftest
-      - name: 제품 창의 Rust 명령과 로컬 IPC 및 이벤트 직렬화
-        if: matrix.os == 'windows-latest'
-        run: python -X utf8 tests/audit/actualShellSmoke.py --built-product
-      - name: production GUI memory gate selftest
-        if: matrix.os == 'windows-latest'
-        run: python -X utf8 tests/audit/guiMemoryContract.py --selftest
-      - name: production GUI and WebView memory smoke
-        if: matrix.os == 'windows-latest'
-        env:
-          TEMP: ${{ runner.temp }}
-          TMP: ${{ runner.temp }}
-        run: python -X utf8 tests/audit/guiMemoryContract.py --profile smoke --record-auto --budget tests/audit/guiMemorySmokeBudget.json
-      - uses: actions/upload-artifact@v4
-        if: always() && matrix.os == 'windows-latest'
-        with:
-          name: gui-memory-smoke-${{ github.run_id }}
-          path: |
-            ${{ runner.temp }}/runtrol-gui-memory-smoke.json
-            ${{ runner.temp }}/runtrol-gui-memory-failure-*/trace.log
-            ${{ runner.temp }}/runtrol-gui-memory-failure-*/error.log
-          # An earlier independent Windows gate can stop this job before the memory campaign creates a file.
-          # Keep that original failure as the job's cause and make the missing diagnostic visible without adding
-          # a second, misleading product failure.
-          if-no-files-found: warn
-      - name: 데스크톱 무대화 경계 자체 검증
-        run: python -X utf8 tests/audit/desktopThinBoundary.py --selftest
-      - name: 데스크톱 저장 권한과 API 경계
-        run: python -X utf8 tests/audit/desktopThinBoundary.py
-      - name: 창 스타일시트 타입 스케일 게이트 자체 검증
-        run: python -X utf8 tests/audit/desktopTypeScale.py --selftest
-      - name: 창 스타일시트가 테마 스케일과 브랜드 정본만 쓴다
-        run: python -X utf8 tests/audit/desktopTypeScale.py
-      - name: 창 이벤트 표현 게이트 자체 검증
-        run: python -X utf8 tests/audit/desktopEventCoverage.py --selftest
-      - name: provider 어휘의 모든 이벤트가 창에 표현을 갖는다
-        run: python -X utf8 tests/audit/desktopEventCoverage.py
-      - name: 데스크톱 대화 비저장 게이트 자체 검증
-        if: matrix.os == 'windows-latest'
-        run: python -X utf8 tests/audit/desktopPersistenceSmoke.py --selftest
-      - name: 새로고침 뒤 대화 프레임 비저장
-        if: matrix.os == 'windows-latest'
-        run: python -X utf8 tests/audit/desktopPersistenceSmoke.py
       - name: 유휴 상주 비용 ratchet 자체 검증
         run: python -X utf8 tests/audit/idleFootprintRatchet.py --selftest
       - name: 유휴 데몬 RSS와 CPU ratchet
@@ -462,61 +344,6 @@ jobs:
           TMPDIR: ${{ matrix.os == 'macos-latest' && '/tmp' || runner.temp }}
         run: python -X utf8 tests/audit/uninstallLeavesNoTrace.py
 
-  desktopInteractive:
-    if: github.event_name == 'workflow_dispatch' && inputs.interactiveIme
-    runs-on: [self-hosted, Windows, X64, runtrol-interactive-ime]
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
-        with:
-          node-version: "24"
-          cache: npm
-          cache-dependency-path: crates/runtrol-gui/ui/package-lock.json
-      - name: 데스크톱 프런트엔드 의존성
-        run: npm --prefix crates/runtrol-gui/ui ci
-      - name: production Windows 한글 IME와 선택 및 복사
-        shell: powershell
-        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/audit/desktopImeSmoke.ps1
-
-  guiMemoryCampaign:
-    if: github.event_name == 'workflow_dispatch' && inputs.guiMemoryCampaign
-    runs-on: [self-hosted, Windows, X64]
-    timeout-minutes: 1500
-    steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-python@v6
-        with:
-          python-version: "3.13"
-      - uses: actions/setup-node@v5
-        with:
-          node-version: "24"
-          cache: npm
-          cache-dependency-path: crates/runtrol-gui/ui/package-lock.json
-      - uses: Swatinem/rust-cache@v2
-      - name: production desktop dependencies
-        run: npm --prefix crates/runtrol-gui/ui ci
-      - name: production desktop bundle
-        run: python -X utf8 tests/audit/frontendBuild.py
-      - name: production GUI memory product and fixture build
-        run: python -X utf8 tests/audit/guiMemoryContract.py --build
-      - name: production GUI memory gate selftest
-        run: python -X utf8 tests/audit/guiMemoryContract.py --selftest
-      - name: 24-hour production GUI and WebView memory campaign
-        env:
-          TEMP: ${{ runner.temp }}
-          TMP: ${{ runner.temp }}
-        run: python -X utf8 tests/audit/guiMemoryContract.py --profile campaign --record-auto
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: gui-memory-campaign-${{ github.run_id }}
-          path: |
-            ${{ runner.temp }}/runtrol-gui-memory-campaign.json
-            ${{ runner.temp }}/runtrol-gui-memory-failure-*/trace.log
-            ${{ runner.temp }}/runtrol-gui-memory-failure-*/error.log
-          if-no-files-found: error
-
   # Parser probes need no account or turn. The approval journey runs the current real CLI against a local
   # deterministic Messages endpoint, carries only a non-secret sentinel, and spends no hosted model token.
   providerDrift:
@@ -535,11 +362,6 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: "24"
-      - name: Linux desktop shell dependencies
-        if: matrix.os == 'ubuntu-latest'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
       - uses: Swatinem/rust-cache@v2
       - name: Install latest provider CLIs without credentials
         run: npm install --global @anthropic-ai/claude-code @openai/codex

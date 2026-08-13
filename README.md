@@ -4,7 +4,7 @@
 
 한국어 | [English](README_EN.md) | [中文](README_ZH.md) | [日本語](README_JA.md)
 
-> 상태: **코어와 주력 VS Code 확장을 구현했고 `Runtrol Studio 0.1.0`을 6개 네이티브 플랫폼 대상으로 공개했다.** 실시간 세션 인덱스, 실물 Extension Host와 초당 3,000 프레임 Webview 성능 ratchet, 설치된 실물 CLI의 전체 조작 여정, 깨끗한 Marketplace 설치, 활성 세션을 보존하는 VSIX 갱신과 롤백을 검증했다. 별도 데스크톱 GUI는 공개 제품 표면이 아니다. [Marketplace 확장](https://marketplace.visualstudio.com/items?itemName=runtrol.runtrol-studio)과 [GitHub Pages 사이트](https://eddmpython.github.io/runtrol/)가 공개되어 있다. 휴대폰 PWA와 자동 갱신 이니셔티브는 아직 남았다.
+> 상태: **코어와 주력 VS Code 확장을 구현했고 `Runtrol Studio 0.1.0`을 6개 네이티브 플랫폼 대상으로 공개했다.** 실시간 세션 인덱스, 실물 Extension Host와 초당 3,000 프레임 Webview 성능 ratchet, 설치된 실물 CLI의 전체 조작 여정, 깨끗한 Marketplace 설치, 활성 세션을 보존하는 VSIX 갱신과 롤백을 검증했다. 독립 데스크톱 GUI 코드와 실행 경로는 제거됐고 PC 표면은 VS Code 확장 하나다. [Marketplace 확장](https://marketplace.visualstudio.com/items?itemName=runtrol.runtrol-studio)과 [GitHub Pages 사이트](https://eddmpython.github.io/runtrol/)가 공개되어 있다. 휴대폰 PWA와 자동 갱신 이니셔티브는 아직 남았다.
 > 아래 점수 대부분이 0 인 것은 코드가 없어서가 아니라 그 축을 단언하는 게이트가 아직 없어서다.
 
 보안 경계와 기본 거부 설정은 [SECURITY.md](SECURITY.md)에 정리되어 있다.
@@ -36,14 +36,14 @@ Code-hot workspace는 bounded 상태를 유지한다. streaming과 background �
 
 | 북극성 | 현재 점수 | 현 상태 | 도달할 상태 |
 |---|---:|---|---|
-| 하나의 세션 목록 | 5/10 | hosted Windows CI 가 production browser lifecycle 과 실제 Tauri 제품을 구동해 시작, hot 및 cold 열기, 편집 가능한 다음 입력, 확인된 목록 제거를 검증한다. 상대가 deterministic mock transport 와 ACP fixture 이므로 mock 층이다. | 공급자가 Claude Code 든 Codex 든 그 다음 무엇이든, 지금 내 PC 에 살아 있는 세션이 한 목록에 뜨고 거기서 시작, 재개, 삭제가 끝난다. |
-| 즉시 반응 | 5/10 | 실물 브라우저와 VS Code Extension Host가 production bundle을 측정한다. 30개 실제 세션 목록, 최대 8개 hot ACP 프로세스, provider-native cold 재개, 초당 3,000 원시 프레임, watch와 Webview paint가 끝난 세션 전환, workspace 변경 뒤 정확한 선택 복원까지 하나의 ratchet으로 막는다. 전송 상대가 mock이라 이 층에 머문다. | 목록이 기다림 없이 뜨고, 대화가 누르는 즉시 열리고, 긴 출력이 쏟아져도 스크롤과 입력이 끊기지 않는다. 사용자가 로딩을 인지하는 순간이 없다. |
+| 하나의 세션 목록 | 5/10 | hosted CI가 실제 VS Code Extension Host에서 시작, 두 workspace 전환, 정확한 선택 복원, 재접속, 중단, 종료를 검증한다. 상대가 deterministic loopback model이라 mock 층이다. | 공급자가 Claude Code 든 Codex 든 그 다음 무엇이든, 지금 내 PC 에 살아 있는 세션이 한 목록에 뜨고 거기서 시작, 재개, 삭제가 끝난다. |
+| 즉시 반응 | 5/10 | 실제 VS Code Extension Host가 production bundle을 측정한다. 30개 실제 세션 목록, 최대 8개 hot ACP 프로세스, provider-native cold 재개, 초당 3,000 원시 프레임, watch와 Webview paint가 끝난 세션 전환, workspace 변경 뒤 정확한 선택 복원까지 하나의 ratchet으로 막는다. 전송 상대가 mock이라 이 층에 머문다. | 목록이 기다림 없이 뜨고, 대화가 누르는 즉시 열리고, 긴 출력이 쏟아져도 스크롤과 입력이 끊기지 않는다. 사용자가 로딩을 인지하는 순간이 없다. |
 | 폰에서 내 PC 세션 잇기 | 0/10 | 미구현. | 폰을 PC 에 한 번 붙여 두면, 자리를 떠난 뒤에도 그 PC 에서 돌고 있는 세션에 폰에서 새 지시를 넣고 출력을 실시간으로 본다. 공급자 계정의 등급이나 인증 방식이 이 경험을 막지 않는다. |
 | 공급자 확장성 | 5/10 | hosted CI 는 외부 드라이버 공개 계약, 3 개 OS 의 범용 ACP fixture, 독립 배포 ACP 구현의 두 턴과 native load, 실물 Claude Code 의 hidden 승인 거부 왕복을 검증한다. model endpoint 들은 로컬 mock 이며, 스케줄 CI 는 최신 CLI 로 parser probe 와 같은 승인 여정을 반복한다. 계정 기반 model 동작과 전체 event 표면은 주장하지 않는다. | 새 CLI 가 나오면 어댑터 하나만 추가되고 PC 화면과 폰 화면과 조작 방법은 그대로다. 사용자는 공급자가 늘어난 것을 목록이 길어진 것으로만 안다. |
 | 대화 무통과 | 6/10 | 실물 루프백 소켓의 정확한 송신 허용 목록과 production Noise IK 및 IKpsk1 경계가 돈다 (`egressContract`). 프롬프트 표본은 릴레이 캡처와 진단 문자열에 평문으로 나타나지 않고, transport 는 디스크와 로그 API 를 갖지 않으며, 드라이버와 저장소는 공급자 transcript 경로를 모른다. 실물 폰과 릴레이를 잇는 live 게이트가 없어 천장이 6 이다. | 사용자의 프롬프트와 모델의 응답은 PC 와 공급자 사이, 그리고 사용자 자신의 기기 사이에서만 오간다. runtrol 은 본문을 저장하지 않고, 중간의 어떤 서버도 그것을 읽을 수 있는 형태로 받지 않는다. |
 | 폰에서 승인 | 0/10 | 미구현. | 에이전트가 위험한 작업 앞에서 멈추면 폰에 뜨고, 폰에서 허용하거나 거부하면 PC 의 세션이 즉시 이어진다. |
 | 끊겨도 살아남기 | 0/10 | 원격 폰 종단 게이트는 미구현이다. | 폰이 잠기거나 네트워크가 끊기거나 runtrol 을 재시작해도 PC 세션은 공식 resume surface 로 복구된다. bounded window 안은 exact cursor 로 이어지고, 밖은 조용히 건너뛰지 않고 명시적 gap 으로 보인다. |
-| 상주 비용 | 6/10 | 세 hosted OS가 실제 debug daemon의 idle RSS와 CPU를 재고, Windows는 production GUI와 전체 WebView2 트리를 60초 ratchet에 대조한다. 둘 다 bench 종류라 천장은 6이고 24시간 campaign은 별도 계약이다. | 하루 종일 켜 두어도 사용자가 존재를 눈치채지 못한다. 배터리, 팬, 작업 관리자 어디에서도 눈에 띄지 않는다. |
+| 상주 비용 | 6/10 | 세 hosted OS가 실제 debug daemon의 idle RSS와 10초 유휴 CPU를 하나의 ratchet으로 측정한다. 독립된 두 번째 증거 종류가 없어 천장은 6이다. | 하루 종일 켜 두어도 사용자가 존재를 눈치채지 못한다. 배터리, 팬, 작업 관리자 어디에서도 눈에 띄지 않는다. |
 | 어디서나 같은 방법 | 0/10 | 미구현. | Windows, macOS, Linux 에서 설치 방법과 조작이 같다. Windows 사용자가 WSL 이나 tmux 를 알 필요가 없다. |
 | 알아서 최신 | 0/10 | 미구현. | 앱과 설치된 에이전트 CLI 가 알아서 최신이고, 업데이트가 세션을 깨면 사용자가 손대기 전에 되돌아가 있다. 사용자가 버전을 신경 쓰는 순간이 없다. |
 | 모델 자동 인식 | 6/10 | hosted `modelDetectionSmoke --require-all` 은 자격증명 없이 최신 실물 CLI 를 설치해 Codex `model/list` 와 격리된 provider-owned option cache sentinel 을 포함한 Claude partial catalogue 를 검사하고, 관측한 identifier 가 production source 에 하드코딩되지 않았음을 확인한다. 특정 계정의 실제 사용 가능 여부는 주장하지 않아 live 한 종류의 천장 6 이다. | 지금 이 계정으로 쓸 수 있는 모델이 목록에 그대로 뜨고, 새 모델이 나와도 runtrol 을 고치지 않아도 뜬다. |
@@ -154,7 +154,7 @@ Rust 는 목적이 아니라 위 표의 세 축을 위한 수단이다.
 
 | | | |
 |---|---|---|
-| `crates/` | 제품 코어 (Rust). daemon, provider 어댑터, 전송. 기존 내부 GUI 코드는 공개 대상이 아니다 | 구현됨 |
+| `crates/` | 제품 코어 (Rust). daemon, provider 어댑터, 전송. 독립 GUI crate는 없다 | 구현됨 |
 | [`extensions/runtrol-vscode/`](extensions/runtrol-vscode/) | 유일한 PC 표면 `Runtrol Studio` | 30개 세션 출시 부하 검증, 0.1.0 공개 |
 | `pwa/` | 모바일 PWA | 미생성 |
 | [`site/`](site/) | [무의존성 GitHub Pages 랜딩](https://eddmpython.github.io/runtrol/) | 공개됨 |

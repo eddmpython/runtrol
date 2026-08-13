@@ -61,7 +61,7 @@ jobs:
       - name: Refuse a runner that differs from the release SSOT
         run: node -e "const actual=process.platform+'-'+process.arch; const expected='${{ matrix.target }}'; if(actual!==expected) throw new Error('runner is '+actual+', expected '+expected)"
       - name: Build the native release Core
-        run: cargo build --release -p runtrol --bin runtrol --no-default-features --target-dir target/vscode-release
+        run: cargo build --release -p runtrol --bin runtrol --target-dir target/vscode-release
       - name: Package the native VSIX
         run: npm --prefix extensions/runtrol-vscode run package:native
         env:

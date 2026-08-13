@@ -22,13 +22,15 @@ A second PC window would duplicate session navigation, workspace selection, keyb
 
 VS Code already supplies the desktop shell, workspace model, command palette, keyboard conventions, and extension distribution channel. runtrol should spend its complexity budget on session supervision and remote continuity instead of another window manager.
 
-The existing Tauri implementation is legacy internal evidence. It is not a release artifact or a public installation option. Its code and gates may be removed only after any unique Core, input, cleanup, and memory coverage has moved to the VS Code or Core gate that owns the contract.
+The standalone desktop implementation and its execution path have been removed. The VS Code extension is the only PC user interface. Core remains a headless local supervisor and command endpoint.
 
 ## VS Code interaction contract
 
 - Fifteen sessions are the daily-use baseline and 30 sessions are the release load.
 - At most eight logical sessions may own a hot provider process.
 - Exactly one selected session owns the full stream and active renderer.
+- Selecting a session opens one reusable conversation tab in the editor area instead of compressing the conversation into the sidebar.
+- Session names use the operator's saved name when present and a project plus discovered-provider fallback otherwise. Conversation content is never read to invent a title.
 - Search covers project, provider metadata, state, and workspace path without reading conversation content.
 - Selecting a cold row updates the UI immediately, resumes through the provider-native session identity, and follows the bound workspace.
 - Installed providers, versions, models, flags, capabilities, and session paths are discovered at runtime.

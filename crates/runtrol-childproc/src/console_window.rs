@@ -1,6 +1,5 @@
 //! Keeping background children from opening a Windows console window.
 //!
-//! The desktop process can hide the console it owns, but that does not govern a console program started later.
 //! Every provider process and short discovery probe passes through this policy before spawn. Terminal launches
 //! remain unchanged because this flag applies to children supervised in the background, not to runtrol itself.
 

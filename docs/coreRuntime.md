@@ -43,8 +43,8 @@ charged to the daemon's RSS budget.
 | Residual increase after the live journey | 4 MiB | 5 MiB | 4 MiB |
 | Idle process CPU during a 10 second window | 100 ms | 100 ms | 100 ms |
 
-The Linux ceiling accounts for the desktop runtime mapped into the shared executable. The macOS residual allowance
-records measured allocator retention. On macOS the daemon performs one early self-exec with the system allocator's
+The Linux ceiling records the higher hosted debug measurement. The macOS residual allowance records measured
+allocator retention. On macOS the daemon performs one early self-exec with the system allocator's
 space-efficient policy. Its central supervised-command boundary restores the operator's original allocator
 environment and removes private restart markers from every provider session and probe child. These numbers are
 regression ceilings, not estimates of object sizes.
@@ -57,8 +57,8 @@ the payload is not placed on the live wire.
 After a provider session is fully released, GNU/Linux performs one explicit allocator trim at that lifecycle
 boundary. The trim adds no timer or background worker.
 
-The current evidence does not claim a release-build live ceiling, GUI memory, or immediate return of every freed page
-to the operating system.
+The current evidence does not claim a release-build live ceiling or immediate return of every freed page to the
+operating system.
 
 ## Bounded delivery and replay
 

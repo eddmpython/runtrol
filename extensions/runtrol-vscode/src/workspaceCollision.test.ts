@@ -9,6 +9,7 @@ function session(workspace: string, hot = true, id = workspace): SessionLine {
     session: id,
     provider: "fixture",
     native: null,
+    label: null,
     workspace,
     hot,
     doing: hot ? "running" : "detached",

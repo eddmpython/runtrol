@@ -4,7 +4,7 @@
 
 [한국어](README.md) | [English](README_EN.md) | 中文 | [日本語](README_JA.md)
 
-> 状态：**内核和主要 VS Code 扩展已经实现，`Runtrol Studio 0.1.0` 已面向六个原生目标公开发布。** 实时会话索引、真实 Extension Host 和每秒 3,000 帧 Webview 性能门槛、已安装真实 CLI 的完整操作旅程、全新 Marketplace 安装，以及保留活动会话的 VSIX 升级与回滚都已验证。独立桌面 GUI 不是公开产品界面。[Marketplace 扩展](https://marketplace.visualstudio.com/items?itemName=runtrol.runtrol-studio)和 [GitHub Pages 站点](https://eddmpython.github.io/runtrol/)已经上线。手机 PWA 与自动更新倡议仍未完成。
+> 状态：**内核和主要 VS Code 扩展已经实现，`Runtrol Studio 0.1.0` 已面向六个原生目标公开发布。** 实时会话索引、真实 Extension Host 和每秒 3,000 帧 Webview 性能门槛、已安装真实 CLI 的完整操作旅程、全新 Marketplace 安装，以及保留活动会话的 VSIX 升级与回滚都已验证。独立桌面 GUI 代码和执行路径已经删除，VS Code 扩展是唯一 PC 界面。[Marketplace 扩展](https://marketplace.visualstudio.com/items?itemName=runtrol.runtrol-studio)和 [GitHub Pages 站点](https://eddmpython.github.io/runtrol/)已经上线。手机 PWA 与自动更新倡议仍未完成。
 > 下面多数分数为 0，不是因为没有代码，而是因为还没有门禁去断言那些轴。
 
 The security boundary and default-deny settings are documented in [SECURITY.md](SECURITY.md).
@@ -35,14 +35,14 @@ active subscription 与 Code-hot workspace 始终有界。streaming 与后台工
 
 | 北极星 | 当前分数 | 现状 | 目标状态 |
 |---|---:|---|---|
-| 统一的会话列表 | 5/10 | hosted Windows CI 驱动 production browser lifecycle 与实际 Tauri 产品，验证启动、热会话与冷会话打开、可编辑的下一条输入以及确认后的列表移除。对端是确定性的 mock transport 与 ACP fixture，因此停留在 mock 层。 | 无论供应商是 Claude Code、Codex 还是之后出现的任何一个，此刻在我电脑上存活的会话都出现在一个列表里，启动、恢复、删除都在那里完成。 |
-| 即时响应 | 5/10 | 真实浏览器与 VS Code Extension Host 测量 production bundle。同一棘轮覆盖真实的 30 会话列表、最多 8 个 hot ACP 进程、provider-native cold resume、每秒 3,000 个原始帧、完成 Core watch 确认与 Webview 绘制的会话切换，以及 workspace 改变后的精确选择恢复。传输对端仍是 mock，因此该轴停留在此层级。 | 列表毫无等待地出现，对话在按下的瞬间打开，长输出倾泻而下时滚动与输入也不卡顿。用户不存在感知到加载的时刻。 |
+| 统一的会话列表 | 5/10 | hosted CI 驱动真实 VS Code Extension Host，验证启动、两个 workspace 切换、精确选择恢复、重连、中断与关闭。对端是确定性的 loopback model，因此停留在 mock 层。 | 无论供应商是 Claude Code、Codex 还是之后出现的任何一个，此刻在我电脑上存活的会话都出现在一个列表里，启动、恢复、删除都在那里完成。 |
+| 即时响应 | 5/10 | 真实 VS Code Extension Host 测量 production bundle。同一棘轮覆盖真实的 30 会话列表、最多 8 个 hot ACP 进程、provider-native cold resume、每秒 3,000 个原始帧、完成 Core watch 确认与 Webview 绘制的会话切换，以及 workspace 改变后的精确选择恢复。传输对端仍是 mock，因此该轴停留在此层级。 | 列表毫无等待地出现，对话在按下的瞬间打开，长输出倾泻而下时滚动与输入也不卡顿。用户不存在感知到加载的时刻。 |
 | 用手机接续电脑上的会话 | 0/10 | 未实现。 | 手机与电脑配对一次，之后即使离开座位，也能向那台电脑上正在运行的会话发送新指令并实时查看输出。供应商账户的等级或认证方式不会阻断这一体验。 |
 | 供应商可扩展性 | 5/10 | hosted CI 检查外部驱动公开契约、三个操作系统上的通用 ACP fixture、独立发布 ACP 实现的两轮对话与 native load，以及真实 Claude Code 的隐藏审批拒绝往返。model endpoint 均为本地 mock。定时 CI 会用当前 CLI 重复 parser probe 与同一审批旅程，但不宣称覆盖账户模型行为或完整 event 表面。 | 出现新的 CLI 时只需增加一个适配器，电脑界面、手机界面与操作方式保持不变。用户只会感到列表变长了。 |
 | 对话不经过 | 6/10 | `egressContract` 在真实回环套接字上运行精确的出站白名单和 production Noise IK、IKpsk1 边界。提示词样本不会以明文出现在中继捕获或诊断信息中，transport 没有磁盘或日志 API，驱动与存储也不知道供应商 transcript 路径。尚无连接真实手机与中继的 live 门禁，所以天花板是 6。 | 用户的提示词与模型的回复只在电脑与供应商之间、以及用户自己的设备之间往返。runtrol 不保存其内容，中间的任何服务器都不会以可读的形式收到它。 |
 | 在手机上批准 | 0/10 | 未实现。 | 代理在危险操作前停下时会出现在手机上，在手机上允许或拒绝后，电脑上的会话立即继续。 |
 | 断了也活着 | 0/10 | 远程手机端到端门禁尚未实现。 | 手机锁屏、网络中断或 runtrol 重启后，PC 会话仍可通过官方 resume surface 恢复。保留窗口内按精确 cursor 接续，窗口外明确显示 gap，绝不静默跳过。 |
-| 常驻成本 | 6/10 | 三个 hosted 操作系统都测量真实 debug daemon 的 idle RSS 与 CPU。Windows 还用 60 秒棘轮检查 production GUI 与完整 WebView2 进程树。两者都属于 bench 证据，因此上限仍为 6，24 小时 campaign 是独立合同。 | 整天开着，用户也察觉不到它的存在。电池、风扇、任务管理器里都看不见。 |
+| 常驻成本 | 6/10 | 三个 hosted 操作系统都用同一个棘轮测量真实 debug daemon 的 idle RSS 与十秒 idle CPU。没有第二种独立证据，因此上限仍为 6。 | 整天开着，用户也察觉不到它的存在。电池、风扇、任务管理器里都看不见。 |
 | 到哪都一样 | 0/10 | 未实现。 | 在 Windows、macOS、Linux 上安装方式与操作方式相同。Windows 用户无需知道 WSL 或 tmux 是什么。 |
 | 自动保持最新 | 0/10 | 未实现。 | 应用与已安装的代理 CLI 会自行保持最新；若更新破坏了会话，在用户动手之前它已经回滚。用户不存在需要关心版本的时刻。 |
 | 自动识别模型 | 6/10 | hosted `modelDetectionSmoke --require-all` 在无凭据环境中安装当前真实 CLI，检查 Codex 的 `model/list` 与包含隔离 provider-owned option cache sentinel 的 Claude partial catalogue，并拒绝在 production source 中硬编码观测 identifier。它不证明特定账户的实际可用性，因此一种 live gate 的上限为 6。 | 当前账户实际可用的模型原样出现在列表中，出现新模型时无需修改 runtrol 就会显示。 |
@@ -153,7 +153,7 @@ Rust 不是目的，而是上表中三个轴的手段。
 
 | | | |
 |---|---|---|
-| `crates/` | 产品内核（Rust）。守护进程、供应商适配器与传输。旧内部 GUI 代码不是公开目标 | 已实现 |
+| `crates/` | 产品内核（Rust）。守护进程、供应商适配器与传输。不存在独立 GUI crate | 已实现 |
 | [`extensions/runtrol-vscode/`](extensions/runtrol-vscode/) | 唯一 PC 界面 `Runtrol Studio` | 30 会话发布负载已验证，0.1.0 已公开 |
 | `pwa/` | 移动端 PWA | 未创建 |
 | [`site/`](site/) | [无依赖 GitHub Pages 落地页](https://eddmpython.github.io/runtrol/) | 已上线 |

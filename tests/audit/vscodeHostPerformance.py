@@ -206,7 +206,7 @@ def productBinaries() -> tuple[Path, Path]:
     commands = (
         [
             "cargo", "build", "-p", "runtrol", "--bin", "runtrol",
-            "--no-default-features", "--target-dir", str(target),
+            "--target-dir", str(target),
         ],
         [
             "cargo", "build", "-p", "runtrol-drivers", "--example", "acpFixture",

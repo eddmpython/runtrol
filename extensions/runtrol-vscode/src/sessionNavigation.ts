@@ -1,6 +1,5 @@
-import path from "node:path";
-
-import type { SessionLine } from "./protocol";
+import type { ProviderLine, SessionLine } from "./protocol";
+import { sessionContext, uniqueSessionTitle, workspaceName } from "./sessionDisplay";
 
 export type SessionChoice = {
   label: string;
@@ -29,11 +28,12 @@ export function orderedSessions(
 export function sessionChoices(
   sessions: readonly SessionLine[],
   selected: string | null,
+  providers: readonly ProviderLine[] = [],
 ): SessionChoice[] {
   return orderedSessions(sessions, selected).map((session) => ({
-    label: `${icon(session, selected)} ${folderName(session)}`,
-    description: `${session.provider} | ${session.doing}`,
-    detail: session.workspace,
+    label: `${icon(session, selected)} ${uniqueSessionTitle(session, sessions, providers)}`,
+    description: session.doing,
+    detail: `${sessionContext(session, providers)} · ${session.workspace}`,
     picked: session.session === selected,
     session,
   }));
@@ -60,7 +60,7 @@ function icon(session: SessionLine, selected: string | null): string {
 }
 
 function folderName(session: SessionLine): string {
-  return path.basename(session.workspace) || session.workspace;
+  return workspaceName(session.workspace);
 }
 
 function ordinalCompare(left: string, right: string): number {

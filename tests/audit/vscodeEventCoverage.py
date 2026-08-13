@@ -1,13 +1,13 @@
-"""Gate: every product surface consumes one complete event-presentation SSOT.
+"""Gate: the VS Code surface consumes the complete event-presentation SSOT.
 
 The wire vocabulary belongs to ``EventBody::wire_name``. Presentation kind, message side, and localization keys belong
-to ``assets/event-presentation.json``. Desktop, VS Code, and a future phone surface may localize those keys differently,
-but they may not invent another event-name table or inspect opaque provider content through this contract.
+to ``assets/event-presentation.json``. VS Code and future surfaces may localize those keys differently, but they may not
+invent another event-name table or inspect opaque provider content through this contract.
 
 Usage::
 
-    python -X utf8 tests/audit/desktopEventCoverage.py
-    python -X utf8 tests/audit/desktopEventCoverage.py --selftest
+    python -X utf8 tests/audit/vscodeEventCoverage.py
+    python -X utf8 tests/audit/vscodeEventCoverage.py --selftest
 """
 
 from __future__ import annotations
@@ -21,7 +21,6 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[2]
 VOCABULARY = ROOT / "crates" / "runtrol-provider" / "src" / "event" / "mod.rs"
 PRESENTATION = ROOT / "assets" / "event-presentation.json"
-DESKTOP = ROOT / "crates" / "runtrol-gui" / "ui" / "src" / "frames.ts"
 VSCODE = (
     ROOT / "extensions" / "runtrol-vscode" / "src" / "webview" / "main.ts",
     ROOT / "extensions" / "runtrol-vscode" / "src" / "webview" / "presentation.ts",
@@ -80,7 +79,7 @@ def contractProblems(data: Any, kinds: set[str]) -> list[str]:
 
 
 def surfaceProblems(texts: dict[str, tuple[str, str]], kinds: set[str]) -> list[str]:
-    """Return surfaces that ignore the SSOT or restore a local event-name map."""
+    """Return consumers that ignore the SSOT or restore a local event-name map."""
     found: list[str] = []
     for name, (text, requiredToken) in texts.items():
         if requiredToken not in text:
@@ -96,34 +95,22 @@ def surfaceProblems(texts: dict[str, tuple[str, str]], kinds: set[str]) -> list[
     return found
 
 
-def localizationProblems(data: Any, desktop: str, vscode: str) -> list[str]:
-    """Return localization keys that a consuming surface would expose raw."""
+def localizationProblems(data: Any, vscode: str) -> list[str]:
+    """Return localization keys that VS Code would expose raw."""
     if not isinstance(data, dict) or not isinstance(data.get("events"), dict):
         return []
-    desktopKeys: set[str] = set()
-    vscodeKeys: set[str] = set()
-    for contract in data["events"].values():
-        if not isinstance(contract, dict):
-            continue
-        labelKey = contract.get("labelKey")
-        textKey = contract.get("textKey")
-        if nonempty(labelKey):
-            desktopKeys.add(labelKey)
-        if nonempty(textKey):
-            desktopKeys.add(textKey)
-            if contract.get("kind") == "status":
-                vscodeKeys.add(textKey)
-    found = [
-        f"desktop has no localized text for {key}"
-        for key in sorted(desktopKeys)
-        if f'"{key}"' not in desktop
-    ]
-    found += [
+    vscodeKeys = {
+        contract["textKey"]
+        for contract in data["events"].values()
+        if isinstance(contract, dict)
+        and contract.get("kind") == "status"
+        and nonempty(contract.get("textKey"))
+    }
+    return [
         f"VS Code has no localized text for {key}"
         for key in sorted(vscodeKeys)
         if f'"{key}"' not in vscode
     ]
-    return found
 
 
 def nonempty(value: Any) -> bool:
@@ -131,15 +118,15 @@ def nonempty(value: Any) -> bool:
 
 
 def report(problems: list[str]) -> int:
-    print("[desktopEventCoverage] shared event presentation violations:", file=sys.stderr)
+    print("[vscodeEventCoverage] shared event presentation violations:", file=sys.stderr)
     for problem in problems:
         print(f"  - {problem}", file=sys.stderr)
     return 2
 
 
 def main() -> int:
-    """Compare the Rust vocabulary, shared contract, and both shipped consumers."""
-    paths = (VOCABULARY, PRESENTATION, DESKTOP, *VSCODE)
+    """Compare the Rust vocabulary, shared contract, and shipped VS Code consumers."""
+    paths = (VOCABULARY, PRESENTATION, *VSCODE)
     missingPaths = [str(path.relative_to(ROOT)) for path in paths if not path.is_file()]
     if missingPaths:
         return report([f"required file is missing: {name}" for name in missingPaths])
@@ -151,23 +138,22 @@ def main() -> int:
     except (OSError, json.JSONDecodeError) as error:
         return report([f"the shared presentation is not readable JSON: {error}"])
     texts = {
-        "desktop frames.ts": (DESKTOP.read_text(encoding="utf-8"), "event-presentation.json"),
         "VS Code main.ts": (VSCODE[0].read_text(encoding="utf-8"), "presentationOf"),
         "VS Code presentation.ts": (VSCODE[1].read_text(encoding="utf-8"), "event-presentation.json"),
     }
     found = (
         contractProblems(data, kinds)
         + surfaceProblems(texts, kinds)
-        + localizationProblems(data, texts["desktop frames.ts"][0], texts["VS Code main.ts"][0])
+        + localizationProblems(data, texts["VS Code main.ts"][0])
     )
     if found:
         return report(found)
-    print(f"[desktopEventCoverage] OK. {len(kinds)} events use one shared contract across desktop and VS Code.")
+    print(f"[vscodeEventCoverage] OK. {len(kinds)} events use one shared contract in VS Code.")
     return 0
 
 
 def selftest() -> int:
-    """Prove vocabulary, schema, meaning, and consumer drift all make the gate red."""
+    """Prove vocabulary, schema, meaning, consumer, and localization drift all make the gate red."""
     rustFixture = """
     pub const fn wire_name(&self) -> &'static str {
         match self {
@@ -179,7 +165,7 @@ def selftest() -> int:
     """
     kinds = vocabulary(rustFixture)
     if kinds != {"attached", "agentMessageChunk"}:
-        print("[desktopEventCoverage --selftest] FAIL. wire_name was not isolated.", file=sys.stderr)
+        print("[vscodeEventCoverage --selftest] FAIL. wire_name was not isolated.", file=sys.stderr)
         return 2
     green = {
         "schema": 1,
@@ -190,7 +176,7 @@ def selftest() -> int:
     }
     consumer = 'import presentation from "event-presentation.json";\nconst use = presentation.events;'
     if contractProblems(green, kinds) or surfaceProblems({"surface": (consumer, "event-presentation.json")}, kinds):
-        print("[desktopEventCoverage --selftest] FAIL. the green fixture was rejected.", file=sys.stderr)
+        print("[vscodeEventCoverage --selftest] FAIL. the green fixture was rejected.", file=sys.stderr)
         return 2
     mutations = [
         {"schema": 2, "events": green["events"]},
@@ -208,22 +194,21 @@ def selftest() -> int:
     ]
     for index, mutation in enumerate(mutations, start=1):
         if not contractProblems(mutation, kinds):
-            print(f"[desktopEventCoverage --selftest] FAIL. contract mutation {index} escaped.", file=sys.stderr)
+            print(f"[vscodeEventCoverage --selftest] FAIL. contract mutation {index} escaped.", file=sys.stderr)
             return 2
     consumerMutations = ("const local = 1;", f'{consumer}\nif (event === "attached") return;')
     for index, mutation in enumerate(consumerMutations, start=1):
         if not surfaceProblems({"surface": (mutation, "event-presentation.json")}, kinds):
-            print(f"[desktopEventCoverage --selftest] FAIL. consumer mutation {index} escaped.", file=sys.stderr)
+            print(f"[vscodeEventCoverage --selftest] FAIL. consumer mutation {index} escaped.", file=sys.stderr)
             return 2
-    desktop = 'const text = { "session.attached": "Attached", "message.agent": "Agent" };'
     vscode = 'const text = { "session.attached": "Attached" };'
-    if localizationProblems(green, desktop, vscode):
-        print("[desktopEventCoverage --selftest] FAIL. green localization was rejected.", file=sys.stderr)
+    if localizationProblems(green, vscode):
+        print("[vscodeEventCoverage --selftest] FAIL. green localization was rejected.", file=sys.stderr)
         return 2
-    if not localizationProblems(green, desktop.replace('"message.agent"', '"missing"'), vscode):
-        print("[desktopEventCoverage --selftest] FAIL. missing localization escaped.", file=sys.stderr)
+    if not localizationProblems(green, vscode.replace('"session.attached"', '"missing"')):
+        print("[vscodeEventCoverage --selftest] FAIL. missing localization escaped.", file=sys.stderr)
         return 2
-    print("[desktopEventCoverage --selftest] OK. nine injected defects make the gate red.")
+    print("[vscodeEventCoverage --selftest] OK. nine injected defects make the gate red.")
     return 0
 
 

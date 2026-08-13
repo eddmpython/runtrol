@@ -49,8 +49,6 @@ NOT_A_GATE: dict[str, str] = {
     "northStar gates rather than run on its own",
     "rustSource.py": "reading Rust source the way a gate has to. imported by the gates that scan "
     "source rather than run on its own, and its selftest runs inside theirs",
-    "desktopPerformance.py": "shared production-build and browser launcher imported by the two desktop "
-    "performance gates",
 }
 
 # Preflight gates that intentionally have no counterpart step in the workflow.
@@ -69,11 +67,6 @@ LOCAL_ONLY: dict[str, str] = {
     "logins they need, so it runs where they live: the operator's own preflight",
     "crossConsultSmokeSelftest": "the same script with a flag, kept beside the gate it proves for the same "
     "reason as the lifecycle selftest above",
-    "desktopRealProviderGuiSmoke": "it drives the production window against two real subscription CLIs and "
-    "an operator-prepared file naming existing native conversations. neither the logins nor that file can "
-    "exist on a hosted runner, so it runs where they live, which is the operator's own preflight",
-    "desktopRealProviderGuiSmokeSelftest": "the same script with a flag. it proves the operator gate can "
-    "fail, and a proof that runs where the thing it proves does not is a proof of nothing",
     "clippyCrossCfg": "the workflow runs this gate too, and it has to name a different target: each "
     "runner cross-compiles toward the platform it is not, so the local command targets linux and the "
     "linux runner targets windows. the gate is present on both sides; only the argument differs, which "

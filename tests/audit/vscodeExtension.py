@@ -73,8 +73,13 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
     required = {
         "core/framing.ts": ["MAX_FRAME_BYTES", "MAX_QUEUED_FRAMES", "MAX_QUEUED_BYTES", "setImmediate"],
         "webview/main.ts": ["MAX_VISIBLE_ITEMS", "MAX_VISIBLE_CHARACTERS", "MAX_BATCH"],
-        "conversationView.ts": ["webviewReady", "await ready.promise"],
-        "extension.ts": ["retainContextWhenHidden: false", "afterReady"],
+        "conversationView.ts": [
+            "webviewReady",
+            "await ready.promise",
+            "createWebviewPanel",
+            "retainContextWhenHidden: false",
+        ],
+        "extension.ts": ["afterReady"],
         "controller.ts": [
             "private watchAbort",
             "private indexAbort",
@@ -123,8 +128,10 @@ def selftest() -> int:
     sources = {
         "core/framing.ts": "MAX_FRAME_BYTES MAX_QUEUED_FRAMES MAX_QUEUED_BYTES setImmediate",
         "webview/main.ts": "MAX_VISIBLE_ITEMS MAX_VISIBLE_CHARACTERS MAX_BATCH",
-        "conversationView.ts": "webviewReady await ready.promise",
-        "extension.ts": "retainContextWhenHidden: false afterReady",
+        "conversationView.ts": (
+            "webviewReady await ready.promise createWebviewPanel retainContextWhenHidden: false"
+        ),
+        "extension.ts": "afterReady",
         "controller.ts": (
             'private watchAbort; private indexAbort; this.watchAbort?.abort(); reconnect workspaceCollisions '
             '"Start here anyway"'

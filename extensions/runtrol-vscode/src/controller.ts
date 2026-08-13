@@ -13,6 +13,7 @@ import type {
   WorkspaceAccess,
 } from "./protocol";
 import { SelectionStore } from "./selectionStore";
+import { sessionTitle } from "./sessionDisplay";
 import { sessionChoices } from "./sessionNavigation";
 import { RuntimeState } from "./state";
 import { SessionItem } from "./trees";
@@ -24,6 +25,7 @@ export class Controller implements vscode.Disposable {
   private readonly status: vscode.StatusBarItem;
   private selectionTail: Promise<void> = Promise.resolve();
   private watchReady: Promise<void> = Promise.resolve();
+  private conversationVisible = false;
   private disposed = false;
 
   constructor(
@@ -48,7 +50,7 @@ export class Controller implements vscode.Disposable {
       ?? this.state.sessions.find((session) => session.hot)
       ?? null;
     if (selected) {
-      await this.select(selected, false);
+      await this.select(selected, false, false);
     } else {
       this.conversation.reset(null);
     }
@@ -67,20 +69,22 @@ export class Controller implements vscode.Disposable {
 
   async switchSession(): Promise<void> {
     const selected = this.state.selected?.session ?? null;
-    const picked = await vscode.window.showQuickPick(sessionChoices(this.state.sessions, selected), {
-      title: `Switch Runtrol session (${this.state.sessions.length})`,
-      placeHolder: "Type a project, provider, state, or workspace",
-      matchOnDescription: true,
-      matchOnDetail: true,
-    });
+    const picked = await vscode.window.showQuickPick(
+      sessionChoices(this.state.sessions, selected, this.state.providers),
+      {
+        title: `Switch Runtrol session (${this.state.sessions.length})`,
+        placeHolder: "Type a project, provider, state, or workspace",
+        matchOnDescription: true,
+        matchOnDetail: true,
+      },
+    );
     if (picked) {
       await this.select(picked.session);
     }
   }
 
   async reconnect(): Promise<void> {
-    this.watchAbort?.abort();
-    this.watchAbort = null;
+    this.pauseWatch();
     this.indexAbort?.abort();
     this.indexAbort = null;
     await this.client.reset();
@@ -89,34 +93,40 @@ export class Controller implements vscode.Disposable {
     const selected = this.state.selected;
     if (selected) {
       this.conversation.reset(selected);
-      this.startWatch(selected);
+      this.ensureSelectedWatch();
     } else {
       this.conversation.reset(null);
     }
   }
 
-  select(value: SessionItem | SessionLine | string, follow = true): Promise<void> {
-    const selected = this.selectionTail.then(() => this.selectNow(value, follow));
+  select(value: SessionItem | SessionLine | string, follow = true, reveal = true): Promise<void> {
+    const selected = this.selectionTail.then(() => this.selectNow(value, follow, reveal));
     this.selectionTail = selected.catch(() => undefined);
     return selected;
   }
 
-  private async selectNow(value: SessionItem | SessionLine | string, follow: boolean): Promise<void> {
+  private async selectNow(
+    value: SessionItem | SessionLine | string,
+    follow: boolean,
+    reveal: boolean,
+  ): Promise<void> {
     const id = typeof value === "string" ? value : value instanceof SessionItem ? value.session.session : value.session;
     let session = this.state.sessions.find((candidate) => candidate.session === id);
     if (!session) {
       throw new Error("that session is no longer listed");
     }
+    if (reveal) {
+      void this.conversation.show();
+    }
     if (!session.hot) {
-      this.watchAbort?.abort();
-      this.watchAbort = null;
+      this.pauseWatch();
       this.state.select(session.session);
       this.conversation.reset(session);
       this.conversation.status("Resuming the provider-owned session...", "info");
       session = await this.resumeSession(session);
     }
     const stored = this.selection.save(session.session);
-    this.watchAbort?.abort();
+    this.pauseWatch();
     this.state.select(session.session);
     this.conversation.reset(session);
 
@@ -128,7 +138,7 @@ export class Controller implements vscode.Disposable {
       });
       return;
     }
-    this.startWatch(session);
+    this.ensureSelectedWatch();
     await stored;
   }
 
@@ -240,6 +250,46 @@ export class Controller implements vscode.Disposable {
     requireDone(response, "interrupt");
   }
 
+  openConversation(): void {
+    void this.conversation.show();
+    this.ensureSelectedWatch();
+  }
+
+  conversationVisibilityChanged(visible: boolean): void {
+    this.conversationVisible = visible;
+    if (visible) {
+      this.ensureSelectedWatch();
+    } else {
+      this.pauseWatch();
+    }
+  }
+
+  async nameSession(value?: SessionItem | SessionLine): Promise<void> {
+    const session = value instanceof SessionItem ? value.session : value ?? this.requireSelected();
+    const label = await vscode.window.showInputBox({
+      title: `Rename ${sessionTitle(session)}`,
+      prompt: "Use a short name for this session. Leave it empty to restore the automatic name.",
+      value: session.label ?? "",
+      placeHolder: sessionTitle({ ...session, label: null }),
+      ignoreFocusOut: true,
+      validateInput: validateSessionLabel,
+    });
+    if (label === undefined) {
+      return;
+    }
+    const normalized = label.trim() || null;
+    const { response } = await this.client.once({
+      ask: "rename",
+      with: { session: session.session, label: normalized },
+    });
+    requireDone(response, "rename");
+    await this.refresh();
+    const renamed = this.state.sessions.find((candidate) => candidate.session === session.session);
+    if (renamed && this.state.selected?.session === renamed.session) {
+      this.conversation.updateSession(renamed);
+    }
+  }
+
   async answerApproval(approval: string, option: number, subjectDigest: number[]): Promise<void> {
     const session = this.requireSelected();
     const { response } = await this.client.once({
@@ -281,7 +331,7 @@ export class Controller implements vscode.Disposable {
     requireDone(response, "close");
     await this.refresh();
     if (!this.state.selected) {
-      this.watchAbort?.abort();
+      this.pauseWatch();
       this.conversation.reset(null);
     }
   }
@@ -319,6 +369,20 @@ export class Controller implements vscode.Disposable {
     void this.watchLoop(session, abort.signal, ready);
   }
 
+  private ensureSelectedWatch(): void {
+    const selected = this.state.selected;
+    if (!this.conversationVisible || !selected || this.watchAbort) {
+      return;
+    }
+    this.startWatch(selected);
+  }
+
+  private pauseWatch(): void {
+    this.watchAbort?.abort();
+    this.watchAbort = null;
+    this.watchReady = Promise.resolve();
+  }
+
   private async watchLoop(session: SessionLine, signal: AbortSignal, ready: () => void): Promise<void> {
     let retryMs = 250;
     while (!signal.aborted && !this.disposed && this.state.selected?.session === session.session) {
@@ -329,8 +393,11 @@ export class Controller implements vscode.Disposable {
           {
             started: ready,
             event: (payload, nextExpected) => {
-              this.state.advance(session.session, nextExpected);
-              this.conversation.frame(payload);
+              if (this.conversation.frame(payload)) {
+                this.state.advance(session.session, nextExpected);
+              } else {
+                this.pauseWatch();
+              }
             },
             gap: (nextExpected, message) => {
               this.state.advance(session.session, nextExpected);
@@ -408,8 +475,7 @@ export class Controller implements vscode.Disposable {
       this.conversation.status(warning, "warning");
     }
     if (selected && !this.state.selected) {
-      this.watchAbort?.abort();
-      this.watchReady = Promise.resolve();
+      this.pauseWatch();
       void this.selection.clear().catch((error: unknown) => {
         this.conversation.status(
           `Cannot clear the selected session: ${error instanceof Error ? error.message : String(error)}`,
@@ -506,6 +572,25 @@ function requireDone(response: Response, operation: string): void {
   if (response.say !== "done") {
     throw new Error(`the daemon answered ${operation} with ${response.say}`);
   }
+}
+
+function validateSessionLabel(value: string): string | null {
+  const label = value.trim();
+  if ([...label].length > 80) {
+    return "Use 80 characters or fewer.";
+  }
+  if ([...label].some((character) => forbiddenLabelCharacter(character))) {
+    return "Use one visible line without bidirectional control characters.";
+  }
+  return null;
+}
+
+function forbiddenLabelCharacter(character: string): boolean {
+  const code = character.codePointAt(0) ?? 0;
+  return code < 0x20
+    || (code >= 0x7f && code <= 0x9f)
+    || (code >= 0x202a && code <= 0x202e)
+    || (code >= 0x2066 && code <= 0x2069);
 }
 
 async function chooseProvider(providers: readonly ProviderLine[]): Promise<ProviderLine | null> {

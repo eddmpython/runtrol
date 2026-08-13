@@ -116,6 +116,27 @@ impl Store {
         }
     }
 
+    /// Change only the operator-owned display name of a stored session.
+    ///
+    /// Returns `false` when the provider has not produced a durable session pointer yet.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::Codec`] when the updated row cannot be encoded, [`StoreError::Engine`] when the read or write
+    /// fails.
+    pub fn set_session_label(
+        &self,
+        session: SessionId,
+        label: Option<Box<str>>,
+    ) -> Result<bool, StoreError> {
+        let Some(mut row) = self.get_session(session)? else {
+            return Ok(false);
+        };
+        row.label = label;
+        self.put_session(session, &row)?;
+        Ok(true)
+    }
+
     /// Every stored session, oldest first.
     ///
     /// A malformed row is skipped and reported rather than aborting the whole list. One bad row must not make
@@ -619,6 +640,37 @@ mod tests {
         assert_eq!(
             scratch.store.get_session(session).expect("readable"),
             Some(updated)
+        );
+    }
+
+    #[test]
+    fn changing_a_session_name_preserves_every_other_pointer_field() {
+        let scratch = Scratch::make("rename");
+        let session = SessionId::now();
+        let row = a_row("codex", "thread-1");
+        scratch.store.put_session(session, &row).expect("stored");
+
+        assert!(
+            scratch
+                .store
+                .set_session_label(session, Some("Release repair".into()))
+                .expect("renamed")
+        );
+        let renamed = scratch
+            .store
+            .get_session(session)
+            .expect("readable")
+            .expect("present");
+        assert_eq!(renamed.label.as_deref(), Some("Release repair"));
+        assert_eq!(renamed.provider, row.provider);
+        assert_eq!(renamed.native, row.native);
+        assert_eq!(renamed.cwd, row.cwd);
+
+        assert!(
+            !scratch
+                .store
+                .set_session_label(SessionId::now(), Some("Absent".into()))
+                .expect("absence is an answer")
         );
     }
 

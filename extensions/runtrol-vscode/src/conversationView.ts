@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 
 import type { SessionLine } from "./protocol";
+import { sessionTitle } from "./sessionDisplay";
 
 type ViewAction =
   | { type: "prompt"; text: string }
@@ -49,9 +50,9 @@ type WebviewReadyWaiter = {
 const MAX_PENDING_POSTS = 4_096;
 const POST_BATCH = MAX_PENDING_POSTS;
 
-export class ConversationView implements vscode.WebviewViewProvider {
+export class ConversationView implements vscode.Disposable {
   static readonly viewType = "runtrol.conversation";
-  private view: vscode.WebviewView | null = null;
+  private panel: vscode.WebviewPanel | null = null;
   private selected: SessionLine | null = null;
   private generation = 0;
   private pendingFrames: FrameEnvelope[] = [];
@@ -62,24 +63,40 @@ export class ConversationView implements vscode.WebviewViewProvider {
   private readonly renderWaiters = new Set<RenderWaiter>();
   private renderedGeneration = 0;
   private webviewReady: WebviewReadyWaiter | null = null;
+  private visibleReady = false;
 
   constructor(
     private readonly extensionUri: vscode.Uri,
     private readonly action: (message: ViewAction) => void,
+    private readonly titleOf: (session: SessionLine) => string = sessionTitle,
+    private readonly visibility: (visible: boolean) => void = () => {},
   ) {}
 
-  resolveWebviewView(view: vscode.WebviewView): void {
-    this.view = view;
+  show(preserveFocus = false): Promise<void> {
+    if (this.panel) {
+      this.panel.reveal(this.panel.viewColumn ?? vscode.ViewColumn.Active, preserveFocus);
+      return this.webviewReady?.promise ?? Promise.resolve();
+    }
+    const panel = vscode.window.createWebviewPanel(
+      ConversationView.viewType,
+      this.panelTitle(this.selected),
+      vscode.ViewColumn.Active,
+      {
+        enableScripts: true,
+        localResourceRoots: [vscode.Uri.joinPath(this.extensionUri, "dist")],
+        retainContextWhenHidden: false,
+      },
+    );
+    panel.iconPath = vscode.Uri.joinPath(this.extensionUri, "resources", "symbol.svg");
+    this.panel = panel;
     const ready = webviewReadyWaiter();
     this.webviewReady = ready;
-    view.webview.options = {
-      enableScripts: true,
-      localResourceRoots: [vscode.Uri.joinPath(this.extensionUri, "dist")],
-    };
-    view.webview.onDidReceiveMessage((message: unknown) => {
+    panel.webview.onDidReceiveMessage((message: unknown) => {
       if (isWebviewReady(message)) {
-        ready.resolve();
+        this.visibleReady = true;
+        this.webviewReady?.resolve();
         this.reset(this.selected);
+        this.visibility(true);
         return;
       }
       if (this.receiveRenderedGeneration(message)) {
@@ -93,9 +110,21 @@ export class ConversationView implements vscode.WebviewViewProvider {
       }
       this.action(message);
     });
-    view.onDidDispose(() => {
-      if (this.view === view) {
-        this.view = null;
+    panel.onDidChangeViewState(({ webviewPanel }) => {
+      if (webviewPanel.visible || this.panel !== panel) {
+        return;
+      }
+      this.visibleReady = false;
+      this.webviewReady?.resolve();
+      this.webviewReady = webviewReadyWaiter();
+      this.visibility(false);
+    });
+    panel.onDidDispose(() => {
+      if (this.panel === panel) {
+        this.panel = null;
+        this.visibleReady = false;
+        this.visibility(false);
+        this.webviewReady?.resolve();
         this.webviewReady = null;
         this.pendingFrames = [];
         ready.resolve();
@@ -103,31 +132,49 @@ export class ConversationView implements vscode.WebviewViewProvider {
         this.rejectRenderWaiters(new Error("the Runtrol Webview closed before painting the selected session"));
       }
     });
-    view.webview.html = this.html(view.webview);
+    panel.webview.html = this.html(panel.webview);
+    return ready.promise;
   }
 
   reset(session: SessionLine | null): number {
     this.selected = session;
+    if (this.panel) {
+      this.panel.title = this.panelTitle(session);
+    }
     this.generation += 1;
     this.pendingFrames = [];
     this.postGap = false;
-    void this.view?.webview.postMessage({ type: "reset", session, generation: this.generation });
+    void this.panel?.webview.postMessage({
+      type: "reset",
+      session,
+      title: session ? this.titleOf(session) : null,
+      generation: this.generation,
+    });
     return this.generation;
   }
 
-  waitForCurrentRender(): Promise<void> {
+  updateSession(session: SessionLine): void {
+    this.selected = session;
+    if (this.panel) {
+      this.panel.title = this.panelTitle(session);
+    }
+    void this.panel?.webview.postMessage({ type: "session", session, title: this.titleOf(session) });
+  }
+
+  async waitForCurrentRender(): Promise<void> {
+    await this.show(true);
     const generation = this.generation;
     if (this.renderedGeneration >= generation) {
-      return Promise.resolve();
+      return;
     }
     return new Promise<void>((resolve, reject) => {
       this.renderWaiters.add({ generation, resolve, reject });
     });
   }
 
-  frame(payload: unknown): void {
-    if (!this.view) {
-      return;
+  frame(payload: unknown): boolean {
+    if (!this.panel?.visible || !this.visibleReady) {
+      return false;
     }
     if (this.pendingFrames.length >= MAX_PENDING_POSTS) {
       const dropped = this.pendingFrames.length - MAX_PENDING_POSTS + 1;
@@ -137,26 +184,27 @@ export class ConversationView implements vscode.WebviewViewProvider {
     }
     this.pendingFrames.push({ generation: this.generation, payload });
     this.schedulePosts();
+    return true;
   }
 
   status(message: string, kind: "info" | "warning" | "error" = "info"): void {
-    void this.view?.webview.postMessage({ type: "status", message, kind });
+    void this.panel?.webview.postMessage({ type: "status", message, kind });
   }
 
   async measurePerformance(framesPerSecond = 3_000, durationMs = 5_000): Promise<WebviewPerformance> {
-    if (!this.view) {
-      throw new Error("open the Runtrol view before measuring its Webview");
-    }
+    await this.show(true);
+    const panel = this.panel;
+    if (!panel) throw new Error("the Runtrol conversation panel did not open");
     if (framesPerSecond <= 0 || durationMs <= 0) {
       throw new Error("Webview measurement rate and duration must be positive");
     }
-    const webview = this.view.webview;
+    const webview = panel.webview;
     const ready = this.webviewReady;
     if (!ready) {
       throw new Error("open the Runtrol view before measuring its Webview");
     }
     await ready.promise;
-    if (this.view?.webview !== webview) {
+    if (this.panel?.webview !== webview) {
       throw new Error("the Runtrol Webview changed before measurement started");
     }
     const id = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -215,11 +263,11 @@ export class ConversationView implements vscode.WebviewViewProvider {
   }
 
   private async flushPosts(): Promise<void> {
-    while (this.view && this.pendingFrames.length > 0) {
+    while (this.panel && this.pendingFrames.length > 0) {
       const batch = this.pendingFrames.splice(0, POST_BATCH);
       const gap = this.postGap;
       this.postGap = false;
-      const delivered = await this.view.webview.postMessage({ type: "frames", batch, gap });
+      const delivered = await this.panel.webview.postMessage({ type: "frames", batch, gap });
       if (!delivered) {
         this.pendingFrames = [];
         return;
@@ -297,6 +345,21 @@ export class ConversationView implements vscode.WebviewViewProvider {
     this.renderWaiters.clear();
   }
 
+  dispose(): void {
+    this.panel?.dispose();
+    this.panel = null;
+    this.visibleReady = false;
+    this.webviewReady?.resolve();
+    this.webviewReady = null;
+    this.pendingFrames = [];
+    this.rejectMeasurements(new Error("the Runtrol conversation panel was disposed"));
+    this.rejectRenderWaiters(new Error("the Runtrol conversation panel was disposed"));
+  }
+
+  private panelTitle(session: SessionLine | null): string {
+    return session ? `Runtrol: ${this.titleOf(session)}` : "Runtrol Session";
+  }
+
   private html(webview: vscode.Webview): string {
     const script = webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, "dist", "webview.js"));
     const style = webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, "dist", "webview.css"));
@@ -308,21 +371,25 @@ export class ConversationView implements vscode.WebviewViewProvider {
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource}; script-src 'nonce-${nonce}';">
   <link rel="stylesheet" href="${style}">
-  <title>Runtrol active session</title>
+  <title>Runtrol session</title>
 </head>
 <body>
   <header>
-    <div>
+    <div class="session-heading">
       <strong id="session-title">No active session</strong>
       <div id="session-path"></div>
     </div>
-    <button id="open-workspace" type="button" title="Open workspace">Open</button>
+    <div class="header-actions">
+      <span id="session-state"></span>
+      <button id="open-workspace" type="button" title="Open workspace">Open workspace</button>
+    </div>
   </header>
   <div id="status" role="status"></div>
   <main id="conversation" aria-live="polite"></main>
   <form id="composer">
-    <textarea id="prompt" rows="3" placeholder="Select a session to send a prompt" disabled></textarea>
+    <textarea id="prompt" rows="2" aria-label="Prompt" placeholder="Select a session to send a prompt" disabled></textarea>
     <div class="actions">
+      <span class="send-hint">Ctrl+Enter to send</span>
       <button id="interrupt" type="button" disabled>Interrupt</button>
       <button id="close" type="button" disabled>Close</button>
       <button id="send" type="submit" disabled>Send</button>

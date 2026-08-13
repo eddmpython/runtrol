@@ -7,10 +7,10 @@ The public surfaces share product contracts and brand assets, not a mandatory co
 | Surface | Stack | Reason |
 |---|---|---|
 | GitHub Pages landing | Static HTML, CSS, and small browser JavaScript | Main content works without JavaScript, no package runtime is needed, and the complete output stays under a hard byte budget |
-| VS Code extension | Native VS Code views plus one bounded Webview for the selected live session | Reuses editor navigation and keeps renderer cost independent of logical session count |
+| VS Code extension | Native VS Code navigation plus one bounded editor Webview for the selected live session | Gives the conversation editor width while keeping renderer cost independent of logical session count |
 | Phone PWA | Chosen when the production transport contract is complete | The client must follow the encrypted frame and reconnect boundary instead of shaping that boundary around a premature UI |
 
-The previous plan to require Astryx and StyleX across a landing page, a PWA, and a Tauri desktop window is superseded by the VS Code-only PC decision. A static distribution page does not need to carry an application component runtime. The phone PWA may still reuse interaction patterns, tokens, and accessible primitives where that improves the production result.
+The previous desktop-window frontend was removed when the PC surface became VS Code-only. A static distribution page does not need to carry an application component runtime. The phone PWA may still reuse interaction patterns, tokens, and accessible primitives where that improves the production result.
 
 ## Shared contracts
 
@@ -34,6 +34,11 @@ The landing uses one source object for the repository and latest-release endpoin
 
 ## VS Code implementation
 
-The session TreeView and QuickPick own navigation for every logical session. Only the selected session owns the full watch and Webview renderer. Stable selected-first ordering, fuzzy metadata search, workspace following, hot process bounds, and cold provider-native resume are release contracts, not styling preferences.
+The session TreeView and QuickPick own navigation for every logical session. Selecting a row opens one reusable
+conversation tab in the editor area. Only the selected session owns the full watch and Webview renderer. A custom
+operator name is primary when present. Otherwise the title combines the workspace name and runtime-discovered
+provider display name, adding a short stable discriminator only when two visible titles collide. Stable selected-first
+ordering, fuzzy metadata search, workspace following, hot process bounds, and cold provider-native resume are release
+contracts, not styling preferences.
 
 Webview code must use the VS Code state and message boundary already covered by extension gates. It must not introduce a second transcript store or provider-specific product branch.

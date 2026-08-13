@@ -91,7 +91,9 @@ pub fn needed(request: &Request) -> Needed {
             workspace_access: WorkspaceAccess::Exclusive,
             ..
         } => Needed::Scope(DeviceScope::SessionResume),
-        Request::Prompt { .. } => Needed::Scope(DeviceScope::SessionInputWrite),
+        Request::Prompt { .. } | Request::Rename { .. } => {
+            Needed::Scope(DeviceScope::SessionInputWrite)
+        }
         Request::AnswerApproval { .. } => Needed::ApprovalResponse,
         Request::Watch { .. } => Needed::Scope(DeviceScope::SessionOutputRead),
         Request::Interrupt { .. } => Needed::Scope(DeviceScope::SessionStop),
@@ -217,6 +219,10 @@ mod tests {
             Request::Prompt {
                 session: SessionId::now(),
                 text: "hello".into(),
+            },
+            Request::Rename {
+                session: SessionId::now(),
+                label: Some("release repair".into()),
             },
             Request::AnswerApproval {
                 session: SessionId::now(),

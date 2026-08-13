@@ -24,6 +24,7 @@ export type SessionLine = {
   session: string;
   provider: string;
   native: string | null;
+  label?: string | null;
   workspace: string;
   hot: boolean;
   doing: string;
@@ -80,6 +81,7 @@ export type Request =
       };
     }
   | { ask: "prompt"; with: { session: string; text: string } }
+  | { ask: "rename"; with: { session: string; label: string | null } }
   | {
       ask: "answerApproval";
       with: { session: string; approval: string; option: number; subject_digest: number[] };

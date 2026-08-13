@@ -102,7 +102,7 @@ def sourceProblems(
     if 'path.join(repositoryRoot, "LICENSE")' not in buildScript:
         found.append("build.mjs does not copy the repository license into package resources")
     requiredWorkflowTokens = (
-        "cargo build --release -p runtrol --bin runtrol --no-default-features",
+        "cargo build --release -p runtrol --bin runtrol --target-dir target/vscode-release",
         "--target-dir target/vscode-release",
         "RUNTROL_CORE_BINARY: target/vscode-release/release/${{ matrix.executable }}",
         "tests/audit/vscodeUpgradeRollback.py --archive",
@@ -116,15 +116,18 @@ def sourceProblems(
     for token in ("crates/runtrol-gui", "libwebkit2gtk-4.1-dev"):
         if token in releaseWorkflow:
             found.append(f"vscode-release.yml restores unused desktop release work {token}")
+    for token in ("--no-default-features", "--features"):
+        if token in releaseWorkflow:
+            found.append(f"vscode-release.yml selects a removed Core feature surface: {token}")
     for token in ("VSCE_PAT", "--oidc", "--azure-credential", "vsce publish", "id-token: write"):
         if token in releaseWorkflow:
             found.append(f"vscode-release.yml contains an unavailable or secret Marketplace publishing path: {token}")
     for actionRevision in re.findall(r"uses:\s+[^@\s]+@([^\s#]+)", releaseWorkflow):
         if not re.fullmatch(r"[0-9a-f]{40}", actionRevision):
             found.append(f"vscode-release.yml uses an unpinned action revision: {actionRevision}")
-    for token in ('default = ["desktop"]', 'desktop = ["dep:runtrol-gui"]', "optional = true"):
-        if token not in coreManifest:
-            found.append(f"runtrol Cargo.toml is missing optional desktop contract {token}")
+    for token in ('default = ["desktop"]', 'desktop = ["dep:runtrol-gui"]', "runtrol-gui"):
+        if token in coreManifest:
+            found.append(f"runtrol Cargo.toml restores removed standalone GUI contract {token}")
     for token in ("tooling/**", "src/**", "node_modules/**", "performance-budget.json", "release-targets.json"):
         if token not in ignore:
             found.append(f".vscodeignore does not exclude {token}")
@@ -361,7 +364,7 @@ def selftest() -> int:
     )
     buildScript = 'path.join(repositoryRoot, "LICENSE")'
     releaseWorkflow = """
-    cargo build --release -p runtrol --bin runtrol --no-default-features --target-dir target/vscode-release
+    cargo build --release -p runtrol --bin runtrol --target-dir target/vscode-release
     RUNTROL_CORE_BINARY: target/vscode-release/release/${{ matrix.executable }}
     tests/audit/vscodeUpgradeRollback.py --archive
     if: inputs.release
@@ -369,7 +372,7 @@ def selftest() -> int:
     gh release create
     uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
     """
-    coreManifest = 'default = ["desktop"]\ndesktop = ["dep:runtrol-gui"]\nruntrol-gui = { optional = true }'
+    coreManifest = '[package]\nname = "runtrol"'
     ignore = "tooling/** src/** node_modules/** performance-budget.json release-targets.json"
     if sourceProblems(
         sourcePackage,
@@ -390,8 +393,8 @@ def selftest() -> int:
     sourceMutations = (
         (brokenSource, releaseWorkflow, coreManifest),
         (floatingPublisher, releaseWorkflow, coreManifest),
-        (sourcePackage, releaseWorkflow.replace("--no-default-features", ""), coreManifest),
-        (sourcePackage, releaseWorkflow, coreManifest.replace("optional = true", "")),
+        (sourcePackage, releaseWorkflow.replace("--bin runtrol", "--bin runtrol --features desktop"), coreManifest),
+        (sourcePackage, releaseWorkflow, f'{coreManifest}\ndefault = ["desktop"]'),
         (sourcePackage, f"{releaseWorkflow}\ncrates/runtrol-gui", coreManifest),
         (sourcePackage, releaseWorkflow.replace("tests/audit/vscodeUpgradeRollback.py --archive", ""), coreManifest),
         (sourcePackage, releaseWorkflow.replace("gh release create", ""), coreManifest),

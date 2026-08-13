@@ -51,8 +51,7 @@ use std::time::{Duration, Instant};
 #[cfg(not(target_os = "linux"))]
 const RELEASE_BUDGET: u64 = 16 * 1024 * 1024;
 
-/// Linux maps the desktop runtime into the one installed executable even when that executable is serving as the
-/// daemon. The hosted debug measurement is 41,500,672 bytes, so both Linux profiles have a 48 MiB ceiling until a
+/// The hosted Linux debug measurement is 41,500,672 bytes, so both Linux profiles have a 48 MiB ceiling until a
 /// release measurement justifies a lower one.
 #[cfg(target_os = "linux")]
 const RELEASE_BUDGET: u64 = 48 * 1024 * 1024;

@@ -57,8 +57,7 @@ installed" for as long as the operator's search path does. The registration name
   a vendor's commands is semantics no probe can read, so it is declared and then exercised, like bound flags.
 - `crates/runtrol-daemon/src/consult.rs`: the executor. Enumerates ordered provider pairs, judges state,
   wires and unwires, and answers one `Consult` response shape for status and for both flips.
-- Requests `consult` / `consult wire <from> <to>` / `consult unwire <from> <to>` on the command surface,
-  and the `AI 자문` dialog in the desktop window, both over the same daemon requests.
+- Requests `consult` / `consult wire <from> <to>` / `consult unwire <from> <to>` on the command surface.
 - Consult work runs in the connection task behind the provider preparation gate, so a toggle never stops a
   running session's events.
 

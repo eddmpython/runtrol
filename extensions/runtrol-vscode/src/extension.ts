@@ -6,6 +6,7 @@ import { CoreClient } from "./core/client";
 import { CoreLocator } from "./core/locator";
 import { journeyApi, type JourneyApi } from "./journeyApi";
 import { SelectionStore } from "./selectionStore";
+import { uniqueSessionTitle } from "./sessionDisplay";
 import { RuntimeState } from "./state";
 import { ProvidersTree, SessionsTree } from "./trees";
 
@@ -40,21 +41,26 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
     return action();
   };
   let controller: Controller;
-  const conversation = new ConversationView(context.extensionUri, (message) => {
-    if (message.type === "prompt") {
-      void run(() => afterReady(() => controller.prompt(message.text)));
-    } else if (message.type === "answerApproval") {
-      void run(() => afterReady(
-        () => controller.answerApproval(message.approval, message.option, message.subjectDigest),
-      ));
-    } else if (message.type === "openWorkspace") {
-      void run(() => afterReady(() => controller.openWorkspace()));
-    } else if (message.type === "interrupt") {
-      void run(() => afterReady(() => controller.interrupt()));
-    } else {
-      void run(() => afterReady(() => controller.close()));
-    }
-  });
+  const conversation = new ConversationView(
+    context.extensionUri,
+    (message) => {
+      if (message.type === "prompt") {
+        void run(() => afterReady(() => controller.prompt(message.text)));
+      } else if (message.type === "answerApproval") {
+        void run(() => afterReady(
+          () => controller.answerApproval(message.approval, message.option, message.subjectDigest),
+        ));
+      } else if (message.type === "openWorkspace") {
+        void run(() => afterReady(() => controller.openWorkspace()));
+      } else if (message.type === "interrupt") {
+        void run(() => afterReady(() => controller.interrupt()));
+      } else {
+        void run(() => afterReady(() => controller.close()));
+      }
+    },
+    (session) => uniqueSessionTitle(session, state.sessions, state.providers),
+    (visible) => controller.conversationVisibilityChanged(visible),
+  );
   controller = new Controller(context, client, state, conversation, selection);
   const sessions = new SessionsTree(state);
   const providers = new ProvidersTree(state);
@@ -62,13 +68,11 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
   context.subscriptions.push(
     state,
     controller,
+    conversation,
     sessions,
     providers,
     vscode.window.registerTreeDataProvider("runtrol.sessions", sessions),
     vscode.window.registerTreeDataProvider("runtrol.providers", providers),
-    vscode.window.registerWebviewViewProvider(ConversationView.viewType, conversation, {
-      webviewOptions: { retainContextWhenHidden: false },
-    }),
     vscode.commands.registerCommand("runtrol.refresh", () => run(() => afterReady(() => controller.refresh()))),
     vscode.commands.registerCommand(
       "runtrol.switchSession",
@@ -81,6 +85,14 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
     vscode.commands.registerCommand(
       "runtrol.selectSession",
       (item) => run(() => afterReady(() => controller.select(item))),
+    ),
+    vscode.commands.registerCommand(
+      "runtrol.openConversation",
+      () => run(() => afterReady(async () => controller.openConversation())),
+    ),
+    vscode.commands.registerCommand(
+      "runtrol.renameSession",
+      (item) => run(() => afterReady(() => controller.nameSession(item))),
     ),
     vscode.commands.registerCommand(
       "runtrol.openWorkspace",
