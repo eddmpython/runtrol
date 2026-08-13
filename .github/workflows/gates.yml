@@ -227,13 +227,15 @@ jobs:
       - name: cargo clippy
         if: needs.detect.outputs.hasWorkspace == 'true'
         run: cargo clippy --all-targets --all-features -- -D warnings
-      # 다른 플랫폼의 cfg 분기를 이 잡에서도 본다. 로컬 preflight 와 같은 게이트다
-      # (`tests/audit/gateCoverage.py` 가 두 목록의 일치를 강제한다).
+      # 다른 플랫폼의 cfg 분기를 이 잡에서도 본다. Linux 호스트에서는 MSVC 도구의 `lib.exe`가
+      # 없으므로 MinGW 도구와 GNU 대상을 사용한다. 로컬 preflight 는 현재 호스트의 반대 대상을 쓴다.
       - name: cargo clippy (다른 플랫폼 cfg 분기)
         if: needs.detect.outputs.hasWorkspace == 'true'
         run: |
-          rustup target add x86_64-pc-windows-msvc
-          cargo clippy --all-targets --workspace --target x86_64-pc-windows-msvc -- -D warnings
+          sudo apt-get update
+          sudo apt-get install -y gcc-mingw-w64-x86-64
+          rustup target add x86_64-pc-windows-gnu
+          cargo clippy --all-targets --workspace --target x86_64-pc-windows-gnu -- -D warnings
       - name: memory budget gate product binary
         if: needs.detect.outputs.hasWorkspace == 'true'
         run: cargo build -p runtrol --bin runtrol
@@ -318,6 +320,16 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y gnome-keyring
           gnome-keyring-daemon --components=secrets --daemonize --unlock <<< 'runtrol-ci'
+      - name: macOS 네이티브 자격 증명 저장소
+        if: matrix.os == 'macos-latest'
+        shell: bash
+        run: |
+          keychain="$RUNNER_TEMP/runtrol-ci.keychain-db"
+          security create-keychain -p 'runtrol-ci' "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p 'runtrol-ci' "$keychain"
+          security default-keychain -d user -s "$keychain"
+          security list-keychains -d user -s "$keychain"
       - uses: actions/cache@v4
         with:
           path: extensions/runtrol-vscode/.vscode-test

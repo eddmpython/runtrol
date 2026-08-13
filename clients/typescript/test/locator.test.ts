@@ -51,12 +51,12 @@ async function makeOwnerOnly(path: string): Promise<void> {
   const script = [
     "& { param([string]$TargetPath)",
     "$ErrorActionPreference='Stop'",
-    "$acl=Get-Acl -LiteralPath $TargetPath",
+    "$acl=[System.IO.File]::GetAccessControl($TargetPath)",
     "$acl.SetAccessRuleProtection($true,$false)",
     "$identity=[Security.Principal.WindowsIdentity]::GetCurrent().User",
     "$rule=New-Object Security.AccessControl.FileSystemAccessRule($identity,'FullControl','Allow')",
     "$acl.SetAccessRule($rule)",
-    "Set-Acl -LiteralPath $TargetPath -AclObject $acl",
+    "[System.IO.File]::SetAccessControl($TargetPath,$acl)",
     "}",
   ].join(";");
   await executeFile(

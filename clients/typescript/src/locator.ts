@@ -126,7 +126,7 @@ async function validateWindowsSecurity(path: string): Promise<void> {
   const script = [
     "& { param([string]$TargetPath)",
     "$ErrorActionPreference='Stop'",
-    "$acl=Get-Acl -LiteralPath $TargetPath",
+    "$acl=[System.IO.File]::GetAccessControl($TargetPath)",
     "$current=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value",
     "$owner=$acl.GetOwner([Security.Principal.SecurityIdentifier]).Value",
     "$rules=@($acl.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier]) | ForEach-Object {",
