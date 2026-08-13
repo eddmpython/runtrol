@@ -18,6 +18,12 @@ import { sessionTitle } from "./sessionDisplay";
 import { sessionChoices } from "./sessionNavigation";
 import { RuntimeState } from "./state";
 import { SessionItem } from "./trees";
+import { StudioRuntimeClient } from "./runtimeClient";
+import {
+  projectModelCatalog,
+  projectProviders,
+  projectSessions,
+} from "./runtimeProjection";
 import { workspaceCollisions, type WorkspaceCollision } from "./workspaceCollision";
 
 export class Controller implements vscode.Disposable {
@@ -33,6 +39,7 @@ export class Controller implements vscode.Disposable {
   constructor(
     private readonly context: vscode.ExtensionContext,
     private readonly client: CoreClient,
+    private readonly runtime: StudioRuntimeClient,
     private readonly state: RuntimeState,
     private readonly conversation: ConversationView,
     private readonly selection: SelectionStore,
@@ -59,14 +66,12 @@ export class Controller implements vscode.Disposable {
   }
 
   async refresh(): Promise<void> {
-    const { response, providers } = await this.client.once({ ask: "list" });
-    if (response.say === "failed") {
-      throw new Error(response.with.message);
-    }
-    if (response.say !== "sessions") {
-      throw new Error(`the daemon answered list with ${response.say}`);
-    }
-    this.applyListing(response.with.sessions, response.with.warnings, providers);
+    const inventory = await this.runtime.inventory();
+    this.applyListing(
+      projectSessions(inventory.sessions),
+      inventory.sessions.warnings,
+      projectProviders(inventory.providers),
+    );
   }
 
   async checkProviderUpdates(): Promise<void> {
@@ -172,6 +177,7 @@ export class Controller implements vscode.Disposable {
     this.indexAbort?.abort();
     this.indexAbort = null;
     await this.client.reset();
+    await this.runtime.reset();
     await this.refreshAfterReconnect();
     this.startSessionIndexWatch();
     const selected = this.state.selected;
@@ -437,6 +443,7 @@ export class Controller implements vscode.Disposable {
     this.watchAbort?.abort();
     this.indexAbort?.abort();
     this.client.dispose();
+    this.runtime.dispose();
   }
 
   selectedWatchReady(): Promise<void> {
@@ -471,7 +478,7 @@ export class Controller implements vscode.Disposable {
     let retryMs = 250;
     while (!signal.aborted && !this.disposed && this.state.selected?.session === session.session) {
       try {
-        await this.client.watch(
+        await this.runtime.watchEvents(
           session.session,
           this.state.cursor(session.session),
           {
@@ -479,8 +486,10 @@ export class Controller implements vscode.Disposable {
             event: (payload, nextExpected) => {
               if (this.conversation.frame(payload)) {
                 this.state.advance(session.session, nextExpected);
+                return true;
               } else {
                 this.pauseWatch();
+                return false;
               }
             },
             gap: (nextExpected, message) => {
@@ -530,12 +539,26 @@ export class Controller implements vscode.Disposable {
     let retryMs = 250;
     while (!signal.aborted && !this.disposed) {
       try {
-        await this.client.watchSessions(
-          {
-            snapshot: (listing, providers) => this.applyListing(listing.sessions, listing.warnings, providers),
-          },
-          signal,
-        );
+        const connected = new AbortController();
+        const watching = AbortSignal.any([signal, connected.signal]);
+        await Promise.race([
+          this.runtime.watchSessions(
+            (listing) => this.applyListing(
+              projectSessions(listing),
+              listing.warnings,
+              this.state.providers,
+            ),
+            watching,
+          ),
+          this.runtime.watchProviders(
+            (providers) => this.applyListing(
+              this.state.sessions,
+              [],
+              projectProviders(providers),
+            ),
+            watching,
+          ),
+        ]).finally(() => connected.abort());
         retryMs = 250;
       } catch (error) {
         if (signal.aborted) {
@@ -574,14 +597,7 @@ export class Controller implements vscode.Disposable {
   }
 
   private async chooseModel(provider: ProviderLine): Promise<string | null | undefined> {
-    const { response } = await this.client.once({ ask: "models", with: { provider: provider.id } });
-    if (response.say === "failed") {
-      throw new Error(response.with.message);
-    }
-    if (response.say !== "models") {
-      throw new Error(`the daemon answered models with ${response.say}`);
-    }
-    const choices = modelChoices(response.with);
+    const choices = modelChoices(projectModelCatalog(await this.runtime.models(provider.id)));
     if (choices.length === 0) {
       return null;
     }

@@ -178,3 +178,27 @@ fn publishable_typescript_client_imports_no_private_runtime_authority() {
         );
     }
 }
+
+#[test]
+fn studio_public_read_modules_use_the_package_and_not_private_ipc() {
+    for relative in ["runtimeClient.ts", "runtimeProjection.ts"] {
+        let path = root().join("extensions/runtrol-vscode/src").join(relative);
+        let source = std::fs::read_to_string(&path)
+            .unwrap_or_else(|error| panic!("cannot read {}: {error}", path.display()));
+        assert!(
+            source.contains("@runtrol/runtime-client"),
+            "Studio public read module {relative} does not import the public package"
+        );
+        for forbidden in [
+            "./core/client",
+            "./protocol",
+            "FrameTransport",
+            "WIRE_VERSION",
+        ] {
+            assert!(
+                !source.contains(forbidden),
+                "Studio public read module {relative} imports private IPC declaration {forbidden:?}"
+            );
+        }
+    }
+}

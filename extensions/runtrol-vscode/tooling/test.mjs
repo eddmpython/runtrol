@@ -8,6 +8,7 @@ import { build } from "esbuild";
 import { isolatedExtensionTestArguments } from "./isolated-vscode.mjs";
 
 const extensionRoot = fileURLToPath(new URL("../", import.meta.url));
+const repositoryRoot = fileURLToPath(new URL("../../../", import.meta.url));
 const out = path.join(extensionRoot, ".test-dist");
 await rm(out, { recursive: true, force: true });
 await mkdir(out, { recursive: true });
@@ -25,12 +26,16 @@ await build({
     "sessionNavigation.test": path.join(extensionRoot, "src/sessionNavigation.test.ts"),
     "stateRows.test": path.join(extensionRoot, "src/stateRows.test.ts"),
     "workspaceCollision.test": path.join(extensionRoot, "src/workspaceCollision.test.ts"),
+    "runtimeProjection.test": path.join(extensionRoot, "src/runtimeProjection.test.ts"),
   },
   outdir: out,
   bundle: true,
   platform: "node",
   format: "cjs",
   target: "node20",
+  alias: {
+    "@runtrol/runtime-client": path.join(repositoryRoot, "clients/typescript/src/index.ts"),
+  },
   sourcemap: false,
   logLevel: "silent",
 });
@@ -47,6 +52,7 @@ const result = spawnSync(process.execPath, [
   path.join(out, "sessionNavigation.test.js"),
   path.join(out, "stateRows.test.js"),
   path.join(out, "workspaceCollision.test.js"),
+  path.join(out, "runtimeProjection.test.js"),
 ], {
   stdio: "inherit",
 });

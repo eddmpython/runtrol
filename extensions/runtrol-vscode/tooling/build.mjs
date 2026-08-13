@@ -26,6 +26,9 @@ await Promise.all([
     format: "cjs",
     target: "node20",
     external: ["vscode"],
+    alias: {
+      "@runtrol/runtime-client": path.join(repositoryRoot, "clients/typescript/src/index.ts"),
+    },
     minify: true,
     sourcemap: false,
     logLevel: "info",

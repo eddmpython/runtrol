@@ -229,6 +229,7 @@
     "package:win32-x64": "node tooling/package.mjs win32-x64"
   },
   "devDependencies": {
+    "@runtrol/runtime-client": "file:../../clients/typescript",
     "@types/node": "^24.0.0",
     "@types/vscode": "^1.100.0",
     "@vscode/test-electron": "3.1.0",

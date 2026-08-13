@@ -104,6 +104,21 @@ export async function reviewIntegrationEnrollments(client: CoreClient): Promise<
   await decideEnrollment(client, selected.enrollment);
 }
 
+export async function reviewIntegrationEnrollment(
+  client: CoreClient,
+  pendingId: string,
+): Promise<boolean> {
+  const response = await ask(client, { ask: "integrationEnrollments" });
+  if (response.say !== "integrationEnrollments") {
+    throw new Error(`the daemon answered integration enrollment listing with ${response.say}`);
+  }
+  const enrollment = response.with.find((candidate) => candidate.pending_id === pendingId);
+  if (!enrollment) {
+    throw new Error("the Studio Runtime enrollment is no longer pending");
+  }
+  return await decideEnrollment(client, enrollment) === "approved";
+}
+
 export async function manageIntegrations(client: CoreClient): Promise<void> {
   const response = await ask(client, { ask: "integrations" });
   if (response.say !== "integrations") {
@@ -134,7 +149,10 @@ export async function manageIntegrations(client: CoreClient): Promise<void> {
   await vscode.window.showInformationMessage(`Runtrol: Revoked ${selected.label}.`);
 }
 
-async function decideEnrollment(client: CoreClient, enrollment: IntegrationEnrollmentLine): Promise<void> {
+async function decideEnrollment(
+  client: CoreClient,
+  enrollment: IntegrationEnrollmentLine,
+): Promise<"approved" | "denied" | "cancelled"> {
   const summary = [
     `${enrollment.client_name} ${enrollment.client_version}`,
     `Instance: ${enrollment.client_instance_id}`,
@@ -155,10 +173,10 @@ async function decideEnrollment(client: CoreClient, enrollment: IntegrationEnrol
     });
     expectDone(denied, "integration denial");
     await vscode.window.showInformationMessage(`Runtrol: Denied ${enrollment.client_name}.`);
-    return;
+    return "denied";
   }
   if (action !== "Review and Approve") {
-    return;
+    return "cancelled";
   }
   const scopes = await pickSubset(
     "Choose integration permissions",
@@ -166,7 +184,7 @@ async function decideEnrollment(client: CoreClient, enrollment: IntegrationEnrol
     "At least one permission must remain selected",
   );
   if (!scopes) {
-    return;
+    return "cancelled";
   }
   const roots = enrollment.roots.length === 0
     ? []
@@ -176,7 +194,7 @@ async function decideEnrollment(client: CoreClient, enrollment: IntegrationEnrol
       "At least one project root must remain selected",
     );
   if (!roots) {
-    return;
+    return "cancelled";
   }
   const begun = await ask(client, {
     ask: "integrationApprovalBegin",
@@ -192,7 +210,7 @@ async function decideEnrollment(client: CoreClient, enrollment: IntegrationEnrol
     ignoreFocusOut: true,
   });
   if (typed === undefined) {
-    return;
+    return "cancelled";
   }
   const approved = await ask(client, {
     ask: "integrationApprovalFinish",
@@ -204,6 +222,7 @@ async function decideEnrollment(client: CoreClient, enrollment: IntegrationEnrol
   await vscode.window.showInformationMessage(
     `Runtrol: Approved ${enrollment.client_name} as ${approved.with.integration_id}.`,
   );
+  return "approved";
 }
 
 async function pickSubset(

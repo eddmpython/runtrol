@@ -6,6 +6,7 @@ import { CoreClient } from "./core/client";
 import { CoreLocator } from "./core/locator";
 import {
   manageIntegrations,
+  reviewIntegrationEnrollment,
   reviewIntegrationEnrollments,
   reviewRuntimeRequests,
 } from "./integrationAdministration";
@@ -13,6 +14,7 @@ import { journeyApi, type JourneyApi } from "./journeyApi";
 import { SelectionStore } from "./selectionStore";
 import { uniqueSessionTitle } from "./sessionDisplay";
 import { RuntimeState } from "./state";
+import { StudioRuntimeClient } from "./runtimeClient";
 import { ProvidersTree, SessionsTree } from "./trees";
 
 export type RuntrolExtensionApi = {
@@ -38,6 +40,11 @@ export type SessionManagementPerformance = {
 export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi {
   const locator = new CoreLocator(context);
   const client = new CoreClient(locator);
+  const runtime = new StudioRuntimeClient(
+    context,
+    () => client.ensureRuntime(),
+    (pendingId) => reviewIntegrationEnrollment(client, pendingId),
+  );
   const state = new RuntimeState();
   const selection = new SelectionStore(context.globalStorageUri.fsPath);
   let lifecycle: Promise<void> = Promise.resolve();
@@ -66,7 +73,7 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
     (session) => uniqueSessionTitle(session, state.sessions, state.providers),
     (visible) => controller.conversationVisibilityChanged(visible),
   );
-  controller = new Controller(context, client, state, conversation, selection);
+  controller = new Controller(context, client, runtime, state, conversation, selection);
   const sessions = new SessionsTree(state);
   const providers = new ProvidersTree(state);
 
@@ -136,7 +143,7 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
     }),
   );
 
-  lifecycle = controller.initialize();
+  lifecycle = runtime.initialize().then(() => controller.initialize());
   void run(() => lifecycle);
   return {
     get ready() {

@@ -4,6 +4,10 @@
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "module": "ESNext",
     "moduleResolution": "Bundler",
+    "baseUrl": ".",
+    "paths": {
+      "@runtrol/runtime-client": ["../../clients/typescript/src/index.ts"]
+    },
     "strict": true,
     "noEmit": true,
     "skipLibCheck": true,

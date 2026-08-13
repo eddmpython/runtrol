@@ -1,9 +1,7 @@
-import { readFileSync } from "node:fs";
-
 import { RuntimeProtocolError } from "./errors.js";
+import { PUBLIC_SCHEMA } from "./generated/schema.js";
 
-const schemaPath = new URL("../../schema/runtime.schema.json", import.meta.url);
-const rootSchema = JSON.parse(readFileSync(schemaPath, "utf8")) as JsonSchema;
+const rootSchema = PUBLIC_SCHEMA as JsonSchema;
 
 type JsonSchema = boolean | {
   readonly $defs?: Readonly<Record<string, JsonSchema>>;

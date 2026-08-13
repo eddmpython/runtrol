@@ -32,6 +32,10 @@ export class CoreClient {
 
   constructor(private readonly locator: CoreLocator) {}
 
+  async ensureRuntime(): Promise<void> {
+    await this.command();
+  }
+
   once(request: Request): Promise<{ response: Response; providers: ProviderLine[] }> {
     return this.serial(async () => {
       const connected = await this.command();

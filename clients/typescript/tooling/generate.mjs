@@ -9,6 +9,7 @@ const sourceSchema = resolve(
   "../../crates/runtrol-runtime-protocol/schema/runtime.schema.json",
 );
 const generatedTypes = resolve(packageRoot, "src/generated/protocol.ts");
+const generatedSchema = resolve(packageRoot, "src/generated/schema.ts");
 const packagedSchema = resolve(packageRoot, "schema/runtime.schema.json");
 const checking = process.argv.includes("--check");
 
@@ -103,6 +104,8 @@ const generated = `// Generated from crates/runtrol-runtime-protocol/schema/runt
   + `export const FINALIZED_REVISIONS = ${JSON.stringify(revisions)} as const;\n`
   + `export const PUBLIC_LIMITS = ${JSON.stringify(limits, null, 2)} as const;\n\n`
   + `${declarations.join("\n\n")}\n`;
+const generatedSchemaText = "// Generated from crates/runtrol-runtime-protocol/schema/runtime.schema.json. Do not edit.\n\n"
+  + `export const PUBLIC_SCHEMA = ${JSON.stringify(schema)} as const;\n`;
 
 async function compare(path, expected, label) {
   let actual;
@@ -116,10 +119,12 @@ async function compare(path, expected, label) {
 
 if (checking) {
   await compare(generatedTypes, generated, "generated TypeScript protocol");
+  await compare(generatedSchema, generatedSchemaText, "generated TypeScript schema document");
   await compare(packagedSchema, schemaText, "packaged Runtime schema");
 } else {
   await mkdir(dirname(generatedTypes), { recursive: true });
   await mkdir(dirname(packagedSchema), { recursive: true });
   await writeFile(generatedTypes, generated, "utf8");
+  await writeFile(generatedSchema, generatedSchemaText, "utf8");
   await writeFile(packagedSchema, schemaText, "utf8");
 }
