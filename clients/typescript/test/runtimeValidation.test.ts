@@ -43,6 +43,8 @@ function initialized(instanceId: string): object {
         integrationEnrollment: true,
         providerInventory: true,
         managedSessionList: true,
+        modelDiscovery: true,
+        nativeSessionCatalogue: true,
         sessionControl: true,
         sessionEvents: true,
       },
@@ -79,6 +81,38 @@ test("an initialized fake transport rejects an unknown provider result field", a
   const locator = validatedLocator(instanceId, "fixture", "0.1.1");
   const runtime = await connector.connect(locator, { name: "fixture", version: "1.0.0" });
   await assert.rejects(runtime.providers().list(), RuntimeProtocolError);
+  runtime.close();
+});
+
+test("native catalogues reject conversation-shaped extension fields", async () => {
+  const instanceId = `rtm_${"3".repeat(32)}`;
+  const transport = new ScriptedRuntimeTransport([
+    challenge(instanceId),
+    initialized(instanceId),
+    {
+      jsonrpc: "2.0",
+      id: 2,
+      result: {
+        providerId: "provider",
+        coverage: { kind: "complete", source: "officialProtocol" },
+        sessions: [{
+          nativeSessionId: "native",
+          cwd: "C:/work",
+          additionalDirectories: [],
+          resume: "available",
+          preview: "must not cross",
+        }],
+      },
+    },
+  ]);
+  const runtime = await new RuntimeConnector(scriptedTransportFactory(transport)).connect(
+    validatedLocator(instanceId, "fixture", "0.1.1"),
+    { name: "fixture", version: "1.0.0" },
+  );
+  await assert.rejects(
+    runtime.providers().listNativeSessions({ providerId: "provider", root: "C:/work" }),
+    RuntimeProtocolError,
+  );
   runtime.close();
 });
 

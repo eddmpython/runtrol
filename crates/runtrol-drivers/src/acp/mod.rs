@@ -8,6 +8,7 @@
 //! stays in its original byte buffer and crosses the provider seam as [`runtrol_provider::Opaque`].
 
 mod agent;
+mod catalogue;
 mod map;
 mod provider;
 mod wire;

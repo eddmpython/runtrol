@@ -9,6 +9,7 @@ mod inventory;
 mod locator;
 mod method;
 mod models;
+mod native_sessions;
 mod revision;
 mod rpc;
 mod schema;
@@ -29,6 +30,11 @@ pub use locator::{RUNTIME_LOCATOR_SCHEMA, RuntimeEndpointKind, RuntimeLocatorRec
 pub use method::RuntimeMethod;
 pub use models::{
     ListModelsParams, RuntimeModelCatalog, RuntimeModelChoice, RuntimeReasoningChoice,
+};
+pub use native_sessions::{
+    CatalogueCoverage, CatalogueSource, ListNativeSessionsParams, MAX_NATIVE_PUBLIC_CURSOR_BYTES,
+    NATIVE_CURSOR_LIFETIME_MS, NativeResumeCapability, NativeSessionCatalogue,
+    NativeSessionDescriptor,
 };
 pub use revision::{
     FINALIZED_REVISIONS, ProtocolRevision, REVISION_2026_08_13, RevisionError, negotiate,

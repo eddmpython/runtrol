@@ -17,7 +17,10 @@ use std::sync::{Arc, Weak};
 use async_trait::async_trait;
 use runtrol_childproc::{Containment, Program};
 use runtrol_provider::{
-    Agent, MAX_MODEL_CHOICES, MAX_REASONING_CHOICES, ModelCatalog, ModelChoice, OpenIntent,
+    Agent, MAX_MODEL_CHOICES, MAX_NATIVE_CURSOR_BYTES, MAX_NATIVE_SESSION_ITEMS,
+    MAX_NATIVE_TIMESTAMP_BYTES, MAX_NATIVE_TITLE_BYTES, MAX_REASONING_CHOICES, ModelCatalog,
+    ModelChoice, NativeCatalogueCoverage, NativeCatalogueSource, NativeResumeCapability,
+    NativeSessionCatalogue, NativeSessionEntry, NativeSessionId, NativeSessionQuery, OpenIntent,
     Provider, ProviderError, ProviderId, ReasoningChoice,
 };
 use serde::{Deserialize, Serialize};
@@ -40,6 +43,38 @@ const MAX_DISPLAY_NAME_BYTES: usize = 512;
 const MAX_DESCRIPTION_BYTES: usize = 4 * 1024;
 const MAX_REASONING_ID_BYTES: usize = 64;
 const MAX_CURSOR_BYTES: usize = 1024;
+const MAX_NATIVE_PATH_BYTES: usize = 32 * 1024;
+
+/// Root-scoped official session listing with transcript repair explicitly disabled.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ThreadListParams<'a> {
+    cursor: Option<&'a str>,
+    limit: u16,
+    cwd: &'a str,
+    archived: bool,
+    use_state_db_only: bool,
+    sort_key: &'static str,
+    sort_direction: &'static str,
+}
+
+/// One page from the provider's official structured thread list.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ThreadPage {
+    data: Vec<ListedThread>,
+    next_cursor: Option<Box<str>>,
+}
+
+/// Only the structural fields allowed to cross the native catalogue seam.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ListedThread {
+    id: Box<str>,
+    cwd: Box<str>,
+    name: Option<Box<str>>,
+    updated_at: i64,
+}
 
 /// Parameters for the provider's model discovery request.
 #[derive(Serialize)]
@@ -211,10 +246,153 @@ impl Provider for CodexProvider {
         Err(catalogue_too_large(self.id, "pages"))
     }
 
+    async fn native_sessions(
+        &self,
+        query: NativeSessionQuery,
+    ) -> Result<NativeSessionCatalogue, ProviderError> {
+        if query.limit == 0 || usize::from(query.limit) > MAX_NATIVE_SESSION_ITEMS {
+            return Err(native_protocol(
+                self.id,
+                "the requested page limit is invalid",
+            ));
+        }
+        if let Some(cursor) = query.cursor.as_deref() {
+            bounded_native(
+                self.id,
+                "pagination cursor",
+                cursor,
+                MAX_NATIVE_CURSOR_BYTES,
+            )?;
+        }
+        let conn = self.connection().await?;
+        let root = query.root.to_string();
+        let answer = conn
+            .call(
+                "thread/list",
+                &ThreadListParams {
+                    cursor: query.cursor.as_deref(),
+                    limit: query.limit,
+                    cwd: &root,
+                    archived: false,
+                    use_state_db_only: true,
+                    sort_key: "updated_at",
+                    sort_direction: "desc",
+                },
+                "listing native sessions",
+            )
+            .await?;
+        let page: ThreadPage =
+            serde_json::from_slice(&answer).map_err(|error| ProviderError::Protocol {
+                provider: self.id,
+                doing: "listing native sessions",
+                detail: error.to_string(),
+            })?;
+        if page.data.len() > usize::from(query.limit) {
+            return Err(native_protocol(
+                self.id,
+                "the provider returned more sessions than requested",
+            ));
+        }
+        if let Some(cursor) = page.next_cursor.as_deref() {
+            bounded_native(
+                self.id,
+                "pagination cursor",
+                cursor,
+                MAX_NATIVE_CURSOR_BYTES,
+            )?;
+            if query.cursor.as_deref() == Some(cursor) {
+                return Err(native_protocol(
+                    self.id,
+                    "the provider repeated the request pagination cursor",
+                ));
+            }
+        }
+        let sessions = page
+            .data
+            .into_iter()
+            .map(|listed| read_native_session(self.id, listed))
+            .collect::<Result<Vec<_>, ProviderError>>()?;
+        Ok(NativeSessionCatalogue {
+            coverage: NativeCatalogueCoverage::Partial {
+                source: NativeCatalogueSource::OfficialProtocol,
+                why: "the official state database page excludes archived sessions and disables transcript repair scans"
+                    .into(),
+            },
+            sessions,
+            next_cursor: page.next_cursor,
+        })
+    }
+
     async fn open(&self, intent: OpenIntent) -> Result<Box<dyn Agent>, ProviderError> {
         let conn = self.connection().await?;
         let agent = CodexAgent::start(conn, self.id, &intent).await?;
         Ok(Box::new(agent))
+    }
+}
+
+fn read_native_session(
+    provider: ProviderId,
+    listed: ListedThread,
+) -> Result<NativeSessionEntry, ProviderError> {
+    bounded_native(
+        provider,
+        "working directory",
+        &listed.cwd,
+        MAX_NATIVE_PATH_BYTES,
+    )?;
+    if let Some(title) = listed.name.as_deref() {
+        bounded_native(provider, "session title", title, MAX_NATIVE_TITLE_BYTES)?;
+    }
+    let updated = u64::try_from(listed.updated_at)
+        .map_err(|_| {
+            native_protocol(
+                provider,
+                "the provider returned a negative session timestamp",
+            )
+        })?
+        .to_string();
+    bounded_native(
+        provider,
+        "session timestamp",
+        &updated,
+        MAX_NATIVE_TIMESTAMP_BYTES,
+    )?;
+    let native = NativeSessionId::new(&listed.id).map_err(|error| ProviderError::Protocol {
+        provider,
+        doing: "listing native sessions",
+        detail: format!("a native session identifier is unusable: {error}"),
+    })?;
+    Ok(NativeSessionEntry {
+        native,
+        cwd: listed.cwd,
+        additional_directories: Vec::new(),
+        title: listed.name,
+        updated_at: Some(updated.into()),
+        resume: NativeResumeCapability::Available,
+    })
+}
+
+fn bounded_native(
+    provider: ProviderId,
+    what: &'static str,
+    value: &str,
+    limit: usize,
+) -> Result<(), ProviderError> {
+    if value.len() <= limit && !value.chars().any(char::is_control) {
+        Ok(())
+    } else {
+        Err(native_protocol(
+            provider,
+            format!("the provider returned an oversized or invalid {what}"),
+        ))
+    }
+}
+
+fn native_protocol(provider: ProviderId, detail: impl Into<String>) -> ProviderError {
+    ProviderError::Protocol {
+        provider,
+        doing: "listing native sessions",
+        detail: detail.into(),
     }
 }
 
@@ -339,6 +517,19 @@ mod tests {
         }
     }
 
+    fn listed_thread() -> ListedThread {
+        ListedThread {
+            id: "0199c0de-1234-7000-8000-abcdef012345".into(),
+            cwd: if cfg!(windows) {
+                r"C:\work".into()
+            } else {
+                "/work".into()
+            },
+            name: Some("Provider title".into()),
+            updated_at: 1_786_579_200,
+        }
+    }
+
     #[test]
     fn building_a_driver_starts_nothing() {
         // A build assembles every provider at boot. If constructing one started a daemon, a fresh start would
@@ -377,6 +568,29 @@ mod tests {
         listed.model = "x".repeat(MAX_MODEL_ID_BYTES + 1).into();
         let error = read_choice(a_provider_id(), listed).expect_err("over the contract");
         assert!(error.to_string().contains("oversized model identifier"));
+    }
+
+    #[test]
+    fn native_listing_keeps_only_structural_provider_fields() {
+        let session = read_native_session(a_provider_id(), listed_thread()).expect("bounded");
+        assert_eq!(
+            session.native.as_str(),
+            "0199c0de-1234-7000-8000-abcdef012345"
+        );
+        assert_eq!(session.title.as_deref(), Some("Provider title"));
+        assert_eq!(session.updated_at.as_deref(), Some("1786579200"));
+        assert_eq!(session.resume, NativeResumeCapability::Available);
+    }
+
+    #[test]
+    fn native_page_decoder_drops_preview_and_turns() {
+        let page: ThreadPage = serde_json::from_str(&format!(
+            r#"{{"data":[{{"id":"0199c0de-1234-7000-8000-abcdef012345","cwd":"{}","name":"Provider title","updatedAt":1786579200,"preview":"conversation content","turns":[{{"items":[]}}]}}],"nextCursor":null}}"#,
+            if cfg!(windows) { r"C:\\work" } else { "/work" }
+        ))
+        .expect("structural fields decode");
+        assert_eq!(page.data.len(), 1);
+        assert!(page.next_cursor.is_none());
     }
 
     #[test]

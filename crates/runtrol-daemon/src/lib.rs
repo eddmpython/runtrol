@@ -26,6 +26,7 @@ mod runtime_auth;
 mod runtime_control;
 mod runtime_inventory;
 mod runtime_locator;
+mod runtime_native_sessions;
 mod runtime_serve;
 pub mod scope;
 pub mod serve;

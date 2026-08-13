@@ -105,7 +105,11 @@ fn serve(state: Option<&Path>, reply_bytes: Option<usize>) -> Result<(), ()> {
                     "protocolVersion": 1,
                     "agentCapabilities": {
                         "loadSession": true,
-                        "promptCapabilities": {"image": true}
+                        "promptCapabilities": {"image": true},
+                        "sessionCapabilities": {
+                            "list": {},
+                            "additionalDirectories": {}
+                        }
                     },
                     "agentInfo": {"name": "ACP fixture", "version": "1.0.0"}
                 }),
@@ -143,6 +147,7 @@ fn serve(state: Option<&Path>, reply_bytes: Option<usize>) -> Result<(), ()> {
                 }
                 answer(&mut output, id.as_ref().ok_or(())?, &json!({}))?;
             }
+            "session/list" => list_sessions(&mut output, &frame, id.as_ref().ok_or(())?)?,
             "session/prompt" => {
                 let session = frame
                     .pointer("/params/sessionId")
@@ -172,6 +177,34 @@ fn serve(state: Option<&Path>, reply_bytes: Option<usize>) -> Result<(), ()> {
         }
     }
     Ok(())
+}
+
+fn list_sessions(output: &mut impl Write, frame: &Value, id: &Value) -> Result<(), ()> {
+    let cwd = frame
+        .pointer("/params/cwd")
+        .and_then(Value::as_str)
+        .ok_or(())?;
+    let cursor = frame.pointer("/params/cursor").and_then(Value::as_str);
+    let (suffix, next) = match cursor {
+        None => ("one", Some("fixture-page-2")),
+        Some("fixture-page-2") => ("two", None),
+        Some(_) => return Err(()),
+    };
+    answer(
+        output,
+        id,
+        &json!({
+            "sessions": [{
+                "sessionId": format!("fixture-native-{suffix}"),
+                "cwd": cwd,
+                "additionalDirectories": [],
+                "title": format!("Fixture {suffix}"),
+                "updatedAt": "2026-08-13T00:00:00Z",
+                "_meta": {"preview": "must not cross Runtime"}
+            }],
+            "nextCursor": next
+        }),
+    )
 }
 
 fn native_session(frame: &Value) -> Result<String, ()> {

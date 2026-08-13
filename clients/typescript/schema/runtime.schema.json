@@ -96,6 +96,88 @@
         }
       ]
     },
+    "CatalogueCoverage": {
+      "description": "Honest native catalogue coverage for the current provider and root context.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "The official provider surface claims complete pagination for the current context.",
+          "properties": {
+            "kind": {
+              "const": "complete",
+              "type": "string"
+            },
+            "source": {
+              "$ref": "#/$defs/CatalogueSource",
+              "description": "Provenance of the catalogue."
+            }
+          },
+          "required": [
+            "kind",
+            "source"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The official surface or required path filtering has a named structural limitation.",
+          "properties": {
+            "kind": {
+              "const": "partial",
+              "type": "string"
+            },
+            "source": {
+              "$ref": "#/$defs/CatalogueSource",
+              "description": "Provenance of the catalogue."
+            },
+            "why": {
+              "description": "Safe stable explanation of the limitation.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "source",
+            "why"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "No registered official enumerable provider surface exists.",
+          "properties": {
+            "kind": {
+              "const": "unsupported",
+              "type": "string"
+            },
+            "why": {
+              "description": "Safe stable explanation of the absent capability.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "why"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "CatalogueSource": {
+      "description": "The official provider surface used for discovery.",
+      "oneOf": [
+        {
+          "const": "officialProtocol",
+          "description": "A provider-owned structured protocol method.",
+          "type": "string"
+        },
+        {
+          "const": "officialCli",
+          "description": "A provider-owned structured CLI command.",
+          "type": "string"
+        }
+      ]
+    },
     "ClientCapabilities": {
       "additionalProperties": false,
       "description": "Client features understood by the initial read-only revision.",
@@ -747,6 +829,32 @@
       ],
       "type": "object"
     },
+    "ListNativeSessionsParams": {
+      "additionalProperties": false,
+      "description": "Select one provider and one exact approved root for explicit native discovery.",
+      "properties": {
+        "cursor": {
+          "description": "Runtime-wrapped opaque cursor returned by the preceding page.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "providerId": {
+          "$ref": "#/$defs/ProviderId",
+          "description": "Opaque provider identity returned by `providers/list`."
+        },
+        "root": {
+          "description": "Exact canonical root already present in the authenticated integration grant.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "providerId",
+        "root"
+      ],
+      "type": "object"
+    },
     "ManagedSessionList": {
       "additionalProperties": false,
       "description": "A bounded Runtime-managed session snapshot.",
@@ -775,6 +883,117 @@
     "MutationRequestId": {
       "description": "A caller-minted UUIDv7 identifying one state-changing request.",
       "type": "string"
+    },
+    "NativeResumeCapability": {
+      "description": "Whether an officially listed session can be resumed through the same provider driver.",
+      "oneOf": [
+        {
+          "const": "available",
+          "description": "An official resume operation is available.",
+          "type": "string"
+        },
+        {
+          "const": "unavailable",
+          "description": "The provider explicitly does not advertise resume support.",
+          "type": "string"
+        },
+        {
+          "const": "unknown",
+          "description": "The official discovery surface cannot establish resume support.",
+          "type": "string"
+        }
+      ]
+    },
+    "NativeSessionCatalogue": {
+      "additionalProperties": false,
+      "description": "One bounded provider-native session page after authorization and filtering.",
+      "properties": {
+        "coverage": {
+          "$ref": "#/$defs/CatalogueCoverage",
+          "description": "Honest coverage after Runtime path filtering."
+        },
+        "nextCursor": {
+          "description": "Runtime-wrapped opaque cursor for the next page.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "providerId": {
+          "$ref": "#/$defs/ProviderId",
+          "description": "Exact provider context."
+        },
+        "sessions": {
+          "description": "Root-authorized entries in provider order.",
+          "items": {
+            "$ref": "#/$defs/NativeSessionDescriptor"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "providerId",
+        "coverage",
+        "sessions"
+      ],
+      "type": "object"
+    },
+    "NativeSessionDescriptor": {
+      "additionalProperties": false,
+      "description": "One root-authorized official provider-native session.",
+      "properties": {
+        "additionalDirectories": {
+          "description": "Canonical authorized additional roots in provider order.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "alreadyManagedAs": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RuntimeSessionId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Existing Runtime pointer matched only by provider and native identity."
+        },
+        "cwd": {
+          "description": "Canonical authorized primary working directory.",
+          "type": "string"
+        },
+        "nativeSessionId": {
+          "description": "Provider-owned opaque identity returned unchanged for adoption.",
+          "type": "string"
+        },
+        "resume": {
+          "$ref": "#/$defs/NativeResumeCapability",
+          "description": "Officially discovered resume capability."
+        },
+        "title": {
+          "description": "Provider-owned presentation title, if officially supplied.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "updatedAt": {
+          "description": "Provider-owned official timestamp representation, if supplied.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "nativeSessionId",
+        "cwd",
+        "additionalDirectories",
+        "resume"
+      ],
+      "type": "object"
     },
     "PendingEnrollmentId": {
       "description": "An opaque pending local enrollment decision.",
@@ -860,6 +1079,14 @@
           "description": "Fast managed session snapshot is implemented.",
           "type": "boolean"
         },
+        "modelDiscovery": {
+          "description": "Explicit provider model discovery is implemented.",
+          "type": "boolean"
+        },
+        "nativeSessionCatalogue": {
+          "description": "Root-scoped official provider-native session discovery is implemented.",
+          "type": "boolean"
+        },
         "providerInventory": {
           "description": "Fast provider inventory method is implemented.",
           "type": "boolean"
@@ -877,6 +1104,8 @@
         "integrationEnrollment",
         "providerInventory",
         "managedSessionList",
+        "modelDiscovery",
+        "nativeSessionCatalogue",
         "sessionControl",
         "sessionEvents"
       ],
@@ -1320,6 +1549,11 @@
         {
           "const": "providers/listModels",
           "description": "Discover the selected provider's current opaque model catalogue.",
+          "type": "string"
+        },
+        {
+          "const": "providers/listNativeSessions",
+          "description": "Discover one root-scoped official provider-native session page.",
           "type": "string"
         },
         {
@@ -1805,6 +2039,9 @@
     "list_models": {
       "$ref": "#/$defs/ListModelsParams"
     },
+    "list_native_sessions": {
+      "$ref": "#/$defs/ListNativeSessionsParams"
+    },
     "managed_session_list": {
       "$ref": "#/$defs/ManagedSessionList"
     },
@@ -1813,6 +2050,9 @@
     },
     "model_catalogue": {
       "$ref": "#/$defs/RuntimeModelCatalog"
+    },
+    "native_session_catalogue": {
+      "$ref": "#/$defs/NativeSessionCatalogue"
     },
     "notification": {
       "$ref": "#/$defs/JsonRpcNotification"
@@ -1865,6 +2105,8 @@
     "provider_list",
     "list_models",
     "model_catalogue",
+    "list_native_sessions",
+    "native_session_catalogue",
     "managed_session_list",
     "acquire_control",
     "control_lease",

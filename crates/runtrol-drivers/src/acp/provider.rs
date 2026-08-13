@@ -5,7 +5,8 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use runtrol_childproc::{Containment, Program};
 use runtrol_provider::{
-    Agent, ModelAliases, ModelCatalog, OpenIntent, Provider, ProviderError, ProviderId,
+    Agent, ModelAliases, ModelCatalog, NativeSessionCatalogue, NativeSessionQuery, OpenIntent,
+    Provider, ProviderError, ProviderId,
 };
 
 use crate::acp::agent::AcpAgent;
@@ -61,6 +62,20 @@ impl Provider for AcpProvider {
             aliases: self.models.aliases.clone(),
             why: "these aliases come from the provider manifest".into(),
         })
+    }
+
+    async fn native_sessions(
+        &self,
+        query: NativeSessionQuery,
+    ) -> Result<NativeSessionCatalogue, ProviderError> {
+        crate::acp::catalogue::list(
+            self.id,
+            &self.program,
+            &self.transport_argv,
+            query,
+            &self.contained_by,
+        )
+        .await
     }
 
     async fn open(&self, intent: OpenIntent) -> Result<Box<dyn Agent>, ProviderError> {

@@ -34,13 +34,20 @@ try {
     archive,
   ], consumer);
   await writeFile(join(consumer, "verify.ts"), `
-    import { RuntimeConnector, type ProviderId, type RuntimeClient } from "@runtrol/runtime-client";
+    import {
+      RuntimeConnector,
+      type ListNativeSessionsParams,
+      type ProviderId,
+      type RuntimeClient,
+    } from "@runtrol/runtime-client";
     import { ScriptedRuntimeTransport } from "@runtrol/runtime-client/testing";
     const provider: ProviderId = "opaque-provider";
     void provider;
     new RuntimeConnector();
     new ScriptedRuntimeTransport([]).close();
     declare const runtime: RuntimeClient;
+    const nativePage: ListNativeSessionsParams = { providerId: provider, root: "C:/opaque-root" };
+    void runtime.providers().listNativeSessions(nativePage);
     // @ts-expect-error raw protocol dispatch is not part of the public client API
     runtime.call("providers/list", {});
   `);

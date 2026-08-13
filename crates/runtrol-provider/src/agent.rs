@@ -33,6 +33,7 @@ use crate::command::{AgentCommand, CloseMode, OpenIntent, Produced};
 use crate::error::ProviderError;
 use crate::event::ApprovalRequest;
 use crate::id::{ApprovalId, ProviderId, SessionId};
+use crate::native_catalogue::{NativeSessionCatalogue, NativeSessionQuery};
 
 /// One coding CLI, as runtrol talks to it.
 ///
@@ -60,6 +61,27 @@ pub trait Provider: Send + Sync + 'static {
     async fn models(&self) -> Result<ModelCatalog, ProviderError> {
         Ok(ModelCatalog::unsupported(
             "this driver does not provide model discovery",
+        ))
+    }
+
+    /// Discover one official provider-native session page for one approved root.
+    ///
+    /// A default keeps third-party drivers source compatible and honest. It never scans provider storage, help text,
+    /// logs, or transcripts to approximate a catalogue.
+    ///
+    /// # Errors
+    ///
+    /// Any [`ProviderError`] produced while calling the provider's registered official discovery surface.
+    ///
+    /// # Cancellation
+    ///
+    /// Dropping this future must synchronously begin cleanup of every process, task, or stream created by the query.
+    async fn native_sessions(
+        &self,
+        _query: NativeSessionQuery,
+    ) -> Result<NativeSessionCatalogue, ProviderError> {
+        Ok(NativeSessionCatalogue::unsupported(
+            "this driver does not provide official native session discovery",
         ))
     }
 

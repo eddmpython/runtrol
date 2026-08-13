@@ -1,7 +1,7 @@
 //! Public inventory adapters over the registry and the single managed-session catalogue.
 
 use runtrol_core::{BinFacts, ProbeCache, SessionManager, locate};
-use runtrol_provider::AbsPath;
+use runtrol_provider::{AbsPath, NativeSessionId, ProviderId as CoreProviderId};
 use runtrol_runtime_protocol::{
     InstallationObservation, InstallationState, ManagedSessionList, ProviderDescriptor, ProviderId,
     ProviderList, RuntimeSessionId, SessionDescriptor,
@@ -25,6 +25,8 @@ pub(crate) enum RuntimeInventoryFailure {
 /// One public session plus the canonicalization input required for grant filtering.
 pub(crate) struct RuntimeSessionRecord {
     session: runtrol_provider::SessionId,
+    provider: CoreProviderId,
+    native: Option<Box<str>>,
     descriptor: SessionDescriptor,
     workspace: Box<str>,
 }
@@ -103,6 +105,8 @@ pub(crate) fn sessions(
             .into_iter()
             .map(|session| RuntimeSessionRecord {
                 session: session.session,
+                provider: session.provider,
+                native: session.native,
                 descriptor: SessionDescriptor {
                     session_id: RuntimeSessionId::new(session.session.to_string()),
                     provider_id: ProviderId::new(session.provider.as_str()),
@@ -128,6 +132,32 @@ impl RuntimeSessionCatalogue {
         }
     }
 
+    #[cfg(test)]
+    pub(crate) fn one_for_tests(
+        provider: CoreProviderId,
+        native: &str,
+        workspace: &AbsPath,
+    ) -> Self {
+        let session = runtrol_provider::SessionId::now();
+        Self {
+            sessions: vec![RuntimeSessionRecord {
+                session,
+                provider,
+                native: Some(native.into()),
+                descriptor: SessionDescriptor {
+                    session_id: RuntimeSessionId::new(session.to_string()),
+                    provider_id: ProviderId::new(provider.as_str()),
+                    lifecycle: runtrol_runtime_protocol::LifecycleState::Cold,
+                    session_generation: 0,
+                    label: None,
+                },
+                workspace: workspace.as_str().into(),
+            }],
+            unreadable: 0,
+            available: true,
+        }
+    }
+
     /// Filter against canonical current paths before any descriptor leaves Runtime.
     pub(crate) fn authorized(
         &self,
@@ -146,7 +176,7 @@ impl RuntimeSessionCatalogue {
                 };
                 roots
                     .iter()
-                    .any(|root| workspace.is_under(root))
+                    .any(|root| workspace.is_under(&root.path))
                     .then(|| session.descriptor.clone())
             })
             .collect();
@@ -178,16 +208,65 @@ impl RuntimeSessionCatalogue {
             .ok_or(RuntimeInventoryFailure::SessionNotFound)?;
         let workspace = AbsPath::canonicalize(&session.workspace)
             .map_err(|_| RuntimeInventoryFailure::SessionNotFound)?;
-        if !roots.iter().any(|root| workspace.is_under(root)) {
+        if !roots.iter().any(|root| workspace.is_under(&root.path)) {
             return Err(RuntimeInventoryFailure::SessionNotFound);
         }
         Ok(session.session)
     }
+
+    /// Find an authorized managed pointer by the only safe native merge key.
+    pub(crate) fn managed_as(
+        &self,
+        authority: &AuthorizedIntegration,
+        provider: CoreProviderId,
+        native: &NativeSessionId,
+    ) -> Result<Option<RuntimeSessionId>, RuntimeInventoryFailure> {
+        if !self.available {
+            return Err(RuntimeInventoryFailure::Unavailable);
+        }
+        let roots = approved_roots(authority)?;
+        Ok(self.sessions.iter().find_map(|session| {
+            if session.provider != provider || session.native.as_deref() != Some(native.as_str()) {
+                return None;
+            }
+            let Ok(workspace) = AbsPath::canonicalize(&session.workspace) else {
+                return None;
+            };
+            roots
+                .iter()
+                .any(|root| workspace.is_under(&root.path))
+                .then(|| session.descriptor.session_id.clone())
+        }))
+    }
+}
+
+/// One exact currently valid approved root and its filesystem identity.
+pub(crate) struct AuthorizedRoot {
+    pub(crate) path: AbsPath,
+    pub(crate) identity: [u8; 24],
+}
+
+/// Resolve one caller-selected root only when it still names the locally approved object.
+pub(crate) fn authorized_root(
+    authority: &AuthorizedIntegration,
+    requested: &str,
+) -> Result<AuthorizedRoot, RuntimeInventoryFailure> {
+    approved_roots(authority)?
+        .into_iter()
+        .find(|root| root.path.as_str() == requested)
+        .ok_or(RuntimeInventoryFailure::RootAuthorityChanged)
+}
+
+/// Revalidate every approved root before provider-supplied paths are filtered.
+pub(crate) fn authorized_roots(
+    authority: &AuthorizedIntegration,
+) -> Result<Vec<AuthorizedRoot>, RuntimeInventoryFailure> {
+    approved_roots(authority)
 }
 
 fn approved_roots(
     authority: &AuthorizedIntegration,
-) -> Result<Vec<AbsPath>, RuntimeInventoryFailure> {
+) -> Result<Vec<AuthorizedRoot>, RuntimeInventoryFailure> {
     let mut roots = Vec::with_capacity(authority.roots.len());
     for root in &authority.roots {
         let approved =
@@ -199,7 +278,10 @@ fn approved_roots(
         if current != approved || identity.to_bytes() != root.identity {
             return Err(RuntimeInventoryFailure::RootAuthorityChanged);
         }
-        roots.push(current);
+        roots.push(AuthorizedRoot {
+            path: current,
+            identity: root.identity,
+        });
     }
     Ok(roots)
 }
@@ -240,6 +322,9 @@ mod tests {
         let catalogue = RuntimeSessionCatalogue {
             sessions: vec![RuntimeSessionRecord {
                 session: runtrol_provider::SessionId::now(),
+                provider: runtrol_provider::ProviderId::parse("provider-fixture")
+                    .expect("valid provider"),
+                native: Some("native_fixture".into()),
                 descriptor: SessionDescriptor {
                     session_id: RuntimeSessionId::new("session_fixture"),
                     provider_id: ProviderId::new("provider_fixture"),

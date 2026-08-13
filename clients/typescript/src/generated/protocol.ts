@@ -21,6 +21,12 @@ export interface AcquireControlParams { readonly expectedLifecycle: LifecycleSta
 /** Public integration authority, separate from remote device scopes. */
 export type AppScope = "provider.read" | "model.read" | "session.list" | "session.native.discover" | "session.output.read" | "session.start" | "session.resume" | "session.input.write" | "session.stop" | "approval.respond.low" | "approval.respond.high" | "session.delete";
 
+/** Honest native catalogue coverage for the current provider and root context. */
+export type CatalogueCoverage = { readonly kind: "complete"; readonly source: CatalogueSource; } | { readonly kind: "partial"; readonly source: CatalogueSource; readonly why: string; } | { readonly kind: "unsupported"; readonly why: string; };
+
+/** The official provider surface used for discovery. */
+export type CatalogueSource = "officialProtocol" | "officialCli";
+
 /** Client features understood by the initial read-only revision. */
 export interface ClientCapabilities { readonly opaqueEventExtensions?: boolean; }
 
@@ -93,11 +99,23 @@ export type LifecycleState = "hotIdle" | "hotRunning" | "cold" | "failed";
 /** Select one provider for explicit, potentially slow model discovery. */
 export interface ListModelsParams { readonly providerId: ProviderId; }
 
+/** Select one provider and one exact approved root for explicit native discovery. */
+export interface ListNativeSessionsParams { readonly cursor?: string | null; readonly providerId: ProviderId; readonly root: string; }
+
 /** A bounded Runtime-managed session snapshot. */
 export interface ManagedSessionList { readonly sessions: ReadonlyArray<SessionDescriptor>; readonly warnings: ReadonlyArray<string>; }
 
 /** A caller-minted UUIDv7 identifying one state-changing request. */
 export type MutationRequestId = string;
+
+/** Whether an officially listed session can be resumed through the same provider driver. */
+export type NativeResumeCapability = "available" | "unavailable" | "unknown";
+
+/** One bounded provider-native session page after authorization and filtering. */
+export interface NativeSessionCatalogue { readonly coverage: CatalogueCoverage; readonly nextCursor?: string | null; readonly providerId: ProviderId; readonly sessions: ReadonlyArray<NativeSessionDescriptor>; }
+
+/** One root-authorized official provider-native session. */
+export interface NativeSessionDescriptor { readonly additionalDirectories: ReadonlyArray<string>; readonly alreadyManagedAs?: RuntimeSessionId | null; readonly cwd: string; readonly nativeSessionId: string; readonly resume: NativeResumeCapability; readonly title?: string | null; readonly updatedAt?: string | null; }
 
 /** An opaque pending local enrollment decision. */
 export type PendingEnrollmentId = string;
@@ -118,7 +136,7 @@ export interface ProviderList { readonly providers: ReadonlyArray<ProviderDescri
 export interface RequestEnrollmentParams { readonly manifest: EnrollmentManifest; readonly signature: string; }
 
 /** Public product capabilities for the selected revision. */
-export interface RuntimeCapabilities { readonly integrationEnrollment: boolean; readonly managedSessionList: boolean; readonly providerInventory: boolean; readonly sessionControl: boolean; readonly sessionEvents: boolean; }
+export interface RuntimeCapabilities { readonly integrationEnrollment: boolean; readonly managedSessionList: boolean; readonly modelDiscovery: boolean; readonly nativeSessionCatalogue: boolean; readonly providerInventory: boolean; readonly sessionControl: boolean; readonly sessionEvents: boolean; }
 
 /** Local transport kind named by the platform locator. */
 export type RuntimeEndpointKind = "namedPipe" | "unixSocket";
@@ -142,7 +160,7 @@ export interface RuntimeLimits { readonly challengeLifetimeMs: number; readonly 
 export interface RuntimeLocatorRecord { readonly endpoint: string; readonly endpointKind: RuntimeEndpointKind; readonly instanceId: string; readonly processId: number; readonly runtimeVersion: string; readonly schema: number; }
 
 /** A public Runtime method implemented by the initial read-only boundary. */
-export type RuntimeMethod = "runtime/initialize" | "runtime/initialized" | "runtime/challenge" | "integrations/requestEnrollment" | "integrations/watchEnrollment" | "integrations/getGrant" | "providers/list" | "providers/listModels" | "sessions/list" | "sessions/acquireControl" | "sessions/renewControl" | "sessions/releaseControl" | "sessions/submitInput" | "sessions/watchEvents" | "sessions/interrupt" | "sessions/event" | "sessions/lagged" | "runtime/panicStop";
+export type RuntimeMethod = "runtime/initialize" | "runtime/initialized" | "runtime/challenge" | "integrations/requestEnrollment" | "integrations/watchEnrollment" | "integrations/getGrant" | "providers/list" | "providers/listModels" | "providers/listNativeSessions" | "sessions/list" | "sessions/acquireControl" | "sessions/renewControl" | "sessions/releaseControl" | "sessions/submitInput" | "sessions/watchEvents" | "sessions/interrupt" | "sessions/event" | "sessions/lagged" | "runtime/panicStop";
 
 /** The current model information Runtime can truthfully expose. */
 export type RuntimeModelCatalog = { readonly coverage: "known"; readonly models: ReadonlyArray<RuntimeModelChoice>; } | { readonly aliases: ReadonlyArray<string>; readonly coverage: "aliases"; readonly why: string; } | { readonly aliases: ReadonlyArray<string>; readonly coverage: "partial"; readonly models: ReadonlyArray<RuntimeModelChoice>; readonly why: string; } | { readonly coverage: "unknown"; readonly why: string; } | { readonly coverage: "unsupported"; readonly why: string; };

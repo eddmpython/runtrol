@@ -16,7 +16,9 @@ import type {
   JsonRpcResponse,
   LaggedNotification,
   ListModelsParams,
+  ListNativeSessionsParams,
   ManagedSessionList,
+  NativeSessionCatalogue,
   PendingEnrollmentId,
   ProviderId,
   ProviderList,
@@ -190,6 +192,15 @@ export class ProviderClient {
   public listModels(providerId: ProviderId): Promise<RuntimeModelCatalog> {
     const params: ListModelsParams = { providerId };
     return callRuntime(this.runtime, "providers/listModels", params, "RuntimeModelCatalog");
+  }
+
+  public listNativeSessions(params: ListNativeSessionsParams): Promise<NativeSessionCatalogue> {
+    return callRuntime(
+      this.runtime,
+      "providers/listNativeSessions",
+      params,
+      "NativeSessionCatalogue",
+    );
   }
 }
 

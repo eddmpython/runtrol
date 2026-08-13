@@ -6,10 +6,11 @@ use runtrol_runtime_protocol::{
     ControlLease, ControlLeaseParams, EnrollmentDecision, EnrollmentManifest, EnrollmentReceipt,
     ErrorResponse, FINALIZED_REVISIONS, InitializeParams, InitializeResult,
     IntegrationAuthentication, IntegrationGrant, JsonRpcId, JsonRpcNotification, JsonRpcRequest,
-    JsonRpcResponse, LaggedNotification, ListModelsParams, ManagedSessionList, PendingEnrollmentId,
-    ProviderId, ProviderList, RequestEnrollmentParams, RuntimeEventNotification, RuntimeMethod,
-    RuntimeModelCatalog, RuntimeSessionId, ServerChallenge, SubmitInputParams, SuccessResponse,
-    WatchEnrollmentParams, WatchEventsParams, WatchEventsResult, enrollment_signing_payload,
+    JsonRpcResponse, LaggedNotification, ListModelsParams, ListNativeSessionsParams,
+    ManagedSessionList, NativeSessionCatalogue, PendingEnrollmentId, ProviderId, ProviderList,
+    RequestEnrollmentParams, RuntimeEventNotification, RuntimeMethod, RuntimeModelCatalog,
+    RuntimeSessionId, ServerChallenge, SubmitInputParams, SuccessResponse, WatchEnrollmentParams,
+    WatchEventsParams, WatchEventsResult, enrollment_signing_payload,
     initialization_signing_payload,
 };
 use serde::Serialize;
@@ -564,6 +565,20 @@ impl ProviderClient<'_> {
             )
             .await
     }
+
+    /// Discover one official provider-native page under one exact approved root.
+    ///
+    /// # Errors
+    ///
+    /// Public client and Runtime failures, including stale cursors, changed roots, and provider discovery failure.
+    pub async fn list_native_sessions(
+        &mut self,
+        params: ListNativeSessionsParams,
+    ) -> Result<NativeSessionCatalogue, ClientError> {
+        self.runtime
+            .call(RuntimeMethod::ProvidersListNativeSessions, &params)
+            .await
+    }
 }
 
 /// Typed Runtime-managed session methods.
@@ -742,6 +757,7 @@ impl EventSubscription<'_> {
             | RuntimeMethod::IntegrationsGetGrant
             | RuntimeMethod::ProvidersList
             | RuntimeMethod::ProvidersListModels
+            | RuntimeMethod::ProvidersListNativeSessions
             | RuntimeMethod::SessionsList
             | RuntimeMethod::SessionsAcquireControl
             | RuntimeMethod::SessionsRenewControl

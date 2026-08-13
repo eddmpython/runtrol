@@ -85,6 +85,26 @@ def build() -> tuple[Path, Path]:
     return runtrol, fixture
 
 
+def buildNativeProbe() -> Path:
+    """Build the separate consumer that drives only the official ACP catalogue SPI."""
+    built = subprocess.run(
+        ["cargo", "build", "-p", "runtrol-drivers", "--example", "nativeCatalogueProbe"],
+        cwd=ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=TIMEOUT_S,
+    )
+    if built.returncode != 0:
+        detail = (built.stderr or built.stdout or "native catalogue probe build failed").strip()
+        raise Failed(detail)
+    suffix = ".exe" if sys.platform == "win32" else ""
+    probe = ROOT / "target" / "debug" / "examples" / f"nativeCatalogueProbe{suffix}"
+    if not probe.is_file():
+        raise Failed(f"cargo succeeded but {probe.relative_to(ROOT)} is missing")
+    return probe
+
+
 def manifest(home: Path, fixture: Path) -> None:
     """Declare the fixture exactly where an operator declares a third provider."""
     providers = home / "providers"
@@ -180,10 +200,24 @@ def stopDaemon(daemon: subprocess.Popen[str]) -> None:
 def exercise() -> None:
     """Drive discovery, start, prompt, streamed output, completion, and cleanup."""
     binary, fixture = build()
+    native_probe = buildNativeProbe()
     with tempfile.TemporaryDirectory(prefix="runtrol-acp-") as raw_home:
         home = Path(raw_home)
         workspace = home / "workspace"
         workspace.mkdir()
+        probed = subprocess.run(
+            [str(native_probe), str(fixture), str(workspace)],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=TIMEOUT_S,
+            check=False,
+        )
+        if probed.returncode != 0:
+            detail = (probed.stderr or probed.stdout or "native catalogue probe failed").strip()
+            raise Failed(detail)
         manifest(home, fixture)
         env = environment(home, fixture)
         daemon = startDaemon(binary, env, home)
@@ -235,7 +269,8 @@ def exercise() -> None:
                 raise Failed(f"resume returned no fresh runtrol session identifier: {resumed!r}")
             command(binary, env, ["close", resumed, "--now"])
             print(
-                "[genericAcpSmoke] OK. external TOML -> ACP child -> streamed turn -> completion -> load."
+                "[genericAcpSmoke] OK. official ACP catalogue pages -> external TOML -> "
+                "ACP child -> streamed turn -> completion -> load."
             )
         finally:
             if watcher is not None and watcher.poll() is None:

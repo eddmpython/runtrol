@@ -33,6 +33,9 @@ pub enum RuntimeMethod {
     /// Discover the selected provider's current opaque model catalogue.
     #[serde(rename = "providers/listModels")]
     ProvidersListModels,
+    /// Discover one root-scoped official provider-native session page.
+    #[serde(rename = "providers/listNativeSessions")]
+    ProvidersListNativeSessions,
     /// Read the Runtime-managed session catalogue.
     #[serde(rename = "sessions/list")]
     SessionsList,
@@ -78,6 +81,7 @@ impl RuntimeMethod {
             Self::IntegrationsGetGrant => "integrations/getGrant",
             Self::ProvidersList => "providers/list",
             Self::ProvidersListModels => "providers/listModels",
+            Self::ProvidersListNativeSessions => "providers/listNativeSessions",
             Self::SessionsList => "sessions/list",
             Self::SessionsAcquireControl => "sessions/acquireControl",
             Self::SessionsRenewControl => "sessions/renewControl",
@@ -111,6 +115,7 @@ impl FromStr for RuntimeMethod {
             "integrations/getGrant" => Ok(Self::IntegrationsGetGrant),
             "providers/list" => Ok(Self::ProvidersList),
             "providers/listModels" => Ok(Self::ProvidersListModels),
+            "providers/listNativeSessions" => Ok(Self::ProvidersListNativeSessions),
             "sessions/list" => Ok(Self::SessionsList),
             "sessions/acquireControl" => Ok(Self::SessionsAcquireControl),
             "sessions/renewControl" => Ok(Self::SessionsRenewControl),

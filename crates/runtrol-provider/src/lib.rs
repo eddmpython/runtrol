@@ -31,6 +31,7 @@ pub mod error;
 pub mod event;
 pub mod id;
 pub mod manifest;
+pub mod native_catalogue;
 pub mod path;
 pub mod time;
 
@@ -56,6 +57,12 @@ pub use id::{
 pub use manifest::{
     BinSpec, FallbackSpec, FlagProbe, Kind, MANIFEST_SCHEMA, Manifest, ManifestError, ModelAliases,
     ProbeSpec, SecretPaths, TransportSpec, UpdateHint, UpdateSpec, VersionParse, VersionProbe,
+};
+pub use native_catalogue::{
+    MAX_NATIVE_ADDITIONAL_DIRECTORIES, MAX_NATIVE_CURSOR_BYTES, MAX_NATIVE_SESSION_ITEMS,
+    MAX_NATIVE_TIMESTAMP_BYTES, MAX_NATIVE_TITLE_BYTES, NativeCatalogueCoverage,
+    NativeCatalogueSource, NativeResumeCapability, NativeSessionCatalogue, NativeSessionEntry,
+    NativeSessionQuery,
 };
 pub use path::{AbsPath, PathError, WorkspaceAccess};
 pub use time::WallMs;

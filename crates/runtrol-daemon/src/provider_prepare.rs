@@ -6,6 +6,7 @@ use std::sync::Arc;
 use runtrol_core::registry::KindStatus;
 use runtrol_drivers::DriverContext;
 use runtrol_provider::{Provider, ProviderId};
+use sha2::{Digest as _, Sha256};
 
 use crate::Composed;
 
@@ -32,6 +33,20 @@ pub(crate) async fn driver(
     composed: &Composed,
     id: ProviderId,
 ) -> Result<Box<dyn Provider>, ProviderPreparationError> {
+    Ok(prepared_driver(composed, id).await?.driver)
+}
+
+/// One exact prepared driver plus a non-secret digest of the binary facts used for the probe.
+pub(crate) struct PreparedDriver {
+    pub(crate) driver: Box<dyn Provider>,
+    pub(crate) binary_identity: [u8; 32],
+}
+
+/// Build a driver and retain the exact binary identity needed to scope a provider cursor.
+pub(crate) async fn prepared_driver(
+    composed: &Composed,
+    id: ProviderId,
+) -> Result<PreparedDriver, ProviderPreparationError> {
     let provider = id.as_str();
     let Some(declared) = composed.registry.get(id) else {
         return Err(ProviderPreparationError::new(format!(
@@ -79,15 +94,21 @@ pub(crate) async fn driver(
 
     let checked = checked_flags(provider, entry, probed.flags)?;
 
-    Ok(make(&DriverContext {
-        provider: id,
-        models: declared.manifest.models.clone(),
-        program,
-        transport_argv: declared.manifest.transport.argv.clone(),
-        available_flags: checked.available,
-        unavailable_flags: checked.unavailable,
-        contained_by: Arc::clone(&composed.containment),
-    }))
+    let encoded_facts = serde_json::to_vec(&probed.bin)
+        .map_err(|error| ProviderPreparationError::new(error.to_string()))?;
+    let binary_identity: [u8; 32] = Sha256::digest(encoded_facts).into();
+    Ok(PreparedDriver {
+        driver: make(&DriverContext {
+            provider: id,
+            models: declared.manifest.models.clone(),
+            program,
+            transport_argv: declared.manifest.transport.argv.clone(),
+            available_flags: checked.available,
+            unavailable_flags: checked.unavailable,
+            contained_by: Arc::clone(&composed.containment),
+        }),
+        binary_identity,
+    })
 }
 
 /// Exact confirmed and unavailable optional flags for one prepared driver.

@@ -142,6 +142,10 @@ pub struct RuntimeCapabilities {
     pub provider_inventory: bool,
     /// Fast managed session snapshot is implemented.
     pub managed_session_list: bool,
+    /// Explicit provider model discovery is implemented.
+    pub model_discovery: bool,
+    /// Root-scoped official provider-native session discovery is implemented.
+    pub native_session_catalogue: bool,
     /// Renewable single-writer session control is implemented.
     pub session_control: bool,
     /// Bounded replay followed by live normalized events is implemented.

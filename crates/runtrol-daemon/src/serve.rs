@@ -606,6 +606,13 @@ async fn serve_surfaces(
         mpsc::unbounded_channel::<crate::runtime_control::RuntimeReturned>();
     let mut runtime_control = crate::runtime_control::RuntimeControl::new()
         .map_err(|error| ServeError::RuntimeBootstrap(error.message.to_owned()))?;
+    let runtime_native_cursors = Arc::new(
+        crate::runtime_native_sessions::NativeCursorCodec::new().map_err(|_| {
+            ServeError::RuntimeBootstrap(
+                "Runtime could not create native catalogue cursor authority".to_owned(),
+            )
+        })?,
+    );
     let (noticing_updates, mut update_notices) = mpsc::unbounded_channel::<AutomaticUpdateNotice>();
     let mut provider_update_notices = BTreeMap::<ProviderId, Box<str>>::new();
     let initial_index = Arc::<[u8]>::from(encode_session_index(
@@ -644,6 +651,7 @@ async fn serve_surfaces(
                     runtime_instance.clone(),
                     Arc::clone(&composed),
                     Arc::clone(&discovering),
+                    Arc::clone(&runtime_native_cursors),
                     runtime_sessions.subscribe(),
                     runtime_asking.clone(),
                     runtime_returning.clone(),

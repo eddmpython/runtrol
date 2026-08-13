@@ -8,7 +8,8 @@ use runtrol_ipc::transport::Connection;
 use runtrol_runtime_protocol::{
     AcquireControlParams, AppScope, ControlLeaseParams, ErrorResponse, FINALIZED_REVISIONS,
     InitializeParams, InitializeResult, JsonRpcId, JsonRpcNotification, JsonRpcRequest,
-    JsonRpcResponse, LaggedNotification, ListModelsParams, MAX_REVISION_OFFERS, ProtocolRevision,
+    JsonRpcResponse, LaggedNotification, ListModelsParams, ListNativeSessionsParams,
+    MAX_NATIVE_PUBLIC_CURSOR_BYTES, MAX_PAGE_ITEMS, MAX_REVISION_OFFERS, ProtocolRevision,
     RequestEnrollmentParams, RuntimeCapabilities, RuntimeError, RuntimeErrorKind, RuntimeInstance,
     RuntimeLimits, RuntimeMethod, RuntimeModelCatalog, RuntimeModelChoice, RuntimeReasoningChoice,
     RuntimeSessionId, SubmitInputParams, SuccessResponse, WatchEnrollmentParams, WatchEventsParams,
@@ -29,13 +30,19 @@ use crate::runtime_control::{
     RuntimeControlRequest, RuntimeReturned, cursor_to_public,
 };
 use crate::runtime_inventory::{RuntimeInventoryFailure, RuntimeSessionCatalogue};
+use crate::runtime_native_sessions::{NativeCursorCodec, NativeCursorFailure};
 
 /// Serve one public connection until it closes or violates the public frame contract.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one connection keeps endpoint identity, discovery authority, catalogue snapshots, and owner channels explicit"
+)]
 pub(crate) async fn serve_connection(
     mut connection: Connection,
     instance_id: String,
     composed: Arc<Composed>,
     discovering: Arc<Mutex<()>>,
+    native_cursors: Arc<NativeCursorCodec>,
     sessions: watch::Receiver<Arc<RuntimeSessionCatalogue>>,
     asking: mpsc::Sender<RuntimeAsked>,
     returning: mpsc::UnboundedSender<RuntimeReturned>,
@@ -82,6 +89,7 @@ pub(crate) async fn serve_connection(
             &instance_id,
             &composed,
             &discovering,
+            &native_cursors,
             &catalogue,
             &asking,
             &returning,
@@ -186,6 +194,7 @@ async fn answer(
     instance_id: &str,
     composed: &Composed,
     discovering: &Mutex<()>,
+    native_cursors: &NativeCursorCodec,
     sessions: &RuntimeSessionCatalogue,
     asking: &mpsc::Sender<RuntimeAsked>,
     returning: &mpsc::UnboundedSender<RuntimeReturned>,
@@ -245,6 +254,7 @@ async fn answer(
         instance_id,
         composed,
         discovering,
+        native_cursors,
         sessions,
         asking,
         returning,
@@ -285,6 +295,7 @@ async fn dispatch_public(
     instance_id: &str,
     composed: &Composed,
     discovering: &Mutex<()>,
+    native_cursors: &NativeCursorCodec,
     sessions: &RuntimeSessionCatalogue,
     asking: &mpsc::Sender<RuntimeAsked>,
     returning: &mpsc::UnboundedSender<RuntimeReturned>,
@@ -323,6 +334,18 @@ async fn dispatch_public(
             RuntimeMethod::ProvidersListModels => {
                 list_models(state, composed, discovering, id, params).await
             }
+            RuntimeMethod::ProvidersListNativeSessions => {
+                list_native_sessions(
+                    state,
+                    composed,
+                    discovering,
+                    native_cursors,
+                    sessions,
+                    id,
+                    params,
+                )
+                .await
+            }
             RuntimeMethod::SessionsList => sessions_list(state, composed, sessions, id, params),
             RuntimeMethod::SessionsAcquireControl
             | RuntimeMethod::SessionsRenewControl
@@ -356,6 +379,7 @@ fn required_scope(method: RuntimeMethod) -> Option<AppScope> {
     match method {
         RuntimeMethod::ProvidersList => Some(AppScope::ProviderRead),
         RuntimeMethod::ProvidersListModels => Some(AppScope::ModelRead),
+        RuntimeMethod::ProvidersListNativeSessions => Some(AppScope::SessionNativeDiscover),
         RuntimeMethod::SessionsList => Some(AppScope::SessionList),
         RuntimeMethod::SessionsAcquireControl | RuntimeMethod::SessionsSubmitInput => {
             Some(AppScope::SessionInputWrite)
@@ -475,6 +499,8 @@ fn initialize(
             integration_enrollment: true,
             provider_inventory: true,
             managed_session_list: true,
+            model_discovery: true,
+            native_session_catalogue: true,
             session_control: true,
             session_events: true,
         },
@@ -630,6 +656,161 @@ async fn list_models(
             id,
             RuntimeErrorKind::RuntimeUnavailable,
             "model catalogue discovery exceeded its bounded deadline",
+        ),
+    }
+}
+
+#[expect(
+    clippy::too_many_lines,
+    reason = "native discovery keeps authority, provider preparation, cursor binding, and managed-session merging explicit"
+)]
+async fn list_native_sessions(
+    state: &mut PublicState,
+    composed: &Composed,
+    discovering: &Mutex<()>,
+    native_cursors: &NativeCursorCodec,
+    managed: &RuntimeSessionCatalogue,
+    id: JsonRpcId,
+    params: serde_json::Value,
+) -> Answer {
+    let Ok(params) = serde_json::from_value::<ListNativeSessionsParams>(params) else {
+        return Answer::plain(
+            id,
+            RuntimeErrorKind::InvalidRequest,
+            "native session catalogue parameters are invalid",
+        );
+    };
+    if params
+        .cursor
+        .as_ref()
+        .is_some_and(|cursor| cursor.len() > MAX_NATIVE_PUBLIC_CURSOR_BYTES)
+    {
+        return Answer::plain(
+            id,
+            RuntimeErrorKind::InvalidRequest,
+            "the native session catalogue cursor is oversized",
+        );
+    }
+    let authority = match authorized(
+        state,
+        &composed.store,
+        Some(AppScope::SessionNativeDiscover),
+    ) {
+        Ok(authority) => authority.clone(),
+        Err(failure) => return Answer::failure(id, failure),
+    };
+    let selected_root = match crate::runtime_inventory::authorized_root(&authority, &params.root) {
+        Ok(root) => root,
+        Err(failure) => return inventory_failure(id, failure),
+    };
+    let approved_roots = match crate::runtime_inventory::authorized_roots(&authority) {
+        Ok(roots) => roots,
+        Err(failure) => return inventory_failure(id, failure),
+    };
+    let Ok(provider) = runtrol_provider::ProviderId::parse(params.provider_id.as_str()) else {
+        return Answer::plain(
+            id,
+            RuntimeErrorKind::InvalidRequest,
+            "the selected provider identity is invalid",
+        );
+    };
+    let discovered = tokio::time::timeout(
+        Duration::from_millis(crate::serve::MODEL_PREPARATION_BUDGET_MS),
+        async {
+            let _preparing = discovering.lock().await;
+            let prepared = crate::provider_prepare::prepared_driver(composed, provider)
+                .await
+                .map_err(|_| NativeDiscoveryFailure::Provider)?;
+            let opened = params
+                .cursor
+                .as_deref()
+                .map(|cursor| {
+                    native_cursors.open(
+                        &authority,
+                        provider,
+                        &selected_root,
+                        prepared.binary_identity,
+                        cursor,
+                    )
+                })
+                .transpose()
+                .map_err(NativeDiscoveryFailure::Cursor)?;
+            let catalogue = prepared
+                .driver
+                .native_sessions(runtrol_provider::NativeSessionQuery {
+                    root: selected_root.path.clone(),
+                    cursor: opened.as_ref().map(|cursor| cursor.provider_cursor.clone()),
+                    limit: MAX_PAGE_ITEMS,
+                })
+                .await
+                .map_err(|_| NativeDiscoveryFailure::Provider)?;
+            let next = catalogue.next_cursor.clone();
+            let mut public = crate::runtime_native_sessions::authorize_catalogue(
+                &authority,
+                &selected_root,
+                &approved_roots,
+                managed,
+                provider,
+                catalogue,
+            )
+            .map_err(NativeDiscoveryFailure::Inventory)?;
+            if let Some(next) = next {
+                public.next_cursor = Some(
+                    native_cursors
+                        .seal(
+                            &authority,
+                            provider,
+                            &selected_root,
+                            prepared.binary_identity,
+                            &next,
+                            opened.as_ref(),
+                        )
+                        .map_err(NativeDiscoveryFailure::Cursor)?,
+                );
+            }
+            Ok(public)
+        },
+    )
+    .await;
+    match discovered {
+        Ok(Ok(catalogue)) => Answer::success(id, &catalogue),
+        Ok(Err(NativeDiscoveryFailure::Cursor(failure))) => cursor_failure(id, failure),
+        Ok(Err(NativeDiscoveryFailure::Inventory(failure))) => inventory_failure(id, failure),
+        Ok(Err(NativeDiscoveryFailure::Provider)) => Answer::plain(
+            id,
+            RuntimeErrorKind::ProviderUnavailable,
+            "the selected provider could not supply a native session catalogue",
+        ),
+        Err(_) => Answer::plain(
+            id,
+            RuntimeErrorKind::RuntimeUnavailable,
+            "native session discovery exceeded its bounded deadline",
+        ),
+    }
+}
+
+enum NativeDiscoveryFailure {
+    Cursor(NativeCursorFailure),
+    Inventory(RuntimeInventoryFailure),
+    Provider,
+}
+
+fn cursor_failure(id: JsonRpcId, failure: NativeCursorFailure) -> Answer {
+    match failure {
+        NativeCursorFailure::Invalid | NativeCursorFailure::Expired => Answer::plain(
+            id,
+            RuntimeErrorKind::InvalidRequest,
+            "the native session catalogue cursor is invalid, expired, or outside this context",
+        ),
+        NativeCursorFailure::TooManyPages => Answer::plain(
+            id,
+            RuntimeErrorKind::ResourceExhausted,
+            "the native session catalogue exceeded its bounded page walk",
+        ),
+        NativeCursorFailure::Internal => Answer::plain(
+            id,
+            RuntimeErrorKind::Internal,
+            "Runtime could not protect the native session catalogue cursor",
         ),
     }
 }
@@ -851,6 +1032,7 @@ fn parse_session_operation(
         | RuntimeMethod::IntegrationsGetGrant
         | RuntimeMethod::ProvidersList
         | RuntimeMethod::ProvidersListModels
+        | RuntimeMethod::ProvidersListNativeSessions
         | RuntimeMethod::SessionsList
         | RuntimeMethod::SessionsEvent
         | RuntimeMethod::SessionsLagged
@@ -1181,6 +1363,98 @@ mod tests {
     use super::*;
     use base64ct::Encoding as _;
 
+    const NATIVE_PROVIDER_MANIFEST: &str = r#"
+schema = 1
+id = "native-fixture"
+display_name = "Native Fixture"
+kind = "native-fixture-kind"
+
+[bin]
+names = ["rustc"]
+
+[probe]
+version = { args = ["--version"], parse = "semver-anywhere" }
+
+[transport]
+argv = []
+listen = "stdio"
+"#;
+
+    fn make_native_fixture(
+        context: &runtrol_drivers::DriverContext,
+    ) -> Box<dyn runtrol_provider::Provider> {
+        Box::new(NativeFixtureProvider {
+            provider: context.provider,
+        })
+    }
+
+    const NATIVE_PROVIDER_KINDS: &[runtrol_drivers::DriverKind] = &[runtrol_drivers::DriverKind {
+        kind: "native-fixture-kind",
+        make: Some(make_native_fixture),
+        flags: &[],
+        consult: runtrol_drivers::ConsultSurface {
+            registrar: None,
+            server: None,
+        },
+        unavailable: None,
+    }];
+    const NATIVE_PROVIDER_MANIFESTS: &[&str] = &[NATIVE_PROVIDER_MANIFEST];
+
+    struct NativeFixtureProvider {
+        provider: runtrol_provider::ProviderId,
+    }
+
+    #[async_trait::async_trait]
+    impl runtrol_provider::Provider for NativeFixtureProvider {
+        fn id(&self) -> runtrol_provider::ProviderId {
+            self.provider
+        }
+
+        async fn native_sessions(
+            &self,
+            query: runtrol_provider::NativeSessionQuery,
+        ) -> Result<runtrol_provider::NativeSessionCatalogue, runtrol_provider::ProviderError>
+        {
+            let (native, next_cursor) = match query.cursor.as_deref() {
+                None => ("fixture-native-one", Some("fixture-page-two".into())),
+                Some("fixture-page-two") => ("fixture-native-two", None),
+                Some(_) => {
+                    return Err(runtrol_provider::ProviderError::Protocol {
+                        provider: self.provider,
+                        doing: "listing fixture sessions",
+                        detail: "the cursor is unknown".to_owned(),
+                    });
+                }
+            };
+            Ok(runtrol_provider::NativeSessionCatalogue {
+                coverage: runtrol_provider::NativeCatalogueCoverage::Complete {
+                    source: runtrol_provider::NativeCatalogueSource::OfficialProtocol,
+                },
+                sessions: vec![runtrol_provider::NativeSessionEntry {
+                    native: runtrol_provider::NativeSessionId::new(native)
+                        .expect("valid fixture native identity"),
+                    cwd: query.root.as_str().into(),
+                    additional_directories: Vec::new(),
+                    title: Some("Provider-owned fixture title".into()),
+                    updated_at: Some("2026-08-13T00:00:00Z".into()),
+                    resume: runtrol_provider::NativeResumeCapability::Available,
+                }],
+                next_cursor,
+            })
+        }
+
+        async fn open(
+            &self,
+            _intent: runtrol_provider::OpenIntent,
+        ) -> Result<Box<dyn runtrol_provider::Agent>, runtrol_provider::ProviderError> {
+            Err(runtrol_provider::ProviderError::Unsupported {
+                provider: self.provider,
+                what: "opening a fixture session".to_owned(),
+                why: "this fixture exists only for native catalogue discovery",
+            })
+        }
+    }
+
     #[test]
     fn public_event_wrapper_preserves_the_existing_event_bytes() {
         let session = RuntimeSessionId::new("session_fixture");
@@ -1279,6 +1553,15 @@ mod tests {
             std::env::temp_dir().join(format!("runtrol-runtime-public-{}", std::process::id()));
         drop(std::fs::remove_dir_all(&directory));
         std::fs::create_dir_all(&directory).expect("create Runtime test directory");
+        let project_path = directory.join("project");
+        std::fs::create_dir(&project_path).expect("create approved project");
+        let project = runtrol_provider::AbsPath::canonicalize(
+            project_path.to_str().expect("UTF-8 approved project"),
+        )
+        .expect("canonical approved project");
+        let project_identity = runtrol_security::ProjectRootIdentity::read(&project)
+            .expect("read approved project identity")
+            .to_bytes();
         let endpoint = if cfg!(windows) {
             format!(r"\\.\pipe\runtrol-runtime-public-{}", std::process::id())
         } else {
@@ -1302,18 +1585,32 @@ mod tests {
         let composed = Arc::new(
             crate::Composed::for_tests(
                 directory.to_str().expect("UTF-8 Runtime test home"),
-                runtrol_drivers::builtin(),
+                runtrol_drivers::Builtin {
+                    manifests: NATIVE_PROVIDER_MANIFESTS,
+                    kinds: NATIVE_PROVIDER_KINDS,
+                },
             )
             .expect("compose test Runtime"),
         );
-        let sessions = Arc::new(crate::runtime_inventory::RuntimeSessionCatalogue::unavailable());
+        let fixture_provider =
+            runtrol_provider::ProviderId::parse("native-fixture").expect("valid provider");
+        let sessions = Arc::new(
+            crate::runtime_inventory::RuntimeSessionCatalogue::one_for_tests(
+                fixture_provider,
+                "fixture-native-one",
+                &project,
+            ),
+        );
         let (_publishing, watching) = watch::channel(sessions);
         let (runtime_asking, _runtime_asked) = mpsc::channel(1);
         let (runtime_returning, _runtime_returned) = mpsc::unbounded_channel();
         let discovering = Arc::new(Mutex::new(()));
+        let native_cursors =
+            Arc::new(NativeCursorCodec::new().expect("create native catalogue cursor authority"));
         let serving = tokio::spawn({
             let composed = Arc::clone(&composed);
             let discovering = Arc::clone(&discovering);
+            let native_cursors = Arc::clone(&native_cursors);
             async move {
                 for _ in 0..2 {
                     let connection = listener.accept().await.expect("accept public client");
@@ -1322,6 +1619,7 @@ mod tests {
                         instance.to_owned(),
                         Arc::clone(&composed),
                         Arc::clone(&discovering),
+                        Arc::clone(&native_cursors),
                         watching.clone(),
                         runtime_asking.clone(),
                         runtime_returning.clone(),
@@ -1356,8 +1654,12 @@ mod tests {
             .request(runtrol_runtime_client::EnrollmentProposal::new(
                 "fixture-instance",
                 [3; 32],
-                vec![AppScope::ProviderRead, AppScope::ModelRead],
-                Vec::new(),
+                vec![
+                    AppScope::ProviderRead,
+                    AppScope::ModelRead,
+                    AppScope::SessionNativeDiscover,
+                ],
+                vec![project.to_string()],
             ))
             .await
             .expect("request enrollment");
@@ -1382,8 +1684,12 @@ mod tests {
                     scopes: vec![
                         AppScope::ProviderRead.as_str().into(),
                         AppScope::ModelRead.as_str().into(),
+                        AppScope::SessionNativeDiscover.as_str().into(),
                     ],
-                    roots: Vec::new(),
+                    roots: vec![runtrol_store::IntegrationRootRow {
+                        path: project.as_str().into(),
+                        identity: project_identity,
+                    }],
                     key_generation: 1,
                     grant_generation: 1,
                     approved_at: runtrol_provider::WallMs::now(),
@@ -1424,6 +1730,66 @@ mod tests {
             .list()
             .await
             .expect("approved provider inventory");
+        let first = approved
+            .providers()
+            .list_native_sessions(runtrol_runtime_protocol::ListNativeSessionsParams {
+                provider_id: runtrol_runtime_protocol::ProviderId::new("native-fixture"),
+                root: project.to_string(),
+                cursor: None,
+            })
+            .await
+            .expect("first native catalogue page");
+        assert_eq!(first.sessions.len(), 1);
+        assert!(
+            first
+                .sessions
+                .first()
+                .is_some_and(|session| session.already_managed_as.is_some())
+        );
+        let denied_root = approved
+            .providers()
+            .list_native_sessions(runtrol_runtime_protocol::ListNativeSessionsParams {
+                provider_id: runtrol_runtime_protocol::ProviderId::new("native-fixture"),
+                root: directory.to_string_lossy().into_owned(),
+                cursor: None,
+            })
+            .await
+            .expect_err("an unapproved root cannot reach provider discovery");
+        assert!(matches!(
+            denied_root,
+            runtrol_runtime_client::ClientError::Runtime(error)
+                if error.code == RuntimeErrorKind::RootDenied
+        ));
+        let mut tampered = first
+            .next_cursor
+            .clone()
+            .expect("first page carries a cursor");
+        tampered.push('x');
+        let denied_cursor = approved
+            .providers()
+            .list_native_sessions(runtrol_runtime_protocol::ListNativeSessionsParams {
+                provider_id: runtrol_runtime_protocol::ProviderId::new("native-fixture"),
+                root: project.to_string(),
+                cursor: Some(tampered),
+            })
+            .await
+            .expect_err("a modified cursor is rejected before provider discovery");
+        assert!(matches!(
+            denied_cursor,
+            runtrol_runtime_client::ClientError::Runtime(error)
+                if error.code == RuntimeErrorKind::InvalidRequest
+        ));
+        let second = approved
+            .providers()
+            .list_native_sessions(runtrol_runtime_protocol::ListNativeSessionsParams {
+                provider_id: runtrol_runtime_protocol::ProviderId::new("native-fixture"),
+                root: project.to_string(),
+                cursor: first.next_cursor,
+            })
+            .await
+            .expect("second native catalogue page");
+        assert_eq!(second.sessions.len(), 1);
+        assert!(second.next_cursor.is_none());
         let unavailable = approved
             .providers()
             .list_models(runtrol_runtime_protocol::ProviderId::new("not-registered"))
