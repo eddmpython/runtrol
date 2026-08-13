@@ -15,14 +15,16 @@ use runtrol_runtime_protocol::{
     ListNativeSessionsParams, ListPendingApprovalsParams, MAX_MODEL_SELECTION_BYTES,
     MAX_NATIVE_ADOPTION_TOKEN_BYTES, MAX_NATIVE_PUBLIC_CURSOR_BYTES, MAX_PAGE_ITEMS,
     MAX_REVISION_OFFERS, ProtocolRevision, ProviderCapabilityAvailability,
-    ProviderCapabilityObservation, ProviderCapabilityProvenance, RequestEnrollmentParams,
-    RespondApprovalParams, ResumeSessionParams, RuntimeCapabilities, RuntimeError,
-    RuntimeErrorKind, RuntimeInstance, RuntimeLimits, RuntimeMethod, RuntimeModelCatalog,
-    RuntimeModelChoice, RuntimeProviderCapabilities, RuntimeReasoningChoice, RuntimeSessionId,
-    SessionIndexChangedNotification, SessionIndexEndReason, SessionIndexEndedNotification,
-    SessionWorkspaceAccess, StartSessionParams, SubmitInputParams, SuccessResponse,
-    WatchEnrollmentParams, WatchEventsParams, WatchEventsResult, WatchSessionIndexParams,
-    WatchSessionIndexResult, negotiate,
+    ProviderCapabilityObservation, ProviderCapabilityProvenance, ProviderList,
+    ProviderWatchEndReason, ProviderWatchEndedNotification, ProvidersChangedNotification,
+    RequestEnrollmentParams, RespondApprovalParams, ResumeSessionParams, RuntimeCapabilities,
+    RuntimeError, RuntimeErrorKind, RuntimeInstance, RuntimeLimits, RuntimeMethod,
+    RuntimeModelCatalog, RuntimeModelChoice, RuntimeProviderCapabilities, RuntimeReasoningChoice,
+    RuntimeSessionId, SessionIndexChangedNotification, SessionIndexEndReason,
+    SessionIndexEndedNotification, SessionWorkspaceAccess, StartSessionParams, SubmitInputParams,
+    SuccessResponse, WatchEnrollmentParams, WatchEventsParams, WatchEventsResult,
+    WatchProvidersParams, WatchProvidersResult, WatchSessionIndexParams, WatchSessionIndexResult,
+    negotiate,
 };
 use runtrol_store::EnrollmentKey;
 use runtrol_store::IntegrationAuditOutcome;
@@ -55,6 +57,7 @@ pub(crate) async fn serve_connection(
     composed: Arc<Composed>,
     discovering: Arc<Mutex<()>>,
     native_cursors: Arc<NativeCursorCodec>,
+    providers: watch::Sender<Arc<ProviderList>>,
     mut sessions: watch::Receiver<Arc<RuntimeSessionCatalogue>>,
     asking: mpsc::Sender<RuntimeAsked>,
     returning: mpsc::UnboundedSender<RuntimeReturned>,
@@ -95,19 +98,24 @@ pub(crate) async fn serve_connection(
         let Ok(request) = serde_json::from_slice::<JsonRpcRequest>(&payload) else {
             return;
         };
+        refresh_provider_inventory(&providers, &composed);
         let catalogue = Arc::clone(&sessions.borrow_and_update());
+        let provider_catalogue = Arc::clone(&providers.borrow());
         let answered = answer(
             &mut state,
             &instance_id,
             &composed,
             &discovering,
             &native_cursors,
+            &providers,
+            &provider_catalogue,
             &catalogue,
             &asking,
             &returning,
             request,
         )
         .await;
+        refresh_provider_inventory(&providers, &composed);
         if send_response(&mut connection, &answered.response)
             .await
             .is_err()
@@ -205,6 +213,24 @@ impl Answer {
             }),
         }
     }
+
+    fn watching_providers(
+        id: JsonRpcId,
+        result: &WatchProvidersResult,
+        updates: watch::Receiver<Arc<ProviderList>>,
+        authority: AuthorizedIntegration,
+    ) -> Self {
+        Self {
+            response: success(id, result),
+            close: false,
+            watching: Some(Watching::Providers {
+                subscription_id: result.subscription_id.clone(),
+                last: result.snapshot.clone(),
+                updates,
+                authority,
+            }),
+        }
+    }
 }
 
 enum Watching {
@@ -216,6 +242,12 @@ enum Watching {
     SessionIndex {
         subscription_id: String,
         last: runtrol_runtime_protocol::ManagedSessionList,
+        authority: AuthorizedIntegration,
+    },
+    Providers {
+        subscription_id: String,
+        last: ProviderList,
+        updates: watch::Receiver<Arc<ProviderList>>,
         authority: AuthorizedIntegration,
     },
 }
@@ -230,6 +262,8 @@ async fn answer(
     composed: &Composed,
     discovering: &Mutex<()>,
     native_cursors: &NativeCursorCodec,
+    provider_updates: &watch::Sender<Arc<ProviderList>>,
+    providers: &ProviderList,
     sessions: &RuntimeSessionCatalogue,
     asking: &mpsc::Sender<RuntimeAsked>,
     returning: &mpsc::UnboundedSender<RuntimeReturned>,
@@ -290,6 +324,8 @@ async fn answer(
         composed,
         discovering,
         native_cursors,
+        provider_updates,
+        providers,
         sessions,
         asking,
         returning,
@@ -332,6 +368,8 @@ async fn dispatch_public(
     composed: &Composed,
     discovering: &Mutex<()>,
     native_cursors: &NativeCursorCodec,
+    provider_updates: &watch::Sender<Arc<ProviderList>>,
+    providers: &ProviderList,
     sessions: &RuntimeSessionCatalogue,
     asking: &mpsc::Sender<RuntimeAsked>,
     returning: &mpsc::UnboundedSender<RuntimeReturned>,
@@ -366,7 +404,10 @@ async fn dispatch_public(
                 watch_integration(state, composed, id, params)
             }
             RuntimeMethod::IntegrationsGetGrant => grant(state, composed, id, params),
-            RuntimeMethod::ProvidersList => providers(state, composed, id, params),
+            RuntimeMethod::ProvidersList => providers_list(state, composed, providers, id, params),
+            RuntimeMethod::ProvidersWatch => {
+                providers_watch(state, composed, provider_updates, id, params)
+            }
             RuntimeMethod::ProvidersGetCapabilities => {
                 get_provider_capabilities(state, composed, discovering, id, params).await
             }
@@ -423,6 +464,8 @@ async fn dispatch_public(
             }
             RuntimeMethod::Initialized
             | RuntimeMethod::Challenge
+            | RuntimeMethod::ProvidersChanged
+            | RuntimeMethod::ProvidersWatchEnded
             | RuntimeMethod::SessionsEvent
             | RuntimeMethod::SessionsLagged
             | RuntimeMethod::SessionsIndexChanged
@@ -442,9 +485,9 @@ async fn dispatch_public(
 
 fn required_scope(method: RuntimeMethod) -> Option<AppScope> {
     match method {
-        RuntimeMethod::ProvidersList | RuntimeMethod::ProvidersGetCapabilities => {
-            Some(AppScope::ProviderRead)
-        }
+        RuntimeMethod::ProvidersList
+        | RuntimeMethod::ProvidersWatch
+        | RuntimeMethod::ProvidersGetCapabilities => Some(AppScope::ProviderRead),
         RuntimeMethod::ProvidersListModels => Some(AppScope::ModelRead),
         RuntimeMethod::ProvidersListNativeSessions => Some(AppScope::SessionNativeDiscover),
         RuntimeMethod::SessionsList
@@ -472,6 +515,8 @@ fn required_scope(method: RuntimeMethod) -> Option<AppScope> {
         | RuntimeMethod::IntegrationsRequestEnrollment
         | RuntimeMethod::IntegrationsWatchEnrollment
         | RuntimeMethod::IntegrationsGetGrant
+        | RuntimeMethod::ProvidersChanged
+        | RuntimeMethod::ProvidersWatchEnded
         | RuntimeMethod::SessionsEvent
         | RuntimeMethod::SessionsLagged
         | RuntimeMethod::SessionsIndexChanged
@@ -671,9 +716,10 @@ fn grant(
     }
 }
 
-fn providers(
+fn providers_list(
     state: &mut PublicState,
     composed: &Composed,
+    providers: &ProviderList,
     id: JsonRpcId,
     params: serde_json::Value,
 ) -> Answer {
@@ -685,9 +731,50 @@ fn providers(
         );
     }
     match authorized(state, &composed.store, Some(AppScope::ProviderRead)) {
-        Ok(_) => Answer::success(id, &crate::runtime_inventory::providers(composed)),
+        Ok(_) => Answer::success(id, providers),
         Err(failure) => Answer::failure(id, failure),
     }
+}
+
+fn providers_watch(
+    state: &mut PublicState,
+    composed: &Composed,
+    updates: &watch::Sender<Arc<ProviderList>>,
+    id: JsonRpcId,
+    params: serde_json::Value,
+) -> Answer {
+    if serde_json::from_value::<WatchProvidersParams>(params).is_err() {
+        return Answer::plain(
+            id,
+            RuntimeErrorKind::InvalidRequest,
+            "provider watch parameters are invalid",
+        );
+    }
+    let authority = match authorized(state, &composed.store, Some(AppScope::ProviderRead)) {
+        Ok(authority) => authority.clone(),
+        Err(failure) => return Answer::failure(id, failure),
+    };
+    let subscription_id = match random_subscription_id() {
+        Ok(subscription_id) if !subscription_id.is_empty() => subscription_id,
+        Ok(_) | Err(_) => {
+            return Answer::plain(
+                id,
+                RuntimeErrorKind::Internal,
+                "Runtime could not allocate a provider subscription identity",
+            );
+        }
+    };
+    let provider_updates = updates.subscribe();
+    let snapshot = provider_updates.borrow().as_ref().clone();
+    Answer::watching_providers(
+        id,
+        &WatchProvidersResult {
+            subscription_id,
+            snapshot,
+        },
+        provider_updates,
+        authority,
+    )
 }
 
 async fn get_provider_capabilities(
@@ -1916,6 +2003,9 @@ fn parse_session_operation(
         | RuntimeMethod::IntegrationsWatchEnrollment
         | RuntimeMethod::IntegrationsGetGrant
         | RuntimeMethod::ProvidersList
+        | RuntimeMethod::ProvidersWatch
+        | RuntimeMethod::ProvidersChanged
+        | RuntimeMethod::ProvidersWatchEnded
         | RuntimeMethod::ProvidersGetCapabilities
         | RuntimeMethod::ProvidersListModels
         | RuntimeMethod::ProvidersListNativeSessions
@@ -2114,7 +2204,110 @@ async fn relay_watch(
             )
             .await;
         }
+        Watching::Providers {
+            subscription_id,
+            last,
+            updates,
+            authority,
+        } => {
+            relay_providers(
+                connection,
+                composed,
+                subscription_id,
+                last,
+                updates,
+                authority,
+            )
+            .await;
+        }
     }
+}
+
+fn refresh_provider_inventory(providers: &watch::Sender<Arc<ProviderList>>, composed: &Composed) {
+    let next = Arc::new(crate::runtime_inventory::providers(composed));
+    providers.send_if_modified(|current| {
+        if current.as_ref() == next.as_ref() {
+            return false;
+        }
+        *current = next;
+        true
+    });
+}
+
+async fn relay_providers(
+    connection: &mut Connection,
+    composed: &Composed,
+    subscription_id: String,
+    mut last: ProviderList,
+    mut updates: watch::Receiver<Arc<ProviderList>>,
+    authority: AuthorizedIntegration,
+) {
+    loop {
+        if updates.changed().await.is_err() {
+            send_provider_watch_end(
+                connection,
+                subscription_id,
+                ProviderWatchEndReason::RuntimeUnavailable,
+            )
+            .await;
+            return;
+        }
+        match refresh(&composed.store, &authority) {
+            Ok(current) if current.grant.scopes.contains(&AppScope::ProviderRead) => {}
+            Ok(_) => {
+                send_provider_watch_end(
+                    connection,
+                    subscription_id,
+                    ProviderWatchEndReason::AuthorityChanged,
+                )
+                .await;
+                return;
+            }
+            Err(failure) => {
+                let reason = if failure.kind == RuntimeErrorKind::IntegrationRevoked {
+                    ProviderWatchEndReason::IntegrationRevoked
+                } else {
+                    ProviderWatchEndReason::AuthorityChanged
+                };
+                send_provider_watch_end(connection, subscription_id, reason).await;
+                return;
+            }
+        }
+        let snapshot = Arc::clone(&updates.borrow_and_update());
+        if snapshot.as_ref() == &last {
+            continue;
+        }
+        last = snapshot.as_ref().clone();
+        let notification = ProvidersChangedNotification {
+            subscription_id: subscription_id.clone(),
+            snapshot: last.clone(),
+        };
+        if send_notification(connection, RuntimeMethod::ProvidersChanged, &notification)
+            .await
+            .is_err()
+        {
+            return;
+        }
+    }
+}
+
+async fn send_provider_watch_end(
+    connection: &mut Connection,
+    subscription_id: String,
+    reason: ProviderWatchEndReason,
+) {
+    let notification = ProviderWatchEndedNotification {
+        subscription_id,
+        reason,
+    };
+    drop(
+        send_notification(
+            connection,
+            RuntimeMethod::ProvidersWatchEnded,
+            &notification,
+        )
+        .await,
+    );
 }
 
 async fn relay_events(
@@ -2746,6 +2939,8 @@ listen = "stdio"
                 &resume_project,
             ),
         );
+        let (provider_updates, _provider_updates_receiver) =
+            watch::channel(Arc::new(crate::runtime_inventory::providers(&composed)));
         let (publishing, watching) = watch::channel(sessions.clone());
         let (runtime_asking, runtime_asked) = mpsc::channel(1);
         let (runtime_returning, runtime_returned) = mpsc::unbounded_channel();
@@ -2761,20 +2956,25 @@ listen = "stdio"
             let composed = Arc::clone(&composed);
             let discovering = Arc::clone(&discovering);
             let native_cursors = Arc::clone(&native_cursors);
+            let provider_updates = provider_updates.clone();
             async move {
-                for _ in 0..3 {
+                let mut connections = tokio::task::JoinSet::new();
+                for _ in 0..4 {
                     let connection = listener.accept().await.expect("accept public client");
-                    serve_connection(
+                    connections.spawn(serve_connection(
                         connection,
                         instance.to_owned(),
                         Arc::clone(&composed),
                         Arc::clone(&discovering),
                         Arc::clone(&native_cursors),
+                        provider_updates.clone(),
                         watching.clone(),
                         runtime_asking.clone(),
                         runtime_returning.clone(),
-                    )
-                    .await;
+                    ));
+                }
+                while let Some(joined) = connections.join_next().await {
+                    joined.expect("public connection task");
                 }
             }
         });
@@ -3169,37 +3369,94 @@ listen = "stdio"
         let mut watching_client = locator
             .connect(
                 runtrol_runtime_client::ClientOptions::new("contract fixture", "1.0.0")
-                    .with_credentials(credentials),
+                    .with_credentials(credentials.clone()),
             )
             .await
             .expect("connect a dedicated index watcher");
         {
-            let mut session_client = watching_client.sessions();
-            let mut index = session_client
-                .watch_index()
+            let mut provider_watching_client = locator
+                .connect(
+                    runtrol_runtime_client::ClientOptions::new("contract fixture", "1.0.0")
+                        .with_credentials(credentials),
+                )
                 .await
-                .expect("watch the authorized session index");
-            assert_eq!(index.started().snapshot.sessions.len(), 1);
-            assert!(
-                composed
-                    .store
-                    .revoke_integration(integration, runtrol_provider::WallMs::now())
-                    .expect("revoke integration")
-            );
-            publishing.send_replace(sessions);
-            let ended = tokio::time::timeout(Duration::from_secs(2), index.next())
+                .expect("connect a dedicated provider watcher");
+            let mut provider_client = provider_watching_client.providers();
+            let mut provider_watch = provider_client
+                .watch()
                 .await
-                .expect("revocation retires the index watch without polling")
-                .expect("typed index end notification");
+                .expect("watch the structural provider inventory");
+            assert_eq!(provider_watch.started().snapshot.providers.len(), 1);
+            let initial_providers = provider_watch.started().snapshot.clone();
+            let mut changed_providers = initial_providers.clone();
+            changed_providers
+                .providers
+                .first_mut()
+                .expect("one fixture provider")
+                .display_name = "Changed fixture provider".to_owned();
+            provider_updates.send_replace(Arc::new(changed_providers));
+            let changed = tokio::time::timeout(Duration::from_secs(2), provider_watch.next())
+                .await
+                .expect("provider changes arrive without polling")
+                .expect("typed provider change notification");
             assert!(matches!(
-                ended,
-                runtrol_runtime_client::SessionIndexNotification::Ended(
-                    runtrol_runtime_protocol::SessionIndexEndedNotification {
-                        reason: runtrol_runtime_protocol::SessionIndexEndReason::IntegrationRevoked,
-                        ..
-                    }
+                changed,
+                runtrol_runtime_client::ProviderNotification::Changed(
+                    runtrol_runtime_protocol::ProvidersChangedNotification { .. }
                 )
             ));
+
+            {
+                let mut session_client = watching_client.sessions();
+                let mut index = session_client
+                    .watch_index()
+                    .await
+                    .expect("watch the authorized session index");
+                assert_eq!(index.started().snapshot.sessions.len(), 1);
+                assert!(
+                    composed
+                        .store
+                        .revoke_integration(integration, runtrol_provider::WallMs::now())
+                        .expect("revoke integration")
+                );
+                publishing.send_replace(sessions);
+                provider_updates.send_replace(Arc::new(initial_providers));
+                let ended = tokio::time::timeout(Duration::from_secs(2), index.next())
+                    .await
+                    .expect("revocation retires the index watch without polling")
+                    .expect("typed index end notification");
+                assert!(matches!(
+                    ended,
+                    runtrol_runtime_client::SessionIndexNotification::Ended(
+                        runtrol_runtime_protocol::SessionIndexEndedNotification {
+                            reason:
+                                runtrol_runtime_protocol::SessionIndexEndReason::IntegrationRevoked,
+                            ..
+                        }
+                    )
+                ));
+            }
+
+            let provider_ended = async {
+                for _ in 0..3 {
+                    let notification = provider_watch
+                        .next()
+                        .await
+                        .expect("typed provider watch notification");
+                    if let runtrol_runtime_client::ProviderNotification::Ended(ended) = notification
+                    {
+                        return ended;
+                    }
+                }
+                panic!("provider watch did not end after revocation");
+            };
+            let provider_ended = tokio::time::timeout(Duration::from_secs(2), provider_ended)
+                .await
+                .expect("revocation retires the provider watch without polling");
+            assert_eq!(
+                provider_ended.reason,
+                runtrol_runtime_protocol::ProviderWatchEndReason::IntegrationRevoked
+            );
         }
         drop(watching_client);
         drop(publishing);

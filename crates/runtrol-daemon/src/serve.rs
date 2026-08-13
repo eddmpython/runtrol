@@ -625,6 +625,8 @@ async fn serve_surfaces(
         Arc::new(crate::runtime_inventory::sessions(&composed, &sessions)?);
     let (runtime_sessions, _initial_runtime_sessions_receiver) =
         watch::channel(initial_runtime_sessions);
+    let (runtime_providers, _initial_runtime_providers_receiver) =
+        watch::channel(Arc::new(crate::runtime_inventory::providers(&composed)));
     // ProbeCache replaces one file atomically but is deliberately not a database. Serializing provider preparation
     // keeps two connections from publishing stale snapshots over each other and bounds temporary provider processes.
     // A Models request holds this gate through its provider call. Opens release it after discovery because their
@@ -652,6 +654,7 @@ async fn serve_surfaces(
                     Arc::clone(&composed),
                     Arc::clone(&discovering),
                     Arc::clone(&runtime_native_cursors),
+                    runtime_providers.clone(),
                     runtime_sessions.subscribe(),
                     runtime_asking.clone(),
                     runtime_returning.clone(),
@@ -1105,6 +1108,7 @@ async fn serve_surfaces(
 
             Some(notice) = update_notices.recv() => {
                 provider_update_notices.insert(notice.provider, notice.message);
+                publish_runtime_providers(&runtime_providers, &composed);
                 publish_session_index(
                     &session_index,
                     &runtime_sessions,
@@ -1831,6 +1835,20 @@ async fn relay_session_index(
             return;
         }
     }
+}
+
+fn publish_runtime_providers(
+    providers: &watch::Sender<Arc<runtrol_runtime_protocol::ProviderList>>,
+    composed: &Composed,
+) {
+    let next = Arc::new(crate::runtime_inventory::providers(composed));
+    providers.send_if_modified(|current| {
+        if current.as_ref() == next.as_ref() {
+            return false;
+        }
+        *current = next;
+        true
+    });
 }
 
 /// Publish only a changed current index. The encoded bytes are shared by every subscriber.

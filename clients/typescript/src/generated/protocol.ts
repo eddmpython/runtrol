@@ -169,6 +169,15 @@ export type ProviderId = string;
 /** A bounded provider inventory snapshot. */
 export interface ProviderList { readonly providers: ReadonlyArray<ProviderDescriptor>; }
 
+/** Why a provider inventory subscription ended. */
+export type ProviderWatchEndReason = "integrationRevoked" | "authorityChanged" | "runtimeUnavailable";
+
+/** Final typed reason for retiring a provider inventory subscription. */
+export interface ProviderWatchEndedNotification { readonly reason: ProviderWatchEndReason; readonly subscriptionId: string; }
+
+/** A changed complete provider inventory snapshot. */
+export interface ProvidersChangedNotification { readonly snapshot: ProviderList; readonly subscriptionId: string; }
+
 /** Prove possession of the key attached to a new enrollment. */
 export interface RequestEnrollmentParams { readonly manifest: EnrollmentManifest; readonly signature: string; }
 
@@ -215,7 +224,7 @@ export interface RuntimeLimits { readonly challengeLifetimeMs: number; readonly 
 export interface RuntimeLocatorRecord { readonly endpoint: string; readonly endpointKind: RuntimeEndpointKind; readonly instanceId: string; readonly processId: number; readonly runtimeVersion: string; readonly schema: number; }
 
 /** A public Runtime method implemented by the initial read-only boundary. */
-export type RuntimeMethod = "runtime/initialize" | "runtime/initialized" | "runtime/challenge" | "integrations/requestEnrollment" | "integrations/watchEnrollment" | "integrations/getGrant" | "providers/list" | "providers/getCapabilities" | "providers/listModels" | "providers/listNativeSessions" | "sessions/list" | "sessions/watchIndex" | "sessions/get" | "sessions/start" | "sessions/adoptNative" | "sessions/resume" | "sessions/acquireControl" | "sessions/renewControl" | "sessions/releaseControl" | "sessions/submitInput" | "sessions/watchEvents" | "sessions/interrupt" | "sessions/cool" | "approvals/listPending" | "approvals/respond" | "sessions/indexChanged" | "sessions/indexEnded" | "sessions/event" | "sessions/lagged" | "runtime/panicStop";
+export type RuntimeMethod = "runtime/initialize" | "runtime/initialized" | "runtime/challenge" | "integrations/requestEnrollment" | "integrations/watchEnrollment" | "integrations/getGrant" | "providers/list" | "providers/watch" | "providers/getCapabilities" | "providers/listModels" | "providers/listNativeSessions" | "sessions/list" | "sessions/watchIndex" | "sessions/get" | "sessions/start" | "sessions/adoptNative" | "sessions/resume" | "sessions/acquireControl" | "sessions/renewControl" | "sessions/releaseControl" | "sessions/submitInput" | "sessions/watchEvents" | "sessions/interrupt" | "sessions/cool" | "approvals/listPending" | "approvals/respond" | "sessions/indexChanged" | "sessions/indexEnded" | "providers/changed" | "providers/watchEnded" | "sessions/event" | "sessions/lagged" | "runtime/panicStop";
 
 /** The current model information Runtime can truthfully expose. */
 export type RuntimeModelCatalog = { readonly coverage: "known"; readonly models: ReadonlyArray<RuntimeModelChoice>; } | { readonly aliases: ReadonlyArray<string>; readonly coverage: "aliases"; readonly why: string; } | { readonly aliases: ReadonlyArray<string>; readonly coverage: "partial"; readonly models: ReadonlyArray<RuntimeModelChoice>; readonly why: string; } | { readonly coverage: "unknown"; readonly why: string; } | { readonly coverage: "unsupported"; readonly why: string; };
@@ -270,6 +279,12 @@ export interface WatchEventsParams { readonly after?: EventCursor | null; readon
 
 /** Event subscription boundary returned before replay or live delivery. */
 export interface WatchEventsResult { readonly gap?: EventGap | null; readonly liveAt: EventCursor; readonly sessionId: RuntimeSessionId; readonly startsAt: EventCursor; readonly subscriptionId: string; }
+
+/** Install one dedicated provider inventory subscription. */
+export type WatchProvidersParams = Readonly<Record<string, never>>;
+
+/** Initial provider snapshot and connection-local subscription identity. */
+export interface WatchProvidersResult { readonly snapshot: ProviderList; readonly subscriptionId: string; }
 
 /** Install one dedicated managed-session index subscription. */
 export type WatchSessionIndexParams = Readonly<Record<string, never>>;

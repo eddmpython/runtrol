@@ -31,6 +31,8 @@ import type {
   PendingApprovalList,
   ProviderId,
   ProviderList,
+  ProviderWatchEndedNotification,
+  ProvidersChangedNotification,
   RequestEnrollmentParams,
   RespondApprovalParams,
   ResumeSessionParams,
@@ -48,6 +50,7 @@ import type {
   SubmitInputParams,
   WatchEventsParams,
   WatchEventsResult,
+  WatchProvidersResult,
   WatchSessionIndexResult,
 } from "./generated/protocol.js";
 import { FINALIZED_REVISIONS, PUBLIC_LIMITS } from "./generated/protocol.js";
@@ -225,6 +228,16 @@ export class ProviderClient {
     return callRuntime(this.runtime, "providers/list", {}, "ProviderList");
   }
 
+  public async watch(): Promise<ProviderSubscription> {
+    const started = await callRuntime<WatchProvidersResult>(
+      this.runtime,
+      "providers/watch",
+      {},
+      "WatchProvidersResult",
+    );
+    return new ProviderSubscription(beginStream(this.runtime), started);
+  }
+
   public getCapabilities(providerId: ProviderId): Promise<RuntimeProviderCapabilities> {
     const params: GetProviderCapabilitiesParams = { providerId };
     return callRuntime(
@@ -247,6 +260,48 @@ export class ProviderClient {
       params,
       "NativeSessionCatalogue",
     );
+  }
+}
+
+export type ProviderNotification =
+  | { readonly kind: "changed"; readonly changed: ProvidersChangedNotification }
+  | { readonly kind: "ended"; readonly ended: ProviderWatchEndedNotification };
+
+export class ProviderSubscription {
+  public constructor(
+    private readonly transport: RuntimeTransport,
+    public readonly started: WatchProvidersResult,
+  ) {}
+
+  public async next(): Promise<ProviderNotification> {
+    const decoded = decodeJson(await this.transport.receive());
+    const notification = validatePublic<JsonRpcNotification>("JsonRpcNotification", decoded);
+    if (notification.jsonrpc !== "2.0") {
+      throw new RuntimeProtocolError("provider notification JSON-RPC version is not 2.0");
+    }
+    if (notification.method === "providers/changed") {
+      const changed = validatePublic<ProvidersChangedNotification>(
+        "ProvidersChangedNotification",
+        notification.params,
+      );
+      this.validateTarget(changed.subscriptionId);
+      return { kind: "changed", changed };
+    }
+    if (notification.method === "providers/watchEnded") {
+      const ended = validatePublic<ProviderWatchEndedNotification>(
+        "ProviderWatchEndedNotification",
+        notification.params,
+      );
+      this.validateTarget(ended.subscriptionId);
+      return { kind: "ended", ended };
+    }
+    throw new RuntimeProtocolError("dedicated provider stream received a different method");
+  }
+
+  private validateTarget(subscriptionId: string): void {
+    if (subscriptionId !== this.started.subscriptionId) {
+      throw new RuntimeProtocolError("provider notification target does not match its subscription");
+    }
   }
 }
 

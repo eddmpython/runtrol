@@ -29,6 +29,16 @@ console.log(receipt.pendingId);
 runtime.close();
 ```
 
+Provider installation observations also use a dedicated snapshot stream and update only when Runtime observes a
+changed verified inventory:
+
+```ts
+const providers = await runtime.providers().watch();
+console.log(providers.started.snapshot.providers);
+const providerUpdate = await providers.next();
+if (providerUpdate.kind === "changed") console.log(providerUpdate.changed.snapshot.providers);
+```
+
 Managed-session changes use a dedicated snapshot stream, so an integration does not poll or infer changes from
 provider output:
 

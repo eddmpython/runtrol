@@ -30,6 +30,9 @@ pub enum RuntimeMethod {
     /// Read the structural provider inventory.
     #[serde(rename = "providers/list")]
     ProvidersList,
+    /// Watch structural provider inventory changes without polling.
+    #[serde(rename = "providers/watch")]
+    ProvidersWatch,
     /// Discover structural lifecycle and event capabilities for one provider.
     #[serde(rename = "providers/getCapabilities")]
     ProvidersGetCapabilities,
@@ -90,6 +93,12 @@ pub enum RuntimeMethod {
     /// Final managed-session index subscription reason.
     #[serde(rename = "sessions/indexEnded")]
     SessionsIndexEnded,
+    /// One changed provider inventory snapshot.
+    #[serde(rename = "providers/changed")]
+    ProvidersChanged,
+    /// Final provider inventory subscription reason.
+    #[serde(rename = "providers/watchEnded")]
+    ProvidersWatchEnded,
     /// One normalized event notification.
     #[serde(rename = "sessions/event")]
     SessionsEvent,
@@ -113,6 +122,7 @@ impl RuntimeMethod {
             Self::IntegrationsWatchEnrollment => "integrations/watchEnrollment",
             Self::IntegrationsGetGrant => "integrations/getGrant",
             Self::ProvidersList => "providers/list",
+            Self::ProvidersWatch => "providers/watch",
             Self::ProvidersGetCapabilities => "providers/getCapabilities",
             Self::ProvidersListModels => "providers/listModels",
             Self::ProvidersListNativeSessions => "providers/listNativeSessions",
@@ -133,6 +143,8 @@ impl RuntimeMethod {
             Self::ApprovalsRespond => "approvals/respond",
             Self::SessionsIndexChanged => "sessions/indexChanged",
             Self::SessionsIndexEnded => "sessions/indexEnded",
+            Self::ProvidersChanged => "providers/changed",
+            Self::ProvidersWatchEnded => "providers/watchEnded",
             Self::SessionsEvent => "sessions/event",
             Self::SessionsLagged => "sessions/lagged",
             Self::PanicStop => "runtime/panicStop",
@@ -158,6 +170,7 @@ impl FromStr for RuntimeMethod {
             "integrations/watchEnrollment" => Ok(Self::IntegrationsWatchEnrollment),
             "integrations/getGrant" => Ok(Self::IntegrationsGetGrant),
             "providers/list" => Ok(Self::ProvidersList),
+            "providers/watch" => Ok(Self::ProvidersWatch),
             "providers/getCapabilities" => Ok(Self::ProvidersGetCapabilities),
             "providers/listModels" => Ok(Self::ProvidersListModels),
             "providers/listNativeSessions" => Ok(Self::ProvidersListNativeSessions),
@@ -178,6 +191,8 @@ impl FromStr for RuntimeMethod {
             "approvals/respond" => Ok(Self::ApprovalsRespond),
             "sessions/indexChanged" => Ok(Self::SessionsIndexChanged),
             "sessions/indexEnded" => Ok(Self::SessionsIndexEnded),
+            "providers/changed" => Ok(Self::ProvidersChanged),
+            "providers/watchEnded" => Ok(Self::ProvidersWatchEnded),
             "sessions/event" => Ok(Self::SessionsEvent),
             "sessions/lagged" => Ok(Self::SessionsLagged),
             "runtime/panicStop" => Ok(Self::PanicStop),
@@ -205,6 +220,7 @@ mod tests {
             RuntimeMethod::IntegrationsWatchEnrollment,
             RuntimeMethod::IntegrationsGetGrant,
             RuntimeMethod::ProvidersList,
+            RuntimeMethod::ProvidersWatch,
             RuntimeMethod::ProvidersGetCapabilities,
             RuntimeMethod::ProvidersListModels,
             RuntimeMethod::ProvidersListNativeSessions,
@@ -225,6 +241,8 @@ mod tests {
             RuntimeMethod::ApprovalsRespond,
             RuntimeMethod::SessionsIndexChanged,
             RuntimeMethod::SessionsIndexEnded,
+            RuntimeMethod::ProvidersChanged,
+            RuntimeMethod::ProvidersWatchEnded,
             RuntimeMethod::SessionsEvent,
             RuntimeMethod::SessionsLagged,
             RuntimeMethod::PanicStop,

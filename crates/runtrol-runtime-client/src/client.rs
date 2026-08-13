@@ -9,13 +9,15 @@ use runtrol_runtime_protocol::{
     IntegrationAuthentication, IntegrationGrant, JsonRpcId, JsonRpcNotification, JsonRpcRequest,
     JsonRpcResponse, LaggedNotification, ListModelsParams, ListNativeSessionsParams,
     ListPendingApprovalsParams, ManagedSessionList, NativeSessionCatalogue, PendingApprovalList,
-    PendingEnrollmentId, ProviderId, ProviderList, RequestEnrollmentParams, RespondApprovalParams,
+    PendingEnrollmentId, ProviderId, ProviderList, ProviderWatchEndedNotification,
+    ProvidersChangedNotification, RequestEnrollmentParams, RespondApprovalParams,
     ResumeSessionParams, RuntimeEventNotification, RuntimeMethod, RuntimeModelCatalog,
     RuntimeProviderCapabilities, RuntimeSessionId, ServerChallenge, SessionDescriptor,
     SessionIndexChangedNotification, SessionIndexEndedNotification, SessionOpenResult,
     StartSessionParams, SubmitInputParams, SuccessResponse, WatchEnrollmentParams,
-    WatchEventsParams, WatchEventsResult, WatchSessionIndexParams, WatchSessionIndexResult,
-    enrollment_signing_payload, initialization_signing_payload,
+    WatchEventsParams, WatchEventsResult, WatchProvidersParams, WatchProvidersResult,
+    WatchSessionIndexParams, WatchSessionIndexResult, enrollment_signing_payload,
+    initialization_signing_payload,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -558,6 +560,26 @@ impl ProviderClient<'_> {
             .await
     }
 
+    /// Convert this connection into one provider inventory subscription after its initial snapshot.
+    ///
+    /// # Errors
+    ///
+    /// Public client and Runtime failures, including missing provider read scope.
+    pub async fn watch(&mut self) -> Result<ProviderSubscription<'_>, ClientError> {
+        let started: WatchProvidersResult = self
+            .runtime
+            .call(
+                RuntimeMethod::ProvidersWatch,
+                &WatchProvidersParams::default(),
+            )
+            .await?;
+        Ok(ProviderSubscription {
+            runtime: self.runtime,
+            subscription_id: started.subscription_id.clone(),
+            started,
+        })
+    }
+
     /// Discover one provider's structural lifecycle and event capabilities.
     ///
     /// # Errors
@@ -604,6 +626,87 @@ impl ProviderClient<'_> {
         self.runtime
             .call(RuntimeMethod::ProvidersListNativeSessions, &params)
             .await
+    }
+}
+
+/// One provider inventory notification.
+#[derive(Debug)]
+pub enum ProviderNotification {
+    /// The complete provider snapshot changed.
+    Changed(ProvidersChangedNotification),
+    /// The subscription ended with a typed authority or Runtime reason.
+    Ended(ProviderWatchEndedNotification),
+}
+
+/// One dedicated provider inventory stream borrowed from an initialized Runtime connection.
+pub struct ProviderSubscription<'client> {
+    runtime: &'client mut RuntimeClient,
+    subscription_id: String,
+    started: WatchProvidersResult,
+}
+
+impl ProviderSubscription<'_> {
+    /// Initial provider snapshot acknowledged before notifications begin.
+    #[must_use]
+    pub const fn started(&self) -> &WatchProvidersResult {
+        &self.started
+    }
+
+    /// Wait for a changed provider snapshot or terminal reason.
+    ///
+    /// # Errors
+    ///
+    /// Transport failure or a notification that violates the selected public revision.
+    pub async fn next(&mut self) -> Result<ProviderNotification, ClientError> {
+        let payload = self.runtime.connection.receive().await?;
+        let notification: JsonRpcNotification =
+            serde_json::from_slice(&payload).map_err(|error| {
+                ClientError::Protocol(format!(
+                    "provider notification is not valid public JSON-RPC: {error}"
+                ))
+            })?;
+        if notification.jsonrpc != "2.0" {
+            return Err(ClientError::Protocol(
+                "provider notification JSON-RPC version is not 2.0".to_owned(),
+            ));
+        }
+        let method = notification.method.parse::<RuntimeMethod>().map_err(|_| {
+            ClientError::Protocol("provider notification method is unknown".to_owned())
+        })?;
+        match method {
+            RuntimeMethod::ProvidersChanged => {
+                let changed: ProvidersChangedNotification =
+                    serde_json::from_value(notification.params).map_err(|error| {
+                        ClientError::Protocol(format!(
+                            "provider change notification has the wrong shape: {error}"
+                        ))
+                    })?;
+                self.validate_subscription(&changed.subscription_id)?;
+                Ok(ProviderNotification::Changed(changed))
+            }
+            RuntimeMethod::ProvidersWatchEnded => {
+                let ended: ProviderWatchEndedNotification =
+                    serde_json::from_value(notification.params).map_err(|error| {
+                        ClientError::Protocol(format!(
+                            "provider watch end notification has the wrong shape: {error}"
+                        ))
+                    })?;
+                self.validate_subscription(&ended.subscription_id)?;
+                Ok(ProviderNotification::Ended(ended))
+            }
+            _ => Err(ClientError::Protocol(
+                "the dedicated provider stream received a different method".to_owned(),
+            )),
+        }
+    }
+
+    fn validate_subscription(&self, subscription_id: &str) -> Result<(), ClientError> {
+        if subscription_id != self.subscription_id {
+            return Err(ClientError::Protocol(
+                "provider notification target does not match its subscription".to_owned(),
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -842,6 +945,7 @@ impl ApprovalClient<'_> {
 }
 
 /// One managed-session index notification.
+#[derive(Debug)]
 pub enum SessionIndexNotification {
     /// The authorized snapshot changed.
     Changed(SessionIndexChangedNotification),
@@ -985,6 +1089,7 @@ impl EventSubscription<'_> {
             | RuntimeMethod::IntegrationsWatchEnrollment
             | RuntimeMethod::IntegrationsGetGrant
             | RuntimeMethod::ProvidersList
+            | RuntimeMethod::ProvidersWatch
             | RuntimeMethod::ProvidersGetCapabilities
             | RuntimeMethod::ProvidersListModels
             | RuntimeMethod::ProvidersListNativeSessions
@@ -1005,6 +1110,8 @@ impl EventSubscription<'_> {
             | RuntimeMethod::ApprovalsRespond
             | RuntimeMethod::SessionsIndexChanged
             | RuntimeMethod::SessionsIndexEnded
+            | RuntimeMethod::ProvidersChanged
+            | RuntimeMethod::ProvidersWatchEnded
             | RuntimeMethod::PanicStop => Err(ClientError::Protocol(
                 "the dedicated session stream received a non-event method".to_owned(),
             )),

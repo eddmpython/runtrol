@@ -8,12 +8,14 @@ use crate::{
     GetSessionParams, InitializeParams, InitializeResult, IntegrationGrant, JsonRpcNotification,
     JsonRpcRequest, JsonRpcResponse, LaggedNotification, ListModelsParams,
     ListNativeSessionsParams, ListPendingApprovalsParams, ManagedSessionList,
-    NativeSessionCatalogue, PendingApprovalList, ProviderList, RequestEnrollmentParams,
-    RespondApprovalParams, ResumeSessionParams, RuntimeEventNotification, RuntimeLocatorRecord,
-    RuntimeMethod, RuntimeModelCatalog, RuntimeProviderCapabilities, ServerChallenge,
-    SessionDescriptor, SessionIndexChangedNotification, SessionIndexEndedNotification,
-    SessionOpenResult, StartSessionParams, SubmitInputParams, WatchEnrollmentParams,
-    WatchEventsParams, WatchEventsResult, WatchSessionIndexParams, WatchSessionIndexResult,
+    NativeSessionCatalogue, PendingApprovalList, ProviderList, ProviderWatchEndedNotification,
+    ProvidersChangedNotification, RequestEnrollmentParams, RespondApprovalParams,
+    ResumeSessionParams, RuntimeEventNotification, RuntimeLocatorRecord, RuntimeMethod,
+    RuntimeModelCatalog, RuntimeProviderCapabilities, ServerChallenge, SessionDescriptor,
+    SessionIndexChangedNotification, SessionIndexEndedNotification, SessionOpenResult,
+    StartSessionParams, SubmitInputParams, WatchEnrollmentParams, WatchEventsParams,
+    WatchEventsResult, WatchProvidersParams, WatchProvidersResult, WatchSessionIndexParams,
+    WatchSessionIndexResult,
 };
 
 /// Checked schema filename inside this package.
@@ -69,6 +71,10 @@ struct PublicProtocolSchema {
     watch_session_index_result: WatchSessionIndexResult,
     session_index_changed: SessionIndexChangedNotification,
     session_index_ended: SessionIndexEndedNotification,
+    watch_providers: WatchProvidersParams,
+    watch_providers_result: WatchProvidersResult,
+    providers_changed: ProvidersChangedNotification,
+    provider_watch_ended: ProviderWatchEndedNotification,
 }
 
 /// Generate the language-neutral public schema from the Rust DTOs.

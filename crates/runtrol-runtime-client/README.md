@@ -7,6 +7,9 @@ revision, proves a consumer-owned integration identity, and exposes typed provid
 authorized snapshot, later notifications carry only changed complete snapshots, and authority loss has a typed final
 reason. The SDK performs no polling.
 
+`ProviderClient::watch` follows the same dedicated connection contract for structural provider installation
+observations. Runtime publishes only changed verified snapshots and never starts every provider to produce a list.
+
 After local enrollment approval, a consumer can reconnect with its credentials and start a provider-neutral session:
 
 ```rust,no_run

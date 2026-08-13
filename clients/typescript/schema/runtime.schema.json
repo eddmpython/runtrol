@@ -1351,6 +1351,64 @@
       ],
       "type": "object"
     },
+    "ProviderWatchEndReason": {
+      "description": "Why a provider inventory subscription ended.",
+      "oneOf": [
+        {
+          "const": "integrationRevoked",
+          "description": "The integration grant was revoked.",
+          "type": "string"
+        },
+        {
+          "const": "authorityChanged",
+          "description": "Scope or integration generations changed and require authenticated reconnect.",
+          "type": "string"
+        },
+        {
+          "const": "runtimeUnavailable",
+          "description": "The Runtime provider inventory publisher stopped.",
+          "type": "string"
+        }
+      ]
+    },
+    "ProviderWatchEndedNotification": {
+      "additionalProperties": false,
+      "description": "Final typed reason for retiring a provider inventory subscription.",
+      "properties": {
+        "reason": {
+          "$ref": "#/$defs/ProviderWatchEndReason",
+          "description": "Structural terminal reason."
+        },
+        "subscriptionId": {
+          "description": "Opaque connection-local subscription identity.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "subscriptionId",
+        "reason"
+      ],
+      "type": "object"
+    },
+    "ProvidersChangedNotification": {
+      "additionalProperties": false,
+      "description": "A changed complete provider inventory snapshot.",
+      "properties": {
+        "snapshot": {
+          "$ref": "#/$defs/ProviderList",
+          "description": "New complete provider snapshot."
+        },
+        "subscriptionId": {
+          "description": "Opaque connection-local subscription identity.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "subscriptionId",
+        "snapshot"
+      ],
+      "type": "object"
+    },
     "RequestEnrollmentParams": {
       "additionalProperties": false,
       "description": "Prove possession of the key attached to a new enrollment.",
@@ -2083,6 +2141,11 @@
           "type": "string"
         },
         {
+          "const": "providers/watch",
+          "description": "Watch structural provider inventory changes without polling.",
+          "type": "string"
+        },
+        {
           "const": "providers/getCapabilities",
           "description": "Discover structural lifecycle and event capabilities for one provider.",
           "type": "string"
@@ -2180,6 +2243,16 @@
         {
           "const": "sessions/indexEnded",
           "description": "Final managed-session index subscription reason.",
+          "type": "string"
+        },
+        {
+          "const": "providers/changed",
+          "description": "One changed provider inventory snapshot.",
+          "type": "string"
+        },
+        {
+          "const": "providers/watchEnded",
+          "description": "Final provider inventory subscription reason.",
           "type": "string"
         },
         {
@@ -2780,6 +2853,30 @@
       ],
       "type": "object"
     },
+    "WatchProvidersParams": {
+      "additionalProperties": false,
+      "description": "Install one dedicated provider inventory subscription.",
+      "type": "object"
+    },
+    "WatchProvidersResult": {
+      "additionalProperties": false,
+      "description": "Initial provider snapshot and connection-local subscription identity.",
+      "properties": {
+        "snapshot": {
+          "$ref": "#/$defs/ProviderList",
+          "description": "Exact provider snapshot at the subscription boundary."
+        },
+        "subscriptionId": {
+          "description": "Opaque connection-local subscription identity.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "subscriptionId",
+        "snapshot"
+      ],
+      "type": "object"
+    },
     "WatchSessionIndexParams": {
       "additionalProperties": false,
       "description": "Install one dedicated managed-session index subscription.",
@@ -2883,6 +2980,12 @@
     "provider_list": {
       "$ref": "#/$defs/ProviderList"
     },
+    "provider_watch_ended": {
+      "$ref": "#/$defs/ProviderWatchEndedNotification"
+    },
+    "providers_changed": {
+      "$ref": "#/$defs/ProvidersChangedNotification"
+    },
     "request": {
       "$ref": "#/$defs/JsonRpcRequest"
     },
@@ -2930,6 +3033,12 @@
     },
     "watch_events_result": {
       "$ref": "#/$defs/WatchEventsResult"
+    },
+    "watch_providers": {
+      "$ref": "#/$defs/WatchProvidersParams"
+    },
+    "watch_providers_result": {
+      "$ref": "#/$defs/WatchProvidersResult"
     },
     "watch_session_index": {
       "$ref": "#/$defs/WatchSessionIndexParams"
@@ -2981,7 +3090,11 @@
     "watch_session_index",
     "watch_session_index_result",
     "session_index_changed",
-    "session_index_ended"
+    "session_index_ended",
+    "watch_providers",
+    "watch_providers_result",
+    "providers_changed",
+    "provider_watch_ended"
   ],
   "title": "PublicProtocolSchema",
   "type": "object",

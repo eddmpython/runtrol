@@ -10,8 +10,8 @@ mod locator;
 
 pub use client::{
     ApprovalClient, ClientOptions, EnrollmentProposal, EventSubscription, IntegrationClient,
-    ProviderClient, RuntimeClient, SessionClient, SessionIndexNotification,
-    SessionIndexSubscription, SessionNotification,
+    ProviderClient, ProviderNotification, ProviderSubscription, RuntimeClient, SessionClient,
+    SessionIndexNotification, SessionIndexSubscription, SessionNotification,
 };
 pub use identity::{IntegrationCredentials, IntegrationIdentity};
 pub use locator::{LocatorError, LocatorState, RuntimeLocator, ValidatedLocator};

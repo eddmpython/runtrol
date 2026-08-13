@@ -55,6 +55,7 @@ try {
     const nativePage: ListNativeSessionsParams = { providerId: provider, root: "C:/opaque-root" };
     void runtime.providers().listNativeSessions(nativePage);
     void runtime.providers().getCapabilities(provider);
+    void runtime.providers().watch();
     const session: RuntimeSessionId = "opaque-session";
     void runtime.sessions().get(session);
     void runtime.sessions().watchIndex();

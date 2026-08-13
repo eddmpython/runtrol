@@ -91,6 +91,53 @@ pub struct ProviderList {
     pub providers: Vec<ProviderDescriptor>,
 }
 
+/// Install one dedicated provider inventory subscription.
+#[derive(Clone, Debug, Default, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WatchProvidersParams {}
+
+/// Initial provider snapshot and connection-local subscription identity.
+#[derive(Clone, Debug, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WatchProvidersResult {
+    /// Opaque connection-local subscription identity.
+    pub subscription_id: String,
+    /// Exact provider snapshot at the subscription boundary.
+    pub snapshot: ProviderList,
+}
+
+/// A changed complete provider inventory snapshot.
+#[derive(Clone, Debug, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProvidersChangedNotification {
+    /// Opaque connection-local subscription identity.
+    pub subscription_id: String,
+    /// New complete provider snapshot.
+    pub snapshot: ProviderList,
+}
+
+/// Why a provider inventory subscription ended.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ProviderWatchEndReason {
+    /// The integration grant was revoked.
+    IntegrationRevoked,
+    /// Scope or integration generations changed and require authenticated reconnect.
+    AuthorityChanged,
+    /// The Runtime provider inventory publisher stopped.
+    RuntimeUnavailable,
+}
+
+/// Final typed reason for retiring a provider inventory subscription.
+#[derive(Clone, Debug, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProviderWatchEndedNotification {
+    /// Opaque connection-local subscription identity.
+    pub subscription_id: String,
+    /// Structural terminal reason.
+    pub reason: ProviderWatchEndReason,
+}
+
 /// Structural Runtime supervision state without conversation meaning.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
