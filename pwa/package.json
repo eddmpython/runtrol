@@ -6,6 +6,10 @@
   "type": "module",
   "scripts": {
     "build": "node build.mjs",
-    "test": "node --test test/connection.test.mjs"
+    "test": "node --test test/connection.test.mjs test/surface.test.mjs",
+    "test:visual": "node test/visual.mjs"
+  },
+  "devDependencies": {
+    "pyproc": "0.0.21"
   }
 }

@@ -44,7 +44,7 @@ export class MissionController implements vscode.Disposable {
   }
 
   async refresh(): Promise<void> {
-    const response = (await this.client.once({ ask: "missionList" })).response;
+    const response = (await this.client.read({ ask: "missionList" })).response;
     this.rows = requireResponse(response, "missions");
     this.changedEmitter.fire();
   }

@@ -126,7 +126,7 @@ def approvalDriverProblems(source: str) -> list[str]:
     """Require the approval marker to follow graceful private-pipe retirement."""
     found: list[str] = []
     close_at = source.find("await connection.close();")
-    publish_at = source.find("if (settledIntegration) {")
+    publish_at = source.find("await writeFile(marker,")
     if close_at < 0 or publish_at < close_at:
         found.append("the approval marker can precede private IPC retirement")
     if "this.socket.end();" not in source:
@@ -220,7 +220,7 @@ def selftest() -> int:
     approval_source = (
         "let settledIntegration = null;\n"
         "await connection.close();\n"
-        "if (settledIntegration) {\n"
+        "await writeFile(marker, integrationId);\n"
         'this.socket.once("close", resolve);\n'
         "this.socket.end();\n"
     )

@@ -17,6 +17,7 @@ verifyExtensionTestArguments();
 await build({
   entryPoints: {
     "framing.test": path.join(extensionRoot, "src/core/framing.test.ts"),
+    "client.test": path.join(extensionRoot, "src/core/client.test.ts"),
     "liveCore.test": path.join(extensionRoot, "src/core/liveCore.test.ts"),
     "managedCore.test": path.join(extensionRoot, "src/core/managedCore.test.ts"),
     "presentation.test": path.join(extensionRoot, "src/webview/presentation.test.ts"),
@@ -27,6 +28,7 @@ await build({
     "stateRows.test": path.join(extensionRoot, "src/stateRows.test.ts"),
     "workspaceCollision.test": path.join(extensionRoot, "src/workspaceCollision.test.ts"),
     "runtimeProjection.test": path.join(extensionRoot, "src/runtimeProjection.test.ts"),
+    "runtimeControl.test": path.join(extensionRoot, "src/runtimeControl.test.ts"),
   },
   outdir: out,
   bundle: true,
@@ -43,6 +45,7 @@ await build({
 const result = spawnSync(process.execPath, [
   "--test",
   path.join(out, "framing.test.js"),
+  path.join(out, "client.test.js"),
   path.join(out, "liveCore.test.js"),
   path.join(out, "managedCore.test.js"),
   path.join(out, "presentation.test.js"),
@@ -53,6 +56,7 @@ const result = spawnSync(process.execPath, [
   path.join(out, "stateRows.test.js"),
   path.join(out, "workspaceCollision.test.js"),
   path.join(out, "runtimeProjection.test.js"),
+  path.join(out, "runtimeControl.test.js"),
 ], {
   stdio: "inherit",
 });

@@ -23,6 +23,13 @@ import {
 } from "@runtrol/runtime-client";
 import * as vscode from "vscode";
 
+import {
+  cachedControlAction,
+  restorableControls,
+  sessionDisappearedAfterCool,
+  type StoredControlState,
+} from "./runtimeControl";
+
 const SECRET_KEY = "runtrol.runtime.integration.v1";
 const ENROLLMENT_PASSIVE_SETTLE_MS = 250;
 const ENROLLMENT_DECISION_SETTLE_MS = 5_000;
@@ -49,6 +56,7 @@ type StoredIntegration = {
   clientInstanceId: string;
   privateKeyPkcs8: string;
   grant?: IntegrationGrant;
+  controlState?: StoredControlState;
 };
 
 export type RuntimeInventory = {
@@ -91,6 +99,7 @@ export class StudioRuntimeClient implements vscode.Disposable {
       confirmationId: string,
       sessionId: string,
     ) => Promise<boolean>,
+    private readonly additionalEnrollmentRoots: readonly string[] = [],
     private readonly reportInitialization: (stage: string) => void = () => undefined,
   ) {}
 
@@ -148,7 +157,7 @@ export class StudioRuntimeClient implements vscode.Disposable {
         access,
         ...(model ? { model } : {}),
       });
-      this.controls.set(opened.session.sessionId, opened.control);
+      await this.rememberControl(opened.control);
       return opened.session;
     });
   }
@@ -163,7 +172,7 @@ export class StudioRuntimeClient implements vscode.Disposable {
         workspace: session.workspace,
         access,
       });
-      this.controls.set(opened.session.sessionId, opened.control);
+      await this.rememberControl(opened.control);
       return opened.session;
     });
   }
@@ -218,8 +227,13 @@ export class StudioRuntimeClient implements vscode.Disposable {
           leaseId: lease.leaseId,
           leaseGeneration: lease.leaseGeneration,
         });
-        this.controls.delete(current.sessionId);
-        current = await runtime.sessions().get(current.sessionId);
+        await this.forgetControl(current.sessionId);
+        try {
+          current = await runtime.sessions().get(current.sessionId);
+        } catch (error) {
+          if (sessionDisappearedAfterCool(error)) return;
+          throw error;
+        }
       }
       if (current.lifecycle !== "cold") {
         throw new Error(`the session cannot close from Runtime lifecycle ${current.lifecycle}`);
@@ -238,7 +252,7 @@ export class StudioRuntimeClient implements vscode.Disposable {
         }
         await runtime.sessions().forget(forget);
       }
-      this.controls.delete(current.sessionId);
+      await this.forgetControl(current.sessionId);
     });
   }
 
@@ -416,10 +430,9 @@ export class StudioRuntimeClient implements vscode.Disposable {
     await this.serial(async () => {
       this.command?.close();
       this.command = null;
-      this.controls.clear();
       if (this.options) {
         try {
-          this.command = await this.connectCommand();
+          await this.commandClient();
         } catch (error) {
           if (!recoverableAuthenticationFailure(error)) throw error;
           await this.replaceIntegration();
@@ -453,11 +466,13 @@ export class StudioRuntimeClient implements vscode.Disposable {
       this.sessionSnapshot = null;
       const runtime = await this.commandClient();
       try {
-        return await operation(runtime);
+        const result = await operation(runtime);
+        this.sessionSnapshot = null;
+        return result;
       } catch (error) {
+        this.sessionSnapshot = null;
         runtime.close();
         this.command = null;
-        this.controls.clear();
         throw error;
       }
     });
@@ -468,41 +483,69 @@ export class StudioRuntimeClient implements vscode.Disposable {
     session: RuntimeSessionAction,
   ): Promise<ControlLease> {
     const current = this.controls.get(session.sessionId);
-    if (
-      current
-      && current.sessionGeneration === session.generation
-      && current.expiresAtMs > Date.now() + 5_000
-    ) {
-      return current;
-    }
-    if (
-      current
-      && current.sessionGeneration === session.generation
-      && current.expiresAtMs > Date.now()
-    ) {
+    const action = cachedControlAction(current, Date.now());
+    if (action === "reuse" && current) return current;
+    if (action === "renew" && current) {
       const renewed = await runtime.sessions().renewControl({
         requestId: newMutationRequestId(),
         sessionId: session.sessionId,
         leaseId: current.leaseId,
         leaseGeneration: current.leaseGeneration,
       });
-      this.controls.set(session.sessionId, renewed);
+      await this.rememberControl(renewed);
       return renewed;
     }
-    this.controls.delete(session.sessionId);
+    await this.forgetControl(session.sessionId);
     const acquired = await runtime.sessions().acquireControl({
       requestId: newMutationRequestId(),
       sessionId: session.sessionId,
       expectedLifecycle: session.lifecycle,
       expectedSessionGeneration: session.generation,
     });
-    this.controls.set(session.sessionId, acquired);
+    await this.rememberControl(acquired);
     return acquired;
   }
 
   private async commandClient(): Promise<RuntimeClient> {
-    this.command ??= await this.connectCommand();
+    if (this.command) return this.command;
+    const expectedInstance = this.stored?.controlState?.runtimeInstanceId;
+    const connected = await this.connectCommand();
+    this.command = connected;
+    if (
+      expectedInstance
+      && expectedInstance !== connected.initialization.runtime.instanceId
+    ) {
+      this.controls.clear();
+      await this.persistControls();
+    }
     return this.command;
+  }
+
+  private async rememberControl(control: ControlLease): Promise<void> {
+    this.controls.set(control.sessionId, control);
+    await this.persistControls();
+  }
+
+  private async forgetControl(sessionId: string): Promise<void> {
+    if (!this.controls.delete(sessionId)) return;
+    await this.persistControls();
+  }
+
+  private async persistControls(): Promise<void> {
+    const stored = this.stored;
+    const command = this.command;
+    if (!stored || !command) return;
+    const now = Date.now();
+    const leases = [...this.controls.values()].filter((lease) => lease.expiresAtMs > now);
+    const next: StoredIntegration = {
+      ...stored,
+      controlState: {
+        runtimeInstanceId: command.initialization.runtime.instanceId,
+        leases,
+      },
+    };
+    await this.context.secrets.store(SECRET_KEY, JSON.stringify(next));
+    this.stored = next;
   }
 
   private async connectCommand(): Promise<RuntimeClient> {
@@ -556,7 +599,8 @@ export class StudioRuntimeClient implements vscode.Disposable {
   }
 
   private async loadOrCreateIdentity(): Promise<StoredIntegration> {
-    const stored = parseStoredIntegration(await this.context.secrets.get(SECRET_KEY));
+    const raw = await this.context.secrets.get(SECRET_KEY);
+    const stored = parseStoredIntegration(raw);
     if (stored) {
       try {
         IntegrationIdentity.fromPkcs8(Buffer.from(stored.privateKeyPkcs8, "base64url"));
@@ -592,7 +636,15 @@ export class StudioRuntimeClient implements vscode.Disposable {
       credentials: new IntegrationCredentials(identity, grant),
     };
     this.reportInitialization("command");
-    this.command = await this.connectCommand();
+    this.command = await this.commandClient();
+    const controls = restorableControls(
+      this.stored?.controlState,
+      this.command.initialization.runtime.instanceId,
+      Date.now(),
+    );
+    for (const lease of controls) {
+      this.controls.set(lease.sessionId, lease);
+    }
   }
 
   private async replaceIntegration(): Promise<void> {
@@ -625,7 +677,10 @@ export class StudioRuntimeClient implements vscode.Disposable {
       (locator) => this.connector.connectWithRetry(locator, options),
     );
     try {
-      const roots = (vscode.workspace.workspaceFolders ?? []).map((folder) => folder.uri.fsPath);
+      const roots = [...new Set([
+        ...(vscode.workspace.workspaceFolders ?? []).map((folder) => folder.uri.fsPath),
+        ...this.additionalEnrollmentRoots,
+      ])];
       const receipt = await runtime.integrations().request({
         clientInstanceId: stored.clientInstanceId,
         manifestDigest: createHash("sha256")
@@ -699,6 +754,7 @@ function parseStoredIntegration(raw: string | undefined): StoredIntegration | nu
       || typeof value.privateKeyPkcs8 !== "string"
       || value.privateKeyPkcs8.length > 512
       || (value.grant !== undefined && !validGrant(value.grant))
+      || (value.controlState !== undefined && !validControlState(value.controlState))
     ) {
       return null;
     }
@@ -706,6 +762,35 @@ function parseStoredIntegration(raw: string | undefined): StoredIntegration | nu
   } catch {
     return null;
   }
+}
+
+function validControlState(value: unknown): value is NonNullable<StoredIntegration["controlState"]> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const state = value as Partial<NonNullable<StoredIntegration["controlState"]>>;
+  return typeof state.runtimeInstanceId === "string"
+    && state.runtimeInstanceId.length > 0
+    && state.runtimeInstanceId.length <= 128
+    && Array.isArray(state.leases)
+    && state.leases.length <= 32
+    && state.leases.every(validControlLease);
+}
+
+function validControlLease(value: unknown): value is ControlLease {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const lease = value as Partial<ControlLease>;
+  return typeof lease.leaseId === "string"
+    && lease.leaseId.length > 0
+    && lease.leaseId.length <= 128
+    && typeof lease.sessionId === "string"
+    && lease.sessionId.length > 0
+    && lease.sessionId.length <= 128
+    && validUint(lease.sessionGeneration)
+    && validUint(lease.leaseGeneration)
+    && validUint(lease.expiresAtMs);
+}
+
+function validUint(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 }
 
 function validGrant(value: unknown): value is IntegrationGrant {

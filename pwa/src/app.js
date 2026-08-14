@@ -179,6 +179,9 @@ async function showPairing() {
   setup.hidden = false;
   sessionsView.hidden = true;
   panic.disabled = true;
+  forget.hidden = true;
+  notifications.hidden = true;
+  setStatus("Ready to pair", "connecting");
   const pcFingerprint = await keyFingerprint(state.pairing.pcPublicKey);
   setup.innerHTML = `
     <div class="setup-card">

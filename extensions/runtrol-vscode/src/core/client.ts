@@ -29,16 +29,27 @@ export class CoreClient {
   }
 
   once(request: Request): Promise<{ response: Response }> {
+    return this.request(request, false);
+  }
+
+  read(request: Request): Promise<{ response: Response }> {
+    return this.request(request, true);
+  }
+
+  private request(request: Request, retryOnce: boolean): Promise<{ response: Response }> {
     return this.serial(async () => {
-      const connected = await this.command();
-      try {
-        await connected.transport.send(request);
-        const response = readResponse(JSON.parse((await connected.transport.receive()).toString("utf8")));
-        return { response };
-      } catch (error) {
-        this.dropCommandConnection();
-        throw error;
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        try {
+          const connected = await this.command();
+          await connected.transport.send(request);
+          const response = readResponse(JSON.parse((await connected.transport.receive()).toString("utf8")));
+          return { response };
+        } catch (error) {
+          this.dropCommandConnection();
+          if (!retryOnce || attempt === 1) throw error;
+        }
       }
+      throw new Error("the read-only daemon request exhausted its retry boundary");
     });
   }
 

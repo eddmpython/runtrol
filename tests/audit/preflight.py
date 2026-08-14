@@ -21,6 +21,7 @@ CI 와 같은 게이트를 로컬에서 돌린다. push 준비 보고 직전에 
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import sys
@@ -531,6 +532,8 @@ def skipReasonFor(name: str) -> str | None:
         return "cargo-deny 미설치 (cargo binstall cargo-deny)"
     if name == "clippyCrossCfg" and not hasCrossTarget():
         return f"{CROSS_TARGET} 미설치 (rustup target add {CROSS_TARGET})"
+    if name == "clippyCrossCfg" and not hasCrossCompiler():
+        return f"{CROSS_TARGET} C 컴파일러 없음"
     if name == "externalAcpSmoke" and shutil.which("opencode") is None:
         return "독립 ACP CLI 미설치 (npm install --global opencode-ai@1.2.27)"
     if name == "missionLiveJourney" and shutil.which("opencode") is None:
@@ -564,6 +567,19 @@ def hasCrossTarget() -> bool:
         check=False,
     )
     return CROSS_TARGET in proc.stdout
+
+
+def hasCrossCompiler() -> bool:
+    """네이티브 C 의존성까지 교차 빌드할 컴파일러가 있는가."""
+    if CROSS_TARGET != "x86_64-unknown-linux-gnu":
+        return True
+    configured = (
+        os.environ.get("CC_x86_64_unknown_linux_gnu")
+        or os.environ.get("CC_X86_64_UNKNOWN_LINUX_GNU")
+    )
+    if configured:
+        return shutil.which(configured) is not None or Path(configured).is_file()
+    return shutil.which("x86_64-linux-gnu-gcc") is not None
 
 
 def runGate(name: str) -> int:

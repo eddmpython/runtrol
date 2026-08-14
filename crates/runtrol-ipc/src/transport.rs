@@ -420,12 +420,14 @@ mod platform {
 
     /// The pipe the daemon waits on.
     ///
-    /// A named pipe has no accept loop of its own: one instance serves one client, so the next instance is created
-    /// while the current one is being handed over. Creating it first is what keeps a client that connects in that
-    /// moment from finding nothing there.
+    /// A named pipe has no accept loop of its own: one instance serves one client. Two unclaimed instances remain
+    /// alive so a burst caller always finds the name, and cancelling an `accept` future never drops the instance it
+    /// was waiting on.
     pub(super) struct Listener {
-        /// The instance waiting for the next client.
-        next: Option<NamedPipeServer>,
+        /// The instance whose connection is accepted next.
+        waiting: Option<NamedPipeServer>,
+        /// One additional unclaimed instance for a caller arriving before the owner loop accepts again.
+        spare: Option<NamedPipeServer>,
         /// Every instance receives the current-owner DACL when set.
         owner_only: bool,
     }
@@ -433,8 +435,10 @@ mod platform {
     impl Listener {
         pub(super) fn bind(address: &str, owner_only: bool) -> Result<Self, TransportError> {
             let first = instance(address, true, owner_only)?;
+            let spare = instance(address, false, owner_only)?;
             Ok(Self {
-                next: Some(first),
+                waiting: Some(first),
+                spare: Some(spare),
                 owner_only,
             })
         }
@@ -455,21 +459,41 @@ mod platform {
                 });
             }
             loop {
-                let waiting = match self.next.take() {
-                    Some(one) => one,
-                    // Only reachable if a previous accept failed after taking the instance. Creating one rather than
-                    // refusing keeps a listener that had one bad moment usable.
-                    None => instance(address, false, owner_only)?,
-                };
-                waiting
-                    .connect()
-                    .await
-                    .map_err(|error| TransportError::Bind {
-                        address: address.to_owned(),
-                        detail: error.to_string(),
-                    })?;
-                // Created before the current one is handed over, so a client connecting right now finds an instance.
-                self.next = Some(instance(address, false, owner_only)?);
+                // Both borrowed instances stay in `self` across the await. A Windows caller may claim either
+                // available instance, so accepting only one of them can strand a successful single caller until a
+                // second caller happens to arrive. Dropping this future leaves both instances alive for the next call.
+                let waiting = self.waiting.as_ref().ok_or_else(|| TransportError::Bind {
+                    address: address.to_owned(),
+                    detail: "the Windows listener lost its waiting pipe".to_owned(),
+                })?;
+                let spare = self.spare.as_ref().ok_or_else(|| TransportError::Bind {
+                    address: address.to_owned(),
+                    detail: "the Windows listener lost its spare pipe".to_owned(),
+                })?;
+                let accepted_waiting = tokio::select! {
+                    connected = waiting.connect() => connected
+                        .map(|()| true)
+                        .map_err(|error| TransportError::Bind {
+                            address: address.to_owned(),
+                            detail: error.to_string(),
+                        }),
+                    connected = spare.connect() => connected
+                        .map(|()| false)
+                        .map_err(|error| TransportError::Bind {
+                            address: address.to_owned(),
+                            detail: error.to_string(),
+                        }),
+                }?;
+                let replacement = instance(address, false, owner_only)?;
+                let waiting = if accepted_waiting {
+                    self.waiting.replace(replacement)
+                } else {
+                    self.spare.replace(replacement)
+                }
+                .ok_or_else(|| TransportError::Bind {
+                    address: address.to_owned(),
+                    detail: "the Windows listener lost its connected pipe".to_owned(),
+                })?;
                 if owner_only {
                     let mut peer = 0_u32;
                     // SAFETY: `waiting` owns a live connected pipe handle, and `peer` is a valid writable u32 for the
@@ -1137,6 +1161,77 @@ mod tests {
 
         let served = serving.await.expect("the daemon's side finished");
         drop((first, second, served));
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn raw_windows_clients_always_find_a_waiting_pipe_instance() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        };
+        use std::time::Duration;
+
+        use tokio::net::windows::named_pipe::ClientOptions;
+
+        let address = an_address("two-raw-windows-clients");
+        let mut listener = Listener::bind(&address).await.expect("the endpoint binds");
+        let first_accepted = Arc::new(AtomicBool::new(false));
+        let server_observed = Arc::clone(&first_accepted);
+        let serving = tokio::spawn(async move {
+            let first = listener
+                .accept()
+                .await
+                .expect("the first raw caller arrives");
+            server_observed.store(true, Ordering::Release);
+            let second = listener
+                .accept()
+                .await
+                .expect("the second raw caller arrives");
+            (first, second)
+        });
+        tokio::task::yield_now().await;
+
+        let first = ClientOptions::new()
+            .open(&address)
+            .expect("first raw pipe opens");
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while !first_accepted.load(Ordering::Acquire) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("one raw caller is accepted without needing a second");
+        let second = ClientOptions::new()
+            .open(&address)
+            .expect("second raw pipe opens");
+        let served = serving
+            .await
+            .expect("the daemon side accepted both raw clients");
+        drop((first, second, served));
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn cancelling_accept_keeps_two_waiting_pipe_instances() {
+        use std::time::Duration;
+
+        use tokio::net::windows::named_pipe::ClientOptions;
+
+        let address = an_address("cancelled-windows-accept");
+        let mut listener = Listener::bind(&address).await.expect("the endpoint binds");
+        let timed_out = tokio::time::timeout(Duration::from_millis(1), listener.accept()).await;
+        assert!(timed_out.is_err(), "accept stays pending without a caller");
+
+        let first = ClientOptions::new()
+            .open(&address)
+            .expect("first raw pipe opens after cancellation");
+        let second = ClientOptions::new()
+            .open(&address)
+            .expect("second raw pipe opens after cancellation");
+        let accepted_first = listener.accept().await.expect("first caller is accepted");
+        let accepted_second = listener.accept().await.expect("second caller is accepted");
+        drop((first, second, accepted_first, accepted_second));
     }
 
     #[tokio::test]

@@ -67,6 +67,7 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
       ? () => waitForExternalIntegrationApproval(externalTestApproval)
       : (pendingId) => reviewIntegrationEnrollment(client, pendingId),
     (confirmationId, sessionId) => confirmRuntimeForget(client, confirmationId, sessionId),
+    testIntegrationRoots(context),
     (stage) => {
       initializationStage = `runtime:${stage}`;
     },
@@ -296,14 +297,14 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
     }),
   );
 
-  lifecycle = runtime.initialize()
-    .then(() => {
-      initializationStage = "controller";
-      return controller.initialize();
-    })
-    .then(() => {
+  const missionInitialization = missionController.initialize().catch((error: unknown) => {
       initializationStage = "mission";
-      return missionController.initialize();
+      throw error;
+    });
+  lifecycle = Promise.all([runtime.initialize(), missionInitialization])
+    .then(async () => {
+      initializationStage = "controller";
+      await controller.initialize();
     })
     .then(() => {
       initializationStage = "ready";
@@ -339,10 +340,22 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
         }
 
         const resumeStarted = performance.now();
-        await controller.select(cold.sessionId, false);
+        await performanceDeadline(
+          controller.select(cold.sessionId, false),
+          10_000,
+          "cold session selection",
+        );
         await Promise.all([
-          controller.selectedWatchReady(),
-          conversation.waitForCurrentRender(),
+          performanceDeadline(
+            controller.selectedWatchReady(),
+            10_000,
+            "cold session event watch",
+          ),
+          performanceDeadline(
+            conversation.waitForCurrentRender(),
+            10_000,
+            "cold session Webview render",
+          ),
         ]);
         const coldResumeMs = performance.now() - resumeStarted;
         const resumed = state.selected;
@@ -398,6 +411,40 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
       : undefined,
     journey: journeyApi(controller, state, conversation, afterReady, context.extensionMode),
   };
+}
+
+function testIntegrationRoots(context: vscode.ExtensionContext): readonly string[] {
+  if (context.extensionMode !== vscode.ExtensionMode.Test) return [];
+  const raw = process.env.RUNTROL_TEST_INTEGRATION_ROOTS;
+  if (!raw) return [];
+  const value: unknown = JSON.parse(raw);
+  if (
+    !Array.isArray(value)
+    || value.length > 32
+    || !value.every((root) => typeof root === "string" && path.isAbsolute(root))
+  ) {
+    throw new Error("RUNTROL_TEST_INTEGRATION_ROOTS must contain at most 32 absolute paths");
+  }
+  return [...new Set(value)];
+}
+
+function performanceDeadline<T>(pending: Promise<T>, timeoutMs: number, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timeout = setTimeout(
+      () => reject(new Error(`${label} exceeded ${timeoutMs} ms`)),
+      timeoutMs,
+    );
+    pending.then(
+      (value) => {
+        clearTimeout(timeout);
+        resolve(value);
+      },
+      (error: unknown) => {
+        clearTimeout(timeout);
+        reject(error);
+      },
+    );
+  });
 }
 
 async function waitForExternalIntegrationApproval(marker: string): Promise<boolean> {

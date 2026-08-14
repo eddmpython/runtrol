@@ -228,11 +228,21 @@ async function restore(checkpoint: SwitchingCheckpoint, resultPath: string): Pro
 async function activate(): Promise<ExtensionApi> {
   currentStage = "opening-view";
   const extension = extensionUnderTest<ExtensionApi>();
-  await openView();
+  await within(
+    vscode.commands.executeCommand("workbench.view.extension.runtrol"),
+    30_000,
+    "opening the Runtrol view",
+  );
   currentStage = "activating-extension";
   const api = await within(waitForActivation(extension), 30_000, "extension activation through the Runtrol view");
   currentStage = "initializing-extension";
   await within(api.ready, 30_000, "extension initialization");
+  currentStage = "opening-conversation";
+  await within(
+    vscode.commands.executeCommand("runtrol.openConversation"),
+    30_000,
+    "focusing the Runtrol conversation",
+  );
   return api;
 }
 
@@ -241,19 +251,6 @@ async function waitForActivation(extension: vscode.Extension<ExtensionApi>): Pro
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
   return extension.exports;
-}
-
-async function openView(): Promise<void> {
-  await within(
-    vscode.commands.executeCommand("workbench.view.extension.runtrol"),
-    5_000,
-    "opening the Runtrol view",
-  );
-  await within(
-    vscode.commands.executeCommand("runtrol.openConversation"),
-    5_000,
-    "focusing the Runtrol conversation",
-  );
 }
 
 async function readCheckpoint(resultPath: string): Promise<SwitchingCheckpoint | null> {

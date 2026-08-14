@@ -24,6 +24,34 @@ class DisconnectingTransport extends ScriptedRuntimeTransport {
   }
 }
 
+class StalledWatchTransport extends ScriptedRuntimeTransport {
+  public closed = false;
+  readonly #instanceFrames: number;
+  #receives = 0;
+  #reject: ((reason: RuntimeTransportError) => void) | null = null;
+
+  public constructor(instanceId: string) {
+    const frames = framesForInitialization(instanceId);
+    super(frames);
+    this.#instanceFrames = frames.length;
+  }
+
+  public override async receive(): Promise<Uint8Array> {
+    this.#receives += 1;
+    if (this.#receives <= this.#instanceFrames) return super.receive();
+    return new Promise<Uint8Array>((_resolve, reject) => {
+      this.#reject = reject;
+      if (this.closed) reject(new RuntimeTransportError("fixture watch was closed"));
+    });
+  }
+
+  public override close(): void {
+    this.closed = true;
+    super.close();
+    this.#reject?.(new RuntimeTransportError("fixture watch was closed"));
+  }
+}
+
 function successfulTransport(instanceId: string): ScriptedRuntimeTransport {
   return new ScriptedRuntimeTransport([
     {
@@ -91,6 +119,49 @@ test("connection retry returns a protocol failure without a second attempt", asy
     RuntimeProtocolError,
   );
   assert.equal(attempts, 1);
+});
+
+test("aborting an event watch closes a connection stalled during subscription", async () => {
+  const instanceId = `rtm_${"7".repeat(32)}`;
+  const transport = new StalledWatchTransport(instanceId);
+  const connector = new RuntimeConnector(async () => transport);
+  const abort = new AbortController();
+  const opening = connector.watchEventsWithReconnect(
+    validatedLocator(instanceId, "fixture", "0.1.1"),
+    { name: "fixture", version: "1.0.0" },
+    { sessionId: "session_fixture" },
+    { initialDelayMs: 1, maximumDelayMs: 2, deadlineMs: 100, signal: abort.signal },
+  );
+  await waitFor(() => transport.sent.length === 3);
+  abort.abort(new RuntimeTransportError("fixture selection changed"));
+  await assert.rejects(opening, /fixture selection changed/);
+  assert.equal(transport.closed, true);
+});
+
+test("aborting an event watch cancels a connection attempt before transport exists", async () => {
+  const instanceId = `rtm_${"6".repeat(32)}`;
+  let connecting = false;
+  let cancelled = false;
+  const connector = new RuntimeConnector(async (_endpoint, signal) => {
+    connecting = true;
+    return new Promise((_resolve, reject) => {
+      signal?.addEventListener("abort", () => {
+        cancelled = true;
+        reject(signal.reason);
+      }, { once: true });
+    });
+  });
+  const abort = new AbortController();
+  const opening = connector.watchEventsWithReconnect(
+    validatedLocator(instanceId, "fixture", "0.1.1"),
+    { name: "fixture", version: "1.0.0" },
+    { sessionId: "session_fixture" },
+    { initialDelayMs: 1, maximumDelayMs: 2, deadlineMs: 100, signal: abort.signal },
+  );
+  await waitFor(() => connecting);
+  abort.abort(new RuntimeTransportError("fixture selection changed before connection"));
+  await assert.rejects(opening, /fixture selection changed before connection/);
+  assert.equal(cancelled, true);
 });
 
 test("mutation transport loss returns outcomeUnknown with the original request identity", async () => {
@@ -334,4 +405,12 @@ function framesForInitialization(instanceId: string): unknown[] {
       },
     },
   ];
+}
+
+async function waitFor(condition: () => boolean): Promise<void> {
+  const deadline = Date.now() + 1_000;
+  while (!condition()) {
+    if (Date.now() >= deadline) throw new Error("fixture condition did not settle");
+    await new Promise((resolve) => setTimeout(resolve, 1));
+  }
 }

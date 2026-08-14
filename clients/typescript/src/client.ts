@@ -130,18 +130,27 @@ export class RuntimeConnector {
     private readonly transportFactory: RuntimeTransportFactory = connectLocalTransport,
   ) {}
 
-  public async connect(locator: ValidatedLocator, options: ClientOptions): Promise<RuntimeClient> {
+  public async connect(
+    locator: ValidatedLocator,
+    options: ClientOptions,
+    signal?: AbortSignal,
+  ): Promise<RuntimeClient> {
     locator.assertSdkValidated();
-    const transport = await this.transportFactory(locator.endpoint);
+    const transport = await this.transportFactory(locator.endpoint, signal);
+    const abort = (): void => abortTransport(transport);
+    signal?.addEventListener("abort", abort, { once: true });
     try {
+      signal?.throwIfAborted();
       return await initializeRuntime(transport, locator, options);
     } catch (error) {
       transport.close();
       throw error;
+    } finally {
+      signal?.removeEventListener("abort", abort);
     }
   }
 
-  public async connectSystem(options: ClientOptions): Promise<RuntimeClient> {
+  public async connectSystem(options: ClientOptions, signal?: AbortSignal): Promise<RuntimeClient> {
     const state = await RuntimeLocator.system().inspect();
     if (state.state === "notInstalled") {
       throw new RuntimeRequestError({
@@ -151,7 +160,7 @@ export class RuntimeConnector {
         correlationId: "local-locator",
       });
     }
-    return this.connect(state.locator, options);
+    return this.connect(state.locator, options, signal);
   }
 
   public connectWithRetry(
@@ -159,14 +168,14 @@ export class RuntimeConnector {
     options: ClientOptions,
     policy: ReconnectPolicy = {},
   ): Promise<RuntimeClient> {
-    return retryConnection(() => this.connect(locator, options), policy);
+    return retryConnection((signal) => this.connect(locator, options, signal), policy);
   }
 
   public connectSystemWithRetry(
     options: ClientOptions,
     policy: ReconnectPolicy = {},
   ): Promise<RuntimeClient> {
-    return retryConnection(() => this.connectSystem(options), policy);
+    return retryConnection((signal) => this.connectSystem(options, signal), policy);
   }
 
   public async watchEventsWithReconnect(
@@ -505,16 +514,14 @@ export class ReconnectingProviderSubscription {
   }
 
   async #open(): Promise<WatchProvidersResult> {
-    const opened = await retryConnection(async () => {
-      const runtime = await connectSelected(this.connector, this.locator, this.options);
-      try {
-        const subscription = await runtime.providers().watch();
-        return { runtime, subscription };
-      } catch (error) {
-        runtime.close();
-        throw error;
-      }
-    }, this.#policy);
+    const opened = await retryConnection(
+      (signal) => openRuntimeSubscription(
+        () => connectSelected(this.connector, this.locator, this.options, signal),
+        (runtime) => runtime.providers().watch(),
+        signal,
+      ),
+      this.#policy,
+    );
     this.#current = opened;
     this.#started = opened.subscription.started;
     return opened.subscription.started;
@@ -737,16 +744,14 @@ export class ReconnectingSessionIndexSubscription {
   }
 
   async #open(): Promise<WatchSessionIndexResult> {
-    const opened = await retryConnection(async () => {
-      const runtime = await connectSelected(this.connector, this.locator, this.options);
-      try {
-        const subscription = await runtime.sessions().watchIndex();
-        return { runtime, subscription };
-      } catch (error) {
-        runtime.close();
-        throw error;
-      }
-    }, this.#policy);
+    const opened = await retryConnection(
+      (signal) => openRuntimeSubscription(
+        () => connectSelected(this.connector, this.locator, this.options, signal),
+        (runtime) => runtime.sessions().watchIndex(),
+        signal,
+      ),
+      this.#policy,
+    );
     this.#current = opened;
     this.#started = opened.subscription.started;
     return opened.subscription.started;
@@ -878,19 +883,17 @@ export class ReconnectingEventSubscription {
   }
 
   async #open(): Promise<WatchEventsResult> {
-    const opened = await retryConnection(async () => {
-      const runtime = await connectSelected(this.connector, this.locator, this.options);
-      try {
-        const subscription = await runtime.sessions().watchEvents({
+    const opened = await retryConnection(
+      (signal) => openRuntimeSubscription(
+        () => connectSelected(this.connector, this.locator, this.options, signal),
+        (runtime) => runtime.sessions().watchEvents({
           sessionId: this.params.sessionId,
           ...(this.#accepted ? { after: this.#accepted } : {}),
-        });
-        return { runtime, subscription };
-      } catch (error) {
-        runtime.close();
-        throw error;
-      }
-    }, this.#policy);
+        }),
+        signal,
+      ),
+      this.#policy,
+    );
     this.#current = opened;
     this.#started = opened.subscription.started;
     return opened.subscription.started;
@@ -906,8 +909,42 @@ function connectSelected(
   connector: RuntimeConnector,
   locator: ValidatedLocator | null,
   options: ClientOptions,
+  signal?: AbortSignal,
 ): Promise<RuntimeClient> {
-  return locator ? connector.connect(locator, options) : connector.connectSystem(options);
+  return locator
+    ? connector.connect(locator, options, signal)
+    : connector.connectSystem(options, signal);
+}
+
+async function openRuntimeSubscription<T>(
+  connect: () => Promise<RuntimeClient>,
+  subscribe: (runtime: RuntimeClient) => Promise<T>,
+  signal?: AbortSignal,
+): Promise<{ runtime: RuntimeClient; subscription: T }> {
+  signal?.throwIfAborted();
+  const runtime = await connect();
+  const abort = (): void => abortRuntime(runtime);
+  signal?.addEventListener("abort", abort, { once: true });
+  try {
+    signal?.throwIfAborted();
+    const subscription = await subscribe(runtime);
+    signal?.throwIfAborted();
+    return { runtime, subscription };
+  } catch (error) {
+    runtime.close();
+    throw error;
+  } finally {
+    signal?.removeEventListener("abort", abort);
+  }
+}
+
+function abortTransport(transport: RuntimeTransport): void {
+  if (transport.abort) transport.abort();
+  else transport.close();
+}
+
+function abortRuntime(runtime: RuntimeClient): void {
+  abortTransport(runtimeState(runtime).transport);
 }
 
 async function initializeRuntime(
@@ -978,7 +1015,7 @@ function runtimeState(runtime: RuntimeClient): RuntimeClientState {
 }
 
 async function retryConnection<T>(
-  connect: () => Promise<T>,
+  connect: (signal: AbortSignal) => Promise<T>,
   policy: ReconnectPolicy,
 ): Promise<T> {
   const initialDelayMs = boundedDelay(policy.initialDelayMs ?? 100, "initialDelayMs");
@@ -993,14 +1030,28 @@ async function retryConnection<T>(
   let delayMs = initialDelayMs;
   for (;;) {
     policy.signal?.throwIfAborted();
+    const remainingMs = deadline - performance.now();
+    if (remainingMs <= 0) {
+      throw new RuntimeTransportError("Runtime reconnect deadline expired");
+    }
+    const attempt = new AbortController();
+    const signal = policy.signal
+      ? AbortSignal.any([policy.signal, attempt.signal])
+      : attempt.signal;
+    const timeout = setTimeout(
+      () => attempt.abort(new RuntimeTransportError("Runtime connection attempt timed out")),
+      remainingMs,
+    );
     try {
-      return await connect();
+      return await connect(signal);
     } catch (error) {
       if (!retryableConnectionFailure(error)) throw error;
-      const remainingMs = deadline - performance.now();
-      if (remainingMs <= 0) throw error;
-      await abortableDelay(Math.min(jitteredDelay(delayMs), remainingMs), policy.signal);
+      const retryRemainingMs = deadline - performance.now();
+      if (retryRemainingMs <= 0) throw error;
+      await abortableDelay(Math.min(jitteredDelay(delayMs), retryRemainingMs), policy.signal);
       delayMs = Math.min(delayMs * 2, maximumDelayMs);
+    } finally {
+      clearTimeout(timeout);
     }
   }
 }

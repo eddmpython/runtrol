@@ -537,8 +537,8 @@ impl Drop for AgentGuard {
 ///
 /// [`ServeError::Transport`] when the endpoint cannot be created or cannot keep accepting. Not worked around: a
 /// daemon nothing can reach is a daemon that does nothing, and staying up would hide that from the operator.
-pub async fn serve(composed: Composed, mut listener: Listener) -> Result<(), ServeError> {
-    serve_sessions(composed, &mut listener, SessionManager::new()).await
+pub async fn serve(composed: Composed, listener: Listener) -> Result<(), ServeError> {
+    serve_sessions(composed, listener, SessionManager::new()).await
 }
 
 /// Serve local surfaces and one explicit phone ingress through the same session owner.
@@ -551,18 +551,11 @@ pub async fn serve(composed: Composed, mut listener: Listener) -> Result<(), Ser
 /// The same failures as [`serve`], plus [`ServeError::PhoneIdentityUnavailable`] when no protected PC key exists.
 pub async fn serve_with_phone(
     composed: Composed,
-    mut listener: Listener,
+    listener: Listener,
     ingress: PhoneIngress,
 ) -> Result<(), ServeError> {
     let phone = phone_plane(&composed, ingress)?;
-    serve_surfaces(
-        composed,
-        &mut listener,
-        SessionManager::new(),
-        Some(phone),
-        None,
-    )
-    .await
+    serve_surfaces(composed, listener, SessionManager::new(), Some(phone), None).await
 }
 
 /// Serve local surfaces and one reconnecting encrypted relay through the same session owner.
@@ -575,7 +568,7 @@ pub async fn serve_with_phone(
 /// The same failures as [`serve`], plus [`ServeError::PhoneIdentityUnavailable`] when no protected PC key exists.
 pub async fn serve_with_relay(
     composed: Composed,
-    mut listener: Listener,
+    listener: Listener,
     ingress: crate::relay::RelayIngress,
 ) -> Result<(), ServeError> {
     if composed.pc_identity.is_none() {
@@ -583,7 +576,7 @@ pub async fn serve_with_relay(
     }
     serve_surfaces(
         composed,
-        &mut listener,
+        listener,
         SessionManager::new(),
         None,
         Some(ingress),
@@ -609,7 +602,7 @@ fn phone_plane(composed: &Composed, ingress: PhoneIngress) -> Result<PhonePlane,
 
 async fn serve_sessions(
     composed: Composed,
-    listener: &mut Listener,
+    listener: Listener,
     sessions: SessionManager,
 ) -> Result<(), ServeError> {
     serve_surfaces(composed, listener, sessions, None, None).await
@@ -621,7 +614,7 @@ async fn serve_sessions(
 )]
 async fn serve_surfaces(
     composed: Composed,
-    listener: &mut Listener,
+    mut listener: Listener,
     mut sessions: SessionManager,
     phone: Option<PhonePlane>,
     relay: Option<crate::relay::RelayIngress>,
@@ -717,45 +710,94 @@ async fn serve_surfaces(
         reserving.clone(),
         noticing_updates,
     ));
+    let (local_failed, mut local_failures) = mpsc::unbounded_channel();
+    {
+        let asking = asking.clone();
+        let reserving = reserving.clone();
+        let returning = returning.clone();
+        let composed = Arc::clone(&composed);
+        let discovering = Arc::clone(&discovering);
+        let session_index = session_index.clone();
+        connections.spawn(async move {
+            let mut clients = JoinSet::new();
+            loop {
+                tokio::select! {
+                    arrived = listener.accept() => match arrived {
+                        Ok(connection) => {
+                            clients.spawn(converse(
+                                SurfaceConnection::Local(connection),
+                                Conversation::at_the_machine(),
+                                ConnectionServices {
+                                    asking: asking.clone(),
+                                    reserving: reserving.clone(),
+                                    returning: returning.clone(),
+                                    composed: Arc::clone(&composed),
+                                    discovering: Arc::clone(&discovering),
+                                    session_index: session_index.subscribe(),
+                                },
+                            ));
+                        }
+                        Err(error) => {
+                            drop(local_failed.send(error));
+                            break;
+                        }
+                    },
+                    Some(_finished) = clients.join_next(), if !clients.is_empty() => {}
+                }
+            }
+            clients.abort_all();
+            while clients.join_next().await.is_some() {}
+        });
+    }
+    let (runtime_failed, mut runtime_failures) = mpsc::unbounded_channel();
+    {
+        let runtime_instance = runtime_instance.clone();
+        let composed = Arc::clone(&composed);
+        let discovering = Arc::clone(&discovering);
+        let runtime_native_cursors = Arc::clone(&runtime_native_cursors);
+        let runtime_providers = runtime_providers.clone();
+        let runtime_sessions = runtime_sessions.clone();
+        let runtime_asking = runtime_asking.clone();
+        let runtime_returning = runtime_returning.clone();
+        connections.spawn(async move {
+            let mut clients = JoinSet::new();
+            loop {
+                tokio::select! {
+                    arrived = runtime_listener.accept() => match arrived {
+                        Ok(connection) => {
+                            clients.spawn(crate::runtime_serve::serve_connection(
+                                connection,
+                                runtime_instance.clone(),
+                                Arc::clone(&composed),
+                                Arc::clone(&discovering),
+                                Arc::clone(&runtime_native_cursors),
+                                runtime_providers.clone(),
+                                runtime_sessions.subscribe(),
+                                runtime_asking.clone(),
+                                runtime_returning.clone(),
+                            ));
+                        }
+                        Err(error) => {
+                            drop(runtime_failed.send(error));
+                            break;
+                        }
+                    },
+                    Some(_finished) = clients.join_next(), if !clients.is_empty() => {}
+                }
+            }
+            clients.abort_all();
+            while clients.join_next().await.is_some() {}
+        });
+    }
 
     let outcome = loop {
         tokio::select! {
-            arrived = runtime_listener.accept() => {
-                let connection = match arrived {
-                    Ok(connection) => connection,
-                    Err(error) => break Err(error.into()),
-                };
-                connections.spawn(crate::runtime_serve::serve_connection(
-                    connection,
-                    runtime_instance.clone(),
-                    Arc::clone(&composed),
-                    Arc::clone(&discovering),
-                    Arc::clone(&runtime_native_cursors),
-                    runtime_providers.clone(),
-                    runtime_sessions.subscribe(),
-                    runtime_asking.clone(),
-                    runtime_returning.clone(),
-                ));
+            Some(error) = local_failures.recv() => {
+                break Err(error.into());
             }
 
-            arrived = listener.accept() => {
-                let connection = match arrived {
-                    Ok(connection) => connection,
-                    Err(error) => break Err(error.into()),
-                };
-                // The connection's own task. It reads, it writes, and it never touches a session.
-                connections.spawn(converse(
-                    SurfaceConnection::Local(connection),
-                    Conversation::at_the_machine(),
-                    ConnectionServices {
-                        asking: asking.clone(),
-                        reserving: reserving.clone(),
-                        returning: returning.clone(),
-                        composed: Arc::clone(&composed),
-                        discovering: Arc::clone(&discovering),
-                        session_index: session_index.subscribe(),
-                    },
-                ));
+            Some(error) = runtime_failures.recv() => {
+                break Err(error.into());
             }
 
             arrived = accept_phone(phone.as_ref()), if phone.is_some() => {
@@ -925,6 +967,10 @@ async fn serve_surfaces(
                     request,
                     answered,
                 } = ask;
+                let changes_index = !matches!(
+                    &request,
+                    crate::runtime_control::RuntimeControlRequest::Watch { .. }
+                );
                 let reply = runtime_control.answer(
                     &composed.store,
                     &mut sessions,
@@ -963,13 +1009,15 @@ async fn serve_surfaces(
                         _ => {}
                     }
                 }
-                publish_session_index(
-                    &session_index,
-                    &runtime_sessions,
-                    &composed,
-                    &sessions,
-                    &provider_update_notices,
-                );
+                if changes_index {
+                    publish_session_index(
+                        &session_index,
+                        &runtime_sessions,
+                        &composed,
+                        &sessions,
+                        &provider_update_notices,
+                    );
+                }
             }
 
             Some(returned_agent) = returned.recv() => match returned_agent {
@@ -1177,13 +1225,22 @@ async fn serve_surfaces(
 
             // Events reach watchers through the session's own fan-out. This arm keeps the provider stream moving.
             pumped = sessions.pump_any() => {
-                if let Some(published) = pumped.published {
+                let runtrol_core::Pumped {
+                    session,
+                    published,
+                    index_changed,
+                } = pumped;
+                let release_oversize = published.as_ref().is_some_and(|published| {
+                    published.event.body.payload_bytes()
+                        > runtrol_core::events::MAX_LIVE_PAYLOAD_BYTES
+                });
+                if let Some(published) = published {
                     let should_wake = published.event.body.deserves_a_notification();
-                    if let Err(error) = crate::dispatch::persist_live(&composed, &sessions, pumped.session) {
+                    if let Err(error) = crate::dispatch::persist_live(&composed, &sessions, session) {
                         break Err(error.into());
                     }
                     if let Err(error) = composed.store.put_cursor(
-                        pumped.session,
+                        session,
                         runtrol_store::Cursor {
                             src_end: published.event.src_end,
                             seq: published.event.seq,
@@ -1195,7 +1252,13 @@ async fn serve_surfaces(
                         schedule_push_wakes(&mut connections, &composed, &push_wake_active);
                     }
                 }
-                if pumped.index_changed {
+                if release_oversize {
+                    // The fan-out and replay ring both reject this payload, so the positioned event above owned the
+                    // last large allocation. Release allocator pages at that exact drop boundary instead of waiting
+                    // for a later session close after smaller allocations may have fragmented them.
+                    runtrol_childproc::footprint::release_unused_memory();
+                }
+                if index_changed {
                     publish_session_index(
                         &session_index,
                         &runtime_sessions,
@@ -2297,13 +2360,11 @@ mod tests {
             let composed = crate::compose::Composed::for_tests(&home, runtrol_drivers::builtin())
                 .expect("a fresh home composes");
             let address = composed.home.paths().endpoint().address().to_owned();
-            let mut listener = Listener::bind(&address)
+            let listener = Listener::bind(&address)
                 .await
                 .expect("the endpoint is free");
             let serving =
-                tokio::spawn(
-                    async move { serve_sessions(composed, &mut listener, sessions).await },
-                );
+                tokio::spawn(async move { serve_sessions(composed, listener, sessions).await });
             Self {
                 address,
                 home,
@@ -2349,7 +2410,7 @@ mod tests {
             );
 
             let address = composed.home.paths().endpoint().address().to_owned();
-            let mut listener = Listener::bind(&address)
+            let listener = Listener::bind(&address)
                 .await
                 .expect("the endpoint is free");
             let tcp = TcpListener::bind("127.0.0.1:0")
@@ -2360,7 +2421,7 @@ mod tests {
             let phone_address = ingress.local_addr().expect("phone address");
             let phone_plane = phone_plane(&composed, ingress).expect("phone plane");
             let serving = tokio::spawn(async move {
-                serve_surfaces(composed, &mut listener, sessions, Some(phone_plane), None).await
+                serve_surfaces(composed, listener, sessions, Some(phone_plane), None).await
             });
             (
                 Self {
@@ -2437,7 +2498,7 @@ mod tests {
             );
 
             let address = composed.home.paths().endpoint().address().to_owned();
-            let mut listener = Listener::bind(&address)
+            let listener = Listener::bind(&address)
                 .await
                 .expect("the endpoint is free");
             let tcp = TcpListener::bind("127.0.0.1:0")
@@ -2450,7 +2511,7 @@ mod tests {
             let serving = tokio::spawn(async move {
                 serve_surfaces(
                     composed,
-                    &mut listener,
+                    listener,
                     SessionManager::new(),
                     Some(phone_plane),
                     None,
@@ -2538,7 +2599,7 @@ mod tests {
             composed.pc_identity = Some(Arc::clone(&pc));
 
             let address = composed.home.paths().endpoint().address().to_owned();
-            let mut listener = Listener::bind(&address)
+            let listener = Listener::bind(&address)
                 .await
                 .expect("the endpoint is free");
             let tcp = TcpListener::bind("127.0.0.1:0")
@@ -2551,7 +2612,7 @@ mod tests {
             let serving = tokio::spawn(async move {
                 serve_surfaces(
                     composed,
-                    &mut listener,
+                    listener,
                     SessionManager::new(),
                     Some(phone_plane),
                     None,
@@ -2592,7 +2653,7 @@ mod tests {
                 "the paired phone must restore from durable state"
             );
             let address = composed.home.paths().endpoint().address().to_owned();
-            let mut listener = Listener::bind(&address)
+            let listener = Listener::bind(&address)
                 .await
                 .expect("the restarted endpoint is free");
             let tcp = TcpListener::bind(seed.phone_address)
@@ -2604,7 +2665,7 @@ mod tests {
             let serving = tokio::spawn(async move {
                 serve_surfaces(
                     composed,
-                    &mut listener,
+                    listener,
                     SessionManager::new(),
                     Some(phone_plane),
                     None,

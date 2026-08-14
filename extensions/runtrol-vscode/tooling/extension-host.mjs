@@ -1,5 +1,5 @@
 import { spawn, spawnSync } from "node:child_process";
-import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { cp, mkdtemp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -42,8 +42,9 @@ if (bundled.status !== 0) {
 // exactly this purpose, and the random suffix still isolates concurrent runs.
 const temporaryRoot = process.platform === "darwin" ? "/tmp" : os.tmpdir();
 const temporary = await mkdtemp(path.join(temporaryRoot, "runtrol-vscode-host-"));
-const output = path.join(extensionRoot, ".test-dist");
+const output = path.join(temporary, "tests");
 const testEntry = path.join(output, "extensionHost.test.cjs");
+const extensionUnderTestRoot = path.join(temporary, "extension");
 const resultPath = path.join(temporary, "result.json");
 const restoreResultPath = path.join(temporary, "restore-result.json");
 const integrationApproval = path.join(temporary, "integration-approved");
@@ -53,23 +54,38 @@ const userData = path.join(temporary, "user");
 const measureExtensions = path.join(temporary, "extensions-measure");
 const restoreExtensions = path.join(temporary, "extensions-restore");
 const workspaceRoot = path.join(temporary, "workspaces");
-await rm(output, { recursive: true, force: true });
-await mkdir(output, { recursive: true });
-await mkdir(path.join(userData, "User"), { recursive: true });
-await mkdir(measureExtensions, { recursive: true });
-await mkdir(restoreExtensions, { recursive: true });
 const workspaces = Array.from(
   { length: 30 },
   (_unused, index) => path.join(workspaceRoot, `workspace-${index + 1}`),
 );
-for (const workspace of workspaces) {
-  await mkdir(workspace, { recursive: true });
-}
 const providers = path.join(runtrolHome, "providers");
-await mkdir(providers, { recursive: true });
-await writeFile(
-  path.join(providers, "fixture-acp.toml"),
-  `schema = 1
+const pathKey = Object.keys(process.env).find((name) => name.toLowerCase() === "path") ?? "PATH";
+const coreEnvironment = runtimeState.environment;
+coreEnvironment.RUNTROL_ACP_FIXTURE_UNIQUE_SESSIONS = "1";
+coreEnvironment[pathKey] = `${path.dirname(fixture)}${path.delimiter}${process.env[pathKey] ?? ""}`;
+let daemon = null;
+let daemonStderr = "";
+const managedSessions = [];
+
+try {
+  await rm(output, { recursive: true, force: true });
+  await mkdir(output, { recursive: true });
+  await mkdir(extensionUnderTestRoot, { recursive: true });
+  await Promise.all([
+    cp(path.join(extensionRoot, "package.json"), path.join(extensionUnderTestRoot, "package.json")),
+    cp(path.join(extensionRoot, "dist"), path.join(extensionUnderTestRoot, "dist"), { recursive: true }),
+    cp(path.join(extensionRoot, "resources"), path.join(extensionUnderTestRoot, "resources"), { recursive: true }),
+  ]);
+  await mkdir(path.join(userData, "User"), { recursive: true });
+  await mkdir(measureExtensions, { recursive: true });
+  await mkdir(restoreExtensions, { recursive: true });
+  for (const workspace of workspaces) {
+    await mkdir(workspace, { recursive: true });
+  }
+  await mkdir(providers, { recursive: true });
+  await writeFile(
+    path.join(providers, "fixture-acp.toml"),
+    `schema = 1
 id = "fixture-acp"
 display_name = "ACP Fixture"
 kind = "acp"
@@ -84,26 +100,17 @@ version = { args = ["--version"], parse = "semver-anywhere" }
 argv = []
 listen = "stdio"
 `,
-  "utf8",
-);
-await writeFile(
-  path.join(userData, "User", "settings.json"),
-  JSON.stringify({
-    ...isolatedProfileSettings,
-    "runtrol.corePath": core,
-    "runtrol.followWorkspace": false,
-  }),
-  "utf8",
-);
-const pathKey = Object.keys(process.env).find((name) => name.toLowerCase() === "path") ?? "PATH";
-const coreEnvironment = runtimeState.environment;
-coreEnvironment.RUNTROL_ACP_FIXTURE_UNIQUE_SESSIONS = "1";
-coreEnvironment[pathKey] = `${path.dirname(fixture)}${path.delimiter}${process.env[pathKey] ?? ""}`;
-let daemon = null;
-let daemonStderr = "";
-const managedSessions = [];
-
-try {
+    "utf8",
+  );
+  await writeFile(
+    path.join(userData, "User", "settings.json"),
+    JSON.stringify({
+      ...isolatedProfileSettings,
+      "runtrol.corePath": core,
+      "runtrol.followWorkspace": false,
+    }),
+    "utf8",
+  );
   daemon = spawn(core, ["daemon"], {
     env: coreEnvironment,
     stdio: ["ignore", "ignore", "pipe"],
@@ -213,7 +220,7 @@ try {
   const result = { ...measured, ...restored };
   process.stdout.write(`RUNTROL_VSCODE_HOST ${JSON.stringify(result)}\n`);
 } catch (error) {
-  if (daemon?.exitCode !== null) {
+  if (daemon && daemon.exitCode !== null) {
     throw new Error(`the VS Code host run failed after Core exited with ${String(daemon?.exitCode)}`, {
       cause: error,
     });
@@ -294,8 +301,8 @@ async function runHost(installed, testEntry, resultPath, testEnvironment, worksp
     return;
   }
   await runTests({
-    cachePath: path.join(extensionRoot, ".vscode-test"),
-    extensionDevelopmentPath: extensionRoot,
+    cachePath: path.join(os.tmpdir(), "runtrol-vscode-test-cache"),
+    extensionDevelopmentPath: extensionUnderTestRoot,
     extensionTestsPath: testEntry,
     extensionTestsEnv: testEnvironment,
     launchArgs: [
@@ -329,7 +336,7 @@ async function runInstalledCode(
     "--extensions-dir",
     extensionsDirectory,
     "--extensionDevelopmentPath",
-    extensionRoot,
+    extensionUnderTestRoot,
     "--extensionTestsPath",
     testEntry,
     workspace,

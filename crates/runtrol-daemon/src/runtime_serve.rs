@@ -98,7 +98,13 @@ pub(crate) async fn serve_connection(
         let Ok(request) = serde_json::from_slice::<JsonRpcRequest>(&payload) else {
             return;
         };
-        refresh_provider_inventory(&providers, &composed);
+        let refresh_providers = request
+            .method
+            .parse::<RuntimeMethod>()
+            .is_ok_and(method_needs_provider_refresh);
+        if refresh_providers {
+            refresh_provider_inventory(&providers, &composed);
+        }
         let catalogue = Arc::clone(&sessions.borrow_and_update());
         let provider_catalogue = Arc::clone(&providers.borrow());
         let answered = answer(
@@ -115,7 +121,9 @@ pub(crate) async fn serve_connection(
             request,
         )
         .await;
-        refresh_provider_inventory(&providers, &composed);
+        if refresh_providers {
+            refresh_provider_inventory(&providers, &composed);
+        }
         if send_response(&mut connection, &answered.response)
             .await
             .is_err()
@@ -2560,6 +2568,20 @@ fn refresh_provider_inventory(providers: &watch::Sender<Arc<ProviderList>>, comp
     });
 }
 
+const fn method_needs_provider_refresh(method: RuntimeMethod) -> bool {
+    matches!(
+        method,
+        RuntimeMethod::ProvidersList
+            | RuntimeMethod::ProvidersWatch
+            | RuntimeMethod::ProvidersGetCapabilities
+            | RuntimeMethod::ProvidersListModels
+            | RuntimeMethod::ProvidersListNativeSessions
+            | RuntimeMethod::SessionsStart
+            | RuntimeMethod::SessionsAdoptNative
+            | RuntimeMethod::SessionsResume
+    )
+}
+
 async fn relay_providers(
     connection: &mut Connection,
     composed: &Composed,
@@ -2569,7 +2591,14 @@ async fn relay_providers(
     authority: AuthorizedIntegration,
 ) {
     loop {
-        if updates.changed().await.is_err() {
+        let changed = tokio::select! {
+            peer = connection.recv() => {
+                drop(peer);
+                return;
+            }
+            changed = updates.changed() => changed,
+        };
+        if changed.is_err() {
             send_provider_watch_end(
                 connection,
                 subscription_id,
@@ -2642,7 +2671,17 @@ async fn relay_events(
     session_id: RuntimeSessionId,
     mut view: Box<runtrol_core::SessionView>,
 ) {
-    while let Some(item) = view.recv().await {
+    loop {
+        let item = tokio::select! {
+            peer = connection.recv() => {
+                drop(peer);
+                return;
+            }
+            item = view.recv() => item,
+        };
+        let Some(item) = item else {
+            return;
+        };
         match item {
             runtrol_core::WatchItem::Event(event) => {
                 let positioned = event.event();
@@ -2692,7 +2731,14 @@ async fn relay_session_index(
     authority: AuthorizedIntegration,
 ) {
     loop {
-        if sessions.changed().await.is_err() {
+        let changed = tokio::select! {
+            peer = connection.recv() => {
+                drop(peer);
+                return;
+            }
+            changed = sessions.changed() => changed,
+        };
+        if changed.is_err() {
             send_index_end(
                 connection,
                 subscription_id,
@@ -3135,6 +3181,37 @@ listen = "stdio"
             assert!(
                 private.parse::<RuntimeMethod>().is_err(),
                 "admitted {private:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn provider_refresh_is_absent_from_authenticated_session_streams() {
+        for method in [
+            RuntimeMethod::ProvidersList,
+            RuntimeMethod::ProvidersWatch,
+            RuntimeMethod::ProvidersGetCapabilities,
+            RuntimeMethod::ProvidersListModels,
+            RuntimeMethod::ProvidersListNativeSessions,
+            RuntimeMethod::SessionsStart,
+            RuntimeMethod::SessionsAdoptNative,
+            RuntimeMethod::SessionsResume,
+        ] {
+            assert!(
+                method_needs_provider_refresh(method),
+                "missing refresh for {method:?}"
+            );
+        }
+        for method in [
+            RuntimeMethod::Initialize,
+            RuntimeMethod::IntegrationsWatchEnrollment,
+            RuntimeMethod::SessionsList,
+            RuntimeMethod::SessionsWatchIndex,
+            RuntimeMethod::SessionsWatchEvents,
+        ] {
+            assert!(
+                !method_needs_provider_refresh(method),
+                "unrelated request refreshes providers: {method:?}"
             );
         }
     }

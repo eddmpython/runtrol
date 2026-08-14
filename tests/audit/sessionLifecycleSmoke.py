@@ -282,8 +282,12 @@ def exercise(binary: Path, home: Path, workspace: Path, providers: list[str]) ->
     [`Failed`] at the first thing that does not hold, naming what was expected and what was there.
     """
     started: dict[str, str] = {}
+    workspaces: dict[str, Path] = {}
     for provider in providers:
-        session = run(binary, home, ["start", provider, str(workspace)])
+        provider_workspace = workspace / provider
+        provider_workspace.mkdir()
+        workspaces[provider] = provider_workspace
+        session = run(binary, home, ["start", provider, str(provider_workspace)])
         if not isSessionId(session):
             raise Failed(f"starting {provider} answered {session!r}, which is not a session identifier")
         started[provider] = session
@@ -323,7 +327,7 @@ def exercise(binary: Path, home: Path, workspace: Path, providers: list[str]) ->
             print(f"  {provider}: started and listed. names a conversation only once one exists")
             continue
 
-        ok, said = attempt(binary, home, ["resume", provider, native, str(workspace)])
+        ok, said = attempt(binary, home, ["resume", provider, native, str(workspaces[provider])])
 
         if not ok:
             # Measured, and it is the same truth the other provider states by staying unnamed: a conversation

@@ -22,6 +22,15 @@ const userData = requiredEnvironment("RUNTROL_VSCODE_USER_DATA");
 const extensions = requiredEnvironment("RUNTROL_VSCODE_EXTENSIONS");
 const configuredVscode = requiredEnvironment("RUNTROL_TEST_VSCODE_EXECUTABLE");
 const integrationApproval = path.join(path.dirname(resultPath), "integration-approved");
+const repositoryRoot = path.resolve(extensionRoot, "../..");
+const publicSchema = JSON.parse(await readFile(
+  path.join(repositoryRoot, "crates", "runtrol-runtime-protocol", "schema", "runtime.schema.json"),
+  "utf8",
+));
+const controlLeaseLifetimeMs = publicSchema?.["x-runtrol-limits"]?.controlLeaseLifetimeMs;
+if (!Number.isSafeInteger(controlLeaseLifetimeMs) || controlLeaseLifetimeMs <= 0) {
+  throw new Error("the public schema has no valid control lease lifetime");
+}
 const testEnvironment = {
   ...process.env,
   RUNTROL_TEST_EXTERNAL_INTEGRATION_APPROVAL: integrationApproval,
@@ -82,7 +91,17 @@ try {
     );
   }
   if (result.stage === "switching") {
-    await runHost(secondWorkspace, "complete");
+    // Isolated Extension Hosts may not share native SecretStorage even with one profile. If the next host receives a
+    // fresh integration, the old principal keeps control until the protocol lease expires because disconnect never
+    // transfers authority. Wait that exact schema-owned lifetime and approve only a real new enrollment.
+    await delay(controlLeaseLifetimeMs + 1_000);
+    await rm(integrationApproval, { force: true });
+    const approval = new AbortController();
+    const host = runHost(secondWorkspace, "complete").finally(() => approval.abort());
+    await Promise.all([
+      host,
+      approveNextTestIntegration(core, testEnvironment, 180_000, approval.signal),
+    ]);
     result = await readResult();
   }
   if (typeof result.failure === "string") {

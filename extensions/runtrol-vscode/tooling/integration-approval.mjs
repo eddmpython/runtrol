@@ -17,20 +17,27 @@ export async function approveNextTestIntegration(core, environment, timeoutMs = 
   let enrollmentObserved = false;
   let lastApprovedAt = 0;
   let integrationId = null;
+  let endpoint = null;
+  let markerPublished = false;
   while (Date.now() < deadline) {
     if (signal?.aborted) return null;
     try {
       await stat(core);
-      const located = spawnSync(core, ["endpoint"], {
-        env: environment,
-        encoding: "utf8",
-        timeout: 5_000,
-        windowsHide: true,
-      });
-      if (located.status !== 0 || !located.stdout.trim()) {
-        lastFailure = located.stderr || located.stdout || "Core endpoint discovery failed";
-      } else {
-        const connection = await FramedConnection.connect(located.stdout.trim());
+      if (!endpoint) {
+        const located = spawnSync(core, ["endpoint"], {
+          env: environment,
+          encoding: "utf8",
+          timeout: 5_000,
+          windowsHide: true,
+        });
+        if (located.status !== 0 || !located.stdout.trim()) {
+          lastFailure = located.stderr || located.stdout || "Core endpoint discovery failed";
+        } else {
+          endpoint = located.stdout.trim();
+        }
+      }
+      if (endpoint) {
+        const connection = await FramedConnection.connect(endpoint);
         let settledIntegration = null;
         try {
           await expect(connection, { ask: "hello", with: { wire } }, "welcome");
@@ -83,8 +90,11 @@ export async function approveNextTestIntegration(core, environment, timeoutMs = 
         } finally {
           await connection.close();
         }
+        if (integrationId && !markerPublished) {
+          await writeFile(marker, `${integrationId}\n`, { encoding: "utf8", flag: "wx" });
+          markerPublished = true;
+        }
         if (settledIntegration) {
-          await writeFile(marker, `${settledIntegration}\n`, { encoding: "utf8", flag: "wx" });
           return settledIntegration;
         }
       }
@@ -93,6 +103,7 @@ export async function approveNextTestIntegration(core, environment, timeoutMs = 
       if (enrollmentObserved) {
         throw new Error(`the isolated Studio integration approval failed: ${lastFailure}`);
       }
+      endpoint = null;
     }
     await delay(50);
   }

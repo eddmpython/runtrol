@@ -1,4 +1,3 @@
-import { once } from "node:events";
 import { createConnection, type Socket } from "node:net";
 
 import { PUBLIC_LIMITS } from "./generated/protocol.js";
@@ -8,24 +7,62 @@ export interface RuntimeTransport {
   send(payload: Uint8Array): Promise<void>;
   receive(): Promise<Uint8Array>;
   close(): void;
+  abort?(): void;
 }
 
-export type RuntimeTransportFactory = (endpoint: string) => Promise<RuntimeTransport>;
+export type RuntimeTransportFactory = (
+  endpoint: string,
+  signal?: AbortSignal,
+) => Promise<RuntimeTransport>;
 
-export async function connectLocalTransport(endpoint: string): Promise<RuntimeTransport> {
+const LOCAL_CONNECT_TIMEOUT_MS = 250;
+
+export async function connectLocalTransport(
+  endpoint: string,
+  signal?: AbortSignal,
+): Promise<RuntimeTransport> {
+  signal?.throwIfAborted();
   const socket = createConnection(endpoint);
   try {
-    await Promise.race([
-      once(socket, "connect"),
-      once(socket, "error").then(([error]) => Promise.reject(error)),
-    ]);
+    await waitForConnection(socket, signal);
   } catch (error) {
     socket.destroy();
+    if (signal?.aborted) {
+      throw signal.reason ?? new RuntimeTransportError("local Runtime connection was aborted");
+    }
+    if (error instanceof RuntimeTransportError) throw error;
     throw new RuntimeTransportError("could not connect to the local Runtime endpoint", {
       cause: error,
     });
   }
   return new FramedSocket(socket);
+}
+
+function waitForConnection(socket: Socket, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      finish(new RuntimeTransportError(
+        `local Runtime connection exceeded ${LOCAL_CONNECT_TIMEOUT_MS} milliseconds`,
+      ));
+    }, LOCAL_CONNECT_TIMEOUT_MS);
+    const connected = (): void => finish();
+    const failed = (error: Error): void => finish(error);
+    const aborted = (): void => finish(signal?.reason ?? new RuntimeTransportError(
+      "local Runtime connection was aborted",
+    ));
+    const finish = (error?: unknown): void => {
+      clearTimeout(timeout);
+      socket.removeListener("connect", connected);
+      socket.removeListener("error", failed);
+      signal?.removeEventListener("abort", aborted);
+      if (error === undefined) resolve();
+      else reject(error);
+    };
+    socket.once("connect", connected);
+    socket.once("error", failed);
+    signal?.addEventListener("abort", aborted, { once: true });
+    if (signal?.aborted) aborted();
+  });
 }
 
 class FramedSocket implements RuntimeTransport {
@@ -63,6 +100,10 @@ class FramedSocket implements RuntimeTransport {
 
   public close(): void {
     this.#socket.end();
+  }
+
+  public abort(): void {
+    this.#socket.destroy();
   }
 
   async #write(payload: Uint8Array): Promise<void> {

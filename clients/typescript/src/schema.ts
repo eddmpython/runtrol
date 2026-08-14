@@ -111,6 +111,7 @@ function matchesType(value: unknown, type: string): boolean {
 
 function matchesNumberFormat(value: number, format: string): boolean {
   if (!Number.isSafeInteger(value) || value < 0) return false;
+  if (format === "uint8") return value <= 0xff;
   if (format === "uint16") return value <= 0xffff;
   if (format === "uint32") return value <= 0xffff_ffff;
   return format === "uint" || format === "uint64";

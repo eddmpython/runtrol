@@ -16,12 +16,17 @@ import { descendantPids, normalizedExecutable, processRows } from "./process-ide
 export const TESTED_VSCODE_VERSION = "1.132.1";
 
 export const isolatedProfileSettings = Object.freeze({
+  "chat.agentHost.enabled": false,
   "extensions.autoCheckUpdates": false,
   "extensions.autoUpdate": false,
+  "telemetry.telemetryLevel": "off",
+  "workbench.enableExperiments": false,
   "workbench.startupEditor": "none",
 });
 
 export const isolatedLaunchArguments = Object.freeze([
+  "--disable-extension",
+  "GitHub.copilot-chat",
   "--disable-updates",
 ]);
 

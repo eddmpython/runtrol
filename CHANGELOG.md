@@ -29,6 +29,21 @@ and refactoring that no user can observe do not belong here.
   can become usable without an extra restart or manual refresh.
 - Local Runtime and Studio connections retire Windows named pipes gracefully before an immediate reconnect, avoiding
   startup stalls while preserving the same owner-only endpoints.
+- Windows Runtime listeners keep another named pipe ready while accepting the current client, so simultaneous Studio
+  and public SDK connections no longer lose the daemon during connection churn.
+- The TypeScript Runtime client now cancels stalled handshakes and subscription reconnects within the caller's exact
+  deadline, including attempts that have not created a transport yet.
+- Runtime event streams no longer rescan installed providers for unrelated authenticated requests, and disconnected
+  idle streams are retired immediately. Studio activation, hot-session switching, and reload restoration remain
+  within their enforced budgets on Windows.
+- Studio retains an unexpired control lease across reconnects and same-Runtime workspace reloads, preventing a false
+  control conflict after the extension host restarts.
+- Closing a session now invalidates any concurrently refreshed inventory and accepts a cooled session with no durable
+  pointer as already closed, so removed sessions disappear from Studio immediately.
+- Runtime returns allocator pages after bounded large live events leave the fan-out path, keeping settled daemon
+  memory within the enforced budget.
+- The phone app now permits its same-origin presentation contract under its content security policy, and its pairing
+  screen reports readiness without exposing actions that require an already connected PC.
 
 ### Removed
 
