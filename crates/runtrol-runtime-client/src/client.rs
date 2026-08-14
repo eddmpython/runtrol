@@ -29,6 +29,8 @@ use crate::connection::Connection;
 use crate::identity::{IntegrationCredentials, IntegrationIdentity};
 use crate::locator::{LocatorError, LocatorState, RuntimeLocator, ValidatedLocator};
 
+const CHALLENGE_CLOCK_SKEW_TOLERANCE_MS: u64 = 5_000;
+
 /// Safe client metadata and optional consumer-owned integration identity.
 #[derive(Clone, Debug)]
 pub struct ClientOptions {
@@ -475,14 +477,22 @@ fn validate_challenge(
     let now_ms = u64::try_from(now.as_millis()).map_err(|_| {
         ClientError::Protocol("system time does not fit Runtime milliseconds".to_owned())
     })?;
+    validate_challenge_at(challenge, now_ms)
+}
+
+fn validate_challenge_at(challenge: &ServerChallenge, now_ms: u64) -> Result<(), ClientError> {
     if challenge.expires_at_ms <= now_ms {
         return Err(ClientError::Protocol(
             "the Runtime challenge is already expired".to_owned(),
         ));
     }
-    if challenge.expires_at_ms > now_ms.saturating_add(CHALLENGE_LIFETIME_MS) {
+    if challenge.expires_at_ms
+        > now_ms
+            .saturating_add(CHALLENGE_LIFETIME_MS)
+            .saturating_add(CHALLENGE_CLOCK_SKEW_TOLERANCE_MS)
+    {
         return Err(ClientError::Protocol(
-            "the Runtime challenge exceeds the public lifetime bound".to_owned(),
+            "the Runtime challenge exceeds the public lifetime and clock-skew bound".to_owned(),
         ));
     }
     let nonce = match Base64UrlUnpadded::decode_vec(&challenge.nonce) {
@@ -2376,6 +2386,32 @@ mod tests {
         assert_eq!(
             identity.sign_base64(&payload),
             "cBrwv1dkWz6oG-YszAimU6leDfkNriZSKxUNSGYttRiH2dD0RJQsTklzpjzW3_qSIZYwrPeSPLHnCyW5fJ5sBQ"
+        );
+    }
+
+    #[test]
+    fn challenge_validation_tolerates_bounded_local_clock_skew_and_nothing_beyond_it() {
+        let now_ms = 2_000_000_000_000;
+        let locator = ValidatedLocator {
+            instance_id: "rtm_0123456789abcdef0123456789abcdef".to_owned(),
+            endpoint: "fixture".to_owned(),
+            runtime_version: "0.1.1".to_owned(),
+        };
+        let mut challenge = ServerChallenge {
+            instance_id: locator.instance_id.clone(),
+            nonce_id: "nonce_0123456789abcdef0123456789abcdef".to_owned(),
+            nonce: Base64UrlUnpadded::encode_string(&[3; 32]),
+            expires_at_ms: now_ms + CHALLENGE_LIFETIME_MS + CHALLENGE_CLOCK_SKEW_TOLERANCE_MS,
+        };
+        validate_challenge_at(&challenge, now_ms).expect("bounded local clock skew is accepted");
+
+        challenge.expires_at_ms = challenge.expires_at_ms.saturating_add(1);
+        let rejected = validate_challenge_at(&challenge, now_ms)
+            .expect_err("clock skew beyond the bound is rejected");
+        assert!(
+            rejected
+                .to_string()
+                .contains("public lifetime and clock-skew bound")
         );
     }
 

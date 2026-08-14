@@ -32,7 +32,10 @@ has a separate 1 MiB ceiling. SDK readers validate lengths before allocation.
 
 Runtime sends `runtime/challenge` first. The client signs a canonical payload containing the Runtime instance, nonce,
 revision offer, client information, capabilities, and current integration generations. Runtime accepts each nonce
-once and rejects expired, replayed, or connection-mismatched proofs.
+once and rejects expired, replayed, or connection-mismatched proofs. Runtime still expires the challenge after 60
+seconds. Both SDKs allow at most five additional seconds only when checking the challenge's future wall-clock bound,
+so small local clock-resolution or adjustment differences cannot reject a fresh challenge. An already expired
+challenge receives no tolerance.
 
 The client then sends `runtime/initialize`. Runtime returns the selected revision, instance information, public
 capabilities, numeric limits, and the current grant when authentication succeeds. The client must send

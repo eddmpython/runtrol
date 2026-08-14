@@ -57,6 +57,43 @@ function initialized(instanceId: string, grant?: object): object {
   };
 }
 
+test("challenge validation tolerates bounded local clock skew and nothing beyond it", async (context) => {
+  const now = 2_000_000_000_000;
+  context.mock.method(Date, "now", () => now);
+  const instanceId = `rtm_${"8".repeat(32)}`;
+  const challengeAt = (expiresAtMs: number): object => ({
+    jsonrpc: "2.0",
+    method: "runtime/challenge",
+    params: {
+      instanceId,
+      nonceId: `nonce_${"0".repeat(32)}`,
+      nonce: Buffer.alloc(32).toString("base64url"),
+      expiresAtMs,
+    },
+  });
+
+  const acceptedTransport = new ScriptedRuntimeTransport([
+    challengeAt(now + PUBLIC_LIMITS.challengeLifetimeMs + 5_000),
+    initialized(instanceId),
+  ]);
+  const accepted = await new RuntimeConnector(scriptedTransportFactory(acceptedTransport)).connect(
+    validatedLocator(instanceId, "fixture", "0.1.1"),
+    { name: "fixture", version: "1.0.0" },
+  );
+  accepted.close();
+
+  const rejectedTransport = new ScriptedRuntimeTransport([
+    challengeAt(now + PUBLIC_LIMITS.challengeLifetimeMs + 5_001),
+  ]);
+  await assert.rejects(
+    new RuntimeConnector(scriptedTransportFactory(rejectedTransport)).connect(
+      validatedLocator(instanceId, "fixture", "0.1.1"),
+      { name: "fixture", version: "1.0.0" },
+    ),
+    /exceeds the public lifetime and clock-skew bound/,
+  );
+});
+
 test("key rotation signs the replacement key and returns replacement credentials", async () => {
   const instanceId = `rtm_${"6".repeat(32)}`;
   const original = IntegrationIdentity.generate();

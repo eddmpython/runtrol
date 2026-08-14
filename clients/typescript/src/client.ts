@@ -74,6 +74,7 @@ import {
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder("utf-8", { fatal: true });
+const CHALLENGE_CLOCK_SKEW_TOLERANCE_MS = 5_000;
 
 export function newMutationRequestId(): MutationRequestId {
   const bytes = randomBytes(16);
@@ -1117,12 +1118,19 @@ async function receiveChallenge(
   }
   const challenge = validatePublic<ServerChallenge>("ServerChallenge", notification.params);
   const now = Date.now();
-  if (challenge.instanceId !== locator.instanceId
-    || challenge.expiresAtMs <= now
-    || challenge.expiresAtMs > now + PUBLIC_LIMITS.challengeLifetimeMs
-    || !/^nonce_[0-9a-f]{32}$/.test(challenge.nonceId)
+  if (challenge.instanceId !== locator.instanceId) {
+    throw new RuntimeProtocolError("Runtime challenge instance does not match the locator");
+  }
+  if (challenge.expiresAtMs <= now) {
+    throw new RuntimeProtocolError("Runtime challenge is already expired");
+  }
+  if (challenge.expiresAtMs
+    > now + PUBLIC_LIMITS.challengeLifetimeMs + CHALLENGE_CLOCK_SKEW_TOLERANCE_MS) {
+    throw new RuntimeProtocolError("Runtime challenge exceeds the public lifetime and clock-skew bound");
+  }
+  if (!/^nonce_[0-9a-f]{32}$/.test(challenge.nonceId)
     || Buffer.from(challenge.nonce, "base64url").byteLength !== 32) {
-    throw new RuntimeProtocolError("Runtime challenge is stale, mismatched, or malformed");
+    throw new RuntimeProtocolError("Runtime challenge nonce is malformed");
   }
   return challenge;
 }

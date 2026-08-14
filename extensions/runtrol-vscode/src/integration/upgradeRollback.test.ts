@@ -143,8 +143,11 @@ async function waitForConversationEditor(): Promise<vscode.Tab | null> {
 }
 
 function isConversationEditor(tab: vscode.Tab): boolean {
-  return tab.input instanceof vscode.TabInputWebview
-    && tab.input.viewType === "runtrol.conversation";
+  if (!(tab.input instanceof vscode.TabInputWebview)) {
+    return false;
+  }
+  return tab.input.viewType === "runtrol.conversation"
+    || tab.input.viewType === "mainThreadWebview-runtrol.conversation";
 }
 
 function conversationTabDiagnostics(): string {
