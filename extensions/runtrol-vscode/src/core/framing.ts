@@ -180,7 +180,7 @@ export class FrameTransport {
   }
 
   close(): void {
-    this.socket.destroy();
+    this.socket.end();
   }
 
   private onData(chunk: Buffer): void {
@@ -240,4 +240,3 @@ export class FrameTransport {
     this.socket.destroy();
   }
 }
-

@@ -65,8 +65,9 @@ After the final session closes, the gate allows at most eight consecutive 250 ms
 settling. One complete window must stay at or below the platform residual ceiling. The byte ceilings remain exact,
 and a failure reports the lowest complete-window sample observed during those two seconds.
 
-After a provider session is fully released, GNU/Linux performs one explicit allocator trim at that lifecycle
-boundary. The trim adds no timer or background worker.
+After a provider session is fully released, GNU/Linux performs one explicit allocator trim and macOS requests
+maximal pressure relief from all allocator zones at that lifecycle boundary. Neither operation adds a timer or
+background worker.
 
 The current evidence does not claim a release-build live ceiling or immediate return of every freed page to the
 operating system.

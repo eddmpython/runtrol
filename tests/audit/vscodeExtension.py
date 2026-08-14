@@ -80,7 +80,13 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
             found.append(f"runtimeClient.ts repeats system locator validation through `{token}`")
 
     required = {
-        "core/framing.ts": ["MAX_FRAME_BYTES", "MAX_QUEUED_FRAMES", "MAX_QUEUED_BYTES", "setImmediate"],
+        "core/framing.ts": [
+            "MAX_FRAME_BYTES",
+            "MAX_QUEUED_FRAMES",
+            "MAX_QUEUED_BYTES",
+            "setImmediate",
+            "this.socket.end()",
+        ],
         "webview/main.ts": ["MAX_VISIBLE_ITEMS", "MAX_VISIBLE_CHARACTERS", "MAX_BATCH"],
         "conversationView.ts": [
             "webviewReady",
@@ -160,7 +166,10 @@ def selftest() -> int:
     """Prove the detector rejects each class of defect."""
     package = {"contributes": {"viewsContainers": {"activitybar": []}}}
     sources = {
-        "core/framing.ts": "MAX_FRAME_BYTES MAX_QUEUED_FRAMES MAX_QUEUED_BYTES setImmediate",
+        "core/framing.ts": (
+            "MAX_FRAME_BYTES MAX_QUEUED_FRAMES MAX_QUEUED_BYTES setImmediate "
+            "this.socket.end()"
+        ),
         "webview/main.ts": "MAX_VISIBLE_ITEMS MAX_VISIBLE_CHARACTERS MAX_BATCH",
         "conversationView.ts": (
             "webviewReady createWebviewPanel focusPanel conversationTabIsActive "
@@ -210,6 +219,15 @@ def selftest() -> int:
         (package, {**sources, "webview/main.ts": "localStorage MAX_VISIBLE_ITEMS"}),
         (package, {**sources, "controller.ts": "setInterval("}),
         (package, {**sources, "core/framing.ts": "MAX_FRAME_BYTES"}),
+        (
+            package,
+            {
+                **sources,
+                "core/framing.ts": sources["core/framing.ts"].replace(
+                    "this.socket.end()", "this.socket.destroy()"
+                ),
+            },
+        ),
         (package, {**sources, "conversationView.ts": "webviewReady"}),
         (package, {**sources, "controller.ts": sources["controller.ts"].replace("workspaceCollisions", "")}),
         (package, {**sources, "controller.ts": sources["controller.ts"] + " writeFile("}),

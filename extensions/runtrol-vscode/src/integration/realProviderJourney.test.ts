@@ -83,7 +83,6 @@ async function journey(resultPath: string): Promise<void> {
   const secondWorkspace = requiredEnvironment("RUNTROL_VSCODE_WORKSPACE_TWO");
   const target = requiredEnvironment("RUNTROL_VSCODE_DENIED_TARGET");
   const provider = requiredEnvironment("RUNTROL_VSCODE_PROVIDER");
-  const model = requiredEnvironment("RUNTROL_VSCODE_MODEL");
   const core = requiredEnvironment("RUNTROL_TEST_CORE");
   const api = await activate();
 
@@ -94,7 +93,7 @@ async function journey(resultPath: string): Promise<void> {
 
   currentStage = "starting-first-session";
   const firstSession = await within(
-    api.journey.start(provider, firstWorkspace, model),
+    api.journey.start(provider, firstWorkspace),
     30_000,
     "starting the first installed-provider session",
   );
@@ -138,7 +137,7 @@ async function journey(resultPath: string): Promise<void> {
 
     currentStage = "starting-second-session";
     const secondSession = await within(
-      api.journey.start(provider, secondWorkspace, model),
+      api.journey.start(provider, secondWorkspace),
       30_000,
       "starting the second installed-provider session",
     );

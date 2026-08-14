@@ -26,6 +26,7 @@ ROOT = Path(__file__).resolve().parents[2]
 EXTENSION = ROOT / "extensions" / "runtrol-vscode"
 BUDGET_PATH = EXTENSION / "performance-budget.json"
 HOST_TEST_PATH = EXTENSION / "src" / "integration" / "extensionHost.test.ts"
+APPROVAL_DRIVER_PATH = EXTENSION / "tooling" / "integration-approval.mjs"
 MARKER = "RUNTROL_VSCODE_HOST "
 FIELDS = (
     "activationMs",
@@ -121,6 +122,20 @@ def hostContractProblems(source: str) -> list[str]:
     return found
 
 
+def approvalDriverProblems(source: str) -> list[str]:
+    """Require the approval marker to follow graceful private-pipe retirement."""
+    found: list[str] = []
+    close_at = source.find("await connection.close();")
+    publish_at = source.find("if (settledIntegration) {")
+    if close_at < 0 or publish_at < close_at:
+        found.append("the approval marker can precede private IPC retirement")
+    if "this.socket.end();" not in source:
+        found.append("the approval driver does not end its private pipe gracefully")
+    if 'this.socket.once("close", resolve);' not in source:
+        found.append("the approval driver does not wait for the private pipe to close")
+    return found
+
+
 def selftest() -> int:
     """Prove each missing and regressed metric makes the gate red independently."""
     budget = loadBudget()
@@ -201,6 +216,24 @@ def selftest() -> int:
     )
     if any(not hostContractProblems(mutation) for mutation in host_mutations):
         print("[vscodeHostPerformance --selftest] FAIL. a host timeout defect escaped.", file=sys.stderr)
+        return 2
+    approval_source = (
+        "let settledIntegration = null;\n"
+        "await connection.close();\n"
+        "if (settledIntegration) {\n"
+        'this.socket.once("close", resolve);\n'
+        "this.socket.end();\n"
+    )
+    if approvalDriverProblems(approval_source):
+        print("[vscodeHostPerformance --selftest] FAIL. the approval driver fixture was rejected.", file=sys.stderr)
+        return 2
+    approval_mutations = (
+        approval_source.replace("await connection.close();", "connection.close();"),
+        approval_source.replace("this.socket.end();", "this.socket.destroy();"),
+        approval_source.replace('this.socket.once("close", resolve);', ""),
+    )
+    if any(not approvalDriverProblems(mutation) for mutation in approval_mutations):
+        print("[vscodeHostPerformance --selftest] FAIL. a private pipe retirement defect escaped.", file=sys.stderr)
         return 2
     print(
         "[vscodeHostPerformance --selftest] OK. all injected defects, host guards, and trial aggregation "
@@ -301,6 +334,11 @@ def run() -> int:
         host_problems = hostContractProblems(HOST_TEST_PATH.read_text(encoding="utf-8"))
         if host_problems:
             raise RuntimeError("; ".join(host_problems))
+        approval_problems = approvalDriverProblems(
+            APPROVAL_DRIVER_PATH.read_text(encoding="utf-8")
+        )
+        if approval_problems:
+            raise RuntimeError("; ".join(approval_problems))
         metrics = measurement(*productBinaries())
     except (OSError, ValueError, RuntimeError, json.JSONDecodeError) as error:
         print(f"[vscodeHostPerformance] FAIL. {error}", file=sys.stderr)

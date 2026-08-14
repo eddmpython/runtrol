@@ -201,11 +201,26 @@ mod platform {
 mod platform {
     use crate::error::SpawnError;
 
+    #[expect(
+        unsafe_code,
+        reason = "macOS exposes its synchronous allocator pressure release only through malloc_zone_pressure_relief"
+    )]
+    pub(super) fn release_unused_memory() {
+        unsafe extern "C" {
+            fn malloc_zone_pressure_relief(
+                zone: *mut libc::malloc_zone_t,
+                goal: libc::size_t,
+            ) -> libc::size_t;
+        }
+
+        // SAFETY: Apple's public contract accepts a null zone to inspect every zone and a zero goal to request
+        // maximal pressure relief. The call owns no pointer, moves no allocation, and returns only a byte count.
+        let _released = unsafe { malloc_zone_pressure_relief(std::ptr::null_mut(), 0) };
+    }
+
     pub(super) fn resident_bytes(pid: u32) -> Result<u64, SpawnError> {
         super::resident_from_ps(pid)
     }
-
-    pub(super) const fn release_unused_memory() {}
 }
 
 #[cfg(all(not(windows), not(target_os = "linux"), not(target_os = "macos")))]

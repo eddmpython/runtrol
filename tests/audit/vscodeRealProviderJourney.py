@@ -525,7 +525,6 @@ def exercise(claude: str) -> None:
                     "RUNTROL_VSCODE_WORKSPACE_TWO": str(second_workspace),
                     "RUNTROL_VSCODE_DENIED_TARGET": str(target),
                     "RUNTROL_VSCODE_PROVIDER": provider_gate.PROVIDER,
-                    "RUNTROL_VSCODE_MODEL": provider_gate.MODEL,
                     "RUNTROL_VSCODE_USER_DATA": str(user_data),
                     "RUNTROL_VSCODE_EXTENSIONS": str(extensions),
                     "RUNTROL_TEST_VSCODE_EXECUTABLE": str(vscode),

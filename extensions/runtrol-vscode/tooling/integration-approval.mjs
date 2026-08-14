@@ -31,6 +31,7 @@ export async function approveNextTestIntegration(core, environment, timeoutMs = 
         lastFailure = located.stderr || located.stdout || "Core endpoint discovery failed";
       } else {
         const connection = await FramedConnection.connect(located.stdout.trim());
+        let settledIntegration = null;
         try {
           await expect(connection, { ask: "hello", with: { wire } }, "welcome");
           const listed = await expect(connection, { ask: "integrationEnrollments" }, "integrationEnrollments");
@@ -73,15 +74,18 @@ export async function approveNextTestIntegration(core, environment, timeoutMs = 
             lastApprovedAt = Date.now();
             lastFailure = "waiting for concurrent Studio proposals to settle";
           } else if (integrationId && Date.now() - lastApprovedAt >= APPROVAL_QUIESCENCE_MS) {
-            await writeFile(marker, `${integrationId}\n`, { encoding: "utf8", flag: "wx" });
-            return integrationId;
+            settledIntegration = integrationId;
           } else {
             lastFailure = integrationId
               ? "waiting for concurrent Studio proposals to settle"
               : "the Studio integration proposal is not pending yet";
           }
         } finally {
-          connection.close();
+          await connection.close();
+        }
+        if (settledIntegration) {
+          await writeFile(marker, `${settledIntegration}\n`, { encoding: "utf8", flag: "wx" });
+          return settledIntegration;
         }
       }
     } catch (error) {
@@ -188,8 +192,25 @@ class FramedConnection {
     return JSON.parse(payload.toString("utf8"));
   }
 
-  close() {
-    this.socket.destroy();
+  async close() {
+    if (this.socket.destroyed) return;
+    let timer;
+    try {
+      await Promise.race([
+        new Promise((resolve) => {
+          this.socket.once("close", resolve);
+          this.socket.end();
+        }),
+        new Promise((_resolve, reject) => {
+          timer = setTimeout(() => {
+            this.socket.destroy();
+            reject(new Error("the private IPC connection did not close within 5 seconds"));
+          }, 5_000);
+        }),
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
   }
 
   async fill(length) {

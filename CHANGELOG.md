@@ -25,6 +25,10 @@ and refactoring that no user can observe do not belong here.
   activation within its startup budget on every supported operating system.
 - Opening a conversation now completes only after VS Code's panel state and editor-tab model agree on the active
   Runtrol tab, preventing intermittent focus on another editor.
+- Studio verifies a newly installed CLI in the background and refreshes its provider state automatically, so the CLI
+  can become usable without an extra restart or manual refresh.
+- Local Runtime and Studio connections retire Windows named pipes gracefully before an immediate reconnect, avoiding
+  startup stalls while preserving the same owner-only endpoints.
 
 ### Removed
 

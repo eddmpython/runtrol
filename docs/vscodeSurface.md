@@ -30,7 +30,8 @@ validated locator across its command, inventory, and selected-session stream con
 stream failure discards it, so the next attempt repeats locator ownership and permission validation before accepting
 a replacement Runtime. Initial discovery gives Core a bounded window to finish its atomic owner-only locator
 publication after private IPC becomes reachable. Public SDK frames use one bounded local transport write for the
-four-byte header and payload.
+four-byte header and payload. Public Runtime and private Studio transports end gracefully before Windows reuses their
+named-pipe instances. Test approval markers are published only after the private approval connection has fully closed.
 Before opening the local enrollment review, Studio briefly observes the exact pending decision so an approval already
 completed through another local administration surface does not produce a stale duplicate prompt.
 
