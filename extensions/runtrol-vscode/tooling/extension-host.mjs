@@ -51,12 +51,16 @@ const runtrolHome = runtimeState.home;
 const userData = path.join(temporary, "user");
 const measureExtensions = path.join(temporary, "extensions-measure");
 const restoreExtensions = path.join(temporary, "extensions-restore");
+const workspaceRoot = path.join(temporary, "workspaces");
 await rm(output, { recursive: true, force: true });
 await mkdir(output, { recursive: true });
 await mkdir(path.join(userData, "User"), { recursive: true });
 await mkdir(measureExtensions, { recursive: true });
 await mkdir(restoreExtensions, { recursive: true });
-const workspaces = Array.from({ length: 30 }, (_unused, index) => path.join(temporary, `workspace-${index + 1}`));
+const workspaces = Array.from(
+  { length: 30 },
+  (_unused, index) => path.join(workspaceRoot, `workspace-${index + 1}`),
+);
 for (const workspace of workspaces) {
   await mkdir(workspace, { recursive: true });
 }
@@ -164,7 +168,7 @@ try {
         testEntry,
         resultPath,
         testEnvironment,
-        repositoryRoot,
+        workspaceRoot,
         measureExtensions,
       ),
       approveNextTestIntegration(core, testEnvironment),
