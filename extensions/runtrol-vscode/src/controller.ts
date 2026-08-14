@@ -50,8 +50,15 @@ export class Controller implements vscode.Disposable {
   }
 
   async initialize(): Promise<void> {
-    await this.startSessionIndexWatch();
-    const remembered = await this.selection.load();
+    const [inventory, remembered] = await Promise.all([
+      this.runtime.inventory(),
+      this.selection.load(),
+    ]);
+    this.applyListing(
+      inventory.sessions.sessions,
+      inventory.sessions.warnings,
+      inventory.providers.providers,
+    );
     const selected = this.state.sessions.find((session) => session.sessionId === remembered)
       ?? this.state.sessions.find((session) => session.hot)
       ?? null;
@@ -60,6 +67,7 @@ export class Controller implements vscode.Disposable {
     } else {
       this.conversation.reset(null);
     }
+    this.startSessionIndexWatch();
   }
 
   async refresh(): Promise<void> {
@@ -483,35 +491,11 @@ export class Controller implements vscode.Disposable {
     }
   }
 
-  private startSessionIndexWatch(): Promise<void> {
+  private startSessionIndexWatch(): void {
     this.indexAbort?.abort();
     const abort = new AbortController();
     this.indexAbort = abort;
-    let sessionsReady = false;
-    let providersReady = false;
-    let settled = false;
-    let settle: () => void = () => undefined;
-    const ready = new Promise<void>((resolve) => {
-      settle = () => {
-        if (!settled && (abort.signal.aborted || (sessionsReady && providersReady))) {
-          settled = true;
-          resolve();
-        }
-      };
-    });
-    abort.signal.addEventListener("abort", settle, { once: true });
-    void this.sessionIndexLoop(
-      abort.signal,
-      () => {
-        sessionsReady = true;
-        settle();
-      },
-      () => {
-        providersReady = true;
-        settle();
-      },
-    );
-    return ready;
+    void this.sessionIndexLoop(abort.signal);
   }
 
   private async refreshAfterReconnect(): Promise<void> {
@@ -531,11 +515,7 @@ export class Controller implements vscode.Disposable {
     throw lastError;
   }
 
-  private async sessionIndexLoop(
-    signal: AbortSignal,
-    sessionsStarted: () => void,
-    providersStarted: () => void,
-  ): Promise<void> {
+  private async sessionIndexLoop(signal: AbortSignal): Promise<void> {
     let retryMs = 250;
     while (!signal.aborted && !this.disposed) {
       try {
@@ -549,7 +529,6 @@ export class Controller implements vscode.Disposable {
                 listing.warnings,
                 this.state.providers,
               );
-              sessionsStarted();
             },
             watching,
           ),
@@ -560,7 +539,6 @@ export class Controller implements vscode.Disposable {
                 [],
                 providers.providers,
               );
-              providersStarted();
             },
             watching,
           ),

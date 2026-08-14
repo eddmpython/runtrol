@@ -34,14 +34,15 @@ four-byte header and payload.
 Before opening the local enrollment review, Studio briefly observes the exact pending decision so an approval already
 completed through another local administration surface does not produce a stale duplicate prompt.
 
-Studio becomes ready after both dedicated provider and managed-session streams have delivered their first snapshots.
-While those streams remain active, explicit refreshes reuse their latest snapshots instead of opening duplicate list
-requests. A lifecycle mutation invalidates the session snapshot until the stream or an exact list request replaces it.
+Studio becomes ready after one exact provider and managed-session inventory has populated navigation. Dedicated
+provider and managed-session streams then replace that inventory in the background. While those streams remain
+active, explicit refreshes reuse their latest snapshots instead of opening duplicate list requests. A lifecycle
+mutation invalidates the session snapshot until the stream or an exact list request replaces it.
 Core discovery and protected identity loading begin together. Studio then validates the public locator. On Windows
 the exact selected Core executable reuses the Rust client's native owner and DACL checks, and the TypeScript SDK
 compares the validated fields with the file it opens. Unix keeps the SDK's direct owner and mode checks. Opening the
-conversation waits only until VS Code activates the editor tab; Webview readiness then starts the selected-session
-stream without blocking the command response.
+conversation waits only until both the panel and VS Code's editor-tab model report that exact tab active; Webview
+readiness then starts the selected-session stream without blocking the command response.
 
 The bundled Core is copied by streaming digest into one stable extension-global path. A hard link preserves the mapped
 image before atomic replacement. Extension Host reloads, official VSIX upgrades, and rollbacks therefore reconnect to

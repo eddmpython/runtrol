@@ -19,6 +19,13 @@ and refactoring that no user can observe do not belong here.
 
 - Selecting a session now opens one reusable conversation tab in the editor area. The wider layout keeps session state, workspace, output, approvals, and an expanding composer visible without squeezing the conversation into the sidebar.
 
+### Fixed
+
+- Studio populates navigation from one exact Runtime inventory before background change streams connect, keeping cold
+  activation within its startup budget on every supported operating system.
+- Opening a conversation now completes only after VS Code's panel state and editor-tab model agree on the active
+  Runtrol tab, preventing intermittent focus on another editor.
+
 ### Removed
 
 - The standalone desktop GUI, its `runtrol gui` execution path, Tauri dependencies, and GUI-only build and test jobs. Runtrol Studio in VS Code is now the only PC user interface.

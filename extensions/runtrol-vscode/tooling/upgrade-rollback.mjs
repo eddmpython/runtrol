@@ -233,6 +233,10 @@ listen = "stdio"
 
 async function runPhase(vscodeExecutablePath, phase, version, selectedSession) {
   await rm(resultPath, { force: true });
+  // Isolated Extension Hosts may not share native SecretStorage even when they reuse the same profile. A fresh
+  // marker and live IPC approval let each real pending enrollment finish without accepting a stale earlier decision.
+  await rm(integrationApproval, { force: true });
+  const approval = new AbortController();
   const host = runInstalledExtensionTest({
     vscodeExecutablePath,
     verifierRoot: verifier,
@@ -252,18 +256,19 @@ async function runPhase(vscodeExecutablePath, phase, version, selectedSession) {
     workspace,
     userData,
     extensions,
-  });
-  if (phase === "bootstrap") {
-    await Promise.all([
-      host,
-      approveNextTestIntegration(managedCore, {
+  }).finally(() => approval.abort());
+  await Promise.all([
+    host,
+    approveNextTestIntegration(
+      managedCore,
+      {
         ...environment,
         RUNTROL_TEST_EXTERNAL_INTEGRATION_APPROVAL: integrationApproval,
-      }),
-    ]);
-  } else {
-    await host;
-  }
+      },
+      180_000,
+      approval.signal,
+    ),
+  ]);
   const result = JSON.parse(await readFile(resultPath, "utf8"));
   if (typeof result.failure === "string") {
     throw new Error(

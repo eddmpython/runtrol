@@ -412,23 +412,45 @@ export class ConversationView implements vscode.Disposable {
 }
 
 function focusPanel(panel: vscode.WebviewPanel): Promise<void> {
-  if (panel.active) return Promise.resolve();
-  return new Promise((resolve) => {
+  if (panel.active && conversationTabIsActive()) return Promise.resolve();
+  return new Promise((resolve, reject) => {
     let settled = false;
-    const settle = () => {
+    const listeners: vscode.Disposable[] = [];
+    const settle = (error?: Error) => {
       if (settled) return;
       settled = true;
-      changed.dispose();
-      disposed.dispose();
-      resolve();
+      clearTimeout(timeout);
+      for (const listener of listeners) listener.dispose();
+      if (error) {
+        reject(error);
+      } else {
+        resolve();
+      }
     };
-    const changed = panel.onDidChangeViewState(({ webviewPanel }) => {
-      if (webviewPanel.active) settle();
-    });
-    const disposed = panel.onDidDispose(settle);
+    const check = () => {
+      if (panel.active && conversationTabIsActive()) settle();
+    };
+    const timeout = setTimeout(
+      () => settle(new Error("VS Code did not activate the Runtrol conversation tab within 2000 ms")),
+      2_000,
+    );
+    listeners.push(
+      panel.onDidChangeViewState(check),
+      vscode.window.tabGroups.onDidChangeTabs(check),
+      vscode.window.tabGroups.onDidChangeTabGroups(check),
+      panel.onDidDispose(() => settle(new Error("the Runtrol conversation tab closed before activation"))),
+    );
     panel.reveal(panel.viewColumn ?? vscode.ViewColumn.Active, false);
-    if (panel.active) settle();
+    check();
   });
+}
+
+function conversationTabIsActive(): boolean {
+  return vscode.window.tabGroups.all.some((group) => group.tabs.some((tab) => {
+    if (!tab.isActive || !(tab.input instanceof vscode.TabInputWebview)) return false;
+    return tab.input.viewType === "runtrol.conversation"
+      || tab.input.viewType === "mainThreadWebview-runtrol.conversation";
+  }));
 }
 
 function webviewReadyWaiter(): WebviewReadyWaiter {
