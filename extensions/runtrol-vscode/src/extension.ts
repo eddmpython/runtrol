@@ -62,7 +62,7 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
     : undefined;
   const runtime = new StudioRuntimeClient(
     context,
-    () => client.ensureRuntime(),
+    () => locator.runtimeExecutable(),
     externalTestApproval
       ? () => waitForExternalIntegrationApproval(externalTestApproval)
       : (pendingId) => reviewIntegrationEnrollment(client, pendingId),

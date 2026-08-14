@@ -18,6 +18,11 @@ export type LocatorState =
   | { readonly state: "notInstalled" }
   | { readonly state: "running"; readonly locator: ValidatedLocator };
 
+export type RuntimeLocatorOptions = {
+  /** Exact Runtime executable used for native Windows owner and DACL validation. It is never PATH-resolved. */
+  readonly runtimeExecutable?: string;
+};
+
 const validatedLocatorToken = Symbol("validated Runtime locator");
 
 export class ValidatedLocator {
@@ -42,16 +47,24 @@ export class ValidatedLocator {
 }
 
 export class RuntimeLocator {
-  public constructor(token: typeof runtimeLocatorToken, public readonly path: string) {
+  public constructor(
+    token: typeof runtimeLocatorToken,
+    public readonly path: string,
+    private readonly runtimeExecutable?: string,
+  ) {
     if (token !== runtimeLocatorToken) {
       throw new RuntimeLocatorError("unsafe", "Runtime locator path was not derived by this SDK");
     }
+    if (runtimeExecutable !== undefined && !isAbsolute(runtimeExecutable)) {
+      throw new RuntimeLocatorError("environment", "Runtime verifier executable is not absolute");
+    }
   }
 
-  public static system(): RuntimeLocator {
+  public static system(options: RuntimeLocatorOptions = {}): RuntimeLocator {
     return new RuntimeLocator(
       runtimeLocatorToken,
       join(systemStateRoot(), "runtrol", "runtime.locator.json"),
+      options.runtimeExecutable,
     );
   }
 
@@ -77,7 +90,40 @@ export class RuntimeLocator {
         throw new RuntimeLocatorError("unsafe", "Runtime locator is not owned by the current user");
       }
     } else {
-      await validateWindowsSecurity(this.path);
+      let verified: NativeLocatorObservation | null = null;
+      if (this.runtimeExecutable) {
+        try {
+          verified = await validateWindowsSecurityWithRuntime(this.runtimeExecutable);
+        } catch {
+          await validateWindowsSecurity(this.path);
+        }
+      } else {
+        await validateWindowsSecurity(this.path);
+      }
+      let decoded: unknown;
+      try {
+        decoded = JSON.parse(await readFile(this.path, "utf8"));
+      } catch (error) {
+        throw new RuntimeLocatorError("malformed", `Runtime locator is not valid JSON: ${String(error)}`);
+      }
+      const record = validatePublic<RuntimeLocatorRecord>("RuntimeLocatorRecord", decoded);
+      validateLocatorRecord(record, this.path);
+      if (verified && (
+        verified.instanceId !== record.instanceId
+        || verified.endpoint !== record.endpoint
+        || verified.runtimeVersion !== record.runtimeVersion
+      )) {
+        throw new RuntimeLocatorError("unsafe", "Runtime locator changed after native validation");
+      }
+      return {
+        state: "running",
+        locator: new ValidatedLocator(
+          validatedLocatorToken,
+          record.instanceId,
+          record.endpoint,
+          record.runtimeVersion,
+        ),
+      };
     }
     let decoded: unknown;
     try {
@@ -98,6 +144,12 @@ export class RuntimeLocator {
     };
   }
 }
+
+type NativeLocatorObservation = {
+  readonly endpoint: string;
+  readonly instanceId: string;
+  readonly runtimeVersion: string;
+};
 
 interface WindowsSecurityObservation {
   readonly current: string;
@@ -158,6 +210,33 @@ async function validateWindowsSecurity(path: string): Promise<void> {
       "Runtime locator owner or DACL is not current-user-only",
     );
   }
+}
+
+async function validateWindowsSecurityWithRuntime(
+  executable: string,
+): Promise<NativeLocatorObservation> {
+  let decoded: unknown;
+  try {
+    const result = await executeFile(
+      executable,
+      ["runtime-locator"],
+      { encoding: "utf8", maxBuffer: MAX_SECURITY_OUTPUT_BYTES, timeout: 5_000, windowsHide: true },
+    );
+    decoded = JSON.parse(result.stdout);
+  } catch (error) {
+    throw new RuntimeLocatorError("unsafe", `could not verify Runtime locator natively: ${String(error)}`);
+  }
+  if (!decoded || typeof decoded !== "object" || Array.isArray(decoded)) {
+    throw new RuntimeLocatorError("unsafe", "native Runtime locator verification returned no record");
+  }
+  const record = decoded as Partial<NativeLocatorObservation>;
+  if (Object.keys(record).sort().join(",") !== "endpoint,instanceId,runtimeVersion"
+    || typeof record.endpoint !== "string"
+    || typeof record.instanceId !== "string"
+    || typeof record.runtimeVersion !== "string") {
+    throw new RuntimeLocatorError("unsafe", "native Runtime locator verification returned a malformed record");
+  }
+  return record as NativeLocatorObservation;
 }
 
 export function runtimeLocatorAtForTesting(path: string): RuntimeLocator {

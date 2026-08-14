@@ -93,8 +93,8 @@ const ALLOWED_EDGES: &[(&str, &[&str])] = &[
     // L4. The thin binary. It links everything, which is the one exception to all of the above, and
     // confining that exception to one short file is what lets this table be strict about everything else. The
     // edges past the two personalities are what being the program requires: naming which providers this build
-    // can drive, binding the endpoint when it is the daemon, and deciding once what this process passes on to
-    // anything it starts.
+    // can drive, binding the endpoint when it is the daemon, validating the public Runtime bootstrap with the
+    // native client, and deciding once what this process passes on to anything it starts.
     (
         "runtrol",
         &[
@@ -103,6 +103,7 @@ const ALLOWED_EDGES: &[(&str, &[&str])] = &[
             "runtrol-drivers",
             "runtrol-ipc",
             "runtrol-childproc",
+            "runtrol-runtime-client",
         ],
     ),
     // The gate crate. No production dependencies at all: every one of them is a development dependency, so

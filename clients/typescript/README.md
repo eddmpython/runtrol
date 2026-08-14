@@ -8,6 +8,13 @@ It does not bundle or start Runtime, inspect provider storage, hold provider cre
 The application owns its integration private key and should persist the PKCS#8 bytes in operating-system secure
 storage.
 
+On Windows, a packaged host that has already selected an exact absolute Runtime executable can call
+`RuntimeLocator.system({ runtimeExecutable }).inspect()`. The read-only `runtrol runtime-locator` command uses the Rust
+client's native owner and DACL validation. This SDK then opens the platform-standard locator, validates its closed
+record and endpoint, and requires its security-relevant fields to equal the native observation. The command does not
+install or start Runtime. An older exact executable without that bootstrap command falls back to the direct SDK
+validation path, which is also used when the option is omitted.
+
 Version 0.1.1 implements finalized protocol revision `2026-08-13` and is tested with Runtime 0.1.1. Package SemVer and
 wire revision negotiation are independent compatibility checks.
 

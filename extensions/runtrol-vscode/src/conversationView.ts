@@ -75,9 +75,11 @@ export class ConversationView implements vscode.Disposable {
   async show(preserveFocus = false): Promise<void> {
     if (this.panel) {
       const panel = this.panel;
-      panel.reveal(panel.viewColumn ?? vscode.ViewColumn.Active, preserveFocus);
       if (preserveFocus) {
+        panel.reveal(panel.viewColumn ?? vscode.ViewColumn.Active, true);
         await (this.webviewReady?.promise ?? Promise.resolve());
+      } else {
+        await focusPanel(panel);
       }
       return;
     }
@@ -137,7 +139,11 @@ export class ConversationView implements vscode.Disposable {
       }
     });
     panel.webview.html = this.html(panel.webview);
-    if (preserveFocus) await ready.promise;
+    if (preserveFocus) {
+      await ready.promise;
+    } else {
+      await focusPanel(panel);
+    }
   }
 
   reset(session: SessionLine | null): number {
@@ -403,6 +409,26 @@ export class ConversationView implements vscode.Disposable {
 </body>
 </html>`;
   }
+}
+
+function focusPanel(panel: vscode.WebviewPanel): Promise<void> {
+  if (panel.active) return Promise.resolve();
+  return new Promise((resolve) => {
+    let settled = false;
+    const settle = () => {
+      if (settled) return;
+      settled = true;
+      changed.dispose();
+      disposed.dispose();
+      resolve();
+    };
+    const changed = panel.onDidChangeViewState(({ webviewPanel }) => {
+      if (webviewPanel.active) settle();
+    });
+    const disposed = panel.onDidDispose(settle);
+    panel.reveal(panel.viewColumn ?? vscode.ViewColumn.Active, false);
+    if (panel.active) settle();
+  });
 }
 
 function webviewReadyWaiter(): WebviewReadyWaiter {

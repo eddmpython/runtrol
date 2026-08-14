@@ -35,6 +35,13 @@ Runtrol Studio follows this same public SDK flow for ordinary provider and sessi
 only for local administration such as enrollment review, grant management, revocation, update administration, and
 physical-presence confirmation.
 
+On Windows, a packaged Node.js consumer that already selected an exact absolute Runtime executable may pass it to
+`RuntimeLocator.system({ runtimeExecutable })`. The executable's read-only `runtrol runtime-locator` bootstrap command
+uses the Rust client's native owner and DACL validation. The TypeScript SDK still opens the platform-standard file,
+validates its closed record and endpoint, and requires its security-relevant fields to equal the native observation.
+The command never installs or starts Runtime. Consumers without an exact executable use the SDK's direct Windows
+validation path. An older selected Runtime without the bootstrap command also falls back to that direct validation.
+
 ## Scope selection
 
 Start read-only integrations with `provider.read` and `session.list`. Add `model.read` only when the product displays

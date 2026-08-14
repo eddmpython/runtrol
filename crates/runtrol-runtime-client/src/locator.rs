@@ -129,6 +129,26 @@ pub struct ValidatedLocator {
     pub(crate) runtime_version: String,
 }
 
+impl ValidatedLocator {
+    /// Durable Runtime instance identity proved during connection setup.
+    #[must_use]
+    pub fn instance_id(&self) -> &str {
+        &self.instance_id
+    }
+
+    /// Owner-local endpoint admitted by the validated locator.
+    #[must_use]
+    pub fn endpoint(&self) -> &str {
+        &self.endpoint
+    }
+
+    /// Runtime package version published with this endpoint.
+    #[must_use]
+    pub fn runtime_version(&self) -> &str {
+        &self.runtime_version
+    }
+}
+
 fn validate_record(record: &RuntimeLocatorRecord, locator_path: &Path) -> Result<(), LocatorError> {
     if record.schema != RUNTIME_LOCATOR_SCHEMA {
         return Err(LocatorError::Malformed(format!(

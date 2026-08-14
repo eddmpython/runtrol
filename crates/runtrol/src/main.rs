@@ -10,6 +10,7 @@
 //! - **A daemon**, asked for by name, which serves until it is stopped.
 //! - **A command**, which is everything else somebody types.
 //! - **A local endpoint reporter**, used by native surfaces that speak the framed IPC directly.
+//! - **A validated Runtime locator reporter**, used by packaged Node.js surfaces on Windows without a shell probe.
 //! - **A daemon started by a command**, which is the first one again, launched by the second when nothing is
 //!   listening. It is why the first is a subcommand rather than a separate program.
 //!
@@ -27,6 +28,8 @@ enum Personality {
     Daemon,
     /// Ensure the daemon is reachable and print its exact local endpoint.
     Endpoint,
+    /// Inspect and print the native-client-validated public Runtime locator.
+    RuntimeLocator,
     /// Ask the daemon something and print the answer.
     Command(Vec<String>),
     /// Say what the words could have been.
@@ -35,6 +38,9 @@ enum Personality {
 
 /// The word native surfaces use to discover the daemon endpoint from its single owner.
 const ENDPOINT_ARGUMENT: &str = "endpoint";
+
+/// The exact bootstrap probe used by packaged Node.js surfaces that already selected this executable.
+const RUNTIME_LOCATOR_ARGUMENT: &str = "runtime-locator";
 
 /// Blocking pipe operations admitted by the daemon at one time on Windows.
 ///
@@ -82,6 +88,7 @@ fn main() -> ExitCode {
     match choose(&words) {
         Personality::Daemon => run(serving()),
         Personality::Endpoint => run(endpointing()),
+        Personality::RuntimeLocator => runtime_locating(),
         Personality::Command(words) => run(commanding(&words)),
         Personality::Usage(message) => {
             report(&message);
@@ -94,13 +101,14 @@ fn main() -> ExitCode {
 fn choose(words: &[String]) -> Personality {
     match words.first().map(String::as_str) {
         None => Personality::Usage(
-            "runtrol <command>. try: endpoint, list, start, resume, say, answer, stop, watch, close, consult, panic"
+            "runtrol <command>. try: endpoint, runtime-locator, list, start, resume, say, answer, stop, watch, close, consult, panic"
                 .to_owned(),
         ),
         // Spelled as a subcommand rather than inferred from how the program was invoked. Inferring it from the
         // executable's own name would mean a renamed file behaving differently, which is a surprise nobody asked for.
         Some(word) if word == runtrol_cli::DAEMON_ARGUMENT => Personality::Daemon,
         Some(word) if word == ENDPOINT_ARGUMENT => Personality::Endpoint,
+        Some(word) if word == RUNTIME_LOCATOR_ARGUMENT => Personality::RuntimeLocator,
         Some(_) => Personality::Command(words.to_vec()),
     }
 }
@@ -199,6 +207,33 @@ fn endpointing() -> impl FnOnce(&tokio::runtime::Runtime) -> ExitCode {
             }
         }
     }
+}
+
+/// Report the public locator only after the native client has validated its file type, bounds, ownership, DACL or
+/// Unix mode, closed record, and endpoint confinement.
+fn runtime_locating() -> ExitCode {
+    use runtrol_runtime_client::{LocatorState, RuntimeLocator};
+
+    let locator = match RuntimeLocator::system().and_then(|candidate| candidate.inspect()) {
+        Ok(LocatorState::Running(locator)) => locator,
+        Ok(LocatorState::NotInstalled) => {
+            report("the Runtrol Runtime locator is not installed");
+            return ExitCode::FAILURE;
+        }
+        Err(error) => {
+            report(&format!(
+                "cannot validate the Runtrol Runtime locator: {error}"
+            ));
+            return ExitCode::FAILURE;
+        }
+    };
+    let encoded = serde_json::json!({
+        "instanceId": locator.instance_id(),
+        "endpoint": locator.endpoint(),
+        "runtimeVersion": locator.runtime_version(),
+    });
+    say(&encoded.to_string());
+    ExitCode::SUCCESS
 }
 
 /// Be a command.
@@ -341,6 +376,14 @@ mod tests {
         assert!(matches!(
             choose(&typed(ENDPOINT_ARGUMENT)),
             Personality::Endpoint
+        ));
+    }
+
+    #[test]
+    fn runtime_locator_validation_is_not_sent_as_a_product_request() {
+        assert!(matches!(
+            choose(&typed(RUNTIME_LOCATOR_ARGUMENT)),
+            Personality::RuntimeLocator
         ));
     }
 

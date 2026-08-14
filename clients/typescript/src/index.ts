@@ -6,5 +6,6 @@ export {
   RuntimeLocator,
   ValidatedLocator,
   type LocatorState,
+  type RuntimeLocatorOptions,
 } from "./locator.js";
 export type { RuntimeTransport, RuntimeTransportFactory } from "./transport.js";

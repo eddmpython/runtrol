@@ -6,9 +6,17 @@ import { isAbsolute, join } from "node:path";
 import { test } from "node:test";
 import { promisify } from "node:util";
 
+import { RuntimeLocator, RuntimeLocatorError } from "../src/index.js";
 import { runtimeLocatorAt } from "../src/testing.js";
 
 const executeFile = promisify(execFile);
+
+test("a native locator verifier must be one exact absolute executable", () => {
+  assert.throws(
+    () => RuntimeLocator.system({ runtimeExecutable: "runtrol" }),
+    (error: unknown) => error instanceof RuntimeLocatorError && error.code === "environment",
+  );
+});
 
 test("an owner-only locator produces one validated local endpoint", async () => {
   const scratch = await mkdtemp(join(tmpdir(), "runtrol-ts-locator-"));

@@ -21,6 +21,10 @@ export class CoreLocator {
     return this.located;
   }
 
+  async runtimeExecutable(): Promise<string> {
+    return (await this.locate()).executable;
+  }
+
   invalidate(): void {
     this.located = null;
   }

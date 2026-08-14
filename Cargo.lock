@@ -1513,6 +1513,8 @@ dependencies = [
  "runtrol-daemon",
  "runtrol-drivers",
  "runtrol-ipc",
+ "runtrol-runtime-client",
+ "serde_json",
  "tokio",
 ]
 

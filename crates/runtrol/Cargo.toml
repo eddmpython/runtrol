@@ -27,6 +27,8 @@ runtrol-childproc = { workspace = true }
 runtrol-drivers = { workspace = true }
 # Where the daemon listens. Binding belongs to whoever is being a daemon, which is this file and nothing else.
 runtrol-ipc = { workspace = true }
+runtrol-runtime-client = { workspace = true }
+serde_json = { workspace = true }
 # The command and daemon entry points are asynchronous. The runtime is built here because the daemon needs an explicit
 # blocking-worker ceiling.
 tokio = { workspace = true, features = ["io-util", "process", "rt", "sync", "time"] }

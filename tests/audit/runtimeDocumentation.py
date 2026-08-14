@@ -44,6 +44,7 @@ def documentationProblems(
             "outcomeUnknown",
             "presenceRequired",
             "Consumer private keys stay outside Runtime",
+            "runtrol runtime-locator",
         ),
         "runtimeSecurity.md": (
             "same OS user",
@@ -95,7 +96,7 @@ def selftest() -> int:
         "runtimeProtocol.md": "2026-08-13 runtime.locator.json 32-bit big-endian UUIDv7 Store rollback floor method scope error",
         "runtimeIntegration.md": (
             "runtimeNotInstalled Review Integration Requests outcomeUnknown presenceRequired "
-            "Consumer private keys stay outside Runtime"
+            "Consumer private keys stay outside Runtime runtrol runtime-locator"
         ),
         "runtimeSecurity.md": (
             "same OS user never holds or forwards a model API key never scans, parses for meaning, rewrites, or stores a copy "

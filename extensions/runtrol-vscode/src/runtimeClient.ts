@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { isAbsolute } from "node:path";
 
 import {
   IntegrationCredentials,
@@ -78,12 +79,13 @@ export class StudioRuntimeClient implements vscode.Disposable {
   private readonly controls = new Map<string, ControlLease>();
   private providerSnapshot: ProviderList | null = null;
   private sessionSnapshot: ManagedSessionList | null = null;
+  private runtimeExecutable: string | null = null;
   private providerWatch: symbol | null = null;
   private sessionWatch: symbol | null = null;
 
   constructor(
     private readonly context: vscode.ExtensionContext,
-    private readonly ensureRuntimeReady: () => Promise<void>,
+    private readonly locateRuntimeExecutable: () => Promise<string>,
     private readonly approveEnrollment: (pendingId: string) => Promise<boolean>,
     private readonly confirmForget: (
       confirmationId: string,
@@ -94,11 +96,12 @@ export class StudioRuntimeClient implements vscode.Disposable {
 
   async initialize(): Promise<void> {
     this.reportInitialization("bootstrap");
-    const [stored] = await Promise.all([
+    const [stored, runtimeExecutable] = await Promise.all([
       this.loadOrCreateIdentity(),
-      this.ensureRuntimeReady(),
-      this.withRuntimeLocator(async () => undefined),
+      this.locateRuntimeExecutable(),
     ]);
+    this.runtimeExecutable = runtimeExecutable;
+    await this.withRuntimeLocator(async () => undefined);
     this.reportInitialization("integration");
     try {
       await this.useIntegration(stored);
@@ -530,7 +533,7 @@ export class StudioRuntimeClient implements vscode.Disposable {
   }
 
   private withRuntimeLocator<T>(operation: (locator: ValidatedLocator) => Promise<T>): Promise<T> {
-    const pending = this.locator ??= inspectRuntimeLocator();
+    const pending = this.locator ??= inspectRuntimeLocator(this.runtimeExecutable);
     return pending.then(operation).catch((error: unknown) => {
       if (this.locator === pending) this.locator = null;
       throw error;
@@ -657,8 +660,12 @@ export class StudioRuntimeClient implements vscode.Disposable {
   }
 }
 
-async function inspectRuntimeLocator(): Promise<ValidatedLocator> {
-  const locator = RuntimeLocator.system();
+async function inspectRuntimeLocator(runtimeExecutable: string | null): Promise<ValidatedLocator> {
+  const locator = RuntimeLocator.system(
+    process.platform === "win32" && runtimeExecutable && isAbsolute(runtimeExecutable)
+      ? { runtimeExecutable }
+      : {},
+  );
   const deadline = Date.now() + RUNTIME_LOCATOR_SETTLE_MS;
   while (true) {
     const inspected = await locator.inspect();
