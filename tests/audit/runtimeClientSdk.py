@@ -48,6 +48,11 @@ def boundaryViolations(package: dict[str, object], sources: dict[str, str]) -> l
     for testingOnly in ("runtimeLocatorAtForTesting", "validatedLocatorForTesting"):
         if testingOnly in index:
             found.append(f"the primary package exports testing-only symbol `{testingOnly}`")
+    transport = sources.get("src/transport.ts", "")
+    if "Buffer.allocUnsafe(4 + payload.byteLength)" not in transport or "frame.set(payload, 4)" not in transport:
+        found.append("the local Runtime transport does not build one bounded complete frame")
+    if transport.count("await this.#write(") != 1 or "await this.#write(frame)" not in transport:
+        found.append("the local Runtime transport does not send each frame with one write")
     return found
 
 
@@ -64,7 +69,13 @@ def selftest() -> int:
             "pack:check": "five",
         },
     }
-    sources = {"src/index.ts": "export { RuntimeLocator } from './locator.js';"}
+    sources = {
+        "src/index.ts": "export { RuntimeLocator } from './locator.js';",
+        "src/transport.ts": (
+            "Buffer.allocUnsafe(4 + payload.byteLength) frame.set(payload, 4) "
+            "await this.#write(frame)"
+        ),
+    }
     if boundaryViolations(package, sources):
         print("[runtimeClientSdk --selftest] FAIL. the green fixture was rejected.", file=sys.stderr)
         return 2
@@ -75,6 +86,7 @@ def selftest() -> int:
         ({**package, "files": []}, sources),
         (package, {"src/index.ts": "extensions/runtrol-vscode"}),
         (package, {"src/index.ts": "runtimeLocatorAtForTesting"}),
+        (package, {**sources, "src/transport.ts": "await this.#write(header) await this.#write(payload)"}),
     ]
     for index, (changedPackage, changedSources) in enumerate(mutations, start=1):
         if not boundaryViolations(changedPackage, changedSources):

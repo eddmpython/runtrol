@@ -20,9 +20,15 @@ Core discovery follows one ordered runtime contract:
 2. the native Core bundled in a Marketplace package and materialized under extension global storage;
 3. a `runtrol` executable discovered on `PATH`.
 
-`runtrol endpoint` starts the daemon when needed and reports the exact local named pipe or Unix socket. The extension
-uses the existing four-byte framed protocol directly. One greeted command connection is serialized and reused, while
-the selected session owns one independent watch connection and reconnect cursor.
+`runtrol endpoint` starts the daemon when needed and reports the exact private local named pipe or Unix socket. One
+greeted private command connection is serialized and reused only for local administration that is not part of the
+public Runtime protocol. Provider inventory, managed sessions, lifecycle actions, approvals, and event streams use the
+public TypeScript Runtime SDK with an approved Studio integration identity.
+
+Studio validates the owner-local public Runtime locator once for a healthy Runtime instance and reuses that exact
+validated locator across its command, inventory, and selected-session stream connections. A connection or terminal
+stream failure discards it, so the next attempt repeats locator ownership and permission validation before accepting
+a replacement Runtime. Public SDK frames use one bounded local transport write for the four-byte header and payload.
 
 The bundled Core is copied by streaming digest into one stable extension-global path. A hard link preserves the mapped
 image before atomic replacement. Extension Host reloads, official VSIX upgrades, and rollbacks therefore reconnect to
@@ -52,6 +58,7 @@ the original daemon and provider processes instead of making a versioned extensi
 | `core/managedCore.ts` | digest verification, stable Core path, mapped-image preservation, atomic replacement | session state or update policy |
 | `core/framing.ts` | bounded four-byte frame transport | request meaning or conversation rendering |
 | `protocol.ts` | TypeScript projection of the Rust wire | provider-specific fields |
+| `runtimeClient.ts` | approved public Runtime identity, validated-locator lifetime, inventory, lifecycle, and streams | provider credentials or conversation storage |
 | `state.ts` | provider, session, cursor, and selection metadata in memory | conversation frames |
 | `selectionStore.ts` | one bounded selected-session identifier | prompts, replies, or provider state |
 | `controller.ts` | user actions, one watch lifetime, workspace binding | transcript discovery or agent loops |
@@ -107,8 +114,8 @@ DOM, visible characters, queue growth, and memory remain bounded.
 
 ## Distribution
 
-The public identity is `runtrol.runtrol-studio`. The extension manifest owns release SemVer and
-`release-targets.json` owns the six native targets:
+The public identity is `runtrol.runtrol-studio`. Workspace package SemVer in `Cargo.toml` is the release version source
+for both Core and the generated extension manifest, while `release-targets.json` owns the six native targets:
 
 - `win32-x64`
 - `win32-arm64`

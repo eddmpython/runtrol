@@ -69,6 +69,15 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
     for token in ("prompt", "reply", "approval", "transcript", "conversation", "frame"):
         if token in selection_source.lower():
             found.append(f"selectionStore.ts contains conversation-capable token `{token}`")
+    runtime_source = sources.get("runtimeClient.ts", "")
+    for token in (
+        "connectSystemWithRetry",
+        "watchEventsWithReconnectSystem",
+        "watchProvidersWithReconnectSystem",
+        "watchSessionIndexWithReconnectSystem",
+    ):
+        if token in runtime_source:
+            found.append(f"runtimeClient.ts repeats system locator validation through `{token}`")
 
     required = {
         "core/framing.ts": ["MAX_FRAME_BYTES", "MAX_QUEUED_FRAMES", "MAX_QUEUED_BYTES", "setImmediate"],
@@ -89,7 +98,12 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
             '"Start here anyway"',
         ],
         "core/client.ts": ["commandConnection", "commandTail"],
-        "runtimeClient.ts": ["watchSessions", "watchSessionIndexWithReconnectSystem"],
+        "runtimeClient.ts": [
+            "RuntimeLocator.system().inspect()",
+            "withRuntimeLocator",
+            "watchSessions",
+            "watchSessionIndexWithReconnect",
+        ],
         "core/locator.ts": ['["endpoint"]', 'candidates.push("runtrol")'],
         "core/managedCore.ts": [
             "createReadStream",
@@ -138,7 +152,10 @@ def selftest() -> int:
             '"Start here anyway"'
         ),
         "core/client.ts": "commandConnection commandTail",
-        "runtimeClient.ts": "watchSessions watchSessionIndexWithReconnectSystem",
+        "runtimeClient.ts": (
+            "RuntimeLocator.system().inspect() withRuntimeLocator watchSessions "
+            "watchSessionIndexWithReconnect"
+        ),
         "core/locator.ts": '["endpoint"] candidates.push("runtrol")',
         "core/managedCore.ts": (
             "createReadStream copyFile(source, incoming) link(executable, preserved) "
@@ -172,6 +189,7 @@ def selftest() -> int:
         (package, {**sources, "selectionStore.ts": sources["selectionStore.ts"] + " prompt"}),
         (package, {**sources, "selectionStore.ts": sources["selectionStore.ts"].replace("retryTransientWrite", "")}),
         (package, {**sources, "journeyApi.ts": "return undefined sessions: () => [...state.sessions]"}),
+        (package, {**sources, "runtimeClient.ts": sources["runtimeClient.ts"] + " connectSystemWithRetry"}),
     ]
     for index, (changed_package, changed_sources) in enumerate(mutations, start=1):
         if not sourceViolations(changed_package, changed_sources):

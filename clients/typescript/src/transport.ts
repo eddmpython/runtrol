@@ -44,10 +44,10 @@ class FramedSocket implements RuntimeTransport {
         `frame has ${payload.byteLength} bytes, above ${PUBLIC_LIMITS.maxFrameBytes}`,
       );
     }
-    const header = Buffer.allocUnsafe(4);
-    header.writeUInt32BE(payload.byteLength);
-    await this.#write(header);
-    await this.#write(payload);
+    const frame = Buffer.allocUnsafe(4 + payload.byteLength);
+    frame.writeUInt32BE(payload.byteLength);
+    frame.set(payload, 4);
+    await this.#write(frame);
   }
 
   public async receive(): Promise<Uint8Array> {

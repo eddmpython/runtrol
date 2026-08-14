@@ -4,6 +4,7 @@ import {
   IntegrationCredentials,
   IntegrationIdentity,
   RuntimeConnector,
+  RuntimeLocator,
   RuntimeRequestError,
   newMutationRequestId,
   type AppScope,
@@ -17,6 +18,7 @@ import {
   type RuntimeModelCatalog,
   type SessionDescriptor,
   type SessionWorkspaceAccess,
+  type ValidatedLocator,
 } from "@runtrol/runtime-client";
 import * as vscode from "vscode";
 
@@ -68,6 +70,7 @@ export class StudioRuntimeClient implements vscode.Disposable {
   private command: RuntimeClient | null = null;
   private options: ClientOptions | null = null;
   private stored: StoredIntegration | null = null;
+  private locator: Promise<ValidatedLocator> | null = null;
   private commandTail: Promise<void> = Promise.resolve();
   private readonly controls = new Map<string, ControlLease>();
 
@@ -247,54 +250,64 @@ export class StudioRuntimeClient implements vscode.Disposable {
     snapshot: (providers: ProviderList) => void,
     signal: AbortSignal,
   ): Promise<void> {
-    const subscription = await this.connector.watchProvidersWithReconnectSystem(
-      this.requireOptions(),
-      { signal },
-    );
-    try {
-      snapshot(subscription.started.snapshot);
-      while (!signal.aborted) {
-        const notification = await subscription.next();
-        if (notification.kind === "changed") {
-          snapshot(notification.changed.snapshot);
-        } else if (notification.kind === "reconnected") {
-          snapshot(notification.started.snapshot);
-        } else {
-          throw new Error(`the Runtime provider stream ended: ${notification.ended.reason}`);
+    await this.withRuntimeLocator(async (locator) => {
+      try {
+        const subscription = await this.connector.watchProvidersWithReconnect(
+          locator,
+          this.requireOptions(),
+          { signal },
+        );
+        try {
+          snapshot(subscription.started.snapshot);
+          while (!signal.aborted) {
+            const notification = await subscription.next();
+            if (notification.kind === "changed") {
+              snapshot(notification.changed.snapshot);
+            } else if (notification.kind === "reconnected") {
+              snapshot(notification.started.snapshot);
+            } else {
+              throw new Error(`the Runtime provider stream ended: ${notification.ended.reason}`);
+            }
+          }
+        } finally {
+          subscription.close();
         }
+      } catch (error) {
+        if (!signal.aborted) throw error;
       }
-    } catch (error) {
-      if (!signal.aborted) throw error;
-    } finally {
-      subscription.close();
-    }
+    });
   }
 
   async watchSessions(
     snapshot: (sessions: ManagedSessionList) => void,
     signal: AbortSignal,
   ): Promise<void> {
-    const subscription = await this.connector.watchSessionIndexWithReconnectSystem(
-      this.requireOptions(),
-      { signal },
-    );
-    try {
-      snapshot(subscription.started.snapshot);
-      while (!signal.aborted) {
-        const notification = await subscription.next();
-        if (notification.kind === "changed") {
-          snapshot(notification.changed.snapshot);
-        } else if (notification.kind === "reconnected") {
-          snapshot(notification.started.snapshot);
-        } else {
-          throw new Error(`the Runtime session stream ended: ${notification.ended.reason}`);
+    await this.withRuntimeLocator(async (locator) => {
+      try {
+        const subscription = await this.connector.watchSessionIndexWithReconnect(
+          locator,
+          this.requireOptions(),
+          { signal },
+        );
+        try {
+          snapshot(subscription.started.snapshot);
+          while (!signal.aborted) {
+            const notification = await subscription.next();
+            if (notification.kind === "changed") {
+              snapshot(notification.changed.snapshot);
+            } else if (notification.kind === "reconnected") {
+              snapshot(notification.started.snapshot);
+            } else {
+              throw new Error(`the Runtime session stream ended: ${notification.ended.reason}`);
+            }
+          }
+        } finally {
+          subscription.close();
         }
+      } catch (error) {
+        if (!signal.aborted) throw error;
       }
-    } catch (error) {
-      if (!signal.aborted) throw error;
-    } finally {
-      subscription.close();
-    }
+    });
   }
 
   async watchEvents(
@@ -303,38 +316,43 @@ export class StudioRuntimeClient implements vscode.Disposable {
     handlers: RuntimeEventHandlers,
     signal: AbortSignal,
   ): Promise<void> {
-    const subscription = await this.connector.watchEventsWithReconnectSystem(
-      this.requireOptions(),
-      { sessionId, ...(after ? { after } : {}) },
-      { signal },
-    );
-    try {
-      handlers.started();
-      if (subscription.started.gap) {
-        handlers.gap(subscription.started.startsAt, "The bounded replay window has a gap.");
-      }
-      while (!signal.aborted) {
-        const notification = await subscription.next();
-        if (notification.kind === "event") {
-          if (!handlers.event(notification.event.event, notification.event.nextExpected)) return;
-          subscription.accept(notification.event.nextExpected);
-        } else if (notification.kind === "lagged") {
-          handlers.gap(
-            notification.lagged.nextExpected,
-            "The active view fell behind the bounded stream.",
-          );
-        } else if (notification.started.gap) {
-          handlers.gap(
-            notification.started.startsAt,
-            "The bounded replay window has a gap after reconnecting.",
-          );
+    await this.withRuntimeLocator(async (locator) => {
+      try {
+        const subscription = await this.connector.watchEventsWithReconnect(
+          locator,
+          this.requireOptions(),
+          { sessionId, ...(after ? { after } : {}) },
+          { signal },
+        );
+        try {
+          handlers.started();
+          if (subscription.started.gap) {
+            handlers.gap(subscription.started.startsAt, "The bounded replay window has a gap.");
+          }
+          while (!signal.aborted) {
+            const notification = await subscription.next();
+            if (notification.kind === "event") {
+              if (!handlers.event(notification.event.event, notification.event.nextExpected)) return;
+              subscription.accept(notification.event.nextExpected);
+            } else if (notification.kind === "lagged") {
+              handlers.gap(
+                notification.lagged.nextExpected,
+                "The active view fell behind the bounded stream.",
+              );
+            } else if (notification.started.gap) {
+              handlers.gap(
+                notification.started.startsAt,
+                "The bounded replay window has a gap after reconnecting.",
+              );
+            }
+          }
+        } finally {
+          subscription.close();
         }
+      } catch (error) {
+        if (!signal.aborted) throw error;
       }
-    } catch (error) {
-      if (!signal.aborted) throw error;
-    } finally {
-      subscription.close();
-    }
+    });
   }
 
   async reset(): Promise<void> {
@@ -430,7 +448,9 @@ export class StudioRuntimeClient implements vscode.Disposable {
 
   private async connectCommand(): Promise<RuntimeClient> {
     const options = this.requireOptions();
-    const runtime = await this.connector.connectSystemWithRetry(options);
+    const runtime = await this.withRuntimeLocator(
+      (locator) => this.connector.connectWithRetry(locator, options),
+    );
     const current = runtime.initialization.grant;
     const credentials = options.credentials;
     if (!current || !credentials) {
@@ -457,6 +477,14 @@ export class StudioRuntimeClient implements vscode.Disposable {
   private requireOptions(): ClientOptions {
     if (!this.options) throw new Error("Runtrol Studio has not initialized its Runtime integration");
     return this.options;
+  }
+
+  private withRuntimeLocator<T>(operation: (locator: ValidatedLocator) => Promise<T>): Promise<T> {
+    const pending = this.locator ??= inspectRuntimeLocator();
+    return pending.then(operation).catch((error: unknown) => {
+      if (this.locator === pending) this.locator = null;
+      throw error;
+    });
   }
 
   private serial<T>(action: () => Promise<T>): Promise<T> {
@@ -524,7 +552,9 @@ export class StudioRuntimeClient implements vscode.Disposable {
       version: extensionVersion(this.context),
       identity,
     };
-    const runtime = await this.connector.connectSystemWithRetry(options);
+    const runtime = await this.withRuntimeLocator(
+      (locator) => this.connector.connectWithRetry(locator, options),
+    );
     try {
       const roots = (vscode.workspace.workspaceFolders ?? []).map((folder) => folder.uri.fsPath);
       const receipt = await runtime.integrations().request({
@@ -557,6 +587,14 @@ export class StudioRuntimeClient implements vscode.Disposable {
       runtime.close();
     }
   }
+}
+
+async function inspectRuntimeLocator(): Promise<ValidatedLocator> {
+  const inspected = await RuntimeLocator.system().inspect();
+  if (inspected.state !== "running") {
+    throw new Error("Runtrol Runtime is not installed");
+  }
+  return inspected.locator;
 }
 
 function extensionVersion(context: vscode.ExtensionContext): string {
