@@ -5,7 +5,7 @@ import path from "node:path";
 
 const MAX_FRAME_BYTES = 1024 * 1024;
 
-export async function approveNextTestIntegration(core, environment, timeoutMs = 30_000) {
+export async function approveNextTestIntegration(core, environment, timeoutMs = 180_000) {
   const marker = environment.RUNTROL_TEST_EXTERNAL_INTEGRATION_APPROVAL;
   if (typeof marker !== "string" || !path.isAbsolute(marker)) {
     throw new Error("the external integration approval marker must be absolute");

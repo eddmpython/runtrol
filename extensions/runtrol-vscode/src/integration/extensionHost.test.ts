@@ -296,7 +296,7 @@ async function requireConversationEditor(): Promise<void> {
   if (!tab.isActive) {
     throw new Error("the Runtrol conversation editor tab is not active");
   }
-  if (!tab.label.startsWith("Runtrol:")) {
+  if (!tab.label.startsWith("Runtrol")) {
     throw new Error(`the conversation editor has an unreadable label: ${tab.label}`);
   }
 }
@@ -305,7 +305,7 @@ async function waitForConversationEditor(): Promise<vscode.Tab | null> {
   for (;;) {
     const tab = vscode.window.tabGroups.all
       .flatMap((group) => group.tabs)
-      .find((candidate) => candidate.isActive && candidate.label.startsWith("Runtrol:"));
+      .find((candidate) => candidate.isActive && isConversationEditor(candidate));
     if (tab) {
       return tab;
     }
@@ -316,7 +316,8 @@ async function waitForConversationEditor(): Promise<vscode.Tab | null> {
 async function hideAndRestoreConversation(): Promise<void> {
   const temporary = await vscode.workspace.openTextDocument({ content: "Runtrol editor lifecycle check\n" });
   await vscode.window.showTextDocument(temporary, { preview: true });
-  if (vscode.window.tabGroups.activeTabGroup.activeTab?.label.startsWith("Runtrol:")) {
+  const activeTab = vscode.window.tabGroups.activeTabGroup.activeTab;
+  if (activeTab && isConversationEditor(activeTab)) {
     throw new Error("a text editor did not hide the Runtrol conversation tab");
   }
   await within(
@@ -325,4 +326,9 @@ async function hideAndRestoreConversation(): Promise<void> {
     "restoring the hidden Runtrol conversation",
   );
   await requireConversationEditor();
+}
+
+function isConversationEditor(tab: vscode.Tab): boolean {
+  return tab.input instanceof vscode.TabInputWebview
+    && tab.input.viewType === "runtrol.conversation";
 }

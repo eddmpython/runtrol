@@ -117,7 +117,7 @@ function requiredEnvironment(name: string): string {
 
 async function requireConversationEditor(): Promise<void> {
   const tab = await within(waitForConversationEditor(), 15_000, "registering the conversation editor tab");
-  if (!tab || !tab.label.startsWith("Runtrol:")) {
+  if (!tab || !tab.label.startsWith("Runtrol")) {
     throw new Error("the selected conversation is not an identifiable editor Webview tab");
   }
 }
@@ -126,10 +126,15 @@ async function waitForConversationEditor(): Promise<vscode.Tab | null> {
   for (;;) {
     const tab = vscode.window.tabGroups.all
       .flatMap((group) => group.tabs)
-      .find((candidate) => candidate.isActive && candidate.label.startsWith("Runtrol:"));
+      .find((candidate) => candidate.isActive && isConversationEditor(candidate));
     if (tab) {
       return tab;
     }
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
+}
+
+function isConversationEditor(tab: vscode.Tab): boolean {
+  return tab.input instanceof vscode.TabInputWebview
+    && tab.input.viewType === "runtrol.conversation";
 }

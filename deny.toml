@@ -19,6 +19,9 @@ allow = [
     "Apache-2.0 WITH LLVM-exception",
     "BSD-2-Clause",
     "BSD-3-Clause",
+    # webpki-roots embeds Mozilla's CA root data. Its agreement permits use, modification, and sharing
+    # when the agreement text accompanies the data; the distributed root LICENSE carries that text.
+    "CDLA-Permissive-2.0",
     "ISC",
     "Unicode-3.0",
     "Zlib",

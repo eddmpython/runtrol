@@ -4,8 +4,9 @@ Copyright (c) 2026 eddmpython
 This product is licensed under the MIT License. See LICENSE.
 
 This product includes or depends on third-party components, each of which
-remains under its own license. The list below is maintained as components are
-adopted and is not yet complete, because the product is at the design stage.
+remains under its own license. The distributed LICENSE file includes the
+agreement required for the Mozilla CA root certificate data embedded through
+webpki-roots. The dependency license allowlist is enforced by cargo-deny.
 
 --------------------------------------------------------------------------------
 Note on the agent CLIs
