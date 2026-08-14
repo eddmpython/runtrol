@@ -93,14 +93,18 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
             "private watchAbort",
             "private indexAbort",
             "this.watchAbort?.abort()",
+            "await this.startSessionIndexWatch()",
             "reconnect",
             "workspaceCollisions",
             '"Start here anyway"',
         ],
         "core/client.ts": ["commandConnection", "commandTail"],
         "runtimeClient.ts": [
-            "RuntimeLocator.system().inspect()",
+            "RuntimeLocator.system()",
+            "RUNTIME_LOCATOR_SETTLE_MS",
             "withRuntimeLocator",
+            "providerSnapshot",
+            "sessionSnapshot",
             "watchSessions",
             "watchSessionIndexWithReconnect",
         ],
@@ -148,12 +152,14 @@ def selftest() -> int:
         ),
         "extension.ts": "afterReady",
         "controller.ts": (
-            'private watchAbort; private indexAbort; this.watchAbort?.abort(); reconnect workspaceCollisions '
+            'private watchAbort; private indexAbort; this.watchAbort?.abort(); '
+            'await this.startSessionIndexWatch(); reconnect workspaceCollisions '
             '"Start here anyway"'
         ),
         "core/client.ts": "commandConnection commandTail",
         "runtimeClient.ts": (
-            "RuntimeLocator.system().inspect() withRuntimeLocator watchSessions "
+            "RuntimeLocator.system() RUNTIME_LOCATOR_SETTLE_MS withRuntimeLocator "
+            "providerSnapshot sessionSnapshot watchSessions "
             "watchSessionIndexWithReconnect"
         ),
         "core/locator.ts": '["endpoint"] candidates.push("runtrol")',
@@ -190,6 +196,8 @@ def selftest() -> int:
         (package, {**sources, "selectionStore.ts": sources["selectionStore.ts"].replace("retryTransientWrite", "")}),
         (package, {**sources, "journeyApi.ts": "return undefined sessions: () => [...state.sessions]"}),
         (package, {**sources, "runtimeClient.ts": sources["runtimeClient.ts"] + " connectSystemWithRetry"}),
+        (package, {**sources, "runtimeClient.ts": sources["runtimeClient.ts"].replace("providerSnapshot", "")}),
+        (package, {**sources, "controller.ts": sources["controller.ts"].replace("await this.startSessionIndexWatch()", "")}),
     ]
     for index, (changed_package, changed_sources) in enumerate(mutations, start=1):
         if not sourceViolations(changed_package, changed_sources):

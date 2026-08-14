@@ -23,8 +23,11 @@ import {
 import * as vscode from "vscode";
 
 const SECRET_KEY = "runtrol.runtime.integration.v1";
+const ENROLLMENT_PASSIVE_SETTLE_MS = 250;
 const ENROLLMENT_DECISION_SETTLE_MS = 5_000;
 const ENROLLMENT_DECISION_POLL_MS = 50;
+const RUNTIME_LOCATOR_SETTLE_MS = 5_000;
+const RUNTIME_LOCATOR_POLL_MS = 25;
 const ALL_STUDIO_SCOPES: readonly AppScope[] = [
   "provider.read",
   "model.read",
@@ -73,6 +76,10 @@ export class StudioRuntimeClient implements vscode.Disposable {
   private locator: Promise<ValidatedLocator> | null = null;
   private commandTail: Promise<void> = Promise.resolve();
   private readonly controls = new Map<string, ControlLease>();
+  private providerSnapshot: ProviderList | null = null;
+  private sessionSnapshot: ManagedSessionList | null = null;
+  private providerWatch: symbol | null = null;
+  private sessionWatch: symbol | null = null;
 
   constructor(
     private readonly context: vscode.ExtensionContext,
@@ -96,10 +103,16 @@ export class StudioRuntimeClient implements vscode.Disposable {
   }
 
   async inventory(): Promise<RuntimeInventory> {
-    return this.read(async (runtime) => ({
-      providers: await runtime.providers().list(),
-      sessions: await runtime.sessions().list(),
-    }));
+    const providers = this.providerSnapshot;
+    const sessions = this.sessionSnapshot;
+    if (providers && sessions) return { providers, sessions };
+    return this.read(async (runtime) => {
+      const nextProviders = this.providerSnapshot ?? await runtime.providers().list();
+      const nextSessions = this.sessionSnapshot ?? await runtime.sessions().list();
+      if (this.providerWatch) this.providerSnapshot = nextProviders;
+      if (this.sessionWatch) this.sessionSnapshot = nextSessions;
+      return { providers: nextProviders, sessions: nextSessions };
+    });
   }
 
   async models(providerId: string): Promise<RuntimeModelCatalog> {
@@ -250,64 +263,92 @@ export class StudioRuntimeClient implements vscode.Disposable {
     snapshot: (providers: ProviderList) => void,
     signal: AbortSignal,
   ): Promise<void> {
-    await this.withRuntimeLocator(async (locator) => {
-      try {
-        const subscription = await this.connector.watchProvidersWithReconnect(
-          locator,
-          this.requireOptions(),
-          { signal },
-        );
+    const watch = Symbol("provider watch");
+    this.providerWatch = watch;
+    const publish = (providers: ProviderList): void => {
+      if (this.providerWatch !== watch) return;
+      this.providerSnapshot = providers;
+      snapshot(providers);
+    };
+    try {
+      await this.withRuntimeLocator(async (locator) => {
         try {
-          snapshot(subscription.started.snapshot);
-          while (!signal.aborted) {
-            const notification = await subscription.next();
-            if (notification.kind === "changed") {
-              snapshot(notification.changed.snapshot);
-            } else if (notification.kind === "reconnected") {
-              snapshot(notification.started.snapshot);
-            } else {
-              throw new Error(`the Runtime provider stream ended: ${notification.ended.reason}`);
+          const subscription = await this.connector.watchProvidersWithReconnect(
+            locator,
+            this.requireOptions(),
+            { signal },
+          );
+          try {
+            publish(subscription.started.snapshot);
+            while (!signal.aborted) {
+              const notification = await subscription.next();
+              if (notification.kind === "changed") {
+                publish(notification.changed.snapshot);
+              } else if (notification.kind === "reconnected") {
+                publish(notification.started.snapshot);
+              } else {
+                throw new Error(`the Runtime provider stream ended: ${notification.ended.reason}`);
+              }
             }
+          } finally {
+            subscription.close();
           }
-        } finally {
-          subscription.close();
+        } catch (error) {
+          if (!signal.aborted) throw error;
         }
-      } catch (error) {
-        if (!signal.aborted) throw error;
+      });
+    } finally {
+      if (this.providerWatch === watch) {
+        this.providerWatch = null;
+        this.providerSnapshot = null;
       }
-    });
+    }
   }
 
   async watchSessions(
     snapshot: (sessions: ManagedSessionList) => void,
     signal: AbortSignal,
   ): Promise<void> {
-    await this.withRuntimeLocator(async (locator) => {
-      try {
-        const subscription = await this.connector.watchSessionIndexWithReconnect(
-          locator,
-          this.requireOptions(),
-          { signal },
-        );
+    const watch = Symbol("session watch");
+    this.sessionWatch = watch;
+    const publish = (sessions: ManagedSessionList): void => {
+      if (this.sessionWatch !== watch) return;
+      this.sessionSnapshot = sessions;
+      snapshot(sessions);
+    };
+    try {
+      await this.withRuntimeLocator(async (locator) => {
         try {
-          snapshot(subscription.started.snapshot);
-          while (!signal.aborted) {
-            const notification = await subscription.next();
-            if (notification.kind === "changed") {
-              snapshot(notification.changed.snapshot);
-            } else if (notification.kind === "reconnected") {
-              snapshot(notification.started.snapshot);
-            } else {
-              throw new Error(`the Runtime session stream ended: ${notification.ended.reason}`);
+          const subscription = await this.connector.watchSessionIndexWithReconnect(
+            locator,
+            this.requireOptions(),
+            { signal },
+          );
+          try {
+            publish(subscription.started.snapshot);
+            while (!signal.aborted) {
+              const notification = await subscription.next();
+              if (notification.kind === "changed") {
+                publish(notification.changed.snapshot);
+              } else if (notification.kind === "reconnected") {
+                publish(notification.started.snapshot);
+              } else {
+                throw new Error(`the Runtime session stream ended: ${notification.ended.reason}`);
+              }
             }
+          } finally {
+            subscription.close();
           }
-        } finally {
-          subscription.close();
+        } catch (error) {
+          if (!signal.aborted) throw error;
         }
-      } catch (error) {
-        if (!signal.aborted) throw error;
+      });
+    } finally {
+      if (this.sessionWatch === watch) {
+        this.sessionWatch = null;
+        this.sessionSnapshot = null;
       }
-    });
+    }
   }
 
   async watchEvents(
@@ -356,6 +397,7 @@ export class StudioRuntimeClient implements vscode.Disposable {
   }
 
   async reset(): Promise<void> {
+    this.invalidateInventory();
     await this.serial(async () => {
       this.command?.close();
       this.command = null;
@@ -375,6 +417,7 @@ export class StudioRuntimeClient implements vscode.Disposable {
     this.command?.close();
     this.command = null;
     this.controls.clear();
+    this.invalidateInventory();
   }
 
   private read<T>(operation: (runtime: RuntimeClient) => Promise<T>): Promise<T> {
@@ -392,6 +435,7 @@ export class StudioRuntimeClient implements vscode.Disposable {
 
   private mutate<T>(operation: (runtime: RuntimeClient) => Promise<T>): Promise<T> {
     return this.serial(async () => {
+      this.sessionSnapshot = null;
       const runtime = await this.commandClient();
       try {
         return await operation(runtime);
@@ -540,7 +584,15 @@ export class StudioRuntimeClient implements vscode.Disposable {
     this.controls.clear();
     this.options = null;
     this.stored = null;
+    this.invalidateInventory();
     await this.useIntegration(await this.createIdentity());
+  }
+
+  private invalidateInventory(): void {
+    this.providerWatch = null;
+    this.sessionWatch = null;
+    this.providerSnapshot = null;
+    this.sessionSnapshot = null;
   }
 
   private async enroll(
@@ -565,14 +617,22 @@ export class StudioRuntimeClient implements vscode.Disposable {
         requestedScopes: ALL_STUDIO_SCOPES,
         requestedRoots: roots,
       });
-      if (!await this.approveEnrollment(receipt.pendingId)) {
+      const passiveDeadline = Math.min(
+        receipt.expiresAtMs,
+        Date.now() + ENROLLMENT_PASSIVE_SETTLE_MS,
+      );
+      let decision = await runtime.integrations().watch(receipt.pendingId);
+      while (decision.state === "pending" && Date.now() < passiveDeadline) {
+        await new Promise((resolve) => setTimeout(resolve, ENROLLMENT_DECISION_POLL_MS));
+        decision = await runtime.integrations().watch(receipt.pendingId);
+      }
+      if (decision.state === "pending" && !await this.approveEnrollment(receipt.pendingId)) {
         throw new Error("Runtrol Studio Runtime access was not approved");
       }
       const decisionDeadline = Math.min(
         receipt.expiresAtMs,
         Date.now() + ENROLLMENT_DECISION_SETTLE_MS,
       );
-      let decision = await runtime.integrations().watch(receipt.pendingId);
       while (decision.state === "pending" && Date.now() < decisionDeadline) {
         await new Promise((resolve) => setTimeout(resolve, ENROLLMENT_DECISION_POLL_MS));
         decision = await runtime.integrations().watch(receipt.pendingId);
@@ -590,11 +650,16 @@ export class StudioRuntimeClient implements vscode.Disposable {
 }
 
 async function inspectRuntimeLocator(): Promise<ValidatedLocator> {
-  const inspected = await RuntimeLocator.system().inspect();
-  if (inspected.state !== "running") {
-    throw new Error("Runtrol Runtime is not installed");
+  const locator = RuntimeLocator.system();
+  const deadline = Date.now() + RUNTIME_LOCATOR_SETTLE_MS;
+  while (true) {
+    const inspected = await locator.inspect();
+    if (inspected.state === "running") return inspected.locator;
+    if (Date.now() >= deadline) {
+      throw new Error("Runtrol Runtime is not installed");
+    }
+    await new Promise((resolve) => setTimeout(resolve, RUNTIME_LOCATOR_POLL_MS));
   }
-  return inspected.locator;
 }
 
 function extensionVersion(context: vscode.ExtensionContext): string {

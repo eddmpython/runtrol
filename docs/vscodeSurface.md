@@ -28,7 +28,15 @@ public TypeScript Runtime SDK with an approved Studio integration identity.
 Studio validates the owner-local public Runtime locator once for a healthy Runtime instance and reuses that exact
 validated locator across its command, inventory, and selected-session stream connections. A connection or terminal
 stream failure discards it, so the next attempt repeats locator ownership and permission validation before accepting
-a replacement Runtime. Public SDK frames use one bounded local transport write for the four-byte header and payload.
+a replacement Runtime. Initial discovery gives Core a bounded window to finish its atomic owner-only locator
+publication after private IPC becomes reachable. Public SDK frames use one bounded local transport write for the
+four-byte header and payload.
+Before opening the local enrollment review, Studio briefly observes the exact pending decision so an approval already
+completed through another local administration surface does not produce a stale duplicate prompt.
+
+Studio becomes ready after both dedicated provider and managed-session streams have delivered their first snapshots.
+While those streams remain active, explicit refreshes reuse their latest snapshots instead of opening duplicate list
+requests. A lifecycle mutation invalidates the session snapshot until the stream or an exact list request replaces it.
 
 The bundled Core is copied by streaming digest into one stable extension-global path. A hard link preserves the mapped
 image before atomic replacement. Extension Host reloads, official VSIX upgrades, and rollbacks therefore reconnect to
