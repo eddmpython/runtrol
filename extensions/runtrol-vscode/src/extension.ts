@@ -50,6 +50,7 @@ export type SessionManagementPerformance = {
 export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi {
   const locator = new CoreLocator(context);
   const client = new CoreClient(locator);
+  let initializationStage = "runtime:bootstrap";
   // Extension Host gates delegate the physical-presence step to a separate local IPC driver. Installed-package
   // continuity explicitly opts in because VS Code reports the installed bundle as Production. The driver still
   // completes the real bounded challenge, and every ordinary activation shows the local review UI.
@@ -66,11 +67,13 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
       ? () => waitForExternalIntegrationApproval(externalTestApproval)
       : (pendingId) => reviewIntegrationEnrollment(client, pendingId),
     (confirmationId, sessionId) => confirmRuntimeForget(client, confirmationId, sessionId),
+    (stage) => {
+      initializationStage = `runtime:${stage}`;
+    },
   );
   const state = new RuntimeState();
   const selection = new SelectionStore(context.globalStorageUri.fsPath);
   let lifecycle: Promise<void> = Promise.resolve();
-  let initializationStage = "runtime";
   const afterReady = async <T>(action: () => Promise<T>): Promise<T> => {
     await lifecycle;
     return action();

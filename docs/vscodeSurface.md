@@ -37,6 +37,9 @@ completed through another local administration surface does not produce a stale 
 Studio becomes ready after both dedicated provider and managed-session streams have delivered their first snapshots.
 While those streams remain active, explicit refreshes reuse their latest snapshots instead of opening duplicate list
 requests. A lifecycle mutation invalidates the session snapshot until the stream or an exact list request replaces it.
+Core discovery, public locator validation, and protected identity loading begin together. Opening the conversation
+commits the editor panel immediately; Webview readiness then starts the selected-session stream without blocking the
+command response.
 
 The bundled Core is copied by streaming digest into one stable extension-global path. A hard link preserves the mapped
 image before atomic replacement. Extension Host reloads, official VSIX upgrades, and rollbacks therefore reconnect to

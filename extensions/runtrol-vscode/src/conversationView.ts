@@ -76,9 +76,8 @@ export class ConversationView implements vscode.Disposable {
     if (this.panel) {
       const panel = this.panel;
       panel.reveal(panel.viewColumn ?? vscode.ViewColumn.Active, preserveFocus);
-      await (this.webviewReady?.promise ?? Promise.resolve());
-      if (this.panel === panel && !preserveFocus && !panel.active) {
-        panel.reveal(panel.viewColumn ?? vscode.ViewColumn.Active, false);
+      if (preserveFocus) {
+        await (this.webviewReady?.promise ?? Promise.resolve());
       }
       return;
     }
@@ -138,10 +137,7 @@ export class ConversationView implements vscode.Disposable {
       }
     });
     panel.webview.html = this.html(panel.webview);
-    await ready.promise;
-    if (this.panel === panel && !preserveFocus && !panel.active) {
-      panel.reveal(panel.viewColumn ?? vscode.ViewColumn.Active, false);
-    }
+    if (preserveFocus) await ready.promise;
   }
 
   reset(session: SessionLine | null): number {

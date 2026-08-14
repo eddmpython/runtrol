@@ -26,7 +26,7 @@ const SECRET_KEY = "runtrol.runtime.integration.v1";
 const ENROLLMENT_PASSIVE_SETTLE_MS = 250;
 const ENROLLMENT_DECISION_SETTLE_MS = 5_000;
 const ENROLLMENT_DECISION_POLL_MS = 50;
-const RUNTIME_LOCATOR_SETTLE_MS = 5_000;
+const RUNTIME_LOCATOR_SETTLE_MS = 12_000;
 const RUNTIME_LOCATOR_POLL_MS = 25;
 const ALL_STUDIO_SCOPES: readonly AppScope[] = [
   "provider.read",
@@ -89,11 +89,17 @@ export class StudioRuntimeClient implements vscode.Disposable {
       confirmationId: string,
       sessionId: string,
     ) => Promise<boolean>,
+    private readonly reportInitialization: (stage: string) => void = () => undefined,
   ) {}
 
   async initialize(): Promise<void> {
-    await this.ensureRuntimeReady();
-    const stored = await this.loadOrCreateIdentity();
+    this.reportInitialization("bootstrap");
+    const [stored] = await Promise.all([
+      this.loadOrCreateIdentity(),
+      this.ensureRuntimeReady(),
+      this.withRuntimeLocator(async () => undefined),
+    ]);
+    this.reportInitialization("integration");
     try {
       await this.useIntegration(stored);
     } catch (error) {
@@ -568,6 +574,7 @@ export class StudioRuntimeClient implements vscode.Disposable {
     const identity = IntegrationIdentity.fromPkcs8(
       Buffer.from(stored.privateKeyPkcs8, "base64url"),
     );
+    if (!stored.grant) this.reportInitialization("enrollment");
     const grant = stored.grant ?? await this.enroll(stored, identity);
     this.stored = { ...stored, grant };
     this.options = {
@@ -575,6 +582,7 @@ export class StudioRuntimeClient implements vscode.Disposable {
       version: extensionVersion(this.context),
       credentials: new IntegrationCredentials(identity, grant),
     };
+    this.reportInitialization("command");
     this.command = await this.connectCommand();
   }
 

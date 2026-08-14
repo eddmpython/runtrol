@@ -4,6 +4,7 @@ import net from "node:net";
 import path from "node:path";
 
 const MAX_FRAME_BYTES = 1024 * 1024;
+const APPROVAL_QUIESCENCE_MS = 250;
 
 export async function approveNextTestIntegration(core, environment, timeoutMs = 180_000, signal = null) {
   const marker = environment.RUNTROL_TEST_EXTERNAL_INTEGRATION_APPROVAL;
@@ -14,6 +15,8 @@ export async function approveNextTestIntegration(core, environment, timeoutMs = 
   const deadline = Date.now() + timeoutMs;
   let lastFailure = "the Core executable is not ready";
   let enrollmentObserved = false;
+  let lastApprovedAt = 0;
+  let integrationId = null;
   while (Date.now() < deadline) {
     if (signal?.aborted) return null;
     try {
@@ -34,41 +37,49 @@ export async function approveNextTestIntegration(core, environment, timeoutMs = 
           if (!Array.isArray(listed.with)) {
             throw new Error("the private IPC enrollment list is malformed");
           }
-          const enrollment = listed.with.find((candidate) => candidate.client_name === "Runtrol Studio");
-          if (enrollment) {
+          const enrollments = listed.with.filter((candidate) => candidate.client_name === "Runtrol Studio");
+          if (enrollments.length > 0) {
             enrollmentObserved = true;
-            if (!Array.isArray(enrollment.scopes) || !Array.isArray(enrollment.roots)) {
-              throw new Error("the Studio integration proposal has malformed authority");
-            }
-            const begun = await expect(
-              connection,
-              {
-                ask: "integrationApprovalBegin",
-                with: {
-                  pending_id: enrollment.pending_id,
-                  scopes: enrollment.scopes,
-                  roots: enrollment.roots,
+            for (const enrollment of enrollments) {
+              if (!Array.isArray(enrollment.scopes) || !Array.isArray(enrollment.roots)) {
+                throw new Error("the Studio integration proposal has malformed authority");
+              }
+              const begun = await expect(
+                connection,
+                {
+                  ask: "integrationApprovalBegin",
+                  with: {
+                    pending_id: enrollment.pending_id,
+                    scopes: enrollment.scopes,
+                    roots: enrollment.roots,
+                  },
                 },
-              },
-              "integrationApprovalChallenge",
-            );
-            const answer = challengeAnswer(begun.with.prompt);
-            const approved = await expect(
-              connection,
-              {
-                ask: "integrationApprovalFinish",
-                with: { challenge_id: begun.with.challenge_id, answer },
-              },
-              "integrationApproved",
-            );
-            const integrationId = approved.with.integration_id;
-            if (typeof integrationId !== "string" || !/^int_[0-9a-f]{32}$/u.test(integrationId)) {
-              throw new Error("the approved integration identity is malformed");
+                "integrationApprovalChallenge",
+              );
+              const answer = challengeAnswer(begun.with.prompt);
+              const approved = await expect(
+                connection,
+                {
+                  ask: "integrationApprovalFinish",
+                  with: { challenge_id: begun.with.challenge_id, answer },
+                },
+                "integrationApproved",
+              );
+              integrationId = approved.with.integration_id;
+              if (typeof integrationId !== "string" || !/^int_[0-9a-f]{32}$/u.test(integrationId)) {
+                throw new Error("the approved integration identity is malformed");
+              }
             }
+            lastApprovedAt = Date.now();
+            lastFailure = "waiting for concurrent Studio proposals to settle";
+          } else if (integrationId && Date.now() - lastApprovedAt >= APPROVAL_QUIESCENCE_MS) {
             await writeFile(marker, `${integrationId}\n`, { encoding: "utf8", flag: "wx" });
             return integrationId;
+          } else {
+            lastFailure = integrationId
+              ? "waiting for concurrent Studio proposals to settle"
+              : "the Studio integration proposal is not pending yet";
           }
-          lastFailure = "the Studio integration proposal is not pending yet";
         } finally {
           connection.close();
         }

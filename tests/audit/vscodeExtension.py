@@ -91,7 +91,7 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
         "extension.ts": [
             "afterReady",
             'process.env.RUNTROL_TEST_INSTALLED_UPGRADE === "1"',
-            'initializationStage = "runtime"',
+            'initializationStage = "runtime:bootstrap"',
         ],
         "controller.ts": [
             "private watchAbort",
@@ -156,7 +156,7 @@ def selftest() -> int:
         ),
         "extension.ts": (
             'afterReady process.env.RUNTROL_TEST_INSTALLED_UPGRADE === "1" '
-            'initializationStage = "runtime"'
+            'initializationStage = "runtime:bootstrap"'
         ),
         "controller.ts": (
             'private watchAbort; private indexAbort; this.watchAbort?.abort(); '
