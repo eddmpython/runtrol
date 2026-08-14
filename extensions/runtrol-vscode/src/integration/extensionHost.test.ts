@@ -6,6 +6,7 @@ import * as vscode from "vscode";
 import { extensionUnderTest } from "./extensionUnderTest.test";
 
 let currentStage = "starting";
+const EXTENSION_INITIALIZATION_HANG_TIMEOUT_MS = 15_000;
 
 type ExtensionApi = {
   readonly ready: Promise<void>;
@@ -82,7 +83,7 @@ async function measure(resultPath: string): Promise<Record<string, number | stri
   const api = await within(extension.activate() as Promise<ExtensionApi>, 5_000, "extension activation");
   await checkpoint(resultPath, "activated");
   try {
-    await within(api.ready, 5_000, "extension initialization");
+    await within(api.ready, EXTENSION_INITIALIZATION_HANG_TIMEOUT_MS, "extension initialization");
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
     throw new Error(
@@ -201,7 +202,7 @@ async function measureRestore(expected: string): Promise<{
   const activatedAt = performance.now();
   let readyAt = activatedAt;
   let viewAt = activatedAt;
-  const ready = within(api.ready, 5_000, "reload initialization").then(() => {
+  const ready = within(api.ready, EXTENSION_INITIALIZATION_HANG_TIMEOUT_MS, "reload initialization").then(() => {
     readyAt = performance.now();
   });
   const view = (async () => {

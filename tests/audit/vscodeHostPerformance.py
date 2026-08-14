@@ -25,6 +25,7 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[2]
 EXTENSION = ROOT / "extensions" / "runtrol-vscode"
 BUDGET_PATH = EXTENSION / "performance-budget.json"
+HOST_TEST_PATH = EXTENSION / "src" / "integration" / "extensionHost.test.ts"
 MARKER = "RUNTROL_VSCODE_HOST "
 FIELDS = (
     "activationMs",
@@ -44,6 +45,8 @@ EXPECTED_HOT_SESSIONS = 8
 EXPECTED_MANAGED_SESSIONS = 30
 EXPECTED_DROPPED_FRAMES = 0
 MEASUREMENT_TRIALS = 3
+INITIALIZATION_TIMEOUT_DECLARATION = "const EXTENSION_INITIALIZATION_HANG_TIMEOUT_MS = 15_000;"
+INITIALIZATION_TIMEOUT_USE = "within(api.ready, EXTENSION_INITIALIZATION_HANG_TIMEOUT_MS"
 
 
 def loadBudget() -> dict[str, float]:
@@ -106,6 +109,16 @@ def medianMeasurements(measurements: list[dict[str, Any]]) -> dict[str, Any]:
             raise ValueError(f"every VS Code measurement must report {name}={expected}, found {values!r}")
         result[name] = expected
     return result
+
+
+def hostContractProblems(source: str) -> list[str]:
+    """Keep hang detection separate from the median performance ratchet."""
+    found: list[str] = []
+    if INITIALIZATION_TIMEOUT_DECLARATION not in source:
+        found.append("the Extension Host initialization hang timeout is not the exact 15 second guard")
+    if source.count(INITIALIZATION_TIMEOUT_USE) != 2:
+        found.append("initial activation and reload do not share the initialization hang guard")
+    return found
 
 
 def selftest() -> int:
@@ -174,8 +187,23 @@ def selftest() -> int:
     if not incomplete_rejected:
         print("[vscodeHostPerformance --selftest] FAIL. an incomplete trial set was accepted.", file=sys.stderr)
         return 2
+    host_source = (
+        f"{INITIALIZATION_TIMEOUT_DECLARATION}\n"
+        f"{INITIALIZATION_TIMEOUT_USE}, 'initial');\n"
+        f"{INITIALIZATION_TIMEOUT_USE}, 'reload');\n"
+    )
+    if hostContractProblems(host_source):
+        print("[vscodeHostPerformance --selftest] FAIL. the host contract fixture was rejected.", file=sys.stderr)
+        return 2
+    host_mutations = (
+        host_source.replace("15_000", "5_000"),
+        host_source.replace(f"{INITIALIZATION_TIMEOUT_USE}, 'reload');\n", ""),
+    )
+    if any(not hostContractProblems(mutation) for mutation in host_mutations):
+        print("[vscodeHostPerformance --selftest] FAIL. a host timeout defect escaped.", file=sys.stderr)
+        return 2
     print(
-        "[vscodeHostPerformance --selftest] OK. all twenty-seven injected defects and trial aggregation "
+        "[vscodeHostPerformance --selftest] OK. all injected defects, host guards, and trial aggregation "
         "make the gate red."
     )
     return 0
@@ -270,6 +298,9 @@ def run() -> int:
     """Build, measure, and enforce the shared budget."""
     try:
         budget = loadBudget()
+        host_problems = hostContractProblems(HOST_TEST_PATH.read_text(encoding="utf-8"))
+        if host_problems:
+            raise RuntimeError("; ".join(host_problems))
         metrics = measurement(*productBinaries())
     except (OSError, ValueError, RuntimeError, json.JSONDecodeError) as error:
         print(f"[vscodeHostPerformance] FAIL. {error}", file=sys.stderr)

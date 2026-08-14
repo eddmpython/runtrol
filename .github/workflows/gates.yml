@@ -403,7 +403,7 @@ jobs:
           TMPDIR: ${{ matrix.os == 'macos-latest' && '/tmp' || runner.temp }}
         run: python -X utf8 tests/audit/resilienceFaultInjection.py
       - name: 독립 ACP 구현 설치
-        run: npm install --global opencode-ai@1.2.27
+        run: npm install --global --allow-scripts=opencode-ai opencode-ai@1.2.27
       - name: 독립 ACP 구현 게이트 자체 검증
         run: python -X utf8 tests/audit/externalAcpSmoke.py --selftest
       - name: 독립 설치 ACP 구현의 두 턴과 native load
@@ -411,7 +411,7 @@ jobs:
           TMPDIR: ${{ matrix.os == 'macos-latest' && '/tmp' || runner.temp }}
         run: python -X utf8 tests/audit/externalAcpSmoke.py --require-external
       - name: 실물 Claude Code 고정 판본 설치
-        run: npm install --global @anthropic-ai/claude-code@2.1.220
+        run: npm install --global --allow-scripts=@anthropic-ai/claude-code @anthropic-ai/claude-code@2.1.220
       - name: VS Code 실물 provider 전체 여정 게이트 자체 검증
         run: python -X utf8 tests/audit/vscodeRealProviderJourney.py --selftest
       - name: VS Code에서 실물 CLI 시작, 승인, 중단, 재접속, workspace 전환, 종료
@@ -498,7 +498,7 @@ jobs:
           node-version: "24"
       - uses: Swatinem/rust-cache@v2
       - name: Install latest provider CLIs without credentials
-        run: npm install --global @anthropic-ai/claude-code @openai/codex
+        run: npm install --global --allow-scripts=@anthropic-ai/claude-code @anthropic-ai/claude-code @openai/codex
       - name: Seed provider-owned model cache fixture
         env:
           CODEX_HOME: ${{ runner.temp }}/runtrol-model-detection-codex

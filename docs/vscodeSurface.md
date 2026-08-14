@@ -124,7 +124,8 @@ every trial. The shared ratchet currently caps:
 | Full workspace reload restoration | 1,500 ms |
 
 The Webview carries 15,000 raw frames over five seconds and must drop zero raw frames while animation, input, scroll,
-DOM, visible characters, queue growth, and memory remain bounded.
+DOM, visible characters, queue growth, and memory remain bounded. Its measurement protocol bounds startup and result
+acknowledgements separately and retries one transient Webview document reload within the outer gate timeout.
 
 ## Distribution
 

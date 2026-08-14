@@ -84,12 +84,14 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
         "webview/main.ts": ["MAX_VISIBLE_ITEMS", "MAX_VISIBLE_CHARACTERS", "MAX_BATCH"],
         "conversationView.ts": [
             "webviewReady",
-            "await ready.promise",
             "createWebviewPanel",
             "focusPanel",
             "conversationTabIsActive",
             "onDidChangeTabs",
             "onDidChangeTabGroups",
+            "MEASUREMENT_ATTEMPTS",
+            "withinMeasurementStage",
+            "waitForVisibleWebview",
             "retainContextWhenHidden: false",
         ],
         "extension.ts": [
@@ -158,8 +160,9 @@ def selftest() -> int:
         "core/framing.ts": "MAX_FRAME_BYTES MAX_QUEUED_FRAMES MAX_QUEUED_BYTES setImmediate",
         "webview/main.ts": "MAX_VISIBLE_ITEMS MAX_VISIBLE_CHARACTERS MAX_BATCH",
         "conversationView.ts": (
-            "webviewReady await ready.promise createWebviewPanel focusPanel conversationTabIsActive "
-            "onDidChangeTabs onDidChangeTabGroups retainContextWhenHidden: false"
+            "webviewReady createWebviewPanel focusPanel conversationTabIsActive "
+            "onDidChangeTabs onDidChangeTabGroups MEASUREMENT_ATTEMPTS withinMeasurementStage "
+            "waitForVisibleWebview retainContextWhenHidden: false"
         ),
         "extension.ts": (
             'afterReady process.env.RUNTROL_TEST_INSTALLED_UPGRADE === "1" '

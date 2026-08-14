@@ -42,13 +42,13 @@ type RenderWaiter = {
   reject(error: Error): void;
 };
 
-type WebviewReadyWaiter = {
-  promise: Promise<void>;
-  resolve(): void;
-};
-
 const MAX_PENDING_POSTS = 4_096;
 const POST_BATCH = MAX_PENDING_POSTS;
+const VISIBLE_READY_TIMEOUT_MS = 5_000;
+const MEASUREMENT_ATTEMPTS = 2;
+const MEASUREMENT_STAGE_TIMEOUT_MS = 5_000;
+
+class RetryableMeasurementError extends Error {}
 
 export class ConversationView implements vscode.Disposable {
   static readonly viewType = "runtrol.conversation";
@@ -62,7 +62,6 @@ export class ConversationView implements vscode.Disposable {
   private readonly measurements = new Map<string, MeasurementWaiter>();
   private readonly renderWaiters = new Set<RenderWaiter>();
   private renderedGeneration = 0;
-  private webviewReady: WebviewReadyWaiter | null = null;
   private visibleReady = false;
 
   constructor(
@@ -77,7 +76,7 @@ export class ConversationView implements vscode.Disposable {
       const panel = this.panel;
       if (preserveFocus) {
         panel.reveal(panel.viewColumn ?? vscode.ViewColumn.Active, true);
-        await (this.webviewReady?.promise ?? Promise.resolve());
+        await this.waitForVisibleWebview(panel);
       } else {
         await focusPanel(panel);
       }
@@ -95,12 +94,14 @@ export class ConversationView implements vscode.Disposable {
     );
     panel.iconPath = vscode.Uri.joinPath(this.extensionUri, "resources", "symbol.svg");
     this.panel = panel;
-    const ready = webviewReadyWaiter();
-    this.webviewReady = ready;
     panel.webview.onDidReceiveMessage((message: unknown) => {
       if (isWebviewReady(message)) {
+        if (this.measurements.size > 0) {
+          this.rejectMeasurements(new RetryableMeasurementError(
+            "the Runtrol Webview reloaded during measurement",
+          ));
+        }
         this.visibleReady = true;
-        this.webviewReady?.resolve();
         this.reset(this.selected);
         this.visibility(true);
         return;
@@ -121,26 +122,24 @@ export class ConversationView implements vscode.Disposable {
         return;
       }
       this.visibleReady = false;
-      this.webviewReady?.resolve();
-      this.webviewReady = webviewReadyWaiter();
       this.visibility(false);
+      this.rejectMeasurements(new RetryableMeasurementError(
+        "the Runtrol Webview became hidden during measurement",
+      ));
     });
     panel.onDidDispose(() => {
       if (this.panel === panel) {
         this.panel = null;
         this.visibleReady = false;
         this.visibility(false);
-        this.webviewReady?.resolve();
-        this.webviewReady = null;
         this.pendingFrames = [];
-        ready.resolve();
         this.rejectMeasurements(new Error("the Runtrol Webview closed during measurement"));
         this.rejectRenderWaiters(new Error("the Runtrol Webview closed before painting the selected session"));
       }
     });
     panel.webview.html = this.html(panel.webview);
     if (preserveFocus) {
-      await ready.promise;
+      await this.waitForVisibleWebview(panel);
     } else {
       await focusPanel(panel);
     }
@@ -202,34 +201,45 @@ export class ConversationView implements vscode.Disposable {
   }
 
   async measurePerformance(framesPerSecond = 3_000, durationMs = 5_000): Promise<WebviewPerformance> {
-    await this.show(true);
-    const panel = this.panel;
-    if (!panel) throw new Error("the Runtrol conversation panel did not open");
     if (framesPerSecond <= 0 || durationMs <= 0) {
       throw new Error("Webview measurement rate and duration must be positive");
     }
+    let retryable: RetryableMeasurementError | null = null;
+    for (let attempt = 0; attempt < MEASUREMENT_ATTEMPTS; attempt += 1) {
+      try {
+        await this.show(true);
+        const panel = this.panel;
+        if (!panel) throw new Error("the Runtrol conversation panel did not open");
+        return await this.measurePerformanceOnce(panel, framesPerSecond, durationMs);
+      } catch (error) {
+        if (!(error instanceof RetryableMeasurementError)) throw error;
+        retryable = error;
+      }
+    }
+    throw retryable ?? new Error("the Runtrol Webview measurement did not run");
+  }
+
+  private async measurePerformanceOnce(
+    panel: vscode.WebviewPanel,
+    framesPerSecond: number,
+    durationMs: number,
+  ): Promise<WebviewPerformance> {
     const webview = panel.webview;
-    const ready = this.webviewReady;
-    if (!ready) {
-      throw new Error("open the Runtrol view before measuring its Webview");
-    }
-    await ready.promise;
-    if (this.panel?.webview !== webview) {
-      throw new Error("the Runtrol Webview changed before measurement started");
-    }
     const id = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
     const waiter = measurementWaiter();
     const droppedBefore = this.droppedFrames;
     this.measurements.set(id, waiter);
-    const timeout = setTimeout(
-      () => waiter.reject(new Error("the Runtrol Webview measurement exceeded 30 seconds")),
-      30_000,
-    );
     try {
       if (!await webview.postMessage({ type: "measureStart", id })) {
         throw new Error("the Runtrol Webview closed before measurement started");
       }
-      await waiter.ready;
+      await withinMeasurementStage(
+        waiter.ready,
+        "the Runtrol Webview did not acknowledge measurement startup",
+      );
+      if (this.panel !== panel || !panel.visible || !this.visibleReady) {
+        throw new RetryableMeasurementError("the Runtrol Webview changed before measurement load");
+      }
       const total = Math.ceil(framesPerSecond * durationMs / 1_000);
       const started = performance.now();
       let produced = 0;
@@ -251,11 +261,27 @@ export class ConversationView implements vscode.Disposable {
       })) {
         throw new Error("the Runtrol Webview closed before measurement finished");
       }
-      return await waiter.result;
+      return await withinMeasurementStage(
+        waiter.result,
+        "the Runtrol Webview did not return measurement results",
+      );
     } finally {
-      clearTimeout(timeout);
       this.measurements.delete(id);
     }
+  }
+
+  private async waitForVisibleWebview(panel: vscode.WebviewPanel): Promise<void> {
+    const deadline = Date.now() + VISIBLE_READY_TIMEOUT_MS;
+    while (this.panel === panel && Date.now() < deadline) {
+      if (panel.visible && this.visibleReady) return;
+      await delay(25);
+    }
+    if (this.panel !== panel) {
+      throw new Error("the Runtrol Webview closed before becoming ready");
+    }
+    throw new RetryableMeasurementError(
+      `the visible Runtrol Webview was not ready within ${VISIBLE_READY_TIMEOUT_MS} ms`,
+    );
   }
 
   private schedulePosts(): void {
@@ -359,8 +385,6 @@ export class ConversationView implements vscode.Disposable {
     this.panel?.dispose();
     this.panel = null;
     this.visibleReady = false;
-    this.webviewReady?.resolve();
-    this.webviewReady = null;
     this.pendingFrames = [];
     this.rejectMeasurements(new Error("the Runtrol conversation panel was disposed"));
     this.rejectRenderWaiters(new Error("the Runtrol conversation panel was disposed"));
@@ -453,22 +477,6 @@ function conversationTabIsActive(): boolean {
   }));
 }
 
-function webviewReadyWaiter(): WebviewReadyWaiter {
-  let settled = false;
-  let resolvePromise: () => void = () => {};
-  const promise = new Promise<void>((resolve) => {
-    resolvePromise = resolve;
-  });
-  return {
-    promise,
-    resolve: () => {
-      if (settled) return;
-      settled = true;
-      resolvePromise();
-    },
-  };
-}
-
 function measurementWaiter(): MeasurementWaiter {
   let readyResolve: () => void = () => {};
   let rejectReady: (error: Error) => void = () => {};
@@ -493,6 +501,23 @@ function measurementWaiter(): MeasurementWaiter {
       rejectResult(error);
     },
   };
+}
+
+function withinMeasurementStage<T>(work: Promise<T>, message: string): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  return Promise.race([
+    work,
+    new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(
+        () => reject(new RetryableMeasurementError(
+          `${message} within ${MEASUREMENT_STAGE_TIMEOUT_MS} ms`,
+        )),
+        MEASUREMENT_STAGE_TIMEOUT_MS,
+      );
+    }),
+  ]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
 }
 
 function performanceFrame(index: number): unknown {
