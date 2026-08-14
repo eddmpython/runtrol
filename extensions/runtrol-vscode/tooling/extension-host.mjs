@@ -49,12 +49,14 @@ const integrationApproval = path.join(temporary, "integration-approved");
 const runtimeState = isolatedRuntimeState(temporary);
 const runtrolHome = runtimeState.home;
 const userData = path.join(temporary, "user");
-const extensions = path.join(temporary, "extensions");
+const measureExtensions = path.join(temporary, "extensions-measure");
+const restoreExtensions = path.join(temporary, "extensions-restore");
 const workspaceRoot = path.join(temporary, "workspaces");
 await rm(output, { recursive: true, force: true });
 await mkdir(output, { recursive: true });
 await mkdir(path.join(userData, "User"), { recursive: true });
-await mkdir(extensions, { recursive: true });
+await mkdir(measureExtensions, { recursive: true });
+await mkdir(restoreExtensions, { recursive: true });
 const workspaces = Array.from(
   { length: 30 },
   (_unused, index) => path.join(workspaceRoot, `workspace-${index + 1}`),
@@ -167,7 +169,7 @@ try {
         resultPath,
         testEnvironment,
         workspaceRoot,
-        extensions,
+        measureExtensions,
       ),
       approveNextTestIntegration(core, testEnvironment),
     ]);
@@ -192,14 +194,20 @@ try {
     RUNTROL_VSCODE_PHASE: "restore",
     RUNTROL_VSCODE_RESTORE_SESSION: restoreSession,
   };
-  await runHost(
+  await rm(integrationApproval, { force: true });
+  const restoreApproval = new AbortController();
+  const restoreHost = runHost(
     installed,
     testEntry,
     restoreResultPath,
     restoreEnvironment,
     restoreWorkspace,
-    extensions,
-  );
+    restoreExtensions,
+  ).finally(() => restoreApproval.abort());
+  await Promise.all([
+    restoreHost,
+    approveNextTestIntegration(core, restoreEnvironment, 30_000, restoreApproval.signal),
+  ]);
   const restored = JSON.parse(await readFile(restoreResultPath, "utf8"));
   const result = { ...measured, ...restored };
   process.stdout.write(`RUNTROL_VSCODE_HOST ${JSON.stringify(result)}\n`);

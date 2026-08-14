@@ -5,7 +5,7 @@ import path from "node:path";
 
 const MAX_FRAME_BYTES = 1024 * 1024;
 
-export async function approveNextTestIntegration(core, environment, timeoutMs = 180_000) {
+export async function approveNextTestIntegration(core, environment, timeoutMs = 180_000, signal = null) {
   const marker = environment.RUNTROL_TEST_EXTERNAL_INTEGRATION_APPROVAL;
   if (typeof marker !== "string" || !path.isAbsolute(marker)) {
     throw new Error("the external integration approval marker must be absolute");
@@ -15,6 +15,7 @@ export async function approveNextTestIntegration(core, environment, timeoutMs = 
   let lastFailure = "the Core executable is not ready";
   let enrollmentObserved = false;
   while (Date.now() < deadline) {
+    if (signal?.aborted) return null;
     try {
       await stat(core);
       const located = spawnSync(core, ["endpoint"], {
@@ -80,6 +81,7 @@ export async function approveNextTestIntegration(core, environment, timeoutMs = 
     }
     await delay(50);
   }
+  if (signal?.aborted) return null;
   throw new Error(`the isolated Studio integration was not approved: ${lastFailure}`);
 }
 
