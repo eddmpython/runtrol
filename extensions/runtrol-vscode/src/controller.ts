@@ -312,8 +312,8 @@ export class Controller implements vscode.Disposable {
     await this.runtime.interrupt(runtimeAction(session));
   }
 
-  openConversation(): void {
-    void this.conversation.show();
+  async openConversation(): Promise<void> {
+    await this.conversation.show();
     this.ensureSelectedWatch();
   }
 

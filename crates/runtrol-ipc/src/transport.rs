@@ -636,9 +636,11 @@ mod platform {
         )]
         fn current_owner() -> std::io::Result<Self> {
             let owner = process_user()?.sid_string()?;
-            // Only the exact process token user receives full control. No owner-rights alias, Everyone, anonymous,
-            // network, administrator, or SYSTEM ACE is present.
-            let sddl: Vec<u16> = format!("D:P(A;;GA;;;{owner})")
+            // The exact process token user owns the object and is the only principal that receives full control.
+            // Token default ownership can be an administrator group for service accounts, so both ownership and the
+            // protected DACL must be explicit. No owner-rights alias, Everyone, anonymous, network, administrator, or
+            // SYSTEM ACE is present.
+            let sddl: Vec<u16> = format!("O:{owner}D:P(A;;GA;;;{owner})")
                 .encode_utf16()
                 .chain(core::iter::once(0))
                 .collect();

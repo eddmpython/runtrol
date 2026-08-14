@@ -253,7 +253,7 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
     ),
     vscode.commands.registerCommand(
       "runtrol.openConversation",
-      () => run(() => afterReady(async () => controller.openConversation())),
+      () => run(() => afterReady(() => controller.openConversation())),
     ),
     vscode.commands.registerCommand(
       "runtrol.renameSession",

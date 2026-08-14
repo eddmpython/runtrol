@@ -289,7 +289,15 @@ function managedSessionIds(): string[] {
 }
 
 async function requireConversationEditor(): Promise<void> {
-  const tab = await within(waitForConversationEditor(), 15_000, "registering the conversation editor tab");
+  let tab: vscode.Tab | null;
+  try {
+    tab = await within(waitForConversationEditor(), 15_000, "registering the conversation editor tab");
+  } catch (error) {
+    throw new Error(
+      `the conversation editor tab was not registered; current tabs: ${conversationTabDiagnostics()}`,
+      { cause: error },
+    );
+  }
   if (!tab) {
     throw new Error("the Runtrol conversation did not open as an editor Webview tab");
   }
@@ -305,7 +313,7 @@ async function waitForConversationEditor(): Promise<vscode.Tab | null> {
   for (;;) {
     const tab = vscode.window.tabGroups.all
       .flatMap((group) => group.tabs)
-      .find((candidate) => candidate.isActive && isConversationEditor(candidate));
+      .find(isConversationEditor);
     if (tab) {
       return tab;
     }
@@ -331,4 +339,16 @@ async function hideAndRestoreConversation(): Promise<void> {
 function isConversationEditor(tab: vscode.Tab): boolean {
   return tab.input instanceof vscode.TabInputWebview
     && tab.input.viewType === "runtrol.conversation";
+}
+
+function conversationTabDiagnostics(): string {
+  return JSON.stringify(vscode.window.tabGroups.all.flatMap((group) => group.tabs).map((tab) => {
+    const input = tab.input as { constructor?: { name?: unknown }; viewType?: unknown };
+    return {
+      active: tab.isActive,
+      input: typeof input.constructor?.name === "string" ? input.constructor.name : typeof tab.input,
+      label: tab.label,
+      viewType: typeof input.viewType === "string" ? input.viewType : null,
+    };
+  }));
 }

@@ -72,10 +72,15 @@ export class ConversationView implements vscode.Disposable {
     private readonly visibility: (visible: boolean) => void = () => {},
   ) {}
 
-  show(preserveFocus = false): Promise<void> {
+  async show(preserveFocus = false): Promise<void> {
     if (this.panel) {
-      this.panel.reveal(this.panel.viewColumn ?? vscode.ViewColumn.Active, preserveFocus);
-      return this.webviewReady?.promise ?? Promise.resolve();
+      const panel = this.panel;
+      panel.reveal(panel.viewColumn ?? vscode.ViewColumn.Active, preserveFocus);
+      await (this.webviewReady?.promise ?? Promise.resolve());
+      if (this.panel === panel && !preserveFocus && !panel.active) {
+        panel.reveal(panel.viewColumn ?? vscode.ViewColumn.Active, false);
+      }
+      return;
     }
     const panel = vscode.window.createWebviewPanel(
       ConversationView.viewType,
@@ -133,7 +138,10 @@ export class ConversationView implements vscode.Disposable {
       }
     });
     panel.webview.html = this.html(panel.webview);
-    return ready.promise;
+    await ready.promise;
+    if (this.panel === panel && !preserveFocus && !panel.active) {
+      panel.reveal(panel.viewColumn ?? vscode.ViewColumn.Active, false);
+    }
   }
 
   reset(session: SessionLine | null): number {
