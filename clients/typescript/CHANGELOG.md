@@ -8,4 +8,5 @@
 - Added provider, session, approval, control lease, mutation, and bounded watcher clients.
 - Added read-only reconnect helpers that never retry mutations or reacquire control.
 - Coalesced each framed request into one local transport write.
+- Retire local transports with a graceful socket end so immediate Windows named-pipe reconnects reach a fresh server instance.
 - Added packed external-consumer verification and the checked public schema.

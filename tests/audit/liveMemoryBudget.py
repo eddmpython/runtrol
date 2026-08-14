@@ -23,6 +23,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from collections.abc import Iterable
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -36,6 +37,8 @@ HOT_INCREMENT = 10 * MIB
 # The macOS allocator retained 4.05 MiB after the real admitted journey on the hosted runner. Its ceiling includes one
 # measured mebibyte of scheduling and allocator headroom without weakening the 4 MiB ratchet elsewhere.
 RESIDUAL_INCREMENT = (5 if sys.platform == "darwin" else 4) * MIB
+RESIDUAL_SETTLE_WINDOWS = 8
+RESIDUAL_WINDOW_SECONDS = 0.25
 REPLY_BYTES = 900 * 1024
 REJECTED_REPLY_BYTES = 15 * MIB
 WATCHERS = 4
@@ -123,6 +126,20 @@ def selftest() -> int:
     if not watchProblems(rejected[:-1] + [b"watching only"], REJECTED_REPLY_BYTES, admitted=False):
         print("[liveMemoryBudget --selftest] FAIL. silent oversize drop escaped.", file=sys.stderr)
         return 2
+    settled = selectSettledResidual(
+        [green.baseline + RESIDUAL_INCREMENT + 1, green.baseline + RESIDUAL_INCREMENT],
+        green.baseline,
+    )
+    if settled != green.baseline + RESIDUAL_INCREMENT:
+        print("[liveMemoryBudget --selftest] FAIL. bounded settling was rejected.", file=sys.stderr)
+        return 2
+    unsettled = selectSettledResidual(
+        [green.baseline + RESIDUAL_INCREMENT + 2, green.baseline + RESIDUAL_INCREMENT + 1],
+        green.baseline,
+    )
+    if unsettled != green.baseline + RESIDUAL_INCREMENT + 1:
+        print("[liveMemoryBudget --selftest] FAIL. the lowest failed sample was lost.", file=sys.stderr)
+        return 2
     print("[liveMemoryBudget --selftest] OK. memory and delivery defects make the gate red.")
     return 0
 
@@ -199,6 +216,26 @@ def sample(pid: int, seconds: float) -> int:
         peak = max(peak, resident(pid))
         time.sleep(0.01)
     return peak
+
+
+def settledResidual(pid: int, baseline: int) -> int:
+    """Require one complete RSS window to settle within the residual ceiling."""
+    observations = (
+        sample(pid, RESIDUAL_WINDOW_SECONDS) for _ in range(RESIDUAL_SETTLE_WINDOWS)
+    )
+    return selectSettledResidual(observations, baseline)
+
+
+def selectSettledResidual(observations: Iterable[int], baseline: int) -> int:
+    """Return the first settled window or the lowest failed complete window."""
+    lowest = math.inf
+    for observed in observations:
+        lowest = min(lowest, observed)
+        if observed - baseline <= RESIDUAL_INCREMENT:
+            return observed
+    if not math.isfinite(lowest):
+        raise Failed("the residual settling window produced no memory sample")
+    return int(lowest)
 
 
 def manifest(home: Path, fixture: Path, reply_bytes: int) -> None:
@@ -329,8 +366,7 @@ def exerciseCase(
                     raise Failed("; ".join(deliveryProblems))
                 acp.command(binary, environment, ["close", session, "--now"])
                 time.sleep(0.25)
-            time.sleep(0.5)
-            residual = sample(daemon.pid, 0.5)
+            residual = settledResidual(daemon.pid, baseline)
             evidence = Evidence(baseline=baseline, peak=peak, residual=residual)
             found = problems(evidence, enforce_hot_increment=admitted)
             if found:

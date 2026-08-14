@@ -62,6 +62,9 @@ key generation and the previous key can no longer reconnect.
 deadline. It reads and validates the system locator again for every attempt. Authentication, protocol, enrollment,
 and authorization failures return immediately.
 
+`RuntimeClient.close()` ends the local socket gracefully. In particular, Windows named-pipe servers observe the
+closed instance before an immediate anonymous or authenticated reconnect opens the next instance.
+
 Use `watchEventsWithReconnectSystem` for a read-only event stream that survives Runtime endpoint replacement. After
 consuming an event, call `accept(event.event.nextExpected)` before reading another. Reconnection uses only that accepted
 cursor and returns a `reconnected` item with the full start boundary and any replay gap. The wrapper never acquires

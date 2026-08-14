@@ -90,12 +90,7 @@ async function journey(resultPath: string): Promise<void> {
   if (!api.journey) {
     throw new Error("the real-provider journey API is unavailable");
   }
-  const providerDetected = api.journey.providers().some(
-    (item) => item.providerId === provider && item.installation.state === "usable",
-  );
-  if (!providerDetected) {
-    throw new Error(`the installed provider ${provider} was not discovered as usable`);
-  }
+  const providerDetected = await waitForUsableProvider(api.journey, provider);
 
   currentStage = "starting-first-session";
   const firstSession = await within(
@@ -181,6 +176,20 @@ async function journey(resultPath: string): Promise<void> {
   } finally {
     await watch.stop();
   }
+}
+
+async function waitForUsableProvider(journey: JourneyApi, providerId: string): Promise<boolean> {
+  const deadline = Date.now() + 30_000;
+  let observed: ProviderLine | undefined;
+  while (Date.now() < deadline) {
+    observed = journey.providers().find((provider) => provider.providerId === providerId);
+    if (observed?.installation.state === "usable") return true;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error(
+    `the installed provider ${providerId} was not discovered as usable: `
+    + `${observed?.installation.state ?? "absent"} ${observed?.installation.why ?? "without a reason"}`,
+  );
 }
 
 async function restore(checkpoint: SwitchingCheckpoint, resultPath: string): Promise<void> {

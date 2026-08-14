@@ -62,7 +62,7 @@ class FramedSocket implements RuntimeTransport {
   }
 
   public close(): void {
-    this.#socket.destroy();
+    this.#socket.end();
   }
 
   async #write(payload: Uint8Array): Promise<void> {

@@ -128,6 +128,12 @@ export class StudioRuntimeClient implements vscode.Disposable {
     return this.read((runtime) => runtime.providers().listModels(providerId));
   }
 
+  async verifyProvider(providerId: string): Promise<void> {
+    await this.read(async (runtime) => {
+      await runtime.providers().getCapabilities(providerId);
+    });
+  }
+
   async start(
     providerId: string,
     workspace: string,

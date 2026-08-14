@@ -53,6 +53,8 @@ def boundaryViolations(package: dict[str, object], sources: dict[str, str]) -> l
         found.append("the local Runtime transport does not build one bounded complete frame")
     if transport.count("await this.#write(") != 1 or "await this.#write(frame)" not in transport:
         found.append("the local Runtime transport does not send each frame with one write")
+    if "public close(): void {\n    this.#socket.end();\n  }" not in transport:
+        found.append("the local Runtime transport does not retire its pipe with a graceful end")
     locator = sources.get("src/locator.ts", "")
     for token in (
         'runtimeExecutable?: string',
@@ -86,7 +88,7 @@ def selftest() -> int:
         ),
         "src/transport.ts": (
             "Buffer.allocUnsafe(4 + payload.byteLength) frame.set(payload, 4) "
-            "await this.#write(frame)"
+            "await this.#write(frame) public close(): void {\n    this.#socket.end();\n  }"
         ),
     }
     if boundaryViolations(package, sources):
@@ -100,6 +102,15 @@ def selftest() -> int:
         (package, {"src/index.ts": "extensions/runtrol-vscode"}),
         (package, {"src/index.ts": "runtimeLocatorAtForTesting"}),
         (package, {**sources, "src/transport.ts": "await this.#write(header) await this.#write(payload)"}),
+        (
+            package,
+            {
+                **sources,
+                "src/transport.ts": sources["src/transport.ts"].replace(
+                    "this.#socket.end()", "this.#socket.destroy()"
+                ),
+            },
+        ),
         (package, {**sources, "src/locator.ts": "runtimeExecutable?: string"}),
     ]
     for index, (changedPackage, changedSources) in enumerate(mutations, start=1):

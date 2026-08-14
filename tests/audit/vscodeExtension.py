@@ -105,6 +105,9 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
             "this.watchAbort?.abort()",
             "this.runtime.inventory()",
             "this.startSessionIndexWatch()",
+            "this.startProviderVerification(",
+            "this.runtime.verifyProvider(",
+            "the installed executable has not completed a verified probe",
             "reconnect",
             "workspaceCollisions",
             '"Start here anyway"',
@@ -170,7 +173,9 @@ def selftest() -> int:
         ),
         "controller.ts": (
             'private watchAbort; private indexAbort; this.watchAbort?.abort(); '
-            'this.runtime.inventory(); this.startSessionIndexWatch(); reconnect workspaceCollisions '
+            'this.runtime.inventory(); this.startSessionIndexWatch(); this.startProviderVerification( '
+            'this.runtime.verifyProvider( the installed executable has not completed a verified probe '
+            'reconnect workspaceCollisions '
             '"Start here anyway"'
         ),
         "core/client.ts": "commandConnection commandTail",
@@ -215,6 +220,7 @@ def selftest() -> int:
         (package, {**sources, "runtimeClient.ts": sources["runtimeClient.ts"] + " connectSystemWithRetry"}),
         (package, {**sources, "runtimeClient.ts": sources["runtimeClient.ts"].replace("providerSnapshot", "")}),
         (package, {**sources, "controller.ts": sources["controller.ts"].replace("this.runtime.inventory()", "")}),
+        (package, {**sources, "controller.ts": sources["controller.ts"].replace("this.runtime.verifyProvider(", "")}),
         (package, {**sources, "extension.ts": sources["extension.ts"].replace("RUNTROL_TEST_INSTALLED_UPGRADE", "")}),
     ]
     for index, (changed_package, changed_sources) in enumerate(mutations, start=1):

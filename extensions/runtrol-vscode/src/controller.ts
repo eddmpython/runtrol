@@ -33,6 +33,7 @@ export class Controller implements vscode.Disposable {
   private conversationVisible = false;
   private disposed = false;
   private readonly seenWarnings = new Set<string>();
+  private readonly verifyingProviders = new Set<string>();
 
   constructor(
     private readonly context: vscode.ExtensionContext,
@@ -68,6 +69,7 @@ export class Controller implements vscode.Disposable {
       this.conversation.reset(null);
     }
     this.startSessionIndexWatch();
+    this.startProviderVerification(inventory.providers.providers);
   }
 
   async refresh(): Promise<void> {
@@ -77,6 +79,7 @@ export class Controller implements vscode.Disposable {
       inventory.sessions.warnings,
       inventory.providers.providers,
     );
+    this.startProviderVerification(inventory.providers.providers);
   }
 
   async checkProviderUpdates(): Promise<void> {
@@ -580,6 +583,27 @@ export class Controller implements vscode.Disposable {
     }
   }
 
+  private startProviderVerification(providers: readonly ProviderLine[]): void {
+    for (const provider of providers) {
+      if (!providerNeedsVerification(provider) || this.verifyingProviders.has(provider.providerId)) {
+        continue;
+      }
+      this.verifyingProviders.add(provider.providerId);
+      void this.runtime.verifyProvider(provider.providerId).then(async () => {
+        if (!this.disposed) await this.refresh();
+      }).catch((error: unknown) => {
+        if (!this.disposed) {
+          this.conversation.status(
+            `Cannot verify ${provider.displayName}: ${error instanceof Error ? error.message : String(error)}`,
+            "warning",
+          );
+        }
+      }).finally(() => {
+        this.verifyingProviders.delete(provider.providerId);
+      });
+    }
+  }
+
   private async chooseModel(provider: ProviderLine): Promise<string | null | undefined> {
     const choices = modelChoices(await this.runtime.models(provider.providerId));
     if (choices.length === 0) {
@@ -645,6 +669,11 @@ export class Controller implements vscode.Disposable {
       : `$(pulse) Runtrol  ${hot}/${this.state.sessions.length}`;
     this.status.tooltip = `${hot} hot sessions, ${this.state.sessions.length} total`;
   }
+}
+
+function providerNeedsVerification(provider: ProviderLine): boolean {
+  return provider.installation.state === "unavailable"
+    && provider.installation.why === "the installed executable has not completed a verified probe";
 }
 
 type StartWorkspace = {

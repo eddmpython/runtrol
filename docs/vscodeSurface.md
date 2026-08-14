@@ -38,6 +38,9 @@ Studio becomes ready after one exact provider and managed-session inventory has 
 provider and managed-session streams then replace that inventory in the background. While those streams remain
 active, explicit refreshes reuse their latest snapshots instead of opening duplicate list requests. A lifecycle
 mutation invalidates the session snapshot until the stream or an exact list request replaces it.
+An installed executable without a verified probe remains visible while Studio starts its provider-neutral capability
+probe in the background. A successful probe refreshes the Runtime snapshot automatically. A failed probe stays
+unavailable and produces a visible warning without blocking unrelated sessions.
 Core discovery and protected identity loading begin together. Studio then validates the public locator. On Windows
 the exact selected Core executable reuses the Rust client's native owner and DACL checks, and the TypeScript SDK
 compares the validated fields with the file it opens. Unix keeps the SDK's direct owner and mode checks. Opening the
