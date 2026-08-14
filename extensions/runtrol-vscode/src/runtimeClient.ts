@@ -21,6 +21,8 @@ import {
 import * as vscode from "vscode";
 
 const SECRET_KEY = "runtrol.runtime.integration.v1";
+const ENROLLMENT_DECISION_SETTLE_MS = 5_000;
+const ENROLLMENT_DECISION_POLL_MS = 50;
 const ALL_STUDIO_SCOPES: readonly AppScope[] = [
   "provider.read",
   "model.read",
@@ -536,7 +538,15 @@ export class StudioRuntimeClient implements vscode.Disposable {
       if (!await this.approveEnrollment(receipt.pendingId)) {
         throw new Error("Runtrol Studio Runtime access was not approved");
       }
-      const decision = await runtime.integrations().watch(receipt.pendingId);
+      const decisionDeadline = Math.min(
+        receipt.expiresAtMs,
+        Date.now() + ENROLLMENT_DECISION_SETTLE_MS,
+      );
+      let decision = await runtime.integrations().watch(receipt.pendingId);
+      while (decision.state === "pending" && Date.now() < decisionDeadline) {
+        await new Promise((resolve) => setTimeout(resolve, ENROLLMENT_DECISION_POLL_MS));
+        decision = await runtime.integrations().watch(receipt.pendingId);
+      }
       if (decision.state !== "approved") {
         throw new Error(`Runtrol Studio Runtime enrollment ended as ${decision.state}`);
       }
