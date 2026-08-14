@@ -49,14 +49,12 @@ const integrationApproval = path.join(temporary, "integration-approved");
 const runtimeState = isolatedRuntimeState(temporary);
 const runtrolHome = runtimeState.home;
 const userData = path.join(temporary, "user");
-const measureExtensions = path.join(temporary, "extensions-measure");
-const restoreExtensions = path.join(temporary, "extensions-restore");
+const extensions = path.join(temporary, "extensions");
 const workspaceRoot = path.join(temporary, "workspaces");
 await rm(output, { recursive: true, force: true });
 await mkdir(output, { recursive: true });
 await mkdir(path.join(userData, "User"), { recursive: true });
-await mkdir(measureExtensions, { recursive: true });
-await mkdir(restoreExtensions, { recursive: true });
+await mkdir(extensions, { recursive: true });
 const workspaces = Array.from(
   { length: 30 },
   (_unused, index) => path.join(workspaceRoot, `workspace-${index + 1}`),
@@ -169,7 +167,7 @@ try {
         resultPath,
         testEnvironment,
         workspaceRoot,
-        measureExtensions,
+        extensions,
       ),
       approveNextTestIntegration(core, testEnvironment),
     ]);
@@ -200,7 +198,7 @@ try {
     restoreResultPath,
     restoreEnvironment,
     restoreWorkspace,
-    restoreExtensions,
+    extensions,
   );
   const restored = JSON.parse(await readFile(restoreResultPath, "utf8"));
   const result = { ...measured, ...restored };
