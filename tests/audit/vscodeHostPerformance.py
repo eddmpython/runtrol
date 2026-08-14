@@ -1,7 +1,7 @@
 """Gate: the real VS Code Extension Host stays inside one checked-in performance budget.
 
-The measurement launches an isolated VS Code profile, the production extension bundle, and a tracked Core
-daemon. Three isolated trials measure ready activation, opening the contributed view, repeated session refresh p95,
+The measurement launches an isolated profile on the exact tested VS Code version, the production extension bundle,
+and a tracked Core daemon. Three isolated trials measure ready activation, opening the contributed view, session refresh p95,
 Extension Host RSS growth, 30 managed external ACP sessions with at most eight hot, a real cold-session resume,
 selected-watch plus Webview-paint switching, and exact selection restoration after VS Code restarts in another
 workspace. The median rejects one hosted-runner scheduling outlier without relaxing the checked-in JSON thresholds.

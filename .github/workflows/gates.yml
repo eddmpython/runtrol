@@ -352,7 +352,7 @@ jobs:
       - uses: actions/cache@v4
         with:
           path: extensions/runtrol-vscode/.vscode-test
-          key: vscode-test-${{ runner.os }}-${{ hashFiles('extensions/runtrol-vscode/package-lock.json') }}
+          key: vscode-test-${{ runner.os }}-${{ hashFiles('extensions/runtrol-vscode/package-lock.json', 'extensions/runtrol-vscode/tooling/isolated-vscode.mjs') }}
       - name: memory budget gate product binary
         run: cargo build -p runtrol --bin runtrol
       - name: VS Code Extension Host 성능 게이트 자체 검증

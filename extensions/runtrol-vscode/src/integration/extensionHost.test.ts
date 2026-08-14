@@ -9,6 +9,7 @@ let currentStage = "starting";
 
 type ExtensionApi = {
   readonly ready: Promise<void>;
+  readonly initializationStage?: string;
   refresh(): Promise<void>;
   measureWebview?(framesPerSecond?: number, durationMs?: number): Promise<{
     baselineFrameP95Ms: number;
@@ -80,7 +81,15 @@ async function measure(resultPath: string): Promise<Record<string, number | stri
   const activationStarted = performance.now();
   const api = await within(extension.activate() as Promise<ExtensionApi>, 5_000, "extension activation");
   await checkpoint(resultPath, "activated");
-  await within(api.ready, 5_000, "extension initialization");
+  try {
+    await within(api.ready, 5_000, "extension initialization");
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `extension initialization failed at ${api.initializationStage ?? "unknown"}: ${detail}`,
+      { cause: error },
+    );
+  }
   const activationMs = performance.now() - activationStarted;
   await checkpoint(resultPath, "ready");
 

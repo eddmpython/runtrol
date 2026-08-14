@@ -184,7 +184,9 @@ def vscodeExecutable(node: str) -> Path:
         return executable.resolve()
     program = (
         "import { downloadAndUnzipVSCode } from '@vscode/test-electron';"
-        "console.log(await downloadAndUnzipVSCode(process.env.RUNTROL_TEST_VSCODE_VERSION || 'stable'));"
+        "import { TESTED_VSCODE_VERSION } from './tooling/isolated-vscode.mjs';"
+        "console.log(await downloadAndUnzipVSCode("
+        "process.env.RUNTROL_TEST_VSCODE_VERSION || TESTED_VSCODE_VERSION));"
     )
     prepared = subprocess.run(
         [node, "--input-type=module", "--eval", program],

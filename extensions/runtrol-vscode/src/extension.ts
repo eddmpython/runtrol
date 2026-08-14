@@ -28,6 +28,7 @@ import { ProvidersTree, SessionsTree } from "./trees";
 
 export type RuntrolExtensionApi = {
   readonly ready: Promise<void>;
+  readonly initializationStage?: string;
   refresh(): Promise<void>;
   measureWebview?(framesPerSecond?: number, durationMs?: number): Promise<WebviewPerformance>;
   measureSessionManagement?(sessionIds: readonly string[]): Promise<SessionManagementPerformance>;
@@ -49,9 +50,13 @@ export type SessionManagementPerformance = {
 export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi {
   const locator = new CoreLocator(context);
   const client = new CoreClient(locator);
-  // Extension Host gates delegate the physical-presence step to a separate local IPC driver. The driver still
-  // completes the real bounded challenge; ordinary Development and Production activations always show the UI.
-  const externalTestApproval = context.extensionMode === vscode.ExtensionMode.Test
+  // Extension Host gates delegate the physical-presence step to a separate local IPC driver. Installed-package
+  // continuity explicitly opts in because VS Code reports the installed bundle as Production. The driver still
+  // completes the real bounded challenge, and every ordinary activation shows the local review UI.
+  const externalTestApproval = (
+    context.extensionMode === vscode.ExtensionMode.Test
+    || process.env.RUNTROL_TEST_INSTALLED_UPGRADE === "1"
+  )
     ? process.env.RUNTROL_TEST_EXTERNAL_INTEGRATION_APPROVAL
     : undefined;
   const runtime = new StudioRuntimeClient(
@@ -65,6 +70,7 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
   const state = new RuntimeState();
   const selection = new SelectionStore(context.globalStorageUri.fsPath);
   let lifecycle: Promise<void> = Promise.resolve();
+  let initializationStage = "runtime";
   const afterReady = async <T>(action: () => Promise<T>): Promise<T> => {
     await lifecycle;
     return action();
@@ -287,7 +293,18 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
     }),
   );
 
-  lifecycle = runtime.initialize().then(() => controller.initialize()).then(() => missionController.initialize());
+  lifecycle = runtime.initialize()
+    .then(() => {
+      initializationStage = "controller";
+      return controller.initialize();
+    })
+    .then(() => {
+      initializationStage = "mission";
+      return missionController.initialize();
+    })
+    .then(() => {
+      initializationStage = "ready";
+    });
   void run(() => lifecycle);
   void run(async () => {
     await lifecycle;
@@ -296,6 +313,9 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
   return {
     get ready() {
       return lifecycle;
+    },
+    get initializationStage() {
+      return process.env.RUNTROL_VSCODE_PERFORMANCE === "1" ? initializationStage : undefined;
     },
     refresh: () => afterReady(() => controller.refresh()),
     measureWebview: process.env.RUNTROL_VSCODE_PERFORMANCE === "1"

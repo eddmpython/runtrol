@@ -240,6 +240,7 @@ async function runPhase(vscodeExecutablePath, phase, version, selectedSession) {
     environment: {
       ...environment,
       RUNTROL_TEST_EXTERNAL_INTEGRATION_APPROVAL: integrationApproval,
+      RUNTROL_TEST_INSTALLED_UPGRADE: "1",
       RUNTROL_VSCODE_PERFORMANCE: "1",
       RUNTROL_VSCODE_RESULT: resultPath,
       RUNTROL_VSCODE_PHASE: phase,

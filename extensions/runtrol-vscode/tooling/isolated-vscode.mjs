@@ -13,6 +13,8 @@ import {
 import { extensionInstallPrefix } from "./extension-manifest.mjs";
 import { descendantPids, normalizedExecutable, processRows } from "./process-identity.mjs";
 
+export const TESTED_VSCODE_VERSION = "1.132.1";
+
 export const isolatedProfileSettings = Object.freeze({
   "extensions.autoCheckUpdates": false,
   "extensions.autoUpdate": false,
@@ -89,7 +91,7 @@ export function isolatedExtensionTestArguments(options) {
 
 export async function acquireVSCode(cachePath) {
   const executable = await downloadAndUnzipVSCode({
-    version: process.env.RUNTROL_TEST_VSCODE_VERSION || "stable",
+    version: process.env.RUNTROL_TEST_VSCODE_VERSION || TESTED_VSCODE_VERSION,
     cachePath,
   });
   const [cli] = resolveCliArgsFromVSCodeExecutablePath(executable);

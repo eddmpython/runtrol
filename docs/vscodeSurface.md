@@ -136,8 +136,9 @@ Each VSIX contains exactly one matching native Core, the production bundles, can
 license. Source, tooling, development dependencies, performance budgets, and target metadata are excluded.
 
 The release workflow builds on every native runner, compares the packaged Core bytes with the built binary, installs
-the VSIX into a clean stable VS Code profile, activates through the bundled Core, exercises upgrade and rollback with
-an active session, and uploads the package. It creates a tagged GitHub Release only after all six jobs pass.
+the VSIX into a clean VS Code 1.132.1 profile, activates through the bundled Core, exercises upgrade and rollback with
+an active session, and uploads the package. Hosted extension gates use that same exact tested version unless an
+operator explicitly supplies another version. It creates a tagged GitHub Release only after all six jobs pass.
 
 The first public release is [Runtrol Studio 0.1.0](https://github.com/eddmpython/runtrol/releases/tag/vscode-v0.1.0).
 All six native packages are published under one

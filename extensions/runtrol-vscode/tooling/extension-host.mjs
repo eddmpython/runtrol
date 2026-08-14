@@ -13,6 +13,7 @@ import {
   isolatedLaunchArguments,
   isolatedProfileSettings,
   isolatedRuntimeState,
+  TESTED_VSCODE_VERSION,
 } from "./isolated-vscode.mjs";
 
 const repositoryRoot = fileURLToPath(new URL("../../../", import.meta.url));
@@ -304,7 +305,7 @@ async function runHost(installed, testEntry, resultPath, testEnvironment, worksp
       `--user-data-dir=${userData}`,
       `--extensions-dir=${extensionsDirectory}`,
     ],
-    version: process.env.RUNTROL_TEST_VSCODE_VERSION || "stable",
+    version: process.env.RUNTROL_TEST_VSCODE_VERSION || TESTED_VSCODE_VERSION,
     vscodeExecutablePath: installed || undefined,
   });
 }

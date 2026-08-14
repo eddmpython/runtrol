@@ -1,7 +1,7 @@
 """Gate: an installed VSIX upgrades and rolls back without stopping an active session.
 
 The live gate installs a baseline package, starts one external ACP session through the package's managed Core,
-installs the current package, then reinstalls the baseline package. Every phase runs in a real stable VS Code
+installs the current package, then reinstalls the baseline package. Every phase runs in the exact tested VS Code
 Extension Host with one isolated profile and runtrol home. The original daemon and provider process identifiers must
 remain alive, the exact selected session must restore, and the stable managed Core path must move old to current to
 old by digest.

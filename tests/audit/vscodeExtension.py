@@ -88,7 +88,11 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
             "createWebviewPanel",
             "retainContextWhenHidden: false",
         ],
-        "extension.ts": ["afterReady"],
+        "extension.ts": [
+            "afterReady",
+            'process.env.RUNTROL_TEST_INSTALLED_UPGRADE === "1"',
+            'initializationStage = "runtime"',
+        ],
         "controller.ts": [
             "private watchAbort",
             "private indexAbort",
@@ -150,7 +154,10 @@ def selftest() -> int:
         "conversationView.ts": (
             "webviewReady await ready.promise createWebviewPanel retainContextWhenHidden: false"
         ),
-        "extension.ts": "afterReady",
+        "extension.ts": (
+            'afterReady process.env.RUNTROL_TEST_INSTALLED_UPGRADE === "1" '
+            'initializationStage = "runtime"'
+        ),
         "controller.ts": (
             'private watchAbort; private indexAbort; this.watchAbort?.abort(); '
             'await this.startSessionIndexWatch(); reconnect workspaceCollisions '
@@ -198,6 +205,7 @@ def selftest() -> int:
         (package, {**sources, "runtimeClient.ts": sources["runtimeClient.ts"] + " connectSystemWithRetry"}),
         (package, {**sources, "runtimeClient.ts": sources["runtimeClient.ts"].replace("providerSnapshot", "")}),
         (package, {**sources, "controller.ts": sources["controller.ts"].replace("await this.startSessionIndexWatch()", "")}),
+        (package, {**sources, "extension.ts": sources["extension.ts"].replace("RUNTROL_TEST_INSTALLED_UPGRADE", "")}),
     ]
     for index, (changed_package, changed_sources) in enumerate(mutations, start=1):
         if not sourceViolations(changed_package, changed_sources):
