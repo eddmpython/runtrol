@@ -45,7 +45,6 @@ export class ServiceItem extends vscode.TreeItem {
 export class SessionItem extends vscode.TreeItem {
   constructor(
     readonly session: SessionLine,
-    selected: boolean,
     sessions: readonly SessionLine[],
     providers: readonly ProviderLine[],
   ) {
@@ -65,17 +64,11 @@ export class SessionItem extends vscode.TreeItem {
       title: "Open Chat",
       arguments: [this],
     };
-    this.updateSelected(selected);
-  }
-
-  updateSelected(selected: boolean): void {
     this.iconPath = new vscode.ThemeIcon(
-      this.session.looksStuck ? "warning" : this.session.hot ? "circle-filled" : "circle-outline",
-      this.session.looksStuck
+      session.looksStuck ? "warning" : session.hot ? "circle-filled" : "circle-outline",
+      session.looksStuck
         ? new vscode.ThemeColor("problemsWarningIcon.foreground")
-        : selected
-          ? new vscode.ThemeColor("charts.green")
-          : undefined,
+        : undefined,
     );
   }
 }
@@ -87,20 +80,14 @@ export class SessionsTree implements vscode.TreeDataProvider<ChatTreeItem>, vsco
   readonly onDidChangeTreeData = this.changedEmitter.event;
   private readonly subscription: vscode.Disposable;
   private serviceItems: ServiceItem[] | undefined;
-  private readonly sessionItems = new Map<string, SessionItem>();
   private readonly serviceSessions = new Map<string, SessionItem[]>();
-  private selectedId: string | null;
 
   constructor(private readonly state: RuntimeState) {
-    this.selectedId = state.selected?.sessionId ?? null;
     this.subscription = state.onDidChange((change) => {
       if (change === "rows") {
         this.clearItems();
-        this.selectedId = this.state.selected?.sessionId ?? null;
         this.changedEmitter.fire(undefined);
-        return;
       }
-      this.refreshSelection();
     });
   }
 
@@ -129,44 +116,21 @@ export class SessionsTree implements vscode.TreeDataProvider<ChatTreeItem>, vsco
     if (this.serviceItems) {
       return;
     }
-    const services = chatServices(this.state.sessions, this.state.providers, this.selectedId);
+    const selected = this.state.selected?.sessionId ?? null;
+    const services = chatServices(this.state.sessions, this.state.providers, selected);
     this.serviceItems = services.map((service) => new ServiceItem(service));
     for (const service of services) {
       const items = service.sessions.map((session) => new SessionItem(
         session,
-        session.sessionId === this.selectedId,
         service.sessions,
         this.state.providers,
       ));
       this.serviceSessions.set(service.providerId, items);
-      for (const item of items) {
-        this.sessionItems.set(item.session.sessionId, item);
-      }
-    }
-  }
-
-  private refreshSelection(): void {
-    const next = this.state.selected?.sessionId ?? null;
-    if (next === this.selectedId) {
-      return;
-    }
-    const previous = this.selectedId;
-    this.selectedId = next;
-    for (const id of [previous, next]) {
-      if (!id) {
-        continue;
-      }
-      const item = this.sessionItems.get(id);
-      if (item) {
-        item.updateSelected(id === next);
-        this.changedEmitter.fire(item);
-      }
     }
   }
 
   private clearItems(): void {
     this.serviceItems = undefined;
-    this.sessionItems.clear();
     this.serviceSessions.clear();
   }
 }
