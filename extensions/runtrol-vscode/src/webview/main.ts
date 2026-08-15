@@ -107,7 +107,7 @@ window.addEventListener("message", ({ data }: MessageEvent<Incoming>) => {
     return;
   }
   if (data.type === "readyProbe") {
-    vscode.postMessage({ type: "webviewReady" });
+    vscode.postMessage({ type: "webviewReady", probe: true });
     return;
   }
   if (data.type === "measureStart") {

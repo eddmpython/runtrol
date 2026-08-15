@@ -2,6 +2,7 @@ import * as vscode from "vscode";
 
 import type { SessionLine } from "./runtimeTypes";
 import { sessionTitle } from "./sessionDisplay";
+import { webviewReadyKind } from "./webviewReady";
 
 type ViewAction =
   | { type: "prompt"; text: string }
@@ -95,15 +96,19 @@ export class ConversationView implements vscode.Disposable {
     panel.iconPath = vscode.Uri.joinPath(this.extensionUri, "resources", "symbol.svg");
     this.panel = panel;
     panel.webview.onDidReceiveMessage((message: unknown) => {
-      if (isWebviewReady(message)) {
-        if (this.measurements.size > 0) {
+      const ready = webviewReadyKind(message);
+      if (ready) {
+        if (ready === "startup" && this.measurements.size > 0) {
           this.rejectMeasurements(new RetryableMeasurementError(
             "the Runtrol Webview reloaded during measurement",
           ));
         }
+        const becameReady = !this.visibleReady;
         this.visibleReady = true;
-        this.reset(this.selected);
-        this.visibility(true);
+        if (ready === "startup" || becameReady) {
+          this.reset(this.selected);
+          this.visibility(true);
+        }
         return;
       }
       if (this.receiveRenderedGeneration(message)) {
@@ -275,7 +280,7 @@ export class ConversationView implements vscode.Disposable {
     let nextProbeAt = 0;
     while (this.panel === panel && Date.now() < deadline) {
       if (panel.visible && this.visibleReady) return;
-      if (panel.visible && Date.now() >= nextProbeAt) {
+      if (Date.now() >= nextProbeAt) {
         nextProbeAt = Date.now() + 250;
         void panel.webview.postMessage({ type: "readyProbe" });
       }
@@ -441,7 +446,7 @@ export class ConversationView implements vscode.Disposable {
 }
 
 function focusPanel(panel: vscode.WebviewPanel): Promise<void> {
-  if (panel.active && conversationTabIsActive()) return Promise.resolve();
+  if (panel.visible && panel.active && conversationTabIsActive()) return Promise.resolve();
   return new Promise((resolve, reject) => {
     let settled = false;
     const listeners: vscode.Disposable[] = [];
@@ -457,7 +462,7 @@ function focusPanel(panel: vscode.WebviewPanel): Promise<void> {
       }
     };
     const check = () => {
-      if (panel.active && conversationTabIsActive()) settle();
+      if (panel.visible && panel.active && conversationTabIsActive()) settle();
     };
     const timeout = setTimeout(
       () => settle(new Error("VS Code did not activate the Runtrol conversation tab within 2000 ms")),
@@ -583,13 +588,6 @@ function isViewAction(value: unknown): value is ViewAction {
       && candidate.subjectDigest.every((byte) => Number.isInteger(byte) && byte >= 0 && byte <= 255);
   }
   return type === "openWorkspace" || type === "interrupt" || type === "close";
-}
-
-function isWebviewReady(value: unknown): boolean {
-  return value !== null
-    && typeof value === "object"
-    && !Array.isArray(value)
-    && (value as Record<string, unknown>).type === "webviewReady";
 }
 
 function nonceValue(): string {
