@@ -3,8 +3,10 @@ import * as vscode from "vscode";
 import type { ProviderLine, SessionLine, WatchCursor } from "./runtimeTypes";
 import { providerRowsEqual, sessionRowsEqual } from "./stateRows";
 
+export type RuntimeStateChange = "rows" | "selection";
+
 export class RuntimeState implements vscode.Disposable {
-  private readonly changedEmitter = new vscode.EventEmitter<void>();
+  private readonly changedEmitter = new vscode.EventEmitter<RuntimeStateChange>();
   private readonly cursors = new Map<string, WatchCursor>();
   private sessionRows: readonly SessionLine[] = [];
   private providerRows: readonly ProviderLine[] = [];
@@ -33,7 +35,7 @@ export class RuntimeState implements vscode.Disposable {
     if (this.selectedId && !sessions.some((session) => session.sessionId === this.selectedId)) {
       this.selectedId = null;
     }
-    this.changedEmitter.fire();
+    this.changedEmitter.fire("rows");
   }
 
   select(session: string | null): void {
@@ -41,7 +43,7 @@ export class RuntimeState implements vscode.Disposable {
       return;
     }
     this.selectedId = session;
-    this.changedEmitter.fire();
+    this.changedEmitter.fire("selection");
   }
 
   cursor(session: string): WatchCursor | null {

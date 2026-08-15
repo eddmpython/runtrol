@@ -6,6 +6,8 @@ import { chatServices, type ChatService } from "./sessionNavigation";
 import { sessionContext, uniqueChatTitle } from "./sessionDisplay";
 import { RuntimeState } from "./state";
 
+const SELECTION_PRESENTATION_DELAY_MS = 150;
+
 export class ServiceItem extends vscode.TreeItem {
   readonly startProviderId: string | null;
 
@@ -86,9 +88,21 @@ export class SessionsTree implements vscode.TreeDataProvider<ChatTreeItem>, vsco
   private readonly changedEmitter = new vscode.EventEmitter<void>();
   readonly onDidChangeTreeData = this.changedEmitter.event;
   private readonly subscription: vscode.Disposable;
+  private selectionRefresh: ReturnType<typeof setTimeout> | undefined;
 
   constructor(private readonly state: RuntimeState) {
-    this.subscription = state.onDidChange(() => this.changedEmitter.fire());
+    this.subscription = state.onDidChange((change) => {
+      if (change === "rows") {
+        this.cancelSelectionRefresh();
+        this.changedEmitter.fire();
+        return;
+      }
+      this.cancelSelectionRefresh();
+      this.selectionRefresh = setTimeout(() => {
+        this.selectionRefresh = undefined;
+        this.changedEmitter.fire();
+      }, SELECTION_PRESENTATION_DELAY_MS);
+    });
   }
 
   getTreeItem(element: ChatTreeItem): vscode.TreeItem {
@@ -114,8 +128,16 @@ export class SessionsTree implements vscode.TreeDataProvider<ChatTreeItem>, vsco
   }
 
   dispose(): void {
+    this.cancelSelectionRefresh();
     this.subscription.dispose();
     this.changedEmitter.dispose();
+  }
+
+  private cancelSelectionRefresh(): void {
+    if (this.selectionRefresh) {
+      clearTimeout(this.selectionRefresh);
+      this.selectionRefresh = undefined;
+    }
   }
 }
 
@@ -138,7 +160,11 @@ export class ProvidersTree implements vscode.TreeDataProvider<ProviderItem>, vsc
   private readonly subscription: vscode.Disposable;
 
   constructor(private readonly state: RuntimeState) {
-    this.subscription = state.onDidChange(() => this.changedEmitter.fire());
+    this.subscription = state.onDidChange((change) => {
+      if (change === "rows") {
+        this.changedEmitter.fire();
+      }
+    });
   }
 
   getTreeItem(element: ProviderItem): vscode.TreeItem {
