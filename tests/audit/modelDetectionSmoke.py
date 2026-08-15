@@ -36,6 +36,7 @@ import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 
+import claudeApprovalSmoke as provider_gate
 import rustSource
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -150,6 +151,7 @@ def gateEnvironment(home: Path, source: dict[str, str] | None = None) -> dict[st
     if operator_home := environment.get(OPERATOR_HOME_ENV):
         environment["HOME"] = operator_home
         environment["USERPROFILE"] = operator_home
+    provider_gate.configureMacOSKeychain(environment)
     return environment
 
 
