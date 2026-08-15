@@ -587,6 +587,7 @@ def environment(root: Path, home: Path, config: Path, model: RunningModel, claud
         path = user / relative
         path.mkdir(parents=True, exist_ok=True)
         result[name] = str(path)
+    configureMacOSKeychain(result)
     result["RUNTROL_HOME"] = str(home)
     result["CLAUDE_CONFIG_DIR"] = str(config)
     result["ANTHROPIC_CONFIG_DIR"] = str(config)
@@ -606,6 +607,38 @@ def environment(root: Path, home: Path, config: Path, model: RunningModel, claud
     result["no_proxy"] = "127.0.0.1,localhost"
     result["PATH"] = f"{Path(claude).parent}{os.pathsep}{result.get('PATH', '')}"
     return result
+
+
+def configureMacOSKeychain(environment: dict[str, str]) -> None:
+    """Attach the workflow keychain to the isolated macOS home used by the real CLI gate."""
+    if sys.platform != "darwin":
+        return
+    keychain = environment.get("RUNTROL_TEST_MACOS_KEYCHAIN")
+    password = environment.get("RUNTROL_TEST_MACOS_KEYCHAIN_PASSWORD")
+    if not keychain and not password:
+        return
+    if not keychain or not password:
+        raise Failed("the isolated macOS keychain path and password must be configured together")
+    environment["CFFIXED_USER_HOME"] = environment["HOME"]
+    (Path(environment["HOME"]) / "Library" / "Preferences").mkdir(parents=True, exist_ok=True)
+    for arguments in (
+        ("list-keychains", "-d", "user", "-s", keychain),
+        ("default-keychain", "-d", "user", "-s", keychain),
+        ("unlock-keychain", "-p", password, keychain),
+    ):
+        configured = subprocess.run(
+            ["/usr/bin/security", *arguments],
+            env=environment,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=10.0,
+            check=False,
+        )
+        if configured.returncode != 0:
+            detail = (configured.stderr or configured.stdout or "security returned no diagnostics").strip()
+            raise Failed(f"isolated macOS keychain setup failed: {detail}")
 
 
 def probeClaude(claude: str, env: dict[str, str]) -> bool:
@@ -650,28 +683,42 @@ def probeClaude(claude: str, env: dict[str, str]) -> bool:
 
 
 def startDaemon(binary: Path, env: dict[str, str], home: Path) -> subprocess.Popen[str]:
-    """Start an isolated daemon with diagnostics discarded so no inherited pipe can fill."""
-    daemon = subprocess.Popen(
-        [str(binary), "daemon"],
-        cwd=ROOT,
-        env=env,
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        text=True,
-    )
+    """Start an isolated daemon with startup diagnostics in a non-blocking temporary file."""
+    diagnostics = tempfile.TemporaryFile(mode="w+", encoding="utf-8", errors="replace")
+    try:
+        daemon = subprocess.Popen(
+            [str(binary), "daemon"],
+            cwd=ROOT,
+            env=env,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=diagnostics,
+            text=True,
+        )
+    except BaseException:
+        diagnostics.close()
+        raise
     ready = home / ("runtrol.redb" if sys.platform == "win32" else "runtrol.sock")
     deadline = time.monotonic() + 10.0
     while time.monotonic() < deadline:
         if daemon.poll() is not None:
-            raise Failed("the isolated daemon exited before its endpoint was ready")
+            diagnostics.seek(0)
+            detail = diagnostics.read()[-4_000:].strip() or "daemon exited without diagnostics"
+            diagnostics.close()
+            raise Failed(
+                f"the isolated daemon exited with {daemon.returncode} before its endpoint was ready: {detail}"
+            )
         if ready.exists():
             if sys.platform == "win32":
                 time.sleep(0.1)
+            diagnostics.close()
             return daemon
         time.sleep(0.025)
     process.stopDaemon(daemon)
-    raise Failed("the isolated daemon did not become ready")
+    diagnostics.seek(0)
+    detail = diagnostics.read()[-4_000:].strip() or "daemon produced no diagnostics"
+    diagnostics.close()
+    raise Failed(f"the isolated daemon did not become ready: {detail}")
 
 
 @dataclass(frozen=True)
