@@ -38,6 +38,12 @@ For an approval, blocked session, failure, or abnormal detach, Core selects only
 
 iOS and iPadOS require adding the application to the Home Screen before notification permission can be granted. Browser subscription removal and `Forget this PC` both clear the server-side capability when Core is reachable. A locally removed browser subscription is already unusable if Core is offline.
 
+## Physical iOS verification status
+
+The production surface and automated contracts are complete. This repository does not currently hold an observation of a physical iPhone installing the PWA from the public origin and receiving an Apple Web Push notification. That operator-only observation is outside the current completion scope and score. It must not be reported as passed until a contributor supplies the evidence.
+
+A useful contributor receipt records the date, iOS version, public application origin, Home Screen launch, notification permission state, receipt of the generic notification, and successful reconnect after opening it. It must not contain a subscription endpoint, device key, QR fragment, pairing secret, conversation content, or a sensitive screenshot.
+
 ## Verification
 
 - `npm --prefix pwa test` checks pairing-fragment handling, display hardening, canonical record framing, relay admission, explicit Core requests, current-authority replacement, VAPID binding, and subscription removal.

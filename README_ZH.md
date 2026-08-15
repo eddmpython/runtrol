@@ -4,7 +4,7 @@
 
 [한국어](README.md) | [English](README_EN.md) | 中文 | [日本語](README_JA.md)
 
-> 状态：**内核和主要 VS Code 扩展已经实现，`Runtrol Studio 0.1.0` 已面向六个原生目标公开发布。** 实时会话索引、真实 Extension Host 和每秒 3,000 帧 Webview 性能门槛、已安装真实 CLI 的完整操作旅程、全新 Marketplace 安装，以及保留活动会话的 VSIX 升级与回滚都已验证。独立桌面 GUI 代码和执行路径已经删除，VS Code 扩展是唯一 PC 界面。公共 Runtime 协议、Rust 和 TypeScript SDK、外部打包消费门槛，以及六目标签名 standalone Runtime 发布流程也已经实现。已确认 provider 渠道的自动更新也具备进程互斥与精确回滚。[Marketplace 扩展](https://marketplace.visualstudio.com/items?itemName=runtrol.runtrol-studio)、[GitHub Pages 站点](https://eddmpython.github.io/runtrol/)、基于中继的手机 PWA、无正文 Web Push 和 Mission 监督界面都已实现。活动门禁会让已发布的 PWA 模块通过 production daemon 驱动已安装的真实 CLI，验证会话、批准和远程断线恢复旅程。手机端剩余的主要工作是 iOS 真机运行验证。
+> 状态：**内核和主要 VS Code 扩展已经实现，`Runtrol Studio 0.1.0` 已面向六个原生目标公开发布。** 实时会话索引、真实 Extension Host 和每秒 3,000 帧 Webview 性能门槛、已安装真实 CLI 的完整操作旅程、全新 Marketplace 安装，以及保留活动会话的 VSIX 升级与回滚都已验证。独立桌面 GUI 代码和执行路径已经删除，VS Code 扩展是唯一 PC 界面。公共 Runtime 协议、Rust 和 TypeScript SDK、外部打包消费门槛，以及六目标签名 standalone Runtime 发布流程也已经实现。已确认 provider 渠道的自动更新也具备进程互斥与精确回滚。[Marketplace 扩展](https://marketplace.visualstudio.com/items?itemName=runtrol.runtrol-studio)、[GitHub Pages 站点](https://eddmpython.github.io/runtrol/)、基于中继的手机 PWA、无正文 Web Push 和 Mission 监督界面都已实现。活动门禁会让已发布的 PWA 模块通过 production daemon 驱动已安装的真实 CLI，验证会话、批准和远程断线恢复旅程。iOS 真机安装与 Web Push 运行确认仍是未经验证的贡献者 operator evidence，不计入当前完成范围和评分。
 > 下面多数分数为 0，不是因为没有代码，而是因为还没有门禁去断言那些轴。
 
 The security boundary and default-deny settings are documented in [SECURITY.md](SECURITY.md).

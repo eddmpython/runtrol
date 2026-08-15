@@ -27,7 +27,7 @@
 |---|---|
 | `sessionLifecycleSmoke` | An operator-side local preflight starts and closes sessions from every installed real CLI, keeps their provider-native names in one list, survives a daemon restart, and reports native resume refusal instead of silently starting a replacement. This real-account evidence is operator-only and does not add score. |
 | `phoneDrivesPcSmoke` | shipped PWA 의 WebCrypto, Noise, record, CoreClient 모듈을 헤드리스 폰 프로세스에서 그대로 실행한다. QR 승인 완료 상태만 테스트 행으로 주입하고 production 데몬의 기기 인증, 정확한 scope, workspace 및 provider 권한, 실물 Claude Code 시작, prompt, watch 출력, provider 종료, session 삭제를 관통한다. model 상대는 요청 본문을 버리는 결정론 loopback fixture 다 |
-| `iosInstallAndPush` | iOS 홈화면 설치 + Web Push 수신. 실기기 필요. **점수에서 뺀다** |
+| `iosInstallAndPush` | iOS 홈화면 설치 + Web Push 수신의 기여자 operator evidence. 현재 실기기 관측은 없고 완료 범위와 점수에서 뺀다. 관측 전에는 통과로 주장하지 않는다 |
 | `providerContract` | 저장소 밖 구현이 공개 `Provider` 와 `Agent` trait 를 구현하고 native command 를 처리하며 미지 event 를 `Unmapped` 로 보존할 수 있다. 코어의 provider 고유명사 격리는 별도 `providerIsolation` 게이트가 맡는다 |
 | `agentSurfaceDrift` | scheduled hosted CI 가 최신 실물 CLI 를 무인증으로 설치하고, schema provider 의 바인딩 메서드와 stream-json provider 의 바인딩 플래그를 실제 생성 스키마와 인자 파서에 대조한다. built-in probe 전략 하나라도 실행되지 않으면 red 다. 인증과 턴이 필요한 event 및 control frame 호환성은 이 게이트의 주장이 아니다 |
 | `genericAcpSmoke` | 공급자 코드 없이 외부 TOML 만 놓고 별도 ACP v1 실행 파일을 발견한다. 실물 데몬과 CLI 표면을 거쳐 시작 -> 프롬프트 -> 스트림 -> 공급자 선언 종료 -> load 를 Windows, macOS, Linux 에서 완주한다. fixture 이므로 공급자 실물 가산에는 세지 않는다 |

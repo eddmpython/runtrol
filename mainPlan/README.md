@@ -10,21 +10,18 @@
 
 전문 에이전트 5 인 토론 (2026-07-30, r1) 의 결론을 카테고리화했고, 2026-08-13 에 공개 Runtime 제품화, 감독형 Mission, 검증된 프로젝트 능력 재사용 설계를 추가했다. 원본 토론은 `.claude/discussion/r1/` 에 있다 (L-local).
 
-## 남은 이니셔티브 . 폴더 이름이 곧 순서다
+## 남은 이니셔티브
 
-**폴더 앞의 숫자가 짓는 순서다.** 카테고리로 묶어 두면 순서가 어디에도 안 적히고, 안 적힌 순서는 매번 다시 논쟁된다.
-그래서 순서를 이름에 박았고, 각 줄에 **왜 그 자리인지 (앞의 무엇이 없으면 못 하는지)** 를 함께 적는다.
+없음. 현재 범위의 모든 이니셔티브가 운영 문서로 승격됐다.
 
-| 폴더 | 상태 | 한 줄 | 왜 이 자리인가 |
-|---|---|---|---|
-| [6-pwaSurface](6-pwaSurface/) | 활성 | 세션과 Mission 감독 표면, 실물 CLI 세션 및 승인 게이트까지 구현됐다. iOS 홈화면 설치와 Web Push 실기기 운영 검증이 남았다. | 완성된 릴레이, Noise, Web Push와 정확한 기기 권한 위에 서며 로컬 전용 Mission 생성, 통합, 능력 승격 권한을 그대로 유지한다 |
+`pwaSurface`의 릴레이, Noise, Web Push, 세션과 Mission 감독 표면, 실물 CLI 세션 및 승인 게이트는 [phone PWA](../docs/phonePwa.md), [frontend stack](../docs/frontendStack.md), [product surfaces](../docs/productSurfaces.md), [security](../SECURITY.md)로 승격됐다. iOS 실기기 설치와 Web Push 운영 관측은 미검증 기여자 operator evidence로 공개 문서에 남기고 현재 완료 범위와 점수에서 제외한다.
 
 공개 Runtime은 [protocol](../docs/runtimeProtocol.md), [integration](../docs/runtimeIntegration.md),
 [security](../docs/runtimeSecurity.md), [operations](../docs/runtimeOperations.md) 운영 문서로 승격됐다. 외부 제품은
 작은 SDK를 넣고 하나의 사용자별 Runtime을 통해 이미 로그인된 CLI를 발견하고 감독한다. 소비자는 세션을
 소유하지 않고, Runtrol은 모델 API 키나 transcript를 소유하지 않는다.
 
-VS Code 주력 표면, 공개 사이트, 자동 갱신은 [VS Code 운영 문서](../docs/vscodeSurface.md), [사이트 운영 문서](../docs/siteDeployment.md), [automatic updates](../docs/automaticUpdates.md)로 승격됐다. Marketplace에서 6개 네이티브 대상의 `Runtrol Studio 0.1.0`을 설치할 수 있다. 감독형 Mission과 프로젝트 Capability 신뢰 계약은 [Mission 운영 문서](../docs/missionOperations.md)와 [Capability 신뢰 문서](../docs/capabilityTrust.md)로 승격됐다. 폰 연결과 보안 기반도 [frontend stack](../docs/frontendStack.md), [site deployment](../docs/siteDeployment.md), [security](../SECURITY.md)로 승격됐으며, 남은 이니셔티브는 iOS 실기기 운영 검증이다.
+VS Code 주력 표면, 공개 사이트, 자동 갱신은 [VS Code 운영 문서](../docs/vscodeSurface.md), [사이트 운영 문서](../docs/siteDeployment.md), [automatic updates](../docs/automaticUpdates.md)로 승격됐다. Marketplace에서 6개 네이티브 대상의 `Runtrol Studio 0.1.0`을 설치할 수 있다. 감독형 Mission과 프로젝트 Capability 신뢰 계약은 [Mission 운영 문서](../docs/missionOperations.md)와 [Capability 신뢰 문서](../docs/capabilityTrust.md)로 승격됐다. 폰 연결과 보안 기반도 [phone PWA](../docs/phonePwa.md), [frontend stack](../docs/frontendStack.md), [site deployment](../docs/siteDeployment.md), [security](../SECURITY.md)로 승격됐다.
 
 ## 마일스톤 (같은 순서를 사용자 관점으로 본 것)
 
@@ -35,7 +32,7 @@ VS Code 주력 표면, 공개 사이트, 자동 갱신은 [VS Code 운영 문서
 | **M2 VS Code 배포** (완료) | 공개 Marketplace 설치와 [automatic updates](../docs/automaticUpdates.md) | 낯선 사람이 Marketplace에서 설치해 한 창으로 실물 CLI를 운영하고 다음 버전으로 안전하게 갱신한다 |
 | **M3 Embeddable Agent Runtime** (완료) | 공개 protocol + 앱 등록·scope·root + Rust/TypeScript SDK + 관리 세션·공식 native 세션 + 독립 배포·롤백. 운영 정본은 [Runtime protocol](../docs/runtimeProtocol.md)과 연결 문서다 | 저장소 밖 packed 소비자가 private import 없이 SDK를 컴파일하고, Studio가 같은 공개 계약으로 세션을 시작·재개·감시·제어하며, 6개 Runtime 대상과 SDK가 독립 artifact로 검증된다 |
 | **M4 감독형 작업 운영** (완료) | 명시적 Mission -> 증거 판정 -> bounded DAG -> 선택적 프로젝트 능력 재사용. 운영 정본은 [Mission 운영](../docs/missionOperations.md)과 [Capability 신뢰](../docs/capabilityTrust.md)다 | 한 목표를 두 provider가 격리된 worktree에서 수행하고, 대화 해석 없이 검증된 결과만 로컬에서 통합한다 |
-| **M5 폰** | 릴레이 + E2E + push + PWA 감독 표면 + 폰 승인 | 밖에서 폰으로 내 세션을 잇고 승인한다. Mission은 조회·중단 범위만 원격에 연다 |
+| **M5 폰** (완료, iOS 실기기 관측 제외) | 릴레이 + E2E + push + PWA 감독 표면 + 폰 승인 | 밖에서 폰으로 내 세션을 잇고 승인한다. Mission은 조회·중단 범위만 원격에 연다 |
 
 왜 이 순서인가.
 
@@ -51,13 +48,15 @@ VS Code 주력 표면, 공개 사이트, 자동 갱신은 [VS Code 운영 문서
 ## 완료 판정
 
 문서 작성이나 데모 영상으로 완료하지 않는다. 이니셔티브가 끝났다는 것은
-(1) 그 능력이 실물 CLI 와 실물 기기로 동작하고
+(1) 그 능력이 범위에 포함된 실물 CLI 와 실물 기기로 동작하고
 (2) 그것을 단언하는 게이트가 CI 에서 돌고
 (3) 지식이 `docs/` 로 승격됐고
 (4) 이니셔티브 폴더가 삭제됐다
 는 뜻이다.
 
-**완료 사례**: `positioningDecision` 은 2026-07-30 에 [docs/positioning.md](../docs/positioning.md) 로, `crossConsult` 는 2026-08-03 에 [docs/crossConsult.md](../docs/crossConsult.md) 로 승격되고 삭제됐다.
+범위에서 제외한 operator evidence는 통과로 바꾸지 않고 미검증 상태와 제출 기준을 공개 운영 문서에 남긴다. 해당 evidence는 점수를 올리지 않으며 이후 기여자가 실물 관측을 제공할 수 있다.
+
+**완료 사례**: `positioningDecision` 은 2026-07-30 에 [docs/positioning.md](../docs/positioning.md) 로, `crossConsult` 는 2026-08-03 에 [docs/crossConsult.md](../docs/crossConsult.md) 로, `pwaSurface`는 2026-08-15에 [docs/phonePwa.md](../docs/phonePwa.md)로 승격되고 삭제됐다.
 
 ## 이 판을 지배하는 사실 (r1 조사)
 
