@@ -1999,7 +1999,17 @@ async fn finish_connection_cleanup(
 /// conversation takes inside runtrol, and the whole of what happens to it is being put in an envelope.
 async fn relay(connection: &mut SurfaceConnection, mut watching: runtrol_core::SessionView) {
     let stream = watching.start().live_at.stream;
-    while let Some(item) = watching.recv().await {
+    loop {
+        // A live session may be quiet indefinitely. Observe the peer in parallel so a closed watch surface drops its
+        // subscription and receive buffer immediately instead of retaining both until the provider emits again or the
+        // session closes. Watch connections are one-way after their acknowledgement, so any inbound result ends this
+        // dedicated surface.
+        let Some(item) = (tokio::select! {
+            item = watching.recv() => item,
+            _peer = connection.recv() => return,
+        }) else {
+            return;
+        };
         let event = match item {
             runtrol_core::WatchItem::Event(event) => event,
             runtrol_core::WatchItem::Lagged(next_expected) => {
@@ -2059,7 +2069,14 @@ async fn relay_session_index(
     if connection.send(current.as_ref()).await.is_err() {
         return;
     }
-    while session_index.changed().await.is_ok() {
+    loop {
+        let changed = tokio::select! {
+            changed = session_index.changed() => changed,
+            _peer = connection.recv() => return,
+        };
+        if changed.is_err() {
+            return;
+        }
         let current = Arc::clone(&session_index.borrow_and_update());
         if connection.send(current.as_ref()).await.is_err() {
             return;
@@ -3566,6 +3583,48 @@ mod tests {
             Response::Sessions(_)
         ));
         running.stop();
+    }
+
+    #[tokio::test]
+    async fn a_quiet_watch_releases_as_soon_as_its_peer_disconnects() {
+        let root = std::env::temp_dir().join(format!("runtrol-quiet-watch-{}", SessionId::now()));
+        let home = root.to_str().expect("the temporary path is UTF-8");
+        let composed = crate::compose::Composed::for_tests(home, runtrol_drivers::builtin())
+            .expect("a fresh home composes");
+        let address = composed.home.paths().endpoint().address().to_owned();
+        let mut listener = Listener::bind(&address)
+            .await
+            .expect("the isolated watch endpoint is free");
+        let accepting =
+            tokio::spawn(
+                async move { listener.accept().await.expect("the watch peer is accepted") },
+            );
+        let peer = runtrol_ipc::connect(&address)
+            .await
+            .expect("the watch peer connects");
+        let connection = accepting.await.expect("the accept task completes");
+
+        let mut hub = runtrol_core::SessionHub::new(SessionId::now());
+        let view = hub.view(None);
+        assert_eq!(hub.watchers(), 1);
+        let relaying = tokio::spawn(async move {
+            relay(&mut SurfaceConnection::Local(connection), view).await;
+        });
+        drop(peer);
+        tokio::time::timeout(Duration::from_secs(2), relaying)
+            .await
+            .expect("the disconnected quiet watch is released")
+            .expect("the relay task does not panic");
+
+        drop(hub.publish(
+            1,
+            runtrol_provider::EventBody::Plan {
+                payload: Opaque::none(),
+            },
+        ));
+        assert_eq!(hub.watchers(), 0);
+        drop(composed);
+        std::fs::remove_dir_all(root).expect("the isolated watch home is removed");
     }
 
     #[tokio::test]

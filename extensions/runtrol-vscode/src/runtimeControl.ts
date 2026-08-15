@@ -7,6 +7,27 @@ export type StoredControlState = {
   readonly leases: readonly ControlLease[];
 };
 
+export function settleControlPersistence(
+  persistence: Promise<void>,
+  inlineMs: number,
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const finish = (error?: unknown): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      if (error === undefined) resolve();
+      else reject(error);
+    };
+    const timeout = setTimeout(finish, inlineMs);
+    persistence.then(
+      () => finish(),
+      (error: unknown) => finish(error),
+    );
+  });
+}
+
 export function cachedControlAction(
   current: ControlLease | undefined,
   nowMs: number,

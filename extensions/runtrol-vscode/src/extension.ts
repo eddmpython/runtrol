@@ -297,18 +297,18 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
     }),
   );
 
+  const runtimeInitialization = runtime.initialize();
+  const controllerInitialization = runtimeInitialization.then(async () => {
+    initializationStage = "controller";
+    await controller.initialize();
+  });
   const missionInitialization = missionController.initialize().catch((error: unknown) => {
-      initializationStage = "mission";
-      throw error;
-    });
-  lifecycle = Promise.all([runtime.initialize(), missionInitialization])
-    .then(async () => {
-      initializationStage = "controller";
-      await controller.initialize();
-    })
-    .then(() => {
-      initializationStage = "ready";
-    });
+    initializationStage = "mission";
+    throw error;
+  });
+  lifecycle = Promise.all([controllerInitialization, missionInitialization]).then(() => {
+    initializationStage = "ready";
+  });
   void run(() => lifecycle);
   void run(async () => {
     await lifecycle;

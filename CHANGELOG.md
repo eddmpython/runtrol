@@ -22,7 +22,8 @@ and refactoring that no user can observe do not belong here.
 ### Fixed
 
 - Studio populates navigation from one exact Runtime inventory before background change streams connect, keeping cold
-  activation within its startup budget on every supported operating system.
+  activation within its startup budget on every supported operating system. Session navigation initializes as soon
+  as Runtime is ready while the independent Mission list continues loading.
 - Opening a conversation now completes only after VS Code's panel state and editor-tab model agree on the active
   Runtrol tab, preventing intermittent focus on another editor.
 - Studio verifies a newly installed CLI in the background and refreshes its provider state automatically, so the CLI
@@ -36,12 +37,13 @@ and refactoring that no user can observe do not belong here.
 - Runtime event streams no longer rescan installed providers for unrelated authenticated requests, and disconnected
   idle streams are retired immediately. Studio activation, hot-session switching, and reload restoration remain
   within their enforced budgets on Windows.
-- Studio retains an unexpired control lease across reconnects and same-Runtime workspace reloads, preventing a false
-  control conflict after the extension host restarts.
+- Studio retains an unexpired control lease across reconnects and same-Runtime workspace reloads without letting a
+  slow editor secret store block a completed session action, preventing false control conflicts after restarts.
 - Closing a session now invalidates any concurrently refreshed inventory and accepts a cooled session with no durable
   pointer as already closed, so removed sessions disappear from Studio immediately.
-- Runtime returns allocator pages after bounded large live events leave the fan-out path, keeping settled daemon
-  memory within the enforced budget.
+- Runtime retires disconnected local event and session-index watches even while their streams are quiet, then returns
+  allocator pages after bounded large live events leave the fan-out path, keeping settled daemon memory within the
+  enforced budget.
 - The phone app now permits its same-origin presentation contract under its content security policy, and its pairing
   screen reports readiness without exposing actions that require an already connected PC.
 

@@ -6,6 +6,7 @@ import { RuntimeRequestError, type ControlLease } from "@runtrol/runtime-client"
 import {
   cachedControlAction,
   restorableControls,
+  settleControlPersistence,
   sessionDisappearedAfterCool,
 } from "./runtimeControl";
 
@@ -55,4 +56,21 @@ test("restores only unexpired leases from the same Runtime instance", () => {
   assert.deepEqual(restorableControls(state, "runtime_1", 20_000), [future]);
   assert.deepEqual(restorableControls(state, "runtime_2", 20_000), []);
   assert.deepEqual(restorableControls(undefined, "runtime_1", 20_000), []);
+});
+
+test("lets a slow control persistence continue without blocking the session action", async () => {
+  let stored = (): void => undefined;
+  const persistence = new Promise<void>((resolve) => {
+    stored = resolve;
+  });
+  await settleControlPersistence(persistence, 0);
+  stored();
+  await persistence;
+});
+
+test("reports a control persistence failure that arrives inside the inline window", async () => {
+  await assert.rejects(
+    settleControlPersistence(Promise.reject(new Error("secret store unavailable")), 1_000),
+    /secret store unavailable/u,
+  );
 });

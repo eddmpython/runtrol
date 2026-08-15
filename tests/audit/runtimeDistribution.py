@@ -297,6 +297,8 @@ def runChecked(command: list[str], environment: dict[str, str]) -> str:
         env=environment,
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         timeout=30,
     )
     if completed.returncode != 0:
@@ -313,6 +315,8 @@ def runExpectFailure(command: list[str], environment: dict[str, str]) -> None:
         env=environment,
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         timeout=30,
     )
     if completed.returncode == 0 or "Runtime locator exists" not in (completed.stderr + completed.stdout):

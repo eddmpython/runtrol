@@ -26,6 +26,7 @@ import * as vscode from "vscode";
 import {
   cachedControlAction,
   restorableControls,
+  settleControlPersistence,
   sessionDisappearedAfterCool,
   type StoredControlState,
 } from "./runtimeControl";
@@ -36,6 +37,7 @@ const ENROLLMENT_DECISION_SETTLE_MS = 5_000;
 const ENROLLMENT_DECISION_POLL_MS = 50;
 const RUNTIME_LOCATOR_SETTLE_MS = 12_000;
 const RUNTIME_LOCATOR_POLL_MS = 25;
+const CONTROL_PERSISTENCE_INLINE_MS = 250;
 const ALL_STUDIO_SCOPES: readonly AppScope[] = [
   "provider.read",
   "model.read",
@@ -84,6 +86,7 @@ export class StudioRuntimeClient implements vscode.Disposable {
   private stored: StoredIntegration | null = null;
   private locator: Promise<ValidatedLocator> | null = null;
   private commandTail: Promise<void> = Promise.resolve();
+  private controlPersistence: Promise<void> = Promise.resolve();
   private readonly controls = new Map<string, ControlLease>();
   private providerSnapshot: ProviderList | null = null;
   private sessionSnapshot: ManagedSessionList | null = null;
@@ -544,8 +547,13 @@ export class StudioRuntimeClient implements vscode.Disposable {
         leases,
       },
     };
-    await this.context.secrets.store(SECRET_KEY, JSON.stringify(next));
     this.stored = next;
+    const previous = this.controlPersistence;
+    const persistence = previous
+      .catch(() => undefined)
+      .then(() => this.context.secrets.store(SECRET_KEY, JSON.stringify(next)));
+    this.controlPersistence = persistence;
+    await settleControlPersistence(persistence, CONTROL_PERSISTENCE_INLINE_MS);
   }
 
   private async connectCommand(): Promise<RuntimeClient> {
@@ -614,13 +622,11 @@ export class StudioRuntimeClient implements vscode.Disposable {
 
   private async createIdentity(): Promise<StoredIntegration> {
     const identity = IntegrationIdentity.generate();
-    const created: StoredIntegration = {
+    return {
       schema: 1,
       clientInstanceId: randomUUID(),
       privateKeyPkcs8: Buffer.from(identity.exportPkcs8()).toString("base64url"),
     };
-    await this.context.secrets.store(SECRET_KEY, JSON.stringify(created));
-    return created;
   }
 
   private async useIntegration(stored: StoredIntegration): Promise<void> {
