@@ -1816,6 +1816,11 @@ async fn converse(
                     return;
                 }
                 relay(&mut connection, *watching).await;
+                // The relay owns the large encoded watch frame, while the surface may retain its transport buffer.
+                // Drop both before asking the allocator to return their unused pages. Session close can race with a
+                // peer disconnect, so its lifecycle release may otherwise run before the watch task has retired.
+                drop(connection);
+                runtrol_childproc::footprint::release_unused_memory();
                 return;
             }
 
