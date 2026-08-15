@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import type { ProviderLine, SessionLine } from "./runtimeTypes";
+import type { NativeChatLine, ProviderLine, SessionLine } from "./runtimeTypes";
 import { chatServices, orderedSessions, sessionChoices } from "./sessionNavigation";
 
 const PROVIDERS: ProviderLine[] = [
@@ -76,6 +76,22 @@ test("provider-owned chats stay under their service and unknown providers remain
   assert.equal(services[2]?.displayName, "Future Provider");
 });
 
+test("official existing chats join their service without duplicating managed chats", () => {
+  const managed = chatSession("managed", "claude");
+  const native: NativeChatLine[] = [
+    nativeChat("native-managed", "claude", "Already managed", "2026-08-15T10:00:00Z"),
+    nativeChat("older", "claude", "Older", "2026-08-14T10:00:00Z"),
+    nativeChat("newer", "claude", "Newer", "2026-08-16T10:00:00Z"),
+    nativeChat("future", "future-provider", "Future", "2026-08-16T11:00:00Z"),
+    { ...nativeChat("adopted", "claude", "Adopted", "2026-08-16T12:00:00Z"), alreadyManagedAs: "other" },
+  ];
+  const services = chatServices([managed], PROVIDERS, null, native);
+
+  assert.deepEqual(services[0]?.nativeChats.map((chat) => chat.nativeSessionId), ["newer", "older"]);
+  assert.deepEqual(services.map((service) => service.providerId), ["claude", "codex", "future-provider"]);
+  assert.equal(services[2]?.nativeChats[0]?.title, "Future");
+});
+
 function chatSession(sessionId: string, providerId: string, hot = false): SessionLine {
   return {
     sessionId,
@@ -87,5 +103,23 @@ function chatSession(sessionId: string, providerId: string, hot = false): Sessio
     lifecycle: hot ? "hotIdle" : "cold",
     looksStuck: false,
     sessionGeneration: 1,
+  };
+}
+
+function nativeChat(
+  nativeSessionId: string,
+  providerId: string,
+  title: string,
+  updatedAt: string,
+): NativeChatLine {
+  return {
+    providerId,
+    nativeSessionId,
+    cwd: `C:\\work\\${nativeSessionId}`,
+    additionalDirectories: [],
+    title,
+    updatedAt,
+    resume: "available",
+    adoptionToken: `token-${nativeSessionId}`,
   };
 }

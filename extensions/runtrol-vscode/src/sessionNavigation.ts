@@ -1,4 +1,4 @@
-import type { ProviderLine, SessionLine } from "./runtimeTypes";
+import type { NativeChatLine, ProviderLine, SessionLine } from "./runtimeTypes";
 import { sessionStateLabel } from "./runtimeProjection";
 import { providerDisplayName, sessionContext, uniqueSessionTitle, workspaceName } from "./sessionDisplay";
 
@@ -15,6 +15,7 @@ export type ChatService = {
   displayName: string;
   provider: ProviderLine | null;
   sessions: readonly SessionLine[];
+  nativeChats: readonly NativeChatLine[];
   selected: boolean;
 };
 
@@ -52,6 +53,7 @@ export function chatServices(
   sessions: readonly SessionLine[],
   providers: readonly ProviderLine[],
   selectedSessionId: string | null,
+  nativeChats: readonly NativeChatLine[] = [],
 ): ChatService[] {
   const byProvider = new Map<string, SessionLine[]>();
   for (const session of sessions) {
@@ -59,21 +61,36 @@ export function chatServices(
     existing.push(session);
     byProvider.set(session.providerId, existing);
   }
+  const managedNative = new Set(sessions.flatMap((session) => (
+    session.nativeSessionId ? [`${session.providerId}\0${session.nativeSessionId}`] : []
+  )));
+  const nativeByProvider = new Map<string, NativeChatLine[]>();
+  for (const chat of nativeChats) {
+    if (chat.alreadyManagedAs || managedNative.has(`${chat.providerId}\0${chat.nativeSessionId}`)) {
+      continue;
+    }
+    const existing = nativeByProvider.get(chat.providerId) ?? [];
+    existing.push(chat);
+    nativeByProvider.set(chat.providerId, existing);
+  }
 
   const services = providers.map((provider) => chatService(
     provider.providerId,
     provider.displayName,
     provider,
     byProvider.get(provider.providerId) ?? [],
+    nativeByProvider.get(provider.providerId) ?? [],
     selectedSessionId,
   ));
   const known = new Set(providers.map((provider) => provider.providerId));
-  for (const providerId of [...byProvider.keys()].filter((id) => !known.has(id)).sort()) {
+  const unknown = new Set([...byProvider.keys(), ...nativeByProvider.keys()]);
+  for (const providerId of [...unknown].filter((id) => !known.has(id)).sort()) {
     services.push(chatService(
       providerId,
       providerDisplayName(providerId),
       null,
       byProvider.get(providerId) ?? [],
+      nativeByProvider.get(providerId) ?? [],
       selectedSessionId,
     ));
   }
@@ -85,6 +102,7 @@ function chatService(
   displayName: string,
   provider: ProviderLine | null,
   sessions: readonly SessionLine[],
+  nativeChats: readonly NativeChatLine[],
   selectedSessionId: string | null,
 ): ChatService {
   return {
@@ -92,8 +110,18 @@ function chatService(
     displayName,
     provider,
     sessions: orderedSessions(sessions, selectedSessionId),
+    nativeChats: orderedNativeChats(nativeChats),
     selected: sessions.some((session) => session.sessionId === selectedSessionId),
   };
+}
+
+function orderedNativeChats(chats: readonly NativeChatLine[]): NativeChatLine[] {
+  return chats.slice().sort((left, right) => (
+    ordinalCompare(right.updatedAt ?? "", left.updatedAt ?? "")
+    || ordinalCompare(left.title ?? "", right.title ?? "")
+    || ordinalCompare(left.cwd, right.cwd)
+    || ordinalCompare(left.nativeSessionId, right.nativeSessionId)
+  ));
 }
 
 function sessionRank(session: SessionLine, selected: string | null): number {

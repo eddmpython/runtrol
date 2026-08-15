@@ -1,19 +1,14 @@
-import * as QRCode from "qrcode";
 import * as vscode from "vscode";
 
 import { CoreClient } from "./core/client";
+import { pairingQrDataUrl } from "./pairingQr";
 import type { DeviceLine, PairingProposalLine, Response } from "./protocol";
 
 const POLL_INTERVAL_MS = 750;
 
 export async function pairPhone(client: CoreClient): Promise<void> {
   const invitation = expect(await client.once({ ask: "pairingBegin" }), "pairingInvitation");
-  const qr = await QRCode.toDataURL(invitation.pairing_url, {
-    errorCorrectionLevel: "M",
-    margin: 3,
-    width: 320,
-    color: { dark: "#101418", light: "#ffffff" },
-  });
+  const qr = await pairingQrDataUrl(invitation.pairing_url);
   const panel = vscode.window.createWebviewPanel(
     "runtrol.pairPhone",
     "Pair a phone",

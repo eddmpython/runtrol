@@ -9,7 +9,7 @@ import {
   type UnknownRecord,
 } from "./presentation";
 import { afterFrameOrDelay } from "./renderReady";
-import { sessionTitle } from "../sessionDisplay";
+import { sessionTitle, workspaceName } from "../sessionDisplay";
 import { sessionStateLabel } from "../runtimeProjection";
 import type { SessionLine as Session } from "../runtimeTypes";
 
@@ -59,9 +59,9 @@ const MAX_PENDING_FRAMES = 4_096;
 const BASELINE_FRAMES = 30;
 const SELECTION_RENDER_FALLBACK_MS = 250;
 const LOCALIZED_TEXT: Record<string, string> = {
-  "session.attached": "Session attached",
-  "session.detached": "Session detached",
-  "session.updated": "Session information changed",
+  "session.attached": "Chat opened",
+  "session.detached": "Chat saved",
+  "session.updated": "Chat information changed",
   "tool.started": "Tool call started",
   "tool.updated": "Tool call updated",
   "plan.updated": "Plan updated",
@@ -71,18 +71,26 @@ const LOCALIZED_TEXT: Record<string, string> = {
   "approval.waiting": "Approval required",
   "approval.withdrawn": "Approval was withdrawn",
 };
+const HIDDEN_STATUS_KEYS = new Set([
+  "session.attached",
+  "session.detached",
+  "session.updated",
+  "commands.updated",
+  "mode.updated",
+  "configuration.updated",
+]);
 const vscode = acquireVsCodeApi();
 const title = element<HTMLElement>("session-title");
 const sessionPath = element<HTMLElement>("session-path");
 const serviceName = element<HTMLElement>("service-name");
 const serviceAvatar = element<HTMLElement>("service-avatar");
-const composerService = element<HTMLElement>("composer-service");
 const sessionState = element<HTMLSpanElement>("session-state");
 const status = element<HTMLDivElement>("status");
 const conversation = element<HTMLElement>("conversation");
 const composer = element<HTMLFormElement>("composer");
 const prompt = element<HTMLTextAreaElement>("prompt");
 const send = element<HTMLButtonElement>("send");
+const sendHint = element<HTMLSpanElement>("send-hint");
 const interrupt = element<HTMLButtonElement>("interrupt");
 const close = element<HTMLButtonElement>("close");
 const openWorkspace = element<HTMLButtonElement>("open-workspace");
@@ -176,11 +184,7 @@ function reset(
   renderSession(session, displayTitle, provider);
   prompt.value = "";
   resizePrompt();
-  if (session) {
-    appendMessage("meta", `Connected to ${currentProvider} · ${sessionStateLabel(session)}`);
-  } else {
-    renderEmptyState();
-  }
+  renderEmptyState(session);
   afterFrameOrDelay(
     {
       requestFrame: (callback) => requestAnimationFrame(callback),
@@ -198,41 +202,80 @@ function reset(
 
 function renderSession(session: Session | null, displayTitle: string | null, provider: string | null): void {
   currentProvider = provider || "Coding agent";
-  title.textContent = session ? displayTitle || sessionTitle(session) : "No active chat";
-  sessionPath.textContent = session?.workspace ?? "Choose a service from Chats";
-  serviceName.textContent = session ? currentProvider : "Select a service";
+  document.body.classList.toggle("no-chat", !session);
+  title.textContent = session ? displayTitle || sessionTitle(session) : "Choose a chat";
+  sessionPath.textContent = session ? workspaceName(session.workspace) : "";
+  sessionPath.title = session?.workspace ?? "";
+  serviceName.textContent = session ? currentProvider : "Runtrol";
   serviceAvatar.textContent = session ? serviceInitials(currentProvider) : "R";
-  composerService.textContent = session ? currentProvider : "No service selected";
   sessionState.textContent = session ? sessionStateLabel(session) : "";
-  sessionState.className = session ? (session.hot ? "hot" : "cold") : "";
-  const interactive = session?.hot === true;
-  prompt.disabled = !interactive;
-  send.disabled = !interactive;
-  interrupt.disabled = !interactive;
+  sessionState.className = session?.lifecycle ?? "";
+  const canSend = session?.lifecycle === "hotIdle";
+  const canInterrupt = session?.lifecycle === "hotRunning";
+  prompt.disabled = !canSend;
+  send.disabled = !canSend;
+  send.hidden = !canSend;
+  sendHint.hidden = !canSend;
+  interrupt.disabled = !canInterrupt;
+  interrupt.hidden = !canInterrupt;
   close.disabled = !session;
+  close.hidden = !session;
   openWorkspace.disabled = !session;
   openWorkspace.hidden = !session;
   prompt.setAttribute("aria-label", session ? `Message ${currentProvider}` : "Message");
   prompt.placeholder = !session
-    ? "Select a service and chat"
-    : interactive
+    ? "Write a message"
+    : canSend
       ? `Message ${currentProvider}`
-      : "Resuming the provider-owned session";
+      : canInterrupt
+        ? `${currentProvider} is working`
+        : session.lifecycle === "failed"
+          ? "This chat needs attention"
+          : "Opening saved chat";
 }
 
-function renderEmptyState(): void {
+function renderEmptyState(session: Session | null): void {
   const empty = document.createElement("section");
   empty.className = "empty-state";
+  empty.dataset.placeholder = "true";
   empty.dataset.characters = "0";
   const mark = document.createElement("div");
   mark.className = "empty-mark";
   mark.textContent = "R";
   const heading = document.createElement("h1");
-  heading.textContent = "Choose a service to start chatting";
   const detail = document.createElement("p");
-  detail.textContent = "Open Chats in the Runtrol sidebar, then select a service or one of its existing chats.";
+  const emptyCopy = sessionEmptyCopy(session);
+  heading.textContent = emptyCopy.heading;
+  detail.textContent = emptyCopy.detail;
   empty.append(mark, heading, detail);
+  if (!session) {
+    const start = document.createElement("button");
+    start.type = "button";
+    start.className = "empty-primary";
+    start.textContent = "New chat";
+    start.addEventListener("click", () => vscode.postMessage({ type: "startChat" }));
+    empty.append(start);
+  }
   conversation.append(empty);
+}
+
+function sessionEmptyCopy(session: Session | null): { heading: string; detail: string } {
+  if (!session) {
+    return {
+      heading: "Start a chat",
+      detail: "Choose a coding service, or open an existing chat from the sidebar.",
+    };
+  }
+  if (session.lifecycle === "hotIdle") {
+    return { heading: "Ready to chat", detail: `Send a message to ${currentProvider}.` };
+  }
+  if (session.lifecycle === "hotRunning") {
+    return { heading: `${currentProvider} is working`, detail: "The response will appear here." };
+  }
+  if (session.lifecycle === "failed") {
+    return { heading: "This chat needs attention", detail: "Check the message above, then reopen the chat." };
+  }
+  return { heading: "Opening chat", detail: "The conversation will be ready shortly." };
 }
 
 function enqueue(frames: readonly unknown[]): void {
@@ -339,7 +382,8 @@ function present(payload: unknown): void {
     return;
   }
   if (presentation.kind === "status") {
-    appendMessage("meta", LOCALIZED_TEXT[presentation.textKey] ?? presentation.textKey);
+    const text = LOCALIZED_TEXT[presentation.textKey];
+    if (text && !HIDDEN_STATUS_KEYS.has(presentation.textKey)) appendMessage("meta", text);
   }
 }
 
@@ -347,6 +391,7 @@ function appendMessage(side: string, text: string, delta = false, messageId = ""
   if (!text) {
     return;
   }
+  clearPlaceholder();
   if (text.length > MAX_MESSAGE_CHARACTERS) {
     for (let offset = 0; offset < text.length; offset += MAX_MESSAGE_CHARACTERS) {
       appendMessage(side, text.slice(offset, offset + MAX_MESSAGE_CHARACTERS), delta, messageId);
@@ -407,6 +452,7 @@ function serviceInitials(name: string): string {
 }
 
 function appendApproval(body: UnknownRecord): void {
+  clearPlaceholder();
   const approval = string(body.id);
   const digest = Array.isArray(body.subject_digest)
     ? body.subject_digest.filter((byte): byte is number => typeof byte === "number")
@@ -447,6 +493,10 @@ function appendApproval(body: UnknownRecord): void {
   card.dataset.characters = String(card.textContent?.length ?? 0);
   conversation.append(card);
   trim();
+}
+
+function clearPlaceholder(): void {
+  conversation.querySelector<HTMLElement>("[data-placeholder='true']")?.remove();
 }
 
 function trim(): void {

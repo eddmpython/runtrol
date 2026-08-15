@@ -1,6 +1,12 @@
 import * as vscode from "vscode";
 
-import type { ProviderLine, SessionLine, WatchCursor } from "./runtimeTypes";
+import type {
+  NativeChatCatalogue,
+  NativeChatLine,
+  ProviderLine,
+  SessionLine,
+  WatchCursor,
+} from "./runtimeTypes";
 import { providerRowsEqual, sessionRowsEqual } from "./stateRows";
 
 export type RuntimeStateChange = "rows" | "selection";
@@ -10,6 +16,7 @@ export class RuntimeState implements vscode.Disposable {
   private readonly cursors = new Map<string, WatchCursor>();
   private sessionRows: readonly SessionLine[] = [];
   private providerRows: readonly ProviderLine[] = [];
+  private readonly nativeCatalogues = new Map<string, NativeChatCatalogue>();
   private selectedId: string | null = null;
 
   readonly onDidChange = this.changedEmitter.event;
@@ -22,6 +29,14 @@ export class RuntimeState implements vscode.Disposable {
     return this.providerRows;
   }
 
+  get nativeChats(): readonly NativeChatLine[] {
+    return [...this.nativeCatalogues.values()].flatMap((catalogue) => catalogue.chats);
+  }
+
+  nativeCatalogue(providerId: string): NativeChatCatalogue | null {
+    return this.nativeCatalogues.get(providerId) ?? null;
+  }
+
   get selected(): SessionLine | null {
     return this.sessionRows.find((session) => session.sessionId === this.selectedId) ?? null;
   }
@@ -32,6 +47,10 @@ export class RuntimeState implements vscode.Disposable {
     }
     this.sessionRows = sessions;
     this.providerRows = providers;
+    const providerIds = new Set(providers.map((provider) => provider.providerId));
+    for (const providerId of this.nativeCatalogues.keys()) {
+      if (!providerIds.has(providerId)) this.nativeCatalogues.delete(providerId);
+    }
     if (this.selectedId && !sessions.some((session) => session.sessionId === this.selectedId)) {
       this.selectedId = null;
     }
@@ -46,6 +65,17 @@ export class RuntimeState implements vscode.Disposable {
     this.changedEmitter.fire("selection");
   }
 
+  setNativeCatalogue(catalogue: NativeChatCatalogue): void {
+    this.nativeCatalogues.set(catalogue.providerId, catalogue);
+    this.changedEmitter.fire("rows");
+  }
+
+  clearNativeCatalogues(): void {
+    if (this.nativeCatalogues.size === 0) return;
+    this.nativeCatalogues.clear();
+    this.changedEmitter.fire("rows");
+  }
+
   cursor(session: string): WatchCursor | null {
     return this.cursors.get(session) ?? null;
   }
@@ -56,6 +86,7 @@ export class RuntimeState implements vscode.Disposable {
 
   dispose(): void {
     this.cursors.clear();
+    this.nativeCatalogues.clear();
     this.changedEmitter.dispose();
   }
 }

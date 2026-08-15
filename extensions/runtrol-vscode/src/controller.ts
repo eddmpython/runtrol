@@ -11,6 +11,8 @@ import type {
 import type {
   ModelCatalog,
   ModelChoice,
+  NativeChatCatalogue,
+  NativeChatLine,
   ProviderLine,
   SessionLine,
   WorkspaceAccess,
@@ -19,10 +21,17 @@ import { SelectionStore } from "./selectionStore";
 import { sessionTitle } from "./sessionDisplay";
 import { sessionChoices } from "./sessionNavigation";
 import { RuntimeState } from "./state";
-import { SessionItem } from "./trees";
+import { NativeSessionItem, SessionItem } from "./trees";
 import { StudioRuntimeClient } from "./runtimeClient";
 import { sessionStateLabel } from "./runtimeProjection";
 import { workspaceCollisions, type WorkspaceCollision } from "./workspaceCollision";
+
+const NATIVE_ADOPTION_REFRESH_MS = 4 * 60_000;
+
+type NativeDiscovery = {
+  abort: AbortController;
+  pending: Promise<void>;
+};
 
 export class Controller implements vscode.Disposable {
   private watchAbort: AbortController | null = null;
@@ -35,6 +44,8 @@ export class Controller implements vscode.Disposable {
   private disposed = false;
   private readonly seenWarnings = new Set<string>();
   private readonly verifyingProviders = new Set<string>();
+  private readonly nativeDiscoveries = new Map<string, NativeDiscovery>();
+  private nativeDiscoveryGeneration = 0;
 
   constructor(
     private readonly context: vscode.ExtensionContext,
@@ -45,7 +56,7 @@ export class Controller implements vscode.Disposable {
     private readonly selection: SelectionStore,
   ) {
     this.status = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 20);
-    this.status.name = "Runtrol sessions";
+    this.status.name = "Runtrol chats";
     this.status.command = "runtrol.switchSession";
     this.status.show();
     context.subscriptions.push(this.status, state.onDidChange(() => this.updateStatus()));
@@ -81,6 +92,17 @@ export class Controller implements vscode.Disposable {
       inventory.providers.providers,
     );
     this.startProviderVerification(inventory.providers.providers);
+  }
+
+  async refreshChats(): Promise<void> {
+    await this.refresh();
+    await Promise.all(this.state.providers
+      .filter((provider) => provider.installation.state === "usable")
+      .map((provider) => this.loadNativeChats(provider.providerId, true)));
+  }
+
+  discoverNativeChats(providerId: string): void {
+    void this.loadNativeChats(providerId, false);
   }
 
   async checkProviderUpdates(): Promise<void> {
@@ -170,8 +192,8 @@ export class Controller implements vscode.Disposable {
     const picked = await vscode.window.showQuickPick(
       sessionChoices(this.state.sessions, selected, this.state.providers),
       {
-        title: `Switch Runtrol session (${this.state.sessions.length})`,
-        placeHolder: "Type a project, provider, state, or workspace",
+        title: `Switch chat (${this.state.sessions.length})`,
+        placeHolder: "Type a project, service, status, or folder",
         matchOnDescription: true,
         matchOnDetail: true,
       },
@@ -185,6 +207,8 @@ export class Controller implements vscode.Disposable {
     this.pauseWatch();
     this.indexAbort?.abort();
     this.indexAbort = null;
+    this.cancelNativeDiscoveries();
+    this.state.clearNativeCatalogues();
     await this.client.reset();
     await this.runtime.reset();
     await this.refreshAfterReconnect();
@@ -198,7 +222,11 @@ export class Controller implements vscode.Disposable {
     }
   }
 
-  select(value: SessionItem | SessionLine | string, follow = true, reveal = true): Promise<void> {
+  select(
+    value: NativeSessionItem | SessionItem | SessionLine | string,
+    follow = true,
+    reveal = true,
+  ): Promise<void> {
     const selected = this.selectionTail.then(() => this.selectNow(value, follow, reveal));
     this.selectionTail = selected.catch(() => undefined);
     return selected;
@@ -231,17 +259,21 @@ export class Controller implements vscode.Disposable {
   }
 
   private async selectNow(
-    value: SessionItem | SessionLine | string,
+    value: NativeSessionItem | SessionItem | SessionLine | string,
     follow: boolean,
     reveal: boolean,
     afterApplied: () => void = () => undefined,
   ): Promise<void> {
-    const id = typeof value === "string" ? value : value instanceof SessionItem
-      ? value.session.sessionId
-      : value.sessionId;
-    let session = this.state.sessions.find((candidate) => candidate.sessionId === id);
-    if (!session) {
-      throw new Error("that session is no longer listed");
+    let session: SessionLine | null;
+    if (value instanceof NativeSessionItem) {
+      session = await this.adoptNativeChat(value.native);
+      if (!session) return;
+    } else {
+      const id = typeof value === "string" ? value : value instanceof SessionItem
+        ? value.session.sessionId
+        : value.sessionId;
+      session = this.state.sessions.find((candidate) => candidate.sessionId === id) ?? null;
+      if (!session) throw new Error("that session is no longer listed");
     }
     if (reveal) {
       void this.conversation.show();
@@ -250,7 +282,7 @@ export class Controller implements vscode.Disposable {
       this.pauseWatch();
       this.state.select(session.sessionId);
       this.conversation.reset(session);
-      this.conversation.status("Resuming the provider-owned session...", "info");
+      this.conversation.status("Opening the saved chat...", "info");
       session = await this.resumeSession(session);
     }
     const stored = this.persistSelection(session.sessionId);
@@ -280,17 +312,76 @@ export class Controller implements vscode.Disposable {
     if (!session.nativeSessionId) {
       throw new Error("that cold session has no provider-owned conversation identifier to resume");
     }
-    const opened = await this.runtime.resume(runtimeAction(session), "exclusive");
-    await this.refresh();
-    const resumed = this.state.sessions.find((candidate) => candidate.sessionId === opened.sessionId);
-    if (!resumed) {
-      throw new Error("the resumed session is absent from the current session index");
+    const pausedDiscoveries = this.cancelNativeDiscoveries();
+    try {
+      const opened = await this.runtime.resume(runtimeAction(session), "exclusive");
+      await this.refresh();
+      const resumed = this.state.sessions.find((candidate) => candidate.sessionId === opened.sessionId);
+      if (!resumed) {
+        throw new Error("the resumed session is absent from the current session index");
+      }
+      return resumed;
+    } finally {
+      this.restartNativeDiscoveries(pausedDiscoveries);
     }
-    return resumed;
   }
 
-  async startSession(providerId?: string): Promise<void> {
-    await this.refresh();
+  private async adoptNativeChat(native: NativeChatLine): Promise<SessionLine | null> {
+    let catalogue = this.state.nativeCatalogue(native.providerId);
+    if (!catalogue || Date.now() - catalogue.loadedAtMs >= NATIVE_ADOPTION_REFRESH_MS) {
+      await this.loadNativeChats(native.providerId, true);
+      catalogue = this.state.nativeCatalogue(native.providerId);
+    }
+    const current = catalogue?.chats.find(
+      (chat) => chat.nativeSessionId === native.nativeSessionId,
+    );
+    if (!current) {
+      throw new Error(catalogue?.warning ?? "that existing chat is no longer listed by its provider");
+    }
+    const managed = this.state.sessions.find((session) => (
+      session.sessionId === current.alreadyManagedAs
+      || (session.providerId === current.providerId
+        && session.nativeSessionId === current.nativeSessionId)
+    ));
+    if (managed) return managed;
+    if (current.resume !== "available" || !current.adoptionToken) {
+      throw new Error("that existing chat cannot currently be resumed by its provider");
+    }
+    let access: WorkspaceAccess = "exclusive";
+    const collisions = workspaceCollisions(current.cwd, this.state.sessions);
+    if (collisions.length > 0) {
+      const action = await vscode.window.showWarningMessage(
+        `${path.basename(current.cwd)} overlaps ${collisions.length} running chat${
+          collisions.length === 1 ? "" : "s"
+        }.`,
+        {
+          modal: true,
+          detail: collisionDetail(collisions),
+        },
+        "Focus existing",
+        "Resume anyway",
+      );
+      if (action === "Focus existing") {
+        return chooseCollision(collisions);
+      }
+      if (action !== "Resume anyway") return null;
+      access = "shared";
+    }
+    const pausedDiscoveries = this.cancelNativeDiscoveries();
+    try {
+      const opened = await this.runtime.adoptNative(current, access);
+      await this.refresh();
+      const adopted = this.state.sessions.find((session) => session.sessionId === opened.sessionId);
+      if (!adopted) {
+        throw new Error("the resumed existing chat is absent from the current session index");
+      }
+      return adopted;
+    } finally {
+      this.restartNativeDiscoveries(pausedDiscoveries);
+    }
+  }
+
+  async startSession(providerId?: string, selectModel = false): Promise<void> {
     const provider = providerId
       ? this.state.providers.find((candidate) => candidate.providerId === providerId) ?? null
       : await chooseProvider(this.state.providers);
@@ -307,10 +398,8 @@ export class Controller implements vscode.Disposable {
     if (!selectedWorkspace) {
       return;
     }
-    const model = await this.chooseModel(provider);
-    if (model === undefined) {
-      return;
-    }
+    const model = selectModel ? await this.chooseModel(provider) : null;
+    if (model === undefined) return;
     await this.startResolvedSession(
       provider.providerId,
       selectedWorkspace.workspace,
@@ -331,10 +420,15 @@ export class Controller implements vscode.Disposable {
     if (provider?.installation.state !== "usable") {
       throw new Error(`the installed provider ${providerId} is not usable`);
     }
-    const opened = await this.runtime.start(provider.providerId, workspace, access, model);
-    await this.refresh();
-    await this.select(opened.sessionId, follow);
-    return opened.sessionId;
+    const pausedDiscoveries = this.cancelNativeDiscoveries();
+    try {
+      const opened = await this.runtime.start(provider.providerId, workspace, access, model);
+      await this.refresh();
+      await this.select(opened.sessionId, follow);
+      return opened.sessionId;
+    } finally {
+      this.restartNativeDiscoveries(pausedDiscoveries);
+    }
   }
 
   async prompt(text?: string): Promise<void> {
@@ -382,7 +476,7 @@ export class Controller implements vscode.Disposable {
     const session = value instanceof SessionItem ? value.session : value ?? this.requireSelected();
     const label = await vscode.window.showInputBox({
       title: `Rename ${sessionTitle(session)}`,
-      prompt: "Use a short name for this session. Leave it empty to restore the automatic name.",
+      prompt: "Use a short name for this chat. Leave it empty to restore the automatic name.",
       value: session.label ?? "",
       placeHolder: sessionTitle({ ...session, label: null }),
       ignoreFocusOut: true,
@@ -416,14 +510,13 @@ export class Controller implements vscode.Disposable {
 
   async close(value?: SessionItem | SessionLine): Promise<void> {
     const session = value instanceof SessionItem ? value.session : value ?? this.requireSelected();
-    const action = session.lifecycle === "hotRunning"
-      ? "Interrupt and close"
-      : session.lifecycle === "cold"
-        ? "Forget session"
-        : "Close session";
+    const action = session.lifecycle === "hotRunning" ? "Stop and close" : "Close in Runtrol";
     const choice = await vscode.window.showWarningMessage(
-      `Close the ${session.providerId} session in ${path.basename(session.workspace)}?`,
-      { modal: true },
+      `Close the ${session.providerId} chat in ${path.basename(session.workspace)}?`,
+      {
+        modal: true,
+        detail: "Runtrol stops supervising this chat. The coding service keeps its own chat history.",
+      },
       action,
     );
     if (choice !== action) {
@@ -467,6 +560,7 @@ export class Controller implements vscode.Disposable {
     this.disposed = true;
     this.watchAbort?.abort();
     this.indexAbort?.abort();
+    this.cancelNativeDiscoveries();
     this.client.dispose();
     this.runtime.dispose();
   }
@@ -621,8 +715,13 @@ export class Controller implements vscode.Disposable {
     warnings: readonly string[],
     providers: readonly ProviderLine[],
   ): void {
-    const selected = this.state.selected?.sessionId ?? null;
+    const previousSelected = this.state.selected;
+    const selected = previousSelected?.sessionId ?? null;
     this.state.replace(sessions, providers);
+    const currentSelected = this.state.selected;
+    if (currentSelected && currentSelected !== previousSelected) {
+      this.conversation.updateSession(currentSelected);
+    }
     for (const warning of warnings) {
       if (!this.seenWarnings.has(warning)) {
         this.seenWarnings.add(warning);
@@ -662,6 +761,57 @@ export class Controller implements vscode.Disposable {
     }
   }
 
+  private loadNativeChats(providerId: string, force: boolean): Promise<void> {
+    const active = this.nativeDiscoveries.get(providerId);
+    if (active) return active.pending;
+    if (!force && this.state.nativeCatalogue(providerId)) return Promise.resolve();
+    const provider = this.state.providers.find((candidate) => candidate.providerId === providerId);
+    if (provider?.installation.state !== "usable") return Promise.resolve();
+    const generation = this.nativeDiscoveryGeneration;
+    const abort = new AbortController();
+    const pending = this.runtime.nativeChats(providerId, abort.signal).then((catalogue) => {
+      if (!this.disposed && generation === this.nativeDiscoveryGeneration && this.providerUsable(providerId)) {
+        this.state.setNativeCatalogue(catalogue);
+      }
+    }).catch((error: unknown) => {
+      if (
+        !abort.signal.aborted
+        && !this.disposed
+        && generation === this.nativeDiscoveryGeneration
+        && this.providerUsable(providerId)
+      ) {
+        this.state.setNativeCatalogue(nativeCatalogueFailure(providerId, error));
+      }
+    }).finally(() => {
+      if (this.nativeDiscoveries.get(providerId)?.pending === pending) {
+        this.nativeDiscoveries.delete(providerId);
+      }
+    });
+    this.nativeDiscoveries.set(providerId, { abort, pending });
+    return pending;
+  }
+
+  private cancelNativeDiscoveries(): string[] {
+    this.nativeDiscoveryGeneration += 1;
+    const providerIds = [...this.nativeDiscoveries.keys()];
+    for (const discovery of this.nativeDiscoveries.values()) {
+      discovery.abort.abort(new Error("foreground chat action has priority"));
+    }
+    this.nativeDiscoveries.clear();
+    return providerIds;
+  }
+
+  private restartNativeDiscoveries(providerIds: readonly string[]): void {
+    if (this.disposed) return;
+    for (const providerId of providerIds) this.discoverNativeChats(providerId);
+  }
+
+  private providerUsable(providerId: string): boolean {
+    return this.state.providers.some((provider) => (
+      provider.providerId === providerId && provider.installation.state === "usable"
+    ));
+  }
+
   private async chooseModel(provider: ProviderLine): Promise<string | null | undefined> {
     const choices = modelChoices(await this.runtime.models(provider.providerId));
     if (choices.length === 0) {
@@ -682,7 +832,7 @@ export class Controller implements vscode.Disposable {
         return { workspace, access: "exclusive" };
       }
       const action = await vscode.window.showWarningMessage(
-        `${path.basename(workspace)} overlaps ${collisions.length} running runtrol session${
+        `${path.basename(workspace)} overlaps ${collisions.length} running chat${
           collisions.length === 1 ? "" : "s"
         }.`,
         {
@@ -714,7 +864,7 @@ export class Controller implements vscode.Disposable {
   private requireSelected(): SessionLine {
     const selected = this.state.selected;
     if (!selected) {
-      throw new Error("select a runtrol session first");
+      throw new Error("choose a chat first");
     }
     return selected;
   }
@@ -725,7 +875,7 @@ export class Controller implements vscode.Disposable {
     this.status.text = selected
       ? `$(pulse) ${path.basename(selected.workspace)}  ${hot}/${this.state.sessions.length}`
       : `$(pulse) Runtrol  ${hot}/${this.state.sessions.length}`;
-    this.status.tooltip = `${hot} hot sessions, ${this.state.sessions.length} total`;
+    this.status.tooltip = `${hot} running chats, ${this.state.sessions.length} total`;
   }
 }
 
@@ -738,6 +888,16 @@ type StartWorkspace = {
   workspace: string;
   access: WorkspaceAccess;
 };
+
+function nativeCatalogueFailure(providerId: string, error: unknown): NativeChatCatalogue {
+  return {
+    providerId,
+    coverage: null,
+    chats: [],
+    loadedAtMs: Date.now(),
+    warning: `Existing chat discovery failed: ${error instanceof Error ? error.message : String(error)}`,
+  };
+}
 
 function runtimeAction(session: SessionLine) {
   return {
@@ -787,7 +947,7 @@ async function chooseProvider(providers: readonly ProviderLine[]): Promise<Provi
       description: provider.providerId,
       provider,
     })),
-    { title: "Start a Runtrol chat", placeHolder: "Choose an installed service" },
+    { title: "New chat", placeHolder: "Choose a coding service" },
   );
   return selected?.provider ?? null;
 }
@@ -800,12 +960,12 @@ async function chooseWorkspace(): Promise<string | null> {
   if (folders.length > 1) {
     const selected = await vscode.window.showQuickPick(
       folders.map((folder) => ({ label: folder.name, description: folder.uri.fsPath, folder })),
-      { title: "Workspace for the new session" },
+      { title: "Project for the new chat" },
     );
     return selected?.folder.uri.fsPath ?? null;
   }
   const selected = await vscode.window.showOpenDialog({
-    title: "Workspace for the new session",
+    title: "Project for the new chat",
     canSelectFolders: true,
     canSelectFiles: false,
     canSelectMany: false,

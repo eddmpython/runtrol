@@ -42,6 +42,7 @@
     "onView:runtrol.missions",
     "onView:runtrol.providers",
     "onCommand:runtrol.refresh",
+    "onCommand:runtrol.restartExtensionHost",
     "onCommand:runtrol.checkProviderUpdates",
     "onCommand:runtrol.remoteConnectionStatus",
     "onCommand:runtrol.pairPhone",
@@ -52,6 +53,7 @@
     "onCommand:runtrol.reviewRuntimeRequests",
     "onCommand:runtrol.switchSession",
     "onCommand:runtrol.startSession",
+    "onCommand:runtrol.startSessionWithModel",
     "onCommand:runtrol.startServiceChat",
     "onCommand:runtrol.selectSession",
     "onCommand:runtrol.openConversation",
@@ -100,11 +102,13 @@
         },
         {
           "id": "runtrol.missions",
-          "name": "Missions"
+          "name": "Missions",
+          "visibility": "collapsed"
         },
         {
           "id": "runtrol.providers",
-          "name": "Installed CLIs"
+          "name": "Services",
+          "visibility": "collapsed"
         }
       ]
     },
@@ -113,6 +117,11 @@
         "command": "runtrol.refresh",
         "title": "Runtrol: Refresh Chats and Services",
         "icon": "$(refresh)"
+      },
+      {
+        "command": "runtrol.restartExtensionHost",
+        "title": "Runtrol: Restart Extension Host",
+        "icon": "$(debug-restart)"
       },
       {
         "command": "runtrol.checkProviderUpdates",
@@ -163,6 +172,10 @@
         "command": "runtrol.startSession",
         "title": "Runtrol: New Chat",
         "icon": "$(add)"
+      },
+      {
+        "command": "runtrol.startSessionWithModel",
+        "title": "Runtrol: New Chat with Model..."
       },
       {
         "command": "runtrol.startServiceChat",
@@ -319,22 +332,22 @@
         {
           "command": "runtrol.openConversation",
           "when": "view == runtrol.sessions",
-          "group": "navigation@0"
+          "group": "1_chat@1"
         },
         {
           "command": "runtrol.switchSession",
           "when": "view == runtrol.sessions",
-          "group": "navigation@1"
+          "group": "1_chat@2"
         },
         {
           "command": "runtrol.startSession",
           "when": "view == runtrol.sessions",
-          "group": "navigation@2"
+          "group": "navigation@0"
         },
         {
           "command": "runtrol.refresh",
           "when": "view == runtrol.sessions || view == runtrol.providers",
-          "group": "navigation@3"
+          "group": "navigation@1"
         },
         {
           "command": "runtrol.checkProviderUpdates",
@@ -364,7 +377,12 @@
         {
           "command": "runtrol.reviewRuntimeRequests",
           "when": "view == runtrol.sessions",
-          "group": "navigation@4"
+          "group": "2_manage@1"
+        },
+        {
+          "command": "runtrol.restartExtensionHost",
+          "when": "view == runtrol.sessions",
+          "group": "2_manage@2"
         },
         {
           "command": "runtrol.validateMission",

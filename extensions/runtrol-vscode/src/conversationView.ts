@@ -6,6 +6,7 @@ import { webviewReadyKind } from "./webviewReady";
 
 type ViewAction =
   | { type: "prompt"; text: string }
+  | { type: "startChat" }
   | { type: "answerApproval"; approval: string; option: number; subjectDigest: number[] }
   | { type: "openWorkspace" }
   | { type: "interrupt" }
@@ -435,38 +436,31 @@ export class ConversationView implements vscode.Disposable {
   <link rel="stylesheet" href="${style}">
   <title>Runtrol chat</title>
 </head>
-<body>
-  <header>
+<body class="no-chat">
+  <header id="chat-header">
     <div class="service-avatar" id="service-avatar" aria-hidden="true">R</div>
-    <div class="session-heading">
-      <div class="service-context">
-        <span>Chatting with</span>
-        <strong id="service-name">Select a service</strong>
-      </div>
-      <div class="chat-context">
-        <strong id="session-title">No active chat</strong>
+    <div class="chat-heading">
+      <strong id="session-title">Choose a chat</strong>
+      <div class="chat-meta">
+        <strong id="service-name">Runtrol</strong>
         <span class="context-separator" aria-hidden="true">·</span>
-        <span id="session-path">Choose a service from Chats</span>
+        <span id="session-path"></span>
       </div>
     </div>
     <div class="header-actions">
       <span id="session-state"></span>
       <button id="open-workspace" type="button" title="Open workspace" hidden>Open workspace</button>
+      <button id="close" type="button" title="Close chat" hidden>Close</button>
     </div>
   </header>
   <div id="status" role="status"></div>
   <main id="conversation" aria-live="polite"></main>
   <form id="composer">
-    <div class="composer-context">
-      <span>Message</span>
-      <strong id="composer-service">No service selected</strong>
-    </div>
-    <textarea id="prompt" rows="2" aria-label="Message" placeholder="Select a service and chat" disabled></textarea>
+    <textarea id="prompt" rows="3" aria-label="Message" placeholder="Write a message" disabled></textarea>
     <div class="actions">
-      <span class="send-hint">Ctrl+Enter to send</span>
-      <button id="interrupt" type="button" disabled>Interrupt</button>
-      <button id="close" type="button" disabled>Close</button>
-      <button id="send" type="submit" disabled>Send</button>
+      <span class="send-hint" id="send-hint" hidden>Ctrl+Enter to send</span>
+      <button id="interrupt" type="button" disabled hidden>Interrupt</button>
+      <button id="send" type="submit" disabled hidden>Send</button>
     </div>
   </form>
   <script nonce="${nonce}" src="${script}"></script>
@@ -617,7 +611,10 @@ function isViewAction(value: unknown): value is ViewAction {
       && Array.isArray(candidate.subjectDigest)
       && candidate.subjectDigest.every((byte) => Number.isInteger(byte) && byte >= 0 && byte <= 255);
   }
-  return type === "openWorkspace" || type === "interrupt" || type === "close";
+  return type === "startChat"
+    || type === "openWorkspace"
+    || type === "interrupt"
+    || type === "close";
 }
 
 function nonceValue(): string {

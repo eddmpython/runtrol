@@ -12,11 +12,19 @@ and refactoring that no user can observe do not belong here.
 
 ### Added
 
+- Studio automatically lists provider-owned chats through each coding service's official Runtime catalogue, then
+  resumes the selected chat without scanning or copying private transcript storage.
+- The Chats menu includes an explicit Extension Host restart action for recovering extension state while preserving
+  the supervised Runtime and provider processes.
 - Sessions can be given a short name from the VS Code session list. Automatic names combine the project and installed CLI, and only colliding names receive a short discriminator.
 - Local products can enroll with the owner-only Runtime endpoint and receive only the exact provider and project access approved in Runtrol Studio. Studio can review, narrow, deny, and revoke integrations without ending supervised sessions.
 
 ### Changed
 
+- Studio now opens around a chat-first layout. Each available service exposes a permanent New chat row, secondary
+  views start collapsed, the empty conversation has one primary action, and the composer shows only the action valid
+  for the current chat state. New chats use the service default model immediately, while explicit model selection
+  remains available from the command palette.
 - Selecting a session now opens one reusable conversation tab in the editor area. The wider layout keeps session state, workspace, output, approvals, and an expanding composer visible without squeezing the conversation into the sidebar.
 
 ### Fixed

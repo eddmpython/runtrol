@@ -21,10 +21,10 @@ import { MissionTree } from "./mission/tree";
 import { managePhones, pairPhone, reviewPhonePairings } from "./pairingAdministration";
 import type { RemoteConnection } from "./protocol";
 import { SelectionStore } from "./selectionStore";
-import { providerDisplayName, uniqueSessionTitle } from "./sessionDisplay";
+import { providerDisplayName, uniqueChatTitle } from "./sessionDisplay";
 import { RuntimeState } from "./state";
 import { StudioRuntimeClient } from "./runtimeClient";
-import { ProvidersTree, ServiceItem, SessionsTree } from "./trees";
+import { NewChatItem, ProvidersTree, ServiceItem, SessionsTree } from "./trees";
 
 export type RuntrolExtensionApi = {
   readonly ready: Promise<void>;
@@ -88,6 +88,8 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
     (message) => {
       if (message.type === "prompt") {
         void run(() => afterReady(() => controller.prompt(message.text)));
+      } else if (message.type === "startChat") {
+        void run(() => afterReady(() => controller.startSession()));
       } else if (message.type === "answerApproval") {
         void run(() => afterReady(
           () => controller.answerApproval(message.approval, message.option, message.subjectDigest),
@@ -100,7 +102,7 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
         void run(() => afterReady(() => controller.close()));
       }
     },
-    (session) => uniqueSessionTitle(session, state.sessions, state.providers),
+    (session) => uniqueChatTitle(session, state.sessions),
     (visible) => controller.conversationVisibilityChanged(visible),
     (session) => providerDisplayName(session.providerId, state.providers),
   );
@@ -108,7 +110,10 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
   const missionController = new MissionController(client, controller, state);
   const candidateController = new CandidateController(client);
   const missions = new MissionTree(missionController);
-  const sessions = new SessionsTree(state);
+  const sessions = new SessionsTree(
+    state,
+    (providerId) => controller.discoverNativeChats(providerId),
+  );
   const providers = new ProvidersTree(state);
 
   context.subscriptions.push(
@@ -126,7 +131,14 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
     vscode.workspace.registerTextDocumentContentProvider("runtrol-mission", missionController.documentProvider()),
     vscode.commands.registerCommand(
       "runtrol.refresh",
-      () => run(() => afterReady(async () => Promise.all([controller.refresh(), missionController.refresh()]).then(() => undefined))),
+      () => run(() => afterReady(async () => Promise.all([
+        controller.refreshChats(),
+        missionController.refresh(),
+      ]).then(() => undefined))),
+    ),
+    vscode.commands.registerCommand(
+      "runtrol.restartExtensionHost",
+      () => run(restartExtensionHost),
     ),
     vscode.commands.registerCommand(
       "runtrol.validateMission",
@@ -262,8 +274,14 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
       () => run(() => afterReady(() => controller.startSession())),
     ),
     vscode.commands.registerCommand(
+      "runtrol.startSessionWithModel",
+      () => run(() => afterReady(() => controller.startSession(undefined, true))),
+    ),
+    vscode.commands.registerCommand(
       "runtrol.startServiceChat",
-      (item?: ServiceItem) => run(() => afterReady(() => controller.startSession(item?.startProviderId ?? undefined))),
+      (item?: ServiceItem | NewChatItem) => run(
+        () => afterReady(() => controller.startSession(item?.startProviderId ?? undefined)),
+      ),
     ),
     vscode.commands.registerCommand(
       "runtrol.selectSession",
@@ -529,6 +547,16 @@ async function run(action: () => Promise<void>): Promise<void> {
   } catch (error) {
     await vscode.window.showErrorMessage(`Runtrol: ${error instanceof Error ? error.message : String(error)}`);
   }
+}
+
+async function restartExtensionHost(): Promise<void> {
+  const confirmed = await vscode.window.showWarningMessage(
+    "Restart the VS Code Extension Host? Other extensions in this window will restart too.",
+    { modal: true },
+    "Restart extensions",
+  );
+  if (confirmed !== "Restart extensions") return;
+  await vscode.commands.executeCommand("workbench.action.restartExtensionHost");
 }
 
 function percentile(values: readonly number[], at: number): number {

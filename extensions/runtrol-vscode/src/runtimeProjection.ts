@@ -3,12 +3,12 @@ import type { SessionDescriptor } from "@runtrol/runtime-client";
 export function sessionStateLabel(session: Pick<SessionDescriptor, "lifecycle">): string {
   switch (session.lifecycle) {
     case "hotIdle":
-      return "idle";
+      return "Ready";
     case "hotRunning":
-      return "busy";
+      return "Working";
     case "failed":
-      return "failed";
+      return "Needs attention";
     case "cold":
-      return "detached";
+      return "Saved";
   }
 }

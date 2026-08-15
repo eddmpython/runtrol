@@ -30,6 +30,8 @@ import {
   sessionDisappearedAfterCool,
   type StoredControlState,
 } from "./runtimeControl";
+import { collectNativeChats } from "./nativeChatCatalogue";
+import type { NativeChatCatalogue, NativeChatLine } from "./runtimeTypes";
 
 const SECRET_KEY = "runtrol.runtime.integration.v1";
 const ENROLLMENT_PASSIVE_SETTLE_MS = 250;
@@ -146,6 +148,36 @@ export class StudioRuntimeClient implements vscode.Disposable {
     });
   }
 
+  async nativeChats(providerId: string, signal?: AbortSignal): Promise<NativeChatCatalogue> {
+    signal?.throwIfAborted();
+    const grant = this.stored?.grant;
+    if (!grant?.scopes.includes("session.native.discover")) {
+      return nativeCatalogueFailure(
+        providerId,
+        "Existing chat discovery is not approved for this Runtrol Studio integration.",
+      );
+    }
+    const roots = [...new Set(grant.roots)];
+    if (roots.length === 0) {
+      return nativeCatalogueFailure(
+        providerId,
+        "Existing chat discovery needs at least one approved workspace root.",
+      );
+    }
+    return this.withRuntimeLocator(async (locator) => {
+      const runtime = await this.connector.connectWithRetry(locator, this.requireOptions());
+      const close = (): void => runtime.close();
+      signal?.addEventListener("abort", close, { once: true });
+      try {
+        signal?.throwIfAborted();
+        return await collectNativeChats(runtime.providers(), providerId, roots, Date.now, signal);
+      } finally {
+        signal?.removeEventListener("abort", close);
+        runtime.close();
+      }
+    });
+  }
+
   async start(
     providerId: string,
     workspace: string,
@@ -174,6 +206,28 @@ export class StudioRuntimeClient implements vscode.Disposable {
         expectedSessionGeneration: session.generation,
         workspace: session.workspace,
         access,
+      });
+      await this.rememberControl(opened.control);
+      return opened.session;
+    });
+  }
+
+  async adoptNative(
+    native: NativeChatLine,
+    access: SessionWorkspaceAccess,
+  ): Promise<SessionDescriptor> {
+    const adoptionToken = native.adoptionToken;
+    if (!adoptionToken) {
+      throw new Error("that existing chat has no current Runtime adoption proof");
+    }
+    return this.mutate(async (runtime) => {
+      const opened = await runtime.sessions().adoptNative({
+        requestId: newMutationRequestId(),
+        providerId: native.providerId,
+        nativeSessionId: native.nativeSessionId,
+        workspace: native.cwd,
+        access,
+        adoptionToken,
       });
       await this.rememberControl(opened.control);
       return opened.session;
@@ -725,6 +779,16 @@ export class StudioRuntimeClient implements vscode.Disposable {
       runtime.close();
     }
   }
+}
+
+function nativeCatalogueFailure(providerId: string, warning: string): NativeChatCatalogue {
+  return {
+    providerId,
+    coverage: null,
+    chats: [],
+    loadedAtMs: Date.now(),
+    warning,
+  };
 }
 
 async function inspectRuntimeLocator(runtimeExecutable: string | null): Promise<ValidatedLocator> {
