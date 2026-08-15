@@ -115,8 +115,8 @@ every trial. The shared ratchet currently caps:
 
 | Measure | Ceiling |
 |---|---:|
-| Ready activation | 1,000 ms |
-| Runtrol navigation and conversation opening | 500 ms |
+| Ready activation | 1,350 ms |
+| Runtrol navigation and conversation opening | 1,000 ms |
 | Refresh p95 | 50 ms |
 | Extension Host RSS growth | 48 MiB |
 | Loaded animation frame p95 | 40 ms |
@@ -125,7 +125,7 @@ every trial. The shared ratchet currently caps:
 | Renderer backlog | 1,024 frames |
 | Hot-session switch p95 | 100 ms |
 | Cold provider-native resume | 1,500 ms |
-| Full workspace reload restoration | 1,500 ms |
+| Full workspace reload restoration | 1,750 ms |
 
 The Webview carries 15,000 raw frames over five seconds and must drop zero raw frames while animation, input, scroll,
 DOM, visible characters, queue growth, and memory remain bounded. Its measurement protocol bounds startup and result

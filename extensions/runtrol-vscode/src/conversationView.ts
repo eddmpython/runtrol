@@ -46,6 +46,7 @@ type RenderWaiter = {
 const MAX_PENDING_POSTS = 4_096;
 const POST_BATCH = MAX_PENDING_POSTS;
 const VISIBLE_READY_TIMEOUT_MS = 5_000;
+const VISIBLE_READY_RELOAD_MS = 1_500;
 const MEASUREMENT_ATTEMPTS = 2;
 const MEASUREMENT_STAGE_TIMEOUT_MS = 5_000;
 
@@ -77,10 +78,10 @@ export class ConversationView implements vscode.Disposable {
       const panel = this.panel;
       if (preserveFocus) {
         panel.reveal(panel.viewColumn ?? vscode.ViewColumn.Active, true);
-        await this.waitForVisibleWebview(panel);
       } else {
         await focusPanel(panel);
       }
+      await this.waitForVisibleWebview(panel);
       return;
     }
     const panel = vscode.window.createWebviewPanel(
@@ -144,10 +145,11 @@ export class ConversationView implements vscode.Disposable {
     });
     panel.webview.html = this.html(panel.webview);
     if (preserveFocus) {
-      await this.waitForVisibleWebview(panel);
+      panel.reveal(panel.viewColumn ?? vscode.ViewColumn.Active, true);
     } else {
       await focusPanel(panel);
     }
+    await this.waitForVisibleWebview(panel);
   }
 
   reset(session: SessionLine | null): number {
@@ -277,9 +279,16 @@ export class ConversationView implements vscode.Disposable {
 
   private async waitForVisibleWebview(panel: vscode.WebviewPanel): Promise<void> {
     const deadline = Date.now() + VISIBLE_READY_TIMEOUT_MS;
+    const reloadAt = Date.now() + VISIBLE_READY_RELOAD_MS;
     let nextProbeAt = 0;
+    let reloaded = false;
     while (this.panel === panel && Date.now() < deadline) {
       if (panel.visible && this.visibleReady) return;
+      if (!reloaded && panel.visible && Date.now() >= reloadAt) {
+        reloaded = true;
+        this.visibleReady = false;
+        panel.webview.html = this.html(panel.webview);
+      }
       if (Date.now() >= nextProbeAt) {
         nextProbeAt = Date.now() + 250;
         void panel.webview.postMessage({ type: "readyProbe" });

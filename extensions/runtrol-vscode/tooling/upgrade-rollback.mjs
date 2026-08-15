@@ -71,7 +71,7 @@ let providerPid = null;
 try {
   await prepareVerifier();
   await writeConfiguration();
-  const vscode = await acquireVSCode(path.join(extensionRoot, ".vscode-test"));
+  const vscode = await acquireVSCode(path.join(os.tmpdir(), "runtrol-vscode-test-cache"));
 
   installVSIX(vscode.cli, baselineArchive, userData, extensions);
   const baselineDirectory = await findInstalledExtension(extensions, baselineVersion);

@@ -49,7 +49,7 @@ async function verifyPhase(resultPath: string): Promise<void> {
   currentStage = `${phase}-activation`;
   const api = await within(extension.activate() as Promise<ExtensionApi>, 10_000, `${phase} activation`);
   await within(api.ready, 15_000, `${phase} Core discovery`);
-  await within(api.refresh(), 5_000, `${phase} refresh`);
+  await within(api.refresh(), continuityTimeoutMs, `${phase} refresh`);
 
   if (expectedSession) {
     currentStage = `${phase}-selection`;

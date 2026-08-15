@@ -26,7 +26,8 @@ and refactoring that no user can observe do not belong here.
   as Runtime is ready while the independent Mission list continues loading.
 - Opening a conversation now completes only after VS Code's panel state and editor-tab model agree on the active
   Runtrol tab, preventing intermittent focus on another editor. Studio also re-probes an already live Webview after
-  hide and restore transitions instead of waiting for a startup notification that has already been delivered.
+  hide and restore transitions, waits for its renderer before completing the command, and reloads one silent renderer
+  instead of waiting for a startup notification that has already been delivered.
 - Studio verifies a newly installed CLI in the background and refreshes its provider state automatically, so the CLI
   can become usable without an extra restart or manual refresh.
 - Local Runtime and Studio connections retire Windows named pipes gracefully before an immediate reconnect, avoiding

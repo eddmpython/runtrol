@@ -93,7 +93,7 @@ try {
     logLevel: "silent",
   });
 
-  const vscode = await acquireVSCode(path.join(extensionRoot, ".vscode-test"));
+  const vscode = await acquireVSCode(path.join(os.tmpdir(), "runtrol-vscode-test-cache"));
   if (marketplace) {
     installMarketplaceExtension(vscode.cli, extensionIdentifier, userData, extensions);
   } else {

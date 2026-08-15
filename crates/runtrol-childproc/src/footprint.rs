@@ -53,10 +53,10 @@ pub fn release_unused_memory() {
 mod platform {
     use windows_sys::Win32::Foundation::CloseHandle;
     use windows_sys::Win32::System::ProcessStatus::{
-        GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS,
+        EmptyWorkingSet, GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS,
     };
     use windows_sys::Win32::System::Threading::{
-        OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_VM_READ,
+        GetCurrentProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_VM_READ,
     };
 
     use crate::error::SpawnError;
@@ -119,7 +119,15 @@ mod platform {
         Ok(counters.WorkingSetSize as u64)
     }
 
-    pub(super) const fn release_unused_memory() {}
+    #[expect(
+        unsafe_code,
+        reason = "Windows exposes its synchronous working-set release only through EmptyWorkingSet"
+    )]
+    pub(super) fn release_unused_memory() {
+        // SAFETY: `GetCurrentProcess` returns the always-valid pseudo-handle for this process, and
+        // `EmptyWorkingSet` owns no caller memory. The best-effort result changes no state the caller must recover.
+        let _emptied = unsafe { EmptyWorkingSet(GetCurrentProcess()) };
+    }
 }
 
 #[cfg(target_os = "linux")]

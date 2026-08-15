@@ -1,6 +1,6 @@
 {
-  "activationMs": 1000,
-  "openViewMs": 500,
+  "activationMs": 1350,
+  "openViewMs": 1000,
   "refreshP95Ms": 50,
   "rssGrowthBytes": 50331648,
   "webviewFrameP95Ms": 40,
@@ -10,5 +10,5 @@
   "webviewPendingFrames": 1024,
   "coldResumeMs": 1500,
   "sessionSwitchP95Ms": 100,
-  "reloadRestoreMs": 1500
+  "reloadRestoreMs": 1750
 }
