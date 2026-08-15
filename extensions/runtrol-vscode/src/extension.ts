@@ -394,6 +394,7 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
             samples.push(performance.now() - started);
           }
         }
+        await controller.selectionPersisted();
         return {
           sessionCount: current.length,
           hotSessionCount: hot.length,

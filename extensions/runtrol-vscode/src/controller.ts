@@ -29,6 +29,7 @@ export class Controller implements vscode.Disposable {
   private indexAbort: AbortController | null = null;
   private readonly status: vscode.StatusBarItem;
   private selectionTail: Promise<void> = Promise.resolve();
+  private selectionPersistenceTail: Promise<void> = Promise.resolve();
   private watchReady: Promise<void> = Promise.resolve();
   private conversationVisible = false;
   private disposed = false;
@@ -252,7 +253,7 @@ export class Controller implements vscode.Disposable {
       this.conversation.status("Resuming the provider-owned session...", "info");
       session = await this.resumeSession(session);
     }
-    const stored = this.selection.save(session.sessionId);
+    const stored = this.persistSelection(session.sessionId);
     this.pauseWatch();
     this.state.select(session.sessionId);
     this.conversation.reset(session);
@@ -265,9 +266,14 @@ export class Controller implements vscode.Disposable {
       });
       return;
     }
+    void stored.catch((error: unknown) => {
+      this.conversation.status(
+        `Cannot remember the selected session: ${error instanceof Error ? error.message : String(error)}`,
+        "warning",
+      );
+    });
     this.ensureSelectedWatch();
     afterApplied();
-    await stored;
   }
 
   private async resumeSession(session: SessionLine): Promise<SessionLine> {
@@ -447,7 +453,7 @@ export class Controller implements vscode.Disposable {
 
   async openWorkspace(value?: SessionItem | SessionLine): Promise<void> {
     const session = value instanceof SessionItem ? value.session : value ?? this.requireSelected();
-    await this.selection.save(session.sessionId);
+    await this.persistSelection(session.sessionId);
     if (workspaceIsOpen(session.workspace)) {
       await vscode.commands.executeCommand("workbench.view.explorer");
       return;
@@ -467,6 +473,22 @@ export class Controller implements vscode.Disposable {
 
   selectedWatchReady(): Promise<void> {
     return this.watchReady;
+  }
+
+  selectionPersisted(): Promise<void> {
+    return this.selectionPersistenceTail;
+  }
+
+  private persistSelection(sessionId: string): Promise<void> {
+    const stored = this.selectionPersistenceTail.then(() => this.selection.save(sessionId));
+    this.selectionPersistenceTail = stored.catch(() => undefined);
+    return stored;
+  }
+
+  private clearPersistedSelection(): Promise<void> {
+    const cleared = this.selectionPersistenceTail.then(() => this.selection.clear());
+    this.selectionPersistenceTail = cleared.catch(() => undefined);
+    return cleared;
   }
 
   private startWatch(session: SessionLine): void {
@@ -609,7 +631,7 @@ export class Controller implements vscode.Disposable {
     }
     if (selected && !this.state.selected) {
       this.pauseWatch();
-      void this.selection.clear().catch((error: unknown) => {
+      void this.clearPersistedSelection().catch((error: unknown) => {
         this.conversation.status(
           `Cannot clear the selected session: ${error instanceof Error ? error.message : String(error)}`,
           "warning",
