@@ -2218,6 +2218,7 @@ mod tests {
     use hyper::Request as HttpRequest;
     use hyper::upgrade::Upgraded;
     use hyper_util::rt::TokioIo;
+    use runtrol_ledger::LedgerError;
     use runtrol_provider::{
         AbsPath, Agent, AgentCommand, Opaque, Produced, ProviderError, ProviderId, WallMs,
     };
@@ -2677,9 +2678,10 @@ mod tests {
             let mut composed = loop {
                 match crate::compose::Composed::for_tests(&seed.home, runtrol_drivers::builtin()) {
                     Ok(composed) => break composed,
-                    Err(crate::compose::ComposeError::Store(StoreError::AlreadyOpen {
-                        ..
-                    })) if tokio::time::Instant::now() < deadline => {
+                    Err(
+                        crate::compose::ComposeError::Store(StoreError::AlreadyOpen { .. })
+                        | crate::compose::ComposeError::Ledger(LedgerError::AlreadyOpen),
+                    ) if tokio::time::Instant::now() < deadline => {
                         tokio::time::sleep(Duration::from_millis(10)).await;
                     }
                     Err(error) => panic!("the resilience home does not recompose: {error}"),

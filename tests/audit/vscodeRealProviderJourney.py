@@ -540,6 +540,7 @@ def exercise(claude: str) -> None:
                 host_env["LOCALAPPDATA"] = str(root)
             elif sys.platform == "darwin":
                 host_env["HOME"] = str(root)
+                provider_gate.configureMacOSKeychain(host_env)
             else:
                 host_env["XDG_STATE_HOME"] = str(root)
             cli_probed = provider_gate.probeClaude(claude, env)

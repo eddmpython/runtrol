@@ -47,6 +47,9 @@ export type SessionManagementPerformance = {
   restoreWorkspace: string;
 };
 
+// Eight hot sessions over five rounds keep nearest-rank p95 from collapsing to the single maximum sample.
+const SESSION_SWITCH_ROUNDS = 5;
+
 export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi {
   const locator = new CoreLocator(context);
   const client = new CoreClient(locator);
@@ -375,7 +378,7 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
           throw new Error(`cold resume changed the 30-session and eight-hot bounds to ${current.length} and ${hot.length}`);
         }
         const samples: number[] = [];
-        for (let round = 0; round < 2; round += 1) {
+        for (let round = 0; round < SESSION_SWITCH_ROUNDS; round += 1) {
           for (const session of hot) {
             const started = performance.now();
             await controller.select(session.sessionId, false);
