@@ -1007,7 +1007,12 @@ mod tests {
             DeviceScope::SessionStart.to_string().into(),
             DeviceScope::SessionResume.to_string().into(),
         ];
-        let root_path: Box<str> = project.path.to_string_lossy().into_owned().into();
+        let root_path: Box<str> = runtrol_provider::AbsPath::canonicalize(
+            project.path.to_str().expect("UTF-8 project path"),
+        )
+        .expect("canonical project path")
+        .as_str()
+        .into();
         let roots = vec![root_path.clone()];
         let providers = vec![provider.as_str().into()];
         let (challenge_id, prompt) = composed

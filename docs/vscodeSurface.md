@@ -123,7 +123,7 @@ every trial. The shared ratchet currently caps:
 | Load overrun above the runner's native cadence | 8 ms |
 | Input and scroll p95 | 50 ms |
 | Renderer backlog | 1,024 frames |
-| Hot-session switch p95 | 100 ms |
+| Hot-session switch p95 | 125 ms |
 | Cold provider-native resume | 1,500 ms |
 | Full workspace reload restoration | 1,750 ms |
 

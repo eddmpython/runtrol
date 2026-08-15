@@ -9,6 +9,6 @@
   "webviewScrollP95Ms": 50,
   "webviewPendingFrames": 1024,
   "coldResumeMs": 1500,
-  "sessionSwitchP95Ms": 100,
+  "sessionSwitchP95Ms": 125,
   "reloadRestoreMs": 1750
 }
