@@ -1,8 +1,21 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import type { SessionLine } from "./runtimeTypes";
-import { orderedSessions, sessionChoices } from "./sessionNavigation";
+import type { ProviderLine, SessionLine } from "./runtimeTypes";
+import { chatServices, orderedSessions, sessionChoices } from "./sessionNavigation";
+
+const PROVIDERS: ProviderLine[] = [
+  {
+    providerId: "claude",
+    displayName: "Claude Code",
+    installation: { state: "usable", version: "1.0.0" },
+  },
+  {
+    providerId: "codex",
+    displayName: "Codex CLI",
+    installation: { state: "unavailable", why: "not installed" },
+  },
+];
 
 function sessions(count: number): SessionLine[] {
   return Array.from({ length: count }, (_unused, index) => ({
@@ -42,3 +55,37 @@ test("hot and cold groups use deterministic folder ordering", () => {
   );
   assert.equal(ordered.at(-1)?.sessionId, "session-30");
 });
+
+test("chat services preserve discovery order and include services without chats", () => {
+  const services = chatServices([chatSession("one", "claude", true)], PROVIDERS, "one");
+  assert.deepEqual(services.map((service) => service.displayName), ["Claude Code", "Codex CLI"]);
+  assert.equal(services[0]?.selected, true);
+  assert.equal(services[1]?.sessions.length, 0);
+});
+
+test("provider-owned chats stay under their service and unknown providers remain reachable", () => {
+  const listed = [
+    chatSession("cold", "claude"),
+    chatSession("hot", "claude", true),
+    chatSession("other", "future-provider", true),
+  ];
+  const services = chatServices(listed, PROVIDERS, "hot");
+  assert.deepEqual(services.map((service) => service.providerId), ["claude", "codex", "future-provider"]);
+  assert.deepEqual(services[0]?.sessions.map((chat) => chat.sessionId), ["hot", "cold"]);
+  assert.equal(services[2]?.provider, null);
+  assert.equal(services[2]?.displayName, "Future Provider");
+});
+
+function chatSession(sessionId: string, providerId: string, hot = false): SessionLine {
+  return {
+    sessionId,
+    providerId,
+    nativeSessionId: `native-${sessionId}`,
+    label: null,
+    workspace: `C:\\work\\${sessionId}`,
+    hot,
+    lifecycle: hot ? "hotIdle" : "cold",
+    looksStuck: false,
+    sessionGeneration: 1,
+  };
+}

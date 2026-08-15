@@ -21,10 +21,10 @@ import { MissionTree } from "./mission/tree";
 import { managePhones, pairPhone, reviewPhonePairings } from "./pairingAdministration";
 import type { RemoteConnection } from "./protocol";
 import { SelectionStore } from "./selectionStore";
-import { uniqueSessionTitle } from "./sessionDisplay";
+import { providerDisplayName, uniqueSessionTitle } from "./sessionDisplay";
 import { RuntimeState } from "./state";
 import { StudioRuntimeClient } from "./runtimeClient";
-import { ProvidersTree, SessionsTree } from "./trees";
+import { ProvidersTree, ServiceItem, SessionsTree } from "./trees";
 
 export type RuntrolExtensionApi = {
   readonly ready: Promise<void>;
@@ -102,6 +102,7 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
     },
     (session) => uniqueSessionTitle(session, state.sessions, state.providers),
     (visible) => controller.conversationVisibilityChanged(visible),
+    (session) => providerDisplayName(session.providerId, state.providers),
   );
   controller = new Controller(context, client, runtime, state, conversation, selection);
   const missionController = new MissionController(client, controller, state);
@@ -259,6 +260,10 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
     vscode.commands.registerCommand(
       "runtrol.startSession",
       () => run(() => afterReady(() => controller.startSession())),
+    ),
+    vscode.commands.registerCommand(
+      "runtrol.startServiceChat",
+      (item?: ServiceItem) => run(() => afterReady(() => controller.startSession(item?.startProviderId ?? undefined))),
     ),
     vscode.commands.registerCommand(
       "runtrol.selectSession",

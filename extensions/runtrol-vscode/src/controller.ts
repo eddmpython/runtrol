@@ -283,14 +283,22 @@ export class Controller implements vscode.Disposable {
     return resumed;
   }
 
-  async startSession(): Promise<void> {
+  async startSession(providerId?: string): Promise<void> {
     await this.refresh();
-    const selectedWorkspace = await this.chooseStartWorkspace();
-    if (!selectedWorkspace) {
+    const provider = providerId
+      ? this.state.providers.find((candidate) => candidate.providerId === providerId) ?? null
+      : await chooseProvider(this.state.providers);
+    if (!provider) {
+      if (providerId) {
+        throw new Error(`the installed provider ${providerId} is no longer listed`);
+      }
       return;
     }
-    const provider = await chooseProvider(this.state.providers);
-    if (!provider) {
+    if (provider.installation.state !== "usable") {
+      throw new Error(`the installed provider ${provider.providerId} is not usable`);
+    }
+    const selectedWorkspace = await this.chooseStartWorkspace();
+    if (!selectedWorkspace) {
       return;
     }
     const model = await this.chooseModel(provider);
@@ -757,7 +765,7 @@ async function chooseProvider(providers: readonly ProviderLine[]): Promise<Provi
       description: provider.providerId,
       provider,
     })),
-    { title: "Start a runtrol session", placeHolder: "Select an installed CLI" },
+    { title: "Start a Runtrol chat", placeHolder: "Choose an installed service" },
   );
   return selected?.provider ?? null;
 }

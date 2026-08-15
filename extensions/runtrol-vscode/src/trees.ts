@@ -2,9 +2,49 @@ import * as vscode from "vscode";
 
 import type { ProviderLine, SessionLine } from "./runtimeTypes";
 import { sessionStateLabel } from "./runtimeProjection";
-import { orderedSessions } from "./sessionNavigation";
-import { sessionContext, uniqueSessionTitle } from "./sessionDisplay";
+import { chatServices, type ChatService } from "./sessionNavigation";
+import { sessionContext, uniqueChatTitle } from "./sessionDisplay";
 import { RuntimeState } from "./state";
+
+export class ServiceItem extends vscode.TreeItem {
+  readonly startProviderId: string | null;
+
+  constructor(readonly service: ChatService) {
+    super(
+      service.displayName,
+      service.sessions.length > 0
+        ? vscode.TreeItemCollapsibleState.Expanded
+        : vscode.TreeItemCollapsibleState.None,
+    );
+    const count = service.sessions.length;
+    const usable = service.provider?.installation.state === "usable";
+    const chatAvailable = usable || count > 0;
+    this.id = `runtrol.service.${encodeURIComponent(service.providerId)}`;
+    this.startProviderId = usable ? service.providerId : null;
+    this.description = count > 0
+      ? `${count} ${count === 1 ? "chat" : "chats"}`
+      : usable
+        ? "New chat"
+        : "Unavailable";
+    this.tooltip = [
+      service.displayName,
+      count > 0 ? `${count} provider-owned ${count === 1 ? "chat" : "chats"}` : "No chats yet",
+      service.provider?.installation.why ?? (usable ? "Ready to start a chat" : "Provider is not currently listed"),
+    ].join("\n");
+    this.contextValue = usable ? "runtrol.service.ready" : "runtrol.service.unavailable";
+    this.iconPath = new vscode.ThemeIcon(
+      chatAvailable ? "comment-discussion" : "circle-slash",
+      service.selected
+        ? new vscode.ThemeColor("charts.green")
+        : chatAvailable
+          ? undefined
+          : new vscode.ThemeColor("disabledForeground"),
+    );
+    this.accessibilityInformation = {
+      label: `${service.displayName}, ${this.description}`,
+    };
+  }
+}
 
 export class SessionItem extends vscode.TreeItem {
   constructor(
@@ -13,7 +53,7 @@ export class SessionItem extends vscode.TreeItem {
     sessions: readonly SessionLine[],
     providers: readonly ProviderLine[],
   ) {
-    const title = uniqueSessionTitle(session, sessions, providers);
+    const title = uniqueChatTitle(session, sessions);
     super(title, vscode.TreeItemCollapsibleState.None);
     const state = sessionStateLabel(session);
     this.description = `${state}${session.looksStuck ? " · needs attention" : ""}`;
@@ -26,7 +66,7 @@ export class SessionItem extends vscode.TreeItem {
     this.contextValue = "runtrol.session";
     this.command = {
       command: "runtrol.selectSession",
-      title: "Focus Session",
+      title: "Open Chat",
       arguments: [this],
     };
     this.iconPath = new vscode.ThemeIcon(
@@ -40,7 +80,9 @@ export class SessionItem extends vscode.TreeItem {
   }
 }
 
-export class SessionsTree implements vscode.TreeDataProvider<SessionItem>, vscode.Disposable {
+export type ChatTreeItem = ServiceItem | SessionItem;
+
+export class SessionsTree implements vscode.TreeDataProvider<ChatTreeItem>, vscode.Disposable {
   private readonly changedEmitter = new vscode.EventEmitter<void>();
   readonly onDidChangeTreeData = this.changedEmitter.event;
   private readonly subscription: vscode.Disposable;
@@ -49,19 +91,26 @@ export class SessionsTree implements vscode.TreeDataProvider<SessionItem>, vscod
     this.subscription = state.onDidChange(() => this.changedEmitter.fire());
   }
 
-  getTreeItem(element: SessionItem): vscode.TreeItem {
+  getTreeItem(element: ChatTreeItem): vscode.TreeItem {
     return element;
   }
 
-  getChildren(): SessionItem[] {
+  getChildren(element?: ChatTreeItem): ChatTreeItem[] {
     const selected = this.state.selected?.sessionId ?? null;
-    return orderedSessions(this.state.sessions, selected)
-      .map((session) => new SessionItem(
-        session,
-        session.sessionId === selected,
-        this.state.sessions,
-        this.state.providers,
-      ));
+    if (element instanceof ServiceItem) {
+      return element.service.sessions
+        .map((session) => new SessionItem(
+          session,
+          session.sessionId === selected,
+          element.service.sessions,
+          this.state.providers,
+        ));
+    }
+    if (element) {
+      return [];
+    }
+    return chatServices(this.state.sessions, this.state.providers, selected)
+      .map((service) => new ServiceItem(service));
   }
 
   dispose(): void {

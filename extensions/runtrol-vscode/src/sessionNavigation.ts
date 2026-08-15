@@ -1,6 +1,6 @@
 import type { ProviderLine, SessionLine } from "./runtimeTypes";
 import { sessionStateLabel } from "./runtimeProjection";
-import { sessionContext, uniqueSessionTitle, workspaceName } from "./sessionDisplay";
+import { providerDisplayName, sessionContext, uniqueSessionTitle, workspaceName } from "./sessionDisplay";
 
 export type SessionChoice = {
   label: string;
@@ -8,6 +8,14 @@ export type SessionChoice = {
   detail: string;
   picked: boolean;
   session: SessionLine;
+};
+
+export type ChatService = {
+  providerId: string;
+  displayName: string;
+  provider: ProviderLine | null;
+  sessions: readonly SessionLine[];
+  selected: boolean;
 };
 
 export function orderedSessions(
@@ -38,6 +46,54 @@ export function sessionChoices(
     picked: session.sessionId === selected,
     session,
   }));
+}
+
+export function chatServices(
+  sessions: readonly SessionLine[],
+  providers: readonly ProviderLine[],
+  selectedSessionId: string | null,
+): ChatService[] {
+  const byProvider = new Map<string, SessionLine[]>();
+  for (const session of sessions) {
+    const existing = byProvider.get(session.providerId) ?? [];
+    existing.push(session);
+    byProvider.set(session.providerId, existing);
+  }
+
+  const services = providers.map((provider) => chatService(
+    provider.providerId,
+    provider.displayName,
+    provider,
+    byProvider.get(provider.providerId) ?? [],
+    selectedSessionId,
+  ));
+  const known = new Set(providers.map((provider) => provider.providerId));
+  for (const providerId of [...byProvider.keys()].filter((id) => !known.has(id)).sort()) {
+    services.push(chatService(
+      providerId,
+      providerDisplayName(providerId),
+      null,
+      byProvider.get(providerId) ?? [],
+      selectedSessionId,
+    ));
+  }
+  return services;
+}
+
+function chatService(
+  providerId: string,
+  displayName: string,
+  provider: ProviderLine | null,
+  sessions: readonly SessionLine[],
+  selectedSessionId: string | null,
+): ChatService {
+  return {
+    providerId,
+    displayName,
+    provider,
+    sessions: orderedSessions(sessions, selectedSessionId),
+    selected: sessions.some((session) => session.sessionId === selectedSessionId),
+  };
 }
 
 function sessionRank(session: SessionLine, selected: string | null): number {

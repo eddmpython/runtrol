@@ -26,6 +26,17 @@ export function uniqueSessionTitle(
   return duplicates.length > 1 ? `${title} · #${shortIdentity(session)}` : title;
 }
 
+export function uniqueChatTitle(
+  session: SessionLine,
+  sessions: readonly SessionLine[],
+): string {
+  const title = session.label?.trim() || workspaceName(session.workspace);
+  const duplicates = sessions.filter(
+    (candidate) => (candidate.label?.trim() || workspaceName(candidate.workspace)) === title,
+  );
+  return duplicates.length > 1 ? `${title} · #${shortIdentity(session)}` : title;
+}
+
 export function sessionContext(
   session: SessionLine,
   providers: readonly ProviderLine[] = [],

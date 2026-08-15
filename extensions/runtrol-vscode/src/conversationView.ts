@@ -1,7 +1,7 @@
 import * as vscode from "vscode";
 
 import type { SessionLine } from "./runtimeTypes";
-import { sessionTitle } from "./sessionDisplay";
+import { providerDisplayName, sessionTitle } from "./sessionDisplay";
 import { webviewReadyKind } from "./webviewReady";
 
 type ViewAction =
@@ -71,6 +71,7 @@ export class ConversationView implements vscode.Disposable {
     private readonly action: (message: ViewAction) => void,
     private readonly titleOf: (session: SessionLine) => string = sessionTitle,
     private readonly visibility: (visible: boolean) => void = () => {},
+    private readonly providerOf: (session: SessionLine) => string = (session) => providerDisplayName(session.providerId),
   ) {}
 
   async show(preserveFocus = false): Promise<void> {
@@ -166,6 +167,7 @@ export class ConversationView implements vscode.Disposable {
       type: "reset",
       session,
       title: session ? this.titleOf(session) : null,
+      provider: session ? this.providerOf(session) : null,
       generation: this.generation,
     });
     return this.generation;
@@ -176,7 +178,12 @@ export class ConversationView implements vscode.Disposable {
     if (this.panel) {
       this.panel.title = this.panelTitle(session);
     }
-    void this.panel?.webview.postMessage({ type: "session", session, title: this.titleOf(session) });
+    void this.panel?.webview.postMessage({
+      type: "session",
+      session,
+      title: this.titleOf(session),
+      provider: this.providerOf(session),
+    });
   }
 
   async waitForCurrentRender(): Promise<void> {
@@ -412,7 +419,7 @@ export class ConversationView implements vscode.Disposable {
   }
 
   private panelTitle(session: SessionLine | null): string {
-    return session ? `Runtrol: ${this.titleOf(session)}` : "Runtrol Session";
+    return session ? `Runtrol: ${this.titleOf(session)}` : "Runtrol Chat";
   }
 
   private html(webview: vscode.Webview): string {
@@ -426,23 +433,35 @@ export class ConversationView implements vscode.Disposable {
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource}; script-src 'nonce-${nonce}';">
   <link rel="stylesheet" href="${style}">
-  <title>Runtrol session</title>
+  <title>Runtrol chat</title>
 </head>
 <body>
   <header>
+    <div class="service-avatar" id="service-avatar" aria-hidden="true">R</div>
     <div class="session-heading">
-      <strong id="session-title">No active session</strong>
-      <div id="session-path"></div>
+      <div class="service-context">
+        <span>Chatting with</span>
+        <strong id="service-name">Select a service</strong>
+      </div>
+      <div class="chat-context">
+        <strong id="session-title">No active chat</strong>
+        <span class="context-separator" aria-hidden="true">·</span>
+        <span id="session-path">Choose a service from Chats</span>
+      </div>
     </div>
     <div class="header-actions">
       <span id="session-state"></span>
-      <button id="open-workspace" type="button" title="Open workspace">Open workspace</button>
+      <button id="open-workspace" type="button" title="Open workspace" hidden>Open workspace</button>
     </div>
   </header>
   <div id="status" role="status"></div>
   <main id="conversation" aria-live="polite"></main>
   <form id="composer">
-    <textarea id="prompt" rows="2" aria-label="Prompt" placeholder="Select a session to send a prompt" disabled></textarea>
+    <div class="composer-context">
+      <span>Message</span>
+      <strong id="composer-service">No service selected</strong>
+    </div>
+    <textarea id="prompt" rows="2" aria-label="Message" placeholder="Select a service and chat" disabled></textarea>
     <div class="actions">
       <span class="send-hint">Ctrl+Enter to send</span>
       <button id="interrupt" type="button" disabled>Interrupt</button>

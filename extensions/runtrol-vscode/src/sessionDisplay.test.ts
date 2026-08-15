@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import type { ProviderLine, SessionLine } from "./runtimeTypes";
-import { sessionContext, sessionTitle, uniqueSessionTitle } from "./sessionDisplay";
+import { sessionContext, sessionTitle, uniqueChatTitle, uniqueSessionTitle } from "./sessionDisplay";
 
 const PROVIDERS: ProviderLine[] = [
   {
@@ -47,4 +47,15 @@ test("duplicate fallback names gain a short stable discriminator only when neede
   assert.equal(uniqueSessionTitle(first, [first], PROVIDERS), "runtrol · Claude Code");
   assert.equal(uniqueSessionTitle(first, [first, second], PROVIDERS), "runtrol · Claude Code · #123456");
   assert.equal(uniqueSessionTitle(second, [first, second], PROVIDERS), "runtrol · Claude Code · #654321");
+});
+
+test("a service chat title omits the provider already shown by its parent", () => {
+  const first = session();
+  const second = session({
+    sessionId: "019fcafe-0000-7000-8000-fedcba654321",
+    nativeSessionId: "provider-session-654321",
+  });
+  assert.equal(uniqueChatTitle(first, [first]), "runtrol");
+  assert.equal(uniqueChatTitle(first, [first, second]), "runtrol · #123456");
+  assert.equal(uniqueChatTitle(session({ label: "Release audit" }), [first]), "Release audit");
 });

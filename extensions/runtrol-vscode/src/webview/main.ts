@@ -20,8 +20,8 @@ type FrameEnvelope = {
 };
 
 type Incoming =
-  | { type: "reset"; session: Session | null; title: string | null; generation: number }
-  | { type: "session"; session: Session; title: string }
+  | { type: "reset"; session: Session | null; title: string | null; provider: string | null; generation: number }
+  | { type: "session"; session: Session; title: string; provider: string }
   | { type: "frames"; batch: FrameEnvelope[]; gap: boolean }
   | { type: "status"; message: string; kind: "info" | "warning" | "error" }
   | { type: "readyProbe" }
@@ -73,7 +73,10 @@ const LOCALIZED_TEXT: Record<string, string> = {
 };
 const vscode = acquireVsCodeApi();
 const title = element<HTMLElement>("session-title");
-const sessionPath = element<HTMLDivElement>("session-path");
+const sessionPath = element<HTMLElement>("session-path");
+const serviceName = element<HTMLElement>("service-name");
+const serviceAvatar = element<HTMLElement>("service-avatar");
+const composerService = element<HTMLElement>("composer-service");
 const sessionState = element<HTMLSpanElement>("session-state");
 const status = element<HTMLDivElement>("status");
 const conversation = element<HTMLElement>("conversation");
@@ -91,15 +94,16 @@ let scheduled = false;
 let visibleCharacters = 0;
 let measurement: Measurement | null = null;
 let followsTail = true;
+let currentProvider = "Coding agent";
 
 window.addEventListener("message", ({ data }: MessageEvent<Incoming>) => {
   if (data.type === "reset") {
-    reset(data.session, data.title, data.generation);
+    reset(data.session, data.title, data.provider, data.generation);
     return;
   }
   if (data.type === "session") {
     selected = data.session;
-    renderSession(data.session, data.title);
+    renderSession(data.session, data.title, data.provider);
     return;
   }
   if (data.type === "status") {
@@ -154,7 +158,12 @@ conversation.addEventListener("scroll", () => {
   followsTail = conversation.scrollHeight - conversation.scrollTop - conversation.clientHeight < 24;
 }, { passive: true });
 
-function reset(session: Session | null, displayTitle: string | null, nextGeneration: number): void {
+function reset(
+  session: Session | null,
+  displayTitle: string | null,
+  provider: string | null,
+  nextGeneration: number,
+): void {
   selected = session;
   generation = nextGeneration;
   pending.length = 0;
@@ -164,11 +173,13 @@ function reset(session: Session | null, displayTitle: string | null, nextGenerat
   followsTail = true;
   status.textContent = "";
   status.className = "";
-  renderSession(session, displayTitle);
+  renderSession(session, displayTitle, provider);
   prompt.value = "";
   resizePrompt();
   if (session) {
-    appendMessage("meta", `Connected to ${sessionStateLabel(session)}`);
+    appendMessage("meta", `Connected to ${currentProvider} · ${sessionStateLabel(session)}`);
+  } else {
+    renderEmptyState();
   }
   afterFrameOrDelay(
     {
@@ -185,9 +196,13 @@ function reset(session: Session | null, displayTitle: string | null, nextGenerat
   );
 }
 
-function renderSession(session: Session | null, displayTitle: string | null): void {
-  title.textContent = session ? displayTitle || sessionTitle(session) : "No active session";
-  sessionPath.textContent = session?.workspace ?? "Choose a session from the Runtrol sidebar.";
+function renderSession(session: Session | null, displayTitle: string | null, provider: string | null): void {
+  currentProvider = provider || "Coding agent";
+  title.textContent = session ? displayTitle || sessionTitle(session) : "No active chat";
+  sessionPath.textContent = session?.workspace ?? "Choose a service from Chats";
+  serviceName.textContent = session ? currentProvider : "Select a service";
+  serviceAvatar.textContent = session ? serviceInitials(currentProvider) : "R";
+  composerService.textContent = session ? currentProvider : "No service selected";
   sessionState.textContent = session ? sessionStateLabel(session) : "";
   sessionState.className = session ? (session.hot ? "hot" : "cold") : "";
   const interactive = session?.hot === true;
@@ -196,11 +211,28 @@ function renderSession(session: Session | null, displayTitle: string | null): vo
   interrupt.disabled = !interactive;
   close.disabled = !session;
   openWorkspace.disabled = !session;
+  openWorkspace.hidden = !session;
+  prompt.setAttribute("aria-label", session ? `Message ${currentProvider}` : "Message");
   prompt.placeholder = !session
-    ? "Select a session to send a prompt"
+    ? "Select a service and chat"
     : interactive
-      ? "Send unchanged text to the provider CLI"
+      ? `Message ${currentProvider}`
       : "Resuming the provider-owned session";
+}
+
+function renderEmptyState(): void {
+  const empty = document.createElement("section");
+  empty.className = "empty-state";
+  empty.dataset.characters = "0";
+  const mark = document.createElement("div");
+  mark.className = "empty-mark";
+  mark.textContent = "R";
+  const heading = document.createElement("h1");
+  heading.textContent = "Choose a service to start chatting";
+  const detail = document.createElement("p");
+  detail.textContent = "Open Chats in the Runtrol sidebar, then select a service or one of its existing chats.";
+  empty.append(mark, heading, detail);
+  conversation.append(empty);
 }
 
 function enqueue(frames: readonly unknown[]): void {
@@ -348,10 +380,30 @@ function appendMessage(side: string, text: string, delta = false, messageId = ""
     item.dataset.messageId = messageId;
   }
   item.dataset.characters = String(text.length);
-  item.textContent = text;
+  const author = messageAuthor(side);
+  if (author) {
+    const label = document.createElement("span");
+    label.className = "message-author";
+    label.textContent = author;
+    item.append(label);
+  }
+  item.append(document.createTextNode(text));
   visibleCharacters += text.length;
   conversation.append(item);
   trim();
+}
+
+function messageAuthor(side: string): string | null {
+  if (side === "mine") return "You";
+  if (side === "theirs") return currentProvider;
+  if (side === "thought") return `${currentProvider} thinking`;
+  return null;
+}
+
+function serviceInitials(name: string): string {
+  const words = name.split(/\s+/).filter(Boolean);
+  const initials = words.slice(0, 2).map((word) => word.charAt(0)).join("");
+  return initials.toLocaleUpperCase("en-US") || "R";
 }
 
 function appendApproval(body: UnknownRecord): void {

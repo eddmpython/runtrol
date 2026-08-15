@@ -52,6 +52,7 @@
     "onCommand:runtrol.reviewRuntimeRequests",
     "onCommand:runtrol.switchSession",
     "onCommand:runtrol.startSession",
+    "onCommand:runtrol.startServiceChat",
     "onCommand:runtrol.selectSession",
     "onCommand:runtrol.openConversation",
     "onCommand:runtrol.renameSession",
@@ -95,7 +96,7 @@
       "runtrol": [
         {
           "id": "runtrol.sessions",
-          "name": "Sessions"
+          "name": "Chats"
         },
         {
           "id": "runtrol.missions",
@@ -110,7 +111,7 @@
     "commands": [
       {
         "command": "runtrol.refresh",
-        "title": "Runtrol: Refresh Sessions",
+        "title": "Runtrol: Refresh Chats and Services",
         "icon": "$(refresh)"
       },
       {
@@ -155,31 +156,36 @@
       },
       {
         "command": "runtrol.switchSession",
-        "title": "Runtrol: Switch Session",
+        "title": "Runtrol: Switch Chat",
         "icon": "$(search)"
       },
       {
         "command": "runtrol.startSession",
-        "title": "Runtrol: Start Session",
+        "title": "Runtrol: New Chat",
+        "icon": "$(add)"
+      },
+      {
+        "command": "runtrol.startServiceChat",
+        "title": "Runtrol: New Chat with Service",
         "icon": "$(add)"
       },
       {
         "command": "runtrol.selectSession",
-        "title": "Runtrol: Focus Session"
+        "title": "Runtrol: Open Chat"
       },
       {
         "command": "runtrol.openConversation",
-        "title": "Runtrol: Open Conversation",
+        "title": "Runtrol: Open Current Chat",
         "icon": "$(comment-discussion)"
       },
       {
         "command": "runtrol.renameSession",
-        "title": "Runtrol: Rename Session",
+        "title": "Runtrol: Rename Chat",
         "icon": "$(edit)"
       },
       {
         "command": "runtrol.openWorkspace",
-        "title": "Runtrol: Open Session Workspace",
+        "title": "Runtrol: Open Chat Workspace",
         "icon": "$(folder-opened)"
       },
       {
@@ -189,7 +195,7 @@
       },
       {
         "command": "runtrol.closeSession",
-        "title": "Runtrol: Close Session",
+        "title": "Runtrol: Close Chat",
         "icon": "$(close)"
       },
       {
@@ -303,6 +309,12 @@
       }
     ],
     "menus": {
+      "commandPalette": [
+        {
+          "command": "runtrol.startServiceChat",
+          "when": "false"
+        }
+      ],
       "view/title": [
         {
           "command": "runtrol.openConversation",
@@ -377,6 +389,11 @@
       ],
       "view/item/context": [
         {
+          "command": "runtrol.startServiceChat",
+          "when": "view == runtrol.sessions && viewItem == runtrol.service.ready",
+          "group": "inline@1"
+        },
+        {
           "command": "runtrol.renameSession",
           "when": "view == runtrol.sessions && viewItem == runtrol.session",
           "group": "inline@1"
@@ -443,6 +460,12 @@
         }
       ]
     },
+    "viewsWelcome": [
+      {
+        "view": "runtrol.sessions",
+        "contents": "No installed coding-agent services are available.\n[Refresh services](command:runtrol.refresh)"
+      }
+    ],
     "configuration": {
       "title": "Runtrol",
       "properties": {

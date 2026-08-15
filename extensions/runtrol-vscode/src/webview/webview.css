@@ -10,7 +10,12 @@
 
 body {
   display: grid;
-  grid-template-rows: auto auto minmax(8rem, 1fr) auto;
+  grid-template-areas:
+    "header"
+    "status"
+    "conversation"
+    "composer";
+  grid-template-rows: auto auto minmax(0, 1fr) 9.4rem;
   height: 100vh;
   margin: 0;
   overflow: hidden;
@@ -19,32 +24,79 @@ body {
 }
 
 header {
-  display: flex;
+  display: grid;
+  grid-area: header;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
-  justify-content: space-between;
-  gap: 1rem;
-  min-height: 4.4rem;
-  padding: 0.8rem max(1rem, calc((100vw - 960px) / 2));
+  gap: 0.8rem;
+  min-height: 5rem;
+  padding: 0.85rem max(1rem, calc((100vw - 960px) / 2));
   border-bottom: 1px solid var(--vscode-editorGroup-border, transparent);
+  background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+}
+
+.service-avatar {
+  display: grid;
+  width: 2.65rem;
+  height: 2.65rem;
+  place-items: center;
+  border: 1px solid var(--vscode-focusBorder);
+  border-radius: 0.8rem;
+  color: var(--vscode-button-foreground);
+  background: var(--vscode-button-background);
+  font-size: 0.9rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
 }
 
 .session-heading {
   min-width: 0;
 }
 
-header strong {
-  display: block;
+.service-context,
+.chat-context {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  min-width: 0;
+}
+
+.service-context > span {
+  color: var(--vscode-descriptionForeground);
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+#service-name {
   overflow: hidden;
   font-size: 1.05rem;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-#session-path {
-  margin-top: 0.2rem;
+#session-title {
+  flex: 0 1 auto;
   overflow: hidden;
+  font-size: 0.9rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-context {
+  margin-top: 0.22rem;
   color: var(--vscode-descriptionForeground);
-  font-size: 0.9em;
+  font-size: 0.88rem;
+}
+
+.context-separator {
+  flex: 0 0 auto;
+  opacity: 0.55;
+}
+
+#session-path {
+  overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -73,6 +125,7 @@ header strong {
 
 #status {
   display: none;
+  grid-area: status;
   width: min(960px, calc(100% - 2rem));
   margin: 0.65rem auto 0;
   padding: 0.45rem 0.6rem;
@@ -94,10 +147,47 @@ header strong {
 }
 
 #conversation {
+  grid-area: conversation;
   min-height: 0;
-  padding: 1.25rem max(1rem, calc((100vw - 960px) / 2));
+  padding: 1.5rem max(1rem, calc((100vw - 960px) / 2));
   overflow: auto;
   scrollbar-gutter: stable;
+}
+
+.empty-state {
+  display: flex;
+  min-height: 100%;
+  align-items: center;
+  flex-direction: column;
+  justify-content: center;
+  padding: 2rem;
+  text-align: center;
+}
+
+.empty-mark {
+  display: grid;
+  width: 3.5rem;
+  height: 3.5rem;
+  margin-bottom: 1rem;
+  place-items: center;
+  border: 1px solid var(--vscode-widget-border, var(--vscode-editorGroup-border));
+  border-radius: 1rem;
+  color: var(--vscode-descriptionForeground);
+  background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+  font-size: 1.1rem;
+  font-weight: 700;
+}
+
+.empty-state h1 {
+  margin: 0;
+  font-size: 1.3rem;
+}
+
+.empty-state p {
+  max-width: 34rem;
+  margin: 0.6rem 0 0;
+  color: var(--vscode-descriptionForeground);
+  line-height: 1.55;
 }
 
 .message {
@@ -108,25 +198,37 @@ header strong {
   margin: 0 0 1rem;
   padding: 0.75rem 0.85rem;
   border: 1px solid var(--vscode-widget-border, transparent);
-  border-radius: 0.7rem;
+  border-radius: 0.8rem;
+  line-height: 1.5;
   overflow-wrap: anywhere;
   white-space: pre-wrap;
 }
 
+.message-author {
+  display: block;
+  margin-bottom: 0.35rem;
+  color: var(--vscode-descriptionForeground);
+  font-size: 0.78rem;
+  font-style: normal;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+}
+
 .message.mine {
+  max-width: 76%;
   margin-left: auto;
   color: var(--vscode-input-foreground);
   background: var(--vscode-input-background);
 }
 
 .message.theirs {
-  max-width: 100%;
-  padding-inline: 0;
-  border-color: transparent;
-  background: var(--vscode-editor-background);
+  max-width: 88%;
+  margin-right: auto;
+  background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
 }
 
 .message.thought {
+  max-width: 88%;
   color: var(--vscode-descriptionForeground);
   background: var(--vscode-textBlockQuote-background);
   font-style: italic;
@@ -178,9 +280,27 @@ header strong {
 }
 
 #composer {
-  padding: 0.8rem max(1rem, calc((100vw - 960px) / 2)) 1rem;
+  grid-area: composer;
+  min-height: 9.4rem;
+  padding: 0.75rem max(1rem, calc((100vw - 960px) / 2)) 1rem;
   border-top: 1px solid var(--vscode-editorGroup-border, transparent);
-  background: var(--vscode-editor-background);
+  background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+}
+
+.composer-context {
+  display: flex;
+  align-items: baseline;
+  gap: 0.35rem;
+  margin-bottom: 0.45rem;
+  color: var(--vscode-descriptionForeground);
+  font-size: 0.82rem;
+}
+
+.composer-context strong {
+  overflow: hidden;
+  color: var(--vscode-foreground);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 textarea {
@@ -196,6 +316,7 @@ textarea {
   color: var(--vscode-input-foreground);
   background: var(--vscode-input-background);
   font: inherit;
+  line-height: 1.45;
 }
 
 textarea:focus {
@@ -237,12 +358,22 @@ button:disabled {
 
 @media (max-width: 600px) {
   header {
-    align-items: flex-start;
+    grid-template-columns: auto minmax(0, 1fr);
   }
 
   .header-actions {
-    align-items: flex-end;
+    grid-column: 1 / -1;
+    justify-content: flex-end;
+  }
+
+  .chat-context {
+    align-items: flex-start;
     flex-direction: column;
+    gap: 0.12rem;
+  }
+
+  .context-separator {
+    display: none;
   }
 
   .message {
