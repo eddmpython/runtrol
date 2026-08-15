@@ -272,8 +272,13 @@ export class ConversationView implements vscode.Disposable {
 
   private async waitForVisibleWebview(panel: vscode.WebviewPanel): Promise<void> {
     const deadline = Date.now() + VISIBLE_READY_TIMEOUT_MS;
+    let nextProbeAt = 0;
     while (this.panel === panel && Date.now() < deadline) {
       if (panel.visible && this.visibleReady) return;
+      if (panel.visible && Date.now() >= nextProbeAt) {
+        nextProbeAt = Date.now() + 250;
+        void panel.webview.postMessage({ type: "readyProbe" });
+      }
       await delay(25);
     }
     if (this.panel !== panel) {

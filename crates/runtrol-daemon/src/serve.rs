@@ -1530,14 +1530,35 @@ fn requested_provider(request: &Request) -> Option<&str> {
 ///
 /// Reads a request, asks the one task that owns the sessions, and writes back what it says. A connection that goes
 /// away simply ends: it is not a failure the daemon has to act on.
+async fn converse(
+    connection: SurfaceConnection,
+    conversation: Conversation,
+    services: ConnectionServices,
+) {
+    let mut release_watch_memory = false;
+    converse_inner(
+        connection,
+        conversation,
+        services,
+        &mut release_watch_memory,
+    )
+    .await;
+    if release_watch_memory {
+        // The inner future owns the transport, relay state, and encoded frame. Awaiting it here drops those values
+        // before allocator pressure relief runs, including when session close races with the peer disconnect.
+        runtrol_childproc::footprint::release_unused_memory();
+    }
+}
+
 #[expect(
     clippy::too_many_lines,
     reason = "one connection lifecycle keeps reservation cancellation and request ownership visible together"
 )]
-async fn converse(
+async fn converse_inner(
     mut connection: SurfaceConnection,
     mut conversation: Conversation,
     services: ConnectionServices,
+    release_watch_memory: &mut bool,
 ) {
     let ConnectionServices {
         asking,
@@ -1816,11 +1837,7 @@ async fn converse(
                     return;
                 }
                 relay(&mut connection, *watching).await;
-                // The relay owns the large encoded watch frame, while the surface may retain its transport buffer.
-                // Drop both before asking the allocator to return their unused pages. Session close can race with a
-                // peer disconnect, so its lifecycle release may otherwise run before the watch task has retired.
-                drop(connection);
-                runtrol_childproc::footprint::release_unused_memory();
+                *release_watch_memory = true;
                 return;
             }
 

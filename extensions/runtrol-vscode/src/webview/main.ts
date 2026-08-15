@@ -24,6 +24,7 @@ type Incoming =
   | { type: "session"; session: Session; title: string }
   | { type: "frames"; batch: FrameEnvelope[]; gap: boolean }
   | { type: "status"; message: string; kind: "info" | "warning" | "error" }
+  | { type: "readyProbe" }
   | { type: "measureStart"; id: string }
   | { type: "measureEnd"; id: string; producedFrames: number; droppedFrames: number };
 
@@ -103,6 +104,10 @@ window.addEventListener("message", ({ data }: MessageEvent<Incoming>) => {
   }
   if (data.type === "status") {
     setStatus(data.message, data.kind);
+    return;
+  }
+  if (data.type === "readyProbe") {
+    vscode.postMessage({ type: "webviewReady" });
     return;
   }
   if (data.type === "measureStart") {

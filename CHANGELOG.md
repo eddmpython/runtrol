@@ -25,7 +25,8 @@ and refactoring that no user can observe do not belong here.
   activation within its startup budget on every supported operating system. Session navigation initializes as soon
   as Runtime is ready while the independent Mission list continues loading.
 - Opening a conversation now completes only after VS Code's panel state and editor-tab model agree on the active
-  Runtrol tab, preventing intermittent focus on another editor.
+  Runtrol tab, preventing intermittent focus on another editor. Studio also re-probes an already live Webview after
+  hide and restore transitions instead of waiting for a startup notification that has already been delivered.
 - Studio verifies a newly installed CLI in the background and refreshes its provider state automatically, so the CLI
   can become usable without an extra restart or manual refresh.
 - Local Runtime and Studio connections retire Windows named pipes gracefully before an immediate reconnect, avoiding
@@ -42,8 +43,8 @@ and refactoring that no user can observe do not belong here.
 - Closing a session now invalidates any concurrently refreshed inventory and accepts a cooled session with no durable
   pointer as already closed, so removed sessions disappear from Studio immediately.
 - Runtime retires disconnected local event and session-index watches even while their streams are quiet, then returns
-  allocator pages after bounded large live events leave the fan-out path, keeping settled daemon memory within the
-  enforced budget.
+  allocator pages after the watch task and bounded large live events fully leave the fan-out path, keeping settled
+  daemon memory within the enforced budget.
 - The phone app now permits its same-origin presentation contract under its content security policy, and its pairing
   screen reports readiness without exposing actions that require an already connected PC.
 
