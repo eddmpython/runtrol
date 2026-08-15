@@ -64,7 +64,7 @@ export class Controller implements vscode.Disposable {
       ?? this.state.sessions.find((session) => session.hot)
       ?? null;
     if (selected) {
-      await this.select(selected, false, false);
+      await this.selectForInitialization(selected);
     } else {
       this.conversation.reset(null);
     }
@@ -203,10 +203,37 @@ export class Controller implements vscode.Disposable {
     return selected;
   }
 
+  private selectForInitialization(value: SessionLine): Promise<void> {
+    let applied = false;
+    let resolveApplied: () => void = () => undefined;
+    let rejectApplied: (error: unknown) => void = () => undefined;
+    const ready = new Promise<void>((resolve, reject) => {
+      resolveApplied = resolve;
+      rejectApplied = reject;
+    });
+    const selected = this.selectionTail.then(() => this.selectNow(value, false, false, () => {
+      applied = true;
+      resolveApplied();
+    }));
+    this.selectionTail = selected.catch(() => undefined);
+    void selected.catch((error: unknown) => {
+      if (!applied) {
+        rejectApplied(error);
+        return;
+      }
+      this.conversation.status(
+        `Cannot remember the selected session: ${error instanceof Error ? error.message : String(error)}`,
+        "warning",
+      );
+    });
+    return ready;
+  }
+
   private async selectNow(
     value: SessionItem | SessionLine | string,
     follow: boolean,
     reveal: boolean,
+    afterApplied: () => void = () => undefined,
   ): Promise<void> {
     const id = typeof value === "string" ? value : value instanceof SessionItem
       ? value.session.sessionId
@@ -239,6 +266,7 @@ export class Controller implements vscode.Disposable {
       return;
     }
     this.ensureSelectedWatch();
+    afterApplied();
     await stored;
   }
 
