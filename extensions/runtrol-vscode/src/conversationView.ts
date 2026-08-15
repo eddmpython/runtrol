@@ -77,7 +77,9 @@ export class ConversationView implements vscode.Disposable {
     if (this.panel) {
       const panel = this.panel;
       if (preserveFocus) {
-        panel.reveal(panel.viewColumn ?? vscode.ViewColumn.Active, true);
+        if (!panel.visible) {
+          panel.reveal(panel.viewColumn ?? vscode.ViewColumn.Active, true);
+        }
       } else {
         await focusPanel(panel);
       }

@@ -494,7 +494,8 @@ def exercise(claude: str) -> None:
         raise Failed("node is required to launch the VS Code Extension Host")
     vscode = vscodeExecutable(node)
     binary = provider_gate.buildBinary()
-    with tempfile.TemporaryDirectory(prefix="runtrol-vscode-real-provider-") as raw_root:
+    # Keep the macOS Unix socket below its 103-byte kernel path limit after /tmp canonicalizes to /private/tmp.
+    with tempfile.TemporaryDirectory(prefix="rvp-") as raw_root:
         root = Path(raw_root).resolve()
         if sys.platform == "win32":
             home = root / "runtrol"
