@@ -55,12 +55,12 @@ async function verifyPhase(resultPath: string): Promise<void> {
     currentStage = `${phase}-selection`;
     await within(
       vscode.commands.executeCommand("workbench.view.extension.runtrol"),
-      5_000,
+      continuityTimeoutMs,
       `${phase} view opening`,
     );
     await within(
       vscode.commands.executeCommand("runtrol.openConversation"),
-      5_000,
+      continuityTimeoutMs,
       `${phase} conversation focus`,
     );
     await requireConversationEditor();
