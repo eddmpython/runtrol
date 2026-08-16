@@ -60,6 +60,9 @@ pub struct ClaudeAgent {
     session: SessionId,
     /// The provider's name for it, once it has announced one.
     native: Option<String>,
+    /// Explicit launch choices retained until the provider announces the attached session.
+    model_requested: Option<Box<str>>,
+    reasoning_effort_requested: Option<Box<str>>,
     /// The durable process-group record, dropped before the child handle so the live root can identify the group.
     child_guard: ChildGuard,
     /// The child.
@@ -141,6 +144,8 @@ impl ClaudeAgent {
             provider,
             session: intent.session,
             native: None,
+            model_requested: intent.model.clone(),
+            reasoning_effort_requested: intent.reasoning_effort.clone(),
             child,
             child_guard,
             stdin: Some(stdin),
@@ -195,9 +200,9 @@ impl ClaudeAgent {
                     src_end: self.src_end,
                     body: EventBody::Attached(Box::new(runtrol_provider::Attached {
                         native: startup.native,
-                        // What runtrol asked for, not what will answer. Filled by whoever opened the session; the
-                        // model in the frame is the answering one and rides in the payload.
-                        model_requested: None,
+                        // What runtrol asked for, not what will answer. The answering model stays in the payload.
+                        model_requested: self.model_requested.clone(),
+                        reasoning_effort_requested: self.reasoning_effort_requested.clone(),
                         caps: startup.caps,
                         payload: startup.payload,
                     })),
@@ -464,6 +469,10 @@ fn argv(
     if let Some(model) = &intent.model {
         require_optional(provider, "--model", available_flags, unavailable_flags)?;
         args.extend(["--model".to_owned(), model.to_string()]);
+    }
+    if let Some(reasoning_effort) = &intent.reasoning_effort {
+        require_optional(provider, "--effort", available_flags, unavailable_flags)?;
+        args.extend(["--effort".to_owned(), reasoning_effort.to_string()]);
     }
     if let Some(permission) = &intent.permission {
         require_optional(
@@ -843,6 +852,7 @@ mod tests {
                 .expect("valid"),
             disposition,
             model: None,
+            reasoning_effort: None,
             permission: None,
         }
     }
@@ -925,6 +935,7 @@ mod tests {
         )
         .expect("served");
         assert!(!args.iter().any(|arg| arg == "--model"));
+        assert!(!args.iter().any(|arg| arg == "--effort"));
         assert!(!args.iter().any(|arg| arg == "--permission-mode"));
     }
 
@@ -933,11 +944,16 @@ mod tests {
         let mut flags = all_flags();
         flags.remove("--include-partial-messages");
         flags.remove("--model");
+        flags.remove("--effort");
         flags.remove("--permission-mode");
         let unavailable = [
             (
                 Box::<str>::from("--model"),
                 "the requested model cannot be selected",
+            ),
+            (
+                Box::<str>::from("--effort"),
+                "the requested reasoning posture cannot be selected",
             ),
             (
                 Box::<str>::from("--permission-mode"),
@@ -946,12 +962,14 @@ mod tests {
         ]
         .into_iter()
         .collect();
-        for (model, permission, expected_flag) in [
-            (Some("operator-choice"), None, "--model"),
-            (None, Some("operator-permission"), "--permission-mode"),
+        for (model, effort, permission, expected_flag) in [
+            (Some("operator-choice"), None, None, "--model"),
+            (None, Some("operator-effort"), None, "--effort"),
+            (None, None, Some("operator-permission"), "--permission-mode"),
         ] {
             let mut intent = an_intent(Disposition::Fresh);
             intent.model = model.map(Into::into);
+            intent.reasoning_effort = effort.map(Into::into);
             intent.permission = permission.map(Into::into);
             let error = argv(a_provider(), &intent, &flags, &unavailable)
                 .expect_err("an explicit choice must not be silently dropped");
@@ -965,6 +983,7 @@ mod tests {
         // platform's own refusal names neither the argument nor the character.
         let mut intent = an_intent(Disposition::Fresh);
         intent.model = Some("haiku".into());
+        intent.reasoning_effort = Some("high".into());
         intent.permission = Some("plan".into());
         let args = argv(a_provider(), &intent, &all_flags(), &BTreeMap::new()).expect("served");
         runtrol_childproc::check_all(&args).expect("every argument is passable");

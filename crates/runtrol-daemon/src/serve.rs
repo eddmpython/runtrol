@@ -2329,6 +2329,7 @@ mod tests {
             .expect("valid test path"),
             disposition: runtrol_provider::Disposition::Fresh,
             model: None,
+            reasoning_effort: None,
             permission: None,
         };
         sessions
@@ -3959,6 +3960,7 @@ mod tests {
                     .expect("valid test path"),
                     disposition: runtrol_provider::Disposition::Fresh,
                     model: None,
+                    reasoning_effort: None,
                     permission: None,
                 };
                 sessions

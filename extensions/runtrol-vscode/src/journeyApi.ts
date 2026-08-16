@@ -12,6 +12,7 @@ export type JourneyApi = {
     provider: string,
     workspace: string,
     model?: string | null,
+    reasoningEffort?: string | null,
   ): Promise<string>;
   select(session: string, follow?: boolean): Promise<void>;
   prompt(text: string): Promise<void>;
@@ -39,8 +40,8 @@ export function journeyApi(
   return {
     providers: () => [...state.providers],
     sessions: () => [...state.sessions],
-    start: (provider, workspace, model = null) => afterReady(
-      () => controller.startResolvedSession(provider, workspace, model, "exclusive", false),
+    start: (provider, workspace, model = null, reasoningEffort = null) => afterReady(
+      () => controller.startResolvedSession(provider, workspace, model, reasoningEffort, "exclusive", false),
     ),
     select: (session, follow = false) => afterReady(() => controller.select(session, follow)),
     prompt: (text) => afterReady(() => controller.prompt(text)),

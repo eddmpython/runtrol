@@ -58,6 +58,11 @@ the original daemon and provider processes instead of making a versioned extensi
 - At most eight sessions own hot provider processes.
 - Exactly one selected session owns the full watch and Webview renderer.
 - The sidebar owns session navigation. The selected conversation opens in one reusable editor tab with a bounded renderer and composer.
+- Every New Chat entry uses one guided service, workspace, model, and reasoning-effort flow. Model and effort rows are
+  only the opaque values returned by the installed CLI through Runtime, plus an explicit Provider default choice.
+- The selected conversation keeps its requested model, requested reasoning effort, provider mode, context use,
+  provider-reported cost, and available short and long account-limit windows visible above the stream. Missing
+  provider telemetry remains visibly absent and is never estimated.
 - A hidden conversation pauses its watch at the last delivered cursor. Reopening waits for the new Webview document to become ready before replay continues.
 - An operator name is stored as bounded session metadata. Without one, the visible title is the workspace name plus the runtime-discovered provider name. A short stable suffix appears only when titles collide.
 - The selected session remains first. One fuzzy switcher searches project, provider, state, and workspace metadata.

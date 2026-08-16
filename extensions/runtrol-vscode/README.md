@@ -16,11 +16,14 @@ No Core path is required for a Marketplace installation. The extension verifies 
 ## Use
 
 - Open **Chats**, choose an installed service, then select any chat to open it in one editor tab and follow its exact workspace.
-- Use the plus action on a service row to start a chat directly with that service.
+- Use the plus action on a service row to start a guided chat with that service. Choose the workspace, then a model
+  and reasoning effort reported by the installed CLI, or keep either Provider default.
 - Use **Rename Chat** on a row to replace the automatic project name with a short name of your own.
 - Run **Runtrol: Switch Chat** for fast project, CLI, state, and path search.
-- Run **Runtrol: New Chat** to choose a discovered service and workspace.
+- Run **Runtrol: New Chat** for the same service, workspace, model, and effort flow from the Command Palette.
 - Use **Open Current Chat**, **Open Chat Workspace**, **Interrupt Turn**, and **Close Chat** from the view or Command Palette.
+- Read the active model, effort, mode, context usage, session cost, and available account-limit windows together at
+  the top of the conversation. Runtrol shows only telemetry the provider reports and does not estimate missing data.
 - Use **Runtrol: Review Runtime Requests** to approve an exact external integration metadata-removal or key-rotation request. Metadata removal never deletes provider-owned conversation state, and key rotation shows the integration, current generation, and replacement fingerprint before confirmation.
 
 Fifteen sessions are the daily-use baseline and 30 sessions are the release load. At most eight sessions own a hot process, while exactly one selected session owns the full event stream and active renderer. Cold rows respond immediately and resume through the provider-native session identity.

@@ -237,6 +237,7 @@ impl AcpAgent {
             body: EventBody::Attached(Box::new(Attached {
                 native: opened.1,
                 model_requested: None,
+                reasoning_effort_requested: None,
                 caps,
                 payload,
             })),

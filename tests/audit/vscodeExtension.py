@@ -151,7 +151,7 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
             'process.env.RUNTROL_VSCODE_REAL_PROVIDER_JOURNEY !== "1"',
             "return undefined",
             "sessions: () => [...state.sessions]",
-            'controller.startResolvedSession(provider, workspace, model, "exclusive", false)',
+            'controller.startResolvedSession(provider, workspace, model, reasoningEffort, "exclusive", false)',
         ],
     }
     for relative, tokens in required.items():
@@ -206,7 +206,7 @@ def selftest() -> int:
             'extensionMode !== vscode.ExtensionMode.Test '
             'process.env.RUNTROL_VSCODE_REAL_PROVIDER_JOURNEY !== "1" return undefined '
             'sessions: () => [...state.sessions] '
-            'controller.startResolvedSession(provider, workspace, model, "exclusive", false)'
+            'controller.startResolvedSession(provider, workspace, model, reasoningEffort, "exclusive", false)'
         ),
     }
     if sourceViolations(package, sources):

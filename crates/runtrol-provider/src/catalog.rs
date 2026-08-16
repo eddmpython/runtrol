@@ -30,6 +30,9 @@ pub enum ModelCatalog {
     Aliases {
         /// Tokens accepted where a model identifier would otherwise go.
         aliases: Vec<Box<str>>,
+        /// Provider-owned reasoning choices that apply across those aliases, when discovery exposes them.
+        #[serde(rename = "reasoningEfforts")]
+        reasoning_efforts: Vec<ReasoningChoice>,
         /// Why these are aliases rather than an enumerated catalogue.
         why: Box<str>,
     },
@@ -39,6 +42,9 @@ pub enum ModelCatalog {
         aliases: Vec<Box<str>>,
         /// Exact provider-recorded options, in provider order.
         models: Vec<ModelChoice>,
+        /// Provider-owned reasoning choices that apply to aliases and models without their own list.
+        #[serde(rename = "reasoningEfforts")]
+        reasoning_efforts: Vec<ReasoningChoice>,
         /// Why this is not a complete account catalogue.
         why: Box<str>,
     },
@@ -104,11 +110,13 @@ mod tests {
             ModelCatalog::Known { models: Vec::new() },
             ModelCatalog::Aliases {
                 aliases: vec!["fast".into()],
+                reasoning_efforts: Vec::new(),
                 why: "the CLI exposes aliases only".into(),
             },
             ModelCatalog::Partial {
                 aliases: vec!["fast".into()],
                 models: Vec::new(),
+                reasoning_efforts: Vec::new(),
                 why: "the CLI exposes only a partial catalogue".into(),
             },
             ModelCatalog::unknown("the CLI exposes no discovery surface"),

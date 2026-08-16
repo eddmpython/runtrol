@@ -14,6 +14,7 @@ export const PUBLIC_LIMITS = {
   "maxNativePublicCursorBytes": 8192,
   "maxPageItems": 100,
   "maxPendingEnrollments": 64,
+  "maxReasoningSelectionBytes": 4096,
   "maxRevisionOffers": 16,
   "maxSubscriptions": 32,
   "nativeCursorLifetimeMs": 300000
@@ -224,7 +225,7 @@ export interface RuntimeEventNotification { readonly event: unknown; readonly ev
 export interface RuntimeInstance { readonly instanceId: string; readonly platform: string; readonly version: string; }
 
 /** Numeric public bounds advertised during initialization. */
-export interface RuntimeLimits { readonly challengeLifetimeMs: number; readonly controlLeaseLifetimeMs: number; readonly enrollmentLifetimeMs: number; readonly idempotencyWindowMs: number; readonly maxFrameBytes: number; readonly maxIdempotencyRecords: number; readonly maxInputBytes: number; readonly maxModelSelectionBytes: number; readonly maxNativeAdoptionTokenBytes: number; readonly maxNativePublicCursorBytes: number; readonly maxPageItems: number; readonly maxPendingEnrollments: number; readonly maxRevisionOffers: number; readonly maxSubscriptions: number; readonly nativeCursorLifetimeMs: number; }
+export interface RuntimeLimits { readonly challengeLifetimeMs: number; readonly controlLeaseLifetimeMs: number; readonly enrollmentLifetimeMs: number; readonly idempotencyWindowMs: number; readonly maxFrameBytes: number; readonly maxIdempotencyRecords: number; readonly maxInputBytes: number; readonly maxModelSelectionBytes: number; readonly maxNativeAdoptionTokenBytes: number; readonly maxNativePublicCursorBytes: number; readonly maxPageItems: number; readonly maxPendingEnrollments: number; readonly maxReasoningSelectionBytes: number; readonly maxRevisionOffers: number; readonly maxSubscriptions: number; readonly nativeCursorLifetimeMs: number; }
 
 /** Operational bootstrap data published only after the public endpoint is ready. */
 export interface RuntimeLocatorRecord { readonly endpoint: string; readonly endpointKind: RuntimeEndpointKind; readonly instanceId: string; readonly processId: number; readonly runtimeVersion: string; readonly schema: number; }
@@ -233,7 +234,7 @@ export interface RuntimeLocatorRecord { readonly endpoint: string; readonly endp
 export type RuntimeMethod = "runtime/initialize" | "runtime/initialized" | "runtime/challenge" | "integrations/requestEnrollment" | "integrations/watchEnrollment" | "integrations/getGrant" | "integrations/rotateKey" | "providers/list" | "providers/watch" | "providers/getCapabilities" | "providers/listModels" | "providers/listNativeSessions" | "sessions/list" | "sessions/watchIndex" | "sessions/get" | "sessions/start" | "sessions/adoptNative" | "sessions/resume" | "sessions/acquireControl" | "sessions/renewControl" | "sessions/releaseControl" | "sessions/submitInput" | "sessions/watchEvents" | "sessions/interrupt" | "sessions/cool" | "sessions/forget" | "approvals/listPending" | "approvals/respond" | "sessions/indexChanged" | "sessions/indexEnded" | "providers/changed" | "providers/watchEnded" | "sessions/event" | "sessions/lagged" | "runtime/panicStop";
 
 /** The current model information Runtime can truthfully expose. */
-export type RuntimeModelCatalog = { readonly coverage: "known"; readonly models: ReadonlyArray<RuntimeModelChoice>; } | { readonly aliases: ReadonlyArray<string>; readonly coverage: "aliases"; readonly why: string; } | { readonly aliases: ReadonlyArray<string>; readonly coverage: "partial"; readonly models: ReadonlyArray<RuntimeModelChoice>; readonly why: string; } | { readonly coverage: "unknown"; readonly why: string; } | { readonly coverage: "unsupported"; readonly why: string; };
+export type RuntimeModelCatalog = { readonly coverage: "known"; readonly models: ReadonlyArray<RuntimeModelChoice>; } | { readonly aliases: ReadonlyArray<string>; readonly coverage: "aliases"; readonly reasoningEfforts: ReadonlyArray<RuntimeReasoningChoice>; readonly why: string; } | { readonly aliases: ReadonlyArray<string>; readonly coverage: "partial"; readonly models: ReadonlyArray<RuntimeModelChoice>; readonly reasoningEfforts: ReadonlyArray<RuntimeReasoningChoice>; readonly why: string; } | { readonly coverage: "unknown"; readonly why: string; } | { readonly coverage: "unsupported"; readonly why: string; };
 
 /** One opaque model selection reported by a provider. */
 export interface RuntimeModelChoice { readonly description: string; readonly displayName: string; readonly id: string; readonly isDefault: boolean; readonly reasoningEfforts: ReadonlyArray<RuntimeReasoningChoice>; }
@@ -269,7 +270,7 @@ export interface SessionOpenResult { readonly control: ControlLease; readonly se
 export type SessionWorkspaceAccess = "exclusive" | "shared";
 
 /** Start a new provider-native session in one exact authorized workspace. */
-export interface StartSessionParams { readonly access: SessionWorkspaceAccess; readonly model?: string | null; readonly providerId: ProviderId; readonly requestId: MutationRequestId; readonly workspace: string; }
+export interface StartSessionParams { readonly access: SessionWorkspaceAccess; readonly model?: string | null; readonly providerId: ProviderId; readonly reasoningEffort?: string | null; readonly requestId: MutationRequestId; readonly workspace: string; }
 
 /** Submit caller-owned input under one exact control lease. */
 export interface SubmitInputParams { readonly input: string; readonly leaseGeneration: number; readonly leaseId: string; readonly requestId: MutationRequestId; readonly sessionId: RuntimeSessionId; }

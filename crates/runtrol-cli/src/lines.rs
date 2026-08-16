@@ -73,45 +73,7 @@ pub fn render(response: &Response) -> Vec<String> {
             rendered
         }
 
-        Response::Models(ModelCatalog::Known { models }) if models.is_empty() => {
-            vec!["no models reported".to_owned()]
-        }
-
-        Response::Models(ModelCatalog::Known { models }) => models
-            .iter()
-            .map(|model| {
-                let default = if model.is_default { "  (default)" } else { "" };
-                format!("{}  {}{default}", model.id, model.display_name)
-            })
-            .collect(),
-
-        Response::Models(ModelCatalog::Aliases { aliases, why }) => {
-            let mut lines = vec![format!("aliases only: {why}")];
-            lines.extend(aliases.iter().map(|alias| format!("alias  {alias}")));
-            lines
-        }
-
-        Response::Models(ModelCatalog::Partial {
-            aliases,
-            models,
-            why,
-        }) => {
-            let mut lines = vec![format!("partial catalogue: {why}")];
-            lines.extend(aliases.iter().map(|alias| format!("alias  {alias}")));
-            lines.extend(models.iter().map(|model| {
-                let default = if model.is_default { "  (default)" } else { "" };
-                format!("model  {}  {}{default}", model.id, model.display_name)
-            }));
-            lines
-        }
-
-        Response::Models(ModelCatalog::Unknown { why }) => {
-            vec![format!("model catalogue unknown: {why}")]
-        }
-
-        Response::Models(ModelCatalog::Unsupported { why }) => {
-            vec![format!("model catalogue unsupported: {why}")]
-        }
+        Response::Models(catalogue) => render_models(catalogue),
 
         Response::Started { session } => vec![session.to_string()],
 
@@ -148,6 +110,73 @@ pub fn render(response: &Response) -> Vec<String> {
         // An answer from a daemon newer than this build. Shown rather than dropped: the operator asked for something and
         // deserves to know an answer came back, even one this build cannot lay out.
         other => vec![format!("an answer this build cannot lay out: {other:?}")],
+    }
+}
+
+fn render_models(catalogue: &ModelCatalog) -> Vec<String> {
+    match catalogue {
+        ModelCatalog::Known { models } if models.is_empty() => {
+            vec!["no models reported".to_owned()]
+        }
+        ModelCatalog::Known { models } => models
+            .iter()
+            .flat_map(|model| {
+                let default = if model.is_default { "  (default)" } else { "" };
+                std::iter::once(format!("{}  {}{default}", model.id, model.display_name)).chain(
+                    model
+                        .reasoning_efforts
+                        .iter()
+                        .map(|effort| format!("effort  {}  {}", model.id, effort.id)),
+                )
+            })
+            .collect(),
+        ModelCatalog::Aliases {
+            aliases,
+            reasoning_efforts,
+            why,
+        } => {
+            let mut lines = vec![format!("aliases only: {why}")];
+            lines.extend(aliases.iter().map(|alias| format!("alias  {alias}")));
+            lines.extend(
+                reasoning_efforts
+                    .iter()
+                    .map(|effort| format!("effort  {}", effort.id)),
+            );
+            lines
+        }
+        ModelCatalog::Partial {
+            aliases,
+            models,
+            reasoning_efforts,
+            why,
+        } => {
+            let mut lines = vec![format!("partial catalogue: {why}")];
+            lines.extend(aliases.iter().map(|alias| format!("alias  {alias}")));
+            lines.extend(
+                reasoning_efforts
+                    .iter()
+                    .map(|effort| format!("effort  {}", effort.id)),
+            );
+            lines.extend(models.iter().flat_map(|model| {
+                let default = if model.is_default { "  (default)" } else { "" };
+                std::iter::once(format!(
+                    "model  {}  {}{default}",
+                    model.id, model.display_name
+                ))
+                .chain(
+                    model
+                        .reasoning_efforts
+                        .iter()
+                        .map(|effort| format!("effort  {}  {}", model.id, effort.id)),
+                )
+            }));
+            lines
+        }
+        ModelCatalog::Unknown { why } => vec![format!("model catalogue unknown: {why}")],
+        ModelCatalog::Unsupported { why } => {
+            vec![format!("model catalogue unsupported: {why}")]
+        }
+        other => vec![format!("model catalogue unknown to this build: {other:?}")],
     }
 }
 
@@ -210,7 +239,9 @@ fn render_watching(
 
 #[cfg(test)]
 mod tests {
-    use runtrol_provider::{ModelCatalog, ModelChoice, SessionId, StreamId, WatchCursor, WatchGap};
+    use runtrol_provider::{
+        ModelCatalog, ModelChoice, ReasoningChoice, SessionId, StreamId, WatchCursor, WatchGap,
+    };
 
     use super::*;
 
@@ -312,16 +343,29 @@ mod tests {
                 display_name: "Runtime Choice".into(),
                 description: "reported now".into(),
                 is_default: true,
-                reasoning_efforts: Vec::new(),
+                reasoning_efforts: vec![ReasoningChoice {
+                    id: "provider-effort".into(),
+                    description: Box::default(),
+                }],
             }],
         }));
-        assert_eq!(lines, vec!["runtime-choice  Runtime Choice  (default)"]);
+        assert_eq!(
+            lines,
+            vec![
+                "runtime-choice  Runtime Choice  (default)",
+                "effort  runtime-choice  provider-effort"
+            ]
+        );
     }
 
     #[test]
     fn aliases_and_unknown_catalogues_say_what_they_are() {
         let aliases = render(&Response::Models(ModelCatalog::Aliases {
             aliases: vec!["fast".into()],
+            reasoning_efforts: vec![ReasoningChoice {
+                id: "global-effort".into(),
+                description: Box::default(),
+            }],
             why: "aliases only".into(),
         }));
         assert!(
@@ -330,6 +374,11 @@ mod tests {
                 .is_some_and(|line| line.starts_with("aliases only:"))
         );
         assert!(aliases.get(1).is_some_and(|line| line == "alias  fast"));
+        assert!(
+            aliases
+                .get(2)
+                .is_some_and(|line| line == "effort  global-effort")
+        );
 
         let unknown = render(&Response::Models(ModelCatalog::unknown(
             "no discovery surface",
@@ -345,11 +394,15 @@ mod tests {
                 is_default: false,
                 reasoning_efforts: Vec::new(),
             }],
+            reasoning_efforts: vec![ReasoningChoice {
+                id: "global-effort".into(),
+                description: Box::default(),
+            }],
             why: "partial discovery".into(),
         }));
         assert_eq!(partial.get(1).map(String::as_str), Some("alias  fast"));
         assert_eq!(
-            partial.get(2).map(String::as_str),
+            partial.get(3).map(String::as_str),
             Some("model  runtime-model  Runtime Model")
         );
     }

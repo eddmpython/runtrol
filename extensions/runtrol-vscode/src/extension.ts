@@ -280,10 +280,6 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
       () => run(() => afterReady(() => controller.startSession())),
     ),
     vscode.commands.registerCommand(
-      "runtrol.startSessionWithModel",
-      () => run(() => afterReady(() => controller.startSession(undefined, true))),
-    ),
-    vscode.commands.registerCommand(
       "runtrol.startServiceChat",
       (item?: ServiceItem | NewChatItem) => run(
         () => afterReady(() => controller.startSession(item?.startProviderId ?? undefined)),

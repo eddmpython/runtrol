@@ -24,6 +24,11 @@ pub struct Attached {
     /// subscriber can render it; runtrol records only what it requested, because that is the only one it
     /// decided.
     pub model_requested: Option<Box<str>>,
+    /// The provider-owned reasoning posture runtrol asked for.
+    ///
+    /// Kept separate from the provider payload for the same reason as [`Self::model_requested`]: this is the
+    /// operator's explicit launch choice, not an interpretation of what the provider eventually used.
+    pub reasoning_effort_requested: Option<Box<str>>,
     /// Capability tokens the provider announced.
     pub caps: CapabilitySet,
     /// The provider's whole startup object, verbatim.

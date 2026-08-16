@@ -33,9 +33,21 @@ Probe processes are time-bounded and their stdout and stderr are drained concurr
 
 ## Model catalogues
 
-Codex enumerates its current choices through `model/list` on every request. Those results are `ModelCatalog::Known` and carry the provider's identifiers, labels, descriptions, defaults, and reasoning choices.
+Codex enumerates its current choices through `model/list` on every request. Those results are `ModelCatalog::Known`
+and carry the provider's identifiers, labels, descriptions, defaults, and model-specific reasoning choices.
 
-Claude Code does not expose a complete account catalogue. runtrol returns `ModelCatalog::Partial`: stable manifest aliases first, followed by exact options from the provider-owned `~/.claude.json` `additionalModelOptionsCache`. The file is reopened read-only for every discovery request, so no watcher or copied cache is needed. Missing or damaged provider state keeps the stable aliases and exposes why the answer is partial.
+Claude Code does not expose a complete account catalogue. runtrol returns `ModelCatalog::Partial`: stable manifest
+aliases first, followed by exact options from the provider-owned `~/.claude.json`
+`additionalModelOptionsCache`. When the installed argument parser confirms `--effort`, a bounded read of that exact
+binary's official help surface supplies its current opaque effort choices. Unknown, changed, oversized, or truncated
+help degrades to no selectable effort rather than a guessed list. The provider model file is reopened read-only for
+every discovery request, so no watcher or copied cache is needed. Missing or damaged provider state keeps the stable
+aliases and exposes why the answer is partial.
+
+An explicit model or reasoning effort crosses Runtime unchanged only after the current catalogue is checked again at
+session start. Codex receives its model in `thread/start` and its effort through the provider's configuration key.
+Claude Code receives only the corresponding flags confirmed on its installed argument parser. Omitting either value
+leaves that choice under the provider CLI's own current setting.
 
 Neither result claims that a credential-free hosted runner proves which models a particular account may use. Hosted CI proves runtime enumeration and honest partial fallback without credentials. Its isolated operator home contains a sentinel option in the provider-owned cache, and the product command must return that exact option. The operator's local preflight observes account-local state.
 

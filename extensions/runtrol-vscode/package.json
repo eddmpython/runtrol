@@ -53,7 +53,6 @@
     "onCommand:runtrol.reviewRuntimeRequests",
     "onCommand:runtrol.switchSession",
     "onCommand:runtrol.startSession",
-    "onCommand:runtrol.startSessionWithModel",
     "onCommand:runtrol.startServiceChat",
     "onCommand:runtrol.selectSession",
     "onCommand:runtrol.openConversation",
@@ -172,10 +171,6 @@
         "command": "runtrol.startSession",
         "title": "Runtrol: New Chat",
         "icon": "$(add)"
-      },
-      {
-        "command": "runtrol.startSessionWithModel",
-        "title": "Runtrol: New Chat with Model..."
       },
       {
         "command": "runtrol.startServiceChat",

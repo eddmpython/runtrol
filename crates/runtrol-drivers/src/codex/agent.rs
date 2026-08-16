@@ -168,6 +168,7 @@ impl CodexAgent {
                 body: EventBody::Attached(Box::new(Attached {
                     native: named,
                     model_requested: intent.model.clone(),
+                    reasoning_effort_requested: intent.reasoning_effort.clone(),
                     // This CLI declares what it can do once per connection rather than once per conversation,
                     // and a capability list copied onto every session would be the same fact repeated with
                     // nothing keeping the copies true.
@@ -377,6 +378,12 @@ fn open_call(
         params.insert(
             "model".to_owned(),
             serde_json::Value::String(model.to_string()),
+        );
+    }
+    if let Some(reasoning_effort) = &intent.reasoning_effort {
+        params.insert(
+            "config".to_owned(),
+            serde_json::json!({ "model_reasoning_effort": reasoning_effort }),
         );
     }
 
@@ -789,6 +796,7 @@ mod tests {
                 .expect("valid"),
             disposition,
             model: None,
+            reasoning_effort: None,
             permission: None,
         }
     }
@@ -829,7 +837,23 @@ mod tests {
         let (_method, params, _doing) =
             open_call(a_provider(), &an_intent(Disposition::Fresh)).expect("served");
         assert!(params.get("model").is_none());
+        assert!(params.get("config").is_none());
         assert!(params.get("approvalPolicy").is_none());
+    }
+
+    #[test]
+    fn a_discovered_reasoning_choice_uses_the_provider_config_key() {
+        let mut intent = an_intent(Disposition::Fresh);
+        intent.model = Some("provider-model".into());
+        intent.reasoning_effort = Some("provider-effort".into());
+        let (_method, params, _doing) = open_call(a_provider(), &intent).expect("served");
+        assert_eq!(
+            params
+                .get("config")
+                .and_then(|config| config.get("model_reasoning_effort"))
+                .and_then(serde_json::Value::as_str),
+            Some("provider-effort")
+        );
     }
 
     #[test]

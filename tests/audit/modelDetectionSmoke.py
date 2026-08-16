@@ -364,10 +364,17 @@ def parseDiscovery(text: str) -> Discovery:
     first = lines[0]
     if first.startswith("aliases only:"):
         why = first.removeprefix("aliases only:").strip()
-        aliases = tuple(line.removeprefix("alias  ") for line in lines[1:] if line.startswith("alias  "))
-        if not why or not aliases or len(aliases) != len(lines) - 1 or any(not alias for alias in aliases):
+        aliases: list[str] = []
+        for line in lines[1:]:
+            if line.startswith("alias  "):
+                aliases.append(line.removeprefix("alias  "))
+            elif line.startswith("effort  "):
+                validateEffortLine(line, set(aliases), allow_global=True)
+            else:
+                raise Failed(f"alias discovery has an unreadable line: {line!r}")
+        if not why or not aliases or any(not alias or any(ch.isspace() for ch in alias) for alias in aliases):
             raise Failed(f"alias discovery has an unreadable shape: {text!r}")
-        return Discovery("aliases", aliases, why)
+        return Discovery("aliases", tuple(aliases), why)
 
     if first.startswith("partial catalogue:"):
         why = first.removeprefix("partial catalogue:").strip()
@@ -379,6 +386,9 @@ def parseDiscovery(text: str) -> Discovery:
                 identifier, separator, _label = line.removeprefix("model  ").partition("  ")
                 if not separator:
                     raise Failed(f"partial model line has an unreadable shape: {line!r}")
+            elif line.startswith("effort  "):
+                validateEffortLine(line, set(choices), allow_global=True)
+                continue
             else:
                 raise Failed(f"partial discovery has an unreadable line: {line!r}")
             if not identifier or any(ch.isspace() for ch in identifier):
@@ -399,11 +409,31 @@ def parseDiscovery(text: str) -> Discovery:
 
     choices: list[str] = []
     for line in lines:
+        if line.startswith("effort  "):
+            validateEffortLine(line, set(choices), allow_global=False)
+            continue
         identifier, separator, _label = line.partition("  ")
         if not separator or not identifier or any(ch.isspace() for ch in identifier):
             raise Failed(f"enumerated model line has an unreadable shape: {line!r}")
         choices.append(identifier)
     return Discovery("known", tuple(choices), None)
+
+
+def validateEffortLine(line: str, known_models: set[str], *, allow_global: bool) -> None:
+    """Validate an opaque effort row without treating it as a model identifier."""
+    fields = line.removeprefix("effort  ").split("  ")
+    if len(fields) == 1:
+        if not allow_global:
+            raise Failed(f"enumerated effort does not name its model: {line!r}")
+        effort = fields[0]
+    elif len(fields) == 2:
+        model, effort = fields
+        if model not in known_models:
+            raise Failed(f"effort names an unreported model: {line!r}")
+    else:
+        raise Failed(f"effort line has an unreadable shape: {line!r}")
+    if not effort or any(ch.isspace() for ch in effort):
+        raise Failed(f"effort line has an unreadable choice: {line!r}")
 
 
 def productionText(path: Path) -> str:
@@ -774,19 +804,29 @@ def selftest() -> int:
     if cleanup_failure is not None:
         problems.append(f"successful ordered cleanup was reported as failed: {cleanup_failure}")
 
-    known = parseDiscovery("runtime-model-42  Runtime Model 42  (default)")
+    known = parseDiscovery(
+        "runtime-model-42  Runtime Model 42  (default)\neffort  runtime-model-42  provider-effort"
+    )
     if known != Discovery("known", ("runtime-model-42",), None):
         problems.append("a valid enumerated model was not read")
-    aliases = parseDiscovery("aliases only: no enumerable catalogue\nalias  fast\nalias  deep")
+    aliases = parseDiscovery(
+        "aliases only: no enumerable catalogue\nalias  fast\nalias  deep\neffort  provider-effort"
+    )
     if aliases.choices != ("fast", "deep"):
         problems.append("valid aliases were not read")
     partial = parseDiscovery(
-        "partial catalogue: provider-owned cache only\nalias  fast\nmodel  runtime-model-42  Runtime Model"
+        "partial catalogue: provider-owned cache only\nalias  fast\neffort  provider-effort\n"
+        "model  runtime-model-42  Runtime Model\neffort  runtime-model-42  model-effort"
     )
     if partial != Discovery("partial", ("fast", "runtime-model-42"), "provider-owned cache only"):
         problems.append("a valid partial catalogue was not read")
 
-    for malformed in ("", "aliases only: \nalias  ", "identifier-without-a-label"):
+    for malformed in (
+        "",
+        "aliases only: \nalias  ",
+        "identifier-without-a-label",
+        "runtime-model-42  Runtime Model\neffort  missing-model  high",
+    ):
         rejected = False
         try:
             parseDiscovery(malformed)

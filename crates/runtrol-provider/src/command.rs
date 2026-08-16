@@ -76,6 +76,10 @@ pub struct OpenIntent {
     /// `None` means the provider's own settings decide, which is the honest default: runtrol does not have an
     /// opinion about which model somebody wants.
     pub model: Option<Box<str>>,
+    /// The provider-owned reasoning posture selected for the model, when the operator chose one.
+    ///
+    /// The value is returned unchanged from model discovery. `None` leaves the provider's own setting in control.
+    pub reasoning_effort: Option<Box<str>>,
     /// The permission posture to start at, when the operator chose one.
     pub permission: Option<Box<str>>,
 }
@@ -249,9 +253,11 @@ mod tests {
                 .expect("valid"),
             disposition: Disposition::Fresh,
             model: None,
+            reasoning_effort: None,
             permission: None,
         };
         assert!(intent.model.is_none());
+        assert!(intent.reasoning_effort.is_none());
         assert!(intent.permission.is_none());
     }
 }

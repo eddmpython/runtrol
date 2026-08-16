@@ -12,10 +12,11 @@ body {
   display: grid;
   grid-template-areas:
     "header"
+    "usage"
     "status"
     "conversation"
     "composer";
-  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  grid-template-rows: auto auto auto minmax(0, 1fr) auto;
   height: 100vh;
   margin: 0;
   overflow: hidden;
@@ -31,6 +32,7 @@ body.no-chat {
 }
 
 body.no-chat #chat-header,
+body.no-chat #usage-summary,
 body.no-chat #composer {
   display: none;
 }
@@ -63,6 +65,25 @@ header {
 
 .chat-heading {
   min-width: 0;
+}
+
+.session-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  margin-top: 0.35rem;
+}
+
+.session-facts span:not([hidden]) {
+  display: inline-flex;
+  min-height: 1.35rem;
+  align-items: center;
+  padding: 0 0.45rem;
+  border: 1px solid var(--vscode-widget-border, transparent);
+  border-radius: 999px;
+  color: var(--vscode-descriptionForeground);
+  background: var(--vscode-badge-background);
+  font-size: 0.76rem;
 }
 
 .chat-meta {
@@ -142,6 +163,65 @@ header {
 
 #session-state.failed {
   color: var(--vscode-notificationsWarningIcon-foreground);
+}
+
+#usage-summary:not([hidden]) {
+  display: grid;
+  grid-area: usage;
+  grid-template-columns: repeat(4, minmax(8rem, 1fr));
+  gap: 0.55rem;
+  padding: 0.55rem max(1rem, calc((100vw - 880px) / 2));
+  border-bottom: 1px solid var(--vscode-editorGroup-border, transparent);
+  background: var(--vscode-sideBar-background, var(--vscode-editor-background));
+}
+
+.usage-card:not([hidden]) {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: 0.2rem 0.5rem;
+  min-width: 0;
+}
+
+.usage-label,
+.usage-reset {
+  overflow: hidden;
+  color: var(--vscode-descriptionForeground);
+  font-size: 0.72rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.usage-card strong {
+  overflow: hidden;
+  font-size: 0.8rem;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.usage-reset {
+  grid-column: 1 / -1;
+}
+
+.usage-meter {
+  grid-column: 1 / -1;
+  height: 0.2rem;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--vscode-editorGroup-border, var(--vscode-widget-border));
+}
+
+.usage-meter span {
+  display: block;
+  width: 0;
+  height: 100%;
+  background: var(--vscode-focusBorder);
+}
+
+#usage-summary.limit-reached .usage-meter span {
+  background: var(--vscode-notificationsWarningIcon-foreground);
 }
 
 #status {
@@ -374,6 +454,10 @@ button:disabled {
   .header-actions {
     grid-column: 1 / -1;
     justify-content: flex-end;
+  }
+
+  #usage-summary:not([hidden]) {
+    grid-template-columns: repeat(2, minmax(7rem, 1fr));
   }
 
   .chat-meta {

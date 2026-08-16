@@ -1539,6 +1539,7 @@ async fn open_driver(
         workspace,
         disposition,
         model,
+        reasoning_effort: None,
         permission,
     };
     match driver.open(intent.clone()).await {
@@ -1910,6 +1911,7 @@ mod tests {
             workspace: workspace.clone(),
             disposition: Disposition::Fresh,
             model: None,
+            reasoning_effort: None,
             permission: None,
         };
         let claim = runtrol_core::WorkspaceClaim::discover(

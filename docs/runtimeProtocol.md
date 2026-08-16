@@ -73,6 +73,11 @@ Runtime stores only supervision metadata and provider-native pointers. It never 
 session discovery uses an official provider command or protocol registered by the provider extension. Runtime never
 scans provider storage for conversation files.
 
+`sessions/start` accepts optional opaque `model` and `reasoningEffort` values previously returned by
+`providers/listModels`. Runtime bounds both values and refreshes the selected provider catalogue immediately before
+launch. A missing or stale explicit value returns `modelUnavailable`; absent values leave the provider's own defaults
+in control. Runtime does not accept arbitrary CLI flags through this public boundary.
+
 One renewable control lease authorizes writes to a hot session. Lease ID and generation bind input, interrupt, cool,
 and approval operations. Disconnect does not transfer control. A stale lease returns a typed conflict or expiry.
 

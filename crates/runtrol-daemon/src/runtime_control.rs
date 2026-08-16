@@ -117,6 +117,7 @@ pub(crate) struct RuntimeOpenRequest {
     pub(crate) workspace: AbsPath,
     pub(crate) claim: WorkspaceClaim,
     pub(crate) model: Option<Box<str>>,
+    pub(crate) reasoning_effort: Option<Box<str>>,
     pub(crate) expected: Option<(LifecycleState, u64)>,
     pub(crate) proof: Option<Box<str>>,
 }
@@ -131,6 +132,7 @@ pub(crate) struct RuntimeOpening {
     pub(crate) native: Option<NativeSessionId>,
     pub(crate) workspace: AbsPath,
     pub(crate) model: Option<Box<str>>,
+    pub(crate) reasoning_effort: Option<Box<str>>,
     pub(crate) proof: Option<Box<str>>,
     pub(crate) reservation: OpenReservation,
     pub(crate) displaced_agent: Option<Box<dyn Agent>>,
@@ -682,6 +684,7 @@ impl RuntimeControl {
                     native: request.native,
                     workspace: request.workspace,
                     model: request.model,
+                    reasoning_effort: request.reasoning_effort,
                     proof: request.proof,
                     reservation: reserved.reservation,
                     displaced_agent,
@@ -1451,6 +1454,13 @@ impl RuntimeControl {
         );
         feed(
             &mut mac,
+            request
+                .reasoning_effort
+                .as_deref()
+                .map_or(&[][..], str::as_bytes),
+        );
+        feed(
+            &mut mac,
             request.proof.as_deref().map_or(&[][..], str::as_bytes),
         );
         if let Some((lifecycle, generation)) = request.expected {
@@ -2005,6 +2015,7 @@ mod tests {
                     workspace,
                     disposition: Disposition::Fresh,
                     model: None,
+                    reasoning_effort: None,
                     permission: None,
                 },
                 WorkspaceAccess::Shared,
@@ -2196,6 +2207,7 @@ mod tests {
             claim: WorkspaceClaim::discover(first.clone(), WorkspaceAccess::Exclusive)
                 .expect("first claim"),
             model: None,
+            reasoning_effort: None,
             expected: None,
             proof: None,
         };
@@ -2213,6 +2225,7 @@ mod tests {
             workspace: first.clone(),
             disposition: Disposition::Fresh,
             model: None,
+            reasoning_effort: None,
             permission: None,
         };
         let RuntimeOpenCompletion::Answer(Ok(opened)) = control.finish_open(
@@ -2244,6 +2257,7 @@ mod tests {
             claim: WorkspaceClaim::discover(first.clone(), WorkspaceAccess::Exclusive)
                 .expect("replay claim"),
             model: None,
+            reasoning_effort: None,
             expected: None,
             proof: None,
         };
@@ -2267,6 +2281,7 @@ mod tests {
             claim: WorkspaceClaim::discover(first, WorkspaceAccess::Exclusive)
                 .expect("changed claim"),
             model: Some("different-model".into()),
+            reasoning_effort: None,
             expected: None,
             proof: None,
         };
@@ -2294,6 +2309,7 @@ mod tests {
             claim: WorkspaceClaim::discover(second.clone(), WorkspaceAccess::Exclusive)
                 .expect("second claim"),
             model: None,
+            reasoning_effort: None,
             expected: None,
             proof: None,
         };
@@ -2322,6 +2338,7 @@ mod tests {
             claim: WorkspaceClaim::discover(second, WorkspaceAccess::Exclusive)
                 .expect("cancelled replay claim"),
             model: None,
+            reasoning_effort: None,
             expected: None,
             proof: None,
         };
@@ -2368,6 +2385,7 @@ mod tests {
                     workspace,
                     disposition: Disposition::Fresh,
                     model: None,
+                    reasoning_effort: None,
                     permission: None,
                 },
                 WorkspaceAccess::Shared,
@@ -2480,6 +2498,7 @@ mod tests {
                     workspace: workspace.clone(),
                     disposition: Disposition::Fresh,
                     model: None,
+                    reasoning_effort: None,
                     permission: None,
                 },
                 WorkspaceAccess::Shared,

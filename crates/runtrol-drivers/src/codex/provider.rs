@@ -646,6 +646,7 @@ mod tests {
             workspace: AbsPath::from_os(&std::env::temp_dir()).expect("the temporary directory"),
             disposition: Disposition::Fresh,
             model: None,
+            reasoning_effort: None,
             permission: None,
         };
 

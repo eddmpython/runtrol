@@ -2076,6 +2076,12 @@
           "minimum": 0,
           "type": "integer"
         },
+        "maxReasoningSelectionBytes": {
+          "description": "Maximum opaque reasoning effort selection bytes on session start.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
         "maxRevisionOffers": {
           "description": "Maximum finalized protocol revisions accepted in one offer.",
           "format": "uint16",
@@ -2101,6 +2107,7 @@
         "maxFrameBytes",
         "maxInputBytes",
         "maxModelSelectionBytes",
+        "maxReasoningSelectionBytes",
         "maxNativeAdoptionTokenBytes",
         "maxNativePublicCursorBytes",
         "maxPageItems",
@@ -2379,6 +2386,13 @@
               "const": "aliases",
               "type": "string"
             },
+            "reasoningEfforts": {
+              "description": "Provider-owned reasoning choices that apply across those aliases.",
+              "items": {
+                "$ref": "#/$defs/RuntimeReasoningChoice"
+              },
+              "type": "array"
+            },
             "why": {
               "description": "Safe structural explanation of the limitation.",
               "type": "string"
@@ -2387,6 +2401,7 @@
           "required": [
             "coverage",
             "aliases",
+            "reasoningEfforts",
             "why"
           ],
           "type": "object"
@@ -2413,6 +2428,13 @@
               },
               "type": "array"
             },
+            "reasoningEfforts": {
+              "description": "Provider-owned reasoning choices used when a model has no narrower list.",
+              "items": {
+                "$ref": "#/$defs/RuntimeReasoningChoice"
+              },
+              "type": "array"
+            },
             "why": {
               "description": "Safe structural explanation of the limitation.",
               "type": "string"
@@ -2422,6 +2444,7 @@
             "coverage",
             "aliases",
             "models",
+            "reasoningEfforts",
             "why"
           ],
           "type": "object"
@@ -2786,6 +2809,13 @@
         "providerId": {
           "$ref": "#/$defs/ProviderId",
           "description": "Opaque provider identity returned by Runtime inventory."
+        },
+        "reasoningEffort": {
+          "description": "Exact opaque reasoning choice returned for the selected model, or provider default when absent.",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "requestId": {
           "$ref": "#/$defs/MutationRequestId",
@@ -3211,6 +3241,7 @@
     "maxNativePublicCursorBytes": 8192,
     "maxPageItems": 100,
     "maxPendingEnrollments": 64,
+    "maxReasoningSelectionBytes": 4096,
     "maxRevisionOffers": 16,
     "maxSubscriptions": 32,
     "nativeCursorLifetimeMs": 300000

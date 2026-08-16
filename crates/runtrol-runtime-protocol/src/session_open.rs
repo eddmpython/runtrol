@@ -11,6 +11,9 @@ use crate::{
 /// Maximum bytes accepted for one provider-owned model selection.
 pub const MAX_MODEL_SELECTION_BYTES: usize = 4 * 1024;
 
+/// Maximum bytes accepted for one provider-owned reasoning selection.
+pub const MAX_REASONING_SELECTION_BYTES: usize = 4 * 1024;
+
 /// Whether a newly heated process must be the only writer for its working tree.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -36,6 +39,9 @@ pub struct StartSessionParams {
     /// Exact opaque model choice previously returned by Runtime, or provider default when absent.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// Exact opaque reasoning choice returned for the selected model, or provider default when absent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<String>,
 }
 
 /// Adopt one exact native catalogue observation into Runtime supervision.

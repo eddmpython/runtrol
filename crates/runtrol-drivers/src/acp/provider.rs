@@ -78,6 +78,7 @@ impl Provider for AcpProvider {
         }
         Ok(ModelCatalog::Aliases {
             aliases: self.models.aliases.clone(),
+            reasoning_efforts: Vec::new(),
             why: "these aliases come from the provider manifest".into(),
         })
     }

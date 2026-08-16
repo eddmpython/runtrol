@@ -96,6 +96,7 @@ async fn an_outside_driver_needs_only_the_public_contract() {
             workspace,
             disposition: Disposition::Fresh,
             model: None,
+            reasoning_effort: None,
             permission: None,
         })
         .await

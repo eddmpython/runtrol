@@ -26,6 +26,9 @@ pub enum RuntimeModelCatalog {
     Aliases {
         /// Exact opaque tokens accepted by the provider.
         aliases: Vec<String>,
+        /// Provider-owned reasoning choices that apply across those aliases.
+        #[serde(rename = "reasoningEfforts")]
+        reasoning_efforts: Vec<RuntimeReasoningChoice>,
         /// Safe structural explanation of the limitation.
         why: String,
     },
@@ -35,6 +38,9 @@ pub enum RuntimeModelCatalog {
         aliases: Vec<String>,
         /// Exact model options observed from the provider.
         models: Vec<RuntimeModelChoice>,
+        /// Provider-owned reasoning choices used when a model has no narrower list.
+        #[serde(rename = "reasoningEfforts")]
+        reasoning_efforts: Vec<RuntimeReasoningChoice>,
         /// Safe structural explanation of the limitation.
         why: String,
     },
@@ -109,6 +115,31 @@ mod tests {
                         "description": "Provider effort"
                     }]
                 }]
+            })
+        );
+    }
+
+    #[test]
+    fn fallback_reasoning_choices_use_the_public_camel_case_field() {
+        let catalogue = RuntimeModelCatalog::Aliases {
+            aliases: vec!["provider-alias".to_owned()],
+            reasoning_efforts: vec![RuntimeReasoningChoice {
+                id: "provider-effort".to_owned(),
+                description: "Provider effort".to_owned(),
+            }],
+            why: "the provider exposes aliases".to_owned(),
+        };
+        let encoded = serde_json::to_value(catalogue).expect("serializable catalogue");
+        assert_eq!(
+            encoded,
+            serde_json::json!({
+                "coverage": "aliases",
+                "aliases": ["provider-alias"],
+                "reasoningEfforts": [{
+                    "id": "provider-effort",
+                    "description": "Provider effort"
+                }],
+                "why": "the provider exposes aliases"
             })
         );
     }

@@ -9,8 +9,6 @@ import type {
   Response,
 } from "./protocol";
 import type {
-  ModelCatalog,
-  ModelChoice,
   NativeChatCatalogue,
   NativeChatLine,
   ProviderLine,
@@ -24,6 +22,7 @@ import { RuntimeState } from "./state";
 import { NativeSessionItem, SessionItem } from "./trees";
 import { StudioRuntimeClient } from "./runtimeClient";
 import { sessionStateLabel } from "./runtimeProjection";
+import { modelOptions, reasoningOptions } from "./sessionConfiguration";
 import { workspaceCollisions, type WorkspaceCollision } from "./workspaceCollision";
 
 const NATIVE_ADOPTION_REFRESH_MS = 4 * 60_000;
@@ -399,7 +398,7 @@ export class Controller implements vscode.Disposable {
     return adopted;
   }
 
-  async startSession(providerId?: string, selectModel = false): Promise<void> {
+  async startSession(providerId?: string): Promise<void> {
     const provider = providerId
       ? this.state.providers.find((candidate) => candidate.providerId === providerId) ?? null
       : await chooseProvider(this.state.providers);
@@ -416,12 +415,13 @@ export class Controller implements vscode.Disposable {
     if (!selectedWorkspace) {
       return;
     }
-    const model = selectModel ? await this.chooseModel(provider) : null;
-    if (model === undefined) return;
+    const configuration = await this.chooseStartConfiguration(provider);
+    if (!configuration) return;
     await this.startResolvedSession(
       provider.providerId,
       selectedWorkspace.workspace,
-      model,
+      configuration.model,
+      configuration.reasoningEffort,
       selectedWorkspace.access,
       true,
     );
@@ -431,6 +431,7 @@ export class Controller implements vscode.Disposable {
     providerId: string,
     workspace: string,
     model: string | null,
+    reasoningEffort: string | null,
     access: WorkspaceAccess,
     follow: boolean,
   ): Promise<string> {
@@ -440,7 +441,13 @@ export class Controller implements vscode.Disposable {
     }
     const pausedDiscoveries = this.beginForegroundAction();
     try {
-      const opened = await this.runtime.start(provider.providerId, workspace, access, model);
+      const opened = await this.runtime.start(
+        provider.providerId,
+        workspace,
+        access,
+        model,
+        reasoningEffort,
+      );
       await this.refresh();
       await this.select(opened.sessionId, follow);
       return opened.sessionId;
@@ -865,16 +872,53 @@ export class Controller implements vscode.Disposable {
     ));
   }
 
-  private async chooseModel(provider: ProviderLine): Promise<string | null | undefined> {
-    const choices = modelChoices(await this.runtime.models(provider.providerId));
-    if (choices.length === 0) {
-      return null;
-    }
-    const selected = await vscode.window.showQuickPick(
-      [{ label: "Provider default", id: null, description: "Let the installed CLI choose" }, ...choices],
-      { title: `Model for ${provider.displayName}`, placeHolder: "Select a runtime-discovered model" },
+  private async chooseStartConfiguration(provider: ProviderLine): Promise<StartConfiguration | null> {
+    const catalogue = await this.runtime.models(provider.providerId);
+    const choices = modelOptions(catalogue);
+    const selectedModel = await vscode.window.showQuickPick(
+      [
+        {
+          label: "Provider default",
+          id: null,
+          model: null,
+          description: "Use the installed CLI's current model setting",
+        },
+        ...choices,
+      ],
+      {
+        title: `New chat with ${provider.displayName}: model`,
+        placeHolder: choices.length === 0
+          ? "This CLI exposes no selectable model catalogue"
+          : "Choose a model reported by the installed CLI",
+      },
     );
-    return selected?.id;
+    if (!selectedModel) return null;
+
+    const efforts = reasoningOptions(catalogue, selectedModel.model);
+    if (efforts.length === 0) {
+      return { model: selectedModel.id, reasoningEffort: null };
+    }
+    const selectedEffort = await vscode.window.showQuickPick(
+      [
+        {
+          label: "Provider default",
+          id: null,
+          description: "Use the installed CLI's current effort setting",
+        },
+        ...efforts.map((effort) => ({
+          label: effort.id,
+          id: effort.id,
+          description: effort.description || "Reported by the installed CLI",
+        })),
+      ],
+      {
+        title: `New chat with ${provider.displayName}: reasoning effort`,
+        placeHolder: "Choose an effort reported for this model",
+      },
+    );
+    return selectedEffort
+      ? { model: selectedModel.id, reasoningEffort: selectedEffort.id }
+      : null;
   }
 
   private async chooseStartWorkspace(): Promise<StartWorkspace | null> {
@@ -940,6 +984,11 @@ function providerNeedsVerification(provider: ProviderLine): boolean {
 type StartWorkspace = {
   workspace: string;
   access: WorkspaceAccess;
+};
+
+type StartConfiguration = {
+  model: string | null;
+  reasoningEffort: string | null;
 };
 
 function nativeCatalogueFailure(providerId: string, error: unknown): NativeChatCatalogue {
@@ -1094,25 +1143,6 @@ async function chooseAlternateWorkspace(
     canSelectMany: false,
   });
   return picked?.[0]?.fsPath ?? null;
-}
-
-function modelChoices(catalog: ModelCatalog): Array<{ label: string; id: string; description?: string }> {
-  const models: ModelChoice[] = catalog.coverage === "known" || catalog.coverage === "partial"
-    ? [...catalog.models]
-    : [];
-  const aliases = catalog.coverage === "aliases" || catalog.coverage === "partial"
-    ? catalog.aliases
-    : [];
-  return [
-    ...models.map((model) => ({
-      label: model.displayName,
-      id: model.id,
-      description: model.isDefault ? "Provider default" : model.description,
-    })),
-    ...aliases
-      .filter((alias) => !models.some((model) => model.id === alias))
-      .map((alias) => ({ label: alias, id: alias, description: "Provider alias" })),
-  ];
 }
 
 function workspaceIsOpen(workspace: string): boolean {

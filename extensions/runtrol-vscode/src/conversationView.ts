@@ -446,6 +446,11 @@ export class ConversationView implements vscode.Disposable {
         <span class="context-separator" aria-hidden="true">·</span>
         <span id="session-path"></span>
       </div>
+      <div class="session-facts" aria-label="Session configuration">
+        <span id="session-model" hidden></span>
+        <span id="session-effort" hidden></span>
+        <span id="session-mode" hidden></span>
+      </div>
     </div>
     <div class="header-actions">
       <span id="session-state"></span>
@@ -453,6 +458,29 @@ export class ConversationView implements vscode.Disposable {
       <button id="close" type="button" title="Close chat" hidden>Close</button>
     </div>
   </header>
+  <section id="usage-summary" aria-label="Usage and limits" hidden>
+    <div class="usage-card" id="context-usage" hidden>
+      <span class="usage-label">Context</span>
+      <strong id="context-value">Unavailable</strong>
+      <div class="usage-meter" aria-hidden="true"><span id="context-meter"></span></div>
+    </div>
+    <div class="usage-card" id="session-cost" hidden>
+      <span class="usage-label">Session cost</span>
+      <strong id="cost-value">Unavailable</strong>
+    </div>
+    <div class="usage-card" id="primary-limit" hidden>
+      <span class="usage-label" id="primary-label">Short limit</span>
+      <strong id="primary-value">Unavailable</strong>
+      <span class="usage-reset" id="primary-reset"></span>
+      <div class="usage-meter" aria-hidden="true"><span id="primary-meter"></span></div>
+    </div>
+    <div class="usage-card" id="secondary-limit" hidden>
+      <span class="usage-label" id="secondary-label">Long limit</span>
+      <strong id="secondary-value">Unavailable</strong>
+      <span class="usage-reset" id="secondary-reset"></span>
+      <div class="usage-meter" aria-hidden="true"><span id="secondary-meter"></span></div>
+    </div>
+  </section>
   <div id="status" role="status"></div>
   <main id="conversation" aria-live="polite"></main>
   <form id="composer">

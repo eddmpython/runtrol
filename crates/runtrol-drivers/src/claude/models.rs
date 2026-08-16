@@ -10,12 +10,18 @@ use std::ffi::{OsStr, OsString};
 use std::fs::File;
 use std::io::BufReader;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
-use runtrol_provider::{MAX_MODEL_CHOICES, ModelAliases, ModelChoice};
+use runtrol_childproc::{Containment, Program, capture};
+use runtrol_provider::{
+    MAX_MODEL_CHOICES, MAX_REASONING_CHOICES, ModelAliases, ModelChoice, ReasoningChoice,
+};
 use serde::de::{SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer};
 
 const CONFIG_FILE: &str = ".claude.json";
+const HELP_DEADLINE: Duration = Duration::from_secs(10);
+const MAX_REASONING_ID_BYTES: usize = 128;
 
 #[cfg(windows)]
 const OPERATOR_HOME_ENV: &str = "USERPROFILE";
@@ -80,6 +86,65 @@ impl ClaudeModels {
             config: Ok(home.join(CONFIG_FILE)),
         }
     }
+}
+
+/// Discover the installed CLI's current reasoning choices from the same official help surface that declares the
+/// bound `--effort` flag. Values are kept opaque and an unfamiliar or changed help shape degrades to no choices.
+pub(super) async fn discover_reasoning_efforts(
+    program: &Program,
+    contained_by: &Containment,
+) -> Vec<ReasoningChoice> {
+    let Ok(output) = capture(program, &["--help".to_owned()], HELP_DEADLINE, contained_by).await
+    else {
+        return Vec::new();
+    };
+    if output.truncated {
+        return Vec::new();
+    }
+    reasoning_efforts(&output.text())
+}
+
+fn reasoning_efforts(help: &str) -> Vec<ReasoningChoice> {
+    let Some(flag_at) = help.find("--effort") else {
+        return Vec::new();
+    };
+    let after_flag = &help[flag_at + "--effort".len()..];
+    let Some(next_flag) = after_flag.find("\n  --") else {
+        return Vec::new();
+    };
+    let section = &after_flag[..next_flag];
+    let choices = if let Some(choices_at) = section.find("choices:") {
+        &section[choices_at + "choices:".len()..]
+    } else {
+        let Some(open) = section.find('(') else {
+            return Vec::new();
+        };
+        let choices = &section[open + 1..];
+        if !choices.contains(',') {
+            return Vec::new();
+        }
+        choices
+    };
+    let Some(close) = choices.find(')') else {
+        return Vec::new();
+    };
+    let mut seen = BTreeSet::new();
+    choices[..close]
+        .split(',')
+        .map(|choice| choice.trim().trim_matches('"'))
+        .filter(|choice| {
+            !choice.is_empty()
+                && choice.len() <= MAX_REASONING_ID_BYTES
+                && !choice.chars().any(char::is_control)
+                && !choice.chars().any(char::is_whitespace)
+                && seen.insert((*choice).to_owned())
+        })
+        .take(MAX_REASONING_CHOICES)
+        .map(|choice| ReasoningChoice {
+            id: choice.into(),
+            description: Box::default(),
+        })
+        .collect()
 }
 
 #[derive(Clone, Debug)]
@@ -486,5 +551,35 @@ mod tests {
         })
         .expect("an absolute runtime home must resolve");
         assert_eq!(path, scratch.0.join(CONFIG_FILE));
+    }
+
+    #[test]
+    fn reasoning_choices_come_from_the_installed_help_and_stay_opaque() {
+        for help in [
+            "  --effort <level>  Effort for this session\n                      (low, medium, provider-new)\n  --model <model>  Model",
+            "  --effort <level>  Effort for this session\n                      (choices: low, medium, provider-new)\n  --model <model>  Model",
+        ] {
+            let choices = reasoning_efforts(help);
+            assert_eq!(
+                choices
+                    .iter()
+                    .map(|choice| choice.id.as_ref())
+                    .collect::<Vec<_>>(),
+                ["low", "medium", "provider-new"]
+            );
+        }
+    }
+
+    #[test]
+    fn changed_or_unbounded_effort_help_degrades_to_no_choices() {
+        assert!(reasoning_efforts("--effort accepts provider values").is_empty());
+        assert!(
+            reasoning_efforts("  --effort <level> (recommended)\n  --model <model>").is_empty()
+        );
+        let oversized = format!(
+            "  --effort <level> (choices: {})\n  --model <model>",
+            "x".repeat(MAX_REASONING_ID_BYTES + 1)
+        );
+        assert!(reasoning_efforts(&oversized).is_empty());
     }
 }

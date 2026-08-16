@@ -15,7 +15,7 @@ use runtrol_provider::{
 };
 
 use crate::claude::agent::ClaudeAgent;
-use crate::claude::models::ClaudeModels;
+use crate::claude::models::{ClaudeModels, discover_reasoning_efforts};
 
 /// The driver for the CLI that runs one process per session.
 #[derive(Debug)]
@@ -102,9 +102,15 @@ impl Provider for ClaudeProvider {
 
     async fn models(&self) -> Result<ModelCatalog, ProviderError> {
         let found = self.models.discover();
+        let reasoning_efforts = if self.available_flags.contains("--effort") {
+            discover_reasoning_efforts(&self.program, &self.contained_by).await
+        } else {
+            Vec::new()
+        };
         Ok(ModelCatalog::Partial {
             aliases: found.aliases,
             models: found.models,
+            reasoning_efforts,
             why: found.why,
         })
     }
@@ -199,6 +205,7 @@ mod tests {
                 aliases,
                 models: _,
                 why,
+                ..
             } => {
                 assert_eq!(
                     aliases,
@@ -227,6 +234,7 @@ mod tests {
             workspace: AbsPath::from_os(&std::env::temp_dir()).expect("the temporary directory"),
             disposition: Disposition::Fresh,
             model: None,
+            reasoning_effort: None,
             permission: None,
         };
 

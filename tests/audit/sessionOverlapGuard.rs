@@ -87,6 +87,7 @@ fn intent(session: SessionId, workspace: AbsPath) -> OpenIntent {
         workspace,
         disposition: Disposition::Fresh,
         model: None,
+        reasoning_effort: None,
         permission: None,
     }
 }

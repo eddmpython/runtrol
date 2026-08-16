@@ -181,6 +181,11 @@ pub const FLAGS: &[BoundFlag] = &[
         required: false,
         without_it: "the session runs whatever model the operator's own settings choose",
     },
+    BoundFlag {
+        flag: "--effort",
+        required: false,
+        without_it: "the session runs at whatever reasoning effort the operator's own settings choose",
+    },
 ];
 
 /// This CLI's part in cross-consult wiring.

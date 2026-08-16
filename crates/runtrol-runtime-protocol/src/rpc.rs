@@ -162,6 +162,8 @@ pub struct RuntimeLimits {
     pub max_input_bytes: usize,
     /// Maximum opaque model selection bytes on session start.
     pub max_model_selection_bytes: usize,
+    /// Maximum opaque reasoning effort selection bytes on session start.
+    pub max_reasoning_selection_bytes: usize,
     /// Maximum authenticated native adoption token bytes.
     pub max_native_adoption_token_bytes: usize,
     /// Maximum wrapped native catalogue cursor bytes.
@@ -194,6 +196,7 @@ impl Default for RuntimeLimits {
             max_frame_bytes: MAX_FRAME_BYTES,
             max_input_bytes: MAX_INPUT_BYTES,
             max_model_selection_bytes: crate::MAX_MODEL_SELECTION_BYTES,
+            max_reasoning_selection_bytes: crate::MAX_REASONING_SELECTION_BYTES,
             max_native_adoption_token_bytes: crate::MAX_NATIVE_ADOPTION_TOKEN_BYTES,
             max_native_public_cursor_bytes: crate::MAX_NATIVE_PUBLIC_CURSOR_BYTES,
             max_page_items: MAX_PAGE_ITEMS,
@@ -251,6 +254,10 @@ mod tests {
         assert_eq!(
             limits.max_model_selection_bytes,
             crate::MAX_MODEL_SELECTION_BYTES
+        );
+        assert_eq!(
+            limits.max_reasoning_selection_bytes,
+            crate::MAX_REASONING_SELECTION_BYTES
         );
         assert_eq!(
             limits.max_native_adoption_token_bytes,

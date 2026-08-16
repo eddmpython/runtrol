@@ -9,6 +9,7 @@ import {
   type UnknownRecord,
 } from "./presentation";
 import { afterFrameOrDelay } from "./renderReady";
+import { limitTelemetry, usageTelemetry } from "./telemetry";
 import { sessionTitle, workspaceName } from "../sessionDisplay";
 import { sessionStateLabel } from "../runtimeProjection";
 import type { SessionLine as Session } from "../runtimeTypes";
@@ -94,6 +95,25 @@ const sendHint = element<HTMLSpanElement>("send-hint");
 const interrupt = element<HTMLButtonElement>("interrupt");
 const close = element<HTMLButtonElement>("close");
 const openWorkspace = element<HTMLButtonElement>("open-workspace");
+const sessionModel = element<HTMLSpanElement>("session-model");
+const sessionEffort = element<HTMLSpanElement>("session-effort");
+const sessionMode = element<HTMLSpanElement>("session-mode");
+const usageSummary = element<HTMLElement>("usage-summary");
+const contextUsage = element<HTMLElement>("context-usage");
+const contextValue = element<HTMLElement>("context-value");
+const contextMeter = element<HTMLElement>("context-meter");
+const sessionCost = element<HTMLElement>("session-cost");
+const costValue = element<HTMLElement>("cost-value");
+const primaryLimit = element<HTMLElement>("primary-limit");
+const primaryLabel = element<HTMLElement>("primary-label");
+const primaryValue = element<HTMLElement>("primary-value");
+const primaryReset = element<HTMLElement>("primary-reset");
+const primaryMeter = element<HTMLElement>("primary-meter");
+const secondaryLimit = element<HTMLElement>("secondary-limit");
+const secondaryLabel = element<HTMLElement>("secondary-label");
+const secondaryValue = element<HTMLElement>("secondary-value");
+const secondaryReset = element<HTMLElement>("secondary-reset");
+const secondaryMeter = element<HTMLElement>("secondary-meter");
 const pending: unknown[] = [];
 let selected: Session | null = null;
 let generation = 0;
@@ -181,6 +201,7 @@ function reset(
   followsTail = true;
   status.textContent = "";
   status.className = "";
+  resetSessionTelemetry();
   renderSession(session, displayTitle, provider);
   prompt.value = "";
   resizePrompt();
@@ -381,10 +402,144 @@ function present(payload: unknown): void {
     appendMessage("warning", code);
     return;
   }
+  if (presentation.kind === "usage") {
+    updateUsage(body);
+    return;
+  }
+  if (presentation.kind === "rateLimit") {
+    updateRateLimits(body);
+    return;
+  }
   if (presentation.kind === "status") {
+    if (presentation.textKey === "session.attached") updateAttachment(body);
+    if (presentation.textKey === "mode.updated") updateMode(body);
     const text = LOCALIZED_TEXT[presentation.textKey];
     if (text && !HIDDEN_STATUS_KEYS.has(presentation.textKey)) appendMessage("meta", text);
   }
+}
+
+function resetSessionTelemetry(): void {
+  for (const fact of [sessionModel, sessionEffort, sessionMode]) {
+    fact.textContent = "";
+    fact.hidden = true;
+  }
+  for (const card of [contextUsage, sessionCost, primaryLimit, secondaryLimit]) {
+    card.hidden = true;
+  }
+  usageSummary.hidden = true;
+  for (const meter of [contextMeter, primaryMeter, secondaryMeter]) {
+    meter.style.width = "0";
+  }
+}
+
+function updateAttachment(body: UnknownRecord): void {
+  setFact(sessionModel, "Model", string(body.model_requested));
+  setFact(sessionEffort, "Effort", string(body.reasoning_effort_requested));
+}
+
+function updateMode(body: UnknownRecord): void {
+  setFact(sessionMode, "Mode", string(body.mode_id));
+}
+
+function setFact(target: HTMLElement, label: string, value: string): void {
+  target.textContent = value ? `${label}: ${value}` : "";
+  target.hidden = !value;
+}
+
+function updateUsage(body: UnknownRecord): void {
+  const telemetry = usageTelemetry(body);
+  const { used, size } = telemetry;
+  if (used !== null || size !== null) {
+    const shownUsed = used === null ? "Unknown" : formatCount(used);
+    const shownSize = size === null ? "Unknown" : formatCount(size);
+    contextValue.textContent = `${shownUsed} / ${shownSize}`;
+    contextUsage.hidden = false;
+    contextMeter.style.width = percentWidth(used, size);
+  }
+  if (telemetry.amount !== null && telemetry.currency) {
+    costValue.textContent = `${telemetry.amount.toLocaleString(undefined, {
+      maximumFractionDigits: 4,
+    })} ${telemetry.currency}`;
+    sessionCost.hidden = false;
+  }
+  revealUsageSummary();
+}
+
+function updateRateLimits(body: UnknownRecord): void {
+  updateLimitCard(
+    primaryLimit,
+    primaryLabel,
+    primaryValue,
+    primaryReset,
+    primaryMeter,
+    record(body.primary),
+    "Short limit",
+  );
+  updateLimitCard(
+    secondaryLimit,
+    secondaryLabel,
+    secondaryValue,
+    secondaryReset,
+    secondaryMeter,
+    record(body.secondary),
+    "Long limit",
+  );
+  usageSummary.classList.toggle("limit-reached", body.reached === true);
+  revealUsageSummary();
+}
+
+function updateLimitCard(
+  card: HTMLElement,
+  label: HTMLElement,
+  value: HTMLElement,
+  reset: HTMLElement,
+  meter: HTMLElement,
+  window: UnknownRecord | null,
+  fallbackLabel: string,
+): void {
+  const telemetry = limitTelemetry(window);
+  if (!telemetry) return;
+  label.textContent = telemetry.windowMinutes === null
+    ? fallbackLabel
+    : `${formatDuration(telemetry.windowMinutes)} limit`;
+  value.textContent = `${Math.max(0, 100 - telemetry.usedPercent)}% left`;
+  reset.textContent = telemetry.resetsAt === null ? "" : `Resets ${formatReset(telemetry.resetsAt)}`;
+  meter.style.width = `${telemetry.usedPercent}%`;
+  card.hidden = false;
+}
+
+function revealUsageSummary(): void {
+  usageSummary.hidden = [contextUsage, sessionCost, primaryLimit, secondaryLimit]
+    .every((card) => card.hidden);
+}
+
+function percentWidth(used: number | null, size: number | null): string {
+  return used === null || size === null || size <= 0
+    ? "0"
+    : `${Math.min(100, (used / size) * 100)}%`;
+}
+
+function formatCount(value: number): string {
+  return new Intl.NumberFormat(undefined, {
+    notation: value >= 1_000 ? "compact" : "standard",
+    maximumFractionDigits: 1,
+  }).format(value);
+}
+
+function formatDuration(minutes: number): string {
+  if (minutes < 60) return `${minutes} min`;
+  if (minutes < 1_440) return `${Math.round(minutes / 60)} hr`;
+  return `${Math.round(minutes / 1_440)} day`;
+}
+
+function formatReset(milliseconds: number): string {
+  return new Intl.DateTimeFormat(undefined, {
+    hour: "numeric",
+    minute: "2-digit",
+    ...(new Date(milliseconds).toDateString() !== new Date().toDateString()
+      ? { month: "short", day: "numeric" }
+      : {}),
+  }).format(new Date(milliseconds));
 }
 
 function appendMessage(side: string, text: string, delta = false, messageId = ""): void {

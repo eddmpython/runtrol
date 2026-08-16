@@ -14,6 +14,11 @@ and refactoring that no user can observe do not belong here.
 
 ### Added
 
+- Every New Chat entry now guides the user through service, workspace, the installed CLI's current model choices,
+  and the reasoning efforts available for that exact model. Runtime rechecks explicit choices immediately before
+  starting the provider process.
+- The active conversation header now keeps the requested model, reasoning effort, provider mode, context use,
+  provider-reported session cost, and short and long account limits visible together.
 - Studio automatically lists provider-owned chats through each coding service's official Runtime catalogue, then
   resumes the selected chat without scanning or copying private transcript storage.
 - The Chats menu includes an explicit Extension Host restart action for recovering extension state while preserving
@@ -25,8 +30,8 @@ and refactoring that no user can observe do not belong here.
 
 - Studio now opens around a chat-first layout. Each available service exposes a permanent New chat row, secondary
   views start collapsed, the empty conversation has one primary action, and the composer shows only the action valid
-  for the current chat state. New chats use the service default model immediately, while explicit model selection
-  remains available from the command palette.
+  for the current chat state. The plus action and Command Palette now use the same guided New Chat flow, and choosing
+  Provider default leaves the installed CLI's current model or reasoning setting unchanged.
 - Selecting a session now opens one reusable conversation tab in the editor area. The wider layout keeps session state, workspace, output, approvals, and an expanding composer visible without squeezing the conversation into the sidebar.
 
 ### Fixed

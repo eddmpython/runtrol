@@ -1293,17 +1293,30 @@ fn model_catalogue(catalogue: runtrol_provider::ModelCatalog) -> RuntimeModelCat
         runtrol_provider::ModelCatalog::Known { models } => RuntimeModelCatalog::Known {
             models: models.into_iter().map(model_choice).collect(),
         },
-        runtrol_provider::ModelCatalog::Aliases { aliases, why } => RuntimeModelCatalog::Aliases {
+        runtrol_provider::ModelCatalog::Aliases {
+            aliases,
+            reasoning_efforts,
+            why,
+        } => RuntimeModelCatalog::Aliases {
             aliases: aliases.into_iter().map(String::from).collect(),
+            reasoning_efforts: reasoning_efforts
+                .into_iter()
+                .map(reasoning_choice)
+                .collect(),
             why: String::from(why),
         },
         runtrol_provider::ModelCatalog::Partial {
             aliases,
             models,
+            reasoning_efforts,
             why,
         } => RuntimeModelCatalog::Partial {
             aliases: aliases.into_iter().map(String::from).collect(),
             models: models.into_iter().map(model_choice).collect(),
+            reasoning_efforts: reasoning_efforts
+                .into_iter()
+                .map(reasoning_choice)
+                .collect(),
             why: String::from(why),
         },
         runtrol_provider::ModelCatalog::Unknown { why } => RuntimeModelCatalog::Unknown {
@@ -1332,6 +1345,13 @@ fn model_choice(choice: runtrol_provider::ModelChoice) -> RuntimeModelChoice {
                 description: String::from(effort.description),
             })
             .collect(),
+    }
+}
+
+fn reasoning_choice(choice: runtrol_provider::ReasoningChoice) -> RuntimeReasoningChoice {
+    RuntimeReasoningChoice {
+        id: String::from(choice.id),
+        description: String::from(choice.description),
     }
 }
 
@@ -1741,6 +1761,10 @@ fn build_open_request(
                 .map_err(OpenAdmissionFailure::Inventory)?;
             let access = public_open_access(params.access)?;
             let model = params.model.map(validate_model_selection).transpose()?;
+            let reasoning_effort = params
+                .reasoning_effort
+                .map(validate_reasoning_selection)
+                .transpose()?;
             let claim = WorkspaceClaim::discover(workspace.path.clone(), access)
                 .map_err(|_| OpenAdmissionFailure::Control(workspace_conflict()))?;
             Ok(RuntimeOpenRequest {
@@ -1752,6 +1776,7 @@ fn build_open_request(
                 workspace: workspace.path,
                 claim,
                 model,
+                reasoning_effort,
                 expected: None,
                 proof: None,
             })
@@ -1789,6 +1814,7 @@ fn build_open_request(
                 workspace: workspace.path,
                 claim,
                 model: None,
+                reasoning_effort: None,
                 expected: None,
                 proof: Some(params.adoption_token.into()),
             })
@@ -1832,6 +1858,7 @@ fn build_open_request(
                 workspace: workspace.path,
                 claim,
                 model: None,
+                reasoning_effort: None,
                 expected: Some((
                     params.expected_lifecycle,
                     params.expected_session_generation,
@@ -1874,6 +1901,18 @@ fn validate_model_selection(value: String) -> Result<Box<str>, OpenAdmissionFail
     {
         return Err(OpenAdmissionFailure::Control(invalid_open(
             "the model selection is empty, oversized, or invalid",
+        )));
+    }
+    Ok(value.into())
+}
+
+fn validate_reasoning_selection(value: String) -> Result<Box<str>, OpenAdmissionFailure> {
+    if value.is_empty()
+        || value.len() > runtrol_runtime_protocol::MAX_REASONING_SELECTION_BYTES
+        || value.chars().any(char::is_control)
+    {
+        return Err(OpenAdmissionFailure::Control(invalid_open(
+            "the reasoning selection is empty, oversized, or invalid",
         )));
     }
     Ok(value.into())
@@ -2007,16 +2046,26 @@ async fn perform_runtime_open(
             .await;
         }
     }
-    if let Some(model) = guard.opening().and_then(|opening| opening.model.as_deref()) {
+    let selected_model = guard.opening().and_then(|opening| opening.model.as_deref());
+    let selected_effort = guard
+        .opening()
+        .and_then(|opening| opening.reasoning_effort.as_deref());
+    if selected_model.is_some() || selected_effort.is_some() {
         let discovered = prepared.driver.models().await;
-        if !discovered.is_ok_and(|catalogue| model_is_current(&catalogue, model)) {
+        let choices_are_current = discovered.is_ok_and(|catalogue| {
+            selected_model.is_none_or(|model| model_is_current(&catalogue, model))
+                && selected_effort.is_none_or(|effort| {
+                    reasoning_effort_is_current(&catalogue, selected_model, effort)
+                })
+        });
+        if !choices_are_current {
             return send_open_denied(
                 id,
                 guard,
                 returning,
                 RuntimeControlFailure::new(
                     RuntimeErrorKind::ModelUnavailable,
-                    "the selected model is not present in the provider's current catalogue",
+                    "the selected model or reasoning effort is not present in the provider's current catalogue",
                 ),
             )
             .await;
@@ -2046,6 +2095,7 @@ async fn perform_runtime_open(
                 }
             },
             model: opening.model.clone(),
+            reasoning_effort: opening.reasoning_effort.clone(),
             permission: None,
         },
         None => return control_failure(id, RuntimeControlFailure::outcome_unknown()),
@@ -2087,6 +2137,42 @@ fn model_is_current(catalogue: &runtrol_provider::ModelCatalog, selected: &str) 
             aliases.iter().any(|alias| alias.as_ref() == selected)
                 || models.iter().any(|model| model.id.as_ref() == selected)
         }
+        _ => false,
+    }
+}
+
+fn reasoning_effort_is_current(
+    catalogue: &runtrol_provider::ModelCatalog,
+    selected_model: Option<&str>,
+    selected_effort: &str,
+) -> bool {
+    let model_efforts = match (catalogue, selected_model) {
+        (
+            runtrol_provider::ModelCatalog::Known { models }
+            | runtrol_provider::ModelCatalog::Partial { models, .. },
+            Some(selected),
+        ) => models
+            .iter()
+            .find(|model| model.id.as_ref() == selected)
+            .map(|model| model.reasoning_efforts.as_slice()),
+        _ => None,
+    };
+    if model_efforts.is_some_and(|efforts| !efforts.is_empty()) {
+        return model_efforts.is_some_and(|efforts| {
+            efforts
+                .iter()
+                .any(|effort| effort.id.as_ref() == selected_effort)
+        });
+    }
+    match catalogue {
+        runtrol_provider::ModelCatalog::Aliases {
+            reasoning_efforts, ..
+        }
+        | runtrol_provider::ModelCatalog::Partial {
+            reasoning_efforts, ..
+        } => reasoning_efforts
+            .iter()
+            .any(|effort| effort.id.as_ref() == selected_effort),
         _ => false,
     }
 }
@@ -3230,17 +3316,29 @@ listen = "stdio"
                     description: "Provider effort".into(),
                 }],
             }],
+            reasoning_efforts: vec![runtrol_provider::ReasoningChoice {
+                id: "provider-global-effort".into(),
+                description: "Provider global effort".into(),
+            }],
             why: "the provider reports a partial list".into(),
         });
         let RuntimeModelCatalog::Partial {
             aliases,
             models,
+            reasoning_efforts,
             why,
         } = catalogue
         else {
             panic!("coverage must remain partial");
         };
         assert_eq!(aliases, ["provider-alias"]);
+        assert_eq!(
+            reasoning_efforts
+                .first()
+                .expect("one mapped global reasoning effort")
+                .id,
+            "provider-global-effort"
+        );
         let model = models.first().expect("one mapped model");
         assert_eq!(model.id, "provider-model");
         assert_eq!(
@@ -3259,6 +3357,49 @@ listen = "stdio"
             )),
             RuntimeModelCatalog::Unsupported { why }
                 if why == "no official discovery surface"
+        ));
+    }
+
+    #[test]
+    fn reasoning_effort_validation_uses_the_current_provider_catalogue() {
+        let catalogue = runtrol_provider::ModelCatalog::Partial {
+            aliases: vec!["provider-alias".into()],
+            models: vec![runtrol_provider::ModelChoice {
+                id: "provider-model".into(),
+                display_name: "Provider Model".into(),
+                description: "Provider description".into(),
+                is_default: true,
+                reasoning_efforts: vec![runtrol_provider::ReasoningChoice {
+                    id: "model-effort".into(),
+                    description: "Model effort".into(),
+                }],
+            }],
+            reasoning_efforts: vec![runtrol_provider::ReasoningChoice {
+                id: "global-effort".into(),
+                description: "Global effort".into(),
+            }],
+            why: "the provider reports a partial list".into(),
+        };
+
+        assert!(reasoning_effort_is_current(
+            &catalogue,
+            Some("provider-model"),
+            "model-effort"
+        ));
+        assert!(!reasoning_effort_is_current(
+            &catalogue,
+            Some("provider-model"),
+            "global-effort"
+        ));
+        assert!(reasoning_effort_is_current(
+            &catalogue,
+            Some("provider-alias"),
+            "global-effort"
+        ));
+        assert!(!reasoning_effort_is_current(
+            &catalogue,
+            Some("provider-alias"),
+            "missing-effort"
         ));
     }
 
@@ -3749,6 +3890,7 @@ listen = "stdio"
             workspace: start_project.to_string(),
             access: runtrol_runtime_protocol::SessionWorkspaceAccess::Exclusive,
             model: None,
+            reasoning_effort: None,
         };
         let started = approved
             .sessions()
@@ -3781,6 +3923,7 @@ listen = "stdio"
                 workspace: start_project.to_string(),
                 access: runtrol_runtime_protocol::SessionWorkspaceAccess::Shared,
                 model: None,
+                reasoning_effort: None,
             })
             .await
             .expect_err("public shared writer admission requires local presence");

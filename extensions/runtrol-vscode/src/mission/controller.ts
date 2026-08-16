@@ -153,6 +153,7 @@ export class MissionController implements vscode.Disposable {
       provider,
       workspace.workspace,
       null,
+      null,
       access,
       false,
     );

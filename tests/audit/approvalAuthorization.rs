@@ -166,6 +166,7 @@ async fn running(
                 workspace,
                 disposition: Disposition::Fresh,
                 model: None,
+                reasoning_effort: None,
                 permission: None,
             },
             WorkspaceAccess::Exclusive,
