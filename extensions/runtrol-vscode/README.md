@@ -99,6 +99,6 @@ After publication, repeat the same isolated activation journey using the package
 node tooling/installed-package.mjs --marketplace
 ```
 
-The hosted release workflow repeats this journey on native Windows, macOS, and Linux runners. It publishes all six exact packages with a short-lived GitHub Actions OIDC credential, verifies the public Marketplace version, target set, and package digests, then creates the tagged GitHub Release. No Marketplace PAT is stored.
+The hosted release workflow repeats this journey on native Windows, macOS, and Linux runners. It publishes all six exact packages with the `VSCE_PAT` GitHub Actions repository secret, verifies the public Marketplace version, target set, and package digests, then creates the tagged GitHub Release.
 
-The `runtrol` Marketplace publisher must have one trusted publishing policy bound to repository `eddmpython/runtrol` and workflow `.github/workflows/vscode-release.yml`. After that one publisher setting, every release uses the automatic OIDC path. The workflow also has a `publishExisting` recovery input that publishes and verifies the current version from its already tagged GitHub Release without rebuilding the packages.
+Create the token once with the Azure DevOps Marketplace `Manage` scope for all accessible organizations and store it as repository secret `VSCE_PAT`. Rotate the secret before its expiration. Every release after that uses the automatic path. The workflow also has a `publishExisting` recovery input that publishes and verifies the current version from its already tagged GitHub Release without rebuilding the packages.

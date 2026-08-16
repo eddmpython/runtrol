@@ -134,7 +134,7 @@ def sourceProblems(
         "if: inputs.publishExisting",
         "refs/heads/main",
         "Refuse an incomplete platform set",
-        "id-token: write",
+        "VSCE_PAT: ${{ secrets.VSCE_PAT }}",
         "publish-marketplace.mjs",
         "--directory release",
         "gh release download",
@@ -149,32 +149,33 @@ def sourceProblems(
     for token in ("--no-default-features", "--features"):
         if token in releaseWorkflow:
             found.append(f"vscode-release.yml selects a removed Core feature surface: {token}")
-    for token in ("VSCE_PAT", "--azure-credential", "secrets."):
+    for token in ("--oidc", "--azure-credential", "id-token: write"):
         if token in releaseWorkflow:
-            found.append(f"vscode-release.yml contains a stored Marketplace credential path: {token}")
+            found.append(f"vscode-release.yml contains an unsupported Marketplace credential path: {token}")
+    marketplaceSecrets = re.findall(r"secrets\.([A-Za-z0-9_]+)", releaseWorkflow)
+    if not marketplaceSecrets or set(marketplaceSecrets) != {"VSCE_PAT"}:
+        found.append("vscode-release.yml must use only the VSCE_PAT repository secret for Marketplace publishing")
     requiredMarketplaceTokens = (
         '"publish"',
-        '"--oidc"',
         '"--skip-duplicate"',
         '"--packagePath"',
         '"show"',
         '"--json"',
-        "ACTIONS_ID_TOKEN_REQUEST_TOKEN",
-        "ACTIONS_ID_TOKEN_REQUEST_URL",
         "GITHUB_ACTIONS",
         "GITHUB_REF",
         "GITHUB_REPOSITORY",
         "GITHUB_WORKFLOW_REF",
+        "VSCE_PAT",
         "Microsoft.VisualStudio.Services.VsixSha256",
         "packageManifest.version",
         "release-targets.json",
     )
     for token in requiredMarketplaceTokens:
         if token not in marketplaceScript:
-            found.append(f"publish-marketplace.mjs is missing trusted publication contract {token}")
-    for token in ("VSCE_PAT", '"--pat"', '"--azure-credential"'):
+            found.append(f"publish-marketplace.mjs is missing automated publication contract {token}")
+    for token in ('"--oidc"', '"--pat"', '"--azure-credential"'):
         if token in marketplaceScript:
-            found.append(f"publish-marketplace.mjs contains a stored Marketplace credential path: {token}")
+            found.append(f"publish-marketplace.mjs contains an unsupported Marketplace credential path: {token}")
     for actionRevision in re.findall(r"uses:\s+[^@\s]+@([^\s#]+)", releaseWorkflow):
         if not re.fullmatch(r"[0-9a-f]{40}", actionRevision):
             found.append(f"vscode-release.yml uses an unpinned action revision: {actionRevision}")
@@ -437,7 +438,7 @@ def selftest() -> int:
     if: inputs.publishExisting
     refs/heads/main
     Refuse an incomplete platform set
-    id-token: write
+    VSCE_PAT: ${{ secrets.VSCE_PAT }}
     publish-marketplace.mjs
     --directory release
     gh release download
@@ -445,10 +446,9 @@ def selftest() -> int:
     uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
     """
     marketplaceScript = """
-    "publish" "--oidc" "--skip-duplicate" "--packagePath"
+    "publish" "--skip-duplicate" "--packagePath"
     "show" "--json"
-    ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL
-    GITHUB_ACTIONS GITHUB_REF GITHUB_REPOSITORY GITHUB_WORKFLOW_REF
+    GITHUB_ACTIONS GITHUB_REF GITHUB_REPOSITORY GITHUB_WORKFLOW_REF VSCE_PAT
     Microsoft.VisualStudio.Services.VsixSha256
     packageManifest.version release-targets.json
     """
@@ -513,21 +513,21 @@ def selftest() -> int:
             marketplaceScript,
             coreManifest,
         ),
-        (sourcePackage, f"{releaseWorkflow}\nVSCE_PAT", marketplaceScript, coreManifest),
         (
             sourcePackage,
-            releaseWorkflow.replace("id-token: write", ""),
+            releaseWorkflow.replace("VSCE_PAT: ${{ secrets.VSCE_PAT }}", ""),
             marketplaceScript,
             coreManifest,
         ),
-        (sourcePackage, releaseWorkflow, marketplaceScript.replace('"--oidc"', ""), coreManifest),
+        (sourcePackage, f"{releaseWorkflow}\nid-token: write", marketplaceScript, coreManifest),
+        (sourcePackage, releaseWorkflow, marketplaceScript.replace("VSCE_PAT", ""), coreManifest),
         (
             sourcePackage,
             releaseWorkflow,
             marketplaceScript.replace("Microsoft.VisualStudio.Services.VsixSha256", ""),
             coreManifest,
         ),
-        (sourcePackage, releaseWorkflow, f'{marketplaceScript}\n"--pat"', coreManifest),
+        (sourcePackage, releaseWorkflow, f'{marketplaceScript}\n"--oidc"', coreManifest),
         (
             sourcePackage,
             f"{releaseWorkflow}\nuses: actions/setup-node@v7",

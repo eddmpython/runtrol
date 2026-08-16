@@ -12,8 +12,8 @@ and refactoring that no user can observe do not belong here.
 
 ### Changed
 
-- Studio releases now publish all six platform packages to the Marketplace through GitHub Actions trusted publishing,
-  verify the public version, target set, and exact package digests, and retain no long-lived Marketplace token.
+- Studio releases now publish all six platform packages to the Marketplace through GitHub Actions, then verify the
+  public version, target set, and exact package digests before completing the release.
 
 ## [0.1.2] - 2026-08-16
 

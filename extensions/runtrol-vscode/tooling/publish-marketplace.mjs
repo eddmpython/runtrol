@@ -14,8 +14,8 @@ const VSIX_DIGEST_PROPERTY = "Microsoft.VisualStudio.Services.VsixSha256";
 const VERIFY_DEADLINE_MS = 180_000;
 const VERIFY_INTERVAL_MS = 5_000;
 const RELEASE_DIRECTORY = path.join(repositoryRoot, "release");
-const TRUSTED_REPOSITORY = repositorySlug(packageManifest.repository);
-const TRUSTED_WORKFLOW_REF = `${TRUSTED_REPOSITORY}/.github/workflows/vscode-release.yml@refs/heads/main`;
+const EXPECTED_REPOSITORY = repositorySlug(packageManifest.repository);
+const EXPECTED_WORKFLOW_REF = `${EXPECTED_REPOSITORY}/.github/workflows/vscode-release.yml@refs/heads/main`;
 const vsce = path.join(extensionRoot, "node_modules", "@vscode", "vsce", "vsce");
 const targets = JSON.parse(
   await readFile(path.join(extensionRoot, "release-targets.json"), "utf8"),
@@ -28,7 +28,7 @@ if (process.argv.includes("--selftest")) {
 }
 
 async function publish(directory) {
-  requireGitHubOIDC(process.env);
+  requireGitHubPublication(process.env);
   const archives = await exactArchives(directory);
   const expectedDigests = new Map(
     await Promise.all(
@@ -40,7 +40,6 @@ async function publish(directory) {
     [
       vsce,
       "publish",
-      "--oidc",
       "--skip-duplicate",
       "--packagePath",
       ...archives.map(({ archive }) => archive),
@@ -56,7 +55,7 @@ async function publish(directory) {
   process.stdout.write(published.stdout ?? "");
   process.stderr.write(published.stderr ?? "");
   if (published.status !== 0) {
-    throw new Error(`Marketplace OIDC publishing failed with exit ${String(published.status)}`);
+    throw new Error(`Marketplace publishing failed with exit ${String(published.status)}`);
   }
 
   const deadline = Date.now() + VERIFY_DEADLINE_MS;
@@ -93,30 +92,29 @@ function directoryArgument(arguments_) {
   return directory;
 }
 
-function requireGitHubOIDC(environment) {
+function requireGitHubPublication(environment) {
   for (const name of [
-    "ACTIONS_ID_TOKEN_REQUEST_TOKEN",
-    "ACTIONS_ID_TOKEN_REQUEST_URL",
     "GITHUB_ACTIONS",
     "GITHUB_REF",
     "GITHUB_REPOSITORY",
     "GITHUB_WORKFLOW_REF",
+    "VSCE_PAT",
   ]) {
     if (typeof environment[name] !== "string" || environment[name].length === 0) {
-      throw new Error(`Marketplace publishing requires GitHub Actions OIDC environment ${name}`);
+      throw new Error(`Marketplace publishing requires GitHub Actions environment ${name}`);
     }
   }
   if (environment.GITHUB_ACTIONS !== "true") {
-    throw new Error("Marketplace OIDC publishing runs only inside GitHub Actions");
+    throw new Error("Marketplace publishing runs only inside GitHub Actions");
   }
   if (environment.GITHUB_REF !== "refs/heads/main") {
-    throw new Error("Marketplace OIDC publishing runs only from main");
+    throw new Error("Marketplace publishing runs only from main");
   }
-  if (environment.GITHUB_REPOSITORY !== TRUSTED_REPOSITORY) {
-    throw new Error("Marketplace OIDC publishing runs only from the manifest repository");
+  if (environment.GITHUB_REPOSITORY !== EXPECTED_REPOSITORY) {
+    throw new Error("Marketplace publishing runs only from the manifest repository");
   }
-  if (environment.GITHUB_WORKFLOW_REF !== TRUSTED_WORKFLOW_REF) {
-    throw new Error("Marketplace OIDC publishing runs only from the trusted workflow on main");
+  if (environment.GITHUB_WORKFLOW_REF !== EXPECTED_WORKFLOW_REF) {
+    throw new Error("Marketplace publishing runs only from the trusted workflow on main");
   }
 }
 
@@ -127,7 +125,7 @@ function repositorySlug(repository) {
   const url = new URL(repository.url);
   const pathParts = url.pathname.replace(/\.git$/u, "").split("/").filter(Boolean);
   if (url.protocol !== "https:" || url.hostname !== "github.com" || pathParts.length !== 2) {
-    throw new Error("Marketplace trusted publishing requires an exact GitHub repository URL");
+    throw new Error("Marketplace publication requires an exact GitHub repository URL");
   }
   return pathParts.join("/");
 }
@@ -222,31 +220,30 @@ function selftest() {
     }
   };
   const githubEnvironment = {
-    ACTIONS_ID_TOKEN_REQUEST_TOKEN: "request-token",
-    ACTIONS_ID_TOKEN_REQUEST_URL: "https://example.invalid/token",
     GITHUB_ACTIONS: "true",
     GITHUB_REF: "refs/heads/main",
-    GITHUB_REPOSITORY: TRUSTED_REPOSITORY,
-    GITHUB_WORKFLOW_REF: TRUSTED_WORKFLOW_REF,
+    GITHUB_REPOSITORY: EXPECTED_REPOSITORY,
+    GITHUB_WORKFLOW_REF: EXPECTED_WORKFLOW_REF,
+    VSCE_PAT: "secret",
   };
-  requireGitHubOIDC(githubEnvironment);
+  requireGitHubPublication(githubEnvironment);
   let boundaryMutations = 0;
   for (const name of Object.keys(githubEnvironment)) {
     boundaryMutations += expectFailure(
-      () => requireGitHubOIDC({ ...githubEnvironment, [name]: "" }),
+      () => requireGitHubPublication({ ...githubEnvironment, [name]: "" }),
     );
   }
   boundaryMutations += expectFailure(
-    () => requireGitHubOIDC({ ...githubEnvironment, GITHUB_ACTIONS: "false" }),
+    () => requireGitHubPublication({ ...githubEnvironment, GITHUB_ACTIONS: "false" }),
   );
   boundaryMutations += expectFailure(
-    () => requireGitHubOIDC({ ...githubEnvironment, GITHUB_REF: "refs/heads/different" }),
+    () => requireGitHubPublication({ ...githubEnvironment, GITHUB_REF: "refs/heads/different" }),
   );
   boundaryMutations += expectFailure(
-    () => requireGitHubOIDC({ ...githubEnvironment, GITHUB_REPOSITORY: "different/repository" }),
+    () => requireGitHubPublication({ ...githubEnvironment, GITHUB_REPOSITORY: "different/repository" }),
   );
   boundaryMutations += expectFailure(
-    () => requireGitHubOIDC({ ...githubEnvironment, GITHUB_WORKFLOW_REF: "different" }),
+    () => requireGitHubPublication({ ...githubEnvironment, GITHUB_WORKFLOW_REF: "different" }),
   );
   if (directoryArgument(["--directory", "release"]) !== RELEASE_DIRECTORY) {
     throw new Error("the release directory fixture was rejected");

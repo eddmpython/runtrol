@@ -171,7 +171,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      id-token: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -189,7 +188,9 @@ jobs:
         run: |
           count="$(find release -maxdepth 1 -name 'runtrol-studio-${{ needs.prepare.outputs.version }}-*.vsix' -type f | wc -l)"
           test "$count" -eq "${{ needs.prepare.outputs.targetCount }}"
-      - name: Publish and verify all Marketplace platform packages with OIDC
+      - name: Publish and verify all Marketplace platform packages
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
         run: >-
           node extensions/runtrol-vscode/tooling/publish-marketplace.mjs
           --directory release
@@ -200,7 +201,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      id-token: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -228,7 +228,9 @@ jobs:
             target="${target%.vsix}"
             python -X utf8 tests/audit/vscodePackage.py --archive "$archive" --target "$target"
           done
-      - name: Publish and verify the tagged Marketplace platform packages with OIDC
+      - name: Publish and verify the tagged Marketplace platform packages
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
         run: >-
           node extensions/runtrol-vscode/tooling/publish-marketplace.mjs
           --directory release
