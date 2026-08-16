@@ -39,7 +39,9 @@ const ENROLLMENT_DECISION_SETTLE_MS = 5_000;
 const ENROLLMENT_DECISION_POLL_MS = 50;
 const RUNTIME_LOCATOR_SETTLE_MS = 12_000;
 const RUNTIME_LOCATOR_POLL_MS = 25;
-const CONTROL_PERSISTENCE_INLINE_MS = 250;
+// The in-memory lease is authoritative while the Extension Host is alive. Persisting it only
+// improves reload recovery, so SecretStorage latency must not delay an interactive session action.
+const CONTROL_PERSISTENCE_INLINE_MS = 0;
 const ALL_STUDIO_SCOPES: readonly AppScope[] = [
   "provider.read",
   "model.read",

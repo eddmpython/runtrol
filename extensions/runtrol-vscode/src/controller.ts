@@ -335,6 +335,12 @@ export class Controller implements vscode.Disposable {
       throw new Error("that cold session has no provider-owned conversation identifier to resume");
     }
     const opened = await this.runtime.resume(runtimeAction(session), "exclusive");
+    const watched = this.state.sessions.find((candidate) => (
+      candidate.sessionId === opened.sessionId
+      && candidate.hot
+      && candidate.sessionGeneration === opened.sessionGeneration
+    ));
+    if (watched) return watched;
     await this.refresh();
     const resumed = this.state.sessions.find((candidate) => candidate.sessionId === opened.sessionId);
     if (!resumed) {

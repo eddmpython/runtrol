@@ -49,7 +49,6 @@ export type SessionManagementPerformance = {
 
 // Eight hot sessions over five rounds keep nearest-rank p95 from collapsing to the single maximum sample.
 const SESSION_SWITCH_ROUNDS = 5;
-const AUXILIARY_STARTUP_IDLE_MS = 5_000;
 
 export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi {
   const locator = new CoreLocator(context);
@@ -344,13 +343,10 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
   });
   void run(() => lifecycle);
   void run(() => missionLifecycle);
-  const auxiliaryStartup = setTimeout(() => {
-    void run(async () => {
-      await lifecycle;
-      await configureRemoteConnection(client);
-    });
-  }, AUXILIARY_STARTUP_IDLE_MS);
-  context.subscriptions.push(new vscode.Disposable(() => clearTimeout(auxiliaryStartup)));
+  void run(async () => {
+    await lifecycle;
+    await configureRemoteConnection(client);
+  });
   return {
     get ready() {
       return lifecycle;
