@@ -44,7 +44,7 @@ if (archive) {
 }
 
 const temporaryRoot = process.platform === "darwin" ? "/tmp" : os.tmpdir();
-const MARKETPLACE_INSTALL_DEADLINE_MS = 10 * 60_000;
+const MARKETPLACE_INSTALL_DEADLINE_MS = 15 * 60_000;
 const MARKETPLACE_INSTALL_INTERVAL_MS = 15_000;
 const temporary = await mkdtemp(path.join(temporaryRoot, "runtrol-vscode-package-"));
 const resultPath = path.join(temporary, "result.json");

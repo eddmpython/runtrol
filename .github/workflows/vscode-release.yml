@@ -203,7 +203,7 @@ jobs:
   marketplace:
     needs: [prepare, publish]
     if: ${{ github.event_name == 'push' || inputs.release }}
-    timeout-minutes: 20
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}

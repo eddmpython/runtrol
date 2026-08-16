@@ -11,8 +11,8 @@ import {
 } from "./extension-manifest.mjs";
 
 const VSIX_DIGEST_PROPERTY = "Microsoft.VisualStudio.Services.VsixSha256";
-const VERIFY_DEADLINE_MS = 180_000;
-const VERIFY_INTERVAL_MS = 5_000;
+const VERIFY_DEADLINE_MS = 15 * 60_000;
+const VERIFY_INTERVAL_MS = 15_000;
 const RELEASE_DIRECTORY = path.join(repositoryRoot, "release");
 const EXPECTED_REPOSITORY = repositorySlug(packageManifest.repository);
 const EXPECTED_WORKFLOW_REF = `${EXPECTED_REPOSITORY}/.github/workflows/vscode-release.yml@refs/heads/main`;

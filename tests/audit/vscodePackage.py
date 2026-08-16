@@ -160,6 +160,7 @@ def sourceProblems(
     if not marketplaceSecrets or set(marketplaceSecrets) != {"VSCE_PAT"}:
         found.append("vscode-release.yml must use only the VSCE_PAT repository secret for Marketplace publishing")
     requiredMarketplaceTokens = (
+        "const VERIFY_DEADLINE_MS = 15 * 60_000;",
         '"publish"',
         '"--skip-duplicate"',
         '"--packagePath"',
@@ -190,7 +191,7 @@ def sourceProblems(
         if token not in ignore:
             found.append(f".vscodeignore does not exclude {token}")
     for token in (
-        "MARKETPLACE_INSTALL_DEADLINE_MS",
+        "const MARKETPLACE_INSTALL_DEADLINE_MS = 15 * 60_000;",
         "`${extensionIdentifier}@${packageManifest.version}`",
         "findInstalledExtension(extensions, packageManifest.version)",
         "Marketplace did not install",
@@ -540,6 +541,7 @@ def selftest() -> int:
     uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
     """
     marketplaceScript = """
+    const VERIFY_DEADLINE_MS = 15 * 60_000;
     "publish" "--skip-duplicate" "--packagePath"
     "show" "--json"
     GITHUB_ACTIONS GITHUB_REF GITHUB_REPOSITORY GITHUB_WORKFLOW_REF VSCE_PAT
@@ -549,7 +551,7 @@ def selftest() -> int:
     coreManifest = '[package]\nname = "runtrol"'
     ignore = "tooling/** src/** node_modules/** performance-budget.json release-targets.json"
     installedPackageScript = """
-    MARKETPLACE_INSTALL_DEADLINE_MS
+    const MARKETPLACE_INSTALL_DEADLINE_MS = 15 * 60_000;
     `${extensionIdentifier}@${packageManifest.version}`
     findInstalledExtension(extensions, packageManifest.version)
     Marketplace did not install
@@ -669,7 +671,7 @@ def selftest() -> int:
             print(f"[vscodePackage --selftest] FAIL. source mutation {index} escaped.", file=sys.stderr)
             return 2
     installedMutations = (
-        installedPackageScript.replace("MARKETPLACE_INSTALL_DEADLINE_MS", ""),
+        installedPackageScript.replace("const MARKETPLACE_INSTALL_DEADLINE_MS = 15 * 60_000;", ""),
         installedPackageScript.replace("`${extensionIdentifier}@${packageManifest.version}`", "extensionIdentifier"),
         installedPackageScript.replace("findInstalledExtension(extensions, packageManifest.version)", ""),
     )
