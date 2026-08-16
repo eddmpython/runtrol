@@ -55,6 +55,7 @@ def sourceProblems(
     extensionManifestScript: str,
     buildScript: str,
     releaseWorkflow: str,
+    marketplaceScript: str,
     coreManifest: str,
     ignore: str,
     installedVerifierExists: bool,
@@ -125,25 +126,55 @@ def sourceProblems(
         "extensionReleaseTag",
         "previousExtensionReleaseTag",
         "['show-ref', '--verify', '--quiet', `refs/tags/${tag}`]",
+        "['merge-base', '--is-ancestor', tag, 'HEAD']",
         "gnome-keyring-daemon --components=secrets --daemonize --unlock",
         'echo "DBUS_SESSION_BUS_ADDRESS=$dbus_address" >> "$GITHUB_ENV"',
         "RUNTROL_TEST_MACOS_KEYCHAIN=$keychain",
         "if: inputs.release",
+        "if: inputs.publishExisting",
+        "refs/heads/main",
         "Refuse an incomplete platform set",
+        "id-token: write",
+        "publish-marketplace.mjs",
+        "--directory release",
+        "gh release download",
         "gh release create",
     )
     for token in requiredWorkflowTokens:
         if token not in releaseWorkflow:
-            found.append(f"vscode-release.yml is missing supervisor-only Core contract {token}")
+            found.append(f"vscode-release.yml is missing release contract {token}")
     for token in ("crates/runtrol-gui", "libwebkit2gtk-4.1-dev"):
         if token in releaseWorkflow:
             found.append(f"vscode-release.yml restores unused desktop release work {token}")
     for token in ("--no-default-features", "--features"):
         if token in releaseWorkflow:
             found.append(f"vscode-release.yml selects a removed Core feature surface: {token}")
-    for token in ("VSCE_PAT", "--oidc", "--azure-credential", "vsce publish", "id-token: write"):
+    for token in ("VSCE_PAT", "--azure-credential", "secrets."):
         if token in releaseWorkflow:
-            found.append(f"vscode-release.yml contains an unavailable or secret Marketplace publishing path: {token}")
+            found.append(f"vscode-release.yml contains a stored Marketplace credential path: {token}")
+    requiredMarketplaceTokens = (
+        '"publish"',
+        '"--oidc"',
+        '"--skip-duplicate"',
+        '"--packagePath"',
+        '"show"',
+        '"--json"',
+        "ACTIONS_ID_TOKEN_REQUEST_TOKEN",
+        "ACTIONS_ID_TOKEN_REQUEST_URL",
+        "GITHUB_ACTIONS",
+        "GITHUB_REF",
+        "GITHUB_REPOSITORY",
+        "GITHUB_WORKFLOW_REF",
+        "Microsoft.VisualStudio.Services.VsixSha256",
+        "packageManifest.version",
+        "release-targets.json",
+    )
+    for token in requiredMarketplaceTokens:
+        if token not in marketplaceScript:
+            found.append(f"publish-marketplace.mjs is missing trusted publication contract {token}")
+    for token in ("VSCE_PAT", '"--pat"', '"--azure-credential"'):
+        if token in marketplaceScript:
+            found.append(f"publish-marketplace.mjs contains a stored Marketplace credential path: {token}")
     for actionRevision in re.findall(r"uses:\s+[^@\s]+@([^\s#]+)", releaseWorkflow):
         if not re.fullmatch(r"[0-9a-f]{40}", actionRevision):
             found.append(f"vscode-release.yml uses an unpinned action revision: {actionRevision}")
@@ -398,13 +429,28 @@ def selftest() -> int:
     extensionReleaseTag
     previousExtensionReleaseTag
     ['show-ref', '--verify', '--quiet', `refs/tags/${tag}`]
+    ['merge-base', '--is-ancestor', tag, 'HEAD']
     gnome-keyring-daemon --components=secrets --daemonize --unlock
     echo "DBUS_SESSION_BUS_ADDRESS=$dbus_address" >> "$GITHUB_ENV"
     RUNTROL_TEST_MACOS_KEYCHAIN=$keychain
     if: inputs.release
+    if: inputs.publishExisting
+    refs/heads/main
     Refuse an incomplete platform set
+    id-token: write
+    publish-marketplace.mjs
+    --directory release
+    gh release download
     gh release create
     uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+    """
+    marketplaceScript = """
+    "publish" "--oidc" "--skip-duplicate" "--packagePath"
+    "show" "--json"
+    ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL
+    GITHUB_ACTIONS GITHUB_REF GITHUB_REPOSITORY GITHUB_WORKFLOW_REF
+    Microsoft.VisualStudio.Services.VsixSha256
+    packageManifest.version release-targets.json
     """
     coreManifest = '[package]\nname = "runtrol"'
     ignore = "tooling/** src/** node_modules/** performance-budget.json release-targets.json"
@@ -415,6 +461,7 @@ def selftest() -> int:
         extensionManifestScript,
         buildScript,
         releaseWorkflow,
+        marketplaceScript,
         coreManifest,
         ignore,
         True,
@@ -426,29 +473,71 @@ def selftest() -> int:
     brokenSource["version"] = "0.1.0"
     floatingPublisher = {**sourcePackage, "devDependencies": {"@vscode/vsce": "^3.9.3"}}
     sourceMutations = (
-        (brokenSource, releaseWorkflow, coreManifest),
-        (floatingPublisher, releaseWorkflow, coreManifest),
-        (sourcePackage, releaseWorkflow.replace("--bin runtrol", "--bin runtrol --features desktop"), coreManifest),
-        (sourcePackage, releaseWorkflow, f'{coreManifest}\ndefault = ["desktop"]'),
-        (sourcePackage, f"{releaseWorkflow}\ncrates/runtrol-gui", coreManifest),
-        (sourcePackage, releaseWorkflow.replace("tests/audit/vscodeUpgradeRollback.py --archive", ""), coreManifest),
-        (sourcePackage, releaseWorkflow.replace("previousExtensionReleaseTag", ""), coreManifest),
-        (sourcePackage, releaseWorkflow.replace("gh release create", ""), coreManifest),
+        (brokenSource, releaseWorkflow, marketplaceScript, coreManifest),
+        (floatingPublisher, releaseWorkflow, marketplaceScript, coreManifest),
+        (
+            sourcePackage,
+            releaseWorkflow.replace("--bin runtrol", "--bin runtrol --features desktop"),
+            marketplaceScript,
+            coreManifest,
+        ),
+        (sourcePackage, releaseWorkflow, marketplaceScript, f'{coreManifest}\ndefault = ["desktop"]'),
+        (sourcePackage, f"{releaseWorkflow}\ncrates/runtrol-gui", marketplaceScript, coreManifest),
+        (
+            sourcePackage,
+            releaseWorkflow.replace("tests/audit/vscodeUpgradeRollback.py --archive", ""),
+            marketplaceScript,
+            coreManifest,
+        ),
+        (
+            sourcePackage,
+            releaseWorkflow.replace("previousExtensionReleaseTag", ""),
+            marketplaceScript,
+            coreManifest,
+        ),
+        (
+            sourcePackage,
+            releaseWorkflow.replace("gh release create", ""),
+            marketplaceScript,
+            coreManifest,
+        ),
         (
             sourcePackage,
             releaseWorkflow.replace("gnome-keyring-daemon --components=secrets --daemonize --unlock", ""),
+            marketplaceScript,
             coreManifest,
         ),
         (
             sourcePackage,
             releaseWorkflow.replace("RUNTROL_TEST_MACOS_KEYCHAIN=$keychain", ""),
+            marketplaceScript,
             coreManifest,
         ),
-        (sourcePackage, f"{releaseWorkflow}\nVSCE_PAT", coreManifest),
-        (sourcePackage, f"{releaseWorkflow}\nvsce publish --oidc", coreManifest),
-        (sourcePackage, f"{releaseWorkflow}\nuses: actions/setup-node@v7", coreManifest),
+        (sourcePackage, f"{releaseWorkflow}\nVSCE_PAT", marketplaceScript, coreManifest),
+        (
+            sourcePackage,
+            releaseWorkflow.replace("id-token: write", ""),
+            marketplaceScript,
+            coreManifest,
+        ),
+        (sourcePackage, releaseWorkflow, marketplaceScript.replace('"--oidc"', ""), coreManifest),
+        (
+            sourcePackage,
+            releaseWorkflow,
+            marketplaceScript.replace("Microsoft.VisualStudio.Services.VsixSha256", ""),
+            coreManifest,
+        ),
+        (sourcePackage, releaseWorkflow, f'{marketplaceScript}\n"--pat"', coreManifest),
+        (
+            sourcePackage,
+            f"{releaseWorkflow}\nuses: actions/setup-node@v7",
+            marketplaceScript,
+            coreManifest,
+        ),
     )
-    for index, (mutatedPackage, mutatedWorkflow, mutatedManifest) in enumerate(sourceMutations, start=1):
+    for index, (mutatedPackage, mutatedWorkflow, mutatedMarketplace, mutatedManifest) in enumerate(
+        sourceMutations, start=1
+    ):
         if not sourceProblems(
             mutatedPackage,
             targets,
@@ -456,6 +545,7 @@ def selftest() -> int:
             extensionManifestScript,
             buildScript,
             mutatedWorkflow,
+            mutatedMarketplace,
             mutatedManifest,
             ignore,
             True,
@@ -496,6 +586,7 @@ def sourceRun() -> int:
         (EXTENSION / "tooling" / "extension-manifest.mjs").read_text(encoding="utf-8"),
         (EXTENSION / "tooling" / "build.mjs").read_text(encoding="utf-8"),
         (ROOT / ".github" / "workflows" / "vscode-release.yml").read_text(encoding="utf-8"),
+        (EXTENSION / "tooling" / "publish-marketplace.mjs").read_text(encoding="utf-8"),
         (ROOT / "crates" / "runtrol" / "Cargo.toml").read_text(encoding="utf-8"),
         (EXTENSION / ".vscodeignore").read_text(encoding="utf-8"),
         (EXTENSION / "tooling" / "installed-package.mjs").is_file()

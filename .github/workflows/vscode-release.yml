@@ -4,7 +4,12 @@ on:
   workflow_dispatch:
     inputs:
       release:
-        description: Create a tagged GitHub release after all native packages pass
+        description: Publish all native packages and create the tagged GitHub release
+        required: true
+        type: boolean
+        default: false
+      publishExisting:
+        description: Publish the already tagged current release to Marketplace without rebuilding
         required: true
         type: boolean
         default: false
@@ -27,6 +32,8 @@ jobs:
       - name: Verify patch-only extension release sequence
         env:
           CREATE_RELEASE: ${{ inputs.release }}
+          PUBLISH_EXISTING: ${{ inputs.publishExisting }}
+          RELEASE_REF: ${{ github.ref }}
         run: |
           node --input-type=module <<'NODE'
           import { spawnSync } from 'node:child_process';
@@ -41,10 +48,33 @@ jobs:
             { stdio: 'ignore' },
           ).status === 0;
 
+          const tagIsAncestorOfHead = (tag) => spawnSync(
+            'git',
+            ['merge-base', '--is-ancestor', tag, 'HEAD'],
+            { stdio: 'ignore' },
+          ).status === 0;
+
+          if (process.env.CREATE_RELEASE === 'true' && process.env.PUBLISH_EXISTING === 'true') {
+            throw new Error('release and publishExisting are mutually exclusive');
+          }
+          if (
+            (process.env.CREATE_RELEASE === 'true' || process.env.PUBLISH_EXISTING === 'true')
+            && process.env.RELEASE_REF !== 'refs/heads/main'
+          ) {
+            throw new Error('Marketplace publication runs only from main');
+          }
+
           if (!tagExists(previousExtensionReleaseTag)) {
             throw new Error(`the exact previous extension release ${previousExtensionReleaseTag} is missing`);
           }
-          if (process.env.CREATE_RELEASE === 'true' && tagExists(extensionReleaseTag)) {
+          if (process.env.PUBLISH_EXISTING === 'true') {
+            if (!tagExists(extensionReleaseTag)) {
+              throw new Error(`the extension release ${extensionReleaseTag} does not exist`);
+            }
+            if (!tagIsAncestorOfHead(extensionReleaseTag)) {
+              throw new Error(`the extension release ${extensionReleaseTag} is not in the current main history`);
+            }
+          } else if (process.env.CREATE_RELEASE === 'true' && tagExists(extensionReleaseTag)) {
             throw new Error(`the extension release ${extensionReleaseTag} already exists`);
           }
           NODE
@@ -64,6 +94,7 @@ jobs:
 
   package:
     needs: prepare
+    if: ${{ ! inputs.publishExisting }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -134,12 +165,13 @@ jobs:
           path: release/runtrol-studio-${{ needs.prepare.outputs.version }}-${{ matrix.target }}.vsix
           if-no-files-found: error
 
-  release:
+  publish:
     needs: [prepare, package]
     if: inputs.release
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -157,6 +189,63 @@ jobs:
         run: |
           count="$(find release -maxdepth 1 -name 'runtrol-studio-${{ needs.prepare.outputs.version }}-*.vsix' -type f | wc -l)"
           test "$count" -eq "${{ needs.prepare.outputs.targetCount }}"
+      - name: Publish and verify all Marketplace platform packages with OIDC
+        run: >-
+          node extensions/runtrol-vscode/tooling/publish-marketplace.mjs
+          --directory release
+
+  publishExisting:
+    needs: prepare
+    if: inputs.publishExisting
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: extensions/runtrol-vscode/package-lock.json
+      - run: npm --prefix extensions/runtrol-vscode ci
+      - name: Download the exact tagged GitHub release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p release
+          gh release download vscode-v${{ needs.prepare.outputs.version }} \
+            --pattern 'runtrol-studio-${{ needs.prepare.outputs.version }}-*.vsix' \
+            --dir release
+      - name: Refuse an incomplete platform set
+        run: |
+          count="$(find release -maxdepth 1 -name 'runtrol-studio-${{ needs.prepare.outputs.version }}-*.vsix' -type f | wc -l)"
+          test "$count" -eq "${{ needs.prepare.outputs.targetCount }}"
+      - name: Inspect every downloaded VSIX before publication
+        run: |
+          for archive in release/runtrol-studio-${{ needs.prepare.outputs.version }}-*.vsix; do
+            target="${archive#release/runtrol-studio-${{ needs.prepare.outputs.version }}-}"
+            target="${target%.vsix}"
+            python -X utf8 tests/audit/vscodePackage.py --archive "$archive" --target "$target"
+          done
+      - name: Publish and verify the tagged Marketplace platform packages with OIDC
+        run: >-
+          node extensions/runtrol-vscode/tooling/publish-marketplace.mjs
+          --directory release
+
+  release:
+    needs: [prepare, package, publish]
+    if: inputs.release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: runtrol-studio-${{ needs.prepare.outputs.version }}-*
+          path: release
+          merge-multiple: true
       - name: Create the tagged GitHub release
         env:
           GH_TOKEN: ${{ github.token }}

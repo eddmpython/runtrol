@@ -99,4 +99,6 @@ After publication, repeat the same isolated activation journey using the package
 node tooling/installed-package.mjs --marketplace
 ```
 
-The hosted release workflow repeats this journey on native Windows, macOS, and Linux runners and creates a tagged GitHub Release only after all six packages pass. Upload those exact assets through the `runtrol` Marketplace publisher portal. The Marketplace signs the published VSIX files, and VS Code verifies that signature when installing them. The workflow intentionally contains neither a long-lived Marketplace token nor the unavailable OIDC publishing command.
+The hosted release workflow repeats this journey on native Windows, macOS, and Linux runners. It publishes all six exact packages with a short-lived GitHub Actions OIDC credential, verifies the public Marketplace version, target set, and package digests, then creates the tagged GitHub Release. No Marketplace PAT is stored.
+
+The `runtrol` Marketplace publisher must have one trusted publishing policy bound to repository `eddmpython/runtrol` and workflow `.github/workflows/vscode-release.yml`. After that one publisher setting, every release uses the automatic OIDC path. The workflow also has a `publishExisting` recovery input that publishes and verifies the current version from its already tagged GitHub Release without rebuilding the packages.
