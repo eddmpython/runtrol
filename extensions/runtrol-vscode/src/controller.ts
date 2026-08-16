@@ -27,6 +27,7 @@ import { sessionStateLabel } from "./runtimeProjection";
 import { workspaceCollisions, type WorkspaceCollision } from "./workspaceCollision";
 
 const NATIVE_ADOPTION_REFRESH_MS = 4 * 60_000;
+const NATIVE_DISCOVERY_IDLE_MS = 5_000;
 
 type NativeDiscovery = {
   abort: AbortController;
@@ -45,6 +46,9 @@ export class Controller implements vscode.Disposable {
   private readonly seenWarnings = new Set<string>();
   private readonly verifyingProviders = new Set<string>();
   private readonly nativeDiscoveries = new Map<string, NativeDiscovery>();
+  private readonly deferredNativeProviders = new Set<string>();
+  private nativeDiscoveryRestart: NodeJS.Timeout | null = null;
+  private nativeDiscoveryPauseDepth = 0;
   private nativeDiscoveryGeneration = 0;
 
   constructor(
@@ -102,6 +106,10 @@ export class Controller implements vscode.Disposable {
   }
 
   discoverNativeChats(providerId: string): void {
+    if (this.nativeDiscoveryPauseDepth > 0 || this.nativeDiscoveryRestart) {
+      this.deferredNativeProviders.add(providerId);
+      return;
+    }
     void this.loadNativeChats(providerId, false);
   }
 
@@ -264,6 +272,20 @@ export class Controller implements vscode.Disposable {
     reveal: boolean,
     afterApplied: () => void = () => undefined,
   ): Promise<void> {
+    const pausedDiscoveries = this.beginForegroundAction();
+    try {
+      await this.applySelection(value, follow, reveal, afterApplied);
+    } finally {
+      this.endForegroundAction(pausedDiscoveries);
+    }
+  }
+
+  private async applySelection(
+    value: NativeSessionItem | SessionItem | SessionLine | string,
+    follow: boolean,
+    reveal: boolean,
+    afterApplied: () => void,
+  ): Promise<void> {
     let session: SessionLine | null;
     if (value instanceof NativeSessionItem) {
       session = await this.adoptNativeChat(value.native);
@@ -312,18 +334,13 @@ export class Controller implements vscode.Disposable {
     if (!session.nativeSessionId) {
       throw new Error("that cold session has no provider-owned conversation identifier to resume");
     }
-    const pausedDiscoveries = this.cancelNativeDiscoveries();
-    try {
-      const opened = await this.runtime.resume(runtimeAction(session), "exclusive");
-      await this.refresh();
-      const resumed = this.state.sessions.find((candidate) => candidate.sessionId === opened.sessionId);
-      if (!resumed) {
-        throw new Error("the resumed session is absent from the current session index");
-      }
-      return resumed;
-    } finally {
-      this.restartNativeDiscoveries(pausedDiscoveries);
+    const opened = await this.runtime.resume(runtimeAction(session), "exclusive");
+    await this.refresh();
+    const resumed = this.state.sessions.find((candidate) => candidate.sessionId === opened.sessionId);
+    if (!resumed) {
+      throw new Error("the resumed session is absent from the current session index");
     }
+    return resumed;
   }
 
   private async adoptNativeChat(native: NativeChatLine): Promise<SessionLine | null> {
@@ -367,18 +384,13 @@ export class Controller implements vscode.Disposable {
       if (action !== "Resume anyway") return null;
       access = "shared";
     }
-    const pausedDiscoveries = this.cancelNativeDiscoveries();
-    try {
-      const opened = await this.runtime.adoptNative(current, access);
-      await this.refresh();
-      const adopted = this.state.sessions.find((session) => session.sessionId === opened.sessionId);
-      if (!adopted) {
-        throw new Error("the resumed existing chat is absent from the current session index");
-      }
-      return adopted;
-    } finally {
-      this.restartNativeDiscoveries(pausedDiscoveries);
+    const opened = await this.runtime.adoptNative(current, access);
+    await this.refresh();
+    const adopted = this.state.sessions.find((session) => session.sessionId === opened.sessionId);
+    if (!adopted) {
+      throw new Error("the resumed existing chat is absent from the current session index");
     }
+    return adopted;
   }
 
   async startSession(providerId?: string, selectModel = false): Promise<void> {
@@ -420,14 +432,14 @@ export class Controller implements vscode.Disposable {
     if (provider?.installation.state !== "usable") {
       throw new Error(`the installed provider ${providerId} is not usable`);
     }
-    const pausedDiscoveries = this.cancelNativeDiscoveries();
+    const pausedDiscoveries = this.beginForegroundAction();
     try {
       const opened = await this.runtime.start(provider.providerId, workspace, access, model);
       await this.refresh();
       await this.select(opened.sessionId, follow);
       return opened.sessionId;
     } finally {
-      this.restartNativeDiscoveries(pausedDiscoveries);
+      this.endForegroundAction(pausedDiscoveries);
     }
   }
 
@@ -793,17 +805,52 @@ export class Controller implements vscode.Disposable {
 
   private cancelNativeDiscoveries(): string[] {
     this.nativeDiscoveryGeneration += 1;
-    const providerIds = [...this.nativeDiscoveries.keys()];
+    if (this.nativeDiscoveryRestart) {
+      clearTimeout(this.nativeDiscoveryRestart);
+      this.nativeDiscoveryRestart = null;
+    }
+    const providerIds = new Set([
+      ...this.nativeDiscoveries.keys(),
+      ...this.deferredNativeProviders,
+    ]);
+    this.deferredNativeProviders.clear();
     for (const discovery of this.nativeDiscoveries.values()) {
       discovery.abort.abort(new Error("foreground chat action has priority"));
     }
     this.nativeDiscoveries.clear();
-    return providerIds;
+    return [...providerIds];
   }
 
-  private restartNativeDiscoveries(providerIds: readonly string[]): void {
-    if (this.disposed) return;
-    for (const providerId of providerIds) this.discoverNativeChats(providerId);
+  private beginForegroundAction(): string[] {
+    this.nativeDiscoveryPauseDepth += 1;
+    return this.cancelNativeDiscoveries();
+  }
+
+  private endForegroundAction(providerIds: readonly string[]): void {
+    for (const providerId of providerIds) this.deferredNativeProviders.add(providerId);
+    this.nativeDiscoveryPauseDepth = Math.max(0, this.nativeDiscoveryPauseDepth - 1);
+    this.scheduleNativeDiscoveries();
+  }
+
+  private scheduleNativeDiscoveries(): void {
+    if (
+      this.disposed
+      || this.nativeDiscoveryPauseDepth > 0
+      || this.nativeDiscoveryRestart
+      || this.deferredNativeProviders.size === 0
+    ) {
+      return;
+    }
+    this.nativeDiscoveryRestart = setTimeout(() => {
+      this.nativeDiscoveryRestart = null;
+      if (this.disposed || this.nativeDiscoveryPauseDepth > 0) {
+        this.scheduleNativeDiscoveries();
+        return;
+      }
+      const providerIds = [...this.deferredNativeProviders];
+      this.deferredNativeProviders.clear();
+      for (const providerId of providerIds) this.discoverNativeChats(providerId);
+    }, NATIVE_DISCOVERY_IDLE_MS);
   }
 
   private providerUsable(providerId: string): boolean {

@@ -49,6 +49,7 @@ export type SessionManagementPerformance = {
 
 // Eight hot sessions over five rounds keep nearest-rank p95 from collapsing to the single maximum sample.
 const SESSION_SWITCH_ROUNDS = 5;
+const AUXILIARY_STARTUP_IDLE_MS = 5_000;
 
 export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi {
   const locator = new CoreLocator(context);
@@ -78,8 +79,14 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
   const state = new RuntimeState();
   const selection = new SelectionStore(context.globalStorageUri.fsPath);
   let lifecycle: Promise<void> = Promise.resolve();
+  let missionLifecycle: Promise<void> = Promise.resolve();
   const afterReady = async <T>(action: () => Promise<T>): Promise<T> => {
     await lifecycle;
+    return action();
+  };
+  const afterMissionReady = async <T>(action: () => Promise<T>): Promise<T> => {
+    await lifecycle;
+    await missionLifecycle;
     return action();
   };
   let controller: Controller;
@@ -131,7 +138,7 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
     vscode.workspace.registerTextDocumentContentProvider("runtrol-mission", missionController.documentProvider()),
     vscode.commands.registerCommand(
       "runtrol.refresh",
-      () => run(() => afterReady(async () => Promise.all([
+      () => run(() => afterMissionReady(async () => Promise.all([
         controller.refreshChats(),
         missionController.refresh(),
       ]).then(() => undefined))),
@@ -142,59 +149,59 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
     ),
     vscode.commands.registerCommand(
       "runtrol.validateMission",
-      () => run(() => afterReady(() => missionController.validateMission())),
+      () => run(() => afterMissionReady(() => missionController.validateMission())),
     ),
     vscode.commands.registerCommand(
       "runtrol.registerMissionGate",
-      () => run(() => afterReady(() => missionController.registerGate())),
+      () => run(() => afterMissionReady(() => missionController.registerGate())),
     ),
     vscode.commands.registerCommand(
       "runtrol.openMission",
-      (item) => run(() => afterReady(() => missionController.openMission(item))),
+      (item) => run(() => afterMissionReady(() => missionController.openMission(item))),
     ),
     vscode.commands.registerCommand(
       "runtrol.startMission",
-      (item) => run(() => afterReady(() => missionController.startMission(item))),
+      (item) => run(() => afterMissionReady(() => missionController.startMission(item))),
     ),
     vscode.commands.registerCommand(
       "runtrol.prepareMissionTask",
-      (item) => run(() => afterReady(() => missionController.prepareTask(item))),
+      (item) => run(() => afterMissionReady(() => missionController.prepareTask(item))),
     ),
     vscode.commands.registerCommand(
       "runtrol.sendTaskInstruction",
-      (item) => run(() => afterReady(() => missionController.sendTaskInstruction(item))),
+      (item) => run(() => afterMissionReady(() => missionController.sendTaskInstruction(item))),
     ),
     vscode.commands.registerCommand(
       "runtrol.verifyMissionTask",
-      (item) => run(() => afterReady(() => missionController.verifyTask(item))),
+      (item) => run(() => afterMissionReady(() => missionController.verifyTask(item))),
     ),
     vscode.commands.registerCommand(
       "runtrol.retryMissionTask",
-      (item) => run(() => afterReady(() => missionController.retryTask(item))),
+      (item) => run(() => afterMissionReady(() => missionController.retryTask(item))),
     ),
     vscode.commands.registerCommand(
       "runtrol.pauseMission",
-      (item) => run(() => afterReady(() => missionController.pauseMission(item))),
+      (item) => run(() => afterMissionReady(() => missionController.pauseMission(item))),
     ),
     vscode.commands.registerCommand(
       "runtrol.resumeMission",
-      (item) => run(() => afterReady(() => missionController.resumeMission(item))),
+      (item) => run(() => afterMissionReady(() => missionController.resumeMission(item))),
     ),
     vscode.commands.registerCommand(
       "runtrol.cancelMission",
-      (item) => run(() => afterReady(() => missionController.cancelMission(item))),
+      (item) => run(() => afterMissionReady(() => missionController.cancelMission(item))),
     ),
     vscode.commands.registerCommand(
       "runtrol.completeMissionIntegration",
-      (item) => run(() => afterReady(() => missionController.completeIntegration(item))),
+      (item) => run(() => afterMissionReady(() => missionController.completeIntegration(item))),
     ),
     vscode.commands.registerCommand(
       "runtrol.archiveMission",
-      (item) => run(() => afterReady(() => missionController.archiveMission(item))),
+      (item) => run(() => afterMissionReady(() => missionController.archiveMission(item))),
     ),
     vscode.commands.registerCommand(
       "runtrol.openTaskSession",
-      (item) => run(() => afterReady(() => missionController.openTaskSession(item))),
+      (item) => run(() => afterMissionReady(() => missionController.openTaskSession(item))),
     ),
     vscode.commands.registerCommand(
       "runtrol.proposeCapability",
@@ -328,18 +335,22 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
     initializationStage = "controller";
     await controller.initialize();
   });
-  const missionInitialization = missionController.initialize().catch((error: unknown) => {
+  missionLifecycle = missionController.initialize().catch((error: unknown) => {
     initializationStage = "mission";
     throw error;
   });
-  lifecycle = Promise.all([controllerInitialization, missionInitialization]).then(() => {
+  lifecycle = controllerInitialization.then(() => {
     initializationStage = "ready";
   });
   void run(() => lifecycle);
-  void run(async () => {
-    await lifecycle;
-    await configureRemoteConnection(client);
-  });
+  void run(() => missionLifecycle);
+  const auxiliaryStartup = setTimeout(() => {
+    void run(async () => {
+      await lifecycle;
+      await configureRemoteConnection(client);
+    });
+  }, AUXILIARY_STARTUP_IDLE_MS);
+  context.subscriptions.push(new vscode.Disposable(() => clearTimeout(auxiliaryStartup)));
   return {
     get ready() {
       return lifecycle;

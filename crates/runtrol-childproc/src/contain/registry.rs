@@ -826,14 +826,17 @@ fn group_has_executing_members(group: u32) -> Result<bool, SpawnError> {
     let processes = std::fs::read_dir("/proc")
         .map_err(|error| io_failure("listing process-group members", error))?;
     for process in processes {
-        let process =
-            process.map_err(|error| io_failure("reading a process-group member", error))?;
+        let process = match process {
+            Ok(process) => process,
+            Err(error) if linux_process_member_vanished(&error) => continue,
+            Err(error) => return Err(io_failure("reading a process-group member", error)),
+        };
         let Ok(_pid) = process.file_name().to_string_lossy().parse::<u32>() else {
             continue;
         };
         let stat = match std::fs::read_to_string(process.path().join("stat")) {
             Ok(stat) => stat,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) if linux_process_member_vanished(&error) => continue,
             Err(error) => return Err(io_failure("reading a process-group member", error)),
         };
         let Some(tail) = stat.rsplit_once(") ").map(|(_, tail)| tail) else {
@@ -873,6 +876,11 @@ fn group_has_executing_members(group: u32) -> Result<bool, SpawnError> {
         }
     }
     Ok(false)
+}
+
+#[cfg(target_os = "linux")]
+fn linux_process_member_vanished(error: &std::io::Error) -> bool {
+    error.kind() == std::io::ErrorKind::NotFound || error.raw_os_error() == Some(libc::ESRCH)
 }
 
 #[cfg(target_os = "macos")]
@@ -1041,6 +1049,20 @@ mod tests {
         "contain::registry::tests::an_active_guard_and_inherited_lock_survive_a_hard_kill";
     const CHILD_BUDGET: Duration = Duration::from_secs(10);
     static NEXT_FIXTURE: AtomicU64 = AtomicU64::new(0);
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn vanished_linux_process_members_are_not_containment_failures() {
+        assert!(linux_process_member_vanished(
+            &std::io::Error::from_raw_os_error(libc::ENOENT)
+        ));
+        assert!(linux_process_member_vanished(
+            &std::io::Error::from_raw_os_error(libc::ESRCH)
+        ));
+        assert!(!linux_process_member_vanished(
+            &std::io::Error::from_raw_os_error(libc::EACCES)
+        ));
+    }
 
     #[test]
     fn active_record_round_trips_the_complete_process_identity() -> Result<(), SpawnError> {
