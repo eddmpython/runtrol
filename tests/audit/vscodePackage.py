@@ -125,6 +125,9 @@ def sourceProblems(
         "extensionReleaseTag",
         "previousExtensionReleaseTag",
         "['show-ref', '--verify', '--quiet', `refs/tags/${tag}`]",
+        "gnome-keyring-daemon --components=secrets --daemonize --unlock",
+        'echo "DBUS_SESSION_BUS_ADDRESS=$dbus_address" >> "$GITHUB_ENV"',
+        "RUNTROL_TEST_MACOS_KEYCHAIN=$keychain",
         "if: inputs.release",
         "Refuse an incomplete platform set",
         "gh release create",
@@ -395,6 +398,9 @@ def selftest() -> int:
     extensionReleaseTag
     previousExtensionReleaseTag
     ['show-ref', '--verify', '--quiet', `refs/tags/${tag}`]
+    gnome-keyring-daemon --components=secrets --daemonize --unlock
+    echo "DBUS_SESSION_BUS_ADDRESS=$dbus_address" >> "$GITHUB_ENV"
+    RUNTROL_TEST_MACOS_KEYCHAIN=$keychain
     if: inputs.release
     Refuse an incomplete platform set
     gh release create
@@ -428,6 +434,16 @@ def selftest() -> int:
         (sourcePackage, releaseWorkflow.replace("tests/audit/vscodeUpgradeRollback.py --archive", ""), coreManifest),
         (sourcePackage, releaseWorkflow.replace("previousExtensionReleaseTag", ""), coreManifest),
         (sourcePackage, releaseWorkflow.replace("gh release create", ""), coreManifest),
+        (
+            sourcePackage,
+            releaseWorkflow.replace("gnome-keyring-daemon --components=secrets --daemonize --unlock", ""),
+            coreManifest,
+        ),
+        (
+            sourcePackage,
+            releaseWorkflow.replace("RUNTROL_TEST_MACOS_KEYCHAIN=$keychain", ""),
+            coreManifest,
+        ),
         (sourcePackage, f"{releaseWorkflow}\nVSCE_PAT", coreManifest),
         (sourcePackage, f"{releaseWorkflow}\nvsce publish --oidc", coreManifest),
         (sourcePackage, f"{releaseWorkflow}\nuses: actions/setup-node@v7", coreManifest),

@@ -75,7 +75,25 @@ jobs:
         if: matrix.family == 'linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y xvfb
+          sudo apt-get install -y gnome-keyring xvfb
+          dbus_address="$(dbus-daemon --session --fork --print-address=1)"
+          echo "DBUS_SESSION_BUS_ADDRESS=$dbus_address" >> "$GITHUB_ENV"
+          export DBUS_SESSION_BUS_ADDRESS="$dbus_address"
+          keyring_environment="$(printf 'runtrol-ci' | gnome-keyring-daemon --components=secrets --daemonize --unlock)"
+          eval "$keyring_environment"
+          echo "GNOME_KEYRING_CONTROL=$GNOME_KEYRING_CONTROL" >> "$GITHUB_ENV"
+      - name: macOS native credential store
+        if: matrix.family == 'macos'
+        shell: bash
+        run: |
+          keychain="$RUNNER_TEMP/runtrol-ci.keychain-db"
+          security create-keychain -p 'runtrol-ci' "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p 'runtrol-ci' "$keychain"
+          security default-keychain -d user -s "$keychain"
+          security list-keychains -d user -s "$keychain"
+          echo "RUNTROL_TEST_MACOS_KEYCHAIN=$keychain" >> "$GITHUB_ENV"
+          echo "RUNTROL_TEST_MACOS_KEYCHAIN_PASSWORD=runtrol-ci" >> "$GITHUB_ENV"
       - uses: Swatinem/rust-cache@63fed3e2fecf6f7b51dc6f043341b79ef82a9ae7 # v2.9.2
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
