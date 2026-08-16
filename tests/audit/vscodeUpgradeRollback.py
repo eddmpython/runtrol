@@ -32,7 +32,7 @@ from xml.etree import ElementTree
 
 ROOT = Path(__file__).resolve().parents[2]
 EXTENSION = ROOT / "extensions" / "runtrol-vscode"
-WORKSPACE_MANIFEST = ROOT / "Cargo.toml"
+RELEASE_POLICY = EXTENSION / "release-policy.json"
 BASELINE_VERSION = "0.0.1"
 RESULT_MARKER = "RUNTROL_VSCODE_UPGRADE "
 SESSION_PATTERN = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
@@ -213,21 +213,11 @@ def normalizeArchitecture() -> str:
 
 
 def currentVersion() -> str:
-    """Read the extension release version from the workspace source of truth."""
-    manifest = WORKSPACE_MANIFEST.read_text(encoding="utf-8")
-    section = re.search(
-        r"^\[workspace\.package\]\s*$([\s\S]*?)(?=^\[|\Z)",
-        manifest,
-        flags=re.MULTILINE,
-    )
-    version = re.search(
-        r'^version\s*=\s*"(\d+\.\d+\.\d+)"\s*$',
-        section.group(1) if section else "",
-        flags=re.MULTILINE,
-    )
-    value = version.group(1) if version else None
-    if value is None:
-        raise RuntimeError("the workspace manifest has no stable semantic version")
+    """Read the extension release version from its independent source of truth."""
+    policy = json.loads(RELEASE_POLICY.read_text(encoding="utf-8"))
+    value = policy.get("version")
+    if not isinstance(value, str) or re.fullmatch(r"\d+\.\d+\.\d+", value) is None:
+        raise RuntimeError("the extension release policy has no stable semantic version")
     if value == BASELINE_VERSION:
         raise RuntimeError(f"the release version must be newer than the rehearsal baseline {BASELINE_VERSION}")
     return value

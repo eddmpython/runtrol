@@ -185,7 +185,7 @@ GATES: dict[str, tuple[str, list[str]]] = {
         [*PY, f"{HOOKS}/versionSsot.py", "--selftest"],
     ),
     "versionSsot": (
-        "Cargo와 VS Code 릴리스 버전 단일 정본",
+        "Runtime과 Studio 릴리스 버전 정본",
         [*PY, f"{HOOKS}/versionSsot.py"],
     ),
     "channelVerdict": (

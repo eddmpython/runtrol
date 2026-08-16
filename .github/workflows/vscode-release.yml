@@ -22,6 +22,32 @@ jobs:
       version: ${{ steps.manifest.outputs.version }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Verify patch-only extension release sequence
+        env:
+          CREATE_RELEASE: ${{ inputs.release }}
+        run: |
+          node --input-type=module <<'NODE'
+          import { spawnSync } from 'node:child_process';
+          import {
+            extensionReleaseTag,
+            previousExtensionReleaseTag,
+          } from './extensions/runtrol-vscode/tooling/extension-manifest.mjs';
+
+          const tagExists = (tag) => spawnSync(
+            'git',
+            ['show-ref', '--verify', '--quiet', `refs/tags/${tag}`],
+            { stdio: 'ignore' },
+          ).status === 0;
+
+          if (!tagExists(previousExtensionReleaseTag)) {
+            throw new Error(`the exact previous extension release ${previousExtensionReleaseTag} is missing`);
+          }
+          if (process.env.CREATE_RELEASE === 'true' && tagExists(extensionReleaseTag)) {
+            throw new Error(`the extension release ${extensionReleaseTag} already exists`);
+          }
+          NODE
       - name: Read the extension release SSOT
         id: manifest
         run: |

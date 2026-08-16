@@ -10,6 +10,8 @@ and refactoring that no user can observe do not belong here.
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-08-16
+
 ### Added
 
 - Studio automatically lists provider-owned chats through each coding service's official Runtime catalogue, then

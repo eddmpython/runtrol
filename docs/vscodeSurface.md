@@ -133,8 +133,11 @@ acknowledgements separately and retries one transient Webview document reload wi
 
 ## Distribution
 
-The public identity is `runtrol.runtrol-studio`. Workspace package SemVer in `Cargo.toml` is the release version source
-for both Core and the generated extension manifest, while `release-targets.json` owns the six native targets:
+The public identity is `runtrol.runtrol-studio`. `release-policy.json` is the extension version source, independently
+of the Runtime and Rust SDK version in `Cargo.toml`. Studio is permanently on the `0.1.x` release line from `0.1.1`
+onward. Every release increments only the patch component by exactly one. The policy, complete changelog sequence,
+and release workflow's exact predecessor-tag check enforce that rule before packaging. `release-targets.json` owns
+the six native targets:
 
 - `win32-x64`
 - `win32-arm64`

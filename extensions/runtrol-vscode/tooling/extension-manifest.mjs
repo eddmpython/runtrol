@@ -5,11 +5,20 @@ import { fileURLToPath } from "node:url";
 export const extensionRoot = fileURLToPath(new URL("../", import.meta.url));
 export const repositoryRoot = fileURLToPath(new URL("../../../", import.meta.url));
 const sourceManifest = JSON.parse(await readFile(path.join(extensionRoot, "package.json"), "utf8"));
-const workspaceManifest = await readFile(path.join(repositoryRoot, "Cargo.toml"), "utf8");
-const workspaceVersion = readWorkspaceVersion(workspaceManifest);
-export const packageManifest = Object.freeze(
-  { ...sourceManifest, version: workspaceVersion },
+export const extensionReleasePolicy = Object.freeze(
+  JSON.parse(await readFile(path.join(extensionRoot, "release-policy.json"), "utf8")),
 );
+const releaseVersion = validateReleaseVersion(extensionReleasePolicy.version, extensionReleasePolicy);
+export const packageManifest = Object.freeze(
+  { ...sourceManifest, version: extensionReleasePolicy.version },
+);
+export const extensionReleaseTag = `${extensionReleasePolicy.tagPrefix}${extensionReleasePolicy.version}`;
+export const previousExtensionVersion = [
+  releaseVersion.major,
+  releaseVersion.minor,
+  releaseVersion.patch - extensionReleasePolicy.increment,
+].join(".");
+export const previousExtensionReleaseTag = `${extensionReleasePolicy.tagPrefix}${previousExtensionVersion}`;
 
 if (!manifestToken(packageManifest.publisher) || !manifestToken(packageManifest.name)) {
   throw new Error("the extension manifest has an invalid Marketplace identity");
@@ -25,12 +34,34 @@ function manifestToken(value) {
   return typeof value === "string" && /^[a-z0-9][a-z0-9-]*$/u.test(value);
 }
 
-function readWorkspaceVersion(manifest) {
-  const afterHeader = manifest.split(/^\[workspace\.package\]\s*$/mu, 2)[1];
-  const section = afterHeader?.split(/^\[/mu, 1)[0];
-  const version = section?.match(/^version\s*=\s*"(\d+\.\d+\.\d+)"\s*$/mu)?.[1];
-  if (!version || version === "0.0.0") {
-    throw new Error("Cargo.toml has no publishable workspace package version");
+function validateReleaseVersion(version, policy) {
+  const expectedKeys = ["increment", "initialPatch", "major", "minor", "tagPrefix", "version"];
+  if (JSON.stringify(Object.keys(policy).sort()) !== JSON.stringify(expectedKeys)) {
+    throw new Error("release-policy.json has an unknown or missing field");
   }
-  return version;
+  const match = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/u.exec(version);
+  const major = Number(match?.[1]);
+  const minor = Number(match?.[2]);
+  const patch = Number(match?.[3]);
+  if (
+    !Number.isSafeInteger(policy.major)
+    || !Number.isSafeInteger(policy.minor)
+    || !Number.isSafeInteger(policy.initialPatch)
+    || policy.increment !== 1
+    || typeof policy.tagPrefix !== "string"
+    || !/^[a-z0-9.-]+$/u.test(policy.tagPrefix)
+  ) {
+    throw new Error("release-policy.json has an invalid patch-only policy");
+  }
+  if (
+    !match
+    || major !== policy.major
+    || minor !== policy.minor
+    || patch < policy.initialPatch + policy.increment
+  ) {
+    throw new Error(
+      `the extension release must stay on ${policy.major}.${policy.minor}.x and advance from its initial patch`,
+    );
+  }
+  return { major, minor, patch };
 }

@@ -17,7 +17,6 @@ import hashlib
 import json
 import re
 import sys
-import tomllib
 import zipfile
 from pathlib import Path
 from typing import NamedTuple
@@ -38,7 +37,8 @@ EXPECTED_TARGETS = {
     "win32-arm64",
     "win32-x64",
 }
-WORKSPACE_VERSION = tomllib.loads((ROOT / "Cargo.toml").read_text(encoding="utf-8"))["workspace"]["package"]["version"]
+EXTENSION_POLICY = json.loads((EXTENSION / "release-policy.json").read_text(encoding="utf-8"))
+EXTENSION_VERSION = EXTENSION_POLICY["version"]
 
 
 class ArchiveEntry(NamedTuple):
@@ -65,8 +65,8 @@ def sourceProblems(
     version = package.get("version")
     if version != "0.0.0":
         found.append("the checked-in extension version must be the derived-version placeholder 0.0.0")
-    if not isinstance(WORKSPACE_VERSION, str) or not SEMVER.fullmatch(WORKSPACE_VERSION) or WORKSPACE_VERSION == "0.0.0":
-        found.append("the workspace package version must be a publishable major.minor.patch other than 0.0.0")
+    if not isinstance(EXTENSION_VERSION, str) or not SEMVER.fullmatch(EXTENSION_VERSION):
+        found.append("release-policy.json must own one publishable extension version")
     if package.get("publisher") != PUBLIC_PUBLISHER or package.get("name") != PUBLIC_EXTENSION_NAME:
         found.append("the public extension identity changed")
     if package.get("license") != "SEE LICENSE IN resources/LICENSE":
@@ -105,7 +105,12 @@ def sourceProblems(
     for token in requiredPackageTokens:
         if token not in packageScript:
             found.append(f"package.mjs is missing release contract {token}")
-    for token in ("workspace\\.package", "sourceManifest.version !== \"0.0.0\"", "version: workspaceVersion"):
+    for token in (
+        "sourceManifest.version !== \"0.0.0\"",
+        "version: extensionReleasePolicy.version",
+        "release-policy.json",
+        "previousExtensionReleaseTag",
+    ):
         if token not in extensionManifestScript:
             found.append(f"extension-manifest.mjs is missing version derivation contract {token}")
     if 'path.join(repositoryRoot, "LICENSE")' not in buildScript:
@@ -115,6 +120,11 @@ def sourceProblems(
         "--target-dir target/vscode-release",
         "RUNTROL_CORE_BINARY: target/vscode-release/release/${{ matrix.executable }}",
         "tests/audit/vscodeUpgradeRollback.py --archive",
+        "fetch-depth: 0",
+        "Verify patch-only extension release sequence",
+        "extensionReleaseTag",
+        "previousExtensionReleaseTag",
+        "['show-ref', '--verify', '--quiet', `refs/tags/${tag}`]",
         "if: inputs.release",
         "Refuse an incomplete platform set",
         "gh release create",
@@ -371,12 +381,20 @@ def selftest() -> int:
         "mkdtemp(path.join(os.tmpdir(), \"runtrol-vsix-\")) "
         "cp(source, path.join(stagedCore, targetContract.executable)) await rm(staging"
     )
-    extensionManifestScript = 'workspace\\.package sourceManifest.version !== "0.0.0" version: workspaceVersion'
+    extensionManifestScript = (
+        'sourceManifest.version !== "0.0.0" version: extensionReleasePolicy.version '
+        "release-policy.json previousExtensionReleaseTag"
+    )
     buildScript = 'path.join(repositoryRoot, "LICENSE")'
     releaseWorkflow = """
     cargo build --release -p runtrol --bin runtrol --target-dir target/vscode-release
     RUNTROL_CORE_BINARY: target/vscode-release/release/${{ matrix.executable }}
     tests/audit/vscodeUpgradeRollback.py --archive
+    fetch-depth: 0
+    Verify patch-only extension release sequence
+    extensionReleaseTag
+    previousExtensionReleaseTag
+    ['show-ref', '--verify', '--quiet', `refs/tags/${tag}`]
     if: inputs.release
     Refuse an incomplete platform set
     gh release create
@@ -408,6 +426,7 @@ def selftest() -> int:
         (sourcePackage, releaseWorkflow, f'{coreManifest}\ndefault = ["desktop"]'),
         (sourcePackage, f"{releaseWorkflow}\ncrates/runtrol-gui", coreManifest),
         (sourcePackage, releaseWorkflow.replace("tests/audit/vscodeUpgradeRollback.py --archive", ""), coreManifest),
+        (sourcePackage, releaseWorkflow.replace("previousExtensionReleaseTag", ""), coreManifest),
         (sourcePackage, releaseWorkflow.replace("gh release create", ""), coreManifest),
         (sourcePackage, f"{releaseWorkflow}\nVSCE_PAT", coreManifest),
         (sourcePackage, f"{releaseWorkflow}\nvsce publish --oidc", coreManifest),
@@ -428,7 +447,11 @@ def selftest() -> int:
         ):
             print(f"[vscodePackage --selftest] FAIL. source mutation {index} escaped.", file=sys.stderr)
             return 2
-    print("[vscodePackage --selftest] OK. eight archives, eight source mutations, and two listing mutations make the gate red.")
+    print(
+        "[vscodePackage --selftest] OK. "
+        f"{len(mutations)} archive, {len(sourceMutations)} source, and {len(listingMutations)} listing mutations "
+        "make the gate red."
+    )
     return 0
 
 
@@ -467,7 +490,7 @@ def sourceRun() -> int:
     found += listingProblems(package, (EXTENSION / "README.md").read_text(encoding="utf-8"))
     if found:
         return report("vscodePackage", found)
-    print(f"[vscodePackage] OK. release {WORKSPACE_VERSION} and six native targets are wired.")
+    print(f"[vscodePackage] OK. Studio release {EXTENSION_VERSION} and six native targets are wired.")
     return 0
 
 
@@ -484,7 +507,7 @@ def archiveRun(archive: Path, target: str, core: Path | None) -> int:
         found += archiveProblems(
             entries,
             target,
-            WORKSPACE_VERSION,
+            EXTENSION_VERSION,
             (ROOT / "LICENSE").read_bytes(),
             coreBytes,
         )

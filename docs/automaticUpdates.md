@@ -73,7 +73,7 @@ them. The phone surface cannot trigger package mutation.
 
 | Gate | Contract |
 |---|---|
-| `versionSsot` | Cargo and VS Code packages derive one release version |
+| `versionSsot` | Cargo members and Studio each have one version source, and Studio advances only one `0.1.x` patch at a time |
 | `vscodeUpgradeRollback` | official VSIX upgrade and rollback preserve the daemon, provider process, session, and workspace |
 | `channelVerdict` | package ownership, safe package identifiers, closed channel arguments, and operator-manifest denial |
 | `cliUpdateRehearsal` | a broken fixture target restores the exact starting tree, while an unrestorable target fails closed |
