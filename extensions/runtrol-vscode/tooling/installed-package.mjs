@@ -44,6 +44,8 @@ if (archive) {
 }
 
 const temporaryRoot = process.platform === "darwin" ? "/tmp" : os.tmpdir();
+const MARKETPLACE_INSTALL_DEADLINE_MS = 10 * 60_000;
+const MARKETPLACE_INSTALL_INTERVAL_MS = 15_000;
 const temporary = await mkdtemp(path.join(temporaryRoot, "runtrol-vscode-package-"));
 const resultPath = path.join(temporary, "result.json");
 const integrationApproval = path.join(temporary, "integration-approved");
@@ -94,12 +96,17 @@ try {
   });
 
   const vscode = await acquireVSCode(path.join(os.tmpdir(), "runtrol-vscode-test-cache"));
+  let installedDirectory;
   if (marketplace) {
-    installMarketplaceExtension(vscode.cli, extensionIdentifier, userData, extensions);
+    installedDirectory = await installPublishedMarketplaceExtension(
+      vscode.cli,
+      userData,
+      extensions,
+    );
   } else {
     installVSIX(vscode.cli, archive, userData, extensions);
+    installedDirectory = await findInstalledExtension(extensions, packageManifest.version);
   }
-  const installedDirectory = await findInstalledExtension(extensions);
   bundledCore = path.join(
     installedDirectory,
     "resources",
@@ -169,4 +176,29 @@ function stopIsolatedDaemon(executable, home) {
     timeout: 15_000,
     windowsHide: true,
   });
+}
+
+async function installPublishedMarketplaceExtension(cli, userData, extensions) {
+  const exactRelease = `${extensionIdentifier}@${packageManifest.version}`;
+  const deadline = Date.now() + MARKETPLACE_INSTALL_DEADLINE_MS;
+  let lastFailure = "Marketplace installation has not started";
+  do {
+    await rm(extensions, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+    await mkdir(extensions, { recursive: true });
+    try {
+      installMarketplaceExtension(cli, exactRelease, userData, extensions);
+      return await findInstalledExtension(extensions, packageManifest.version);
+    } catch (error) {
+      lastFailure = error instanceof Error ? error.message : String(error);
+    }
+    if (Date.now() + MARKETPLACE_INSTALL_INTERVAL_MS >= deadline) break;
+    await delay(MARKETPLACE_INSTALL_INTERVAL_MS);
+  } while (Date.now() < deadline);
+  throw new Error(
+    `Marketplace did not install ${exactRelease} within the propagation deadline: ${lastFailure}`,
+  );
+}
+
+function delay(milliseconds) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }

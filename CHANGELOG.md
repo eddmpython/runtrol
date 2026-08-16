@@ -10,10 +10,22 @@ and refactoring that no user can observe do not belong here.
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-08-16
+
+### Added
+
+- The Marketplace page now gives an exact extension-ID search fallback, automatic-update recovery for earlier manual
+  VSIX installs, local-workspace requirements, and short troubleshooting paths before development internals.
+- Marketplace metadata now exposes release health and current-version badges, broader agent and session discovery
+  keywords, and exact Workspace Trust and virtual-workspace safety boundaries.
+
 ### Changed
 
-- Studio releases now publish all six platform packages to the Marketplace through GitHub Actions, then verify the
-  public version, target set, and exact package digests before completing the release.
+- Advancing the Studio patch version on `main` now starts the complete six-platform release automatically. The release
+  publishes every package, verifies the public version, target set, and exact package digests, then installs and
+  activates the public Marketplace package on every native release runner before creating the GitHub Release.
+- Studio now runs only in the local UI Extension Host, matching its ownership of local CLI processes and bundled native
+  Core. Untrusted and virtual workspaces are rejected with a direct explanation instead of failing after activation.
 
 ## [0.1.2] - 2026-08-16
 

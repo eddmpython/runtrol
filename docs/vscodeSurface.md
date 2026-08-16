@@ -159,17 +159,18 @@ the VSIX into a clean VS Code 1.132.1 profile, activates through the bundled Cor
 an active session, and uploads the package. Hosted extension gates use that same exact tested version unless an
 operator explicitly supplies another version. It creates a tagged GitHub Release only after all six jobs pass.
 
-The first public release is [Runtrol Studio 0.1.0](https://github.com/eddmpython/runtrol/releases/tag/vscode-v0.1.0).
+The current public release is [Runtrol Studio 0.1.3](https://github.com/eddmpython/runtrol/releases/tag/vscode-v0.1.3).
 All six native packages are published under one
 [Marketplace listing](https://marketplace.visualstudio.com/items?itemName=runtrol.runtrol-studio). Stable VS Code
-1.132.1 downloaded the public `win32-x64` package into an isolated profile, activated with no configured Core path,
-materialized the exact bundled Core, refreshed through it, and opened the contributed Runtrol view. Exact verifier
-processes and temporary profiles were removed afterward.
+1.132.1 downloads the exact public package into an isolated profile on each native release runner, activates with no
+configured Core path, materializes the bundled Core, refreshes through it, and opens the contributed Runtrol view.
+Exact verifier processes and temporary profiles are removed afterward.
 
-The attempted credentialless Marketplace OIDC exchange returned `404` from the Marketplace token endpoint. Until a
-supported credentialless contract is available, Marketplace publication is a deliberate operator step using the
-pinned `vsce` client and a short-lived Marketplace-only credential. The credential must be removed from `vsce` and
-revoked after publication. No Marketplace secret is stored in the repository or release workflow.
+Advancing `release-policy.json` by one patch on `main` starts the release automatically. GitHub Actions holds one
+Marketplace-only PAT as the `VSCE_PAT` repository secret. The pinned publisher client receives it only through the
+publication step environment, publishes all six packages, and verifies the public identity, version, target set, and
+archive digests before the public installation matrix and tagged GitHub Release can complete. `publishExisting` is a
+manual recovery input for an already tagged version and cannot rebuild or retag artifacts.
 
 Extension and provider update ownership, safe scheduling, exact rollback, and the local-only update command are
 specified in [automatic updates](automaticUpdates.md).

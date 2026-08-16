@@ -1,6 +1,11 @@
 name: vscode-release
 
 on:
+  push:
+    branches:
+      - main
+    paths:
+      - extensions/runtrol-vscode/release-policy.json
   workflow_dispatch:
     inputs:
       release:
@@ -31,7 +36,7 @@ jobs:
           fetch-depth: 0
       - name: Verify patch-only extension release sequence
         env:
-          CREATE_RELEASE: ${{ inputs.release }}
+          CREATE_RELEASE: ${{ github.event_name == 'push' || inputs.release }}
           PUBLISH_EXISTING: ${{ inputs.publishExisting }}
           RELEASE_REF: ${{ github.ref }}
         run: |
@@ -94,7 +99,7 @@ jobs:
 
   package:
     needs: prepare
-    if: ${{ ! inputs.publishExisting }}
+    if: ${{ github.event_name == 'push' || ! inputs.publishExisting }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -167,7 +172,7 @@ jobs:
 
   publish:
     needs: [prepare, package]
-    if: inputs.release
+    if: ${{ github.event_name == 'push' || inputs.release }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -194,6 +199,55 @@ jobs:
         run: >-
           node extensions/runtrol-vscode/tooling/publish-marketplace.mjs
           --directory release
+
+  marketplace:
+    needs: [prepare, publish]
+    if: ${{ github.event_name == 'push' || inputs.release }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Linux native VS Code dependencies
+        if: matrix.family == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gnome-keyring xvfb
+          dbus_address="$(dbus-daemon --session --fork --print-address=1)"
+          echo "DBUS_SESSION_BUS_ADDRESS=$dbus_address" >> "$GITHUB_ENV"
+          export DBUS_SESSION_BUS_ADDRESS="$dbus_address"
+          keyring_environment="$(printf 'runtrol-ci' | gnome-keyring-daemon --components=secrets --daemonize --unlock)"
+          eval "$keyring_environment"
+          echo "GNOME_KEYRING_CONTROL=$GNOME_KEYRING_CONTROL" >> "$GITHUB_ENV"
+      - name: macOS native credential store
+        if: matrix.family == 'macos'
+        shell: bash
+        run: |
+          keychain="$RUNNER_TEMP/runtrol-marketplace-ci.keychain-db"
+          security create-keychain -p 'runtrol-ci' "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p 'runtrol-ci' "$keychain"
+          security default-keychain -d user -s "$keychain"
+          security list-keychains -d user -s "$keychain"
+          echo "RUNTROL_TEST_MACOS_KEYCHAIN=$keychain" >> "$GITHUB_ENV"
+          echo "RUNTROL_TEST_MACOS_KEYCHAIN_PASSWORD=runtrol-ci" >> "$GITHUB_ENV"
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: extensions/runtrol-vscode/package-lock.json
+      - name: Install deterministic frontend dependencies
+        run: npm --prefix extensions/runtrol-vscode ci
+      - name: Refuse a runner that differs from the release SSOT
+        run: node -e "const actual=process.platform+'-'+process.arch; const expected='${{ matrix.target }}'; if(actual!==expected) throw new Error('runner is '+actual+', expected '+expected)"
+      - name: Install and activate the public Marketplace release
+        if: matrix.family != 'linux'
+        run: node extensions/runtrol-vscode/tooling/installed-package.mjs --marketplace
+      - name: Install and activate the public Marketplace release on Linux
+        if: matrix.family == 'linux'
+        run: xvfb-run -a node extensions/runtrol-vscode/tooling/installed-package.mjs --marketplace
 
   publishExisting:
     needs: prepare
@@ -236,8 +290,8 @@ jobs:
           --directory release
 
   release:
-    needs: [prepare, package, publish]
-    if: inputs.release
+    needs: [prepare, package, publish, marketplace]
+    if: ${{ github.event_name == 'push' || inputs.release }}
     runs-on: ubuntu-latest
     permissions:
       contents: write

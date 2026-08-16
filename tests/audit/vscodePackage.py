@@ -58,6 +58,7 @@ def sourceProblems(
     marketplaceScript: str,
     coreManifest: str,
     ignore: str,
+    installedPackageScript: str,
     installedVerifierExists: bool,
     upgradeVerifierExists: bool,
 ) -> list[str]:
@@ -117,6 +118,9 @@ def sourceProblems(
     if 'path.join(repositoryRoot, "LICENSE")' not in buildScript:
         found.append("build.mjs does not copy the repository license into package resources")
     requiredWorkflowTokens = (
+        "push:",
+        "extensions/runtrol-vscode/release-policy.json",
+        "github.event_name == 'push' || inputs.release",
         "cargo build --release -p runtrol --bin runtrol --target-dir target/vscode-release",
         "--target-dir target/vscode-release",
         "RUNTROL_CORE_BINARY: target/vscode-release/release/${{ matrix.executable }}",
@@ -130,13 +134,13 @@ def sourceProblems(
         "gnome-keyring-daemon --components=secrets --daemonize --unlock",
         'echo "DBUS_SESSION_BUS_ADDRESS=$dbus_address" >> "$GITHUB_ENV"',
         "RUNTROL_TEST_MACOS_KEYCHAIN=$keychain",
-        "if: inputs.release",
         "if: inputs.publishExisting",
         "refs/heads/main",
         "Refuse an incomplete platform set",
         "VSCE_PAT: ${{ secrets.VSCE_PAT }}",
         "publish-marketplace.mjs",
         "--directory release",
+        "Install and activate the public Marketplace release",
         "gh release download",
         "gh release create",
     )
@@ -185,6 +189,14 @@ def sourceProblems(
     for token in ("tooling/**", "src/**", "node_modules/**", "performance-budget.json", "release-targets.json"):
         if token not in ignore:
             found.append(f".vscodeignore does not exclude {token}")
+    for token in (
+        "MARKETPLACE_INSTALL_DEADLINE_MS",
+        "`${extensionIdentifier}@${packageManifest.version}`",
+        "findInstalledExtension(extensions, packageManifest.version)",
+        "Marketplace did not install",
+    ):
+        if token not in installedPackageScript:
+            found.append(f"installed-package.mjs is missing public release contract {token}")
     if not installedVerifierExists:
         found.append("the installed-package verifier is missing")
     if not upgradeVerifierExists:
@@ -205,11 +217,48 @@ def listingProblems(package: dict[str, object], readme: str) -> list[str]:
         found.append("the open source extension is not labelled Free")
     if package.get("galleryBanner") != {"color": "#0B0D0F", "theme": "dark"}:
         found.append("the Marketplace banner does not use the canonical graphite contract")
+    if package.get("extensionKind") != ["ui"]:
+        found.append("the local supervisor is not constrained to the UI extension host")
+    expectedCapabilities = {
+        "untrustedWorkspaces": {
+            "supported": False,
+            "description": (
+                "Runtrol starts local coding-agent CLI processes that can change the selected repository. "
+                "Trust the workspace before opening chats."
+            ),
+        },
+        "virtualWorkspaces": {
+            "supported": False,
+            "description": (
+                "Runtrol requires a local filesystem workspace for provider CLI processes, repositories, and worktrees."
+            ),
+        },
+    }
+    if package.get("capabilities") != expectedCapabilities:
+        found.append("the Marketplace manifest does not declare exact workspace safety boundaries")
+    keywords = package.get("keywords")
+    requiredKeywords = {"agent manager", "ai agent", "chat", "cli", "coding agent", "session manager", "worktree"}
+    if not isinstance(keywords, list) or not requiredKeywords.issubset(set(keywords)):
+        found.append("the Marketplace listing is missing bounded discovery keywords")
+    badges = package.get("badges")
+    badgeUrls = {
+        badge.get("url") for badge in badges if isinstance(badge, dict) and isinstance(badge.get("url"), str)
+    } if isinstance(badges, list) else set()
+    if badgeUrls != {
+        "https://github.com/eddmpython/runtrol/actions/workflows/vscode-release.yml/badge.svg",
+        "https://img.shields.io/visual-studio-marketplace/v/runtrol.runtrol-studio",
+    }:
+        found.append("the Marketplace listing does not expose exact release and version badges")
     requiredReadmeTokens = (
         "# Runtrol Studio for VS Code",
         "## Install",
         "Search for `Runtrol Studio`",
+        "@id:runtrol.runtrol-studio",
         "No Core path is required for a Marketplace installation",
+        "## Updates",
+        "A manually installed VSIX has automatic updates disabled by VS Code",
+        "## Requirements",
+        "## Troubleshooting",
         "## Ownership and security",
         "https://eddmpython.github.io/runtrol/",
         "https://github.com/eddmpython/runtrol/blob/main/SECURITY.md",
@@ -379,6 +428,39 @@ def selftest() -> int:
         "bugs": {"url": "https://github.com/eddmpython/runtrol/issues"},
         "pricing": "Free",
         "galleryBanner": {"color": "#0B0D0F", "theme": "dark"},
+        "badges": [
+            {
+                "url": "https://github.com/eddmpython/runtrol/actions/workflows/vscode-release.yml/badge.svg",
+            },
+            {
+                "url": "https://img.shields.io/visual-studio-marketplace/v/runtrol.runtrol-studio",
+            },
+        ],
+        "keywords": [
+            "agent manager",
+            "ai agent",
+            "chat",
+            "cli",
+            "coding agent",
+            "session manager",
+            "worktree",
+        ],
+        "extensionKind": ["ui"],
+        "capabilities": {
+            "untrustedWorkspaces": {
+                "supported": False,
+                "description": (
+                    "Runtrol starts local coding-agent CLI processes that can change the selected repository. "
+                    "Trust the workspace before opening chats."
+                ),
+            },
+            "virtualWorkspaces": {
+                "supported": False,
+                "description": (
+                    "Runtrol requires a local filesystem workspace for provider CLI processes, repositories, and worktrees."
+                ),
+            },
+        },
         "scripts": {"package:native": "node tooling/package.mjs"},
         "devDependencies": {"@vscode/vsce": "3.9.3-5"},
     }
@@ -386,7 +468,12 @@ def selftest() -> int:
     # Runtrol Studio for VS Code
     ## Install
     Search for `Runtrol Studio`
+    @id:runtrol.runtrol-studio
     No Core path is required for a Marketplace installation
+    ## Updates
+    A manually installed VSIX has automatic updates disabled by VS Code
+    ## Requirements
+    ## Troubleshooting
     ## Ownership and security
     https://eddmpython.github.io/runtrol/
     https://github.com/eddmpython/runtrol/blob/main/SECURITY.md
@@ -397,6 +484,10 @@ def selftest() -> int:
     listingMutations = (
         ({**sourcePackage, "homepage": "https://example.invalid/"}, listingReadme),
         (sourcePackage, listingReadme.replace("## Install", "## Setup")),
+        ({**sourcePackage, "extensionKind": ["workspace"]}, listingReadme),
+        ({**sourcePackage, "capabilities": {}}, listingReadme),
+        ({**sourcePackage, "keywords": ["coding agent"]}, listingReadme),
+        (sourcePackage, listingReadme.replace("## Updates", "## Delivery")),
     )
     for index, (mutatedPackage, mutatedReadme) in enumerate(listingMutations, start=1):
         if not listingProblems(mutatedPackage, mutatedReadme):
@@ -422,6 +513,9 @@ def selftest() -> int:
     )
     buildScript = 'path.join(repositoryRoot, "LICENSE")'
     releaseWorkflow = """
+    push:
+    extensions/runtrol-vscode/release-policy.json
+    github.event_name == 'push' || inputs.release
     cargo build --release -p runtrol --bin runtrol --target-dir target/vscode-release
     RUNTROL_CORE_BINARY: target/vscode-release/release/${{ matrix.executable }}
     tests/audit/vscodeUpgradeRollback.py --archive
@@ -434,13 +528,13 @@ def selftest() -> int:
     gnome-keyring-daemon --components=secrets --daemonize --unlock
     echo "DBUS_SESSION_BUS_ADDRESS=$dbus_address" >> "$GITHUB_ENV"
     RUNTROL_TEST_MACOS_KEYCHAIN=$keychain
-    if: inputs.release
     if: inputs.publishExisting
     refs/heads/main
     Refuse an incomplete platform set
     VSCE_PAT: ${{ secrets.VSCE_PAT }}
     publish-marketplace.mjs
     --directory release
+    Install and activate the public Marketplace release
     gh release download
     gh release create
     uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -454,6 +548,12 @@ def selftest() -> int:
     """
     coreManifest = '[package]\nname = "runtrol"'
     ignore = "tooling/** src/** node_modules/** performance-budget.json release-targets.json"
+    installedPackageScript = """
+    MARKETPLACE_INSTALL_DEADLINE_MS
+    `${extensionIdentifier}@${packageManifest.version}`
+    findInstalledExtension(extensions, packageManifest.version)
+    Marketplace did not install
+    """
     if sourceProblems(
         sourcePackage,
         targets,
@@ -464,6 +564,7 @@ def selftest() -> int:
         marketplaceScript,
         coreManifest,
         ignore,
+        installedPackageScript,
         True,
         True,
     ):
@@ -473,6 +574,19 @@ def selftest() -> int:
     brokenSource["version"] = "0.1.0"
     floatingPublisher = {**sourcePackage, "devDependencies": {"@vscode/vsce": "^3.9.3"}}
     sourceMutations = (
+        (sourcePackage, releaseWorkflow.replace("push:", ""), marketplaceScript, coreManifest),
+        (
+            sourcePackage,
+            releaseWorkflow.replace("extensions/runtrol-vscode/release-policy.json", ""),
+            marketplaceScript,
+            coreManifest,
+        ),
+        (
+            sourcePackage,
+            releaseWorkflow.replace("Install and activate the public Marketplace release", ""),
+            marketplaceScript,
+            coreManifest,
+        ),
         (brokenSource, releaseWorkflow, marketplaceScript, coreManifest),
         (floatingPublisher, releaseWorkflow, marketplaceScript, coreManifest),
         (
@@ -548,14 +662,38 @@ def selftest() -> int:
             mutatedMarketplace,
             mutatedManifest,
             ignore,
+            installedPackageScript,
             True,
             True,
         ):
             print(f"[vscodePackage --selftest] FAIL. source mutation {index} escaped.", file=sys.stderr)
             return 2
+    installedMutations = (
+        installedPackageScript.replace("MARKETPLACE_INSTALL_DEADLINE_MS", ""),
+        installedPackageScript.replace("`${extensionIdentifier}@${packageManifest.version}`", "extensionIdentifier"),
+        installedPackageScript.replace("findInstalledExtension(extensions, packageManifest.version)", ""),
+    )
+    for index, mutatedInstalledPackage in enumerate(installedMutations, start=1):
+        if not sourceProblems(
+            sourcePackage,
+            targets,
+            packageScript,
+            extensionManifestScript,
+            buildScript,
+            releaseWorkflow,
+            marketplaceScript,
+            coreManifest,
+            ignore,
+            mutatedInstalledPackage,
+            True,
+            True,
+        ):
+            print(f"[vscodePackage --selftest] FAIL. installer mutation {index} escaped.", file=sys.stderr)
+            return 2
     print(
         "[vscodePackage --selftest] OK. "
-        f"{len(mutations)} archive, {len(sourceMutations)} source, and {len(listingMutations)} listing mutations "
+        f"{len(mutations)} archive, {len(sourceMutations)} source, {len(installedMutations)} installer, "
+        f"and {len(listingMutations)} listing mutations "
         "make the gate red."
     )
     return 0
@@ -589,6 +727,7 @@ def sourceRun() -> int:
         (EXTENSION / "tooling" / "publish-marketplace.mjs").read_text(encoding="utf-8"),
         (ROOT / "crates" / "runtrol" / "Cargo.toml").read_text(encoding="utf-8"),
         (EXTENSION / ".vscodeignore").read_text(encoding="utf-8"),
+        (EXTENSION / "tooling" / "installed-package.mjs").read_text(encoding="utf-8"),
         (EXTENSION / "tooling" / "installed-package.mjs").is_file()
         and (EXTENSION / "src" / "integration" / "installedPackage.test.ts").is_file(),
         (EXTENSION / "tooling" / "upgrade-rollback.mjs").is_file()

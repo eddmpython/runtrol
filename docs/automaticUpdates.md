@@ -9,6 +9,25 @@ streams that binary into one extension-global managed location. A changed binary
 while an already running daemon and its provider children keep their existing process identities. The next daemon
 start uses the new bytes. Reinstalling an earlier VSIX applies the same mechanism in reverse.
 
+## Studio Marketplace delivery
+
+`extensions/runtrol-vscode/release-policy.json` owns the Studio version. A patch increment pushed to `main` starts the
+release workflow without an operator upload step. The workflow requires the exact predecessor tag, builds and inspects
+all six native VSIX packages, installs each package in an isolated stable VS Code profile, publishes with the
+Marketplace-only `VSCE_PAT` Actions secret, and compares the public target set and SHA-256 properties with the built
+archives. It then installs and activates the exact public Marketplace version on every native release runner. The
+GitHub Release and tag are created only after those public installation journeys pass.
+
+VS Code checks for extension updates and installs them automatically for enabled extensions. The default update delay
+is two hours. A user can bypass the delay with the extension's Update action or the Check for Extension Updates
+command. A package installed manually from a VSIX has per-extension automatic updates disabled by VS Code. Such an
+installation must enable Auto Update from the extension Manage menu or be reinstalled once from the
+[Marketplace listing](https://marketplace.visualstudio.com/items?itemName=runtrol.runtrol-studio). Exact-ID search uses
+`@id:runtrol.runtrol-studio`.
+
+Studio does not implement a second updater, contact the Marketplace itself during activation, or modify VS Code's
+global update settings. Delivery, signing, update policy, and restart prompts remain owned by VS Code.
+
 The daemon owns provider package updates. A surface can request status or an explicit update, but it never constructs
 package-manager arguments and never changes provider files itself.
 
@@ -75,6 +94,7 @@ them. The phone surface cannot trigger package mutation.
 |---|---|
 | `versionSsot` | Cargo members and Studio each have one version source, and Studio advances only one `0.1.x` patch at a time |
 | `vscodeUpgradeRollback` | official VSIX upgrade and rollback preserve the daemon, provider process, session, and workspace |
+| `vscode-release` Marketplace matrix | the exact public version installs and activates on all six native release runners before tagging |
 | `channelVerdict` | package ownership, safe package identifiers, closed channel arguments, and operator-manifest denial |
 | `cliUpdateRehearsal` | a broken fixture target restores the exact starting tree, while an unrestorable target fails closed |
 | `scopeWall` | provider update requests are local-only and every request has a boundary rule |

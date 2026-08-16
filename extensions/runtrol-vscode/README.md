@@ -1,36 +1,104 @@
 # Runtrol Studio for VS Code
 
-Run every repository, session, and installed coding-agent CLI from one VS Code window.
+Manage every local coding-agent CLI chat, model, workspace, and session from one fast VS Code window.
 
-Runtrol Studio is the primary runtrol surface. It discovers supported CLIs already installed on your machine, keeps provider-owned sessions available, and moves the current VS Code window to the workspace or worktree bound to the selected session.
+Runtrol Studio discovers supported CLIs already installed on your computer, keeps provider-owned sessions available,
+and follows the exact workspace or worktree bound to the selected chat. It does not replace the provider CLI or keep
+a second conversation copy.
 
 ## Install
 
 1. Open Extensions in VS Code with `Ctrl+Shift+X` on Windows or Linux, or `Cmd+Shift+X` on macOS.
-2. Search for `Runtrol Studio`.
+2. Search for `Runtrol Studio`. If title search misses it, search for the exact identifier
+   `@id:runtrol.runtrol-studio`.
 3. Select **Install**.
 4. Open the Runtrol icon in the Activity Bar.
 
-No Core path is required for a Marketplace installation. The extension verifies and materializes its bundled native Core, then discovers supported installed CLIs at runtime. Keep each CLI installed and authenticated through its own official flow.
+No Core path is required for a Marketplace installation. Each platform package includes the matching native Core and
+Runtrol materializes it automatically. Keep each coding-agent CLI installed and authenticated through its own official
+flow.
 
-## Use
+## Updates
 
-- Open **Chats**, choose an installed service, then select any chat to open it in one editor tab and follow its exact workspace.
-- Use the plus action on a service row to start a guided chat with that service. Choose the workspace, then a model
-  and reasoning effort reported by the installed CLI, or keep either Provider default.
-- Use **Rename Chat** on a row to replace the automatic project name with a short name of your own.
-- Run **Runtrol: Switch Chat** for fast project, CLI, state, and path search.
-- Run **Runtrol: New Chat** for the same service, workspace, model, and effort flow from the Command Palette.
-- Use **Open Current Chat**, **Open Chat Workspace**, **Interrupt Turn**, and **Close Chat** from the view or Command Palette.
-- Read the active model, effort, mode, context usage, session cost, and available account-limit windows together at
-  the top of the conversation. Runtrol shows only telemetry the provider reports and does not estimate missing data.
-- Use **Runtrol: Review Runtime Requests** to approve an exact external integration metadata-removal or key-rotation request. Metadata removal never deletes provider-owned conversation state, and key rotation shows the integration, current generation, and replacement fingerprint before confirmation.
+Marketplace installations use VS Code's built-in extension updates. VS Code checks for releases and updates enabled
+extensions automatically. Its default update delay is two hours, and an immediate update is available from the
+extension's **Update** action.
 
-Fifteen sessions are the daily-use baseline and 30 sessions are the release load. At most eight sessions own a hot process, while exactly one selected session owns the full event stream and active renderer. Cold rows respond immediately and resume through the provider-native session identity.
+A manually installed VSIX has automatic updates disabled by VS Code. If an older Runtrol copy came from a VSIX,
+open the extension's Manage menu and enable **Auto Update**, or uninstall it and install the Marketplace version once.
+Runtrol never downloads or replaces extension packages outside VS Code's signed Marketplace flow.
+
+An extension update does not take ownership of active chats. The Core binary lives at one extension-global managed
+path, and upgrades reconnect to the same daemon and provider processes after the Extension Host restarts.
+
+## Quick start
+
+1. Open **Chats**.
+2. Select **New chat** beside an available service.
+3. Choose a local workspace, then a model and reasoning effort reported by that installed CLI. Provider default leaves
+   the CLI's own choice unchanged.
+4. Send the first message in the conversation editor.
+
+Selecting an existing chat opens the same conversation tab and follows its exact workspace. Use **Rename Chat** for a
+short label, and **Runtrol: Switch Chat** for fast project, service, state, and path search.
+
+The conversation header keeps the active model, reasoning effort, provider mode, context use, provider-reported cost,
+and available account-limit windows together. Missing provider telemetry is shown as unavailable instead of estimated.
+
+## Requirements
+
+- Desktop VS Code 1.100 or newer.
+- Windows, macOS, or Linux on x64 or ARM64.
+- A trusted local filesystem workspace. Virtual workspaces and browser-only VS Code cannot start local provider CLIs.
+- At least one supported coding-agent CLI installed and authenticated with its own official account flow.
+
+Runtrol runs near the local VS Code UI so it can supervise local CLI processes. A remote workspace still needs a local
+filesystem workspace for chats that run on this computer.
+
+## Troubleshooting
+
+### The extension does not appear in search
+
+Search for `@id:runtrol.runtrol-studio`, or open the
+[public Marketplace listing](https://marketplace.visualstudio.com/items?itemName=runtrol.runtrol-studio).
+
+### The installed version is old
+
+Open the Runtrol Studio Manage menu and enable **Auto Update**. If the extension was installed from a VSIX, reinstall
+it from the Marketplace once. Use VS Code's **Check for Extension Updates** command for an immediate check.
+
+### No services appear
+
+Install and authenticate a supported coding-agent CLI through its official flow, then select **Refresh services**.
+Runtrol discovers versions, models, flags, capabilities, and provider-owned sessions at runtime.
+
+### The extension view needs recovery
+
+Run **Runtrol: Restart Extension Host**. The extension view restarts while the supervised Core and active provider
+processes stay alive.
+
+## Main commands
+
+- **Runtrol: New Chat**
+- **Runtrol: Switch Chat**
+- **Runtrol: Open Current Chat**
+- **Runtrol: Refresh Chats and Services**
+- **Runtrol: Check Provider Updates**
+- **Runtrol: Restart Extension Host**
+- **Runtrol: Pair a Phone**
+
+## Settings
+
+| Setting | Default | Purpose |
+|---|---|---|
+| `runtrol.corePath` | Empty | Optional absolute Core path for local development. Marketplace packages use the bundled Core |
+| `runtrol.followWorkspace` | `true` | Open the selected chat's workspace or worktree in the current window |
+| `runtrol.relayOrigin` | Empty | Exact encrypted relay origin for phone connections. Empty disables phone connections |
 
 ## Ownership and security
 
-The installed provider CLI owns the conversation and repository changes. Runtrol supervises process, session, workspace, worktree, and collision boundaries.
+The installed provider CLI owns the conversation and repository changes. Runtrol supervises process, session,
+workspace, worktree, and collision boundaries.
 
 Runtrol does not:
 
@@ -40,65 +108,12 @@ Runtrol does not:
 - hardcode provider versions, models, flags, or session paths;
 - replace the provider CLI's agent loop.
 
-Only the selected runtrol session identifier is retained across workspace reloads. Prompts, replies, approvals, provider state, and conversation frames are never written to extension storage.
+Only the selected Runtrol session identifier is retained across workspace reloads. Prompts, replies, approvals,
+provider state, and conversation frames are never written to extension storage.
 
-Before another hot writer starts in the same, parent, or child path, the extension offers the existing session, a separate workspace or worktree, an explicit continue action, or cancellation.
-
-## Settings
-
-| Setting | Default | Purpose |
-|---|---|---|
-| `runtrol.corePath` | Empty | Optional absolute Core path for local development. Marketplace packages use the bundled Core |
-| `runtrol.followWorkspace` | `true` | Open the selected session's workspace or worktree in the current window |
-
-## Open source
+## Support and development
 
 - [Product site](https://eddmpython.github.io/runtrol/)
 - [Source and issue tracker](https://github.com/eddmpython/runtrol)
 - [Security policy](https://github.com/eddmpython/runtrol/blob/main/SECURITY.md)
-
-## Development
-
-```text
-npm install
-npm run check
-npm test
-npm run build
-```
-
-Set `runtrol.corePath` to a local debug or release executable while developing. A packaged platform VSIX contains one matching runtrol Core under `resources/core/`. On activation that file is streamed into one stable path under the extension's global storage. The packaged file is release material and never owns a daemon lifetime.
-
-### Package the native platform
-
-Build the Rust release binary, then run:
-
-```text
-cargo build --release --bin runtrol --target-dir ../../target/vscode-release
-npm run package:native
-```
-
-The packager resolves relative Core paths from the repository root and assembles the VSIX in an isolated temporary directory. It does not replace `resources/core` in the working extension, even when that development Core is running.
-
-`RUNTROL_CORE_BINARY` may name a different verified binary. Packages are written under the repository `release/` directory, which is not tracked.
-
-The release target map is `release-targets.json`. The manifest version is the release version SSOT and the package filename is derived from it. Every package contains one matching Core, the production bundles, brand resources, and the repository license. Source, tooling, dependencies, test budgets, and target metadata are excluded.
-
-When Core bytes change, the extension preserves the currently mapped image with a hard link before atomically replacing the stable name. An Extension Host reload, VSIX upgrade, or VSIX rollback therefore reconnects to the same daemon and active provider processes instead of making the versioned extension directory their owner.
-
-Inspect and clean-install a built package before publication:
-
-```text
-python -X utf8 ../../tests/audit/vscodePackage.py --archive ../../release/runtrol-studio-VERSION-win32-x64.vsix --target win32-x64 --core ../../target/vscode-release/release/runtrol.exe
-node tooling/installed-package.mjs ../../release/runtrol-studio-VERSION-win32-x64.vsix
-python -X utf8 ../../tests/audit/vscodeUpgradeRollback.py --archive ../../release/runtrol-studio-VERSION-win32-x64.vsix
-```
-
-After publication, repeat the same isolated activation journey using the package downloaded by stable VS Code from the public Marketplace:
-
-```text
-node tooling/installed-package.mjs --marketplace
-```
-
-The hosted release workflow repeats this journey on native Windows, macOS, and Linux runners. It publishes all six exact packages with the `VSCE_PAT` GitHub Actions repository secret, verifies the public Marketplace version, target set, and package digests, then creates the tagged GitHub Release.
-
-Create the token once with the Azure DevOps Marketplace `Manage` scope for all accessible organizations and store it as repository secret `VSCE_PAT`. Rotate the secret before its expiration. Every release after that uses the automatic path. The workflow also has a `publishExisting` recovery input that publishes and verifies the current version from its already tagged GitHub Release without rebuilding the packages.
+- [Development and release internals](https://github.com/eddmpython/runtrol/blob/main/docs/vscodeSurface.md)

@@ -21,7 +21,7 @@
 작은 SDK를 넣고 하나의 사용자별 Runtime을 통해 이미 로그인된 CLI를 발견하고 감독한다. 소비자는 세션을
 소유하지 않고, Runtrol은 모델 API 키나 transcript를 소유하지 않는다.
 
-VS Code 주력 표면, 공개 사이트, 자동 갱신은 [VS Code 운영 문서](../docs/vscodeSurface.md), [사이트 운영 문서](../docs/siteDeployment.md), [automatic updates](../docs/automaticUpdates.md)로 승격됐다. Marketplace에서 6개 네이티브 대상의 `Runtrol Studio 0.1.0`을 설치할 수 있다. 감독형 Mission과 프로젝트 Capability 신뢰 계약은 [Mission 운영 문서](../docs/missionOperations.md)와 [Capability 신뢰 문서](../docs/capabilityTrust.md)로 승격됐다. 폰 연결과 보안 기반도 [phone PWA](../docs/phonePwa.md), [frontend stack](../docs/frontendStack.md), [site deployment](../docs/siteDeployment.md), [security](../SECURITY.md)로 승격됐다.
+VS Code 주력 표면, 공개 사이트, 자동 갱신은 [VS Code 운영 문서](../docs/vscodeSurface.md), [사이트 운영 문서](../docs/siteDeployment.md), [automatic updates](../docs/automaticUpdates.md)로 승격됐다. Marketplace에서 6개 네이티브 대상의 `Runtrol Studio 0.1.3`을 설치할 수 있다. 감독형 Mission과 프로젝트 Capability 신뢰 계약은 [Mission 운영 문서](../docs/missionOperations.md)와 [Capability 신뢰 문서](../docs/capabilityTrust.md)로 승격됐다. 폰 연결과 보안 기반도 [phone PWA](../docs/phonePwa.md), [frontend stack](../docs/frontendStack.md), [site deployment](../docs/siteDeployment.md), [security](../SECURITY.md)로 승격됐다.
 
 ## 마일스톤 (같은 순서를 사용자 관점으로 본 것)
 

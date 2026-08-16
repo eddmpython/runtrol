@@ -14,6 +14,18 @@
     "url": "https://github.com/eddmpython/runtrol/issues"
   },
   "pricing": "Free",
+  "badges": [
+    {
+      "url": "https://github.com/eddmpython/runtrol/actions/workflows/vscode-release.yml/badge.svg",
+      "href": "https://github.com/eddmpython/runtrol/actions/workflows/vscode-release.yml",
+      "description": "VS Code release status"
+    },
+    {
+      "url": "https://img.shields.io/visual-studio-marketplace/v/runtrol.runtrol-studio",
+      "href": "https://marketplace.visualstudio.com/items?itemName=runtrol.runtrol-studio",
+      "description": "Marketplace version"
+    }
+  ],
   "galleryBanner": {
     "color": "#0B0D0F",
     "theme": "dark"
@@ -26,15 +38,32 @@
     "Machine Learning"
   ],
   "keywords": [
+    "agent manager",
+    "ai agent",
+    "chat",
+    "cli",
     "coding agent",
+    "coding assistant",
+    "developer tools",
     "multi agent",
     "session",
-    "workspace"
+    "session manager",
+    "workspace",
+    "worktree"
   ],
   "extensionKind": [
-    "ui",
-    "workspace"
+    "ui"
   ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": false,
+      "description": "Runtrol starts local coding-agent CLI processes that can change the selected repository. Trust the workspace before opening chats."
+    },
+    "virtualWorkspaces": {
+      "supported": false,
+      "description": "Runtrol requires a local filesystem workspace for provider CLI processes, repositories, and worktrees."
+    }
+  },
   "main": "./dist/extension.js",
   "icon": "resources/icon.png",
   "activationEvents": [
