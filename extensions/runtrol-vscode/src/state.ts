@@ -1,5 +1,6 @@
 import * as vscode from "vscode";
 
+import { conversations, type Conversation } from "./conversationList";
 import type {
   NativeChatCatalogue,
   NativeChatLine,
@@ -18,6 +19,7 @@ export class RuntimeState implements vscode.Disposable {
   private providerRows: readonly ProviderLine[] = [];
   private readonly nativeCatalogues = new Map<string, NativeChatCatalogue>();
   private selectedId: string | null = null;
+  private conversationRows: readonly Conversation[] | null = null;
 
   readonly onDidChange = this.changedEmitter.event;
 
@@ -41,12 +43,31 @@ export class RuntimeState implements vscode.Disposable {
     return this.sessionRows.find((session) => session.sessionId === this.selectedId) ?? null;
   }
 
+  /// Every conversation on this machine, in the order every surface shows them.
+  ///
+  /// Derived once here rather than in each surface, so the sidebar, the switcher and the open editor tab can never
+  /// disagree about what a conversation is called or where it sits.
+  get conversations(): readonly Conversation[] {
+    this.conversationRows ??= conversations(
+      this.sessionRows,
+      this.providerRows,
+      this.nativeChats,
+      this.selectedId,
+    );
+    return this.conversationRows;
+  }
+
+  conversationOf(sessionId: string): Conversation | null {
+    return this.conversations.find((row) => row.session?.sessionId === sessionId) ?? null;
+  }
+
   replace(sessions: readonly SessionLine[], providers: readonly ProviderLine[]): void {
     if (sessionRowsEqual(this.sessionRows, sessions) && providerRowsEqual(this.providerRows, providers)) {
       return;
     }
     this.sessionRows = sessions;
     this.providerRows = providers;
+    this.conversationRows = null;
     const providerIds = new Set(providers.map((provider) => provider.providerId));
     for (const providerId of this.nativeCatalogues.keys()) {
       if (!providerIds.has(providerId)) this.nativeCatalogues.delete(providerId);
@@ -62,17 +83,20 @@ export class RuntimeState implements vscode.Disposable {
       return;
     }
     this.selectedId = session;
+    this.conversationRows = null;
     this.changedEmitter.fire("selection");
   }
 
   setNativeCatalogue(catalogue: NativeChatCatalogue): void {
     this.nativeCatalogues.set(catalogue.providerId, catalogue);
+    this.conversationRows = null;
     this.changedEmitter.fire("rows");
   }
 
   clearNativeCatalogues(): void {
     if (this.nativeCatalogues.size === 0) return;
     this.nativeCatalogues.clear();
+    this.conversationRows = null;
     this.changedEmitter.fire("rows");
   }
 

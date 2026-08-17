@@ -11,9 +11,9 @@ import { CoreLocator } from "./core/locator";
 import {
   confirmRuntimeForget,
   manageIntegrations,
-  reviewIntegrationEnrollment,
   reviewIntegrationEnrollments,
   reviewRuntimeRequests,
+  selfApproveIntegration,
 } from "./integrationAdministration";
 import { journeyApi, type JourneyApi } from "./journeyApi";
 import { MissionController } from "./mission/controller";
@@ -21,10 +21,10 @@ import { MissionTree } from "./mission/tree";
 import { managePhones, pairPhone, reviewPhonePairings } from "./pairingAdministration";
 import type { RemoteConnection } from "./protocol";
 import { SelectionStore } from "./selectionStore";
-import { providerDisplayName, uniqueChatTitle } from "./sessionDisplay";
+import { providerDisplayName, sessionTitle } from "./sessionDisplay";
 import { RuntimeState } from "./state";
 import { StudioRuntimeClient } from "./runtimeClient";
-import { NewChatItem, ProvidersTree, ServiceItem, SessionsTree } from "./trees";
+import { ConversationsTree } from "./trees";
 
 export type RuntrolExtensionApi = {
   readonly ready: Promise<void>;
@@ -68,7 +68,7 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
     () => locator.runtimeExecutable(),
     externalTestApproval
       ? () => waitForExternalIntegrationApproval(externalTestApproval)
-      : (pendingId) => reviewIntegrationEnrollment(client, pendingId),
+      : (pendingId, signature) => selfApproveIntegration(client, pendingId, signature),
     (confirmationId, sessionId) => confirmRuntimeForget(client, confirmationId, sessionId),
     testIntegrationRoots(context),
     (stage) => {
@@ -77,7 +77,17 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
   );
   const state = new RuntimeState();
   const selection = new SelectionStore(context.globalStorageUri.fsPath);
-  let lifecycle: Promise<void> = Promise.resolve();
+  let settleReady: ((error?: unknown) => void) | null = null;
+  let lifecycle: Promise<void> = new Promise<void>((resolve, reject) => {
+    settleReady = (error) => {
+      settleReady = null;
+      if (error === undefined) {
+        resolve();
+      } else {
+        reject(error);
+      }
+    };
+  });
   let missionLifecycle: Promise<void> = Promise.resolve();
   const afterReady = async <T>(action: () => Promise<T>): Promise<T> => {
     await lifecycle;
@@ -108,7 +118,7 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
         void run(() => afterReady(() => controller.close()));
       }
     },
-    (session) => uniqueChatTitle(session, state.sessions),
+    (session) => state.conversationOf(session.sessionId)?.title ?? sessionTitle(session),
     (visible) => controller.conversationVisibilityChanged(visible),
     (session) => providerDisplayName(session.providerId, state.providers),
   );
@@ -116,11 +126,7 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
   const missionController = new MissionController(client, controller, state);
   const candidateController = new CandidateController(client);
   const missions = new MissionTree(missionController);
-  const sessions = new SessionsTree(
-    state,
-    (providerId) => controller.discoverNativeChats(providerId),
-  );
-  const providers = new ProvidersTree(state);
+  const conversations = new ConversationsTree(state);
 
   context.subscriptions.push(
     state,
@@ -129,11 +135,8 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
     candidateController,
     conversation,
     missions,
-    sessions,
-    providers,
-    vscode.window.registerTreeDataProvider("runtrol.sessions", sessions),
+    conversations,
     vscode.window.registerTreeDataProvider("runtrol.missions", missions),
-    vscode.window.registerTreeDataProvider("runtrol.providers", providers),
     vscode.workspace.registerTextDocumentContentProvider("runtrol-mission", missionController.documentProvider()),
     vscode.commands.registerCommand(
       "runtrol.refresh",
@@ -280,10 +283,8 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
       () => run(() => afterReady(() => controller.startSession())),
     ),
     vscode.commands.registerCommand(
-      "runtrol.startServiceChat",
-      (item?: ServiceItem | NewChatItem) => run(
-        () => afterReady(() => controller.startSession(item?.startProviderId ?? undefined)),
-      ),
+      "runtrol.startConfiguredSession",
+      () => run(() => afterReady(() => controller.startConfiguredSession())),
     ),
     vscode.commands.registerCommand(
       "runtrol.selectSession",
@@ -334,9 +335,41 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
     initializationStage = "mission";
     throw error;
   });
-  lifecycle = controllerInitialization.then(() => {
-    initializationStage = "ready";
+  controllerInitialization.then(
+    () => {
+      initializationStage = "ready";
+      settleReady?.();
+    },
+    (error: unknown) => {
+      settleReady?.(error);
+    },
+  );
+  context.subscriptions.push(
+    vscode.window.registerWebviewPanelSerializer(ConversationView.viewType, {
+      deserializeWebviewPanel: async (panel) => {
+        await conversation.adopt(panel);
+        await afterReady(async () => {
+          conversation.reset(state.selected);
+        });
+      },
+    }),
+  );
+  const conversationsView = vscode.window.createTreeView("runtrol.sessions", {
+    treeDataProvider: conversations,
   });
+  conversations.bindView(conversationsView);
+  const revealEntryConversation = (): void => {
+    void run(() => afterReady(() => controller.revealConversationOnEntry()));
+  };
+  if (conversationsView.visible) {
+    revealEntryConversation();
+  }
+  context.subscriptions.push(
+    conversationsView,
+    conversationsView.onDidChangeVisibility((event) => {
+      if (event.visible) revealEntryConversation();
+    }),
+  );
   void run(() => lifecycle);
   void run(() => missionLifecycle);
   void run(async () => {

@@ -69,7 +69,6 @@
   "activationEvents": [
     "onView:runtrol.sessions",
     "onView:runtrol.missions",
-    "onView:runtrol.providers",
     "onCommand:runtrol.refresh",
     "onCommand:runtrol.restartExtensionHost",
     "onCommand:runtrol.checkProviderUpdates",
@@ -82,7 +81,7 @@
     "onCommand:runtrol.reviewRuntimeRequests",
     "onCommand:runtrol.switchSession",
     "onCommand:runtrol.startSession",
-    "onCommand:runtrol.startServiceChat",
+    "onCommand:runtrol.startConfiguredSession",
     "onCommand:runtrol.selectSession",
     "onCommand:runtrol.openConversation",
     "onCommand:runtrol.renameSession",
@@ -126,16 +125,11 @@
       "runtrol": [
         {
           "id": "runtrol.sessions",
-          "name": "Chats"
+          "name": "Conversations"
         },
         {
           "id": "runtrol.missions",
           "name": "Missions",
-          "visibility": "collapsed"
-        },
-        {
-          "id": "runtrol.providers",
-          "name": "Services",
           "visibility": "collapsed"
         }
       ]
@@ -143,7 +137,7 @@
     "commands": [
       {
         "command": "runtrol.refresh",
-        "title": "Runtrol: Refresh Chats and Services",
+        "title": "Runtrol: Refresh Conversations",
         "icon": "$(refresh)"
       },
       {
@@ -193,36 +187,31 @@
       },
       {
         "command": "runtrol.switchSession",
-        "title": "Runtrol: Switch Chat",
+        "title": "Runtrol: Switch Conversation",
         "icon": "$(search)"
       },
       {
         "command": "runtrol.startSession",
-        "title": "Runtrol: New Chat",
-        "icon": "$(add)"
-      },
-      {
-        "command": "runtrol.startServiceChat",
-        "title": "Runtrol: New Chat with Service",
+        "title": "Runtrol: New Conversation",
         "icon": "$(add)"
       },
       {
         "command": "runtrol.selectSession",
-        "title": "Runtrol: Open Chat"
+        "title": "Runtrol: Open Conversation"
       },
       {
         "command": "runtrol.openConversation",
-        "title": "Runtrol: Open Current Chat",
+        "title": "Runtrol: Show Open Conversation",
         "icon": "$(comment-discussion)"
       },
       {
         "command": "runtrol.renameSession",
-        "title": "Runtrol: Rename Chat",
+        "title": "Runtrol: Rename Conversation",
         "icon": "$(edit)"
       },
       {
         "command": "runtrol.openWorkspace",
-        "title": "Runtrol: Open Chat Workspace",
+        "title": "Runtrol: Open Conversation Project",
         "icon": "$(folder-opened)"
       },
       {
@@ -232,7 +221,7 @@
       },
       {
         "command": "runtrol.closeSession",
-        "title": "Runtrol: Close Chat",
+        "title": "Runtrol: Close Conversation",
         "icon": "$(close)"
       },
       {
@@ -343,70 +332,75 @@
         "command": "runtrol.archiveCapability",
         "title": "Runtrol: Archive Capability",
         "icon": "$(archive)"
+      },
+      {
+        "command": "runtrol.startConfiguredSession",
+        "title": "Runtrol: New Conversation with Service, Model and Effort...",
+        "icon": "$(settings-gear)"
       }
     ],
     "menus": {
-      "commandPalette": [
-        {
-          "command": "runtrol.startServiceChat",
-          "when": "false"
-        }
-      ],
+      "commandPalette": [],
       "view/title": [
-        {
-          "command": "runtrol.openConversation",
-          "when": "view == runtrol.sessions",
-          "group": "1_chat@1"
-        },
-        {
-          "command": "runtrol.switchSession",
-          "when": "view == runtrol.sessions",
-          "group": "1_chat@2"
-        },
         {
           "command": "runtrol.startSession",
           "when": "view == runtrol.sessions",
           "group": "navigation@0"
         },
         {
-          "command": "runtrol.refresh",
-          "when": "view == runtrol.sessions || view == runtrol.providers",
+          "command": "runtrol.openConversation",
+          "when": "view == runtrol.sessions",
           "group": "navigation@1"
         },
         {
-          "command": "runtrol.checkProviderUpdates",
-          "when": "view == runtrol.providers",
+          "command": "runtrol.switchSession",
+          "when": "view == runtrol.sessions",
           "group": "navigation@2"
         },
         {
+          "command": "runtrol.startConfiguredSession",
+          "when": "view == runtrol.sessions",
+          "group": "1_new@1"
+        },
+        {
+          "command": "runtrol.refresh",
+          "when": "view == runtrol.sessions",
+          "group": "1_new@2"
+        },
+        {
+          "command": "runtrol.checkProviderUpdates",
+          "when": "view == runtrol.sessions",
+          "group": "2_services@1"
+        },
+        {
           "command": "runtrol.pairPhone",
-          "when": "view == runtrol.providers",
-          "group": "navigation@3"
+          "when": "view == runtrol.sessions",
+          "group": "3_devices@1"
         },
         {
           "command": "runtrol.managePhones",
-          "when": "view == runtrol.providers",
-          "group": "navigation@4"
+          "when": "view == runtrol.sessions",
+          "group": "3_devices@2"
         },
         {
           "command": "runtrol.reviewIntegrations",
-          "when": "view == runtrol.providers",
-          "group": "navigation@5"
+          "when": "view == runtrol.sessions",
+          "group": "4_access@1"
         },
         {
           "command": "runtrol.manageIntegrations",
-          "when": "view == runtrol.providers",
-          "group": "navigation@6"
+          "when": "view == runtrol.sessions",
+          "group": "4_access@2"
         },
         {
           "command": "runtrol.reviewRuntimeRequests",
           "when": "view == runtrol.sessions",
-          "group": "2_manage@1"
+          "group": "4_access@3"
         },
         {
           "command": "runtrol.restartExtensionHost",
           "when": "view == runtrol.sessions",
-          "group": "2_manage@2"
+          "group": "5_recover@1"
         },
         {
           "command": "runtrol.validateMission",
@@ -431,23 +425,18 @@
       ],
       "view/item/context": [
         {
-          "command": "runtrol.startServiceChat",
-          "when": "view == runtrol.sessions && viewItem == runtrol.service.ready",
-          "group": "inline@1"
-        },
-        {
           "command": "runtrol.renameSession",
-          "when": "view == runtrol.sessions && viewItem == runtrol.session",
+          "when": "view == runtrol.sessions && viewItem =~ /^runtrol\\.conversation/",
           "group": "inline@1"
         },
         {
           "command": "runtrol.openWorkspace",
-          "when": "view == runtrol.sessions && viewItem == runtrol.session",
+          "when": "view == runtrol.sessions && viewItem =~ /^runtrol\\.conversation/",
           "group": "inline@2"
         },
         {
           "command": "runtrol.closeSession",
-          "when": "view == runtrol.sessions && viewItem == runtrol.session",
+          "when": "view == runtrol.sessions && viewItem == runtrol.conversation.live",
           "group": "inline@3"
         },
         {
@@ -505,7 +494,7 @@
     "viewsWelcome": [
       {
         "view": "runtrol.sessions",
-        "contents": "No installed coding-agent services are available.\n[Refresh services](command:runtrol.refresh)"
+        "contents": "No coding-agent CLI was found on this machine.\n\nRuntrol supervises the CLIs you already have. Install one, then reopen this view.\n[Look again](command:runtrol.refresh)"
       }
     ],
     "configuration": {

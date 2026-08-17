@@ -1,254 +1,166 @@
 import * as vscode from "vscode";
 
-import type {
-  NativeChatCatalogue,
-  NativeChatLine,
-  ProviderLine,
-  SessionLine,
-} from "./runtimeTypes";
-import { sessionStateLabel } from "./runtimeProjection";
-import { chatServices, type ChatService } from "./sessionNavigation";
-import { sessionContext, uniqueChatTitle, workspaceName } from "./sessionDisplay";
+import { conversationDetail, type Conversation } from "./conversationList";
+import { isBroken } from "./providerHealth";
+import type { ProviderLine } from "./runtimeTypes";
 import { RuntimeState } from "./state";
 
-export class ServiceItem extends vscode.TreeItem {
-  readonly startProviderId: string | null;
-
-  constructor(
-    readonly service: ChatService,
-    readonly catalogue: NativeChatCatalogue | null,
-  ) {
-    const count = service.sessions.length + service.nativeChats.length;
-    const usable = service.provider?.installation.state === "usable";
-    super(
-      service.displayName,
-      count > 0 || usable
-        ? vscode.TreeItemCollapsibleState.Expanded
-        : vscode.TreeItemCollapsibleState.None,
-    );
-    const chatAvailable = usable || count > 0;
-    this.id = `runtrol.service.${encodeURIComponent(service.providerId)}`;
-    this.startProviderId = usable ? service.providerId : null;
-    this.description = serviceDescription(count, Boolean(usable));
-    this.tooltip = [
-      service.displayName,
-      count > 0 ? `${count} existing ${count === 1 ? "chat" : "chats"}` : "No chats yet",
-      service.provider?.installation.why ?? (usable ? "Ready to start a chat" : "Provider is not currently listed"),
-      catalogue?.warning ?? undefined,
-    ].filter((line): line is string => Boolean(line)).join("\n");
-    this.contextValue = usable ? "runtrol.service.ready" : "runtrol.service.unavailable";
-    this.iconPath = new vscode.ThemeIcon(
-      chatAvailable ? "comment-discussion" : "circle-slash",
-      chatAvailable ? undefined : new vscode.ThemeColor("disabledForeground"),
-    );
-    this.accessibilityInformation = {
-      label: `${service.displayName}, ${this.description}`,
-    };
-  }
-}
-
-function serviceDescription(
-  count: number,
-  usable: boolean,
-): string {
-  if (count > 0) return `${count} ${count === 1 ? "chat" : "chats"}`;
-  if (!usable) return "Unavailable";
-  return "Ready";
-}
-
-export class NewChatItem extends vscode.TreeItem {
-  constructor(readonly startProviderId: string, displayName: string) {
-    super("New chat", vscode.TreeItemCollapsibleState.None);
-    this.description = `with ${displayName}`;
-    this.contextValue = "runtrol.newChat";
-    this.command = {
-      command: "runtrol.startServiceChat",
-      title: "New Chat",
-      arguments: [this],
-    };
-    this.iconPath = new vscode.ThemeIcon("add");
-    this.accessibilityInformation = { label: `Start a new chat with ${displayName}` };
-  }
-}
-
-export class NativeSessionItem extends vscode.TreeItem {
-  constructor(readonly native: NativeChatLine) {
-    const title = native.title?.trim() || workspaceName(native.cwd);
-    super(title, vscode.TreeItemCollapsibleState.None);
-    const resumable = native.resume === "available" && Boolean(native.adoptionToken);
-    this.description = resumable ? "Continue chat" : "Cannot continue";
-    this.tooltip = [
-      title,
-      native.cwd,
-      native.updatedAt ? `Updated: ${native.updatedAt}` : undefined,
-      resumable ? "Open this existing chat" : "This coding service cannot resume this chat",
-    ].filter((line): line is string => Boolean(line)).join("\n");
-    this.contextValue = resumable ? "runtrol.nativeSession" : "runtrol.nativeSession.unavailable";
-    if (resumable) {
+/// One conversation, as one row.
+///
+/// There is no second kind of row. A coding service is a fact about a conversation, not a container for one, so it
+/// appears in the muted detail line rather than as a node the reader has to open first.
+export class ConversationItem extends vscode.TreeItem {
+  constructor(readonly conversation: Conversation, nowMs: number) {
+    super(conversation.title, vscode.TreeItemCollapsibleState.None);
+    this.id = conversation.key;
+    this.description = conversationDetail(conversation, nowMs);
+    this.tooltip = tooltip(conversation);
+    this.contextValue = contextValue(conversation);
+    this.iconPath = icon(conversation);
+    if (conversation.canOpen) {
       this.command = {
         command: "runtrol.selectSession",
-        title: "Open Existing Chat",
+        title: "Open conversation",
         arguments: [this],
       };
     }
-    this.iconPath = new vscode.ThemeIcon(resumable ? "history" : "circle-slash");
+    this.accessibilityInformation = {
+      label: `${conversation.title}, ${spokenActivity(conversation)}, ${this.description}`,
+    };
   }
 }
 
-export class SessionItem extends vscode.TreeItem {
-  constructor(
-    readonly session: SessionLine,
-    sessions: readonly SessionLine[],
-    providers: readonly ProviderLine[],
-  ) {
-    const title = uniqueChatTitle(session, sessions);
-    super(title, vscode.TreeItemCollapsibleState.None);
-    const state = sessionStateLabel(session);
-    this.description = state;
-    this.tooltip = [
-      title,
-      sessionContext(session, providers),
-      session.workspace,
-      `State: ${state}`,
-    ].join("\n");
-    this.contextValue = "runtrol.session";
-    this.command = {
-      command: "runtrol.selectSession",
-      title: "Open Chat",
-      arguments: [this],
-    };
+/// The one row that is not a conversation, shown only when something is actually wrong.
+///
+/// A coding service that is simply not installed is not a problem and gets no row. Discovery decides what exists,
+/// and a list of things the reader does not have is not a list they asked for.
+export class ServiceProblemItem extends vscode.TreeItem {
+  constructor(provider: ProviderLine) {
+    super(`${provider.displayName} needs attention`, vscode.TreeItemCollapsibleState.None);
+    this.id = `runtrol.problem.${encodeURIComponent(provider.providerId)}`;
+    this.description = "Unavailable";
+    this.tooltip = provider.installation.why ?? `${provider.displayName} cannot currently start a conversation.`;
+    this.contextValue = "runtrol.serviceProblem";
     this.iconPath = new vscode.ThemeIcon(
-      session.looksStuck ? "warning" : session.hot ? "circle-filled" : "circle-outline",
-      session.looksStuck
-        ? new vscode.ThemeColor("problemsWarningIcon.foreground")
-        : undefined,
+      "warning",
+      new vscode.ThemeColor("problemsWarningIcon.foreground"),
     );
   }
 }
 
-export type ChatTreeItem = ServiceItem | NewChatItem | SessionItem | NativeSessionItem;
+export type ChatTreeItem = ConversationItem | ServiceProblemItem;
 
-export class SessionsTree implements vscode.TreeDataProvider<ChatTreeItem>, vscode.Disposable {
+function icon(conversation: Conversation): vscode.ThemeIcon {
+  if (!conversation.canOpen) {
+    return new vscode.ThemeIcon("circle-slash", new vscode.ThemeColor("disabledForeground"));
+  }
+  switch (conversation.activity) {
+    case "attention":
+      return new vscode.ThemeIcon("warning", new vscode.ThemeColor("problemsWarningIcon.foreground"));
+    case "working":
+      return new vscode.ThemeIcon("loading~spin", new vscode.ThemeColor("charts.orange"));
+    case "ready":
+      return new vscode.ThemeIcon("circle-filled", new vscode.ThemeColor("charts.green"));
+    case "saved":
+      return new vscode.ThemeIcon("circle-outline");
+  }
+}
+
+function spokenActivity(conversation: Conversation): string {
+  if (!conversation.canOpen) return "cannot be reopened";
+  switch (conversation.activity) {
+    case "attention":
+      return "needs attention";
+    case "working":
+      return "working";
+    case "ready":
+      return "ready";
+    case "saved":
+      return "saved";
+  }
+}
+
+function contextValue(conversation: Conversation): string {
+  if (!conversation.canOpen) return "runtrol.conversation.blocked";
+  return conversation.session ? "runtrol.conversation.live" : "runtrol.conversation.saved";
+}
+
+function tooltip(conversation: Conversation): vscode.MarkdownString {
+  const lines = [
+    `**${conversation.title}**`,
+    "",
+    `${conversation.serviceName} · ${spokenActivity(conversation)}`,
+    conversation.workspace,
+  ];
+  if (conversation.blocked) lines.push("", conversation.blocked);
+  const markdown = new vscode.MarkdownString(lines.join("\n\n"));
+  markdown.supportThemeIcons = true;
+  return markdown;
+}
+
+/// The entry point. Everything a person can reach lives in this one list.
+export class ConversationsTree implements vscode.TreeDataProvider<ChatTreeItem>, vscode.Disposable {
   private readonly changedEmitter = new vscode.EventEmitter<ChatTreeItem | undefined>();
   readonly onDidChangeTreeData = this.changedEmitter.event;
   private readonly subscription: vscode.Disposable;
-  private serviceItems: ServiceItem[] | undefined;
-  private readonly serviceSessions = new Map<string, ChatTreeItem[]>();
+  private items: ChatTreeItem[] | undefined;
+  private view: vscode.TreeView<ChatTreeItem> | null = null;
 
   constructor(
     private readonly state: RuntimeState,
-    private readonly discoverNative: (providerId: string) => void = () => undefined,
+    private readonly now: () => number = () => Date.now(),
   ) {
     this.subscription = state.onDidChange((change) => {
-      if (change === "rows") {
-        this.clearItems();
-        this.changedEmitter.fire(undefined);
-      }
+      this.items = undefined;
+      this.changedEmitter.fire(undefined);
+      if (change === "selection") this.revealOpenConversation();
     });
+  }
+
+  bindView(view: vscode.TreeView<ChatTreeItem>): void {
+    this.view = view;
+    this.revealOpenConversation();
   }
 
   getTreeItem(element: ChatTreeItem): vscode.TreeItem {
     return element;
   }
 
+  getParent(): undefined {
+    return undefined;
+  }
+
   getChildren(element?: ChatTreeItem): ChatTreeItem[] {
+    if (element) return [];
     this.ensureItems();
-    if (element instanceof ServiceItem) {
-      if (element.startProviderId && !element.catalogue) {
-        this.discoverNative(element.startProviderId);
-      }
-      return this.serviceSessions.get(element.service.providerId) ?? [];
-    }
-    if (element) {
-      return [];
-    }
-    for (const service of this.serviceItems ?? []) {
-      if (service.startProviderId && !service.catalogue) {
-        this.discoverNative(service.startProviderId);
-      }
-    }
-    return this.serviceItems ?? [];
+    return this.items ?? [];
   }
 
   dispose(): void {
-    this.clearItems();
+    this.view = null;
+    this.items = undefined;
     this.subscription.dispose();
     this.changedEmitter.dispose();
+  }
+
+  private revealOpenConversation(): void {
+    const view = this.view;
+    if (!view) return;
+    this.ensureItems();
+    const open = this.items?.find(
+      (item): item is ConversationItem => item instanceof ConversationItem && item.conversation.open,
+    );
+    if (open) void view.reveal(open, { select: true, focus: false });
   }
 
   private ensureItems(): void {
-    if (this.serviceItems) {
-      return;
-    }
-    const selected = this.state.selected?.sessionId ?? null;
-    const services = chatServices(
-      this.state.sessions,
-      this.state.providers,
-      selected,
-      this.state.nativeChats,
-    );
-    this.serviceItems = services.map((service) => new ServiceItem(
-      service,
-      this.state.nativeCatalogue(service.providerId),
-    ));
-    for (const service of services) {
-      const items: ChatTreeItem[] = [
-        ...(service.provider?.installation.state === "usable"
-          ? [new NewChatItem(service.providerId, service.displayName)]
-          : []),
-        ...service.sessions.map((session) => new SessionItem(
-          session,
-          service.sessions,
-          this.state.providers,
-        )),
-        ...service.nativeChats.map((native) => new NativeSessionItem(native)),
-      ];
-      this.serviceSessions.set(service.providerId, items);
-    }
-  }
-
-  private clearItems(): void {
-    this.serviceItems = undefined;
-    this.serviceSessions.clear();
-  }
-}
-
-class ProviderItem extends vscode.TreeItem {
-  constructor(provider: ProviderLine) {
-    super(provider.displayName, vscode.TreeItemCollapsibleState.None);
-    const usable = provider.installation.state === "usable";
-    this.description = usable ? "Ready" : "Unavailable";
-    this.tooltip = provider.installation.why ?? `${provider.displayName} is ready`;
-    this.iconPath = new vscode.ThemeIcon(
-      usable ? "terminal" : "circle-slash",
-      usable ? undefined : new vscode.ThemeColor("disabledForeground"),
-    );
-  }
-}
-
-export class ProvidersTree implements vscode.TreeDataProvider<ProviderItem>, vscode.Disposable {
-  private readonly changedEmitter = new vscode.EventEmitter<void>();
-  readonly onDidChangeTreeData = this.changedEmitter.event;
-  private readonly subscription: vscode.Disposable;
-
-  constructor(private readonly state: RuntimeState) {
-    this.subscription = state.onDidChange((change) => {
-      if (change === "rows") {
-        this.changedEmitter.fire();
-      }
-    });
-  }
-
-  getTreeItem(element: ProviderItem): vscode.TreeItem {
-    return element;
-  }
-
-  getChildren(): ProviderItem[] {
-    return this.state.providers.map((provider) => new ProviderItem(provider));
-  }
-
-  dispose(): void {
-    this.subscription.dispose();
-    this.changedEmitter.dispose();
+    if (this.items) return;
+    const nowMs = this.now();
+    this.items = [
+      ...this.state.conversations.map((row) => new ConversationItem(row, nowMs)),
+      ...this.state.providers
+        .filter(isBroken)
+        .map((provider) => new ServiceProblemItem(provider)),
+    ];
   }
 }

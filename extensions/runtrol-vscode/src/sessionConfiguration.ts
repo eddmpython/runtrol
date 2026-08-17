@@ -1,5 +1,11 @@
 import type { ModelCatalog, ModelChoice, ReasoningChoice } from "./runtimeTypes";
 
+/// Where the coding service used for the last new conversation is remembered.
+///
+/// This is the whole of what makes New chat answer its own question. Global rather than per workspace, because a
+/// person's preferred agent follows them between projects while a project rarely has an opinion.
+export const RECENT_SERVICE_KEY = "runtrol.recentService";
+
 export type ModelOption = {
   label: string;
   id: string;

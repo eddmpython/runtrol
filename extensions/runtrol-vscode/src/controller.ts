@@ -15,23 +15,35 @@ import type {
   SessionLine,
   WorkspaceAccess,
 } from "./runtimeTypes";
+import type { Conversation } from "./conversationList";
+import { conversationChoices } from "./conversationPicker";
+import { awaitsVerification, isUsable } from "./providerHealth";
 import { SelectionStore } from "./selectionStore";
 import { sessionTitle } from "./sessionDisplay";
-import { sessionChoices } from "./sessionNavigation";
 import { RuntimeState } from "./state";
-import { NativeSessionItem, SessionItem } from "./trees";
+import { ConversationItem } from "./trees";
 import { StudioRuntimeClient } from "./runtimeClient";
 import { sessionStateLabel } from "./runtimeProjection";
-import { modelOptions, reasoningOptions } from "./sessionConfiguration";
+import { modelOptions, reasoningOptions, RECENT_SERVICE_KEY } from "./sessionConfiguration";
 import { workspaceCollisions, type WorkspaceCollision } from "./workspaceCollision";
 
 const NATIVE_ADOPTION_REFRESH_MS = 4 * 60_000;
-const NATIVE_DISCOVERY_IDLE_MS = 5_000;
+/// Existing conversations are discovered as soon as the surface is idle enough to ask.
+///
+/// Short on purpose. This delay only exists to let a foreground action finish first, never to stagger discovery
+/// into a wait a person can watch.
+const NATIVE_DISCOVERY_IDLE_MS = 150;
 
 type NativeDiscovery = {
   abort: AbortController;
   pending: Promise<void>;
 };
+
+/// Every way a caller can name the conversation it wants opened.
+///
+/// A tree row, a row of the list itself, a session record, or a bare session identifier. They all reduce to one
+/// record before anything is opened, so there is exactly one path through selection.
+export type SelectionTarget = ConversationItem | Conversation | SessionLine | string;
 
 export class Controller implements vscode.Disposable {
   private watchAbort: AbortController | null = null;
@@ -85,6 +97,7 @@ export class Controller implements vscode.Disposable {
     }
     this.startSessionIndexWatch();
     this.startProviderVerification(inventory.providers.providers);
+    this.startExistingChatDiscovery();
   }
 
   async refresh(): Promise<void> {
@@ -100,7 +113,7 @@ export class Controller implements vscode.Disposable {
   async refreshChats(): Promise<void> {
     await this.refresh();
     await Promise.all(this.state.providers
-      .filter((provider) => provider.installation.state === "usable")
+      .filter(isUsable)
       .map((provider) => this.loadNativeChats(provider.providerId, true)));
   }
 
@@ -195,18 +208,18 @@ export class Controller implements vscode.Disposable {
   }
 
   async switchSession(): Promise<void> {
-    const selected = this.state.selected?.sessionId ?? null;
+    const rows = this.state.conversations;
     const picked = await vscode.window.showQuickPick(
-      sessionChoices(this.state.sessions, selected, this.state.providers),
+      conversationChoices(rows, Date.now()),
       {
-        title: `Switch chat (${this.state.sessions.length})`,
-        placeHolder: "Type a project, service, status, or folder",
+        title: `Conversations (${rows.length})`,
+        placeHolder: "Type a project, service, or title",
         matchOnDescription: true,
         matchOnDetail: true,
       },
     );
     if (picked) {
-      await this.select(picked.session.sessionId);
+      await this.selectConversation(picked.conversation);
     }
   }
 
@@ -230,13 +243,17 @@ export class Controller implements vscode.Disposable {
   }
 
   select(
-    value: NativeSessionItem | SessionItem | SessionLine | string,
+    value: SelectionTarget,
     follow = true,
     reveal = true,
   ): Promise<void> {
     const selected = this.selectionTail.then(() => this.selectNow(value, follow, reveal));
     this.selectionTail = selected.catch(() => undefined);
     return selected;
+  }
+
+  private selectConversation(conversation: Conversation): Promise<void> {
+    return this.select(conversation);
   }
 
   private selectForInitialization(value: SessionLine): Promise<void> {
@@ -266,7 +283,7 @@ export class Controller implements vscode.Disposable {
   }
 
   private async selectNow(
-    value: NativeSessionItem | SessionItem | SessionLine | string,
+    value: SelectionTarget,
     follow: boolean,
     reveal: boolean,
     afterApplied: () => void = () => undefined,
@@ -279,22 +296,30 @@ export class Controller implements vscode.Disposable {
     }
   }
 
+  /// Reduce every way a conversation can be named down to the one record that opens it.
+  private resolve(value: SelectionTarget): Conversation | SessionLine {
+    if (value instanceof ConversationItem) return value.conversation;
+    if (typeof value !== "string" && "key" in value) return value;
+    const id = typeof value === "string" ? value : value.sessionId;
+    const session = this.state.sessions.find((candidate) => candidate.sessionId === id);
+    if (!session) throw new Error("that conversation is no longer listed");
+    return session;
+  }
+
   private async applySelection(
-    value: NativeSessionItem | SessionItem | SessionLine | string,
+    value: SelectionTarget,
     follow: boolean,
     reveal: boolean,
     afterApplied: () => void,
   ): Promise<void> {
+    const target = this.resolve(value);
     let session: SessionLine | null;
-    if (value instanceof NativeSessionItem) {
-      session = await this.adoptNativeChat(value.native);
+    if ("key" in target) {
+      if (!target.canOpen) throw new Error(target.blocked ?? "that conversation cannot be opened");
+      session = target.session ?? await this.adoptNativeChat(requireNative(target));
       if (!session) return;
     } else {
-      const id = typeof value === "string" ? value : value instanceof SessionItem
-        ? value.session.sessionId
-        : value.sessionId;
-      session = this.state.sessions.find((candidate) => candidate.sessionId === id) ?? null;
-      if (!session) throw new Error("that session is no longer listed");
+      session = target;
     }
     if (reveal) {
       void this.conversation.show();
@@ -398,25 +423,69 @@ export class Controller implements vscode.Disposable {
     return adopted;
   }
 
+  /// Open a new conversation without asking anything that can be answered from what is already known.
+  ///
+  /// A person clicking New chat has already said everything they meant to say. The coding service is the one they
+  /// used last, the project is the one this window is open on, and the model and effort are whatever the installed
+  /// CLI already defaults to. Every one of those was a question in an earlier design, and every one of them had a
+  /// correct answer the surface could have worked out for itself.
+  ///
+  /// Only a genuine ambiguity still stops to ask: no project is open at all, or another agent is already writing
+  /// in the same directory.
   async startSession(providerId?: string): Promise<void> {
     const provider = providerId
       ? this.state.providers.find((candidate) => candidate.providerId === providerId) ?? null
-      : await chooseProvider(this.state.providers);
+      : this.preferredService();
     if (!provider) {
-      if (providerId) {
-        throw new Error(`the installed provider ${providerId} is no longer listed`);
-      }
-      return;
+      throw new Error(providerId
+        ? `the installed coding service ${providerId} is no longer listed`
+        : "no installed coding-agent CLI is currently usable");
     }
-    if (provider.installation.state !== "usable") {
-      throw new Error(`the installed provider ${provider.providerId} is not usable`);
+    if (!isUsable(provider)) {
+      throw new Error(`the installed coding service ${provider.providerId} is not usable`);
     }
     const selectedWorkspace = await this.chooseStartWorkspace();
     if (!selectedWorkspace) {
       return;
     }
+    await this.rememberService(provider.providerId);
+    await this.startResolvedSession(
+      provider.providerId,
+      selectedWorkspace.workspace,
+      // The installed CLI already holds the operator's own model and effort settings. Asking again would make
+      // Runtrol the third place that opinion lives, and the two that disagree would both look authoritative.
+      null,
+      null,
+      selectedWorkspace.access,
+      true,
+    );
+  }
+
+  /// The deliberate path: name the service, the model and the effort explicitly.
+  ///
+  /// Automatic is the default, not the ceiling. Someone who came here specifically to run a different model gets
+  /// every choice the installed CLI actually reports, and nobody else is asked.
+  async startConfiguredSession(): Promise<void> {
+    const usable = this.state.providers.filter(isUsable);
+    if (usable.length === 0) {
+      throw new Error("no installed coding-agent CLI is currently usable");
+    }
+    const recent = this.context.globalState.get<string>(RECENT_SERVICE_KEY);
+    const picked = usable.length === 1 ? { provider: usable[0] } : await vscode.window.showQuickPick(
+      usable.map((provider) => ({
+        label: provider.displayName,
+        description: provider.providerId === recent ? "Last used" : provider.installation.version ?? "",
+        provider,
+      })),
+      { title: "New conversation", placeHolder: "Choose a coding service" },
+    );
+    const provider = picked?.provider;
+    if (!provider) return;
+    const selectedWorkspace = await this.chooseStartWorkspace();
+    if (!selectedWorkspace) return;
     const configuration = await this.chooseStartConfiguration(provider);
     if (!configuration) return;
+    await this.rememberService(provider.providerId);
     await this.startResolvedSession(
       provider.providerId,
       selectedWorkspace.workspace,
@@ -425,6 +494,20 @@ export class Controller implements vscode.Disposable {
       selectedWorkspace.access,
       true,
     );
+  }
+
+  /// The coding service a new conversation should use when nobody said otherwise.
+  ///
+  /// The one used last, because that is what a person means by "again". Falling back to the only usable service,
+  /// then to the first, keeps the very first run from asking a question with one possible answer.
+  private preferredService(): ProviderLine | null {
+    const usable = this.state.providers.filter(isUsable);
+    const recent = this.context.globalState.get<string>(RECENT_SERVICE_KEY);
+    return usable.find((provider) => provider.providerId === recent) ?? usable[0] ?? null;
+  }
+
+  private async rememberService(providerId: string): Promise<void> {
+    await this.context.globalState.update(RECENT_SERVICE_KEY, providerId);
   }
 
   async startResolvedSession(
@@ -436,8 +519,8 @@ export class Controller implements vscode.Disposable {
     follow: boolean,
   ): Promise<string> {
     const provider = this.state.providers.find((candidate) => candidate.providerId === providerId);
-    if (provider?.installation.state !== "usable") {
-      throw new Error(`the installed provider ${providerId} is not usable`);
+    if (!provider || !isUsable(provider)) {
+      throw new Error(`the installed coding service ${providerId} is not usable`);
     }
     const pausedDiscoveries = this.beginForegroundAction();
     try {
@@ -488,6 +571,15 @@ export class Controller implements vscode.Disposable {
     this.ensureSelectedWatch();
   }
 
+  async revealConversationOnEntry(): Promise<void> {
+    if (this.conversation.isOpen) {
+      this.ensureSelectedWatch();
+      return;
+    }
+    await this.conversation.show(true);
+    this.ensureSelectedWatch();
+  }
+
   conversationVisibilityChanged(visible: boolean): void {
     this.conversationVisible = visible;
     if (visible) {
@@ -497,8 +589,8 @@ export class Controller implements vscode.Disposable {
     }
   }
 
-  async nameSession(value?: SessionItem | SessionLine): Promise<void> {
-    const session = value instanceof SessionItem ? value.session : value ?? this.requireSelected();
+  async nameSession(value?: ConversationItem | SessionLine): Promise<void> {
+    const session = this.sessionOf(value);
     const label = await vscode.window.showInputBox({
       title: `Rename ${sessionTitle(session)}`,
       prompt: "Use a short name for this chat. Leave it empty to restore the automatic name.",
@@ -533,8 +625,8 @@ export class Controller implements vscode.Disposable {
     );
   }
 
-  async close(value?: SessionItem | SessionLine): Promise<void> {
-    const session = value instanceof SessionItem ? value.session : value ?? this.requireSelected();
+  async close(value?: ConversationItem | SessionLine): Promise<void> {
+    const session = this.sessionOf(value);
     const action = session.lifecycle === "hotRunning" ? "Stop and close" : "Close in Runtrol";
     const choice = await vscode.window.showWarningMessage(
       `Close the ${session.providerId} chat in ${path.basename(session.workspace)}?`,
@@ -551,12 +643,14 @@ export class Controller implements vscode.Disposable {
   }
 
   async closeResolvedSession(
-    value: SessionItem | SessionLine | string,
+    value: ConversationItem | SessionLine | string,
     interruptRunning: boolean,
   ): Promise<void> {
-    const id = typeof value === "string" ? value : value instanceof SessionItem
-      ? value.session.sessionId
-      : value.sessionId;
+    const id = typeof value === "string"
+      ? value
+      : value instanceof ConversationItem
+        ? value.conversation.session?.sessionId ?? ""
+        : value.sessionId;
     const session = this.state.sessions.find((candidate) => candidate.sessionId === id);
     if (!session) {
       throw new Error("that session is no longer listed");
@@ -569,8 +663,8 @@ export class Controller implements vscode.Disposable {
     }
   }
 
-  async openWorkspace(value?: SessionItem | SessionLine): Promise<void> {
-    const session = value instanceof SessionItem ? value.session : value ?? this.requireSelected();
+  async openWorkspace(value?: ConversationItem | SessionLine): Promise<void> {
+    const session = this.sessionOf(value);
     await this.persistSelection(session.sessionId);
     if (workspaceIsOpen(session.workspace)) {
       await vscode.commands.executeCommand("workbench.view.explorer");
@@ -767,7 +861,7 @@ export class Controller implements vscode.Disposable {
 
   private startProviderVerification(providers: readonly ProviderLine[]): void {
     for (const provider of providers) {
-      if (!providerNeedsVerification(provider) || this.verifyingProviders.has(provider.providerId)) {
+      if (!awaitsVerification(provider) || this.verifyingProviders.has(provider.providerId)) {
         continue;
       }
       this.verifyingProviders.add(provider.providerId);
@@ -791,7 +885,7 @@ export class Controller implements vscode.Disposable {
     if (active) return active.pending;
     if (!force && this.state.nativeCatalogue(providerId)) return Promise.resolve();
     const provider = this.state.providers.find((candidate) => candidate.providerId === providerId);
-    if (provider?.installation.state !== "usable") return Promise.resolve();
+    if (!provider || !isUsable(provider)) return Promise.resolve();
     const generation = this.nativeDiscoveryGeneration;
     const abort = new AbortController();
     const pending = this.runtime.nativeChats(providerId, abort.signal).then((catalogue) => {
@@ -845,6 +939,13 @@ export class Controller implements vscode.Disposable {
     this.scheduleNativeDiscoveries();
   }
 
+  private startExistingChatDiscovery(): void {
+    for (const provider of this.state.providers.filter(isUsable)) {
+      this.deferredNativeProviders.add(provider.providerId);
+    }
+    this.flushNativeDiscoveries();
+  }
+
   private scheduleNativeDiscoveries(): void {
     if (
       this.disposed
@@ -856,20 +957,27 @@ export class Controller implements vscode.Disposable {
     }
     this.nativeDiscoveryRestart = setTimeout(() => {
       this.nativeDiscoveryRestart = null;
-      if (this.disposed || this.nativeDiscoveryPauseDepth > 0) {
-        this.scheduleNativeDiscoveries();
-        return;
-      }
-      const providerIds = [...this.deferredNativeProviders];
-      this.deferredNativeProviders.clear();
-      for (const providerId of providerIds) this.discoverNativeChats(providerId);
+      this.flushNativeDiscoveries();
     }, NATIVE_DISCOVERY_IDLE_MS);
   }
 
+  private flushNativeDiscoveries(): void {
+    if (this.nativeDiscoveryRestart) {
+      clearTimeout(this.nativeDiscoveryRestart);
+      this.nativeDiscoveryRestart = null;
+    }
+    if (this.disposed || this.nativeDiscoveryPauseDepth > 0) {
+      return;
+    }
+    const providerIds = [...this.deferredNativeProviders];
+    this.deferredNativeProviders.clear();
+    for (const providerId of providerIds) this.discoverNativeChats(providerId);
+  }
+
   private providerUsable(providerId: string): boolean {
-    return this.state.providers.some((provider) => (
-      provider.providerId === providerId && provider.installation.state === "usable"
-    ));
+    return this.state.providers.some(
+      (provider) => provider.providerId === providerId && isUsable(provider),
+    );
   }
 
   private async chooseStartConfiguration(provider: ProviderLine): Promise<StartConfiguration | null> {
@@ -961,9 +1069,23 @@ export class Controller implements vscode.Disposable {
   private requireSelected(): SessionLine {
     const selected = this.state.selected;
     if (!selected) {
-      throw new Error("choose a chat first");
+      throw new Error("open a conversation first");
     }
     return selected;
+  }
+
+  /// The supervised session behind a row, a record, or the open conversation.
+  ///
+  /// A row that no provider process is holding has no session to act on, and saying so by name is better than
+  /// silently acting on whatever happened to be open instead.
+  private sessionOf(value?: ConversationItem | SessionLine): SessionLine {
+    if (!value) return this.requireSelected();
+    if (!(value instanceof ConversationItem)) return value;
+    const session = value.conversation.session;
+    if (!session) {
+      throw new Error(`${value.conversation.title} is not open yet`);
+    }
+    return session;
   }
 
   private updateStatus(): void {
@@ -976,10 +1098,6 @@ export class Controller implements vscode.Disposable {
   }
 }
 
-function providerNeedsVerification(provider: ProviderLine): boolean {
-  return provider.installation.state === "unavailable"
-    && provider.installation.why === "the installed executable has not completed a verified probe";
-}
 
 type StartWorkspace = {
   workspace: string;
@@ -990,6 +1108,17 @@ type StartConfiguration = {
   model: string | null;
   reasoningEffort: string | null;
 };
+
+/// A row without a supervised session must carry the provider-owned chat that opens it.
+///
+/// Enforced here rather than assumed, because the alternative is a click that silently does nothing.
+function requireNative(conversation: Conversation): NativeChatLine {
+  const native = conversation.native;
+  if (!native) {
+    throw new Error(`${conversation.title} has nothing left to reopen`);
+  }
+  return native;
+}
 
 function nativeCatalogueFailure(providerId: string, error: unknown): NativeChatCatalogue {
   return {
@@ -1038,21 +1167,6 @@ function forbiddenLabelCharacter(character: string): boolean {
     || (code >= 0x2066 && code <= 0x2069);
 }
 
-async function chooseProvider(providers: readonly ProviderLine[]): Promise<ProviderLine | null> {
-  const usable = providers.filter((provider) => provider.installation.state === "usable");
-  if (usable.length === 0) {
-    throw new Error("no installed coding-agent CLI is currently usable");
-  }
-  const selected = await vscode.window.showQuickPick(
-    usable.map((provider) => ({
-      label: provider.displayName,
-      description: provider.providerId,
-      provider,
-    })),
-    { title: "New chat", placeHolder: "Choose a coding service" },
-  );
-  return selected?.provider ?? null;
-}
 
 async function chooseWorkspace(): Promise<string | null> {
   const folders = vscode.workspace.workspaceFolders ?? [];
