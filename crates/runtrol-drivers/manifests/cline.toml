@@ -1,0 +1,41 @@
+# Compiled into the binary, so a fresh install has this provider with no file anywhere. An operator who needs
+# something different writes a file with the same id and it replaces this one entirely.
+#
+# This provider needs no driver of its own. It speaks the generic protocol the `acp` kind already serves, so the
+# entire cost of supporting it is this file.
+schema = 1
+id = "cline"
+display_name = "Cline"
+kind = "acp"
+
+[bin]
+# Bare names, tried in this order. Measured on this machine: a package manager installs a launcher script in front
+# of the real program, and resolution unwraps it.
+names = ["cline", "cline.cmd", "cline.exe"]
+
+[probe]
+version = { args = ["--version"], parse = "semver-anywhere" }
+# No flag block. The generic protocol driver passes no optional flags, so there is nothing to ask a parser about.
+
+[transport]
+# Measured on version 3.0.55: this flag answers `initialize` with protocol version 1 and announces `loadSession`,
+# so a saved conversation reopens by identifier. It announces no `sessionCapabilities`, so the catalogue call
+# answers "method not found" and the surface reports existing-conversation discovery as unsupported for this CLI
+# rather than inventing a list. That refusal is the honest state, and it changes the day the vendor adds the
+# capability, with no file here to update.
+argv = ["--acp"]
+listen = "stdio"
+
+# No `[models]` block. This CLI selects a model through its own provider configuration, and the protocol does not
+# enumerate one. Aliases invented here would be a catalogue runtrol made up.
+
+[secrets]
+# Where this CLI keeps its own login. Not discoverable: a CLI does not report this, and guessing from its name is
+# how a wall comes to protect a directory nobody uses. Measured on this machine: its configuration directory and
+# its isolated data directory both default under this one. runtrol never holds a provider credential, and the
+# scope wall refuses any workspace that would let an agent read one either.
+under_home = [".cline"]
+
+[update]
+# The built-in adapter may use npm only after the resolved entry point and package metadata independently agree.
+hint = "npm"

@@ -1,0 +1,42 @@
+# Compiled into the binary, so a fresh install has this provider with no file anywhere. An operator who needs
+# something different writes a file with the same id and it replaces this one entirely.
+#
+# This provider needs no driver of its own. It speaks the generic protocol the `acp` kind already serves, so the
+# entire cost of supporting it is this file. That is the boundary the manifest exists to hold: a CLI joins by
+# declaring how to reach it, never by adding a branch to the core.
+schema = 1
+id = "opencode"
+display_name = "OpenCode"
+kind = "acp"
+
+[bin]
+# Bare names, tried in this order. Measured on this machine: a package manager installs a launcher script in front
+# of the real program, and resolution unwraps it. A separate native installer also exists, and whichever one the
+# operator's search path finds is the one that runs.
+names = ["opencode", "opencode.cmd", "opencode.exe"]
+
+[probe]
+version = { args = ["--version"], parse = "semver-anywhere" }
+# No flag block. The generic protocol driver passes no optional flags, so there is nothing to ask a parser about
+# and no reason to teach this CLI a way to refuse work.
+
+[transport]
+# Measured on version 1.2.27: this subcommand answers `initialize` with protocol version 1 and announces
+# `loadSession`, `sessionCapabilities.list`, `sessionCapabilities.resume` and `sessionCapabilities.fork`. Existing
+# conversations therefore arrive through the official protocol, with nothing here restating what they are.
+argv = ["acp"]
+listen = "stdio"
+
+# No `[models]` block. This CLI enumerates its own models, so writing any of them here would be a copy that goes
+# stale on the vendor's next release.
+
+[secrets]
+# Where this CLI keeps its own login. Not discoverable: a CLI does not report this, and guessing from its name is
+# how a wall comes to protect a directory nobody uses. Measured on this machine: configuration lives in the first
+# and the session database with its credentials lives in the second. runtrol never holds a provider credential,
+# and the scope wall refuses any workspace that would let an agent read one either.
+under_home = [".config/opencode", ".local/share/opencode"]
+
+[update]
+# The built-in adapter may use npm only after the resolved entry point and package metadata independently agree.
+hint = "npm"

@@ -35,6 +35,8 @@ use crate::codex::CodexProvider;
 pub const MANIFESTS: &[&str] = &[
     include_str!("../manifests/claude.toml"),
     include_str!("../manifests/codex.toml"),
+    include_str!("../manifests/cline.toml"),
+    include_str!("../manifests/opencode.toml"),
 ];
 
 /// Builds a driver for one kind.
