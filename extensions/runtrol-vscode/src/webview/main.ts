@@ -449,11 +449,17 @@ function present(payload: unknown): void {
     return;
   }
   if (presentation.kind === "status") {
-    if (presentation.textKey === "session.attached") updateAttachment(body);
+    if (presentation.textKey === "session.attached") {
+      updateAttachment(body);
+      // Claude Code names its slash commands inside the frame it says hello with, not in a later update, and the
+      // driver carries that frame through whole. So for the flagship service the list is already here, and
+      // services that announce separately still overwrite it below.
+      adoptCommands(body, false);
+    }
     if (presentation.textKey === "mode.updated") updateMode(body);
     // Kept out of the transcript below and remembered here. "The command list changed" is not something anybody
     // came to read, but the list itself is the only way to find out what this CLI can be told to do.
-    if (presentation.textKey === "commands.updated") updateOfferedCommands(body);
+    if (presentation.textKey === "commands.updated") adoptCommands(body, true);
     const text = LOCALIZED_TEXT[presentation.textKey];
     if (text && !HIDDEN_STATUS_KEYS.has(presentation.textKey)) appendMessage("meta", text);
   }
@@ -463,8 +469,15 @@ function present(payload: unknown): void {
 ///
 /// Replaces rather than merges. The service is the authority on its own command list, and a list that only ever
 /// grew would keep offering a command that a mode change had withdrawn.
-function updateOfferedCommands(body: UnknownRecord): void {
-  offeredCommands = slashCommandsOf(body);
+///
+/// `authoritative` separates the two ways a list arrives. A dedicated command update is the service saying what it
+/// offers now, so an empty one withdraws everything. A startup frame is the service saying hello, and the ones that
+/// mention commands there do it in passing: reading an absence as a withdrawal would clear a list that a later
+/// update had already delivered.
+function adoptCommands(body: UnknownRecord, authoritative: boolean): void {
+  const announced = slashCommandsOf(body);
+  if (announced.length === 0 && !authoritative) return;
+  offeredCommands = announced;
   refreshCommands();
 }
 
