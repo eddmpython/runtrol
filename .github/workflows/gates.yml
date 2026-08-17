@@ -82,6 +82,11 @@ jobs:
         run: python -X utf8 tests/audit/noTranscriptCopy.py --selftest
       - name: 대화 사본을 갖지 않는다
         run: python -X utf8 tests/audit/noTranscriptCopy.py
+      # 낯선 사람의 clone 에 없는 것을 공개 파일이 가리키면 그건 그 사람이 처음 보는 404 다.
+      - name: 공개 참조 검출기 자체 검증
+        run: python -X utf8 tests/audit/publicReferences.py --selftest
+      - name: 추적 파일은 추적되는 것만 가리킨다
+        run: python -X utf8 tests/audit/publicReferences.py
       # 요청마다 누가 할 수 있는지 규칙이 있고 벽이 먼저 물어진다. 컴파일러는 crate 경계 너머로
       # 빠진 요청을 말해주지 못한다.
       - name: 스코프 벽 검출기 자체 검증

@@ -61,6 +61,15 @@ GATES: dict[str, tuple[str, list[str]]] = {
         [*PY, f"{HOOKS}/noTranscriptCopy.py", "--selftest"],
     ),
     "noTranscriptCopy": ("대화 사본을 갖지 않는다", [*PY, f"{HOOKS}/noTranscriptCopy.py"]),
+    # 낯선 사람의 clone 에 없는 것을 공개 파일이 가리키면 그건 그 사람이 처음 보는 404 다.
+    "publicReferencesSelftest": (
+        "공개 참조 검출기 자체 검증",
+        [*PY, f"{HOOKS}/publicReferences.py", "--selftest"],
+    ),
+    "publicReferences": (
+        "추적 파일은 추적되는 것만 가리킨다",
+        [*PY, f"{HOOKS}/publicReferences.py"],
+    ),
     # 요청마다 누가 할 수 있는지 규칙이 있고, 벽이 다른 무엇보다 먼저 물어진다. 컴파일러는 crate
     # 경계 너머로 빠진 요청을 말해주지 못한다.
     "scopeWallSelftest": ("스코프 벽 검출기 자체 검증", [*PY, f"{HOOKS}/scopeWall.py", "--selftest"]),
@@ -392,6 +401,8 @@ SUITES: dict[str, tuple[str, ...]] = {
         "workspaceLints",
         "noTranscriptCopySelftest",
         "noTranscriptCopy",
+        "publicReferencesSelftest",
+        "publicReferences",
         "scopeWallSelftest",
         "scopeWall",
         "orphanReapingSelftest",

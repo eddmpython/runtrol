@@ -1,8 +1,8 @@
 # Contributing to runtrol
 
-Thank you for looking. runtrol is at the **design stage**: what exists today is the North Star,
-architecture decisions backed by measurements, and the contract gates. Product code lands
-milestone by milestone (see [mainPlan/README.md](mainPlan/README.md)).
+Thank you for looking. What exists today is the North Star, architecture decisions backed by
+measurements, the contract gates, and a published VS Code extension. [README.md](README.md) scores
+each milestone, and a score counts only when a gate runs in CI.
 
 Design-stage contributions are real contributions: challenging a decision in `docs/` with
 evidence, testing a probe on your machine, or preparing a provider manifest all count.
@@ -24,8 +24,7 @@ Almost always the provider CLI already exposes a structured surface for it.
 | | |
 |---|---|
 | `README.md` | The North Star, honestly scored. A score only counts when a gate runs in CI |
-| `docs/` | Decided. The operational source of truth |
-| `mainPlan/` | Being designed or built. Initiatives are deleted on completion, knowledge promoted to `docs/` |
+| `docs/` | Decided. The operational source of truth, dug out of the code itself |
 | `tests/audit/` | The contract gates |
 
 ## Before you code

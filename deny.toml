@@ -1,7 +1,7 @@
 # 공급망 게이트 + **기각한 crate 의 기계 기억**.
 #
 # 두 번째 역할이 중요하다. 설계 문서에 "sled 를 쓰지 않는다" 를 적어도 다음 사람은 안 읽는다.
-# 여기 적으면 `cargo deny` 가 막는다. 기각 이유는 mainPlan 문서에서 왔고 `use-instead` 로 남긴다.
+# 여기 적으면 `cargo deny` 가 막는다. 기각 이유는 `use-instead` 로 함께 남긴다.
 
 [graph]
 all-features = true

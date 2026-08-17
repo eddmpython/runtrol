@@ -67,8 +67,8 @@ def documentationProblems(
         if body is None:
             found.append(f"public Runtime document {name} is missing")
             continue
-        if "mainPlan/" in body:
-            found.append(f"{name} cites a provisional initiative")
+        # Citing the initiative layer is asserted for every tracked file by `publicReferences.py`, so
+        # repeating the rule here would be a second reading of it.
         if "\u2014" in body or "\u2013" in body:
             found.append(f"{name} contains a forbidden dash character")
         for token in tokens:

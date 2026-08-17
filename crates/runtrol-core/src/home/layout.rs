@@ -8,9 +8,8 @@
 //!
 //! # What is here, and who reads it
 //!
-//! Each entry traces to a decision recorded in `mainPlan/`, and each one's reader arrives in its own
-//! step. The layout is defined as a whole because it is a single concern: the shape of a directory
-//! this program owns.
+//! Each entry has exactly one reader, and each reader arrives in its own step. The layout is defined
+//! as a whole because it is a single concern: the shape of a directory this program owns.
 //!
 //! | Entry | Reader |
 //! |---|---|

@@ -162,7 +162,6 @@ Rust は目的ではなく、上の表の三つの軸のための手段である
 | [`site/`](site/) | [依存関係のない GitHub Pages ランディング](https://eddmpython.github.io/runtrol/) | 公開済み |
 | [`assets/brand/`](assets/brand/) | ロゴ。SVG が正本で、favicon・アイコン・ソーシャルカードはそこから派生する | |
 | [`docs/`](docs/README.md) | 運用ドキュメントの正本 | |
-| [`mainPlan/`](mainPlan/README.md) | これから作るもの（イニシアチブ。完了したら知識を `docs/` へ昇格しフォルダを削除する） | |
 | [`tests/audit/`](tests/audit/) | 契約ゲート | |
 | [`tests/audit/northStar/`](tests/audit/northStar/) | スコアボードのエンジン。上の表の数字を計算し、4 言語をそれに揃える | |
 

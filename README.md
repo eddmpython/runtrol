@@ -162,7 +162,6 @@ Rust 는 목적이 아니라 위 표의 세 축을 위한 수단이다.
 | [`site/`](site/) | [무의존성 GitHub Pages 랜딩](https://eddmpython.github.io/runtrol/) | 공개됨 |
 | [`assets/brand/`](assets/brand/) | 로고. SVG 가 정본, 파비콘·아이콘·소셜 카드는 파생 | |
 | [`docs/`](docs/README.md) | 운영문서 정본 | |
-| [`mainPlan/`](mainPlan/README.md) | 앞으로 지을 것 (이니셔티브. 완료되면 `docs/` 로 승격하고 지운다) | |
 | [`tests/audit/`](tests/audit/) | 계약 게이트 | |
 | [`tests/audit/northStar/`](tests/audit/northStar/) | 점수판 엔진. 위 표의 숫자를 계산하고 4 개 언어를 대조한다 | |
 

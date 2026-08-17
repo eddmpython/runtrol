@@ -164,7 +164,6 @@ If those axes are not nailed down by gates, using Rust means nothing.
 | [`site/`](site/) | [Dependency-free GitHub Pages landing](https://eddmpython.github.io/runtrol/) | Live |
 | [`assets/brand/`](assets/brand/) | The logo. SVG is the source; favicons, icons, and social cards derive from it | |
 | [`docs/`](docs/README.md) | Operational documentation, source of truth | |
-| [`mainPlan/`](mainPlan/README.md) | What is to be built (initiatives; on completion the knowledge is promoted to `docs/` and the folder is deleted) | |
 | [`tests/audit/`](tests/audit/) | Contract gates | |
 | [`tests/audit/northStar/`](tests/audit/northStar/) | The scoreboard engine. Computes the numbers in the table above and holds the four languages to them | |
 
