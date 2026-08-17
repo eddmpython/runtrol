@@ -60,7 +60,7 @@ export function conversations(
   for (const session of sessions) {
     const key = session.nativeSessionId
       ? conversationKey(session.providerId, session.nativeSessionId)
-      : `session\0${session.sessionId}`;
+      : `session:${encodeURIComponent(session.sessionId)}`;
     claimed.add(key);
     rows.push(supervised(session, nativeByKey.get(key) ?? null, key, providers, selectedSessionId));
   }
@@ -73,8 +73,14 @@ export function conversations(
   return rows.sort(byMostRecentlyActive).map(disambiguated(rows));
 }
 
+/// A stable identity that is also legal as a tree element id.
+///
+/// Percent-encoded parts joined by a character encoding cannot produce. An earlier version separated them with NUL,
+/// which reads fine as a map key and is not a legal element id: VS Code mangled it, could no longer resolve the
+/// element, and every attempt to keep the open row selected rejected with "Cannot resolve tree item". Measured in
+/// CI, fourteen rejections in one run against zero before, and the reveal retries showed up in session-switch time.
 function conversationKey(providerId: string, nativeSessionId: string): string {
-  return `chat\0${providerId}\0${nativeSessionId}`;
+  return `chat:${encodeURIComponent(providerId)}:${encodeURIComponent(nativeSessionId)}`;
 }
 
 function supervised(

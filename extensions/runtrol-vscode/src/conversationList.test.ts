@@ -340,3 +340,25 @@ test("a conversation the reader cannot see is not a starting point they get stuc
   assert.ok(next, "an unknown starting point still lands somewhere useful");
   assert.equal(needsYou(next), true);
 });
+
+test("a conversation key is legal as a tree element id", () => {
+  // Measured in CI: a NUL separator reads fine as a map key and is not a legal element id. VS Code mangled it,
+  // could no longer resolve the element, and every reveal rejected. Fourteen rejections in one run.
+  const rows = conversations(
+    [session({ sessionId: "s1", providerId: "codex", nativeSessionId: "ses_1/2 3", workspace: "C:\work\a" })],
+    PROVIDERS,
+    [nativeChat({ nativeSessionId: "n 1", providerId: "opencode", cwd: "C:\work\b" })],
+    null,
+  );
+
+  assert.ok(rows.length >= 2);
+  for (const row of rows) {
+    assert.ok(row.key.length > 0);
+    assert.equal(
+      /[ -]/u.test(row.key),
+      false,
+      `${JSON.stringify(row.key)} carries a control character`,
+    );
+  }
+  assert.equal(new Set(rows.map((row) => row.key)).size, rows.length, "keys stay distinct");
+});

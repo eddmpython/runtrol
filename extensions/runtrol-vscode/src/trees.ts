@@ -19,7 +19,6 @@ export class ConversationItem extends vscode.TreeItem {
     this.description = conversation.activity === "needsYou"
       ? `Needs you · ${detail}`
       : detail;
-    this.tooltip = tooltip(conversation);
     this.contextValue = contextValue(conversation);
     this.iconPath = icon(conversation);
     if (conversation.canOpen) {
@@ -124,6 +123,8 @@ export class ConversationsTree implements vscode.TreeDataProvider<ChatTreeItem>,
   private readonly subscription: vscode.Disposable;
   private items: ChatTreeItem[] | undefined;
   private view: vscode.TreeView<ChatTreeItem> | null = null;
+  private badged: number | null = null;
+  private revealed: string | null = null;
 
   constructor(
     private readonly state: RuntimeState,
@@ -131,6 +132,7 @@ export class ConversationsTree implements vscode.TreeDataProvider<ChatTreeItem>,
   ) {
     this.subscription = state.onDidChange((change) => {
       this.items = undefined;
+      if (change === "selection") this.revealed = null;
       this.changedEmitter.fire(undefined);
       this.updateBadge();
       if (change === "selection") this.revealOpenConversation();
@@ -145,6 +147,18 @@ export class ConversationsTree implements vscode.TreeDataProvider<ChatTreeItem>,
 
   getTreeItem(element: ChatTreeItem): vscode.TreeItem {
     return element;
+  }
+
+  /// Build the hover only for the row actually being hovered.
+  ///
+  /// A tooltip is markdown, and thirty of them were being constructed on every session-index change purely so that
+  /// one of them might be read. VS Code asks for the hover when it needs it, which is the only time it is worth
+  /// paying for.
+  resolveTreeItem(item: vscode.TreeItem, element: ChatTreeItem): vscode.TreeItem {
+    if (element instanceof ConversationItem) {
+      item.tooltip = tooltip(element.conversation);
+    }
+    return item;
   }
 
   getParent(): undefined {
@@ -169,6 +183,9 @@ export class ConversationsTree implements vscode.TreeDataProvider<ChatTreeItem>,
     const view = this.view;
     if (!view) return;
     const waiting = attentionCount(this.state.conversations);
+    // Writing the same badge again is a repaint nobody asked for, and the index changes constantly.
+    if (waiting === this.badged) return;
+    this.badged = waiting;
     view.badge = waiting === 0
       ? undefined
       : {
@@ -181,12 +198,18 @@ export class ConversationsTree implements vscode.TreeDataProvider<ChatTreeItem>,
 
   private revealOpenConversation(): void {
     const view = this.view;
-    if (!view) return;
+    if (!view || !view.visible) return;
     this.ensureItems();
     const open = this.items?.find(
       (item): item is ConversationItem => item instanceof ConversationItem && item.conversation.open,
     );
-    if (open) void view.reveal(open, { select: true, focus: false });
+    if (!open || open.conversation.key === this.revealed) return;
+    this.revealed = open.conversation.key;
+    // Revealing is cosmetic, and it races the refresh that was just announced. A failure here must stay a
+    // swallowed nicety rather than an unhandled rejection: the row is still correct, it just is not scrolled to.
+    view.reveal(open, { select: true, focus: false }).then(undefined, () => {
+      this.revealed = null;
+    });
   }
 
   private ensureItems(): void {
