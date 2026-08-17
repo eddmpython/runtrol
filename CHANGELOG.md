@@ -16,8 +16,13 @@ and refactoring that no user can observe do not belong here.
   question reads `Needs you` in the list, carries its own glyph, and raises a count badge on the Runtrol icon, so a
   blocked agent is visible without opening anything. Waiting on an account limit is shown as its own state and never
   asks to be answered.
-- New Conversation, Switch Conversation, and Show Open Conversation have keyboard chords (`Ctrl+K Ctrl+N`,
-  `Ctrl+K Ctrl+A`, `Ctrl+K Ctrl+O`; `Cmd` on macOS).
+- One key takes you to whichever agent is waiting for you. Run six at once and you never have to work out which
+  one stopped: `Ctrl+K Ctrl+W` opens the next waiting conversation, and pressing it again walks the rest. An agent
+  waiting on an account limit is skipped, because nobody can answer that.
+- While anything is waiting, the status bar says so with a count and a warning colour from anywhere in the window,
+  and clicking it goes straight there.
+- New Conversation, Switch Conversation, Show Open Conversation, and Open Next Waiting have keyboard chords
+  (`Ctrl+K Ctrl+N`, `Ctrl+K Ctrl+A`, `Ctrl+K Ctrl+O`, `Ctrl+K Ctrl+W`; `Cmd` on macOS).
 - Cline and OpenCode join the coding services Runtrol supervises. OpenCode reports its existing conversations through
   the official protocol, so they appear in the list without being started here first.
 

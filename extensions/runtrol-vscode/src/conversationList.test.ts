@@ -1,7 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { attentionCount, conversationDetail, conversations, elapsed, needsYou } from "./conversationList";
+import {
+  attentionCount,
+  conversationDetail,
+  conversations,
+  elapsed,
+  needsYou,
+  nextNeedingYou,
+} from "./conversationList";
 import type { NativeChatLine, ProviderLine, SessionLine } from "./runtimeTypes";
 
 const NOW = Date.parse("2026-08-17T12:00:00Z");
@@ -238,4 +245,98 @@ test("a waiting state never survives its own turn", () => {
 
   assert.equal(row?.activity, "saved");
   assert.equal(needsYou(row!), false);
+});
+
+function waitingFleet(openIndex: number | null) {
+  // Five running agents. Two of them stopped for a person, one is throttled, two are simply working.
+  const rows = conversations(
+    [
+      session({ sessionId: "s1", hot: true, lifecycle: "hotRunning", workspace: "C:\work\a" }),
+      session({ sessionId: "s2", hot: true, lifecycle: "hotRunning", waitingOn: "person", workspace: "C:\work\b" }),
+      session({ sessionId: "s3", hot: true, lifecycle: "hotRunning", waitingOn: "quota", workspace: "C:\work\c" }),
+      session({ sessionId: "s4", hot: true, lifecycle: "hotRunning", waitingOn: "person", workspace: "C:\work\d" }),
+      session({ sessionId: "s5", hot: true, lifecycle: "hotIdle", workspace: "C:\work\e" }),
+    ],
+    PROVIDERS,
+    [],
+    null,
+  );
+  return { rows, openKey: openIndex === null ? null : rows[openIndex]?.key ?? null };
+}
+
+test("one key reaches a conversation that stopped for a person", () => {
+  const { rows } = waitingFleet(null);
+
+  const next = nextNeedingYou(rows, null);
+
+  assert.ok(next, "something is waiting");
+  assert.equal(needsYou(next), true);
+  assert.equal(next.activity, "needsYou");
+});
+
+test("pressing it again walks the waiting ones instead of returning to the same one", () => {
+  const { rows } = waitingFleet(null);
+  const waitingKeys = rows.filter(needsYou).map((row) => row.key);
+  assert.equal(waitingKeys.length, 2, "two agents stopped for a person");
+
+  const first = nextNeedingYou(rows, null);
+  assert.ok(first);
+  const second = nextNeedingYou(rows, first.key);
+  assert.ok(second);
+
+  assert.notEqual(first.key, second.key, "the second press moves on");
+  assert.deepEqual(new Set([first.key, second.key]), new Set(waitingKeys));
+});
+
+test("the walk wraps around rather than dead-ending on the last one", () => {
+  const { rows } = waitingFleet(null);
+  const waiting = rows.filter(needsYou);
+  const last = waiting.at(-1);
+  assert.ok(last);
+
+  const wrapped = nextNeedingYou(rows, last.key);
+
+  assert.equal(wrapped?.key, waiting[0]?.key);
+});
+
+test("a throttled or working agent is never somewhere the key sends you", () => {
+  const { rows } = waitingFleet(null);
+  const reachable = new Set<string>();
+  let cursor: string | null = null;
+  for (let step = 0; step < rows.length + 2; step += 1) {
+    const next = nextNeedingYou(rows, cursor);
+    if (!next) break;
+    reachable.add(next.key);
+    cursor = next.key;
+  }
+
+  for (const row of rows) {
+    if (row.activity === "needsYou") continue;
+    assert.equal(reachable.has(row.key), false, `${row.activity} must not be a destination`);
+  }
+});
+
+test("nothing waiting means nowhere to go, not an arbitrary conversation", () => {
+  const rows = conversations(
+    [
+      session({ sessionId: "s1", hot: true, lifecycle: "hotRunning", workspace: "C:\work\a" }),
+      session({ sessionId: "s2", hot: true, lifecycle: "hotIdle", workspace: "C:\work\b" }),
+    ],
+    PROVIDERS,
+    [],
+    null,
+  );
+
+  assert.equal(nextNeedingYou(rows, null), null);
+  assert.equal(attentionCount(rows), 0);
+});
+
+test("a conversation the reader cannot see is not a starting point they get stuck on", () => {
+  const { rows } = waitingFleet(null);
+
+  // A key from a conversation that has since left the list.
+  const next = nextNeedingYou(rows, "chat gone gone");
+
+  assert.ok(next, "an unknown starting point still lands somewhere useful");
+  assert.equal(needsYou(next), true);
 });

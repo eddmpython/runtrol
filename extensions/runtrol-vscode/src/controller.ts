@@ -16,6 +16,7 @@ import type {
   WorkspaceAccess,
 } from "./runtimeTypes";
 import type { Conversation } from "./conversationList";
+import { attentionCount, nextNeedingYou } from "./conversationList";
 import { conversationChoices } from "./conversationPicker";
 import { awaitsVerification, isUsable } from "./providerHealth";
 import { SelectionStore } from "./selectionStore";
@@ -207,6 +208,24 @@ export class Controller implements vscode.Disposable {
     } else {
       await vscode.window.showInformationMessage(`${picked.label} is already current at ${result.to}.`);
     }
+  }
+
+  /// Go to the next conversation that has stopped for this person.
+  ///
+  /// One key, no scanning. With several agents running, the reader never has to work out which one wants them,
+  /// and pressing it again walks the rest rather than returning to the same one.
+  async openNextWaiting(): Promise<void> {
+    const rows = this.state.conversations;
+    const next = nextNeedingYou(rows, this.state.conversations.find((row) => row.open)?.key ?? null);
+    if (!next) {
+      // A transient line rather than a dialog. Being told nothing needs you should not itself need dismissing.
+      this.context.subscriptions.push(
+        vscode.window.setStatusBarMessage("Runtrol: nothing is waiting for you.", 3_000),
+      );
+      return;
+    }
+    await this.selectConversation(next);
+    await this.conversation.show();
   }
 
   async switchSession(): Promise<void> {
@@ -1105,13 +1124,30 @@ export class Controller implements vscode.Disposable {
     return session;
   }
 
+  /// The one thing worth showing from anywhere in the window.
+  ///
+  /// A count of running agents is ambient information nobody acts on. A count of agents that have stopped for
+  /// this person is the only number in this product that is a request, so when there is one the status bar stops
+  /// reporting and starts asking, and clicking it goes straight there instead of opening a list to search.
   private updateStatus(): void {
+    const waiting = attentionCount(this.state.conversations);
     const hot = this.state.sessions.filter((session) => session.hot).length;
+    if (waiting > 0) {
+      this.status.text = `$(bell-dot) ${waiting} waiting`;
+      this.status.tooltip = waiting === 1
+        ? "One conversation is waiting for you. Click to open it."
+        : `${waiting} conversations are waiting for you. Click to open the next one.`;
+      this.status.command = "runtrol.openNextWaiting";
+      this.status.backgroundColor = new vscode.ThemeColor("statusBarItem.warningBackground");
+      return;
+    }
     const selected = this.state.selected;
     this.status.text = selected
       ? `$(pulse) ${path.basename(selected.workspace)}  ${hot}/${this.state.sessions.length}`
       : `$(pulse) Runtrol  ${hot}/${this.state.sessions.length}`;
-    this.status.tooltip = `${hot} running chats, ${this.state.sessions.length} total`;
+    this.status.tooltip = `${hot} running conversations, ${this.state.sessions.length} total`;
+    this.status.command = "runtrol.switchSession";
+    this.status.backgroundColor = undefined;
   }
 }
 

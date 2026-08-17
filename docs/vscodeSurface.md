@@ -71,8 +71,15 @@ the original daemon and provider processes instead of making a versioned extensi
 - A conversation whose turn stopped for a person reads `Needs you` before anything else on the row, and the view
   carries a count badge so a blocked agent stays visible from another view entirely. An account limit is a separate
   state and never counts toward that badge, because nobody can answer it.
-- New Conversation, Switch Conversation, and Show Open Conversation each have a keyboard chord, so the entry point
-  never requires the mouse.
+- One command opens the next conversation that stopped for the operator, and pressing it again walks the rest
+  rather than returning to the same one. A conversation waiting on an account limit is never a destination, because
+  nobody can answer it. This is the orchestration primitive: supervising several agents never requires reading a
+  board to work out which one wants attention.
+- While anything is waiting, the status bar carries the count and its warning colour from anywhere in the window,
+  and activating it opens that conversation. With nothing waiting it returns to reporting running counts. A count of
+  running agents is ambient; a count of agents that stopped for this person is a request.
+- New Conversation, Switch Conversation, Show Open Conversation, and Open Next Waiting each have a keyboard chord,
+  so the entry point never requires the mouse.
 - A coding service that is not installed produces no row. Only an installed service that still cannot run appears, and
   only once its capability probe has finished.
 - The selected conversation opens in one reusable editor tab with a bounded renderer and composer.

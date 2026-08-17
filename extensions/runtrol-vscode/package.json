@@ -79,6 +79,7 @@
     "onCommand:runtrol.reviewIntegrations",
     "onCommand:runtrol.manageIntegrations",
     "onCommand:runtrol.reviewRuntimeRequests",
+    "onCommand:runtrol.openNextWaiting",
     "onCommand:runtrol.switchSession",
     "onCommand:runtrol.startSession",
     "onCommand:runtrol.startConfiguredSession",
@@ -184,6 +185,11 @@
         "command": "runtrol.reviewRuntimeRequests",
         "title": "Runtrol: Review Runtime Requests",
         "icon": "$(checklist)"
+      },
+      {
+        "command": "runtrol.openNextWaiting",
+        "title": "Runtrol: Open Next Waiting Conversation",
+        "icon": "$(bell-dot)"
       },
       {
         "command": "runtrol.switchSession",
@@ -341,6 +347,12 @@
     ],
     "keybindings": [
       {
+        "command": "runtrol.openNextWaiting",
+        "key": "ctrl+k ctrl+w",
+        "mac": "cmd+k cmd+w",
+        "when": "!terminalFocus"
+      },
+      {
         "command": "runtrol.switchSession",
         "key": "ctrl+k ctrl+a",
         "mac": "cmd+k cmd+a",
@@ -373,14 +385,19 @@
           "group": "navigation@0"
         },
         {
-          "command": "runtrol.openConversation",
+          "command": "runtrol.openNextWaiting",
           "when": "view == runtrol.sessions",
           "group": "navigation@1"
         },
         {
-          "command": "runtrol.switchSession",
+          "command": "runtrol.openConversation",
           "when": "view == runtrol.sessions",
           "group": "navigation@2"
+        },
+        {
+          "command": "runtrol.switchSession",
+          "when": "view == runtrol.sessions",
+          "group": "navigation@3"
         },
         {
           "command": "runtrol.startConfiguredSession",

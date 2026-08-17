@@ -259,6 +259,10 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
       () => run(() => afterReady(() => reviewRuntimeRequests(client))),
     ),
     vscode.commands.registerCommand(
+      "runtrol.openNextWaiting",
+      () => run(() => afterReady(() => controller.openNextWaiting())),
+    ),
+    vscode.commands.registerCommand(
       "runtrol.switchSession",
       () => run(() => afterReady(() => controller.switchSession())),
     ),

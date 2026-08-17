@@ -147,6 +147,26 @@ export function attentionCount(rows: readonly Conversation[]): number {
   return rows.filter(needsYou).length;
 }
 
+/// The next conversation that wants the reader, starting after the one they are looking at.
+///
+/// This is the whole orchestration primitive. Running six agents means five of them are busy and one has stopped
+/// for you, and the useful question is never "show me a board" but "take me to the one that wants me". Cycling
+/// from the open row rather than always returning the first means pressing it repeatedly walks every waiting
+/// conversation instead of bouncing between two.
+///
+/// Returns null when nothing is waiting, which the caller says out loud rather than opening something arbitrary.
+export function nextNeedingYou(
+  rows: readonly Conversation[],
+  openKey: string | null,
+): Conversation | null {
+  const waiting = rows.filter(needsYou);
+  if (waiting.length === 0) return null;
+  const openAt = openKey === null ? -1 : rows.findIndex((row) => row.key === openKey);
+  if (openAt < 0) return waiting[0] ?? null;
+  // Ordered by the list itself, so the walk follows what the reader sees.
+  return waiting.find((row) => rows.indexOf(row) > openAt) ?? waiting[0] ?? null;
+}
+
 /// Live conversations first, then whatever the coding service touched most recently.
 ///
 /// Turn state deliberately does not participate. Sorting on it would move rows under the pointer every time an
