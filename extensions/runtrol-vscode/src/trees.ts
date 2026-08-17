@@ -178,11 +178,22 @@ export class ConversationsTree implements vscode.TreeDataProvider<ChatTreeItem>,
     private readonly now: () => number = () => Date.now(),
   ) {
     this.subscription = state.onDidChange((change) => {
+      if (change === "selection") {
+        // Selection changes which row is scrolled to, not what any row says. No `ConversationItem` reads
+        // `open`: the label, detail, glyph, context value and command are all computed from state the
+        // selection does not touch. So rebuilding every row here would be an allocation per conversation and
+        // a full repaint in order to render exactly what was already on screen, on the one interaction a
+        // person feels most: switching conversations.
+        //
+        // It is also the safer half. Reusing the items VS Code already knows is what makes revealing one
+        // resolvable; handing it freshly built objects for the same rows is how a reveal starts failing.
+        this.revealed = null;
+        this.revealOpenConversation();
+        return;
+      }
       this.forgetItems();
-      if (change === "selection") this.revealed = null;
       this.changedEmitter.fire(undefined);
       this.updateBadge();
-      if (change === "selection") this.revealOpenConversation();
     });
   }
 
