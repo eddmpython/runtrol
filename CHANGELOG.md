@@ -10,6 +10,13 @@ and refactoring that no user can observe do not belong here.
 
 ## [Unreleased]
 
+### Changed
+
+- Installing more coding services no longer delays the moment the window is usable. Each service's executable was
+  resolved one after another, so every supported CLI added its own search-path walk to startup. They are resolved
+  at the same time now. Measured on the real Extension Host with four installed services: the fastest run went
+  from 1,244 ms to 992 ms and the ratchet's activation budget went from red to green.
+
 ### Added
 
 - OpenCode now reports its models. The protocol its driver speaks has no way to enumerate them, but the CLI has a

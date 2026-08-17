@@ -42,14 +42,39 @@ pub(crate) struct RuntimeSessionCatalogue {
 /// Build the fast provider inventory without starting any provider process.
 pub(crate) fn providers(composed: &Composed) -> ProviderList {
     let cache = ProbeCache::open(composed.home.paths().probe_cache());
+    let registered: Vec<&runtrol_core::registry::Provider> = composed.registry.all().collect();
+    // Resolved concurrently because each entry walks the operator's search path for its own executable and
+    // stats what it finds, and that cost is per provider rather than shared. Done in sequence it meant every
+    // supported CLI added delay to the moment the window becomes usable, which is the one wait a person feels
+    // on every single launch. Threads rather than tasks because this is blocking filesystem work and the
+    // function is called from places that are not async.
+    let observations: Vec<InstallationObservation> = std::thread::scope(|scope| {
+        let resolving: Vec<_> = registered
+            .iter()
+            .map(|provider| scope.spawn(|| installation(provider, &cache)))
+            .collect();
+        resolving
+            .into_iter()
+            .map(|handle| {
+                handle.join().unwrap_or_else(|_| InstallationObservation {
+                    // A panic while resolving one provider must not lose the other three. Reported as
+                    // unavailable rather than missing: something went wrong here, and claiming the CLI is
+                    // absent would send the operator to install what they may already have.
+                    state: InstallationState::Unavailable,
+                    version: None,
+                    why: Some("resolving this provider's executable did not complete".to_owned()),
+                })
+            })
+            .collect()
+    });
     ProviderList {
-        providers: composed
-            .registry
-            .all()
-            .map(|provider| ProviderDescriptor {
+        providers: registered
+            .into_iter()
+            .zip(observations)
+            .map(|(provider, installation)| ProviderDescriptor {
                 provider_id: ProviderId::new(provider.id().as_str()),
                 display_name: provider.manifest.display_name.to_string(),
-                installation: installation(provider, &cache),
+                installation,
                 help: help(provider),
             })
             .collect(),
