@@ -8,7 +8,7 @@ use runtrol_childproc::{Containment, Program, capture};
 use runtrol_provider::{
     Agent, MAX_MODEL_CHOICES, ModelAliases, ModelCatalog, ModelChoice, NativeSessionCatalogue,
     NativeSessionQuery, OpenIntent, Provider, ProviderCapabilities, ProviderCapability,
-    ProviderCapabilitySource, ProviderError, ProviderId,
+    ProviderCapabilitySource, ProviderError, ProviderId, SessionCatalogue,
 };
 
 use crate::acp::agent::AcpAgent;
@@ -20,6 +20,7 @@ pub struct AcpProvider {
     program: Program,
     contained_by: Arc<Containment>,
     models: ModelAliases,
+    sessions: SessionCatalogue,
     transport_argv: Vec<Box<str>>,
 }
 
@@ -97,6 +98,7 @@ impl AcpProvider {
         program: Program,
         contained_by: Arc<Containment>,
         models: ModelAliases,
+        sessions: SessionCatalogue,
         transport_argv: Vec<Box<str>>,
     ) -> Self {
         Self {
@@ -104,6 +106,7 @@ impl AcpProvider {
             program,
             contained_by,
             models,
+            sessions,
             transport_argv,
         }
     }
@@ -164,6 +167,19 @@ impl Provider for AcpProvider {
         &self,
         query: NativeSessionQuery,
     ) -> Result<NativeSessionCatalogue, ProviderError> {
+        // A CLI that lists its own conversations is asked directly. The protocol answering "method not found" says
+        // nothing about the command line, and reading the protocol's silence as the CLI's is how this driver came
+        // to report an absent surface for a provider that had one all along.
+        if !self.sessions.list.is_empty() {
+            return crate::acp::history::list(
+                self.id,
+                &self.program,
+                &self.sessions.list,
+                &query,
+                &self.contained_by,
+            )
+            .await;
+        }
         crate::acp::catalogue::list(
             self.id,
             &self.program,
@@ -208,6 +224,7 @@ mod tests {
             program(),
             Arc::new(Containment::without_any()),
             ModelAliases::default(),
+            SessionCatalogue::default(),
             vec!["serve".into(), "--stdio".into()],
         );
         assert_eq!(provider.id().as_str(), "example-acp");
@@ -227,6 +244,7 @@ mod tests {
                 list: Vec::new(),
                 aliases: vec!["fast".into(), "deep".into()],
             },
+            SessionCatalogue::default(),
             Vec::new(),
         );
         let ModelCatalog::Aliases { aliases, .. } =

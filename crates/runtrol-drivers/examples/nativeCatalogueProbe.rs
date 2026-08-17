@@ -27,6 +27,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         resolve(&fixture)?,
         Arc::new(Containment::without_any()),
         runtrol_provider::ModelAliases::default(),
+        runtrol_provider::SessionCatalogue::default(),
         Vec::new(),
     );
     let root = AbsPath::canonicalize(&workspace)?;

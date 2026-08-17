@@ -255,6 +255,9 @@ pub struct Manifest {
     /// This CLI's own commands for getting itself working.
     #[serde(default)]
     pub help: HelpCommands,
+    /// This CLI's own command for listing the conversations it already owns.
+    #[serde(default)]
+    pub sessions: SessionCatalogue,
 }
 
 impl Manifest {
@@ -284,6 +287,7 @@ impl Manifest {
         self.models.validate()?;
         self.secrets.validate()?;
         self.help.validate()?;
+        self.sessions.validate()?;
         Ok(())
     }
 }
@@ -535,6 +539,45 @@ impl HelpCommands {
                     "contains a character a shell could read as the start of a second command",
                 ));
             }
+        }
+        Ok(())
+    }
+}
+
+/// This CLI's own command for listing the conversations it already owns.
+///
+/// # Why this may be declared
+///
+/// The same reason the model listing command may be. A driver's protocol may have no session enumeration method
+/// while the CLI behind it has a command that does, and naming that command is declaring how to reach the CLI
+/// rather than restating what it holds. Every conversation still comes from the CLI at the moment of asking.
+///
+/// Measured on cline 3.0.52: `cline history --json --limit N --page N` prints the sessions it owns as structured
+/// JSON with pagination. Before finding it, this repository had concluded that discovering those conversations was
+/// impossible without scanning provider storage, which the thin principle forbids outright. The conclusion was
+/// wrong, and the way it was wrong is worth remembering: the protocol's silence was mistaken for the CLI's.
+///
+/// # What a driver may read from the answer
+///
+/// The four fields a session entry needs, and nothing else. A history record from a coding CLI contains the
+/// conversation: cline's carries the operator's own prompt in full and a path to the stored messages. Reading
+/// either would make Runtrol a second holder of a transcript, which is the one thing this product refuses. The
+/// driver reads identity, working directory, title and timestamp, and a test asserts that nothing else survives.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SessionCatalogue {
+    /// Arguments to the CLI's own session listing command, when it has one.
+    ///
+    /// Empty means it has none, and the driver reports the absence rather than approximating a list.
+    #[serde(default)]
+    pub list: Vec<Box<str>>,
+}
+
+impl SessionCatalogue {
+    /// Refuse anything a shell or an argument parser could read as something else.
+    fn validate(&self) -> Result<(), ManifestError> {
+        for argument in &self.list {
+            HelpCommands::refuse_unless_one_word(argument)?;
         }
         Ok(())
     }

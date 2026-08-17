@@ -22,7 +22,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use runtrol_childproc::{Containment, Program};
-use runtrol_provider::{ModelAliases, Provider, ProviderId};
+use runtrol_provider::{ModelAliases, Provider, ProviderId, SessionCatalogue};
 
 use crate::acp::AcpProvider;
 use crate::claude::ClaudeProvider;
@@ -95,8 +95,10 @@ impl core::fmt::Debug for DriverKind {
 pub struct DriverContext {
     /// Which provider this driver is being built for.
     pub provider: ProviderId,
-    /// Stable model aliases declared by this provider, when its CLI cannot enumerate a catalogue.
+    /// How to learn this provider's models, when its protocol cannot say.
     pub models: ModelAliases,
+    /// This CLI's own command for listing the conversations it owns, when it has one.
+    pub sessions: SessionCatalogue,
     /// The program to run, already resolved and with its launchers unwrapped.
     pub program: Program,
     /// Arguments the manifest declares for opening the structured transport.
@@ -186,6 +188,7 @@ fn make_acp(context: &DriverContext) -> Box<dyn Provider> {
         context.program.clone(),
         Arc::clone(&context.contained_by),
         context.models.clone(),
+        context.sessions.clone(),
         context.transport_argv.clone(),
     ))
 }

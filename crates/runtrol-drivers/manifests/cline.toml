@@ -50,3 +50,14 @@ hint = "npm"
 sign_in = ["auth"]
 diagnose = ["doctor"]
 install = "npm install --global --allow-scripts=cline cline"
+
+[sessions]
+# This CLI lists the conversations it owns on its own command line even though the protocol its driver speaks
+# announces no session capabilities at all. Measured on 3.0.52: `cline history --json` prints structured records
+# with identity, working directory, title and timestamp, paginated by `--limit` and `--page`.
+#
+# Reading the protocol's silence as the CLI's is how this repository concluded that discovering these
+# conversations was impossible without scanning provider storage, which the thin principle forbids. The
+# conclusion was wrong. The driver reads four fields and never the prompt or the stored-message path that arrive
+# in the same record.
+list = ["history", "--json"]

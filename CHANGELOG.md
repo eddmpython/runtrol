@@ -10,6 +10,14 @@ and refactoring that no user can observe do not belong here.
 
 ## [Unreleased]
 
+### Added
+
+- Conversations you started with Cline outside Runtrol now appear in the list. That CLI announces no session
+  capabilities over the protocol its driver speaks, so Runtrol reported existing-conversation discovery as
+  unsupported for it. The CLI lists them on its own command line, and Runtrol asks that command instead. Only the
+  four things a row needs are read (identity, project, title, when it changed); the prompt text and the stored
+  message path that arrive in the same record are never touched, and a test asserts that.
+
 ### Changed
 
 - Installing more coding services no longer delays the moment the window is usable. Each service's executable was

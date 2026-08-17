@@ -9,6 +9,7 @@
 
 mod agent;
 mod catalogue;
+mod history;
 mod map;
 mod provider;
 mod wire;
