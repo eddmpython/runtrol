@@ -10,6 +10,14 @@ import {
 } from "./presentation";
 import { conversationEmptyCopy, sendShortcutHint } from "./conversationCopy";
 import { toolActivityLine, toolActivityOf } from "./toolActivity";
+import {
+  asksForCommands,
+  completed,
+  matchingCommands,
+  movedHighlight,
+  slashCommandsOf,
+  type SlashCommand,
+} from "./slashCommands";
 import { afterFrameOrDelay } from "./renderReady";
 import {
   agentLine,
@@ -99,6 +107,7 @@ const sendHint = element<HTMLSpanElement>("send-hint");
 const interrupt = element<HTMLButtonElement>("interrupt");
 const agentChip = element<HTMLSpanElement>("agent-chip");
 const usageChip = element<HTMLSpanElement>("usage-chip");
+const commandMenu = element<HTMLUListElement>("commands");
 const pending: unknown[] = [];
 let selected: Session | null = null;
 let generation = 0;
@@ -108,6 +117,11 @@ let visibleCharacters = 0;
 let measurement: Measurement | null = null;
 let followsTail = true;
 let currentProvider = "Coding agent";
+/// Everything this coding service said it offers. Its own list, in its own words.
+let offeredCommands: SlashCommand[] = [];
+/// The subset currently on screen, which is also what the arrow keys move through.
+let visibleCommands: SlashCommand[] = [];
+let highlighted = 0;
 let promptWasSendable = false;
 let currentTitle: string | null = null;
 let facts: ConversationFacts = NO_FACTS;
@@ -163,13 +177,44 @@ composer.addEventListener("submit", (event) => {
   prompt.focus();
 });
 prompt.addEventListener("keydown", (event) => {
+  if (event.isComposing) return;
+  // The command menu owns the arrow keys and Enter while it is open, because that is what it is for. Escape
+  // closes it and gives the keys back rather than clearing what was typed.
+  if (visibleCommands.length > 0) {
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      highlighted = movedHighlight(highlighted, visibleCommands.length, event.key === "ArrowDown" ? 1 : -1);
+      paintCommands();
+      return;
+    }
+    if (event.key === "Escape") {
+      event.preventDefault();
+      closeCommands();
+      return;
+    }
+    if (event.key === "Enter" || event.key === "Tab") {
+      const chosen = visibleCommands[highlighted];
+      if (chosen) {
+        event.preventDefault();
+        chooseCommand(chosen);
+        return;
+      }
+    }
+  }
   // Enter sends and Shift+Enter writes a new line, which is what every chat surface has taught people to expect.
   // A modifier-to-send binding makes the common action the awkward one.
-  if (event.key !== "Enter" || event.isComposing || event.shiftKey || event.altKey) return;
+  if (event.key !== "Enter" || event.shiftKey || event.altKey) return;
   event.preventDefault();
   composer.requestSubmit();
 });
-prompt.addEventListener("input", resizePrompt);
+prompt.addEventListener("input", () => {
+  resizePrompt();
+  refreshCommands();
+});
+prompt.addEventListener("blur", () => {
+  // Only after the click that may have landed on the menu has been delivered.
+  setTimeout(closeCommands, 120);
+});
 interrupt.addEventListener("click", () => vscode.postMessage({ type: "interrupt" }));
 conversation.addEventListener("scroll", () => {
   followsTail = conversation.scrollHeight - conversation.scrollTop - conversation.clientHeight < 24;
@@ -406,15 +451,91 @@ function present(payload: unknown): void {
   if (presentation.kind === "status") {
     if (presentation.textKey === "session.attached") updateAttachment(body);
     if (presentation.textKey === "mode.updated") updateMode(body);
+    // Kept out of the transcript below and remembered here. "The command list changed" is not something anybody
+    // came to read, but the list itself is the only way to find out what this CLI can be told to do.
+    if (presentation.textKey === "commands.updated") updateOfferedCommands(body);
     const text = LOCALIZED_TEXT[presentation.textKey];
     if (text && !HIDDEN_STATUS_KEYS.has(presentation.textKey)) appendMessage("meta", text);
   }
+}
+
+/// Remember what this coding service says it offers.
+///
+/// Replaces rather than merges. The service is the authority on its own command list, and a list that only ever
+/// grew would keep offering a command that a mode change had withdrawn.
+function updateOfferedCommands(body: UnknownRecord): void {
+  offeredCommands = slashCommandsOf(body);
+  refreshCommands();
+}
+
+/// Show the candidates for what is typed, or nothing.
+function refreshCommands(): void {
+  const next = selected ? matchingCommands(offeredCommands, prompt.value) : [];
+  // Keeps the highlight on the same command when the list narrows under it, instead of snapping to the top.
+  const previous = visibleCommands[highlighted]?.name;
+  visibleCommands = next;
+  const stayed = next.findIndex((command) => command.name === previous);
+  highlighted = stayed >= 0 ? stayed : 0;
+  paintCommands();
+}
+
+function paintCommands(): void {
+  if (visibleCommands.length === 0) {
+    commandMenu.hidden = true;
+    commandMenu.replaceChildren();
+    return;
+  }
+  commandMenu.replaceChildren(...visibleCommands.map((command, index) => {
+    const row = document.createElement("li");
+    row.className = index === highlighted ? "command command-active" : "command";
+    row.setAttribute("role", "option");
+    row.setAttribute("aria-selected", index === highlighted ? "true" : "false");
+    const name = document.createElement("span");
+    name.className = "command-name";
+    name.textContent = `/${command.name}`;
+    row.append(name);
+    if (command.description) {
+      const description = document.createElement("span");
+      description.className = "command-description";
+      description.textContent = command.description;
+      row.append(description);
+    }
+    // Pointer rather than click, so the choice lands before the textarea's blur can close the menu.
+    row.addEventListener("mousedown", (event) => {
+      event.preventDefault();
+      chooseCommand(command);
+    });
+    return row;
+  }));
+  commandMenu.hidden = false;
+}
+
+function closeCommands(): void {
+  if (visibleCommands.length === 0) return;
+  visibleCommands = [];
+  highlighted = 0;
+  paintCommands();
+}
+
+/// Put the chosen command in the composer and leave it there.
+///
+/// Never sends it. A command is a message the person is composing, and some of them take an argument; sending on
+/// selection would make the ones that do unusable and would send the others before anybody meant to.
+function chooseCommand(command: SlashCommand): void {
+  prompt.value = completed(command);
+  closeCommands();
+  resizePrompt();
+  prompt.focus();
 }
 
 function resetSessionTelemetry(): void {
   facts = { ...NO_FACTS, service: currentProvider };
   usage = NO_USAGE;
   paintFacts();
+  // A command list belongs to one conversation. Carrying it across would offer the previous service's commands
+  // to the next one, and the wrong list is worse than none: it looks authoritative.
+  offeredCommands = [];
+  closeCommands();
 }
 
 function updateAttachment(body: UnknownRecord): void {

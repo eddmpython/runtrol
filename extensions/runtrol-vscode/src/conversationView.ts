@@ -461,6 +461,11 @@ export class ConversationView implements vscode.Disposable {
   <div id="status" role="status"></div>
   <main id="conversation" aria-live="polite"></main>
   <form id="composer">
+    <!--
+      The coding service's own commands, offered when the message starts with a slash. A listbox rather than
+      decoration: the reader arrows through it and presses Enter, and a screen reader announces it as a choice.
+    -->
+    <ul id="commands" class="commands" role="listbox" aria-label="Commands this coding service offers" hidden></ul>
     <div class="composer-field">
       <textarea id="prompt" rows="1" aria-label="Message" placeholder="Message" disabled></textarea>
       <button id="send" type="submit" aria-label="Send" title="Send" disabled hidden>
