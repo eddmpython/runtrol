@@ -55,11 +55,25 @@ function contains(parent: string, child: string, paths: typeof path.posix | type
     && !paths.isAbsolute(relative);
 }
 
+/// The one value that decides whether two paths are the same project.
+///
+/// Exported because grouping conversations by project asks exactly the question collision detection asks,
+/// and two answers to it would disagree on the case a person is most likely to hit: the same folder
+/// reached by a different casing or separator on Windows, which would split one project into two headings
+/// while collision detection still treated them as one.
+export function workspaceIdentity(
+  value: string,
+  paths: typeof path.posix | typeof path.win32 = path,
+  platform: NodeJS.Platform = process.platform,
+): string {
+  const resolved = paths.resolve(value);
+  return platform === "win32" ? resolved.toLocaleLowerCase("en-US") : resolved;
+}
+
 function normalize(
   value: string,
   paths: typeof path.posix | typeof path.win32,
   platform: NodeJS.Platform,
 ): string {
-  const resolved = paths.resolve(value);
-  return platform === "win32" ? resolved.toLocaleLowerCase("en-US") : resolved;
+  return workspaceIdentity(value, paths, platform);
 }

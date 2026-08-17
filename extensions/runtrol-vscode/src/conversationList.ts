@@ -1,5 +1,6 @@
 import type { NativeChatLine, ProviderLine, SessionLine } from "./runtimeTypes";
 import { providerDisplayName, workspaceName } from "./sessionDisplay";
+import { workspaceIdentity } from "./workspaceCollision";
 
 /// What a conversation is doing, said the way a person would say it.
 ///
@@ -71,6 +72,111 @@ export function conversations(
     rows.push(providerOwned(chat, key, providers));
   }
   return rows.sort(byMostRecentlyActive).map(disambiguated(rows));
+}
+
+/// Every conversation that belongs to one project, under one heading.
+///
+/// A project is a working tree, which is what a person means by "what I am working on". Grouping by the
+/// coding service instead would sort by an implementation detail: somebody running Claude and Codex on the
+/// same repository is doing one piece of work, not two.
+export type ProjectGroup = {
+  /// Stable across casing and separator differences, and legal as a tree element id.
+  readonly key: string;
+  /// The folder name, which is what a person calls the project.
+  readonly name: string;
+  /// The path, for the hover and for opening it.
+  readonly workspace: string;
+  /// Whether this VS Code window is open on it.
+  readonly current: boolean;
+  readonly rows: readonly Conversation[];
+  /// How many of them have stopped and want the reader.
+  readonly attention: number;
+  /// How many have a provider process behind them right now.
+  readonly live: number;
+};
+
+/// How long a list has to be before headings earn their keep.
+///
+/// Grouping trades a click for a shorter list. That trade is only worth making once the flat list stops fitting
+/// on screen: below this many rows the reader can already see everything, so a heading would cost them a click
+/// and give back nothing. Above it, the headings are what let somebody with eight projects see only the one they
+/// are working in.
+export const MIN_ROWS_FOR_PROJECT_HEADINGS = 9;
+
+/// Conversations gathered under the project each one belongs to.
+///
+/// Returns an empty array when headings would not help, which the caller reads as "show the flat list". Two
+/// cases: a list short enough to read whole, and a list that is all one project anyway. In the second, a single
+/// heading over everything is a disclosure triangle that costs a click and separates nothing.
+export function projects(
+  rows: readonly Conversation[],
+  openWorkspaces: readonly string[],
+): ProjectGroup[] {
+  if (rows.length < MIN_ROWS_FOR_PROJECT_HEADINGS) return [];
+  const open = new Set(openWorkspaces.map((workspace) => workspaceIdentity(workspace)));
+  const byProject = new Map<string, Conversation[]>();
+  for (const row of rows) {
+    const key = workspaceIdentity(row.workspace);
+    const existing = byProject.get(key);
+    if (existing) {
+      existing.push(row);
+    } else {
+      byProject.set(key, [row]);
+    }
+  }
+  if (byProject.size < 2) return [];
+
+  const groups: ProjectGroup[] = [];
+  for (const [key, group] of byProject) {
+    const first = group[0];
+    if (!first) continue;
+    groups.push({
+      key: `project:${encodeURIComponent(key)}`,
+      name: first.folder,
+      workspace: first.workspace,
+      current: open.has(key),
+      rows: group,
+      attention: group.filter(needsYou).length,
+      live: group.filter((row) => row.live).length,
+    });
+  }
+  return groups.sort(byNearestToTheReader);
+}
+
+/// This window's project first, then whatever was touched most recently.
+///
+/// Deliberately blind to whether anything inside is running or waiting. Sorting on that would move a whole
+/// heading, and everything under it, every time an agent started or finished a turn. The count in the
+/// heading says who wants attention; the position says where the reader left it.
+function byNearestToTheReader(left: ProjectGroup, right: ProjectGroup): number {
+  if (left.current !== right.current) return left.current ? -1 : 1;
+  const leftAt = latestActivity(left.rows);
+  const rightAt = latestActivity(right.rows);
+  if (leftAt !== rightAt) {
+    if (leftAt === null) return 1;
+    if (rightAt === null) return -1;
+    return rightAt - leftAt;
+  }
+  return compare(left.name, right.name) || compare(left.key, right.key);
+}
+
+function latestActivity(rows: readonly Conversation[]): number | null {
+  let latest: number | null = null;
+  for (const row of rows) {
+    if (row.updatedAtMs !== null && (latest === null || row.updatedAtMs > latest)) {
+      latest = row.updatedAtMs;
+    }
+  }
+  return latest;
+}
+
+/// The muted line beside a project heading.
+export function projectDetail(group: ProjectGroup): string {
+  const parts: string[] = [];
+  if (group.attention > 0) parts.push(`${group.attention} waiting`);
+  if (group.live > 0) parts.push(`${group.live} live`);
+  parts.push(group.rows.length === 1 ? "1 conversation" : `${group.rows.length} conversations`);
+  return parts.join(" · ");
 }
 
 /// A stable identity that is also legal as a tree element id.

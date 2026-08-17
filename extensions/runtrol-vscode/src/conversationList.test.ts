@@ -6,12 +6,19 @@ import {
   conversationDetail,
   conversations,
   elapsed,
+  MIN_ROWS_FOR_PROJECT_HEADINGS,
   needsYou,
   nextNeedingYou,
+  projectDetail,
+  projects,
 } from "./conversationList";
 import type { NativeChatLine, ProviderLine, SessionLine } from "./runtimeTypes";
 
 const NOW = Date.parse("2026-08-17T12:00:00Z");
+
+const ALPHA = "C:\\work\\alpha";
+const BETA = "C:\\work\\beta";
+const GAMMA = "C:\\work\\gamma";
 
 const PROVIDERS: ProviderLine[] = [
   { providerId: "claude", displayName: "Claude Code", installation: { state: "usable", version: "2.1.0" } },
@@ -173,13 +180,13 @@ test("elapsed time reads the way a chat list writes it", () => {
 test("a turn that stopped for a person outranks one that is merely working", () => {
   const rows = conversations(
     [
-      session({ sessionId: "s1", hot: true, lifecycle: "hotRunning", workspace: "C:\work\alpha" }),
+      session({ sessionId: "s1", hot: true, lifecycle: "hotRunning", workspace: "C:\\work\\alpha" }),
       session({
         sessionId: "s2",
         hot: true,
         lifecycle: "hotRunning",
         waitingOn: "person",
-        workspace: "C:\work\beta",
+        workspace: "C:\\work\\beta",
       }),
     ],
     PROVIDERS,
@@ -361,4 +368,115 @@ test("a conversation key is legal as a tree element id", () => {
     );
   }
   assert.equal(new Set(rows.map((row) => row.key)).size, rows.length, "keys stay distinct");
+});
+
+/// Enough conversations that project headings apply, spread over the given projects in turn.
+///
+/// Headings only appear once a flat list stops fitting on screen, so a fixture that wants to exercise them has to
+/// be at least that long. Building it here keeps every grouping test honest about which rule it is testing: the
+/// length rule, or the one it actually cares about.
+function spread(workspaces: readonly string[], count = MIN_ROWS_FOR_PROJECT_HEADINGS): SessionLine[] {
+  return Array.from({ length: count }, (_unused, index) =>
+    session({
+      sessionId: `s${index}`,
+      workspace: workspaces[index % workspaces.length] ?? workspaces[0] ?? "",
+    }));
+}
+
+test("a list short enough to read whole gets no headings", () => {
+  // Grouping trades a click for a shorter list, and there is nothing to shorten here.
+  const rows = conversations(spread([ALPHA, BETA], MIN_ROWS_FOR_PROJECT_HEADINGS - 1), PROVIDERS, [], null);
+  assert.deepEqual(projects(rows, [ALPHA]), []);
+});
+
+test("one project gets no headings however long the list is", () => {
+  // A single heading over everything is a disclosure triangle that costs a click and separates nothing.
+  const rows = conversations(spread([ALPHA], MIN_ROWS_FOR_PROJECT_HEADINGS * 2), PROVIDERS, [], null);
+  assert.deepEqual(projects(rows, [ALPHA]), []);
+});
+
+test("each project gets a heading and every conversation lands under exactly one", () => {
+  const rows = conversations(spread([ALPHA, BETA, GAMMA]), PROVIDERS, [], null);
+  const groups = projects(rows, []);
+  assert.equal(groups.length, 3);
+  const held = groups.flatMap((group) => group.rows.map((row) => row.key));
+  assert.equal(held.length, rows.length, "no conversation is dropped");
+  assert.equal(new Set(held).size, rows.length, "and none is duplicated");
+});
+
+test("this window's project comes first however recently the others were touched", () => {
+  // The reader is already in this project. Anything else at the top makes them scroll to where they are.
+  const rows = conversations(
+    spread([ALPHA, BETA]),
+    PROVIDERS,
+    [nativeChat({ nativeSessionId: "n1", cwd: BETA, updatedAt: "2026-08-17T11:59:00Z" })],
+    null,
+  );
+  const groups = projects(rows, [ALPHA]);
+  assert.equal(groups[0]?.name, "alpha");
+  assert.equal(groups[0]?.current, true);
+});
+
+test("heading order does not move when an agent starts or finishes a turn", () => {
+  // The regression this ordering exists to prevent. Sorting a heading on what is running inside it would move the
+  // heading, and everything under it, every time any agent changed state. A list that rearranges itself while
+  // being read is not a list.
+  const order = (lifecycle: SessionLine["lifecycle"]) =>
+    projects(
+      conversations(
+        spread([ALPHA, BETA, GAMMA]).map((line, index) =>
+          index === 0 ? { ...line, hot: true, lifecycle } : line),
+        PROVIDERS,
+        [],
+        null,
+      ),
+      [],
+    ).map((group) => group.name);
+  assert.deepEqual(order("hotIdle"), order("hotRunning"));
+});
+
+test("a heading counts what is waiting inside it without moving because of it", () => {
+  const lines = spread([ALPHA, BETA]);
+  const rows = conversations(
+    lines.map((line, index) =>
+      index === 0
+        ? { ...line, hot: true, lifecycle: "hotRunning" as const, waitingOn: "person" as const }
+        : index === 2
+          ? { ...line, hot: true, lifecycle: "hotIdle" as const }
+          : line),
+    PROVIDERS,
+    [],
+    null,
+  );
+  const alpha = projects(rows, []).find((group) => group.name === "alpha");
+  assert.ok(alpha);
+  assert.equal(alpha.attention, 1);
+  assert.equal(alpha.live, 2);
+  assert.ok(projectDetail(alpha).startsWith("1 waiting"));
+});
+
+test("a heading with nothing waiting says only what it holds", () => {
+  const rows = conversations(spread([ALPHA, BETA]), PROVIDERS, [], null);
+  const beta = projects(rows, []).find((group) => group.name === "beta");
+  assert.ok(beta);
+  assert.equal(beta.attention, 0);
+  assert.ok(projectDetail(beta).endsWith("conversations"));
+});
+
+test("the same folder reached two ways is one project, not two", () => {
+  // Windows resolves these to the same directory. Two headings for one project would also disagree with
+  // collision detection, which already treats them as one working tree.
+  if (process.platform !== "win32") {
+    // Case folding is a Windows rule. Asserting it elsewhere would assert the opposite of the truth there.
+    return;
+  }
+  const lines = spread([ALPHA, BETA]);
+  const rows = conversations(
+    lines.map((line, index) => (index === 0 ? { ...line, workspace: "c:\\WORK\\alpha" } : line)),
+    PROVIDERS,
+    [],
+    null,
+  );
+  const groups = projects(rows, []);
+  assert.equal(groups.length, 2, "casing did not split one project in two");
 });
