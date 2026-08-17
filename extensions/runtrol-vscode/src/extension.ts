@@ -110,12 +110,8 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
         void run(() => afterReady(
           () => controller.answerApproval(message.approval, message.option, message.subjectDigest),
         ));
-      } else if (message.type === "openWorkspace") {
-        void run(() => afterReady(() => controller.openWorkspace()));
-      } else if (message.type === "interrupt") {
-        void run(() => afterReady(() => controller.interrupt()));
       } else {
-        void run(() => afterReady(() => controller.close()));
+        void run(() => afterReady(() => controller.interrupt()));
       }
     },
     (session) => state.conversationOf(session.sessionId)?.title ?? sessionTitle(session),

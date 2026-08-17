@@ -57,12 +57,26 @@ the original daemon and provider processes instead of making a versioned extensi
 - Fifteen sessions are the daily-use baseline and 30 sessions are the release load.
 - At most eight sessions own hot provider processes.
 - Exactly one selected session owns the full watch and Webview renderer.
-- The sidebar owns session navigation. The selected conversation opens in one reusable editor tab with a bounded renderer and composer.
-- Every New Chat entry uses one guided service, workspace, model, and reasoning-effort flow. Model and effort rows are
-  only the opaque values returned by the installed CLI through Runtime, plus an explicit Provider default choice.
-- The selected conversation keeps its requested model, requested reasoning effort, provider mode, context use,
-  provider-reported cost, and available short and long account-limit windows visible above the stream. Missing
-  provider telemetry remains visibly absent and is never estimated.
+- The sidebar is one flat list of conversations and nothing else. A coding service is a fact printed on a row, never a
+  parent node the reader opens first, and there is no separate inventory view.
+- A Runtime-supervised session and the provider-owned chat it came from are one row. Row identity is the conversation,
+  so opening a saved chat updates that row in place instead of removing one and inserting another.
+- Live conversations lead, then whatever the coding service touched most recently. Turn state never participates in the
+  order, so no row moves because an agent started or finished thinking.
+- A coding service that is not installed produces no row. Only an installed service that still cannot run appears, and
+  only once its capability probe has finished.
+- The selected conversation opens in one reusable editor tab with a bounded renderer and composer.
+- When the Conversations view becomes visible and no conversation tab exists, Studio opens that selected in-progress
+  chat without blocking ready. A restored editor tab is reused as VS Code left it.
+- Existing provider-owned chats start loading as soon as the first inventory is ready, instead of waiting for a later idle window.
+- New Conversation asks nothing. The coding service is the one used last, the project is the one this window is open on,
+  and model and reasoning effort stay whatever the installed CLI already defaults to. A separate explicit command still
+  offers the full service, model, and effort flow, using only the opaque values the installed CLI returns through
+  Runtime plus an explicit Provider default choice.
+- The conversation editor carries no session panel. The requested model, requested reasoning effort, provider mode,
+  context use, provider-reported cost, and the tightest account-limit window appear as one line beneath the composer.
+  Missing provider telemetry remains visibly absent and is never estimated, and an untouched quota window says nothing.
+- Enter sends and Shift+Enter writes a new line.
 - A hidden conversation pauses its watch at the last delivered cursor. Reopening waits for the new Webview document to become ready before replay continues.
 - An operator name is stored as bounded session metadata. Without one, the visible title is the workspace name plus the runtime-discovered provider name. A short stable suffix appears only when titles collide.
 - The selected session remains first. One fuzzy switcher searches project, provider, state, and workspace metadata.

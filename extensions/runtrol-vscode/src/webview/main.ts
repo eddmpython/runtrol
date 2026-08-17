@@ -8,10 +8,18 @@ import {
   textOf,
   type UnknownRecord,
 } from "./presentation";
+import { conversationEmptyCopy, sendShortcutHint } from "./conversationCopy";
 import { afterFrameOrDelay } from "./renderReady";
+import {
+  agentLine,
+  NO_FACTS,
+  NO_USAGE,
+  usageLine,
+  type ConversationFacts,
+  type UsageFacts,
+} from "./statusLine";
 import { limitTelemetry, usageTelemetry } from "./telemetry";
-import { sessionTitle, workspaceName } from "../sessionDisplay";
-import { sessionStateLabel } from "../runtimeProjection";
+import { sessionTitle } from "../sessionDisplay";
 import type { SessionLine as Session } from "../runtimeTypes";
 
 
@@ -81,11 +89,6 @@ const HIDDEN_STATUS_KEYS = new Set([
   "configuration.updated",
 ]);
 const vscode = acquireVsCodeApi();
-const title = element<HTMLElement>("session-title");
-const sessionPath = element<HTMLElement>("session-path");
-const serviceName = element<HTMLElement>("service-name");
-const serviceAvatar = element<HTMLElement>("service-avatar");
-const sessionState = element<HTMLSpanElement>("session-state");
 const status = element<HTMLDivElement>("status");
 const conversation = element<HTMLElement>("conversation");
 const composer = element<HTMLFormElement>("composer");
@@ -93,27 +96,8 @@ const prompt = element<HTMLTextAreaElement>("prompt");
 const send = element<HTMLButtonElement>("send");
 const sendHint = element<HTMLSpanElement>("send-hint");
 const interrupt = element<HTMLButtonElement>("interrupt");
-const close = element<HTMLButtonElement>("close");
-const openWorkspace = element<HTMLButtonElement>("open-workspace");
-const sessionModel = element<HTMLSpanElement>("session-model");
-const sessionEffort = element<HTMLSpanElement>("session-effort");
-const sessionMode = element<HTMLSpanElement>("session-mode");
-const usageSummary = element<HTMLElement>("usage-summary");
-const contextUsage = element<HTMLElement>("context-usage");
-const contextValue = element<HTMLElement>("context-value");
-const contextMeter = element<HTMLElement>("context-meter");
-const sessionCost = element<HTMLElement>("session-cost");
-const costValue = element<HTMLElement>("cost-value");
-const primaryLimit = element<HTMLElement>("primary-limit");
-const primaryLabel = element<HTMLElement>("primary-label");
-const primaryValue = element<HTMLElement>("primary-value");
-const primaryReset = element<HTMLElement>("primary-reset");
-const primaryMeter = element<HTMLElement>("primary-meter");
-const secondaryLimit = element<HTMLElement>("secondary-limit");
-const secondaryLabel = element<HTMLElement>("secondary-label");
-const secondaryValue = element<HTMLElement>("secondary-value");
-const secondaryReset = element<HTMLElement>("secondary-reset");
-const secondaryMeter = element<HTMLElement>("secondary-meter");
+const agentChip = element<HTMLSpanElement>("agent-chip");
+const usageChip = element<HTMLSpanElement>("usage-chip");
 const pending: unknown[] = [];
 let selected: Session | null = null;
 let generation = 0;
@@ -123,6 +107,10 @@ let visibleCharacters = 0;
 let measurement: Measurement | null = null;
 let followsTail = true;
 let currentProvider = "Coding agent";
+let promptWasSendable = false;
+let currentTitle: string | null = null;
+let facts: ConversationFacts = NO_FACTS;
+let usage: UsageFacts = NO_USAGE;
 
 window.addEventListener("message", ({ data }: MessageEvent<Incoming>) => {
   if (data.type === "reset") {
@@ -159,6 +147,7 @@ window.addEventListener("message", ({ data }: MessageEvent<Incoming>) => {
   enqueue(frames);
 });
 
+sendHint.textContent = sendShortcutHint();
 vscode.postMessage({ type: "webviewReady" });
 
 composer.addEventListener("submit", (event) => {
@@ -173,15 +162,14 @@ composer.addEventListener("submit", (event) => {
   prompt.focus();
 });
 prompt.addEventListener("keydown", (event) => {
-  if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
-    event.preventDefault();
-    composer.requestSubmit();
-  }
+  // Enter sends and Shift+Enter writes a new line, which is what every chat surface has taught people to expect.
+  // A modifier-to-send binding makes the common action the awkward one.
+  if (event.key !== "Enter" || event.isComposing || event.shiftKey || event.altKey) return;
+  event.preventDefault();
+  composer.requestSubmit();
 });
 prompt.addEventListener("input", resizePrompt);
 interrupt.addEventListener("click", () => vscode.postMessage({ type: "interrupt" }));
-close.addEventListener("click", () => vscode.postMessage({ type: "close" }));
-openWorkspace.addEventListener("click", () => vscode.postMessage({ type: "openWorkspace" }));
 conversation.addEventListener("scroll", () => {
   followsTail = conversation.scrollHeight - conversation.scrollTop - conversation.clientHeight < 24;
 }, { passive: true });
@@ -202,6 +190,7 @@ function reset(
   status.textContent = "";
   status.className = "";
   resetSessionTelemetry();
+  promptWasSendable = false;
   renderSession(session, displayTitle, provider);
   prompt.value = "";
   resizePrompt();
@@ -223,14 +212,12 @@ function reset(
 
 function renderSession(session: Session | null, displayTitle: string | null, provider: string | null): void {
   currentProvider = provider || "Coding agent";
+  currentTitle = session ? displayTitle || sessionTitle(session) : null;
   document.body.classList.toggle("no-chat", !session);
-  title.textContent = session ? displayTitle || sessionTitle(session) : "Choose a chat";
-  sessionPath.textContent = session ? workspaceName(session.workspace) : "";
-  sessionPath.title = session?.workspace ?? "";
-  serviceName.textContent = session ? currentProvider : "Runtrol";
-  serviceAvatar.textContent = session ? serviceInitials(currentProvider) : "R";
-  sessionState.textContent = session ? sessionStateLabel(session) : "";
-  sessionState.className = session?.lifecycle ?? "";
+  document.body.classList.toggle("opening", session?.lifecycle === "cold");
+  document.body.classList.toggle("working", session?.lifecycle === "hotRunning");
+  facts = { ...facts, service: session ? currentProvider : "" };
+  paintFacts();
   const canSend = session?.lifecycle === "hotIdle";
   const canInterrupt = session?.lifecycle === "hotRunning";
   prompt.disabled = !canSend;
@@ -239,25 +226,37 @@ function renderSession(session: Session | null, displayTitle: string | null, pro
   sendHint.hidden = !canSend;
   interrupt.disabled = !canInterrupt;
   interrupt.hidden = !canInterrupt;
-  close.disabled = !session;
-  close.hidden = !session;
-  openWorkspace.disabled = !session;
-  openWorkspace.hidden = !session;
   prompt.setAttribute("aria-label", session ? `Message ${currentProvider}` : "Message");
   prompt.placeholder = !session
-    ? "Write a message"
+    ? "Message"
     : canSend
       ? `Message ${currentProvider}`
       : canInterrupt
         ? `${currentProvider} is working`
         : session.lifecycle === "failed"
-          ? "This chat needs attention"
-          : "Opening saved chat";
+          ? "This conversation needs attention"
+          : "Reopening the saved conversation";
+  if (canSend && !promptWasSendable && document.hasFocus()) {
+    prompt.focus();
+  }
+  promptWasSendable = canSend;
+}
+
+/// The one line under the composer that replaced an entire panel.
+function paintFacts(): void {
+  const agent = agentLine(facts);
+  agentChip.textContent = agent;
+  agentChip.hidden = !agent;
+  const spent = usageLine(usage, Date.now());
+  usageChip.textContent = spent;
+  usageChip.hidden = !spent;
+  usageChip.classList.toggle("limit-reached", usage.reached);
 }
 
 function renderEmptyState(session: Session | null): void {
+  const emptyCopy = conversationEmptyCopy(session, currentProvider, currentTitle);
   const empty = document.createElement("section");
-  empty.className = "empty-state";
+  empty.className = `empty-state empty-${emptyCopy.tone}`;
   empty.dataset.placeholder = "true";
   empty.dataset.characters = "0";
   const mark = document.createElement("div");
@@ -265,7 +264,6 @@ function renderEmptyState(session: Session | null): void {
   mark.textContent = "R";
   const heading = document.createElement("h1");
   const detail = document.createElement("p");
-  const emptyCopy = sessionEmptyCopy(session);
   heading.textContent = emptyCopy.heading;
   detail.textContent = emptyCopy.detail;
   empty.append(mark, heading, detail);
@@ -273,30 +271,11 @@ function renderEmptyState(session: Session | null): void {
     const start = document.createElement("button");
     start.type = "button";
     start.className = "empty-primary";
-    start.textContent = "New chat";
+    start.textContent = "New conversation";
     start.addEventListener("click", () => vscode.postMessage({ type: "startChat" }));
     empty.append(start);
   }
   conversation.append(empty);
-}
-
-function sessionEmptyCopy(session: Session | null): { heading: string; detail: string } {
-  if (!session) {
-    return {
-      heading: "Start a chat",
-      detail: "Choose a coding service, or open an existing chat from the sidebar.",
-    };
-  }
-  if (session.lifecycle === "hotIdle") {
-    return { heading: "Ready to chat", detail: `Send a message to ${currentProvider}.` };
-  }
-  if (session.lifecycle === "hotRunning") {
-    return { heading: `${currentProvider} is working`, detail: "The response will appear here." };
-  }
-  if (session.lifecycle === "failed") {
-    return { heading: "This chat needs attention", detail: "Check the message above, then reopen the chat." };
-  }
-  return { heading: "Opening chat", detail: "The conversation will be ready shortly." };
 }
 
 function enqueue(frames: readonly unknown[]): void {
@@ -419,98 +398,38 @@ function present(payload: unknown): void {
 }
 
 function resetSessionTelemetry(): void {
-  for (const fact of [sessionModel, sessionEffort, sessionMode]) {
-    fact.textContent = "";
-    fact.hidden = true;
-  }
-  for (const card of [contextUsage, sessionCost, primaryLimit, secondaryLimit]) {
-    card.hidden = true;
-  }
-  usageSummary.hidden = true;
-  for (const meter of [contextMeter, primaryMeter, secondaryMeter]) {
-    meter.style.width = "0";
-  }
+  facts = { ...NO_FACTS, service: currentProvider };
+  usage = NO_USAGE;
+  paintFacts();
 }
 
 function updateAttachment(body: UnknownRecord): void {
-  setFact(sessionModel, "Model", string(body.model_requested));
-  setFact(sessionEffort, "Effort", string(body.reasoning_effort_requested));
+  facts = {
+    ...facts,
+    model: string(body.model_requested),
+    effort: string(body.reasoning_effort_requested),
+  };
+  paintFacts();
 }
 
 function updateMode(body: UnknownRecord): void {
-  setFact(sessionMode, "Mode", string(body.mode_id));
-}
-
-function setFact(target: HTMLElement, label: string, value: string): void {
-  target.textContent = value ? `${label}: ${value}` : "";
-  target.hidden = !value;
+  facts = { ...facts, mode: string(body.mode_id) };
+  paintFacts();
 }
 
 function updateUsage(body: UnknownRecord): void {
-  const telemetry = usageTelemetry(body);
-  const { used, size } = telemetry;
-  if (used !== null || size !== null) {
-    const shownUsed = used === null ? "Unknown" : formatCount(used);
-    const shownSize = size === null ? "Unknown" : formatCount(size);
-    contextValue.textContent = `${shownUsed} / ${shownSize}`;
-    contextUsage.hidden = false;
-    contextMeter.style.width = percentWidth(used, size);
-  }
-  if (telemetry.amount !== null && telemetry.currency) {
-    costValue.textContent = `${telemetry.amount.toLocaleString(undefined, {
-      maximumFractionDigits: 4,
-    })} ${telemetry.currency}`;
-    sessionCost.hidden = false;
-  }
-  revealUsageSummary();
+  usage = { ...usage, usage: usageTelemetry(body) };
+  paintFacts();
 }
 
 function updateRateLimits(body: UnknownRecord): void {
-  updateLimitCard(
-    primaryLimit,
-    primaryLabel,
-    primaryValue,
-    primaryReset,
-    primaryMeter,
-    record(body.primary),
-    "Short limit",
-  );
-  updateLimitCard(
-    secondaryLimit,
-    secondaryLabel,
-    secondaryValue,
-    secondaryReset,
-    secondaryMeter,
-    record(body.secondary),
-    "Long limit",
-  );
-  usageSummary.classList.toggle("limit-reached", body.reached === true);
-  revealUsageSummary();
-}
-
-function updateLimitCard(
-  card: HTMLElement,
-  label: HTMLElement,
-  value: HTMLElement,
-  reset: HTMLElement,
-  meter: HTMLElement,
-  window: UnknownRecord | null,
-  fallbackLabel: string,
-): void {
-  const telemetry = limitTelemetry(window);
-  if (!telemetry) return;
-  label.textContent = telemetry.windowMinutes === null
-    ? fallbackLabel
-    : `${formatDuration(telemetry.windowMinutes)} limit`;
-  value.textContent = `${Math.max(0, 100 - telemetry.usedPercent)}% left`;
-  reset.textContent = telemetry.resetsAt === null ? "" : `Resets ${formatReset(telemetry.resetsAt)}`;
-  meter.style.width = `${telemetry.usedPercent}%`;
-  card.hidden = false;
-}
-
-function revealUsageSummary(): void {
-  usageSummary.hidden = [contextUsage, sessionCost, primaryLimit, secondaryLimit]
-    .every((card) => card.hidden);
+  usage = {
+    ...usage,
+    primary: limitTelemetry(record(body.primary)) ?? usage.primary,
+    secondary: limitTelemetry(record(body.secondary)) ?? usage.secondary,
+    reached: body.reached === true,
+  };
+  paintFacts();
 }
 
 function percentWidth(used: number | null, size: number | null): string {

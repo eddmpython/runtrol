@@ -105,6 +105,11 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
             'process.env.RUNTROL_TEST_INSTALLED_UPGRADE === "1"',
             'initializationStage = "runtime:bootstrap"',
         ],
+        "providerHealth.ts": [
+            "the installed executable has not completed a verified probe",
+            "export function awaitsVerification",
+            "export function isBroken",
+        ],
         "controller.ts": [
             "private watchAbort",
             "private indexAbort",
@@ -113,7 +118,7 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
             "this.startSessionIndexWatch()",
             "this.startProviderVerification(",
             "this.runtime.verifyProvider(",
-            "the installed executable has not completed a verified probe",
+            "awaitsVerification(",
             "reconnect",
             "workspaceCollisions",
             '"Start here anyway"',
@@ -180,10 +185,14 @@ def selftest() -> int:
             'afterReady process.env.RUNTROL_TEST_INSTALLED_UPGRADE === "1" '
             'initializationStage = "runtime:bootstrap"'
         ),
+        "providerHealth.ts": (
+            "the installed executable has not completed a verified probe "
+            "export function awaitsVerification export function isBroken"
+        ),
         "controller.ts": (
             'private watchAbort; private indexAbort; this.watchAbort?.abort(); '
             'this.runtime.inventory(); this.startSessionIndexWatch(); this.startProviderVerification( '
-            'this.runtime.verifyProvider( the installed executable has not completed a verified probe '
+            'this.runtime.verifyProvider( awaitsVerification( '
             'reconnect workspaceCollisions '
             '"Start here anyway"'
         ),

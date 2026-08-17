@@ -10,6 +10,29 @@ and refactoring that no user can observe do not belong here.
 
 ## [Unreleased]
 
+### Added
+
+- Cline and OpenCode join the coding services Runtrol supervises. OpenCode reports its existing conversations through
+  the official protocol, so they appear in the list without being started here first.
+
+### Changed
+
+- The sidebar is now one list of conversations. Clicking a row opens it. Coding services are no longer folders to open
+  first, the separate services view is gone, and a service you have not installed no longer takes up a row.
+- A conversation Runtrol is supervising and the saved chat it came from are one row instead of two, and opening a saved
+  chat updates that row where it is rather than moving it.
+- New Conversation no longer asks anything. It uses the coding service you used last, the project this window is open
+  on, and whatever model and effort your installed CLI already defaults to. Choosing all three explicitly is still one
+  command away.
+- The conversation editor drops its session panel. Model, effort, context use, cost, and a quota window that is
+  actually close now read as one line under the composer, and the reply column is centred for reading.
+- Enter sends a message and Shift+Enter writes a new line.
+- The Chats sidebar now marks the open conversation, keeps it selected, and labels provider-owned chats as Resume. The editor uses a quieter in-chat empty state, a named resume moment, and the brand accent so the open session is obvious at a glance.
+
+### Fixed
+
+- Opening the Runtrol Chats view now shows the selected in-progress conversation immediately. Studio no longer leaves the editor empty until the session is clicked again, and existing provider chats appear without waiting five seconds after startup.
+
 ## [0.1.3] - 2026-08-16
 
 ### Added

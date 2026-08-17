@@ -8,9 +8,7 @@ type ViewAction =
   | { type: "prompt"; text: string }
   | { type: "startChat" }
   | { type: "answerApproval"; approval: string; option: number; subjectDigest: number[] }
-  | { type: "openWorkspace" }
-  | { type: "interrupt" }
-  | { type: "close" };
+  | { type: "interrupt" };
 
 export type WebviewPerformance = {
   baselineFrameP95Ms: number;
@@ -66,6 +64,7 @@ export class ConversationView implements vscode.Disposable {
   private readonly renderWaiters = new Set<RenderWaiter>();
   private renderedGeneration = 0;
   private visibleReady = false;
+  private showQueue: Promise<void> = Promise.resolve();
 
   constructor(
     private readonly extensionUri: vscode.Uri,
@@ -75,19 +74,37 @@ export class ConversationView implements vscode.Disposable {
     private readonly providerOf: (session: SessionLine) => string = (session) => providerDisplayName(session.providerId),
   ) {}
 
+  get isOpen(): boolean {
+    return this.panel !== null;
+  }
+
+  adopt(panel: vscode.WebviewPanel): Promise<void> {
+    const pending = this.showQueue.then(() => {
+      this.attach(panel);
+    });
+    this.showQueue = pending.catch(() => undefined);
+    return pending;
+  }
+
   async show(preserveFocus = false): Promise<void> {
-    if (this.panel) {
-      const panel = this.panel;
-      if (preserveFocus) {
-        if (!panel.visible) {
-          panel.reveal(panel.viewColumn ?? vscode.ViewColumn.Active, true);
-        }
-      } else {
-        await focusPanel(panel);
+    const pending = this.showQueue.then(() => this.showNow(preserveFocus));
+    this.showQueue = pending.catch(() => undefined);
+    return pending;
+  }
+
+  private async showNow(preserveFocus: boolean): Promise<void> {
+    const panel = this.panel ?? this.createPanel();
+    if (preserveFocus) {
+      if (!panel.visible) {
+        panel.reveal(panel.viewColumn ?? vscode.ViewColumn.Active, true);
       }
-      await this.waitForVisibleWebview(panel);
-      return;
+    } else {
+      await focusPanel(panel);
     }
+    await this.waitForVisibleWebview(panel);
+  }
+
+  private createPanel(): vscode.WebviewPanel {
     const panel = vscode.window.createWebviewPanel(
       ConversationView.viewType,
       this.panelTitle(this.selected),
@@ -98,8 +115,18 @@ export class ConversationView implements vscode.Disposable {
         retainContextWhenHidden: false,
       },
     );
-    panel.iconPath = vscode.Uri.joinPath(this.extensionUri, "resources", "symbol.svg");
+    this.attach(panel);
+    return panel;
+  }
+
+  private attach(panel: vscode.WebviewPanel): void {
+    if (this.panel && this.panel !== panel) {
+      this.panel.dispose();
+    }
     this.panel = panel;
+    this.visibleReady = false;
+    panel.iconPath = vscode.Uri.joinPath(this.extensionUri, "resources", "symbol.svg");
+    panel.title = this.panelTitle(this.selected);
     panel.webview.onDidReceiveMessage((message: unknown) => {
       const ready = webviewReadyKind(message);
       if (ready) {
@@ -148,12 +175,6 @@ export class ConversationView implements vscode.Disposable {
       }
     });
     panel.webview.html = this.html(panel.webview);
-    if (preserveFocus) {
-      panel.reveal(panel.viewColumn ?? vscode.ViewColumn.Active, true);
-    } else {
-      await focusPanel(panel);
-    }
-    await this.waitForVisibleWebview(panel);
   }
 
   reset(session: SessionLine | null): number {
@@ -437,58 +458,22 @@ export class ConversationView implements vscode.Disposable {
   <title>Runtrol chat</title>
 </head>
 <body class="no-chat">
-  <header id="chat-header">
-    <div class="service-avatar" id="service-avatar" aria-hidden="true">R</div>
-    <div class="chat-heading">
-      <strong id="session-title">Choose a chat</strong>
-      <div class="chat-meta">
-        <strong id="service-name">Runtrol</strong>
-        <span class="context-separator" aria-hidden="true">·</span>
-        <span id="session-path"></span>
-      </div>
-      <div class="session-facts" aria-label="Session configuration">
-        <span id="session-model" hidden></span>
-        <span id="session-effort" hidden></span>
-        <span id="session-mode" hidden></span>
-      </div>
-    </div>
-    <div class="header-actions">
-      <span id="session-state"></span>
-      <button id="open-workspace" type="button" title="Open workspace" hidden>Open workspace</button>
-      <button id="close" type="button" title="Close chat" hidden>Close</button>
-    </div>
-  </header>
-  <section id="usage-summary" aria-label="Usage and limits" hidden>
-    <div class="usage-card" id="context-usage" hidden>
-      <span class="usage-label">Context</span>
-      <strong id="context-value">Unavailable</strong>
-      <div class="usage-meter" aria-hidden="true"><span id="context-meter"></span></div>
-    </div>
-    <div class="usage-card" id="session-cost" hidden>
-      <span class="usage-label">Session cost</span>
-      <strong id="cost-value">Unavailable</strong>
-    </div>
-    <div class="usage-card" id="primary-limit" hidden>
-      <span class="usage-label" id="primary-label">Short limit</span>
-      <strong id="primary-value">Unavailable</strong>
-      <span class="usage-reset" id="primary-reset"></span>
-      <div class="usage-meter" aria-hidden="true"><span id="primary-meter"></span></div>
-    </div>
-    <div class="usage-card" id="secondary-limit" hidden>
-      <span class="usage-label" id="secondary-label">Long limit</span>
-      <strong id="secondary-value">Unavailable</strong>
-      <span class="usage-reset" id="secondary-reset"></span>
-      <div class="usage-meter" aria-hidden="true"><span id="secondary-meter"></span></div>
-    </div>
-  </section>
   <div id="status" role="status"></div>
   <main id="conversation" aria-live="polite"></main>
   <form id="composer">
-    <textarea id="prompt" rows="3" aria-label="Message" placeholder="Write a message" disabled></textarea>
-    <div class="actions">
-      <span class="send-hint" id="send-hint" hidden>Ctrl+Enter to send</span>
-      <button id="interrupt" type="button" disabled hidden>Interrupt</button>
-      <button id="send" type="submit" disabled hidden>Send</button>
+    <div class="composer-field">
+      <textarea id="prompt" rows="1" aria-label="Message" placeholder="Message" disabled></textarea>
+      <button id="send" type="submit" aria-label="Send" title="Send" disabled hidden>
+        <span aria-hidden="true">&#8593;</span>
+      </button>
+      <button id="interrupt" type="button" aria-label="Stop" title="Stop" disabled hidden>
+        <span aria-hidden="true">&#9632;</span>
+      </button>
+    </div>
+    <div class="composer-foot">
+      <span id="agent-chip" class="chip" hidden></span>
+      <span id="usage-chip" class="chip" hidden></span>
+      <span id="send-hint" class="send-hint" hidden></span>
     </div>
   </form>
   <script nonce="${nonce}" src="${script}"></script>
