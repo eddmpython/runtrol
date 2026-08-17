@@ -205,13 +205,21 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
+/*
+ * Progress, not alarm.
+ *
+ * This rail used to carry the brand accent, which is a red-orange. Seen on screen next to a failed call wearing
+ * warning yellow, the running call looked like the more serious of the two, so the vocabulary read backwards:
+ * work in progress alarming, work that actually broke merely cautionary. Progress takes the colour the host
+ * already uses for progress, and failure takes the colour the host uses for failure.
+ */
 .message.tool-running {
-  border-left-color: var(--runtrol-accent);
+  border-left-color: var(--vscode-progressBar-background, var(--vscode-charts-blue));
 }
 
 .message.tool-failed {
-  border-left-color: var(--vscode-notificationsWarningIcon-foreground);
-  color: var(--vscode-notificationsWarningIcon-foreground);
+  border-left-color: var(--vscode-charts-red, var(--vscode-errorForeground));
+  color: var(--vscode-errorForeground);
 }
 
 .message.tool-done {
