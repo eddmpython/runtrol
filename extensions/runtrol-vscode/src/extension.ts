@@ -139,6 +139,10 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
       () => run(() => afterMissionReady(() => missionController.validateMission())),
     ),
     vscode.commands.registerCommand(
+      "runtrol.fanOutInstruction",
+      () => run(() => afterMissionReady(() => missionController.fanOutInstruction())),
+    ),
+    vscode.commands.registerCommand(
       "runtrol.registerMissionGate",
       () => run(() => afterMissionReady(() => missionController.registerGate())),
     ),

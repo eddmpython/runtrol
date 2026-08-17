@@ -11,6 +11,14 @@ import type {
   Response,
 } from "../protocol";
 import type { RuntimeState } from "../state";
+import {
+  MAX_BRANCHES,
+  MIN_BRANCHES,
+  branchProblem,
+  fanOutName,
+  instructionDigest,
+  missionSpec,
+} from "./fanOut";
 
 export type MissionSelection = {
   readonly mission?: MissionLine;
@@ -74,6 +82,89 @@ export class MissionController implements vscode.Disposable {
     })).response;
     const snapshot = requireResponse(response, "mission");
     await this.acceptSnapshot(snapshot, true);
+  }
+
+  /// Write the Mission that tries one instruction several ways at once, each attempt in its own worktree.
+  ///
+  /// Reaching this flow used to mean composing a Mission document by hand: schema line, limits, and one task block
+  /// per attempt with a matching instruction digest. That is the part nobody should be typing, and it is the whole
+  /// reason the flow went unused. So this composes it and hands it over.
+  ///
+  /// # Why it hands the document over instead of saving it
+  ///
+  /// Two reasons that turned out to be the same reason.
+  ///
+  /// The extension writes exactly two things to disk (the selected-session scalar and the managed Core), and an
+  /// instruction is the prompt an operator gives an agent. Writing that would make this surface a place where
+  /// conversation starts living, which is the boundary the writer contract exists to hold.
+  ///
+  /// And Mission binds a task to the exact bytes of its instruction because those bytes are meant to have been
+  /// reviewed. A document generated, saved and validated without the operator seeing it would keep every mechanism
+  /// and discard the thing the mechanism is for. Handing it to an editor means the review is real: they read it,
+  /// they choose where it lives, and they save it.
+  async fanOutInstruction(): Promise<void> {
+    const folder = vscode.workspace.workspaceFolders?.[0];
+    if (!folder) {
+      throw new Error("open the project you want to try this in before composing a fan-out");
+    }
+    const chosen = await vscode.window.showOpenDialog({
+      title: "Which instruction should every attempt follow?",
+      openLabel: "Use this instruction",
+      canSelectFiles: true,
+      canSelectFolders: false,
+      canSelectMany: false,
+    });
+    const instructionUri = chosen?.[0];
+    if (!instructionUri) return;
+    const instructionRef = path
+      .relative(folder.uri.fsPath, instructionUri.fsPath)
+      .replaceAll("\\", "/");
+    if (!instructionRef || instructionRef.startsWith("../") || path.isAbsolute(instructionRef)) {
+      throw new Error("the instruction file must live inside this project");
+    }
+    // Read, never written. The digest has to be over the bytes already on disk, because those are the bytes the
+    // operator reviewed and the ones Mission will bind the task to.
+    const bytes = await vscode.workspace.fs.readFile(instructionUri);
+    const instruction = new TextDecoder().decode(bytes);
+    if (!instruction.trim()) {
+      throw new Error("that instruction file is empty");
+    }
+
+    const branches = await vscode.window.showInputBox({
+      title: "Try one instruction several ways",
+      prompt: `How many attempts at once? (${MIN_BRANCHES} to ${MAX_BRANCHES})`,
+      value: "3",
+      ignoreFocusOut: true,
+      validateInput: branchProblem,
+    });
+    if (!branches) return;
+    const gateId = await vscode.window.showInputBox({
+      title: "Try one instruction several ways",
+      // Asked rather than invented. A Gate decides whether an attempt succeeded, and inventing one that checks
+      // nothing would produce a fan-out whose attempts all pass regardless of what they did.
+      prompt: "Which registered Gate decides whether an attempt worked?",
+      placeHolder: "the Gate ID you registered for this project",
+      ignoreFocusOut: true,
+    });
+    if (!gateId?.trim()) return;
+
+    const document = await vscode.workspace.openTextDocument({
+      language: "toml",
+      content: missionSpec(fanOutName(instruction, new Date()), instructionDigest(instruction), {
+        instruction,
+        instructionRef,
+        branches: Number(branches),
+        gateId: gateId.trim(),
+        baseRef: "main",
+        // The project's own source directory is the honest default: an attempt allowed to write anywhere is an
+        // attempt whose blast radius nobody declared.
+        outputRoots: ["src"],
+      }),
+    });
+    await vscode.window.showTextDocument(document, { preview: false });
+    await vscode.window.showInformationMessage(
+      `Read this, save it in ${folder.name}, then run Validate Mission on it.`,
+    );
   }
 
   async registerGate(): Promise<void> {

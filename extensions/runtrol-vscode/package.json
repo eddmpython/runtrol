@@ -89,6 +89,7 @@
     "onCommand:runtrol.openWorkspace",
     "onCommand:runtrol.interrupt",
     "onCommand:runtrol.closeSession",
+    "onCommand:runtrol.fanOutInstruction",
     "onCommand:runtrol.validateMission",
     "onCommand:runtrol.registerMissionGate",
     "onCommand:runtrol.openMission",
@@ -229,6 +230,11 @@
         "command": "runtrol.closeSession",
         "title": "Runtrol: Close Conversation",
         "icon": "$(close)"
+      },
+      {
+        "command": "runtrol.fanOutInstruction",
+        "title": "Runtrol: Try One Instruction Several Ways...",
+        "icon": "$(type-hierarchy)"
       },
       {
         "command": "runtrol.validateMission",
@@ -443,6 +449,11 @@
           "command": "runtrol.restartExtensionHost",
           "when": "view == runtrol.sessions",
           "group": "5_recover@1"
+        },
+        {
+          "command": "runtrol.fanOutInstruction",
+          "when": "view == runtrol.missions",
+          "group": "navigation@0"
         },
         {
           "command": "runtrol.validateMission",

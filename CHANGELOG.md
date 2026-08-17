@@ -21,6 +21,11 @@ and refactoring that no user can observe do not belong here.
   has a command of its own that does, so Runtrol asks it instead of carrying a list. Measured: the model picker went
   from "this CLI exposes no selectable catalogue" to seven identifiers that come from the installed CLI at the moment
   of asking. Cline reports none, because that CLI has no such command and inventing one would be worse.
+- One instruction can now be tried several ways at once, each attempt in its own worktree. Point at the instruction
+  file, say how many attempts and which Gate judges them, and Runtrol composes the Mission that runs them in
+  parallel. It opens that document for you to read and save rather than saving it itself: a Mission is bound to the
+  exact bytes of a reviewed instruction, and one generated behind your back would keep the machinery and lose the
+  point. Attempts are capped at four, because each owns a worktree and an agent process.
 
 ### Changed
 
