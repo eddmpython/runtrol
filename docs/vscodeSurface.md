@@ -59,8 +59,19 @@ the original daemon and provider processes instead of making a versioned extensi
 - Fifteen sessions are the daily-use baseline and 30 sessions are the release load.
 - At most eight sessions own hot provider processes.
 - Exactly one selected session owns the full watch and Webview renderer.
-- The sidebar is one flat list of conversations and nothing else. A coding service is a fact printed on a row, never a
-  parent node the reader opens first, and there is no separate inventory view.
+- The sidebar lists conversations, never coding services. A service is a fact printed on a row, never a parent node the
+  reader opens first, and there is no separate inventory view.
+- Projects are the only grouping, and only once grouping pays for itself. Below nine rows, or with every conversation in
+  one project, the list is flat: a heading there costs a click and shortens nothing. Above that the working tree becomes
+  the heading, because a working tree is what a person means by what they are working on. Grouping by coding service
+  would sort by an implementation detail, since one repository driven by two CLIs is one piece of work.
+- The project this window is open on is first and open. Any project holding a conversation that stopped for the operator
+  is open too, so no heading can hide the thing that wants them. Everything else is closed.
+- Heading order ignores what is running inside it, for the same reason row order does. Waiting counts are printed in the
+  heading; position reflects where the reader left it.
+- A heading's rows are built when that heading is first drawn, never before. Thirty projects means twenty-nine closed
+  headings whose rows nobody is going to look at, and the tree provider answers parent queries from a map rather than
+  from built items so revealing a row never depends on having built the rest.
 - A Runtime-supervised session and the provider-owned chat it came from are one row. Row identity is the conversation,
   so opening a saved chat updates that row in place instead of removing one and inserting another.
 - Live conversations lead, then whatever the coding service touched most recently. Turn state never participates in the
@@ -94,6 +105,21 @@ the original daemon and provider processes instead of making a versioned extensi
   context use, provider-reported cost, and the tightest account-limit window appear as one line beneath the composer.
   Missing provider telemetry remains visibly absent and is never estimated, and an untouched quota window says nothing.
 - Enter sends and Shift+Enter writes a new line.
+- A message opening with `/` offers the commands the attached coding service announced, with that service's own
+  descriptions. Only a leading slash opens the menu, since a slash inside a sentence belongs to a path. Choosing fills
+  the composer and sends nothing: some of these commands take an argument, and sending on selection would make those
+  unusable and the rest premature. Only the announced name and description are read; a command's argument schema stays
+  the service's business, because the value of passing a slash command through untouched is that the service decides
+  what it means.
+- Changing the model mid conversation is that command, not a Runtime method. Every one of these CLIs owns a `/model`,
+  and a parallel Runtrol call would be a second place that opinion lives, disagreeing the moment somebody typed the
+  command instead. Model and effort are chosen at start; after that the service's own commands own them.
+- The command list belongs to one conversation and is dropped on switching. A previous service's commands offered to
+  the next one is worse than none, because it looks authoritative.
+- A coding service that cannot start a conversation is answered with that service's own remedy, chosen by the public
+  error category and what discovery already knows: not signed in, not installed, or installed and failing. The exact
+  command is placed in the operator's terminal unexecuted. Runtrol never runs it. Fetching and executing on somebody's
+  behalf is refused, and an install button that installs is that refusal reversed under a friendlier label.
 - A hidden conversation pauses its watch at the last delivered cursor. Reopening waits for the new Webview document to become ready before replay continues.
 - An operator name is stored as bounded session metadata. Without one, the visible title is the workspace name plus the runtime-discovered provider name. A short stable suffix appears only when titles collide.
 - The selected session remains first. One fuzzy switcher searches project, provider, state, and workspace metadata.

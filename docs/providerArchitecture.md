@@ -24,8 +24,13 @@ A manifest may declare only facts needed to reach the process:
 - stable model aliases only when the CLI cannot enumerate a catalogue
 - provider-owned credential directories used by the workspace wall
 - an update channel hint
+- the CLI's own sign-in, self-diagnosis, and install commands
 
 Capabilities, model catalogues, account state, and supported flags are discovered from the installed CLI at runtime. Probe policy, caching, model honesty, and loader-time manifest linting are defined in [provider discovery](providerDiscovery.md), not in the adapter boundary.
+
+The help commands are the one entry whose declaration needs defending, since the hard rule is that a discoverable fact may not be declared. The install line is wanted exactly when no executable exists to ask. The other two exist inside an installed CLI, but the only way to learn their names is to read help text, and approximating a capability from help text is what the driver contract refuses: the shape differs per vendor and changes per release, and a wrong guess prints a command that silently does nothing. They remain a declaration of how to reach the CLI rather than a claim about what it can do, and nothing consults them to decide whether an operation is possible.
+
+These strings are the only manifest text that reaches an operator's shell, and a manifest may come from the operator's own provider directory rather than from the product. So the loader refuses any character a shell could read as a separator, by whitelist rather than by blacklist. Runtime assembles the finished command line, because only Runtime knows which candidate executable resolved; a client that joined arguments to a name would be a second place deciding what runs, wrong on exactly the machine where the second candidate was the installed one. No surface may execute one: they are offered to a person, who reads the line and decides.
 
 ## Driver registry
 

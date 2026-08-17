@@ -25,6 +25,19 @@ and refactoring that no user can observe do not belong here.
   (`Ctrl+K Ctrl+N`, `Ctrl+K Ctrl+A`, `Ctrl+K Ctrl+O`, `Ctrl+K Ctrl+W`; `Cmd` on macOS).
 - Cline and OpenCode join the coding services Runtrol supervises. OpenCode reports its existing conversations through
   the official protocol, so they appear in the list without being started here first.
+- Conversations are grouped by project once the list gets long enough that grouping helps. The project this window is
+  open on comes first and arrives open, any project holding a conversation that is waiting for you is open too, and the
+  rest stay closed so eight projects do not become one long scroll. Each heading says how many conversations it holds
+  and how many of them want you. A short list, or a single project, stays flat: a heading there would cost a click and
+  shorten nothing.
+- Typing `/` shows the commands the coding service you are talking to actually offers, with its own descriptions. Arrow
+  keys move, Enter fills it in, and nothing is sent until you send it. This is also how you change model mid
+  conversation: `/model` is the CLI's own command, so it takes effect in the CLI's own state rather than in a second
+  opinion Runtrol keeps on the side.
+- A coding service that will not start now offers its own way out. Not signed in, not installed, or installed and
+  broken are three different problems, and Runtrol offers the matching command from that CLI itself: `claude auth
+  login`, `codex doctor`, `npm install --global cline`, and so on. The command is typed into your terminal and left
+  there unrun, so you read it and decide. Runtrol never installs or authenticates anything on your behalf.
 
 ### Changed
 
@@ -60,6 +73,10 @@ and refactoring that no user can observe do not belong here.
 
 ### Fixed
 
+- A conversation that would not start now says why. Every failure coming from the coding service itself, including a
+  CLI that was simply not signed in, used to report "the session or native pointer changed after the caller observed
+  it" and offer nothing. Not signed in, not installed, out of quota and capability absent are now four distinct
+  answers, each with its own next step.
 - Opening the Runtrol Chats view now shows the selected in-progress conversation immediately. Studio no longer leaves the editor empty until the session is clicked again, and existing provider chats appear without waiting five seconds after startup.
 
 ## [0.1.3] - 2026-08-16
