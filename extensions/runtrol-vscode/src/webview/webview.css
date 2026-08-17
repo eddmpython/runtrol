@@ -200,12 +200,22 @@ body {
 .approval {
   padding: 0.85rem 1rem;
   border: 1px solid var(--vscode-focusBorder);
+  border-left-width: 3px;
   border-radius: 0.8rem;
   background: var(--vscode-editorWidget-background);
 }
 
 .approval.high-risk {
   border-color: var(--vscode-notificationsWarningIcon-foreground);
+}
+
+.approval strong {
+  display: block;
+  margin-bottom: 0.15rem;
+}
+
+.approval.high-risk strong {
+  color: var(--vscode-notificationsWarningIcon-foreground);
 }
 
 .approval pre {
@@ -226,6 +236,39 @@ body {
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: 0.4rem;
+}
+
+/*
+ * Refusing and granting must not look the same.
+ *
+ * Measured on the rendered card: three identical buttons meant that saying no to a command and giving an agent
+ * standing permission to run it were one misclick apart. The safe answer is now the solid one, granting is
+ * outlined, and granting *always* is outlined in the warning colour and says so. Keyed on what the option does,
+ * because the provider owns the order its options arrive in.
+ */
+.approval-actions button[data-kind="reject"] {
+  color: var(--vscode-button-foreground);
+  background: var(--vscode-button-background);
+}
+
+.approval-actions button[data-kind="allow"] {
+  color: var(--vscode-foreground);
+  border-color: var(--vscode-descriptionForeground);
+  background: transparent;
+}
+
+.approval-actions button[data-kind="allow"]:hover:not(:disabled) {
+  background: var(--vscode-toolbar-hoverBackground, var(--vscode-editorWidget-background));
+}
+
+.approval-actions button[data-kind="allow"][data-scope="always"] {
+  color: var(--vscode-notificationsWarningIcon-foreground);
+  border-color: var(--vscode-notificationsWarningIcon-foreground);
+}
+
+.approval.high-risk .approval-actions button[data-kind="allow"] {
+  color: var(--vscode-notificationsWarningIcon-foreground);
+  border-color: var(--vscode-notificationsWarningIcon-foreground);
 }
 
 #composer {
@@ -377,6 +420,22 @@ body.working #agent-chip::after {
   animation: runtrol-pulse 1.4s ease-in-out infinite;
 }
 
+/* Waiting outranks working, and says so without pulsing: nothing is in progress to animate. */
+body.waiting #agent-chip::after,
+body.throttled #agent-chip::after {
+  animation: none;
+}
+
+body.waiting #agent-chip::after {
+  color: var(--vscode-notificationsWarningIcon-foreground);
+  content: "waiting for you";
+}
+
+body.throttled #agent-chip::after {
+  color: var(--vscode-descriptionForeground);
+  content: "waiting on a limit";
+}
+
 body.opening #agent-chip::after {
   margin-left: 0.4rem;
   content: "opening";
@@ -404,4 +463,10 @@ body.opening #agent-chip::after {
   body.opening #agent-chip::after {
     animation: none;
   }
+}
+
+/* `working` and `waiting` are both true while a blocked turn runs, and only one of them may paint. */
+body.waiting.working #agent-chip::after,
+body.throttled.working #agent-chip::after {
+  animation: none;
 }

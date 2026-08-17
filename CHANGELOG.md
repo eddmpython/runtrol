@@ -23,6 +23,11 @@ and refactoring that no user can observe do not belong here.
 
 ### Changed
 
+- Approving a command no longer looks like refusing one. Refuse is the solid button, granting is outlined, granting
+  permanently is outlined in the warning colour, and a high-risk request says so in words. The styling follows what
+  each option does rather than the order the coding service sent them in.
+- The composer says when an agent is waiting for you or waiting on an account limit, instead of calling both of
+  those "working".
 - The sidebar is now one list of conversations. Clicking a row opens it. Coding services are no longer folders to open
   first, the separate services view is gone, and a service you have not installed no longer takes up a row.
 - A conversation Runtrol is supervising and the saved chat it came from are one row instead of two, and opening a saved

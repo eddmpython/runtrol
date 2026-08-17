@@ -216,10 +216,15 @@ function renderSession(session: Session | null, displayTitle: string | null, pro
   document.body.classList.toggle("no-chat", !session);
   document.body.classList.toggle("opening", session?.lifecycle === "cold");
   document.body.classList.toggle("working", session?.lifecycle === "hotRunning");
+  document.body.classList.toggle("throttled", session?.waitingOn === "quota");
   facts = { ...facts, service: session ? currentProvider : "" };
   paintFacts();
   const canSend = session?.lifecycle === "hotIdle";
   const canInterrupt = session?.lifecycle === "hotRunning";
+  // A turn that stopped for a person is still a running turn, so the lifecycle alone would say "working" about
+  // the one session that is actually waiting on the reader.
+  const waitingOnYou = session?.waitingOn === "person";
+  document.body.classList.toggle("waiting", waitingOnYou);
   prompt.disabled = !canSend;
   send.disabled = !canSend;
   send.hidden = !canSend;
@@ -231,11 +236,15 @@ function renderSession(session: Session | null, displayTitle: string | null, pro
     ? "Message"
     : canSend
       ? `Message ${currentProvider}`
-      : canInterrupt
-        ? `${currentProvider} is working`
-        : session.lifecycle === "failed"
-          ? "This conversation needs attention"
-          : "Reopening the saved conversation";
+      : waitingOnYou
+        ? `${currentProvider} is waiting for you`
+        : session.waitingOn === "quota"
+          ? `${currentProvider} is waiting on an account limit`
+          : canInterrupt
+            ? `${currentProvider} is working`
+            : session.lifecycle === "failed"
+              ? "This conversation needs attention"
+              : "Reopening the saved conversation";
   if (canSend && !promptWasSendable && document.hasFocus()) {
     prompt.focus();
   }
@@ -532,10 +541,15 @@ function appendApproval(body: UnknownRecord): void {
     ? body.subject_digest.filter((byte): byte is number => typeof byte === "number")
     : [];
   const incomplete = body.subject_incomplete === true;
+  const highRisk = string(body.risk) === "high";
   const card = document.createElement("article");
-  card.className = `message approval ${string(body.risk) === "high" ? "high-risk" : ""}`;
+  card.className = `message approval ${highRisk ? "high-risk" : ""}`;
   const heading = document.createElement("strong");
-  heading.textContent = incomplete ? "Approval blocked: incomplete subject" : "Approval required";
+  heading.textContent = incomplete
+    ? "Approval blocked: incomplete subject"
+    : highRisk
+      ? "High risk. Approval required"
+      : "Approval required";
   card.append(heading);
   const subject = document.createElement("pre");
   subject.textContent = printable(body.subject);
@@ -552,6 +566,10 @@ function appendApproval(body: UnknownRecord): void {
     }
     const button = document.createElement("button");
     button.type = "button";
+    // Styled by what the option does, never by where the provider happened to put it. Refusing and granting must
+    // not be one misclick apart, and the provider decides the order of its own options.
+    button.dataset.kind = kind.startsWith("reject") ? "reject" : "allow";
+    button.dataset.scope = kind.endsWith("Always") ? "always" : "once";
     button.textContent = string(option?.label) || kind || `Option ${id}`;
     button.disabled = incomplete && !kind.startsWith("reject");
     button.addEventListener("click", () => {
