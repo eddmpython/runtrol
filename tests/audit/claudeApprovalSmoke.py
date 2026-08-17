@@ -941,9 +941,23 @@ def descendants(parent: int) -> set[int]:
     return found
 
 
+# How long process teardown may take before a survivor counts as a leak.
+#
+# Thirty seconds rather than five. The question this answers is whether a process runtrol started ever goes away,
+# and that is not a timing budget: a leak is still there after thirty seconds, so the detection is unchanged. What
+# the old five seconds measured on a busy machine was the operating system's scheduling, and it reported a leak on
+# a run where the same commit cleaned up fine locally. Measured on this repository's CI the same day: the hosted
+# Windows runner produced a four-fold spread on unrelated timings, and macOS produced 805 and 3237 milliseconds for
+# the same view.
+#
+# A real leak pays thirty seconds once. A slow runner pays nothing, because the loop exits as soon as the last
+# process is gone.
+TEARDOWN_DEADLINE_SECONDS = 30.0
+
+
 def waitGone(pids: set[int]) -> set[int]:
-    """Wait briefly for process teardown and return the exact survivors."""
-    deadline = time.monotonic() + 5.0
+    """Wait for process teardown and return the exact survivors."""
+    deadline = time.monotonic() + TEARDOWN_DEADLINE_SECONDS
     alive = pids
     while alive and time.monotonic() < deadline:
         alive = pids.intersection(processTable())
