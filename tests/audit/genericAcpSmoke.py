@@ -224,7 +224,9 @@ def exercise() -> None:
         watcher: subprocess.Popen[str] | None = None
         try:
             catalogue = command(binary, env, ["models", PROVIDER])
-            if "catalogue unknown" not in catalogue:
+            # An ACP provider that declares no aliases reports that its protocol has no model surface. That is the
+            # honest answer and it still proves the manifest was loaded and the provider resolved.
+            if "catalogue unsupported" not in catalogue:
                 raise Failed(f"the external manifest was not discovered as usable: {catalogue}")
 
             session = command(binary, env, ["start", PROVIDER, str(workspace)])

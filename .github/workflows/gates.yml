@@ -404,6 +404,10 @@ jobs:
         run: python -X utf8 tests/audit/resilienceFaultInjection.py
       - name: 독립 ACP 구현 설치
         run: npm install --global --allow-scripts=opencode-ai opencode-ai@1.2.27
+      # Every provider compiled into the build has to exist here, or the model-detection gate refuses a run it
+      # cannot make complete. Adding a built-in manifest without adding its CLI is what made that gate red.
+      - name: 두 번째 독립 ACP 구현 설치
+        run: npm install --global --allow-scripts=cline cline@3.0.55
       - name: 독립 ACP 구현 게이트 자체 검증
         run: python -X utf8 tests/audit/externalAcpSmoke.py --selftest
       - name: 독립 설치 ACP 구현의 두 턴과 native load
@@ -497,8 +501,10 @@ jobs:
         with:
           node-version: "24"
       - uses: Swatinem/rust-cache@v2
+      # Deliberately unpinned. This job exists to notice the day a vendor changes its surface, so every provider
+      # compiled into the build has to be here at whatever version it ships today.
       - name: Install latest provider CLIs without credentials
-        run: npm install --global --allow-scripts=@anthropic-ai/claude-code @anthropic-ai/claude-code @openai/codex
+        run: npm install --global --allow-scripts=@anthropic-ai/claude-code --allow-scripts=opencode-ai --allow-scripts=cline @anthropic-ai/claude-code @openai/codex opencode-ai cline
       - name: Seed provider-owned model cache fixture
         env:
           CODEX_HOME: ${{ runner.temp }}/runtrol-model-detection-codex

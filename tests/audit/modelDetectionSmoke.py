@@ -2,7 +2,10 @@
 
 The manifests decide which providers exist and how their executables are found. A provider with stable aliases
 declared in its manifest must return those aliases honestly. A provider without aliases must enumerate at least
-one current model through its own runtime surface. No prompt is sent, so this spends no tokens or rate limit.
+one current model through its own runtime surface, or state that its protocol has no such surface. Stating it is a
+complete answer because a provider that enumerates nothing has no identifier that could have leaked into source;
+answering `unknown` is not, because a discovery that broke says exactly the same thing. No prompt is sent, so this
+spends no tokens or rate limit.
 
 Every enumerated model identifier is then searched for as a string literal throughout production source. Finding one
 means a current model has leaked into code instead of remaining runtime data and will go stale there.
@@ -404,6 +407,12 @@ def parseDiscovery(text: str) -> Discovery:
             raise Failed(f"unknown discovery has an unreadable shape: {text!r}")
         return Discovery("unknown", (), why)
 
+    if first.startswith("model catalogue unsupported:"):
+        why = first.removeprefix("model catalogue unsupported:").strip()
+        if not why or len(lines) != 1:
+            raise Failed(f"unsupported discovery has an unreadable shape: {text!r}")
+        return Discovery("unsupported", (), why)
+
     if first == "no models reported":
         return Discovery("known", (), None)
 
@@ -482,10 +491,18 @@ def verify(spec: ProviderSpec, discovery: Discovery) -> None:
             raise Failed(f"{spec.identifier} returned undeclared choices as aliases")
         return
 
+    # A provider whose protocol has no model surface at all says so, and that is a complete answer. This gate
+    # exists so that model identifiers come from the installed CLI instead of source literals, and a provider that
+    # enumerates nothing has nothing that could have leaked. `unknown` stays illegal on purpose: it is what a
+    # discovery that broke also says, and an absent surface must not be spelled the same as a failed one.
+    if discovery.kind == "unsupported":
+        return
+
     if discovery.kind != "known" or not discovery.choices:
         raise Failed(
-            f"{spec.identifier} declares no aliases, so its runtime discovery must enumerate at least one model; "
-            f"it answered {discovery.kind} with {len(discovery.choices)} choices"
+            f"{spec.identifier} declares no aliases, so its runtime discovery must enumerate at least one model "
+            f"or state that its protocol has none; it answered {discovery.kind} with "
+            f"{len(discovery.choices)} choices"
         )
 
 

@@ -72,8 +72,11 @@ impl Provider for AcpProvider {
 
     async fn models(&self) -> Result<ModelCatalog, ProviderError> {
         if self.models.aliases.is_empty() {
-            return Ok(ModelCatalog::unknown(
-                "this ACP provider does not declare model aliases",
+            // Unsupported, not unknown. Stable ACP v1 has no method that enumerates models at all, so there is
+            // nothing here that failed or might answer later. Reporting this as unknown made an absent surface
+            // indistinguishable from a discovery that broke, which is the one thing a surface must never blur.
+            return Ok(ModelCatalog::unsupported(
+                "the Agent Client Protocol has no model enumeration method, and this provider declares no aliases",
             ));
         }
         Ok(ModelCatalog::Aliases {
