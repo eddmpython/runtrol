@@ -10,6 +10,8 @@ and refactoring that no user can observe do not belong here.
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-08-17
+
 ### Added
 
 - Conversations now say when they are waiting for you. A coding agent that stops mid-turn for an approval or a
