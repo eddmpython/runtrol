@@ -195,6 +195,7 @@ mod tests {
             a_resolved_program(),
             Arc::new(Containment::without_any()),
             ModelAliases {
+                list: Vec::new(),
                 aliases: vec!["fast".into(), "deep".into()],
             },
             all_flags(),

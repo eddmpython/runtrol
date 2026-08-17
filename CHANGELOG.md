@@ -10,6 +10,14 @@ and refactoring that no user can observe do not belong here.
 
 ## [Unreleased]
 
+### Added
+
+- OpenCode now reports its models. The protocol its driver speaks has no way to enumerate them, but the CLI has a
+  command of its own that does, so Runtrol asks that command instead of carrying a list. Measured: the model
+  picker went from "this CLI exposes no selectable catalogue" to seven identifiers that come from the installed
+  CLI at the moment of asking. Cline still reports none, because that CLI has no such command and inventing one
+  would be worse than saying so.
+
 ## [0.1.4] - 2026-08-17
 
 ### Added

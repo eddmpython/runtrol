@@ -50,3 +50,10 @@ hint = "npm"
 # one that only prints resolved configuration would send a stuck person somewhere that cannot help them.
 sign_in = ["auth"]
 install = "npm install --global --allow-scripts=opencode-ai opencode-ai"
+
+[models]
+# This CLI has its own model enumeration command even though the protocol its driver speaks has none.
+# Measured on version 1.2.27: `opencode models` prints the current catalogue, one identifier per line, and
+# exits 0 immediately. Naming the command is declaring how to reach the CLI; the list itself still comes from
+# the CLI at the moment of asking, so it cannot go stale the way a written catalogue would.
+list = ["models"]

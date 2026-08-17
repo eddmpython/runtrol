@@ -391,6 +391,7 @@ mod tests {
 
     fn aliases(values: &[&str]) -> ModelAliases {
         ModelAliases {
+            list: Vec::new(),
             aliases: values
                 .iter()
                 .map(|value| Box::<str>::from(*value))

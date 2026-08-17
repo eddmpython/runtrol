@@ -590,15 +590,28 @@ impl SecretPaths {
     }
 }
 
-/// Model alias tokens.
+/// How to learn this provider's models, when its protocol cannot say.
 ///
-/// Tokens only, never model identifiers. This block exists for the provider whose model list cannot be
-/// enumerated at all: measured, one CLI answers a wrong model name with a bare error and no list. The
-/// honest response is to carry the four alias tokens it accepts and show the limitation as unknown, rather
-/// than to invent a catalogue that goes stale.
+/// Two ways, and neither one is a model list written into the manifest.
+///
+/// `list` names the CLI's own enumeration command, for a CLI that has one outside the protocol its driver
+/// speaks. Measured: the Agent Client Protocol carries no model enumeration method, and one CLI that speaks
+/// it answers `models` on its own command line with the current catalogue, one identifier per line. Naming
+/// that command is declaring how to reach the CLI; the answer still comes from the CLI, so it cannot go
+/// stale the way a written list would.
+///
+/// `aliases` carries tokens for the provider whose list cannot be enumerated at all: measured, one CLI
+/// answers a wrong model name with a bare error and no list. Tokens only, never model identifiers. The
+/// honest response is the four alias tokens it accepts with the limitation shown as unknown, rather than an
+/// invented catalogue.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ModelAliases {
+    /// Arguments to this CLI's own model enumeration command, when it has one.
+    ///
+    /// Empty means it has none, and the driver reports the absence rather than guessing.
+    #[serde(default)]
+    pub list: Vec<Box<str>>,
     /// The tokens, in the order to offer them.
     #[serde(default)]
     pub aliases: Vec<Box<str>>,
@@ -625,6 +638,11 @@ impl ModelAliases {
             if token.contains(|ch: char| !ch.is_ascii_lowercase() && ch != '-') {
                 return Err(refuse("must be lowercase ascii letters and '-'"));
             }
+        }
+        // The enumeration command reaches a process launch, so it takes the same refusal the help commands
+        // take: one argument, no character a shell or an argument parser could read as something else.
+        for argument in &self.list {
+            HelpCommands::refuse_unless_one_word(argument)?;
         }
         Ok(())
     }

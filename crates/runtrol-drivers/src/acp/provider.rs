@@ -1,13 +1,14 @@
 //! The stateless provider half of the generic ACP driver.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
-use runtrol_childproc::{Containment, Program};
+use runtrol_childproc::{Containment, Program, capture};
 use runtrol_provider::{
-    Agent, ModelAliases, ModelCatalog, NativeSessionCatalogue, NativeSessionQuery, OpenIntent,
-    Provider, ProviderCapabilities, ProviderCapability, ProviderCapabilitySource, ProviderError,
-    ProviderId,
+    Agent, MAX_MODEL_CHOICES, ModelAliases, ModelCatalog, ModelChoice, NativeSessionCatalogue,
+    NativeSessionQuery, OpenIntent, Provider, ProviderCapabilities, ProviderCapability,
+    ProviderCapabilitySource, ProviderError, ProviderId,
 };
 
 use crate::acp::agent::AcpAgent;
@@ -22,7 +23,73 @@ pub struct AcpProvider {
     transport_argv: Vec<Box<str>>,
 }
 
+/// How long the CLI's own model listing may take before the answer is treated as absent.
+///
+/// Measured on the one CLI that has this command: it answers in well under a second because it reads a
+/// catalogue it already holds. The budget is generous against that and short enough that a hung child cannot
+/// make opening a conversation feel broken.
+const MODEL_LIST_DEADLINE: Duration = Duration::from_secs(10);
+
 impl AcpProvider {
+    /// Ask the CLI's own command for its current models.
+    ///
+    /// One identifier per line, which is the shape the CLI that has this command actually prints. Nothing is
+    /// parsed out of a line beyond trimming it: an identifier is the provider's value to send back, and
+    /// splitting it into parts would be Runtrol deciding what a model name means.
+    ///
+    /// A failure is reported as unknown rather than unsupported. The command exists, so this is a discovery
+    /// that did not answer, and blurring that into "this CLI has no models" would tell an operator to stop
+    /// looking for something that is there.
+    async fn enumerate_models(&self) -> ModelCatalog {
+        let arguments: Vec<String> = self.models.list.iter().map(ToString::to_string).collect();
+        let Ok(output) = capture(
+            &self.program,
+            &arguments,
+            MODEL_LIST_DEADLINE,
+            &self.contained_by,
+        )
+        .await
+        else {
+            return ModelCatalog::unknown(
+                "this coding service's own model listing command could not be run",
+            );
+        };
+        if output.truncated {
+            return ModelCatalog::unknown(
+                "this coding service's model listing was longer than the bounded read",
+            );
+        }
+        let mut models: Vec<ModelChoice> = Vec::new();
+        for line in output.text().lines() {
+            let id = line.trim();
+            // Blank lines and anything a terminal wrote for a person rather than for a caller. A decorated
+            // line is not an identifier, and sending one back as a model would fail at session start.
+            if id.is_empty() || id.contains(char::is_whitespace) || id.contains('\u{1b}') {
+                continue;
+            }
+            if models.iter().any(|choice| &*choice.id == id) {
+                continue;
+            }
+            models.push(ModelChoice {
+                id: id.into(),
+                display_name: id.into(),
+                description: Box::default(),
+                // The command prints a list, not a default. Marking one would be an invention.
+                is_default: false,
+                reasoning_efforts: Vec::new(),
+            });
+            if models.len() >= MAX_MODEL_CHOICES {
+                break;
+            }
+        }
+        if models.is_empty() {
+            return ModelCatalog::unknown(
+                "this coding service's model listing command printed nothing Runtrol could use",
+            );
+        }
+        ModelCatalog::Known { models }
+    }
+
     /// Build a provider without starting its executable.
     #[must_use]
     pub const fn new(
@@ -71,12 +138,19 @@ impl Provider for AcpProvider {
     }
 
     async fn models(&self) -> Result<ModelCatalog, ProviderError> {
+        // The protocol cannot answer this, but the CLI behind it may have a command of its own that can. Asking
+        // that command is still asking the provider: the identifiers come from the installed CLI at the moment
+        // of asking, so nothing here goes stale the way a catalogue written into a manifest would.
+        if !self.models.list.is_empty() {
+            return Ok(self.enumerate_models().await);
+        }
         if self.models.aliases.is_empty() {
             // Unsupported, not unknown. Stable ACP v1 has no method that enumerates models at all, so there is
             // nothing here that failed or might answer later. Reporting this as unknown made an absent surface
             // indistinguishable from a discovery that broke, which is the one thing a surface must never blur.
             return Ok(ModelCatalog::unsupported(
-                "the Agent Client Protocol has no model enumeration method, and this provider declares no aliases",
+                "the Agent Client Protocol has no model enumeration method, this provider declares no listing \
+                 command of its own, and it declares no aliases",
             ));
         }
         Ok(ModelCatalog::Aliases {
@@ -150,6 +224,7 @@ mod tests {
             program(),
             Arc::new(Containment::without_any()),
             ModelAliases {
+                list: Vec::new(),
                 aliases: vec!["fast".into(), "deep".into()],
             },
             Vec::new(),
