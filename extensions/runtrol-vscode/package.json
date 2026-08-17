@@ -340,7 +340,12 @@
       }
     ],
     "menus": {
-      "commandPalette": [],
+      "commandPalette": [
+        {
+          "command": "runtrol.selectSession",
+          "when": "false"
+        }
+      ],
       "view/title": [
         {
           "command": "runtrol.startSession",
