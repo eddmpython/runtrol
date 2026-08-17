@@ -33,6 +33,7 @@ import { RuntimeState } from "./state";
 import { ConversationItem } from "./trees";
 import { StudioRuntimeClient } from "./runtimeClient";
 import { sessionStateLabel } from "./runtimeProjection";
+import type { ModelOption } from "./sessionConfiguration";
 import { modelOptions, reasoningOptions, RECENT_SERVICE_KEY } from "./sessionConfiguration";
 import { workspaceCollisions, type WorkspaceCollision } from "./workspaceCollision";
 
@@ -1089,23 +1090,30 @@ export class Controller implements vscode.Disposable {
   private async chooseStartConfiguration(provider: ProviderLine): Promise<StartConfiguration | null> {
     const catalogue = await this.runtime.models(provider.providerId);
     const choices = modelOptions(catalogue);
-    const selectedModel = await vscode.window.showQuickPick(
-      [
-        {
-          label: "Provider default",
-          id: null,
-          model: null,
-          description: "Use the installed CLI's current model setting",
-        },
-        ...choices,
-      ],
-      {
-        title: `New chat with ${provider.displayName}: model`,
-        placeHolder: choices.length === 0
-          ? "This CLI exposes no selectable model catalogue"
-          : "Choose a model reported by the installed CLI",
-      },
-    );
+    // A question with one possible answer is not a choice. When the installed CLI reports no selectable
+    // catalogue, the only available answer is whatever that CLI already uses, and a picker saying so costs a
+    // keystroke to convey nothing. Effort is still asked about below when this CLI reports any, because that
+    // can be offered without a model catalogue.
+    const selectedModel:
+      | { readonly id: string | null; readonly model: ModelOption["model"] }
+      | undefined =
+      choices.length === 0
+        ? { id: null, model: null }
+        : await vscode.window.showQuickPick(
+          [
+            {
+              label: "Provider default",
+              id: null,
+              model: null,
+              description: "Use the installed CLI's current model setting",
+            },
+            ...choices,
+          ],
+          {
+            title: `New chat with ${provider.displayName}: model`,
+            placeHolder: "Choose a model reported by the installed CLI",
+          },
+        );
     if (!selectedModel) return null;
 
     const efforts = reasoningOptions(catalogue, selectedModel.model);
