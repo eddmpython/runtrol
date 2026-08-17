@@ -61,3 +61,18 @@ pub fn endpoint(home: Option<&str>) -> Result<String, ComposeError> {
     };
     Ok(home.paths().endpoint().address().to_owned())
 }
+
+/// One place for tests in this crate to take the process-wide console before claiming it.
+///
+/// `LocalConsole` is deliberately once per process, because there is one operator at one machine. Tests in
+/// different modules of this crate drive paths that claim it, and `cargo test` runs them in parallel, so without
+/// a shared lock whichever one lost the race failed with "the local approval surface is already in use".
+///
+/// Observed as an intermittent red in CI and reproduced locally: the test passes alone and fails beside its
+/// siblings. Serializing here rather than in each module keeps the two call sites from drifting onto two locks,
+/// which would serialize nothing.
+#[cfg(test)]
+pub(crate) fn console_lock() -> &'static std::sync::Mutex<()> {
+    static CONSOLE: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+    CONSOLE.get_or_init(|| std::sync::Mutex::new(()))
+}

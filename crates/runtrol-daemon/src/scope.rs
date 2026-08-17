@@ -654,7 +654,10 @@ mod tests {
         let mut ledger = GrantLedger::new();
         let device = DeviceId::now();
         let approved = [DeviceScope::SessionList];
-        let console = LocalConsole::claim().expect("nothing else in this crate claims the console");
+        let _serialised = crate::console_lock()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let console = LocalConsole::claim().expect("the console is free while this lock is held");
         let challenge = PresenceChallenge::issue(
             &console,
             GrantRequest::DeviceScopes {
