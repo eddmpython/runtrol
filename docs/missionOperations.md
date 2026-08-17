@@ -171,6 +171,29 @@ renderer. The normal sequence is:
 9. Verify and complete integration locally.
 10. Archive the terminal Mission.
 
+### Composing the parallel-attempt Mission
+
+Step 2 assumes a Mission file exists. Writing one by hand is the part that kept the commonest shape of this flow
+unused: one instruction, tried several ways at once, compared, and the best kept.
+
+Studio composes that file. It takes an instruction file the operator already wrote, an attempt count, and the Gate
+that judges an attempt, and produces a Mission whose Tasks carry no dependencies (so they run at once) and each
+declare `isolated_worktree` (so no two write the same files). Attempts are bounded at four because each owns a
+worktree and a hot provider. Each attempt runs once with no repair cycles: a fan-out compares attempts, and
+retrying one silently would mean the thing being compared changed while being compared.
+
+Three things it does not do, each for a stated reason:
+
+- **It does not save the file.** Studio writes exactly two things to disk, and an instruction is the prompt an
+  operator gives an agent. The composed document opens in an editor; the operator reads it, chooses where it lives,
+  and saves it. Step 2 then proceeds normally.
+- **It does not create the instruction.** A Task is bound to the exact bytes of its instruction because those bytes
+  are meant to have been reviewed. The digest is taken over the file as it already exists, never over text this
+  surface reformatted.
+- **It does not invent a Gate.** Build commands differ per project, and a Gate that checks nothing produces a
+  fan-out whose attempts all pass regardless of what they did. The operator names a registered Gate. Registration
+  is per project, not per fan-out.
+
 ## Verification and claim limit
 
 `missionGrowthContracts` proves state, scheduling, exact Send, recovery, evidence, integration, local scope, explicit
