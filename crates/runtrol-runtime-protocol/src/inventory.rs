@@ -152,6 +152,20 @@ pub enum LifecycleState {
     Failed,
 }
 
+/// What a running turn is waiting for, when it is waiting for anybody.
+///
+/// Structural, and deliberately only two values. A surface listing eight running sessions needs to answer one
+/// question without opening any of them: which of these stopped for me? An approval identifier or the provider's
+/// own wording would be conversation detail, which this protocol does not carry.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum WaitingOn {
+    /// A person has to answer before the turn continues.
+    Person,
+    /// An account limit has to lapse before the turn continues.
+    Quota,
+}
+
 /// One Runtime-managed session in the immediate catalogue.
 #[derive(Clone, Debug, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -171,6 +185,13 @@ pub struct SessionDescriptor {
     pub lifecycle: LifecycleState,
     /// Structural stalled-turn hint derived by Core without interpreting conversation content.
     pub looks_stuck: bool,
+    /// What the running turn is waiting for, when Core observed it stop for something.
+    ///
+    /// Optional and omitted when absent, so a client written against this revision before the field existed
+    /// reads exactly what it read before. Derived from the provider's own structural turn frames, never from
+    /// conversation content.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub waiting_on: Option<WaitingOn>,
     /// Monotonic lifecycle generation used to reject stale control actions.
     pub session_generation: u64,
     /// Operator-owned label, never derived from conversation content.

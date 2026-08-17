@@ -10,6 +10,7 @@ use runtrol_security::ProjectRootIdentity;
 
 use crate::Composed;
 use crate::runtime_auth::AuthorizedIntegration;
+use crate::runtime_control::public_waiting;
 
 /// Safe reason a public session snapshot could not be authorized.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -115,6 +116,7 @@ pub(crate) fn sessions(
                     hot: session.hot,
                     lifecycle: session.lifecycle.public(session.hot),
                     looks_stuck: session.looks_stuck,
+                    waiting_on: session.waiting.map(public_waiting),
                     session_generation: session.generation,
                     label: session.label.map(Into::into),
                 },
@@ -156,6 +158,7 @@ impl RuntimeSessionCatalogue {
                     hot: false,
                     lifecycle: runtrol_runtime_protocol::LifecycleState::Cold,
                     looks_stuck: false,
+                    waiting_on: None,
                     session_generation: 0,
                     label: None,
                 },
@@ -408,6 +411,7 @@ mod tests {
                     hot: false,
                     lifecycle: LifecycleState::Cold,
                     looks_stuck: false,
+                    waiting_on: None,
                     session_generation: 0,
                     label: None,
                 },

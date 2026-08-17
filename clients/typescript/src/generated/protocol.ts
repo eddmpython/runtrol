@@ -252,7 +252,7 @@ export type RuntimeSessionId = string;
 export interface ServerChallenge { readonly expiresAtMs: number; readonly instanceId: string; readonly nonce: string; readonly nonceId: string; }
 
 /** One Runtime-managed session in the immediate catalogue. */
-export interface SessionDescriptor { readonly hot: boolean; readonly label?: string | null; readonly lifecycle: LifecycleState; readonly looksStuck: boolean; readonly nativeSessionId?: string | null; readonly providerId: ProviderId; readonly sessionGeneration: number; readonly sessionId: RuntimeSessionId; readonly workspace: string; }
+export interface SessionDescriptor { readonly hot: boolean; readonly label?: string | null; readonly lifecycle: LifecycleState; readonly looksStuck: boolean; readonly nativeSessionId?: string | null; readonly providerId: ProviderId; readonly sessionGeneration: number; readonly sessionId: RuntimeSessionId; readonly waitingOn?: WaitingOn | null; readonly workspace: string; }
 
 /** A changed authorized managed-session snapshot. */
 export interface SessionIndexChangedNotification { readonly snapshot: ManagedSessionList; readonly subscriptionId: string; }
@@ -277,6 +277,13 @@ export interface SubmitInputParams { readonly input: string; readonly leaseGener
 
 /** Successful JSON-RPC response. */
 export interface SuccessResponse { readonly id: JsonRpcId; readonly jsonrpc: string; readonly result: unknown; }
+
+/** What a running turn is waiting for, when it is waiting for anybody.
+
+Structural, and deliberately only two values. A surface listing eight running sessions needs to answer one
+question without opening any of them: which of these stopped for me? An approval identifier or the provider's
+own wording would be conversation detail, which this protocol does not carry. */
+export type WaitingOn = "person" | "quota";
 
 /** Read one pending decision on the same proved connection. */
 export interface WatchEnrollmentParams { readonly pendingId: PendingEnrollmentId; }

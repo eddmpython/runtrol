@@ -2678,6 +2678,17 @@
           "$ref": "#/$defs/RuntimeSessionId",
           "description": "Stable Runtime selection value."
         },
+        "waitingOn": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WaitingOn"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "What the running turn is waiting for, when Core observed it stop for something.\n\nOptional and omitted when absent, so a client written against this revision before the field existed\nreads exactly what it read before. Derived from the provider's own structural turn frames, never from\nconversation content."
+        },
         "workspace": {
           "description": "Exact canonical workspace display path, already filtered through the integration's approved roots.",
           "type": "string"
@@ -2892,6 +2903,21 @@
         "result"
       ],
       "type": "object"
+    },
+    "WaitingOn": {
+      "description": "What a running turn is waiting for, when it is waiting for anybody.\n\nStructural, and deliberately only two values. A surface listing eight running sessions needs to answer one\nquestion without opening any of them: which of these stopped for me? An approval identifier or the provider's\nown wording would be conversation detail, which this protocol does not carry.",
+      "oneOf": [
+        {
+          "const": "person",
+          "description": "A person has to answer before the turn continues.",
+          "type": "string"
+        },
+        {
+          "const": "quota",
+          "description": "An account limit has to lapse before the turn continues.",
+          "type": "string"
+        }
+      ]
     },
     "WatchEnrollmentParams": {
       "additionalProperties": false,

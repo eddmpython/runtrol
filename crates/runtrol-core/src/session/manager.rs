@@ -47,7 +47,7 @@ use runtrol_security::{Caller, DeviceScope, GrantLedger, SecurityError};
 use crate::events::{Published, SessionHub, SessionView};
 use crate::project::{ProjectError, ProjectIdentity, WorkspaceClaim};
 use crate::session::mint::Identity;
-use crate::session::state::{FailureCode, Observed, SessionState};
+use crate::session::state::{FailureCode, Observed, SessionState, Waiting};
 use crate::session::tier::{Admit, HotSession, MAX_HOT, Tier};
 
 /// A session operation could not be carried out.
@@ -1003,6 +1003,7 @@ impl SessionManager {
                 let observed = observation_of(&produced.body);
                 let lifecycle_before = live.state.lifecycle().clone();
                 let stuck_before = live.state.looks_stuck();
+                let waiting_before = live.state.waiting();
                 let published = live.hub.publish(produced.src_end, produced.body);
                 if let Some(observed) = observed {
                     // A driver reporting something that cannot have happened becomes a notice rather than a panic. A
@@ -1022,7 +1023,8 @@ impl SessionManager {
                     published: Some(published),
                     index_changed: native_changed
                         || live.state.lifecycle() != &lifecycle_before
-                        || live.state.looks_stuck() != stuck_before,
+                        || live.state.looks_stuck() != stuck_before
+                        || live.state.waiting() != waiting_before,
                 }
             }
 
@@ -1612,8 +1614,24 @@ fn observation_of(body: &EventBody) -> Option<Observed> {
             runtrol_provider::TurnEvent::Ended { turn, .. } => {
                 Some(Observed::TurnEnded { turn: *turn })
             }
-            // Blocked and resumed are about what a turn is waiting for, not about whether it is running. The state
-            // machine has no transition for them because there is nothing to change.
+            // Blocked and resumed are about what a turn is waiting for, not about whether it is running, so
+            // neither moves the session. They are still observations: without them the index cannot say which of
+            // eight running sessions stopped for a person, and the only way to find out is to open all eight.
+            runtrol_provider::TurnEvent::Blocked { on, .. } => match on {
+                runtrol_provider::BlockedOn::Approval { .. }
+                | runtrol_provider::BlockedOn::UserInput => Some(Observed::Blocked {
+                    on: Waiting::Person,
+                }),
+                runtrol_provider::BlockedOn::RateLimit => {
+                    Some(Observed::Blocked { on: Waiting::Quota })
+                }
+                // A reason this build has no name for. Saying "needs you" about it would be a guess, and a
+                // "needs you" that turns out to want nothing is how an operator learns to stop trusting the
+                // one signal that is supposed to be worth interrupting them for. The session keeps whatever
+                // it was, which is the same thing this build did before the state existed.
+                _ => None,
+            },
+            runtrol_provider::TurnEvent::Resumed { .. } => Some(Observed::Unblocked),
             _ => None,
         },
         EventBody::Detached(_) => Some(Observed::Detached),
@@ -3007,14 +3025,49 @@ mod tests {
             observation_of(&turn_ended(0).body),
             Some(Observed::TurnEnded { .. })
         ));
-        assert!(
-            observation_of(&EventBody::Turn(TurnEvent::Blocked {
-                turn: TurnId { epoch: 0, index: 0 },
-                on: runtrol_provider::BlockedOn::UserInput,
-            }))
-            .is_none(),
+        // Blocking is an observation, and it still must not change whether the turn is running. Those are two
+        // separate claims, and the second is the one that matters: a session that stopped for a person is not a
+        // session that finished.
+        let blocked = observation_of(&EventBody::Turn(TurnEvent::Blocked {
+            turn: TurnId { epoch: 0, index: 0 },
+            on: runtrol_provider::BlockedOn::UserInput,
+        }))
+        .expect("a turn stopping for a person is worth observing");
+        assert!(matches!(
+            blocked,
+            Observed::Blocked {
+                on: crate::session::state::Waiting::Person
+            }
+        ));
+
+        let running = crate::session::state::Lifecycle::Busy {
+            turn: TurnId { epoch: 0, index: 0 },
+        };
+        assert_eq!(
+            running
+                .after(blocked, WallMs::from_millis(1))
+                .expect("a running turn may block"),
+            running,
             "waiting on a person is not a change of whether a turn is running"
         );
+
+        assert!(matches!(
+            observation_of(&EventBody::Turn(TurnEvent::Resumed {
+                turn: TurnId { epoch: 0, index: 0 },
+            })),
+            Some(Observed::Unblocked)
+        ));
+
+        // A rate limit is nobody's to answer, so it must not read as a request for a person.
+        assert!(matches!(
+            observation_of(&EventBody::Turn(TurnEvent::Blocked {
+                turn: TurnId { epoch: 0, index: 0 },
+                on: runtrol_provider::BlockedOn::RateLimit,
+            })),
+            Some(Observed::Blocked {
+                on: crate::session::state::Waiting::Quota
+            })
+        ));
     }
 
     #[test]

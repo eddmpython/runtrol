@@ -39,7 +39,7 @@ pub use session::{
     AgentLease, ApprovalAuthority, AttachError, AttachedSession, CloseReason, ClosingReservation,
     ClosingSession, FailureCode, Identity, Lifecycle, LiveSession, Observed, OpenReservation,
     ProviderUpdateReservation, Pumped, ReservedOpen, SessionError, SessionManager, SessionState,
-    TakenAgent, Tier,
+    TakenAgent, Tier, Waiting,
 };
 
 // These edges are declared in this crate's manifest and enforced by

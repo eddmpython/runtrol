@@ -25,7 +25,7 @@ pub use manager::{
     SessionError, SessionManager, TakenAgent,
 };
 pub use mint::Identity;
-pub use state::{CloseReason, FailureCode, Lifecycle, Observed, Refused, SessionState};
+pub use state::{CloseReason, FailureCode, Lifecycle, Observed, Refused, SessionState, Waiting};
 pub use tier::{Admit, HotSession, MAX_HOT, NoRoom, Tier};
 
 #[cfg(test)]

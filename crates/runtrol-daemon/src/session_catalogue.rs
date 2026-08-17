@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use runtrol_core::{Lifecycle, SessionManager};
+use runtrol_core::{Lifecycle, SessionManager, Waiting};
 use runtrol_provider::{ProviderId, SessionId};
 
 use crate::Composed;
@@ -18,6 +18,8 @@ pub(crate) struct ManagedSession {
     pub(crate) lifecycle: ManagedLifecycle,
     pub(crate) generation: u64,
     pub(crate) looks_stuck: bool,
+    /// What a running turn is waiting for, when it is waiting for anybody.
+    pub(crate) waiting: Option<Waiting>,
 }
 
 /// Structural lifecycle shared by private and public presentation adapters.
@@ -94,6 +96,8 @@ pub(crate) fn read(
                 lifecycle: ManagedLifecycle::Detached,
                 generation: 0,
                 looks_stuck: false,
+                // A session with no process cannot be mid-turn, so it cannot be waiting for anybody.
+                waiting: None,
             },
         );
     }
@@ -113,6 +117,7 @@ pub(crate) fn read(
                 lifecycle: one.state.lifecycle().into(),
                 generation: one.state.generation(),
                 looks_stuck: one.state.looks_stuck(),
+                waiting: one.state.waiting(),
             },
         );
     }

@@ -38,7 +38,7 @@ pub use inventory::{
     ManagedSessionList, ProviderDescriptor, ProviderId, ProviderList, ProviderWatchEndReason,
     ProviderWatchEndedNotification, ProvidersChangedNotification, RuntimeSessionId,
     SessionDescriptor, SessionIndexChangedNotification, SessionIndexEndReason,
-    SessionIndexEndedNotification, WatchProvidersParams, WatchProvidersResult,
+    SessionIndexEndedNotification, WaitingOn, WatchProvidersParams, WatchProvidersResult,
     WatchSessionIndexParams, WatchSessionIndexResult,
 };
 pub use locator::{RUNTIME_LOCATOR_SCHEMA, RuntimeEndpointKind, RuntimeLocatorRecord};

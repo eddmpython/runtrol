@@ -73,6 +73,13 @@ Runtime stores only supervision metadata and provider-native pointers. It never 
 session discovery uses an official provider command or protocol registered by the provider extension. Runtime never
 scans provider storage for conversation files.
 
+A session in the index carries `waitingOn` when Core observed its running turn stop for something. `person` means a
+pending approval or a request for free-form input, and `quota` means an account limit. Both are derived from the
+provider's own structural turn frames and carry no approval identifier or provider wording, so a client can rank a
+list of running sessions without reading any conversation. The field is omitted when the turn is not waiting and is
+always cleared when the turn ends, so it cannot outlive what it describes. A client written before the field existed
+reads the same index it always did.
+
 `sessions/start` accepts optional opaque `model` and `reasoningEffort` values previously returned by
 `providers/listModels`. Runtime bounds both values and refreshes the selected provider catalogue immediately before
 launch. A missing or stale explicit value returns `modelUnavailable`; absent values leave the provider's own defaults

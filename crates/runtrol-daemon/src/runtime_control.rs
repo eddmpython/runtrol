@@ -11,7 +11,7 @@ use runtrol_core::{
     ApprovalAuthority, ClosingReservation, OpenReservation, SessionManager, SessionView,
     TakenAgent, WorkspaceClaim,
 };
-use runtrol_core::{Lifecycle, SessionError};
+use runtrol_core::{Lifecycle, SessionError, Waiting};
 use runtrol_provider::{
     AbsPath, Agent, AgentCommand, ApprovalId, ApprovalKind, ApprovalRequest, ContentBlock,
     NativeSessionId, OpenIntent, OptionId, PermissionOptionKind, ProviderId, RiskClass, SessionId,
@@ -23,8 +23,8 @@ use runtrol_runtime_protocol::{
     ListPendingApprovalsParams, MAX_INPUT_BYTES, MUTATION_CLOCK_SKEW_MS, MutationRequestId,
     PendingApproval, PendingApprovalList, RespondApprovalParams, RuntimeApprovalKind,
     RuntimeApprovalOption, RuntimeApprovalOptionKind, RuntimeApprovalRisk, RuntimeErrorKind,
-    RuntimeMethod, SessionDescriptor, SessionOpenResult, SubmitInputParams, WatchEventsParams,
-    WatchEventsResult,
+    RuntimeMethod, SessionDescriptor, SessionOpenResult, SubmitInputParams, WaitingOn,
+    WatchEventsParams, WatchEventsResult,
 };
 use runtrol_store::{
     IntegrationKey, IntegrationMutationKey, IntegrationMutationRow, IntegrationMutationState, Store,
@@ -534,6 +534,7 @@ impl RuntimeControl {
                 hot: true,
                 lifecycle: public_lifecycle(live.state.lifecycle()),
                 looks_stuck: live.state.looks_stuck(),
+                waiting_on: live.state.waiting().map(public_waiting),
                 session_generation: live.state.generation(),
                 label: None,
             },
@@ -1538,6 +1539,17 @@ pub(crate) fn cursor_to_public(cursor: WatchCursor) -> EventCursor {
         stream: cursor.stream.to_string(),
         epoch: cursor.epoch,
         seq: cursor.seq,
+    }
+}
+
+/// The one place Core's waiting vocabulary becomes the public one.
+///
+/// Exhaustive by construction: both enums have exactly the two values, so adding a third to either without
+/// deciding what it means here is a compile error rather than a state that silently never reaches a surface.
+pub(crate) const fn public_waiting(waiting: Waiting) -> WaitingOn {
+    match waiting {
+        Waiting::Person => WaitingOn::Person,
+        Waiting::Quota => WaitingOn::Quota,
     }
 }
 

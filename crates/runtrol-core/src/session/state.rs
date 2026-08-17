@@ -117,6 +117,28 @@ pub enum CloseReason {
     Deleted,
 }
 
+/// What a running turn is waiting for, reduced to what a list can act on.
+///
+/// The driver reports something finer: which approval, or that free-form input was asked for. A list does not
+/// need the identifier, it needs the answer to one question: **can I keep working, or does somebody have to do
+/// something?** Two values answer that. Anything more would be detail the row cannot show and the reader cannot
+/// use, and it would put an approval identifier into the session index, which is not the index's business.
+/// Exhaustive on purpose. Every surface that shows a session has to decide what to do with each value, and a
+/// wildcard arm somewhere would let a new state be added and silently never reach a list.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Waiting {
+    /// A person has to answer before this turn continues.
+    ///
+    /// A pending approval and a request for free-form input are the same fact to whoever is reading a list of
+    /// eight sessions: this is the one that stopped for them.
+    Person,
+    /// An account limit has to lapse before this turn continues.
+    ///
+    /// Deliberately not the same state as waiting on a person. Nobody can do anything about it, so a surface
+    /// that lumped it in with the approvals would send the operator to a session that does not need them.
+    Quota,
+}
+
 /// Something runtrol saw happen to a session.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Observed {
@@ -138,6 +160,18 @@ pub enum Observed {
         /// Which turn.
         turn: TurnId,
     },
+    /// The turn stopped and cannot continue on its own.
+    ///
+    /// Not a lifecycle change. The turn is still the running turn, so a blocked session stays busy and only
+    /// gains a reason. Treating this as an ending would report a completion that did not happen.
+    Blocked {
+        /// What it is waiting for.
+        on: Waiting,
+    },
+
+    /// The turn is moving again without having ended.
+    Unblocked,
+
     /// The driver is no longer bound, and nothing went wrong.
     Detached,
     /// Something went wrong.
@@ -267,6 +301,12 @@ impl Lifecycle {
                 }
             }
 
+            // Blocking and unblocking are about what a turn is waiting for, never about whether it runs. The
+            // running turn is still the running turn, so the state is unchanged and only the reason moves.
+            (Self::Busy { turn }, Observed::Blocked { .. } | Observed::Unblocked) => {
+                Ok(Self::Busy { turn: *turn })
+            }
+
             // Letting go cleanly. From `Starting` too: a bind that was abandoned rather than failed.
             (Self::Starting | Self::Idle | Self::Busy { .. }, Observed::Detached) => {
                 Ok(Self::Detached)
@@ -277,6 +317,8 @@ impl Lifecycle {
             (_, Observed::Attached) => refuse("attached"),
             (_, Observed::TurnStarted { .. }) => refuse("starting a turn"),
             (_, Observed::TurnEnded { .. }) => refuse("ending a turn"),
+            (_, Observed::Blocked { .. }) => refuse("blocked outside a turn"),
+            (_, Observed::Unblocked) => refuse("unblocked outside a turn"),
             (_, Observed::Detached) => refuse("detached"),
         }
     }
@@ -294,6 +336,8 @@ pub struct SessionState {
     last_seen: WallMs,
     /// Since when nothing has arrived, once that has gone on long enough to be worth showing.
     quiet_since: Option<WallMs>,
+    /// What the running turn is waiting for, when it is waiting for anything.
+    waiting: Option<Waiting>,
     /// Monotonic lifecycle generation for rejecting stale external control actions.
     generation: u64,
 }
@@ -306,6 +350,7 @@ impl SessionState {
             lifecycle: Lifecycle::Detached,
             last_seen: at,
             quiet_since: None,
+            waiting: None,
             generation: 0,
         }
     }
@@ -343,6 +388,16 @@ impl SessionState {
         self.quiet_since.is_some()
     }
 
+    /// What the running turn is waiting for, when it is waiting for anything.
+    ///
+    /// The one fact that lets a list of eight running sessions be read without opening any of them: which of
+    /// them stopped for a person. A session that is simply working answers `None`, and so does one that is
+    /// idle, because neither is waiting on anybody.
+    #[must_use]
+    pub const fn waiting(&self) -> Option<Waiting> {
+        self.waiting
+    }
+
     /// Apply an observation.
     ///
     /// Anything arriving is also evidence of life, so this clears the silence.
@@ -351,6 +406,10 @@ impl SessionState {
     ///
     /// [`Refused`] when the observation cannot have happened.
     pub fn observe(&mut self, observed: Observed, at: WallMs) -> Result<(), Refused> {
+        let observed_waiting = match observed {
+            Observed::Blocked { on } => Some(on),
+            _ => None,
+        };
         let next = self.lifecycle.after(observed, at)?;
         if next != self.lifecycle {
             self.generation = self.generation.checked_add(1).ok_or(Refused {
@@ -358,6 +417,11 @@ impl SessionState {
                 observed: "advanced past its lifecycle generation limit",
             })?;
         }
+        // Blocking is the only observation that leaves something waiting. Every other one is evidence the turn
+        // moved, ended, or went away, and each of those means nobody is being waited on any more. Assigning
+        // unconditionally rather than only on the blocking arms is what keeps a stale "needs you" from
+        // outliving its turn.
+        self.waiting = observed_waiting;
         self.lifecycle = next;
         self.last_seen = at;
         self.quiet_since = None;
@@ -642,6 +706,106 @@ mod tests {
             state.looks_stuck(),
             "and the operator can see it looks stuck"
         );
+    }
+
+    #[test]
+    fn a_blocked_turn_is_still_the_running_turn() {
+        // The whole point of the state. Reporting a completion here, or moving the session to idle, would tell
+        // the operator the work finished when it is sitting waiting for them.
+        let mut state = SessionState::new(now());
+        state.observe(Observed::Attaching, now()).expect("binding");
+        state.observe(Observed::Attached, now()).expect("bound");
+        state
+            .observe(Observed::TurnStarted { turn: turn(1) }, now())
+            .expect("a turn begins");
+
+        state
+            .observe(
+                Observed::Blocked {
+                    on: Waiting::Person,
+                },
+                now(),
+            )
+            .expect("the turn stops for a person");
+
+        assert_eq!(state.lifecycle(), &Lifecycle::Busy { turn: turn(1) });
+        assert_eq!(state.waiting(), Some(Waiting::Person));
+    }
+
+    #[test]
+    fn moving_again_clears_who_was_being_waited_on() {
+        let mut state = SessionState::new(now());
+        state.observe(Observed::Attaching, now()).expect("binding");
+        state.observe(Observed::Attached, now()).expect("bound");
+        state
+            .observe(Observed::TurnStarted { turn: turn(1) }, now())
+            .expect("a turn begins");
+        state
+            .observe(
+                Observed::Blocked {
+                    on: Waiting::Person,
+                },
+                now(),
+            )
+            .expect("it stops for a person");
+
+        state
+            .observe(Observed::Unblocked, now())
+            .expect("and then continues");
+
+        assert_eq!(state.waiting(), None);
+        assert_eq!(state.lifecycle(), &Lifecycle::Busy { turn: turn(1) });
+    }
+
+    #[test]
+    fn a_turn_that_ends_while_blocked_stops_asking_for_anybody() {
+        // A stale "needs you" is worse than none. It sends the operator to a session that wants nothing, and
+        // the next real one is the one they stop trusting.
+        for ending in [
+            Observed::TurnEnded { turn: turn(1) },
+            Observed::Detached,
+            Observed::Failed {
+                code: FailureCode::Protocol,
+                detail: "the driver stopped answering".to_owned(),
+            },
+            Observed::Closed {
+                reason: CloseReason::Requested,
+            },
+        ] {
+            let mut state = SessionState::new(now());
+            state.observe(Observed::Attaching, now()).expect("binding");
+            state.observe(Observed::Attached, now()).expect("bound");
+            state
+                .observe(Observed::TurnStarted { turn: turn(1) }, now())
+                .expect("a turn begins");
+            state
+                .observe(Observed::Blocked { on: Waiting::Quota }, now())
+                .expect("it stops for a quota");
+            assert_eq!(state.waiting(), Some(Waiting::Quota));
+
+            state.observe(ending.clone(), now()).expect("it ends");
+
+            assert_eq!(state.waiting(), None, "{ending:?} left a stale request");
+        }
+    }
+
+    #[test]
+    fn only_a_running_turn_can_block() {
+        // An idle session that reports itself blocked is a driver bug, and inventing a waiting state for it
+        // would put a permanent "needs you" on a session nobody can unblock.
+        let mut state = SessionState::new(now());
+        state.observe(Observed::Attaching, now()).expect("binding");
+        state.observe(Observed::Attached, now()).expect("bound");
+
+        let refused = state.observe(
+            Observed::Blocked {
+                on: Waiting::Person,
+            },
+            now(),
+        );
+
+        assert!(refused.is_err());
+        assert_eq!(state.waiting(), None);
     }
 
     #[test]
