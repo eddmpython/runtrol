@@ -17,7 +17,9 @@ test("a provider that does not classify its tools gets the neutral word, not a g
   // renames a tool, and a wrong verb is worse than a plain one.
   const unclassified = toolActivityOf({ status: "inProgress", payload: { title: "something" } });
   assert.equal(unclassified.verb, "Tool");
-  assert.equal(toolActivityLine(unclassified), "Tool something...");
+  // The classification stays neutral, and the line drops the neutral word rather than printing it in front of the
+  // only real information the service gave.
+  assert.equal(toolActivityLine(unclassified), "something...");
 });
 
 test("a failure says so, because it is the one a reader has to notice", () => {
@@ -55,4 +57,61 @@ test("an unrecognised status is unknown rather than a claim", () => {
   const odd = toolActivityOf({ kind: "fetch", status: "somethingNew", payload: { title: "https://x" } });
   assert.equal(odd.state, "unknown");
   assert.equal(toolActivityLine(odd), "Fetch https://x");
+});
+
+test("a service that only named its tool shows that name, not a filler verb", () => {
+  // Claude Code reports a tool's name and its raw arguments, never a display label the way the Agent Client
+  // Protocol does. Reading those arguments to build one would be interpreting what a provider never offered for
+  // display, so the name is all there is. "Tool Read" puts a filler word in front of the only real information on
+  // the line, and the reader is left parsing our vocabulary instead of reading theirs.
+  assert.equal(
+    toolActivityLine(toolActivityOf({ status: "completed", payload: { title: "Read" } })),
+    "Read",
+  );
+  assert.equal(
+    toolActivityLine(toolActivityOf({ status: "inProgress", payload: { title: "Bash" } })),
+    "Bash...",
+  );
+  // A service that classified its tool still reads as verb plus target.
+  assert.equal(
+    toolActivityLine(toolActivityOf({ kind: "read", status: "completed", payload: { title: "src/main.rs" } })),
+    "Read src/main.rs",
+  );
+  // And one that gave neither still says something rather than nothing.
+  assert.equal(toolActivityLine(toolActivityOf({ status: "completed" })), "Tool");
+});
+
+test("a tool's own name is used when the service gave no display label", () => {
+  // Claude Code reports `name` and raw arguments; the Agent Client Protocol reports a `title` meant for a reader.
+  // Both are names the service put in its own frame, so both are safe to show. A service that gives both keeps its
+  // label, because that is the one it wrote for a person.
+  assert.equal(
+    toolActivityOf({ status: "completed", payload: { name: "Read" } }).target,
+    "Read",
+  );
+  assert.equal(
+    toolActivityOf({ status: "completed", payload: { title: "Read src/main.rs", name: "Read" } }).target,
+    "Read src/main.rs",
+  );
+});
+
+test("nothing but those two names is read, whatever else the payload carries", () => {
+  // The rule this module exists for. Raw input, output and diffs are the conversation, and composing a label out of
+  // them would interpret what no service offered for display.
+  const activity = toolActivityOf({
+    kind: "read",
+    status: "completed",
+    payload: {
+      title: "Read src/main.rs",
+      name: "Read",
+      input: { file_path: "SECRET_PATH" },
+      output: "SECRET_OUTPUT",
+      content: [{ type: "diff", oldText: "SECRET_OLD" }],
+      locations: ["SECRET_LOCATION"],
+    },
+  });
+  const rendered = JSON.stringify(activity);
+  for (const secret of ["SECRET_PATH", "SECRET_OUTPUT", "SECRET_OLD", "SECRET_LOCATION"]) {
+    assert.equal(rendered.includes(secret), false, `${secret} reached the activity line`);
+  }
 });

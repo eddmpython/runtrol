@@ -36,26 +36,38 @@ const STATES: Record<string, ToolActivity["state"]> = {
   cancelled: "cancelled",
 };
 
-/// What a tool call is doing, from the fields Runtime lifted plus the one label providers agree on.
+/// What a tool call is doing, from the fields Runtime lifted plus the labels providers agree on.
 ///
-/// `title` is the only thing read out of the payload. It is the human label the Agent Client Protocol
-/// standardises, so reading it is not provider-specific parsing, and a provider that omits it simply has no
-/// target to show. Everything else in the payload stays unread here: raw input, raw output, diffs and terminal
-/// bytes are the conversation, and this surface does not interpret the conversation.
+/// Two names are read out of the payload and nothing else. `title` is the human label the Agent Client Protocol
+/// standardises. `name` is the tool's own name, which is all Claude Code reports, and it is read second so a
+/// service that gives both keeps its label.
+///
+/// Neither is provider-specific parsing: both are names a service chose to put in its own frame. What stays unread
+/// is everything else in the payload. Raw input, raw output, diffs and terminal bytes are the conversation, and
+/// reaching into them to compose a nicer label would be interpreting what no service offered for display. That is
+/// the same move that made a wrapper unmaintainable the first time a vendor changed an argument shape.
 export function toolActivityOf(body: UnknownRecord): ToolActivity {
   const kind = string(body.kind);
   const status = string(body.status);
   const payload = record(body.payload);
   return {
     verb: VERBS[kind] ?? "Tool",
-    target: string(payload?.title).trim(),
+    target: (string(payload?.title).trim() || string(payload?.name).trim()),
     state: STATES[status] ?? "unknown",
   };
 }
 
 /// The one line shown in the thread.
+///
+/// A service that classified its tool gets "verb target". A service that only named the tool gets that name alone,
+/// because `Tool Read` puts a filler word in front of the only real information on the line. The neutral verb exists
+/// for the service that gave nothing at all.
 export function toolActivityLine(activity: ToolActivity): string {
-  const head = activity.target ? `${activity.verb} ${activity.target}` : activity.verb;
+  const head = activity.target
+    ? activity.verb === VERBS.other
+      ? activity.target
+      : `${activity.verb} ${activity.target}`
+    : activity.verb;
   switch (activity.state) {
     case "failed":
       return `${head} · failed`;
