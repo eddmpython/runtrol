@@ -42,3 +42,14 @@ under_home = [".codex"]
 [update]
 # The built-in adapter may use npm only after the resolved entry point and package metadata independently agree.
 hint = "npm"
+
+[help]
+# This CLI's own commands for getting itself working. runtrol never runs them: it types one into the operator's
+# own terminal and stops there.
+#
+# Not discoverable, for the same reason as the sibling manifests. Measured against the installed CLI:
+# `codex login`, `codex login status` and `codex doctor` exist, and the doctor names installation, config, auth
+# and runtime health as what it diagnoses.
+sign_in = ["login"]
+diagnose = ["doctor"]
+install = "npm install --global @openai/codex"

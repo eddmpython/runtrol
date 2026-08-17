@@ -88,6 +88,20 @@ pub enum ManifestError {
         why: &'static str,
     },
 
+    /// An offered help command could mean more than one command.
+    ///
+    /// These strings are the only manifest text that reaches a person's own shell, and a manifest can come
+    /// from the operator's `providers/` directory rather than from this build. So the refusal is a
+    /// whitelist: a character a shell reads as a separator would turn one offered command into the visible
+    /// one plus whatever followed it.
+    #[error("help command {text:?} {why}")]
+    HelpCommand {
+        /// The text as written.
+        text: String,
+        /// Why it was refused.
+        why: &'static str,
+    },
+
     /// A declared secret directory is not a plain path under the home.
     ///
     /// The wall refuses any workspace overlapping these, so an entry that reached outside the home would be a
@@ -238,6 +252,9 @@ pub struct Manifest {
     /// Where this CLI keeps its own login.
     #[serde(default)]
     pub secrets: SecretPaths,
+    /// This CLI's own commands for getting itself working.
+    #[serde(default)]
+    pub help: HelpCommands,
 }
 
 impl Manifest {
@@ -266,6 +283,7 @@ impl Manifest {
         self.bin.validate()?;
         self.models.validate()?;
         self.secrets.validate()?;
+        self.help.validate()?;
         Ok(())
     }
 }
@@ -427,6 +445,99 @@ pub enum Listen {
     /// Uniform across platforms and needs no socket to clean up, which is why it is the only one so far.
     #[default]
     Stdio,
+}
+
+/// The longest help command runtrol will offer a person.
+///
+/// Generous for a real command line and far short of anything that could hide a second one inside a text box.
+const MAX_HELP_COMMAND_BYTES: usize = 200;
+
+/// A CLI's own commands for getting itself working, offered to a person who is stuck.
+///
+/// # Why this is declared and not discovered
+///
+/// The install line is needed exactly when the executable is absent, so there is nothing to ask. The sign-in and
+/// diagnose commands do exist inside an installed CLI, but the only way to learn their names is to read help text,
+/// and approximating a capability from help text is what the driver contract refuses: the shape differs per vendor
+/// and changes per release, and a wrong guess prints a command that silently does nothing.
+///
+/// It stays a declaration of **how to reach** the CLI rather than a claim about what it can do. Nothing here is
+/// consulted to decide whether an operation is possible.
+///
+/// # What runtrol does with them
+///
+/// It types one into the operator's own terminal, and stops. runtrol never runs them. Fetching and executing on a
+/// person's behalf is the one capability this product refused from the start, and an installer button is exactly
+/// that capability wearing a helpful label. The operator reads the line and presses Enter, or does not.
+///
+/// This is also why the validation below is a whitelist rather than a blacklist. A manifest may come from the
+/// operator's own `providers/` directory, so this is untrusted text on its way to a shell.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct HelpCommands {
+    /// Arguments to this CLI's own sign-in command, run against its own executable.
+    ///
+    /// Empty means this CLI declares none, and the surface offers nothing rather than guessing.
+    #[serde(default)]
+    pub sign_in: Vec<Box<str>>,
+    /// Arguments to this CLI's own self-diagnosis command.
+    ///
+    /// Worth more than any check runtrol could write: the CLI knows its own installation, configuration, login and
+    /// runtime health, and it is the party that stays correct when the vendor changes any of them.
+    #[serde(default)]
+    pub diagnose: Vec<Box<str>>,
+    /// The whole command line that installs this CLI, for when no executable exists to ask.
+    #[serde(default)]
+    pub install: Option<Box<str>>,
+}
+
+impl HelpCommands {
+    /// Refuse any text that a shell could read as more than one command.
+    fn validate(&self) -> Result<(), ManifestError> {
+        for argument in self.sign_in.iter().chain(&self.diagnose) {
+            Self::refuse_unless_one_word(argument)?;
+        }
+        if let Some(install) = &self.install {
+            Self::refuse_unless_one_command(install)?;
+        }
+        Ok(())
+    }
+
+    /// One argument of a command, which never needs a space.
+    fn refuse_unless_one_word(text: &str) -> Result<(), ManifestError> {
+        Self::refuse_unless_safe(text, false)
+    }
+
+    /// A whole command line, which needs spaces between its words and nothing else.
+    fn refuse_unless_one_command(text: &str) -> Result<(), ManifestError> {
+        Self::refuse_unless_safe(text, true)
+    }
+
+    fn refuse_unless_safe(text: &str, spaces_allowed: bool) -> Result<(), ManifestError> {
+        let refuse = |why: &'static str| ManifestError::HelpCommand {
+            text: text.to_string(),
+            why,
+        };
+        if text.trim().is_empty() {
+            return Err(refuse("is empty, so there is nothing to offer"));
+        }
+        if text.len() > MAX_HELP_COMMAND_BYTES {
+            return Err(refuse("is longer than any real command line"));
+        }
+        for character in text.chars() {
+            // A whitelist, because the set of characters a shell treats specially differs between shells and
+            // grows. Everything a real install or sign-in line needs is here, and a separator cannot be.
+            let allowed = character.is_ascii_alphanumeric()
+                || matches!(character, '.' | '_' | '-' | '/' | ':' | '=' | '@' | '+')
+                || (spaces_allowed && character == ' ');
+            if !allowed {
+                return Err(refuse(
+                    "contains a character a shell could read as the start of a second command",
+                ));
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Where a provider keeps its own login.

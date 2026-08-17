@@ -165,7 +165,25 @@ export interface ProviderCapabilityObservation { readonly availability: Provider
 export type ProviderCapabilityProvenance = "officialProtocol" | "officialCli" | "driverContract";
 
 /** One provider in the fast inventory. */
-export interface ProviderDescriptor { readonly displayName: string; readonly installation: InstallationObservation; readonly providerId: ProviderId; }
+export interface ProviderDescriptor { readonly displayName: string; readonly help?: ProviderHelp | null; readonly installation: InstallationObservation; readonly providerId: ProviderId; }
+
+/** A coding service's own commands for making itself usable, ready to show a person.
+
+# Why Runtime sends finished command lines
+
+A declaration names arguments; only Runtime knows which executable actually resolved. A client that
+joined the two would be a second place that decides what runs, and it would be wrong on exactly the
+machine where a second candidate was the installed one.
+
+# What a client may do with these
+
+Offer them. Nothing else. Runtime does not run them and neither should a client: fetching and
+executing on a person's behalf is the capability this product refused from the start, and an install
+button that runs is that capability with a friendly label. The operator reads the line and decides.
+
+Every string is validated at the declaration boundary to contain no character a shell could read as a
+separator, so a client can present one without quoting it into something else. */
+export interface ProviderHelp { readonly diagnose?: string | null; readonly install?: string | null; readonly signIn?: string | null; }
 
 /** An opaque provider identity discovered by Runtime. */
 export type ProviderId = string;

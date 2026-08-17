@@ -39,3 +39,14 @@ under_home = [".cline"]
 [update]
 # The built-in adapter may use npm only after the resolved entry point and package metadata independently agree.
 hint = "npm"
+
+[help]
+# This CLI's own commands for getting itself working. runtrol never runs them: it types one into the operator's
+# own terminal and stops there.
+#
+# Measured against the installed CLI: `cline auth` authenticates a provider and `cline doctor` diagnoses and
+# fixes configuration. The install line carries npm's script allowance because this package needs it, which is
+# the reason the release gates install it that exact way.
+sign_in = ["auth"]
+diagnose = ["doctor"]
+install = "npm install --global --allow-scripts=cline cline"

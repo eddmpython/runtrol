@@ -14,8 +14,8 @@ use runtrol_core::{
 use runtrol_core::{Lifecycle, SessionError, Waiting};
 use runtrol_provider::{
     AbsPath, Agent, AgentCommand, ApprovalId, ApprovalKind, ApprovalRequest, ContentBlock,
-    NativeSessionId, OpenIntent, OptionId, PermissionOptionKind, ProviderId, RiskClass, SessionId,
-    StreamId, WallMs, WatchCursor,
+    NativeSessionId, OpenIntent, OptionId, PermissionOptionKind, ProviderError, ProviderId,
+    RiskClass, SessionId, StreamId, WallMs, WatchCursor,
 };
 use runtrol_runtime_protocol::{
     AcquireControlParams, CONTROL_LEASE_LIFETIME_MS, ControlLease, ControlLeaseParams,
@@ -1605,7 +1605,74 @@ fn open_failure(error: &SessionError) -> RuntimeControlFailure {
                 "the selected provider is changing and cannot open a session",
             )
         }
+        SessionError::Provider(provider) => provider_failure(provider),
         _ => session_conflict(),
+    }
+}
+
+/// Why the coding service itself could not open a session.
+///
+/// Every arm exists because the operator's next move differs. Authenticating a CLI, installing one,
+/// waiting out a quota and filing a vendor bug are four different errands, and a caller that receives
+/// one category for all four can only say "it did not work".
+///
+/// This mattered more than it looks. Every one of these used to fall through to `session_conflict()`,
+/// so a coding service that was merely not logged in reported "the session or native pointer changed
+/// after the caller observed it" to a surface whose only honest response was to show that sentence to
+/// a person. The kind is what a client branches on, so getting it wrong makes assistance impossible
+/// no matter how good the surface is.
+fn provider_failure(error: &ProviderError) -> RuntimeControlFailure {
+    match error {
+        // The CLI is not installed, or two of it are and choosing would silently pick one. Both are
+        // resolved at the machine by installing or correcting `PATH`, never by retrying.
+        ProviderError::BinNotFound { .. } | ProviderError::BinAmbiguous { .. } => {
+            RuntimeControlFailure::new(
+                RuntimeErrorKind::ProviderUnavailable,
+                "this coding service is not installed where Runtrol can run it",
+            )
+        }
+        // Authentication is the one provider failure a person can fix in seconds, and only at their
+        // own machine: Runtrol holds no credential and will not accept one. `PresenceRequired` is
+        // exactly that instruction, and it already means "a private local action is required".
+        ProviderError::AuthRequired { .. } => RuntimeControlFailure::new(
+            RuntimeErrorKind::PresenceRequired,
+            "this coding service needs you to sign in to it at your own machine",
+        ),
+        // A clock lifts this one, so the caller may show a wait rather than a fault.
+        ProviderError::Quota { .. } => RuntimeControlFailure::new(
+            RuntimeErrorKind::RateLimited,
+            "the coding service account has reached its limit",
+        ),
+        // Nothing is broken. The capability is absent, and saying so plainly stops the caller from
+        // offering an action that cannot work.
+        ProviderError::Unsupported { .. } | ProviderError::NativeRefused { .. } => {
+            RuntimeControlFailure::new(
+                RuntimeErrorKind::CapabilityUnavailable,
+                "this coding service does not offer what the request needs",
+            )
+        }
+        // The CLI changed shape underneath us. Distinct from the above because the fix is a vendor
+        // bug report, and reporting it as anything else buries the one failure worth escalating.
+        ProviderError::Protocol { .. } => RuntimeControlFailure::new(
+            RuntimeErrorKind::ProviderUnavailable,
+            "this coding service answered in a shape Runtrol cannot read",
+        ),
+        // Spawn, IO and timeout are all "it should have worked". Kept together because the next move
+        // is the same (look at the machine, try again) and split from the four above because those
+        // have specific next moves.
+        ProviderError::Spawn { .. } | ProviderError::Io { .. } | ProviderError::Timeout { .. } => {
+            RuntimeControlFailure::new(
+                RuntimeErrorKind::ProviderUnavailable,
+                "this coding service could not be started",
+            )
+        }
+        // `ProviderError` is `#[non_exhaustive]` so a driver outside this repository keeps building.
+        // A variant this build has never seen is still the coding service's failure, not a stale
+        // pointer, so it lands in the honest category rather than the misleading one.
+        _ => RuntimeControlFailure::new(
+            RuntimeErrorKind::ProviderUnavailable,
+            "this coding service could not open a session",
+        ),
     }
 }
 
@@ -1693,6 +1760,10 @@ fn approval_failure(error: &SessionError) -> RuntimeControlFailure {
             RuntimeErrorKind::ScopeDenied,
             "the integration lacks the approval authority required by the pending request",
         ),
+        // Answering an approval runs a provider command, so it fails the same ways opening does. A
+        // sign-in that lapsed between the request and the answer is the common one, and it used to
+        // report a stale pointer here too.
+        SessionError::Provider(provider) => provider_failure(provider),
         _ => session_conflict(),
     }
 }
@@ -2626,5 +2697,168 @@ mod tests {
             "caller input entered Runtime storage"
         );
         std::fs::remove_dir_all(directory).expect("clean fixture directory");
+    }
+
+    /// One of each `ProviderError` this build can construct, for the failure-translation tests.
+    ///
+    /// Written out rather than generated so that adding a variant to `ProviderError` shows up here as
+    /// a gap somebody has to fill, which is the point: a new variant with no considered category is
+    /// how the whole set drifted into one wrong answer the first time.
+    fn every_provider_error() -> Vec<ProviderError> {
+        let provider = ProviderId::parse("mapped").expect("provider id");
+        vec![
+            ProviderError::BinNotFound {
+                provider,
+                searched: "PATH".into(),
+            },
+            ProviderError::BinAmbiguous {
+                provider,
+                candidates: "one, two".into(),
+            },
+            ProviderError::Spawn {
+                provider,
+                program: "cli".into(),
+                source: std::io::Error::other("no"),
+            },
+            ProviderError::Protocol {
+                provider,
+                doing: "opening",
+                detail: "unreadable".into(),
+            },
+            ProviderError::Timeout {
+                provider,
+                doing: "opening",
+                waited_ms: 1,
+            },
+            ProviderError::AuthRequired {
+                provider,
+                how: "cli auth login".into(),
+            },
+            ProviderError::Quota {
+                provider,
+                resets_in_ms: None,
+            },
+            ProviderError::Unsupported {
+                provider,
+                what: "resume".into(),
+                why: "this CLI has no such command",
+            },
+            ProviderError::NativeRefused {
+                provider,
+                doing: "resuming",
+                detail: "declined".into(),
+            },
+            ProviderError::Io {
+                provider,
+                doing: "reading",
+                source: std::io::Error::other("no"),
+            },
+        ]
+    }
+
+    #[test]
+    fn a_coding_service_that_needs_signing_in_says_so_and_not_something_else() {
+        // The whole reason this translation exists. A CLI that is merely not logged in is the most
+        // common provider failure and the easiest to fix, and it can only be fixed at the operator's
+        // own machine, which is exactly what `PresenceRequired` means.
+        let failure = provider_failure(&ProviderError::AuthRequired {
+            provider: ProviderId::parse("mapped").expect("provider id"),
+            how: "cli auth login".into(),
+        });
+        assert_eq!(failure.kind, RuntimeErrorKind::PresenceRequired);
+    }
+
+    #[test]
+    fn no_coding_service_failure_is_reported_as_a_stale_pointer() {
+        // The regression this file carried: every provider failure fell through to the session
+        // conflict arm, so a surface received "the session or native pointer changed after the caller
+        // observed it" for a CLI that was not installed, not logged in, or out of quota. A client
+        // branches on the kind, so that one wrong value made assistance impossible.
+        for error in every_provider_error() {
+            let failure = provider_failure(&error);
+            assert_ne!(
+                failure.kind,
+                RuntimeErrorKind::SessionConflict,
+                "{error} was reported as a stale pointer"
+            );
+            assert_ne!(
+                failure.kind,
+                RuntimeErrorKind::Internal,
+                "{error} was reported as an internal fault"
+            );
+        }
+    }
+
+    #[test]
+    fn the_four_errands_a_person_can_act_on_stay_apart() {
+        // Installing, signing in, waiting out a limit and hitting an absent capability are four
+        // different next moves. Collapsing any two of them removes the only information the surface
+        // has to offer the right action.
+        let provider = ProviderId::parse("mapped").expect("provider id");
+        let kinds = [
+            provider_failure(&ProviderError::BinNotFound {
+                provider,
+                searched: "PATH".into(),
+            })
+            .kind,
+            provider_failure(&ProviderError::AuthRequired {
+                provider,
+                how: "cli auth login".into(),
+            })
+            .kind,
+            provider_failure(&ProviderError::Quota {
+                provider,
+                resets_in_ms: None,
+            })
+            .kind,
+            provider_failure(&ProviderError::Unsupported {
+                provider,
+                what: "resume".into(),
+                why: "this CLI has no such command",
+            })
+            .kind,
+        ];
+        for (index, kind) in kinds.iter().enumerate() {
+            for other in kinds.iter().skip(index + 1) {
+                assert_ne!(kind, other, "two distinct errands share one category");
+            }
+        }
+    }
+
+    #[test]
+    fn opening_and_answering_an_approval_translate_a_provider_failure_the_same_way() {
+        // A sign-in can lapse between a request and its answer, so the approval path fails the same
+        // ways opening does. Two translations would drift, and the one nobody looked at would be the
+        // one that kept reporting a stale pointer.
+        for error in every_provider_error() {
+            let direct = provider_failure(&error);
+            let opening = open_failure(&SessionError::Provider(error));
+            assert_eq!(direct.kind, opening.kind);
+            assert_eq!(direct.message, opening.message);
+        }
+        for error in every_provider_error() {
+            let direct = provider_failure(&error);
+            let approving = approval_failure(&SessionError::Provider(error));
+            assert_eq!(direct.kind, approving.kind);
+            assert_eq!(direct.message, approving.message);
+        }
+    }
+
+    #[test]
+    fn every_translated_message_reads_as_a_sentence_about_the_coding_service() {
+        // The kind is what a client branches on, but the message is what a person reads when the
+        // surface has nothing better to show. A wire-shaped or empty one puts protocol vocabulary in
+        // front of somebody trying to get work done.
+        for error in every_provider_error() {
+            let failure = provider_failure(&error);
+            assert!(
+                failure.message.len() > 20,
+                "{error} produced a message too short to explain anything"
+            );
+            assert!(
+                !failure.message.contains("pointer") && !failure.message.contains("Runtime"),
+                "{error} produced a message about the transport rather than the service"
+            );
+        }
     }
 }

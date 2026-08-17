@@ -71,6 +71,44 @@ pub struct InstallationObservation {
     pub why: Option<String>,
 }
 
+/// A coding service's own commands for making itself usable, ready to show a person.
+///
+/// # Why Runtime sends finished command lines
+///
+/// A declaration names arguments; only Runtime knows which executable actually resolved. A client that
+/// joined the two would be a second place that decides what runs, and it would be wrong on exactly the
+/// machine where a second candidate was the installed one.
+///
+/// # What a client may do with these
+///
+/// Offer them. Nothing else. Runtime does not run them and neither should a client: fetching and
+/// executing on a person's behalf is the capability this product refused from the start, and an install
+/// button that runs is that capability with a friendly label. The operator reads the line and decides.
+///
+/// Every string is validated at the declaration boundary to contain no character a shell could read as a
+/// separator, so a client can present one without quoting it into something else.
+#[derive(Clone, Debug, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProviderHelp {
+    /// The command that signs in to this service, when it declares one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sign_in: Option<String>,
+    /// The command that makes this service diagnose its own installation, when it declares one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub diagnose: Option<String>,
+    /// The command that installs this service, for when no executable exists to ask.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub install: Option<String>,
+}
+
+impl ProviderHelp {
+    /// Whether this carries anything worth offering.
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.sign_in.is_none() && self.diagnose.is_none() && self.install.is_none()
+    }
+}
+
 /// One provider in the fast inventory.
 #[derive(Clone, Debug, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -81,6 +119,12 @@ pub struct ProviderDescriptor {
     pub display_name: String,
     /// Fast cached installation evidence. Listing does not start the provider.
     pub installation: InstallationObservation,
+    /// This service's own commands for making itself usable, when it declares any.
+    ///
+    /// Absent rather than empty when nothing is declared, so a client shows nothing instead of an action
+    /// that leads nowhere.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub help: Option<ProviderHelp>,
 }
 
 /// A bounded provider inventory snapshot.

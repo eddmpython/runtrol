@@ -40,3 +40,13 @@ under_home = [".config/opencode", ".local/share/opencode"]
 [update]
 # The built-in adapter may use npm only after the resolved entry point and package metadata independently agree.
 hint = "npm"
+
+[help]
+# This CLI's own commands for getting itself working. runtrol never runs them: it types one into the operator's
+# own terminal and stops there.
+#
+# Measured against the installed CLI: `opencode auth` manages providers and credentials. No diagnose entry,
+# because this CLI's `debug` is a group of inspection subcommands rather than a single self-check, and offering
+# one that only prints resolved configuration would send a stuck person somewhere that cannot help them.
+sign_in = ["auth"]
+install = "npm install --global --allow-scripts=opencode-ai opencode-ai"

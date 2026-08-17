@@ -19,6 +19,14 @@ import type { Conversation } from "./conversationList";
 import { attentionCount, nextNeedingYou } from "./conversationList";
 import { conversationChoices } from "./conversationPicker";
 import { awaitsVerification, isUsable } from "./providerHealth";
+import type { HelpOffer, ServiceTrouble } from "./serviceHelp";
+import {
+  ServiceTroubleReported,
+  errorKindOf,
+  offersFor,
+  troubleOf,
+  troubleSentence,
+} from "./serviceHelp";
 import { SelectionStore } from "./selectionStore";
 import { sessionTitle } from "./sessionDisplay";
 import { RuntimeState } from "./state";
@@ -59,6 +67,8 @@ export class Controller implements vscode.Disposable {
   private readonly verifyingProviders = new Set<string>();
   private readonly nativeDiscoveries = new Map<string, NativeDiscovery>();
   private readonly deferredNativeProviders = new Set<string>();
+  /// The one terminal help commands are offered in, reused so repeated attempts do not stack up.
+  private helpTerminal: vscode.Terminal | null = null;
   private nativeDiscoveryRestart: NodeJS.Timeout | null = null;
   private nativeDiscoveryPauseDepth = 0;
   private nativeDiscoveryGeneration = 0;
@@ -540,8 +550,14 @@ export class Controller implements vscode.Disposable {
     follow: boolean,
   ): Promise<string> {
     const provider = this.state.providers.find((candidate) => candidate.providerId === providerId);
-    if (!provider || !isUsable(provider)) {
-      throw new Error(`the installed coding service ${providerId} is not usable`);
+    if (!provider) {
+      throw new Error(`the installed coding service ${providerId} is no longer listed`);
+    }
+    // A service that cannot run is the commonest reason a conversation never starts, and it is the one a
+    // person can fix in a minute if anybody tells them how. This used to be a bare sentence about
+    // usability, which is true and useless.
+    if (!isUsable(provider)) {
+      return await this.reportServiceTrouble(provider, troubleOf(undefined, provider));
     }
     const pausedDiscoveries = this.beginForegroundAction();
     try {
@@ -555,9 +571,63 @@ export class Controller implements vscode.Disposable {
       await this.refresh();
       await this.select(opened.sessionId, follow);
       return opened.sessionId;
+    } catch (error) {
+      if (error instanceof ServiceTroubleReported) throw error;
+      const trouble = troubleOf(errorKindOf(error), provider);
+      // An unrecognised failure is not the coding service's fault as far as anybody knows, so it keeps the
+      // original error rather than being dressed up as a service problem with actions that cannot help.
+      if (trouble === "unknown" && errorKindOf(error) === undefined) throw error;
+      return await this.reportServiceTrouble(provider, trouble);
     } finally {
       this.endForegroundAction(pausedDiscoveries);
     }
+  }
+
+  /// Say what a coding service could not do, and offer that service's own commands for fixing it.
+  ///
+  /// Buttons rather than a sentence naming a command, because a person who has to retype a command from a
+  /// toast has been told about the fix rather than helped with it. The chosen line goes into their own
+  /// terminal unexecuted.
+  ///
+  /// Always throws. The caller has a signature that promises a session, and there is no session; the
+  /// distinct error type is what stops the command wrapper from stacking a second message on top of this
+  /// one.
+  private async reportServiceTrouble(
+    provider: ProviderLine,
+    trouble: ServiceTrouble,
+  ): Promise<never> {
+    const sentence = troubleSentence(provider, trouble);
+    const offers = offersFor(provider, trouble);
+    if (offers.length === 0) {
+      // Nothing declared to offer. Still say what happened in the person's own terms rather than falling
+      // through to a protocol string.
+      await vscode.window.showErrorMessage(`Runtrol: ${sentence}`);
+      throw new ServiceTroubleReported(sentence);
+    }
+    const chosen = await vscode.window.showErrorMessage(
+      sentence,
+      ...offers.map((offer) => offer.label),
+    );
+    const offer = offers.find((candidate) => candidate.label === chosen);
+    if (offer) {
+      this.offerInTerminal(offer);
+    }
+    throw new ServiceTroubleReported(sentence);
+  }
+
+  /// Type a coding service's own command into the operator's terminal and stop there.
+  ///
+  /// `false` is the whole point of this method: the line is placed, not run. Runtrol fetching and executing
+  /// on somebody's behalf is the one capability this product refused from the start, and an install button
+  /// that installs is exactly that capability with a friendly label. So the person reads the command,
+  /// standing in their own shell, and decides.
+  private offerInTerminal(offer: HelpOffer): void {
+    if (this.helpTerminal?.exitStatus !== undefined) {
+      this.helpTerminal = null;
+    }
+    this.helpTerminal ??= vscode.window.createTerminal({ name: "Runtrol: coding service" });
+    this.helpTerminal.show(true);
+    this.helpTerminal.sendText(offer.command, false);
   }
 
   async prompt(text?: string): Promise<void> {

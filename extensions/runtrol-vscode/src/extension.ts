@@ -20,6 +20,7 @@ import { MissionTree } from "./mission/tree";
 import { managePhones, pairPhone, reviewPhonePairings } from "./pairingAdministration";
 import type { RemoteConnection } from "./protocol";
 import { SelectionStore } from "./selectionStore";
+import { ServiceTroubleReported } from "./serviceHelp";
 import { providerDisplayName, sessionTitle } from "./sessionDisplay";
 import { RuntimeState } from "./state";
 import { StudioRuntimeClient } from "./runtimeClient";
@@ -545,6 +546,10 @@ async function run(action: () => Promise<void>): Promise<void> {
   try {
     await action();
   } catch (error) {
+    // Already explained, with the coding service's own next steps offered as buttons. A second message
+    // underneath that one reads as a second problem, and the bare protocol string is the less useful of
+    // the two.
+    if (error instanceof ServiceTroubleReported) return;
     await vscode.window.showErrorMessage(`Runtrol: ${error instanceof Error ? error.message : String(error)}`);
   }
 }

@@ -3,8 +3,8 @@
 use runtrol_core::{BinFacts, ProbeCache, SessionManager, locate};
 use runtrol_provider::{AbsPath, NativeSessionId, ProviderId as CoreProviderId};
 use runtrol_runtime_protocol::{
-    InstallationObservation, InstallationState, ManagedSessionList, ProviderDescriptor, ProviderId,
-    ProviderList, RuntimeSessionId, SessionDescriptor,
+    InstallationObservation, InstallationState, ManagedSessionList, ProviderDescriptor,
+    ProviderHelp, ProviderId, ProviderList, RuntimeSessionId, SessionDescriptor,
 };
 use runtrol_security::ProjectRootIdentity;
 
@@ -50,9 +50,40 @@ pub(crate) fn providers(composed: &Composed) -> ProviderList {
                 provider_id: ProviderId::new(provider.id().as_str()),
                 display_name: provider.manifest.display_name.to_string(),
                 installation: installation(provider, &cache),
+                help: help(provider),
             })
             .collect(),
     }
+}
+
+/// This service's own help commands, assembled into lines a person can read and run.
+///
+/// Uses the first declared binary name rather than a resolved path. Three reasons, and the third is the
+/// deciding one: it is what an operator types in their own terminal, it needs no quoting on any platform,
+/// and the install line is wanted exactly when nothing resolved at all, so depending on resolution would
+/// withhold the one command that is still useful when the CLI is absent.
+///
+/// Returns `None` rather than an empty structure so that a client shows nothing instead of an action that
+/// leads nowhere.
+fn help(provider: &runtrol_core::registry::Provider) -> Option<ProviderHelp> {
+    let declared = &provider.manifest.help;
+    let command = provider.manifest.bin.names.first()?;
+    let line = |arguments: &[Box<str>]| {
+        (!arguments.is_empty()).then(|| {
+            let mut text = command.to_string();
+            for argument in arguments {
+                text.push(' ');
+                text.push_str(argument);
+            }
+            text
+        })
+    };
+    let assembled = ProviderHelp {
+        sign_in: line(&declared.sign_in),
+        diagnose: line(&declared.diagnose),
+        install: declared.install.as_ref().map(ToString::to_string),
+    };
+    (!assembled.is_empty()).then_some(assembled)
 }
 
 fn installation(

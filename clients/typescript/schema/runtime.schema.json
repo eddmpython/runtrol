@@ -1340,6 +1340,17 @@
           "description": "Provider or manifest supplied label for presentation only.",
           "type": "string"
         },
+        "help": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProviderHelp"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "This service's own commands for making itself usable, when it declares any.\n\nAbsent rather than empty when nothing is declared, so a client shows nothing instead of an action\nthat leads nowhere."
+        },
         "installation": {
           "$ref": "#/$defs/InstallationObservation",
           "description": "Fast cached installation evidence. Listing does not start the provider."
@@ -1354,6 +1365,34 @@
         "displayName",
         "installation"
       ],
+      "type": "object"
+    },
+    "ProviderHelp": {
+      "additionalProperties": false,
+      "description": "A coding service's own commands for making itself usable, ready to show a person.\n\n# Why Runtime sends finished command lines\n\nA declaration names arguments; only Runtime knows which executable actually resolved. A client that\njoined the two would be a second place that decides what runs, and it would be wrong on exactly the\nmachine where a second candidate was the installed one.\n\n# What a client may do with these\n\nOffer them. Nothing else. Runtime does not run them and neither should a client: fetching and\nexecuting on a person's behalf is the capability this product refused from the start, and an install\nbutton that runs is that capability with a friendly label. The operator reads the line and decides.\n\nEvery string is validated at the declaration boundary to contain no character a shell could read as a\nseparator, so a client can present one without quoting it into something else.",
+      "properties": {
+        "diagnose": {
+          "description": "The command that makes this service diagnose its own installation, when it declares one.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "install": {
+          "description": "The command that installs this service, for when no executable exists to ask.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "signIn": {
+          "description": "The command that signs in to this service, when it declares one.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
       "type": "object"
     },
     "ProviderId": {
