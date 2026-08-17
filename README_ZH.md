@@ -4,7 +4,7 @@
 
 [한국어](README.md) | [English](README_EN.md) | 中文 | [日本語](README_JA.md)
 
-> 状态：**内核和主要 VS Code 扩展已经实现，`Runtrol Studio 0.1.3` 已面向六个原生目标公开发布。** 实时会话索引、真实 Extension Host 和每秒 3,000 帧 Webview 性能门槛、已安装真实 CLI 的完整操作旅程、全新 Marketplace 安装，以及保留活动会话的 VSIX 升级与回滚都已验证。独立桌面 GUI 代码和执行路径已经删除，VS Code 扩展是唯一 PC 界面。公共 Runtime 协议、Rust 和 TypeScript SDK、外部打包消费门槛，以及六目标签名 standalone Runtime 发布流程也已经实现。已确认 provider 渠道的自动更新也具备进程互斥与精确回滚。[Marketplace 扩展](https://marketplace.visualstudio.com/items?itemName=runtrol.runtrol-studio)、[GitHub Pages 站点](https://eddmpython.github.io/runtrol/)、基于中继的手机 PWA、无正文 Web Push 和 Mission 监督界面都已实现。活动门禁会让已发布的 PWA 模块通过 production daemon 驱动已安装的真实 CLI，验证会话、批准和远程断线恢复旅程。iOS 真机安装与 Web Push 运行确认仍是未经验证的贡献者 operator evidence，不计入当前完成范围和评分。
+> 状态：**内核和主要 VS Code 扩展已经实现，`Runtrol Studio 0.1.4` 已面向六个原生目标公开发布。** 实时会话索引、真实 Extension Host 和每秒 3,000 帧 Webview 性能门槛、已安装真实 CLI 的完整操作旅程、全新 Marketplace 安装，以及保留活动会话的 VSIX 升级与回滚都已验证。独立桌面 GUI 代码和执行路径已经删除，VS Code 扩展是唯一 PC 界面。公共 Runtime 协议、Rust 和 TypeScript SDK、外部打包消费门槛，以及六目标签名 standalone Runtime 发布流程也已经实现。已确认 provider 渠道的自动更新也具备进程互斥与精确回滚。[Marketplace 扩展](https://marketplace.visualstudio.com/items?itemName=runtrol.runtrol-studio)、[GitHub Pages 站点](https://eddmpython.github.io/runtrol/)、基于中继的手机 PWA、无正文 Web Push 和 Mission 监督界面都已实现。活动门禁会让已发布的 PWA 模块通过 production daemon 驱动已安装的真实 CLI，验证会话、批准和远程断线恢复旅程。iOS 真机安装与 Web Push 运行确认仍是未经验证的贡献者 operator evidence，不计入当前完成范围和评分。
 > 下面多数分数为 0，不是因为没有代码，而是因为还没有门禁去断言那些轴。
 
 The security boundary and default-deny settings are documented in [SECURITY.md](SECURITY.md).
@@ -116,7 +116,7 @@ active subscription 与 Code-hot workspace 始终有界。streaming 与后台工
 | **PC（Windows、macOS、Linux）** | 从 [VS Code Marketplace 安装 `Runtrol Studio`](https://marketplace.visualstudio.com/items?itemName=runtrol.runtrol-studio)。支持 x64 与 ARM64，不会分发独立桌面应用 |
 | **移动端** | [永久 GitHub Pages 地址上的手机 PWA](https://eddmpython.github.io/runtrol/app/)。先使用 VS Code 中的一次性二维码配对 |
 
-公开版本 `0.1.3` 与六个平台 VSIX 也可从 [GitHub Releases](https://github.com/eddmpython/runtrol/releases/tag/vscode-v0.1.3) 获取。
+公开版本 `0.1.4` 与六个平台 VSIX 也可从 [GitHub Releases](https://github.com/eddmpython/runtrol/releases/tag/vscode-v0.1.4) 获取。
 VS Code 会自动更新从 Marketplace 安装的扩展。如果旧版本是直接通过 VSIX 安装的，请从 Marketplace 重新安装一次，因为 VS Code 会关闭手动 VSIX 安装的自动更新。
 
 ## 不需要 runtrol 的人
@@ -156,7 +156,7 @@ Rust 不是目的，而是上表中三个轴的手段。
 |---|---|---|
 | `crates/` | 产品内核（Rust）。守护进程、供应商适配器与传输。不存在独立 GUI crate | 已实现 |
 | [`clients/typescript/`](clients/typescript/) | 面向外部产品的公共 Runtime TypeScript SDK | 已验证打包消费 |
-| [`extensions/runtrol-vscode/`](extensions/runtrol-vscode/) | 唯一 PC 界面 `Runtrol Studio` | 30 会话发布负载已验证，0.1.3 已公开 |
+| [`extensions/runtrol-vscode/`](extensions/runtrol-vscode/) | 唯一 PC 界面 `Runtrol Studio` | 30 会话发布负载已验证，0.1.4 已公开 |
 | [`pwa/`](pwa/) | 移动端 PWA | 已实现中继连接、会话控制与批准界面 |
 | [`site/`](site/) | [无依赖 GitHub Pages 落地页](https://eddmpython.github.io/runtrol/) | 已上线 |
 | [`assets/brand/`](assets/brand/) | 标志。SVG 为正本，favicon、图标与社交卡片皆由其派生 | |

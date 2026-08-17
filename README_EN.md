@@ -4,7 +4,7 @@
 
 [한국어](README.md) | English | [中文](README_ZH.md) | [日本語](README_JA.md)
 
-> Status: **the Core and primary VS Code extension are implemented, and `Runtrol Studio 0.1.3` is public for six native targets.** The live session index, real Extension Host and 3,000-frame-per-second Webview performance ratchets, full journey with an installed real CLI, clean Marketplace installation, and session-preserving VSIX upgrade and rollback are verified. The standalone desktop GUI code and execution path have been removed, and the VS Code extension is the only PC surface. The public Runtime protocol, Rust and TypeScript SDKs, external packed-consumer gates, and signed six-target standalone Runtime release pipeline are also implemented. Automatic updates for confirmed provider channels now include process exclusion and exact rollback. The [Marketplace extension](https://marketplace.visualstudio.com/items?itemName=runtrol.runtrol-studio), [GitHub Pages site](https://eddmpython.github.io/runtrol/), relay-based phone PWA, bodyless Web Push, and Mission supervision surface are implemented. Active gates now run the shipped PWA modules through the production daemon and an installed real CLI for session, approval, and remote disconnection recovery journeys. Physical iOS installation and Web Push operation remain unverified contributor operator evidence and are excluded from the current completion scope and score. Most scores below are 0 because no gate asserts those axes yet, not because there is
+> Status: **the Core and primary VS Code extension are implemented, and `Runtrol Studio 0.1.4` is public for six native targets.** The live session index, real Extension Host and 3,000-frame-per-second Webview performance ratchets, full journey with an installed real CLI, clean Marketplace installation, and session-preserving VSIX upgrade and rollback are verified. The standalone desktop GUI code and execution path have been removed, and the VS Code extension is the only PC surface. The public Runtime protocol, Rust and TypeScript SDKs, external packed-consumer gates, and signed six-target standalone Runtime release pipeline are also implemented. Automatic updates for confirmed provider channels now include process exclusion and exact rollback. The [Marketplace extension](https://marketplace.visualstudio.com/items?itemName=runtrol.runtrol-studio), [GitHub Pages site](https://eddmpython.github.io/runtrol/), relay-based phone PWA, bodyless Web Push, and Mission supervision surface are implemented. Active gates now run the shipped PWA modules through the production daemon and an installed real CLI for session, approval, and remote disconnection recovery journeys. Physical iOS installation and Web Push operation remain unverified contributor operator evidence and are excluded from the current completion scope and score. Most scores below are 0 because no gate asserts those axes yet, not because there is
 > no code.
 
 The security boundary and default-deny settings are documented in [SECURITY.md](SECURITY.md).
@@ -119,7 +119,7 @@ At every fork, take the side that is easier for the user. The test is not taste.
 | **PC (Windows, macOS, Linux)** | Install [`Runtrol Studio` from the VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=runtrol.runtrol-studio). x64 and ARM64 are supported. No separate desktop application is distributed |
 | **Mobile** | [Phone PWA at the permanent GitHub Pages origin](https://eddmpython.github.io/runtrol/app/). Pair first from the one-use QR in VS Code |
 
-Public release `0.1.3` and all six platform VSIX packages are also available from [GitHub Releases](https://github.com/eddmpython/runtrol/releases/tag/vscode-v0.1.3).
+Public release `0.1.4` and all six platform VSIX packages are also available from [GitHub Releases](https://github.com/eddmpython/runtrol/releases/tag/vscode-v0.1.4).
 VS Code automatically updates Marketplace installations. If an older version was installed directly from a VSIX, reinstall it once from the Marketplace because VS Code disables automatic updates for manual VSIX installations.
 
 ## Who does not need runtrol
@@ -159,7 +159,7 @@ If those axes are not nailed down by gates, using Rust means nothing.
 |---|---|---|
 | `crates/` | The product core (Rust). Daemon, provider adapters, and transport. There is no standalone GUI crate | Implemented |
 | [`clients/typescript/`](clients/typescript/) | Public Runtime TypeScript SDK for external products | Packed consumer verified |
-| [`extensions/runtrol-vscode/`](extensions/runtrol-vscode/) | The only PC surface, `Runtrol Studio` | 30-session release load verified, 0.1.3 public |
+| [`extensions/runtrol-vscode/`](extensions/runtrol-vscode/) | The only PC surface, `Runtrol Studio` | 30-session release load verified, 0.1.4 public |
 | [`pwa/`](pwa/) | Mobile PWA | Relay connection, session control, and approval surface implemented |
 | [`site/`](site/) | [Dependency-free GitHub Pages landing](https://eddmpython.github.io/runtrol/) | Live |
 | [`assets/brand/`](assets/brand/) | The logo. SVG is the source; favicons, icons, and social cards derive from it | |

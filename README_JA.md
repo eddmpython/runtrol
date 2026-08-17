@@ -4,7 +4,7 @@
 
 [한국어](README.md) | [English](README_EN.md) | [中文](README_ZH.md) | 日本語
 
-> ステータス: **コアと主力 VS Code 拡張を実装し、`Runtrol Studio 0.1.3` を六つの native target 向けに公開した。** live session index、実物 Extension Host と秒間 3,000 frame Webview の性能 ratchet、インストール済み実物 CLI の完全な操作 journey、Marketplace からの clean install、active session を維持する VSIX upgrade と rollback を検証済みである。独立したデスクトップ GUI のコードと実行経路は削除され、VS Code 拡張が唯一の PC surface である。公開 Runtime protocol、Rust と TypeScript SDK、外部 packed consumer gate、署名付き六 target standalone Runtime release pipeline も実装した。確認済み provider channel の自動更新には process exclusion と正確な rollback も実装した。[Marketplace 拡張](https://marketplace.visualstudio.com/items?itemName=runtrol.runtrol-studio)、[GitHub Pages サイト](https://eddmpython.github.io/runtrol/)、リレー接続のスマートフォン PWA、本文を持たない Web Push、Mission 監督 surface を実装した。active gate は shipped PWA module を production daemon とインストール済み実物 CLI に通し、session、approval、remote disconnect recovery journey を検証する。iOS 実機へのインストールと Web Push の運用確認は未検証の contributor operator evidence として残し、現在の完了範囲とスコアから除外する。以下のスコアの多くが 0 なのは、コードがないからではなく、その軸を断言するゲートがまだない
+> ステータス: **コアと主力 VS Code 拡張を実装し、`Runtrol Studio 0.1.4` を六つの native target 向けに公開した。** live session index、実物 Extension Host と秒間 3,000 frame Webview の性能 ratchet、インストール済み実物 CLI の完全な操作 journey、Marketplace からの clean install、active session を維持する VSIX upgrade と rollback を検証済みである。独立したデスクトップ GUI のコードと実行経路は削除され、VS Code 拡張が唯一の PC surface である。公開 Runtime protocol、Rust と TypeScript SDK、外部 packed consumer gate、署名付き六 target standalone Runtime release pipeline も実装した。確認済み provider channel の自動更新には process exclusion と正確な rollback も実装した。[Marketplace 拡張](https://marketplace.visualstudio.com/items?itemName=runtrol.runtrol-studio)、[GitHub Pages サイト](https://eddmpython.github.io/runtrol/)、リレー接続のスマートフォン PWA、本文を持たない Web Push、Mission 監督 surface を実装した。active gate は shipped PWA module を production daemon とインストール済み実物 CLI に通し、session、approval、remote disconnect recovery journey を検証する。iOS 実機へのインストールと Web Push の運用確認は未検証の contributor operator evidence として残し、現在の完了範囲とスコアから除外する。以下のスコアの多くが 0 なのは、コードがないからではなく、その軸を断言するゲートがまだない
 > からである。
 
 The security boundary and default-deny settings are documented in [SECURITY.md](SECURITY.md).
@@ -117,7 +117,7 @@ streaming と background 作業が入力、スクロール、セッション切�
 | **PC（Windows、macOS、Linux）** | [VS Code Marketplace から `Runtrol Studio`](https://marketplace.visualstudio.com/items?itemName=runtrol.runtrol-studio) をインストールする。x64 と ARM64 に対応し、独立したデスクトップアプリは配布しない |
 | **モバイル** | [恒久的な GitHub Pages オリジンのスマートフォン PWA](https://eddmpython.github.io/runtrol/app/)。まず VS Code の一回限りの QR でペアリングする |
 
-公開リリース `0.1.3` と六つの platform VSIX は [GitHub Releases](https://github.com/eddmpython/runtrol/releases/tag/vscode-v0.1.3) からも取得できる。
+公開リリース `0.1.4` と六つの platform VSIX は [GitHub Releases](https://github.com/eddmpython/runtrol/releases/tag/vscode-v0.1.4) からも取得できる。
 Marketplace からインストールした拡張は VS Code が自動更新する。以前の版を VSIX から直接インストールした場合、VS Code はその拡張の自動更新を無効にするため、Marketplace から一度再インストールする。
 
 ## runtrol が要らない人
@@ -157,7 +157,7 @@ Rust は目的ではなく、上の表の三つの軸のための手段である
 |---|---|---|
 | `crates/` | 製品コア（Rust）。デーモン、プロバイダーアダプター、トランスポート。独立 GUI crate は存在しない | 実装済み |
 | [`clients/typescript/`](clients/typescript/) | 外部製品向け公開 Runtime TypeScript SDK | packed consumer 検証済み |
-| [`extensions/runtrol-vscode/`](extensions/runtrol-vscode/) | 唯一の PC surface `Runtrol Studio` | 30 session のリリース負荷を検証、0.1.3 公開済み |
+| [`extensions/runtrol-vscode/`](extensions/runtrol-vscode/) | 唯一の PC surface `Runtrol Studio` | 30 session のリリース負荷を検証、0.1.4 公開済み |
 | [`pwa/`](pwa/) | モバイル PWA | リレー接続、セッション制御、承認 surface を実装済み |
 | [`site/`](site/) | [依存関係のない GitHub Pages ランディング](https://eddmpython.github.io/runtrol/) | 公開済み |
 | [`assets/brand/`](assets/brand/) | ロゴ。SVG が正本で、favicon・アイコン・ソーシャルカードはそこから派生する | |
