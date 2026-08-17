@@ -17,6 +17,10 @@ and refactoring that no user can observe do not belong here.
   unsupported for it. The CLI lists them on its own command line, and Runtrol asks that command instead. Only the
   four things a row needs are read (identity, project, title, when it changed); the prompt text and the stored
   message path that arrive in the same record are never touched, and a test asserts that.
+- OpenCode now reports its models. The protocol its driver speaks has no way to enumerate them either, but that CLI
+  has a command of its own that does, so Runtrol asks it instead of carrying a list. Measured: the model picker went
+  from "this CLI exposes no selectable catalogue" to seven identifiers that come from the installed CLI at the moment
+  of asking. Cline reports none, because that CLI has no such command and inventing one would be worse.
 
 ### Changed
 
@@ -24,14 +28,6 @@ and refactoring that no user can observe do not belong here.
   resolved one after another, so every supported CLI added its own search-path walk to startup. They are resolved
   at the same time now. Measured on the real Extension Host with four installed services: the fastest run went
   from 1,244 ms to 992 ms and the ratchet's activation budget went from red to green.
-
-### Added
-
-- OpenCode now reports its models. The protocol its driver speaks has no way to enumerate them, but the CLI has a
-  command of its own that does, so Runtrol asks that command instead of carrying a list. Measured: the model
-  picker went from "this CLI exposes no selectable catalogue" to seven identifiers that come from the installed
-  CLI at the moment of asking. Cline still reports none, because that CLI has no such command and inventing one
-  would be worse than saying so.
 
 ## [0.1.4] - 2026-08-17
 
