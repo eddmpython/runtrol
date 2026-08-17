@@ -43,15 +43,24 @@ async fn main() -> Result<(), Box<dyn Error>> {
     // operator happens to have. Reporting what came back is the whole point there; the fixture contract below
     // describes one deterministic fixture and cannot describe a real machine.
     if !listing_named {
-        println!("coverage: {:?}", first.coverage);
-        println!("sessions: {}", first.sessions.len());
-        for session in first.sessions.iter().take(5) {
-            println!(
-                "  {} | {} | {}",
-                session.native.as_str(),
-                session.title.as_deref().unwrap_or("(no title)"),
-                session.cwd,
-            );
+        // The crate forbids stdout because a driver shares it with a child's protocol stream. This is an example
+        // rather than a driver: it is the top-level process, its child owns its own pipes, and showing the
+        // operator what a real installed CLI answered is the entire reason this mode exists.
+        #[expect(
+            clippy::print_stdout,
+            reason = "a discovery probe reports what it found to the operator running it"
+        )]
+        {
+            println!("coverage: {:?}", first.coverage);
+            println!("sessions: {}", first.sessions.len());
+            for session in first.sessions.iter().take(5) {
+                println!(
+                    "  {} | {} | {}",
+                    session.native.as_str(),
+                    session.title.as_deref().unwrap_or("(no title)"),
+                    session.cwd,
+                );
+            }
         }
         return Ok(());
     }
