@@ -67,10 +67,10 @@ export class ProjectItem extends vscode.TreeItem {
   constructor(readonly group: ProjectGroup) {
     super(
       group.name,
-      // Anything with a conversation waiting is open, whatever else is true, because the reader must not have
-      // to guess which heading hides the thing that stopped. Then this window's own project, because that is
-      // where they already are. Everything else stays closed so ten projects do not become one long scroll.
-      group.attention > 0 || group.current
+      // Open when the reader has a reason to be looking inside: something is waiting, something is live, this is
+      // the project the window is on, or the conversation they currently have open lives here. Everything else
+      // starts closed so twenty projects do not become one long scroll.
+      group.attention > 0 || group.live > 0 || group.current || group.holdsOpen
         ? vscode.TreeItemCollapsibleState.Expanded
         : vscode.TreeItemCollapsibleState.Collapsed,
     );
@@ -304,10 +304,9 @@ export class ConversationsTree implements vscode.TreeDataProvider<ChatTreeItem>,
     const grouped = new Map<string, readonly Conversation[]>();
 
     if (groups.length === 0) {
-      // One project, or none. Nothing to separate, so the list stays flat and costs no clicks.
-      const flat = rows.map((row) => new ConversationItem(row, nowMs));
-      this.items = [...flat, ...problems];
-      this.flat = flat;
+      // Nothing to group, which means no conversations at all. The welcome content covers that case.
+      this.items = [...problems];
+      this.flat = [];
       this.parents = parents;
       this.grouped = grouped;
       return;

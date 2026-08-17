@@ -89,6 +89,9 @@ const LOCALIZED_TEXT: Record<string, string> = {
   "approval.waiting": "Approval required",
   "approval.withdrawn": "Approval was withdrawn",
 };
+/// A tool panel is bounded because a tool result can be an entire file.
+const MAX_TOOL_DETAIL = 4000;
+
 const HIDDEN_STATUS_KEYS = new Set([
   "session.attached",
   "session.detached",
@@ -430,14 +433,14 @@ function present(payload: unknown): void {
     return;
   }
   if (presentation.kind === "turn") {
-    const step = string(body.step) || "updated";
-    const stop = string(body.stop);
-    appendMessage("meta", stop ? `Turn ${step}: ${stop}` : `Turn ${step}`);
+    // A turn beginning and ending is already visible: the composer swaps its button and the row changes state.
+    // Printing "Turn started" into the transcript says what the reader can already see, and it says it in the
+    // protocol's words. Only an ending that stopped for a reason worth acting on earns a line.
+    appendTurnEnd(body);
     return;
   }
   if (presentation.kind === "notice") {
-    const code = string(body.code) || "provider notice";
-    appendMessage("warning", code);
+    appendNotice(body);
     return;
   }
   if (presentation.kind === "usage") {
@@ -736,9 +739,16 @@ function appendApproval(body: UnknownRecord): void {
  *
  * Updates replace the line for the same call rather than appending, so a long run does not fill the thread.
  */
+/// One tool call, as a heading that can be opened to see what the agent actually sent and got back.
+///
+/// The details are folded away rather than dropped. Watching an agent work means being able to check what it did,
+/// and a surface that shows only "Edit src/main.rs" makes the reader open their own editor to find out. The thin
+/// principle forbids storing, interpreting or rewriting a conversation; showing one is the entire point of the
+/// product, and this panel keeps nothing after the row scrolls away.
 function appendTool(body: UnknownRecord): void {
   const activity = toolActivityOf(body);
   const line = toolActivityLine(activity);
+  const detail = toolDetail(body);
   const callId = string(body.tool_call_id) || string(body.toolCallId);
   const existing = callId
     ? conversation.querySelector<HTMLElement>(`[data-tool-call="${cssEscape(callId)}"]`)
@@ -751,10 +761,73 @@ function appendTool(body: UnknownRecord): void {
   }
   item.className = `message tool tool-${activity.state}`;
   visibleCharacters -= Number(item.dataset.characters ?? 0);
-  item.textContent = line;
-  item.dataset.characters = String(line.length);
-  visibleCharacters += line.length;
+
+  if (!detail) {
+    item.replaceChildren(document.createTextNode(line));
+    item.dataset.characters = String(line.length);
+    visibleCharacters += line.length;
+    trim();
+    return;
+  }
+  // An open panel stays open while its call updates, because a reader watching output arrive should not have to
+  // reopen it every time another chunk lands.
+  const wasOpen = item.querySelector("details")?.open ?? false;
+  const panel = document.createElement("details");
+  panel.open = wasOpen;
+  const summary = document.createElement("summary");
+  summary.textContent = line;
+  const pre = document.createElement("pre");
+  pre.className = "tool-detail";
+  pre.textContent = detail;
+  panel.append(summary, pre);
+  item.replaceChildren(panel);
+  item.dataset.characters = String(line.length + detail.length);
+  visibleCharacters += line.length + detail.length;
   trim();
+}
+
+/// The detail a tool call carries, as the service itself wrote it.
+///
+/// Serialized rather than interpreted. Every service shapes this differently (Claude Code sends `input` and a
+/// result, the Agent Client Protocol sends content blocks and locations, Codex sends its own patch shape), and
+/// flattening them into one house style would be rewriting the conversation. So the panel prints what arrived and
+/// lets the differences show.
+function toolDetail(body: UnknownRecord): string {
+  const payload = record(body.payload);
+  if (!payload) return "";
+  // The names already on the summary line. Repeating them inside the panel is noise.
+  const shown = Object.fromEntries(
+    Object.entries(payload).filter(([key]) => key !== "title" && key !== "name"),
+  );
+  if (Object.keys(shown).length === 0) return "";
+  const text = JSON.stringify(shown, null, 2);
+  // Bounded because a tool result can be a whole file. The reader opens the file to see the rest; a panel that
+  // grows without limit makes the transcript unscrollable.
+  return text.length > MAX_TOOL_DETAIL ? `${text.slice(0, MAX_TOOL_DETAIL)}\n...` : text;
+}
+
+/// A turn ending, only when the ending says something the reader would act on.
+///
+/// A turn starting and finishing is already visible: the composer swaps its send button for a stop button and the
+/// row in the sidebar changes state. Printing "Turn started" restates that in the protocol's vocabulary. An ending
+/// that is anything other than the agent finishing normally is worth a line, because that is the case where the
+/// reader would otherwise wonder why the reply stopped.
+function appendTurnEnd(body: UnknownRecord): void {
+  if (string(body.step) !== "ended") return;
+  const stop = string(body.stop);
+  if (!stop || stop === "endTurn") return;
+  appendMessage("meta", stop);
+}
+
+/// A notice from the coding service, in the service's own words or not at all.
+///
+/// The code is a protocol value. Printing it put the literal word "other" in the transcript five times, which told
+/// the reader nothing and looked like an error because it was styled as a warning. Only a notice carrying text a
+/// person can read earns a line, and its level decides how loud it looks.
+function appendNotice(body: UnknownRecord): void {
+  const text = string(body.message) || string(body.detail) || textOf(record(body.payload)?.message);
+  if (!text.trim()) return;
+  appendMessage(string(body.level) === "error" ? "warning" : "meta", text.trim());
 }
 
 /// Only what a CSS attribute selector needs, because a provider identifier is untrusted text.

@@ -93,26 +93,25 @@ export type ProjectGroup = {
   readonly attention: number;
   /// How many have a provider process behind them right now.
   readonly live: number;
+  /// Whether the conversation the reader currently has open is one of these.
+  ///
+  /// A heading that hides the open conversation is a heading that made the reader lose their place.
+  readonly holdsOpen: boolean;
 };
-
-/// How long a list has to be before headings earn their keep.
-///
-/// Grouping trades a click for a shorter list. That trade is only worth making once the flat list stops fitting
-/// on screen: below this many rows the reader can already see everything, so a heading would cost them a click
-/// and give back nothing. Above it, the headings are what let somebody with eight projects see only the one they
-/// are working in.
-export const MIN_ROWS_FOR_PROJECT_HEADINGS = 9;
 
 /// Conversations gathered under the project each one belongs to.
 ///
-/// Returns an empty array when headings would not help, which the caller reads as "show the flat list". Two
-/// cases: a list short enough to read whole, and a list that is all one project anyway. In the second, a single
-/// heading over everything is a disclosure triangle that costs a click and separates nothing.
+/// **Project then session, always.** That is the shape of the thing being looked at: work happens in a project and
+/// a conversation belongs to one. An earlier version only grouped once the list passed a length threshold, on the
+/// theory that a short list is cheaper to read flat. That was wrong twice over. It made the sidebar change shape as
+/// conversations accumulated, so the reader had to relearn it, and it hid the one fact that tells them where they
+/// are. A window showing `runtrol · Claude Code` with no heading says nothing about which project that is.
+///
+/// Returns an empty array only when there is nothing to group.
 export function projects(
   rows: readonly Conversation[],
   openWorkspaces: readonly string[],
 ): ProjectGroup[] {
-  if (rows.length < MIN_ROWS_FOR_PROJECT_HEADINGS) return [];
   const open = new Set(openWorkspaces.map((workspace) => workspaceIdentity(workspace)));
   const byProject = new Map<string, Conversation[]>();
   for (const row of rows) {
@@ -124,8 +123,6 @@ export function projects(
       byProject.set(key, [row]);
     }
   }
-  if (byProject.size < 2) return [];
-
   const groups: ProjectGroup[] = [];
   for (const [key, group] of byProject) {
     const first = group[0];
@@ -138,6 +135,7 @@ export function projects(
       rows: group,
       attention: group.filter(needsYou).length,
       live: group.filter((row) => row.live).length,
+      holdsOpen: group.some((row) => row.open),
     });
   }
   return groups.sort(byNearestToTheReader);

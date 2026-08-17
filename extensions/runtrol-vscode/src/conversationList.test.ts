@@ -6,7 +6,6 @@ import {
   conversationDetail,
   conversations,
   elapsed,
-  MIN_ROWS_FOR_PROJECT_HEADINGS,
   needsYou,
   nextNeedingYou,
   projectDetail,
@@ -375,7 +374,7 @@ test("a conversation key is legal as a tree element id", () => {
 /// Headings only appear once a flat list stops fitting on screen, so a fixture that wants to exercise them has to
 /// be at least that long. Building it here keeps every grouping test honest about which rule it is testing: the
 /// length rule, or the one it actually cares about.
-function spread(workspaces: readonly string[], count = MIN_ROWS_FOR_PROJECT_HEADINGS): SessionLine[] {
+function spread(workspaces: readonly string[], count = 6): SessionLine[] {
   return Array.from({ length: count }, (_unused, index) =>
     session({
       sessionId: `s${index}`,
@@ -383,16 +382,39 @@ function spread(workspaces: readonly string[], count = MIN_ROWS_FOR_PROJECT_HEAD
     }));
 }
 
-test("a list short enough to read whole gets no headings", () => {
-  // Grouping trades a click for a shorter list, and there is nothing to shorten here.
-  const rows = conversations(spread([ALPHA, BETA], MIN_ROWS_FOR_PROJECT_HEADINGS - 1), PROVIDERS, [], null);
-  assert.deepEqual(projects(rows, [ALPHA]), []);
+test("a project heading appears however short the list is", () => {
+  // Project then session, always. An earlier version only grouped past a length threshold, so the sidebar changed
+  // shape as conversations accumulated and a single conversation showed no project at all. `runtrol · Claude Code`
+  // with no heading does not say which project that is.
+  const rows = conversations(spread([ALPHA], 1), PROVIDERS, [], null);
+  const groups = projects(rows, [ALPHA]);
+  assert.equal(groups.length, 1);
+  assert.equal(groups[0]?.name, "alpha");
+  assert.equal(groups[0]?.rows.length, 1);
 });
 
-test("one project gets no headings however long the list is", () => {
-  // A single heading over everything is a disclosure triangle that costs a click and separates nothing.
-  const rows = conversations(spread([ALPHA], MIN_ROWS_FOR_PROJECT_HEADINGS * 2), PROVIDERS, [], null);
-  assert.deepEqual(projects(rows, [ALPHA]), []);
+test("one project still gets its heading", () => {
+  const rows = conversations(spread([ALPHA], 4), PROVIDERS, [], null);
+  const groups = projects(rows, [ALPHA]);
+  assert.equal(groups.length, 1);
+  assert.equal(groups[0]?.rows.length, 4);
+});
+
+test("a heading says whether it holds the conversation currently open", () => {
+  // A heading that hides the open conversation is a heading that made the reader lose their place, so the tree
+  // uses this to arrive expanded.
+  const rows = conversations(
+    [
+      session({ sessionId: "s1", workspace: ALPHA }),
+      session({ sessionId: "s2", workspace: BETA }),
+    ],
+    PROVIDERS,
+    [],
+    "s2",
+  );
+  const groups = projects(rows, [ALPHA]);
+  assert.equal(groups.find((group) => group.name === "beta")?.holdsOpen, true);
+  assert.equal(groups.find((group) => group.name === "alpha")?.holdsOpen, false);
 });
 
 test("each project gets a heading and every conversation lands under exactly one", () => {
