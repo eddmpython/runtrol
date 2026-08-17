@@ -5,7 +5,6 @@ import path from "node:path";
 import { build } from "esbuild";
 
 import { extensionIdentifier, extensionRoot } from "./extension-manifest.mjs";
-import { approveNextTestIntegration } from "./integration-approval.mjs";
 import {
   isolatedExtensionTestArguments,
   isolatedProfileSettings,
@@ -21,7 +20,6 @@ const secondWorkspace = requiredEnvironment("RUNTROL_VSCODE_WORKSPACE_TWO");
 const userData = requiredEnvironment("RUNTROL_VSCODE_USER_DATA");
 const extensions = requiredEnvironment("RUNTROL_VSCODE_EXTENSIONS");
 const configuredVscode = requiredEnvironment("RUNTROL_TEST_VSCODE_EXECUTABLE");
-const integrationApproval = path.join(path.dirname(resultPath), "integration-approved");
 const repositoryRoot = path.resolve(extensionRoot, "../..");
 const publicSchema = JSON.parse(await readFile(
   path.join(repositoryRoot, "crates", "runtrol-runtime-protocol", "schema", "runtime.schema.json"),
@@ -33,7 +31,6 @@ if (!Number.isSafeInteger(controlLeaseLifetimeMs) || controlLeaseLifetimeMs <= 0
 }
 const testEnvironment = {
   ...process.env,
-  RUNTROL_TEST_EXTERNAL_INTEGRATION_APPROVAL: integrationApproval,
 };
 
 await Promise.all([
@@ -79,10 +76,7 @@ try {
     logLevel: "silent",
   });
 
-  await Promise.all([
-    runHost(firstWorkspace, "switching"),
-    approveNextTestIntegration(core, testEnvironment),
-  ]);
+  await runHost(firstWorkspace, "switching");
   let result = await readResult();
   if (typeof result.failure === "string") {
     throw new Error(
@@ -93,15 +87,9 @@ try {
   if (result.stage === "switching") {
     // Isolated Extension Hosts may not share native SecretStorage even with one profile. If the next host receives a
     // fresh integration, the old principal keeps control until the protocol lease expires because disconnect never
-    // transfers authority. Wait that exact schema-owned lifetime and approve only a real new enrollment.
+    // transfers authority. Wait that exact schema-owned lifetime before the next host enrolls.
     await delay(controlLeaseLifetimeMs + 1_000);
-    await rm(integrationApproval, { force: true });
-    const approval = new AbortController();
-    const host = runHost(secondWorkspace, "complete").finally(() => approval.abort());
-    await Promise.all([
-      host,
-      approveNextTestIntegration(core, testEnvironment, 180_000, approval.signal),
-    ]);
+    await runHost(secondWorkspace, "complete");
     result = await readResult();
   }
   if (typeof result.failure === "string") {

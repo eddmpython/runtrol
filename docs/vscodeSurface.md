@@ -31,7 +31,8 @@ stream failure discards it, so the next attempt repeats locator ownership and pe
 a replacement Runtime. Initial discovery gives Core a bounded window to finish its atomic owner-only locator
 publication after private IPC becomes reachable. Public SDK frames use one bounded local transport write for the
 four-byte header and payload. Public Runtime and private Studio transports end gracefully before Windows reuses their
-named-pipe instances. Test approval markers are published only after the private approval connection has fully closed.
+named-pipe instances. Tests take the same enrollment path a person does: Studio settles its own enrollment with its
+own key, and no test-only approval channel exists to route around.
 Before settling its own enrollment, Studio briefly observes the exact pending decision so a decision already made
 through another local administration surface is honoured instead of overridden. Studio self-approves only an
 enrollment still pending after that window, by signing the exact pending identity with the key that requested it.

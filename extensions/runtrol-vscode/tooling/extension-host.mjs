@@ -8,7 +8,6 @@ import { runTests } from "@vscode/test-electron";
 import { build } from "esbuild";
 
 import { extensionIdentifier, extensionRoot } from "./extension-manifest.mjs";
-import { approveNextTestIntegration } from "./integration-approval.mjs";
 import {
   isolatedLaunchArguments,
   isolatedProfileSettings,
@@ -47,7 +46,6 @@ const testEntry = path.join(output, "extensionHost.test.cjs");
 const extensionUnderTestRoot = path.join(temporary, "extension");
 const resultPath = path.join(temporary, "result.json");
 const restoreResultPath = path.join(temporary, "restore-result.json");
-const integrationApproval = path.join(temporary, "integration-approved");
 const runtimeState = isolatedRuntimeState(temporary);
 const runtrolHome = runtimeState.home;
 const userData = path.join(temporary, "user");
@@ -161,7 +159,6 @@ listen = "stdio"
     ...coreEnvironment,
     RUNTROL_TEST_CORE: core,
     RUNTROL_TEST_EXTENSION_ID: extensionIdentifier,
-    RUNTROL_TEST_EXTERNAL_INTEGRATION_APPROVAL: integrationApproval,
     RUNTROL_VSCODE_PERFORMANCE: "1",
     RUNTROL_VSCODE_RESULT: resultPath,
     RUNTROL_VSCODE_PHASE: "measure",
@@ -179,7 +176,6 @@ listen = "stdio"
         workspaceRoot,
         measureExtensions,
       ),
-      approveNextTestIntegration(core, testEnvironment),
     ]);
   } finally {
     const progress = await readFile(resultPath, "utf8")
@@ -202,8 +198,6 @@ listen = "stdio"
     RUNTROL_VSCODE_PHASE: "restore",
     RUNTROL_VSCODE_RESTORE_SESSION: restoreSession,
   };
-  await rm(integrationApproval, { force: true });
-  const restoreApproval = new AbortController();
   const restoreHost = runHost(
     installed,
     testEntry,
@@ -211,11 +205,8 @@ listen = "stdio"
     restoreEnvironment,
     restoreWorkspace,
     restoreExtensions,
-  ).finally(() => restoreApproval.abort());
-  await Promise.all([
-    restoreHost,
-    approveNextTestIntegration(core, restoreEnvironment, 30_000, restoreApproval.signal),
-  ]);
+  );
+  await restoreHost;
   const restored = JSON.parse(await readFile(restoreResultPath, "utf8"));
   const result = { ...measured, ...restored };
   process.stdout.write(`RUNTROL_VSCODE_HOST ${JSON.stringify(result)}\n`);

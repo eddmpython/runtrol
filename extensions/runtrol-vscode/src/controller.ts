@@ -61,6 +61,8 @@ export class Controller implements vscode.Disposable {
   private nativeDiscoveryRestart: NodeJS.Timeout | null = null;
   private nativeDiscoveryPauseDepth = 0;
   private nativeDiscoveryGeneration = 0;
+  /// One provider probe at a time. Each spawns a CLI, so the queue is what keeps activation answerable.
+  private verificationTail: Promise<void> = Promise.resolve();
 
   constructor(
     private readonly context: vscode.ExtensionContext,
@@ -859,24 +861,39 @@ export class Controller implements vscode.Disposable {
     }
   }
 
+  /// Ask each unverified coding service what it can do, one at a time.
+  ///
+  /// Verification starts the CLI, and the slowest installed one takes about four seconds. Firing every provider
+  /// at once put that many process spawns on the machine during activation, and each completion asked for a full
+  /// refresh, which asked to verify again. Measured on 2026-08-17: with four installed services that turned a
+  /// refresh from immediate into more than five seconds.
+  ///
+  /// Serialized instead, and always in the background. One provider is probed at a time, the surface stays
+  /// answerable throughout, and each service appears in the list the moment its own probe lands rather than
+  /// every service appearing after the slowest one.
   private startProviderVerification(providers: readonly ProviderLine[]): void {
     for (const provider of providers) {
       if (!awaitsVerification(provider) || this.verifyingProviders.has(provider.providerId)) {
         continue;
       }
       this.verifyingProviders.add(provider.providerId);
-      void this.runtime.verifyProvider(provider.providerId).then(async () => {
-        if (!this.disposed) await this.refresh();
-      }).catch((error: unknown) => {
-        if (!this.disposed) {
-          this.conversation.status(
-            `Cannot verify ${provider.displayName}: ${error instanceof Error ? error.message : String(error)}`,
-            "warning",
-          );
+      const verified = this.verificationTail.then(async () => {
+        if (this.disposed) return;
+        try {
+          await this.runtime.verifyProvider(provider.providerId);
+          if (!this.disposed) await this.refresh();
+        } catch (error: unknown) {
+          if (!this.disposed) {
+            this.conversation.status(
+              `Cannot verify ${provider.displayName}: ${error instanceof Error ? error.message : String(error)}`,
+              "warning",
+            );
+          }
+        } finally {
+          this.verifyingProviders.delete(provider.providerId);
         }
-      }).finally(() => {
-        this.verifyingProviders.delete(provider.providerId);
       });
+      this.verificationTail = verified;
     }
   }
 

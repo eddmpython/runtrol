@@ -18,7 +18,6 @@ import {
   extensionRoot,
   packageManifest,
 } from "./extension-manifest.mjs";
-import { approveNextTestIntegration } from "./integration-approval.mjs";
 import {
   acquireVSCode,
   fileDigest,
@@ -48,7 +47,6 @@ const MARKETPLACE_INSTALL_DEADLINE_MS = 15 * 60_000;
 const MARKETPLACE_INSTALL_INTERVAL_MS = 15_000;
 const temporary = await mkdtemp(path.join(temporaryRoot, "runtrol-vscode-package-"));
 const resultPath = path.join(temporary, "result.json");
-const integrationApproval = path.join(temporary, "integration-approved");
 const runtimeState = isolatedRuntimeState(temporary);
 const runtrolHome = runtimeState.home;
 const userData = path.join(temporary, "user-data");
@@ -125,7 +123,6 @@ try {
 
   const environment = {
     ...runtimeState.environment,
-    RUNTROL_TEST_EXTERNAL_INTEGRATION_APPROVAL: integrationApproval,
     RUNTROL_TEST_EXTENSION_ID: extensionIdentifier,
     RUNTROL_VSCODE_RESULT: resultPath,
     RUNTROL_TEST_EXTENSION_VERSION: packageManifest.version,
@@ -142,7 +139,6 @@ try {
       userData,
       extensions,
     }),
-    approveNextTestIntegration(managedCore, environment),
   ]);
 
   const result = JSON.parse(await readFile(resultPath, "utf8"));

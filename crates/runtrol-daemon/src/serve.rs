@@ -52,7 +52,7 @@ use runtrol_transport::{
     StaticKeypair, WebSocketLinkError, response,
 };
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::{Mutex, mpsc, oneshot, watch};
+use tokio::sync::{RwLock, mpsc, oneshot, watch};
 use tokio::task::JoinSet;
 use tokio::time::Instant;
 
@@ -250,7 +250,7 @@ struct ConnectionServices {
     reserving: mpsc::UnboundedSender<ReservationAsked>,
     returning: mpsc::UnboundedSender<AgentReturned>,
     composed: Arc<Composed>,
-    discovering: Arc<Mutex<()>>,
+    discovering: Arc<RwLock<()>>,
     session_index: watch::Receiver<Arc<[u8]>>,
 }
 
@@ -342,7 +342,7 @@ impl Drop for ProviderUpdateGuard {
 
 async fn automatic_provider_updates(
     composed: Arc<Composed>,
-    discovering: Arc<Mutex<()>>,
+    discovering: Arc<RwLock<()>>,
     reserving: mpsc::UnboundedSender<ReservationAsked>,
     notices: mpsc::UnboundedSender<AutomaticUpdateNotice>,
 ) {
@@ -351,7 +351,9 @@ async fn automatic_provider_updates(
     let mut session_pins = BTreeMap::<ProviderId, Box<str>>::new();
     loop {
         let statuses = {
-            let _gate = discovering.lock().await;
+            // Exclusive against every driver preparation: inspecting an update may replace a binary, and a
+            // capability probe that ran across that swap would describe a program that is no longer there.
+            let _gate = discovering.write().await;
             crate::provider_update::inspect_all(&composed).await
         };
         for status in statuses {
@@ -387,7 +389,7 @@ async fn automatic_provider_updates(
                 }
             }
 
-            let _gate = discovering.lock().await;
+            let _gate = discovering.write().await;
             let (answered, hearing) = oneshot::channel();
             if reserving
                 .send(ReservationAsked::ReserveProviderUpdate { provider, answered })
@@ -670,7 +672,7 @@ async fn serve_surfaces(
     // keeps two connections from publishing stale snapshots over each other and bounds temporary provider processes.
     // A Models request holds this gate through its provider call. Opens release it after discovery because their
     // process slots are bounded separately by MAX_HOT.
-    let discovering = Arc::new(Mutex::new(()));
+    let discovering = Arc::new(RwLock::new(()));
     let mut connections = JoinSet::new();
     let push_wake_active = Arc::new(AtomicBool::new(false));
     let mut relay_hub = match relay {
@@ -1744,7 +1746,7 @@ async fn converse_inner(
                 request,
                 Request::ProviderUpdates | Request::ProviderUpdate { .. }
             ) {
-            Some(discovering.lock().await)
+            Some(discovering.write().await)
         } else {
             None
         };
@@ -3155,8 +3157,40 @@ mod tests {
         live_phone_journey("resilience").await;
     }
 
+    /// Two providers prepare at the same time, and an update still excludes both.
+    ///
+    /// Measured on 2026-08-17: with one exclusive gate, every installed coding service serialized against every
+    /// other one. Two of the four probe in about three seconds each, so adding them took activation-adjacent
+    /// work from roughly two seconds to nine and pushed the Extension Host past its deadlines. Two coding
+    /// services have nothing to say to each other; a provider update is the only thing that must stop them.
     #[tokio::test]
-    async fn a_stuck_model_provider_releases_global_preparation() {
+    async fn preparation_is_shared_between_providers_and_excluded_by_an_update() {
+        let gate = Arc::new(RwLock::new(()));
+
+        let first = gate.read().await;
+        let second = tokio::time::timeout(Duration::from_millis(250), gate.read())
+            .await
+            .expect("a second provider prepares while the first still is");
+
+        let updating = Arc::clone(&gate);
+        tokio::time::timeout(Duration::from_millis(100), async move {
+            let _exclusive = updating.write().await;
+        })
+        .await
+        .expect_err("a provider update waits for every preparation to finish");
+
+        drop(second);
+        drop(first);
+        let updating = Arc::clone(&gate);
+        tokio::time::timeout(Duration::from_millis(250), async move {
+            let _exclusive = updating.write().await;
+        })
+        .await
+        .expect("the update proceeds once preparation is done");
+    }
+
+    #[tokio::test]
+    async fn a_stuck_model_provider_releases_the_update_gate() {
         struct DropSignal(Option<oneshot::Sender<()>>);
 
         impl Drop for DropSignal {
@@ -3167,12 +3201,12 @@ mod tests {
             }
         }
 
-        let gate = Arc::new(Mutex::new(()));
+        let gate = Arc::new(RwLock::new(()));
         let first_gate = Arc::clone(&gate);
         let (held, holding) = oneshot::channel();
         let (dropped, dropping) = oneshot::channel();
         let first = tokio::spawn(async move {
-            let _guard = first_gate.lock().await;
+            let _guard = first_gate.write().await;
             held.send(()).expect("the test observes the held gate");
             let preparing = async move {
                 let _cleanup = DropSignal(Some(dropped));
@@ -3184,7 +3218,7 @@ mod tests {
 
         let second_gate = Arc::clone(&gate);
         let second = tokio::spawn(async move {
-            let _guard = second_gate.lock().await;
+            let _guard = second_gate.write().await;
         });
 
         let prepared = first.await.expect("the bounded preparation task finishes");

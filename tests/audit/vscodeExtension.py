@@ -102,7 +102,7 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
         ],
         "extension.ts": [
             "afterReady",
-            'process.env.RUNTROL_TEST_INSTALLED_UPGRADE === "1"',
+            "selfApproveIntegration(client, pendingId, signature)",
             'initializationStage = "runtime:bootstrap"',
         ],
         "providerHealth.ts": [
@@ -182,7 +182,7 @@ def selftest() -> int:
             "waitForVisibleWebview retainContextWhenHidden: false"
         ),
         "extension.ts": (
-            'afterReady process.env.RUNTROL_TEST_INSTALLED_UPGRADE === "1" '
+            "afterReady selfApproveIntegration(client, pendingId, signature) "
             'initializationStage = "runtime:bootstrap"'
         ),
         "providerHealth.ts": (
@@ -248,7 +248,7 @@ def selftest() -> int:
         (package, {**sources, "runtimeClient.ts": sources["runtimeClient.ts"].replace("providerSnapshot", "")}),
         (package, {**sources, "controller.ts": sources["controller.ts"].replace("this.runtime.inventory()", "")}),
         (package, {**sources, "controller.ts": sources["controller.ts"].replace("this.runtime.verifyProvider(", "")}),
-        (package, {**sources, "extension.ts": sources["extension.ts"].replace("RUNTROL_TEST_INSTALLED_UPGRADE", "")}),
+        (package, {**sources, "extension.ts": sources["extension.ts"].replace("selfApproveIntegration", "")}),
     ]
     for index, (changed_package, changed_sources) in enumerate(mutations, start=1):
         if not sourceViolations(changed_package, changed_sources):

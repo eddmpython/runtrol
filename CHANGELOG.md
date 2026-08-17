@@ -28,6 +28,10 @@ and refactoring that no user can observe do not belong here.
   extension could talk to the Core it had just installed and started itself. It now proves it is the enrollment it
   created by signing for it. Every other product still goes through the full local review, and narrowing what an
   integration may reach is still a decision you make.
+- Installing more coding services no longer makes Runtrol slower to open. Each service is asked what it can do one
+  at a time in the background instead of all at once, and two services no longer wait on each other inside Core.
+  Measured with four installed services, where two of them take about three seconds each to answer: a refresh went
+  from over five seconds back to immediate.
 - Approving a command no longer looks like refusing one. Refuse is the solid button, granting is outlined, granting
   permanently is outlined in the warning colour, and a high-risk request says so in words. The styling follows what
   each option does rather than the order the coding service sent them in.

@@ -7,7 +7,6 @@ import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
 
 import { extensionIdentifier, extensionRoot } from "./extension-manifest.mjs";
-import { approveNextTestIntegration } from "./integration-approval.mjs";
 import {
   acquireVSCode,
   fileDigest,
@@ -44,7 +43,6 @@ const runtimeState = isolatedRuntimeState(temporary);
 const runtrolHome = runtimeState.home;
 const workspace = path.join(temporary, "workspace");
 const resultPath = path.join(temporary, "phase-result.json");
-const integrationApproval = path.join(temporary, "integration-approved");
 const testEntry = path.join(verifier, "upgradeRollback.test.cjs");
 const managedCore = path.join(
   userData,
@@ -233,18 +231,14 @@ listen = "stdio"
 
 async function runPhase(vscodeExecutablePath, phase, version, selectedSession) {
   await rm(resultPath, { force: true });
-  // Isolated Extension Hosts may not share native SecretStorage even when they reuse the same profile. A fresh
-  // marker and live IPC approval let each real pending enrollment finish without accepting a stale earlier decision.
-  await rm(integrationApproval, { force: true });
-  const approval = new AbortController();
+  // Isolated Extension Hosts may not share native SecretStorage even when they reuse the same profile, so each
+  // phase enrolls for itself and settles that enrollment with its own key.
   const host = runInstalledExtensionTest({
     vscodeExecutablePath,
     verifierRoot: verifier,
     testEntry,
     environment: {
       ...environment,
-      RUNTROL_TEST_EXTERNAL_INTEGRATION_APPROVAL: integrationApproval,
-      RUNTROL_TEST_INSTALLED_UPGRADE: "1",
       RUNTROL_VSCODE_PERFORMANCE: "1",
       RUNTROL_VSCODE_RESULT: resultPath,
       RUNTROL_VSCODE_PHASE: phase,
@@ -256,19 +250,8 @@ async function runPhase(vscodeExecutablePath, phase, version, selectedSession) {
     workspace,
     userData,
     extensions,
-  }).finally(() => approval.abort());
-  await Promise.all([
-    host,
-    approveNextTestIntegration(
-      managedCore,
-      {
-        ...environment,
-        RUNTROL_TEST_EXTERNAL_INTEGRATION_APPROVAL: integrationApproval,
-      },
-      180_000,
-      approval.signal,
-    ),
-  ]);
+  });
+  await host;
   const result = JSON.parse(await readFile(resultPath, "utf8"));
   if (typeof result.failure === "string") {
     throw new Error(

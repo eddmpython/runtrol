@@ -1,4 +1,3 @@
-import { readFile } from "node:fs/promises";
 import path from "node:path";
 
 import * as vscode from "vscode";
@@ -54,21 +53,10 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
   const locator = new CoreLocator(context);
   const client = new CoreClient(locator);
   let initializationStage = "runtime:bootstrap";
-  // Extension Host gates delegate the physical-presence step to a separate local IPC driver. Installed-package
-  // continuity explicitly opts in because VS Code reports the installed bundle as Production. The driver still
-  // completes the real bounded challenge, and every ordinary activation shows the local review UI.
-  const externalTestApproval = (
-    context.extensionMode === vscode.ExtensionMode.Test
-    || process.env.RUNTROL_TEST_INSTALLED_UPGRADE === "1"
-  )
-    ? process.env.RUNTROL_TEST_EXTERNAL_INTEGRATION_APPROVAL
-    : undefined;
   const runtime = new StudioRuntimeClient(
     context,
     () => locator.runtimeExecutable(),
-    externalTestApproval
-      ? () => waitForExternalIntegrationApproval(externalTestApproval)
-      : (pendingId, signature) => selfApproveIntegration(client, pendingId, signature),
+    (pendingId, signature) => selfApproveIntegration(client, pendingId, signature),
     (confirmationId, sessionId) => confirmRuntimeForget(client, confirmationId, sessionId),
     testIntegrationRoots(context),
     (stage) => {
@@ -506,30 +494,6 @@ function performanceDeadline<T>(pending: Promise<T>, timeoutMs: number, label: s
   });
 }
 
-async function waitForExternalIntegrationApproval(marker: string): Promise<boolean> {
-  if (!path.isAbsolute(marker)) {
-    throw new Error("the external integration approval marker must be absolute");
-  }
-  const deadline = Date.now() + 30_000;
-  while (Date.now() < deadline) {
-    try {
-      const integrationId = (await readFile(marker, "utf8")).trim();
-      if (!/^int_[0-9a-f]{32}$/u.test(integrationId)) {
-        throw new Error("the external integration approval marker is malformed");
-      }
-      return true;
-    } catch (error) {
-      if (!isMissingFile(error)) throw error;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 50));
-  }
-  throw new Error("the external integration approval did not complete in time");
-}
-
-function isMissingFile(error: unknown): boolean {
-  return Boolean(error && typeof error === "object" && "code" in error
-    && (error as NodeJS.ErrnoException).code === "ENOENT");
-}
 
 export function deactivate(): void {}
 
