@@ -172,7 +172,7 @@ into a Task. The detailed contracts are [Mission operations](missionOperations.m
 ## Performance contract
 
 The real Extension Host gate runs three isolated cold trials of the production extension and Core on hosted Windows,
-macOS, and Linux. One median feeds the shared budget, while exact session counts and zero dropped frames must hold in
+macOS, and Linux. The fastest of three trials feeds the shared budget, while exact session counts and zero dropped frames must hold in
 every trial. The shared ratchet currently caps:
 
 | Measure | Ceiling |
