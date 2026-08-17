@@ -71,8 +71,10 @@ pub fn endpoint(home: Option<&str>) -> Result<String, ComposeError> {
 /// Observed as an intermittent red in CI and reproduced locally: the test passes alone and fails beside its
 /// siblings. Serializing here rather than in each module keeps the two call sites from drifting onto two locks,
 /// which would serialize nothing.
+/// Async-aware on purpose. One of the two call sites is an async test that holds this across an await, which a
+/// blocking guard would not survive, and this crate disallows the blocking one for exactly that reason.
 #[cfg(test)]
-pub(crate) fn console_lock() -> &'static std::sync::Mutex<()> {
-    static CONSOLE: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
-    CONSOLE.get_or_init(|| std::sync::Mutex::new(()))
+pub(crate) fn console_lock() -> &'static tokio::sync::Mutex<()> {
+    static CONSOLE: std::sync::OnceLock<tokio::sync::Mutex<()>> = std::sync::OnceLock::new();
+    CONSOLE.get_or_init(|| tokio::sync::Mutex::new(()))
 }

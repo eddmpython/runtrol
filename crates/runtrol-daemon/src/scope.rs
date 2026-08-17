@@ -654,9 +654,9 @@ mod tests {
         let mut ledger = GrantLedger::new();
         let device = DeviceId::now();
         let approved = [DeviceScope::SessionList];
-        let _serialised = crate::console_lock()
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // A synchronous test, so it takes the async lock the blocking way. That is only sound because nothing
+        // here runs inside a runtime.
+        let _serialised = crate::console_lock().blocking_lock();
         let console = LocalConsole::claim().expect("the console is free while this lock is held");
         let challenge = PresenceChallenge::issue(
             &console,

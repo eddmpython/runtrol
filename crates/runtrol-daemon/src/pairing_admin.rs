@@ -828,9 +828,7 @@ mod tests {
 
     #[tokio::test]
     async fn exact_local_approval_persists_then_releases_the_noise_channel() {
-        let _serialised = crate::console_lock()
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _serialised = crate::console_lock().lock().await;
         let scratch = Scratch::make();
         let home = scratch.path.to_str().expect("UTF-8 scratch");
         let mut composed = Composed::for_tests(home, runtrol_drivers::builtin()).expect("compose");
