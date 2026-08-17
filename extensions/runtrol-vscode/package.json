@@ -339,6 +339,26 @@
         "icon": "$(settings-gear)"
       }
     ],
+    "keybindings": [
+      {
+        "command": "runtrol.switchSession",
+        "key": "ctrl+k ctrl+a",
+        "mac": "cmd+k cmd+a",
+        "when": "!terminalFocus"
+      },
+      {
+        "command": "runtrol.startSession",
+        "key": "ctrl+k ctrl+n",
+        "mac": "cmd+k cmd+n",
+        "when": "!terminalFocus"
+      },
+      {
+        "command": "runtrol.openConversation",
+        "key": "ctrl+k ctrl+o",
+        "mac": "cmd+k cmd+o",
+        "when": "!terminalFocus"
+      }
+    ],
     "menus": {
       "commandPalette": [
         {

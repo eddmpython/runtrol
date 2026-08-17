@@ -18,24 +18,31 @@ export function conversationChoices(
 ): ConversationChoice[] {
   return rows.map((conversation) => ({
     label: `${glyph(conversation)} ${conversation.title}`,
-    description: conversationDetail(conversation, nowMs),
+    description: conversation.activity === "needsYou"
+      ? `Needs you · ${conversationDetail(conversation, nowMs)}`
+      : conversationDetail(conversation, nowMs),
     detail: conversation.workspace,
     picked: conversation.open,
     conversation,
   }));
 }
 
+/// The same six shapes the sidebar uses. A switcher that spelled a state differently would make the reader learn
+/// the vocabulary twice.
 function glyph(conversation: Conversation): string {
   if (!conversation.canOpen) return "$(circle-slash)";
-  if (conversation.open) return "$(check)";
   switch (conversation.activity) {
+    case "needsYou":
+      return "$(question)";
     case "attention":
-      return "$(warning)";
+      return "$(error)";
     case "working":
       return "$(loading~spin)";
+    case "waitingOnQuota":
+      return "$(watch)";
     case "ready":
-      return "$(circle-filled)";
+      return conversation.open ? "$(check)" : "$(circle-filled)";
     case "saved":
-      return "$(circle-outline)";
+      return conversation.open ? "$(check)" : "$(circle-outline)";
   }
 }

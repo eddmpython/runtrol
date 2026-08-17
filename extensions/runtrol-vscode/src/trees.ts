@@ -1,6 +1,6 @@
 import * as vscode from "vscode";
 
-import { conversationDetail, type Conversation } from "./conversationList";
+import { attentionCount, conversationDetail, type Conversation } from "./conversationList";
 import { isBroken } from "./providerHealth";
 import type { ProviderLine } from "./runtimeTypes";
 import { RuntimeState } from "./state";
@@ -13,7 +13,12 @@ export class ConversationItem extends vscode.TreeItem {
   constructor(readonly conversation: Conversation, nowMs: number) {
     super(conversation.title, vscode.TreeItemCollapsibleState.None);
     this.id = conversation.key;
-    this.description = conversationDetail(conversation, nowMs);
+    // A conversation that stopped for the reader says so first. The service and the folder are what distinguish
+    // rows from each other; this is what distinguishes one row from every other thing they could be doing.
+    const detail = conversationDetail(conversation, nowMs);
+    this.description = conversation.activity === "needsYou"
+      ? `Needs you · ${detail}`
+      : detail;
     this.tooltip = tooltip(conversation);
     this.contextValue = contextValue(conversation);
     this.iconPath = icon(conversation);
@@ -50,15 +55,25 @@ export class ServiceProblemItem extends vscode.TreeItem {
 
 export type ChatTreeItem = ConversationItem | ServiceProblemItem;
 
+/*
+ * One glyph per state, and the same glyph everywhere that state is shown.
+ *
+ * The point of the vocabulary is that a list of eight running agents can be read without opening any of them. That
+ * only works if the reader learns six shapes once, so no state may borrow another's glyph and none may be silent.
+ */
 function icon(conversation: Conversation): vscode.ThemeIcon {
   if (!conversation.canOpen) {
     return new vscode.ThemeIcon("circle-slash", new vscode.ThemeColor("disabledForeground"));
   }
   switch (conversation.activity) {
+    case "needsYou":
+      return new vscode.ThemeIcon("question", new vscode.ThemeColor("notificationsWarningIcon.foreground"));
     case "attention":
-      return new vscode.ThemeIcon("warning", new vscode.ThemeColor("problemsWarningIcon.foreground"));
+      return new vscode.ThemeIcon("error", new vscode.ThemeColor("problemsErrorIcon.foreground"));
     case "working":
       return new vscode.ThemeIcon("loading~spin", new vscode.ThemeColor("charts.orange"));
+    case "waitingOnQuota":
+      return new vscode.ThemeIcon("watch", new vscode.ThemeColor("descriptionForeground"));
     case "ready":
       return new vscode.ThemeIcon("circle-filled", new vscode.ThemeColor("charts.green"));
     case "saved":
@@ -69,10 +84,14 @@ function icon(conversation: Conversation): vscode.ThemeIcon {
 function spokenActivity(conversation: Conversation): string {
   if (!conversation.canOpen) return "cannot be reopened";
   switch (conversation.activity) {
+    case "needsYou":
+      return "needs you";
     case "attention":
       return "needs attention";
     case "working":
       return "working";
+    case "waitingOnQuota":
+      return "waiting on a limit";
     case "ready":
       return "ready";
     case "saved":
@@ -113,12 +132,14 @@ export class ConversationsTree implements vscode.TreeDataProvider<ChatTreeItem>,
     this.subscription = state.onDidChange((change) => {
       this.items = undefined;
       this.changedEmitter.fire(undefined);
+      this.updateBadge();
       if (change === "selection") this.revealOpenConversation();
     });
   }
 
   bindView(view: vscode.TreeView<ChatTreeItem>): void {
     this.view = view;
+    this.updateBadge();
     this.revealOpenConversation();
   }
 
@@ -141,6 +162,21 @@ export class ConversationsTree implements vscode.TreeDataProvider<ChatTreeItem>,
     this.items = undefined;
     this.subscription.dispose();
     this.changedEmitter.dispose();
+  }
+
+  /// The count on the activity bar icon, so a blocked agent is visible from a different view entirely.
+  private updateBadge(): void {
+    const view = this.view;
+    if (!view) return;
+    const waiting = attentionCount(this.state.conversations);
+    view.badge = waiting === 0
+      ? undefined
+      : {
+        value: waiting,
+        tooltip: waiting === 1
+          ? "1 conversation is waiting for you"
+          : `${waiting} conversations are waiting for you`,
+      };
   }
 
   private revealOpenConversation(): void {

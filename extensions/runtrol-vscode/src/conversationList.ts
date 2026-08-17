@@ -2,7 +2,17 @@ import type { NativeChatLine, ProviderLine, SessionLine } from "./runtimeTypes";
 import { providerDisplayName, workspaceName } from "./sessionDisplay";
 
 /// What a conversation is doing, said the way a person would say it.
-export type ConversationActivity = "working" | "ready" | "attention" | "saved";
+///
+/// Ordered by how much it wants from the reader. `needsYou` is the only one that is actually urgent, and keeping
+/// it a separate value from `attention` is deliberate: something that broke and something that is politely
+/// waiting are different errands, and a surface that merged them would send the reader to the wrong one.
+export type ConversationActivity =
+  | "needsYou"
+  | "attention"
+  | "working"
+  | "waitingOnQuota"
+  | "ready"
+  | "saved";
 
 /// One conversation, whichever half of the system currently holds it.
 ///
@@ -118,9 +128,23 @@ function providerOwned(
 
 function activityOf(session: SessionLine): ConversationActivity {
   if (session.lifecycle === "failed" || session.looksStuck) return "attention";
+  // Waiting outranks running, because a turn that stopped for a person is the one fact worth interrupting them
+  // for. Runtime reports it only while a turn is actually running, so it can never outlive its turn.
+  if (session.waitingOn === "person") return "needsYou";
+  if (session.waitingOn === "quota") return "waitingOnQuota";
   if (session.lifecycle === "hotRunning") return "working";
   if (session.lifecycle === "hotIdle") return "ready";
   return "saved";
+}
+
+/// Whether this conversation has stopped and cannot continue until the reader does something.
+export function needsYou(row: Conversation): boolean {
+  return row.activity === "needsYou" || row.activity === "attention";
+}
+
+/// How many conversations are waiting on the reader right now.
+export function attentionCount(rows: readonly Conversation[]): number {
+  return rows.filter(needsYou).length;
 }
 
 /// Live conversations first, then whatever the coding service touched most recently.

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { conversationDetail, conversations, elapsed } from "./conversationList";
+import { attentionCount, conversationDetail, conversations, elapsed, needsYou } from "./conversationList";
 import type { NativeChatLine, ProviderLine, SessionLine } from "./runtimeTypes";
 
 const NOW = Date.parse("2026-08-17T12:00:00Z");
@@ -161,4 +161,81 @@ test("elapsed time reads the way a chat list writes it", () => {
   assert.equal(elapsed(NOW - 3 * 3_600_000, NOW), "3h");
   assert.equal(elapsed(NOW - 2 * 86_400_000, NOW), "2d");
   assert.equal(elapsed(NOW - 30 * 86_400_000, NOW), "4w");
+});
+
+test("a turn that stopped for a person outranks one that is merely working", () => {
+  const rows = conversations(
+    [
+      session({ sessionId: "s1", hot: true, lifecycle: "hotRunning", workspace: "C:\work\alpha" }),
+      session({
+        sessionId: "s2",
+        hot: true,
+        lifecycle: "hotRunning",
+        waitingOn: "person",
+        workspace: "C:\work\beta",
+      }),
+    ],
+    PROVIDERS,
+    [],
+    null,
+  );
+
+  const working = rows.find((row) => row.session?.sessionId === "s1");
+  const blocked = rows.find((row) => row.session?.sessionId === "s2");
+  assert.equal(working?.activity, "working");
+  assert.equal(blocked?.activity, "needsYou", "a running turn that stopped for a person is not just working");
+});
+
+test("a quota wait is not an errand for the reader", () => {
+  const [row] = conversations(
+    [session({ sessionId: "s1", hot: true, lifecycle: "hotRunning", waitingOn: "quota" })],
+    PROVIDERS,
+    [],
+    null,
+  );
+
+  assert.ok(row);
+  assert.equal(row.activity, "waitingOnQuota");
+  assert.equal(needsYou(row), false, "nobody can answer a rate limit, so it must not ask to be answered");
+});
+
+test("a broken session outranks a waiting one, because it cannot be answered either", () => {
+  const [row] = conversations(
+    [session({ sessionId: "s1", hot: true, lifecycle: "failed", waitingOn: "person" })],
+    PROVIDERS,
+    [],
+    null,
+  );
+
+  assert.equal(row?.activity, "attention");
+});
+
+test("the badge counts exactly the conversations a person has to act on", () => {
+  const rows = conversations(
+    [
+      session({ sessionId: "s1", hot: true, lifecycle: "hotRunning", waitingOn: "person", workspace: "C:\work\a" }),
+      session({ sessionId: "s2", hot: true, lifecycle: "failed", workspace: "C:\work\b" }),
+      session({ sessionId: "s3", hot: true, lifecycle: "hotRunning", waitingOn: "quota", workspace: "C:\work\c" }),
+      session({ sessionId: "s4", hot: true, lifecycle: "hotRunning", workspace: "C:\work\d" }),
+      session({ sessionId: "s5", hot: true, lifecycle: "hotIdle", workspace: "C:\work\e" }),
+    ],
+    PROVIDERS,
+    [],
+    null,
+  );
+
+  assert.equal(attentionCount(rows), 2, "one waiting and one broken, and nothing else");
+});
+
+test("a waiting state never survives its own turn", () => {
+  // Runtime clears it, and the projection must not resurrect it from a stale field on a cold row.
+  const [row] = conversations(
+    [session({ sessionId: "s1", hot: false, lifecycle: "cold", waitingOn: null })],
+    PROVIDERS,
+    [],
+    null,
+  );
+
+  assert.equal(row?.activity, "saved");
+  assert.equal(needsYou(row!), false);
 });

@@ -12,6 +12,12 @@ and refactoring that no user can observe do not belong here.
 
 ### Added
 
+- Conversations now say when they are waiting for you. A coding agent that stops mid-turn for an approval or a
+  question reads `Needs you` in the list, carries its own glyph, and raises a count badge on the Runtrol icon, so a
+  blocked agent is visible without opening anything. Waiting on an account limit is shown as its own state and never
+  asks to be answered.
+- New Conversation, Switch Conversation, and Show Open Conversation have keyboard chords (`Ctrl+K Ctrl+N`,
+  `Ctrl+K Ctrl+A`, `Ctrl+K Ctrl+O`; `Cmd` on macOS).
 - Cline and OpenCode join the coding services Runtrol supervises. OpenCode reports its existing conversations through
   the official protocol, so they appear in the list without being started here first.
 

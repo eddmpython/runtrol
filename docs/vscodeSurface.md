@@ -63,6 +63,14 @@ the original daemon and provider processes instead of making a versioned extensi
   so opening a saved chat updates that row in place instead of removing one and inserting another.
 - Live conversations lead, then whatever the coding service touched most recently. Turn state never participates in the
   order, so no row moves because an agent started or finished thinking.
+- Every row carries one of six states, and the same glyph means the same thing in the sidebar and in the switcher:
+  needs you, needs attention, working, waiting on a limit, ready, saved. The point of the vocabulary is that a list of
+  running agents can be read without opening any of them.
+- A conversation whose turn stopped for a person reads `Needs you` before anything else on the row, and the view
+  carries a count badge so a blocked agent stays visible from another view entirely. An account limit is a separate
+  state and never counts toward that badge, because nobody can answer it.
+- New Conversation, Switch Conversation, and Show Open Conversation each have a keyboard chord, so the entry point
+  never requires the mouse.
 - A coding service that is not installed produces no row. Only an installed service that still cannot run appears, and
   only once its capability probe has finished.
 - The selected conversation opens in one reusable editor tab with a bounded renderer and composer.
