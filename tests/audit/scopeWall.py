@@ -15,6 +15,11 @@ So three things are checked, and each one has already been the thing that went w
    never heard of.
 3. **The wall is consulted before the dispatcher does anything else.** A check that runs after another branch has
    acted is a check on the way out, and what it was meant to prevent has already happened.
+4. **Every request the table sends to local administration is bound by the dispatcher.** Having a rule is not the
+   same as being routed. A request can pass the wall and still reach nothing, because the dispatcher decides
+   membership in a second place: one predicate that selects the family and one match that answers it. Measured on
+   2026-08-17: a new request was added to the table and to neither, so every call was refused by name, the handler
+   was dead code, and the only journey that runs the real product routed around the path entirely. Nothing failed.
 
 Usage::
 
@@ -37,6 +42,16 @@ ROOT = Path(__file__).resolve().parents[2]
 WIRE = ROOT / "crates" / "runtrol-ipc" / "src" / "wire.rs"
 TABLE = ROOT / "crates" / "runtrol-daemon" / "src" / "scope.rs"
 BOUNDARY = ROOT / "crates" / "runtrol-daemon" / "src" / "dispatch.rs"
+
+
+# The families whose membership the dispatcher decides in a predicate of its own. For each, every request the
+# scope table assigns to that local capability must be selected by the predicate AND answered in `answer_prepared`.
+# Families absent here are routed by other means and are out of this check's scope.
+ROUTED_FAMILIES = {
+    "IntegrationAdmin": "fn is_integration_admin(request: &Request) -> bool",
+    "DevicePair": "fn is_pairing_admin(request: &Request) -> bool",
+}
+ANSWERS = "fn answer_prepared("
 
 # The enum whose variants are the requests a caller can make.
 THE_REQUEST = "Request"
@@ -83,6 +98,57 @@ def variantsOf(path: Path, enum: str) -> list[str]:
         depth += opened - closed
         if index > start and depth <= 0:
             break
+    return found
+
+
+def bodyOf(lines: list[str], signature: str) -> list[str]:
+    """The source lines of one function, found by its signature and closed by brace depth."""
+    start = next((index for index, line in enumerate(lines) if signature in line), None)
+    if start is None:
+        return []
+    depth = 0
+    opened = False
+    for index in range(start, len(lines)):
+        text = rustSource.withoutComments(lines[index])
+        depth += text.count("{") - text.count("}")
+        if "{" in text:
+            opened = True
+        if opened and depth <= 0:
+            return lines[start : index + 1]
+    return []
+
+
+def namesIn(source: list[str], enum: str) -> set[str]:
+    """Every request variant one region of source names."""
+    variant = re.compile(rf"{re.escape(enum)}::([A-Z][A-Za-z0-9]*)")
+    found: set[str] = set()
+    for line in source:
+        found.update(variant.findall(rustSource.withoutComments(line)))
+    return found
+
+
+def familyMembers(path: Path, enum: str, capability: str) -> set[str]:
+    """Every request the scope table assigns to one local capability.
+
+    Read from the table rather than listed here, so a new request joins this check by being written down once.
+    """
+    lines = path.read_text(encoding="utf-8").splitlines()
+    regions = rustSource.testRegions(lines)
+    variant = re.compile(rf"{re.escape(enum)}::([A-Z][A-Za-z0-9]*)")
+    target = f"LocalScope::{capability}"
+
+    found: set[str] = set()
+    pending: list[str] = []
+    for index, line in enumerate(lines):
+        if rustSource.inRegions(index, regions):
+            continue
+        text = rustSource.withoutComments(line)
+        pending.extend(variant.findall(text))
+        if "Needed::" not in text:
+            continue
+        if target in text:
+            found.update(pending)
+        pending = []
     return found
 
 
@@ -154,6 +220,29 @@ def main() -> int:
             f"of would be allowed"
         )
 
+    boundaryLines = BOUNDARY.read_text(encoding="utf-8").splitlines()
+    answered = namesIn(bodyOf(boundaryLines, ANSWERS), THE_REQUEST)
+    routedTotal = 0
+    for capability, selector in sorted(ROUTED_FAMILIES.items()):
+        members = familyMembers(TABLE, THE_REQUEST, capability)
+        if not members:
+            problems.append(
+                f"  - no request in {TABLE.name} is assigned to `LocalScope::{capability}`, so this check would "
+                f"pass on nothing"
+            )
+            continue
+        routedTotal += len(members)
+        selected = namesIn(bodyOf(boundaryLines, selector), THE_REQUEST)
+        for name in sorted(members):
+            missing = [where for where, table in (("selected by", selected), ("answered in", answered))
+                       if name not in table]
+            for where in missing:
+                problems.append(
+                    f"  - `{THE_REQUEST}::{name}` is `LocalScope::{capability}` in {TABLE.name} but is not "
+                    f"{where} {BOUNDARY.name}. it passes the wall and then reaches nothing, so its handler is "
+                    f"dead code and every call is refused by name"
+                )
+
     ranFirst = askedFirst(BOUNDARY)
     if ranFirst:
         problems.append(
@@ -166,8 +255,9 @@ def main() -> int:
         return 2
 
     print(
-        f"[scopeWall] OK. {len(declared)} requests all have a rule, the wildcard refuses, "
-        f"and the wall is asked before anything acts."
+        f"[scopeWall] OK. {len(declared)} requests all have a rule, "
+        f"{routedTotal} locally administered requests are selected and answered by the "
+        f"dispatcher, the wildcard refuses, and the wall is asked before anything acts."
     )
     return 0
 

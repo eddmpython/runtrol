@@ -622,6 +622,7 @@ pub(crate) const fn is_integration_admin(request: &Request) -> bool {
         Request::IntegrationEnrollments
             | Request::IntegrationApprovalBegin { .. }
             | Request::IntegrationApprovalFinish { .. }
+            | Request::IntegrationSelfApprove { .. }
             | Request::IntegrationEnrollmentDeny { .. }
             | Request::Integrations
             | Request::IntegrationRevoke { .. }
@@ -780,6 +781,15 @@ pub(crate) async fn prepare_integration_admin(
             .map(|integration_id| Response::IntegrationApproved {
                 integration_id: integration_id.to_string().into(),
             }),
+        Request::IntegrationSelfApprove {
+            pending_id,
+            signature,
+        } => crate::integration_admin::IntegrationAdmin::self_approve(
+            composed, pending_id, signature,
+        )
+        .map(|integration_id| Response::IntegrationApproved {
+            integration_id: integration_id.to_string().into(),
+        }),
         Request::IntegrationEnrollmentDeny { pending_id } => {
             crate::integration_admin::IntegrationAdmin::deny(composed, pending_id)
                 .map(|()| Response::Done)
@@ -1225,6 +1235,7 @@ pub(crate) fn answer_prepared(
         Request::IntegrationEnrollments
         | Request::IntegrationApprovalBegin { .. }
         | Request::IntegrationApprovalFinish { .. }
+        | Request::IntegrationSelfApprove { .. }
         | Request::IntegrationEnrollmentDeny { .. }
         | Request::Integrations
         | Request::IntegrationRevoke { .. }

@@ -97,6 +97,7 @@ pub fn needed(request: &Request) -> Needed {
         Request::IntegrationEnrollments
         | Request::IntegrationApprovalBegin { .. }
         | Request::IntegrationApprovalFinish { .. }
+        | Request::IntegrationSelfApprove { .. }
         | Request::IntegrationEnrollmentDeny { .. }
         | Request::Integrations
         | Request::IntegrationRevoke { .. }

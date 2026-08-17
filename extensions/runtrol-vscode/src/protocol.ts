@@ -1,4 +1,4 @@
-export const WIRE_VERSION = 23;
+export const WIRE_VERSION = 24;
 
 export type PrivateProviderLine = {
   id: string;
@@ -193,6 +193,7 @@ export type Request =
       with: { pending_id: string; scopes: string[]; roots: string[] };
     }
   | { ask: "integrationApprovalFinish"; with: { challenge_id: string; answer: string } }
+  | { ask: "integrationSelfApprove"; with: { pending_id: string; signature: string } }
   | { ask: "integrationEnrollmentDeny"; with: { pending_id: string } }
   | { ask: "integrations" }
   | { ask: "integrationRevoke"; with: { integration_id: string } }

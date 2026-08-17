@@ -36,8 +36,18 @@ durable state.
 
 ## Authorization
 
-Enrollment proves possession of an Ed25519 key and creates a bounded pending request. The operator approves a narrowed
-scope and root set locally. The public caller cannot approve, widen, or choose a different root after review.
+Enrollment proves possession of an Ed25519 key and creates a bounded pending request. A third-party integration is
+decided by the operator locally, who approves a narrowed scope and root set. The public caller cannot approve, widen,
+or choose a different root after review.
+
+Runtrol Studio's own enrollment is settled differently, because the ceremony it would otherwise perform proves
+nothing. Studio materializes and spawns the Core it enrolls with, and the local approval challenge returns its own
+phrase inside the response, so any program that can reach the owner-only private endpoint could already read that
+phrase back and complete the approval unaided. Studio instead signs the pending identity with the enrolling key over
+a domain-separated payload. That establishes which enrollment the caller is, which the phrase never established.
+Self-approval grants the enrollment exactly as requested and can neither widen nor narrow it: narrowing remains a
+reviewed local decision, the root deny list still refuses any root overlapping a provider credential directory, and
+the request is a local administration type that no remote caller can reach.
 
 Grant changes are generation-based. Narrowing and revocation apply before the next parsed request is dispatched and
 retire active subscriptions. Widening requires a new local decision. Key rotation proves the old and replacement keys

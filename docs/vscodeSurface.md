@@ -32,8 +32,9 @@ a replacement Runtime. Initial discovery gives Core a bounded window to finish i
 publication after private IPC becomes reachable. Public SDK frames use one bounded local transport write for the
 four-byte header and payload. Public Runtime and private Studio transports end gracefully before Windows reuses their
 named-pipe instances. Test approval markers are published only after the private approval connection has fully closed.
-Before opening the local enrollment review, Studio briefly observes the exact pending decision so an approval already
-completed through another local administration surface does not produce a stale duplicate prompt.
+Before settling its own enrollment, Studio briefly observes the exact pending decision so a decision already made
+through another local administration surface is honoured instead of overridden. Studio self-approves only an
+enrollment still pending after that window, by signing the exact pending identity with the key that requested it.
 
 Studio becomes ready after one exact provider and managed-session inventory has populated navigation. Dedicated
 provider and managed-session streams then replace that inventory in the background. While those streams remain

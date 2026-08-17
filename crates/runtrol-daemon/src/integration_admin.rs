@@ -441,10 +441,6 @@ impl IntegrationAdmin {
         })
     }
 
-    #[expect(
-        clippy::too_many_lines,
-        reason = "one approval transaction keeps the one-use witness, exact proposal revalidation, filesystem identity binding, durable grant, and audit stages together"
-    )]
     pub(crate) async fn finish(
         &self,
         composed: &Composed,
@@ -525,40 +521,73 @@ impl IntegrationAdmin {
             approved_at: now,
             revoked_at: None,
         };
-        for _ in 0..4 {
-            let key = IntegrationKey::from_bytes(random_key()?);
-            if composed
-                .store
-                .get_integration(key)
-                .map_err(|_| AdminError::state())?
-                .is_none()
-            {
-                crate::runtime_audit::local(
-                    &composed.store,
-                    Some(key),
-                    Some(grant.key_generation),
-                    "integrations/approve",
-                    IntegrationAuditOutcome::Attempted,
-                    "attempted",
-                )
-                .map_err(|_| AdminError::state())?;
-                composed
-                    .store
-                    .approve_enrollment(pending.enrollment, key, &grant)
-                    .map_err(|_| AdminError::state())?;
-                crate::runtime_audit::local(
-                    &composed.store,
-                    Some(key),
-                    Some(grant.key_generation),
-                    "integrations/approve",
-                    IntegrationAuditOutcome::Allowed,
-                    "allowed",
-                )
-                .map_err(|_| AdminError::state())?;
-                return Ok(integration_id(key));
-            }
+        commit_approval(composed, pending.enrollment, &grant, "integrations/approve")
+    }
+
+    /// Approve one pending enrollment for the key that requested it, without a typed phrase.
+    ///
+    /// Reaching this method already means reaching the owner-only private endpoint, which is what the phrase
+    /// otherwise stands in for. The phrase cannot add anything against a caller that is already there: the local
+    /// challenge prompt carries its own answer, so any program with this reach can read and return it. What the
+    /// phrase does not establish is which enrollment the caller is, and the signature here does establish exactly
+    /// that. The grant is the enrollment as requested; narrowing stays a reviewed decision through `begin`.
+    pub(crate) fn self_approve(
+        composed: &Composed,
+        pending: &str,
+        signature: &str,
+    ) -> Result<IntegrationId, AdminError> {
+        let enrollment = parse_enrollment(pending)?;
+        let now = WallMs::now();
+        let row = composed
+            .store
+            .get_enrollment(enrollment)
+            .map_err(|_| AdminError::state())?
+            .ok_or_else(|| AdminError::invalid("the pending enrollment does not exist"))?;
+        if row.state != EnrollmentState::Pending || row.expires_at < now {
+            return Err(AdminError::invalid("the enrollment is terminal or expired"));
         }
-        Err(AdminError::state())
+        crate::runtime_auth::verify_self_approval(
+            &row.public_key,
+            signature,
+            &pending_id(enrollment),
+        )
+        .map_err(|_| {
+            AdminError::invalid("the self-approval proof does not match the enrolling key")
+        })?;
+        // The same rule `begin` and `change_grant` enforce. Authority over sessions or approvals with no root to
+        // exercise it in is not a smaller grant, it is a broken one: every later call fails root-denied and
+        // nothing repairs it, because the grant itself is valid and the client has no reason to re-enroll.
+        if row
+            .scopes
+            .iter()
+            .any(|scope| scope.starts_with("session.") || scope.starts_with("approval."))
+            && row.roots.is_empty()
+        {
+            return Err(AdminError::invalid(
+                "session authority requires at least one approved project root",
+            ));
+        }
+        let deny = deny_list(composed)?;
+        let approved_roots = approve_roots(&row.roots, &deny)?
+            .iter()
+            .map(|root| IntegrationRootRow {
+                path: root.path().as_str().into(),
+                identity: root.identity().to_bytes(),
+            })
+            .collect::<Vec<_>>();
+        let grant = IntegrationRow {
+            public_key: row.public_key,
+            client_instance_id: row.client_instance_id,
+            label: row.client_name,
+            manifest_digest: row.manifest_digest,
+            scopes: row.scopes,
+            roots: approved_roots,
+            key_generation: 1,
+            grant_generation: 1,
+            approved_at: now,
+            revoked_at: None,
+        };
+        commit_approval(composed, enrollment, &grant, "integrations/selfApprove")
     }
 
     pub(crate) fn deny(composed: &Composed, pending: &str) -> Result<(), AdminError> {
@@ -796,6 +825,56 @@ pub(crate) fn deny_list(composed: &Composed) -> Result<DenyList, AdminError> {
     DenyList::new(&home, composed.home.paths().root(), &declared).map_err(|_| AdminError::state())
 }
 
+/// Mint one unused integration key and durably record the grant, bracketed by audit.
+///
+/// Both approval paths end here so that the audit pair, the key-collision retry, and the durable write are
+/// written once. What differs between them is who proved the decision, which is settled before this call and
+/// carried in `method` so the ledger keeps the two apart.
+///
+/// The method is not cosmetic. The audit ledger is where someone goes to ask whether a person reviewed a grant
+/// or a program spent its own enrollment, and one shared name would make that unanswerable after the fact.
+fn commit_approval(
+    composed: &Composed,
+    enrollment: EnrollmentKey,
+    grant: &IntegrationRow,
+    method: &'static str,
+) -> Result<IntegrationId, AdminError> {
+    for _ in 0..4 {
+        let key = IntegrationKey::from_bytes(random_key()?);
+        if composed
+            .store
+            .get_integration(key)
+            .map_err(|_| AdminError::state())?
+            .is_none()
+        {
+            crate::runtime_audit::local(
+                &composed.store,
+                Some(key),
+                Some(grant.key_generation),
+                method,
+                IntegrationAuditOutcome::Attempted,
+                "attempted",
+            )
+            .map_err(|_| AdminError::state())?;
+            composed
+                .store
+                .approve_enrollment(enrollment, key, grant)
+                .map_err(|_| AdminError::state())?;
+            crate::runtime_audit::local(
+                &composed.store,
+                Some(key),
+                Some(grant.key_generation),
+                method,
+                IntegrationAuditOutcome::Allowed,
+                "allowed",
+            )
+            .map_err(|_| AdminError::state())?;
+            return Ok(integration_id(key));
+        }
+    }
+    Err(AdminError::state())
+}
+
 fn parse_enrollment(value: &str) -> Result<EnrollmentKey, AdminError> {
     enrollment_key(&PendingEnrollmentId::new(value))
         .map_err(|_| AdminError::invalid("the pending enrollment identity is malformed"))
@@ -925,5 +1004,304 @@ impl AdminError {
 impl core::fmt::Display for AdminError {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter.write_str(self.message)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    use base64ct::{Base64UrlUnpadded, Encoding as _};
+    use ed25519_dalek::{Signer as _, SigningKey};
+    use runtrol_runtime_protocol::self_approval_signing_payload;
+    use runtrol_store::EnrollmentRow;
+
+    use super::*;
+
+    static NEXT_SCRATCH: AtomicU64 = AtomicU64::new(0);
+
+    struct Scratch {
+        path: std::path::PathBuf,
+    }
+
+    impl Scratch {
+        fn make() -> Self {
+            let sequence = NEXT_SCRATCH.fetch_add(1, Ordering::Relaxed);
+            let path = std::env::temp_dir().join(format!(
+                "runtrol-integration-admin-{}-{sequence}",
+                std::process::id()
+            ));
+            std::fs::create_dir_all(&path).expect("create integration scratch");
+            Self { path }
+        }
+    }
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ignored = std::fs::remove_dir_all(&self.path);
+        }
+    }
+
+    /// One pending enrollment for a caller-owned key, requesting one real project root.
+    ///
+    /// A real root because session authority without one is refused, which is the point of
+    /// `session_authority_without_a_root_is_refused` below. Everything else here is about who may spend an
+    /// enrollment, so the root is simply the scratch directory and never varies.
+    fn pending(
+        composed: &Composed,
+        signing: &SigningKey,
+        expires_at: WallMs,
+        roots: Vec<Box<str>>,
+    ) -> EnrollmentKey {
+        let Ok(bytes) = random_key() else {
+            panic!("the operating system supplies randomness for a test enrollment key");
+        };
+        let key = EnrollmentKey::from_bytes(bytes);
+        let now = WallMs::now();
+        let row = EnrollmentRow {
+            public_key: signing.verifying_key().to_bytes(),
+            client_instance_id: "instance".into(),
+            client_name: "Test Consumer".into(),
+            client_version: "0.0.0".into(),
+            manifest_digest: [7; 32],
+            scopes: vec![AppScope::SessionList.to_string().into()],
+            roots,
+            created_at: now,
+            expires_at,
+            state: EnrollmentState::Pending,
+        };
+        assert!(
+            composed
+                .store
+                .create_enrollment(key, &row)
+                .expect("create enrollment"),
+            "the scratch store had no such enrollment yet"
+        );
+        key
+    }
+
+    fn sign_for(signing: &SigningKey, enrollment: EnrollmentKey) -> String {
+        let payload =
+            self_approval_signing_payload(&pending_id(enrollment)).expect("canonical payload");
+        Base64UrlUnpadded::encode_string(&signing.sign(&payload).to_bytes())
+    }
+
+    /// Comfortably in the future, so a slow test machine cannot expire the enrollment mid-test.
+    fn live() -> WallMs {
+        WallMs::now().plus_millis(10 * 60_000)
+    }
+
+    /// Unambiguously in the past. `now` with a zero window can land in the same millisecond as the clock read
+    /// inside the code under test, and a test that depends on which side of a tie it falls is a flaky test.
+    fn already_expired() -> WallMs {
+        WallMs::from_millis(1)
+    }
+
+    fn composed_for(scratch: &Scratch) -> Composed {
+        let home = scratch.path.join("home");
+        std::fs::create_dir_all(&home).expect("create runtrol home");
+        Composed::for_tests(
+            home.to_str().expect("UTF-8 home"),
+            runtrol_drivers::builtin(),
+        )
+        .expect("compose")
+    }
+
+    /// One real directory to hold authority over.
+    ///
+    /// A sibling of the runtrol home rather than a child of it. The deny list refuses any root that would let an
+    /// agent read runtrol's own state, so a project nested inside the home is rejected before the signature is
+    /// ever the reason.
+    fn one_root(scratch: &Scratch) -> Vec<Box<str>> {
+        let project = scratch.path.join("project");
+        std::fs::create_dir_all(&project).expect("create project root");
+        vec![project.to_str().expect("UTF-8 root").into()]
+    }
+
+    #[test]
+    fn the_enrolling_key_spends_its_own_enrollment() {
+        let scratch = Scratch::make();
+        let composed = composed_for(&scratch);
+        let signing = SigningKey::from_bytes(&[3; 32]);
+        let enrollment = pending(&composed, &signing, live(), one_root(&scratch));
+
+        let Ok(granted) = IntegrationAdmin::self_approve(
+            &composed,
+            pending_id(enrollment).as_str(),
+            &sign_for(&signing, enrollment),
+        ) else {
+            panic!("the enrolling key may spend its own enrollment");
+        };
+
+        assert!(granted.as_str().starts_with("int_"));
+        let row = composed
+            .store
+            .get_enrollment(enrollment)
+            .expect("read enrollment")
+            .expect("the enrollment row survives its decision");
+        assert_ne!(
+            row.state,
+            EnrollmentState::Pending,
+            "an approved enrollment is no longer pending"
+        );
+    }
+
+    #[test]
+    fn another_key_cannot_spend_an_enrollment_it_did_not_request() {
+        // The whole reason this path carries a signature. Reaching the private endpoint is not enough; the
+        // caller has to be the enrollment.
+        let scratch = Scratch::make();
+        let composed = composed_for(&scratch);
+        let enrolling = SigningKey::from_bytes(&[3; 32]);
+        let impostor = SigningKey::from_bytes(&[9; 32]);
+        let enrollment = pending(&composed, &enrolling, live(), one_root(&scratch));
+
+        let refused = IntegrationAdmin::self_approve(
+            &composed,
+            pending_id(enrollment).as_str(),
+            &sign_for(&impostor, enrollment),
+        );
+
+        assert!(refused.is_err(), "a foreign signature must not be accepted");
+        let row = composed
+            .store
+            .get_enrollment(enrollment)
+            .expect("read enrollment")
+            .expect("the enrollment is still there");
+        assert_eq!(
+            row.state,
+            EnrollmentState::Pending,
+            "a refused attempt must not spend the enrollment"
+        );
+    }
+
+    #[test]
+    fn a_signature_for_one_enrollment_cannot_spend_another() {
+        // The pending identity is inside the signed payload precisely so that one captured proof cannot be
+        // pointed at a second enrollment the same key also owns.
+        let scratch = Scratch::make();
+        let composed = composed_for(&scratch);
+        let signing = SigningKey::from_bytes(&[3; 32]);
+        let first = pending(&composed, &signing, live(), one_root(&scratch));
+        let second = pending(&composed, &signing, live(), one_root(&scratch));
+
+        let refused = IntegrationAdmin::self_approve(
+            &composed,
+            pending_id(second).as_str(),
+            &sign_for(&signing, first),
+        );
+
+        assert!(
+            refused.is_err(),
+            "a proof naming one enrollment must not spend a different one"
+        );
+        assert_eq!(
+            composed
+                .store
+                .get_enrollment(second)
+                .expect("read enrollment")
+                .expect("still there")
+                .state,
+            EnrollmentState::Pending
+        );
+    }
+
+    #[test]
+    fn an_expired_enrollment_cannot_be_self_approved() {
+        let scratch = Scratch::make();
+        let composed = composed_for(&scratch);
+        let signing = SigningKey::from_bytes(&[3; 32]);
+        let enrollment = pending(&composed, &signing, already_expired(), one_root(&scratch));
+
+        let refused = IntegrationAdmin::self_approve(
+            &composed,
+            pending_id(enrollment).as_str(),
+            &sign_for(&signing, enrollment),
+        );
+
+        assert!(
+            refused.is_err(),
+            "an expired pending request is not a live decision"
+        );
+    }
+
+    #[test]
+    fn one_enrollment_is_spent_at_most_once() {
+        // A replayed proof must not mint a second integration. The signature never expires on its own, so the
+        // enrollment state is what has to stop it.
+        let scratch = Scratch::make();
+        let composed = composed_for(&scratch);
+        let signing = SigningKey::from_bytes(&[3; 32]);
+        let enrollment = pending(&composed, &signing, live(), one_root(&scratch));
+        let proof = sign_for(&signing, enrollment);
+
+        assert!(
+            IntegrationAdmin::self_approve(&composed, pending_id(enrollment).as_str(), &proof)
+                .is_ok(),
+            "the first spend succeeds"
+        );
+        let replayed =
+            IntegrationAdmin::self_approve(&composed, pending_id(enrollment).as_str(), &proof);
+
+        assert!(
+            replayed.is_err(),
+            "replaying the same proof must not mint a second integration"
+        );
+    }
+
+    #[test]
+    fn session_authority_without_a_root_is_refused() {
+        // Every other grant-writing path refuses this, and self-approval must too. A grant carrying session
+        // authority with no root to exercise it in is not a smaller grant, it is a broken one: every later call
+        // fails root-denied, the grant itself stays valid, and the client never learns to re-enroll.
+        let scratch = Scratch::make();
+        let composed = composed_for(&scratch);
+        let signing = SigningKey::from_bytes(&[3; 32]);
+        let enrollment = pending(&composed, &signing, live(), Vec::new());
+
+        let refused = IntegrationAdmin::self_approve(
+            &composed,
+            pending_id(enrollment).as_str(),
+            &sign_for(&signing, enrollment),
+        );
+
+        assert!(
+            refused.is_err(),
+            "session authority with no approved root must not be granted"
+        );
+        assert_eq!(
+            composed
+                .store
+                .get_enrollment(enrollment)
+                .expect("read enrollment")
+                .expect("still there")
+                .state,
+            EnrollmentState::Pending
+        );
+    }
+
+    #[test]
+    fn a_malformed_pending_identity_or_signature_is_refused() {
+        let scratch = Scratch::make();
+        let composed = composed_for(&scratch);
+        let signing = SigningKey::from_bytes(&[3; 32]);
+        let enrollment = pending(&composed, &signing, live(), one_root(&scratch));
+
+        assert!(
+            IntegrationAdmin::self_approve(
+                &composed,
+                "not-a-pending-id",
+                &sign_for(&signing, enrollment)
+            )
+            .is_err()
+        );
+        assert!(
+            IntegrationAdmin::self_approve(
+                &composed,
+                pending_id(enrollment).as_str(),
+                "not-a-signature"
+            )
+            .is_err()
+        );
     }
 }

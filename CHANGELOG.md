@@ -23,6 +23,11 @@ and refactoring that no user can observe do not belong here.
 
 ### Changed
 
+- Runtrol Studio no longer asks you to approve Runtrol Studio. Opening the extension for the first time used to
+  interrupt you with a permission dialog, a scope picker, a project picker, and a phrase to transcribe, all so the
+  extension could talk to the Core it had just installed and started itself. It now proves it is the enrollment it
+  created by signing for it. Every other product still goes through the full local review, and narrowing what an
+  integration may reach is still a decision you make.
 - Approving a command no longer looks like refusing one. Refuse is the solid button, granting is outlined, granting
   permanently is outlined in the warning colour, and a high-risk request says so in words. The styling follows what
   each option does rather than the order the coding service sent them in.

@@ -101,7 +101,7 @@ export class StudioRuntimeClient implements vscode.Disposable {
   constructor(
     private readonly context: vscode.ExtensionContext,
     private readonly locateRuntimeExecutable: () => Promise<string>,
-    private readonly approveEnrollment: (pendingId: string) => Promise<boolean>,
+    private readonly selfApprove: (pendingId: string, signature: string) => Promise<boolean>,
     private readonly confirmForget: (
       confirmationId: string,
       sessionId: string,
@@ -762,8 +762,14 @@ export class StudioRuntimeClient implements vscode.Disposable {
         await new Promise((resolve) => setTimeout(resolve, ENROLLMENT_DECISION_POLL_MS));
         decision = await runtime.integrations().watch(receipt.pendingId);
       }
-      if (decision.state === "pending" && !await this.approveEnrollment(receipt.pendingId)) {
-        throw new Error("Runtrol Studio Runtime access was not approved");
+      if (decision.state === "pending") {
+        const approved = await this.selfApprove(
+          receipt.pendingId,
+          identity.signBase64(selfApprovalPayload(receipt.pendingId)),
+        );
+        if (!approved) {
+          throw new Error("Runtrol Studio Runtime access was not approved");
+        }
       }
       const decisionDeadline = Math.min(
         receipt.expiresAtMs,
@@ -783,6 +789,16 @@ export class StudioRuntimeClient implements vscode.Disposable {
       runtime.close();
     }
   }
+}
+
+/// The exact bytes the Core signs over for a self-approval, which must match
+/// `self_approval_signing_payload` in `crates/runtrol-runtime-protocol/src/integration.rs` byte for byte.
+/// Field order is the Rust struct's field order and both sides emit compact JSON, so the two agree.
+function selfApprovalPayload(pendingId: string): Uint8Array {
+  return Buffer.from(
+    JSON.stringify({ domain: "runtrol-runtime-self-approval-v1", pendingId }),
+    "utf8",
+  );
 }
 
 function nativeCatalogueFailure(providerId: string, warning: string): NativeChatCatalogue {

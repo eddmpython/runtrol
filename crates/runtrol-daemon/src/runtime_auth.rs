@@ -11,7 +11,7 @@ use runtrol_runtime_protocol::{
     IntegrationGrant, IntegrationId, MAX_PENDING_ENROLLMENTS, MUTATION_CLOCK_SKEW_MS,
     PendingEnrollmentId, ProtocolRevision, RequestEnrollmentParams, RotateIntegrationKeyParams,
     RuntimeErrorKind, ServerChallenge, enrollment_signing_payload, initialization_signing_payload,
-    key_rotation_signing_payload,
+    key_rotation_signing_payload, self_approval_signing_payload,
 };
 use runtrol_store::{
     EnrollmentKey, EnrollmentRow, EnrollmentState, IntegrationKey, IntegrationRootRow,
@@ -406,6 +406,22 @@ fn verify_signature(
     verifying.verify_strict(payload, &signature).map_err(|_| {
         AuthorizationFailure::unauthenticated("the integration signature does not verify")
     })
+}
+
+/// Prove that whoever asks to approve this enrollment holds the key the enrollment was requested with.
+///
+/// Local administration already requires reaching the private endpoint, which is owner-only and therefore counts
+/// as being at the machine. What that alone does not establish is *which* pending enrollment the caller is, so a
+/// program at the machine could otherwise approve an enrollment some other program requested. This proof closes
+/// that gap: only the enrolling key can spend its own pending decision.
+pub(crate) fn verify_self_approval(
+    public_key: &[u8; 32],
+    encoded_signature: &str,
+    pending: &PendingEnrollmentId,
+) -> Result<(), AuthorizationFailure> {
+    let payload =
+        self_approval_signing_payload(pending).map_err(|_| AuthorizationFailure::internal())?;
+    verify_signature(public_key, encoded_signature, &payload)
 }
 
 fn ensure_challenge_fresh(challenge: &ServerChallenge) -> Result<(), AuthorizationFailure> {

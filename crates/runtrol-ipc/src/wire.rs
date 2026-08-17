@@ -170,6 +170,17 @@ pub enum Request {
         answer: Box<str>,
     },
 
+    /// Approve one pending integration for the exact key that requested it.
+    ///
+    /// The caller signs its own pending identity, so this spends an enrollment only for whoever created it. It
+    /// grants the enrollment as requested. Narrowing a grant stays a reviewed decision and keeps its phrase.
+    IntegrationSelfApprove {
+        /// Opaque pending enrollment identity.
+        pending_id: Box<str>,
+        /// Base64url Ed25519 signature over the canonical self-approval payload.
+        signature: Box<str>,
+    },
+
     /// Deny one pending integration without granting authority.
     IntegrationEnrollmentDeny {
         /// Opaque pending enrollment identity.

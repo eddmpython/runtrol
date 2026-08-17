@@ -126,19 +126,26 @@ export async function reviewIntegrationEnrollments(client: CoreClient): Promise<
   await decideEnrollment(client, selected.enrollment);
 }
 
-export async function reviewIntegrationEnrollment(
+/// Spend Studio's own pending enrollment with the key that requested it.
+///
+/// Studio is not a third party asking for reach into someone else's Core. It materialized this Core, spawned it,
+/// and is the only reason it is running, so making the operator transcribe a phrase to let the extension talk to
+/// its own daemon buys nothing: reaching this private endpoint is already the presence the phrase stands for. The
+/// signature is what the phrase could never give, naming which enrollment the caller is. Other products still
+/// enroll through `reviewIntegrationEnrollments`, which keeps the full review.
+export async function selfApproveIntegration(
   client: CoreClient,
   pendingId: string,
+  signature: string,
 ): Promise<boolean> {
-  const response = await ask(client, { ask: "integrationEnrollments" });
-  if (response.say !== "integrationEnrollments") {
-    throw new Error(`the daemon answered integration enrollment listing with ${response.say}`);
+  const response = await ask(client, {
+    ask: "integrationSelfApprove",
+    with: { pending_id: pendingId, signature },
+  });
+  if (response.say !== "integrationApproved") {
+    throw new Error(`the daemon answered Studio self-approval with ${response.say}`);
   }
-  const enrollment = response.with.find((candidate) => candidate.pending_id === pendingId);
-  if (!enrollment) {
-    throw new Error("the Studio Runtime enrollment is no longer pending");
-  }
-  return await decideEnrollment(client, enrollment) === "approved";
+  return true;
 }
 
 export async function manageIntegrations(client: CoreClient): Promise<boolean> {

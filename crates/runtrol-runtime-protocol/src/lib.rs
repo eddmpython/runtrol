@@ -32,6 +32,7 @@ pub use integration::{
     IntegrationGrant, IntegrationId, PendingEnrollmentId, RequestEnrollmentParams,
     RotateIntegrationKeyParams, ServerChallenge, UnknownAppScope, WatchEnrollmentParams,
     enrollment_signing_payload, initialization_signing_payload, key_rotation_signing_payload,
+    self_approval_signing_payload,
 };
 pub use inventory::{
     GetSessionParams, InstallationObservation, InstallationState, LifecycleState,

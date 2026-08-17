@@ -374,6 +374,32 @@ pub fn key_rotation_signing_payload(
     })
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SelfApprovalSigningPayload<'a> {
+    domain: &'static str,
+    pending_id: &'a PendingEnrollmentId,
+}
+
+/// Canonical bytes proving that the holder of an enrollment's own key is the one approving it.
+///
+/// The domain string keeps this proof unusable as any other signature this protocol accepts, and the pending
+/// identity keeps it unusable for a second enrollment. A caller that reaches local administration can already
+/// answer a presence challenge, so this proof exists to bind the approval to the exact enrolling key rather than
+/// to add a secret.
+///
+/// # Errors
+///
+/// Serialization failure, which indicates a protocol implementation defect rather than caller data.
+pub fn self_approval_signing_payload(
+    pending_id: &PendingEnrollmentId,
+) -> Result<Vec<u8>, serde_json::Error> {
+    serde_json::to_vec(&SelfApprovalSigningPayload {
+        domain: "runtrol-runtime-self-approval-v1",
+        pending_id,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
