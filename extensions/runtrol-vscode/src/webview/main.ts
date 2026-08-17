@@ -9,6 +9,7 @@ import {
   type UnknownRecord,
 } from "./presentation";
 import { conversationEmptyCopy, sendShortcutHint } from "./conversationCopy";
+import { toolActivityLine, toolActivityOf } from "./toolActivity";
 import { afterFrameOrDelay } from "./renderReady";
 import {
   agentLine,
@@ -379,6 +380,10 @@ function present(payload: unknown): void {
     appendApproval(body);
     return;
   }
+  if (presentation.kind === "tool") {
+    appendTool(body);
+    return;
+  }
   if (presentation.kind === "turn") {
     const step = string(body.step) || "updated";
     const stop = string(body.stop);
@@ -585,6 +590,42 @@ function appendApproval(body: UnknownRecord): void {
   card.dataset.characters = String(card.textContent?.length ?? 0);
   conversation.append(card);
   trim();
+}
+
+/*
+ * What the agent is doing to the project, as one line that updates in place.
+ *
+ * This used to render the fixed sentence "Tool call started" with no tool, no target and no outcome, so an agent
+ * that edited five files and ran the tests showed five identical lines. The provider already sends its own
+ * classification and status; only the label is read out of the payload, and the raw input, raw output and diffs
+ * stay unread because those are the conversation.
+ *
+ * Updates replace the line for the same call rather than appending, so a long run does not fill the thread.
+ */
+function appendTool(body: UnknownRecord): void {
+  const activity = toolActivityOf(body);
+  const line = toolActivityLine(activity);
+  const callId = string(body.tool_call_id) || string(body.toolCallId);
+  const existing = callId
+    ? conversation.querySelector<HTMLElement>(`[data-tool-call="${cssEscape(callId)}"]`)
+    : null;
+  const item = existing ?? document.createElement("article");
+  if (!existing) {
+    clearPlaceholder();
+    if (callId) item.dataset.toolCall = callId;
+    conversation.append(item);
+  }
+  item.className = `message tool tool-${activity.state}`;
+  visibleCharacters -= Number(item.dataset.characters ?? 0);
+  item.textContent = line;
+  item.dataset.characters = String(line.length);
+  visibleCharacters += line.length;
+  trim();
+}
+
+/// Only what a CSS attribute selector needs, because a provider identifier is untrusted text.
+function cssEscape(value: string): string {
+  return value.replaceAll(/["\\]/gu, (match) => `\\${match}`);
 }
 
 function clearPlaceholder(): void {

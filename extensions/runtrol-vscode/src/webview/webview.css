@@ -186,6 +186,38 @@ body {
   font-size: 0.94em;
 }
 
+/*
+ * What the agent is doing, kept quiet.
+ *
+ * Tool activity is the majority of a coding agent's output and almost none of it is what the reader came for, so
+ * it sits at the weight of a caption. A failure is the exception and takes the warning colour, because that is
+ * the one the reader has to notice.
+ */
+.message.tool {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  margin-bottom: 0.55rem;
+  padding-left: 0.8rem;
+  border-left: 2px solid var(--vscode-editorGroup-border, var(--vscode-widget-border));
+  color: var(--vscode-descriptionForeground);
+  font-size: 0.85em;
+  font-variant-numeric: tabular-nums;
+}
+
+.message.tool-running {
+  border-left-color: var(--runtrol-accent);
+}
+
+.message.tool-failed {
+  border-left-color: var(--vscode-notificationsWarningIcon-foreground);
+  color: var(--vscode-notificationsWarningIcon-foreground);
+}
+
+.message.tool-done {
+  border-left-color: var(--vscode-charts-green, var(--vscode-testing-iconPassed));
+}
+
 .message.meta,
 .message.warning {
   margin-bottom: 1rem;

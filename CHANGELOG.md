@@ -28,6 +28,11 @@ and refactoring that no user can observe do not belong here.
 
 ### Changed
 
+- You can now see what an agent is doing to your project. Tool activity used to render as the fixed sentence
+  "Tool call started", so an agent that read three files, edited one and ran the tests showed five identical lines.
+  It now reads `Edit src/main.rs`, `Run cargo test...`, `Run cargo clippy · failed`, updating in place as each call
+  progresses, with a coloured rail for running, done, and failed. Only the service's own classification and label
+  are shown; raw input, raw output and diffs stay untouched, because those are the conversation.
 - Runtrol Studio no longer asks you to approve Runtrol Studio. Opening the extension for the first time used to
   interrupt you with a permission dialog, a scope picker, a project picker, and a phrase to transcribe, all so the
   extension could talk to the Core it had just installed and started itself. It now proves it is the enrollment it

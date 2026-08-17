@@ -1,24 +1,77 @@
 {
   "schema": 1,
   "events": {
-    "attached": { "kind": "status", "textKey": "session.attached" },
-    "turn": { "kind": "turn" },
-    "notice": { "kind": "notice" },
-    "detached": { "kind": "status", "textKey": "session.detached" },
-    "userMessageChunk": { "kind": "message", "side": "mine", "labelKey": "message.you" },
-    "agentMessageChunk": { "kind": "message", "side": "theirs", "labelKey": "message.agent" },
-    "agentThoughtChunk": { "kind": "message", "side": "thought", "labelKey": "message.thought" },
-    "toolCall": { "kind": "status", "textKey": "tool.started" },
-    "toolCallUpdate": { "kind": "status", "textKey": "tool.updated" },
-    "plan": { "kind": "status", "textKey": "plan.updated" },
-    "availableCommandsUpdate": { "kind": "status", "textKey": "commands.updated" },
-    "currentModeUpdate": { "kind": "status", "textKey": "mode.updated" },
-    "configOptionUpdate": { "kind": "status", "textKey": "configuration.updated" },
-    "sessionInfoUpdate": { "kind": "status", "textKey": "session.updated" },
-    "usageUpdate": { "kind": "usage" },
-    "rateLimitUpdate": { "kind": "rateLimit" },
-    "approvalRequested": { "kind": "approval", "textKey": "approval.waiting" },
-    "approvalWithdrawn": { "kind": "status", "textKey": "approval.withdrawn" },
-    "unmapped": { "kind": "discard" }
+    "attached": {
+      "kind": "status",
+      "textKey": "session.attached"
+    },
+    "turn": {
+      "kind": "turn"
+    },
+    "notice": {
+      "kind": "notice"
+    },
+    "detached": {
+      "kind": "status",
+      "textKey": "session.detached"
+    },
+    "userMessageChunk": {
+      "kind": "message",
+      "side": "mine",
+      "labelKey": "message.you"
+    },
+    "agentMessageChunk": {
+      "kind": "message",
+      "side": "theirs",
+      "labelKey": "message.agent"
+    },
+    "agentThoughtChunk": {
+      "kind": "message",
+      "side": "thought",
+      "labelKey": "message.thought"
+    },
+    "toolCall": {
+      "kind": "tool"
+    },
+    "toolCallUpdate": {
+      "kind": "tool"
+    },
+    "plan": {
+      "kind": "status",
+      "textKey": "plan.updated"
+    },
+    "availableCommandsUpdate": {
+      "kind": "status",
+      "textKey": "commands.updated"
+    },
+    "currentModeUpdate": {
+      "kind": "status",
+      "textKey": "mode.updated"
+    },
+    "configOptionUpdate": {
+      "kind": "status",
+      "textKey": "configuration.updated"
+    },
+    "sessionInfoUpdate": {
+      "kind": "status",
+      "textKey": "session.updated"
+    },
+    "usageUpdate": {
+      "kind": "usage"
+    },
+    "rateLimitUpdate": {
+      "kind": "rateLimit"
+    },
+    "approvalRequested": {
+      "kind": "approval",
+      "textKey": "approval.waiting"
+    },
+    "approvalWithdrawn": {
+      "kind": "status",
+      "textKey": "approval.withdrawn"
+    },
+    "unmapped": {
+      "kind": "discard"
+    }
   }
 }

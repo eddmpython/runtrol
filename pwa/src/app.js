@@ -554,9 +554,37 @@ function presentEvent(payload, session) {
     appendOutput(contract.side, contentText(body));
   } else if (contract?.kind === "approval") {
     appendApproval(body, session);
+  } else if (contract?.kind === "tool") {
+    appendOutput("meta", toolLine(body));
   } else if (contract?.kind === "status" || contract?.kind === "turn" || contract?.kind === "notice") {
     appendOutput("meta", safeVisibleText(contract.textKey || body.event));
   }
+}
+
+// The provider's own classification and label, mirroring the PC surface so one vocabulary is learned once. Only
+// the label is read out of the payload; raw input, raw output and diffs stay untouched because they are the
+// conversation, and a phone is the last place to spill them.
+const TOOL_VERBS = {
+  read: "Read",
+  edit: "Edit",
+  delete: "Delete",
+  move: "Move",
+  search: "Search",
+  execute: "Run",
+  think: "Think",
+  fetch: "Fetch",
+  switchMode: "Switch mode",
+  other: "Tool",
+};
+
+function toolLine(body) {
+  const verb = TOOL_VERBS[body.kind] || "Tool";
+  const title = safeVisibleText(typeof body.payload?.title === "string" ? body.payload.title : "");
+  const head = title ? `${verb} ${title}` : verb;
+  if (body.status === "failed") return `${head} failed`;
+  if (body.status === "cancelled") return `${head} cancelled`;
+  if (body.status === "inProgress") return `${head} running`;
+  return head;
 }
 
 function appendApproval(body, session) {

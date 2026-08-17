@@ -28,7 +28,20 @@ VSCODE = (
 
 WIRE_NAME_ARM = re.compile(r'Self::\w+[^=]*=>\s*"([A-Za-z][A-Za-z0-9]*)"')
 WIRE_NAME_FN = re.compile(r"fn\s+wire_name\s*\(")
-ALLOWED_KINDS = {"message", "status", "turn", "notice", "usage", "rateLimit", "approval", "discard"}
+# `tool` renders the provider's own classification, label and status as one line that updates in place. It is a
+# kind of its own because a fixed status sentence cannot say which tool ran against what, which is most of what a
+# coding agent does.
+ALLOWED_KINDS = {
+    "message",
+    "status",
+    "turn",
+    "notice",
+    "usage",
+    "rateLimit",
+    "approval",
+    "tool",
+    "discard",
+}
 ALLOWED_SIDES = {"mine", "theirs", "thought"}
 
 
