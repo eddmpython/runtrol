@@ -31,10 +31,12 @@
       "labelKey": "message.thought"
     },
     "toolCall": {
-      "kind": "tool"
+      "kind": "tool",
+      "part": "call"
     },
     "toolCallUpdate": {
-      "kind": "tool"
+      "kind": "tool",
+      "part": "result"
     },
     "plan": {
       "kind": "status",

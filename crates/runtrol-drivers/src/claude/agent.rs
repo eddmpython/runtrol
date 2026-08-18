@@ -234,6 +234,24 @@ impl ClaudeAgent {
                 }
             }
 
+            Frame::Bodies { first, rest } => {
+                // One line of the provider's stream is one source position, however many events it turned out
+                // to be. The boundary advances once and every event off that line carries the same one.
+                self.src_end = self.src_end.saturating_add(1);
+                // The queue is drained before the next line is read, so the blocks reach a subscriber in the
+                // order the provider laid them out.
+                for body in rest {
+                    self.announced.push_back(Produced {
+                        src_end: self.src_end,
+                        body,
+                    });
+                }
+                Produced {
+                    src_end: self.src_end,
+                    body: first,
+                }
+            }
+
             Frame::Approval(_)
             | Frame::ApprovalCancelled(_)
             | Frame::UnsupportedControl(_)

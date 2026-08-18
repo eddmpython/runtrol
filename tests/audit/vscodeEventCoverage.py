@@ -43,6 +43,10 @@ ALLOWED_KINDS = {
     "discard",
 }
 ALLOWED_SIDES = {"mine", "theirs", "thought"}
+# A tool frame is either the call or what answered it. A surface needs to tell them apart to show both at
+# once, and the event name is the only thing that says which: the payload that would answer belongs to the
+# provider, and arrival order freezes the first partial result of a service that streams them.
+ALLOWED_PARTS = {"call", "result"}
 
 
 def vocabulary(text: str) -> set[str]:
@@ -85,6 +89,10 @@ def contractProblems(data: Any, kinds: set[str]) -> list[str]:
             expected.add("textKey")
             if not nonempty(contract.get("textKey")):
                 found.append(f"{name} {kind} presentation has no textKey")
+        elif kind == "tool":
+            expected.add("part")
+            if contract.get("part") not in ALLOWED_PARTS:
+                found.append(f"{name} tool presentation has no valid part")
         extras = sorted(set(contract) - expected)
         if extras:
             found.append(f"{name} presentation carries forbidden fields: {', '.join(extras)}")
@@ -172,12 +180,13 @@ def selftest() -> int:
         match self {
             Self::Attached(_) => "attached",
             Self::AgentMessageChunk(_) => "agentMessageChunk",
+            Self::ToolCall(_) => "toolCall",
         }
     }
     pub const fn other(&self) -> &'static str { "notAnEvent" }
     """
     kinds = vocabulary(rustFixture)
-    if kinds != {"attached", "agentMessageChunk"}:
+    if kinds != {"attached", "agentMessageChunk", "toolCall"}:
         print("[vscodeEventCoverage --selftest] FAIL. wire_name was not isolated.", file=sys.stderr)
         return 2
     green = {
@@ -185,6 +194,7 @@ def selftest() -> int:
         "events": {
             "attached": {"kind": "status", "textKey": "session.attached"},
             "agentMessageChunk": {"kind": "message", "side": "theirs", "labelKey": "message.agent"},
+            "toolCall": {"kind": "tool", "part": "call"},
         },
     }
     consumer = 'import presentation from "event-presentation.json";\nconst use = presentation.events;'
@@ -204,6 +214,8 @@ def selftest() -> int:
             "schema": 1,
             "events": {**green["events"], "attached": {"kind": "status", "textKey": "x", "payload": "x"}},
         },
+        {"schema": 1, "events": {**green["events"], "toolCall": {"kind": "tool"}}},
+        {"schema": 1, "events": {**green["events"], "toolCall": {"kind": "tool", "part": "both"}}},
     ]
     for index, mutation in enumerate(mutations, start=1):
         if not contractProblems(mutation, kinds):
@@ -221,7 +233,7 @@ def selftest() -> int:
     if not localizationProblems(green, vscode.replace('"session.attached"', '"missing"')):
         print("[vscodeEventCoverage --selftest] FAIL. missing localization escaped.", file=sys.stderr)
         return 2
-    print("[vscodeEventCoverage --selftest] OK. nine injected defects make the gate red.")
+    print("[vscodeEventCoverage --selftest] OK. eleven injected defects make the gate red.")
     return 0
 
 

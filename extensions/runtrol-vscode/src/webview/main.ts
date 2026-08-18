@@ -9,7 +9,8 @@ import {
   type UnknownRecord,
 } from "./presentation";
 import { conversationEmptyCopy, sendShortcutHint } from "./conversationCopy";
-import { toolActivityLine, toolActivityOf } from "./toolActivity";
+import { toolActivityLineKeeping, toolActivityOf } from "./toolActivity";
+import { toolDetail } from "./toolDetail";
 import {
   asksForCommands,
   completed,
@@ -89,9 +90,6 @@ const LOCALIZED_TEXT: Record<string, string> = {
   "approval.waiting": "Approval required",
   "approval.withdrawn": "Approval was withdrawn",
 };
-/// A tool panel is bounded because a tool result can be an entire file.
-const MAX_TOOL_DETAIL = 4000;
-
 const HIDDEN_STATUS_KEYS = new Set([
   "session.attached",
   "session.detached",
@@ -429,7 +427,7 @@ function present(payload: unknown): void {
     return;
   }
   if (presentation.kind === "tool") {
-    appendTool(body);
+    appendTool(body, presentation.part);
     return;
   }
   if (presentation.kind === "turn") {
@@ -745,10 +743,7 @@ function appendApproval(body: UnknownRecord): void {
 /// and a surface that shows only "Edit src/main.rs" makes the reader open their own editor to find out. The thin
 /// principle forbids storing, interpreting or rewriting a conversation; showing one is the entire point of the
 /// product, and this panel keeps nothing after the row scrolls away.
-function appendTool(body: UnknownRecord): void {
-  const activity = toolActivityOf(body);
-  const line = toolActivityLine(activity);
-  const detail = toolDetail(body);
+function appendTool(body: UnknownRecord, part: "call" | "result"): void {
   const callId = string(body.tool_call_id) || string(body.toolCallId);
   const existing = callId
     ? conversation.querySelector<HTMLElement>(`[data-tool-call="${cssEscape(callId)}"]`)
@@ -759,10 +754,25 @@ function appendTool(body: UnknownRecord): void {
     if (callId) item.dataset.toolCall = callId;
     conversation.append(item);
   }
+
+  const activity = toolActivityOf(body);
+  const line = toolActivityLineKeeping(activity, item.dataset.toolLabel ?? "");
+  if (activity.target) item.dataset.toolLabel = activity.target;
+
   item.className = `message tool tool-${activity.state}`;
   visibleCharacters -= Number(item.dataset.characters ?? 0);
 
-  if (!detail) {
+  // What went in and what came back sit in one folded block, which is how the coding services show their own
+  // tools. Two slots rather than one because an update replacing the call would erase the arguments the moment
+  // the result arrived, and rather than a growing list because a service streams many updates per call.
+  const slots = new Map<string, string>();
+  for (const pre of item.querySelectorAll("pre.tool-detail")) {
+    slots.set(pre.getAttribute("data-slot") ?? IN, pre.textContent ?? "");
+  }
+  const detail = toolDetail(body);
+  if (detail) slots.set(part === "result" ? OUT : IN, detail);
+
+  if (slots.size === 0) {
     item.replaceChildren(document.createTextNode(line));
     item.dataset.characters = String(line.length);
     visibleCharacters += line.length;
@@ -776,35 +786,28 @@ function appendTool(body: UnknownRecord): void {
   panel.open = wasOpen;
   const summary = document.createElement("summary");
   summary.textContent = line;
-  const pre = document.createElement("pre");
-  pre.className = "tool-detail";
-  pre.textContent = detail;
-  panel.append(summary, pre);
+  panel.append(summary);
+  let length = line.length;
+  for (const slot of [IN, OUT]) {
+    const text = slots.get(slot);
+    if (!text) continue;
+    const pre = document.createElement("pre");
+    pre.className = "tool-detail";
+    pre.setAttribute("data-slot", slot);
+    pre.textContent = text;
+    panel.append(pre);
+    length += text.length;
+  }
   item.replaceChildren(panel);
-  item.dataset.characters = String(line.length + detail.length);
-  visibleCharacters += line.length + detail.length;
+  item.dataset.characters = String(length);
+  visibleCharacters += length;
   trim();
 }
 
-/// The detail a tool call carries, as the service itself wrote it.
-///
-/// Serialized rather than interpreted. Every service shapes this differently (Claude Code sends `input` and a
-/// result, the Agent Client Protocol sends content blocks and locations, Codex sends its own patch shape), and
-/// flattening them into one house style would be rewriting the conversation. So the panel prints what arrived and
-/// lets the differences show.
-function toolDetail(body: UnknownRecord): string {
-  const payload = record(body.payload);
-  if (!payload) return "";
-  // The names already on the summary line. Repeating them inside the panel is noise.
-  const shown = Object.fromEntries(
-    Object.entries(payload).filter(([key]) => key !== "title" && key !== "name"),
-  );
-  if (Object.keys(shown).length === 0) return "";
-  const text = JSON.stringify(shown, null, 2);
-  // Bounded because a tool result can be a whole file. The reader opens the file to see the rest; a panel that
-  // grows without limit makes the transcript unscrollable.
-  return text.length > MAX_TOOL_DETAIL ? `${text.slice(0, MAX_TOOL_DETAIL)}\n...` : text;
-}
+/// The call's own arguments, as the service sent them.
+const IN = "in";
+/// What came back, as the service sent it.
+const OUT = "out";
 
 /// A turn ending, only when the ending says something the reader would act on.
 ///

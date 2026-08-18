@@ -5,7 +5,8 @@ export type UnknownRecord = Record<string, unknown>;
 export type PresentationContract =
   | { kind: "message"; side: "mine" | "theirs" | "thought"; labelKey: string }
   | { kind: "status" | "approval"; textKey: string }
-  | { kind: "turn" | "notice" | "usage" | "rateLimit" | "tool" | "discard" };
+  | { kind: "tool"; part: "call" | "result" }
+  | { kind: "turn" | "notice" | "usage" | "rateLimit" | "discard" };
 
 const EVENT_PRESENTATION = eventPresentation.events as Record<string, PresentationContract>;
 

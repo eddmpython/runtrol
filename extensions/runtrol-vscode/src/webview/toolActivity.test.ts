@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { toolActivityLine, toolActivityOf } from "./toolActivity";
+import { toolActivityLine, toolActivityLineKeeping, toolActivityOf } from "./toolActivity";
 
 test("the provider's own classification becomes a word a person reads", () => {
   const edit = toolActivityOf({ kind: "edit", status: "inProgress", payload: { title: "src/main.rs" } });
@@ -114,4 +114,28 @@ test("nothing but those two names is read, whatever else the payload carries", (
   for (const secret of ["SECRET_PATH", "SECRET_OUTPUT", "SECRET_OLD", "SECRET_LOCATION"]) {
     assert.equal(rendered.includes(secret), false, `${secret} reached the activity line`);
   }
+});
+
+test("a call keeps its name when the result arrives", () => {
+  // Claude Code sends the name on `tool_use` and only an identifier on `tool_result`. Redrawing the row from the
+  // result alone renamed every finished call to "Tool", which is the moment the reader most wants to know what ran.
+  const call = toolActivityOf({ status: "inProgress", payload: { name: "Bash" } });
+  assert.equal(toolActivityLineKeeping(call, ""), "Bash...");
+
+  const result = toolActivityOf({ status: "completed", payload: { tool_use_id: "toolu_01" } });
+  assert.equal(result.target, "", "the result frame carries no name of its own");
+  assert.equal(toolActivityLineKeeping(result, "Bash"), "Bash");
+});
+
+test("a frame that carries its own name is not overridden by the remembered one", () => {
+  // The Agent Client Protocol repeats the label on every update. Preferring the stale one would freeze a title
+  // the service is still refining.
+  const update = toolActivityOf({ kind: "edit", status: "completed", payload: { title: "src/main.rs" } });
+  assert.equal(toolActivityLineKeeping(update, "something older"), "Edit src/main.rs");
+});
+
+test("a failed call is still named", () => {
+  const failure = toolActivityOf({ status: "failed", payload: { tool_use_id: "toolu_01" } });
+  assert.equal(toolActivityLineKeeping(failure, "Bash"), "Bash · failed");
+  assert.equal(toolActivityLine(failure), "Tool · failed", "with nothing remembered there is nothing to name");
 });

@@ -57,6 +57,18 @@ export function toolActivityOf(body: UnknownRecord): ToolActivity {
   };
 }
 
+/// The line for a call whose row is already on screen.
+///
+/// A result frame names the call it answers and not the tool that ran: Claude Code sends `tool_use` with the name
+/// and `tool_result` with only an identifier. A row redrawn from the result alone therefore lost its label at the
+/// exact moment the call finished, and "Bash" became "Tool". The label carried by whichever frame had one is kept.
+///
+/// Kept, not recomposed. Reading the arguments to invent a nicer label would be interpreting a conversation this
+/// product only transports.
+export function toolActivityLineKeeping(activity: ToolActivity, remembered: string): string {
+  return toolActivityLine({ ...activity, target: activity.target || remembered });
+}
+
 /// The one line shown in the thread.
 ///
 /// A service that classified its tool gets "verb target". A service that only named the tool gets that name alone,

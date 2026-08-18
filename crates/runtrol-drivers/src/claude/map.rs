@@ -6,10 +6,15 @@
 //! # What is read, and what is not
 //!
 //! Read: `type`, `subtype`, the nested fragment kind, the session identifier, the capability list, the stop
-//! reason, whether it failed. Every one of those is something the supervisor takes a decision on.
+//! reason, whether it failed, and within a whole message the list of content blocks: which kind each block is,
+//! and the identifiers that bind a tool call to its result. Every one of those is something the supervisor or a
+//! subscriber takes a decision on.
 //!
-//! Not read: the message. Not once, anywhere. What the agent said travels as a slice of the line it arrived on
-//! and is never opened, which is why a mapping change can never start leaking a conversation.
+//! Not read: what is inside a block. Not once, anywhere. A block's text, a tool's input, a tool's output: each
+//! travels as a slice of the line it arrived on and is never opened. Reading a block's `type` is the same act as
+//! reading the envelope's `type`, one level further in, and it is what lets a tool call be shown as a tool call
+//! instead of as prose. A mapping change still cannot start leaking a conversation, because nothing here ever
+//! looks inside the slice it cuts.
 //!
 //! # Nothing is dropped
 //!
@@ -20,7 +25,7 @@
 use bytes::Bytes;
 use runtrol_provider::{
     CapabilitySet, Chunk, EventBody, Level, MessageId, NativeSessionId, Notice, NoticeCode, Opaque,
-    RateLimit, StopReason, Unmapped,
+    RateLimit, StopReason, ToolCallFrame, ToolCallId, ToolCallStatus, Unmapped,
 };
 use serde::Deserialize;
 use serde_json::value::RawValue;
@@ -71,6 +76,21 @@ pub enum Frame {
     Started(Box<Startup>),
     /// A frame that is already an event.
     Body(EventBody),
+    /// One frame that is several events, in the order the provider laid them out.
+    ///
+    /// A whole message is a list of content blocks, and the blocks are different kinds of thing: what the agent
+    /// said, what it thought, and the tool calls it made. Relaying that list as a single chunk shows a tool call
+    /// as if it were prose, which is the opposite of showing the conversation the way the CLI shows it.
+    ///
+    /// A separate variant rather than a list on [`Frame::Body`] because the streaming path is one event per
+    /// frame and by far the hottest, and it keeps allocating nothing. Split into a first and a rest so the list
+    /// is non-empty by construction and no consumer has to invent behaviour for a frame that is no events.
+    Bodies {
+        /// The first event, which the driver returns.
+        first: EventBody,
+        /// The others, in order, which the driver queues behind it.
+        rest: Vec<EventBody>,
+    },
     /// The turn ended, by the provider's own declaration.
     Ended(Box<Ended>),
     /// The provider is waiting for a human choice.
@@ -188,6 +208,34 @@ struct Fragment<'line> {
     kind: Option<&'line str>,
 }
 
+/// The one thing runtrol reads about a whole message: whether its content is a list of blocks.
+#[derive(Deserialize)]
+struct Message<'line> {
+    /// The blocks, when the provider sent a list rather than a bare string.
+    #[serde(default, borrow)]
+    content: Option<Vec<&'line RawValue>>,
+}
+
+/// A content block's kind, and the identifiers that bind a call to the result that answers it.
+///
+/// Every field here is a discriminator or a handle. What the block contains has no field on this struct, which
+/// is the mechanical reason no later edit starts reading it by accident.
+#[derive(Deserialize)]
+struct Block<'line> {
+    /// Which kind of block.
+    #[serde(rename = "type")]
+    kind: Option<&'line str>,
+    /// On a call: the provider's identifier for it.
+    #[serde(default)]
+    id: Option<&'line str>,
+    /// On a result: which call it answers.
+    #[serde(default)]
+    tool_use_id: Option<&'line str>,
+    /// On a result: whether the tool failed.
+    #[serde(default)]
+    is_error: Option<bool>,
+}
+
 /// Classify one frame.
 ///
 /// # Errors
@@ -212,7 +260,7 @@ pub fn read(line: &Bytes) -> Result<Frame, MapError> {
             Ok(Frame::Ended(Box::new(ended(line, &envelope))))
         }
 
-        ("assistant" | "user", _) => Ok(Frame::Body(whole_message(line, kind, &envelope))),
+        ("assistant" | "user", _) => Ok(whole_message(line, kind, &envelope)),
 
         ("stream_event", _) => Ok(Frame::Body(fragment(line, &envelope))),
 
@@ -356,15 +404,118 @@ fn ended(line: &Bytes, envelope: &Envelope<'_>) -> Ended {
     }
 }
 
-/// A whole message, from either side.
-fn whole_message(line: &Bytes, kind: &str, envelope: &Envelope<'_>) -> EventBody {
-    let chunk = Chunk {
-        message_id: message_id(envelope.request_id),
-        delta: false,
-        parent: parent_call(envelope.parent_tool_use_id),
-        content: payload_of(line, envelope.message),
+/// A whole message, from either side, as the events its content blocks are.
+fn whole_message(line: &Bytes, kind: &str, envelope: &Envelope<'_>) -> Frame {
+    let user = kind == "user";
+    let id = message_id(envelope.request_id);
+    let parent = tool_call(envelope.parent_tool_use_id);
+
+    let mut bodies = content_blocks(envelope.message)
+        .into_iter()
+        .map(|block| block_body(line, user, id.clone(), parent.clone(), block));
+
+    let Some(first) = bodies.next() else {
+        // A message whose content is not a readable list of blocks is relayed whole, which is what this did
+        // before it read blocks at all. A vendor changing the container degrades to one chunk, not to silence.
+        return Frame::Body(said(user, id, parent, payload_of(line, envelope.message)));
     };
-    if kind == "user" {
+    let rest: Vec<EventBody> = bodies.collect();
+    if rest.is_empty() {
+        Frame::Body(first)
+    } else {
+        Frame::Bodies { first, rest }
+    }
+}
+
+/// The content blocks of a whole message, empty when there is no readable list of them.
+fn content_blocks<'line>(message: Option<&'line RawValue>) -> Vec<&'line RawValue> {
+    let Some(message) = message else {
+        return Vec::new();
+    };
+    match serde_json::from_str::<Message<'line>>(message.get()) {
+        // No list, either because `content` is absent or because it is the bare string the provider also sends.
+        // Both mean the same thing to the caller, which relays the message whole, so nothing is lost by not
+        // telling them apart here.
+        Ok(message) => message.content.unwrap_or_default(),
+        // A message that is not an object at all. Same answer and same reason: the caller relays it whole.
+        Err(_) => Vec::new(),
+    }
+}
+
+/// One content block as the event it is.
+fn block_body(
+    line: &Bytes,
+    user: bool,
+    id: Option<MessageId>,
+    parent: Option<ToolCallId>,
+    block: &RawValue,
+) -> EventBody {
+    let payload = Opaque::borrowed_from(line, block.get()).unwrap_or_else(|| whole_line(line));
+    let read: Block<'_> = match serde_json::from_str(block.get()) {
+        Ok(read) => read,
+        // A block whose shape is not this one is still somebody's content. Shown as content it is visible;
+        // refused it would be gone.
+        Err(_) => return said(user, id, parent, payload),
+    };
+
+    match read.kind {
+        // Thinking is rendered somewhere else entirely, which is why it is told apart here and not downstream.
+        Some("thinking" | "redacted_thinking") => EventBody::AgentThoughtChunk(Chunk {
+            message_id: id,
+            delta: false,
+            parent,
+            content: payload,
+        }),
+
+        Some("tool_use" | "server_tool_use" | "mcp_tool_use") => match tool_call(read.id) {
+            Some(tool_call_id) => EventBody::ToolCall(ToolCallFrame {
+                tool_call_id,
+                // This CLI does not classify its own tools. Inferring a kind from a tool name is the hardcoding
+                // the discovery rule forbids, and it would be silently wrong the first time a tool is renamed.
+                kind: None,
+                status: Some(ToolCallStatus::InProgress),
+                delta: false,
+                payload,
+            }),
+            // Without a usable identifier no result could ever be bound to this call. Shown as content rather
+            // than as a call that would sit unfinished forever.
+            None => said(user, id, parent, payload),
+        },
+
+        Some("tool_result" | "mcp_tool_result") => match tool_call(read.tool_use_id) {
+            Some(tool_call_id) => EventBody::ToolCallUpdate(ToolCallFrame {
+                tool_call_id,
+                kind: None,
+                status: Some(if read.is_error == Some(true) {
+                    ToolCallStatus::Failed
+                } else {
+                    ToolCallStatus::Completed
+                }),
+                delta: false,
+                payload,
+            }),
+            None => said(user, id, parent, payload),
+        },
+
+        // Text, images, documents, and whatever a vendor adds next. All of it is content and all of it is shown.
+        _ => said(user, id, parent, payload),
+    }
+}
+
+/// A block shown as something one of the two sides said.
+fn said(
+    user: bool,
+    id: Option<MessageId>,
+    parent: Option<ToolCallId>,
+    content: Opaque,
+) -> EventBody {
+    let chunk = Chunk {
+        message_id: id,
+        delta: false,
+        parent,
+        content,
+    };
+    if user {
         EventBody::UserMessageChunk(chunk)
     } else {
         EventBody::AgentMessageChunk(chunk)
@@ -381,7 +532,7 @@ fn fragment(line: &Bytes, envelope: &Envelope<'_>) -> EventBody {
     let chunk = Chunk {
         message_id: message_id(envelope.request_id),
         delta: true,
-        parent: parent_call(envelope.parent_tool_use_id),
+        parent: tool_call(envelope.parent_tool_use_id),
         content: payload_of(line, envelope.event),
     };
 
@@ -404,12 +555,15 @@ fn message_id(text: Option<&str>) -> Option<MessageId> {
     Some(id)
 }
 
-/// The tool call a subagent's output belongs under, when there is a usable one.
+/// A tool call named by the provider, when the name is one runtrol will hold.
 ///
-/// Same reasoning as [`message_id`]: without it the content is shown at the top level instead of nested, which is
-/// a worse rendering and not a lost message.
-fn parent_call(text: Option<&str>) -> Option<runtrol_provider::ToolCallId> {
-    let Ok(id) = runtrol_provider::ToolCallId::new(text?) else {
+/// Answers three questions with one rule: which call a block is, which call a result answers, and which call a
+/// subagent's output belongs under.
+///
+/// Same reasoning as [`message_id`]: without it the content is shown at the top level instead of attached, which
+/// is a worse rendering and not a lost message.
+fn tool_call(text: Option<&str>) -> Option<ToolCallId> {
+    let Ok(id) = ToolCallId::new(text?) else {
         return None;
     };
     Some(id)
@@ -700,6 +854,168 @@ mod tests {
                 );
             }
             other => panic!("expected content, got {other:?}"),
+        }
+    }
+
+    /// A whole assistant message with the block list the CLI actually sends.
+    ///
+    /// Copied from a session on 2.1.233 and shortened. Composed by hand it would have been a list of one text
+    /// block, which is the shape that already worked and the reason a tool call went unshown for so long.
+    fn recorded_speech_and_a_call() -> Bytes {
+        line(&format!(
+            r#"{{"type":"assistant","session_id":"{SESSION}","request_id":"req_01","message":{{"id":"msg_01","role":"assistant","content":[{{"type":"text","text":"Let me look at the tree."}},{{"type":"tool_use","id":"toolu_01","name":"Bash","input":{{"command":"git status","description":"Show working tree status"}}}}]}}}}"#
+        ))
+    }
+
+    /// The result frame that answers it, which this CLI sends as a user message.
+    fn recorded_result(is_error: &str) -> Bytes {
+        line(&format!(
+            r#"{{"type":"user","session_id":"{SESSION}","message":{{"role":"user","content":[{{"type":"tool_result","tool_use_id":"toolu_01","content":"On branch main"{is_error}}}]}}}}"#
+        ))
+    }
+
+    #[test]
+    fn a_tool_call_is_shown_as_a_tool_call_and_not_as_prose() {
+        // The flagship case. One message is a list of blocks and the blocks are different kinds of thing.
+        // Relayed as a single chunk, every tool this CLI ran arrived as prose, which is to say as nothing a
+        // subscriber could fold, label, or attach a result to.
+        match read(&recorded_speech_and_a_call()).expect("readable") {
+            Frame::Bodies { first, rest } => {
+                assert!(
+                    matches!(first, EventBody::AgentMessageChunk(_)),
+                    "what it said comes first, in the order the provider wrote it"
+                );
+                assert_eq!(rest.len(), 1, "and the call is its own event");
+                match rest.first().expect("the rest is not empty") {
+                    EventBody::ToolCall(frame) => {
+                        assert_eq!(frame.tool_call_id.as_str(), "toolu_01");
+                        assert_eq!(frame.status, Some(ToolCallStatus::InProgress));
+                        assert!(
+                            frame.kind.is_none(),
+                            "this CLI does not classify its tools and runtrol does not guess"
+                        );
+                    }
+                    other => panic!("expected a tool call, got {other:?}"),
+                }
+            }
+            other => panic!("expected several events out of one message, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_result_completes_the_call_it_answers() {
+        // The identifier is the whole point: without it a subscriber has a call that never finishes and a result
+        // floating loose beside it.
+        match read(&recorded_result("")).expect("readable") {
+            Frame::Body(EventBody::ToolCallUpdate(frame)) => {
+                assert_eq!(frame.tool_call_id.as_str(), "toolu_01");
+                assert_eq!(frame.status, Some(ToolCallStatus::Completed));
+            }
+            other => panic!("expected an update to the call, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_tool_that_failed_says_so() {
+        // A failed call is one of the few things worth waking a phone for, so it cannot be reported as finished.
+        match read(&recorded_result(r#","is_error":true"#)).expect("readable") {
+            Frame::Body(EventBody::ToolCallUpdate(frame)) => {
+                assert_eq!(frame.status, Some(ToolCallStatus::Failed));
+            }
+            other => panic!("expected an update to the call, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn speech_and_thinking_in_one_message_are_told_apart() {
+        // They arrive in the same block list and a subscriber renders them in different places.
+        let both = line(&format!(
+            r#"{{"type":"assistant","session_id":"{SESSION}","message":{{"content":[{{"type":"thinking","thinking":"weighing it up","signature":"sig"}},{{"type":"text","text":"here is the answer"}}]}}}}"#
+        ));
+        match read(&both).expect("readable") {
+            Frame::Bodies { first, rest } => {
+                assert!(matches!(first, EventBody::AgentThoughtChunk(_)));
+                assert!(matches!(
+                    rest.first().expect("the rest is not empty"),
+                    EventBody::AgentMessageChunk(_)
+                ));
+            }
+            other => panic!("expected two events, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn each_block_carries_its_own_slice_and_not_its_neighbours() {
+        // A block is cut out of the line it arrived on and handed over unopened. Handing over the whole line
+        // instead would show every block's content under every block.
+        match read(&recorded_speech_and_a_call()).expect("readable") {
+            Frame::Bodies { first, rest } => {
+                let EventBody::AgentMessageChunk(said) = first else {
+                    panic!("expected speech first");
+                };
+                assert!(said.content.as_str().contains("Let me look at the tree"));
+                assert!(
+                    !said.content.as_str().contains("git status"),
+                    "what it said must not carry what it ran"
+                );
+                let Some(EventBody::ToolCall(call)) = rest.first() else {
+                    panic!("expected a call second");
+                };
+                assert!(
+                    call.payload.as_str().contains("Show working tree status"),
+                    "the call's own input is what a subscriber renders it from"
+                );
+                assert!(
+                    !call.payload.as_str().contains("Let me look at the tree"),
+                    "and it must not carry what it said"
+                );
+            }
+            other => panic!("expected several events, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_call_with_no_usable_identifier_is_shown_rather_than_left_unfinished() {
+        // Nothing could ever be bound to it. Shown as content it is at least visible; shown as a call it would
+        // sit spinning until the session ended.
+        let nameless = line(&format!(
+            r#"{{"type":"assistant","session_id":"{SESSION}","message":{{"content":[{{"type":"tool_use","name":"Bash","input":{{}}}}]}}}}"#
+        ));
+        match read(&nameless).expect("readable") {
+            Frame::Body(EventBody::AgentMessageChunk(chunk)) => {
+                assert!(chunk.content.as_str().contains("tool_use"));
+            }
+            other => panic!("expected content, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_block_kind_nobody_bound_is_still_shown() {
+        // The same answer the frame level gives a frame nobody bound. An image today, whatever a vendor adds
+        // next tomorrow: it is content and a subscriber gets it.
+        let image = line(&format!(
+            r#"{{"type":"user","session_id":"{SESSION}","message":{{"content":[{{"type":"image","source":{{"type":"base64","media_type":"image/png"}}}}]}}}}"#
+        ));
+        match read(&image).expect("readable") {
+            Frame::Body(EventBody::UserMessageChunk(chunk)) => {
+                assert!(chunk.content.as_str().contains("image/png"));
+            }
+            other => panic!("expected content, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_message_whose_content_is_not_a_list_is_relayed_whole() {
+        // This CLI also sends `content` as a bare string, and a vendor is allowed to change the container. Either
+        // way the message is relayed as one chunk, which is what this did before it read blocks at all.
+        let bare = line(&format!(
+            r#"{{"type":"assistant","session_id":"{SESSION}","message":{{"content":"just a sentence"}}}}"#
+        ));
+        match read(&bare).expect("readable") {
+            Frame::Body(EventBody::AgentMessageChunk(chunk)) => {
+                assert!(chunk.content.as_str().contains("just a sentence"));
+            }
+            other => panic!("expected one chunk, got {other:?}"),
         }
     }
 
