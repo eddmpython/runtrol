@@ -336,7 +336,7 @@ body.no-chat #composer {
 }
 
 .message.tool details > summary::before {
-  content: "B8";
+  content: "\25B8";
   display: inline-block;
   width: 1em;
   color: var(--vscode-descriptionForeground);
