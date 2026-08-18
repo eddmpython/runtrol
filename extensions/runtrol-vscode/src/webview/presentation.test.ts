@@ -42,3 +42,25 @@ test("shared presentation data drives message, status, approval, and discarded e
   assert.equal(presentationOf("unmapped")?.kind, "discard");
   assert.equal(presentationOf("futureProviderEvent"), null);
 });
+
+test("a streaming delta is text, not an object that reads as nothing", () => {
+  // Claude Code streams in Anthropic's content-block shape. Reading `delta` as a string returned "" for every
+  // chunk, so finished messages appeared and the typing did not: a reply landed in one lump after the agent had
+  // already stopped. This is what "the conversation as that CLI shows it" fails on first.
+  assert.equal(textOf({ type: "content_block_delta", delta: { type: "text_delta", text: "ok" } }), "ok");
+  assert.equal(textOf({ type: "content_block_delta", delta: { type: "thinking_delta", thinking: "hm" } }), "hm");
+  // The older flat shapes still work.
+  assert.equal(textOf({ delta: "ok" }), "ok");
+  assert.equal(textOf({ text: "ok" }), "ok");
+});
+
+test("a thought inside a content array is shown, not skipped", () => {
+  assert.equal(
+    textOf({ message: { content: [{ type: "thinking", thinking: "weighing it" }] } }),
+    "weighing it",
+  );
+  assert.equal(
+    textOf({ content: [{ type: "text", text: "a" }, { type: "thinking", thinking: "b" }] }),
+    "ab",
+  );
+});

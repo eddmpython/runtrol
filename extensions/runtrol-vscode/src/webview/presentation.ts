@@ -35,7 +35,16 @@ export function textOf(value: unknown): string {
   if (!source) {
     return "";
   }
-  const direct = string(source.delta) || string(source.text);
+  // A streaming delta arrives as an object, not a string. Claude Code sends the content-block shape
+  // (`{delta: {type: "text_delta", text}}`, or `thinking` for a thought), and reading `delta` as a string returned
+  // nothing for every one of them. The effect was that finished messages appeared and the typing did not: a reply
+  // landed in one lump after the agent had already stopped.
+  const delta = record(source.delta);
+  const direct = string(source.delta)
+    || string(delta?.text)
+    || string(delta?.thinking)
+    || string(source.text)
+    || string(source.thinking);
   if (direct) {
     return direct;
   }
@@ -48,7 +57,10 @@ export function textOf(value: unknown): string {
     : Array.isArray(record(source.message)?.content)
       ? record(source.message)?.content as unknown[]
       : [];
-  return content.map((part) => string(record(part)?.text)).join("");
+  // A content block is text or a thought; both are the service's own words and both belong on screen.
+  return content
+    .map((part) => string(record(part)?.text) || string(record(part)?.thinking))
+    .join("");
 }
 
 export function record(value: unknown): UnknownRecord | null {
