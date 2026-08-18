@@ -64,10 +64,20 @@ pub(super) async fn list(
     provider: ProviderId,
     program: &Program,
     argv: &[Box<str>],
+    limit_flag: Option<&str>,
     query: &NativeSessionQuery,
     contained_by: &Containment,
 ) -> Result<NativeSessionCatalogue, ProviderError> {
-    let arguments: Vec<String> = argv.iter().map(ToString::to_string).collect();
+    let capacity = usize::from(query.limit).min(MAX_NATIVE_SESSION_ITEMS);
+    let mut arguments: Vec<String> = argv.iter().map(ToString::to_string).collect();
+    // One more than will be kept. A CLI that paginates gives a short answer and a truncated answer the same
+    // shape, and asking for the extra record is the only thing that tells them apart.
+    let asked = limit_flag.map(|flag| {
+        let asked = capacity.saturating_add(1);
+        arguments.push(flag.to_owned());
+        arguments.push(asked.to_string());
+        asked
+    });
     let output = capture(program, &arguments, LISTING_DEADLINE, contained_by)
         .await
         .map_err(|error| ProviderError::Protocol {
@@ -88,7 +98,7 @@ pub(super) async fn list(
             doing: "reading the conversation list this CLI printed",
             detail: error.to_string(),
         })?;
-    Ok(page(records, query.root.as_str(), query.limit))
+    Ok(page(records, query.root.as_str(), query.limit, asked))
 }
 
 /// Turn records into one bounded page.
@@ -96,8 +106,24 @@ pub(super) async fn list(
 /// Filtering by the requested root here is a convenience, not the security boundary: Runtime canonicalises and
 /// re-checks every entry against the caller's approved roots before anything is shown. Doing it early only keeps
 /// the page from being filled with rows that would be discarded.
-fn page(records: Vec<Record>, root: &str, limit: u16) -> NativeSessionCatalogue {
+///
+/// `asked` is how many records the CLI was told to print, when the driver could tell it. It is what decides
+/// completeness. Filtering by root is deliberately not counted as an omission, because a conversation belonging
+/// to another folder is not missing from this folder's answer. What would make the answer wrong is the CLI having
+/// stopped early, and that is knowable only by receiving as many records as were requested.
+fn page(
+    records: Vec<Record>,
+    root: &str,
+    limit: u16,
+    asked: Option<usize>,
+) -> NativeSessionCatalogue {
     let capacity = usize::from(limit).min(MAX_NATIVE_SESSION_ITEMS);
+    let cut_short = match asked {
+        Some(asked) => records.len() >= asked,
+        // The CLI paginates and this build does not know the flag that bounds it, so a full page and a whole
+        // history are indistinguishable. Saying so is the only honest answer.
+        None => true,
+    };
     let mut sessions: Vec<NativeSessionEntry> = Vec::new();
     let mut dropped = 0_usize;
     for record in records {
@@ -137,16 +163,25 @@ fn page(records: Vec<Record>, root: &str, limit: u16) -> NativeSessionCatalogue 
             resume: NativeResumeCapability::Unknown,
         });
     }
-    let coverage = if dropped == 0 {
-        NativeCatalogueCoverage::Complete {
+    let coverage = match (cut_short, dropped) {
+        (false, 0) => NativeCatalogueCoverage::Complete {
             source: NativeCatalogueSource::OfficialCli,
-        }
-    } else {
-        NativeCatalogueCoverage::Partial {
+        },
+        (true, 0) => NativeCatalogueCoverage::Partial {
             source: NativeCatalogueSource::OfficialCli,
-            why: "this CLI prints one page and Runtime kept the entries it could use from it"
+            why:
+                "this CLI printed a full page, so it holds conversations Runtime has not been shown"
+                    .into(),
+        },
+        (false, _) => NativeCatalogueCoverage::Partial {
+            source: NativeCatalogueSource::OfficialCli,
+            why: "Runtime read this CLI's whole listing and could not use every record in it"
                 .into(),
-        }
+        },
+        (true, _) => NativeCatalogueCoverage::Partial {
+            source: NativeCatalogueSource::OfficialCli,
+            why: "this CLI printed a full page and Runtime could not use every record in it".into(),
+        },
     };
     NativeSessionCatalogue {
         coverage,
@@ -206,10 +241,13 @@ mod tests {
        "updatedAt":"2026-08-17T17:00:00.000Z"}
     ]"#;
 
+    /// The fixture, read as a driver that asked for one more record than it would keep. Two records come back,
+    /// so any request for two or more proves the CLI had nothing further.
     fn decoded(root: &str, limit: u16) -> NativeSessionCatalogue {
         let records: Vec<Record> =
             serde_json::from_str(REAL_SHAPE).expect("the real shape decodes");
-        page(records, root, limit)
+        let asked = usize::from(limit).saturating_add(1);
+        page(records, root, limit, Some(asked))
     }
 
     #[test]
@@ -289,6 +327,54 @@ mod tests {
     }
 
     #[test]
+    fn a_full_page_is_never_reported_as_the_whole_history() {
+        // The defect this rule exists for, measured on cline 3.0.55. The command's own default is fifty and the
+        // manifest asked for no bound, so a history longer than that printed a page holding none of the requested
+        // root's conversations. Every record in it was usable and none belonged here, which made `dropped` zero
+        // and the answer "no conversations, and that is all of them". Filtering by root is not an omission; a page
+        // that ended because the CLI stopped counting is.
+        let records: Vec<Record> = serde_json::from_str(
+            r#"[{"sessionId":"a","cwd":"/elsewhere"},{"sessionId":"b","cwd":"/elsewhere"}]"#,
+        )
+        .expect("decodes");
+        let catalogue = page(records, "/work/alpha", 1, Some(2));
+        assert!(
+            catalogue.sessions.is_empty(),
+            "nothing in the page belongs to this root"
+        );
+        assert!(
+            matches!(catalogue.coverage, NativeCatalogueCoverage::Partial { .. }),
+            "an empty answer off a full page is not a complete answer"
+        );
+    }
+
+    #[test]
+    fn a_short_page_proves_the_cli_had_nothing_further() {
+        // The other half. Asking for one more than will be kept is what makes completeness knowable at all, so a
+        // driver that received fewer records than it asked for has seen the CLI's whole listing.
+        let records: Vec<Record> =
+            serde_json::from_str(r#"[{"sessionId":"a","cwd":"/work/alpha"}]"#).expect("decodes");
+        let catalogue = page(records, "/work/alpha", 50, Some(51));
+        assert!(matches!(
+            catalogue.coverage,
+            NativeCatalogueCoverage::Complete { .. }
+        ));
+    }
+
+    #[test]
+    fn a_cli_whose_bound_is_unknown_never_claims_completeness() {
+        // Without the flag that bounds the listing, a whole history and a first page arrive in the same shape.
+        // Guessing between them is how an operator comes to trust a list that is missing conversations.
+        let records: Vec<Record> =
+            serde_json::from_str(r#"[{"sessionId":"a","cwd":"/work/alpha"}]"#).expect("decodes");
+        let catalogue = page(records, "/work/alpha", 50, None);
+        assert!(matches!(
+            catalogue.coverage,
+            NativeCatalogueCoverage::Partial { .. }
+        ));
+    }
+
+    #[test]
     fn resume_stays_unknown_because_a_listing_cannot_know_it() {
         // The listing says a conversation exists. Only the agent handshake says whether it can be reopened, and
         // claiming availability here would offer a row that fails on click.
@@ -302,7 +388,7 @@ mod tests {
         let records: Vec<Record> =
             serde_json::from_str(r#"[{"cwd":"/work/alpha"},{"sessionId":"","cwd":"/work/alpha"}]"#)
                 .expect("decodes");
-        let catalogue = page(records, "/work/alpha", 50);
+        let catalogue = page(records, "/work/alpha", 50, Some(51));
         assert!(catalogue.sessions.is_empty());
         assert!(matches!(
             catalogue.coverage,

@@ -571,6 +571,21 @@ pub struct SessionCatalogue {
     /// Empty means it has none, and the driver reports the absence rather than approximating a list.
     #[serde(default)]
     pub list: Vec<Box<str>>,
+    /// The flag that bounds how many conversations the listing prints, when the CLI paginates.
+    ///
+    /// Only the spelling lives here. How many to ask for is the driver's business and stays in code, so the
+    /// number cannot drift between a manifest and the bound it is supposed to describe.
+    ///
+    /// # Why a driver needs it
+    ///
+    /// A CLI that paginates prints its own default page and says nothing about what is past it. Without a way to
+    /// ask for one more than the driver intends to keep, a short answer and a truncated answer look identical,
+    /// and the catalogue has no way to tell completeness from a full first page. Measured on cline 3.0.55, the
+    /// default is fifty: a history longer than that reported an empty page for a root as complete.
+    ///
+    /// Absent means the driver cannot prove completeness and must not claim it.
+    #[serde(default)]
+    pub limit_flag: Option<Box<str>>,
 }
 
 impl SessionCatalogue {
@@ -578,6 +593,9 @@ impl SessionCatalogue {
     fn validate(&self) -> Result<(), ManifestError> {
         for argument in &self.list {
             HelpCommands::refuse_unless_one_word(argument)?;
+        }
+        if let Some(flag) = &self.limit_flag {
+            HelpCommands::refuse_unless_one_word(flag)?;
         }
         Ok(())
     }

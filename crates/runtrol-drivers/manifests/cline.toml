@@ -61,3 +61,7 @@ install = "npm install --global --allow-scripts=cline cline"
 # conclusion was wrong. The driver reads four fields and never the prompt or the stored-message path that arrive
 # in the same record.
 list = ["history", "--json"]
+# Measured on 3.0.55: `cline history --help` reports `--limit <count> (default: "50")`. Without asking,
+# a history longer than fifty printed a page holding none of the requested root's conversations, and the
+# driver reported that empty page as a complete answer.
+limit_flag = "--limit"

@@ -28,7 +28,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
         resolve(&fixture)?,
         Arc::new(Containment::without_any()),
         runtrol_provider::ModelAliases::default(),
-        runtrol_provider::SessionCatalogue { list: listing },
+        runtrol_provider::SessionCatalogue {
+            list: listing,
+            // Left unset so the probe exercises the path a CLI takes when this build does not know how to bound
+            // its listing, which is the case that must never report a complete answer.
+            limit_flag: None,
+        },
         Vec::new(),
     );
     let root = AbsPath::canonicalize(&workspace)?;

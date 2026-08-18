@@ -175,6 +175,7 @@ impl Provider for AcpProvider {
                 self.id,
                 &self.program,
                 &self.sessions.list,
+                self.sessions.limit_flag.as_deref(),
                 &query,
                 &self.contained_by,
             )
