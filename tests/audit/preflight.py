@@ -70,6 +70,16 @@ GATES: dict[str, tuple[str, list[str]]] = {
         "추적 파일은 추적되는 것만 가리킨다",
         [*PY, f"{HOOKS}/publicReferences.py"],
     ),
+    # 셸을 거쳐 들어온 텍스트는 이스케이프를 그 이스케이프가 가리키는 바이트로 바꿔 놓는다. 컴파일러도
+    # 타입 검사도 테스트도 그것을 보지 못하고, git 은 그 파일을 통째로 바이너리로 취급해 검색을 멈춘다.
+    "sourceTextIntegritySelftest": (
+        "소스 제어문자 검출기 자체 검증",
+        [*PY, f"{HOOKS}/sourceTextIntegrity.py", "--selftest"],
+    ),
+    "sourceTextIntegrity": (
+        "소스 파일은 읽을 수 있는 텍스트다",
+        [*PY, f"{HOOKS}/sourceTextIntegrity.py"],
+    ),
     # 요청마다 누가 할 수 있는지 규칙이 있고, 벽이 다른 무엇보다 먼저 물어진다. 컴파일러는 crate
     # 경계 너머로 빠진 요청을 말해주지 못한다.
     "scopeWallSelftest": ("스코프 벽 검출기 자체 검증", [*PY, f"{HOOKS}/scopeWall.py", "--selftest"]),

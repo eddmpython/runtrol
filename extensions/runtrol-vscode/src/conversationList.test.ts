@@ -341,7 +341,7 @@ test("a conversation the reader cannot see is not a starting point they get stuc
   const { rows } = waitingFleet(null);
 
   // A key from a conversation that has since left the list.
-  const next = nextNeedingYou(rows, "chat gone gone");
+  const next = nextNeedingYou(rows, "chat:gone:gone");
 
   assert.ok(next, "an unknown starting point still lands somewhere useful");
   assert.equal(needsYou(next), true);
@@ -361,7 +361,7 @@ test("a conversation key is legal as a tree element id", () => {
   for (const row of rows) {
     assert.ok(row.key.length > 0);
     assert.equal(
-      /[ -]/u.test(row.key),
+      /[\x00-\x1f\x7f]/u.test(row.key),
       false,
       `${JSON.stringify(row.key)} carries a control character`,
     );
