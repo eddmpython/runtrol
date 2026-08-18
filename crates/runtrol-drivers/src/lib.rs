@@ -18,6 +18,7 @@
 //! parses the one and reads the other, and neither the kernel nor this crate needs to know about the other's shape.
 
 pub mod acp;
+mod catalogue;
 pub mod claude;
 pub mod codex;
 pub mod consult;

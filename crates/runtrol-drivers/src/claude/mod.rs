@@ -23,6 +23,7 @@ pub mod bound;
 pub mod map;
 mod models;
 pub mod provider;
+mod sessions;
 
 pub use agent::ClaudeAgent;
 pub use bound::{BoundFlag, BoundFrame, CONSULT, CONTROL, FLAGS, FRAMES, TERMINAL};

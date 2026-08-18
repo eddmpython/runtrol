@@ -336,8 +336,21 @@ export function elapsed(atMs: number | null, nowMs: number): string | null {
   return days < 7 ? `${days}d` : `${Math.round(days / 7)}w`;
 }
 
+/// A timestamp a coding service reported, in whichever way that service reports one.
+///
+/// The protocol asks a driver for the provider's own representation rather than a house format, so more than one
+/// arrives here: the Agent Client Protocol and cline print ISO 8601, and Claude Code prints milliseconds since
+/// the epoch. Reading only the first spelling left every row from the second with no time at all, which pushed it
+/// below every dated row and stripped the elapsed part of its subtitle.
+///
+/// Reading both is not interpretation. Each is an unambiguous machine format and neither says anything about what
+/// the conversation contains.
 function instant(value: string | null | undefined): number | null {
   if (!value) return null;
+  if (/^\d+$/.test(value)) {
+    const millis = Number(value);
+    return Number.isSafeInteger(millis) ? millis : null;
+  }
   const parsed = Date.parse(value);
   return Number.isFinite(parsed) ? parsed : null;
 }

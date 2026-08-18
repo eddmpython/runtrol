@@ -19,11 +19,13 @@ use std::time::Duration;
 
 use runtrol_childproc::{Containment, Program, capture};
 use runtrol_provider::{
-    MAX_NATIVE_SESSION_ITEMS, MAX_NATIVE_TITLE_BYTES, NativeCatalogueCoverage,
-    NativeCatalogueSource, NativeResumeCapability, NativeSessionCatalogue, NativeSessionEntry,
-    NativeSessionId, NativeSessionQuery, ProviderError, ProviderId,
+    MAX_NATIVE_SESSION_ITEMS, NativeCatalogueCoverage, NativeCatalogueSource,
+    NativeResumeCapability, NativeSessionCatalogue, NativeSessionEntry, NativeSessionId,
+    NativeSessionQuery, ProviderError, ProviderId,
 };
 use serde::Deserialize;
+
+use crate::catalogue::{bounded, under};
 
 /// How long the CLI's own listing may take.
 ///
@@ -193,34 +195,6 @@ fn page(
     }
 }
 
-/// Whether one reported directory sits inside the requested root.
-///
-/// Compares on separators rather than on raw text so that a sibling whose name merely starts with the root's name
-/// is not mistaken for a child. Case folding is left to Runtime's canonicalisation, which owns the platform rules.
-fn under(cwd: &str, root: &str) -> bool {
-    let normalise = |path: &str| path.replace('\\', "/").trim_end_matches('/').to_owned();
-    let cwd = normalise(cwd);
-    let root = normalise(root);
-    if root.is_empty() {
-        return true;
-    }
-    cwd.eq_ignore_ascii_case(&root)
-        || cwd.len() > root.len()
-            && cwd[..root.len()].eq_ignore_ascii_case(&root)
-            && cwd.as_bytes().get(root.len()) == Some(&b'/')
-}
-
-fn bounded(text: &str) -> String {
-    if text.len() <= MAX_NATIVE_TITLE_BYTES {
-        return text.to_owned();
-    }
-    let mut end = MAX_NATIVE_TITLE_BYTES;
-    while end > 0 && !text.is_char_boundary(end) {
-        end -= 1;
-    }
-    text[..end].to_owned()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -289,21 +263,6 @@ mod tests {
                 "{forbidden} reached a catalogue entry"
             );
         }
-    }
-
-    #[test]
-    fn a_conversation_outside_the_requested_root_is_not_offered() {
-        let catalogue = decoded("/work/beta", 50);
-        assert!(catalogue.sessions.is_empty());
-    }
-
-    #[test]
-    fn a_sibling_whose_name_starts_with_the_root_is_not_inside_it() {
-        // `/work/alpha-other` is not under `/work/alpha`, and a plain prefix comparison would say it is.
-        assert!(under("/work/alpha/nested", "/work/alpha"));
-        assert!(under("/work/alpha", "/work/alpha"));
-        assert!(!under("/work/alpha-other", "/work/alpha"));
-        assert!(under("C:\\work\\alpha\\deep", "C:/work/alpha"));
     }
 
     #[test]

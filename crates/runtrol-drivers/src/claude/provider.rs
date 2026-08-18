@@ -10,8 +10,9 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use runtrol_childproc::{Containment, Program};
 use runtrol_provider::{
-    Agent, ModelAliases, ModelCatalog, OpenIntent, Provider, ProviderCapabilities,
-    ProviderCapability, ProviderCapabilitySource, ProviderError, ProviderId,
+    Agent, ModelAliases, ModelCatalog, NativeSessionCatalogue, NativeSessionQuery, OpenIntent,
+    Provider, ProviderCapabilities, ProviderCapability, ProviderCapabilitySource, ProviderError,
+    ProviderId,
 };
 
 use crate::claude::agent::ClaudeAgent;
@@ -94,10 +95,30 @@ impl Provider for ClaudeProvider {
             interrupt: ProviderCapability::available(ProviderCapabilitySource::DriverContract),
             approvals: cli(),
             cooling: ProviderCapability::available(ProviderCapabilitySource::DriverContract),
-            native_session_catalogue: ProviderCapability::unsupported(
-                "this driver has no registered official native session catalogue",
-            ),
+            // The roster command, not a conversation catalogue. This CLI publishes which of its sessions are
+            // running and publishes nothing about the ones it has stored, so the capability is available and the
+            // answer it produces is never complete. Declaring it unsupported hid every session a person started
+            // outside runtrol, including the ones waiting on that person.
+            native_session_catalogue: cli(),
         }
+    }
+
+    async fn native_sessions(
+        &self,
+        query: NativeSessionQuery,
+    ) -> Result<NativeSessionCatalogue, ProviderError> {
+        // Whether a listed session can be reopened is the resume flag's answer, and the flag was probed against
+        // the installed CLI rather than assumed. Runtime only offers to open a row it was told is resumable, so
+        // guessing high would put a row on screen that fails on click and guessing low would hide every one.
+        let resumable = self.available_flags.contains("--resume");
+        crate::claude::sessions::list(
+            self.id,
+            &self.program,
+            resumable,
+            &query,
+            &self.contained_by,
+        )
+        .await
     }
 
     async fn models(&self) -> Result<ModelCatalog, ProviderError> {
