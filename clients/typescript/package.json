@@ -5,7 +5,7 @@
   "type": "module",
   "types": "./dist/src/index.d.ts",
   "sideEffects": false,
-  "license": "MIT",
+  "license": "Apache-2.0",
   "repository": {
     "type": "git",
     "url": "https://github.com/eddmpython/runtrol.git",

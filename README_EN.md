@@ -184,4 +184,9 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) to contribute. Design-stage contributions
 
 ## License
 
-[MIT](LICENSE)
+The product is [AGPL-3.0-only](LICENSE). The published client packages
+(`runtrol-runtime-protocol`, `runtrol-runtime-client`, `@runtrol/runtime-client`) exist for
+other programs to link against, so they are [Apache-2.0](crates/runtrol-runtime-protocol/LICENSE).
+
+Running runtrol places no license obligation on your own work. It supervises agent CLIs as
+separate processes and is not linked into anything you write.

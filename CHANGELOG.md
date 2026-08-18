@@ -29,6 +29,13 @@ and refactoring that no user can observe do not belong here.
 
 ### Changed
 
+- Runtrol is now licensed under AGPL-3.0-only instead of MIT, and the source stays public. Using it changes
+  nothing for you: it supervises agent CLIs as separate processes and places no license obligation on your own
+  work. What changes is that a modified Runtrol has to stay open, including one offered to others over a
+  network. The three packages other programs link against (`runtrol-runtime-protocol`,
+  `runtrol-runtime-client`, `@runtrol/runtime-client`) move from MIT to Apache-2.0 and stay permissive on
+  purpose, so integrating against Runtrol is unaffected.
+
 - Installing more coding services no longer delays the moment the window is usable. Each service's executable was
   resolved one after another, so every supported CLI added its own search-path walk to startup. They are resolved
   at the same time now. Measured on the real Extension Host with four installed services: the fastest run went

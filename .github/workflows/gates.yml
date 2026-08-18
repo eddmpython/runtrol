@@ -87,6 +87,12 @@ jobs:
         run: python -X utf8 tests/audit/publicReferences.py --selftest
       - name: 추적 파일은 추적되는 것만 가리킨다
         run: python -X utf8 tests/audit/publicReferences.py
+      # 라이선스는 장식이 아니라 정책이다. 그것을 말하는 표면이 열 곳이 넘고 어느 것이 어긋나도
+      # 빌드는 통과한다. AGPL 로 옮긴 첫 시간에 네 곳이 어긋났다.
+      - name: 라이선스 정책 검출기 자체 검증
+        run: python -X utf8 tests/audit/licenseSsot.py --selftest
+      - name: 라이선스를 말하는 모든 표면이 같은 말을 한다
+        run: python -X utf8 tests/audit/licenseSsot.py
       # 셸을 거쳐 들어온 텍스트는 이스케이프를 그것이 가리키는 바이트로 바꿔 놓는다. 컴파일러도 타입
       # 검사도 테스트도 보지 못하고, git 은 그 파일을 바이너리로 취급해 검색을 멈춘다.
       - name: 소스 제어문자 검출기 자체 검증

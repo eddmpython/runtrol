@@ -15,6 +15,10 @@ await Promise.all([
   cp(path.join(repositoryRoot, "assets/brand/symbol.svg"), path.join(resources, "symbol.svg")),
   cp(path.join(repositoryRoot, "assets/brand/icon-512.png"), path.join(resources, "icon.png")),
   cp(path.join(repositoryRoot, "LICENSE"), path.join(resources, "LICENSE")),
+  // NOTICE carries the agreement for the CA root data the Core embeds. It has to travel with the
+  // binary, and LICENSE cannot carry it: text beyond the license itself stops scanners from
+  // identifying the license at all.
+  cp(path.join(repositoryRoot, "NOTICE"), path.join(resources, "NOTICE")),
 ]);
 
 await Promise.all([

@@ -70,6 +70,14 @@ GATES: dict[str, tuple[str, list[str]]] = {
         "추적 파일은 추적되는 것만 가리킨다",
         [*PY, f"{HOOKS}/publicReferences.py"],
     ),
+    "licenseSsotSelftest": (
+        "라이선스 정책 검출기 자체 검증",
+        [*PY, f"{HOOKS}/licenseSsot.py", "--selftest"],
+    ),
+    "licenseSsot": (
+        "라이선스를 말하는 모든 표면이 같은 말을 한다",
+        [*PY, f"{HOOKS}/licenseSsot.py"],
+    ),
     # 셸을 거쳐 들어온 텍스트는 이스케이프를 그 이스케이프가 가리키는 바이트로 바꿔 놓는다. 컴파일러도
     # 타입 검사도 테스트도 그것을 보지 못하고, git 은 그 파일을 통째로 바이너리로 취급해 검색을 멈춘다.
     "sourceTextIntegritySelftest": (
@@ -413,6 +421,8 @@ SUITES: dict[str, tuple[str, ...]] = {
         "noTranscriptCopy",
         "publicReferencesSelftest",
         "publicReferences",
+        "licenseSsotSelftest",
+        "licenseSsot",
         "scopeWallSelftest",
         "scopeWall",
         "orphanReapingSelftest",

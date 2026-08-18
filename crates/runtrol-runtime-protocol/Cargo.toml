@@ -5,7 +5,8 @@ description = "Provider-neutral public protocol types and schema for Runtrol Run
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
-license.workspace = true
+# 이 crate 는 남의 프로그램이 링크한다. 워크스페이스의 AGPL 상속을 여기서 덮는다 (근거는 루트 `NOTICE`).
+license = "Apache-2.0"
 repository.workspace = true
 authors.workspace = true
 publish = true

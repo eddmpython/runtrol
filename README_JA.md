@@ -182,4 +182,9 @@ git config core.hooksPath .githooks              # クローンごとに一度
 
 ## ライセンス
 
-[MIT](LICENSE)
+製品本体は [AGPL-3.0-only](LICENSE)。公開クライアントパッケージ (`runtrol-runtime-protocol` ·
+`runtrol-runtime-client` · `@runtrol/runtime-client`) は他のプログラムがリンクするためのものなので
+[Apache-2.0](crates/runtrol-runtime-protocol/LICENSE)。
+
+runtrol を使うだけでは、あなたのコードに何の義務も生じません。runtrol はエージェント CLI を
+別プロセスとして監督するだけで、あなたが書いたものにリンクされません。

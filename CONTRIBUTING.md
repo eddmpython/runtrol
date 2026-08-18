@@ -70,4 +70,27 @@ before trusting that it passes: plant the defect it should catch and watch it go
 
 ## License
 
-MIT. By contributing you agree your contributions are licensed under MIT. There is no CLA.
+runtrol is licensed under the GNU Affero General Public License, version 3 only. The published
+client packages (`runtrol-runtime-protocol`, `runtrol-runtime-client`, `@runtrol/runtime-client`)
+are licensed under the Apache License, Version 2.0, because other programs link against them.
+
+Contributing means opening a pull request, sending a patch, or pushing to this repository. By
+contributing you state and agree to all of the following about the work you contribute.
+
+1. You wrote it, or you otherwise hold the rights to contribute it under these terms. If an
+   employer holds rights in it, you have their permission.
+2. It is contributed under the license that already governs the files you touched: AGPL-3.0-only
+   for runtrol itself, Apache-2.0 for the client packages named above.
+3. You grant eddmpython, the copyright holder named in `NOTICE`, and that holder's successors and
+   assigns, a perpetual, worldwide, non-exclusive, royalty-free, irrevocable license to use,
+   reproduce, modify, distribute, and sublicense your contribution, including under terms other
+   than the two above.
+4. On the same footing you grant a patent license covering any patent claim of yours that your
+   contribution necessarily infringes. It terminates for anyone who starts patent litigation
+   alleging that runtrol infringes a patent.
+
+You keep your copyright. Nothing here assigns it. Point 3 exists because copyleft protects a
+project only while one party can still decide what the project becomes, and that stops being true
+once the copyright is split across contributors who can no longer all be reached. Stating it here
+instead of routing you through a signing service is deliberate: the cost to you should be reading
+one paragraph.

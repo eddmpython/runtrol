@@ -55,6 +55,7 @@ try {
     cp(path.join(extensionRoot, "resources/icon.png"), path.join(stagedResources, "icon.png")),
     cp(path.join(extensionRoot, "resources/symbol.svg"), path.join(stagedResources, "symbol.svg")),
     cp(path.join(extensionRoot, "resources/LICENSE"), path.join(stagedResources, "LICENSE")),
+    cp(path.join(extensionRoot, "resources/NOTICE"), path.join(stagedResources, "NOTICE")),
     cp(source, path.join(stagedCore, targetContract.executable)),
   ]);
   const packaged = spawnSync(

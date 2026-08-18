@@ -12,7 +12,8 @@ yanked = "deny"
 
 [licenses]
 version = 2
-# MIT 프로젝트가 무리 없이 배포할 수 있는 것만.
+# 제3자 의존은 permissive 만 받는다. copyleft 를 여기 넣지 않는 이유는 우리가 AGPL 이어서가
+# 아니라, 링크되라고 내보내는 Apache-2.0 crate 두 개가 그것을 삼킬 수 없기 때문이다.
 allow = [
     "MIT",
     "Apache-2.0",
@@ -27,6 +28,9 @@ allow = [
     "Zlib",
 ]
 confidence-threshold = 0.9
+# 위 목록은 제3자에만 적용된다. 우리 멤버 중 배포하지 않는 것은 AGPL-3.0-only 이고 여기서 제외한다.
+# 배포하는 두 개는 Apache-2.0 이라 검사 대상으로 남아도 그대로 통과한다.
+private = { ignore = true }
 
 [sources]
 unknown-registry = "deny"
@@ -41,8 +45,10 @@ wildcards = "deny"
 # Exempt this workspace's own `{ path = ... }` edges. They read as wildcards because they carry no
 # version, and for a third-party crate that would indeed break a reproducible build. For a path
 # dependency inside one repository the resolution is pinned by the commit itself, so denying it would
-# only teach everyone to write a version number that means nothing. Every member is `publish = false`,
-# which is the condition cargo-deny requires before granting this.
+# only teach everyone to write a version number that means nothing. cargo-deny grants this for crates it
+# treats as private, which is every member that is `publish = false`. The two published members are not
+# private, and they need no exemption: `runtrol-runtime-protocol` carries a version next to its path in
+# the table above, so the one published path edge is not a wildcard.
 allow-wildcard-paths = true
 
 # Rejected dependency ledger. Each entry carries or links its reason.

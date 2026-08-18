@@ -336,8 +336,9 @@ def archiveProblems(path: Path, target: str, binary: Path | None = None) -> list
     }
     if set(checksumLines) != expectedChecksums:
         found.append("SHA256SUMS does not cover every other exact archive entry")
-    if entries.get("LICENSE", (b"", 0))[0] != (ROOT / "LICENSE").read_bytes():
-        found.append("archive license differs from repository license")
+    for name in ("LICENSE", "NOTICE"):
+        if entries.get(name, (b"", 0))[0] != (ROOT / name).read_bytes():
+            found.append(f"archive {name} differs from the repository copy")
     if entries.get("runtime.schema.json", (b"", 0))[0] != SCHEMA_PATH.read_bytes():
         found.append("archive public schema differs from the protocol package")
     if expected is not None:

@@ -115,8 +115,12 @@ def sourceProblems(
     ):
         if token not in extensionManifestScript:
             found.append(f"extension-manifest.mjs is missing version derivation contract {token}")
-    if 'path.join(repositoryRoot, "LICENSE")' not in buildScript:
-        found.append("build.mjs does not copy the repository license into package resources")
+    # NOTICE is not decoration here. It carries the agreement for the CA root data the Core embeds,
+    # and LICENSE cannot carry it: text beyond the license itself stops scanners from identifying
+    # the license at all.
+    for name in ("LICENSE", "NOTICE"):
+        if f'path.join(repositoryRoot, "{name}")' not in buildScript:
+            found.append(f"build.mjs does not copy the repository {name} into package resources")
     requiredWorkflowTokens = (
         "push:",
         "extensions/runtrol-vscode/release-policy.json",
@@ -282,6 +286,7 @@ def expectedEntries(target: str) -> set[str]:
         "extension/dist/webview.css",
         "extension/dist/webview.js",
         "extension/resources/LICENSE.txt",
+        "extension/resources/NOTICE.txt",
         "extension/resources/icon.png",
         "extension/resources/symbol.svg",
         f"extension/resources/core/{executable}",
@@ -292,7 +297,7 @@ def archiveProblems(
     entries: dict[str, ArchiveEntry],
     target: str,
     expectedVersion: str,
-    licenseBytes: bytes,
+    verbatim: dict[str, bytes],
     coreBytes: bytes | None,
 ) -> list[str]:
     """Return every content, identity, target, and binary mismatch in one VSIX."""
@@ -341,9 +346,11 @@ def archiveProblems(
                 if identity.get("TargetPlatform") != target:
                     found.append("the VSIX manifest target differs from its release target")
 
-    licenseEntry = entries.get("extension/resources/LICENSE.txt")
-    if licenseEntry and licenseEntry.body != licenseBytes:
-        found.append("the packaged license differs from the repository license")
+    for archivePath, body in verbatim.items():
+        entry = entries.get(archivePath)
+        if entry and entry.body != body:
+            name = archivePath.rsplit("/", 1)[-1]
+            found.append(f"the packaged {name} differs from the repository copy")
     executable = "runtrol.exe" if target.startswith("win32-") else "runtrol"
     coreEntry = entries.get(f"extension/resources/core/{executable}")
     if coreEntry:
@@ -360,7 +367,10 @@ def selftest() -> int:
     """Prove each archive and release-source defect can make the gate red."""
     version = "0.1.0"
     target = "win32-x64"
-    licenseBytes = b"license\n"
+    verbatim = {
+        "extension/resources/LICENSE.txt": b"license\n",
+        "extension/resources/NOTICE.txt": b"notice\n",
+    }
     coreBytes = b"MZ" + b"x" * (1024 * 1024)
     manifest = (
         '<PackageManifest xmlns="http://schemas.microsoft.com/developer/vsx-schema/2011">'
@@ -381,9 +391,10 @@ def selftest() -> int:
     }
     entries["extension/package.json"] = ArchiveEntry(package, 0o644)
     entries["extension.vsixmanifest"] = ArchiveEntry(manifest, 0o644)
-    entries["extension/resources/LICENSE.txt"] = ArchiveEntry(licenseBytes, 0o644)
+    for archivePath, body in verbatim.items():
+        entries[archivePath] = ArchiveEntry(body, 0o644)
     entries["extension/resources/core/runtrol.exe"] = ArchiveEntry(coreBytes, 0o644)
-    if archiveProblems(entries, target, version, licenseBytes, coreBytes):
+    if archiveProblems(entries, target, version, verbatim, coreBytes):
         print("[vscodePackage --selftest] FAIL. the green archive was rejected.", file=sys.stderr)
         return 2
 
@@ -402,9 +413,13 @@ def selftest() -> int:
         manifest.replace(b"win32-x64", b"linux-x64"), 0o644
     )
     mutations.append(wrongManifest)
-    wrongLicense = dict(entries)
-    wrongLicense["extension/resources/LICENSE.txt"] = ArchiveEntry(b"different", 0o644)
-    mutations.append(wrongLicense)
+    for archivePath in verbatim:
+        swapped = dict(entries)
+        swapped[archivePath] = ArchiveEntry(b"different", 0o644)
+        mutations.append(swapped)
+        dropped = dict(entries)
+        dropped.pop(archivePath)
+        mutations.append(dropped)
     stubCore = dict(entries)
     stubCore["extension/resources/core/runtrol.exe"] = ArchiveEntry(b"MZ", 0o644)
     mutations.append(stubCore)
@@ -415,7 +430,7 @@ def selftest() -> int:
     changedCore["extension/resources/core/runtrol.exe"] = ArchiveEntry(coreBytes + b"changed", 0o644)
     mutations.append(changedCore)
     for index, mutation in enumerate(mutations, start=1):
-        if not archiveProblems(mutation, target, version, licenseBytes, coreBytes):
+        if not archiveProblems(mutation, target, version, verbatim, coreBytes):
             print(f"[vscodePackage --selftest] FAIL. archive mutation {index} escaped.", file=sys.stderr)
             return 2
 
@@ -512,7 +527,7 @@ def selftest() -> int:
         'sourceManifest.version !== "0.0.0" version: extensionReleasePolicy.version '
         "release-policy.json previousExtensionReleaseTag"
     )
-    buildScript = 'path.join(repositoryRoot, "LICENSE")'
+    buildScript = 'path.join(repositoryRoot, "LICENSE") path.join(repositoryRoot, "NOTICE")'
     releaseWorkflow = """
     push:
     extensions/runtrol-vscode/release-policy.json
@@ -756,7 +771,10 @@ def archiveRun(archive: Path, target: str, core: Path | None) -> int:
             entries,
             target,
             EXTENSION_VERSION,
-            (ROOT / "LICENSE").read_bytes(),
+            {
+                "extension/resources/LICENSE.txt": (ROOT / "LICENSE").read_bytes(),
+                "extension/resources/NOTICE.txt": (ROOT / "NOTICE").read_bytes(),
+            },
             coreBytes,
         )
     except (OSError, KeyError, ValueError, zipfile.BadZipFile, json.JSONDecodeError) as error:

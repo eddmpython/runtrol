@@ -181,4 +181,9 @@ git config core.hooksPath .githooks              # 每次克隆执行一次
 
 ## 许可证
 
-[MIT](LICENSE)
+产品本体采用 [AGPL-3.0-only](LICENSE)。公开客户端包 (`runtrol-runtime-protocol` ·
+`runtrol-runtime-client` · `@runtrol/runtime-client`) 是供其他程序链接的，因此采用
+[Apache-2.0](crates/runtrol-runtime-protocol/LICENSE)。
+
+仅仅使用 runtrol 不会给你的代码带来任何义务。runtrol 只是把智能体 CLI 作为独立进程来监督，
+不会链接进你写的任何东西。
