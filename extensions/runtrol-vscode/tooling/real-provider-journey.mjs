@@ -9,6 +9,7 @@ import {
   isolatedExtensionTestArguments,
   isolatedProfileSettings,
   terminateExactProcesses,
+  withoutHostIdentity,
 } from "./isolated-vscode.mjs";
 
 const output = path.join(extensionRoot, ".test-dist");
@@ -29,9 +30,9 @@ const controlLeaseLifetimeMs = publicSchema?.["x-runtrol-limits"]?.controlLeaseL
 if (!Number.isSafeInteger(controlLeaseLifetimeMs) || controlLeaseLifetimeMs <= 0) {
   throw new Error("the public schema has no valid control lease lifetime");
 }
-const testEnvironment = {
-  ...process.env,
-};
+// Stripped rather than copied whole. A VS Code launched with the outer host's identity starts as plain Node and
+// never loads a workbench, which is how this journey came to fail with a missing module named after its workspace.
+const testEnvironment = withoutHostIdentity();
 
 await Promise.all([
   stat(core),

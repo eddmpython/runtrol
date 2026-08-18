@@ -30,8 +30,52 @@ export const isolatedLaunchArguments = Object.freeze([
   "--disable-updates",
 ]);
 
-export function isolatedRuntimeState(root, baseEnvironment = process.env) {
+/// Variables that tell a process it belongs to a VS Code extension host, and must not reach the one under test.
+///
+/// `ELECTRON_RUN_AS_NODE` is the one that matters. Electron reads it before anything else and starts as plain
+/// Node, which makes the workbench never load and the first positional argument be treated as a script to run.
+/// Launching a test VS Code from a terminal inside VS Code therefore failed with `Cannot find module
+/// <the workspace path>`, and the stack said `runMain`: the workspace folder had been handed to Node as an entry
+/// point. Nothing in the message names the cause, and three gates were red for it.
+///
+/// The `VSCODE_` group is stripped for the same reason one step further out. `VSCODE_IPC_HOOK` and `VSCODE_PID`
+/// name the outer instance's pipe and process, and a child that reads them talks to the operator's own window
+/// instead of the isolated one this harness built. That is the opposite of isolation.
+///
+/// This is where it belongs rather than in each caller: the module that promises an isolated VS Code is the one
+/// that owes the promise.
+const HOST_IDENTITY_VARIABLES = Object.freeze(["ELECTRON_RUN_AS_NODE"]);
+
+/// Whether a variable names the outer extension host rather than the one being launched.
+function namesTheOuterHost(name) {
+  return HOST_IDENTITY_VARIABLES.includes(name) || name.startsWith("VSCODE_");
+}
+
+/// A copy of an environment with the outer extension host's identity removed.
+export function withoutHostIdentity(baseEnvironment = process.env) {
   const environment = { ...baseEnvironment };
+  for (const name of Object.keys(environment)) {
+    if (namesTheOuterHost(name)) delete environment[name];
+  }
+  return environment;
+}
+
+// Removed from this process, not only from the copies it hands out, and removed on import rather than by each
+// harness remembering to ask.
+//
+// `@vscode/test-electron` builds the launcher's environment as `process.env` first and the caller's environment
+// on top. Deleting a key from the copy therefore removes nothing: the value underneath survives the merge and
+// reaches Electron anyway. That is why stripping the copy fixed the harnesses that spawn VS Code themselves and
+// left the ones going through `runTests` failing in exactly the same way as before.
+//
+// On import because the only reason to import this module is to launch an isolated VS Code, and the cost of one
+// harness forgetting is three gates red with a message that names a folder and never mentions an environment.
+for (const name of Object.keys(process.env)) {
+  if (namesTheOuterHost(name)) delete process.env[name];
+}
+
+export function isolatedRuntimeState(root, baseEnvironment = process.env) {
+  const environment = withoutHostIdentity(baseEnvironment);
   const canonicalRoot = realpathSync.native(root);
   let home;
   if (process.platform === "win32") {
