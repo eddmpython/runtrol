@@ -37,6 +37,7 @@ pub const MANIFESTS: &[&str] = &[
     include_str!("../manifests/codex.toml"),
     include_str!("../manifests/cline.toml"),
     include_str!("../manifests/opencode.toml"),
+    include_str!("../manifests/grok.toml"),
 ];
 
 /// Builds a driver for one kind.

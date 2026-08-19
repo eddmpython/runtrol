@@ -1,0 +1,57 @@
+# Compiled into the binary, so a fresh install has this provider with no file anywhere. An operator who needs
+# something different writes a file with the same id and it replaces this one entirely.
+#
+# This provider needs no driver of its own. Measured on grok 1.0.4 (build d846eb93d9) by handshaking the real
+# binary: `grok agent stdio` answers `initialize` with protocol version 1, `loadSession: true`, and
+# `sessionCapabilities` of `list`, `resume` and `close`. Stored conversations therefore arrive through the
+# official protocol path the generic driver already speaks, titles included, with nothing here restating what
+# they are. It joins by declaring how to reach it, never by adding a branch to the core.
+schema = 1
+id = "grok"
+display_name = "Grok"
+kind = "acp"
+# The editor's own icon font carries this service's vendor mark. Named rather than shipped: the artwork stays the
+# vendor's and this repository distributes none of it.
+icon = "xai"
+
+[bin]
+# Bare names, tried in this order. Measured on this machine: the installer places a native executable at
+# ~/.grok/bin/grok.exe and puts that directory on the search path itself, with no launcher script in front.
+names = ["grok", "grok.exe"]
+
+[probe]
+# Measured: `grok --version` prints `grok 1.0.4 (d846eb93d9) [stable]`, which semver-anywhere reads.
+version = { args = ["--version"], parse = "semver-anywhere" }
+# No flag block. The generic protocol driver passes no optional flags, so there is nothing to ask a parser about
+# and no reason to teach this CLI a way to refuse work.
+
+[transport]
+argv = ["agent", "stdio"]
+listen = "stdio"
+
+# No `[models]` block, and no `list` command either. This CLI's `grok models` prints prose for a person, with no
+# machine-readable flag, so naming it here would make a driver parse sentences. Its real catalogue lives in a
+# version-keyed cache file the CLI maintains for itself, and reading a provider's private file is what this
+# product refuses. Until the vendor ships a machine-readable listing, model choice stays with the CLI's own
+# settings, which is also where it is most correct.
+
+[secrets]
+# Where this CLI keeps its own login. Not discoverable: a CLI does not report this, and guessing from its name is
+# how a wall comes to protect a directory nobody uses. Measured on this machine: `~/.grok/auth.json` holds the
+# OAuth credential and refresh token. runtrol never holds a provider credential, and the scope wall refuses any
+# workspace that would let an agent read one either.
+under_home = [".grok"]
+
+# No `[update]` section. Measured: this CLI updates itself (`grok update`, installer declared as internal in its
+# own configuration), so no package manager runtrol knows how to verify is the authority for it.
+
+[help]
+# This CLI's own commands for getting itself working. runtrol never runs them: it types one into the operator's
+# own terminal and stops there.
+#
+# Measured against the installed CLI: `grok login` signs in through the vendor's own browser flow with a
+# device-code path for headless machines, and `grok doctor` names installation, terminal and configuration health
+# as what it diagnoses. No install line, because the vendor's installer is its own program and no package manager
+# line runtrol could verify installs it.
+sign_in = ["login"]
+diagnose = ["doctor"]
