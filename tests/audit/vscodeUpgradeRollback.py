@@ -185,6 +185,18 @@ def buildArtifacts() -> tuple[Path, Path]:
     for expected in (core, fixture, archive):
         if not expected.is_file():
             raise RuntimeError(f"upgrade rehearsal artifact is missing at {expected}")
+    # The exact-archive contract, on the one really built VSIX a local run has. Without this, a packaging
+    # drift (2026-08-20: a NOTICE staged without the .txt the contract pins) stays invisible locally and
+    # fails six release jobs instead.
+    inspected = runCommand(
+        [
+            sys.executable, "-X", "utf8", str(ROOT / "tests" / "audit" / "vscodePackage.py"),
+            "--archive", str(archive), "--target", targetName, "--core", str(core),
+        ],
+        ROOT,
+    )
+    if inspected.returncode != 0:
+        raise RuntimeError("the rehearsal VSIX violates the exact package contract")
     return archive, fixture
 
 
