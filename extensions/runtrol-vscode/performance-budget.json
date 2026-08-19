@@ -8,7 +8,7 @@
   "webviewInputP95Ms": 50,
   "webviewScrollP95Ms": 50,
   "webviewPendingFrames": 1024,
-  "coldResumeMs": 2600,
+  "coldResumeMs": 3500,
   "sessionSwitchP95Ms": 125,
   "reloadRestoreMs": 2500,
   "followArrivalMs": 15000

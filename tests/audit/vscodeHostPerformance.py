@@ -26,7 +26,9 @@ Usage::
 Three ratchets were recalibrated out of the measured noise band on 2026-08-19, after one day in which each
 flipped red on runs with no code change on its path. The day's trials on the reference machine, best and
 worst, with the old budget in parentheses: reloadRestoreMs 1651~2533 (1750, a green morning run contained a
-2038 ms trial), coldResumeMs 1150~2401 (1500), activationMs 857~1516 (1350). Each budget now sits past its
+2038 ms trial), coldResumeMs 1150~2710 with a 2545 ms trial inside a green pre-change morning run, so the
+band is bimodal rather than drift (1500, then 2600 which the very next day-end run outran; now 3500,
+three times the quiet best), activationMs 857~1516 (1350). Each budget now sits past its
 observed band (2500, 2600, 1800), which still goes red on any real regression beyond machine noise; a budget
 inside the band is a coin flip that trains people to rerun instead of to read.
 """
