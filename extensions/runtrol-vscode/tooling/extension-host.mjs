@@ -1,5 +1,5 @@
 import { spawn, spawnSync } from "node:child_process";
-import { cp, mkdtemp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { cp, mkdtemp, mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -41,16 +41,40 @@ if (bundled.status !== 0) {
 // exactly this purpose, and the random suffix still isolates concurrent runs.
 const temporaryRoot = process.platform === "darwin" ? "/tmp" : os.tmpdir();
 const temporary = await mkdtemp(path.join(temporaryRoot, "runtrol-vscode-host-"));
+// A crashed earlier run leaves its whole isolated world behind, and those leftovers accumulate forever and even
+// surface as windows full of fake workspaces during later tests. Every run therefore starts by deleting its
+// stale predecessors. The age guard keeps a concurrent run's live directory safe; only abandoned ones go.
+const STALE_RUN_AGE_MS = 2 * 60 * 60 * 1000;
+for (const entry of await readdir(temporaryRoot).catch(() => [])) {
+  if (!entry.startsWith("runtrol-vscode-host-")) continue;
+  const stale = path.join(temporaryRoot, entry);
+  if (stale === temporary) continue;
+  const age = await stat(stale).then((s) => Date.now() - s.mtimeMs).catch(() => 0);
+  if (age < STALE_RUN_AGE_MS) continue;
+  // ok: a locked leftover must not fail this run. The run proceeds on its own fresh directory either way, and
+  // the next run sweeps the leftover again.
+  await rm(stale, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }).catch(() => {});
+}
 const output = path.join(temporary, "tests");
 const testEntry = path.join(output, "extensionHost.test.cjs");
 const extensionUnderTestRoot = path.join(temporary, "extension");
 const resultPath = path.join(temporary, "result.json");
 const restoreResultPath = path.join(temporary, "restore-result.json");
+const followResultPath = path.join(temporary, "follow-result.json");
 const runtimeState = isolatedRuntimeState(temporary);
 const runtrolHome = runtimeState.home;
 const userData = path.join(temporary, "user");
 const measureExtensions = path.join(temporary, "extensions-measure");
 const restoreExtensions = path.join(temporary, "extensions-restore");
+const followExtensions = path.join(temporary, "extensions-follow");
+// The follow phase's two folders live outside the measured workspaces so no earlier phase can have granted
+// them: the second folder's conversation can then only arrive through the live follow chain under test.
+const followRoot = path.join(temporary, "follow");
+const followFirst = path.join(followRoot, "alpha");
+const followTarget = path.join(followRoot, "beta");
+// A saved workspace file rather than a plain folder: adding a folder to a workspace-file window keeps the same
+// extension host alive, and a live host is the entire point of the phase.
+const followWorkspaceFile = path.join(followRoot, "follow.code-workspace");
 const workspaceRoot = path.join(temporary, "workspaces");
 const workspaces = Array.from(
   { length: 30 },
@@ -77,6 +101,14 @@ try {
   await mkdir(path.join(userData, "User"), { recursive: true });
   await mkdir(measureExtensions, { recursive: true });
   await mkdir(restoreExtensions, { recursive: true });
+  await mkdir(followExtensions, { recursive: true });
+  await mkdir(followFirst, { recursive: true });
+  await mkdir(followTarget, { recursive: true });
+  await writeFile(
+    followWorkspaceFile,
+    JSON.stringify({ folders: [{ path: followFirst }] }),
+    "utf8",
+  );
   for (const workspace of workspaces) {
     await mkdir(workspace, { recursive: true });
   }
@@ -208,7 +240,22 @@ listen = "stdio"
   );
   await restoreHost;
   const restored = JSON.parse(await readFile(restoreResultPath, "utf8"));
-  const result = { ...measured, ...restored };
+  const followEnvironment = {
+    ...testEnvironment,
+    RUNTROL_VSCODE_RESULT: followResultPath,
+    RUNTROL_VSCODE_PHASE: "follow",
+    RUNTROL_VSCODE_FOLLOW_TARGET: followTarget,
+  };
+  await runHost(
+    installed,
+    testEntry,
+    followResultPath,
+    followEnvironment,
+    followWorkspaceFile,
+    followExtensions,
+  );
+  const followed = JSON.parse(await readFile(followResultPath, "utf8"));
+  const result = { ...measured, ...restored, ...followed };
   process.stdout.write(`RUNTROL_VSCODE_HOST ${JSON.stringify(result)}\n`);
 } catch (error) {
   if (daemon && daemon.exitCode !== null) {

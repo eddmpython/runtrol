@@ -51,6 +51,7 @@ FIELDS = (
     "coldResumeMs",
     "sessionSwitchP95Ms",
     "reloadRestoreMs",
+    "followArrivalMs",
 )
 EXPECTED_HOT_SESSIONS = 8
 EXPECTED_MANAGED_SESSIONS = 30
@@ -133,8 +134,8 @@ def hostContractProblems(source: str) -> list[str]:
     found: list[str] = []
     if INITIALIZATION_TIMEOUT_DECLARATION not in source:
         found.append("the Extension Host initialization hang timeout is not the exact 15 second guard")
-    if source.count(INITIALIZATION_TIMEOUT_USE) != 2:
-        found.append("initial activation and reload do not share the initialization hang guard")
+    if source.count(INITIALIZATION_TIMEOUT_USE) != 3:
+        found.append("initial activation, reload, and follow do not share the initialization hang guard")
     return found
 
 
@@ -222,6 +223,7 @@ def selftest() -> int:
         f"{INITIALIZATION_TIMEOUT_DECLARATION}\n"
         f"{INITIALIZATION_TIMEOUT_USE}, 'initial');\n"
         f"{INITIALIZATION_TIMEOUT_USE}, 'reload');\n"
+        f"{INITIALIZATION_TIMEOUT_USE}, 'follow');\n"
     )
     if hostContractProblems(host_source):
         print("[vscodeHostPerformance --selftest] FAIL. the host contract fixture was rejected.", file=sys.stderr)
@@ -353,7 +355,8 @@ def run() -> int:
         f"{metrics['sessionCount']:.0f} managed, {metrics['hotSessionCount']:.0f} hot, "
         f"cold resume {metrics['coldResumeMs']:.1f} ms, "
         f"hot-session switch p95 {metrics['sessionSwitchP95Ms']:.1f} ms, "
-        f"reload restore {metrics['reloadRestoreMs']:.1f} ms."
+        f"reload restore {metrics['reloadRestoreMs']:.1f} ms, "
+        f"second-folder arrival {metrics['followArrivalMs']:.1f} ms."
     )
     return 0
 

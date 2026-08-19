@@ -35,6 +35,8 @@ type ExtensionApi = {
     restoreWorkspace: string;
   }>;
   verifyRestoredSession?(sessionId: string): Promise<void>;
+  hasConversationIn?(folder: string): Promise<boolean>;
+  waitForConversationIn?(folder: string, deadlineMs: number): Promise<number>;
 };
 
 export async function run(): Promise<void> {
@@ -43,6 +45,9 @@ export async function run(): Promise<void> {
     if (process.env.RUNTROL_VSCODE_PHASE === "restore") {
       const restored = await measureRestore(requiredEnvironment("RUNTROL_VSCODE_RESTORE_SESSION"));
       await writeFile(resultPath, JSON.stringify(restored), "utf8");
+    } else if (process.env.RUNTROL_VSCODE_PHASE === "follow") {
+      const followed = await measureFollow(requiredEnvironment("RUNTROL_VSCODE_FOLLOW_TARGET"));
+      await writeFile(resultPath, JSON.stringify(followed), "utf8");
     } else {
       const measured = await measure(resultPath);
       await writeFile(resultPath, JSON.stringify(measured), "utf8");
@@ -239,6 +244,43 @@ async function measureRestore(expected: string): Promise<{
     reloadViewMs,
     reloadSelectionMs,
   };
+}
+
+/// The live proof that a folder opened later still gets its conversations.
+///
+/// The window starts from a saved `.code-workspace` naming one folder, so adding a second folder keeps the same
+/// extension host alive (a plain-folder window would restart it, which would prove a restart and not a follow).
+/// The second folder was never granted by any earlier phase, so its conversation can only arrive through the
+/// live chain: folder event, grant widened, discovery listed, index broadcast, row rendered.
+async function measureFollow(target: string): Promise<Record<string, number | string>> {
+  currentStage = "follow-activation";
+  const extension = extensionUnderTest<ExtensionApi>();
+  const api = await within(extension.activate() as Promise<ExtensionApi>, 5_000, "follow activation");
+  await within(api.ready, EXTENSION_INITIALIZATION_HANG_TIMEOUT_MS, "follow initialization");
+  if (!api.hasConversationIn || !api.waitForConversationIn) {
+    throw new Error("the performance-only follow probes are unavailable");
+  }
+  const openFolders = vscode.workspace.workspaceFolders ?? [];
+  const first = openFolders[0]?.uri.fsPath;
+  if (!first || openFolders.length !== 1) {
+    throw new Error(`the follow phase expects exactly one starting folder, found ${openFolders.length}`);
+  }
+  currentStage = "follow-first-folder";
+  // The starting folder's stored conversation arriving proves discovery works at all in this window, so a
+  // later failure on the added folder indicts the follow chain and nothing else.
+  await api.waitForConversationIn(first, 30_000);
+  if (await api.hasConversationIn(target)) {
+    throw new Error(`${target} was visible before it was ever opened, so this phase can prove nothing`);
+  }
+  currentStage = "follow-add-folder";
+  const added = vscode.workspace.updateWorkspaceFolders(openFolders.length, 0, {
+    uri: vscode.Uri.file(target),
+  });
+  if (!added) {
+    throw new Error("VS Code refused to add the second workspace folder");
+  }
+  const followArrivalMs = await api.waitForConversationIn(target, 30_000);
+  return { vscode: vscode.version, followArrivalMs };
 }
 
 async function checkpoint(resultPath: string, stage: string): Promise<void> {
