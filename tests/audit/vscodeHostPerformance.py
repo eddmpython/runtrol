@@ -21,6 +21,12 @@ Usage::
 
     python -X utf8 tests/audit/vscodeHostPerformance.py --selftest
     python -X utf8 tests/audit/vscodeHostPerformance.py
+
+
+reloadRestoreMs was recalibrated 1750 -> 2500 on 2026-08-19: one day's trials on the reference machine
+spanned 1651~2533 ms with no code change on that path, so best-of-3 against 1750 was a coin flip on machine
+noise (a green morning run contained a 2038 ms trial). 2500 gives the same ~1.5x headroom over the best
+observed value that activationMs has, and still goes red on any real regression past the noise band.
 """
 
 from __future__ import annotations

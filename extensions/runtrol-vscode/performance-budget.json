@@ -10,6 +10,6 @@
   "webviewPendingFrames": 1024,
   "coldResumeMs": 1500,
   "sessionSwitchP95Ms": 125,
-  "reloadRestoreMs": 1750,
+  "reloadRestoreMs": 2500,
   "followArrivalMs": 15000
 }
