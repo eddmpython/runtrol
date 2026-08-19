@@ -128,7 +128,7 @@ pub struct PairedRoot {
 }
 
 #[derive(Clone)]
-struct DeviceAuthoritySnapshot {
+pub(crate) struct DeviceAuthoritySnapshot {
     granted: Arc<GrantLedger>,
     paired_devices: Arc<[PairedDevice]>,
 }
@@ -173,34 +173,57 @@ impl DeviceAuthority {
         let Caller::Device { device } = caller else {
             return Ok(());
         };
-        let snapshot = self.current.borrow();
+        // One snapshot judges the whole request, so an authority replacement landing mid-check can
+        // never mix two grants. Cloned (two `Arc` bumps) rather than borrowed, because everything
+        // below may touch the filesystem and a held watch read guard would block the next pairing
+        // replacement for exactly that long.
+        let snapshot = self.current.borrow().clone();
         if !snapshot
             .granted
             .holds(*device, DeviceScope::Provider(provider))
         {
             return Err("this phone is not approved for the requested provider");
         }
-        let paired = snapshot
+        if !snapshot
             .paired_devices
             .iter()
-            .find(|paired| paired.id == *device)
-            .ok_or("this phone is no longer paired")?;
+            .any(|paired| paired.id == *device)
+        {
+            return Err("this phone is no longer paired");
+        }
         let current = AbsPath::canonicalize(workspace)
             .map_err(|_| "the requested workspace cannot be resolved")?;
-        let allowed = paired.roots.iter().any(|root| {
-            snapshot
-                .granted
-                .holds(*device, DeviceScope::Workspace(root.id))
-                && current.is_under(&root.path)
-                && AbsPath::canonicalize(root.path.as_str()).is_ok_and(|path| path == root.path)
-                && ProjectRootIdentity::read(&root.path)
-                    .is_ok_and(|identity| identity == root.identity)
-        });
-        if allowed {
+        if live_roots_in(&snapshot, *device)
+            .iter()
+            .any(|root| current.is_under(root))
+        {
             Ok(())
         } else {
             Err("this phone is not approved for the requested workspace")
         }
+    }
+
+    /// Every workspace root this device may act in or look into, verified at this moment.
+    ///
+    /// One definition serves both opening a session and disclosing that sessions exist, so what a phone can
+    /// see never drifts from what it can touch: the grant must still be held, the approved path must still
+    /// resolve to itself, and the directory must still carry the same project identity it had when presence
+    /// approved it. A root that fails any of the three is simply not among the device's roots, so a
+    /// replacement directory at the same path neither opens nor appears in a listing.
+    pub(crate) fn live_roots(&self, device: DeviceId) -> Vec<AbsPath> {
+        // Cloned out of the watch borrow before verification: each root costs a canonicalize and an
+        // identity read, and holding the read guard across those would block `Self::replace` (a write)
+        // while a slow filesystem answers.
+        let snapshot = self.current.borrow().clone();
+        live_roots_in(&snapshot, device)
+    }
+
+    /// A change signal, for surfaces that must shrink a live view the moment a grant does.
+    ///
+    /// The value inside is opaque to subscribers on purpose: what changed is answered by asking
+    /// [`Self::live_roots`] again, so authority is always read through the one verifying accessor.
+    pub(crate) fn changes(&self) -> watch::Receiver<DeviceAuthoritySnapshot> {
+        self.current.subscribe()
     }
 
     pub(crate) fn replace(&self, granted: GrantLedger, paired_devices: Vec<PairedDevice>) {
@@ -233,6 +256,33 @@ impl DeviceAuthority {
             })
             .collect()
     }
+}
+
+/// The verifying half of [`DeviceAuthority::live_roots`], against one already-taken snapshot.
+///
+/// Free-standing so a caller that already judged other facts against a snapshot (like
+/// [`DeviceAuthority::authorize_open`]) verifies roots against the same one, never a newer one.
+fn live_roots_in(snapshot: &DeviceAuthoritySnapshot, device: DeviceId) -> Vec<AbsPath> {
+    let Some(paired) = snapshot
+        .paired_devices
+        .iter()
+        .find(|paired| paired.id == device)
+    else {
+        return Vec::new();
+    };
+    paired
+        .roots
+        .iter()
+        .filter(|root| {
+            snapshot
+                .granted
+                .holds(device, DeviceScope::Workspace(root.id))
+                && AbsPath::canonicalize(root.path.as_str()).is_ok_and(|path| path == root.path)
+                && ProjectRootIdentity::read(&root.path)
+                    .is_ok_and(|identity| identity == root.identity)
+        })
+        .map(|root| root.path.clone())
+        .collect()
 }
 
 /// Everything a running daemon holds.

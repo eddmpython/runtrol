@@ -1051,7 +1051,7 @@ pub(crate) fn answer_prepared(
         // Answered above, and matched here so that adding a request cannot fall through to a wildcard that does nothing.
         Request::Hello { .. } => Reply::One(refuse("the wire format is already agreed")),
 
-        Request::List => Reply::One(list(composed, sessions)),
+        Request::List => Reply::One(list(composed, sessions, conversation.caller())),
 
         Request::WatchSessions => Reply::WatchingSessions,
 
@@ -1706,16 +1706,16 @@ fn send(sessions: &mut SessionManager, session: SessionId, command: AgentCommand
     }
 }
 
-/// The sessions this daemon can see.
+/// The sessions this daemon can see, projected to what this caller may see.
 ///
 /// Joins runtrol's stored session pointers with the sessions that currently have a supervised process. Provider
 /// transcript storage is not consulted, so listing never discovers, derives, or reads a transcript path.
-pub(crate) fn list(composed: &Composed, sessions: &SessionManager) -> Response {
+pub(crate) fn list(composed: &Composed, sessions: &SessionManager, caller: &Caller) -> Response {
     let catalogue = match crate::session_catalogue::read(composed, sessions) {
         Ok(catalogue) => catalogue,
         Err(error) => return refuse(&error.to_string()),
     };
-    Response::Sessions(SessionListing {
+    let full = SessionListing {
         sessions: catalogue
             .sessions
             .into_iter()
@@ -1731,7 +1731,44 @@ pub(crate) fn list(composed: &Composed, sessions: &SessionManager) -> Response {
             })
             .collect(),
         warnings: catalogue.warnings,
-    })
+    };
+    Response::Sessions(sessions_visible_to(
+        full,
+        caller,
+        &composed.device_authority,
+    ))
+}
+
+/// Project one full listing down to what a caller may know exists.
+///
+/// Somebody at the machine sees everything. A device sees exactly the rows inside its live workspace roots,
+/// verified the same three ways that gate opening a session there, so a phone granted one project cannot
+/// watch the names, paths, and timing of every other project on the machine. `session.list` is the scope to
+/// ask the question; workspace grants bound the answer, and a device with none granted is answered with an
+/// empty list rather than a refusal, because "you may ask, and nothing is yours to see" are both true.
+///
+/// A device view also carries no storage warnings: a warning names local rows and paths, which is operator
+/// information a phone can do nothing about.
+pub(crate) fn sessions_visible_to(
+    full: SessionListing,
+    caller: &Caller,
+    authority: &crate::compose::DeviceAuthority,
+) -> SessionListing {
+    let Caller::Device { device } = caller else {
+        return full;
+    };
+    let roots = authority.live_roots(*device);
+    SessionListing {
+        sessions: full
+            .sessions
+            .into_iter()
+            .filter(|line| {
+                AbsPath::new(&line.workspace)
+                    .is_ok_and(|workspace| roots.iter().any(|root| workspace.is_under(root)))
+            })
+            .collect(),
+        warnings: Vec::new(),
+    }
 }
 
 fn session_label(label: Option<Box<str>>) -> Result<Option<Box<str>>, &'static str> {
@@ -1982,6 +2019,162 @@ mod tests {
         composed
             .reload_device_authority()
             .expect("restore paired phone");
+    }
+
+    /// Pair a phone against one on-disk root, optionally granting the workspace scope for it.
+    ///
+    /// Returns the device so a test can speak as it. The root row is always stored; whether the matching
+    /// `workspace(...)` scope is granted is the variable under test, because a stored path without a live
+    /// grant must disclose nothing.
+    fn pair_phone_for_root(
+        composed: &Composed,
+        root: &AbsPath,
+        grant_workspace: bool,
+    ) -> runtrol_security::DeviceId {
+        let device = runtrol_security::DeviceId::now();
+        let root_id = runtrol_security::WorkspaceRootId::now();
+        let identity = runtrol_security::ProjectRootIdentity::read(root)
+            .expect("the scratch root has a filesystem identity");
+        let mut scopes: Vec<Box<str>> = vec![
+            runtrol_security::DeviceScope::SessionList
+                .to_string()
+                .into(),
+        ];
+        if grant_workspace {
+            scopes.push(
+                runtrol_security::DeviceScope::Workspace(root_id)
+                    .to_string()
+                    .into(),
+            );
+        }
+        composed
+            .store
+            .put_device(
+                runtrol_store::DeviceKey::from_bytes(*device.as_bytes()),
+                &runtrol_store::DeviceRow {
+                    remote_static_key: [0x51; 32],
+                    credential_fingerprint: [0x52; 32],
+                    name: "Projection phone".into(),
+                    platform: "Test OS".into(),
+                    scopes,
+                    roots: vec![runtrol_store::DeviceRootRow {
+                        id: *root_id.as_bytes(),
+                        path: root.as_str().into(),
+                        identity: identity.to_bytes(),
+                    }],
+                    push_endpoint: None,
+                    paired_at: WallMs::now(),
+                },
+            )
+            .expect("store paired phone");
+        composed
+            .reload_device_authority()
+            .expect("restore paired phone");
+        device
+    }
+
+    fn listing_row(workspace: &str) -> SessionLine {
+        SessionLine {
+            session: SessionId::now(),
+            provider: "stored-provider".into(),
+            native: None,
+            label: None,
+            workspace: workspace.into(),
+            hot: false,
+            doing: "idle".into(),
+            looks_stuck: false,
+        }
+    }
+
+    #[test]
+    fn a_phone_sees_only_the_sessions_inside_its_granted_roots() {
+        let (composed, path) = composed_for("phone-projection");
+        let granted_dir = std::path::Path::new(&path).join("granted");
+        std::fs::create_dir(&granted_dir).expect("create the granted root");
+        let granted = AbsPath::canonicalize(granted_dir.to_str().expect("UTF-8 scratch path"))
+            .expect("canonical granted root");
+        let device = pair_phone_for_root(&composed, &granted, true);
+
+        let inside = listing_row(granted.as_str());
+        let nested = listing_row(&format!(
+            "{}{}deeper",
+            granted.as_str(),
+            std::path::MAIN_SEPARATOR
+        ));
+        let elsewhere = listing_row(&path);
+        let full = SessionListing {
+            sessions: vec![inside.clone(), nested.clone(), elsewhere.clone()],
+            warnings: vec!["one damaged row was skipped".into()],
+        };
+
+        let machine = sessions_visible_to(
+            full.clone(),
+            &Caller::AtTheMachine,
+            &composed.device_authority,
+        );
+        assert_eq!(machine.sessions.len(), 3, "the machine sees everything");
+        assert_eq!(machine.warnings.len(), 1, "the machine keeps warnings");
+
+        let phone =
+            sessions_visible_to(full, &Caller::Device { device }, &composed.device_authority);
+        let seen: Vec<_> = phone.sessions.iter().map(|line| line.session).collect();
+        assert_eq!(
+            seen,
+            vec![inside.session, nested.session],
+            "exactly the rows under the granted root, nothing beside it"
+        );
+        assert!(
+            phone.warnings.is_empty(),
+            "storage warnings are operator information"
+        );
+        clean(composed, &path);
+    }
+
+    #[test]
+    fn a_phone_without_the_workspace_grant_sees_an_empty_list() {
+        let (composed, path) = composed_for("phone-ungranted");
+        let granted_dir = std::path::Path::new(&path).join("almost");
+        std::fs::create_dir(&granted_dir).expect("create the root");
+        let root = AbsPath::canonicalize(granted_dir.to_str().expect("UTF-8 scratch path"))
+            .expect("canonical root");
+        let device = pair_phone_for_root(&composed, &root, false);
+
+        let full = SessionListing {
+            sessions: vec![listing_row(root.as_str())],
+            warnings: Vec::new(),
+        };
+        let phone =
+            sessions_visible_to(full, &Caller::Device { device }, &composed.device_authority);
+        assert!(
+            phone.sessions.is_empty(),
+            "a stored root without a live workspace grant discloses nothing"
+        );
+        clean(composed, &path);
+    }
+
+    #[test]
+    fn a_replaced_directory_disappears_from_the_phone_view() {
+        let (composed, path) = composed_for("phone-swapped-root");
+        let granted_dir = std::path::Path::new(&path).join("swapped");
+        std::fs::create_dir(&granted_dir).expect("create the root");
+        let root = AbsPath::canonicalize(granted_dir.to_str().expect("UTF-8 scratch path"))
+            .expect("canonical root");
+        let device = pair_phone_for_root(&composed, &root, true);
+
+        std::fs::remove_dir(&granted_dir).expect("remove the approved directory");
+        std::fs::create_dir(&granted_dir).expect("replace the approved directory");
+
+        let full = SessionListing {
+            sessions: vec![listing_row(root.as_str())],
+            warnings: Vec::new(),
+        };
+        let phone =
+            sessions_visible_to(full, &Caller::Device { device }, &composed.device_authority);
+        assert!(
+            phone.sessions.is_empty(),
+            "disclosure uses the same identity verification as opening, so a replacement directory shows nothing"
+        );
+        clean(composed, &path);
     }
 
     #[tokio::test]

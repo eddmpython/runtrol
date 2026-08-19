@@ -43,10 +43,11 @@ use runtrol_core::{
     SessionError, SessionManager, TakenAgent, WorkspaceClaim,
 };
 use runtrol_ipc::transport::{Connection, Listener, TransportError};
-use runtrol_ipc::wire::{Request, Response, WireError};
+use runtrol_ipc::wire::{Request, Response, SessionListing, WireError};
 use runtrol_provider::{
     AbsPath, AgentCommand, CloseMode, ProviderError, ProviderId, SessionId, WorkspaceAccess,
 };
+use runtrol_security::Caller;
 use runtrol_transport::{
     CryptoError, LinkKind, NoiseUpgrade, NoiseWebSocket, PhoneHttp, PhoneHttpError, SessionBinding,
     StaticKeypair, WebSocketLinkError, response,
@@ -284,7 +285,21 @@ struct ConnectionServices {
     returning: mpsc::UnboundedSender<AgentReturned>,
     composed: Arc<Composed>,
     discovering: Arc<DiscoveryGates>,
-    session_index: watch::Receiver<Arc<[u8]>>,
+    session_index: watch::Receiver<PublishedIndex>,
+}
+
+/// One published session index: the full view encoded once, and the rows it was encoded from.
+///
+/// Local subscribers share `full_frame` verbatim, so the fast path stays one `Arc` clone. A device connection
+/// must not receive that frame: it projects `listing` down to its own live workspace roots and encodes the
+/// result itself, which keeps per-caller work on the caller's connection and off the session owner.
+///
+/// `listing` is `None` when the current index is a refusal (the store could not be read). A refusal carries no
+/// session rows, so every caller shares it verbatim.
+#[derive(Clone)]
+struct PublishedIndex {
+    full_frame: Arc<[u8]>,
+    listing: Option<Arc<SessionListing>>,
 }
 
 /// One request, from a connection that is waiting for the answer.
@@ -687,11 +702,7 @@ async fn serve_surfaces(
     );
     let (noticing_updates, mut update_notices) = mpsc::unbounded_channel::<AutomaticUpdateNotice>();
     let mut provider_update_notices = BTreeMap::<ProviderId, Box<str>>::new();
-    let initial_index = Arc::<[u8]>::from(encode_session_index(
-        &composed,
-        &sessions,
-        &provider_update_notices,
-    ));
+    let initial_index = build_session_index(&composed, &sessions, &provider_update_notices);
     let (session_index, _initial_index_receiver) = watch::channel(initial_index);
     let initial_runtime_sessions =
         Arc::new(crate::runtime_inventory::sessions(&composed, &sessions)?);
@@ -1669,8 +1680,16 @@ async fn converse_inner(
                     return;
                 }
             } else {
-                let current = Arc::clone(&session_index.borrow());
-                if connection.send(current.as_ref()).await.is_err() {
+                // Cloned out of the borrow before projecting: a device projection reads the
+                // filesystem to verify its roots, and a held watch borrow would block the owner's
+                // next publish for exactly that long.
+                let published = session_index.borrow().clone();
+                let frame = index_frame_for(
+                    &published,
+                    conversation.caller(),
+                    &composed.device_authority,
+                );
+                if connection.send(frame.as_ref()).await.is_err() {
                     return;
                 }
             }
@@ -1890,7 +1909,13 @@ async fn converse_inner(
                 {
                     return;
                 }
-                relay_session_index(&mut connection, &mut session_index).await;
+                relay_session_index(
+                    &mut connection,
+                    &mut session_index,
+                    conversation.caller(),
+                    &composed.device_authority,
+                )
+                .await;
                 return;
             }
 
@@ -2124,27 +2149,73 @@ async fn relay(connection: &mut SurfaceConnection, mut watching: runtrol_core::S
     }
 }
 
-/// Relay coalesced current session snapshots without copying one frame per connected surface.
+/// Relay coalesced current session snapshots, each projected to what this caller may see.
+///
+/// A local subscriber shares the one published frame, so nothing is copied per connected surface. A device
+/// subscriber gets its own projection, and it also wakes on authority changes: revoking a workspace root must
+/// shrink the phone's live view now, not at whatever moment a session next changes state. Identical frames are
+/// not resent, so a wake that does not change this caller's view costs no wire traffic.
 async fn relay_session_index(
     connection: &mut SurfaceConnection,
-    session_index: &mut watch::Receiver<Arc<[u8]>>,
+    session_index: &mut watch::Receiver<PublishedIndex>,
+    caller: &Caller,
+    authority: &crate::compose::DeviceAuthority,
 ) {
-    let current = Arc::clone(&session_index.borrow_and_update());
-    if connection.send(current.as_ref()).await.is_err() {
-        return;
-    }
+    let mut grants = matches!(caller, Caller::Device { .. }).then(|| authority.changes());
+    let mut last_sent: Option<Arc<[u8]>> = None;
     loop {
-        let changed = tokio::select! {
-            changed = session_index.changed() => changed,
+        // Cloned out of the borrow before projecting, so root verification never holds the
+        // watch read lock against the owner's next publish.
+        let published = session_index.borrow_and_update().clone();
+        let frame = index_frame_for(&published, caller, authority);
+        if last_sent.as_deref() != Some(frame.as_ref()) {
+            if connection.send(frame.as_ref()).await.is_err() {
+                return;
+            }
+            last_sent = Some(frame);
+        }
+        tokio::select! {
+            changed = session_index.changed() => {
+                if changed.is_err() {
+                    return;
+                }
+            }
+            changed = authority_changed(&mut grants) => {
+                if changed.is_err() {
+                    return;
+                }
+            }
             _peer = connection.recv() => return,
-        };
-        if changed.is_err() {
-            return;
         }
-        let current = Arc::clone(&session_index.borrow_and_update());
-        if connection.send(current.as_ref()).await.is_err() {
-            return;
+    }
+}
+
+/// Wait for a device's authority to change; wait forever for callers that have none to change.
+async fn authority_changed(
+    grants: &mut Option<watch::Receiver<crate::compose::DeviceAuthoritySnapshot>>,
+) -> Result<(), watch::error::RecvError> {
+    match grants {
+        Some(grants) => grants.changed().await,
+        None => std::future::pending().await,
+    }
+}
+
+/// The exact index frame this caller may receive.
+///
+/// Somebody at the machine shares the published frame; a device gets its live-roots projection, encoded here on
+/// its own connection. A refusal (no rows to project) is shared verbatim.
+fn index_frame_for(
+    published: &PublishedIndex,
+    caller: &Caller,
+    authority: &crate::compose::DeviceAuthority,
+) -> Arc<[u8]> {
+    match (&published.listing, caller) {
+        (Some(listing), Caller::Device { .. }) => {
+            let projected =
+                crate::dispatch::sessions_visible_to((**listing).clone(), caller, authority);
+            Arc::from(encode_response(&Response::Sessions(projected)))
         }
+        _ => Arc::clone(&published.full_frame),
     }
 }
 
@@ -2162,21 +2233,17 @@ fn publish_runtime_providers(
     });
 }
 
-/// Publish only a changed current index. The encoded bytes are shared by every subscriber.
+/// Publish only a changed current index. The full frame is shared by every at-the-machine subscriber.
 fn publish_session_index(
-    session_index: &watch::Sender<Arc<[u8]>>,
+    session_index: &watch::Sender<PublishedIndex>,
     runtime_sessions: &watch::Sender<Arc<crate::runtime_inventory::RuntimeSessionCatalogue>>,
     composed: &Composed,
     sessions: &SessionManager,
     provider_update_notices: &BTreeMap<ProviderId, Box<str>>,
 ) {
-    let next = Arc::<[u8]>::from(encode_session_index(
-        composed,
-        sessions,
-        provider_update_notices,
-    ));
+    let next = build_session_index(composed, sessions, provider_update_notices);
     session_index.send_if_modified(|current| {
-        if current.as_ref() == next.as_ref() {
+        if current.full_frame.as_ref() == next.full_frame.as_ref() {
             return false;
         }
         *current = next;
@@ -2189,18 +2256,27 @@ fn publish_session_index(
     runtime_sessions.send_replace(public);
 }
 
-fn encode_session_index(
+/// Build the current index once: the full at-the-machine view, encoded, plus the rows behind it.
+fn build_session_index(
     composed: &Composed,
     sessions: &SessionManager,
     provider_update_notices: &BTreeMap<ProviderId, Box<str>>,
-) -> Vec<u8> {
-    let mut response = crate::dispatch::list(composed, sessions);
+) -> PublishedIndex {
+    let mut response = crate::dispatch::list(composed, sessions, &Caller::AtTheMachine);
     if let Response::Sessions(listing) = &mut response {
         listing
             .warnings
             .extend(provider_update_notices.values().cloned());
     }
-    encode_response(&response)
+    let full_frame = Arc::from(encode_response(&response));
+    let listing = match response {
+        Response::Sessions(listing) => Some(Arc::new(listing)),
+        _ => None,
+    };
+    PublishedIndex {
+        full_frame,
+        listing,
+    }
 }
 
 /// Write one answer.
@@ -2358,17 +2434,33 @@ mod tests {
     }
 
     fn attach_test_agent(sessions: &mut SessionManager, session: SessionId, agent: Box<dyn Agent>) {
+        attach_test_agent_in(
+            sessions,
+            session,
+            agent,
+            if cfg!(windows) { r"C:\work" } else { "/work" },
+        );
+    }
+
+    /// Attach a test agent whose session works in an explicit directory, for tests about who may see it.
+    fn attach_test_agent_in(
+        sessions: &mut SessionManager,
+        session: SessionId,
+        agent: Box<dyn Agent>,
+        workspace: &str,
+    ) {
+        let claimed = runtrol_provider::AbsPath::new(workspace).expect("valid test path");
+        let claim = runtrol_core::WorkspaceClaim::discover(
+            claimed,
+            runtrol_provider::WorkspaceAccess::Shared,
+        )
+        .expect("the test workspace claims");
         let reserved = sessions
-            .reserve_open_for_tests(session)
+            .reserve_open(session, claim)
             .expect("one process slot");
         let intent = runtrol_provider::OpenIntent {
             session,
-            workspace: runtrol_provider::AbsPath::new(if cfg!(windows) {
-                r"C:\work"
-            } else {
-                "/work"
-            })
-            .expect("valid test path"),
+            workspace: runtrol_provider::AbsPath::new(workspace).expect("valid test path"),
             disposition: runtrol_provider::Disposition::Fresh,
             model: None,
             reasoning_effort: None,
@@ -2458,6 +2550,7 @@ mod tests {
         async fn start_with_phone(
             name: &str,
             sessions: SessionManager,
+            granted_root: Option<&str>,
         ) -> (Self, SocketAddr, PublicKey, StaticKeypair) {
             let root = std::env::temp_dir().join(format!("runtrol-serve-{name}"));
             if root.exists() {
@@ -2479,14 +2572,29 @@ mod tests {
             )
             .expect("canonical credential");
             composed.pc_identity = Some(Arc::new(pc));
+            let mut scopes = vec![DeviceScope::SessionList];
+            let mut roots = Vec::new();
+            if let Some(granted) = granted_root {
+                let root_id = WorkspaceRootId::now();
+                let root_path =
+                    AbsPath::canonicalize(granted).expect("granted test root is canonical");
+                let identity = ProjectRootIdentity::read(&root_path)
+                    .expect("granted test root has a filesystem identity");
+                scopes.push(DeviceScope::Workspace(root_id));
+                roots.push(crate::compose::PairedRoot {
+                    id: root_id,
+                    path: root_path,
+                    identity,
+                });
+            }
             composed.device_authority.replace(
-                GrantLedger::from_persisted([(device, vec![DeviceScope::SessionList])]),
+                GrantLedger::from_persisted([(device, scopes)]),
                 vec![crate::compose::PairedDevice {
                     id: device,
                     remote_static_key: phone.public_key(),
                     credential_fingerprint: token.fingerprint(),
                     labels: DeviceLabels::new("Test phone", "Browser").expect("device labels"),
-                    roots: Vec::new(),
+                    roots,
                     push_endpoint: None,
                     paired_at: WallMs::from_millis(1_767_225_600_000),
                 }],
@@ -3293,7 +3401,7 @@ mod tests {
             }),
         );
         let (running, phone_address, pc, phone_key) =
-            Running::start_with_phone("phone-same-owner", sessions).await;
+            Running::start_with_phone("phone-same-owner", sessions, None).await;
 
         let stranger = StaticKeypair::generate().expect("unpaired phone key");
         let binding = SessionBinding::direct(LinkKind::Loopback, pc.to_bytes())
@@ -3329,11 +3437,22 @@ mod tests {
                 .await,
             Response::Welcome { .. }
         ));
-        let phone_session = match phone.ask(&Request::List).await {
-            Response::Sessions(listing) => listing.sessions.first().map(|line| line.session),
+        // The phone holds session.list and not one workspace root, so the same daemon that just showed the
+        // local surface a session answers the phone with nothing: which projects exist on this machine is not
+        // something the listing scope alone may learn.
+        match phone.ask(&Request::List).await {
+            Response::Sessions(listing) => {
+                assert!(
+                    listing.sessions.is_empty(),
+                    "a phone with no workspace root must not see the machine's sessions"
+                );
+                assert!(
+                    listing.warnings.is_empty(),
+                    "storage warnings are operator information"
+                );
+            }
             other => panic!("expected a phone session index, got {other:?}"),
-        };
-        assert_eq!(phone_session, local_session);
+        }
         match phone.ask(&Request::Close { session, now: true }).await {
             Response::Failed(error) => assert!(error.message.contains("session.delete")),
             other => panic!("ungranted phone close was not refused: {other:?}"),
@@ -3354,9 +3473,9 @@ mod tests {
         ));
         match watcher.receive().await {
             Response::Sessions(listing) => {
-                assert_eq!(
-                    listing.sessions.first().map(|line| line.session),
-                    Some(session)
+                assert!(
+                    listing.sessions.is_empty(),
+                    "the watch snapshot is projected exactly like the listing"
                 );
             }
             other => panic!("expected the initial phone watch snapshot, got {other:?}"),
@@ -3366,15 +3485,121 @@ mod tests {
             ask(&mut local, &Request::Close { session, now: true }).await,
             Response::Done
         ));
-        match watcher.receive().await {
-            Response::Sessions(listing) => assert!(listing.sessions.is_empty()),
-            other => panic!("expected the changed phone watch snapshot, got {other:?}"),
-        }
+        // The close changed the machine's index but not this phone's empty view, so no frame is resent: an
+        // ungranted phone cannot even observe that something changed.
+        let silence = tokio::time::timeout(Duration::from_millis(500), watcher.receive()).await;
+        assert!(
+            silence.is_err(),
+            "an unchanged projected view must not produce a frame"
+        );
 
         drop(phone);
         drop(watcher);
         drop(local);
         running.stop();
+    }
+
+    #[tokio::test]
+    async fn a_phone_watches_exactly_the_sessions_of_its_granted_root() {
+        let granted_dir =
+            std::env::temp_dir().join(format!("runtrol-phone-granted-{}", std::process::id()));
+        if granted_dir.exists() {
+            std::fs::remove_dir_all(&granted_dir).expect("clear the previous granted root");
+        }
+        std::fs::create_dir(&granted_dir).expect("create the granted root");
+        // One canonical spelling for the grant and the session workspace alike, so the test never
+        // depends on how the OS spells its temporary directory.
+        let granted_text =
+            AbsPath::canonicalize(granted_dir.to_str().expect("the granted path is UTF-8"))
+                .expect("the granted root canonicalizes")
+                .as_str()
+                .to_owned();
+
+        let visible = SessionId::now();
+        let hidden = SessionId::now();
+        let mut sessions = SessionManager::new();
+        attach_test_agent_in(
+            &mut sessions,
+            visible,
+            Box::new(ReadyEvent {
+                session: visible,
+                ready: true,
+            }),
+            &granted_text,
+        );
+        attach_test_agent(
+            &mut sessions,
+            hidden,
+            Box::new(ReadyEvent {
+                session: hidden,
+                ready: true,
+            }),
+        );
+        let (running, phone_address, pc, phone_key) =
+            Running::start_with_phone("phone-granted-root", sessions, Some(&granted_text)).await;
+
+        let mut phone = BrowserPhone::connect(phone_address, pc, &phone_key).await;
+        assert!(matches!(
+            phone
+                .ask(&Request::Hello {
+                    wire: runtrol_ipc::WIRE_VERSION,
+                })
+                .await,
+            Response::Welcome { .. }
+        ));
+        match phone.ask(&Request::List).await {
+            Response::Sessions(listing) => {
+                let seen: Vec<_> = listing.sessions.iter().map(|line| line.session).collect();
+                assert_eq!(
+                    seen,
+                    vec![visible],
+                    "exactly the granted root's session, and never its neighbour"
+                );
+            }
+            other => panic!("expected the granted phone listing, got {other:?}"),
+        }
+
+        assert!(matches!(
+            phone.ask(&Request::WatchSessions).await,
+            Response::WatchingSessions
+        ));
+        match phone.receive().await {
+            Response::Sessions(listing) => {
+                assert_eq!(
+                    listing.sessions.first().map(|line| line.session),
+                    Some(visible)
+                );
+            }
+            other => panic!("expected the granted watch snapshot, got {other:?}"),
+        }
+
+        // Closing the granted session changes what this phone may see, so the watch pushes the shrunk view.
+        let mut local = greeted_caller(&running).await;
+        assert!(matches!(
+            ask(
+                &mut local,
+                &Request::Close {
+                    session: visible,
+                    now: true
+                }
+            )
+            .await,
+            Response::Done
+        ));
+        match phone.receive().await {
+            Response::Sessions(listing) => {
+                assert!(
+                    listing.sessions.is_empty(),
+                    "the hidden neighbour must not appear once the granted session is gone"
+                );
+            }
+            other => panic!("expected the shrunk granted watch snapshot, got {other:?}"),
+        }
+
+        drop(phone);
+        drop(local);
+        running.stop();
+        std::fs::remove_dir_all(&granted_dir).expect("remove the granted root");
     }
 
     #[tokio::test]

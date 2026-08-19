@@ -69,6 +69,16 @@ and refactoring that no user can observe do not belong here.
   folder's conversations stayed invisible until a manual refresh. Proven in a live window by the new harness
   scenario that opens a second folder and watches its conversation arrive.
 
+### Security
+
+- A paired phone now sees exactly the sessions inside the workspace roots you approved for it, and nothing else.
+  The session list and its live updates used to be one shared snapshot, so any phone holding the listing
+  permission received every session's absolute folder path, name, and activity, including projects that phone was
+  never granted. Each phone's view is now projected through the same three-part verification that gates starting
+  a session in a root (the grant still held, the path still resolving to itself, the directory still being the
+  same project), revoking a root shrinks the phone's live view immediately, and local storage warnings stay on
+  the machine. What you see at the PC is unchanged.
+
 ## [0.1.4] - 2026-08-17
 
 ### Added

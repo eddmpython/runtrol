@@ -74,6 +74,9 @@ pub fn needed(request: &Request) -> Needed {
             Needed::Anyone("agreeing a wire format decides nothing and touches nothing")
         }
 
+        // The scope admits the question. The answer is projected per caller: a device receives only the
+        // rows inside its live workspace roots (`dispatch::sessions_visible_to`), so holding this scope
+        // alone discloses nothing about projects the device was never granted.
         Request::List | Request::WatchSessions => Needed::Scope(DeviceScope::SessionList),
         // Model discovery and consult status both read configuration and touch nothing.
         Request::Models { .. }

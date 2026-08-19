@@ -12,7 +12,7 @@ Later connections use Noise IK with the pinned PC and phone static keys. Relay t
 
 ## Device authority
 
-Initial pairing grants only selected plain scopes. Starting or resuming a session additionally requires a runtime-discovered provider identity and a canonical workspace root approved in VS Code. Each root is bound to a minted root identifier and the operating system's directory identity. Replacing the directory at the same path invalidates the grant.
+Initial pairing grants only selected plain scopes. Starting or resuming a session additionally requires a runtime-discovered provider identity and a canonical workspace root approved in VS Code. Each root is bound to a minted root identifier and the operating system's directory identity. Replacing the directory at the same path invalidates the grant. Workspace roots bound disclosure the same way they bound action: the session index a phone lists or watches contains exactly the sessions inside its live approved roots, with no storage warnings, so `session.list` alone reveals nothing about other projects on the machine.
 
 `Runtrol: Manage Paired Phones` shows the complete plain scopes, workspace roots, and provider identities. Changing them creates a new local presence challenge and atomically replaces the durable authority. The authenticated Core greeting returns the current authority only to that same device, so a PWA reconnect immediately loses controls that were removed on the PC.
 
