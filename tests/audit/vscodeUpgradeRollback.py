@@ -172,12 +172,16 @@ def buildArtifacts() -> tuple[Path, Path]:
     fixture = buildFixture()
     environment = dict(os.environ)
     environment["RUNTROL_CORE_BINARY"] = str(core)
+    # A rehearsal package belongs in the ignored build tree, not in the release CI's artifact
+    # directory: a stray repo-root VSIX blocks every later commit at the hygiene gate.
+    packageOutput = target / "release"
+    environment["RUNTROL_PACKAGE_OUTPUT_DIR"] = str(packageOutput)
     packaged = runCommand([*npmCommand(), "run", "package:native"], EXTENSION, environment)
     if packaged.returncode != 0:
         raise RuntimeError(f"native package build returned {packaged.returncode}")
     version = currentVersion()
     targetName = f"{sys.platform}-{normalizeArchitecture()}"
-    archive = ROOT / "release" / f"runtrol-studio-{version}-{targetName}.vsix"
+    archive = packageOutput / f"runtrol-studio-{version}-{targetName}.vsix"
     for expected in (core, fixture, archive):
         if not expected.is_file():
             raise RuntimeError(f"upgrade rehearsal artifact is missing at {expected}")

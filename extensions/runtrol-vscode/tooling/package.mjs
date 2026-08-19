@@ -34,7 +34,10 @@ if (build.status !== 0) {
   process.exit(build.status ?? 1);
 }
 
-const release = path.join(repositoryRoot, "release");
+// The repository-root release directory is the release CI's artifact contract. Local rehearsal
+// gates override it into the ignored build tree so a rehearsal never leaves a stray artifact for
+// the hygiene gate to flag.
+const release = process.env.RUNTROL_PACKAGE_OUTPUT_DIR ?? path.join(repositoryRoot, "release");
 await mkdir(release, { recursive: true });
 const output = path.join(release, `${packageManifest.name}-${packageManifest.version}-${target}.vsix`);
 const vsce = path.join(extensionRoot, "node_modules/@vscode/vsce/vsce");
