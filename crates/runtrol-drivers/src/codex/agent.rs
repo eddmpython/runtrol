@@ -20,6 +20,7 @@
 //! deletes nor reads the provider's transcript.
 
 use core::time::Duration;
+use std::collections::VecDeque;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -71,11 +72,17 @@ pub struct CodexAgent {
     /// A completed item or provider-declared turn advances it. Fragments and control events carry the current
     /// value. This is separate from the stream, epoch, and sequence in a subscriber's `WatchCursor`.
     src_end: u64,
-    /// An event runtrol itself produced, waiting to be handed over.
+    /// Events runtrol itself produced, waiting to be handed over.
     ///
-    /// One slot. What goes in it is an attach or a turn acknowledgement, and neither can happen twice without
-    /// the queue being drained in between, so a queue here would be a place events could pile up unbounded.
-    announced: Option<Produced>,
+    /// Bounded by construction: what goes in is an attach, or a turn acknowledgement plus at most one model
+    /// confirmation from the same receipt, and none of those can happen twice without the queue being drained
+    /// in between. Provider conversation content never enters it.
+    announced: VecDeque<Produced>,
+    /// The model and effort the operator chose for the turns from here on, waiting for the next turn to carry
+    /// them. This CLI's switch surface is the turn itself: `turn/start` documents both fields as overriding
+    /// "this turn and subsequent turns", so the driver holds the words until it has a turn to put them on.
+    pending_model: Option<Box<str>>,
+    pending_effort: Option<Box<str>>,
     /// How many lines the connection had failed to read when this session last said so.
     said_unreadable: u64,
     /// Provider questions still waiting for a human, plus the bounded file payload join.
@@ -163,7 +170,7 @@ impl CodexAgent {
             running: None,
             next_turn: 0,
             src_end: 0,
-            announced: Some(Produced {
+            announced: VecDeque::from([Produced {
                 src_end: 0,
                 body: EventBody::Attached(Box::new(Attached {
                     native: named,
@@ -175,7 +182,9 @@ impl CodexAgent {
                     caps: CapabilitySet::from_tokens(Vec::<&str>::new()),
                     payload: payload_of(&answer),
                 })),
-            }),
+            }]),
+            pending_model: None,
+            pending_effort: None,
             said_unreadable: 0,
             approvals: ApprovalBook::new(),
             finished: false,
@@ -436,6 +445,8 @@ fn prompt_params(
     provider: ProviderId,
     thread: &str,
     blocks: &[ContentBlock],
+    model: Option<&str>,
+    effort: Option<&str>,
 ) -> Result<serde_json::Value, ProviderError> {
     let mut input: Vec<serde_json::Value> = Vec::with_capacity(blocks.len());
     for block in blocks {
@@ -460,7 +471,16 @@ fn prompt_params(
             }
         });
     }
-    Ok(serde_json::json!({"threadId": thread, "input": input}))
+    let mut params = serde_json::json!({"threadId": thread, "input": input});
+    // The operator's pending switch rides the turn, because that is this CLI's own switch surface: turn/start
+    // documents `model` and `effort` as overriding this turn and the ones after it.
+    if let (Some(object), Some(model)) = (params.as_object_mut(), model) {
+        object.insert("model".to_owned(), serde_json::json!(model));
+    }
+    if let (Some(object), Some(effort)) = (params.as_object_mut(), effort) {
+        object.insert("effort".to_owned(), serde_json::json!(effort));
+    }
+    Ok(params)
 }
 
 /// The conversation an answer names.
@@ -523,7 +543,13 @@ impl Agent for CodexAgent {
     async fn send(&mut self, command: AgentCommand) -> Result<(), ProviderError> {
         match command {
             AgentCommand::Prompt(blocks) => {
-                let params = prompt_params(self.provider, &self.native, &blocks)?;
+                let params = prompt_params(
+                    self.provider,
+                    &self.native,
+                    &blocks,
+                    self.pending_model.as_deref(),
+                    self.pending_effort.as_deref(),
+                )?;
                 let answer = self
                     .conn
                     .call("turn/start", &params, "sending a turn")
@@ -567,14 +593,39 @@ impl Agent for CodexAgent {
                     turn,
                     native: native_turn,
                 });
-                self.announced = Some(Produced {
+                self.announced.push_back(Produced {
                     src_end: self.src_end,
                     body: EventBody::Turn(TurnEvent::Accepted { turn, ack_only }),
                 });
+                // The receipt is also the CLI accepting the pending override: turn/start documents the fields
+                // as sticky from this turn on, so acceptance is the moment the switch became true.
+                if let Some(model) = self.pending_model.take() {
+                    self.announced.push_back(Produced {
+                        src_end: self.src_end,
+                        body: EventBody::CurrentModelUpdate {
+                            model_id: model,
+                            available_ids: None,
+                            payload: payload_of(&answer),
+                        },
+                    });
+                }
+                self.pending_effort = None;
                 Ok(())
             }
 
             AgentCommand::Interrupt => self.interrupt().await,
+
+            AgentCommand::SetModel {
+                model,
+                reasoning_effort,
+            } => {
+                // This CLI's switch surface is the next turn itself (turn/start's own documentation: the
+                // override applies to "this turn and subsequent turns"). Nothing is sent now; the choice waits
+                // for the turn that will carry it, and the confirmation event follows that turn's receipt.
+                self.pending_model = Some(model);
+                self.pending_effort = reasoning_effort;
+                Ok(())
+            }
 
             // Forwarded byte for byte, never inspected and never rewritten. A surface driving a feature that
             // shipped after this binary reaches the provider through here. One consequence is worth knowing:
@@ -614,7 +665,7 @@ impl Agent for CodexAgent {
     async fn next(&mut self) -> Option<Result<Produced, ProviderError>> {
         // What runtrol itself has to say comes first, and taking it is not a wait, so a caller that sets this
         // aside partway through loses nothing.
-        if let Some(announced) = self.announced.take() {
+        if let Some(announced) = self.announced.pop_front() {
             return Some(Ok(announced));
         }
         if let Some(report) = self.own_report() {
@@ -865,6 +916,8 @@ mod tests {
             a_provider(),
             "thread_abc",
             &[ContentBlock::Text(written.into())],
+            None,
+            None,
         )
         .expect("writable");
 
@@ -890,6 +943,8 @@ mod tests {
             a_provider(),
             "thread_abc",
             &[ContentBlock::Text("first\nsecond\r\nthird".into())],
+            None,
+            None,
         )
         .expect("writable");
         let line = serde_json::to_string(&params).expect("writable");
@@ -898,11 +953,52 @@ mod tests {
     }
 
     #[test]
+    fn a_pending_switch_rides_the_turn_and_absence_invents_nothing() {
+        // The CLI's own schema documents turn/start `model` and `effort` as overriding this turn and the ones
+        // after it (generated 2026-08-19), which is why the switch is carried here and nowhere else.
+        let with = prompt_params(
+            a_provider(),
+            "thread_abc",
+            &[ContentBlock::Text("hi".into())],
+            Some("gpt-5.3-codex"),
+            Some("high"),
+        )
+        .expect("writable");
+        assert_eq!(
+            with.pointer("/model").and_then(serde_json::Value::as_str),
+            Some("gpt-5.3-codex")
+        );
+        assert_eq!(
+            with.pointer("/effort").and_then(serde_json::Value::as_str),
+            Some("high")
+        );
+
+        let without = prompt_params(
+            a_provider(),
+            "thread_abc",
+            &[ContentBlock::Text("hi".into())],
+            None,
+            None,
+        )
+        .expect("writable");
+        assert!(
+            without.get("model").is_none() && without.get("effort").is_none(),
+            "no pending switch must invent no override fields: {without}"
+        );
+    }
+
+    #[test]
     fn a_block_runtrol_has_never_heard_of_reaches_the_provider_whole() {
         let native =
             Opaque::owned(r#"{"type":"image","url":"data:image/png;base64,AA"}"#.to_owned());
-        let params = prompt_params(a_provider(), "thread_abc", &[ContentBlock::Native(native)])
-            .expect("writable");
+        let params = prompt_params(
+            a_provider(),
+            "thread_abc",
+            &[ContentBlock::Native(native)],
+            None,
+            None,
+        )
+        .expect("writable");
         let block = params.pointer("/input/0").expect("the block survived");
         assert_eq!(
             block.get("type").and_then(serde_json::Value::as_str),
@@ -922,6 +1018,8 @@ mod tests {
             a_provider(),
             "thread_abc",
             &[ContentBlock::Native(Opaque::owned("not json".to_owned()))],
+            None,
+            None,
         )
         .expect("writable");
         assert_eq!(
@@ -974,6 +1072,8 @@ mod tests {
             a_provider(),
             r#"thread","injected":"x"#,
             &[ContentBlock::Text(r#"say "hello""#.into())],
+            None,
+            None,
         )
         .expect("writable");
         assert!(

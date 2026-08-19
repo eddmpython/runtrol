@@ -57,6 +57,19 @@ pub enum AgentCommand {
     /// Never inspected and never rewritten. The escape hatch that keeps runtrol a pipe: a surface can drive a
     /// feature runtrol has never heard of, and runtrol stays out of the way.
     Native(Opaque),
+    /// Ask the provider to answer with a different model from here on.
+    ///
+    /// A relay of the operator's choice through the provider's own switch surface, never a decision: one CLI
+    /// takes it as a control request mid-session, one takes it as an override on the next turn it documents as
+    /// sticky, one takes it as a protocol call. A provider with no such surface refuses loudly, and what the
+    /// session actually answers with stays the provider's own word, arriving as an event.
+    SetModel {
+        /// The model, by the provider's own name for it, exactly as the operator chose it.
+        model: Box<str>,
+        /// The provider-owned reasoning posture, when the operator chose one and the provider has somewhere
+        /// to put it. A provider whose switch surface cannot carry it refuses rather than dropping it.
+        reasoning_effort: Option<Box<str>>,
+    },
 }
 
 /// Why a session is being opened.

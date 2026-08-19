@@ -199,12 +199,33 @@ pub enum EventBody {
     /// How much of the context window is in use.
     UsageUpdate(Box<Usage>),
 
-    // ---- the one place runtrol exceeds the standard ----
+    // ---- the two places runtrol exceeds the standard ----
     /// Where the account stands against its limits.
     ///
     /// The standard has no type for this. Justified in [`RateLimit`]: a quota gauge is account state, not
     /// conversation, and both providers push it for free.
     RateLimitUpdate(Box<RateLimit>),
+    /// Which model the provider says is answering now, in the provider's own words.
+    ///
+    /// The standard has no type for this either (measured 2026-08-19: the ACP schema, v1 and v2, carries no
+    /// model vocabulary; one vendor ships it as an extension). Three CLIs announce it three different ways,
+    /// which is exactly why a driver normalizes it: a switch surface has to display the CLI's current word
+    /// without teaching every UI every dialect.
+    ///
+    /// Like the mode update above, the lifted fields are the message itself and not conversation: the
+    /// identifier of the model now answering, and, when the provider announced one, the set of identifiers it
+    /// says this session may switch to. Nothing else in the payload is read.
+    CurrentModelUpdate {
+        /// The model now answering, by the provider's own name for it.
+        model_id: Box<str>,
+        /// The identifiers this session may switch to, when the provider announced a set.
+        ///
+        /// `None` means the provider did not say, which is not the same as an empty choice: a surface falls
+        /// back to provider-level model discovery.
+        available_ids: Option<Box<[Box<str>]>>,
+        /// The provider's whole announcement, untouched.
+        payload: Opaque,
+    },
 
     // ---- consent plane ----
     /// A human has to choose.
@@ -246,6 +267,7 @@ impl EventBody {
             Self::SessionInfoUpdate { .. } => "sessionInfoUpdate",
             Self::UsageUpdate(_) => "usageUpdate",
             Self::RateLimitUpdate(_) => "rateLimitUpdate",
+            Self::CurrentModelUpdate { .. } => "currentModelUpdate",
             Self::ApprovalRequested(_) => "approvalRequested",
             Self::ApprovalWithdrawn { .. } => "approvalWithdrawn",
             Self::Unmapped(_) => "unmapped",
@@ -327,6 +349,17 @@ impl EventBody {
             | Self::CurrentModeUpdate { payload, .. } => payload.len(),
             Self::UsageUpdate(usage) => usage.detail.len(),
             Self::RateLimitUpdate(limit) => limit.detail.len(),
+            Self::CurrentModelUpdate {
+                model_id,
+                available_ids,
+                payload,
+            } => {
+                payload.len()
+                    + model_id.len()
+                    + available_ids
+                        .as_deref()
+                        .map_or(0, |ids| ids.iter().map(|id| id.len()).sum())
+            }
             Self::ApprovalRequested(request) => request.subject.len(),
             Self::Unmapped(unmapped) => unmapped.payload.len(),
             // runtrol's own frames. Every field is fixed width or bounded, so there is nothing here a

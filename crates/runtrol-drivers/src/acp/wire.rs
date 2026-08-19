@@ -13,6 +13,7 @@ pub(super) const SESSION_NEW: &str = "session/new";
 pub(super) const SESSION_LOAD: &str = "session/load";
 pub(super) const SESSION_PROMPT: &str = "session/prompt";
 pub(super) const SESSION_CANCEL: &str = "session/cancel";
+pub(super) const SESSION_SET_MODEL: &str = "session/set_model";
 pub(super) const SESSION_UPDATE: &str = "session/update";
 
 /// ACP v1 initialization parameters.
@@ -66,6 +67,44 @@ pub(super) struct LoadSession<'a> {
 #[serde(rename_all = "camelCase")]
 pub(super) struct NewSessionResult<'a> {
     pub(super) session_id: &'a str,
+}
+
+/// Ask the agent to answer with a different model.
+///
+/// Not the ACP standard: the standard schema (v1 and v2, measured 2026-08-19) has no model vocabulary at all,
+/// and its own shape for this is a category-tagged config option. One vendor ships this method as an extension
+/// and announces the catalogue it governs on the session answer, so runtrol speaks it where it is announced and
+/// the agent's refusal stays the loud answer everywhere else.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct SetModel<'a> {
+    pub(super) session_id: &'a str,
+    pub(super) model_id: &'a str,
+}
+
+/// The model state a session answer may announce, read leniently because it is a vendor extension: absence is
+/// the normal case, not an error.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct ModelsAnnounced<'a> {
+    #[serde(borrow, default)]
+    pub(super) models: Option<ModelsState<'a>>,
+}
+
+/// Which model answers now, and which ones this session may switch to.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct ModelsState<'a> {
+    pub(super) current_model_id: &'a str,
+    #[serde(default)]
+    pub(super) available_models: Vec<AnnouncedModel<'a>>,
+}
+
+/// One switchable model, by the agent's own identifier for it.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct AnnouncedModel<'a> {
+    pub(super) model_id: &'a str,
 }
 
 /// One prompt request, preserving native blocks through their raw serializer.

@@ -242,7 +242,57 @@ impl AcpAgent {
                 payload,
             })),
         });
+        if let Some(models) = announced_models(&opened.0) {
+            agent.announced.push_back(Produced {
+                src_end: 0,
+                body: models,
+            });
+        }
         Ok(agent)
+    }
+
+    /// Relay the operator's model choice through the agent's own switch call.
+    ///
+    /// The vendor-extension method rather than a probe: an agent that does not ship it answers
+    /// method-not-found, and that refusal propagates as the loud error instead of being guessed around.
+    async fn switch_model(
+        &mut self,
+        model: Box<str>,
+        reasoning_effort: Option<Box<str>>,
+    ) -> Result<(), ProviderError> {
+        if reasoning_effort.is_some() {
+            return Err(ProviderError::Unsupported {
+                provider: self.provider,
+                what: "switching the reasoning effort mid-session".to_owned(),
+                why: "no ACP surface announces one to switch",
+            });
+        }
+        let session = self.native.clone();
+        let answer = self
+            .call(
+                wire::SESSION_SET_MODEL,
+                &wire::SetModel {
+                    session_id: &session,
+                    model_id: &model,
+                },
+                "switching the model",
+            )
+            .await?;
+        let payload = opaque_whole(&answer).ok_or_else(|| ProviderError::Protocol {
+            provider: self.provider,
+            doing: "switching the model",
+            detail: "the provider answer is not a shareable JSON payload".to_owned(),
+        })?;
+        // The agent accepted, which is its word that the model moved; the event carries its answer.
+        self.announced.push_back(Produced {
+            src_end: 0,
+            body: EventBody::CurrentModelUpdate {
+                model_id: model,
+                available_ids: None,
+                payload,
+            },
+        });
+        Ok(())
     }
 
     async fn call<P: serde::Serialize>(
@@ -552,6 +602,10 @@ impl Agent for AcpAgent {
                 Ok(())
             }
             AgentCommand::Native(payload) => self.write_line(payload.as_str()).await,
+            AgentCommand::SetModel {
+                model,
+                reasoning_effort,
+            } => self.switch_model(model, reasoning_effort).await,
             AgentCommand::Answer { .. } => Err(ProviderError::Unsupported {
                 provider: self.provider,
                 what: "answering an ACP client request".to_owned(),
@@ -713,6 +767,41 @@ fn stop_reason(reason: &str) -> StopReason {
     }
 }
 
+/// Bounds on the lifted model identifiers, so a hostile catalogue cannot grow the bounded event ring.
+const MAX_ANNOUNCED_MODELS: usize = 32;
+const MAX_MODEL_ID_BYTES: usize = 200;
+
+/// The model state a session answer announces, when it announces one.
+///
+/// A vendor extension rather than the standard (measured 2026-08-19: the ACP schema has no model vocabulary),
+/// so absence is the normal case and nothing here fails on it. Identifiers are the only thing lifted, bounded
+/// in count and length; the whole announcement rides as the payload.
+fn announced_models(answer: &Bytes) -> Option<EventBody> {
+    let read: wire::ModelsAnnounced<'_> = match serde_json::from_slice(answer) {
+        Ok(read) => read,
+        // ok: an answer that does not parse as this vendor extension simply has no announcement. Session
+        // creation already validated the same answer for everything that is actually required.
+        Err(_) => return None,
+    };
+    let models = read.models?;
+    if models.current_model_id.is_empty() || models.current_model_id.len() > MAX_MODEL_ID_BYTES {
+        return None;
+    }
+    let available: Vec<Box<str>> = models
+        .available_models
+        .iter()
+        .map(|model| model.model_id)
+        .filter(|id| !id.is_empty() && id.len() <= MAX_MODEL_ID_BYTES)
+        .take(MAX_ANNOUNCED_MODELS)
+        .map(Into::into)
+        .collect();
+    Some(EventBody::CurrentModelUpdate {
+        model_id: models.current_model_id.into(),
+        available_ids: (!available.is_empty()).then(|| available.into_boxed_slice()),
+        payload: opaque_whole(answer)?,
+    })
+}
+
 fn opaque_whole(bytes: &Bytes) -> Option<Opaque> {
     match core::str::from_utf8(bytes) {
         Ok(text) => Opaque::borrowed_from(bytes, text),
@@ -731,6 +820,59 @@ fn line_error(provider: ProviderId, doing: &'static str, error: &LineError) -> P
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_announced_model_state_becomes_the_event_and_absence_becomes_nothing() {
+        // The shape is the real one: grok 1.0.4's session/new answer, trimmed to the fields read
+        // (measured 2026-08-19). The vendor nests reasoning efforts in _meta; only identifiers are lifted.
+        let announced = Bytes::from_static(
+            br#"{"sessionId":"01a018c1","models":{"currentModelId":"grok-4.6","availableModels":[{"modelId":"grok-4.6","name":"Grok 4.6"},{"modelId":"grok-4.5","name":"Grok 4.5"}]}}"#,
+        );
+        let Some(EventBody::CurrentModelUpdate {
+            model_id,
+            available_ids,
+            ..
+        }) = announced_models(&announced)
+        else {
+            panic!("a real announcement did not become the event");
+        };
+        assert_eq!(model_id.as_ref(), "grok-4.6");
+        let ids: Vec<&str> = available_ids
+            .as_deref()
+            .expect("the announced set is lifted")
+            .iter()
+            .map(AsRef::as_ref)
+            .collect();
+        assert_eq!(ids, ["grok-4.6", "grok-4.5"]);
+
+        // The standard's own answer carries no models at all, and that is the normal case, not an error.
+        let plain = Bytes::from_static(br#"{"sessionId":"s-1"}"#);
+        assert!(announced_models(&plain).is_none());
+    }
+
+    #[test]
+    fn a_hostile_catalogue_cannot_grow_past_the_bounds() {
+        use core::fmt::Write as _;
+        let mut hostile =
+            String::from(r#"{"sessionId":"s","models":{"currentModelId":"m","availableModels":["#);
+        for index in 0..100 {
+            if index > 0 {
+                hostile.push(',');
+            }
+            write!(hostile, r#"{{"modelId":"model-{index}"}}"#).expect("writing into a String");
+        }
+        hostile.push_str("]}}");
+        let bytes = Bytes::from(hostile);
+        let Some(EventBody::CurrentModelUpdate { available_ids, .. }) = announced_models(&bytes)
+        else {
+            panic!("the announcement did not parse");
+        };
+        assert_eq!(
+            available_ids.map(|ids| ids.len()),
+            Some(MAX_ANNOUNCED_MODELS),
+            "the lifted set is capped, whatever the provider sends"
+        );
+    }
 
     #[test]
     fn stable_stop_reasons_cross_without_reinterpretation() {

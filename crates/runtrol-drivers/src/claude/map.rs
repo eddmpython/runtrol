@@ -100,9 +100,23 @@ pub enum Frame {
     /// A control request runtrol cannot serve, which must receive an error rather than hang.
     UnsupportedControl(UnsupportedControl),
     /// A reply to a control request runtrol sent, consumed by the stateful driver boundary.
-    ControlResponse,
+    ///
+    /// Carried with its identity and outcome because the boundary correlates it: an interrupt reply says
+    /// nothing a turn event does not, but a model-switch reply is the CLI's word on whether the model moved.
+    ControlResponse(ControlOutcome),
     /// Nothing runtrol binds, carried through whole.
     Unbound(Unmapped),
+}
+
+/// The provider's reply to a control request runtrol sent.
+#[derive(Clone, Debug)]
+pub struct ControlOutcome {
+    /// Which request this answers, exactly as runtrol minted it.
+    pub(super) request_id: Box<str>,
+    /// The provider's own sentence when it refused. `None` is success.
+    pub(super) error: Option<Box<str>>,
+    /// The whole reply, untouched.
+    pub(super) payload: Opaque,
 }
 
 /// A provider cancellation addressed by its private request handle.
@@ -331,7 +345,7 @@ pub fn read(line: &Bytes) -> Result<Frame, MapError> {
             }))
         }
 
-        ("control_response", _) => Ok(Frame::ControlResponse),
+        ("control_response", _) => control_response(line),
 
         // Progress that is not conversation. Reported so a subscriber can show that something is happening,
         // without runtrol claiming to know what.
@@ -352,6 +366,35 @@ pub fn read(line: &Bytes) -> Result<Frame, MapError> {
 }
 
 /// Bind one provider question on the hidden stdio control channel.
+/// Read the reply to a control request runtrol sent: which request, and the CLI's own sentence if it refused.
+fn control_response(line: &Bytes) -> Result<Frame, MapError> {
+    #[derive(serde::Deserialize)]
+    struct Reply<'line> {
+        #[serde(borrow)]
+        response: ReplyBody<'line>,
+    }
+    #[derive(serde::Deserialize)]
+    struct ReplyBody<'line> {
+        subtype: &'line str,
+        request_id: &'line str,
+        error: Option<&'line str>,
+    }
+    let read: Reply<'_> =
+        serde_json::from_slice(line.as_ref()).map_err(|error| MapError::BadControl {
+            detail: format!("unreadable control response: {error}"),
+        })?;
+    let error = match (read.response.subtype, read.response.error) {
+        ("success", _) => None,
+        // A non-success reply without a sentence is still a refusal; the subtype itself is the word then.
+        (_, sentence) => Some(sentence.unwrap_or(read.response.subtype).into()),
+    };
+    Ok(Frame::ControlResponse(ControlOutcome {
+        request_id: read.response.request_id.into(),
+        error,
+        payload: whole_line(line),
+    }))
+}
+
 fn control_request(line: &Bytes, envelope: &Envelope<'_>) -> Result<Frame, MapError> {
     let request = envelope.request.ok_or_else(|| MapError::BadControl {
         detail: "the frame carried no request body".to_owned(),
@@ -1275,7 +1318,33 @@ mod tests {
         );
         assert!(matches!(
             read(&response).expect("readable"),
-            Frame::ControlResponse
+            Frame::ControlResponse(_)
         ));
+    }
+
+    #[test]
+    fn a_control_reply_carries_its_identity_and_the_cli_own_sentence_when_refused() {
+        // Both payloads are the real CLI's, measured on 2.1.235 (2026-08-19): a set_model success and a
+        // set_effort refusal.
+        let accepted = line(
+            r#"{"type":"control_response","response":{"subtype":"success","request_id":"probe-1"}}"#,
+        );
+        let Frame::ControlResponse(outcome) = read(&accepted).expect("readable") else {
+            panic!("a control response mapped as something else");
+        };
+        assert_eq!(outcome.request_id.as_ref(), "probe-1");
+        assert!(outcome.error.is_none());
+
+        let refused = line(
+            r#"{"type":"control_response","response":{"subtype":"error","request_id":"p1","error":"Unsupported control request subtype: set_effort"}}"#,
+        );
+        let Frame::ControlResponse(outcome) = read(&refused).expect("readable") else {
+            panic!("a control refusal mapped as something else");
+        };
+        assert_eq!(outcome.request_id.as_ref(), "p1");
+        assert_eq!(
+            outcome.error.as_deref(),
+            Some("Unsupported control request subtype: set_effort")
+        );
     }
 }

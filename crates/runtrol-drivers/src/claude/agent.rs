@@ -77,6 +77,14 @@ pub struct ClaudeAgent {
     running: Option<TurnId>,
     /// Which turn number to use next.
     next_turn: u32,
+    /// Which model-switch request number to use next, separate from turns so an interrupt and a switch sent in
+    /// the same breath cannot mint the same control identity.
+    next_model_switch: u64,
+    /// Model switches runtrol asked for and the CLI has not answered yet, by control request identity.
+    ///
+    /// Bounded by how fast an operator can click: each entry leaves on the CLI's reply, and a session that
+    /// never replies is a protocol failure the read loop already promotes.
+    pending_model_switches: BTreeMap<Box<str>, Box<str>>,
     /// The monotone source boundary in this live provider stream.
     ///
     /// A whole message or provider-declared ending advances it. Fragments and control events carry the current
@@ -152,6 +160,8 @@ impl ClaudeAgent {
             lines: Lines::new(stdout),
             running: None,
             next_turn: 0,
+            next_model_switch: 0,
+            pending_model_switches: BTreeMap::new(),
             src_end: 0,
             announced: VecDeque::new(),
             approvals: ApprovalBook::new(),
@@ -191,11 +201,49 @@ impl ClaudeAgent {
             })
     }
 
+    /// What a control reply means, when it answers a model switch runtrol sent.
+    ///
+    /// Interrupt replies say nothing a turn event does not and stay dropped. A model-switch reply is the CLI's
+    /// word on whether the model moved: success becomes the current-model event, and a refusal becomes a loud
+    /// notice carrying the CLI's own sentence.
+    fn model_switch_outcome(&mut self, outcome: map::ControlOutcome) -> Option<Produced> {
+        let model = self.pending_model_switches.remove(&outcome.request_id)?;
+        let body = match outcome.error {
+            None => EventBody::CurrentModelUpdate {
+                model_id: model,
+                available_ids: None,
+                payload: outcome.payload,
+            },
+            Some(_) => EventBody::Notice(Box::new(Notice {
+                level: Level::Warn,
+                code: NoticeCode::ModelRerouted,
+                retryable: false,
+                payload: outcome.payload,
+            })),
+        };
+        Some(Produced {
+            src_end: self.src_end,
+            body,
+        })
+    }
+
     /// Turn a classified frame into what leaves the driver.
     fn produce(&mut self, frame: Frame) -> Produced {
         match frame {
             Frame::Started(startup) => {
                 self.native = Some(startup.native.as_str().to_owned());
+                if let Some(model) = startup.answering_with.clone() {
+                    // The CLI's own word on which model answers, queued to follow the attachment. Requested and
+                    // answering differ (measured), and only this one is the provider's.
+                    self.announced.push_back(Produced {
+                        src_end: self.src_end,
+                        body: EventBody::CurrentModelUpdate {
+                            model_id: model,
+                            available_ids: None,
+                            payload: startup.payload.clone(),
+                        },
+                    });
+                }
                 Produced {
                     src_end: self.src_end,
                     body: EventBody::Attached(Box::new(runtrol_provider::Attached {
@@ -255,7 +303,7 @@ impl ClaudeAgent {
             Frame::Approval(_)
             | Frame::ApprovalCancelled(_)
             | Frame::UnsupportedControl(_)
-            | Frame::ControlResponse => Produced {
+            | Frame::ControlResponse(_) => Produced {
                 src_end: self.src_end,
                 body: EventBody::Notice(Box::new(Notice {
                     level: Level::Error,
@@ -581,6 +629,27 @@ fn interrupt_frame(provider: ProviderId, request: u64) -> Result<String, Provide
     })
 }
 
+/// The frame that asks the CLI to answer with a different model from here on.
+///
+/// Measured on 2.1.235: the control channel accepts `set_model` mid-session, answers with a control response
+/// carrying this request identity, and the switch also lands in the CLI's own transcript as a local command.
+fn set_model_frame(
+    provider: ProviderId,
+    request: &str,
+    model: &str,
+) -> Result<String, ProviderError> {
+    serde_json::to_string(&serde_json::json!({
+        "type": "control_request",
+        "request_id": request,
+        "request": {"subtype": "set_model", "model": model},
+    }))
+    .map_err(|error| ProviderError::Protocol {
+        provider,
+        doing: "building a model switch",
+        detail: error.to_string(),
+    })
+}
+
 #[async_trait]
 impl Agent for ClaudeAgent {
     fn session(&self) -> SessionId {
@@ -622,6 +691,27 @@ impl Agent for ClaudeAgent {
             AgentCommand::Interrupt => {
                 let frame = interrupt_frame(self.provider, u64::from(self.next_turn))?;
                 self.write_line(&frame).await
+            }
+            AgentCommand::SetModel {
+                model,
+                reasoning_effort,
+            } => {
+                if reasoning_effort.is_some() {
+                    // Measured on this CLI (2.1.235): set_effort and set_reasoning_effort are refused by the
+                    // control channel, so a request carrying one must refuse rather than drop it.
+                    return Err(ProviderError::Unsupported {
+                        provider: self.provider,
+                        what: "switching the reasoning effort mid-session".to_owned(),
+                        why: "this CLI's control channel moves only the model",
+                    });
+                }
+                let request = format!("runtrol-model-{}", self.next_model_switch);
+                self.next_model_switch = self.next_model_switch.saturating_add(1);
+                let frame = set_model_frame(self.provider, &request, &model)?;
+                self.write_line(&frame).await?;
+                // Remembered after the write: a frame that never left is not pending anything.
+                self.pending_model_switches.insert(request.into(), model);
+                Ok(())
             }
             // Forwarded byte for byte. Never inspected and never rewritten.
             AgentCommand::Native(payload) => {
@@ -684,7 +774,12 @@ impl Agent for ClaudeAgent {
             // still produce one event each, including frames nobody has bound yet.
             return match line {
                 Ok(Some(line)) => match map::read(&line) {
-                    Ok(Frame::ControlResponse) => continue 'next_event,
+                    Ok(Frame::ControlResponse(outcome)) => {
+                        if let Some(produced) = self.model_switch_outcome(outcome) {
+                            return Some(Ok(produced));
+                        }
+                        continue 'next_event;
+                    }
                     Ok(frame) => Some(self.handle_frame(frame).await),
                     // A frame runtrol cannot read is a protocol failure, promoted to session state by the caller
                     // rather than logged and stepped over.
@@ -1061,6 +1156,30 @@ mod tests {
             block.pointer("/source/kind").and_then(|v| v.as_str()),
             Some("base64"),
             "the block has to arrive whole, not flattened"
+        );
+    }
+
+    #[test]
+    fn a_model_switch_is_the_cli_control_request_and_carries_only_the_choice() {
+        // Measured on 2.1.235: {"subtype":"set_model","model":...} succeeds mid-session. The frame carries the
+        // operator's choice verbatim and asserts nothing about the outcome, which stays the CLI's word.
+        let frame = set_model_frame(a_provider(), "runtrol-model-0", "sonnet").expect("writable");
+        let parsed: serde_json::Value = serde_json::from_str(&frame).expect("readable");
+        assert_eq!(
+            parsed.pointer("/type").and_then(|v| v.as_str()),
+            Some("control_request")
+        );
+        assert_eq!(
+            parsed.pointer("/request/subtype").and_then(|v| v.as_str()),
+            Some("set_model")
+        );
+        assert_eq!(
+            parsed.pointer("/request/model").and_then(|v| v.as_str()),
+            Some("sonnet")
+        );
+        assert_eq!(
+            parsed.pointer("/request_id").and_then(|v| v.as_str()),
+            Some("runtrol-model-0")
         );
     }
 
