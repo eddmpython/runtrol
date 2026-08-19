@@ -20,6 +20,13 @@ and refactoring that no user can observe do not belong here.
   service that refuses says why in its own words. Reasoning effort rides along where the service accepts one
   mid-conversation; where it does not, Runtrol says so instead of silently dropping it.
 
+- The permission mode can now be switched in the middle of a conversation, from its own chip in the
+  conversation header, exactly like the model. The choices are what the service itself accepts: one CLI's
+  control channel takes it immediately and announces the new mode itself, one carries it on the next message
+  (its own documented surface), and protocol services that announce a mode set per session offer exactly that
+  set. Modes that remove safety prompts entirely are deliberately not offered and are refused for every
+  caller: turning questions off stays a deliberate act at the service's own surface, never a click in Runtrol.
+
 - Conversations you started with Cline outside Runtrol now appear in the list. That CLI announces no session
   capabilities over the protocol its driver speaks, so Runtrol reported existing-conversation discovery as
   unsupported for it. The CLI lists them on its own command line, and Runtrol asks that command instead. Only the

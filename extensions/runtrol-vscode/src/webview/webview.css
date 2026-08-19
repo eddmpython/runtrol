@@ -553,7 +553,8 @@ button:disabled {
   opacity: 0.75;
 }
 
-#agent-chip {
+#agent-chip,
+#mode-chip {
   cursor: pointer;
 }
 

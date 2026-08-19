@@ -70,6 +70,18 @@ pub enum AgentCommand {
         /// to put it. A provider whose switch surface cannot carry it refuses rather than dropping it.
         reasoning_effort: Option<Box<str>>,
     },
+
+    /// Switch which permission mode governs the conversation from now on.
+    ///
+    /// A relay, not a decision: the mode is the operator's choice by the provider's own name for it, and
+    /// whether it changed is answered only by the provider's own announcement. Which names may travel at all
+    /// is decided before this command exists (manifest-listed for CLIs whose vocabulary is not discoverable,
+    /// session-announced for protocols that announce one), so a mode that removes safety prompts entirely
+    /// never has a command to ride.
+    SetMode {
+        /// The mode, by the provider's own name for it, exactly as the operator chose it.
+        mode: Box<str>,
+    },
 }
 
 /// Why a session is being opened.

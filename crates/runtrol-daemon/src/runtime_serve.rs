@@ -22,9 +22,10 @@ use runtrol_runtime_protocol::{
     RuntimeInstance, RuntimeLimits, RuntimeMethod, RuntimeModelCatalog, RuntimeModelChoice,
     RuntimeProviderCapabilities, RuntimeReasoningChoice, RuntimeSessionId,
     SessionIndexChangedNotification, SessionIndexEndReason, SessionIndexEndedNotification,
-    SessionWorkspaceAccess, SetModelParams, StartSessionParams, SubmitInputParams, SuccessResponse,
-    WatchEnrollmentParams, WatchEventsParams, WatchEventsResult, WatchProvidersParams,
-    WatchProvidersResult, WatchSessionIndexParams, WatchSessionIndexResult, negotiate,
+    SessionWorkspaceAccess, SetModeParams, SetModelParams, StartSessionParams, SubmitInputParams,
+    SuccessResponse, WatchEnrollmentParams, WatchEventsParams, WatchEventsResult,
+    WatchProvidersParams, WatchProvidersResult, WatchSessionIndexParams, WatchSessionIndexResult,
+    negotiate,
 };
 use runtrol_store::IntegrationAuditOutcome;
 use runtrol_store::{EnrollmentKey, IntegrationKeyRotation};
@@ -503,6 +504,7 @@ async fn dispatch_public(
             | RuntimeMethod::SessionsReleaseControl
             | RuntimeMethod::SessionsSubmitInput
             | RuntimeMethod::SessionsSetModel
+            | RuntimeMethod::SessionsSetMode
             | RuntimeMethod::SessionsWatchEvents
             | RuntimeMethod::SessionsInterrupt
             | RuntimeMethod::SessionsCool
@@ -554,7 +556,8 @@ fn required_scope(method: RuntimeMethod) -> Option<AppScope> {
         }
         RuntimeMethod::SessionsAcquireControl
         | RuntimeMethod::SessionsSubmitInput
-        | RuntimeMethod::SessionsSetModel => Some(AppScope::SessionInputWrite),
+        | RuntimeMethod::SessionsSetModel
+        | RuntimeMethod::SessionsSetMode => Some(AppScope::SessionInputWrite),
         RuntimeMethod::SessionsWatchEvents | RuntimeMethod::ApprovalsListPending => {
             Some(AppScope::SessionOutputRead)
         }
@@ -1546,6 +1549,12 @@ async fn session_operation(
         Ok(session) => session,
         Err(failure) => return inventory_failure(id, failure),
     };
+    if let ParsedSessionOperation::SetMode(mode_params) = &parsed
+        && let Err(message) =
+            mode_within_provider_vocabulary(composed, sessions, session, &mode_params.mode)
+    {
+        return Answer::plain(id, RuntimeErrorKind::InvalidRequest, message);
+    }
     let request = parsed.into_owner_request(session, approval_scopes);
     let (answered, hearing) = oneshot::channel();
     if asking
@@ -1571,6 +1580,32 @@ async fn session_operation(
         );
     };
     runtime_control_answer(id, reply, returning).await
+}
+
+/// Whether this provider accepts a runtrol switch to the named mode.
+///
+/// The manifest's `switchable` list is the boundary for a CLI whose vocabulary cannot be discovered, and it
+/// deliberately omits the modes that remove safety prompts, so those are unreachable through this method for
+/// every caller. An empty list means the protocol announces modes per session, and the driver itself gates on
+/// that announcement (measured: one agent confirms unannounced switches with an empty success, which is why
+/// somebody must gate). A session whose provider cannot be identified is refused rather than relayed.
+fn mode_within_provider_vocabulary(
+    composed: &Composed,
+    sessions: &RuntimeSessionCatalogue,
+    session: runtrol_provider::SessionId,
+    mode: &str,
+) -> Result<(), &'static str> {
+    let Some(provider) = sessions.provider_of(session) else {
+        return Err("the session's provider cannot be identified for a mode switch");
+    };
+    let Some(entry) = composed.registry.get(provider) else {
+        return Err("the session's provider is not registered in this build");
+    };
+    let switchable = &entry.manifest.modes.switchable;
+    if switchable.is_empty() || switchable.iter().any(|token| **token == *mode) {
+        return Ok(());
+    }
+    Err("this provider does not accept a runtrol switch to that mode")
 }
 
 async fn forget_session(
@@ -2360,6 +2395,7 @@ enum ParsedSessionOperation {
     Release(ControlLeaseParams),
     Submit(SubmitInputParams),
     SetModel(SetModelParams),
+    SetMode(SetModeParams),
     Watch {
         params: WatchEventsParams,
         subscription_id: String,
@@ -2379,6 +2415,7 @@ impl ParsedSessionOperation {
             }
             Self::Submit(params) => &params.session_id,
             Self::SetModel(params) => &params.session_id,
+            Self::SetMode(params) => &params.session_id,
             Self::Watch { params, .. } => &params.session_id,
             Self::Cool(params) => &params.session_id,
             Self::ListApprovals(params) => &params.session_id,
@@ -2397,6 +2434,7 @@ impl ParsedSessionOperation {
             Self::Release(params) => RuntimeControlRequest::Release { session, params },
             Self::Submit(params) => RuntimeControlRequest::Submit { session, params },
             Self::SetModel(params) => RuntimeControlRequest::SetModel { session, params },
+            Self::SetMode(params) => RuntimeControlRequest::SetMode { session, params },
             Self::Watch {
                 params,
                 subscription_id,
@@ -2445,6 +2483,9 @@ fn parse_session_operation(
         RuntimeMethod::SessionsSetModel => serde_json::from_value(params)
             .map(ParsedSessionOperation::SetModel)
             .map_err(|_| "model switch parameters are invalid"),
+        RuntimeMethod::SessionsSetMode => serde_json::from_value(params)
+            .map(ParsedSessionOperation::SetMode)
+            .map_err(|_| "mode switch parameters are invalid"),
         RuntimeMethod::SessionsWatchEvents => {
             let params = serde_json::from_value(params)
                 .map_err(|_| "session event watch parameters are invalid")?;
@@ -3141,6 +3182,71 @@ const fn platform_name() -> &'static str {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn a_mode_travels_only_within_the_provider_vocabulary() {
+        // claude's manifest lists default, plan, and acceptEdits, and deliberately omits the modes that
+        // remove safety prompts; grok's manifest has no mode list at all, which defers the gate to its
+        // driver's session-announcement check. Both facts are what this test pins.
+        let scratch =
+            std::env::temp_dir().join(format!("runtrol-mode-gate-{}", std::process::id()));
+        if scratch.exists() {
+            std::fs::remove_dir_all(&scratch).expect("clear the previous run");
+        }
+        std::fs::create_dir(&scratch).expect("create the scratch home");
+        let home = scratch.to_str().expect("UTF-8 scratch path");
+        let composed = crate::Composed::for_tests(home, runtrol_drivers::builtin())
+            .expect("a fresh home composes");
+        let workspace =
+            runtrol_provider::AbsPath::canonicalize(home).expect("the scratch home canonicalizes");
+
+        let claude = runtrol_provider::ProviderId::parse("claude").expect("a builtin provider");
+        let catalogue = crate::runtime_inventory::RuntimeSessionCatalogue::one_for_tests(
+            claude,
+            "native-mode-gate",
+            &workspace,
+        );
+        let session = catalogue
+            .first_session_id_for_tests()
+            .expect("the fixture holds one session");
+        assert!(
+            mode_within_provider_vocabulary(&composed, &catalogue, session, "acceptEdits").is_ok(),
+            "a manifest-listed mode travels"
+        );
+        assert!(
+            mode_within_provider_vocabulary(&composed, &catalogue, session, "bypassPermissions")
+                .is_err(),
+            "the mode that removes every question must be unreachable through runtrol"
+        );
+        assert!(
+            mode_within_provider_vocabulary(
+                &composed,
+                &catalogue,
+                runtrol_provider::SessionId::now(),
+                "default",
+            )
+            .is_err(),
+            "an unidentifiable session fails closed"
+        );
+
+        let grok = runtrol_provider::ProviderId::parse("grok").expect("a builtin provider");
+        let announced = crate::runtime_inventory::RuntimeSessionCatalogue::one_for_tests(
+            grok,
+            "native-mode-gate-acp",
+            &workspace,
+        );
+        let acp_session = announced
+            .first_session_id_for_tests()
+            .expect("the fixture holds one session");
+        assert!(
+            mode_within_provider_vocabulary(&composed, &announced, acp_session, "anything").is_ok(),
+            "an empty manifest list defers to the driver's session-announcement gate"
+        );
+
+        drop(composed);
+        std::fs::remove_dir_all(&scratch).expect("remove the scratch home");
+    }
+
     use super::*;
     use base64ct::Encoding as _;
 

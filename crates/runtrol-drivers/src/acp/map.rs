@@ -202,6 +202,9 @@ fn current_mode(raw: &RawValue, parent: &Bytes) -> Result<EventBody, MapError> {
     )?;
     Ok(EventBody::CurrentModeUpdate {
         mode_id: fields.current_mode_id.into(),
+        // The notification names only the mode now in force; the switchable set is announced at
+        // session open, not here.
+        available_ids: None,
         payload: opaque(parent, raw)?,
     })
 }

@@ -14,6 +14,7 @@ pub(super) const SESSION_LOAD: &str = "session/load";
 pub(super) const SESSION_PROMPT: &str = "session/prompt";
 pub(super) const SESSION_CANCEL: &str = "session/cancel";
 pub(super) const SESSION_SET_MODEL: &str = "session/set_model";
+pub(super) const SESSION_SET_MODE: &str = "session/set_mode";
 pub(super) const SESSION_UPDATE: &str = "session/update";
 
 /// ACP v1 initialization parameters.
@@ -105,6 +106,42 @@ pub(super) struct ModelsState<'a> {
 #[serde(rename_all = "camelCase")]
 pub(super) struct AnnouncedModel<'a> {
     pub(super) model_id: &'a str,
+}
+
+/// Ask the agent to run under a different session mode.
+///
+/// This one is the ACP standard (`session/set_mode`). It is still relayed only to a session that announced a
+/// mode set: measured on one agent (grok 1.0.4, 2026-08-19), a session that announces `modes: null` answers
+/// this method with an empty success for any identifier at all, so an unannounced mode is refused by the
+/// driver rather than confirmed by an answer that means nothing.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct SetMode<'a> {
+    pub(super) session_id: &'a str,
+    pub(super) mode_id: &'a str,
+}
+
+/// The mode state a session answer may announce, read leniently: announcing none is the normal case.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct ModesAnnounced<'a> {
+    #[serde(borrow, default)]
+    pub(super) modes: Option<ModesState<'a>>,
+}
+
+/// Which mode governs now, and which ones this session may switch to.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct ModesState<'a> {
+    pub(super) current_mode_id: &'a str,
+    #[serde(default)]
+    pub(super) available_modes: Vec<AnnouncedMode<'a>>,
+}
+
+/// One switchable mode, by the agent's own identifier for it (the standard names this field `id`).
+#[derive(Deserialize)]
+pub(super) struct AnnouncedMode<'a> {
+    pub(super) id: &'a str,
 }
 
 /// One prompt request, preserving native blocks through their raw serializer.

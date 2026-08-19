@@ -81,6 +81,9 @@ pub enum RuntimeMethod {
     /// Switch the answering model under the current control lease.
     #[serde(rename = "sessions/setModel")]
     SessionsSetModel,
+    /// Switch the governing permission mode under the current control lease.
+    #[serde(rename = "sessions/setMode")]
+    SessionsSetMode,
     /// Watch the existing bounded normalized event stream.
     #[serde(rename = "sessions/watchEvents")]
     SessionsWatchEvents,
@@ -151,6 +154,7 @@ impl RuntimeMethod {
             Self::SessionsReleaseControl => "sessions/releaseControl",
             Self::SessionsSubmitInput => "sessions/submitInput",
             Self::SessionsSetModel => "sessions/setModel",
+            Self::SessionsSetMode => "sessions/setMode",
             Self::SessionsWatchEvents => "sessions/watchEvents",
             Self::SessionsInterrupt => "sessions/interrupt",
             Self::SessionsCool => "sessions/cool",
@@ -203,6 +207,7 @@ impl FromStr for RuntimeMethod {
             "sessions/releaseControl" => Ok(Self::SessionsReleaseControl),
             "sessions/submitInput" => Ok(Self::SessionsSubmitInput),
             "sessions/setModel" => Ok(Self::SessionsSetModel),
+            "sessions/setMode" => Ok(Self::SessionsSetMode),
             "sessions/watchEvents" => Ok(Self::SessionsWatchEvents),
             "sessions/interrupt" => Ok(Self::SessionsInterrupt),
             "sessions/cool" => Ok(Self::SessionsCool),
@@ -256,6 +261,7 @@ mod tests {
             RuntimeMethod::SessionsReleaseControl,
             RuntimeMethod::SessionsSubmitInput,
             RuntimeMethod::SessionsSetModel,
+            RuntimeMethod::SessionsSetMode,
             RuntimeMethod::SessionsWatchEvents,
             RuntimeMethod::SessionsInterrupt,
             RuntimeMethod::SessionsCool,

@@ -23,8 +23,8 @@ use runtrol_runtime_protocol::{
     ListPendingApprovalsParams, MAX_INPUT_BYTES, MUTATION_CLOCK_SKEW_MS, MutationRequestId,
     PendingApproval, PendingApprovalList, RespondApprovalParams, RuntimeApprovalKind,
     RuntimeApprovalOption, RuntimeApprovalOptionKind, RuntimeApprovalRisk, RuntimeErrorKind,
-    RuntimeMethod, SessionDescriptor, SessionOpenResult, SetModelParams, SubmitInputParams,
-    WaitingOn, WatchEventsParams, WatchEventsResult,
+    RuntimeMethod, SessionDescriptor, SessionOpenResult, SetModeParams, SetModelParams,
+    SubmitInputParams, WaitingOn, WatchEventsParams, WatchEventsResult,
 };
 use runtrol_store::{
     IntegrationKey, IntegrationMutationKey, IntegrationMutationRow, IntegrationMutationState, Store,
@@ -61,6 +61,13 @@ pub(crate) enum RuntimeControlRequest {
     SetModel {
         session: SessionId,
         params: SetModelParams,
+    },
+    /// Switch the governing permission mode under the caller's lease.
+    SetMode {
+        /// The exact managed session.
+        session: SessionId,
+        /// The validated public parameters.
+        params: SetModeParams,
     },
     Interrupt {
         session: SessionId,
@@ -439,6 +446,9 @@ impl RuntimeControl {
             }
             RuntimeControlRequest::SetModel { session, params } => {
                 self.set_model(store, sessions, integration, session, params)
+            }
+            RuntimeControlRequest::SetMode { session, params } => {
+                self.set_mode(store, sessions, integration, session, params)
             }
             RuntimeControlRequest::Interrupt { session, params } => {
                 self.interrupt(store, sessions, integration, session, &params)
@@ -1025,6 +1035,67 @@ impl RuntimeControl {
         }
     }
 
+    /// Relay the operator's mode choice to the session's driver, under the same lease discipline as input.
+    ///
+    /// Whether the name is one the provider accepts a runtrol switch to was already judged at the serve
+    /// boundary, where the provider registry lives; here the words are carried under the same lease and
+    /// idempotent mutation record as speaking, and the provider's confirmation or refusal arrives on the
+    /// event stream.
+    fn set_mode(
+        &mut self,
+        store: &Store,
+        sessions: &mut SessionManager,
+        integration: IntegrationKey,
+        session: SessionId,
+        params: SetModeParams,
+    ) -> RuntimeControlReply {
+        // Transport sanity rather than mode knowledge: every measured vocabulary is a short token.
+        if params.mode.is_empty() || params.mode.len() > 64 {
+            return RuntimeControlReply::Failed(RuntimeControlFailure::new(
+                RuntimeErrorKind::InvalidRequest,
+                "the mode switch names no usable mode",
+            ));
+        }
+        let authenticator = self.authenticate_set_mode(&params);
+        let mutation = match self.begin(
+            store,
+            integration,
+            RuntimeMethod::SessionsSetMode,
+            &params.request_id,
+            authenticator,
+        ) {
+            Ok(Begun::New(key)) => key,
+            Ok(Begun::Replay(reply)) => return *reply,
+            Err(failure) => return RuntimeControlReply::Failed(failure),
+        };
+        if let Err(failure) = self.verify_lease_values(
+            sessions,
+            integration,
+            session,
+            &params.lease_id,
+            params.lease_generation,
+        ) {
+            return self.deny(store, mutation, failure);
+        }
+        match sessions.take_agent(session) {
+            Ok(taken) => RuntimeControlReply::Sending {
+                mutation,
+                taken,
+                command: AgentCommand::SetMode {
+                    mode: params.mode.into(),
+                },
+            },
+            Err(_) => self.deny(
+                store,
+                mutation,
+                RuntimeControlFailure::new(
+                    RuntimeErrorKind::SessionConflict,
+                    "the session cannot switch modes in its current state",
+                ),
+            ),
+        }
+    }
+
     fn interrupt(
         &mut self,
         store: &Store,
@@ -1502,6 +1573,15 @@ impl RuntimeControl {
             &mut mac,
             params.reasoning_effort.as_deref().unwrap_or("").as_bytes(),
         );
+        finish_mac(mac)
+    }
+
+    fn authenticate_set_mode(&self, params: &SetModeParams) -> [u8; 32] {
+        let mut mac = self.mac(RuntimeMethod::SessionsSetMode);
+        feed(&mut mac, params.session_id.as_str().as_bytes());
+        feed(&mut mac, params.lease_id.as_bytes());
+        feed(&mut mac, &params.lease_generation.to_le_bytes());
+        feed(&mut mac, params.mode.as_bytes());
         finish_mac(mac)
     }
 

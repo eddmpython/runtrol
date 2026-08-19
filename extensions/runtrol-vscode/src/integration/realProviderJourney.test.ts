@@ -14,6 +14,7 @@ type JourneyApi = {
   select(session: string, follow?: boolean): Promise<void>;
   prompt(text: string): Promise<void>;
   switchModel(model: string): Promise<void>;
+  switchMode(mode: string): Promise<void>;
   answerApproval(approval: string, option: number, subjectDigest: number[]): Promise<void>;
   interrupt(): Promise<void>;
   reconnect(): Promise<void>;
@@ -138,6 +139,31 @@ async function journey(resultPath: string): Promise<void> {
     }
     if (!confirmedSwitch.includes("sonnet")) {
       throw new Error(`the switch confirmed ${confirmedSwitch}, expected a sonnet model`);
+    }
+
+    currentStage = "mode-switch";
+    // Same spine, other switch: the mode travels the CLI's own control channel, and the confirmation read
+    // here is the CLI's own announcement (measured: a system/status frame carrying the mode follows every
+    // accepted set_permission_mode, and the CLI also announces its current mode on its own schedule, so a
+    // "default" announcement can precede the confirmation). Drained like the model switch above. "plan" is
+    // in the manifest's switchable list; the modes that remove safety prompts are deliberately not, and the
+    // daemon refuses them for every caller.
+    await api.journey.switchMode("plan");
+    let confirmedMode = "";
+    for (let attempt = 0; attempt < 4 && confirmedMode !== "plan"; attempt += 1) {
+      confirmedMode = (await watch.next("mode", 30_000)).mode;
+    }
+    if (confirmedMode !== "plan") {
+      throw new Error(`the mode switch confirmed ${confirmedMode}, expected plan`);
+    }
+    // Returned to default so the rest of the journey exercises the ordinary approval path.
+    await api.journey.switchMode("default");
+    let restoredMode = "";
+    for (let attempt = 0; attempt < 4 && restoredMode !== "default"; attempt += 1) {
+      restoredMode = (await watch.next("mode", 30_000)).mode;
+    }
+    if (restoredMode !== "default") {
+      throw new Error(`the mode restore confirmed ${restoredMode}, expected default`);
     }
 
     currentStage = "reconnecting";

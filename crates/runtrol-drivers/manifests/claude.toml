@@ -36,6 +36,15 @@ argv = [
 ]
 listen = "stdio"
 
+[modes]
+# Measured 2026-08-19 on the installed CLI: the control channel's own refusal names the full vocabulary
+# ("must be one of acceptEdits, auto, bypassPermissions, default, dontAsk, plan"). A refusal sentence is not
+# a discovery surface, so the switchable set lives here beside the measurement. Deliberately absent:
+# bypassPermissions, dontAsk, and auto, the modes that remove or thin the questions an operator would
+# otherwise see. Those are switched at this CLI's own surface by someone at the machine, never through
+# runtrol.
+switchable = ["default", "plan", "acceptEdits"]
+
 [models]
 # Tokens, never model identifiers. Measured: this CLI cannot enumerate its models. Asking it for one it does not
 # have answers with a bare error and no list, so there is nothing to discover and these four are what it accepts.

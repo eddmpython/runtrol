@@ -1365,6 +1365,13 @@
         "providerId": {
           "$ref": "#/$defs/ProviderId",
           "description": "Opaque selection value."
+        },
+        "switchableModes": {
+          "description": "The mode tokens this service accepts a runtrol switch to, when its vocabulary is a manifest fact.\n\nEmpty for a protocol that announces its modes per session; the session's own announcement is then\nthe list a surface offers. The daemon enforces the same boundary on `sessions/setMode`, so this list\nis presentation, never authority.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         }
       },
       "required": [
@@ -2436,6 +2443,11 @@
           "type": "string"
         },
         {
+          "const": "sessions/setMode",
+          "description": "Switch the governing permission mode under the current control lease.",
+          "type": "string"
+        },
+        {
           "const": "sessions/watchEvents",
           "description": "Watch the existing bounded normalized event stream.",
           "type": "string"
@@ -2958,6 +2970,42 @@
         }
       ]
     },
+    "SetModeParams": {
+      "additionalProperties": false,
+      "description": "Switch the governing permission mode under one exact control lease.\n\nA relay like the model switch: the mode is the operator's choice by the provider's own name for it, and\nwhether it changed stays the provider's word, arriving on the event stream as its own event. Which names\nmay travel at all is bounded before relay (manifest-listed for CLIs whose vocabulary is not discoverable,\nsession-announced for protocols that announce one), so a mode that removes safety prompts entirely is not\na reachable destination through this method.",
+      "properties": {
+        "leaseGeneration": {
+          "description": "Exact current lease generation.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "leaseId": {
+          "description": "Opaque lease identity returned on acquisition.",
+          "type": "string"
+        },
+        "mode": {
+          "description": "The mode, by the provider's own name for it, exactly as the operator chose it.",
+          "type": "string"
+        },
+        "requestId": {
+          "$ref": "#/$defs/MutationRequestId",
+          "description": "Caller-minted idempotency identity."
+        },
+        "sessionId": {
+          "$ref": "#/$defs/RuntimeSessionId",
+          "description": "Exact Runtime-managed session."
+        }
+      },
+      "required": [
+        "requestId",
+        "sessionId",
+        "leaseId",
+        "leaseGeneration",
+        "mode"
+      ],
+      "type": "object"
+    },
     "SetModelParams": {
       "additionalProperties": false,
       "description": "Switch the answering model under one exact control lease.\n\nA relay of the operator's choice through the provider's own switch surface, never a rewrite: what the\nsession actually answers with stays the provider's word, arriving on the event stream as its own event.\nA provider whose surface cannot carry the request refuses loudly instead of dropping any part of it.",
@@ -3372,6 +3420,9 @@
     "session_open_result": {
       "$ref": "#/$defs/SessionOpenResult"
     },
+    "set_mode": {
+      "$ref": "#/$defs/SetModeParams"
+    },
     "set_model": {
       "$ref": "#/$defs/SetModelParams"
     },
@@ -3440,6 +3491,7 @@
     "forget_session",
     "submit_input",
     "set_model",
+    "set_mode",
     "watch_events",
     "watch_events_result",
     "runtime_event",

@@ -132,6 +132,13 @@ pub struct ProviderDescriptor {
     /// that leads nowhere.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub help: Option<ProviderHelp>,
+    /// The mode tokens this service accepts a runtrol switch to, when its vocabulary is a manifest fact.
+    ///
+    /// Empty for a protocol that announces its modes per session; the session's own announcement is then
+    /// the list a surface offers. The daemon enforces the same boundary on `sessions/setMode`, so this list
+    /// is presentation, never authority.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub switchable_modes: Vec<String>,
 }
 
 /// A bounded provider inventory snapshot.

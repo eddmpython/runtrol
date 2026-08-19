@@ -182,6 +182,28 @@ pub struct SetModelParams {
     pub reasoning_effort: Option<String>,
 }
 
+/// Switch the governing permission mode under one exact control lease.
+///
+/// A relay like the model switch: the mode is the operator's choice by the provider's own name for it, and
+/// whether it changed stays the provider's word, arriving on the event stream as its own event. Which names
+/// may travel at all is bounded before relay (manifest-listed for CLIs whose vocabulary is not discoverable,
+/// session-announced for protocols that announce one), so a mode that removes safety prompts entirely is not
+/// a reachable destination through this method.
+#[derive(Clone, Debug, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SetModeParams {
+    /// Caller-minted idempotency identity.
+    pub request_id: MutationRequestId,
+    /// Exact Runtime-managed session.
+    pub session_id: RuntimeSessionId,
+    /// Opaque lease identity returned on acquisition.
+    pub lease_id: String,
+    /// Exact current lease generation.
+    pub lease_generation: u64,
+    /// The mode, by the provider's own name for it, exactly as the operator chose it.
+    pub mode: String,
+}
+
 /// Interrupt one exact controlled session.
 pub type InterruptParams = ControlLeaseParams;
 

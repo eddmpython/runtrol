@@ -70,6 +70,11 @@ pub enum NoticeCode {
     PermissionAutoDenied,
     /// The provider served a different model than the one requested.
     ModelRerouted,
+    /// The provider refused to switch permission mode, and the mode in force is unchanged.
+    ///
+    /// Carries the provider's own refusal sentence in the payload, because the vocabulary of valid modes
+    /// is the provider's and its refusal names it better than runtrol could.
+    ModeRefused,
     /// A capability runtrol negotiated is no longer there.
     ///
     /// The visible half of drift tolerance. When a provider surface runtrol relied on disappears, the
@@ -117,6 +122,7 @@ impl NoticeCode {
             | Self::Deprecation
             | Self::PermissionAutoDenied
             | Self::ModelRerouted
+            | Self::ModeRefused
             | Self::TierDowngraded
             | Self::ProtocolViolation
             | Self::Other => false,
@@ -139,6 +145,7 @@ mod tests {
             NoticeCode::Deprecation,
             NoticeCode::PermissionAutoDenied,
             NoticeCode::ModelRerouted,
+            NoticeCode::ModeRefused,
             NoticeCode::TierDowngraded,
             NoticeCode::ProtocolViolation,
             NoticeCode::CredentialRequestRefused,

@@ -111,6 +111,8 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
         ));
       } else if (message.type === "switchModel") {
         void run(() => afterReady(() => controller.switchModel(message.available)));
+      } else if (message.type === "switchMode") {
+        void run(() => afterReady(() => controller.switchMode(message.available)));
       } else {
         void run(() => afterReady(() => controller.interrupt()));
       }

@@ -46,6 +46,11 @@ pub struct AcpAgent {
     next_turn: u32,
     interrupt_requested: bool,
     announced: VecDeque<Produced>,
+    /// The mode identifiers this session announced at open, empty when it announced none.
+    ///
+    /// The gate for [`Self::switch_mode`]: measured, one agent answers `session/set_mode` with an empty
+    /// success for any identifier while announcing no modes, so only announced identifiers are relayed.
+    announced_mode_ids: Box<[Box<str>]>,
     deferred: VecDeque<DeferredFrame>,
     deferred_bytes: usize,
     finished: bool,
@@ -120,6 +125,7 @@ impl AcpAgent {
             next_turn: 0,
             interrupt_requested: false,
             announced: VecDeque::with_capacity(2),
+            announced_mode_ids: Box::new([]),
             deferred: VecDeque::new(),
             deferred_bytes: 0,
             finished: false,
@@ -248,7 +254,53 @@ impl AcpAgent {
                 body: models,
             });
         }
+        if let Some((modes, ids)) = announced_modes(&opened.0) {
+            agent.announced_mode_ids = ids;
+            agent.announced.push_back(Produced {
+                src_end: 0,
+                body: modes,
+            });
+        }
         Ok(agent)
+    }
+
+    /// Relay the operator's mode choice through the standard switch call, for announced modes only.
+    ///
+    /// The announcement is the gate (see the field), and the confirmation event repeats the announced set so
+    /// a surface keeps its options.
+    async fn switch_mode(&mut self, mode: Box<str>) -> Result<(), ProviderError> {
+        if !self.announced_mode_ids.iter().any(|id| **id == *mode) {
+            return Err(ProviderError::Unsupported {
+                provider: self.provider,
+                what: format!("switching to mode {mode:?}"),
+                why: "this session announced no such mode, and an unannounced switch cannot be confirmed",
+            });
+        }
+        let session = self.native.clone();
+        let answer = self
+            .call(
+                wire::SESSION_SET_MODE,
+                &wire::SetMode {
+                    session_id: &session,
+                    mode_id: &mode,
+                },
+                "switching the mode",
+            )
+            .await?;
+        let payload = opaque_whole(&answer).ok_or_else(|| ProviderError::Protocol {
+            provider: self.provider,
+            doing: "switching the mode",
+            detail: "the provider answer is not a shareable JSON payload".to_owned(),
+        })?;
+        self.announced.push_back(Produced {
+            src_end: 0,
+            body: EventBody::CurrentModeUpdate {
+                mode_id: mode,
+                available_ids: Some(self.announced_mode_ids.clone()),
+                payload,
+            },
+        });
+        Ok(())
     }
 
     /// Relay the operator's model choice through the agent's own switch call.
@@ -602,6 +654,8 @@ impl Agent for AcpAgent {
                 Ok(())
             }
             AgentCommand::Native(payload) => self.write_line(payload.as_str()).await,
+            AgentCommand::SetMode { mode } => self.switch_mode(mode).await,
+
             AgentCommand::SetModel {
                 model,
                 reasoning_effort,
@@ -770,6 +824,10 @@ fn stop_reason(reason: &str) -> StopReason {
 /// Bounds on the lifted model identifiers, so a hostile catalogue cannot grow the bounded event ring.
 const MAX_ANNOUNCED_MODELS: usize = 32;
 const MAX_MODEL_ID_BYTES: usize = 200;
+/// Modes share the model bounds: both are short vendor identifiers, and one cap keeps hostile
+/// announcements from growing state in either place.
+const MAX_ANNOUNCED_MODES: usize = 32;
+const MAX_MODE_ID_BYTES: usize = 200;
 
 /// The model state a session answer announces, when it announces one.
 ///
@@ -802,6 +860,38 @@ fn announced_models(answer: &Bytes) -> Option<EventBody> {
     })
 }
 
+/// The mode set a session answer announces, as the event plus the bare identifiers for the gate.
+///
+/// This one is the ACP standard shape (`modes: {currentModeId, availableModes: [{id, ...}]}`), read just as
+/// leniently as the model announcement: `modes: null` is a measured, normal answer and means no surface.
+fn announced_modes(answer: &Bytes) -> Option<(EventBody, Box<[Box<str>]>)> {
+    let read: wire::ModesAnnounced<'_> = match serde_json::from_slice(answer) {
+        Ok(read) => read,
+        // ok: an answer that does not carry the standard mode state simply has no announcement. Session
+        // creation already validated the same answer for everything that is actually required.
+        Err(_) => return None,
+    };
+    let modes = read.modes?;
+    if modes.current_mode_id.is_empty() || modes.current_mode_id.len() > MAX_MODE_ID_BYTES {
+        return None;
+    }
+    let available: Vec<Box<str>> = modes
+        .available_modes
+        .iter()
+        .map(|mode| mode.id)
+        .filter(|id| !id.is_empty() && id.len() <= MAX_MODE_ID_BYTES)
+        .take(MAX_ANNOUNCED_MODES)
+        .map(Into::into)
+        .collect();
+    let ids: Box<[Box<str>]> = available.into_boxed_slice();
+    let event = EventBody::CurrentModeUpdate {
+        mode_id: modes.current_mode_id.into(),
+        available_ids: (!ids.is_empty()).then(|| ids.clone()),
+        payload: opaque_whole(answer)?,
+    };
+    Some((event, ids))
+}
+
 fn opaque_whole(bytes: &Bytes) -> Option<Opaque> {
     match core::str::from_utf8(bytes) {
         Ok(text) => Opaque::borrowed_from(bytes, text),
@@ -820,6 +910,42 @@ fn line_error(provider: ProviderId, doing: &'static str, error: &LineError) -> P
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_announced_mode_state_becomes_the_event_and_a_null_announcement_becomes_nothing() {
+        // The standard shape (session/new `modes` with currentModeId + availableModes[].id). The null case is
+        // the measured one: grok 1.0.4 answers `"modes": null` (2026-08-19 probe), and the same probe showed
+        // its set_mode accepting nonsense with an empty success, which is why absence must gate the switch.
+        let announced = Bytes::from_static(
+            br#"{"sessionId":"s","modes":{"currentModeId":"default","availableModes":[{"id":"default","name":"Default"},{"id":"plan","name":"Plan"}]}}"#,
+        );
+        let Some((
+            EventBody::CurrentModeUpdate {
+                mode_id,
+                available_ids,
+                ..
+            },
+            ids,
+        )) = announced_modes(&announced)
+        else {
+            panic!("a standard announcement did not become the event");
+        };
+        assert_eq!(mode_id.as_ref(), "default");
+        assert_eq!(
+            available_ids.as_deref().map(<[Box<str>]>::len),
+            Some(2),
+            "the event carries the switchable set"
+        );
+        assert_eq!(ids.len(), 2, "the gate holds the same set");
+
+        let null_modes = Bytes::from_static(
+            br#"{"sessionId":"s","models":{"currentModelId":"m"},"modes":null}"#,
+        );
+        assert!(
+            announced_modes(&null_modes).is_none(),
+            "the measured null announcement means no mode surface"
+        );
+    }
 
     #[test]
     fn an_announced_model_state_becomes_the_event_and_absence_becomes_nothing() {

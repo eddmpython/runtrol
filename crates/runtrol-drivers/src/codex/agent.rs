@@ -83,6 +83,9 @@ pub struct CodexAgent {
     /// "this turn and subsequent turns", so the driver holds the words until it has a turn to put them on.
     pending_model: Option<Box<str>>,
     pending_effort: Option<Box<str>>,
+    /// The approval policy the operator chose, waiting the same way: `turn/start` carries
+    /// `approvalPolicy` in this CLI's own schema, so a mode switch is also a next-turn word.
+    pending_mode: Option<Box<str>>,
     /// How many lines the connection had failed to read when this session last said so.
     said_unreadable: u64,
     /// Provider questions still waiting for a human, plus the bounded file payload join.
@@ -185,6 +188,7 @@ impl CodexAgent {
             }]),
             pending_model: None,
             pending_effort: None,
+            pending_mode: None,
             said_unreadable: 0,
             approvals: ApprovalBook::new(),
             finished: false,
@@ -192,6 +196,88 @@ impl CodexAgent {
     }
 
     /// The next turn number.
+    /// One turn: the receipt is the acceptance, and any pending switch becomes true with it.
+    async fn send_prompt(&mut self, blocks: &[ContentBlock]) -> Result<(), ProviderError> {
+        let params = prompt_params(
+            self.provider,
+            &self.native,
+            blocks,
+            self.pending_model.as_deref(),
+            self.pending_effort.as_deref(),
+            self.pending_mode.as_deref(),
+        )?;
+        let answer = self
+            .conn
+            .call("turn/start", &params, "sending a turn")
+            .await?;
+
+        // Measured: this answers in two milliseconds with a turn that is in progress and carries no
+        // work. It is a receipt, and reading it as a result reported an eight second turn as finished
+        // instantly.
+        let submitted = match serde_json::from_slice::<Submitted<'_>>(&answer) {
+            Ok(submitted) => submitted,
+            Err(error) => {
+                return Err(ProviderError::Protocol {
+                    provider: self.provider,
+                    doing: "sending a turn",
+                    detail: format!("the receipt could not be read: {error}"),
+                });
+            }
+        };
+        let Some(native_turn) = submitted
+            .turn
+            .as_ref()
+            .and_then(|turn| turn.id)
+            .map(Box::<str>::from)
+        else {
+            return Err(ProviderError::Protocol {
+                provider: self.provider,
+                doing: "sending a turn",
+                detail: "the receipt named no turn, so nothing could be interrupted or ended"
+                    .to_owned(),
+            });
+        };
+        let ack_only = submitted
+            .turn
+            .as_ref()
+            .and_then(|turn| turn.items.as_ref())
+            .is_none_or(Vec::is_empty);
+
+        let turn = self.mint_turn();
+        self.running = Some(Running {
+            turn,
+            native: native_turn,
+        });
+        self.announced.push_back(Produced {
+            src_end: self.src_end,
+            body: EventBody::Turn(TurnEvent::Accepted { turn, ack_only }),
+        });
+        // The receipt is also the CLI accepting the pending override: turn/start documents the fields
+        // as sticky from this turn on, so acceptance is the moment the switch became true.
+        if let Some(model) = self.pending_model.take() {
+            self.announced.push_back(Produced {
+                src_end: self.src_end,
+                body: EventBody::CurrentModelUpdate {
+                    model_id: model,
+                    available_ids: None,
+                    payload: payload_of(&answer),
+                },
+            });
+        }
+        if let Some(mode) = self.pending_mode.take() {
+            self.announced.push_back(Produced {
+                src_end: self.src_end,
+                body: EventBody::CurrentModeUpdate {
+                    mode_id: mode,
+                    available_ids: None,
+                    payload: payload_of(&answer),
+                },
+            });
+        }
+        self.pending_effort = None;
+        Ok(())
+    }
+
     fn mint_turn(&mut self) -> TurnId {
         let turn = TurnId {
             epoch: 0,
@@ -447,6 +533,7 @@ fn prompt_params(
     blocks: &[ContentBlock],
     model: Option<&str>,
     effort: Option<&str>,
+    approval_policy: Option<&str>,
 ) -> Result<serde_json::Value, ProviderError> {
     let mut input: Vec<serde_json::Value> = Vec::with_capacity(blocks.len());
     for block in blocks {
@@ -479,6 +566,9 @@ fn prompt_params(
     }
     if let (Some(object), Some(effort)) = (params.as_object_mut(), effort) {
         object.insert("effort".to_owned(), serde_json::json!(effort));
+    }
+    if let (Some(object), Some(policy)) = (params.as_object_mut(), approval_policy) {
+        object.insert("approvalPolicy".to_owned(), serde_json::json!(policy));
     }
     Ok(params)
 }
@@ -542,76 +632,7 @@ impl Agent for CodexAgent {
 
     async fn send(&mut self, command: AgentCommand) -> Result<(), ProviderError> {
         match command {
-            AgentCommand::Prompt(blocks) => {
-                let params = prompt_params(
-                    self.provider,
-                    &self.native,
-                    &blocks,
-                    self.pending_model.as_deref(),
-                    self.pending_effort.as_deref(),
-                )?;
-                let answer = self
-                    .conn
-                    .call("turn/start", &params, "sending a turn")
-                    .await?;
-
-                // Measured: this answers in two milliseconds with a turn that is in progress and carries no
-                // work. It is a receipt, and reading it as a result reported an eight second turn as finished
-                // instantly.
-                let submitted = match serde_json::from_slice::<Submitted<'_>>(&answer) {
-                    Ok(submitted) => submitted,
-                    Err(error) => {
-                        return Err(ProviderError::Protocol {
-                            provider: self.provider,
-                            doing: "sending a turn",
-                            detail: format!("the receipt could not be read: {error}"),
-                        });
-                    }
-                };
-                let Some(native_turn) = submitted
-                    .turn
-                    .as_ref()
-                    .and_then(|turn| turn.id)
-                    .map(Box::<str>::from)
-                else {
-                    return Err(ProviderError::Protocol {
-                        provider: self.provider,
-                        doing: "sending a turn",
-                        detail:
-                            "the receipt named no turn, so nothing could be interrupted or ended"
-                                .to_owned(),
-                    });
-                };
-                let ack_only = submitted
-                    .turn
-                    .as_ref()
-                    .and_then(|turn| turn.items.as_ref())
-                    .is_none_or(Vec::is_empty);
-
-                let turn = self.mint_turn();
-                self.running = Some(Running {
-                    turn,
-                    native: native_turn,
-                });
-                self.announced.push_back(Produced {
-                    src_end: self.src_end,
-                    body: EventBody::Turn(TurnEvent::Accepted { turn, ack_only }),
-                });
-                // The receipt is also the CLI accepting the pending override: turn/start documents the fields
-                // as sticky from this turn on, so acceptance is the moment the switch became true.
-                if let Some(model) = self.pending_model.take() {
-                    self.announced.push_back(Produced {
-                        src_end: self.src_end,
-                        body: EventBody::CurrentModelUpdate {
-                            model_id: model,
-                            available_ids: None,
-                            payload: payload_of(&answer),
-                        },
-                    });
-                }
-                self.pending_effort = None;
-                Ok(())
-            }
+            AgentCommand::Prompt(blocks) => self.send_prompt(&blocks).await,
 
             AgentCommand::Interrupt => self.interrupt().await,
 
@@ -624,6 +645,13 @@ impl Agent for CodexAgent {
                 // for the turn that will carry it, and the confirmation event follows that turn's receipt.
                 self.pending_model = Some(model);
                 self.pending_effort = reasoning_effort;
+                Ok(())
+            }
+
+            AgentCommand::SetMode { mode } => {
+                // Same surface as the model: the CLI's own schema puts `approvalPolicy` on `turn/start`, so
+                // the choice waits for the turn that will carry it and is confirmed by that turn's receipt.
+                self.pending_mode = Some(mode);
                 Ok(())
             }
 
@@ -918,6 +946,7 @@ mod tests {
             &[ContentBlock::Text(written.into())],
             None,
             None,
+            None,
         )
         .expect("writable");
 
@@ -945,6 +974,7 @@ mod tests {
             &[ContentBlock::Text("first\nsecond\r\nthird".into())],
             None,
             None,
+            None,
         )
         .expect("writable");
         let line = serde_json::to_string(&params).expect("writable");
@@ -962,6 +992,7 @@ mod tests {
             &[ContentBlock::Text("hi".into())],
             Some("gpt-5.3-codex"),
             Some("high"),
+            None,
         )
         .expect("writable");
         assert_eq!(
@@ -979,11 +1010,46 @@ mod tests {
             &[ContentBlock::Text("hi".into())],
             None,
             None,
+            None,
         )
         .expect("writable");
         assert!(
             without.get("model").is_none() && without.get("effort").is_none(),
             "no pending switch must invent no override fields: {without}"
+        );
+    }
+
+    #[test]
+    fn a_pending_mode_rides_the_turn_as_the_approval_policy_and_absence_invents_nothing() {
+        // The CLI's own schema (generated 2026-08-19) puts `approvalPolicy` on TurnStartParams with the
+        // AskForApproval vocabulary, so a mode switch is a next-turn word exactly like the model.
+        let with = prompt_params(
+            a_provider(),
+            "thread_abc",
+            &[ContentBlock::Text("hi".into())],
+            None,
+            None,
+            Some("on-request"),
+        )
+        .expect("writable");
+        assert_eq!(
+            with.pointer("/approvalPolicy")
+                .and_then(serde_json::Value::as_str),
+            Some("on-request")
+        );
+
+        let without = prompt_params(
+            a_provider(),
+            "thread_abc",
+            &[ContentBlock::Text("hi".into())],
+            None,
+            None,
+            None,
+        )
+        .expect("writable");
+        assert!(
+            without.get("approvalPolicy").is_none(),
+            "no pending mode must invent no policy field: {without}"
         );
     }
 
@@ -995,6 +1061,7 @@ mod tests {
             a_provider(),
             "thread_abc",
             &[ContentBlock::Native(native)],
+            None,
             None,
             None,
         )
@@ -1018,6 +1085,7 @@ mod tests {
             a_provider(),
             "thread_abc",
             &[ContentBlock::Native(Opaque::owned("not json".to_owned()))],
+            None,
             None,
             None,
         )
@@ -1072,6 +1140,7 @@ mod tests {
             a_provider(),
             r#"thread","injected":"x"#,
             &[ContentBlock::Text(r#"say "hello""#.into())],
+            None,
             None,
             None,
         )

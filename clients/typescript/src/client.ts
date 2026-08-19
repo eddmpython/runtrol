@@ -50,6 +50,7 @@ import type {
   SessionIndexChangedNotification,
   SessionIndexEndedNotification,
   SessionOpenResult,
+  SetModeParams,
   SetModelParams,
   StartSessionParams,
   SubmitInputParams,
@@ -607,6 +608,11 @@ export class SessionClient {
    * answers with stays the provider's word, arriving on the event stream. */
   public async setModel(params: SetModelParams): Promise<void> {
     requireEmpty(await callMutation(this.runtime, "sessions/setModel", params, undefined));
+  }
+
+  /** Switch the governing permission mode; whether it changed stays the provider's word on the event stream. */
+  public async setMode(params: SetModeParams): Promise<void> {
+    requireEmpty(await callMutation(this.runtime, "sessions/setMode", params, undefined));
   }
 
   public async interrupt(params: ControlLeaseParams): Promise<void> {

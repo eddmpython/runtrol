@@ -10,7 +10,8 @@ test("the agent line names only what is actually known", () => {
   assert.equal(agentLine({ ...NO_FACTS, service: "Claude Code" }), "Claude Code");
   assert.equal(
     agentLine({ service: "Codex", model: "gpt-5", effort: "high", mode: "auto" }),
-    "Codex · gpt-5 · high · auto",
+    "Codex · gpt-5 · high",
+    "the mode renders on its own chip, never twice",
   );
 });
 

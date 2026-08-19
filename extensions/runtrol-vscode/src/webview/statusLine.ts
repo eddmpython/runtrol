@@ -23,7 +23,8 @@ export const NO_USAGE: UsageFacts = { usage: null, primary: null, secondary: nul
 
 /// Who is being spoken to, and how they are configured.
 export function agentLine(facts: ConversationFacts): string {
-  return [facts.service, facts.model, facts.effort, facts.mode]
+  // The mode is deliberately absent: it renders on its own chip, which is also its own switch.
+  return [facts.service, facts.model, facts.effort]
     .map((part) => part.trim())
     .filter(Boolean)
     .join(" · ");

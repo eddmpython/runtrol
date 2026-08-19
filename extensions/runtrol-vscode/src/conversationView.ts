@@ -9,6 +9,7 @@ type ViewAction =
   | { type: "startChat" }
   | { type: "answerApproval"; approval: string; option: number; subjectDigest: number[] }
   | { type: "switchModel"; available: string[] }
+  | { type: "switchMode"; available: string[] }
   | { type: "interrupt" };
 
 export type WebviewPerformance = {
@@ -478,6 +479,7 @@ export class ConversationView implements vscode.Disposable {
     </div>
     <div class="composer-foot">
       <span id="agent-chip" class="chip" hidden></span>
+      <span id="mode-chip" class="chip" hidden></span>
       <span id="usage-chip" class="chip" hidden></span>
       <span id="send-hint" class="send-hint" hidden></span>
     </div>
@@ -630,7 +632,7 @@ function isViewAction(value: unknown): value is ViewAction {
       && Array.isArray(candidate.subjectDigest)
       && candidate.subjectDigest.every((byte) => Number.isInteger(byte) && byte >= 0 && byte <= 255);
   }
-  if (type === "switchModel") {
+  if (type === "switchModel" || type === "switchMode") {
     const available = (value as { available?: unknown }).available;
     // Bounded like everything else that crosses the webview boundary: the set is display data from the
     // provider's own announcement, and a hostile page must not be able to smuggle bulk through it.

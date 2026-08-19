@@ -1170,6 +1170,47 @@ export class Controller implements vscode.Disposable {
     await this.runtime.setModel(runtimeAction(session), model, reasoningEffort);
   }
 
+  /// Switch the governing permission mode of the open conversation, from its own header chip.
+  ///
+  /// The choices are the session's own announced set when the protocol gave one, and the service's
+  /// manifest-declared switchable set otherwise (the same boundary the daemon enforces, so nothing offered
+  /// here can be refused there as out of vocabulary). A service with neither keeps mode in its own surface,
+  /// and this says so instead of inventing a picker with nothing true to offer.
+  async switchMode(available: readonly string[]): Promise<void> {
+    const session = this.state.selected;
+    if (!session) return;
+    const provider = this.state.providers.find(
+      (candidate) => candidate.providerId === session.providerId,
+    );
+    const choices = available.length > 0 ? available : (provider?.switchableModes ?? []);
+    if (choices.length === 0) {
+      this.conversation.status(
+        `${providerDisplayName(session.providerId, this.state.providers)} announces no switchable modes; its own surface stays in control.`,
+        "info",
+      );
+      return;
+    }
+    const picked = await vscode.window.showQuickPick(
+      choices.map((id) => ({ label: id })),
+      {
+        title: "Switch mode",
+        placeHolder: "Modes this service accepts a switch to",
+      },
+    );
+    if (!picked) return;
+    await this.switchSelectedMode(picked.label);
+  }
+
+  /// The relay itself, shared by the picker above and the journey proof: one path to the provider's own
+  /// switch surface, so the two can never drift.
+  async switchSelectedMode(mode: string): Promise<void> {
+    const session = this.state.selected;
+    if (!session) {
+      throw new Error("no conversation is selected");
+    }
+    await this.runtime.setMode(runtimeAction(session), mode);
+  }
+
   /// One effort picker for every path that asks: `undefined` is a cancel, `null` is the provider's default.
   private async pickReasoningEffort(
     catalogue: ModelCatalog,

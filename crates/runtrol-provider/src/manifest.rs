@@ -101,6 +101,18 @@ pub enum ManifestError {
         why: &'static str,
     },
 
+    /// A mode token is not a bounded plain identifier.
+    ///
+    /// The switchable list travels into a control request verbatim, so a token is refused unless it is the
+    /// kind of short plain identifier every measured CLI actually uses.
+    #[error("mode token {token:?} {why}")]
+    Mode {
+        /// The token as written.
+        token: String,
+        /// Why it was refused.
+        why: &'static str,
+    },
+
     /// An offered help command could mean more than one command.
     ///
     /// These strings are the only manifest text that reaches a person's own shell, and a manifest can come
@@ -267,6 +279,10 @@ pub struct Manifest {
     /// Model alias tokens that cannot be discovered.
     #[serde(default)]
     pub models: ModelAliases,
+    /// The permission or approval modes this CLI accepts a mid-conversation switch to, when its own
+    /// protocol cannot announce them.
+    #[serde(default)]
+    pub modes: ModeTokens,
     /// How this provider is likely to update itself.
     ///
     /// Optional rather than defaulted so the registry can distinguish an absent declaration from an on-disk
@@ -328,6 +344,7 @@ impl Manifest {
         }
         self.bin.validate()?;
         self.models.validate()?;
+        self.modes.validate()?;
         self.secrets.validate()?;
         self.help.validate()?;
         self.sessions.validate()?;
@@ -752,6 +769,56 @@ impl ModelAliases {
     }
 }
 
+/// The mode tokens a CLI accepts a mid-conversation switch to, for a CLI that cannot announce them.
+///
+/// A manifest fact rather than discovery, with the measurement that justifies each list: one CLI names its
+/// mode vocabulary only inside a refusal sentence (measured 2026-08-19: "must be one of acceptEdits, auto,
+/// bypassPermissions, default, dontAsk, plan"), and another fixes it in its own generated schema. Prose in an
+/// error is not a discovery surface, so the tokens live here, next to the measurement.
+///
+/// Deliberately NOT in any list: modes that remove safety prompts entirely. A mode that silences every
+/// question is switched at the CLI's own surface by someone at the machine, never through runtrol, so for
+/// runtrol it does not exist as a destination. Protocols that announce their modes per session (ACP) leave
+/// this empty and the driver gates on the announcement instead.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ModeTokens {
+    /// The tokens, in the order to offer them.
+    #[serde(default)]
+    pub switchable: Vec<Box<str>>,
+}
+
+impl ModeTokens {
+    /// Bounded, plain tokens only: a mode name is a short vendor identifier, not free text.
+    fn validate(&self) -> Result<(), ManifestError> {
+        if self.switchable.len() > 16 {
+            return Err(ManifestError::Mode {
+                token: format!("{} entries", self.switchable.len()),
+                why: "a mode vocabulary is a handful of tokens, not a catalogue",
+            });
+        }
+        for token in &self.switchable {
+            let refuse = |why: &'static str| ManifestError::Mode {
+                token: token.to_string(),
+                why,
+            };
+            if token.is_empty() {
+                return Err(refuse("is empty"));
+            }
+            if token.len() > 64 {
+                return Err(refuse("is longer than any real mode identifier"));
+            }
+            if token
+                .chars()
+                .any(|ch| !ch.is_ascii_alphanumeric() && ch != '-')
+            {
+                return Err(refuse("must be ascii letters, digits, and '-'"));
+            }
+        }
+        Ok(())
+    }
+}
+
 /// How a provider is likely to keep itself current.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -1033,6 +1100,25 @@ argv = ["exec", "--json"]
         manifest
             .validate()
             .expect("bare tokens are what this is for");
+    }
+
+    #[test]
+    fn mode_tokens_are_bounded_plain_identifiers() {
+        // The measured vocabularies use plain camelCase and hyphenated tokens (acceptEdits, on-request), so
+        // both must pass; free text and shell characters must not travel into a control request.
+        let good = format!(
+            "{MINIMAL}\n[modes]\nswitchable = [\"default\", \"acceptEdits\", \"on-request\"]\n"
+        );
+        let manifest = parse(&good).expect("parses");
+        manifest.validate().expect("plain mode tokens validate");
+        assert_eq!(manifest.modes.switchable.len(), 3);
+
+        let long = "x".repeat(65);
+        for bad in ["", "a mode", "mode;rm", long.as_str()] {
+            let text = format!("{MINIMAL}\n[modes]\nswitchable = [{bad:?}]\n");
+            let refused = parse(&text).expect("parses").validate();
+            assert!(refused.is_err(), "{bad:?} must be refused as a mode token");
+        }
     }
 
     #[test]

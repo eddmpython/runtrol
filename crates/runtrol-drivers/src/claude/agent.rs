@@ -77,14 +77,14 @@ pub struct ClaudeAgent {
     running: Option<TurnId>,
     /// Which turn number to use next.
     next_turn: u32,
-    /// Which model-switch request number to use next, separate from turns so an interrupt and a switch sent in
-    /// the same breath cannot mint the same control identity.
-    next_model_switch: u64,
-    /// Model switches runtrol asked for and the CLI has not answered yet, by control request identity.
+    /// Which control-switch request number to use next, separate from turns so an interrupt and a switch sent
+    /// in the same breath cannot mint the same control identity.
+    next_switch: u64,
+    /// Switches runtrol asked for and the CLI has not answered yet, by control request identity.
     ///
     /// Bounded by how fast an operator can click: each entry leaves on the CLI's reply, and a session that
     /// never replies is a protocol failure the read loop already promotes.
-    pending_model_switches: BTreeMap<Box<str>, Box<str>>,
+    pending_switches: BTreeMap<Box<str>, ControlSwitch>,
     /// The monotone source boundary in this live provider stream.
     ///
     /// A whole message or provider-declared ending advances it. Fragments and control events carry the current
@@ -160,8 +160,8 @@ impl ClaudeAgent {
             lines: Lines::new(stdout),
             running: None,
             next_turn: 0,
-            next_model_switch: 0,
-            pending_model_switches: BTreeMap::new(),
+            next_switch: 0,
+            pending_switches: BTreeMap::new(),
             src_end: 0,
             announced: VecDeque::new(),
             approvals: ApprovalBook::new(),
@@ -203,27 +203,14 @@ impl ClaudeAgent {
 
     /// What a control reply means, when it answers a model switch runtrol sent.
     ///
-    /// Interrupt replies say nothing a turn event does not and stay dropped. A model-switch reply is the CLI's
-    /// word on whether the model moved: success becomes the current-model event, and a refusal becomes a loud
-    /// notice carrying the CLI's own sentence.
-    fn model_switch_outcome(&mut self, outcome: map::ControlOutcome) -> Option<Produced> {
-        let model = self.pending_model_switches.remove(&outcome.request_id)?;
-        let body = match outcome.error {
-            None => EventBody::CurrentModelUpdate {
-                model_id: model,
-                available_ids: None,
-                payload: outcome.payload,
-            },
-            Some(_) => EventBody::Notice(Box::new(Notice {
-                level: Level::Warn,
-                code: NoticeCode::ModelRerouted,
-                retryable: false,
-                payload: outcome.payload,
-            })),
-        };
+    /// Interrupt replies say nothing a turn event does not and stay dropped. A switch reply is the CLI's word
+    /// on whether the model or mode moved: success becomes the matching current-state event, and a refusal
+    /// becomes a loud notice carrying the CLI's own sentence.
+    fn switch_outcome(&mut self, outcome: map::ControlOutcome) -> Option<Produced> {
+        let asked = self.pending_switches.remove(&outcome.request_id)?;
         Some(Produced {
             src_end: self.src_end,
-            body,
+            body: switch_event(asked, outcome),
         })
     }
 
@@ -232,6 +219,18 @@ impl ClaudeAgent {
         match frame {
             Frame::Started(startup) => {
                 self.native = Some(startup.native.as_str().to_owned());
+                if let Some(mode) = startup.starting_mode.clone() {
+                    // The permission mode in force at attachment, by the CLI's own word, queued the same way
+                    // as the answering model below.
+                    self.announced.push_back(Produced {
+                        src_end: self.src_end,
+                        body: EventBody::CurrentModeUpdate {
+                            mode_id: mode,
+                            available_ids: None,
+                            payload: startup.payload.clone(),
+                        },
+                    });
+                }
                 if let Some(model) = startup.answering_with.clone() {
                     // The CLI's own word on which model answers, queued to follow the attachment. Requested and
                     // answering differ (measured), and only this one is the provider's.
@@ -629,6 +628,50 @@ fn interrupt_frame(provider: ProviderId, request: u64) -> Result<String, Provide
     })
 }
 
+/// What a pending control request will announce if the CLI says yes.
+///
+/// The kind is decided by which command sent the request, never inferred from the reply: the CLI's control
+/// responses carry only success or an error sentence, so the correlation map is the one place that knows what
+/// was asked.
+enum ControlSwitch {
+    /// A model switch, carrying the requested model.
+    Model(Box<str>),
+    /// A permission-mode switch, carrying the requested mode.
+    Mode(Box<str>),
+}
+
+/// The CLI's answer to one switch, as the event it earns.
+///
+/// Success becomes the matching current-state event carrying what was asked (the reply itself repeats it for
+/// the mode and stays empty for the model, so the correlation entry is the one whole record). A refusal
+/// becomes a loud notice whose payload is the CLI's own sentence.
+fn switch_event(asked: ControlSwitch, outcome: map::ControlOutcome) -> EventBody {
+    match (outcome.error, asked) {
+        (None, ControlSwitch::Model(model)) => EventBody::CurrentModelUpdate {
+            model_id: model,
+            available_ids: None,
+            payload: outcome.payload,
+        },
+        (None, ControlSwitch::Mode(mode)) => EventBody::CurrentModeUpdate {
+            mode_id: mode,
+            available_ids: None,
+            payload: outcome.payload,
+        },
+        (Some(_), ControlSwitch::Model(_)) => EventBody::Notice(Box::new(Notice {
+            level: Level::Warn,
+            code: NoticeCode::ModelRerouted,
+            retryable: false,
+            payload: outcome.payload,
+        })),
+        (Some(_), ControlSwitch::Mode(_)) => EventBody::Notice(Box::new(Notice {
+            level: Level::Warn,
+            code: NoticeCode::ModeRefused,
+            retryable: false,
+            payload: outcome.payload,
+        })),
+    }
+}
+
 /// The frame that asks the CLI to answer with a different model from here on.
 ///
 /// Measured on 2.1.235: the control channel accepts `set_model` mid-session, answers with a control response
@@ -646,6 +689,28 @@ fn set_model_frame(
     .map_err(|error| ProviderError::Protocol {
         provider,
         doing: "building a model switch",
+        detail: error.to_string(),
+    })
+}
+
+/// The frame that asks the CLI to run under a different permission mode from here on.
+///
+/// Measured on 2.1.x: the control channel accepts `set_permission_mode` mid-session, answers success with the
+/// mode it now runs under, refuses an unknown name with a sentence enumerating its own vocabulary, and also
+/// emits its own `system`/`status` announcement carrying the new mode.
+fn set_mode_frame(
+    provider: ProviderId,
+    request: &str,
+    mode: &str,
+) -> Result<String, ProviderError> {
+    serde_json::to_string(&serde_json::json!({
+        "type": "control_request",
+        "request_id": request,
+        "request": {"subtype": "set_permission_mode", "mode": mode},
+    }))
+    .map_err(|error| ProviderError::Protocol {
+        provider,
+        doing: "building a mode switch",
         detail: error.to_string(),
     })
 }
@@ -705,12 +770,23 @@ impl Agent for ClaudeAgent {
                         why: "this CLI's control channel moves only the model",
                     });
                 }
-                let request = format!("runtrol-model-{}", self.next_model_switch);
-                self.next_model_switch = self.next_model_switch.saturating_add(1);
+                let request = format!("runtrol-model-{}", self.next_switch);
+                self.next_switch = self.next_switch.saturating_add(1);
                 let frame = set_model_frame(self.provider, &request, &model)?;
                 self.write_line(&frame).await?;
                 // Remembered after the write: a frame that never left is not pending anything.
-                self.pending_model_switches.insert(request.into(), model);
+                self.pending_switches
+                    .insert(request.into(), ControlSwitch::Model(model));
+                Ok(())
+            }
+            AgentCommand::SetMode { mode } => {
+                let request = format!("runtrol-mode-{}", self.next_switch);
+                self.next_switch = self.next_switch.saturating_add(1);
+                let frame = set_mode_frame(self.provider, &request, &mode)?;
+                self.write_line(&frame).await?;
+                // Remembered after the write: a frame that never left is not pending anything.
+                self.pending_switches
+                    .insert(request.into(), ControlSwitch::Mode(mode));
                 Ok(())
             }
             // Forwarded byte for byte. Never inspected and never rewritten.
@@ -775,7 +851,7 @@ impl Agent for ClaudeAgent {
             return match line {
                 Ok(Some(line)) => match map::read(&line) {
                     Ok(Frame::ControlResponse(outcome)) => {
-                        if let Some(produced) = self.model_switch_outcome(outcome) {
+                        if let Some(produced) = self.switch_outcome(outcome) {
                             return Some(Ok(produced));
                         }
                         continue 'next_event;
@@ -1181,6 +1257,66 @@ mod tests {
             parsed.pointer("/request_id").and_then(|v| v.as_str()),
             Some("runtrol-model-0")
         );
+    }
+
+    #[test]
+    fn a_mode_switch_is_the_cli_control_request_and_carries_only_the_choice() {
+        // Measured on 2.1.x: {"subtype":"set_permission_mode","mode":...} succeeds mid-session with
+        // {"response":{"mode":"acceptEdits"}}, and an unknown name is refused with the CLI's own vocabulary
+        // sentence. The frame carries the operator's choice verbatim and asserts nothing about the outcome.
+        let frame =
+            set_mode_frame(a_provider(), "runtrol-mode-0", "acceptEdits").expect("writable");
+        let parsed: serde_json::Value = serde_json::from_str(&frame).expect("readable");
+        assert_eq!(
+            parsed.pointer("/request/subtype").and_then(|v| v.as_str()),
+            Some("set_permission_mode")
+        );
+        assert_eq!(
+            parsed.pointer("/request/mode").and_then(|v| v.as_str()),
+            Some("acceptEdits")
+        );
+        assert_eq!(
+            parsed.pointer("/request_id").and_then(|v| v.as_str()),
+            Some("runtrol-mode-0")
+        );
+    }
+
+    #[test]
+    fn a_mode_switch_reply_becomes_the_mode_event_and_a_refusal_becomes_a_loud_notice() {
+        // Both payloads are the measured CLI answers (2026-08-19 probe): success repeats the mode, and the
+        // refusal sentence enumerates the CLI's own vocabulary.
+        let confirmed = switch_event(
+            ControlSwitch::Mode("acceptEdits".into()),
+            map::ControlOutcome {
+                request_id: "mode-1".into(),
+                error: None,
+                payload: Opaque::owned(
+                    r#"{"type":"control_response","response":{"subtype":"success","request_id":"mode-1","response":{"mode":"acceptEdits"}}}"#.to_owned(),
+                ),
+            },
+        );
+        match confirmed {
+            EventBody::CurrentModeUpdate { mode_id, .. } => assert_eq!(&*mode_id, "acceptEdits"),
+            other => panic!("expected the mode event, got {other:?}"),
+        }
+
+        let refused = switch_event(
+            ControlSwitch::Mode("nonsense".into()),
+            map::ControlOutcome {
+                request_id: "mode-2".into(),
+                error: Some(
+                    "Cannot set permission mode: must be one of acceptEdits, auto, bypassPermissions, default, dontAsk, plan".into(),
+                ),
+                payload: Opaque::owned("{}".to_owned()),
+            },
+        );
+        match refused {
+            EventBody::Notice(notice) => {
+                assert_eq!(notice.code, NoticeCode::ModeRefused);
+                assert_eq!(notice.level, Level::Warn);
+            }
+            other => panic!("expected the loud refusal, got {other:?}"),
+        }
     }
 
     #[test]

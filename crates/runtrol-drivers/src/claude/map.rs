@@ -146,6 +146,8 @@ pub struct Startup {
     ///
     /// Not the model runtrol asked for. Measured: those differ, and only the requested one is runtrol's decision.
     pub answering_with: Option<Box<str>>,
+    /// The permission mode in force at attachment, by the CLI's own name for it.
+    pub starting_mode: Option<Box<str>>,
     /// The whole startup object, unread.
     pub payload: Opaque,
 }
@@ -209,6 +211,9 @@ struct Envelope<'line> {
     /// On the startup frame: the model that will answer.
     #[serde(default)]
     model: Option<&'line str>,
+    /// On the startup and status frames: the permission mode in force.
+    #[serde(default, rename = "permissionMode")]
+    permission_mode: Option<&'line str>,
     /// On the quota frame: where the account stands.
     #[serde(default, borrow)]
     rate_limit_info: Option<&'line RawValue>,
@@ -347,6 +352,23 @@ pub fn read(line: &Bytes) -> Result<Frame, MapError> {
 
         ("control_response", _) => control_response(line),
 
+        // A status frame carrying `permissionMode` is the CLI's own announcement of which mode now
+        // governs (measured: one follows every accepted `set_permission_mode`, and the CLI also announces
+        // on its own schedule). The identifier is routing, not conversation. A status without one stays the
+        // generic progress notice below.
+        ("system", Some("status")) if envelope.permission_mode.is_some() => {
+            match envelope.permission_mode {
+                Some(mode) => Ok(Frame::Body(EventBody::CurrentModeUpdate {
+                    mode_id: mode.into(),
+                    available_ids: None,
+                    payload: whole_line(line),
+                })),
+                // The guard above makes this unreachable; answered as the generic notice rather than
+                // panicking, because a mapping layer never gets to crash the session.
+                None => Ok(progress_notice(line)),
+            }
+        }
+
         // Progress that is not conversation. Reported so a subscriber can show that something is happening,
         // without runtrol claiming to know what.
         ("system", Some(_)) => Ok(Frame::Body(EventBody::Notice(Box::new(Notice {
@@ -367,6 +389,16 @@ pub fn read(line: &Bytes) -> Result<Frame, MapError> {
 
 /// Bind one provider question on the hidden stdio control channel.
 /// Read the reply to a control request runtrol sent: which request, and the CLI's own sentence if it refused.
+/// Progress that is not conversation, reported without runtrol claiming to know what it is.
+fn progress_notice(line: &Bytes) -> Frame {
+    Frame::Body(EventBody::Notice(Box::new(Notice {
+        level: Level::Info,
+        code: NoticeCode::Other,
+        retryable: false,
+        payload: whole_line(line),
+    })))
+}
+
 fn control_response(line: &Bytes) -> Result<Frame, MapError> {
     #[derive(serde::Deserialize)]
     struct Reply<'line> {
@@ -449,6 +481,7 @@ fn startup(line: &Bytes, envelope: &Envelope<'_>) -> Result<Startup, MapError> {
         caps: CapabilitySet::from_tokens(envelope.capabilities.clone().unwrap_or_default()),
         version: envelope.claude_code_version.map(Into::into),
         answering_with: envelope.model.map(Into::into),
+        starting_mode: envelope.permission_mode.map(Into::into),
         payload: whole_line(line),
     })
 }
@@ -711,6 +744,39 @@ mod tests {
 
     fn line(text: &str) -> Bytes {
         Bytes::copy_from_slice(text.as_bytes())
+    }
+
+    #[test]
+    fn a_status_frame_with_a_permission_mode_is_the_cli_announcing_its_mode() {
+        // The measured announcement that follows an accepted set_permission_mode (2026-08-19 probe).
+        let announced = read(&line(
+            r#"{"type":"system","subtype":"status","status":null,"permissionMode":"acceptEdits","uuid":"107e9eb0-a37b-4b4e-80fc-5728e269d152","session_id":"dda14c4d-17ac-42b9-9e28-bb3fb6c36e92"}"#,
+        ))
+        .expect("the measured line maps");
+        match announced {
+            Frame::Body(EventBody::CurrentModeUpdate {
+                mode_id,
+                available_ids,
+                ..
+            }) => {
+                assert_eq!(&*mode_id, "acceptEdits");
+                assert!(
+                    available_ids.is_none(),
+                    "the status frame names only the mode in force"
+                );
+            }
+            other => panic!("expected the mode event, got {other:?}"),
+        }
+
+        // A status frame without a mode stays the generic notice it always was.
+        let plain = read(&line(
+            r#"{"type":"system","subtype":"status","status":null}"#,
+        ))
+        .expect("the plain status maps");
+        assert!(
+            matches!(plain, Frame::Body(EventBody::Notice(_))),
+            "a modeless status is progress, not a mode announcement"
+        );
     }
 
     /// The startup frame, with the field set observed on 2.1.220 and its content shortened.

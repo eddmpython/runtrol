@@ -23,6 +23,13 @@ version = { args = ["--version"], parse = "semver-anywhere" }
 # schema reads nothing and starts no conversation, so a flag question costs no turn and no tokens.
 flags = { safe_with = ["app-server", "generate-json-schema"] }
 
+[modes]
+# From this CLI's own generated schema (2026-08-19): TurnStartParams.approvalPolicy takes the AskForApproval
+# vocabulary "untrusted", "on-request", "never". Deliberately absent: "never", the value that removes every
+# approval question. That is switched at this CLI's own surface by someone at the machine, never through
+# runtrol.
+switchable = ["untrusted", "on-request"]
+
 [transport]
 # The daemon. Measured: it multiplexes every conversation over one pair of standard streams, which is what
 # makes N sessions cost one child.

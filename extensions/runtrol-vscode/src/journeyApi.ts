@@ -17,6 +17,7 @@ export type JourneyApi = {
   select(session: string, follow?: boolean): Promise<void>;
   prompt(text: string): Promise<void>;
   switchModel(model: string): Promise<void>;
+  switchMode(mode: string): Promise<void>;
   answerApproval(approval: string, option: number, subjectDigest: number[]): Promise<void>;
   interrupt(): Promise<void>;
   reconnect(): Promise<void>;
@@ -47,6 +48,7 @@ export function journeyApi(
     select: (session, follow = false) => afterReady(() => controller.select(session, follow)),
     prompt: (text) => afterReady(() => controller.prompt(text)),
     switchModel: (model) => afterReady(() => controller.switchSelectedModel(model)),
+    switchMode: (mode) => afterReady(() => controller.switchSelectedMode(mode)),
     answerApproval: (approval, option, subjectDigest) => afterReady(
       () => controller.answerApproval(approval, option, subjectDigest),
     ),

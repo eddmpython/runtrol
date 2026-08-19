@@ -165,7 +165,7 @@ export interface ProviderCapabilityObservation { readonly availability: Provider
 export type ProviderCapabilityProvenance = "officialProtocol" | "officialCli" | "driverContract";
 
 /** One provider in the fast inventory. */
-export interface ProviderDescriptor { readonly displayName: string; readonly help?: ProviderHelp | null; readonly icon?: string | null; readonly installation: InstallationObservation; readonly providerId: ProviderId; }
+export interface ProviderDescriptor { readonly displayName: string; readonly help?: ProviderHelp | null; readonly icon?: string | null; readonly installation: InstallationObservation; readonly providerId: ProviderId; readonly switchableModes?: ReadonlyArray<string>; }
 
 /** A coding service's own commands for making itself usable, ready to show a person.
 
@@ -263,7 +263,7 @@ export interface RuntimeLimits { readonly challengeLifetimeMs: number; readonly 
 export interface RuntimeLocatorRecord { readonly endpoint: string; readonly endpointKind: RuntimeEndpointKind; readonly instanceId: string; readonly processId: number; readonly runtimeVersion: string; readonly schema: number; }
 
 /** A public Runtime method implemented by the initial read-only boundary. */
-export type RuntimeMethod = "runtime/initialize" | "runtime/initialized" | "runtime/challenge" | "integrations/requestEnrollment" | "integrations/watchEnrollment" | "integrations/getGrant" | "integrations/rotateKey" | "providers/usage" | "providers/list" | "providers/watch" | "providers/getCapabilities" | "providers/listModels" | "providers/listNativeSessions" | "sessions/list" | "sessions/watchIndex" | "sessions/get" | "sessions/start" | "sessions/adoptNative" | "sessions/resume" | "sessions/acquireControl" | "sessions/renewControl" | "sessions/releaseControl" | "sessions/submitInput" | "sessions/setModel" | "sessions/watchEvents" | "sessions/interrupt" | "sessions/cool" | "sessions/forget" | "approvals/listPending" | "approvals/respond" | "sessions/indexChanged" | "sessions/indexEnded" | "providers/changed" | "providers/watchEnded" | "sessions/event" | "sessions/lagged" | "runtime/panicStop";
+export type RuntimeMethod = "runtime/initialize" | "runtime/initialized" | "runtime/challenge" | "integrations/requestEnrollment" | "integrations/watchEnrollment" | "integrations/getGrant" | "integrations/rotateKey" | "providers/usage" | "providers/list" | "providers/watch" | "providers/getCapabilities" | "providers/listModels" | "providers/listNativeSessions" | "sessions/list" | "sessions/watchIndex" | "sessions/get" | "sessions/start" | "sessions/adoptNative" | "sessions/resume" | "sessions/acquireControl" | "sessions/renewControl" | "sessions/releaseControl" | "sessions/submitInput" | "sessions/setModel" | "sessions/setMode" | "sessions/watchEvents" | "sessions/interrupt" | "sessions/cool" | "sessions/forget" | "approvals/listPending" | "approvals/respond" | "sessions/indexChanged" | "sessions/indexEnded" | "providers/changed" | "providers/watchEnded" | "sessions/event" | "sessions/lagged" | "runtime/panicStop";
 
 /** The current model information Runtime can truthfully expose. */
 export type RuntimeModelCatalog = { readonly coverage: "known"; readonly models: ReadonlyArray<RuntimeModelChoice>; } | { readonly aliases: ReadonlyArray<string>; readonly coverage: "aliases"; readonly reasoningEfforts: ReadonlyArray<RuntimeReasoningChoice>; readonly why: string; } | { readonly aliases: ReadonlyArray<string>; readonly coverage: "partial"; readonly models: ReadonlyArray<RuntimeModelChoice>; readonly reasoningEfforts: ReadonlyArray<RuntimeReasoningChoice>; readonly why: string; } | { readonly coverage: "unknown"; readonly why: string; } | { readonly coverage: "unsupported"; readonly why: string; };
@@ -300,6 +300,15 @@ export interface SessionOpenResult { readonly control: ControlLease; readonly se
 
 /** Whether a newly heated process must be the only writer for its working tree. */
 export type SessionWorkspaceAccess = "exclusive" | "shared";
+
+/** Switch the governing permission mode under one exact control lease.
+
+A relay like the model switch: the mode is the operator's choice by the provider's own name for it, and
+whether it changed stays the provider's word, arriving on the event stream as its own event. Which names
+may travel at all is bounded before relay (manifest-listed for CLIs whose vocabulary is not discoverable,
+session-announced for protocols that announce one), so a mode that removes safety prompts entirely is not
+a reachable destination through this method. */
+export interface SetModeParams { readonly leaseGeneration: number; readonly leaseId: string; readonly mode: string; readonly requestId: MutationRequestId; readonly sessionId: RuntimeSessionId; }
 
 /** Switch the answering model under one exact control lease.
 

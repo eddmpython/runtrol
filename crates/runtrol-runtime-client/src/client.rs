@@ -15,11 +15,11 @@ use runtrol_runtime_protocol::{
     RotateIntegrationKeyParams, RuntimeError, RuntimeErrorKind, RuntimeEventNotification,
     RuntimeMethod, RuntimeModelCatalog, RuntimeProviderCapabilities, RuntimeSessionId,
     ServerChallenge, SessionDescriptor, SessionIndexChangedNotification,
-    SessionIndexEndedNotification, SessionOpenResult, SetModelParams, StartSessionParams,
-    SubmitInputParams, SuccessResponse, WatchEnrollmentParams, WatchEventsParams,
-    WatchEventsResult, WatchProvidersParams, WatchProvidersResult, WatchSessionIndexParams,
-    WatchSessionIndexResult, enrollment_signing_payload, initialization_signing_payload,
-    key_rotation_signing_payload,
+    SessionIndexEndedNotification, SessionOpenResult, SetModeParams, SetModelParams,
+    StartSessionParams, SubmitInputParams, SuccessResponse, WatchEnrollmentParams,
+    WatchEventsParams, WatchEventsResult, WatchProvidersParams, WatchProvidersResult,
+    WatchSessionIndexParams, WatchSessionIndexResult, enrollment_signing_payload,
+    initialization_signing_payload, key_rotation_signing_payload,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -1239,6 +1239,22 @@ impl SessionClient<'_> {
         Ok(())
     }
 
+    /// Ask the provider to run under a different permission mode, under the caller's control lease.
+    ///
+    /// Whether it changed stays the provider's word, arriving on the event stream as its own event.
+    ///
+    /// # Errors
+    ///
+    /// Public client and Runtime failures, including the refusal when the named mode is not one the provider
+    /// accepts a runtrol switch to.
+    pub async fn set_mode(&mut self, params: &SetModeParams) -> Result<(), ClientError> {
+        let _: EmptyResult = self
+            .runtime
+            .call_mutation(RuntimeMethod::SessionsSetMode, &params.request_id, params)
+            .await?;
+        Ok(())
+    }
+
     /// Ask the provider to interrupt one exact controlled session.
     ///
     /// # Errors
@@ -1614,6 +1630,7 @@ async fn receive_session_notification(
         | RuntimeMethod::SessionsReleaseControl
         | RuntimeMethod::SessionsSubmitInput
         | RuntimeMethod::SessionsSetModel
+        | RuntimeMethod::SessionsSetMode
         | RuntimeMethod::SessionsWatchEvents
         | RuntimeMethod::SessionsInterrupt
         | RuntimeMethod::SessionsCool

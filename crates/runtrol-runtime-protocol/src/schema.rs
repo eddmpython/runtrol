@@ -14,7 +14,7 @@ use crate::{
     RuntimeEventNotification, RuntimeLocatorRecord, RuntimeMethod, RuntimeModelCatalog,
     RuntimeProviderCapabilities, ServerChallenge, SessionDescriptor,
     SessionIndexChangedNotification, SessionIndexEndedNotification, SessionOpenResult,
-    SetModelParams, StartSessionParams, SubmitInputParams, WatchEnrollmentParams,
+    SetModeParams, SetModelParams, StartSessionParams, SubmitInputParams, WatchEnrollmentParams,
     WatchEventsParams, WatchEventsResult, WatchProvidersParams, WatchProvidersResult,
     WatchSessionIndexParams, WatchSessionIndexResult,
 };
@@ -65,6 +65,7 @@ struct PublicProtocolSchema {
     forget_session: ForgetSessionParams,
     submit_input: SubmitInputParams,
     set_model: SetModelParams,
+    set_mode: SetModeParams,
     watch_events: WatchEventsParams,
     watch_events_result: WatchEventsResult,
     runtime_event: RuntimeEventNotification,

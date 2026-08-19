@@ -284,6 +284,21 @@ export class StudioRuntimeClient implements vscode.Disposable {
     });
   }
 
+  /// Relay the operator's mode choice under the same lease as input. Whether it changed stays the
+  /// provider's word, arriving on the event stream.
+  async setMode(session: RuntimeSessionAction, mode: string): Promise<void> {
+    await this.mutate(async (runtime) => {
+      const lease = await this.ensureControl(runtime, session);
+      await runtime.sessions().setMode({
+        requestId: newMutationRequestId(),
+        sessionId: session.sessionId,
+        leaseId: lease.leaseId,
+        leaseGeneration: lease.leaseGeneration,
+        mode,
+      });
+    });
+  }
+
   async interrupt(session: RuntimeSessionAction): Promise<void> {
     await this.mutate(async (runtime) => {
       const lease = await this.ensureControl(runtime, session);

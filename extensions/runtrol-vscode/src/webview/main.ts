@@ -114,6 +114,12 @@ agentChip.title = "Switch model";
 agentChip.addEventListener("click", () => {
   vscode.postMessage({ type: "switchModel", available: switchableModels });
 });
+const modeChip = element<HTMLSpanElement>("mode-chip");
+// Same principle for the permission mode: the place that says it is the place to change it.
+modeChip.title = "Switch mode";
+modeChip.addEventListener("click", () => {
+  vscode.postMessage({ type: "switchMode", available: switchableModeIds });
+});
 const usageChip = element<HTMLSpanElement>("usage-chip");
 const commandMenu = element<HTMLUListElement>("commands");
 const pending: unknown[] = [];
@@ -136,6 +142,8 @@ let facts: ConversationFacts = NO_FACTS;
 let usage: UsageFacts = NO_USAGE;
 /// The models this session announced it can switch to, empty when the provider never said.
 let switchableModels: string[] = [];
+/// The modes this session announced, empty when the choice comes from the service's declared set instead.
+let switchableModeIds: string[] = [];
 
 window.addEventListener("message", ({ data }: MessageEvent<Incoming>) => {
   if (data.type === "reset") {
@@ -312,6 +320,8 @@ function paintFacts(): void {
   const agent = agentLine(facts);
   agentChip.textContent = agent;
   agentChip.hidden = !agent;
+  modeChip.textContent = facts.mode;
+  modeChip.hidden = !facts.mode;
   const spent = usageLine(usage, Date.now());
   usageChip.textContent = spent;
   usageChip.hidden = !spent;
@@ -574,6 +584,11 @@ function updateAttachment(body: UnknownRecord): void {
 
 function updateMode(body: UnknownRecord): void {
   facts = { ...facts, mode: string(body.mode_id) };
+  if (Array.isArray(body.available_ids)) {
+    switchableModeIds = body.available_ids.filter(
+      (id): id is string => typeof id === "string" && id.length > 0,
+    );
+  }
   paintFacts();
 }
 

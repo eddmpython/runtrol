@@ -103,6 +103,13 @@ pub(crate) fn providers(composed: &Composed) -> ProviderList {
                 icon: provider.manifest.icon.as_ref().map(ToString::to_string),
                 installation,
                 help: help(provider),
+                switchable_modes: provider
+                    .manifest
+                    .modes
+                    .switchable
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect(),
             })
             .collect(),
     }
@@ -252,6 +259,12 @@ impl RuntimeSessionCatalogue {
         }
     }
 
+    /// The first session's identity, for tests that need to address the one row they built.
+    #[cfg(test)]
+    pub(crate) fn first_session_id_for_tests(&self) -> Option<runtrol_provider::SessionId> {
+        self.sessions.first().map(|row| row.session)
+    }
+
     /// Filter against canonical current paths before any descriptor leaves Runtime.
     pub(crate) fn authorized(
         &self,
@@ -306,6 +319,20 @@ impl RuntimeSessionCatalogue {
             return Err(RuntimeInventoryFailure::SessionNotFound);
         }
         Ok(session.session)
+    }
+
+    /// Which provider owns one already-authorized session.
+    ///
+    /// For policy reads after [`Self::authorized_session`] succeeded; answers nothing about sessions this
+    /// catalogue does not hold.
+    pub(crate) fn provider_of(
+        &self,
+        session: runtrol_provider::SessionId,
+    ) -> Option<CoreProviderId> {
+        self.sessions
+            .iter()
+            .find(|row| row.session == session)
+            .map(|row| row.provider)
     }
 
     /// Read one authorized public descriptor without revealing sessions outside the grant.

@@ -183,6 +183,12 @@ pub enum EventBody {
     CurrentModeUpdate {
         /// Which mode, by the provider's own name for it.
         mode_id: Box<str>,
+        /// Every mode the provider says this session can switch to, when it announced a set.
+        ///
+        /// `None` when the provider announced only the current one (claude's status event, the ACP
+        /// notification). The set arrives where a protocol states it (ACP `session/new` answers `modes`),
+        /// and a surface that offers switching offers exactly this list when it exists.
+        available_ids: Option<Box<[Box<str>]>>,
         /// The provider's whole mode object.
         payload: Opaque,
     },
@@ -345,8 +351,18 @@ impl EventBody {
             Self::Plan { payload }
             | Self::AvailableCommandsUpdate { payload }
             | Self::ConfigOptionUpdate { payload }
-            | Self::SessionInfoUpdate { payload }
-            | Self::CurrentModeUpdate { payload, .. } => payload.len(),
+            | Self::SessionInfoUpdate { payload } => payload.len(),
+            Self::CurrentModeUpdate {
+                mode_id,
+                available_ids,
+                payload,
+            } => {
+                payload.len()
+                    + mode_id.len()
+                    + available_ids
+                        .as_deref()
+                        .map_or(0, |ids| ids.iter().map(|id| id.len()).sum())
+            }
             Self::UsageUpdate(usage) => usage.detail.len(),
             Self::RateLimitUpdate(limit) => limit.detail.len(),
             Self::CurrentModelUpdate {
@@ -460,7 +476,8 @@ mod tests {
                 payload: Opaque::owned(text.to_owned()),
             },
             EventBody::CurrentModeUpdate {
-                mode_id: "plan".into(),
+                mode_id: "".into(),
+                available_ids: None,
                 payload: Opaque::owned(text.to_owned()),
             },
             EventBody::Unmapped(Unmapped {
