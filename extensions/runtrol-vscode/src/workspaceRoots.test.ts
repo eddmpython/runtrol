@@ -161,7 +161,7 @@ function follower(
   return new WorkspaceRootFollowing({
     client: daemon.client,
     integrationId: () => "studio",
-    reconnect: async () => {
+    refreshRoots: async () => {
       reconnects.push(1);
     },
     openFolders: () => folders,
@@ -222,7 +222,7 @@ test("without an enrolled integration nothing is asked at all", async () => {
   const following = new WorkspaceRootFollowing({
     client: daemon.client,
     integrationId: () => null,
-    reconnect: async () => {
+    refreshRoots: async () => {
       throw new Error("must not reconnect");
     },
     openFolders: () => [path.resolve("anything")],

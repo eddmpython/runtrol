@@ -12,6 +12,12 @@ and refactoring that no user can observe do not belong here.
 
 ### Fixed
 
+- Opening a folder into a live window no longer reconnects everything to show that folder's conversations.
+  Widening your own workspace grant now continues on the same authenticated connection (anything that removes
+  or replaces authority still disconnects, exactly as before), conversation discovery reads the grant the
+  daemon holds now instead of a stored snapshot, and resuming a cold conversation in the same run measured
+  235 ms where the day started at ~2.4 s.
+
 - The first meeting with each installed service got three times cheaper, and it now happens behind the boot
   instead of in front of you. A cold probe asked its questions one CLI start after another; they are asked
   together now, a probe that help already answered stops spawning control questions it will not use, and the

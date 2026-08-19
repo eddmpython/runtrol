@@ -165,18 +165,10 @@ export class StudioRuntimeClient implements vscode.Disposable {
 
   async nativeChats(providerId: string, signal?: AbortSignal): Promise<NativeChatCatalogue> {
     signal?.throwIfAborted();
-    const grant = this.stored?.grant;
-    if (!grant?.scopes.includes("session.native.discover")) {
+    if (!this.options) {
       return nativeCatalogueFailure(
         providerId,
         "Existing chat discovery is not approved for this Runtrol Studio integration.",
-      );
-    }
-    const roots = [...new Set(grant.roots)];
-    if (roots.length === 0) {
-      return nativeCatalogueFailure(
-        providerId,
-        "Existing chat discovery needs at least one approved workspace root.",
       );
     }
     return this.withRuntimeLocator(async (locator) => {
@@ -185,6 +177,23 @@ export class StudioRuntimeClient implements vscode.Disposable {
       signal?.addEventListener("abort", close, { once: true });
       try {
         signal?.throwIfAborted();
+        // The grant as the daemon holds it NOW, answered on this very connection's initialization. The
+        // stored snapshot refreshes on the command path's connects, so reading it here raced every root
+        // widening: a folder opened a moment ago was invisible to discovery until some later reconnect.
+        const grant = runtime.initialization.grant;
+        if (!grant?.scopes.includes("session.native.discover")) {
+          return nativeCatalogueFailure(
+            providerId,
+            "Existing chat discovery is not approved for this Runtrol Studio integration.",
+          );
+        }
+        const roots = [...new Set(grant.roots)];
+        if (roots.length === 0) {
+          return nativeCatalogueFailure(
+            providerId,
+            "Existing chat discovery needs at least one approved workspace root.",
+          );
+        }
         return await collectNativeChats(runtime.providers(), providerId, roots, Date.now, signal);
       } finally {
         signal?.removeEventListener("abort", close);

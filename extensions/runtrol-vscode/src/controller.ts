@@ -125,6 +125,21 @@ export class Controller implements vscode.Disposable {
     this.startProviderVerification(inventory.providers.providers);
   }
 
+  /// Bring a freshly widened workspace root into view without tearing anything down.
+  ///
+  /// The daemon re-reads this integration's grant from its store on every request and on every index
+  /// publish, so a widened root is already in force on this very connection. Two things cannot arrive by
+  /// themselves and are asked for here: one wider look at the index (the watch only pushes when sessions
+  /// change, and the grant changing is not that), and the new folder's stored conversations. Measured
+  /// before this path existed, the full reconnect this replaces put ~5 s between opening a folder and its
+  /// conversations arriving.
+  async refreshAfterRootWidened(): Promise<void> {
+    this.cancelNativeDiscoveries();
+    this.state.clearNativeCatalogues();
+    await this.refresh();
+    this.startExistingChatDiscovery();
+  }
+
   async refreshChats(): Promise<void> {
     await this.refresh();
     await Promise.all(this.state.providers

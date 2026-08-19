@@ -129,7 +129,7 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
   const rootFollowing = new WorkspaceRootFollowing({
     client,
     integrationId: () => runtime.integrationId(),
-    reconnect: () => controller.reconnect(),
+    refreshRoots: () => controller.refreshAfterRootWidened(),
     openFolders: () => (vscode.workspace.workspaceFolders ?? []).map((folder) => folder.uri.fsPath),
     warn: (message) => void vscode.window.showWarningMessage(message),
   });

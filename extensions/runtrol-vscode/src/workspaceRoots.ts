@@ -42,9 +42,11 @@ export class WorkspaceRootFollowing {
       client: CoreClient;
       /// The Studio's own integration, or null before enrollment has ever succeeded.
       integrationId: () => string | null;
-      /// Reconnect the Runtime connection. The connect path already persists the daemon's current grant, which
-      /// is how a widened root reaches conversation discovery without this module holding any grant state.
-      reconnect: () => Promise<void>;
+      /// Refresh what the wider grant can now see. The daemon re-reads the grant per request, so the live
+      /// connection already has the new root in force; this asks again with the wider eyes rather than
+      /// reconnecting, which is how a widened root reaches conversation discovery without this module
+      /// holding any grant state or paying a teardown.
+      refreshRoots: () => Promise<void>;
       openFolders: () => readonly string[];
       warn: (message: string) => void;
     },
@@ -113,7 +115,7 @@ export class WorkspaceRootFollowing {
       }
       if (!row || row.revoked) return;
     }
-    if (widened) await this.ports.reconnect();
+    if (widened) await this.ports.refreshRoots();
   }
 
   private async ownRow(integrationId: string): Promise<IntegrationLine | null> {

@@ -148,18 +148,44 @@ pub(crate) fn refresh(
             message: "the integration grant was revoked",
         });
     }
-    if row.grant_generation != current.grant.grant_generation
-        || row.key_generation != current.grant.key_generation
-    {
+    if row.key_generation != current.grant.key_generation {
         return Err(AuthorizationFailure::unauthenticated(
-            "the integration grant changed; reconnect and authenticate again",
+            "the integration key changed; reconnect and authenticate again",
         ));
+    }
+    let next = grant(current.grant.integration_id.clone(), &row)?;
+    if row.grant_generation != current.grant.grant_generation {
+        // A newer generation that only ADDED authority continues in place. The caller proved its identity
+        // against this same key generation, the store row stays the authority for every request either way,
+        // and this widening is something the same integration asked for a moment ago: forcing a reconnect
+        // here bought no security and cost ~5 seconds between opening a folder and its conversations
+        // arriving (measured 2026-08-20). Anything that removed or replaced authority, and any older
+        // generation, still tears the connection down, so a shrink or a rollback can never ride this.
+        if !widening_continues(&current.grant, &next) {
+            return Err(AuthorizationFailure::unauthenticated(
+                "the integration grant changed; reconnect and authenticate again",
+            ));
+        }
     }
     Ok(AuthorizedIntegration {
         key: current.key,
-        grant: grant(current.grant.integration_id.clone(), &row)?,
+        grant: next,
         roots: row.roots,
     })
+}
+
+/// Whether a newer grant is a pure widening the live connection may continue across.
+///
+/// Strictly newer, and everything already held still held: any removed scope, any removed root, and any
+/// older generation answers false, which keeps shrink and rollback on the reconnect-and-reauthenticate
+/// path where they belong.
+fn widening_continues(current: &IntegrationGrant, next: &IntegrationGrant) -> bool {
+    next.grant_generation > current.grant_generation
+        && current
+            .scopes
+            .iter()
+            .all(|scope| next.scopes.contains(scope))
+        && current.roots.iter().all(|root| next.roots.contains(root))
 }
 
 /// Verify a replacement-key proof against the exact current or already-rotated grant row.
@@ -581,6 +607,51 @@ const fn hex_digit(nibble: u8) -> char {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_a_pure_widening_continues_across_a_grant_change() {
+        let grant_with =
+            |generation: u64, scopes: Vec<AppScope>, roots: Vec<String>| IntegrationGrant {
+                integration_id: IntegrationId::new("enr_ab"),
+                scopes,
+                roots,
+                grant_generation: generation,
+                key_generation: 1,
+            };
+        let current = grant_with(1, vec![AppScope::SessionList], vec!["C:/alpha".to_owned()]);
+
+        let widened = grant_with(
+            2,
+            vec![AppScope::SessionList, AppScope::SessionStart],
+            vec!["C:/alpha".to_owned(), "C:/beta".to_owned()],
+        );
+        assert!(
+            widening_continues(&current, &widened),
+            "added authority continues in place"
+        );
+
+        let shrunk_roots = grant_with(2, vec![AppScope::SessionList], Vec::new());
+        assert!(
+            !widening_continues(&current, &shrunk_roots),
+            "a removed root must tear the connection down"
+        );
+
+        let shrunk_scopes = grant_with(2, Vec::new(), vec!["C:/alpha".to_owned()]);
+        assert!(
+            !widening_continues(&current, &shrunk_scopes),
+            "a removed scope must tear the connection down"
+        );
+
+        let rolled_back = grant_with(
+            0,
+            vec![AppScope::SessionList, AppScope::SessionStart],
+            vec!["C:/alpha".to_owned(), "C:/beta".to_owned()],
+        );
+        assert!(
+            !widening_continues(&current, &rolled_back),
+            "an older generation is never a widening, whatever it contains"
+        );
+    }
 
     #[test]
     fn opaque_ids_round_trip_without_accepting_another_prefix() {
