@@ -190,12 +190,16 @@ fn list_sessions(output: &mut impl Write, frame: &Value, id: &Value) -> Result<(
         Some("fixture-page-2") => ("two", None),
         Some(_) => return Err(()),
     };
+    // The identifier carries the folder's hash, unconditionally: a real provider never reuses one session
+    // identifier for two different conversations. When this fixture did (one literal id for every cwd), two
+    // folders' listings collapsed into one row and a real window's first folder showed empty during the
+    // 2026-08-19 eye pass. Uniqueness across folders is the realistic shape, not an option.
     answer(
         output,
         id,
         &json!({
             "sessions": [{
-                "sessionId": format!("fixture-native-{suffix}"),
+                "sessionId": format!("fixture-native-{:016x}-{suffix}", fnv_hash(cwd)),
                 "cwd": cwd,
                 "additionalDirectories": [],
                 "title": format!("Fixture {suffix}"),
@@ -215,12 +219,16 @@ fn native_session(frame: &Value) -> Result<String, ()> {
         .pointer("/params/cwd")
         .and_then(Value::as_str)
         .ok_or(())?;
+    Ok(format!("fixture-session-{:016x}", fnv_hash(workspace)))
+}
+
+fn fnv_hash(text: &str) -> u64 {
     let mut hash = 0xcbf2_9ce4_8422_2325_u64;
-    for byte in workspace.bytes() {
+    for byte in text.bytes() {
         hash ^= u64::from(byte);
         hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
     }
-    Ok(format!("fixture-session-{hash:016x}"))
+    hash
 }
 
 fn notify_reply(

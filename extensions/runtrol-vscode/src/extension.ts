@@ -39,6 +39,7 @@ export type RuntrolExtensionApi = {
   verifyRestoredSession?(sessionId: string): Promise<void>;
   hasConversationIn?(folder: string): Promise<boolean>;
   waitForConversationIn?(folder: string, deadlineMs: number): Promise<number>;
+  seedProject?(folder: string): Promise<void>;
   readonly journey?: JourneyApi;
 };
 
@@ -55,6 +56,9 @@ export type SessionManagementPerformance = {
 
 // Eight hot sessions over five rounds keep nearest-rank p95 from collapsing to the single maximum sample.
 const SESSION_SWITCH_ROUNDS = 5;
+
+/// Whether the performance-only measurement surface is on, asked once. One name for one flag.
+const MEASURED_HOST = process.env.RUNTROL_VSCODE_PERFORMANCE === "1";
 
 export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi {
   const locator = new CoreLocator(context);
@@ -467,15 +471,15 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
       return lifecycle;
     },
     get initializationStage() {
-      return process.env.RUNTROL_VSCODE_PERFORMANCE === "1" ? initializationStage : undefined;
+      return MEASURED_HOST ? initializationStage : undefined;
     },
     refresh: () => afterReady(() => controller.refresh()),
-    measureWebview: process.env.RUNTROL_VSCODE_PERFORMANCE === "1"
+    measureWebview: MEASURED_HOST
       ? (framesPerSecond, durationMs) => afterReady(
         () => conversation.measurePerformance(framesPerSecond, durationMs),
       )
       : undefined,
-    measureSessionManagement: process.env.RUNTROL_VSCODE_PERFORMANCE === "1"
+    measureSessionManagement: MEASURED_HOST
       ? (sessionIds) => afterReady(async () => {
         const expected = new Set(sessionIds);
         const managed = state.sessions.filter((session) => expected.has(session.sessionId));
@@ -547,7 +551,7 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
         };
       })
       : undefined,
-    verifyRestoredSession: process.env.RUNTROL_VSCODE_PERFORMANCE === "1"
+    verifyRestoredSession: MEASURED_HOST
       ? (sessionId) => afterReady(async () => {
         if (state.selected?.sessionId !== sessionId) {
           throw new Error(`restored ${state.selected?.sessionId ?? "no session"}, expected ${sessionId}`);
@@ -562,10 +566,10 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
     // harness watches that folder's conversation arrive. They consult both collections the conversation tree
     // merges (supervised sessions and the provider-owned stored chats), through the same identity function
     // collision detection uses, so the probe agrees with the product about what "a conversation here" means.
-    hasConversationIn: process.env.RUNTROL_VSCODE_PERFORMANCE === "1"
+    hasConversationIn: MEASURED_HOST
       ? (folder) => afterReady(async () => conversationVisibleIn(state, folder))
       : undefined,
-    waitForConversationIn: process.env.RUNTROL_VSCODE_PERFORMANCE === "1"
+    waitForConversationIn: MEASURED_HOST
       ? (folder, deadlineMs) => afterReady(() => new Promise<number>((resolve, reject) => {
         const arrived = () => conversationVisibleIn(state, folder);
         if (arrived()) {
@@ -584,6 +588,13 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
           resolve(performance.now() - started);
         });
       }))
+      : undefined,
+    // The harness's way to stand a created project up without driving the folder-picker dialog. Same code path
+    // as the command, minus the picking.
+    seedProject: MEASURED_HOST
+      ? async (folder) => {
+        await projectStore.create(folder);
+      }
       : undefined,
     journey: journeyApi(controller, state, conversation, afterReady, context.extensionMode),
   };

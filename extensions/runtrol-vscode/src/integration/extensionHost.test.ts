@@ -37,6 +37,7 @@ type ExtensionApi = {
   verifyRestoredSession?(sessionId: string): Promise<void>;
   hasConversationIn?(folder: string): Promise<boolean>;
   waitForConversationIn?(folder: string, deadlineMs: number): Promise<number>;
+  seedProject?(folder: string): Promise<void>;
 };
 
 export async function run(): Promise<void> {
@@ -46,7 +47,7 @@ export async function run(): Promise<void> {
       const restored = await measureRestore(requiredEnvironment("RUNTROL_VSCODE_RESTORE_SESSION"));
       await writeFile(resultPath, JSON.stringify(restored), "utf8");
     } else if (process.env.RUNTROL_VSCODE_PHASE === "follow") {
-      const followed = await measureFollow(requiredEnvironment("RUNTROL_VSCODE_FOLLOW_TARGET"));
+      const followed = await measureFollow(requiredEnvironment("RUNTROL_VSCODE_FOLLOW_TARGET"), resultPath);
       await writeFile(resultPath, JSON.stringify(followed), "utf8");
     } else {
       const measured = await measure(resultPath);
@@ -252,7 +253,7 @@ async function measureRestore(expected: string): Promise<{
 /// extension host alive (a plain-folder window would restart it, which would prove a restart and not a follow).
 /// The second folder was never granted by any earlier phase, so its conversation can only arrive through the
 /// live chain: folder event, grant widened, discovery listed, index broadcast, row rendered.
-async function measureFollow(target: string): Promise<Record<string, number | string>> {
+async function measureFollow(target: string, resultPath: string): Promise<Record<string, number | string>> {
   currentStage = "follow-activation";
   const extension = extensionUnderTest<ExtensionApi>();
   const api = await within(extension.activate() as Promise<ExtensionApi>, 5_000, "follow activation");
@@ -280,7 +281,49 @@ async function measureFollow(target: string): Promise<Record<string, number | st
     throw new Error("VS Code refused to add the second workspace folder");
   }
   const followArrivalMs = await api.waitForConversationIn(target, 30_000);
+  await eyePass(api, first, resultPath);
   return { vscode: vscode.version, followArrivalMs };
+}
+
+/// The opt-in screenshot moment: stand the panel up the way the operator described it and hold still while the
+/// harness photographs the window. The picture then has one created project holding the first folder's
+/// conversation, the second folder's conversation loose beneath the headings, and the usage strip at the bottom.
+///
+/// Does nothing unless RUNTROL_VSCODE_CAPTURE names an output file, so the gate's timed runs never pay for it.
+async function eyePass(api: ExtensionApi, projectFolder: string, resultPath: string): Promise<void> {
+  if (!process.env.RUNTROL_VSCODE_CAPTURE) return;
+  currentStage = "eye-pass";
+  if (!api.seedProject) {
+    throw new Error("the performance-only project seeder is unavailable");
+  }
+  await api.seedProject(projectFolder);
+  await within(
+    vscode.commands.executeCommand("workbench.view.extension.runtrol"),
+    5_000,
+    "opening the Runtrol view for the eye pass",
+  );
+  await within(
+    vscode.commands.executeCommand("runtrol.usage.focus"),
+    5_000,
+    "revealing the usage strip for the eye pass",
+  );
+  // One breath for the tree to paint the new heading before the photograph.
+  await new Promise((resolve) => setTimeout(resolve, 1_500));
+  await checkpoint(resultPath, "capture-ready");
+  const captured = `${resultPath}.captured`;
+  const deadline = Date.now() + 30_000;
+  for (;;) {
+    try {
+      await readFile(captured, "utf8");
+      return;
+    } catch {
+      // Not written yet. The harness is still photographing; keep waiting until the deadline says otherwise.
+    }
+    if (Date.now() > deadline) {
+      throw new Error("the harness never confirmed the eye-pass capture");
+    }
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
 }
 
 async function checkpoint(resultPath: string, stage: string): Promise<void> {

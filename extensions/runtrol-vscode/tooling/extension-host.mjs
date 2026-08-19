@@ -246,14 +246,17 @@ listen = "stdio"
     RUNTROL_VSCODE_PHASE: "follow",
     RUNTROL_VSCODE_FOLLOW_TARGET: followTarget,
   };
-  await runHost(
-    installed,
-    testEntry,
-    followResultPath,
-    followEnvironment,
-    followWorkspaceFile,
-    followExtensions,
-  );
+  await Promise.all([
+    runHost(
+      installed,
+      testEntry,
+      followResultPath,
+      followEnvironment,
+      followWorkspaceFile,
+      followExtensions,
+    ),
+    captureWhenReady(followResultPath),
+  ]);
   const followed = JSON.parse(await readFile(followResultPath, "utf8"));
   const result = { ...measured, ...restored, ...followed };
   process.stdout.write(`RUNTROL_VSCODE_HOST ${JSON.stringify(result)}\n`);
@@ -307,6 +310,49 @@ listen = "stdio"
 
 function delay(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+// The eye-pass photographer. Only does anything when RUNTROL_VSCODE_CAPTURE names an output file: it waits for
+// the follow phase to say the panel is posed, photographs the follow window from outside the extension host,
+// and hands the phase its confirmation file so it can finish.
+async function captureWhenReady(followResultPath) {
+  const outPath = process.env.RUNTROL_VSCODE_CAPTURE;
+  if (!outPath) return;
+  const deadline = Date.now() + 180_000;
+  while (Date.now() < deadline) {
+    const progress = await readFile(followResultPath, "utf8")
+      .then((contents) => JSON.parse(contents))
+      // ok: the phase has simply not written its first checkpoint yet; the loop asks again until the deadline.
+      .catch(() => null);
+    if (progress && typeof progress.failure === "string") return;
+    if (progress && (typeof progress.vscode === "string" || progress.stage === "capture-ready")) {
+      if (progress.stage === "capture-ready") {
+        const shot = spawnSync(
+          "powershell.exe",
+          [
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            path.join(extensionRoot, "tooling", "capture-window.ps1"),
+            "-TitleMatch",
+            "follow (Workspace)",
+            "-OutPath",
+            outPath,
+          ],
+          { encoding: "utf8", timeout: 30_000, windowsHide: true },
+        );
+        if (shot.status !== 0) {
+          throw new Error(`the eye-pass capture failed:\n${shot.stdout}${shot.stderr}`);
+        }
+        await writeFile(`${followResultPath}.captured`, "1", "utf8");
+      }
+      return;
+    }
+    await delay(300);
+  }
+  throw new Error("the follow phase never reached its capture pose");
 }
 
 function adoptResumedSession(sessions, result) {
