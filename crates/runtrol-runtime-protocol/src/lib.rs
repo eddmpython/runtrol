@@ -37,8 +37,9 @@ pub use integration::{
 pub use inventory::{
     GetSessionParams, InstallationObservation, InstallationState, LifecycleState,
     ManagedSessionList, ProviderDescriptor, ProviderHelp, ProviderId, ProviderList,
-    ProviderWatchEndReason, ProviderWatchEndedNotification, ProvidersChangedNotification,
-    RuntimeSessionId, SessionDescriptor, SessionIndexChangedNotification, SessionIndexEndReason,
+    ProviderUsageGauge, ProviderUsageList, ProviderUsageWindow, ProviderWatchEndReason,
+    ProviderWatchEndedNotification, ProvidersChangedNotification, RuntimeSessionId,
+    SessionDescriptor, SessionIndexChangedNotification, SessionIndexEndReason,
     SessionIndexEndedNotification, WaitingOn, WatchProvidersParams, WatchProvidersResult,
     WatchSessionIndexParams, WatchSessionIndexResult,
 };

@@ -920,7 +920,7 @@ argv = ["exec", "--json"]
         // The name reaches a surface and the editor puts it straight into a stylesheet, so it is bounded here the
         // way every other declared value is. Measured against the editor's own registry: names there are lower
         // case letters, digits and hyphens, and nothing else.
-        let good = format!("{MINIMAL}").replace(
+        let good = MINIMAL.to_string().replace(
             r#"display_name = "OpenCode""#,
             "display_name = \"opencode\"\nicon = \"openai\"",
         );
@@ -936,7 +936,7 @@ argv = ["exec", "--json"]
             "../claude",
             "",
         ] {
-            let text = format!("{MINIMAL}").replace(
+            let text = MINIMAL.to_string().replace(
                 r#"display_name = "OpenCode""#,
                 &format!("display_name = \"opencode\"\nicon = \"{bad}\""),
             );

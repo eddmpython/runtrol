@@ -38,8 +38,8 @@ pub use registry::{
 pub use session::{
     AgentLease, ApprovalAuthority, AttachError, AttachedSession, CloseReason, ClosingReservation,
     ClosingSession, FailureCode, Identity, Lifecycle, LiveSession, Observed, OpenReservation,
-    ProviderUpdateReservation, Pumped, ReservedOpen, SessionError, SessionManager, SessionState,
-    TakenAgent, Tier, Waiting,
+    ProviderGauge, ProviderUpdateReservation, Pumped, ReservedOpen, SessionError, SessionManager,
+    SessionState, TakenAgent, Tier, Waiting,
 };
 
 // These edges are declared in this crate's manifest and enforced by

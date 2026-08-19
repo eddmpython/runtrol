@@ -25,7 +25,7 @@
 use bytes::Bytes;
 use runtrol_provider::{
     CapabilitySet, Chunk, EventBody, Level, MessageId, NativeSessionId, Notice, NoticeCode, Opaque,
-    RateLimit, StopReason, ToolCallFrame, ToolCallId, ToolCallStatus, Unmapped,
+    RateLimit, StopReason, ToolCallFrame, ToolCallId, ToolCallStatus, Unmapped, WallMs, Window,
 };
 use serde::Deserialize;
 use serde_json::value::RawValue;
@@ -200,6 +200,54 @@ struct Envelope<'line> {
     rate_limit_info: Option<&'line RawValue>,
 }
 
+/// The limit fields this CLI actually reports, measured on 2.1.235 with a real turn.
+///
+/// The whole measured payload: `status`, `resetsAt`, `rateLimitType`, `overageStatus`,
+/// `overageDisabledReason`, `isUsingOverage`. Notably there is no utilisation number anywhere in it: this CLI
+/// says which window governs and when it resets, never how full it is. Only the two fields a gauge can carry
+/// are read; the rest stays in the payload, which travels whole.
+#[derive(Deserialize)]
+struct RateLimitInfo<'line> {
+    /// The provider's own word for whether requests pass.
+    #[serde(default)]
+    status: Option<&'line str>,
+    /// When the governing window resets, in unix seconds.
+    ///
+    /// Seconds established by magnitude: the measured value read as milliseconds lands in January 1970, three
+    /// weeks after the epoch, which is not a time this CLI resets anything.
+    #[serde(default, rename = "resetsAt")]
+    resets_at: Option<u64>,
+}
+
+/// The account's limit position, from the fields this CLI reports.
+fn rate_limit(line: &Bytes, envelope: &Envelope<'_>) -> RateLimit {
+    // An unreadable report is not silence: both fields fall back to their conservative readings (no window, and
+    // a status that is not known-good), and the whole payload still travels in `detail` for whoever wants the
+    // vendor's own words.
+    let (status, resets_at) = match envelope
+        .rate_limit_info
+        .map(|raw| serde_json::from_str::<RateLimitInfo<'_>>(raw.get()))
+    {
+        Some(Ok(read)) => (read.status, read.resets_at),
+        Some(Err(_)) | None => (None, None),
+    };
+    RateLimit {
+        primary: resets_at.map(|seconds| Window {
+            // Measured: this CLI reports no utilisation number at all. Absent is the truth; a number here
+            // would be invented.
+            used_percent: None,
+            resets_at: Some(WallMs::from_millis(seconds.saturating_mul(1_000))),
+            window_minutes: None,
+        }),
+        secondary: None,
+        // Only the provider's own good word means requests pass. A status this build has never seen reads as
+        // reached, which errs loudly in a warning colour rather than silently as "no limit exists": the same
+        // rule stop reasons follow, where not understood is never rendered as success.
+        reached: status != Some("allowed"),
+        detail: payload_of(line, envelope.rate_limit_info),
+    }
+}
+
 /// A fragment's nested kind.
 #[derive(Deserialize)]
 struct Fragment<'line> {
@@ -265,14 +313,7 @@ pub fn read(line: &Bytes) -> Result<Frame, MapError> {
         ("stream_event", _) => Ok(Frame::Body(fragment(line, &envelope))),
 
         ("rate_limit_event", _) => Ok(Frame::Body(EventBody::RateLimitUpdate(Box::new(
-            RateLimit {
-                // The windows are the provider's own shape and runtrol does not model them yet. What it decides
-                // on is only whether something is blocking, and nothing in this frame says so on its own.
-                primary: None,
-                secondary: None,
-                reached: false,
-                detail: payload_of(line, envelope.rate_limit_info),
-            },
+            rate_limit(line, &envelope),
         )))),
 
         ("control_request", _) => control_request(line, &envelope),
@@ -1016,6 +1057,52 @@ mod tests {
                 assert!(chunk.content.as_str().contains("just a sentence"));
             }
             other => panic!("expected one chunk, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn the_measured_limit_report_becomes_a_window_and_not_a_guess() {
+        // The exact payload a real turn produced on 2.1.235. It carries no utilisation number anywhere, so the
+        // window's percentage is absent rather than invented, and the reset instant rides in milliseconds.
+        let measured = line(&format!(
+            r#"{{"type":"rate_limit_event","session_id":"{SESSION}","rate_limit_info":{{"status":"allowed","resetsAt":1787131200,"rateLimitType":"five_hour","overageStatus":"rejected","overageDisabledReason":"org_level_disabled","isUsingOverage":false}}}}"#
+        ));
+        match read(&measured).expect("readable") {
+            Frame::Body(EventBody::RateLimitUpdate(limit)) => {
+                assert!(
+                    !limit.reached,
+                    "the provider's own word for passing is allowed"
+                );
+                let window = limit.primary.expect("the reset instant makes a window");
+                assert_eq!(
+                    window.used_percent, None,
+                    "no number was reported, so none is shown"
+                );
+                assert_eq!(
+                    window.resets_at.map(WallMs::as_millis),
+                    Some(1_787_131_200_000),
+                    "the provider counts seconds and the vocabulary counts milliseconds"
+                );
+                assert!(
+                    limit.detail.as_str().contains("five_hour"),
+                    "which window governs stays in the provider's own payload"
+                );
+            }
+            other => panic!("expected a limit update, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_limit_status_this_build_has_never_seen_reads_as_reached() {
+        // The same rule stop reasons follow: not understood is never rendered as success. Erring this way is a
+        // warning colour on screen; erring the other way is "no limit exists" said precisely when the provider
+        // is talking about one.
+        let novel = line(&format!(
+            r#"{{"type":"rate_limit_event","session_id":"{SESSION}","rate_limit_info":{{"status":"something_new","resetsAt":1787131200}}}}"#
+        ));
+        match read(&novel).expect("readable") {
+            Frame::Body(EventBody::RateLimitUpdate(limit)) => assert!(limit.reached),
+            other => panic!("expected a limit update, got {other:?}"),
         }
     }
 

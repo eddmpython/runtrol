@@ -14,11 +14,13 @@
 //! means. A task spawned in here would put a runtime configuration in the one place the memory contract says it must
 //! not be.
 
+pub mod gauges;
 pub mod manager;
 pub mod mint;
 pub mod state;
 pub mod tier;
 
+pub use gauges::{AccountGauges, ProviderGauge};
 pub use manager::{
     AgentLease, ApprovalAuthority, AttachError, AttachedSession, ClosingReservation,
     ClosingSession, LiveSession, OpenReservation, ProviderUpdateReservation, Pumped, ReservedOpen,

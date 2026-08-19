@@ -15,7 +15,7 @@ use runtrol_runtime_protocol::{
     ListNativeSessionsParams, ListPendingApprovalsParams, MAX_MODEL_SELECTION_BYTES,
     MAX_NATIVE_ADOPTION_TOKEN_BYTES, MAX_NATIVE_PUBLIC_CURSOR_BYTES, MAX_PAGE_ITEMS,
     MAX_REVISION_OFFERS, ProtocolRevision, ProviderCapabilityAvailability,
-    ProviderCapabilityObservation, ProviderCapabilityProvenance, ProviderList,
+    ProviderCapabilityObservation, ProviderCapabilityProvenance, ProviderList, ProviderUsageList,
     ProviderWatchEndReason, ProviderWatchEndedNotification, ProvidersChangedNotification,
     RequestEnrollmentParams, RespondApprovalParams, ResumeSessionParams,
     RotateIntegrationKeyParams, RuntimeCapabilities, RuntimeError, RuntimeErrorKind,
@@ -59,6 +59,7 @@ pub(crate) async fn serve_connection(
     native_cursors: Arc<NativeCursorCodec>,
     providers: watch::Sender<Arc<ProviderList>>,
     mut sessions: watch::Receiver<Arc<RuntimeSessionCatalogue>>,
+    mut account_gauges: watch::Receiver<Arc<ProviderUsageList>>,
     asking: mpsc::Sender<RuntimeAsked>,
     returning: mpsc::UnboundedSender<RuntimeReturned>,
 ) {
@@ -107,6 +108,7 @@ pub(crate) async fn serve_connection(
         }
         let catalogue = Arc::clone(&sessions.borrow_and_update());
         let provider_catalogue = Arc::clone(&providers.borrow());
+        let usage = Arc::clone(&account_gauges.borrow_and_update());
         let answered = answer(
             &mut state,
             &instance_id,
@@ -116,6 +118,7 @@ pub(crate) async fn serve_connection(
             &providers,
             &provider_catalogue,
             &catalogue,
+            &usage,
             &asking,
             &returning,
             request,
@@ -305,6 +308,7 @@ async fn answer(
     provider_updates: &watch::Sender<Arc<ProviderList>>,
     providers: &ProviderList,
     sessions: &RuntimeSessionCatalogue,
+    usage: &ProviderUsageList,
     asking: &mpsc::Sender<RuntimeAsked>,
     returning: &mpsc::UnboundedSender<RuntimeReturned>,
     request: JsonRpcRequest,
@@ -367,6 +371,7 @@ async fn answer(
         provider_updates,
         providers,
         sessions,
+        usage,
         asking,
         returning,
         method,
@@ -411,6 +416,7 @@ async fn dispatch_public(
     provider_updates: &watch::Sender<Arc<ProviderList>>,
     providers: &ProviderList,
     sessions: &RuntimeSessionCatalogue,
+    usage: &ProviderUsageList,
     asking: &mpsc::Sender<RuntimeAsked>,
     returning: &mpsc::UnboundedSender<RuntimeReturned>,
     method: RuntimeMethod,
@@ -448,6 +454,7 @@ async fn dispatch_public(
                 rotate_integration_key(state, composed, id, params).await
             }
             RuntimeMethod::ProvidersList => providers_list(state, composed, providers, id, params),
+            RuntimeMethod::ProvidersUsage => providers_usage(state, composed, usage, id, params),
             RuntimeMethod::ProvidersWatch => {
                 providers_watch(state, composed, provider_updates, id, params)
             }
@@ -533,6 +540,7 @@ fn required_scope(method: RuntimeMethod) -> Option<AppScope> {
     match method {
         RuntimeMethod::ProvidersList
         | RuntimeMethod::ProvidersWatch
+        | RuntimeMethod::ProvidersUsage
         | RuntimeMethod::ProvidersGetCapabilities => Some(AppScope::ProviderRead),
         RuntimeMethod::ProvidersListModels => Some(AppScope::ModelRead),
         RuntimeMethod::ProvidersListNativeSessions => Some(AppScope::SessionNativeDiscover),
@@ -931,6 +939,31 @@ fn providers_list(
     }
     match authorized(state, &composed.store, Some(AppScope::ProviderRead)) {
         Ok(_) => Answer::success(id, providers),
+        Err(failure) => Answer::failure(id, failure),
+    }
+}
+
+/// Where each account stands against its limits, from the supervisor's latest snapshot.
+///
+/// Answered from a snapshot the serve task publishes when a report passes, so this read costs no lock on the
+/// session owner and no provider process. An empty list means nothing has reported since the Runtime started,
+/// which a surface says as "no report yet" rather than as a green light.
+fn providers_usage(
+    state: &mut PublicState,
+    composed: &Composed,
+    usage: &ProviderUsageList,
+    id: JsonRpcId,
+    params: serde_json::Value,
+) -> Answer {
+    if serde_json::from_value::<EmptyParams>(params).is_err() {
+        return Answer::plain(
+            id,
+            RuntimeErrorKind::InvalidRequest,
+            "provider usage parameters are invalid",
+        );
+    }
+    match authorized(state, &composed.store, Some(AppScope::ProviderRead)) {
+        Ok(_) => Answer::success(id, usage),
         Err(failure) => Answer::failure(id, failure),
     }
 }
@@ -2439,6 +2472,7 @@ fn parse_session_operation(
         | RuntimeMethod::SessionsLagged
         | RuntimeMethod::SessionsIndexChanged
         | RuntimeMethod::SessionsIndexEnded
+        | RuntimeMethod::ProvidersUsage
         | RuntimeMethod::PanicStop => Err("the method is not a session operation"),
     }
 }
@@ -3486,6 +3520,8 @@ listen = "stdio"
         let (provider_updates, _provider_updates_receiver) =
             watch::channel(Arc::new(crate::runtime_inventory::providers(&composed)));
         let (publishing, watching) = watch::channel(sessions.clone());
+        let (_usage_publishing, usage_watching) =
+            watch::channel(Arc::new(ProviderUsageList::default()));
         let (runtime_asking, runtime_asked) = mpsc::channel(1);
         let (runtime_returning, runtime_returned) = mpsc::unbounded_channel();
         let owning = tokio::spawn(crate::runtime_control::fixture_runtime_owner(
@@ -3513,6 +3549,7 @@ listen = "stdio"
                         Arc::clone(&native_cursors),
                         provider_updates.clone(),
                         watching.clone(),
+                        usage_watching.clone(),
                         runtime_asking.clone(),
                         runtime_returning.clone(),
                     ));

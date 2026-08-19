@@ -454,7 +454,7 @@ fn window(raw: Option<&RawValue>) -> Option<Window> {
         Some(minutes)
     });
     Some(Window {
-        used_percent: u8::try_from(used.clamp(0, i64::from(u8::MAX))).unwrap_or(u8::MAX),
+        used_percent: Some(u8::try_from(used.clamp(0, i64::from(u8::MAX))).unwrap_or(u8::MAX)),
         // The schema gives this as a bare integer and does not say whether it counts seconds or milliseconds.
         // Reading it either way puts a reset time in the wrong century half the time, and the whole snapshot
         // is in the payload for anyone who knows.
@@ -781,13 +781,13 @@ mod tests {
         match read("account/rateLimits/updated", Some(&quota)).expect("readable") {
             Frame::Body(EventBody::RateLimitUpdate(limit)) => {
                 let primary = limit.primary.expect("the shorter window was reported");
-                assert_eq!(primary.used_percent, 87);
+                assert_eq!(primary.used_percent, Some(87));
                 assert_eq!(primary.window_minutes, Some(300));
                 assert!(
                     primary.resets_at.is_none(),
                     "the schema does not say what unit that integer is in, and guessing puts the reset in the wrong century"
                 );
-                assert_eq!(limit.secondary.map(|w| w.used_percent), Some(12));
+                assert_eq!(limit.secondary.and_then(|w| w.used_percent), Some(12));
                 assert!(!limit.reached, "nothing here says a limit was reached");
             }
             other => panic!("expected a quota gauge, got {other:?}"),

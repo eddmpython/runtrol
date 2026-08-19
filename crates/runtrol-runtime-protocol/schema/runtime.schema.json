@@ -1423,6 +1423,106 @@
       ],
       "type": "object"
     },
+    "ProviderUsageGauge": {
+      "additionalProperties": false,
+      "description": "One provider's most recent limit report.",
+      "properties": {
+        "atMs": {
+          "description": "When the report arrived, in unix milliseconds, which is how a surface says how stale it is.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "primary": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProviderUsageWindow"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The shorter window, when the provider reports one."
+        },
+        "providerId": {
+          "$ref": "#/$defs/ProviderId",
+          "description": "Opaque selection value."
+        },
+        "reached": {
+          "description": "A limit is blocking right now, by the provider's own word.",
+          "type": "boolean"
+        },
+        "secondary": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProviderUsageWindow"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The longer window, when the provider reports one."
+        }
+      },
+      "required": [
+        "providerId",
+        "reached",
+        "atMs"
+      ],
+      "type": "object"
+    },
+    "ProviderUsageList": {
+      "additionalProperties": false,
+      "description": "Where each account stands against its limits, by each provider's own latest report.\n\nStructured fields only, never the provider's verbatim payload: that payload rides the session event stream\nunder session-output authority, and this list answers under provider authority. A gauge absent from the list\nmeans that provider has not reported since the Runtime started, which is different from a limit not existing,\nand a surface says \"no report yet\" rather than inventing a green light.",
+      "properties": {
+        "providers": {
+          "description": "Latest reports in provider order, one per provider that has reported.",
+          "items": {
+            "$ref": "#/$defs/ProviderUsageGauge"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "providers"
+      ],
+      "type": "object"
+    },
+    "ProviderUsageWindow": {
+      "additionalProperties": false,
+      "description": "One rate limit window, as far as the provider described it.",
+      "properties": {
+        "resetsAtMs": {
+          "description": "When it resets, in unix milliseconds, when the provider says.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "usedPercent": {
+          "description": "How much of the window is used, as a percentage, when the provider reports one.\n\nOptional because it is not universal: measured, one provider reports which window governs and when it\nresets while saying nothing about how full it is.",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "windowMinutes": {
+          "description": "How long the window is, in minutes, when the provider says.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
     "ProviderWatchEndReason": {
       "description": "Why a provider inventory subscription ended.",
       "oneOf": [
@@ -2248,6 +2348,11 @@
         {
           "const": "integrations/rotateKey",
           "description": "Replace the authenticated integration key after exact local confirmation.",
+          "type": "string"
+        },
+        {
+          "const": "providers/usage",
+          "description": "Read each account's latest reported position against its limits.",
           "type": "string"
         },
         {
@@ -3174,6 +3279,9 @@
     "provider_list": {
       "$ref": "#/$defs/ProviderList"
     },
+    "provider_usage_list": {
+      "$ref": "#/$defs/ProviderUsageList"
+    },
     "provider_watch_ended": {
       "$ref": "#/$defs/ProviderWatchEndedNotification"
     },
@@ -3260,6 +3368,7 @@
     "rotate_integration_key",
     "runtime_locator",
     "provider_list",
+    "provider_usage_list",
     "get_provider_capabilities",
     "provider_capabilities",
     "list_models",

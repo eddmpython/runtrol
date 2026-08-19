@@ -46,6 +46,7 @@ use runtrol_security::{Caller, DeviceScope, GrantLedger, SecurityError};
 
 use crate::events::{Published, SessionHub, SessionView};
 use crate::project::{ProjectError, ProjectIdentity, WorkspaceClaim};
+use crate::session::gauges::{AccountGauges, ProviderGauge};
 use crate::session::mint::Identity;
 use crate::session::state::{FailureCode, Observed, SessionState, Waiting};
 use crate::session::tier::{Admit, HotSession, MAX_HOT, Tier};
@@ -259,11 +260,17 @@ pub struct Pumped {
     /// Content frames leave this false, so a surface watching many active sessions does not pay to rebuild its
     /// session list for conversation traffic.
     pub index_changed: bool,
+    /// Whether a provider's account gauge changed with this event.
+    ///
+    /// Separate from `index_changed` on purpose: a limit report arrives with ordinary turn traffic, and letting
+    /// it rebuild the whole session index would be paying the cost that flag exists to avoid.
+    pub gauges_changed: bool,
 }
 
 struct Applied {
     published: Option<Published>,
     index_changed: bool,
+    gauges_changed: bool,
 }
 
 /// A process that was admitted to the live session set.
@@ -408,6 +415,8 @@ pub struct SessionManager {
     /// Kept as a name rather than a position: a position would move under a session that ended, and this is asked
     /// about by exclusion, so it does not have to name a session that is still live.
     after: Option<SessionId>,
+    /// Each provider's latest limit report, remembered as events pass.
+    gauges: AccountGauges,
 }
 
 /// Returns an open reservation if its asynchronous convenience path is abandoned.
@@ -436,7 +445,14 @@ impl SessionManager {
             in_flight: BTreeMap::new(),
             updating_providers: BTreeMap::new(),
             after: None,
+            gauges: AccountGauges::new(),
         }
+    }
+
+    /// Where each account stands against its limits, by each provider's own latest report.
+    #[must_use]
+    pub fn account_gauges(&self) -> Vec<ProviderGauge> {
+        self.gauges.snapshot()
     }
 
     /// Force the next process-slot generation allocation to fail in integration tests.
@@ -926,6 +942,7 @@ impl SessionManager {
             session,
             published: applied.published,
             index_changed: applied.index_changed,
+            gauges_changed: applied.gauges_changed,
         }
     }
 
@@ -983,6 +1000,7 @@ impl SessionManager {
             return Applied {
                 published: None,
                 index_changed: false,
+                gauges_changed: false,
             };
         };
 
@@ -1001,6 +1019,13 @@ impl SessionManager {
                 };
 
                 let observed = observation_of(&produced.body);
+                // Account state, remembered as it passes. This is the one place every event goes by with its
+                // provider known; anywhere else would be a second subscriber holding a copy of the stream.
+                let limit_report = match &produced.body {
+                    EventBody::RateLimitUpdate(limit) => Some((**limit).clone()),
+                    _ => None,
+                };
+                let provider = live.identity.provider();
                 let lifecycle_before = live.state.lifecycle().clone();
                 let stuck_before = live.state.looks_stuck();
                 let waiting_before = live.state.waiting();
@@ -1019,13 +1044,19 @@ impl SessionManager {
                         );
                     }
                 }
-                Applied {
+                let mut applied = Applied {
                     published: Some(published),
                     index_changed: native_changed
                         || live.state.lifecycle() != &lifecycle_before
                         || live.state.looks_stuck() != stuck_before
                         || live.state.waiting() != waiting_before,
+                    gauges_changed: false,
+                };
+                if let (Some(limit), Some(event)) = (limit_report, applied.published.as_ref()) {
+                    self.gauges.record(provider, &limit, event.event.at);
+                    applied.gauges_changed = true;
                 }
+                applied
             }
 
             Some(Err(error)) => {
@@ -1048,6 +1079,7 @@ impl SessionManager {
                 Applied {
                     published: Some(published),
                     index_changed: true,
+                    gauges_changed: false,
                 }
             }
 
@@ -1060,6 +1092,7 @@ impl SessionManager {
                 Applied {
                     published: None,
                     index_changed: true,
+                    gauges_changed: false,
                 }
             }
         }

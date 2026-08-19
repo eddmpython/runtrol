@@ -191,6 +191,20 @@ export type ProviderId = string;
 /** A bounded provider inventory snapshot. */
 export interface ProviderList { readonly providers: ReadonlyArray<ProviderDescriptor>; }
 
+/** One provider's most recent limit report. */
+export interface ProviderUsageGauge { readonly atMs: number; readonly primary?: ProviderUsageWindow | null; readonly providerId: ProviderId; readonly reached: boolean; readonly secondary?: ProviderUsageWindow | null; }
+
+/** Where each account stands against its limits, by each provider's own latest report.
+
+Structured fields only, never the provider's verbatim payload: that payload rides the session event stream
+under session-output authority, and this list answers under provider authority. A gauge absent from the list
+means that provider has not reported since the Runtime started, which is different from a limit not existing,
+and a surface says "no report yet" rather than inventing a green light. */
+export interface ProviderUsageList { readonly providers: ReadonlyArray<ProviderUsageGauge>; }
+
+/** One rate limit window, as far as the provider described it. */
+export interface ProviderUsageWindow { readonly resetsAtMs?: number | null; readonly usedPercent?: number | null; readonly windowMinutes?: number | null; }
+
 /** Why a provider inventory subscription ended. */
 export type ProviderWatchEndReason = "integrationRevoked" | "authorityChanged" | "runtimeUnavailable";
 
@@ -249,7 +263,7 @@ export interface RuntimeLimits { readonly challengeLifetimeMs: number; readonly 
 export interface RuntimeLocatorRecord { readonly endpoint: string; readonly endpointKind: RuntimeEndpointKind; readonly instanceId: string; readonly processId: number; readonly runtimeVersion: string; readonly schema: number; }
 
 /** A public Runtime method implemented by the initial read-only boundary. */
-export type RuntimeMethod = "runtime/initialize" | "runtime/initialized" | "runtime/challenge" | "integrations/requestEnrollment" | "integrations/watchEnrollment" | "integrations/getGrant" | "integrations/rotateKey" | "providers/list" | "providers/watch" | "providers/getCapabilities" | "providers/listModels" | "providers/listNativeSessions" | "sessions/list" | "sessions/watchIndex" | "sessions/get" | "sessions/start" | "sessions/adoptNative" | "sessions/resume" | "sessions/acquireControl" | "sessions/renewControl" | "sessions/releaseControl" | "sessions/submitInput" | "sessions/watchEvents" | "sessions/interrupt" | "sessions/cool" | "sessions/forget" | "approvals/listPending" | "approvals/respond" | "sessions/indexChanged" | "sessions/indexEnded" | "providers/changed" | "providers/watchEnded" | "sessions/event" | "sessions/lagged" | "runtime/panicStop";
+export type RuntimeMethod = "runtime/initialize" | "runtime/initialized" | "runtime/challenge" | "integrations/requestEnrollment" | "integrations/watchEnrollment" | "integrations/getGrant" | "integrations/rotateKey" | "providers/usage" | "providers/list" | "providers/watch" | "providers/getCapabilities" | "providers/listModels" | "providers/listNativeSessions" | "sessions/list" | "sessions/watchIndex" | "sessions/get" | "sessions/start" | "sessions/adoptNative" | "sessions/resume" | "sessions/acquireControl" | "sessions/renewControl" | "sessions/releaseControl" | "sessions/submitInput" | "sessions/watchEvents" | "sessions/interrupt" | "sessions/cool" | "sessions/forget" | "approvals/listPending" | "approvals/respond" | "sessions/indexChanged" | "sessions/indexEnded" | "providers/changed" | "providers/watchEnded" | "sessions/event" | "sessions/lagged" | "runtime/panicStop";
 
 /** The current model information Runtime can truthfully expose. */
 export type RuntimeModelCatalog = { readonly coverage: "known"; readonly models: ReadonlyArray<RuntimeModelChoice>; } | { readonly aliases: ReadonlyArray<string>; readonly coverage: "aliases"; readonly reasoningEfforts: ReadonlyArray<RuntimeReasoningChoice>; readonly why: string; } | { readonly aliases: ReadonlyArray<string>; readonly coverage: "partial"; readonly models: ReadonlyArray<RuntimeModelChoice>; readonly reasoningEfforts: ReadonlyArray<RuntimeReasoningChoice>; readonly why: string; } | { readonly coverage: "unknown"; readonly why: string; } | { readonly coverage: "unsupported"; readonly why: string; };

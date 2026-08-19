@@ -33,6 +33,7 @@ import type {
   PendingApprovalList,
   ProviderId,
   ProviderList,
+  ProviderUsageList,
   ProviderWatchEndedNotification,
   ProvidersChangedNotification,
   RequestEnrollmentParams,
@@ -372,6 +373,11 @@ export class ProviderClient {
 
   public list(): Promise<ProviderList> {
     return callRuntime(this.runtime, "providers/list", {}, "ProviderList");
+  }
+
+  /** Where each account stands against its limits, by each provider's own latest report. */
+  public usage(): Promise<ProviderUsageList> {
+    return callRuntime(this.runtime, "providers/usage", {}, "ProviderUsageList");
   }
 
   public async watch(): Promise<ProviderSubscription> {

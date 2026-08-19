@@ -30,6 +30,9 @@ pub enum RuntimeMethod {
     /// Replace the authenticated integration key after exact local confirmation.
     #[serde(rename = "integrations/rotateKey")]
     IntegrationsRotateKey,
+    /// Read each account's latest reported position against its limits.
+    #[serde(rename = "providers/usage")]
+    ProvidersUsage,
     /// Read the structural provider inventory.
     #[serde(rename = "providers/list")]
     ProvidersList,
@@ -128,6 +131,7 @@ impl RuntimeMethod {
             Self::IntegrationsWatchEnrollment => "integrations/watchEnrollment",
             Self::IntegrationsGetGrant => "integrations/getGrant",
             Self::IntegrationsRotateKey => "integrations/rotateKey",
+            Self::ProvidersUsage => "providers/usage",
             Self::ProvidersList => "providers/list",
             Self::ProvidersWatch => "providers/watch",
             Self::ProvidersGetCapabilities => "providers/getCapabilities",
@@ -178,6 +182,7 @@ impl FromStr for RuntimeMethod {
             "integrations/watchEnrollment" => Ok(Self::IntegrationsWatchEnrollment),
             "integrations/getGrant" => Ok(Self::IntegrationsGetGrant),
             "integrations/rotateKey" => Ok(Self::IntegrationsRotateKey),
+            "providers/usage" => Ok(Self::ProvidersUsage),
             "providers/list" => Ok(Self::ProvidersList),
             "providers/watch" => Ok(Self::ProvidersWatch),
             "providers/getCapabilities" => Ok(Self::ProvidersGetCapabilities),

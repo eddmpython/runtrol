@@ -10,15 +10,15 @@ use runtrol_runtime_protocol::{
     JsonRpcNotification, JsonRpcRequest, JsonRpcResponse, LaggedNotification, ListModelsParams,
     ListNativeSessionsParams, ListPendingApprovalsParams, ManagedSessionList, MutationRequestId,
     NativeSessionCatalogue, PendingApprovalList, PendingEnrollmentId, ProviderId, ProviderList,
-    ProviderWatchEndedNotification, ProvidersChangedNotification, RequestEnrollmentParams,
-    RespondApprovalParams, ResumeSessionParams, RotateIntegrationKeyParams, RuntimeError,
-    RuntimeErrorKind, RuntimeEventNotification, RuntimeMethod, RuntimeModelCatalog,
-    RuntimeProviderCapabilities, RuntimeSessionId, ServerChallenge, SessionDescriptor,
-    SessionIndexChangedNotification, SessionIndexEndedNotification, SessionOpenResult,
-    StartSessionParams, SubmitInputParams, SuccessResponse, WatchEnrollmentParams,
-    WatchEventsParams, WatchEventsResult, WatchProvidersParams, WatchProvidersResult,
-    WatchSessionIndexParams, WatchSessionIndexResult, enrollment_signing_payload,
-    initialization_signing_payload, key_rotation_signing_payload,
+    ProviderUsageList, ProviderWatchEndedNotification, ProvidersChangedNotification,
+    RequestEnrollmentParams, RespondApprovalParams, ResumeSessionParams,
+    RotateIntegrationKeyParams, RuntimeError, RuntimeErrorKind, RuntimeEventNotification,
+    RuntimeMethod, RuntimeModelCatalog, RuntimeProviderCapabilities, RuntimeSessionId,
+    ServerChallenge, SessionDescriptor, SessionIndexChangedNotification,
+    SessionIndexEndedNotification, SessionOpenResult, StartSessionParams, SubmitInputParams,
+    SuccessResponse, WatchEnrollmentParams, WatchEventsParams, WatchEventsResult,
+    WatchProvidersParams, WatchProvidersResult, WatchSessionIndexParams, WatchSessionIndexResult,
+    enrollment_signing_payload, initialization_signing_payload, key_rotation_signing_payload,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -790,6 +790,20 @@ impl ProviderClient<'_> {
     pub async fn list(&mut self) -> Result<ProviderList, ClientError> {
         self.runtime
             .call(RuntimeMethod::ProvidersList, &EmptyParams {})
+            .await
+    }
+
+    /// Where each account stands against its limits, by each provider's own latest report.
+    ///
+    /// An empty list means nothing has reported since the Runtime started, which is different from a limit not
+    /// existing.
+    ///
+    /// # Errors
+    ///
+    /// Public client and Runtime failures, including missing provider read scope.
+    pub async fn usage(&mut self) -> Result<ProviderUsageList, ClientError> {
+        self.runtime
+            .call(RuntimeMethod::ProvidersUsage, &EmptyParams {})
             .await
     }
 
@@ -1567,6 +1581,7 @@ async fn receive_session_notification(
         | RuntimeMethod::IntegrationsGetGrant
         | RuntimeMethod::IntegrationsRotateKey
         | RuntimeMethod::ProvidersList
+        | RuntimeMethod::ProvidersUsage
         | RuntimeMethod::ProvidersWatch
         | RuntimeMethod::ProvidersGetCapabilities
         | RuntimeMethod::ProvidersListModels

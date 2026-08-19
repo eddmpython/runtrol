@@ -142,6 +142,55 @@ pub struct ProviderList {
     pub providers: Vec<ProviderDescriptor>,
 }
 
+/// Where each account stands against its limits, by each provider's own latest report.
+///
+/// Structured fields only, never the provider's verbatim payload: that payload rides the session event stream
+/// under session-output authority, and this list answers under provider authority. A gauge absent from the list
+/// means that provider has not reported since the Runtime started, which is different from a limit not existing,
+/// and a surface says "no report yet" rather than inventing a green light.
+#[derive(Clone, Debug, Default, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProviderUsageList {
+    /// Latest reports in provider order, one per provider that has reported.
+    pub providers: Vec<ProviderUsageGauge>,
+}
+
+/// One provider's most recent limit report.
+#[derive(Clone, Debug, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProviderUsageGauge {
+    /// Opaque selection value.
+    pub provider_id: ProviderId,
+    /// A limit is blocking right now, by the provider's own word.
+    pub reached: bool,
+    /// The shorter window, when the provider reports one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub primary: Option<ProviderUsageWindow>,
+    /// The longer window, when the provider reports one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub secondary: Option<ProviderUsageWindow>,
+    /// When the report arrived, in unix milliseconds, which is how a surface says how stale it is.
+    pub at_ms: u64,
+}
+
+/// One rate limit window, as far as the provider described it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProviderUsageWindow {
+    /// How much of the window is used, as a percentage, when the provider reports one.
+    ///
+    /// Optional because it is not universal: measured, one provider reports which window governs and when it
+    /// resets while saying nothing about how full it is.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub used_percent: Option<u8>,
+    /// When it resets, in unix milliseconds, when the provider says.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resets_at_ms: Option<u64>,
+    /// How long the window is, in minutes, when the provider says.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub window_minutes: Option<u32>,
+}
+
 /// Install one dedicated provider inventory subscription.
 #[derive(Clone, Debug, Default, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

@@ -39,6 +39,32 @@ pub(crate) struct RuntimeSessionCatalogue {
     available: bool,
 }
 
+/// Project the supervisor's account gauges into the public usage list.
+///
+/// Structured fields only. The verbatim payload never reaches this list: it rides the session event stream under
+/// session-output authority, and this list answers under provider authority.
+pub(crate) fn provider_usage(
+    gauges: &[runtrol_core::ProviderGauge],
+) -> runtrol_runtime_protocol::ProviderUsageList {
+    let window = |window: runtrol_provider::Window| runtrol_runtime_protocol::ProviderUsageWindow {
+        used_percent: window.used_percent,
+        resets_at_ms: window.resets_at.map(runtrol_provider::WallMs::as_millis),
+        window_minutes: window.window_minutes,
+    };
+    runtrol_runtime_protocol::ProviderUsageList {
+        providers: gauges
+            .iter()
+            .map(|gauge| runtrol_runtime_protocol::ProviderUsageGauge {
+                provider_id: ProviderId::new(gauge.provider.as_str()),
+                reached: gauge.reached,
+                primary: gauge.primary.map(window),
+                secondary: gauge.secondary.map(window),
+                at_ms: gauge.at.as_millis(),
+            })
+            .collect(),
+    }
+}
+
 /// Build the fast provider inventory without starting any provider process.
 pub(crate) fn providers(composed: &Composed) -> ProviderList {
     let cache = ProbeCache::open(composed.home.paths().probe_cache());

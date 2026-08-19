@@ -183,8 +183,12 @@ pub struct RateLimit {
 /// One rate limit window.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct Window {
-    /// How much of the window is used, as a percentage.
-    pub used_percent: u8,
+    /// How much of the window is used, as a percentage, when the provider reports one.
+    ///
+    /// Optional because it is not universal. Measured on a real turn: one CLI reports which window governs and
+    /// when it resets while saying nothing about how full it is. Requiring a number here forced that report to be
+    /// dropped whole, which read as "no limit exists" precisely when the provider was talking about one.
+    pub used_percent: Option<u8>,
     /// When it resets, when the provider says.
     pub resets_at: Option<WallMs>,
     /// How long the window is, in minutes.

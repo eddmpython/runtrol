@@ -666,6 +666,9 @@ async fn serve_surfaces(
         watch::channel(initial_runtime_sessions);
     let (runtime_providers, _initial_runtime_providers_receiver) =
         watch::channel(Arc::new(crate::runtime_inventory::providers(&composed)));
+    let (account_gauges, _initial_account_gauges_receiver) = watch::channel(Arc::new(
+        crate::runtime_inventory::provider_usage(&sessions.account_gauges()),
+    ));
     // ProbeCache replaces one file atomically but is deliberately not a database. Serializing provider preparation
     // keeps two connections from publishing stale snapshots over each other and bounds temporary provider processes.
     // A Models request holds this gate through its provider call. Opens release it after discovery because their
@@ -757,6 +760,7 @@ async fn serve_surfaces(
         let runtime_native_cursors = Arc::clone(&runtime_native_cursors);
         let runtime_providers = runtime_providers.clone();
         let runtime_sessions = runtime_sessions.clone();
+        let account_gauges = account_gauges.clone();
         let runtime_asking = runtime_asking.clone();
         let runtime_returning = runtime_returning.clone();
         connections.spawn(async move {
@@ -773,6 +777,7 @@ async fn serve_surfaces(
                                 Arc::clone(&runtime_native_cursors),
                                 runtime_providers.clone(),
                                 runtime_sessions.subscribe(),
+                                account_gauges.subscribe(),
                                 runtime_asking.clone(),
                                 runtime_returning.clone(),
                             ));
@@ -1229,6 +1234,7 @@ async fn serve_surfaces(
                     session,
                     published,
                     index_changed,
+                    gauges_changed,
                 } = pumped;
                 let release_oversize = published.as_ref().is_some_and(|published| {
                     published.event.body.payload_bytes()
@@ -1266,6 +1272,13 @@ async fn serve_surfaces(
                         &sessions,
                         &provider_update_notices,
                     );
+                }
+                if gauges_changed {
+                    // Its own channel rather than a session-index rebuild: a limit report arrives with ordinary
+                    // turn traffic, and the index flag exists precisely to keep traffic from rebuilding lists.
+                    account_gauges.send_replace(Arc::new(crate::runtime_inventory::provider_usage(
+                        &sessions.account_gauges(),
+                    )));
                 }
             }
 
