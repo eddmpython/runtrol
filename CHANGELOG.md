@@ -10,6 +10,8 @@ and refactoring that no user can observe do not belong here.
 
 ## [Unreleased]
 
+## [0.1.6] - 2026-08-20
+
 ### Fixed
 
 - The folders your window has open are conversation headings again. The 0.1.5 correction that stopped every
