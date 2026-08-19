@@ -264,6 +264,10 @@ export class Controller implements vscode.Disposable {
     await this.client.reset();
     await this.runtime.reset();
     await this.refreshAfterReconnect();
+    // The catalogues were cleared above and the reconnect may exist precisely because the grant's roots grew
+    // (a folder opened into a live window). Without restarting discovery here, stored conversations in the new
+    // root stay invisible until someone happens to press refresh, which is the silent-forever failure again.
+    this.startExistingChatDiscovery();
     void this.startSessionIndexWatch();
     const selected = this.state.selected;
     if (selected) {
