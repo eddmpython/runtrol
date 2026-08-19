@@ -3,6 +3,7 @@ import path from "node:path";
 import * as vscode from "vscode";
 
 import { CandidateController } from "./capability/controller";
+import { conversations as conversationRows } from "./conversationList";
 import { ConversationView, type WebviewPerformance } from "./conversationView";
 import { Controller } from "./controller";
 import { CoreClient } from "./core/client";
@@ -40,6 +41,7 @@ export type RuntrolExtensionApi = {
   hasConversationIn?(folder: string): Promise<boolean>;
   waitForConversationIn?(folder: string, deadlineMs: number): Promise<number>;
   seedProject?(folder: string): Promise<void>;
+  openFirstConversation?(): Promise<void>;
   readonly journey?: JourneyApi;
 };
 
@@ -598,6 +600,19 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
     seedProject: MEASURED_HOST
       ? async (folder) => {
         await projectStore.create(folder);
+      }
+      : undefined,
+    openFirstConversation: MEASURED_HOST
+      ? async () => {
+        // The eye pass photographs a real conversation, so it opens the first one the tree would show,
+        // through the same selection path a click takes.
+        const rows = conversationRows(state.sessions, state.providers, state.nativeChats, null);
+        const openable = rows.find((row) => row.canOpen);
+        if (!openable) {
+          throw new Error("no openable conversation for the eye pass");
+        }
+        await controller.select(openable);
+        await vscode.commands.executeCommand("runtrol.openConversation");
       }
       : undefined,
     journey: journeyApi(controller, state, conversation, afterReady, context.extensionMode),

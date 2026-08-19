@@ -36,6 +36,7 @@ type ExtensionApi = {
   }>;
   verifyRestoredSession?(sessionId: string): Promise<void>;
   hasConversationIn?(folder: string): Promise<boolean>;
+  openFirstConversation?(): Promise<void>;
   waitForConversationIn?(folder: string, deadlineMs: number): Promise<number>;
   seedProject?(folder: string): Promise<void>;
 };
@@ -297,6 +298,15 @@ async function eyePass(api: ExtensionApi, projectFolder: string, resultPath: str
     throw new Error("the performance-only project seeder is unavailable");
   }
   await api.seedProject(projectFolder);
+  if (!api.openFirstConversation) {
+    throw new Error("the performance-only conversation opener is unavailable");
+  }
+  // A conversation on screen, so the photograph includes the header chips fed by real announcements.
+  await within(
+    api.openFirstConversation(),
+    20_000,
+    "opening a conversation for the eye pass",
+  );
   await within(
     vscode.commands.executeCommand("workbench.view.extension.runtrol"),
     5_000,

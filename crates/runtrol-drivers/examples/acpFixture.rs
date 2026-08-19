@@ -131,7 +131,18 @@ fn serve(state: Option<&Path>, reply_bytes: Option<usize>) -> Result<(), ()> {
                 answer(
                     &mut output,
                     id.as_ref().ok_or(())?,
-                    &json!({"sessionId": native}),
+                    // The mode state is the ACP standard shape, announced so the driver's
+                    // announced-modes gate and the mode chip have one live producer to run against.
+                    &json!({
+                        "sessionId": native,
+                        "modes": {
+                            "currentModeId": "default",
+                            "availableModes": [
+                                {"id": "default", "name": "Default"},
+                                {"id": "focus", "name": "Focus"}
+                            ]
+                        }
+                    }),
                 )?;
             }
             "session/load" => {
@@ -145,7 +156,21 @@ fn serve(state: Option<&Path>, reply_bytes: Option<usize>) -> Result<(), ()> {
                         return Err(());
                     }
                 }
-                answer(&mut output, id.as_ref().ok_or(())?, &json!({}))?;
+                answer(
+                    &mut output,
+                    id.as_ref().ok_or(())?,
+                    // A resumed session announces the same mode state as a new one, so the mode
+                    // surface exists on both open paths.
+                    &json!({
+                        "modes": {
+                            "currentModeId": "default",
+                            "availableModes": [
+                                {"id": "default", "name": "Default"},
+                                {"id": "focus", "name": "Focus"}
+                            ]
+                        }
+                    }),
+                )?;
             }
             "session/list" => list_sessions(&mut output, &frame, id.as_ref().ok_or(())?)?,
             "session/prompt" => {
