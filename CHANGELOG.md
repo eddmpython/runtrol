@@ -10,6 +10,8 @@ and refactoring that no user can observe do not belong here.
 
 ## [Unreleased]
 
+## [0.1.5] - 2026-08-20
+
 ### Added
 
 - The model can now be switched in the middle of a conversation, from the conversation's own header. Click the
