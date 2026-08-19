@@ -11,5 +11,5 @@
   "coldResumeMs": 1500,
   "sessionSwitchP95Ms": 125,
   "reloadRestoreMs": 1750,
-  "followArrivalMs": 20000
+  "followArrivalMs": 15000
 }

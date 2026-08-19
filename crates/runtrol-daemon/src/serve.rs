@@ -85,6 +85,39 @@ pub const MAX_BLOCKING_PROVIDER_OPERATIONS: usize = runtrol_core::session::MAX_H
 /// page timeout together. It also bounds a child that stops reading stdin or a driver that never returns.
 pub const MODEL_PREPARATION_BUDGET_MS: u64 = 300_000;
 
+/// How many native-catalogue listing children may run at once.
+///
+/// A few rather than one, and a few rather than unbounded: each listing spawns a whole CLI, so a cap keeps a
+/// burst of discovery from becoming a process storm, while more than one slot keeps a single slow CLI from
+/// starving every other provider's catalogue.
+pub(crate) const NATIVE_LISTING_SLOTS: usize = 4;
+
+/// The two discovery gates, together because they bound the same class of work.
+///
+/// `preparing` serializes driver preparation. `ProbeCache` replaces one file atomically but is deliberately not a
+/// database, and two connections preparing at once could publish stale snapshots over each other. With a warm
+/// cache preparation is a stat call, so this gate is cheap to hold and cheap to wait on. A Models request holds
+/// it through its provider call. Opens release it after discovery because their process slots are bounded
+/// separately by `MAX_HOT`.
+///
+/// `listing` bounds native-catalogue children instead of serializing them. It was this mutex once, held across
+/// the whole listing, and that queued every provider's catalogue behind whichever CLI was slowest: measured
+/// 2026-08-19, the conversations of a folder just opened into a live window took 13~17 seconds to arrive, and
+/// ~1.2 seconds once the queueing was out of the way.
+pub(crate) struct DiscoveryGates {
+    pub(crate) preparing: Mutex<()>,
+    pub(crate) listing: tokio::sync::Semaphore,
+}
+
+impl DiscoveryGates {
+    pub(crate) fn new() -> Self {
+        Self {
+            preparing: Mutex::new(()),
+            listing: tokio::sync::Semaphore::new(NATIVE_LISTING_SLOTS),
+        }
+    }
+}
+
 /// Delay before the first automatic provider update check, outside activation and idle measurement windows.
 const PROVIDER_UPDATE_INITIAL_DELAY: Duration = Duration::from_mins(5);
 
@@ -250,7 +283,7 @@ struct ConnectionServices {
     reserving: mpsc::UnboundedSender<ReservationAsked>,
     returning: mpsc::UnboundedSender<AgentReturned>,
     composed: Arc<Composed>,
-    discovering: Arc<Mutex<()>>,
+    discovering: Arc<DiscoveryGates>,
     session_index: watch::Receiver<Arc<[u8]>>,
 }
 
@@ -342,7 +375,7 @@ impl Drop for ProviderUpdateGuard {
 
 async fn automatic_provider_updates(
     composed: Arc<Composed>,
-    discovering: Arc<Mutex<()>>,
+    discovering: Arc<DiscoveryGates>,
     reserving: mpsc::UnboundedSender<ReservationAsked>,
     notices: mpsc::UnboundedSender<AutomaticUpdateNotice>,
 ) {
@@ -351,7 +384,7 @@ async fn automatic_provider_updates(
     let mut session_pins = BTreeMap::<ProviderId, Box<str>>::new();
     loop {
         let statuses = {
-            let _gate = discovering.lock().await;
+            let _gate = discovering.preparing.lock().await;
             crate::provider_update::inspect_all(&composed).await
         };
         for status in statuses {
@@ -387,7 +420,7 @@ async fn automatic_provider_updates(
                 }
             }
 
-            let _gate = discovering.lock().await;
+            let _gate = discovering.preparing.lock().await;
             let (answered, hearing) = oneshot::channel();
             if reserving
                 .send(ReservationAsked::ReserveProviderUpdate { provider, answered })
@@ -669,11 +702,7 @@ async fn serve_surfaces(
     let (account_gauges, _initial_account_gauges_receiver) = watch::channel(Arc::new(
         crate::runtime_inventory::provider_usage(&sessions.account_gauges()),
     ));
-    // ProbeCache replaces one file atomically but is deliberately not a database. Serializing provider preparation
-    // keeps two connections from publishing stale snapshots over each other and bounds temporary provider processes.
-    // A Models request holds this gate through its provider call. Opens release it after discovery because their
-    // process slots are bounded separately by MAX_HOT.
-    let discovering = Arc::new(Mutex::new(()));
+    let discovering = Arc::new(DiscoveryGates::new());
     let mut connections = JoinSet::new();
     let push_wake_active = Arc::new(AtomicBool::new(false));
     let mut relay_hub = match relay {
@@ -1757,7 +1786,7 @@ async fn converse_inner(
                 request,
                 Request::ProviderUpdates | Request::ProviderUpdate { .. }
             ) {
-            Some(discovering.lock().await)
+            Some(discovering.preparing.lock().await)
         } else {
             None
         };

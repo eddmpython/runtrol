@@ -29,7 +29,7 @@ use runtrol_runtime_protocol::{
 use runtrol_store::IntegrationAuditOutcome;
 use runtrol_store::{EnrollmentKey, IntegrationKeyRotation};
 use serde::Serialize;
-use tokio::sync::{Mutex, mpsc, oneshot, watch};
+use tokio::sync::{mpsc, oneshot, watch};
 
 use crate::Composed;
 use crate::runtime_auth::{
@@ -55,7 +55,7 @@ pub(crate) async fn serve_connection(
     mut connection: Connection,
     instance_id: String,
     composed: Arc<Composed>,
-    discovering: Arc<Mutex<()>>,
+    discovering: Arc<crate::serve::DiscoveryGates>,
     native_cursors: Arc<NativeCursorCodec>,
     providers: watch::Sender<Arc<ProviderList>>,
     mut sessions: watch::Receiver<Arc<RuntimeSessionCatalogue>>,
@@ -303,7 +303,7 @@ async fn answer(
     state: &mut PublicState,
     instance_id: &str,
     composed: &Composed,
-    discovering: &Mutex<()>,
+    discovering: &crate::serve::DiscoveryGates,
     native_cursors: &NativeCursorCodec,
     provider_updates: &watch::Sender<Arc<ProviderList>>,
     providers: &ProviderList,
@@ -411,7 +411,7 @@ async fn dispatch_public(
     state: &mut PublicState,
     instance_id: &str,
     composed: &Composed,
-    discovering: &Mutex<()>,
+    discovering: &crate::serve::DiscoveryGates,
     native_cursors: &NativeCursorCodec,
     provider_updates: &watch::Sender<Arc<ProviderList>>,
     providers: &ProviderList,
@@ -1012,7 +1012,7 @@ fn providers_watch(
 async fn get_provider_capabilities(
     state: &mut PublicState,
     composed: &Composed,
-    discovering: &Mutex<()>,
+    discovering: &crate::serve::DiscoveryGates,
     id: JsonRpcId,
     params: serde_json::Value,
 ) -> Answer {
@@ -1036,7 +1036,7 @@ async fn get_provider_capabilities(
     let discovered = tokio::time::timeout(
         Duration::from_millis(crate::serve::MODEL_PREPARATION_BUDGET_MS),
         async {
-            let _preparing = discovering.lock().await;
+            let _preparing = discovering.preparing.lock().await;
             crate::provider_prepare::driver(composed, provider_id).await
         },
     )
@@ -1117,7 +1117,7 @@ fn provider_capability(
 async fn list_models(
     state: &mut PublicState,
     composed: &Composed,
-    discovering: &Mutex<()>,
+    discovering: &crate::serve::DiscoveryGates,
     id: JsonRpcId,
     params: serde_json::Value,
 ) -> Answer {
@@ -1141,7 +1141,7 @@ async fn list_models(
     let discovered = tokio::time::timeout(
         Duration::from_millis(crate::serve::MODEL_PREPARATION_BUDGET_MS),
         async {
-            let _preparing = discovering.lock().await;
+            let _preparing = discovering.preparing.lock().await;
             let driver = crate::provider_prepare::driver(composed, provider_id)
                 .await
                 .map_err(|_| ())?;
@@ -1171,7 +1171,7 @@ async fn list_models(
 async fn list_native_sessions(
     state: &mut PublicState,
     composed: &Composed,
-    discovering: &Mutex<()>,
+    discovering: &crate::serve::DiscoveryGates,
     native_cursors: &NativeCursorCodec,
     managed: &RuntimeSessionCatalogue,
     id: JsonRpcId,
@@ -1221,8 +1221,20 @@ async fn list_native_sessions(
     let discovered = tokio::time::timeout(
         Duration::from_millis(crate::serve::MODEL_PREPARATION_BUDGET_MS),
         async {
-            let _preparing = discovering.lock().await;
-            let prepared = crate::provider_prepare::prepared_driver(composed, provider)
+            // Held only through preparation, which is the region the probe-cache atomicity argument covers.
+            // The listing itself spawns a whole CLI and can take seconds; holding this mutex across it queued
+            // every provider's catalogue behind whichever CLI was slowest (measured 2026-08-19: a just-opened
+            // folder's conversations arrived after 13~17 s serialized, ~1.2 s not). Concurrency of the listing
+            // children is bounded by the semaphore below instead.
+            let prepared = {
+                let _preparing = discovering.preparing.lock().await;
+                crate::provider_prepare::prepared_driver(composed, provider)
+                    .await
+                    .map_err(|_| NativeDiscoveryFailure::Provider)?
+            };
+            let _listing = discovering
+                .listing
+                .acquire()
                 .await
                 .map_err(|_| NativeDiscoveryFailure::Provider)?;
             let opened = params
@@ -1700,7 +1712,7 @@ fn forget_confirmation_failure(
 async fn open_session(
     state: &mut PublicState,
     composed: &Composed,
-    discovering: &Mutex<()>,
+    discovering: &crate::serve::DiscoveryGates,
     native_cursors: &NativeCursorCodec,
     sessions: &RuntimeSessionCatalogue,
     asking: &mpsc::Sender<RuntimeAsked>,
@@ -1958,7 +1970,7 @@ fn validate_reasoning_selection(value: String) -> Result<Box<str>, OpenAdmission
 async fn perform_runtime_open(
     state: &mut PublicState,
     composed: &Composed,
-    discovering: &Mutex<()>,
+    discovering: &crate::serve::DiscoveryGates,
     native_cursors: &NativeCursorCodec,
     returning: &mpsc::UnboundedSender<RuntimeReturned>,
     opening: crate::runtime_control::RuntimeOpening,
@@ -2022,7 +2034,7 @@ async fn perform_runtime_open(
         None => return control_failure(id, RuntimeControlFailure::outcome_unknown()),
     };
     let prepared = {
-        let _gate = discovering.lock().await;
+        let _gate = discovering.preparing.lock().await;
         crate::provider_prepare::prepared_driver(composed, provider).await
     };
     let Ok(prepared) = prepared else {
@@ -3529,7 +3541,7 @@ listen = "stdio"
             runtime_asked,
             runtime_returned,
         ));
-        let discovering = Arc::new(Mutex::new(()));
+        let discovering = Arc::new(crate::serve::DiscoveryGates::new());
         let native_cursors =
             Arc::new(NativeCursorCodec::new().expect("create native catalogue cursor authority"));
         let serving = tokio::spawn({

@@ -50,6 +50,12 @@ and refactoring that no user can observe do not belong here.
 
 ### Fixed
 
+- A folder's conversations no longer queue behind every other installed CLI. One internal gate serialized all
+  existing-conversation listings, so the folder you just opened waited for whichever CLI was slowest to be
+  probed and listed. Measured in a live window with five services installed: the second folder's conversation
+  arrived after 13~17 seconds before, 9.7 seconds on a cold start now, and about 1.2 seconds once the daemon
+  has met its providers. Listings now run a few at a time instead of one at a time.
+
 - Opening another folder into a window now brings that folder's saved conversations with it. The reconnect that
   follows a widened workspace cleared the discovered-conversation list and never restarted discovery, so the new
   folder's conversations stayed invisible until a manual refresh. Proven in a live window by the new harness
