@@ -58,7 +58,9 @@ try {
     cp(path.join(extensionRoot, "resources/icon.png"), path.join(stagedResources, "icon.png")),
     cp(path.join(extensionRoot, "resources/symbol.svg"), path.join(stagedResources, "symbol.svg")),
     cp(path.join(extensionRoot, "resources/LICENSE"), path.join(stagedResources, "LICENSE")),
-    cp(path.join(extensionRoot, "resources/NOTICE"), path.join(stagedResources, "NOTICE")),
+    // Staged under the .txt name the package contract pins: vsce renames LICENSE to LICENSE.txt on its
+    // own but leaves NOTICE alone, and the two must land in the archive the same way.
+    cp(path.join(extensionRoot, "resources/NOTICE"), path.join(stagedResources, "NOTICE.txt")),
     cp(source, path.join(stagedCore, targetContract.executable)),
   ]);
   const packaged = spawnSync(
