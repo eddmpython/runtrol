@@ -1,5 +1,5 @@
 import type { NativeChatLine, ProviderLine, SessionLine } from "./runtimeTypes";
-import { providerDisplayName, workspaceName } from "./sessionDisplay";
+import { providerDisplayName, providerIcon, workspaceName } from "./sessionDisplay";
 import { workspaceIdentity } from "./workspaceCollision";
 
 /// What a conversation is doing, said the way a person would say it.
@@ -28,6 +28,8 @@ export type Conversation = {
   readonly key: string;
   readonly providerId: string;
   readonly serviceName: string;
+  /// The glyph that stands for that service, which is what tells two rows apart without reading them.
+  readonly serviceIcon: string;
   readonly title: string;
   readonly workspace: string;
   readonly folder: string;
@@ -115,6 +117,7 @@ export function projects(
   const open = new Set(openWorkspaces.map((workspace) => workspaceIdentity(workspace)));
   const byProject = new Map<string, Conversation[]>();
   for (const row of rows) {
+    if (!inAProject(row)) continue;
     const key = workspaceIdentity(row.workspace);
     const existing = byProject.get(key);
     if (existing) {
@@ -139,6 +142,24 @@ export function projects(
     });
   }
   return groups.sort(byNearestToTheReader);
+}
+
+/// Whether a conversation names a folder at all.
+function inAProject(row: Conversation): boolean {
+  return Boolean(row.workspace.trim());
+}
+
+/// The conversations that belong to no folder, in the order the rows already have.
+///
+/// They sit at the top level beside the project headings, not inside one. An earlier version filed them under a
+/// heading called "No project", which turns an absence into a category and reads as a folder the person forgot
+/// about. The chat apps people already use do not do that: a project is a folder you can put a conversation in,
+/// and a conversation you did not put anywhere is simply a conversation.
+///
+/// Below the headings rather than above them, because a project is a place somebody chose and a loose
+/// conversation is one they did not.
+export function loose(rows: readonly Conversation[]): Conversation[] {
+  return rows.filter((row) => !inAProject(row));
 }
 
 /// This window's project first, then whatever was touched most recently.
@@ -198,7 +219,11 @@ function supervised(
     key,
     providerId: session.providerId,
     serviceName: providerDisplayName(session.providerId, providers),
-    title: session.label?.trim() || native?.title?.trim() || workspaceName(session.workspace),
+    serviceIcon: providerIcon(session.providerId, providers),
+    title: session.label?.trim()
+      || native?.title?.trim()
+      || workspaceName(session.workspace)
+      || untitled(session.nativeSessionId || session.sessionId),
     workspace: session.workspace,
     folder: workspaceName(session.workspace),
     updatedAtMs: instant(native?.updatedAt),
@@ -222,7 +247,8 @@ function providerOwned(
     key,
     providerId: chat.providerId,
     serviceName: providerDisplayName(chat.providerId, providers),
-    title: chat.title?.trim() || workspaceName(chat.cwd),
+    serviceIcon: providerIcon(chat.providerId, providers),
+    title: chat.title?.trim() || workspaceName(chat.cwd) || untitled(chat.nativeSessionId),
     workspace: chat.cwd,
     folder: workspaceName(chat.cwd),
     updatedAtMs: instant(chat.updatedAt),
@@ -309,9 +335,22 @@ function disambiguated(rows: readonly Conversation[]): (row: Conversation) => Co
 }
 
 function shortIdentity(row: Conversation): string {
-  const identity = row.native?.nativeSessionId || row.session?.sessionId || row.key;
+  return shortened(row.native?.nativeSessionId || row.session?.sessionId || row.key);
+}
+
+/// The last four usable characters of an identifier, which is what tells two otherwise identical rows apart.
+function shortened(identity: string): string {
   const compact = identity.replaceAll(/[^A-Za-z0-9]/gu, "");
   return (compact.slice(-4) || identity.slice(-4)).toUpperCase();
+}
+
+/// What to call a conversation that nobody named.
+///
+/// The service supplied no title and there is no folder to borrow a name from, which is what a conversation
+/// started outside any project looks like. Composing a name out of what was said would mean reading the
+/// conversation. The identifier is what the service did give, and it is what tells two of these apart.
+function untitled(identity: string): string {
+  return `Untitled · ${shortened(identity)}`;
 }
 
 /// The muted second line: only the facts that separate this row from its neighbours.

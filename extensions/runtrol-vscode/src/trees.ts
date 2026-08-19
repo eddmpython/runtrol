@@ -3,11 +3,13 @@ import * as vscode from "vscode";
 import {
   attentionCount,
   conversationDetail,
+  loose,
   projectDetail,
   projects,
   type Conversation,
   type ProjectGroup,
 } from "./conversationList";
+import { ConversationDecorations, conversationUri } from "./conversationDecorations";
 import { isBroken } from "./providerHealth";
 import type { ProviderLine } from "./runtimeTypes";
 import { RuntimeState } from "./state";
@@ -28,6 +30,9 @@ export class ConversationItem extends vscode.TreeItem {
       : detail;
     this.contextValue = contextValue(conversation);
     this.iconPath = icon(conversation);
+    // What the badge attaches to. A scheme of its own so the row does not also collect whatever git and the
+    // problems view have to say about the folder it happens to sit in.
+    this.resourceUri = conversationUri(conversation.key);
     if (conversation.canOpen) {
       this.command = {
         command: "runtrol.selectSession",
@@ -90,28 +95,34 @@ export class ProjectItem extends vscode.TreeItem {
 export type ChatTreeItem = ConversationItem | ServiceProblemItem | ProjectItem;
 
 /*
- * One glyph per state, and the same glyph everywhere that state is shown.
+ * The glyph says which coding service, and its colour says how that conversation is going.
  *
- * The point of the vocabulary is that a list of eight running agents can be read without opening any of them. That
- * only works if the reader learns six shapes once, so no state may borrow another's glyph and none may be silent.
+ * The glyph carries the service because that is the fact a two character badge cannot carry: two of the four
+ * services this drives begin with the same letter, and a shape is read without being read. The state moves to the
+ * badge, which can say it in one character, and to the colour here.
+ *
+ * The state's colour is repeated rather than replaced by the badge's. A reader who has learned that orange means
+ * working has learned it in both places, and on a row where the editor overrides one of them the other still says
+ * it.
  */
 function icon(conversation: Conversation): vscode.ThemeIcon {
+  const glyph = conversation.serviceIcon;
   if (!conversation.canOpen) {
-    return new vscode.ThemeIcon("circle-slash", new vscode.ThemeColor("disabledForeground"));
+    return new vscode.ThemeIcon(glyph, new vscode.ThemeColor("disabledForeground"));
   }
   switch (conversation.activity) {
     case "needsYou":
-      return new vscode.ThemeIcon("question", new vscode.ThemeColor("notificationsWarningIcon.foreground"));
+      return new vscode.ThemeIcon(glyph, new vscode.ThemeColor("notificationsWarningIcon.foreground"));
     case "attention":
-      return new vscode.ThemeIcon("error", new vscode.ThemeColor("problemsErrorIcon.foreground"));
+      return new vscode.ThemeIcon(glyph, new vscode.ThemeColor("problemsErrorIcon.foreground"));
     case "working":
-      return new vscode.ThemeIcon("loading~spin", new vscode.ThemeColor("charts.orange"));
+      return new vscode.ThemeIcon(glyph, new vscode.ThemeColor("charts.orange"));
     case "waitingOnQuota":
-      return new vscode.ThemeIcon("watch", new vscode.ThemeColor("descriptionForeground"));
+      return new vscode.ThemeIcon(glyph, new vscode.ThemeColor("descriptionForeground"));
     case "ready":
-      return new vscode.ThemeIcon("circle-filled", new vscode.ThemeColor("charts.green"));
+      return new vscode.ThemeIcon(glyph, new vscode.ThemeColor("charts.green"));
     case "saved":
-      return new vscode.ThemeIcon("circle-outline");
+      return new vscode.ThemeIcon(glyph);
   }
 }
 
@@ -169,6 +180,11 @@ export class ConversationsTree implements vscode.TreeDataProvider<ChatTreeItem>,
   private grouped: Map<string, readonly Conversation[]> | undefined;
   /// Conversation rows for the flat shape, where there is nothing to defer.
   private flat: ConversationItem[] | undefined;
+  /// The badge on each row, which is the second thing a row says.
+  ///
+  /// Owned here because it is fed from the same rows the tree draws, and a second place computing which
+  /// conversations exist would be a second answer to that question.
+  readonly decorations = new ConversationDecorations();
   private view: vscode.TreeView<ChatTreeItem> | null = null;
   private badged: number | null = null;
   private revealed: string | null = null;
@@ -244,6 +260,7 @@ export class ConversationsTree implements vscode.TreeDataProvider<ChatTreeItem>,
     this.view = null;
     this.forgetItems();
     this.subscription.dispose();
+    this.decorations.dispose();
     this.changedEmitter.dispose();
   }
 
@@ -296,15 +313,19 @@ export class ConversationsTree implements vscode.TreeDataProvider<ChatTreeItem>,
     if (this.items) return;
     const nowMs = this.now();
     const rows = this.state.conversations;
+    // Before anything is built, so a row drawn in this pass already has its badge.
+    this.decorations.update(rows);
     const groups = projects(rows, this.openWorkspaces());
+    // Beside the headings, not under one. A conversation nobody filed is still a conversation.
+    const unfiled = loose(rows).map((row) => new ConversationItem(row, nowMs));
     const problems = this.state.providers
       .filter(isBroken)
       .map((provider) => new ServiceProblemItem(provider));
     const parents = new Map<string, ProjectItem>();
     const grouped = new Map<string, readonly Conversation[]>();
 
-    if (groups.length === 0) {
-      // Nothing to group, which means no conversations at all. The welcome content covers that case.
+    if (groups.length === 0 && unfiled.length === 0) {
+      // No conversations at all, filed or otherwise. The welcome content covers that case.
       this.items = [...problems];
       this.flat = [];
       this.parents = parents;
@@ -323,7 +344,7 @@ export class ConversationsTree implements vscode.TreeDataProvider<ChatTreeItem>,
         parents.set(row.key, heading);
       }
     }
-    this.items = [...headings, ...problems];
+    this.items = [...headings, ...unfiled, ...problems];
     this.flat = undefined;
     this.parents = parents;
     this.grouped = grouped;

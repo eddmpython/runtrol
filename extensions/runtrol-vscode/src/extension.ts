@@ -122,6 +122,7 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
     missions,
     conversations,
     vscode.window.registerTreeDataProvider("runtrol.missions", missions),
+    vscode.window.registerFileDecorationProvider(conversations.decorations),
     vscode.workspace.registerTextDocumentContentProvider("runtrol-mission", missionController.documentProvider()),
     vscode.commands.registerCommand(
       "runtrol.refresh",

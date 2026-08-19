@@ -49,6 +49,18 @@ export function providerDisplayName(provider: string, providers: readonly Provid
   return providers.find((candidate) => candidate.providerId === provider)?.displayName ?? readableProvider(provider);
 }
 
+/// The glyph that stands for a coding service, by the name the editor knows it under.
+///
+/// Read from what the service declared and carried here through the protocol, never chosen by a table in this
+/// file. A table here would mean adding a coding service required editing this extension, and the whole point of
+/// a manifest is that it does not.
+///
+/// The fallback is the glyph the editor itself uses for a chat provider it has no mark for, so a service the
+/// editor does not know still reads as a coding service rather than as a missing image.
+export function providerIcon(provider: string, providers: readonly ProviderLine[] = []): string {
+  return providers.find((candidate) => candidate.providerId === provider)?.icon || "sparkle";
+}
+
 export function workspaceName(workspace: string): string {
   const parts = workspace.replaceAll("\\", "/").split("/").filter(Boolean);
   return parts.at(-1) ?? workspace;

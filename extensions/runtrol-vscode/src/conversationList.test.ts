@@ -6,6 +6,7 @@ import {
   conversationDetail,
   conversations,
   elapsed,
+  loose,
   needsYou,
   nextNeedingYou,
   projectDetail,
@@ -381,6 +382,96 @@ function spread(workspaces: readonly string[], count = 6): SessionLine[] {
       workspace: workspaces[index % workspaces.length] ?? workspaces[0] ?? "",
     }));
 }
+
+
+
+
+test("a conversation nobody named still reads as something", () => {
+  // With no title from the service and no folder to borrow a name from, the label was empty. Composing one out of
+  // what was said would mean reading the conversation, so the identifier the service did give is used, and it is
+  // what tells two of these apart.
+  const rows = conversations(
+    [
+      session({ sessionId: "01a011e6-414e-7601-9f70-2f66980e2acd", workspace: "" }),
+      session({ sessionId: "fc2e97a4-1030-43fe-ae32-e78e79351ce1", workspace: "" }),
+    ],
+    PROVIDERS,
+    [],
+    null,
+  );
+  assert.equal(rows.length, 2);
+  for (const row of rows) {
+    assert.ok(row.title.startsWith("Untitled · "), `${row.title} names nothing`);
+  }
+  assert.notEqual(rows[0]?.title, rows[1]?.title, "two nameless conversations are still told apart");
+});
+
+
+test("a conversation with no folder is not filed under an invented one", () => {
+  // Measured across four coding services: a conversation can arrive carrying no working directory. It used to
+  // collapse into a heading whose label was empty, because resolving "" returns the Extension Host's own
+  // directory. Naming that heading "No project" was no better: it turns an absence into a folder the reader
+  // thinks they forgot about. The chat apps people already use do neither. A conversation nobody filed is a
+  // conversation, and it sits at the top level beside the projects.
+  const rows = conversations(
+    [session({ sessionId: "a", workspace: ALPHA }), session({ sessionId: "b", workspace: "" })],
+    PROVIDERS,
+    [],
+    null,
+  );
+  const groups = projects(rows, [ALPHA]);
+  assert.equal(groups.length, 1, "only the real folder is a project");
+  assert.equal(groups[0]?.name, "alpha");
+  const unfiled = loose(rows);
+  assert.equal(unfiled.length, 1);
+  assert.equal(unfiled[0]?.session?.sessionId, "b");
+});
+
+test("a folder that is only whitespace is not a folder", () => {
+  const rows = conversations([session({ sessionId: "a", workspace: "   " })], PROVIDERS, [], null);
+  assert.equal(projects(rows, []).length, 0);
+  assert.equal(loose(rows).length, 1);
+});
+
+test("every conversation is either in a project or loose, never both and never neither", () => {
+  // The two functions split one list, so a row falling through both would vanish from the tree with nothing
+  // saying so, and a row in both would be drawn twice.
+  const rows = conversations(
+    [
+      session({ sessionId: "a", workspace: ALPHA }),
+      session({ sessionId: "b", workspace: BETA }),
+      session({ sessionId: "c", workspace: "" }),
+      session({ sessionId: "d", workspace: ALPHA }),
+    ],
+    PROVIDERS,
+    [],
+    null,
+  );
+  const filed = projects(rows, []).flatMap((group) => group.rows);
+  const unfiled = loose(rows);
+  assert.equal(filed.length + unfiled.length, rows.length);
+  const seen = new Set([...filed, ...unfiled].map((row) => row.key));
+  assert.equal(seen.size, rows.length, "no row is drawn twice");
+});
+
+test("a conversation nobody named still reads as something", () => {
+  // With no title from the service and no folder to borrow a name from, the label was empty. Composing one out
+  // of what was said would mean reading the conversation, so the identifier the service did give is used, and it
+  // is what tells two of these apart.
+  const rows = conversations(
+    [
+      session({ sessionId: "01a011e6-414e-7601-9f70-2f66980e2acd", workspace: "" }),
+      session({ sessionId: "fc2e97a4-1030-43fe-ae32-e78e79351ce1", workspace: "" }),
+    ],
+    PROVIDERS,
+    [],
+    null,
+  );
+  for (const row of rows) {
+    assert.ok(row.title.startsWith("Untitled · "), `${row.title} names nothing`);
+  }
+  assert.notEqual(rows[0]?.title, rows[1]?.title, "two nameless conversations are still told apart");
+});
 
 test("a project heading appears however short the list is", () => {
   // Project then session, always. An earlier version only grouped past a length threshold, so the sidebar changed
