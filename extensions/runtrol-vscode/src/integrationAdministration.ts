@@ -1,5 +1,6 @@
 import * as vscode from "vscode";
 
+import { ask, expectDone } from "./core/ask";
 import type { CoreClient } from "./core/client";
 import type { IntegrationEnrollmentLine, IntegrationLine, Response } from "./protocol";
 
@@ -417,16 +418,4 @@ function uniquePaths(paths: readonly string[]): string[] {
   });
 }
 
-async function ask(client: CoreClient, request: Parameters<CoreClient["once"]>[0]): Promise<Response> {
-  const { response } = await client.once(request);
-  if (response.say === "failed") {
-    throw new Error(response.with.message);
-  }
-  return response;
-}
 
-function expectDone(response: Response, action: string): void {
-  if (response.say !== "done") {
-    throw new Error(`the daemon answered ${action} with ${response.say}`);
-  }
-}

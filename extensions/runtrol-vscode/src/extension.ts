@@ -24,6 +24,7 @@ import { ServiceTroubleReported } from "./serviceHelp";
 import { providerDisplayName, sessionTitle } from "./sessionDisplay";
 import { RuntimeState } from "./state";
 import { StudioRuntimeClient } from "./runtimeClient";
+import { WorkspaceRootFollowing } from "./workspaceRoots";
 import { ConversationsTree } from "./trees";
 
 export type RuntrolExtensionApi = {
@@ -108,6 +109,15 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
     (session) => providerDisplayName(session.providerId, state.providers),
   );
   controller = new Controller(context, client, runtime, state, conversation, selection);
+  // The window's folders follow into the grant's roots. Enrollment read them once; without this, every folder
+  // opened after first activation stayed outside conversation discovery, silently.
+  const rootFollowing = new WorkspaceRootFollowing({
+    client,
+    integrationId: () => runtime.integrationId(),
+    reconnect: () => controller.reconnect(),
+    openFolders: () => (vscode.workspace.workspaceFolders ?? []).map((folder) => folder.uri.fsPath),
+    warn: (message) => void vscode.window.showWarningMessage(message),
+  });
   const missionController = new MissionController(client, controller, state);
   const candidateController = new CandidateController(client);
   const missions = new MissionTree(missionController);
@@ -320,6 +330,11 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
     }),
   );
 
+  context.subscriptions.push(
+    vscode.workspace.onDidChangeWorkspaceFolders(() => {
+      void run(() => afterReady(() => rootFollowing.follow()));
+    }),
+  );
   const runtimeInitialization = runtime.initialize();
   const controllerInitialization = runtimeInitialization.then(async () => {
     initializationStage = "controller";
@@ -333,6 +348,9 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
     () => {
       initializationStage = "ready";
       settleReady?.();
+      // After ready rather than at enrollment, so a window opened onto a not-yet-approved folder catches up on
+      // its own activation, which is the same physical act the first enrollment trusted.
+      void run(() => rootFollowing.follow());
     },
     (error: unknown) => {
       settleReady?.(error);

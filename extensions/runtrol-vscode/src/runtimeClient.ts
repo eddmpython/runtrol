@@ -127,6 +127,14 @@ export class StudioRuntimeClient implements vscode.Disposable {
     }
   }
 
+  /// The Studio's own integration identity, or null before enrollment has ever succeeded.
+  ///
+  /// Only the identity. Roots and generation age the moment the daemon revises the grant, so anything acting on
+  /// them reads the daemon's own row instead of a stored copy.
+  integrationId(): string | null {
+    return this.stored?.grant?.integrationId ?? null;
+  }
+
   async inventory(): Promise<RuntimeInventory> {
     const providers = this.providerSnapshot;
     const sessions = this.sessionSnapshot;
