@@ -20,12 +20,12 @@ import { RuntimeState } from "./state";
 /// There is no second kind of row. A coding service is a fact about a conversation, not a container for one, so it
 /// appears in the muted detail line rather than as a node the reader has to open first.
 export class ConversationItem extends vscode.TreeItem {
-  constructor(readonly conversation: Conversation, nowMs: number) {
+  constructor(readonly conversation: Conversation, nowMs: number, grouped = false) {
     super(conversation.title, vscode.TreeItemCollapsibleState.None);
     this.id = conversation.key;
     // A conversation that stopped for the reader says so first. The service and the folder are what distinguish
     // rows from each other; this is what distinguishes one row from every other thing they could be doing.
-    const detail = conversationDetail(conversation, nowMs);
+    const detail = conversationDetail(conversation, nowMs, grouped);
     this.description = conversation.activity === "needsYou"
       ? `Needs you · ${detail}`
       : detail;
@@ -336,7 +336,9 @@ export class ConversationsTree implements vscode.TreeDataProvider<ChatTreeItem>,
     const records = this.projectRecords.all();
     const groups = projects(records, rows, this.openWorkspaces());
     // Beside the headings, not under one. A conversation nobody filed is still a conversation.
-    const unfiled = loose(records, rows).map((row) => new ConversationItem(row, nowMs));
+    const unfiled = loose(records, rows, this.openWorkspaces()).map(
+      (row) => new ConversationItem(row, nowMs),
+    );
     const problems = this.state.providers
       .filter(isBroken)
       .map((provider) => new ServiceProblemItem(provider));
@@ -375,7 +377,9 @@ export class ConversationsTree implements vscode.TreeDataProvider<ChatTreeItem>,
     const already = this.built.get(key);
     if (already) return already;
     const nowMs = this.now();
-    const under = (this.grouped?.get(key) ?? []).map((row) => new ConversationItem(row, nowMs));
+    const under = (this.grouped?.get(key) ?? []).map(
+      (row) => new ConversationItem(row, nowMs, true),
+    );
     this.built.set(key, under);
     return under;
   }

@@ -433,7 +433,7 @@ test("a conversation with no folder is not filed under an invented one", () => {
   const groups = projects([record(ALPHA)], rows, [ALPHA]);
   assert.equal(groups.length, 1, "only the created project is a heading");
   assert.equal(groups[0]?.name, "alpha");
-  const unfiled = loose([record(ALPHA)], rows);
+  const unfiled = loose([record(ALPHA)], rows, []);
   assert.equal(unfiled.length, 1);
   assert.equal(unfiled[0]?.session?.sessionId, "b");
 });
@@ -442,17 +442,40 @@ test("a folder that is only whitespace files nowhere", () => {
   const rows = conversations([session({ sessionId: "a", workspace: "   " })], PROVIDERS, [], null);
   const filed = projects([record(ALPHA)], rows, []).flatMap((group) => group.rows);
   assert.equal(filed.length, 0);
-  assert.equal(loose([record(ALPHA)], rows).length, 1);
+  assert.equal(loose([record(ALPHA)], rows, []).length, 1);
 });
 
-test("a folder full of conversations is not a heading unless somebody made it one", () => {
-  // The regression this whole shape exists to prevent. The panel used to invent a heading for every folder any
-  // conversation had run in, and a machine full of conversations became a wall of folder names (measured:
-  // thirty auto-headings named workspace-1 through workspace-30, rejected by the operator on sight). With no
-  // created projects there are no headings, and every conversation is simply a conversation.
+test("a folder becomes a heading only when somebody created it or has it open", () => {
+  // The regression this shape exists to prevent, in both directions. The panel once invented a heading for
+  // every folder any conversation had run in (measured: thirty auto-headings named workspace-1 through
+  // workspace-30, rejected by the operator on sight), and the correction then over-shot and flattened even
+  // the window's own open folder into rows that repeated its name (rejected again, 2026-08-20). Opening a
+  // folder is the operator's act exactly like creating a project: the open folder is a heading, everything
+  // neither created nor open stays a plain row.
   const rows = conversations(spread([ALPHA, BETA, GAMMA]), PROVIDERS, [], null);
-  assert.equal(projects([], rows, [ALPHA]).length, 0, "no created project, no heading");
-  assert.equal(loose([], rows).length, rows.length, "every conversation stays a plain row");
+  const groups = projects([], rows, [ALPHA]);
+  assert.equal(groups.length, 1, "the open folder is the one heading");
+  assert.equal(groups[0]?.name, "alpha");
+  assert.equal(groups[0]?.current, true, "the open folder is this window's project");
+  assert.equal(groups[0]?.rows.length, 2, "its own conversations file under it");
+  const unfiled = loose([], rows, [ALPHA]);
+  assert.equal(unfiled.length, rows.length - 2, "folders nobody created or opened stay plain rows");
+  assert.equal(projects([], rows, []).length, 0, "with nothing created and nothing open, no headings");
+});
+
+test("a created project standing on the open folder draws the one heading", () => {
+  const rows = conversations(spread([ALPHA]), PROVIDERS, [], null);
+  const groups = projects([record(ALPHA)], rows, [ALPHA]);
+  assert.equal(groups.length, 1, "one place, one heading");
+  assert.equal(groups[0]?.key.startsWith("project:"), true, "creation is the more deliberate act");
+});
+
+test("a grouped row does not repeat the folder its heading already names", () => {
+  const rows = conversations(spread([ALPHA]), PROVIDERS, [], null);
+  const row = rows[0];
+  assert.ok(row);
+  assert.ok(conversationDetail(row, Date.now()).includes(row.folder));
+  assert.ok(!conversationDetail(row, Date.now(), true).includes(row.folder));
 });
 
 test("a created project with no conversations yet still shows its heading", () => {
@@ -474,7 +497,7 @@ test("a conversation in a subfolder files under the project that covers it", () 
   );
   const groups = projects([record(ALPHA)], rows, []);
   assert.equal(groups[0]?.rows.length, 1);
-  assert.equal(loose([record(ALPHA)], rows).length, 0);
+  assert.equal(loose([record(ALPHA)], rows, []).length, 0);
 });
 
 test("nested projects file a conversation under the deepest one", () => {
@@ -511,7 +534,7 @@ test("every conversation is either in a project or loose, never both and never n
   );
   const records = [record(ALPHA), record(BETA)];
   const filed = projects(records, rows, []).flatMap((group) => group.rows);
-  const unfiled = loose(records, rows);
+  const unfiled = loose(records, rows, []);
   assert.equal(filed.length + unfiled.length, rows.length);
   const seen = new Set([...filed, ...unfiled].map((row) => row.key));
   assert.equal(seen.size, rows.length, "no row is drawn twice");
@@ -655,5 +678,5 @@ test("the same folder reached two ways files into one project", () => {
   );
   const groups = projects([record(ALPHA)], rows, []);
   assert.equal(groups[0]?.rows.length, 1, "casing did not push the conversation out of its project");
-  assert.equal(loose([record(ALPHA)], rows).length, 0);
+  assert.equal(loose([record(ALPHA)], rows, []).length, 0);
 });

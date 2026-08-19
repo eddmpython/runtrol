@@ -12,6 +12,12 @@ and refactoring that no user can observe do not belong here.
 
 ### Fixed
 
+- The folders your window has open are conversation headings again. The 0.1.5 correction that stopped every
+  folder from becoming a heading over-shot and flattened even the window's own project into a repeating list
+  ("runtrol · ..." on every row). Opening a folder is your act exactly like creating a project: the open
+  folder is now a collapsible heading with its conversations underneath, rows under any heading stop
+  repeating the folder name, and folders you neither created nor opened stay plain rows as before.
+
 - Opening a folder into a live window no longer reconnects everything to show that folder's conversations.
   Widening your own workspace grant now continues on the same authenticated connection (anything that removes
   or replaces authority still disconnects, exactly as before), conversation discovery reads the grant the

@@ -1,7 +1,7 @@
 import type { ProjectRecord } from "./projects";
 import type { NativeChatLine, ProviderLine, SessionLine } from "./runtimeTypes";
 import { providerDisplayName, providerIcon, workspaceName } from "./sessionDisplay";
-import { workspaceCovers } from "./workspaceCollision";
+import { workspaceCovers, workspaceIdentity } from "./workspaceCollision";
 
 /// What a conversation is doing, said the way a person would say it.
 ///
@@ -102,18 +102,20 @@ export type ProjectGroup = {
   readonly holdsOpen: boolean;
 };
 
-/// Conversations gathered under the projects the operator created, one group per created project.
+/// Conversations gathered under this machine's projects: the ones the operator created, and the folders this
+/// window has open.
 ///
-/// **A heading exists because somebody made it, never because a folder happened to hold conversations.** An
-/// earlier version invented a heading for every folder any conversation had run in, and on a machine full of
-/// conversations that is a wall of folder names nobody asked for. The operator rejected it in exactly those
-/// words (2026-08-19: thirty auto-headings named workspace-1 through workspace-30). The chat apps people already
-/// use have this right: you create a project, conversations file into it by where they happen, and everything
-/// else stays a plain conversation row.
+/// **A heading exists because somebody acted, never because a folder happened to hold conversations.** Creating
+/// a project is such an act, and so is opening a folder into the window: a person looking at their own window
+/// calls that folder their project, and a flat list that repeats its name on every row is the same wall of text
+/// with the structure thrown away. What never becomes a heading is a folder nobody created and nobody has open
+/// (2026-08-19: an earlier version invented thirty headings named workspace-1 through workspace-30 out of
+/// exactly such folders, and the operator rejected it in those words).
 ///
 /// A created project with nothing in it yet is still returned: it was made a moment ago and a heading that
 /// vanished would read as the creation failing. A conversation inside nested projects files under the deepest
-/// one, which is the folder a person would call its home.
+/// one, which is the folder a person would call its home; a created project wins over an open folder covering
+/// the same conversation, because creation is the more deliberate act and one row must never appear twice.
 export function projects(
   records: readonly ProjectRecord[],
   rows: readonly Conversation[],
@@ -138,7 +140,47 @@ export function projects(
       holdsOpen: group.some((row) => row.open),
     };
   });
+  const seen = new Set<string>();
+  for (const folder of openWorkspaces) {
+    if (!folder.trim()) continue;
+    const identity = workspaceIdentity(folder);
+    if (seen.has(identity)) continue;
+    seen.add(identity);
+    // A created project already standing for this place draws the one heading; either direction of cover
+    // counts, so a project inside the open folder or around it never doubles up.
+    const represented = records.some((record) =>
+      workspaceCovers(record.workspace, folder) || workspaceCovers(folder, record.workspace));
+    if (represented) continue;
+    const group = rows.filter((row) =>
+      !projectOf(records, row) && openFolderOf(openWorkspaces, row) === identity);
+    groups.push({
+      key: `folder:${encodeURIComponent(identity)}`,
+      name: workspaceName(folder) || folder,
+      workspace: folder,
+      current: true,
+      rows: group,
+      attention: group.filter(needsYou).length,
+      live: group.filter((row) => row.live).length,
+      holdsOpen: group.some((row) => row.open),
+    });
+  }
   return groups.sort(byNearestToTheReader);
+}
+
+/// The deepest open folder that covers a conversation, by identity, or null for none.
+function openFolderOf(openWorkspaces: readonly string[], row: Conversation): string | null {
+  if (!row.workspace.trim()) return null;
+  let home: string | null = null;
+  let homeLength = -1;
+  for (const folder of openWorkspaces) {
+    if (!workspaceCovers(folder, row.workspace)) continue;
+    const identity = workspaceIdentity(folder);
+    if (identity.length > homeLength) {
+      home = identity;
+      homeLength = identity.length;
+    }
+  }
+  return home;
 }
 
 /// The created project a conversation belongs to, or null when nobody filed it anywhere.
@@ -166,8 +208,10 @@ function projectOf(records: readonly ProjectRecord[], row: Conversation): Projec
 export function loose(
   records: readonly ProjectRecord[],
   rows: readonly Conversation[],
+  openWorkspaces: readonly string[],
 ): Conversation[] {
-  return rows.filter((row) => !projectOf(records, row));
+  return rows.filter((row) =>
+    !projectOf(records, row) && openFolderOf(openWorkspaces, row) === null);
 }
 
 /// This window's project first, then whatever was touched most recently.
@@ -363,9 +407,11 @@ function untitled(identity: string): string {
 }
 
 /// The muted second line: only the facts that separate this row from its neighbours.
-export function conversationDetail(row: Conversation, nowMs: number): string {
+export function conversationDetail(row: Conversation, nowMs: number, grouped = false): string {
   return [
-    row.folder === row.title ? null : row.folder,
+    // Under a heading the folder is the heading, and repeating it on every row is the wall of text the
+    // grouping exists to remove.
+    grouped || row.folder === row.title ? null : row.folder,
     row.serviceName,
     elapsed(row.updatedAtMs, nowMs),
   ].filter((part): part is string => Boolean(part)).join(" · ");
