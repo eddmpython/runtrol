@@ -176,6 +176,9 @@ async fn prewarm_providers(composed: Arc<Composed>, discovering: Arc<DiscoveryGa
         });
     }
     while meetings.join_next().await.is_some() {}
+    // The meetings parsed help texts and built throwaway drivers; hand those pages back so warming the
+    // machine does not raise what an idle daemon holds, which is a checked contract, not a mood.
+    runtrol_childproc::footprint::release_unused_memory();
 }
 
 /// Delay before the first automatic provider update check, outside activation and idle measurement windows.
