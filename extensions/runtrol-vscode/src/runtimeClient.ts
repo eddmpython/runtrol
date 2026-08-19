@@ -127,6 +127,11 @@ export class StudioRuntimeClient implements vscode.Disposable {
     }
   }
 
+  /// Where each account stands against its limits, by each provider's own latest report.
+  async providersUsage(): Promise<import("@runtrol/runtime-client").ProviderUsageList> {
+    return this.read(async (runtime) => runtime.providers().usage());
+  }
+
   /// The Studio's own integration identity, or null before enrollment has ever succeeded.
   ///
   /// Only the identity. Roots and generation age the moment the daemon revises the grant, so anything acting on

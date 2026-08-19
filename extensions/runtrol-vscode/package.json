@@ -133,6 +133,11 @@
           "id": "runtrol.missions",
           "name": "Missions",
           "visibility": "collapsed"
+        },
+        {
+          "id": "runtrol.usage",
+          "name": "Usage",
+          "visibility": "collapsed"
         }
       ]
     },
@@ -562,6 +567,10 @@
       {
         "view": "runtrol.sessions",
         "contents": "No coding-agent CLI was found on this machine.\n\nRuntrol supervises the CLIs you already have. Install one, then reopen this view.\n[Look again](command:runtrol.refresh)"
+      },
+      {
+        "view": "runtrol.usage",
+        "contents": "No account has reported its limits yet. Usage appears here after a conversation's first turn."
       }
     ],
     "configuration": {

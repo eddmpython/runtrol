@@ -26,6 +26,7 @@ import { RuntimeState } from "./state";
 import { StudioRuntimeClient } from "./runtimeClient";
 import { WorkspaceRootFollowing } from "./workspaceRoots";
 import { ConversationsTree, ProjectItem } from "./trees";
+import { UsageTree } from "./usageTree";
 
 export type RuntrolExtensionApi = {
   readonly ready: Promise<void>;
@@ -122,6 +123,11 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
   const candidateController = new CandidateController(client);
   const missions = new MissionTree(missionController);
   const conversations = new ConversationsTree(state);
+  const usage = new UsageTree({
+    usage: () => runtime.providersUsage(),
+    providers: () => state.providers,
+    now: () => Date.now(),
+  });
 
   context.subscriptions.push(
     state,
@@ -133,6 +139,7 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
     conversations,
     vscode.window.registerTreeDataProvider("runtrol.missions", missions),
     vscode.window.registerFileDecorationProvider(conversations.decorations),
+    usage,
     vscode.workspace.registerTextDocumentContentProvider("runtrol-mission", missionController.documentProvider()),
     vscode.commands.registerCommand(
       "runtrol.refresh",
@@ -379,6 +386,17 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
     treeDataProvider: conversations,
   });
   conversations.bindView(conversationsView);
+  const usageView = vscode.window.createTreeView("runtrol.usage", {
+    treeDataProvider: usage,
+  });
+  usage.bindView(usageView);
+  context.subscriptions.push(
+    usageView,
+    // The strip follows the session list's own changes, which is when a gauge is most likely to have moved.
+    state.onDidChange((change) => {
+      if (change === "rows") usage.sessionsChanged();
+    }),
+  );
   const revealEntryConversation = (): void => {
     void run(() => afterReady(() => controller.revealConversationOnEntry()));
   };
