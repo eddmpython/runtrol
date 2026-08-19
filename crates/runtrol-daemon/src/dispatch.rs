@@ -556,6 +556,78 @@ pub(crate) async fn complete_prepare_for(
     }
 }
 
+/// Project one Mission answer down to what a caller may know exists.
+///
+/// The same boundary the session index has: somebody at the machine sees everything, and a device sees
+/// exactly the Missions whose project lies inside its live workspace roots. A Mission outside them answers
+/// with the very sentence an absent one answers with, so the refusal reveals nothing the projection hides.
+fn missions_visible_to(
+    response: Response,
+    caller: &Caller,
+    authority: &crate::compose::DeviceAuthority,
+) -> Response {
+    let Caller::Device { device } = caller else {
+        return response;
+    };
+    let roots = authority.live_roots(*device);
+    let covered = |project: &str| {
+        AbsPath::new(project).is_ok_and(|path| roots.iter().any(|root| path.is_under(root)))
+    };
+    match response {
+        Response::Missions(lines) => Response::Missions(
+            lines
+                .into_iter()
+                .filter(|line| covered(&line.project))
+                .collect(),
+        ),
+        Response::Mission(snapshot) if !covered(&snapshot.mission.project) => {
+            refuse("the Mission does not exist")
+        }
+        other => other,
+    }
+}
+
+/// Which managed session a request addresses, for the device workspace bound in [`answer`].
+const fn addressed_session(request: &Request) -> Option<SessionId> {
+    match request {
+        Request::Prompt { session, .. }
+        | Request::Rename { session, .. }
+        | Request::Interrupt { session }
+        | Request::AnswerApproval { session, .. }
+        | Request::Watch { session, .. }
+        | Request::Close { session, .. } => Some(*session),
+        _ => None,
+    }
+}
+
+/// Whether this device's live roots cover the session's workspace.
+///
+/// The workspace is the live process's when there is one and the stored pointer's otherwise, and a session
+/// neither knows is nobody's to touch (fail closed): to a device outside the grant it does not exist, and
+/// the refusal must not say more than the projection shows.
+fn device_covers_session(
+    composed: &Composed,
+    sessions: &SessionManager,
+    device: runtrol_security::DeviceId,
+    session: SessionId,
+) -> bool {
+    let workspace = match sessions.live_session(session) {
+        Some(live) => Some(live.workspace.clone()),
+        None => match composed.store.get_session(session) {
+            Ok(Some(row)) => Some(row.cwd),
+            Ok(None) | Err(_) => None,
+        },
+    };
+    let Some(workspace) = workspace else {
+        return false;
+    };
+    composed
+        .device_authority
+        .live_roots(device)
+        .iter()
+        .any(|root| workspace.is_under(root))
+}
+
 /// Whether a request needs provider discovery before it reaches the session owner.
 #[must_use]
 pub(crate) const fn needs_driver(request: &Request) -> bool {
@@ -1050,6 +1122,19 @@ pub(crate) fn answer_prepared(
         ));
     }
 
+    // A device acts only inside its live workspace roots. The scope wall already answered whether this
+    // caller may perform this KIND of action; this answers whether it may perform it on THIS session, with
+    // the same root verification that bounds what it can list, so acting and seeing cannot diverge: a
+    // session id learned before a root was revoked stops working the moment the root does.
+    if let (Caller::Device { device }, Some(session)) =
+        (conversation.caller(), addressed_session(&request))
+        && !device_covers_session(composed, sessions, *device, session)
+    {
+        return Reply::One(refuse(
+            "this phone is not approved for that session's workspace",
+        ));
+    }
+
     match request {
         // Answered above, and matched here so that adding a request cannot fall through to a wildcard that does nothing.
         Request::Hello { .. } => Reply::One(refuse("the wire format is already agreed")),
@@ -1113,12 +1198,19 @@ pub(crate) fn answer_prepared(
                 Vec::new()
             };
             match composed.missions.try_lock() {
-                Ok(mut controller) => Reply::One(controller.answer(
-                    &composed.ledger,
-                    &runtime_ids,
-                    &approved_capabilities,
-                    &mission,
-                )),
+                Ok(mut controller) => {
+                    let response = controller.answer(
+                        &composed.ledger,
+                        &runtime_ids,
+                        &approved_capabilities,
+                        &mission,
+                    );
+                    Reply::One(missions_visible_to(
+                        response,
+                        conversation.caller(),
+                        &composed.device_authority,
+                    ))
+                }
                 Err(_) => Reply::One(refuse("the Mission controller lock is damaged")),
             }
         }
@@ -2042,6 +2134,9 @@ mod tests {
             runtrol_security::DeviceScope::SessionList
                 .to_string()
                 .into(),
+            runtrol_security::DeviceScope::SessionInputWrite
+                .to_string()
+                .into(),
         ];
         if grant_workspace {
             scopes.push(
@@ -2177,6 +2272,150 @@ mod tests {
             phone.sessions.is_empty(),
             "disclosure uses the same identity verification as opening, so a replacement directory shows nothing"
         );
+        clean(composed, &path);
+    }
+
+    #[tokio::test]
+    async fn a_phone_cannot_touch_a_session_outside_its_roots() {
+        // The action-side twin of the listing projection: a session id learned before a root was revoked
+        // (or guessed) must stop working the moment the root does, with a refusal that says no more than
+        // the projection shows.
+        let (composed, path) = composed_for("phone-touch-bound");
+        let mut sessions = SessionManager::new();
+        let session = SessionId::now();
+        attach_and_store(&composed, &mut sessions, session, &path);
+
+        let outside_dir = std::path::Path::new(&path).join("elsewhere");
+        std::fs::create_dir(&outside_dir).expect("create the ungranted root");
+        let outside = AbsPath::canonicalize(outside_dir.to_str().expect("UTF-8 scratch path"))
+            .expect("canonical ungranted root");
+        let device = pair_phone_for_root(&composed, &outside, true);
+
+        let mut conversation = Conversation::from_device(device);
+        match answer(
+            &mut conversation,
+            &composed,
+            &mut sessions,
+            Request::Hello {
+                wire: runtrol_ipc::WIRE_VERSION,
+            },
+        )
+        .await
+        {
+            Reply::One(Response::Welcome { .. }) => {}
+            other => panic!("expected the greeting, got {}", shape(&other)),
+        }
+        match answer(
+            &mut conversation,
+            &composed,
+            &mut sessions,
+            Request::Prompt {
+                session,
+                text: "hello".into(),
+            },
+        )
+        .await
+        {
+            Reply::One(Response::Failed(failure)) => {
+                assert!(
+                    failure
+                        .message
+                        .contains("not approved for that session's workspace"),
+                    "{}",
+                    failure.message
+                );
+            }
+            other => panic!("expected the workspace refusal, got {}", shape(&other)),
+        }
+
+        // The same phone, granted the session's own root, reaches the agent.
+        let covering = AbsPath::canonicalize(&path).expect("the scratch home canonicalizes");
+        let allowed_device = pair_phone_for_root(&composed, &covering, true);
+        let mut allowed = Conversation::from_device(allowed_device);
+        match answer(
+            &mut allowed,
+            &composed,
+            &mut sessions,
+            Request::Hello {
+                wire: runtrol_ipc::WIRE_VERSION,
+            },
+        )
+        .await
+        {
+            Reply::One(Response::Welcome { .. }) => {}
+            other => panic!("expected the greeting, got {}", shape(&other)),
+        }
+        match answer(
+            &mut allowed,
+            &composed,
+            &mut sessions,
+            Request::Prompt {
+                session,
+                text: "hello".into(),
+            },
+        )
+        .await
+        {
+            Reply::Sending { taken, .. } => {
+                assert!(sessions.return_agent(taken.lease, taken.agent).is_ok());
+            }
+            other => panic!(
+                "expected the prompt to reach the agent, got {}",
+                shape(&other)
+            ),
+        }
+        clean(composed, &path);
+    }
+
+    #[test]
+    fn a_phone_sees_only_the_missions_of_its_granted_roots() {
+        let (composed, path) = composed_for("phone-mission-bound");
+        let granted_dir = std::path::Path::new(&path).join("granted-project");
+        std::fs::create_dir(&granted_dir).expect("create the granted project");
+        let granted = AbsPath::canonicalize(granted_dir.to_str().expect("UTF-8 scratch path"))
+            .expect("canonical granted project");
+        let device = pair_phone_for_root(&composed, &granted, true);
+
+        let mission_line = |project: &str| runtrol_ipc::wire::MissionLine {
+            mission_id: "m-1".into(),
+            name: "One mission".into(),
+            project: project.into(),
+            state: "running".into(),
+            passed_tasks: 0,
+            total_tasks: 1,
+            awaiting_input: 0,
+        };
+        let listing = Response::Missions(vec![mission_line(granted.as_str()), mission_line(&path)]);
+        let caller = Caller::Device { device };
+        match missions_visible_to(listing, &caller, &composed.device_authority) {
+            Response::Missions(lines) => {
+                assert_eq!(lines.len(), 1, "exactly the granted project's Mission");
+                assert_eq!(
+                    lines.first().map(|line| &*line.project),
+                    Some(granted.as_str())
+                );
+            }
+            other => panic!("expected the projected listing, got {other:?}"),
+        }
+
+        let hidden = Response::Mission(Box::new(runtrol_ipc::wire::MissionSnapshot {
+            mission: mission_line(&path),
+            mission_sha256: "0".repeat(64).into(),
+            mission_ref: "mission.md".into(),
+            policy_sha256: "0".repeat(64).into(),
+            approval_expires_unix_ms: 0,
+            tasks: Vec::new(),
+        }));
+        match missions_visible_to(hidden, &caller, &composed.device_authority) {
+            Response::Failed(failure) => {
+                assert!(
+                    failure.message.contains("does not exist"),
+                    "the refusal must match an absent Mission exactly: {}",
+                    failure.message
+                );
+            }
+            other => panic!("expected the not-exist refusal, got {other:?}"),
+        }
         clean(composed, &path);
     }
 

@@ -85,6 +85,13 @@ and refactoring that no user can observe do not belong here.
 
 ### Security
 
+- A paired phone now acts only inside the workspace roots you approved for it. Every session command a phone
+  sends (speaking, renaming, watching, interrupting, closing, answering an approval) is verified against the
+  same live roots that bound its listing, so a session identity learned before a root was revoked stops
+  working the moment the root does. Mission reads are bounded the same way: a phone holding the mission-read
+  permission sees only the Missions of its approved roots, and one outside them answers exactly like one that
+  does not exist.
+
 - A paired phone now sees exactly the sessions inside the workspace roots you approved for it, and nothing else.
   The session list and its live updates used to be one shared snapshot, so any phone holding the listing
   permission received every session's absolute folder path, name, and activity, including projects that phone was
