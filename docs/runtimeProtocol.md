@@ -49,7 +49,7 @@ connection cannot approve itself.
 
 | Methods | Required public authority |
 |---|---|
-| `providers/list`, `providers/watch`, `providers/getCapabilities` | `provider.read` |
+| `providers/list`, `providers/watch`, `providers/getCapabilities`, `providers/usage` | `provider.read` |
 | `providers/listModels` | `model.read` |
 | `providers/listNativeSessions` | `session.native.discover` plus an approved root |
 | `sessions/list`, `sessions/watchIndex`, `sessions/get` | `session.list` |
