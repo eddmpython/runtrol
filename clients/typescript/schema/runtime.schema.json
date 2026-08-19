@@ -2431,6 +2431,11 @@
           "type": "string"
         },
         {
+          "const": "sessions/setModel",
+          "description": "Switch the answering model under the current control lease.",
+          "type": "string"
+        },
+        {
           "const": "sessions/watchEvents",
           "description": "Watch the existing bounded normalized event stream.",
           "type": "string"
@@ -2953,6 +2958,49 @@
         }
       ]
     },
+    "SetModelParams": {
+      "additionalProperties": false,
+      "description": "Switch the answering model under one exact control lease.\n\nA relay of the operator's choice through the provider's own switch surface, never a rewrite: what the\nsession actually answers with stays the provider's word, arriving on the event stream as its own event.\nA provider whose surface cannot carry the request refuses loudly instead of dropping any part of it.",
+      "properties": {
+        "leaseGeneration": {
+          "description": "Exact current lease generation.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "leaseId": {
+          "description": "Opaque lease identity returned on acquisition.",
+          "type": "string"
+        },
+        "model": {
+          "description": "The model, by the provider's own name for it, exactly as the operator chose it.",
+          "type": "string"
+        },
+        "reasoningEffort": {
+          "description": "The provider-owned reasoning posture, when the operator chose one and the provider can carry it.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "requestId": {
+          "$ref": "#/$defs/MutationRequestId",
+          "description": "Caller-minted idempotency identity."
+        },
+        "sessionId": {
+          "$ref": "#/$defs/RuntimeSessionId",
+          "description": "Exact Runtime-managed session."
+        }
+      },
+      "required": [
+        "requestId",
+        "sessionId",
+        "leaseId",
+        "leaseGeneration",
+        "model"
+      ],
+      "type": "object"
+    },
     "StartSessionParams": {
       "additionalProperties": false,
       "description": "Start a new provider-native session in one exact authorized workspace.",
@@ -3324,6 +3372,9 @@
     "session_open_result": {
       "$ref": "#/$defs/SessionOpenResult"
     },
+    "set_model": {
+      "$ref": "#/$defs/SetModelParams"
+    },
     "start_session": {
       "$ref": "#/$defs/StartSessionParams"
     },
@@ -3388,6 +3439,7 @@
     "cool_session",
     "forget_session",
     "submit_input",
+    "set_model",
     "watch_events",
     "watch_events_result",
     "runtime_event",

@@ -50,6 +50,7 @@ import type {
   SessionIndexChangedNotification,
   SessionIndexEndedNotification,
   SessionOpenResult,
+  SetModelParams,
   StartSessionParams,
   SubmitInputParams,
   WatchEventsParams,
@@ -600,6 +601,12 @@ export class SessionClient {
       throw new RuntimeProtocolError("session input exceeds the public byte limit");
     }
     requireEmpty(await callMutation(this.runtime, "sessions/submitInput", params, undefined));
+  }
+
+  /** Relay the operator's model choice through the provider's own switch surface. What the session actually
+   * answers with stays the provider's word, arriving on the event stream. */
+  public async setModel(params: SetModelParams): Promise<void> {
+    requireEmpty(await callMutation(this.runtime, "sessions/setModel", params, undefined));
   }
 
   public async interrupt(params: ControlLeaseParams): Promise<void> {

@@ -263,7 +263,7 @@ export interface RuntimeLimits { readonly challengeLifetimeMs: number; readonly 
 export interface RuntimeLocatorRecord { readonly endpoint: string; readonly endpointKind: RuntimeEndpointKind; readonly instanceId: string; readonly processId: number; readonly runtimeVersion: string; readonly schema: number; }
 
 /** A public Runtime method implemented by the initial read-only boundary. */
-export type RuntimeMethod = "runtime/initialize" | "runtime/initialized" | "runtime/challenge" | "integrations/requestEnrollment" | "integrations/watchEnrollment" | "integrations/getGrant" | "integrations/rotateKey" | "providers/usage" | "providers/list" | "providers/watch" | "providers/getCapabilities" | "providers/listModels" | "providers/listNativeSessions" | "sessions/list" | "sessions/watchIndex" | "sessions/get" | "sessions/start" | "sessions/adoptNative" | "sessions/resume" | "sessions/acquireControl" | "sessions/renewControl" | "sessions/releaseControl" | "sessions/submitInput" | "sessions/watchEvents" | "sessions/interrupt" | "sessions/cool" | "sessions/forget" | "approvals/listPending" | "approvals/respond" | "sessions/indexChanged" | "sessions/indexEnded" | "providers/changed" | "providers/watchEnded" | "sessions/event" | "sessions/lagged" | "runtime/panicStop";
+export type RuntimeMethod = "runtime/initialize" | "runtime/initialized" | "runtime/challenge" | "integrations/requestEnrollment" | "integrations/watchEnrollment" | "integrations/getGrant" | "integrations/rotateKey" | "providers/usage" | "providers/list" | "providers/watch" | "providers/getCapabilities" | "providers/listModels" | "providers/listNativeSessions" | "sessions/list" | "sessions/watchIndex" | "sessions/get" | "sessions/start" | "sessions/adoptNative" | "sessions/resume" | "sessions/acquireControl" | "sessions/renewControl" | "sessions/releaseControl" | "sessions/submitInput" | "sessions/setModel" | "sessions/watchEvents" | "sessions/interrupt" | "sessions/cool" | "sessions/forget" | "approvals/listPending" | "approvals/respond" | "sessions/indexChanged" | "sessions/indexEnded" | "providers/changed" | "providers/watchEnded" | "sessions/event" | "sessions/lagged" | "runtime/panicStop";
 
 /** The current model information Runtime can truthfully expose. */
 export type RuntimeModelCatalog = { readonly coverage: "known"; readonly models: ReadonlyArray<RuntimeModelChoice>; } | { readonly aliases: ReadonlyArray<string>; readonly coverage: "aliases"; readonly reasoningEfforts: ReadonlyArray<RuntimeReasoningChoice>; readonly why: string; } | { readonly aliases: ReadonlyArray<string>; readonly coverage: "partial"; readonly models: ReadonlyArray<RuntimeModelChoice>; readonly reasoningEfforts: ReadonlyArray<RuntimeReasoningChoice>; readonly why: string; } | { readonly coverage: "unknown"; readonly why: string; } | { readonly coverage: "unsupported"; readonly why: string; };
@@ -300,6 +300,13 @@ export interface SessionOpenResult { readonly control: ControlLease; readonly se
 
 /** Whether a newly heated process must be the only writer for its working tree. */
 export type SessionWorkspaceAccess = "exclusive" | "shared";
+
+/** Switch the answering model under one exact control lease.
+
+A relay of the operator's choice through the provider's own switch surface, never a rewrite: what the
+session actually answers with stays the provider's word, arriving on the event stream as its own event.
+A provider whose surface cannot carry the request refuses loudly instead of dropping any part of it. */
+export interface SetModelParams { readonly leaseGeneration: number; readonly leaseId: string; readonly model: string; readonly reasoningEffort?: string | null; readonly requestId: MutationRequestId; readonly sessionId: RuntimeSessionId; }
 
 /** Start a new provider-native session in one exact authorized workspace. */
 export interface StartSessionParams { readonly access: SessionWorkspaceAccess; readonly model?: string | null; readonly providerId: ProviderId; readonly reasoningEffort?: string | null; readonly requestId: MutationRequestId; readonly workspace: string; }

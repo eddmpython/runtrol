@@ -15,10 +15,11 @@ use runtrol_runtime_protocol::{
     RotateIntegrationKeyParams, RuntimeError, RuntimeErrorKind, RuntimeEventNotification,
     RuntimeMethod, RuntimeModelCatalog, RuntimeProviderCapabilities, RuntimeSessionId,
     ServerChallenge, SessionDescriptor, SessionIndexChangedNotification,
-    SessionIndexEndedNotification, SessionOpenResult, StartSessionParams, SubmitInputParams,
-    SuccessResponse, WatchEnrollmentParams, WatchEventsParams, WatchEventsResult,
-    WatchProvidersParams, WatchProvidersResult, WatchSessionIndexParams, WatchSessionIndexResult,
-    enrollment_signing_payload, initialization_signing_payload, key_rotation_signing_payload,
+    SessionIndexEndedNotification, SessionOpenResult, SetModelParams, StartSessionParams,
+    SubmitInputParams, SuccessResponse, WatchEnrollmentParams, WatchEventsParams,
+    WatchEventsResult, WatchProvidersParams, WatchProvidersResult, WatchSessionIndexParams,
+    WatchSessionIndexResult, enrollment_signing_payload, initialization_signing_payload,
+    key_rotation_signing_payload,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -1222,6 +1223,22 @@ impl SessionClient<'_> {
         Ok(())
     }
 
+    /// Relay the operator's model choice through the provider's own switch surface.
+    ///
+    /// What the session actually answers with stays the provider's word, arriving on the event stream.
+    ///
+    /// # Errors
+    ///
+    /// Public client and Runtime failures, including the provider's own loud refusal when its surface cannot
+    /// carry the request.
+    pub async fn set_model(&mut self, params: &SetModelParams) -> Result<(), ClientError> {
+        let _: EmptyResult = self
+            .runtime
+            .call_mutation(RuntimeMethod::SessionsSetModel, &params.request_id, params)
+            .await?;
+        Ok(())
+    }
+
     /// Ask the provider to interrupt one exact controlled session.
     ///
     /// # Errors
@@ -1596,6 +1613,7 @@ async fn receive_session_notification(
         | RuntimeMethod::SessionsRenewControl
         | RuntimeMethod::SessionsReleaseControl
         | RuntimeMethod::SessionsSubmitInput
+        | RuntimeMethod::SessionsSetModel
         | RuntimeMethod::SessionsWatchEvents
         | RuntimeMethod::SessionsInterrupt
         | RuntimeMethod::SessionsCool

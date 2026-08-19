@@ -159,6 +159,29 @@ pub struct SubmitInputParams {
     pub input: String,
 }
 
+/// Switch the answering model under one exact control lease.
+///
+/// A relay of the operator's choice through the provider's own switch surface, never a rewrite: what the
+/// session actually answers with stays the provider's word, arriving on the event stream as its own event.
+/// A provider whose surface cannot carry the request refuses loudly instead of dropping any part of it.
+#[derive(Clone, Debug, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SetModelParams {
+    /// Caller-minted idempotency identity.
+    pub request_id: MutationRequestId,
+    /// Exact Runtime-managed session.
+    pub session_id: RuntimeSessionId,
+    /// Opaque lease identity returned on acquisition.
+    pub lease_id: String,
+    /// Exact current lease generation.
+    pub lease_generation: u64,
+    /// The model, by the provider's own name for it, exactly as the operator chose it.
+    pub model: String,
+    /// The provider-owned reasoning posture, when the operator chose one and the provider can carry it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<String>,
+}
+
 /// Interrupt one exact controlled session.
 pub type InterruptParams = ControlLeaseParams;
 

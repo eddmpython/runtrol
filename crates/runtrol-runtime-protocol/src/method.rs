@@ -78,6 +78,9 @@ pub enum RuntimeMethod {
     /// Submit caller-owned input without rewriting or implicit retry.
     #[serde(rename = "sessions/submitInput")]
     SessionsSubmitInput,
+    /// Switch the answering model under the current control lease.
+    #[serde(rename = "sessions/setModel")]
+    SessionsSetModel,
     /// Watch the existing bounded normalized event stream.
     #[serde(rename = "sessions/watchEvents")]
     SessionsWatchEvents,
@@ -147,6 +150,7 @@ impl RuntimeMethod {
             Self::SessionsRenewControl => "sessions/renewControl",
             Self::SessionsReleaseControl => "sessions/releaseControl",
             Self::SessionsSubmitInput => "sessions/submitInput",
+            Self::SessionsSetModel => "sessions/setModel",
             Self::SessionsWatchEvents => "sessions/watchEvents",
             Self::SessionsInterrupt => "sessions/interrupt",
             Self::SessionsCool => "sessions/cool",
@@ -198,6 +202,7 @@ impl FromStr for RuntimeMethod {
             "sessions/renewControl" => Ok(Self::SessionsRenewControl),
             "sessions/releaseControl" => Ok(Self::SessionsReleaseControl),
             "sessions/submitInput" => Ok(Self::SessionsSubmitInput),
+            "sessions/setModel" => Ok(Self::SessionsSetModel),
             "sessions/watchEvents" => Ok(Self::SessionsWatchEvents),
             "sessions/interrupt" => Ok(Self::SessionsInterrupt),
             "sessions/cool" => Ok(Self::SessionsCool),
@@ -250,6 +255,7 @@ mod tests {
             RuntimeMethod::SessionsRenewControl,
             RuntimeMethod::SessionsReleaseControl,
             RuntimeMethod::SessionsSubmitInput,
+            RuntimeMethod::SessionsSetModel,
             RuntimeMethod::SessionsWatchEvents,
             RuntimeMethod::SessionsInterrupt,
             RuntimeMethod::SessionsCool,

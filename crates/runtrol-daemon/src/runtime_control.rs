@@ -23,8 +23,8 @@ use runtrol_runtime_protocol::{
     ListPendingApprovalsParams, MAX_INPUT_BYTES, MUTATION_CLOCK_SKEW_MS, MutationRequestId,
     PendingApproval, PendingApprovalList, RespondApprovalParams, RuntimeApprovalKind,
     RuntimeApprovalOption, RuntimeApprovalOptionKind, RuntimeApprovalRisk, RuntimeErrorKind,
-    RuntimeMethod, SessionDescriptor, SessionOpenResult, SubmitInputParams, WaitingOn,
-    WatchEventsParams, WatchEventsResult,
+    RuntimeMethod, SessionDescriptor, SessionOpenResult, SetModelParams, SubmitInputParams,
+    WaitingOn, WatchEventsParams, WatchEventsResult,
 };
 use runtrol_store::{
     IntegrationKey, IntegrationMutationKey, IntegrationMutationRow, IntegrationMutationState, Store,
@@ -57,6 +57,10 @@ pub(crate) enum RuntimeControlRequest {
     Submit {
         session: SessionId,
         params: SubmitInputParams,
+    },
+    SetModel {
+        session: SessionId,
+        params: SetModelParams,
     },
     Interrupt {
         session: SessionId,
@@ -432,6 +436,9 @@ impl RuntimeControl {
             }
             RuntimeControlRequest::Submit { session, params } => {
                 self.submit(store, sessions, integration, session, params)
+            }
+            RuntimeControlRequest::SetModel { session, params } => {
+                self.set_model(store, sessions, integration, session, params)
             }
             RuntimeControlRequest::Interrupt { session, params } => {
                 self.interrupt(store, sessions, integration, session, &params)
@@ -951,6 +958,73 @@ impl RuntimeControl {
         }
     }
 
+    /// Relay the operator's model choice to the session's driver, under the same lease discipline as input.
+    ///
+    /// The same shape as [`Self::submit`] on purpose: switching what answers is as much a control action as
+    /// speaking, so it takes the same lease and the same idempotent mutation record. Runtime carries the words
+    /// and decides nothing about them; the provider's refusal or confirmation arrives on the event stream.
+    fn set_model(
+        &mut self,
+        store: &Store,
+        sessions: &mut SessionManager,
+        integration: IntegrationKey,
+        session: SessionId,
+        params: SetModelParams,
+    ) -> RuntimeControlReply {
+        // Transport sanity rather than model knowledge: no provider names a model in kilobytes, so a request
+        // that does is malformed, not a catalogue miss.
+        let model_usable = !params.model.is_empty() && params.model.len() <= 256;
+        let effort_usable = params
+            .reasoning_effort
+            .as_deref()
+            .is_none_or(|effort| !effort.is_empty() && effort.len() <= 64);
+        if !model_usable || !effort_usable {
+            return RuntimeControlReply::Failed(RuntimeControlFailure::new(
+                RuntimeErrorKind::InvalidRequest,
+                "the model switch names no usable model or effort",
+            ));
+        }
+        let authenticator = self.authenticate_set_model(&params);
+        let mutation = match self.begin(
+            store,
+            integration,
+            RuntimeMethod::SessionsSetModel,
+            &params.request_id,
+            authenticator,
+        ) {
+            Ok(Begun::New(key)) => key,
+            Ok(Begun::Replay(reply)) => return *reply,
+            Err(failure) => return RuntimeControlReply::Failed(failure),
+        };
+        if let Err(failure) = self.verify_lease_values(
+            sessions,
+            integration,
+            session,
+            &params.lease_id,
+            params.lease_generation,
+        ) {
+            return self.deny(store, mutation, failure);
+        }
+        match sessions.take_agent(session) {
+            Ok(taken) => RuntimeControlReply::Sending {
+                mutation,
+                taken,
+                command: AgentCommand::SetModel {
+                    model: params.model.into(),
+                    reasoning_effort: params.reasoning_effort.map(Into::into),
+                },
+            },
+            Err(_) => self.deny(
+                store,
+                mutation,
+                RuntimeControlFailure::new(
+                    RuntimeErrorKind::SessionConflict,
+                    "the session cannot switch models in its current state",
+                ),
+            ),
+        }
+    }
+
     fn interrupt(
         &mut self,
         store: &Store,
@@ -1413,6 +1487,21 @@ impl RuntimeControl {
         feed(&mut mac, params.lease_id.as_bytes());
         feed(&mut mac, &params.lease_generation.to_le_bytes());
         feed(&mut mac, params.input.as_bytes());
+        finish_mac(mac)
+    }
+
+    fn authenticate_set_model(&self, params: &SetModelParams) -> [u8; 32] {
+        let mut mac = self.mac(RuntimeMethod::SessionsSetModel);
+        feed(&mut mac, params.session_id.as_str().as_bytes());
+        feed(&mut mac, params.lease_id.as_bytes());
+        feed(&mut mac, &params.lease_generation.to_le_bytes());
+        feed(&mut mac, params.model.as_bytes());
+        // Presence is part of the identity: "no effort" and "empty effort" must not collide, and empty is
+        // already refused before this runs.
+        feed(
+            &mut mac,
+            params.reasoning_effort.as_deref().unwrap_or("").as_bytes(),
+        );
         finish_mac(mac)
     }
 
