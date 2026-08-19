@@ -10,6 +10,15 @@ and refactoring that no user can observe do not belong here.
 
 ## [Unreleased]
 
+### Fixed
+
+- The first meeting with each installed service got three times cheaper, and it now happens behind the boot
+  instead of in front of you. A cold probe asked its questions one CLI start after another; they are asked
+  together now, a probe that help already answered stops spawning control questions it will not use, and the
+  daemon warms every usable service in the background (two at a time, so the warming never crowds out your
+  own first request). Measured: resuming a cold conversation dropped from ~2.4 s to ~0.4 s, and a service
+  asked a few seconds after startup answers from a warm cache in ~0.1 s.
+
 ## [0.1.5] - 2026-08-20
 
 ### Added

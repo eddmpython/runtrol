@@ -216,12 +216,20 @@ pub async fn probe_program(
         return Ok((program, known.clone()));
     }
 
-    let version = ask_version(manifest, &program, contained_by).await?;
-    let flags = if bound_flags.is_empty() {
-        ask_flags(&program, contained_by).await
-    } else {
-        confirm_flags(manifest, &program, bound_flags, contained_by).await?
+    // The two questions are independent (same resolved program, different argv), and each one starts a
+    // whole CLI. Measured on the reference machine (2026-08-20): one start costs ~1.5 s for the Node-based
+    // CLIs, so asking one after the other doubled every cold first meeting; asked together, a cold probe
+    // costs one start's worth of waiting.
+    let flags_asked = async {
+        if bound_flags.is_empty() {
+            Ok(ask_flags(&program, contained_by).await)
+        } else {
+            confirm_flags(manifest, &program, bound_flags, contained_by).await
+        }
     };
+    let (version, flags) = tokio::join!(ask_version(manifest, &program, contained_by), flags_asked);
+    let version = version?;
+    let flags = flags?;
     let entry = Entry {
         probed_at: WallMs::now(),
         bin,
@@ -378,13 +386,35 @@ pub async fn confirm_flags(
     let safe: Vec<String> = probe.safe_with.iter().map(ToString::to_string).collect();
     let (mut known, needs_parser) =
         candidates_from_help(candidates, &ask_flags(program, contained_by).await);
-
-    let mut refusals = Vec::with_capacity(CONTROLS.len());
-    for control in CONTROLS {
-        refusals.push(ask_about(program, &safe, control, contained_by).await?);
+    if needs_parser.is_empty() {
+        // Help answered every bound flag, so there is nothing to compare refusals against and the two
+        // control starts would be paid for nothing. Measured 2026-08-20: each start is ~1.5 s on the
+        // Node-based CLIs, and this early return is most cold meetings.
+        return Ok(Flags::Observed(known));
     }
-    // `CONTROLS` has two entries and the loop pushed one answer each. Reporting the impossible as a limitation
-    // rather than a panic keeps a probe a probe.
+
+    // Every remaining question goes to the same program and none depends on another's answer, so they are
+    // asked together and cost one start's wall time: the two controls, and each flag help did not show.
+    // Comparison happens after, on the collected answers.
+    let candidates_asked = async {
+        let mut answers = Vec::with_capacity(needs_parser.len());
+        for candidate in &needs_parser {
+            answers.push((
+                *candidate,
+                ask_about(program, &safe, candidate, contained_by).await?,
+            ));
+        }
+        Ok::<_, ProbeError>(answers)
+    };
+    let (first_control, second_control, candidate_answers) = tokio::join!(
+        ask_about(program, &safe, CONTROLS[0], contained_by),
+        ask_about(program, &safe, CONTROLS[1], contained_by),
+        candidates_asked,
+    );
+    let refusals = vec![first_control?, second_control?];
+    let candidate_answers = candidate_answers?;
+    // `CONTROLS` has two entries and the join above produced one answer each. Reporting the impossible as a
+    // limitation rather than a panic keeps a probe a probe.
     let [first, second] = refusals.as_slice() else {
         return Ok(Flags::Unknown {
             why: "the control questions did not both produce an answer".to_owned(),
@@ -398,8 +428,7 @@ pub async fn confirm_flags(
         });
     }
 
-    for candidate in needs_parser {
-        let answer = ask_about(program, &safe, candidate, contained_by).await?;
+    for (candidate, answer) in candidate_answers {
         if answer != *first {
             known.insert(candidate.to_owned());
         }

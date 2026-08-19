@@ -138,6 +138,46 @@ impl DiscoveryGates {
     }
 }
 
+/// Meet every usable provider once, in the background, the moment the daemon is up.
+///
+/// A cold first meeting costs one CLI start of waiting (measured 2026-08-20: ~1.5 s for the Node-based
+/// CLIs, with the probe's two questions already asked concurrently), and without this the person pays it
+/// on their first real request. Started here, behind the boot, the probes are finished or in flight by
+/// the time a request arrives; a racing request queues on its provider's lane and continues the moment
+/// the same preparation completes, never duplicating it. Composing stays probe-free: this runs after the
+/// listener is up, so it delays nothing.
+async fn prewarm_providers(composed: Arc<Composed>, discovering: Arc<DiscoveryGates>) {
+    // Two at a time, deliberately gentle: each meeting starts up to a few CLI processes, and measured
+    // 2026-08-20, warming all five at once saturated the machine at the exact moment the operator's own
+    // first request arrives, making that request slower than the cold it hides. A racing real request
+    // still wins overall: it queues on its provider's lane and rides the same preparation.
+    let gentle = Arc::new(tokio::sync::Semaphore::new(2));
+    let providers: Vec<ProviderId> = composed
+        .registry
+        .usable()
+        .map(runtrol_core::registry::Provider::id)
+        .collect();
+    let mut meetings = JoinSet::new();
+    for provider in providers {
+        let composed = Arc::clone(&composed);
+        let discovering = Arc::clone(&discovering);
+        let gentle = Arc::clone(&gentle);
+        meetings.spawn(async move {
+            let Ok(_breath) = gentle.acquire_owned().await else {
+                // ok: the semaphore is never closed while this task set lives; if it ever were, skipping a
+                // warm-up changes nothing the next real request cannot do itself.
+                return;
+            };
+            let _lane = discovering.lane(provider).lock_owned().await;
+            // ok: an absent or refusing CLI is a normal first answer here, not a condition to act on. The
+            // next real request for this provider reports the same outcome to the person who asked for it,
+            // through the path that owns that conversation.
+            drop(crate::provider_prepare::prepared_driver(&composed, provider).await);
+        });
+    }
+    while meetings.join_next().await.is_some() {}
+}
+
 /// Delay before the first automatic provider update check, outside activation and idle measurement windows.
 const PROVIDER_UPDATE_INITIAL_DELAY: Duration = Duration::from_mins(5);
 
@@ -763,6 +803,10 @@ async fn serve_surfaces(
         },
     };
     let (upgrading, mut upgrades) = mpsc::channel::<NoiseUpgrade>(PHONE_UPGRADE_QUEUE);
+    connections.spawn(prewarm_providers(
+        Arc::clone(&composed),
+        Arc::clone(&discovering),
+    ));
     connections.spawn(automatic_provider_updates(
         Arc::clone(&composed),
         Arc::clone(&discovering),
@@ -919,11 +963,14 @@ async fn serve_surfaces(
                     let Ok(connection) = pending.approve(remote).await else {
                         return;
                     };
-                    converse(
+                    // Boxed: the connection future carries the services snapshot, and clippy's size lint
+                    // is right that one belongs on the heap rather than in every enclosing future.
+                    Box::pin(converse(
                         SurfaceConnection::Phone(Box::new(connection)),
                         Conversation::from_device(device),
                         services,
-                    ).await;
+                    ))
+                    .await;
                 });
             }
 
@@ -1632,12 +1679,12 @@ async fn converse(
     services: ConnectionServices,
 ) {
     let mut release_watch_memory = false;
-    converse_inner(
+    Box::pin(converse_inner(
         connection,
         conversation,
         services,
         &mut release_watch_memory,
-    )
+    ))
     .await;
     if release_watch_memory {
         // The inner future owns the transport, relay state, and encoded frame. Awaiting it here drops those values
@@ -1857,7 +1904,12 @@ async fn converse_inner(
                 let discovered = discover(&conversation, &composed, &request).await;
                 complete_prepare_for(&request, discovered, reserved_session).await
             };
-            finish_model_preparation(provider, preparing, model_preparation_budget()).await
+            Box::pin(finish_model_preparation(
+                provider,
+                preparing,
+                model_preparation_budget(),
+            ))
+            .await
         } else if crate::consult::is_consult(&request) {
             // The whole consult exchange runs here in the connection's own task, behind the same gate that
             // bounds temporary provider processes, so a toggle never stops a running session's events.
