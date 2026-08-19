@@ -12,6 +12,14 @@ and refactoring that no user can observe do not belong here.
 
 ### Added
 
+- The model can now be switched in the middle of a conversation, from the conversation's own header. Click the
+  agent chip, pick from what your session or your installed CLI actually offers, and the switch travels through
+  each service's own surface: one CLI takes it immediately over its control channel, one applies it to the next
+  message and every one after (its own documented behaviour), and one accepts it through its protocol. The
+  header then shows the model the service says is answering, not the one that was merely requested, and a
+  service that refuses says why in its own words. Reasoning effort rides along where the service accepts one
+  mid-conversation; where it does not, Runtrol says so instead of silently dropping it.
+
 - Conversations you started with Cline outside Runtrol now appear in the list. That CLI announces no session
   capabilities over the protocol its driver speaks, so Runtrol reported existing-conversation discovery as
   unsupported for it. The CLI lists them on its own command line, and Runtrol asks that command instead. Only the

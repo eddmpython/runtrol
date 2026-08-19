@@ -86,6 +86,7 @@ const LOCALIZED_TEXT: Record<string, string> = {
   "plan.updated": "Plan updated",
   "commands.updated": "Available commands changed",
   "mode.updated": "Agent mode changed",
+  "model.updated": "Answering model changed",
   "configuration.updated": "Configuration changed",
   "approval.waiting": "Approval required",
   "approval.withdrawn": "Approval was withdrawn",
@@ -96,6 +97,7 @@ const HIDDEN_STATUS_KEYS = new Set([
   "session.updated",
   "commands.updated",
   "mode.updated",
+  "model.updated",
   "configuration.updated",
 ]);
 const vscode = acquireVsCodeApi();
@@ -107,6 +109,11 @@ const send = element<HTMLButtonElement>("send");
 const sendHint = element<HTMLSpanElement>("send-hint");
 const interrupt = element<HTMLButtonElement>("interrupt");
 const agentChip = element<HTMLSpanElement>("agent-chip");
+// The chip is also the switch: the place that says which model answers is the place to change it.
+agentChip.title = "Switch model";
+agentChip.addEventListener("click", () => {
+  vscode.postMessage({ type: "switchModel", available: switchableModels });
+});
 const usageChip = element<HTMLSpanElement>("usage-chip");
 const commandMenu = element<HTMLUListElement>("commands");
 const pending: unknown[] = [];
@@ -127,6 +134,8 @@ let promptWasSendable = false;
 let currentTitle: string | null = null;
 let facts: ConversationFacts = NO_FACTS;
 let usage: UsageFacts = NO_USAGE;
+/// The models this session announced it can switch to, empty when the provider never said.
+let switchableModels: string[] = [];
 
 window.addEventListener("message", ({ data }: MessageEvent<Incoming>) => {
   if (data.type === "reset") {
@@ -458,6 +467,7 @@ function present(payload: unknown): void {
       adoptCommands(body, false);
     }
     if (presentation.textKey === "mode.updated") updateMode(body);
+    if (presentation.textKey === "model.updated") updateModel(body);
     // Kept out of the transcript below and remembered here. "The command list changed" is not something anybody
     // came to read, but the list itself is the only way to find out what this CLI can be told to do.
     if (presentation.textKey === "commands.updated") adoptCommands(body, true);
@@ -545,6 +555,7 @@ function chooseCommand(command: SlashCommand): void {
 function resetSessionTelemetry(): void {
   facts = { ...NO_FACTS, service: currentProvider };
   usage = NO_USAGE;
+  switchableModels = [];
   paintFacts();
   // A command list belongs to one conversation. Carrying it across would offer the previous service's commands
   // to the next one, and the wrong list is worse than none: it looks authoritative.
@@ -563,6 +574,17 @@ function updateAttachment(body: UnknownRecord): void {
 
 function updateMode(body: UnknownRecord): void {
   facts = { ...facts, mode: string(body.mode_id) };
+  paintFacts();
+}
+
+/// The provider's own word on which model answers now, and which ones this session may switch to.
+function updateModel(body: UnknownRecord): void {
+  facts = { ...facts, model: string(body.model_id) };
+  if (Array.isArray(body.available_ids)) {
+    switchableModels = body.available_ids.filter(
+      (id): id is string => typeof id === "string" && id.length > 0,
+    );
+  }
   paintFacts();
 }
 

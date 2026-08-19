@@ -8,6 +8,7 @@ type ViewAction =
   | { type: "prompt"; text: string }
   | { type: "startChat" }
   | { type: "answerApproval"; approval: string; option: number; subjectDigest: number[] }
+  | { type: "switchModel"; available: string[] }
   | { type: "interrupt" };
 
 export type WebviewPerformance = {
@@ -628,6 +629,14 @@ function isViewAction(value: unknown): value is ViewAction {
       && typeof candidate.option === "number"
       && Array.isArray(candidate.subjectDigest)
       && candidate.subjectDigest.every((byte) => Number.isInteger(byte) && byte >= 0 && byte <= 255);
+  }
+  if (type === "switchModel") {
+    const available = (value as { available?: unknown }).available;
+    // Bounded like everything else that crosses the webview boundary: the set is display data from the
+    // provider's own announcement, and a hostile page must not be able to smuggle bulk through it.
+    return Array.isArray(available)
+      && available.length <= 64
+      && available.every((id) => typeof id === "string" && id.length > 0 && id.length <= 200);
   }
   return type === "startChat"
     || type === "openWorkspace"

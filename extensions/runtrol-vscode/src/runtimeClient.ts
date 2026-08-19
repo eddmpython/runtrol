@@ -264,6 +264,26 @@ export class StudioRuntimeClient implements vscode.Disposable {
     });
   }
 
+  /// Relay the operator's model choice through the provider's own switch surface, under the same lease as
+  /// input. What the session actually answers with stays the provider's word, arriving on the event stream.
+  async setModel(
+    session: RuntimeSessionAction,
+    model: string,
+    reasoningEffort?: string,
+  ): Promise<void> {
+    await this.mutate(async (runtime) => {
+      const lease = await this.ensureControl(runtime, session);
+      await runtime.sessions().setModel({
+        requestId: newMutationRequestId(),
+        sessionId: session.sessionId,
+        leaseId: lease.leaseId,
+        leaseGeneration: lease.leaseGeneration,
+        model,
+        ...(reasoningEffort ? { reasoningEffort } : {}),
+      });
+    });
+  }
+
   async interrupt(session: RuntimeSessionAction): Promise<void> {
     await this.mutate(async (runtime) => {
       const lease = await this.ensureControl(runtime, session);

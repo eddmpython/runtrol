@@ -553,6 +553,10 @@ button:disabled {
   opacity: 0.75;
 }
 
+#agent-chip {
+  cursor: pointer;
+}
+
 body.working #agent-chip::after {
   margin-left: 0.4rem;
   color: var(--runtrol-accent);

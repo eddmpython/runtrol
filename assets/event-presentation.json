@@ -50,6 +50,10 @@
       "kind": "status",
       "textKey": "mode.updated"
     },
+    "currentModelUpdate": {
+      "kind": "status",
+      "textKey": "model.updated"
+    },
     "configOptionUpdate": {
       "kind": "status",
       "textKey": "configuration.updated"

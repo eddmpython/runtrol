@@ -109,6 +109,8 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
         void run(() => afterReady(
           () => controller.answerApproval(message.approval, message.option, message.subjectDigest),
         ));
+      } else if (message.type === "switchModel") {
+        void run(() => afterReady(() => controller.switchModel(message.available)));
       } else {
         void run(() => afterReady(() => controller.interrupt()));
       }

@@ -12,6 +12,7 @@ import type {
   NativeChatCatalogue,
   NativeChatLine,
   ProviderLine,
+  ModelCatalog,
   SessionLine,
   WorkspaceAccess,
 } from "./runtimeTypes";
@@ -28,7 +29,7 @@ import {
   troubleSentence,
 } from "./serviceHelp";
 import { SelectionStore } from "./selectionStore";
-import { sessionTitle } from "./sessionDisplay";
+import { providerDisplayName, sessionTitle } from "./sessionDisplay";
 import { RuntimeState } from "./state";
 import { ConversationItem } from "./trees";
 import { StudioRuntimeClient } from "./runtimeClient";
@@ -1110,6 +1111,84 @@ export class Controller implements vscode.Disposable {
     );
   }
 
+  /// Switch the answering model of the open conversation, from the conversation's own header.
+  ///
+  /// The choices are the session's own announced set when the provider gave one (some announce it per
+  /// session), and the installed CLI's reported catalogue otherwise. Runtrol relays the pick through the
+  /// provider's own switch surface and displays only what the provider says back; a service with neither an
+  /// announced set nor a catalogue keeps model choice in its own settings, and this says so instead of
+  /// inventing a picker with nothing true to offer.
+  async switchModel(available: readonly string[]): Promise<void> {
+    const session = this.state.selected;
+    if (!session) return;
+    let model: string | null = null;
+    let effort: string | null = null;
+    if (available.length > 0) {
+      const picked = await vscode.window.showQuickPick(
+        available.map((id) => ({ label: id })),
+        {
+          title: "Switch model",
+          placeHolder: "Models this conversation says it can switch to",
+        },
+      );
+      if (!picked) return;
+      model = picked.label;
+    } else {
+      const catalogue = await this.runtime.models(session.providerId);
+      const choices = modelOptions(catalogue);
+      if (choices.length === 0) {
+        this.conversation.status(
+          `${providerDisplayName(session.providerId, this.state.providers)} reports no switchable models; its own settings stay in control.`,
+          "info",
+        );
+        return;
+      }
+      const picked = await vscode.window.showQuickPick(choices, {
+        title: "Switch model",
+        placeHolder: "Choose a model reported by the installed CLI",
+      });
+      if (!picked) return;
+      model = picked.id;
+      const pickedEffort = await this.pickReasoningEffort(
+        catalogue,
+        picked.model,
+        "Switch model: reasoning effort",
+      );
+      if (pickedEffort === undefined) return;
+      effort = pickedEffort;
+    }
+    await this.runtime.setModel(runtimeAction(session), model, effort ?? undefined);
+  }
+
+  /// One effort picker for every path that asks: `undefined` is a cancel, `null` is the provider's default.
+  private async pickReasoningEffort(
+    catalogue: ModelCatalog,
+    model: ModelOption["model"],
+    title: string,
+  ): Promise<string | null | undefined> {
+    const efforts = reasoningOptions(catalogue, model);
+    if (efforts.length === 0) return null;
+    const picked = await vscode.window.showQuickPick(
+      [
+        {
+          label: "Provider default",
+          id: null,
+          description: "Use the installed CLI's current effort setting",
+        },
+        ...efforts.map((choice) => ({
+          label: choice.id,
+          id: choice.id,
+          description: choice.description || "Reported by the installed CLI",
+        })),
+      ],
+      {
+        title,
+        placeHolder: "Choose an effort reported for this model",
+      },
+    );
+    return picked ? picked.id : undefined;
+  }
+
   private async chooseStartConfiguration(provider: ProviderLine): Promise<StartConfiguration | null> {
     const catalogue = await this.runtime.models(provider.providerId);
     const choices = modelOptions(catalogue);
@@ -1139,31 +1218,14 @@ export class Controller implements vscode.Disposable {
         );
     if (!selectedModel) return null;
 
-    const efforts = reasoningOptions(catalogue, selectedModel.model);
-    if (efforts.length === 0) {
-      return { model: selectedModel.id, reasoningEffort: null };
-    }
-    const selectedEffort = await vscode.window.showQuickPick(
-      [
-        {
-          label: "Provider default",
-          id: null,
-          description: "Use the installed CLI's current effort setting",
-        },
-        ...efforts.map((effort) => ({
-          label: effort.id,
-          id: effort.id,
-          description: effort.description || "Reported by the installed CLI",
-        })),
-      ],
-      {
-        title: `New chat with ${provider.displayName}: reasoning effort`,
-        placeHolder: "Choose an effort reported for this model",
-      },
+    const selectedEffort = await this.pickReasoningEffort(
+      catalogue,
+      selectedModel.model,
+      `New chat with ${provider.displayName}: reasoning effort`,
     );
-    return selectedEffort
-      ? { model: selectedModel.id, reasoningEffort: selectedEffort.id }
-      : null;
+    return selectedEffort === undefined
+      ? null
+      : { model: selectedModel.id, reasoningEffort: selectedEffort };
   }
 
   private async chooseStartWorkspace(): Promise<StartWorkspace | null> {
