@@ -74,6 +74,7 @@ pub(crate) fn providers(composed: &Composed) -> ProviderList {
             .map(|(provider, installation)| ProviderDescriptor {
                 provider_id: ProviderId::new(provider.id().as_str()),
                 display_name: provider.manifest.display_name.to_string(),
+                icon: provider.manifest.icon.as_ref().map(ToString::to_string),
                 installation,
                 help: help(provider),
             })

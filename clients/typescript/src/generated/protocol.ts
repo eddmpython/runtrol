@@ -165,7 +165,7 @@ export interface ProviderCapabilityObservation { readonly availability: Provider
 export type ProviderCapabilityProvenance = "officialProtocol" | "officialCli" | "driverContract";
 
 /** One provider in the fast inventory. */
-export interface ProviderDescriptor { readonly displayName: string; readonly help?: ProviderHelp | null; readonly installation: InstallationObservation; readonly providerId: ProviderId; }
+export interface ProviderDescriptor { readonly displayName: string; readonly help?: ProviderHelp | null; readonly icon?: string | null; readonly installation: InstallationObservation; readonly providerId: ProviderId; }
 
 /** A coding service's own commands for making itself usable, ready to show a person.
 

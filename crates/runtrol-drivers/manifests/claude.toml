@@ -7,6 +7,9 @@
 schema = 1
 id = "claude"
 display_name = "Claude Code"
+# The editor's own icon font carries this service's mark. Named rather than shipped: the artwork stays the
+# vendor's and this repository distributes none of it.
+icon = "claude"
 kind = "claude-stream-json"
 
 [bin]

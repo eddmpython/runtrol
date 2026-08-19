@@ -7,6 +7,9 @@
 schema = 1
 id = "codex"
 display_name = "Codex"
+# The editor files this service under its vendor's mark rather than the product's, which is also how the
+# editor's own chat surface resolves it.
+icon = "openai"
 kind = "codex-app-server"
 
 [bin]

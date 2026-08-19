@@ -39,6 +39,12 @@ use crate::id::{IdError, ProviderId};
 /// being read with today's meaning for keys that have changed.
 pub const MANIFEST_SCHEMA: u32 = 1;
 
+/// Longest glyph name a manifest may declare.
+///
+/// Measured against the editor's own icon registry: the longest name there is well inside this, so a name past
+/// it is a mistake rather than a glyph.
+const MAX_ICON_NAME: usize = 64;
+
 /// A manifest did not describe something runtrol can use.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
@@ -60,6 +66,13 @@ pub enum ManifestError {
     Empty {
         /// Which field.
         field: &'static str,
+    },
+
+    /// The declared glyph name is not a bare editor icon name.
+    #[error("the icon name `{found}` is not a bare editor glyph name")]
+    Icon {
+        /// What was declared.
+        found: String,
     },
 
     /// A binary name is not a bare file name.
@@ -226,6 +239,21 @@ pub struct Manifest {
     pub id: ProviderId,
     /// What to call it in front of a person.
     pub display_name: Box<str>,
+    /// The editor glyph that stands for this service, by the name the editor knows it under.
+    ///
+    /// Declared rather than discovered, and declared here rather than chosen by a surface. A surface choosing it
+    /// would mean a table of service names inside that surface, and adding a provider would stop being a matter
+    /// of shipping a manifest.
+    ///
+    /// Names a glyph the editor already has. Measured in VS Code 1.132: its own icon font carries the official
+    /// marks for several of these services (`claude`, `openai`, `xai`, `google-gemini`), and the chat extension
+    /// bundled with it refers to them by name rather than shipping the artwork. Naming one is therefore how a
+    /// service comes to be shown with its own mark without this repository distributing anybody's trademark.
+    ///
+    /// Absent when the editor has no mark for this service, and a surface then shows whatever it shows for a
+    /// service it does not recognise.
+    #[serde(default)]
+    pub icon: Option<Box<str>>,
     /// Which driver serves it.
     pub kind: Kind,
     /// How to find its executable.
@@ -282,6 +310,21 @@ impl Manifest {
             return Err(ManifestError::Empty {
                 field: "display_name",
             });
+        }
+        if let Some(icon) = &self.icon {
+            // A glyph name reaches a surface and is put straight into a stylesheet by the editor, so it is
+            // bounded here the same way every other declared value is: a bare token, nothing that could be read
+            // as something else.
+            if icon.is_empty()
+                || icon.len() > MAX_ICON_NAME
+                || !icon.chars().all(|character| {
+                    character.is_ascii_lowercase() || character.is_ascii_digit() || character == '-'
+                })
+            {
+                return Err(ManifestError::Icon {
+                    found: icon.to_string(),
+                });
+            }
         }
         self.bin.validate()?;
         self.models.validate()?;
@@ -870,6 +913,49 @@ argv = ["exec", "--json"]
                 "accepted a key it does not know: {bad}"
             );
         }
+    }
+
+    #[test]
+    fn a_declared_glyph_name_is_a_bare_token_or_it_is_refused() {
+        // The name reaches a surface and the editor puts it straight into a stylesheet, so it is bounded here the
+        // way every other declared value is. Measured against the editor's own registry: names there are lower
+        // case letters, digits and hyphens, and nothing else.
+        let good = format!("{MINIMAL}").replace(
+            r#"display_name = "OpenCode""#,
+            "display_name = \"opencode\"\nicon = \"openai\"",
+        );
+        let manifest = parse(&good).expect("parses");
+        manifest.validate().expect("a bare glyph name is accepted");
+        assert_eq!(manifest.icon.as_deref(), Some("openai"));
+
+        for bad in [
+            "Claude",
+            "claude code",
+            "claude~spin",
+            "$(claude)",
+            "../claude",
+            "",
+        ] {
+            let text = format!("{MINIMAL}").replace(
+                r#"display_name = "OpenCode""#,
+                &format!("display_name = \"opencode\"\nicon = \"{bad}\""),
+            );
+            let manifest = parse(&text).expect("the shape is still readable");
+            assert!(
+                matches!(manifest.validate(), Err(ManifestError::Icon { .. })),
+                "accepted a glyph name that is not a bare token: {bad:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_manifest_that_names_no_glyph_is_still_a_manifest() {
+        // Most services have no mark in the editor, and a surface shows them whatever it shows for a service it
+        // does not recognise. Requiring one would mean a manifest could not be written until somebody drew an
+        // icon for it.
+        let manifest = parse(MINIMAL).expect("parses");
+        manifest.validate().expect("no glyph is not an error");
+        assert_eq!(manifest.icon, None);
     }
 
     #[test]

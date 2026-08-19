@@ -117,6 +117,13 @@ pub struct ProviderDescriptor {
     pub provider_id: ProviderId,
     /// Provider or manifest supplied label for presentation only.
     pub display_name: String,
+    /// The editor glyph that stands for this service, for presentation only.
+    ///
+    /// A name, never artwork. Editors carry marks for several of these services already, and naming one is how a
+    /// surface shows a conversation's service without anybody shipping a trademark. Absent when the manifest
+    /// declared none, and a surface then shows whatever it shows for a service it does not recognise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
     /// Fast cached installation evidence. Listing does not start the provider.
     pub installation: InstallationObservation,
     /// This service's own commands for making itself usable, when it declares any.
