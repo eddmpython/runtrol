@@ -81,6 +81,20 @@ fn mode() -> Result<Mode, ()> {
     }
 }
 
+/// The ACP standard mode state this fixture announces on both open paths.
+///
+/// One definition, so the driver's announced-modes gate and the mode chip always meet the same live
+/// producer whether a session is new or resumed.
+fn announced_mode_state() -> Value {
+    json!({
+        "currentModeId": "default",
+        "availableModes": [
+            {"id": "default", "name": "Default"},
+            {"id": "focus", "name": "Focus"}
+        ]
+    })
+}
+
 fn serve(state: Option<&Path>, reply_bytes: Option<usize>) -> Result<(), ()> {
     let input = std::io::stdin();
     let mut output = std::io::stdout().lock();
@@ -131,18 +145,7 @@ fn serve(state: Option<&Path>, reply_bytes: Option<usize>) -> Result<(), ()> {
                 answer(
                     &mut output,
                     id.as_ref().ok_or(())?,
-                    // The mode state is the ACP standard shape, announced so the driver's
-                    // announced-modes gate and the mode chip have one live producer to run against.
-                    &json!({
-                        "sessionId": native,
-                        "modes": {
-                            "currentModeId": "default",
-                            "availableModes": [
-                                {"id": "default", "name": "Default"},
-                                {"id": "focus", "name": "Focus"}
-                            ]
-                        }
-                    }),
+                    &json!({"sessionId": native, "modes": announced_mode_state()}),
                 )?;
             }
             "session/load" => {
@@ -159,17 +162,7 @@ fn serve(state: Option<&Path>, reply_bytes: Option<usize>) -> Result<(), ()> {
                 answer(
                     &mut output,
                     id.as_ref().ok_or(())?,
-                    // A resumed session announces the same mode state as a new one, so the mode
-                    // surface exists on both open paths.
-                    &json!({
-                        "modes": {
-                            "currentModeId": "default",
-                            "availableModes": [
-                                {"id": "default", "name": "Default"},
-                                {"id": "focus", "name": "Focus"}
-                            ]
-                        }
-                    }),
+                    &json!({"modes": announced_mode_state()}),
                 )?;
             }
             "session/list" => list_sessions(&mut output, &frame, id.as_ref().ok_or(())?)?,
