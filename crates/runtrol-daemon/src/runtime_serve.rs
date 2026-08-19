@@ -1040,7 +1040,7 @@ async fn get_provider_capabilities(
     let discovered = tokio::time::timeout(
         Duration::from_millis(crate::serve::MODEL_PREPARATION_BUDGET_MS),
         async {
-            let _preparing = discovering.preparing.lock().await;
+            let _lane = discovering.lane(provider_id).lock_owned().await;
             crate::provider_prepare::driver(composed, provider_id).await
         },
     )
@@ -1145,7 +1145,7 @@ async fn list_models(
     let discovered = tokio::time::timeout(
         Duration::from_millis(crate::serve::MODEL_PREPARATION_BUDGET_MS),
         async {
-            let _preparing = discovering.preparing.lock().await;
+            let _lane = discovering.lane(provider_id).lock_owned().await;
             let driver = crate::provider_prepare::driver(composed, provider_id)
                 .await
                 .map_err(|_| ())?;
@@ -1231,7 +1231,7 @@ async fn list_native_sessions(
             // folder's conversations arrived after 13~17 s serialized, ~1.2 s not). Concurrency of the listing
             // children is bounded by the semaphore below instead.
             let prepared = {
-                let _preparing = discovering.preparing.lock().await;
+                let _lane = discovering.lane(provider).lock_owned().await;
                 crate::provider_prepare::prepared_driver(composed, provider)
                     .await
                     .map_err(|_| NativeDiscoveryFailure::Provider)?
@@ -2070,7 +2070,7 @@ async fn perform_runtime_open(
         None => return control_failure(id, RuntimeControlFailure::outcome_unknown()),
     };
     let prepared = {
-        let _gate = discovering.preparing.lock().await;
+        let _lane = discovering.lane(provider).lock_owned().await;
         crate::provider_prepare::prepared_driver(composed, provider).await
     };
     let Ok(prepared) = prepared else {
@@ -3654,7 +3654,7 @@ listen = "stdio"
             runtime_asked,
             runtime_returned,
         ));
-        let discovering = Arc::new(crate::serve::DiscoveryGates::new());
+        let discovering = Arc::new(crate::serve::DiscoveryGates::new(&composed.registry));
         let native_cursors =
             Arc::new(NativeCursorCodec::new().expect("create native catalogue cursor authority"));
         let serving = tokio::spawn({

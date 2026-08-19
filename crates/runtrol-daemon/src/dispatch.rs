@@ -598,6 +598,7 @@ pub(crate) async fn prepare_provider_updates(
     conversation: &Conversation,
     composed: &Composed,
     request: &Request,
+    discovering: &crate::serve::DiscoveryGates,
 ) -> Prepared {
     if !matches!(request, Request::ProviderUpdates)
         || !conversation.greeted()
@@ -611,7 +612,9 @@ pub(crate) async fn prepare_provider_updates(
         return Prepared::None;
     }
     Prepared::ProviderUpdates {
-        response: Response::ProviderUpdates(crate::provider_update::inspect_all(composed).await),
+        response: Response::ProviderUpdates(
+            crate::provider_update::inspect_all(composed, discovering).await,
+        ),
     }
 }
 

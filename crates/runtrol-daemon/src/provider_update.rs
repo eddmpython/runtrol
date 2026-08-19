@@ -53,10 +53,17 @@ struct ConfirmedNpm {
 }
 
 /// Inspect every declared provider without starting it or reading provider prose.
-pub(crate) async fn inspect_all(composed: &Composed) -> Vec<ProviderUpdateLine> {
+pub(crate) async fn inspect_all(
+    composed: &Composed,
+    discovering: &crate::serve::DiscoveryGates,
+) -> Vec<ProviderUpdateLine> {
     let npm = resolve("npm");
     let mut lines = Vec::with_capacity(composed.registry.len());
     for provider in composed.registry.all() {
+        // One lane at a time, taken as the loop reaches each provider: the hourly inspection never
+        // blocks a person's preparation of every other provider, and never probes one concurrently
+        // with them either.
+        let _lane = discovering.lane(provider.id()).lock_owned().await;
         let line = match &npm {
             Ok(npm) => inspect_one(composed, npm, provider.id()).await,
             Err(error) => unavailable(
@@ -274,6 +281,7 @@ async fn verify_provider(composed: &Composed, provider: ProviderId) -> Result<()
     )
     .await
     .map_err(|error| error.to_string())?;
+    let _writing = composed.probe_cache_writing.lock().await;
     cache.save().map_err(|error| error.to_string())
 }
 

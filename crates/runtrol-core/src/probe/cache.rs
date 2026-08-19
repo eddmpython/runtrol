@@ -194,8 +194,12 @@ pub struct ProbeCache {
     path: AbsPath,
     /// What was read, or nothing.
     entries: BTreeMap<String, Entry>,
-    /// Whether anything has changed since it was read.
-    dirty: bool,
+    /// Which providers this instance answered fresh since it was read.
+    ///
+    /// Keys rather than a flag, because saving merges exactly these into whatever the file holds by
+    /// then: several holders probing different providers concurrently each own only their keys, so
+    /// none can erase what another learned.
+    dirty: std::collections::BTreeSet<String>,
 }
 
 impl ProbeCache {
@@ -206,7 +210,7 @@ impl ProbeCache {
         Self {
             path: path.clone(),
             entries,
-            dirty: false,
+            dirty: std::collections::BTreeSet::new(),
         }
     }
 
@@ -227,7 +231,7 @@ impl ProbeCache {
     /// Remember an answer, replacing whatever was there for that provider.
     pub fn put(&mut self, id: ProviderId, entry: Entry) {
         self.entries.insert(id.as_str().to_owned(), entry);
-        self.dirty = true;
+        self.dirty.insert(id.as_str().to_owned());
     }
 
     /// How many answers are held.
@@ -244,14 +248,21 @@ impl ProbeCache {
 
     /// Whether there is anything worth writing.
     #[must_use]
-    pub const fn is_dirty(&self) -> bool {
-        self.dirty
+    pub fn is_dirty(&self) -> bool {
+        !self.dirty.is_empty()
     }
 
-    /// Write the cache, replacing the old file atomically.
+    /// Write this instance's fresh answers, merged into whatever the file holds now, atomically.
     ///
     /// Does nothing when nothing changed, so a start that answered every question from the cache does not
     /// touch the disk.
+    ///
+    /// The merge is the concurrency story: a probe takes hundreds of milliseconds, so two holders preparing
+    /// different providers overlap routinely. Writing this instance's whole snapshot would resurrect the
+    /// state of the file as of its own `open` and erase what the other holder just learned. Re-reading and
+    /// changing only this instance's own keys means the last writer can only be stale about its own
+    /// providers, which it is not, because it just probed them. Saves themselves are expected to be brief
+    /// and serialized by the caller when overlap is possible.
     ///
     /// # Errors
     ///
@@ -259,13 +270,19 @@ impl ProbeCache {
     /// it means the next start pays for every probe again, and the operator's answer to "why is this slow
     /// every time" is in here.
     pub fn save(&mut self) -> Result<(), ProbeError> {
-        if !self.dirty {
+        if self.dirty.is_empty() {
             return Ok(());
         }
 
+        let mut entries = read(&self.path).unwrap_or_default();
+        for key in &self.dirty {
+            if let Some(entry) = self.entries.get(key) {
+                entries.insert(key.clone(), entry.clone());
+            }
+        }
         let file = File {
             schema: CACHE_SCHEMA,
-            entries: self.entries.clone(),
+            entries,
         };
         let encoded = serde_json::to_vec(&file).map_err(|error| ProbeError::CacheWrite {
             path: self.path.clone(),
@@ -274,7 +291,7 @@ impl ProbeCache {
 
         let temporary = self.temporary_path()?;
         write_then_rename(&temporary, &self.path, &encoded)?;
-        self.dirty = false;
+        self.dirty.clear();
         Ok(())
     }
 
@@ -414,6 +431,33 @@ mod tests {
             flags: Flags::Observed(["--version".to_owned()].into_iter().collect()),
             asked_flags: Vec::new(),
         }
+    }
+
+    #[test]
+    fn two_holders_probing_different_providers_cannot_erase_each_other() {
+        // The concurrency shape of a cold start: several preparations each open the cache before any of
+        // them saves. Saving a whole snapshot would make the last writer resurrect its stale view; saving
+        // a keyed merge keeps both answers.
+        let scratch = Scratch::make("merge");
+        let (_, first_facts) = scratch.program("first.exe", "the first program");
+        let (_, second_facts) = scratch.program("second.exe", "the second program");
+
+        let mut first = ProbeCache::open(&scratch.cache_path());
+        let mut second = ProbeCache::open(&scratch.cache_path());
+        first.put(id("first"), entry(first_facts.clone(), "1.0.0"));
+        second.put(id("second"), entry(second_facts.clone(), "2.0.0"));
+        first.save().expect("the first holder saves");
+        second.save().expect("the second holder saves");
+
+        let merged = ProbeCache::open(&scratch.cache_path());
+        assert!(
+            merged.get(id("first"), &first_facts).is_some(),
+            "the first holder's fresh answer must survive the second holder's save"
+        );
+        assert!(
+            merged.get(id("second"), &second_facts).is_some(),
+            "the second holder's own answer is there too"
+        );
     }
 
     #[test]

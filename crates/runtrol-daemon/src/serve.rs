@@ -53,7 +53,7 @@ use runtrol_transport::{
     StaticKeypair, WebSocketLinkError, response,
 };
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::{Mutex, mpsc, oneshot, watch};
+use tokio::sync::{mpsc, oneshot, watch};
 use tokio::task::JoinSet;
 use tokio::time::Instant;
 
@@ -93,29 +93,48 @@ pub const MODEL_PREPARATION_BUDGET_MS: u64 = 300_000;
 /// starving every other provider's catalogue.
 pub(crate) const NATIVE_LISTING_SLOTS: usize = 4;
 
-/// The two discovery gates, together because they bound the same class of work.
+/// The discovery gates, together because they bound the same class of work.
 ///
-/// `preparing` serializes driver preparation. `ProbeCache` replaces one file atomically but is deliberately not a
-/// database, and two connections preparing at once could publish stale snapshots over each other. With a warm
-/// cache preparation is a stat call, so this gate is cheap to hold and cheap to wait on. A Models request holds
-/// it through its provider call. Opens release it after discovery because their process slots are bounded
-/// separately by `MAX_HOT`.
+/// `lanes` holds one preparation mutex per registered provider. Preparation was one global mutex once, and a
+/// cold start paid for it: five providers' first probes (300~900 ms each) queued single file, measured
+/// 2026-08-19 as ~9.7 s before a cold window's first conversations against ~1.2 s warm. One lane per provider
+/// keeps the two true requirements (the same CLI is never probed twice at once, and a Models request keeps
+/// its provider call serialized with that provider's preparation) and drops the false one (different CLIs
+/// waiting on each other). The probe-cache file itself stays consistent without a global hold: saves are
+/// keyed merges guarded by [`crate::Composed::probe_cache_writing`], held for milliseconds.
 ///
-/// `listing` bounds native-catalogue children instead of serializing them. It was this mutex once, held across
+/// A caller that must hold several lanes (consult prepares both of its providers) takes them in identifier
+/// order, so two such callers cannot deadlock.
+///
+/// `listing` bounds native-catalogue children instead of serializing them. It was one mutex once, held across
 /// the whole listing, and that queued every provider's catalogue behind whichever CLI was slowest: measured
 /// 2026-08-19, the conversations of a folder just opened into a live window took 13~17 seconds to arrive, and
 /// ~1.2 seconds once the queueing was out of the way.
 pub(crate) struct DiscoveryGates {
-    pub(crate) preparing: Mutex<()>,
+    lanes: BTreeMap<ProviderId, Arc<tokio::sync::Mutex<()>>>,
+    /// The one lane for identities outside the registry, so an unknown provider still has exactly one.
+    unknown: Arc<tokio::sync::Mutex<()>>,
     pub(crate) listing: tokio::sync::Semaphore,
 }
 
 impl DiscoveryGates {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(registry: &runtrol_core::registry::ProviderRegistry) -> Self {
         Self {
-            preparing: Mutex::new(()),
+            lanes: registry
+                .all()
+                .map(|provider| (provider.id(), Arc::new(tokio::sync::Mutex::new(()))))
+                .collect(),
+            unknown: Arc::new(tokio::sync::Mutex::new(())),
             listing: tokio::sync::Semaphore::new(NATIVE_LISTING_SLOTS),
         }
+    }
+
+    /// This provider's preparation lane.
+    pub(crate) fn lane(&self, provider: ProviderId) -> Arc<tokio::sync::Mutex<()>> {
+        self.lanes
+            .get(&provider)
+            .cloned()
+            .unwrap_or_else(|| Arc::clone(&self.unknown))
     }
 }
 
@@ -398,10 +417,7 @@ async fn automatic_provider_updates(
     let mut deferred = BTreeMap::<ProviderId, (Instant, bool)>::new();
     let mut session_pins = BTreeMap::<ProviderId, Box<str>>::new();
     loop {
-        let statuses = {
-            let _gate = discovering.preparing.lock().await;
-            crate::provider_update::inspect_all(&composed).await
-        };
+        let statuses = crate::provider_update::inspect_all(&composed, &discovering).await;
         for status in statuses {
             let Ok(provider) = ProviderId::parse(&status.provider) else {
                 continue;
@@ -435,7 +451,7 @@ async fn automatic_provider_updates(
                 }
             }
 
-            let _gate = discovering.preparing.lock().await;
+            let _gate = discovering.lane(provider).lock_owned().await;
             let (answered, hearing) = oneshot::channel();
             if reserving
                 .send(ReservationAsked::ReserveProviderUpdate { provider, answered })
@@ -713,7 +729,7 @@ async fn serve_surfaces(
     let (account_gauges, _initial_account_gauges_receiver) = watch::channel(Arc::new(
         crate::runtime_inventory::provider_usage(&sessions.account_gauges()),
     ));
-    let discovering = Arc::new(DiscoveryGates::new());
+    let discovering = Arc::new(DiscoveryGates::new(&composed.registry));
     let mut connections = JoinSet::new();
     let push_wake_active = Arc::new(AtomicBool::new(false));
     let mut relay_hub = match relay {
@@ -1572,6 +1588,33 @@ fn requested_workspace(request: &Request) -> Option<(&str, WorkspaceAccess)> {
     }
 }
 
+/// Which providers a request prepares, so a connection holds exactly those lanes.
+///
+/// Consult runs provider processes for the configured pair, and which pair is configuration read later, so
+/// it holds every registered lane; identifier order (the registry map's own) keeps multi-lane holders from
+/// deadlocking each other.
+fn preparation_providers(
+    request: &Request,
+    registry: &runtrol_core::registry::ProviderRegistry,
+) -> Vec<ProviderId> {
+    match request {
+        Request::Models { provider }
+        | Request::Start { provider, .. }
+        | Request::Resume { provider, .. }
+        | Request::ProviderUpdate { provider, .. } => match ProviderId::parse(provider) {
+            Ok(provider) => vec![provider],
+            // A name no registry can hold is refused by name where the request is answered, and
+            // nothing will be prepared for it, so there is no lane to hold.
+            Err(_) => Vec::new(),
+        },
+        request if crate::consult::is_consult(request) => registry
+            .all()
+            .map(runtrol_core::registry::Provider::id)
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
 fn requested_provider(request: &Request) -> Option<&str> {
     match request {
         Request::Start { provider, .. } | Request::Resume { provider, .. } => Some(provider),
@@ -1799,16 +1842,12 @@ async fn converse_inner(
         };
 
         let provider_update = matches!(&request, Request::ProviderUpdate { .. });
-        let mut preparation_gate = if needs_driver(&request)
-            || crate::consult::is_consult(&request)
-            || matches!(
-                request,
-                Request::ProviderUpdates | Request::ProviderUpdate { .. }
-            ) {
-            Some(discovering.preparing.lock().await)
-        } else {
-            None
-        };
+        // Exactly the lanes this request will prepare, in identifier order. ProviderUpdates holds none
+        // here: the inspection takes each provider's lane itself as it reaches it.
+        let mut preparation_gate = Vec::new();
+        for provider in preparation_providers(&request, &composed.registry) {
+            preparation_gate.push(discovering.lane(provider).lock_owned().await);
+        }
         let reserved_session = reservation
             .as_ref()
             .and_then(|guard| guard.reservation.as_ref())
@@ -1824,7 +1863,7 @@ async fn converse_inner(
             // bounds temporary provider processes, so a toggle never stops a running session's events.
             prepare_consult(&conversation, &composed, &request).await
         } else if matches!(request, Request::ProviderUpdates) {
-            prepare_provider_updates(&conversation, &composed, &request).await
+            prepare_provider_updates(&conversation, &composed, &request, &discovering).await
         } else if is_integration_admin(&request) {
             prepare_integration_admin(&conversation, &composed, &request).await
         } else if crate::dispatch::is_pairing_admin(&request) {
@@ -1838,22 +1877,23 @@ async fn converse_inner(
         } else if matches!(request, Request::CapabilityVerify { .. }) {
             prepare_capability_verification(&conversation, &composed, &request).await
         } else {
-            let discovered = if preparation_gate.is_some() {
+            // The old gate's presence doubled as this signal; named directly now that the lanes are a set.
+            let discovered = if needs_driver(&request) || provider_update {
                 discover(&conversation, &composed, &request).await
             } else {
                 Discovered::None
             };
             if !provider_update {
-                drop(preparation_gate.take());
+                preparation_gate.clear();
             }
             complete_prepare_for(&request, discovered, reserved_session).await
         };
-        // A provider update keeps the shared discovery gate through package mutation and verification. Its update
+        // A provider update keeps its provider's lane through package mutation and verification. Its update
         // reservation blocks session processes, while this guard blocks short-lived probes that have no session slot.
         let _provider_update_gate = if provider_update {
-            preparation_gate.take()
+            std::mem::take(&mut preparation_gate)
         } else {
-            None
+            Vec::new()
         };
         drop(preparation_gate);
         let (answered, hearing) = oneshot::channel();
@@ -2325,6 +2365,46 @@ fn encode_response(response: &Response) -> Vec<u8> {
 
 #[cfg(test)]
 mod tests {
+
+    #[tokio::test]
+    async fn preparation_lanes_are_per_provider_and_shared_per_provider() {
+        // The cold-start fix in one assertion: holding one provider's lane must not make another
+        // provider wait, while the same provider always meets the same lane.
+        let scratch = std::env::temp_dir().join(format!("runtrol-lanes-{}", std::process::id()));
+        if scratch.exists() {
+            std::fs::remove_dir_all(&scratch).expect("clear the previous run");
+        }
+        std::fs::create_dir(&scratch).expect("create the scratch home");
+        let home = scratch.to_str().expect("UTF-8 scratch path");
+        let composed = crate::Composed::for_tests(home, runtrol_drivers::builtin())
+            .expect("a fresh home composes");
+        let gates = DiscoveryGates::new(&composed.registry);
+
+        let claude = runtrol_provider::ProviderId::parse("claude").expect("a builtin provider");
+        let codex = runtrol_provider::ProviderId::parse("codex").expect("a builtin provider");
+        let held = gates.lane(claude).lock_owned().await;
+        assert!(
+            gates.lane(codex).try_lock_owned().is_ok(),
+            "another provider's preparation must not queue behind this one"
+        );
+        assert!(
+            gates.lane(claude).try_lock_owned().is_err(),
+            "the same provider's second preparation must wait for the first"
+        );
+        drop(held);
+
+        let unknown = runtrol_provider::ProviderId::parse("nobody-ships-this").expect("parses");
+        let held_unknown = gates.lane(unknown).lock_owned().await;
+        assert!(
+            gates.lane(unknown).try_lock_owned().is_err(),
+            "identities outside the registry still share exactly one lane"
+        );
+        drop(held_unknown);
+
+        drop(composed);
+        std::fs::remove_dir_all(&scratch).expect("remove the scratch home");
+    }
+
     use core::future::Future;
     use std::collections::BTreeSet;
     use std::path::PathBuf;
@@ -3317,7 +3397,7 @@ mod tests {
             }
         }
 
-        let gate = Arc::new(Mutex::new(()));
+        let gate = Arc::new(tokio::sync::Mutex::new(()));
         let first_gate = Arc::clone(&gate);
         let (held, holding) = oneshot::channel();
         let (dropped, dropping) = oneshot::channel();

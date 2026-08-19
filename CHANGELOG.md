@@ -65,6 +65,13 @@ and refactoring that no user can observe do not belong here.
 
 ### Fixed
 
+- A cold start no longer probes your installed services single file. The first time Runtrol meets each CLI it
+  asks the binary who it is (hundreds of milliseconds each), and one global lock made five such introductions
+  queue behind each other. Each service now has its own preparation lane, so first meetings overlap: measured,
+  five cold services answered a model listing in 8.7 seconds where full serialization costs 18, with the same
+  guarantee kept that one service is never probed twice at once and the shared answer cache cannot lose
+  entries to a concurrent write.
+
 - A folder's conversations no longer queue behind every other installed CLI. One internal gate serialized all
   existing-conversation listings, so the folder you just opened waited for whichever CLI was slowest to be
   probed and listed. Measured in a live window with five services installed: the second folder's conversation

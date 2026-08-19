@@ -88,9 +88,13 @@ pub(crate) async fn prepared_driver(
     )
     .await
     .map_err(|error| ProviderPreparationError::new(error.to_string()))?;
-    cache
-        .save()
-        .map_err(|error| ProviderPreparationError::new(error.to_string()))?;
+    {
+        // The save is a re-read-merge-replace of one shared file; two finishing at once must not interleave.
+        let _writing = composed.probe_cache_writing.lock().await;
+        cache
+            .save()
+            .map_err(|error| ProviderPreparationError::new(error.to_string()))?;
+    }
 
     let checked = checked_flags(provider, entry, probed.flags)?;
 
