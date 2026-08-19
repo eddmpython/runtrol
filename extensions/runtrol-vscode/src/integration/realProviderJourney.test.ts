@@ -13,6 +13,7 @@ type JourneyApi = {
   start(provider: string, workspace: string, model?: string | null): Promise<string>;
   select(session: string, follow?: boolean): Promise<void>;
   prompt(text: string): Promise<void>;
+  switchModel(model: string): Promise<void>;
   answerApproval(approval: string, option: number, subjectDigest: number[]): Promise<void>;
   interrupt(): Promise<void>;
   reconnect(): Promise<void>;
@@ -103,6 +104,10 @@ async function journey(resultPath: string): Promise<void> {
     await watch.ready;
     await api.journey.verifySelected(firstSession);
 
+    // The attach-time model announcement is deliberately not asserted here: it fires while the session is
+    // starting, before any watcher can attach, and this watcher begins at the live boundary (measured: waiting
+    // for it timed out on a healthy session). The switch below is therefore the first model fact this watcher
+    // can ever see, which is exactly what makes its assertion unambiguous.
     currentStage = "approval-prompt";
     await api.journey.prompt("perform the requested deterministic action");
     const firstApproval = await watch.next("approval", 60_000);
@@ -117,6 +122,22 @@ async function journey(resultPath: string): Promise<void> {
     const firstEnd = await watch.next("end", 60_000);
     if (firstEnd.stop !== "endTurn" || firstEnd.declaredBy !== "provider") {
       throw new Error(`the denied turn ended as ${firstEnd.stop} by ${firstEnd.declaredBy}`);
+    }
+
+    currentStage = "model-switch";
+    // The switch rides the whole spine to the real CLI's own control channel, and what comes back is the
+    // CLI's confirmation event, not runtrol's assumption. "sonnet" is one of the aliases the manifest carries
+    // with its measurement.
+    await api.journey.switchModel("sonnet");
+    // The CLI also announces its own answering model on its own schedule (measured: one such announcement
+    // arrived ahead of the confirmation), and those announcements are correct events, not noise. So the
+    // confirmation is found by draining a bounded few, not by assuming it arrives first.
+    let confirmedSwitch = "";
+    for (let attempt = 0; attempt < 3 && !confirmedSwitch.includes("sonnet"); attempt += 1) {
+      confirmedSwitch = (await watch.next("model", 30_000)).model;
+    }
+    if (!confirmedSwitch.includes("sonnet")) {
+      throw new Error(`the switch confirmed ${confirmedSwitch}, expected a sonnet model`);
     }
 
     currentStage = "reconnecting";

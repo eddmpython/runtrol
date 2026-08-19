@@ -1157,7 +1157,17 @@ export class Controller implements vscode.Disposable {
       if (pickedEffort === undefined) return;
       effort = pickedEffort;
     }
-    await this.runtime.setModel(runtimeAction(session), model, effort ?? undefined);
+    await this.switchSelectedModel(model, effort ?? undefined);
+  }
+
+  /// The relay itself, shared by the picker above and the journey proof: one path to the provider's own
+  /// switch surface, so the two can never drift.
+  async switchSelectedModel(model: string, reasoningEffort?: string): Promise<void> {
+    const session = this.state.selected;
+    if (!session) {
+      throw new Error("no conversation is selected");
+    }
+    await this.runtime.setModel(runtimeAction(session), model, reasoningEffort);
   }
 
   /// One effort picker for every path that asks: `undefined` is a cancel, `null` is the provider's default.

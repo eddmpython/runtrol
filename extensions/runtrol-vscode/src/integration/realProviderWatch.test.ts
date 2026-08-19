@@ -15,7 +15,12 @@ export type EndFact = {
   declaredBy: string;
 };
 
-type Fact = ApprovalFact | EndFact;
+export type ModelFact = {
+  kind: "model";
+  model: string;
+};
+
+type Fact = ApprovalFact | EndFact | ModelFact;
 
 export class Watcher {
   readonly ready: Promise<void>;
@@ -176,6 +181,12 @@ function watchFact(value: unknown, session: string): Fact | null {
       throw new Error("the terminal event omitted outcome provenance");
     }
     return { kind: "end", stop: body.stop, declaredBy: declared };
+  }
+  if (body.event === "currentModelUpdate") {
+    if (typeof body.model_id !== "string" || !body.model_id) {
+      throw new Error("the model update omitted which model answers");
+    }
+    return { kind: "model", model: body.model_id };
   }
   if (body.event === "notice" && body.code === "protocolViolation") {
     throw new Error("the installed provider journey hit a protocol violation");
