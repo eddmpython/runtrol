@@ -10,6 +10,7 @@ import {
   type ProjectGroup,
 } from "./conversationList";
 import { ConversationDecorations, conversationUri } from "./conversationDecorations";
+import type { ProjectRecord } from "./projects";
 import { isBroken } from "./providerHealth";
 import type { ProviderLine } from "./runtimeTypes";
 import { RuntimeState } from "./state";
@@ -64,20 +65,24 @@ export class ServiceProblemItem extends vscode.TreeItem {
   }
 }
 
-/// One project, holding the conversations that belong to it.
+/// One project the operator created, holding the conversations that belong to it.
 ///
-/// Only ever shown when there is more than one project to tell apart. A single heading over the whole list
-/// is a disclosure triangle that costs a click and separates nothing.
+/// A heading exists because somebody made this project in the panel, never because a folder happened to hold
+/// conversations. Folder-derived headings were shipped once and rejected by the operator: a machine full of
+/// conversations became a wall of folder names nobody asked for.
 export class ProjectItem extends vscode.TreeItem {
   constructor(readonly group: ProjectGroup) {
     super(
       group.name,
-      // Open when the reader has a reason to be looking inside: something is waiting, something is live, this is
-      // the project the window is on, or the conversation they currently have open lives here. Everything else
-      // starts closed so twenty projects do not become one long scroll.
-      group.attention > 0 || group.live > 0 || group.current || group.holdsOpen
-        ? vscode.TreeItemCollapsibleState.Expanded
-        : vscode.TreeItemCollapsibleState.Collapsed,
+      // A project with nothing in it yet has nothing to disclose, so it draws as a plain row whose only invite
+      // is the new-conversation button. Otherwise: open when the reader has a reason to be looking inside
+      // (something waiting, something live, the window's own project, or the open conversation lives here),
+      // closed for everything else so twenty projects do not become one long scroll.
+      group.rows.length === 0
+        ? vscode.TreeItemCollapsibleState.None
+        : group.attention > 0 || group.live > 0 || group.current || group.holdsOpen
+          ? vscode.TreeItemCollapsibleState.Expanded
+          : vscode.TreeItemCollapsibleState.Collapsed,
     );
     this.id = group.key;
     this.description = projectDetail(group);
@@ -93,6 +98,12 @@ export class ProjectItem extends vscode.TreeItem {
 }
 
 export type ChatTreeItem = ConversationItem | ServiceProblemItem | ProjectItem;
+
+/// Where the tree learns which projects the operator has created, without owning their storage.
+export type ProjectsPort = {
+  all(): readonly ProjectRecord[];
+  onDidChange(listener: () => void): { dispose(): void };
+};
 
 /*
  * The glyph says which coding service, and its colour says how that conversation is going.
@@ -167,6 +178,7 @@ export class ConversationsTree implements vscode.TreeDataProvider<ChatTreeItem>,
   private readonly changedEmitter = new vscode.EventEmitter<ChatTreeItem | undefined>();
   readonly onDidChangeTreeData = this.changedEmitter.event;
   private readonly subscription: vscode.Disposable;
+  private readonly projectSubscription: { dispose(): void };
   private items: ChatTreeItem[] | undefined;
   /// The heading each conversation belongs under, by conversation key. Empty while the list is flat.
   private parents: Map<string, ProjectItem> | undefined;
@@ -178,7 +190,7 @@ export class ConversationsTree implements vscode.TreeDataProvider<ChatTreeItem>,
   private readonly built = new Map<string, ConversationItem[]>();
   /// The conversations under each heading, as data rather than as tree items.
   private grouped: Map<string, readonly Conversation[]> | undefined;
-  /// Conversation rows for the flat shape, where there is nothing to defer.
+  /// The top-level conversation rows: the loose ones sitting beside the headings.
   private flat: ConversationItem[] | undefined;
   /// The badge on each row, which is the second thing a row says.
   ///
@@ -191,8 +203,13 @@ export class ConversationsTree implements vscode.TreeDataProvider<ChatTreeItem>,
 
   constructor(
     private readonly state: RuntimeState,
+    private readonly projectRecords: ProjectsPort,
     private readonly now: () => number = () => Date.now(),
   ) {
+    this.projectSubscription = projectRecords.onDidChange(() => {
+      this.forgetItems();
+      this.changedEmitter.fire(undefined);
+    });
     this.subscription = state.onDidChange((change) => {
       if (change === "selection") {
         // Selection changes which row is scrolled to, not what any row says. No `ConversationItem` reads
@@ -260,6 +277,7 @@ export class ConversationsTree implements vscode.TreeDataProvider<ChatTreeItem>,
     this.view = null;
     this.forgetItems();
     this.subscription.dispose();
+    this.projectSubscription.dispose();
     this.decorations.dispose();
     this.changedEmitter.dispose();
   }
@@ -315,9 +333,10 @@ export class ConversationsTree implements vscode.TreeDataProvider<ChatTreeItem>,
     const rows = this.state.conversations;
     // Before anything is built, so a row drawn in this pass already has its badge.
     this.decorations.update(rows);
-    const groups = projects(rows, this.openWorkspaces());
+    const records = this.projectRecords.all();
+    const groups = projects(records, rows, this.openWorkspaces());
     // Beside the headings, not under one. A conversation nobody filed is still a conversation.
-    const unfiled = loose(rows).map((row) => new ConversationItem(row, nowMs));
+    const unfiled = loose(records, rows).map((row) => new ConversationItem(row, nowMs));
     const problems = this.state.providers
       .filter(isBroken)
       .map((provider) => new ServiceProblemItem(provider));
@@ -345,7 +364,8 @@ export class ConversationsTree implements vscode.TreeDataProvider<ChatTreeItem>,
       }
     }
     this.items = [...headings, ...unfiled, ...problems];
-    this.flat = undefined;
+    // The loose rows are top-level items, so revealing one resolves against these exact objects.
+    this.flat = unfiled;
     this.parents = parents;
     this.grouped = grouped;
   }

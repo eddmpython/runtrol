@@ -359,6 +359,19 @@
         "command": "runtrol.newConversationInProject",
         "title": "Runtrol: New Conversation in Project",
         "icon": "$(add)"
+      },
+      {
+        "command": "runtrol.createProject",
+        "title": "Runtrol: Create Project",
+        "icon": "$(new-folder)"
+      },
+      {
+        "command": "runtrol.renameProject",
+        "title": "Runtrol: Rename Project"
+      },
+      {
+        "command": "runtrol.removeProject",
+        "title": "Runtrol: Remove Project"
       }
     ],
     "keybindings": [
@@ -396,6 +409,14 @@
         {
           "command": "runtrol.newConversationInProject",
           "when": "false"
+        },
+        {
+          "command": "runtrol.renameProject",
+          "when": "false"
+        },
+        {
+          "command": "runtrol.removeProject",
+          "when": "false"
         }
       ],
       "view/title": [
@@ -405,19 +426,24 @@
           "group": "navigation@0"
         },
         {
-          "command": "runtrol.openNextWaiting",
+          "command": "runtrol.createProject",
           "when": "view == runtrol.sessions",
           "group": "navigation@1"
         },
         {
-          "command": "runtrol.openConversation",
+          "command": "runtrol.openNextWaiting",
           "when": "view == runtrol.sessions",
           "group": "navigation@2"
         },
         {
-          "command": "runtrol.switchSession",
+          "command": "runtrol.openConversation",
           "when": "view == runtrol.sessions",
           "group": "navigation@3"
+        },
+        {
+          "command": "runtrol.switchSession",
+          "when": "view == runtrol.sessions",
+          "group": "navigation@4"
         },
         {
           "command": "runtrol.startConfiguredSession",
@@ -494,6 +520,16 @@
         {
           "command": "runtrol.newConversationInProject",
           "group": "inline@1",
+          "when": "view == runtrol.sessions && viewItem == runtrol.project"
+        },
+        {
+          "command": "runtrol.renameProject",
+          "group": "1_manage@1",
+          "when": "view == runtrol.sessions && viewItem == runtrol.project"
+        },
+        {
+          "command": "runtrol.removeProject",
+          "group": "1_manage@2",
           "when": "view == runtrol.sessions && viewItem == runtrol.project"
         },
         {

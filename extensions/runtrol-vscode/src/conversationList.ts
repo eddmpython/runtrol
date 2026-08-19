@@ -1,6 +1,7 @@
+import type { ProjectRecord } from "./projects";
 import type { NativeChatLine, ProviderLine, SessionLine } from "./runtimeTypes";
 import { providerDisplayName, providerIcon, workspaceName } from "./sessionDisplay";
-import { workspaceIdentity } from "./workspaceCollision";
+import { workspaceCovers } from "./workspaceCollision";
 
 /// What a conversation is doing, said the way a person would say it.
 ///
@@ -76,11 +77,11 @@ export function conversations(
   return rows.sort(byMostRecentlyActive).map(disambiguated(rows));
 }
 
-/// Every conversation that belongs to one project, under one heading.
+/// Every conversation that belongs to one created project, under one heading.
 ///
-/// A project is a working tree, which is what a person means by "what I am working on". Grouping by the
-/// coding service instead would sort by an implementation detail: somebody running Claude and Codex on the
-/// same repository is doing one piece of work, not two.
+/// A project is a folder the operator chose to make one, which is what a person means by "what I am working
+/// on". Grouping by the coding service instead would sort by an implementation detail: somebody running Claude
+/// and Codex on the same repository is doing one piece of work, not two.
 export type ProjectGroup = {
   /// Stable across casing and separator differences, and legal as a tree element id.
   readonly key: string;
@@ -101,65 +102,72 @@ export type ProjectGroup = {
   readonly holdsOpen: boolean;
 };
 
-/// Conversations gathered under the project each one belongs to.
+/// Conversations gathered under the projects the operator created, one group per created project.
 ///
-/// **Project then session, always.** That is the shape of the thing being looked at: work happens in a project and
-/// a conversation belongs to one. An earlier version only grouped once the list passed a length threshold, on the
-/// theory that a short list is cheaper to read flat. That was wrong twice over. It made the sidebar change shape as
-/// conversations accumulated, so the reader had to relearn it, and it hid the one fact that tells them where they
-/// are. A window showing `runtrol · Claude Code` with no heading says nothing about which project that is.
+/// **A heading exists because somebody made it, never because a folder happened to hold conversations.** An
+/// earlier version invented a heading for every folder any conversation had run in, and on a machine full of
+/// conversations that is a wall of folder names nobody asked for. The operator rejected it in exactly those
+/// words (2026-08-19: thirty auto-headings named workspace-1 through workspace-30). The chat apps people already
+/// use have this right: you create a project, conversations file into it by where they happen, and everything
+/// else stays a plain conversation row.
 ///
-/// Returns an empty array only when there is nothing to group.
+/// A created project with nothing in it yet is still returned: it was made a moment ago and a heading that
+/// vanished would read as the creation failing. A conversation inside nested projects files under the deepest
+/// one, which is the folder a person would call its home.
 export function projects(
+  records: readonly ProjectRecord[],
   rows: readonly Conversation[],
   openWorkspaces: readonly string[],
 ): ProjectGroup[] {
-  const open = new Set(openWorkspaces.map((workspace) => workspaceIdentity(workspace)));
-  const byProject = new Map<string, Conversation[]>();
+  const filed = new Map<string, Conversation[]>(records.map((record) => [record.key, []]));
   for (const row of rows) {
-    if (!inAProject(row)) continue;
-    const key = workspaceIdentity(row.workspace);
-    const existing = byProject.get(key);
-    if (existing) {
-      existing.push(row);
-    } else {
-      byProject.set(key, [row]);
-    }
+    const home = projectOf(records, row);
+    if (home) filed.get(home.key)?.push(row);
   }
-  const groups: ProjectGroup[] = [];
-  for (const [key, group] of byProject) {
-    const first = group[0];
-    if (!first) continue;
-    groups.push({
-      key: `project:${encodeURIComponent(key)}`,
-      name: first.folder,
-      workspace: first.workspace,
-      current: open.has(key),
+  const groups = records.map((record) => {
+    const group = filed.get(record.key) ?? [];
+    return {
+      key: `project:${encodeURIComponent(record.key)}`,
+      name: record.name,
+      workspace: record.workspace,
+      current: openWorkspaces.some((folder) =>
+        workspaceCovers(record.workspace, folder) || workspaceCovers(folder, record.workspace)),
       rows: group,
       attention: group.filter(needsYou).length,
       live: group.filter((row) => row.live).length,
       holdsOpen: group.some((row) => row.open),
-    });
-  }
+    };
+  });
   return groups.sort(byNearestToTheReader);
 }
 
-/// Whether a conversation names a folder at all.
-function inAProject(row: Conversation): boolean {
-  return Boolean(row.workspace.trim());
+/// The created project a conversation belongs to, or null when nobody filed it anywhere.
+///
+/// Deepest folder wins when projects nest, because that is the one a person would call the conversation's home.
+function projectOf(records: readonly ProjectRecord[], row: Conversation): ProjectRecord | null {
+  if (!row.workspace.trim()) return null;
+  let home: ProjectRecord | null = null;
+  for (const record of records) {
+    if (!workspaceCovers(record.workspace, row.workspace)) continue;
+    if (!home || record.key.length > home.key.length) home = record;
+  }
+  return home;
 }
 
-/// The conversations that belong to no folder, in the order the rows already have.
+/// The conversations that belong to no created project, in the order the rows already have.
 ///
 /// They sit at the top level beside the project headings, not inside one. An earlier version filed them under a
 /// heading called "No project", which turns an absence into a category and reads as a folder the person forgot
-/// about. The chat apps people already use do not do that: a project is a folder you can put a conversation in,
-/// and a conversation you did not put anywhere is simply a conversation.
+/// about. The chat apps people already use do not do that: a project is a place you can put a conversation, and
+/// a conversation you did not put anywhere is simply a conversation.
 ///
 /// Below the headings rather than above them, because a project is a place somebody chose and a loose
 /// conversation is one they did not.
-export function loose(rows: readonly Conversation[]): Conversation[] {
-  return rows.filter((row) => !inAProject(row));
+export function loose(
+  records: readonly ProjectRecord[],
+  rows: readonly Conversation[],
+): Conversation[] {
+  return rows.filter((row) => !projectOf(records, row));
 }
 
 /// This window's project first, then whatever was touched most recently.
@@ -191,6 +199,7 @@ function latestActivity(rows: readonly Conversation[]): number | null {
 
 /// The muted line beside a project heading.
 export function projectDetail(group: ProjectGroup): string {
+  if (group.rows.length === 0) return "no conversations yet";
   const parts: string[] = [];
   if (group.attention > 0) parts.push(`${group.attention} waiting`);
   if (group.live > 0) parts.push(`${group.live} live`);

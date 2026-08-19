@@ -17,6 +17,7 @@ import {
 import { journeyApi, type JourneyApi } from "./journeyApi";
 import { MissionController } from "./mission/controller";
 import { MissionTree } from "./mission/tree";
+import { ProjectStore } from "./projects";
 import { managePhones, pairPhone, reviewPhonePairings } from "./pairingAdministration";
 import type { RemoteConnection } from "./protocol";
 import { SelectionStore } from "./selectionStore";
@@ -24,6 +25,7 @@ import { ServiceTroubleReported } from "./serviceHelp";
 import { providerDisplayName, sessionTitle } from "./sessionDisplay";
 import { RuntimeState } from "./state";
 import { StudioRuntimeClient } from "./runtimeClient";
+import { workspaceIdentity } from "./workspaceCollision";
 import { WorkspaceRootFollowing } from "./workspaceRoots";
 import { ConversationsTree, ProjectItem } from "./trees";
 import { UsageTree } from "./usageTree";
@@ -35,6 +37,8 @@ export type RuntrolExtensionApi = {
   measureWebview?(framesPerSecond?: number, durationMs?: number): Promise<WebviewPerformance>;
   measureSessionManagement?(sessionIds: readonly string[]): Promise<SessionManagementPerformance>;
   verifyRestoredSession?(sessionId: string): Promise<void>;
+  hasConversationIn?(folder: string): Promise<boolean>;
+  waitForConversationIn?(folder: string, deadlineMs: number): Promise<number>;
   readonly journey?: JourneyApi;
 };
 
@@ -122,7 +126,10 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
   const missionController = new MissionController(client, controller, state);
   const candidateController = new CandidateController(client);
   const missions = new MissionTree(missionController);
-  const conversations = new ConversationsTree(state);
+  // The operator's own projects. A heading exists because they created it here, never because a folder
+  // happened to hold conversations. Global state, because the panel manages the whole machine from any window.
+  const projectStore = new ProjectStore(context.globalState);
+  const conversations = new ConversationsTree(state, projectStore);
   const usage = new UsageTree({
     usage: () => runtime.providersUsage(),
     providers: () => state.providers,
@@ -305,6 +312,46 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
         if (!(item instanceof ProjectItem)) return;
         await controller.startSessionInWorkspace(item.group.workspace);
       })),
+    ),
+    vscode.commands.registerCommand(
+      "runtrol.createProject",
+      // No name prompt: the folder's own name is the default and rename is one right-click away. Several
+      // folders can be picked at once, and each becomes its own project.
+      () => run(async () => {
+        const chosen = await vscode.window.showOpenDialog({
+          canSelectFiles: false,
+          canSelectFolders: true,
+          canSelectMany: true,
+          openLabel: "Create Project",
+          title: "Choose the folder each new project stands on",
+          defaultUri: vscode.workspace.workspaceFolders?.[0]?.uri,
+        });
+        if (!chosen) return;
+        for (const folder of chosen) {
+          await projectStore.create(folder.fsPath);
+        }
+      }),
+    ),
+    vscode.commands.registerCommand(
+      "runtrol.renameProject",
+      (item: unknown) => run(async () => {
+        if (!(item instanceof ProjectItem)) return;
+        const name = await vscode.window.showInputBox({
+          prompt: "Project name",
+          value: item.group.name,
+        });
+        if (name === undefined) return;
+        await projectStore.setName(item.group.workspace, name);
+      }),
+    ),
+    vscode.commands.registerCommand(
+      "runtrol.removeProject",
+      // Removal only takes the heading away: conversations stay, and creating the project again is one click.
+      // That reversibility is why there is no confirmation dialog in the way.
+      (item: unknown) => run(async () => {
+        if (!(item instanceof ProjectItem)) return;
+        await projectStore.remove(item.group.workspace);
+      }),
     ),
     vscode.commands.registerCommand(
       "runtrol.selectSession",
@@ -511,8 +558,42 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
         ]);
       })
       : undefined,
+    // The two follow probes exist for the live root-following proof: a real window opens a second folder and the
+    // harness watches that folder's conversation arrive. They consult both collections the conversation tree
+    // merges (supervised sessions and the provider-owned stored chats), through the same identity function
+    // collision detection uses, so the probe agrees with the product about what "a conversation here" means.
+    hasConversationIn: process.env.RUNTROL_VSCODE_PERFORMANCE === "1"
+      ? (folder) => afterReady(async () => conversationVisibleIn(state, folder))
+      : undefined,
+    waitForConversationIn: process.env.RUNTROL_VSCODE_PERFORMANCE === "1"
+      ? (folder, deadlineMs) => afterReady(() => new Promise<number>((resolve, reject) => {
+        const arrived = () => conversationVisibleIn(state, folder);
+        if (arrived()) {
+          resolve(0);
+          return;
+        }
+        const started = performance.now();
+        const timer = setTimeout(() => {
+          subscription.dispose();
+          reject(new Error(`no conversation arrived for ${folder} within ${deadlineMs} ms`));
+        }, deadlineMs);
+        const subscription = state.onDidChange(() => {
+          if (!arrived()) return;
+          clearTimeout(timer);
+          subscription.dispose();
+          resolve(performance.now() - started);
+        });
+      }))
+      : undefined,
     journey: journeyApi(controller, state, conversation, afterReady, context.extensionMode),
   };
+}
+
+/// Whether any conversation, supervised or provider-owned, lives in this folder. The follow probes' one lens.
+function conversationVisibleIn(state: RuntimeState, folder: string): boolean {
+  const identity = workspaceIdentity(folder);
+  return state.sessions.some((session) => workspaceIdentity(session.workspace) === identity)
+    || state.nativeChats.some((chat) => workspaceIdentity(chat.cwd) === identity);
 }
 
 function testIntegrationRoots(context: vscode.ExtensionContext): readonly string[] {

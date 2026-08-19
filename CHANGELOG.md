@@ -29,6 +29,13 @@ and refactoring that no user can observe do not belong here.
 
 ### Changed
 
+- Project headings in the conversations panel are now yours to create. The list used to invent a heading for
+  every folder that had ever held a conversation, which on a real machine becomes a wall of folder names nobody
+  asked for. Now a heading exists only for a project you created (the new-folder button in the panel's title
+  bar; pick one folder or several). Conversations file under the project whose folder contains them, and every
+  conversation you did not put anywhere stays a plain row beneath the headings, exactly as it was. Right-click a
+  project to rename or remove it; removing only takes the heading away and touches no conversation.
+
 - Runtrol is now licensed under AGPL-3.0-only instead of MIT, and the source stays public. Using it changes
   nothing for you: it supervises agent CLIs as separate processes and places no license obligation on your own
   work. What changes is that a modified Runtrol has to stay open, including one offered to others over a
@@ -40,6 +47,13 @@ and refactoring that no user can observe do not belong here.
   resolved one after another, so every supported CLI added its own search-path walk to startup. They are resolved
   at the same time now. Measured on the real Extension Host with four installed services: the fastest run went
   from 1,244 ms to 992 ms and the ratchet's activation budget went from red to green.
+
+### Fixed
+
+- Opening another folder into a window now brings that folder's saved conversations with it. The reconnect that
+  follows a widened workspace cleared the discovered-conversation list and never restarted discovery, so the new
+  folder's conversations stayed invisible until a manual refresh. Proven in a live window by the new harness
+  scenario that opens a second folder and watches its conversation arrive.
 
 ## [0.1.4] - 2026-08-17
 

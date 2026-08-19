@@ -3,7 +3,7 @@ import * as path from "node:path";
 import { ask, expectDone } from "./core/ask";
 import type { CoreClient } from "./core/client";
 import type { IntegrationLine } from "./protocol";
-import { workspaceIdentity } from "./workspaceCollision";
+import { identityCovers, workspaceIdentity } from "./workspaceCollision";
 
 /// The window's open folders, followed into the integration's approved roots.
 ///
@@ -143,9 +143,7 @@ export function foldersOutsideRoots(
     const identity = trimmedIdentity(folder, paths, platform);
     if (seen.has(identity)) continue;
     seen.add(identity);
-    const covered = bases.some(
-      (base) => identity === base || identity.startsWith(base + paths.sep),
-    );
+    const covered = bases.some((base) => identityCovers(base, identity, paths.sep));
     if (!covered) outside.push(folder);
   }
   return outside;

@@ -70,6 +70,29 @@ export function workspaceIdentity(
   return platform === "win32" ? resolved.toLocaleLowerCase("en-US") : resolved;
 }
 
+/// Whether the identity `candidate` is `base` itself or sits anywhere inside it.
+///
+/// Both arguments must already be identities. The one containment predicate: root following, project grouping
+/// and collision detection all answer "is this folder inside that one" through this line, so they can never
+/// disagree about it.
+export function identityCovers(base: string, candidate: string, separator: string = path.sep): boolean {
+  return candidate === base || candidate.startsWith(base + separator);
+}
+
+/// Whether `folder` is `root` itself or sits anywhere inside it, as paths a person wrote.
+export function workspaceCovers(
+  root: string,
+  folder: string,
+  paths: typeof path.posix | typeof path.win32 = path,
+  platform: NodeJS.Platform = process.platform,
+): boolean {
+  return identityCovers(
+    workspaceIdentity(root, paths, platform),
+    workspaceIdentity(folder, paths, platform),
+    paths.sep,
+  );
+}
+
 function normalize(
   value: string,
   paths: typeof path.posix | typeof path.win32,

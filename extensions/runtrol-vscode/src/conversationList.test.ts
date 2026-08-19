@@ -12,13 +12,24 @@ import {
   projectDetail,
   projects,
 } from "./conversationList";
+import type { ProjectRecord } from "./projects";
 import type { NativeChatLine, ProviderLine, SessionLine } from "./runtimeTypes";
+import { workspaceIdentity } from "./workspaceCollision";
 
 const NOW = Date.parse("2026-08-17T12:00:00Z");
 
 const ALPHA = "C:\\work\\alpha";
 const BETA = "C:\\work\\beta";
 const GAMMA = "C:\\work\\gamma";
+
+/// A project the operator created on this folder, the way the store would record it.
+function record(workspace: string, name?: string): ProjectRecord {
+  return {
+    key: workspaceIdentity(workspace),
+    name: name ?? workspace.split(/[\\/]/).pop() ?? workspace,
+    workspace,
+  };
+}
 
 const PROVIDERS: ProviderLine[] = [
   { providerId: "claude", displayName: "Claude Code", installation: { state: "usable", version: "2.1.0" } },
@@ -419,18 +430,69 @@ test("a conversation with no folder is not filed under an invented one", () => {
     [],
     null,
   );
-  const groups = projects(rows, [ALPHA]);
-  assert.equal(groups.length, 1, "only the real folder is a project");
+  const groups = projects([record(ALPHA)], rows, [ALPHA]);
+  assert.equal(groups.length, 1, "only the created project is a heading");
   assert.equal(groups[0]?.name, "alpha");
-  const unfiled = loose(rows);
+  const unfiled = loose([record(ALPHA)], rows);
   assert.equal(unfiled.length, 1);
   assert.equal(unfiled[0]?.session?.sessionId, "b");
 });
 
-test("a folder that is only whitespace is not a folder", () => {
+test("a folder that is only whitespace files nowhere", () => {
   const rows = conversations([session({ sessionId: "a", workspace: "   " })], PROVIDERS, [], null);
-  assert.equal(projects(rows, []).length, 0);
-  assert.equal(loose(rows).length, 1);
+  const filed = projects([record(ALPHA)], rows, []).flatMap((group) => group.rows);
+  assert.equal(filed.length, 0);
+  assert.equal(loose([record(ALPHA)], rows).length, 1);
+});
+
+test("a folder full of conversations is not a heading unless somebody made it one", () => {
+  // The regression this whole shape exists to prevent. The panel used to invent a heading for every folder any
+  // conversation had run in, and a machine full of conversations became a wall of folder names (measured:
+  // thirty auto-headings named workspace-1 through workspace-30, rejected by the operator on sight). With no
+  // created projects there are no headings, and every conversation is simply a conversation.
+  const rows = conversations(spread([ALPHA, BETA, GAMMA]), PROVIDERS, [], null);
+  assert.equal(projects([], rows, [ALPHA]).length, 0, "no created project, no heading");
+  assert.equal(loose([], rows).length, rows.length, "every conversation stays a plain row");
+});
+
+test("a created project with no conversations yet still shows its heading", () => {
+  // It was made a moment ago. A heading that vanished until a conversation arrived would read as the creation
+  // having failed.
+  const groups = projects([record(ALPHA)], [], []);
+  assert.equal(groups.length, 1);
+  assert.equal(groups[0]?.rows.length, 0);
+  assert.ok(groups[0]);
+  assert.equal(projectDetail(groups[0]), "no conversations yet");
+});
+
+test("a conversation in a subfolder files under the project that covers it", () => {
+  const rows = conversations(
+    [session({ sessionId: "deep", workspace: `${ALPHA}\\packages\\core` })],
+    PROVIDERS,
+    [],
+    null,
+  );
+  const groups = projects([record(ALPHA)], rows, []);
+  assert.equal(groups[0]?.rows.length, 1);
+  assert.equal(loose([record(ALPHA)], rows).length, 0);
+});
+
+test("nested projects file a conversation under the deepest one", () => {
+  const sub = `${ALPHA}\\packages\\core`;
+  const rows = conversations(
+    [
+      session({ sessionId: "inner", workspace: `${sub}\\src` }),
+      session({ sessionId: "outer", workspace: `${ALPHA}\\docs` }),
+    ],
+    PROVIDERS,
+    [],
+    null,
+  );
+  const groups = projects([record(ALPHA), record(sub, "core")], rows, []);
+  const outer = groups.find((group) => group.name === "alpha");
+  const inner = groups.find((group) => group.name === "core");
+  assert.equal(inner?.rows[0]?.session?.sessionId, "inner");
+  assert.equal(outer?.rows[0]?.session?.sessionId, "outer");
 });
 
 test("every conversation is either in a project or loose, never both and never neither", () => {
@@ -447,8 +509,9 @@ test("every conversation is either in a project or loose, never both and never n
     [],
     null,
   );
-  const filed = projects(rows, []).flatMap((group) => group.rows);
-  const unfiled = loose(rows);
+  const records = [record(ALPHA), record(BETA)];
+  const filed = projects(records, rows, []).flatMap((group) => group.rows);
+  const unfiled = loose(records, rows);
   assert.equal(filed.length + unfiled.length, rows.length);
   const seen = new Set([...filed, ...unfiled].map((row) => row.key));
   assert.equal(seen.size, rows.length, "no row is drawn twice");
@@ -473,20 +536,19 @@ test("a conversation nobody named still reads as something", () => {
   assert.notEqual(rows[0]?.title, rows[1]?.title, "two nameless conversations are still told apart");
 });
 
-test("a project heading appears however short the list is", () => {
-  // Project then session, always. An earlier version only grouped past a length threshold, so the sidebar changed
-  // shape as conversations accumulated and a single conversation showed no project at all. `runtrol · Claude Code`
-  // with no heading does not say which project that is.
+test("a created project shows its heading however short the list is", () => {
+  // An earlier folder-derived version only grouped past a length threshold, so the sidebar changed shape as
+  // conversations accumulated. A created project is a decision, and it shows from its first conversation.
   const rows = conversations(spread([ALPHA], 1), PROVIDERS, [], null);
-  const groups = projects(rows, [ALPHA]);
+  const groups = projects([record(ALPHA)], rows, [ALPHA]);
   assert.equal(groups.length, 1);
   assert.equal(groups[0]?.name, "alpha");
   assert.equal(groups[0]?.rows.length, 1);
 });
 
-test("one project still gets its heading", () => {
+test("one created project still gets its heading", () => {
   const rows = conversations(spread([ALPHA], 4), PROVIDERS, [], null);
-  const groups = projects(rows, [ALPHA]);
+  const groups = projects([record(ALPHA)], rows, [ALPHA]);
   assert.equal(groups.length, 1);
   assert.equal(groups[0]?.rows.length, 4);
 });
@@ -503,14 +565,14 @@ test("a heading says whether it holds the conversation currently open", () => {
     [],
     "s2",
   );
-  const groups = projects(rows, [ALPHA]);
+  const groups = projects([record(ALPHA), record(BETA)], rows, [ALPHA]);
   assert.equal(groups.find((group) => group.name === "beta")?.holdsOpen, true);
   assert.equal(groups.find((group) => group.name === "alpha")?.holdsOpen, false);
 });
 
-test("each project gets a heading and every conversation lands under exactly one", () => {
+test("each created project gets a heading and every conversation lands under exactly one", () => {
   const rows = conversations(spread([ALPHA, BETA, GAMMA]), PROVIDERS, [], null);
-  const groups = projects(rows, []);
+  const groups = projects([record(ALPHA), record(BETA), record(GAMMA)], rows, []);
   assert.equal(groups.length, 3);
   const held = groups.flatMap((group) => group.rows.map((row) => row.key));
   assert.equal(held.length, rows.length, "no conversation is dropped");
@@ -525,7 +587,7 @@ test("this window's project comes first however recently the others were touched
     [nativeChat({ nativeSessionId: "n1", cwd: BETA, updatedAt: "2026-08-17T11:59:00Z" })],
     null,
   );
-  const groups = projects(rows, [ALPHA]);
+  const groups = projects([record(ALPHA), record(BETA)], rows, [ALPHA]);
   assert.equal(groups[0]?.name, "alpha");
   assert.equal(groups[0]?.current, true);
 });
@@ -536,6 +598,7 @@ test("heading order does not move when an agent starts or finishes a turn", () =
   // being read is not a list.
   const order = (lifecycle: SessionLine["lifecycle"]) =>
     projects(
+      [record(ALPHA), record(BETA), record(GAMMA)],
       conversations(
         spread([ALPHA, BETA, GAMMA]).map((line, index) =>
           index === 0 ? { ...line, hot: true, lifecycle } : line),
@@ -561,7 +624,7 @@ test("a heading counts what is waiting inside it without moving because of it", 
     [],
     null,
   );
-  const alpha = projects(rows, []).find((group) => group.name === "alpha");
+  const alpha = projects([record(ALPHA), record(BETA)], rows, []).find((group) => group.name === "alpha");
   assert.ok(alpha);
   assert.equal(alpha.attention, 1);
   assert.equal(alpha.live, 2);
@@ -570,26 +633,27 @@ test("a heading counts what is waiting inside it without moving because of it", 
 
 test("a heading with nothing waiting says only what it holds", () => {
   const rows = conversations(spread([ALPHA, BETA]), PROVIDERS, [], null);
-  const beta = projects(rows, []).find((group) => group.name === "beta");
+  const beta = projects([record(ALPHA), record(BETA)], rows, []).find((group) => group.name === "beta");
   assert.ok(beta);
   assert.equal(beta.attention, 0);
   assert.ok(projectDetail(beta).endsWith("conversations"));
 });
 
-test("the same folder reached two ways is one project, not two", () => {
-  // Windows resolves these to the same directory. Two headings for one project would also disagree with
-  // collision detection, which already treats them as one working tree.
+test("the same folder reached two ways files into one project", () => {
+  // Windows resolves these to the same directory. A conversation whose recorded folder differs from the
+  // project's only by casing still belongs to it, because collision detection already treats them as one
+  // working tree.
   if (process.platform !== "win32") {
     // Case folding is a Windows rule. Asserting it elsewhere would assert the opposite of the truth there.
     return;
   }
-  const lines = spread([ALPHA, BETA]);
   const rows = conversations(
-    lines.map((line, index) => (index === 0 ? { ...line, workspace: "c:\\WORK\\alpha" } : line)),
+    [session({ sessionId: "cased", workspace: "c:\\WORK\\alpha" })],
     PROVIDERS,
     [],
     null,
   );
-  const groups = projects(rows, []);
-  assert.equal(groups.length, 2, "casing did not split one project in two");
+  const groups = projects([record(ALPHA)], rows, []);
+  assert.equal(groups[0]?.rows.length, 1, "casing did not push the conversation out of its project");
+  assert.equal(loose([record(ALPHA)], rows).length, 0);
 });
