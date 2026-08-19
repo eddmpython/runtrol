@@ -101,9 +101,10 @@ the original daemon and provider processes instead of making a versioned extensi
   and model and reasoning effort stay whatever the installed CLI already defaults to. A separate explicit command still
   offers the full service, model, and effort flow, using only the opaque values the installed CLI returns through
   Runtime plus an explicit Provider default choice.
-- The conversation editor carries no session panel. The requested model, requested reasoning effort, provider mode,
-  context use, provider-reported cost, and the tightest account-limit window appear as one line beneath the composer.
-  Missing provider telemetry remains visibly absent and is never estimated, and an untouched quota window says nothing.
+- The conversation editor carries no session panel. The service, the model the service says is answering, the
+  requested reasoning effort, context use, provider-reported cost, and the tightest account-limit window appear as
+  chips beneath the composer, and the permission mode has a chip of its own. Missing provider telemetry remains
+  visibly absent and is never estimated, and an untouched quota window says nothing.
 - Enter sends and Shift+Enter writes a new line.
 - A message opening with `/` offers the commands the attached coding service announced, with that service's own
   descriptions. Only a leading slash opens the menu, since a slash inside a sentence belongs to a path. Choosing fills
@@ -111,9 +112,13 @@ the original daemon and provider processes instead of making a versioned extensi
   unusable and the rest premature. Only the announced name and description are read; a command's argument schema stays
   the service's business, because the value of passing a slash command through untouched is that the service decides
   what it means.
-- Changing the model mid conversation is that command, not a Runtime method. Every one of these CLIs owns a `/model`,
-  and a parallel Runtrol call would be a second place that opinion lives, disagreeing the moment somebody typed the
-  command instead. Model and effort are chosen at start; after that the service's own commands own them.
+- Changing the model or the permission mode mid conversation is the chip that displays it. The pick travels
+  `sessions/setModel` or `sessions/setMode` to the service's own switch surface (a control channel, the next turn's
+  own override field, or the protocol's announced call, whichever that CLI actually has), and the chip then shows
+  what the service says back, never what was merely requested. The choices are the session's own announced set or
+  the service's measured vocabulary; modes that remove safety prompts are not offered and are refused for every
+  caller. The service's own `/model` style commands remain available through the slash menu and stay authoritative:
+  a switch made there surfaces through the same announcement events the chips read.
 - The command list belongs to one conversation and is dropped on switching. A previous service's commands offered to
   the next one is worse than none, because it looks authoritative.
 - A coding service that cannot start a conversation is answered with that service's own remedy, chosen by the public
