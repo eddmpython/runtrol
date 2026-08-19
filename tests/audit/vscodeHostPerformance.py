@@ -23,10 +23,12 @@ Usage::
     python -X utf8 tests/audit/vscodeHostPerformance.py
 
 
-reloadRestoreMs was recalibrated 1750 -> 2500 on 2026-08-19: one day's trials on the reference machine
-spanned 1651~2533 ms with no code change on that path, so best-of-3 against 1750 was a coin flip on machine
-noise (a green morning run contained a 2038 ms trial). 2500 gives the same ~1.5x headroom over the best
-observed value that activationMs has, and still goes red on any real regression past the noise band.
+Three ratchets were recalibrated out of the measured noise band on 2026-08-19, after one day in which each
+flipped red on runs with no code change on its path. The day's trials on the reference machine, best and
+worst, with the old budget in parentheses: reloadRestoreMs 1651~2533 (1750, a green morning run contained a
+2038 ms trial), coldResumeMs 1150~2401 (1500), activationMs 857~1516 (1350). Each budget now sits past its
+observed band (2500, 2600, 1800), which still goes red on any real regression beyond machine noise; a budget
+inside the band is a coin flip that trains people to rerun instead of to read.
 """
 
 from __future__ import annotations
