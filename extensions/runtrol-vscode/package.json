@@ -349,6 +349,11 @@
         "command": "runtrol.startConfiguredSession",
         "title": "Runtrol: New Conversation with Service, Model and Effort...",
         "icon": "$(settings-gear)"
+      },
+      {
+        "command": "runtrol.newConversationInProject",
+        "title": "Runtrol: New Conversation in Project",
+        "icon": "$(add)"
       }
     ],
     "keybindings": [
@@ -381,6 +386,10 @@
       "commandPalette": [
         {
           "command": "runtrol.selectSession",
+          "when": "false"
+        },
+        {
+          "command": "runtrol.newConversationInProject",
           "when": "false"
         }
       ],
@@ -477,6 +486,11 @@
         }
       ],
       "view/item/context": [
+        {
+          "command": "runtrol.newConversationInProject",
+          "group": "inline@1",
+          "when": "view == runtrol.sessions && viewItem == runtrol.project"
+        },
         {
           "command": "runtrol.renameSession",
           "when": "view == runtrol.sessions && viewItem =~ /^runtrol\\.conversation/",

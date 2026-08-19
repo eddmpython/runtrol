@@ -493,11 +493,22 @@ export class Controller implements vscode.Disposable {
     );
   }
 
-  /// The deliberate path: name the service, the model and the effort explicitly.
+  /// Start a conversation inside one project, from its heading.
   ///
-  /// Automatic is the default, not the ceiling. Someone who came here specifically to run a different model gets
-  /// every choice the installed CLI actually reports, and nobody else is asked.
-  async startConfiguredSession(): Promise<void> {
+  /// The heading already says which folder, so that question is never asked. What remains is which coding
+  /// service, and with exactly one usable service there is no question at all: the click is the whole gesture.
+  /// Model and effort stay with the installed CLI's own settings, same as the quick path.
+  async startSessionInWorkspace(workspace: string): Promise<void> {
+    const provider = await this.chooseService();
+    if (!provider) return;
+    const decided = await this.startDecision(workspace, "keep");
+    if (decided === null || decided === "another") return;
+    await this.rememberService(provider.providerId);
+    await this.startResolvedSession(provider.providerId, workspace, null, null, decided, true);
+  }
+
+  /// Which coding service, asked only when there is a choice to make.
+  private async chooseService(): Promise<ProviderLine | null> {
     const usable = this.state.providers.filter(isUsable);
     if (usable.length === 0) {
       throw new Error("no installed coding-agent CLI is currently usable");
@@ -511,7 +522,15 @@ export class Controller implements vscode.Disposable {
       })),
       { title: "New conversation", placeHolder: "Choose a coding service" },
     );
-    const provider = picked?.provider;
+    return picked?.provider ?? null;
+  }
+
+  /// The deliberate path: name the service, the model and the effort explicitly.
+  ///
+  /// Automatic is the default, not the ceiling. Someone who came here specifically to run a different model gets
+  /// every choice the installed CLI actually reports, and nobody else is asked.
+  async startConfiguredSession(): Promise<void> {
+    const provider = await this.chooseService();
     if (!provider) return;
     const selectedWorkspace = await this.chooseStartWorkspace();
     if (!selectedWorkspace) return;
@@ -1146,38 +1165,49 @@ export class Controller implements vscode.Disposable {
   private async chooseStartWorkspace(): Promise<StartWorkspace | null> {
     let workspace = await chooseWorkspace();
     while (workspace) {
-      const collisions = workspaceCollisions(workspace, this.state.sessions);
-      if (collisions.length === 0) {
-        return { workspace, access: "exclusive" };
+      const decided = await this.startDecision(workspace, "offer");
+      if (decided === "another") {
+        workspace = await chooseAlternateWorkspace(workspace, this.state.sessions);
+        continue;
       }
-      const action = await vscode.window.showWarningMessage(
-        `${path.basename(workspace)} overlaps ${collisions.length} running chat${
-          collisions.length === 1 ? "" : "s"
-        }.`,
-        {
-          modal: true,
-          detail: collisionDetail(collisions),
-        },
-        "Focus existing",
-        "Choose another",
-        "Start here anyway",
-      );
-      if (action === "Start here anyway") {
-        return { workspace, access: "shared" };
-      }
-      if (action === "Focus existing") {
-        const existing = await chooseCollision(collisions);
-        if (existing) {
-          await this.select(existing);
-        }
-        return null;
-      }
-      if (action !== "Choose another") {
-        return null;
-      }
-      workspace = await chooseAlternateWorkspace(workspace, this.state.sessions);
+      return decided === null ? null : { workspace, access: decided };
     }
     return null;
+  }
+
+  /// How a start in this folder proceeds when other chats are already writing there.
+  ///
+  /// One dialog for every start path, so the writer-collision vocabulary cannot drift between them. The paths
+  /// differ in exactly one way: a start whose folder was chosen in the dialog may choose another, and a start
+  /// from a project heading has already said which folder, so offering another would contradict the click.
+  private async startDecision(
+    workspace: string,
+    alternatives: "offer" | "keep",
+  ): Promise<StartWorkspace["access"] | "another" | null> {
+    const collisions = workspaceCollisions(workspace, this.state.sessions);
+    if (collisions.length === 0) return "exclusive";
+    const buttons = alternatives === "offer"
+      ? ["Focus existing", "Choose another", "Start here anyway"]
+      : ["Focus existing", "Start here anyway"];
+    const action = await vscode.window.showWarningMessage(
+      `${path.basename(workspace)} overlaps ${collisions.length} running chat${
+        collisions.length === 1 ? "" : "s"
+      }.`,
+      {
+        modal: true,
+        detail: collisionDetail(collisions),
+      },
+      ...buttons,
+    );
+    if (action === "Start here anyway") return "shared";
+    if (action === "Focus existing") {
+      const existing = await chooseCollision(collisions);
+      if (existing) {
+        await this.select(existing);
+      }
+      return null;
+    }
+    return action === "Choose another" ? "another" : null;
   }
 
   private requireSelected(): SessionLine {

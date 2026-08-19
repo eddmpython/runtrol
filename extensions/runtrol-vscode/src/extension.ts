@@ -25,7 +25,7 @@ import { providerDisplayName, sessionTitle } from "./sessionDisplay";
 import { RuntimeState } from "./state";
 import { StudioRuntimeClient } from "./runtimeClient";
 import { WorkspaceRootFollowing } from "./workspaceRoots";
-import { ConversationsTree } from "./trees";
+import { ConversationsTree, ProjectItem } from "./trees";
 
 export type RuntrolExtensionApi = {
   readonly ready: Promise<void>;
@@ -289,6 +289,15 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
     vscode.commands.registerCommand(
       "runtrol.startConfiguredSession",
       () => run(() => afterReady(() => controller.startConfiguredSession())),
+    ),
+    vscode.commands.registerCommand(
+      "runtrol.newConversationInProject",
+      (item: unknown) => run(() => afterReady(async () => {
+        // Inline on the project heading only, so the argument is always the heading. Guarded anyway, because a
+        // command invoked with the wrong thing must refuse rather than start a session somewhere surprising.
+        if (!(item instanceof ProjectItem)) return;
+        await controller.startSessionInWorkspace(item.group.workspace);
+      })),
     ),
     vscode.commands.registerCommand(
       "runtrol.selectSession",
