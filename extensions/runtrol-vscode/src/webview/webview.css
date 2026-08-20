@@ -553,6 +553,52 @@ pre.diff-body.diff-del {
 }
 
 /*
+ * Messages waiting for the turn to end, above the composer that queued them.
+ *
+ * Quiet rows, not bubbles: these are not sent yet, and the strip saying so is also the honest statement
+ * that they live only in this page.
+ */
+.queued {
+  margin: 0 0 0.4rem;
+  padding: 0;
+  list-style: none;
+}
+
+.queued-message {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.2rem 0.6rem;
+  margin-bottom: 0.2rem;
+  border: 1px dashed var(--vscode-editorWidget-border, var(--vscode-widget-border, transparent));
+  border-radius: 0.5rem;
+  color: var(--vscode-descriptionForeground);
+  font-size: 0.88em;
+}
+
+.queued-text {
+  flex: 1;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.queued-cancel {
+  padding: 0 0.35rem;
+  border: none;
+  border-radius: 0.3rem;
+  color: var(--vscode-descriptionForeground);
+  background: transparent;
+  font-size: 1em;
+  cursor: pointer;
+}
+
+.queued-cancel:hover {
+  color: var(--vscode-foreground);
+  background: var(--vscode-editorWidget-background, transparent);
+}
+
+/*
  * The coding service's own commands, above the field they will be typed into.
  *
  * Above rather than below because the composer already sits at the bottom of the panel, and a menu opening

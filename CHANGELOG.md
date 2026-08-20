@@ -27,6 +27,11 @@ and refactoring that no user can observe do not belong here.
 - Removing a project shows an Undo toast instead of asking for confirmation up front: the misclick is
   covered without making every deliberate removal answer a question first.
 
+- Typing no longer waits for the agent. While a turn runs, the composer stays open and Enter queues the
+  message onto a strip above it (up to eight, each with its own cancel); when the turn ends, queued
+  messages go out one per turn, in order. The queue lives only in the open conversation page, exactly like
+  unsent composer text: switching sessions or hiding the tab discards it, and nothing is ever written down.
+
 - The deliberate start flow is findable now: "New Conversation with Service, Model and Effort..." sits on
   every project heading's right-click menu and as a second button on the empty conversation page, not only
   in the view's overflow menu. Each project also remembers its last explicit choice and leads every picker

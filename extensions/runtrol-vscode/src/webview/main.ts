@@ -11,6 +11,7 @@ import {
 import { conversationEmptyCopy, sendShortcutHint } from "./conversationCopy";
 import { hasMarkdownTrigger, parseMarkdown, type Block, type Inline } from "./markdown";
 import { planEntriesOf, planGlyph } from "./plan";
+import { cancelQueued, pushQueued, queuedLabel, takeQueued } from "./queue";
 import { toolActivityLineKeeping, toolActivityOf } from "./toolActivity";
 import { toolDetail } from "./toolDetail";
 import { declaredDiffs, unifiedLineKind, type DeclaredDiff } from "./toolDiff";
@@ -134,6 +135,7 @@ effortChip.addEventListener("click", () => {
 });
 const usageChip = element<HTMLSpanElement>("usage-chip");
 const commandMenu = element<HTMLUListElement>("commands");
+const queuedList = element<HTMLUListElement>("queued");
 const pending: unknown[] = [];
 let selected: Session | null = null;
 let generation = 0;
@@ -159,6 +161,8 @@ let switchableModeIds: string[] = [];
 /// Switches sent but not yet confirmed by the provider. Each rides its chip as a "(requested)"
 /// suffix and is cleared by the matching confirmation event, or at turn end as the fallback.
 let requested = { model: "", mode: "", effort: "" };
+/// Messages typed while the agent worked, sent one per turn boundary. This page's memory only.
+let queued: readonly string[] = [];
 
 window.addEventListener("message", ({ data }: MessageEvent<Incoming>) => {
   if (data.type === "reset") {
@@ -209,7 +213,18 @@ composer.addEventListener("submit", (event) => {
   if (!selected || !text.trim()) {
     return;
   }
-  vscode.postMessage({ type: "prompt", text });
+  if (!promptWasSendable) {
+    // The agent is still working: Enter queues, and the strip above the composer is the receipt.
+    const outcome = pushQueued(queued, text);
+    if (!outcome.accepted) {
+      setStatus(outcome.why, "warning");
+      return;
+    }
+    queued = outcome.queue;
+    paintQueued();
+  } else {
+    vscode.postMessage({ type: "prompt", text });
+  }
   prompt.value = "";
   resizePrompt();
   prompt.focus();
@@ -284,6 +299,10 @@ function reset(
   status.textContent = "";
   status.className = "";
   resetSessionTelemetry();
+  // The queue lives exactly as long as this page's view of one session. Anything still waiting when
+  // the session changes was addressed to the previous one.
+  queued = [];
+  paintQueued();
   promptWasSendable = false;
   renderSession(session, displayTitle, provider);
   prompt.value = "";
@@ -319,7 +338,10 @@ function renderSession(session: Session | null, displayTitle: string | null, pro
   // the one session that is actually waiting on the reader.
   const waitingOnYou = session?.waitingOn === "person";
   document.body.classList.toggle("waiting", waitingOnYou);
-  prompt.disabled = !canSend;
+  // Typing stays open while the agent works: Enter then queues instead of sending, because a person
+  // watching a turn is already composing the next message. Every other unsendable state keeps the
+  // composer closed.
+  prompt.disabled = !canSend && !canInterrupt;
   send.disabled = !canSend;
   send.hidden = !canSend;
   sendHint.hidden = !canSend;
@@ -335,14 +357,54 @@ function renderSession(session: Session | null, displayTitle: string | null, pro
         : session.waitingOn === "quota"
           ? `${currentProvider} is waiting on an account limit`
           : canInterrupt
-            ? `${currentProvider} is working`
+            ? `Message ${currentProvider}. Enter queues it for the end of this turn`
             : session.lifecycle === "failed"
               ? "This conversation needs attention"
               : "Reopening the saved conversation";
-  if (canSend && !promptWasSendable && document.hasFocus()) {
-    prompt.focus();
+  if (canSend && !promptWasSendable) {
+    // The turn just ended. One queued message goes now (one per transition, so an answer arrives
+    // between messages exactly as if the person had typed each one at the moment it became possible).
+    const taken = takeQueued(queued);
+    if (taken.next !== null) {
+      queued = taken.queue;
+      paintQueued();
+      vscode.postMessage({ type: "prompt", text: taken.next });
+    }
+    if (document.hasFocus()) {
+      prompt.focus();
+    }
   }
   promptWasSendable = canSend;
+}
+
+/// The strip of messages waiting for their turn, each with its own cancel.
+function paintQueued(): void {
+  if (queued.length === 0) {
+    queuedList.hidden = true;
+    queuedList.replaceChildren();
+    return;
+  }
+  queuedList.replaceChildren(...queued.map((text, index) => {
+    const row = document.createElement("li");
+    row.className = "queued-message";
+    const label = document.createElement("span");
+    label.className = "queued-text";
+    label.textContent = queuedLabel(text);
+    label.title = "Sends when this turn ends";
+    const cancel = document.createElement("button");
+    cancel.type = "button";
+    cancel.className = "queued-cancel";
+    cancel.textContent = "×";
+    cancel.title = "Do not send this";
+    cancel.setAttribute("aria-label", "Remove the queued message");
+    cancel.addEventListener("click", () => {
+      queued = cancelQueued(queued, index);
+      paintQueued();
+    });
+    row.append(label, cancel);
+    return row;
+  }));
+  queuedList.hidden = false;
 }
 
 /// The one line under the composer that replaced an entire panel.

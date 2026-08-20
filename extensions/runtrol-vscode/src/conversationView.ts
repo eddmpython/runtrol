@@ -467,6 +467,8 @@ export class ConversationView implements vscode.Disposable {
       decoration: the reader arrows through it and presses Enter, and a screen reader announces it as a choice.
     -->
     <ul id="commands" class="commands" role="listbox" aria-label="Commands this coding service offers" hidden></ul>
+    <!-- Messages typed while the agent worked, sent one per turn boundary. This page's memory only. -->
+    <ul id="queued" class="queued" aria-label="Messages waiting for the turn to end" hidden></ul>
     <div class="composer-field">
       <textarea id="prompt" rows="1" aria-label="Message" placeholder="Message" disabled></textarea>
       <button id="send" type="submit" aria-label="Send" title="Send" disabled hidden>
