@@ -361,10 +361,19 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
     vscode.commands.registerCommand(
       "runtrol.removeProject",
       // Removal only takes the heading away: conversations stay, and creating the project again is one click.
-      // That reversibility is why there is no confirmation dialog in the way.
+      // That reversibility is why there is no confirmation dialog in the way; the toast's Undo covers the
+      // misclick without making everyone else answer a question first.
       (item: unknown) => run(async () => {
         if (!(item instanceof ProjectItem)) return;
-        await projectStore.remove(item.group.workspace);
+        const { workspace, name } = item.group;
+        await projectStore.remove(workspace);
+        // Not awaited as a gate: the removal is done, and the toast lives on its own time.
+        void vscode.window.showInformationMessage(`Removed the project ${name}.`, "Undo").then((choice) => {
+          if (choice === "Undo") {
+            return run(() => projectStore.create(workspace, name).then(() => undefined));
+          }
+          return undefined;
+        });
       }),
     ),
     vscode.commands.registerCommand(
