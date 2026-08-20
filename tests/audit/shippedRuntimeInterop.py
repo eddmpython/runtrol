@@ -195,15 +195,32 @@ def greet(core: Path, home: Path, scratch: Path) -> Evidence:
     # folder. Measured 2026-08-20: isolating only RUNTROL_HOME made this gate start a shipped
     # daemon and then greet the operator's own installed one, reporting green for a conversation
     # that never happened. An isolated state root alone left the SDK seeing nothing at all.
-    state_root = home
+    # Both ends must meet at one file, and each platform resolves that file differently. The daemon
+    # and the public SDK agree with each other (`runtrol-core/src/home/os.rs` and
+    # `clients/typescript/src/locator.ts` implement the same three rules), so isolation only has to
+    # follow whichever rule this machine uses:
+    #
+    #   Windows  %LOCALAPPDATA%/runtrol/runtime.locator.json
+    #   macOS    $HOME/Library/Application Support/runtrol/runtime.locator.json
+    #   Linux    $XDG_STATE_HOME/runtrol/runtime.locator.json
+    #
+    # Measured 2026-08-20: setting only RUNTROL_HOME made this gate start a shipped daemon and then
+    # greet the operator's own installed one; setting only a state root left the SDK seeing nothing;
+    # and setting XDG_STATE_HOME on macOS, where nothing reads it, stopped two release jobs with
+    # "the public locator reads notInstalled".
+    env = dict(os.environ)
+    if sys.platform == "win32":
+        state_root = home
+        env["LOCALAPPDATA"] = str(state_root)
+    elif sys.platform == "darwin":
+        env["HOME"] = str(home)
+        state_root = home / "Library" / "Application Support"
+    else:
+        state_root = home
+        env["XDG_STATE_HOME"] = str(state_root)
     runtime_home = state_root / "runtrol"
     runtime_home.mkdir(parents=True, exist_ok=True)
-    env = dict(os.environ)
     env["RUNTROL_HOME"] = str(runtime_home)
-    if sys.platform == "win32":
-        env["LOCALAPPDATA"] = str(state_root)
-    else:
-        env["XDG_STATE_HOME"] = str(state_root)
     version = "unknown"
     started = subprocess.run(
         [str(core), "endpoint"], env=env, capture_output=True, text=True, timeout=TIMEOUT_S, check=False
