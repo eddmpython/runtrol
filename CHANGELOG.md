@@ -18,6 +18,11 @@ and refactoring that no user can observe do not belong here.
 
 ### Fixed
 
+- Returning to a conversation no longer shows an empty page. Leaving the tab (or switching sessions) used to
+  resume the event stream after everything already delivered, so the fresh page had nothing to paint until
+  the agent spoke again. A reopened conversation now replays the daemon's bounded recent window into the new
+  page; anything older than that window stays with the service, exactly as before.
+
 - A message from the conversation page that no handler recognizes is now dropped instead of falling through
   to the interrupt path. No shipped page ever sent such a message, but the fallback meant one malformed
   message away from stopping a running agent.

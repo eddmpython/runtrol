@@ -108,6 +108,14 @@ export class RuntimeState implements vscode.Disposable {
     this.cursors.set(session, cursor);
   }
 
+  // Called when the conversation document is reborn (a reset cleared its DOM). Watching without a
+  // cursor replays the daemon's bounded recent window into the fresh document, where resuming from
+  // the last delivered cursor would leave everything already seen invisible. Backpressure restarts
+  // keep their cursor: the document survived, so a replay there would duplicate what is on screen.
+  forgetCursor(session: string): void {
+    this.cursors.delete(session);
+  }
+
   dispose(): void {
     this.cursors.clear();
     this.nativeCatalogues.clear();

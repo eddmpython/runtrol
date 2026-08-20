@@ -287,6 +287,8 @@ export class Controller implements vscode.Disposable {
     void this.startSessionIndexWatch();
     const selected = this.state.selected;
     if (selected) {
+      // Same rule as selection: the reset empties the document, so the watch replays the window.
+      this.state.forgetCursor(selected.sessionId);
       this.conversation.reset(selected);
       this.ensureSelectedWatch();
     } else {
@@ -386,6 +388,9 @@ export class Controller implements vscode.Disposable {
     const stored = this.persistSelection(session.sessionId);
     this.pauseWatch();
     this.state.select(session.sessionId);
+    // The reset below clears the document, so the watch must replay the recent window rather than
+    // resume past everything the reader can no longer see.
+    this.state.forgetCursor(session.sessionId);
     this.conversation.reset(session);
 
     const follows = vscode.workspace.getConfiguration("runtrol").get<boolean>("followWorkspace", true);
@@ -714,6 +719,14 @@ export class Controller implements vscode.Disposable {
   conversationVisibilityChanged(visible: boolean): void {
     this.conversationVisible = visible;
     if (visible) {
+      // Visibility only turns true right after the view reset a freshly (re)born document
+      // (retainContextWhenHidden is false, so a hidden tab always comes back empty). Resuming from
+      // the stored cursor painted nothing into that empty page; replaying the daemon's bounded
+      // window is what brings the conversation back.
+      const selected = this.state.selected;
+      if (selected) {
+        this.state.forgetCursor(selected.sessionId);
+      }
       this.ensureSelectedWatch();
     } else {
       this.pauseWatch();
