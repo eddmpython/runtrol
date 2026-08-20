@@ -209,7 +209,14 @@ def greet(core: Path, home: Path, scratch: Path) -> Evidence:
         [str(core), "endpoint"], env=env, capture_output=True, text=True, timeout=TIMEOUT_S, check=False
     )
     if started.returncode != 0:
-        return Evidence(version, False, False, False)
+        # Never a bare "did not start": a gate that blocks a release has to say what it saw, or the
+        # person holding the release cannot tell a real incompatibility from an environment it
+        # failed to set up. The daemon's own words go straight into the failure.
+        said = (started.stderr or started.stdout).strip().splitlines()
+        raise Failed(
+            f"the shipped Runtime at {core} did not start: "
+            + (said[-1] if said else f"exit code {started.returncode} and no output")
+        )
     try:
         script = scratch / "greet.mjs"
         entry = (CLIENT / "dist" / "src" / "index.js").resolve().as_uri()
