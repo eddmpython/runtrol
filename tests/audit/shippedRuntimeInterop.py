@@ -322,11 +322,48 @@ def nodeProgram() -> str:
     return node
 
 
+def buildClient() -> None:
+    """Compile the public TypeScript client this gate greets with.
+
+    The gate speaks through the package's built entry point, which a fresh checkout does not have.
+    Measured 2026-08-20: assuming it existed passed locally, where a build already sat on disk, and
+    failed on every CI runner with a module-not-found that said nothing about protocols.
+    """
+    entry = CLIENT / "dist" / "src" / "index.js"
+    if entry.is_file():
+        return
+    npm = shutil.which("npm.cmd" if sys.platform == "win32" else "npm") or shutil.which("npm")
+    if npm is None:
+        raise LookupError("npm is absent")
+    built = subprocess.run(
+        [npm, "run", "build"],
+        cwd=CLIENT,
+        capture_output=True,
+        text=True,
+        timeout=TIMEOUT_S * 3,
+        check=False,
+        shell=sys.platform == "win32",
+    )
+    if built.returncode != 0 or not entry.is_file():
+        detail = (built.stderr or built.stdout).strip().splitlines()
+        raise Failed(
+            "the public client could not be built for this gate: "
+            + (detail[-1] if detail else f"npm run build returned {built.returncode}")
+        )
+
+
 def run() -> int:
     """Greet every recently published Runtime with this build's client."""
     try:
         versions = publishedVersions(RELEASES_CHECKED)
         nodeProgram()
+        buildClient()
+    except Failed as broken:
+        # Preparing the gate failed, which is this gate's own problem and is reported as one rather
+        # than as a protocol verdict, but it is still red: a gate that cannot run has verified
+        # nothing and must not read as a pass.
+        print(f"[shippedRuntimeInterop] FAIL: {broken}", file=sys.stderr)
+        return 2
     except LookupError as absent:
         # The one thing this gate may never do is fail for being offline: it would turn every
         # disconnected checkout red for a contract it cannot observe.
