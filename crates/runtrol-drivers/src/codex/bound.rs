@@ -168,6 +168,11 @@ pub const NOTICES: &[BoundNotice] = &[
         means: "how much of the context window is in use",
     },
     BoundNotice {
+        method: "thread/settings/updated",
+        per_thread: true,
+        means: "the thread's applied settings; the model inside is the CLI's word on what answers",
+    },
+    BoundNotice {
         method: "account/rateLimits/updated",
         // The one that names no conversation. It is account state, so it is true of every session on this
         // connection at once, and it is delivered to all of them rather than guessed at one.

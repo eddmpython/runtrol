@@ -105,6 +105,23 @@ struct Params<'line> {
     /// On a failure notification: whether the provider will try again.
     #[serde(default)]
     will_retry: Option<bool>,
+    /// On a settings notification: the thread's applied settings.
+    #[serde(default, borrow)]
+    thread_settings: Option<&'line RawValue>,
+}
+
+/// Same ceiling every driver puts on a lifted model identifier.
+const MAX_LIFTED_MODEL_BYTES: usize = 200;
+
+/// The one field runtrol lifts from a settings announcement.
+///
+/// The CLI's own schema carries `model`, `effort`, `approvalPolicy` and more here; only the model is
+/// lifted because only it has a dedicated event, and the whole payload travels regardless.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SettingsLift<'line> {
+    #[serde(default)]
+    model: Option<&'line str>,
 }
 
 /// The turn fields runtrol decides on.
@@ -253,6 +270,30 @@ pub fn read(method: &str, params: Option<&Bytes>) -> Result<Frame, MapError> {
             body,
             parsed.token_usage,
         ))))),
+
+        // The CLI's own announcement of this thread's applied settings (its schema:
+        // ThreadSettingsUpdatedNotification.threadSettings). The model is the only lifted field
+        // because it is the one with a dedicated event; everything else stays in the payload.
+        "thread/settings/updated" => Ok(
+            match parsed
+                .thread_settings
+                .and_then(read_nested::<SettingsLift<'_>>)
+                .and_then(|settings| settings.model)
+                .filter(|model| !model.is_empty() && model.len() <= MAX_LIFTED_MODEL_BYTES)
+            {
+                Some(model) => Frame::Body(EventBody::CurrentModelUpdate {
+                    model_id: model.into(),
+                    available_ids: None,
+                    payload: whole(body),
+                }),
+                None => Frame::Unbound(Unmapped {
+                    tag: method.into(),
+                    turn: None,
+                    payload: whole(body),
+                    unknown_to_binding: false,
+                }),
+            },
+        ),
 
         "account/rateLimits/updated" => Ok(Frame::Body(EventBody::RateLimitUpdate(Box::new(
             limits(body, parsed.rate_limits),
@@ -825,11 +866,41 @@ mod tests {
     }
 
     #[test]
+    fn a_settings_announcement_becomes_the_model_event_and_a_modelless_one_travels_whole() {
+        // The shape is the CLI's own (ThreadSettingsUpdatedNotification.threadSettings, from its
+        // generated schema, 2026-08-20). Only the model is lifted; the payload carries the rest.
+        let announced = params(&format!(
+            r#"{{"threadId":"{THREAD}","threadSettings":{{"model":"gpt-5.4-codex","effort":"medium","approvalPolicy":"on-request"}}}}"#
+        ));
+        match read("thread/settings/updated", Some(&announced)).expect("readable") {
+            Frame::Body(EventBody::CurrentModelUpdate {
+                model_id,
+                available_ids,
+                ..
+            }) => {
+                assert_eq!(&*model_id, "gpt-5.4-codex");
+                assert!(
+                    available_ids.is_none(),
+                    "this announcement carries no switchable set"
+                );
+            }
+            other => panic!("expected the model event, got {other:?}"),
+        }
+        let modelless = params(&format!(
+            r#"{{"threadId":"{THREAD}","threadSettings":{{}}}}"#
+        ));
+        match read("thread/settings/updated", Some(&modelless)).expect("readable") {
+            Frame::Unbound(unmapped) => assert_eq!(&*unmapped.tag, "thread/settings/updated"),
+            other => panic!("a settings frame without a model travels whole, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn every_bound_notification_maps_to_something_other_than_unmapped() {
         // The list and the mapping have to agree. A bound notification that falls through to unmapped is a
         // binding that exists on paper and nowhere else.
         let body = params(&format!(
-            r#"{{"threadId":"{THREAD}","turnId":"{TURN}","turn":{{"id":"{TURN}","status":"completed"}},"itemId":"item_01","item":{{"type":"agentMessage","id":"item_01"}},"tokenUsage":{{}},"rateLimits":{{}},"willRetry":false}}"#
+            r#"{{"threadId":"{THREAD}","turnId":"{TURN}","turn":{{"id":"{TURN}","status":"completed"}},"itemId":"item_01","item":{{"type":"agentMessage","id":"item_01"}},"tokenUsage":{{}},"rateLimits":{{}},"willRetry":false,"threadSettings":{{"model":"gpt-5.4-codex"}}}}"#
         ));
         for notice in NOTICES {
             match read(notice.method, Some(&body)) {

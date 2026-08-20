@@ -27,6 +27,12 @@ and refactoring that no user can observe do not belong here.
 - Removing a project shows an Undo toast instead of asking for confirmation up front: the misclick is
   covered without making every deliberate removal answer a question first.
 
+- Codex conversations now show which model is answering. The open answer's own `model` field becomes the
+  attach-time announcement, and the CLI's `thread/settings/updated` notification keeps the chip current
+  mid-session, so the model chip no longer freezes on the requested value for this service. Measured from
+  the CLI's own generated schema; the same measurement showed codex announces no slash-command catalogue,
+  which is recorded in its manifest.
+
 - Typing @ at the start of a word in the composer opens a workspace file picker, and the chosen path is
   inserted as plain text where the @ was. Nothing is interpreted: what an @path means stays the coding
   service's own business, exactly like a slash command's argument.

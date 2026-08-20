@@ -101,6 +101,11 @@ struct Opened<'line> {
     /// The conversation.
     #[serde(default, borrow)]
     thread: Option<ThreadRef<'line>>,
+    /// The model this thread answers with, by the CLI's own schema (`ThreadStartResponse.model`,
+    /// present on resume too). The thread's applied setting, not an echo of a request: it arrives
+    /// whether or not runtrol asked for a model.
+    #[serde(default)]
+    model: Option<&'line str>,
 }
 
 /// The one field runtrol reads out of a conversation.
@@ -164,6 +169,32 @@ impl CodexAgent {
         // runtrol can only ask with the identifier this answer just carried.
         let inbox = conn.register(&native).await;
 
+        let mut announced = VecDeque::from([Produced {
+            src_end: 0,
+            body: EventBody::Attached(Box::new(Attached {
+                native: named,
+                model_requested: intent.model.clone(),
+                reasoning_effort_requested: intent.reasoning_effort.clone(),
+                // This CLI declares what it can do once per connection rather than once per conversation,
+                // and a capability list copied onto every session would be the same fact repeated with
+                // nothing keeping the copies true.
+                caps: CapabilitySet::from_tokens(Vec::<&str>::new()),
+                payload: payload_of(&answer),
+            })),
+        }]);
+        if let Some(model) = announced_model_of(&answer) {
+            // The CLI's own word on which model answers this thread, queued to follow the attachment
+            // exactly like the claude driver's. Without it the chip froze on the requested value.
+            announced.push_back(Produced {
+                src_end: 0,
+                body: EventBody::CurrentModelUpdate {
+                    model_id: model,
+                    available_ids: None,
+                    payload: payload_of(&answer),
+                },
+            });
+        }
+
         Ok(Self {
             provider,
             session: intent.session,
@@ -173,19 +204,7 @@ impl CodexAgent {
             running: None,
             next_turn: 0,
             src_end: 0,
-            announced: VecDeque::from([Produced {
-                src_end: 0,
-                body: EventBody::Attached(Box::new(Attached {
-                    native: named,
-                    model_requested: intent.model.clone(),
-                    reasoning_effort_requested: intent.reasoning_effort.clone(),
-                    // This CLI declares what it can do once per connection rather than once per conversation,
-                    // and a capability list copied onto every session would be the same fact repeated with
-                    // nothing keeping the copies true.
-                    caps: CapabilitySet::from_tokens(Vec::<&str>::new()),
-                    payload: payload_of(&answer),
-                })),
-            }]),
+            announced,
             pending_model: None,
             pending_effort: None,
             pending_mode: None,
@@ -583,6 +602,23 @@ fn thread_of(answer: &Bytes) -> Option<String> {
         .and_then(|thread| thread.id)
         .map(str::to_owned)
 }
+
+/// The model the open answer says this thread answers with, bounded like every lifted identifier.
+///
+/// The CLI's own word (its schema documents `model` on the start and resume responses), which is what
+/// lets the attach-time model reach the screen instead of freezing on whatever was requested.
+fn announced_model_of(answer: &Bytes) -> Option<Box<str>> {
+    // An unreadable answer already failed loudly in `thread_of`; this second read only lifts an
+    // optional field, so absence and unreadability honestly mean the same thing: no announcement.
+    let Ok(opened) = serde_json::from_slice::<Opened<'_>>(answer) else {
+        return None;
+    };
+    let model = opened.model?;
+    (!model.is_empty() && model.len() <= MAX_MODEL_ID_BYTES).then(|| model.into())
+}
+
+/// Same ceiling the ACP driver uses for a lifted model identifier.
+const MAX_MODEL_ID_BYTES: usize = 200;
 
 /// The whole answer as a payload.
 fn payload_of(answer: &Bytes) -> Opaque {
@@ -1107,6 +1143,24 @@ mod tests {
         // An answer that names none is refused by the caller rather than guessed at.
         assert_eq!(thread_of(&Bytes::from_static(b"{}")), None);
         assert_eq!(thread_of(&Bytes::from_static(b"not json")), None);
+    }
+
+    #[test]
+    fn the_answering_model_is_read_out_of_the_open_answer_and_bounded() {
+        // The CLI's own schema documents `model` on ThreadStartResponse and ThreadResumeResponse
+        // (measured from `codex app-server generate-json-schema`, 2026-08-20). It is the thread's
+        // applied setting, so it becomes the attach-time model announcement.
+        let answer = Bytes::from_static(
+            br#"{"thread":{"id":"thread_abc","status":{"type":"idle"}},"model":"gpt-5.4-mini"}"#,
+        );
+        assert_eq!(announced_model_of(&answer).as_deref(), Some("gpt-5.4-mini"));
+        assert_eq!(announced_model_of(&Bytes::from_static(b"{}")), None);
+        let oversized = format!(r#"{{"model":"{}"}}"#, "m".repeat(300));
+        assert_eq!(
+            announced_model_of(&Bytes::from(oversized.into_bytes())),
+            None,
+            "a lifted identifier keeps its ceiling"
+        );
     }
 
     #[test]

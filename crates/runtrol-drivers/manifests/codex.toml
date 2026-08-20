@@ -63,3 +63,9 @@ hint = "npm"
 sign_in = ["login"]
 diagnose = ["doctor"]
 install = "npm install --global @openai/codex"
+
+# No slash-command surface, measured (2026-08-20, `codex app-server generate-json-schema` on the
+# installed CLI): neither ClientRequest (94 methods) nor ServerNotification (72 methods) carries a
+# command catalogue announcement. The only "slash" in the schema is /tmp path handling, and
+# `skills/list` is a different concept (skill packages, not composer commands). So this provider's
+# composer offers no slash menu, and that absence is the CLI's, not a gap here.
