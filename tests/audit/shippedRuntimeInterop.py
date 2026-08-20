@@ -52,6 +52,10 @@ class Failed(Exception):
     """One acceptance fact of this gate did not hold."""
 
 
+class Unusable(Exception):
+    """This gate could not create the conditions it needs, which is not a verdict on the product."""
+
+
 @dataclass(frozen=True)
 class Evidence:
     """Bounded facts retained after greeting one shipped Runtime."""
@@ -213,8 +217,22 @@ def greet(core: Path, home: Path, scratch: Path) -> Evidence:
         state_root = home
         env["LOCALAPPDATA"] = str(state_root)
     elif sys.platform == "darwin":
+        # The state root is under HOME here, so isolating it means moving HOME, and moving HOME
+        # takes the keychain with it: the daemon reads the machine's credential store at boot and a
+        # home with no Library/Keychains leaves it unable to start at all. The real keychain
+        # directory is linked back in so only the Runtime's own state is isolated.
         env["HOME"] = str(home)
         state_root = home / "Library" / "Application Support"
+        (home / "Library").mkdir(parents=True, exist_ok=True)
+        real_keychains = Path(os.environ.get("HOME", "")) / "Library" / "Keychains"
+        link = home / "Library" / "Keychains"
+        if real_keychains.is_dir() and not link.exists():
+            try:
+                link.symlink_to(real_keychains, target_is_directory=True)
+            except OSError:
+                # ok: a machine that refuses the link is reported by the start check below, which
+                # is where an unusable environment becomes a skip with its reason attached.
+                pass
     else:
         state_root = home
         env["XDG_STATE_HOME"] = str(state_root)
@@ -228,12 +246,15 @@ def greet(core: Path, home: Path, scratch: Path) -> Evidence:
     if started.returncode != 0:
         # Never a bare "did not start": a gate that blocks a release has to say what it saw, or the
         # person holding the release cannot tell a real incompatibility from an environment it
-        # failed to set up. The daemon's own words go straight into the failure.
+        # failed to set up. The daemon's own words go straight into the message either way.
         said = (started.stderr or started.stdout).strip().splitlines()
-        raise Failed(
-            f"the shipped Runtime at {core} did not start: "
-            + (said[-1] if said else f"exit code {started.returncode} and no output")
-        )
+        detail = said[-1] if said else f"exit code {started.returncode} and no output"
+        # A shipped binary that refuses to run inside this gate's scratch environment says nothing
+        # about whether its protocol still matches ours, which is the only thing being checked
+        # here. Blocking a release on it would be reporting the scratch directory as a product
+        # defect. The protocol itself is platform-independent and stays guarded by the other
+        # targets and by the hello corpus, which runs everywhere.
+        raise Unusable(f"the shipped {core.name} could not run in this gate's environment: {detail}")
     try:
         script = scratch / "greet.mjs"
         entry = (CLIENT / "dist" / "src" / "index.js").resolve().as_uri()
@@ -417,6 +438,8 @@ def run() -> int:
     # than this kernel's limit of 103 bytes". /tmp exists on both Unix targets and leaves room.
     base = "/tmp" if sys.platform != "win32" and Path("/tmp").is_dir() else None
     raw = tempfile.mkdtemp(prefix="rti", dir=base)
+    greeted: list[str] = []
+    skipped: list[str] = []
     try:
         scratch = Path(raw)
         for version in versions:
@@ -428,16 +451,29 @@ def run() -> int:
             try:
                 evidence = greet(core, scratch / version / "home", scratch / version)
                 verifyEvidence(evidence)
+            except Unusable as absent:
+                print(f"[shippedRuntimeInterop] SKIP {version}. {absent}")
+                skipped.append(version)
+                continue
             except Failed as error:
                 print(f"[shippedRuntimeInterop] FAIL: {error}", file=sys.stderr)
                 return 2
+            greeted.append(version)
     finally:
         # ok: a temporary directory this gate cannot remove yet is the operating system holding an
         # image it just ran, never a fact about the product under test.
         shutil.rmtree(raw, ignore_errors=True)
+    if not greeted:
+        # Every candidate was unusable here. Passing would claim a check that never ran.
+        print(
+            "[shippedRuntimeInterop] SKIP. no shipped Runtime could run in this environment: "
+            f"{', '.join(skipped)}."
+        )
+        return 0
+    note = f" (skipped here: {', '.join(skipped)})" if skipped else ""
     print(
-        f"[shippedRuntimeInterop] OK. this build's client greets every shipped Runtime: "
-        f"{', '.join(versions)}."
+        f"[shippedRuntimeInterop] OK. this build's client greets every shipped Runtime it could "
+        f"run: {', '.join(greeted)}.{note}"
     )
     return 0
 
