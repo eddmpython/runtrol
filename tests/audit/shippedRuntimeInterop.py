@@ -437,7 +437,11 @@ def run() -> int:
     # measured 2026-08-20, this gate stopped two release jobs with "the socket path ... is longer
     # than this kernel's limit of 103 bytes". /tmp exists on both Unix targets and leaves room.
     base = "/tmp" if sys.platform != "win32" and Path("/tmp").is_dir() else None
-    raw = tempfile.mkdtemp(prefix="rti", dir=base)
+    # Resolved, because macOS reaches the same directory by two names: /tmp is a symlink to
+    # /private/tmp, the daemon writes the canonical spelling into its locator, and the SDK then
+    # compares that against a state root spelled the other way and refuses it ("Runtime socket
+    # escaped its owner-only state directory"). Measured 2026-08-20 on the release runner.
+    raw = str(Path(tempfile.mkdtemp(prefix="rti", dir=base)).resolve())
     greeted: list[str] = []
     skipped: list[str] = []
     try:
