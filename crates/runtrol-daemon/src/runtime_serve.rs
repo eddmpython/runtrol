@@ -1148,10 +1148,14 @@ async fn list_models(
         Duration::from_millis(crate::serve::MODEL_PREPARATION_BUDGET_MS),
         async {
             let _lane = discovering.lane(provider_id).lock_owned().await;
-            let driver = crate::provider_prepare::driver(composed, provider_id)
+            let prepared = crate::provider_prepare::prepared_driver(composed, provider_id)
                 .await
                 .map_err(|_| ())?;
-            driver.models().await.map_err(|_| ())
+            // Memoized against the exact binary for a bounded moment, so a picker opening twice
+            // costs one provider spawn, not two.
+            crate::provider_prepare::cached_models(composed, provider_id, &prepared)
+                .await
+                .map_err(|_| ())
         },
     )
     .await;
@@ -2181,7 +2185,10 @@ async fn perform_runtime_open(
         .opening()
         .and_then(|opening| opening.reasoning_effort.as_deref());
     if selected_model.is_some() || selected_effort.is_some() {
-        let discovered = prepared.driver.models().await;
+        // The same bounded memoization the public listing uses, so validating a start no longer
+        // re-spawns the provider the picker just asked.
+        let discovered =
+            crate::provider_prepare::cached_models(composed, provider, &prepared).await;
         let choices_are_current = discovered.is_ok_and(|catalogue| {
             selected_model.is_none_or(|model| model_is_current(&catalogue, model))
                 && selected_effort.is_none_or(|effort| {

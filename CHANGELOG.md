@@ -27,6 +27,11 @@ and refactoring that no user can observe do not belong here.
 - Removing a project shows an Undo toast instead of asking for confirmation up front: the misclick is
   covered without making every deliberate removal answer a question first.
 
+- Opening the model picker twice no longer asks the provider twice. Model catalogues are remembered for
+  five minutes against the exact installed binary (a login change still surfaces quickly, and a replaced
+  binary is always re-asked), and starting a session with a chosen model reuses the same answer instead of
+  re-spawning the provider the picker just asked.
+
 - `providers/getCapabilities` now reports whether the model and the reasoning effort can be switched
   mid-session, per provider. The effort chip reads it before trying: a service that cannot switch (Claude
   Code refuses a mid-session effort change; the effort is an open-time flag there) says "from the next

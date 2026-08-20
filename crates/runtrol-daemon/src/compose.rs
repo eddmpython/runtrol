@@ -313,6 +313,16 @@ pub struct Composed {
     /// Held for milliseconds around each save, never across a probe. Lives here because the cache file is
     /// this home's, and every saver already holds a `Composed`.
     pub(crate) probe_cache_writing: tokio::sync::Mutex<()>,
+    /// Latest model catalogue per provider, keyed to the exact binary it was read from.
+    ///
+    /// A short-TTL memoization, never a store (see `provider_prepare::MODEL_CATALOGUE_TTL`).
+    /// Bounded by the provider count, so it is constant-size in session count like everything else.
+    pub(crate) model_catalogues: tokio::sync::Mutex<
+        std::collections::BTreeMap<
+            runtrol_provider::ProviderId,
+            crate::provider_prepare::CachedModelCatalogue,
+        >,
+    >,
     /// Paired identities and their grants, reconstructed before listeners and replaceable after durable pairing.
     pub(crate) device_authority: DeviceAuthority,
     /// The stable PC Noise identity, protected by the current user's operating-system vault.
@@ -391,6 +401,7 @@ impl Composed {
             registry,
             device_authority: DeviceAuthority::new(granted, paired_devices),
             probe_cache_writing: tokio::sync::Mutex::new(()),
+            model_catalogues: tokio::sync::Mutex::new(std::collections::BTreeMap::new()),
             pc_identity: machine_identity.noise,
             relay_seed: machine_identity.relay,
             push_identity: machine_identity.push,
@@ -447,6 +458,7 @@ impl Composed {
             registry,
             device_authority: DeviceAuthority::new(granted, paired_devices),
             probe_cache_writing: tokio::sync::Mutex::new(()),
+            model_catalogues: tokio::sync::Mutex::new(std::collections::BTreeMap::new()),
             pc_identity: machine_identity.noise,
             relay_seed: machine_identity.relay,
             push_identity: machine_identity.push,
