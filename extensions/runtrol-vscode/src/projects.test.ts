@@ -4,8 +4,15 @@ import test from "node:test";
 import { ProjectStore, type ProjectMemento } from "./projects";
 import { workspaceIdentity } from "./workspaceCollision";
 
-const ALPHA = "C:\\work\\alpha";
-const BETA = "C:\\work\\beta";
+// Built for the platform the tests run on. A project's name is the last path segment, and its
+// identity comes from this platform's own separator and casing rules, so a hardcoded backslash is
+// an ordinary filename character on Linux and the whole path becomes the "folder name". Measured
+// 2026-08-20: these tests were green on Windows and red on the Linux CI runner for that reason.
+const ROOT = process.platform === "win32" ? "C:\\work" : "/work";
+const SEP = process.platform === "win32" ? "\\" : "/";
+
+const ALPHA = [ROOT, "alpha"].join(SEP);
+const BETA = [ROOT, "beta"].join(SEP);
 
 /// A memento that remembers in memory, plus a view of what was persisted.
 function memento(initial?: unknown): ProjectMemento & { persisted: () => unknown } {
@@ -31,11 +38,26 @@ test("creating a project names it after its folder", async () => {
 
 test("creating the same folder twice is the same project, not an error and not a twin", async () => {
   const store = new ProjectStore(memento());
-  await store.create(ALPHA);
-  const again = await store.create("c:\\WORK\\alpha");
+  const first = await store.create(ALPHA);
+  const again = await store.create(ALPHA);
   assert.equal(store.all().length, 1);
+  assert.equal(again.key, first.key);
+});
+
+test("case follows the platform's own rule, because that is what the folder does", async () => {
+  // Two spellings of one name are one folder on Windows and two folders on Linux and macOS. The
+  // store must agree with the filesystem it is on: minting one project for two real directories
+  // would merge unrelated work, and minting two for one directory shows the operator their project
+  // twice. Asserted per platform because the correct answer genuinely differs.
+  const store = new ProjectStore(memento());
+  await store.create(ALPHA);
+  const shouted = await store.create(ALPHA.toUpperCase());
   if (process.platform === "win32") {
-    assert.equal(again.key, workspaceIdentity(ALPHA), "casing does not mint a second project");
+    assert.equal(store.all().length, 1, "casing does not mint a second project");
+    assert.equal(shouted.key, workspaceIdentity(ALPHA));
+  } else {
+    assert.equal(store.all().length, 2, "a case-sensitive filesystem has two real folders here");
+    assert.notEqual(shouted.key, workspaceIdentity(ALPHA));
   }
 });
 

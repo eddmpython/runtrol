@@ -503,7 +503,7 @@ test("a created project with no conversations yet still shows its heading", () =
 
 test("a conversation in a subfolder files under the project that covers it", () => {
   const rows = conversations(
-    [session({ sessionId: "deep", workspace: `${ALPHA}\\packages\\core` })],
+    [session({ sessionId: "deep", workspace: below(ALPHA, "packages", "core") })],
     PROVIDERS,
     [],
     null,
@@ -514,11 +514,11 @@ test("a conversation in a subfolder files under the project that covers it", () 
 });
 
 test("nested projects file a conversation under the deepest one", () => {
-  const sub = `${ALPHA}\\packages\\core`;
+  const sub = below(ALPHA, "packages", "core");
   const rows = conversations(
     [
-      session({ sessionId: "inner", workspace: `${sub}\\src` }),
-      session({ sessionId: "outer", workspace: `${ALPHA}\\docs` }),
+      session({ sessionId: "inner", workspace: below(sub, "src") }),
+      session({ sessionId: "outer", workspace: below(ALPHA, "docs") }),
     ],
     PROVIDERS,
     [],

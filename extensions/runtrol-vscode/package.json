@@ -675,7 +675,8 @@
     "test": "node tooling/test.mjs",
     "test:host": "node tooling/extension-host.mjs",
     "package:native": "node tooling/package.mjs",
-    "package:win32-x64": "node tooling/package.mjs win32-x64"
+    "package:win32-x64": "node tooling/package.mjs win32-x64",
+    "test:posix": "node tooling/posix-suite.mjs"
   },
   "devDependencies": {
     "@runtrol/runtime-client": "file:../../clients/typescript",

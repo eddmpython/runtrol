@@ -307,6 +307,24 @@ def run() -> int:
         return 2
 
     command = npmCommand()
+    # The path-sensitive suites, as a POSIX platform sees them. Development happens on Windows and
+    # CI runs three operating systems, so fixtures that hardcode a backslash pass here and fail
+    # there; measured 2026-08-20, four such tests were red on the Linux runner for days. Running the
+    # simulation beside the real suite makes that a local failure instead of a CI surprise.
+    posix = subprocess.run(
+        [*command, "run", "test:posix"],
+        cwd=EXTENSION,
+        check=False,
+        text=True,
+        capture_output=True,
+        timeout=180,
+    )
+    if posix.returncode != 0:
+        print(posix.stdout, file=sys.stderr)
+        print(posix.stderr, file=sys.stderr)
+        print("[vscodeExtension] FAIL. the POSIX-simulated suites are red.", file=sys.stderr)
+        return 2
+
     for script in ("check", "test", "build"):
         result = subprocess.run(
             [*command, "run", script],
