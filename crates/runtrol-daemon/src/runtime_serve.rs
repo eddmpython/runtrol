@@ -1598,6 +1598,18 @@ fn mode_within_provider_vocabulary(
     let Some(provider) = sessions.provider_of(session) else {
         return Err("the session's provider cannot be identified for a mode switch");
     };
+    mode_within_manifest_vocabulary(composed, provider, mode)
+}
+
+/// The manifest half of the mode boundary, shared by mid-session switching and session start.
+///
+/// One definition on purpose: starting a session at a mode must never reach anything that switching
+/// a session to it could not, or the start path becomes the way around the safety boundary.
+fn mode_within_manifest_vocabulary(
+    composed: &Composed,
+    provider: runtrol_provider::ProviderId,
+    mode: &str,
+) -> Result<(), &'static str> {
     let Some(entry) = composed.registry.get(provider) else {
         return Err("the session's provider is not registered in this build");
     };
@@ -1761,7 +1773,7 @@ async fn open_session(
         Ok(authority) => authority.clone(),
         Err(failure) => return Answer::failure(id, failure),
     };
-    let request = match build_open_request(method, params, &authority, sessions) {
+    let request = match build_open_request(method, params, &authority, sessions, composed) {
         Ok(request) => request,
         Err(OpenAdmissionFailure::Control(failure)) => return control_failure(id, failure),
         Err(OpenAdmissionFailure::Inventory(failure)) => return inventory_failure(id, failure),
@@ -1831,6 +1843,7 @@ fn build_open_request(
     params: serde_json::Value,
     authority: &AuthorizedIntegration,
     sessions: &RuntimeSessionCatalogue,
+    composed: &Composed,
 ) -> Result<RuntimeOpenRequest, OpenAdmissionFailure> {
     match method {
         RuntimeMethod::SessionsStart => {
@@ -1846,6 +1859,17 @@ fn build_open_request(
                 .reasoning_effort
                 .map(validate_reasoning_selection)
                 .transpose()?;
+            let permission = params
+                .permission
+                .map(validate_permission_selection)
+                .transpose()?;
+            // The same boundary the mid-session switch enforces: an empty vocabulary means the
+            // protocol announces modes per session and the driver gates, a non-empty one is the
+            // measured switchable set with the safety-removing modes deliberately absent.
+            if let Some(mode) = permission.as_deref() {
+                mode_within_manifest_vocabulary(composed, provider, mode)
+                    .map_err(|why| OpenAdmissionFailure::Control(invalid_open(why)))?;
+            }
             let claim = WorkspaceClaim::discover(workspace.path.clone(), access)
                 .map_err(|_| OpenAdmissionFailure::Control(workspace_conflict()))?;
             Ok(RuntimeOpenRequest {
@@ -1858,6 +1882,7 @@ fn build_open_request(
                 claim,
                 model,
                 reasoning_effort,
+                permission,
                 expected: None,
                 proof: None,
             })
@@ -1896,6 +1921,7 @@ fn build_open_request(
                 claim,
                 model: None,
                 reasoning_effort: None,
+                permission: None,
                 expected: None,
                 proof: Some(params.adoption_token.into()),
             })
@@ -1928,6 +1954,14 @@ fn build_open_request(
                 ))
             })?;
             let access = public_open_access(params.access)?;
+            // Resume takes the same two optional selections as start: the codex driver already rides
+            // them on thread/resume and the claude driver attaches its flags regardless of
+            // disposition, so only this admission path was withholding them.
+            let model = params.model.map(validate_model_selection).transpose()?;
+            let reasoning_effort = params
+                .reasoning_effort
+                .map(validate_reasoning_selection)
+                .transpose()?;
             let claim = WorkspaceClaim::discover(workspace.path.clone(), access)
                 .map_err(|_| OpenAdmissionFailure::Control(workspace_conflict()))?;
             Ok(RuntimeOpenRequest {
@@ -1938,8 +1972,9 @@ fn build_open_request(
                 native: Some(native),
                 workspace: workspace.path,
                 claim,
-                model: None,
-                reasoning_effort: None,
+                model,
+                reasoning_effort,
+                permission: None,
                 expected: Some((
                     params.expected_lifecycle,
                     params.expected_session_generation,
@@ -1994,6 +2029,18 @@ fn validate_reasoning_selection(value: String) -> Result<Box<str>, OpenAdmission
     {
         return Err(OpenAdmissionFailure::Control(invalid_open(
             "the reasoning selection is empty, oversized, or invalid",
+        )));
+    }
+    Ok(value.into())
+}
+
+fn validate_permission_selection(value: String) -> Result<Box<str>, OpenAdmissionFailure> {
+    if value.is_empty()
+        || value.len() > runtrol_runtime_protocol::MAX_PERMISSION_SELECTION_BYTES
+        || value.chars().any(char::is_control)
+    {
+        return Err(OpenAdmissionFailure::Control(invalid_open(
+            "the permission selection is empty, oversized, or invalid",
         )));
     }
     Ok(value.into())
@@ -2177,7 +2224,7 @@ async fn perform_runtime_open(
             },
             model: opening.model.clone(),
             reasoning_effort: opening.reasoning_effort.clone(),
-            permission: None,
+            permission: opening.permission.clone(),
         },
         None => return control_failure(id, RuntimeControlFailure::outcome_unknown()),
     };
@@ -3247,6 +3294,35 @@ mod tests {
         std::fs::remove_dir_all(&scratch).expect("remove the scratch home");
     }
 
+    #[test]
+    fn starting_at_a_permission_mode_passes_the_exact_switch_boundary() {
+        // sessions/start validates its permission through the same manifest function the mid-session
+        // switch uses, so starting a session can never reach a mode that switching one could not.
+        // plan is in claude's switchable list; the modes that remove safety prompts are not.
+        let scratch =
+            std::env::temp_dir().join(format!("runtrol-start-mode-gate-{}", std::process::id()));
+        if scratch.exists() {
+            std::fs::remove_dir_all(&scratch).expect("clear the previous run");
+        }
+        std::fs::create_dir(&scratch).expect("create the scratch home");
+        let home = scratch.to_str().expect("UTF-8 scratch path");
+        let composed = crate::Composed::for_tests(home, runtrol_drivers::builtin())
+            .expect("a fresh home composes");
+        let claude = runtrol_provider::ProviderId::parse("claude").expect("a builtin provider");
+        assert!(
+            mode_within_manifest_vocabulary(&composed, claude, "plan").is_ok(),
+            "a session can start in plan mode"
+        );
+        for dangerous in ["bypassPermissions", "dontAsk", "auto"] {
+            assert!(
+                mode_within_manifest_vocabulary(&composed, claude, dangerous).is_err(),
+                "{dangerous} must be unreachable at start exactly as it is at switch"
+            );
+        }
+        drop(composed);
+        std::fs::remove_dir_all(&scratch).expect("remove the scratch home");
+    }
+
     use super::*;
     use base64ct::Encoding as _;
 
@@ -3885,6 +3961,8 @@ listen = "stdio"
             expected_session_generation: 0,
             workspace: resume_project.to_string(),
             access: runtrol_runtime_protocol::SessionWorkspaceAccess::Exclusive,
+            model: None,
+            reasoning_effort: None,
         };
         let resumed = approved
             .sessions()
@@ -3909,6 +3987,8 @@ listen = "stdio"
                 expected_session_generation: 1,
                 workspace: resume_project.to_string(),
                 access: runtrol_runtime_protocol::SessionWorkspaceAccess::Exclusive,
+                model: None,
+                reasoning_effort: None,
             })
             .await
             .expect_err("stale resume generation is rejected");
@@ -4053,6 +4133,7 @@ listen = "stdio"
             access: runtrol_runtime_protocol::SessionWorkspaceAccess::Exclusive,
             model: None,
             reasoning_effort: None,
+            permission: None,
         };
         let started = approved
             .sessions()
@@ -4086,6 +4167,7 @@ listen = "stdio"
                 access: runtrol_runtime_protocol::SessionWorkspaceAccess::Shared,
                 model: None,
                 reasoning_effort: None,
+                permission: None,
             })
             .await
             .expect_err("public shared writer admission requires local presence");

@@ -1681,6 +1681,20 @@
           "minimum": 0,
           "type": "integer"
         },
+        "model": {
+          "description": "Exact opaque model choice previously returned by Runtime, or the session's own setting when absent.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reasoningEffort": {
+          "description": "Exact opaque reasoning choice returned for the selected model, or the session's own setting when absent.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "requestId": {
           "$ref": "#/$defs/MutationRequestId",
           "description": "Caller-minted mutation identity."
@@ -3059,6 +3073,13 @@
         },
         "model": {
           "description": "Exact opaque model choice previously returned by Runtime, or provider default when absent.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "permission": {
+          "description": "Exact permission mode to start at, or provider default when absent.\n\nThe value must sit inside the provider's declared switchable vocabulary, the same boundary\n`sessions/setMode` enforces, so starting a session can never reach a mode that switching one\ncould not. Modes that remove safety prompts are outside that vocabulary for every caller.",
           "type": [
             "string",
             "null"

@@ -129,6 +129,8 @@ pub(crate) struct RuntimeOpenRequest {
     pub(crate) claim: WorkspaceClaim,
     pub(crate) model: Option<Box<str>>,
     pub(crate) reasoning_effort: Option<Box<str>>,
+    /// Already validated against the provider's switchable mode vocabulary at admission.
+    pub(crate) permission: Option<Box<str>>,
     pub(crate) expected: Option<(LifecycleState, u64)>,
     pub(crate) proof: Option<Box<str>>,
 }
@@ -144,6 +146,7 @@ pub(crate) struct RuntimeOpening {
     pub(crate) workspace: AbsPath,
     pub(crate) model: Option<Box<str>>,
     pub(crate) reasoning_effort: Option<Box<str>>,
+    pub(crate) permission: Option<Box<str>>,
     pub(crate) proof: Option<Box<str>>,
     pub(crate) reservation: OpenReservation,
     pub(crate) displaced_agent: Option<Box<dyn Agent>>,
@@ -703,6 +706,7 @@ impl RuntimeControl {
                     workspace: request.workspace,
                     model: request.model,
                     reasoning_effort: request.reasoning_effort,
+                    permission: request.permission,
                     proof: request.proof,
                     reservation: reserved.reservation,
                     displaced_agent,
@@ -2460,6 +2464,7 @@ mod tests {
                 .expect("first claim"),
             model: None,
             reasoning_effort: None,
+            permission: None,
             expected: None,
             proof: None,
         };
@@ -2510,6 +2515,7 @@ mod tests {
                 .expect("replay claim"),
             model: None,
             reasoning_effort: None,
+            permission: None,
             expected: None,
             proof: None,
         };
@@ -2534,6 +2540,7 @@ mod tests {
                 .expect("changed claim"),
             model: Some("different-model".into()),
             reasoning_effort: None,
+            permission: None,
             expected: None,
             proof: None,
         };
@@ -2562,6 +2569,7 @@ mod tests {
                 .expect("second claim"),
             model: None,
             reasoning_effort: None,
+            permission: None,
             expected: None,
             proof: None,
         };
@@ -2591,6 +2599,7 @@ mod tests {
                 .expect("cancelled replay claim"),
             model: None,
             reasoning_effort: None,
+            permission: None,
             expected: None,
             proof: None,
         };

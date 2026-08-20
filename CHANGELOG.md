@@ -12,6 +12,12 @@ and refactoring that no user can observe do not belong here.
 
 ### Added
 
+- A session can be started in a chosen permission mode (for example plan) through the public Runtime:
+  `sessions/start` takes an optional `permission`, validated against the same switchable-mode boundary as
+  mid-session switching, so modes that remove safety prompts stay unreachable for every caller. Resuming a
+  session (`sessions/resume`) now also takes the optional model and reasoning effort the drivers already
+  honored.
+
 - Replies now render the light markdown coding agents actually write: fenced code blocks with a copy
   button, inline code, headings, lists, bold, italic, and web links that open in the browser. Plain text
   is untouched and costs nothing; anything the small grammar does not recognize stays exactly as typed.

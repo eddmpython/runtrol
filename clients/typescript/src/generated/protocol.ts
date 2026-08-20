@@ -221,7 +221,7 @@ export interface RequestEnrollmentParams { readonly manifest: EnrollmentManifest
 export interface RespondApprovalParams { readonly approvalId: string; readonly leaseGeneration: number; readonly leaseId: string; readonly optionId: number; readonly requestId: MutationRequestId; readonly sessionId: RuntimeSessionId; readonly subjectDigest: ReadonlyArray<number>; }
 
 /** Heat one existing Runtime-managed cold session. */
-export interface ResumeSessionParams { readonly access: SessionWorkspaceAccess; readonly expectedLifecycle: LifecycleState; readonly expectedSessionGeneration: number; readonly requestId: MutationRequestId; readonly sessionId: RuntimeSessionId; readonly workspace: string; }
+export interface ResumeSessionParams { readonly access: SessionWorkspaceAccess; readonly expectedLifecycle: LifecycleState; readonly expectedSessionGeneration: number; readonly model?: string | null; readonly reasoningEffort?: string | null; readonly requestId: MutationRequestId; readonly sessionId: RuntimeSessionId; readonly workspace: string; }
 
 /** Replace one approved integration key after an exact local confirmation. */
 export interface RotateIntegrationKeyParams { readonly expectedKeyGeneration: number; readonly newKeyProof: string; readonly newPublicKey: string; readonly requestId: MutationRequestId; }
@@ -318,7 +318,7 @@ A provider whose surface cannot carry the request refuses loudly instead of drop
 export interface SetModelParams { readonly leaseGeneration: number; readonly leaseId: string; readonly model: string; readonly reasoningEffort?: string | null; readonly requestId: MutationRequestId; readonly sessionId: RuntimeSessionId; }
 
 /** Start a new provider-native session in one exact authorized workspace. */
-export interface StartSessionParams { readonly access: SessionWorkspaceAccess; readonly model?: string | null; readonly providerId: ProviderId; readonly reasoningEffort?: string | null; readonly requestId: MutationRequestId; readonly workspace: string; }
+export interface StartSessionParams { readonly access: SessionWorkspaceAccess; readonly model?: string | null; readonly permission?: string | null; readonly providerId: ProviderId; readonly reasoningEffort?: string | null; readonly requestId: MutationRequestId; readonly workspace: string; }
 
 /** Submit caller-owned input under one exact control lease. */
 export interface SubmitInputParams { readonly input: string; readonly leaseGeneration: number; readonly leaseId: string; readonly requestId: MutationRequestId; readonly sessionId: RuntimeSessionId; }

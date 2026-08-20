@@ -14,6 +14,9 @@ pub const MAX_MODEL_SELECTION_BYTES: usize = 4 * 1024;
 /// Maximum bytes accepted for one provider-owned reasoning selection.
 pub const MAX_REASONING_SELECTION_BYTES: usize = 4 * 1024;
 
+/// Maximum bytes accepted for one provider-owned permission mode selection.
+pub const MAX_PERMISSION_SELECTION_BYTES: usize = 4 * 1024;
+
 /// Whether a newly heated process must be the only writer for its working tree.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -42,6 +45,13 @@ pub struct StartSessionParams {
     /// Exact opaque reasoning choice returned for the selected model, or provider default when absent.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning_effort: Option<String>,
+    /// Exact permission mode to start at, or provider default when absent.
+    ///
+    /// The value must sit inside the provider's declared switchable vocabulary, the same boundary
+    /// `sessions/setMode` enforces, so starting a session can never reach a mode that switching one
+    /// could not. Modes that remove safety prompts are outside that vocabulary for every caller.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub permission: Option<String>,
 }
 
 /// Adopt one exact native catalogue observation into Runtime supervision.
@@ -78,6 +88,12 @@ pub struct ResumeSessionParams {
     pub workspace: String,
     /// Writer collision posture for the working tree.
     pub access: SessionWorkspaceAccess,
+    /// Exact opaque model choice previously returned by Runtime, or the session's own setting when absent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// Exact opaque reasoning choice returned for the selected model, or the session's own setting when absent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<String>,
 }
 
 /// One newly supervised or reheated session and its initial controller authority.
