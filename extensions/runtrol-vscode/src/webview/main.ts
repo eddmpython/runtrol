@@ -56,6 +56,7 @@ type Incoming =
   | { type: "insertText"; text: string | null };
 
 type VsCodeApi = {
+  setState(state: unknown): void;
   postMessage(message: unknown): void;
 };
 
@@ -170,6 +171,9 @@ let mentionPending = false;
 
 window.addEventListener("message", ({ data }: MessageEvent<Incoming>) => {
   if (data.type === "reset") {
+    // The tab's identity, persisted where VS Code keeps webview state, so a restored tab knows which
+    // session it was showing and the extension can rebind it instead of guessing.
+    vscode.setState({ sessionId: data.session?.sessionId ?? null });
     reset(data.session, data.title, data.provider, data.generation);
     return;
   }

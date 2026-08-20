@@ -73,6 +73,11 @@ export class ConversationView implements vscode.Disposable {
     return this.panel !== null;
   }
 
+  /// On screen with a webview that said hello, which is when frames can land.
+  get isVisible(): boolean {
+    return this.panel?.visible === true && this.visibleReady;
+  }
+
   adopt(panel: vscode.WebviewPanel): Promise<void> {
     const pending = this.showQueue.then(() => {
       this.attach(panel);

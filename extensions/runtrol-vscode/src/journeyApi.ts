@@ -1,6 +1,6 @@
 import * as vscode from "vscode";
 
-import { ConversationView } from "./conversationView";
+import type { ConversationPanels } from "./conversationPanels";
 import { Controller } from "./controller";
 import type { ProviderLine, SessionLine } from "./runtimeTypes";
 import { RuntimeState } from "./state";
@@ -30,7 +30,7 @@ export type JourneyApi = {
 export function journeyApi(
   controller: Controller,
   state: RuntimeState,
-  conversation: ConversationView,
+  conversation: ConversationPanels,
   afterReady: <T>(action: () => Promise<T>) => Promise<T>,
   extensionMode: vscode.ExtensionMode,
 ): JourneyApi | undefined {
@@ -70,10 +70,8 @@ export function journeyApi(
       if (state.selected?.sessionId !== session) {
         throw new Error(`selected ${state.selected?.sessionId ?? "no session"}, expected ${session}`);
       }
-      await Promise.all([
-        controller.selectedWatchReady(),
-        conversation.waitForCurrentRender(),
-      ]);
+      await controller.selectedWatchReady();
+      await conversation.bindingFor(session)?.settled();
     }),
   };
 }

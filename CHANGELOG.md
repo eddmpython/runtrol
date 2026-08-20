@@ -10,6 +10,13 @@ and refactoring that no user can observe do not belong here.
 
 ## [Unreleased]
 
+### Added
+
+- Conversations now open like files: each one gets its own editor tab, so several conversations can be
+  on screen at once, split side by side, and rearranged like any editor. Switching tabs switches the
+  sidebar highlight, prompts and interrupts go to the conversation whose tab they were typed in, and a
+  window reload restores every conversation tab to its own session instead of collapsing them into one.
+
 ## [0.1.7] - 2026-08-20
 
 ### Added

@@ -2,7 +2,8 @@ import path from "node:path";
 
 import * as vscode from "vscode";
 
-import { ConversationView } from "./conversationView";
+import type { ConversationBinding, ConversationPanels } from "./conversationPanels";
+import type { ConversationView } from "./conversationView";
 import { CoreClient } from "./core/client";
 import type {
   ProviderUpdateLine,
@@ -63,13 +64,10 @@ type NativeDiscovery = {
 export type SelectionTarget = ConversationItem | Conversation | SessionLine | string;
 
 export class Controller implements vscode.Disposable {
-  private watchAbort: AbortController | null = null;
   private indexAbort: AbortController | null = null;
   private readonly status: vscode.StatusBarItem;
   private selectionTail: Promise<void> = Promise.resolve();
   private selectionPersistenceTail: Promise<void> = Promise.resolve();
-  private watchReady: Promise<void> = Promise.resolve();
-  private conversationVisible = false;
   private disposed = false;
   private readonly seenWarnings = new Set<string>();
   private readonly verifyingProviders = new Set<string>();
@@ -88,7 +86,7 @@ export class Controller implements vscode.Disposable {
     private readonly client: CoreClient,
     private readonly runtime: StudioRuntimeClient,
     private readonly state: RuntimeState,
-    private readonly conversation: ConversationView,
+    private readonly panels: ConversationPanels,
     private readonly selection: SelectionStore,
   ) {
     this.status = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 20);
@@ -113,8 +111,6 @@ export class Controller implements vscode.Disposable {
       ?? null;
     if (selected) {
       await this.selectForInitialization(selected);
-    } else {
-      this.conversation.reset(null);
     }
     this.startSessionIndexWatch();
     this.startProviderVerification(inventory.providers.providers);
@@ -258,7 +254,6 @@ export class Controller implements vscode.Disposable {
       return;
     }
     await this.selectConversation(next);
-    await this.conversation.show();
   }
 
   async switchSession(): Promise<void> {
@@ -278,7 +273,6 @@ export class Controller implements vscode.Disposable {
   }
 
   async reconnect(): Promise<void> {
-    this.pauseWatch();
     this.indexAbort?.abort();
     this.indexAbort = null;
     this.cancelNativeDiscoveries();
@@ -291,14 +285,9 @@ export class Controller implements vscode.Disposable {
     // root stay invisible until someone happens to press refresh, which is the silent-forever failure again.
     this.startExistingChatDiscovery();
     void this.startSessionIndexWatch();
-    const selected = this.state.selected;
-    if (selected) {
-      // Same rule as selection: the reset empties the document, so the watch replays the window.
-      this.state.forgetCursor(selected.sessionId);
-      this.conversation.reset(selected);
-      this.ensureSelectedWatch();
-    } else {
-      this.conversation.reset(null);
+    // Every open tab re-arms against the fresh connection; each binding replays its own window.
+    for (const binding of this.panels.all()) {
+      binding.rewatch();
     }
   }
 
@@ -333,12 +322,28 @@ export class Controller implements vscode.Disposable {
         rejectApplied(error);
         return;
       }
-      this.conversation.status(
+      this.say(
         `Cannot remember the selected session: ${error instanceof Error ? error.message : String(error)}`,
         "warning",
       );
     });
     return ready;
+  }
+
+  /// The acting tab's view: the explicit session first, the focused tab as the fallback for commands
+  /// that arrive without one (the palette, the tree).
+  private viewOf(session: SessionLine | null): ConversationView | null {
+    if (session) {
+      const bound = this.panels.bindingFor(session.sessionId);
+      if (bound) return bound.view;
+    }
+    return this.panels.focused()?.view ?? null;
+  }
+
+  /// Ambient words with no better home go to the focused tab, and nowhere when none is open, which is
+  /// also what the singleton did with its panel closed.
+  private say(message: string, kind: "info" | "warning" | "error" = "info", session: SessionLine | null = null): void {
+    this.viewOf(session)?.status(message, kind);
   }
 
   private async selectNow(
@@ -378,35 +383,25 @@ export class Controller implements vscode.Disposable {
     } else {
       session = target;
     }
-    if (reveal) {
-      void this.conversation.show();
-    }
     if (!session.hot) {
-      this.pauseWatch();
       this.state.select(session.sessionId);
-      this.conversation.reset(session);
-      this.conversation.status("Opening the saved chat...", "info");
+      const opening = await this.panels.open(session, !reveal);
+      opening.view.status("Opening the saved chat...", "info");
       session = await this.resumeSession(session);
     }
     const stored = this.persistSelection(session.sessionId);
-    this.pauseWatch();
     this.state.select(session.sessionId);
-    // The reset below clears the document, so the watch must replay the recent window rather than
-    // resume past everything the reader can no longer see.
-    this.state.forgetCursor(session.sessionId);
-    this.conversation.reset(session);
-
-    // Deliberately no window-follow here. Selecting a conversation opens its tab and NOTHING else moves
-    // (memory/uxContract.md): moving VS Code to the project is the heading's explicit button. An earlier
-    // followWorkspace setting made a click silently replace the whole window, which is the exact behavior
-    // the operator dictated out.
+    // Deliberately no window-follow here. Selecting a conversation opens ITS tab beside whatever is
+    // already open and NOTHING else moves (memory/uxContract.md): moving VS Code to the project is the
+    // heading's explicit button. The tab's binding owns its watch and its replay-on-rebirth, so nothing
+    // here pauses or resets anybody else's conversation.
+    const binding = await this.panels.open(session, !reveal);
     void stored.catch((error: unknown) => {
-      this.conversation.status(
+      binding.view.status(
         `Cannot remember the selected session: ${error instanceof Error ? error.message : String(error)}`,
         "warning",
       );
     });
-    this.ensureSelectedWatch();
     afterApplied();
   }
 
@@ -733,7 +728,7 @@ export class Controller implements vscode.Disposable {
   /// The path is text and nothing more: what an @path means stays the coding service's business,
   /// exactly like a slash command's argument. The picker lives here because only the Extension Host
   /// may list files; the page only reports that an @ was typed.
-  async insertFileMention(): Promise<void> {
+  async insertFileMention(from?: SessionLine): Promise<void> {
     const session = this.state.selected;
     const base = session && workspaceIsOpen(session.workspace)
       ? session.workspace
@@ -744,8 +739,8 @@ export class Controller implements vscode.Disposable {
       2_000,
     );
     if (files.length === 0) {
-      this.conversation.insertComposerText(null);
-      this.conversation.status("No workspace files are available to mention.", "info");
+      this.viewOf(from ?? null)?.insertComposerText(null);
+      this.say("No workspace files are available to mention.", "info", from ?? null);
       return;
     }
     const picked = await vscode.window.showQuickPick(
@@ -756,7 +751,7 @@ export class Controller implements vscode.Disposable {
         .sort((left, right) => left.label.length - right.label.length || left.label.localeCompare(right.label)),
       { title: "Mention a file", placeHolder: "The chosen path is inserted as plain text" },
     );
-    this.conversation.insertComposerText(picked ? `${picked.label} ` : null);
+    this.viewOf(from ?? null)?.insertComposerText(picked ? `${picked.label} ` : null);
   }
 
   /// Type a coding service's own command into the operator's terminal and stop there.
@@ -774,8 +769,8 @@ export class Controller implements vscode.Disposable {
     this.helpTerminal.sendText(offer.command, false);
   }
 
-  async prompt(text?: string): Promise<void> {
-    const session = this.requireSelected();
+  async prompt(text?: string, from?: SessionLine): Promise<void> {
+    const session = from ?? this.requireSelected();
     const written = text ?? await vscode.window.showInputBox({
       title: `Prompt ${path.basename(session.workspace)}`,
       prompt: "The text is sent unchanged to the provider CLI.",
@@ -796,40 +791,21 @@ export class Controller implements vscode.Disposable {
     await this.runtime.submitInput(runtimeAction(session), text);
   }
 
-  async interrupt(): Promise<void> {
-    const session = this.requireSelected();
+  async interrupt(from?: SessionLine): Promise<void> {
+    const session = from ?? this.requireSelected();
     await this.runtime.interrupt(runtimeAction(session));
   }
 
   async openConversation(): Promise<void> {
-    await this.conversation.show();
-    this.ensureSelectedWatch();
+    const selected = this.state.selected;
+    if (!selected) return;
+    await this.panels.open(selected);
   }
 
   async revealConversationOnEntry(): Promise<void> {
-    if (this.conversation.isOpen) {
-      this.ensureSelectedWatch();
-      return;
-    }
-    await this.conversation.show(true);
-    this.ensureSelectedWatch();
-  }
-
-  conversationVisibilityChanged(visible: boolean): void {
-    this.conversationVisible = visible;
-    if (visible) {
-      // Visibility only turns true right after the view reset a freshly (re)born document
-      // (retainContextWhenHidden is false, so a hidden tab always comes back empty). Resuming from
-      // the stored cursor painted nothing into that empty page; replaying the daemon's bounded
-      // window is what brings the conversation back.
-      const selected = this.state.selected;
-      if (selected) {
-        this.state.forgetCursor(selected.sessionId);
-      }
-      this.ensureSelectedWatch();
-    } else {
-      this.pauseWatch();
-    }
+    const selected = this.state.selected;
+    if (!selected || this.panels.focused()) return;
+    await this.panels.open(selected, true);
   }
 
   async nameSession(value?: ConversationItem | SessionLine): Promise<void> {
@@ -853,13 +829,13 @@ export class Controller implements vscode.Disposable {
     requireDone(response, "rename");
     await this.refresh();
     const renamed = this.state.sessions.find((candidate) => candidate.sessionId === session.sessionId);
-    if (renamed && this.state.selected?.sessionId === renamed.sessionId) {
-      this.conversation.updateSession(renamed);
+    if (renamed) {
+      this.panels.updateSession(renamed);
     }
   }
 
-  async answerApproval(approval: string, option: number, subjectDigest: number[]): Promise<void> {
-    const session = this.requireSelected();
+  async answerApproval(approval: string, option: number, subjectDigest: number[], from?: SessionLine): Promise<void> {
+    const session = from ?? this.requireSelected();
     await this.runtime.answerApproval(
       runtimeAction(session),
       approval,
@@ -898,12 +874,9 @@ export class Controller implements vscode.Disposable {
     if (!session) {
       throw new Error("that session is no longer listed");
     }
+    this.panels.bindingFor(session.sessionId)?.dispose();
     await this.runtime.close(runtimeAction(session), interruptRunning);
     await this.refresh();
-    if (!this.state.selected) {
-      this.pauseWatch();
-      this.conversation.reset(null);
-    }
   }
 
   async openWorkspace(value?: ConversationItem | SessionLine): Promise<void> {
@@ -920,7 +893,6 @@ export class Controller implements vscode.Disposable {
 
   dispose(): void {
     this.disposed = true;
-    this.watchAbort?.abort();
     this.indexAbort?.abort();
     this.cancelNativeDiscoveries();
     this.client.dispose();
@@ -928,7 +900,9 @@ export class Controller implements vscode.Disposable {
   }
 
   selectedWatchReady(): Promise<void> {
-    return this.watchReady;
+    const selected = this.state.selected;
+    const binding = selected ? this.panels.bindingFor(selected.sessionId) : this.panels.focused();
+    return binding?.settled() ?? Promise.resolve();
   }
 
   selectionPersisted(): Promise<void> {
@@ -945,67 +919,6 @@ export class Controller implements vscode.Disposable {
     const cleared = this.selectionPersistenceTail.then(() => this.selection.clear());
     this.selectionPersistenceTail = cleared.catch(() => undefined);
     return cleared;
-  }
-
-  private startWatch(session: SessionLine): void {
-    const abort = new AbortController();
-    this.watchAbort = abort;
-    let ready = () => {};
-    this.watchReady = new Promise<void>((resolve) => {
-      ready = resolve;
-    });
-    void this.watchLoop(session, abort.signal, ready);
-  }
-
-  private ensureSelectedWatch(): void {
-    const selected = this.state.selected;
-    if (!this.conversationVisible || !selected || this.watchAbort) {
-      return;
-    }
-    this.startWatch(selected);
-  }
-
-  private pauseWatch(): void {
-    this.watchAbort?.abort();
-    this.watchAbort = null;
-    this.watchReady = Promise.resolve();
-  }
-
-  private async watchLoop(session: SessionLine, signal: AbortSignal, ready: () => void): Promise<void> {
-    let retryMs = 250;
-    while (!signal.aborted && !this.disposed && this.state.selected?.sessionId === session.sessionId) {
-      try {
-        await this.runtime.watchEvents(
-          session.sessionId,
-          this.state.cursor(session.sessionId),
-          {
-            started: ready,
-            event: (payload, nextExpected) => {
-              if (this.conversation.frame(payload)) {
-                this.state.advance(session.sessionId, nextExpected);
-                return true;
-              } else {
-                this.pauseWatch();
-                return false;
-              }
-            },
-            gap: (nextExpected, message) => {
-              this.state.advance(session.sessionId, nextExpected);
-              this.conversation.status(message, "warning");
-            },
-          },
-          signal,
-        );
-        retryMs = 250;
-      } catch (error) {
-        if (signal.aborted) {
-          return;
-        }
-        this.conversation.status(error instanceof Error ? error.message : String(error), "error");
-      }
-      await abortableDelay(retryMs, signal);
-      retryMs = Math.min(retryMs * 2, 5_000);
-    }
   }
 
   private startSessionIndexWatch(): void {
@@ -1065,7 +978,7 @@ export class Controller implements vscode.Disposable {
         if (signal.aborted) {
           return;
         }
-        this.conversation.status(error instanceof Error ? error.message : String(error), "error");
+        this.say(error instanceof Error ? error.message : String(error), "error");
       }
       await abortableDelay(retryMs, signal);
       retryMs = Math.min(retryMs * 2, 5_000);
@@ -1081,24 +994,31 @@ export class Controller implements vscode.Disposable {
     const selected = previousSelected?.sessionId ?? null;
     this.state.replace(sessions, providers);
     const currentSelected = this.state.selected;
-    if (currentSelected && currentSelected !== previousSelected) {
-      this.conversation.updateSession(currentSelected);
+    void currentSelected;
+    void previousSelected;
+    // Every open tab receives its own row's fresh metadata; a row that vanished closes its tab, because
+    // a tab for a session the daemon no longer lists is a view of nothing.
+    for (const binding of this.panels.all()) {
+      const row = sessions.find((candidate) => candidate.sessionId === binding.session.sessionId);
+      if (row) {
+        binding.updateSession(row);
+      } else {
+        binding.dispose();
+      }
     }
     for (const warning of warnings) {
       if (!this.seenWarnings.has(warning)) {
         this.seenWarnings.add(warning);
-        this.conversation.status(warning, "warning");
+        this.say(warning, "warning");
       }
     }
     if (selected && !this.state.selected) {
-      this.pauseWatch();
       void this.clearPersistedSelection().catch((error: unknown) => {
-        this.conversation.status(
+        this.say(
           `Cannot clear the selected session: ${error instanceof Error ? error.message : String(error)}`,
           "warning",
         );
       });
-      this.conversation.reset(null);
     }
   }
 
@@ -1125,7 +1045,7 @@ export class Controller implements vscode.Disposable {
           if (!this.disposed) await this.refresh();
         } catch (error: unknown) {
           if (!this.disposed) {
-            this.conversation.status(
+            this.say(
               `Cannot verify ${provider.displayName}: ${error instanceof Error ? error.message : String(error)}`,
               "warning",
             );
@@ -1264,7 +1184,7 @@ export class Controller implements vscode.Disposable {
       const catalogue = await this.runtime.models(session.providerId);
       const choices = modelOptions(catalogue);
       if (choices.length === 0) {
-        this.conversation.status(
+        this.say(
           `${providerDisplayName(session.providerId, this.state.providers)} reports no switchable models; its own settings stay in control.`,
           "info",
         );
@@ -1297,9 +1217,9 @@ export class Controller implements vscode.Disposable {
     await this.runtime.setModel(runtimeAction(session), model, reasoningEffort);
     // Sent, not confirmed: the chip shows the request as a suffix until the provider's own
     // announcement replaces it (or the turn ends without one).
-    this.conversation.switchRequested("model", model);
+    this.viewOf(this.state.selected)?.switchRequested("model", model);
     if (reasoningEffort !== undefined) {
-      this.conversation.switchRequested("effort", reasoningEffort);
+      this.viewOf(this.state.selected)?.switchRequested("effort", reasoningEffort);
     }
   }
 
@@ -1316,7 +1236,7 @@ export class Controller implements vscode.Disposable {
     const capability = (await this.runtime.capabilities(session.providerId)).setReasoningEffort;
     if (capability && capability.availability !== "available") {
       const name = providerDisplayName(session.providerId, this.state.providers);
-      this.conversation.status(
+      this.say(
         `${name} cannot switch the reasoning effort mid-conversation`
         + `${capability.why ? ` (${capability.why})` : ""}. `
         + 'Start one with "New Conversation with Service, Model and Effort..." instead.',
@@ -1325,7 +1245,7 @@ export class Controller implements vscode.Disposable {
       return;
     }
     if (!currentModel) {
-      this.conversation.status(
+      this.say(
         `${providerDisplayName(session.providerId, this.state.providers)} has not announced which model is answering, so the effort has nothing to attach to; its own settings stay in control.`,
         "info",
       );
@@ -1335,7 +1255,7 @@ export class Controller implements vscode.Disposable {
     const model = modelOptions(catalogue).find((option) => option.id === currentModel)?.model ?? null;
     const efforts = reasoningOptions(catalogue, model);
     if (efforts.length === 0) {
-      this.conversation.status(
+      this.say(
         `${providerDisplayName(session.providerId, this.state.providers)} reports no reasoning efforts for ${currentModel}; its own settings stay in control.`,
         "info",
       );
@@ -1344,7 +1264,7 @@ export class Controller implements vscode.Disposable {
     const picked = await this.pickReasoningEffort(catalogue, model, "Switch reasoning effort");
     if (picked === undefined) return;
     await this.runtime.setModel(runtimeAction(session), currentModel, picked ?? undefined);
-    this.conversation.switchRequested("effort", picked ?? "default");
+    this.viewOf(this.state.selected)?.switchRequested("effort", picked ?? "default");
   }
 
   /// Switch the governing permission mode of the open conversation, from its own header chip.
@@ -1361,7 +1281,7 @@ export class Controller implements vscode.Disposable {
     );
     const choices = available.length > 0 ? available : (provider?.switchableModes ?? []);
     if (choices.length === 0) {
-      this.conversation.status(
+      this.say(
         `${providerDisplayName(session.providerId, this.state.providers)} announces no switchable modes; its own surface stays in control.`,
         "info",
       );
@@ -1386,7 +1306,7 @@ export class Controller implements vscode.Disposable {
       throw new Error("no conversation is selected");
     }
     await this.runtime.setMode(runtimeAction(session), mode);
-    this.conversation.switchRequested("mode", mode);
+    this.viewOf(this.state.selected)?.switchRequested("mode", mode);
   }
 
   /// One effort picker for every path that asks: `undefined` is a cancel, `null` is the provider's default.

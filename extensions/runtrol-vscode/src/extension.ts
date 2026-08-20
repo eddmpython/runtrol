@@ -4,6 +4,7 @@ import * as vscode from "vscode";
 
 import { CandidateController } from "./capability/controller";
 import { conversations as conversationRows } from "./conversationList";
+import { ConversationPanels } from "./conversationPanels";
 import { ConversationView, type WebviewPerformance } from "./conversationView";
 import { Controller } from "./controller";
 import { CoreClient } from "./core/client";
@@ -101,18 +102,20 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
     return action();
   };
   let controller: Controller;
-  const conversation = new ConversationView(
+  const conversation = new ConversationPanels(
     context.extensionUri,
-    (message) => {
+    runtime,
+    state,
+    (session, message) => {
       if (message.type === "prompt") {
-        void run(() => afterReady(() => controller.prompt(message.text)));
+        void run(() => afterReady(() => controller.prompt(message.text, session)));
       } else if (message.type === "startChat") {
         void run(() => afterReady(() => controller.startSession()));
       } else if (message.type === "startConfiguredChat") {
         void run(() => afterReady(() => controller.startConfiguredSession()));
       } else if (message.type === "answerApproval") {
         void run(() => afterReady(
-          () => controller.answerApproval(message.approval, message.option, message.subjectDigest),
+          () => controller.answerApproval(message.approval, message.option, message.subjectDigest, session),
         ));
       } else if (message.type === "switchModel") {
         void run(() => afterReady(() => controller.switchModel(message.available)));
@@ -121,16 +124,20 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
       } else if (message.type === "switchEffort") {
         void run(() => afterReady(() => controller.switchEffort(message.model)));
       } else if (message.type === "mentionFile") {
-        void run(() => afterReady(() => controller.insertFileMention()));
+        void run(() => afterReady(() => controller.insertFileMention(session)));
       } else if (message.type === "interrupt") {
         // Interrupt is dispatched by its own name, never as a fallback: an action this validator
         // accepts but no branch handles must do nothing, not stop a running agent.
-        void run(() => afterReady(() => controller.interrupt()));
+        void run(() => afterReady(() => controller.interrupt(session)));
       }
     },
     (session) => state.conversationOf(session.sessionId)?.title ?? sessionTitle(session),
-    (visible) => controller.conversationVisibilityChanged(visible),
     (session) => providerDisplayName(session.providerId, state.providers),
+    (session) => {
+      // The focused tab is the selection: the tree highlight and every command that says "the current
+      // conversation" follow whichever conversation tab the reader is actually in.
+      state.select(session.sessionId);
+    },
   );
   controller = new Controller(context, client, runtime, state, conversation, selection);
   // The window's folders follow into the grant's roots. Enrollment read them once; without this, every folder
@@ -480,10 +487,19 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
   );
   context.subscriptions.push(
     vscode.window.registerWebviewPanelSerializer(ConversationView.viewType, {
-      deserializeWebviewPanel: async (panel) => {
-        await conversation.adopt(panel);
+      deserializeWebviewPanel: async (panel, webviewState: unknown) => {
+        // The restored tab names its own session (stamped into webview state on every reset). Rebinding
+        // waits for the list; a tab whose session no longer exists closes rather than showing a guess.
+        const named = (webviewState as { sessionId?: unknown } | undefined)?.sessionId;
         await afterReady(async () => {
-          conversation.reset(state.selected);
+          const session = typeof named === "string"
+            ? state.sessions.find((candidate) => candidate.sessionId === named) ?? null
+            : state.selected;
+          if (!session) {
+            panel.dispose();
+            return;
+          }
+          await conversation.adopt(panel, session);
         });
       },
     }),
@@ -530,9 +546,11 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
     },
     refresh: () => afterReady(() => controller.refresh()),
     measureWebview: MEASURED_HOST
-      ? (framesPerSecond, durationMs) => afterReady(
-        () => conversation.measurePerformance(framesPerSecond, durationMs),
-      )
+      ? (framesPerSecond, durationMs) => afterReady(async () => {
+        const focused = conversation.focused();
+        if (!focused) throw new Error("no conversation tab is open to measure");
+        return focused.view.measurePerformance(framesPerSecond, durationMs);
+      })
       : undefined,
     measureSessionManagement: MEASURED_HOST
       ? (sessionIds) => afterReady(async () => {
@@ -559,7 +577,7 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
             "cold session event watch",
           ),
           performanceDeadline(
-            conversation.waitForCurrentRender(),
+            conversation.focused()?.settled() ?? Promise.resolve(),
             10_000,
             "cold session Webview render",
           ),
@@ -586,10 +604,7 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
           for (const session of hot) {
             const started = performance.now();
             await controller.select(session.sessionId);
-            await Promise.all([
-              controller.selectedWatchReady(),
-              conversation.waitForCurrentRender(),
-            ]);
+            await controller.selectedWatchReady();
             samples.push(performance.now() - started);
           }
         }
@@ -611,10 +626,7 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
         if (state.selected?.sessionId !== sessionId) {
           throw new Error(`restored ${state.selected?.sessionId ?? "no session"}, expected ${sessionId}`);
         }
-        await Promise.all([
-          within(controller.selectedWatchReady(), 10_000, "selected-session watch handshake"),
-          within(conversation.waitForCurrentRender(), 10_000, "selected-session Webview render"),
-        ]);
+        await within(controller.selectedWatchReady(), 10_000, "selected-session watch handshake");
       })
       : undefined,
     // The two follow probes exist for the live root-following proof: a real window opens a second folder and the

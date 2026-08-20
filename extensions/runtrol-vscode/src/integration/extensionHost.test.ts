@@ -426,8 +426,19 @@ async function requireConversationEditor(): Promise<void> {
   if (!tab) {
     throw new Error("the Runtrol conversation did not open as an editor Webview tab");
   }
-  if (!tab.isActive) {
-    throw new Error("the Runtrol conversation editor tab is not active");
+  // Activation settles a tick after registration while VS Code moves tab-group state; the contract is
+  // that the tab ENDS active, so the check waits the same bounded way registration did instead of
+  // photographing one transitional frame.
+  const activeBy = Date.now() + 5_000;
+  while (!tab.isActive) {
+    if (Date.now() > activeBy) {
+      throw new Error("the Runtrol conversation editor tab is not active");
+    }
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    const refreshed = vscode.window.tabGroups.all.flatMap((group) => group.tabs);
+    tab = refreshed.find((candidate) => isConversationEditor(candidate) && candidate.isActive)
+      ?? refreshed.find(isConversationEditor)
+      ?? tab;
   }
   if (!tab.label.startsWith("Runtrol")) {
     throw new Error(`the conversation editor has an unreadable label: ${tab.label}`);
@@ -436,9 +447,11 @@ async function requireConversationEditor(): Promise<void> {
 
 async function waitForConversationEditor(): Promise<vscode.Tab | null> {
   for (;;) {
-    const tab = vscode.window.tabGroups.all
-      .flatMap((group) => group.tabs)
-      .find(isConversationEditor);
+    // With one tab per conversation there can be several registered at once (restored tabs included);
+    // the assertion is about the tab the reader is IN, so the active one wins the search.
+    const tabs = vscode.window.tabGroups.all.flatMap((group) => group.tabs);
+    const tab = tabs.find((candidate) => isConversationEditor(candidate) && candidate.isActive)
+      ?? tabs.find(isConversationEditor);
     if (tab) {
       return tab;
     }
