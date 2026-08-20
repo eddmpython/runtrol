@@ -4,7 +4,7 @@
 
 한국어 | [English](README_EN.md) | [中文](README_ZH.md) | [日本語](README_JA.md)
 
-> 상태: **코어와 주력 VS Code 확장을 구현했고 `Runtrol Studio 0.1.5`를 6개 네이티브 플랫폼 대상으로 공개했다.** 실시간 세션 인덱스, 실물 Extension Host와 초당 3,000 프레임 Webview 성능 ratchet, 설치된 실물 CLI의 전체 조작 여정, 깨끗한 Marketplace 설치, 활성 세션을 보존하는 VSIX 갱신과 롤백을 검증했다. 독립 데스크톱 GUI 코드와 실행 경로는 제거됐고 PC 표면은 VS Code 확장 하나다. 공개 Runtime 프로토콜, Rust와 TypeScript SDK, 외부 패키지 소비 게이트, 서명된 standalone Runtime 6개 대상 배포 파이프라인도 구현했다. 확증된 provider 채널의 자동 갱신, 배타 실행, 정확한 롤백도 구현했다. 로컬 Mission DAG, 결정적 Receipt, 수동 통합, 프로젝트 Capability의 명시적 재사용과 변조 롤백도 두 설치형 CLI의 헤드리스 여정으로 검증했다. [Marketplace 확장](https://marketplace.visualstudio.com/items?itemName=runtrol.runtrol-studio)과 [GitHub Pages 사이트](https://eddmpython.github.io/runtrol/)가 공개되어 있다. 릴레이 기반 휴대폰 PWA, VS Code 페어링, 세부 권한 편집, 내용 없는 Web Push, Mission 조회와 중단 표면을 구현했다. 대화 헤더의 칩으로 답하는 모델과 permission mode 를 대화 중에 바꾸며, 선택은 각 CLI 자신의 전환 표면으로 중계되고 칩은 서비스가 답한 값만 보여 준다 (설치된 실물 Claude Code 여정 게이트가 전환과 복귀를 CLI 자체 공지로 검증). 대화 목록의 프로젝트 헤딩은 운영자가 직접 만들며, 폴더가 자동으로 헤딩이 되지 않는다. 페어링된 기기의 권한은 승인한 workspace root 로 한정된다: 세션 목록과 감시, 모든 세션 명령, Mission 조회가 같은 live root 검증을 통과해야 하고 root 회수는 즉시 효력을 갖는다. provider 준비는 provider 별 lane 으로 병렬화되어 cold 첫 만남 5 개가 직렬 18.1초 대신 8.7초에 끝나고, 새로 연 폴더의 기존 대화는 새로고침 없이 도착한다. PWA 모듈이 production 데몬과 실물 CLI를 관통하는 세션, 승인, 원격 단절 복원 여정도 활성 게이트로 검증한다. iOS 실기기 설치와 Web Push 운영 확인은 미검증 기여자 operator evidence로 남으며 현재 완료 범위와 점수에서 제외한다.
+> 상태: **코어와 주력 VS Code 확장을 구현했고 `Runtrol Studio 0.1.6`를 6개 네이티브 플랫폼 대상으로 공개했다.** 실시간 세션 인덱스, 실물 Extension Host와 초당 3,000 프레임 Webview 성능 ratchet, 설치된 실물 CLI의 전체 조작 여정, 깨끗한 Marketplace 설치, 활성 세션을 보존하는 VSIX 갱신과 롤백을 검증했다. 독립 데스크톱 GUI 코드와 실행 경로는 제거됐고 PC 표면은 VS Code 확장 하나다. 공개 Runtime 프로토콜, Rust와 TypeScript SDK, 외부 패키지 소비 게이트, 서명된 standalone Runtime 6개 대상 배포 파이프라인도 구현했다. 확증된 provider 채널의 자동 갱신, 배타 실행, 정확한 롤백도 구현했다. 로컬 Mission DAG, 결정적 Receipt, 수동 통합, 프로젝트 Capability의 명시적 재사용과 변조 롤백도 두 설치형 CLI의 헤드리스 여정으로 검증했다. [Marketplace 확장](https://marketplace.visualstudio.com/items?itemName=runtrol.runtrol-studio)과 [GitHub Pages 사이트](https://eddmpython.github.io/runtrol/)가 공개되어 있다. 릴레이 기반 휴대폰 PWA, VS Code 페어링, 세부 권한 편집, 내용 없는 Web Push, Mission 조회와 중단 표면을 구현했다. 대화 헤더의 칩으로 답하는 모델과 permission mode 를 대화 중에 바꾸며, 선택은 각 CLI 자신의 전환 표면으로 중계되고 칩은 서비스가 답한 값만 보여 준다 (설치된 실물 Claude Code 여정 게이트가 전환과 복귀를 CLI 자체 공지로 검증). 대화 목록의 프로젝트 헤딩은 운영자가 직접 만들며, 폴더가 자동으로 헤딩이 되지 않는다. 페어링된 기기의 권한은 승인한 workspace root 로 한정된다: 세션 목록과 감시, 모든 세션 명령, Mission 조회가 같은 live root 검증을 통과해야 하고 root 회수는 즉시 효력을 갖는다. provider 준비는 provider 별 lane 으로 병렬화되어 cold 첫 만남 5 개가 직렬 18.1초 대신 8.7초에 끝나고, 새로 연 폴더의 기존 대화는 새로고침 없이 도착한다. PWA 모듈이 production 데몬과 실물 CLI를 관통하는 세션, 승인, 원격 단절 복원 여정도 활성 게이트로 검증한다. iOS 실기기 설치와 Web Push 운영 확인은 미검증 기여자 operator evidence로 남으며 현재 완료 범위와 점수에서 제외한다.
 > 아래 점수 대부분이 0 인 것은 코드가 없어서가 아니라 그 축을 단언하는 게이트가 아직 없어서다.
 
 보안 경계와 기본 거부 설정은 [SECURITY.md](SECURITY.md)에 정리되어 있다.
@@ -117,7 +117,7 @@ Code-hot workspace는 bounded 상태를 유지한다. streaming과 background �
 | **PC (Windows, macOS, Linux)** | [VS Code Marketplace에서 `Runtrol Studio`](https://marketplace.visualstudio.com/items?itemName=runtrol.runtrol-studio)를 설치한다. x64와 ARM64를 지원하며 별도 데스크톱 앱은 배포하지 않는다 |
 | **모바일** | [영구 GitHub Pages 주소의 휴대폰 PWA](https://eddmpython.github.io/runtrol/app/). 먼저 VS Code에서 일회용 QR로 페어링한다 |
 
-공개 릴리스 `0.1.5`과 6개 플랫폼별 VSIX는 [GitHub Releases](https://github.com/eddmpython/runtrol/releases/tag/vscode-v0.1.5)에서도 받을 수 있다.
+공개 릴리스 `0.1.6`과 6개 플랫폼별 VSIX는 [GitHub Releases](https://github.com/eddmpython/runtrol/releases/tag/vscode-v0.1.6)에서도 받을 수 있다.
 Marketplace 설치는 VS Code가 자동 갱신한다. 예전 버전을 VSIX로 직접 설치했다면 VS Code가 그 확장의 자동 갱신을 끄므로 Marketplace에서 한 번 다시 설치한다.
 
 ## runtrol 이 필요 없는 사람
@@ -157,7 +157,7 @@ Rust 는 목적이 아니라 위 표의 세 축을 위한 수단이다.
 |---|---|---|
 | `crates/` | 제품 코어 (Rust). daemon, provider 어댑터, 전송. 독립 GUI crate는 없다 | 구현됨 |
 | [`clients/typescript/`](clients/typescript/) | 외부 제품용 공개 Runtime TypeScript SDK | packed 소비 검증 |
-| [`extensions/runtrol-vscode/`](extensions/runtrol-vscode/) | 유일한 PC 표면 `Runtrol Studio` | 30개 세션 출시 부하 검증, 0.1.5 공개 |
+| [`extensions/runtrol-vscode/`](extensions/runtrol-vscode/) | 유일한 PC 표면 `Runtrol Studio` | 30개 세션 출시 부하 검증, 0.1.6 공개 |
 | [`pwa/`](pwa/) | 모바일 PWA | 릴레이 연결, 세션 제어, 승인 표면 구현 |
 | [`site/`](site/) | [무의존성 GitHub Pages 랜딩](https://eddmpython.github.io/runtrol/) | 공개됨 |
 | [`assets/brand/`](assets/brand/) | 로고. SVG 가 정본, 파비콘·아이콘·소셜 카드는 파생 | |
