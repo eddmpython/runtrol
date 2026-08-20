@@ -916,6 +916,11 @@ mod tests {
 
     #[tokio::test]
     async fn a_wrong_local_phrase_releases_a_denial_to_the_waiting_relay_peer() {
+        // This test claims the process-wide console through `begin_approval`, so it takes the same
+        // lock its sibling does. Without it, whichever test lost the race failed with "the local
+        // approval surface is already in use", which is the parallel runner colliding with itself
+        // rather than anything about pairing.
+        let _serialised = crate::console_lock().lock().await;
         let scratch = Scratch::make();
         let home = scratch.path.to_str().expect("UTF-8 scratch");
         let mut composed = Composed::for_tests(home, runtrol_drivers::builtin()).expect("compose");
