@@ -125,8 +125,8 @@ export type LifecycleState = "hotIdle" | "hotRunning" | "cold" | "failed";
 /** Select one provider for explicit, potentially slow model discovery. */
 export interface ListModelsParams { readonly providerId: ProviderId; }
 
-/** Select one provider and one exact approved root for explicit native discovery. */
-export interface ListNativeSessionsParams { readonly cursor?: string | null; readonly providerId: ProviderId; readonly root: string; }
+/** Select one provider, and either one approved folder or the whole machine, for native discovery. */
+export interface ListNativeSessionsParams { readonly cursor?: string | null; readonly providerId: ProviderId; readonly root?: string | null; }
 
 /** Current control lease required to inspect pending approvals for one session. */
 export interface ListPendingApprovalsParams { readonly leaseGeneration: number; readonly leaseId: string; readonly sessionId: RuntimeSessionId; }

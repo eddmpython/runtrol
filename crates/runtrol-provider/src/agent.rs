@@ -94,6 +94,21 @@ pub trait Provider: Send + Sync + 'static {
         ))
     }
 
+    /// Whether [`Self::native_sessions`] answers a query with no folder by naming every
+    /// conversation this provider knows about, wherever it happened.
+    ///
+    /// Default `false`, which keeps a driver written before this existed asked one folder at a
+    /// time exactly as it was. A driver returns `true` only after its provider's own surface was
+    /// measured answering without a folder filter; every row it then returns must carry its own
+    /// `cwd`, because that is what places the conversation once the query no longer does.
+    ///
+    /// This is a fact about the provider's surface, not a preference: enumerating the machine is
+    /// what the product promises, so a driver that can do it should, and one that cannot must say
+    /// so here rather than silently returning one folder's worth and letting it read as all.
+    fn enumerates_machine(&self) -> bool {
+        false
+    }
+
     /// Open a session and bind to it.
     ///
     /// Returns once the provider has acknowledged the session enough for work to flow. Whether that means a

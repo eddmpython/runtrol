@@ -112,6 +112,16 @@ impl Provider for ClaudeProvider {
         }
     }
 
+    /// The roster answers without a folder, and it is still only a roster.
+    ///
+    /// `--cwd` is a filter on this command (measured 2026-08-20: omitting it returned eight rows
+    /// across four projects), so the machine-wide query is honest about its own scope. What it
+    /// cannot become is complete: this CLI publishes no surface for the conversations it has
+    /// stored, which the catalogue's coverage says in its own words on every page.
+    fn enumerates_machine(&self) -> bool {
+        true
+    }
+
     async fn native_sessions(
         &self,
         query: NativeSessionQuery,

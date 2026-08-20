@@ -1216,9 +1216,18 @@ async fn list_native_sessions(
         Ok(authority) => authority.clone(),
         Err(failure) => return Answer::failure(id, failure),
     };
-    let selected_root = match crate::runtime_inventory::authorized_root(&authority, &params.root) {
-        Ok(root) => root,
-        Err(failure) => return inventory_failure(id, failure),
+    // A named folder still has to be one this integration holds. No folder means the machine, and
+    // there is nothing to authorize against: the Runtime endpoint is owner-only local, the phone
+    // speaks a different wire that has no native-discovery request at all, and the managed session
+    // index already made exactly this move for exactly this reason (`runtime_inventory::authorized`,
+    // operator contract in `memory/uxContract.md`). What remains bounded is what the caller is
+    // shown: every returned row is re-checked below before it reaches anyone.
+    let selected_root = match params.root.as_deref() {
+        Some(requested) => match crate::runtime_inventory::authorized_root(&authority, requested) {
+            Ok(root) => Some(root),
+            Err(failure) => return inventory_failure(id, failure),
+        },
+        None => None,
     };
     let approved_roots = match crate::runtime_inventory::authorized_roots(&authority) {
         Ok(roots) => roots,
@@ -1250,6 +1259,12 @@ async fn list_native_sessions(
                 .acquire()
                 .await
                 .map_err(|_| NativeDiscoveryFailure::Provider)?;
+            // A driver that cannot enumerate the machine is never handed a folderless query. It
+            // would have to either invent a folder or answer one folder's worth as if it were all,
+            // and the second is how a partial list comes to read as complete.
+            if selected_root.is_none() && !prepared.driver.enumerates_machine() {
+                return Err(NativeDiscoveryFailure::RootRequired);
+            }
             let opened = params
                 .cursor
                 .as_deref()
@@ -1257,7 +1272,7 @@ async fn list_native_sessions(
                     native_cursors.open(
                         &authority,
                         provider,
-                        &selected_root,
+                        selected_root.as_ref(),
                         prepared.binary_identity,
                         cursor,
                     )
@@ -1267,7 +1282,7 @@ async fn list_native_sessions(
             let catalogue = prepared
                 .driver
                 .native_sessions(runtrol_provider::NativeSessionQuery {
-                    root: selected_root.path.clone(),
+                    root: selected_root.as_ref().map(|root| root.path.clone()),
                     cursor: opened.as_ref().map(|cursor| cursor.provider_cursor.clone()),
                     limit: MAX_PAGE_ITEMS,
                 })
@@ -1277,7 +1292,7 @@ async fn list_native_sessions(
             let mut public = crate::runtime_native_sessions::authorize_catalogue(
                 native_cursors,
                 &authority,
-                &selected_root,
+                selected_root.as_ref(),
                 &approved_roots,
                 managed,
                 provider,
@@ -1291,7 +1306,7 @@ async fn list_native_sessions(
                         .seal(
                             &authority,
                             provider,
-                            &selected_root,
+                            selected_root.as_ref(),
                             prepared.binary_identity,
                             &next,
                             opened.as_ref(),
@@ -1312,6 +1327,13 @@ async fn list_native_sessions(
             RuntimeErrorKind::ProviderUnavailable,
             "the selected provider could not supply a native session catalogue",
         ),
+        // Named as its own failure so a caller can act on it: ask this provider per folder
+        // instead. A generic refusal would leave it guessing which of the two it was.
+        Ok(Err(NativeDiscoveryFailure::RootRequired)) => Answer::plain(
+            id,
+            RuntimeErrorKind::InvalidRequest,
+            "this provider lists conversations one workspace root at a time, so a root is required",
+        ),
         Err(_) => Answer::plain(
             id,
             RuntimeErrorKind::RuntimeUnavailable,
@@ -1324,6 +1346,8 @@ enum NativeDiscoveryFailure {
     Cursor(NativeCursorFailure),
     Inventory(RuntimeInventoryFailure),
     Provider,
+    /// The caller asked about the machine and this provider only answers about a folder.
+    RootRequired,
 }
 
 fn cursor_failure(id: JsonRpcId, failure: NativeCursorFailure) -> Answer {
@@ -3427,6 +3451,11 @@ listen = "stdio"
             self.provider
         }
 
+        /// Stands in for the four measured providers that answer without a folder filter.
+        fn enumerates_machine(&self) -> bool {
+            true
+        }
+
         async fn native_sessions(
             &self,
             query: runtrol_provider::NativeSessionQuery,
@@ -3450,7 +3479,13 @@ listen = "stdio"
                 sessions: vec![runtrol_provider::NativeSessionEntry {
                     native: runtrol_provider::NativeSessionId::new(native)
                         .expect("valid fixture native identity"),
-                    cwd: query.root.as_str().into(),
+                    // The fixture answers inside whatever folder it was asked about, and names
+                    // its own when asked about the machine.
+                    cwd: query
+                        .root
+                        .as_ref()
+                        .map_or_else(|| "C:/fixture".to_owned(), |root| root.as_str().to_owned())
+                        .into(),
                     additional_directories: Vec::new(),
                     title: Some("Provider-owned fixture title".into()),
                     updated_at: Some("2026-08-13T00:00:00Z".into()),
@@ -3921,7 +3956,7 @@ listen = "stdio"
             .providers()
             .list_native_sessions(runtrol_runtime_protocol::ListNativeSessionsParams {
                 provider_id: runtrol_runtime_protocol::ProviderId::new("native-fixture"),
-                root: project.to_string(),
+                root: Some(project.to_string()),
                 cursor: None,
             })
             .await
@@ -4098,7 +4133,7 @@ listen = "stdio"
             .providers()
             .list_native_sessions(runtrol_runtime_protocol::ListNativeSessionsParams {
                 provider_id: runtrol_runtime_protocol::ProviderId::new("native-fixture"),
-                root: directory.to_string_lossy().into_owned(),
+                root: Some(directory.to_string_lossy().into_owned()),
                 cursor: None,
             })
             .await
@@ -4117,7 +4152,7 @@ listen = "stdio"
             .providers()
             .list_native_sessions(runtrol_runtime_protocol::ListNativeSessionsParams {
                 provider_id: runtrol_runtime_protocol::ProviderId::new("native-fixture"),
-                root: project.to_string(),
+                root: Some(project.to_string()),
                 cursor: Some(tampered),
             })
             .await
@@ -4131,7 +4166,7 @@ listen = "stdio"
             .providers()
             .list_native_sessions(runtrol_runtime_protocol::ListNativeSessionsParams {
                 provider_id: runtrol_runtime_protocol::ProviderId::new("native-fixture"),
-                root: project.to_string(),
+                root: Some(project.to_string()),
                 cursor: first.next_cursor,
             })
             .await

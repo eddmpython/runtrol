@@ -25,7 +25,7 @@ use std::time::Duration;
 
 use runtrol_childproc::{Containment, Program, capture};
 use runtrol_provider::{
-    MAX_NATIVE_SESSION_ITEMS, NativeCatalogueCoverage, NativeCatalogueSource,
+    AbsPath, MAX_NATIVE_SESSION_ITEMS, NativeCatalogueCoverage, NativeCatalogueSource,
     NativeResumeCapability, NativeSessionCatalogue, NativeSessionEntry, NativeSessionId,
     NativeSessionQuery, ProviderError, ProviderId,
 };
@@ -71,13 +71,16 @@ pub(super) async fn list(
     // Measured on 2.1.234: `--cwd` narrows interactive sessions as well as background ones, although the help
     // text mentions only the latter. Sent because a narrower answer is cheaper, and the entries are filtered
     // again below because a flag whose documented meaning is narrower than its behaviour may not be leaned on.
-    let arguments = [
-        "agents".to_owned(),
-        "--json".to_owned(),
-        "--all".to_owned(),
-        "--cwd".to_owned(),
-        query.root.as_str().to_owned(),
-    ];
+    let mut arguments = vec!["agents".to_owned(), "--json".to_owned(), "--all".to_owned()];
+    // Only when a folder was asked for. `--cwd` is a filter here, not a required argument
+    // (measured 2026-08-20: the help calls it "Show only background sessions started under
+    // <path>", and omitting it returned eight rows across four projects), so a machine-wide query
+    // leaves it off. What stays true either way is what this command answers: the sessions this
+    // CLI is running, never the conversations it has stored. The coverage below says so.
+    if let Some(root) = query.root.as_ref() {
+        arguments.push("--cwd".to_owned());
+        arguments.push(root.as_str().to_owned());
+    }
     let output = capture(program, &arguments, LISTING_DEADLINE, contained_by)
         .await
         .map_err(|error| ProviderError::Protocol {
@@ -98,14 +101,24 @@ pub(super) async fn list(
             doing: "reading the session roster this CLI printed",
             detail: error.to_string(),
         })?;
-    Ok(page(records, query.root.as_str(), query.limit, resumable))
+    Ok(page(
+        records,
+        query.root.as_ref().map(AbsPath::as_str),
+        query.limit,
+        resumable,
+    ))
 }
 
 /// Turn roster entries into one bounded page.
 ///
 /// Filtering by the requested root here is a convenience, not the security boundary: Runtime canonicalises and
 /// re-checks every entry against the caller's approved roots before anything is shown.
-fn page(records: Vec<Record>, root: &str, limit: u16, resumable: bool) -> NativeSessionCatalogue {
+fn page(
+    records: Vec<Record>,
+    root: Option<&str>,
+    limit: u16,
+    resumable: bool,
+) -> NativeSessionCatalogue {
     let capacity = usize::from(limit).min(MAX_NATIVE_SESSION_ITEMS);
     let mut sessions: Vec<NativeSessionEntry> = Vec::new();
     for record in records {
@@ -121,7 +134,8 @@ fn page(records: Vec<Record>, root: &str, limit: u16, resumable: bool) -> Native
         let Some(cwd) = record.cwd.filter(|path| !path.is_empty()) else {
             continue;
         };
-        if !under(&cwd, root) {
+        // A folder narrows the roster; no folder means every session this CLI is running.
+        if root.is_some_and(|root| !under(&cwd, root)) {
             continue;
         }
         let title = record
@@ -175,7 +189,7 @@ mod tests {
        "startedAt":1787013318134,"sessionId":"fc2e97a4-1030-43fe-ae32-e78e79351ce1","name":"beta-d9"}
     ]"#;
 
-    fn decoded(root: &str, resumable: bool) -> NativeSessionCatalogue {
+    fn decoded(root: Option<&str>, resumable: bool) -> NativeSessionCatalogue {
         let records: Vec<Record> =
             serde_json::from_str(REAL_SHAPE).expect("the real shape decodes");
         page(records, root, 50, resumable)
@@ -185,7 +199,7 @@ mod tests {
     fn a_session_started_outside_runtrol_becomes_a_row() {
         // The whole reason this module exists. Every claude a person started in their own terminal was invisible
         // while it ran, including the ones waiting on that person.
-        let catalogue = decoded("C:/work/alpha", true);
+        let catalogue = decoded(Some("C:/work/alpha"), true);
         assert_eq!(catalogue.sessions.len(), 2);
         let first = catalogue
             .sessions
@@ -203,8 +217,8 @@ mod tests {
     fn the_drive_letter_this_cli_happened_to_print_does_not_split_a_folder() {
         // Measured: one folder appears as both `C:\` and `c:\` in the same answer. Comparing the text would show
         // an operator half of their running sessions.
-        assert_eq!(decoded("C:/work/alpha", true).sessions.len(), 2);
-        assert_eq!(decoded("c:/work/alpha", true).sessions.len(), 2);
+        assert_eq!(decoded(Some("C:/work/alpha"), true).sessions.len(), 2);
+        assert_eq!(decoded(Some("c:/work/alpha"), true).sessions.len(), 2);
     }
 
     #[test]
@@ -214,7 +228,7 @@ mod tests {
         for root in ["C:/work/alpha", "C:/work/beta", "C:/work/nothing-here"] {
             assert!(
                 matches!(
-                    decoded(root, true).coverage,
+                    decoded(Some(root), true).coverage,
                     NativeCatalogueCoverage::Partial {
                         source: NativeCatalogueSource::OfficialCli,
                         ..
@@ -231,7 +245,7 @@ mod tests {
         // a row on screen that fails on click. Claiming it is unknown when the flag was confirmed would hide
         // every running session behind an unopenable row.
         assert_eq!(
-            decoded("C:/work/alpha", true)
+            decoded(Some("C:/work/alpha"), true)
                 .sessions
                 .first()
                 .expect("an entry")
@@ -239,7 +253,7 @@ mod tests {
             NativeResumeCapability::Available
         );
         assert_eq!(
-            decoded("C:/work/alpha", false)
+            decoded(Some("C:/work/alpha"), false)
                 .sessions
                 .first()
                 .expect("an entry")
@@ -250,7 +264,7 @@ mod tests {
 
     #[test]
     fn a_session_in_another_folder_is_not_offered() {
-        assert!(decoded("C:/work/gamma", true).sessions.is_empty());
+        assert!(decoded(Some("C:/work/gamma"), true).sessions.is_empty());
     }
 
     #[test]
@@ -262,7 +276,7 @@ mod tests {
                  "lastPrompt":"A_CONVERSATION_BODY","transcript":"A_TRANSCRIPT_PATH"}]"#,
         )
         .expect("decodes");
-        let catalogue = page(records, "C:/work/alpha", 50, true);
+        let catalogue = page(records, Some("C:/work/alpha"), 50, true);
         let rendered = format!("{catalogue:?}");
         for forbidden in [
             "A_CONVERSATION_BODY",

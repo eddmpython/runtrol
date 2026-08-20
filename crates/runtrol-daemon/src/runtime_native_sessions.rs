@@ -45,6 +45,25 @@ pub(crate) enum NativeCursorFailure {
     Internal,
 }
 
+/// How a page's scope is bound into its cursor: one folder, or the whole machine.
+///
+/// A cursor carries the context it was issued for so it cannot be replayed into a different one.
+/// That mattered when every page was one folder (a folder-A cursor handed to a folder-B listing
+/// would have sent A's provider cursor into B's call), and it still matters now that a page can
+/// cover the machine: a machine-wide cursor must not be accepted for a folder listing, or the
+/// other way round. So the scope is always signed and the machine simply has its own constant.
+///
+/// The constant is a fixed sentence rather than zeroes so it cannot collide with a real folder.
+fn scope_bytes(root: Option<&AuthorizedRoot>) -> ([u8; 32], [u8; 24]) {
+    match root {
+        Some(root) => (digest(root.path.as_str()), root.identity),
+        None => (
+            digest("machine-wide native catalogue, no folder filter"),
+            [0_u8; 24],
+        ),
+    }
+}
+
 impl NativeCursorCodec {
     /// Mint one unpredictable boot-local cursor authenticity key.
     pub(crate) fn new() -> Result<Self, NativeCursorFailure> {
@@ -60,7 +79,7 @@ impl NativeCursorCodec {
         &self,
         authority: &AuthorizedIntegration,
         provider: CoreProviderId,
-        root: &AuthorizedRoot,
+        root: Option<&AuthorizedRoot>,
         binary_identity: [u8; 32],
         provider_cursor: &str,
         prior: Option<&OpenedCursor>,
@@ -84,8 +103,9 @@ impl NativeCursorCodec {
         body.extend_from_slice(&authority.grant.key_generation.to_be_bytes());
         body.extend_from_slice(&authority.grant.grant_generation.to_be_bytes());
         body.extend_from_slice(&digest(provider.as_str()));
-        body.extend_from_slice(&digest(root.path.as_str()));
-        body.extend_from_slice(&root.identity);
+        let (scope, identity) = scope_bytes(root);
+        body.extend_from_slice(&scope);
+        body.extend_from_slice(&identity);
         body.extend_from_slice(&binary_identity);
         body.extend_from_slice(
             &WallMs::now()
@@ -116,7 +136,7 @@ impl NativeCursorCodec {
         &self,
         authority: &AuthorizedIntegration,
         provider: CoreProviderId,
-        root: &AuthorizedRoot,
+        root: Option<&AuthorizedRoot>,
         binary_identity: [u8; 32],
         encoded: &str,
     ) -> Result<OpenedCursor, NativeCursorFailure> {
@@ -142,7 +162,7 @@ impl NativeCursorCodec {
         &self,
         authority: &AuthorizedIntegration,
         provider: CoreProviderId,
-        root: &AuthorizedRoot,
+        root: Option<&AuthorizedRoot>,
         binary_identity: [u8; 32],
         native_session_id: &str,
         workspace: &AbsPath,
@@ -156,8 +176,9 @@ impl NativeCursorCodec {
         body.extend_from_slice(&authority.grant.key_generation.to_be_bytes());
         body.extend_from_slice(&authority.grant.grant_generation.to_be_bytes());
         body.extend_from_slice(&digest(provider.as_str()));
-        body.extend_from_slice(&digest(root.path.as_str()));
-        body.extend_from_slice(&root.identity);
+        let (scope, identity) = scope_bytes(root);
+        body.extend_from_slice(&scope);
+        body.extend_from_slice(&identity);
         body.extend_from_slice(&binary_identity);
         body.extend_from_slice(&digest(workspace.as_str()));
         body.extend_from_slice(
@@ -266,17 +287,19 @@ fn decode_body(
     body: &[u8],
     authority: &AuthorizedIntegration,
     provider: CoreProviderId,
-    root: &AuthorizedRoot,
+    root: Option<&AuthorizedRoot>,
     binary_identity: [u8; 32],
 ) -> Result<OpenedCursor, NativeCursorFailure> {
+    let (scope, identity) = scope_bytes(root);
     let mut cursor = Cursor { bytes: body, at: 0 };
     if cursor.byte()? != CURSOR_VERSION
         || cursor.fixed::<16>()? != authority.key.to_bytes()
         || cursor.u64()? != authority.grant.key_generation
         || cursor.u64()? != authority.grant.grant_generation
         || cursor.fixed::<32>()? != digest(provider.as_str())
-        || cursor.fixed::<32>()? != digest(root.path.as_str())
-        || cursor.fixed::<24>()? != root.identity
+        // Scope, not just folder: a machine-wide cursor and a folder cursor cannot be swapped.
+        || cursor.fixed::<32>()? != scope
+        || cursor.fixed::<24>()? != identity
         || cursor.fixed::<32>()? != binary_identity
     {
         return Err(NativeCursorFailure::Invalid);
@@ -358,7 +381,7 @@ impl<'a> Cursor<'a> {
 pub(crate) fn authorize_catalogue(
     codec: &NativeCursorCodec,
     authority: &AuthorizedIntegration,
-    selected_root: &AuthorizedRoot,
+    selected_root: Option<&AuthorizedRoot>,
     approved_roots: &[AuthorizedRoot],
     managed: &RuntimeSessionCatalogue,
     provider: CoreProviderId,
@@ -400,7 +423,10 @@ pub(crate) fn authorize_catalogue(
             omitted = omitted.saturating_add(1);
             continue;
         };
-        if !cwd.is_under(&selected_root.path) {
+        // A named folder keeps its old boundary: the provider was asked about that folder, and a
+        // row outside it would be a provider answering something else. A machine-wide request has
+        // no such boundary to enforce, which is the point of it.
+        if selected_root.is_some_and(|selected| !cwd.is_under(&selected.path)) {
             omitted = omitted.saturating_add(1);
             continue;
         }
@@ -413,9 +439,14 @@ pub(crate) fn authorize_catalogue(
             omitted = omitted.saturating_add(1);
             continue;
         };
-        if additional
-            .iter()
-            .any(|path| !approved_roots.iter().any(|root| path.is_under(&root.path)))
+        // The same split. Inside a named folder, a session reaching into folders this integration
+        // was never granted is dropped rather than shown. A machine-wide listing on the owner-only
+        // local endpoint is already looking at the whole machine, so there is no smaller set for
+        // an extra directory to escape from.
+        if selected_root.is_some()
+            && additional
+                .iter()
+                .any(|path| !approved_roots.iter().any(|root| path.is_under(&root.path)))
         {
             omitted = omitted.saturating_add(1);
             continue;
@@ -561,19 +592,19 @@ mod tests {
             .seal(
                 &authority,
                 provider,
-                &root,
+                Some(&root),
                 [4; 32],
                 "provider-page-2",
                 None,
             )
             .expect("sealed");
         let opened = codec
-            .open(&authority, provider, &root, [4; 32], &token)
+            .open(&authority, provider, Some(&root), [4; 32], &token)
             .expect("same context opens");
         assert_eq!(opened.provider_cursor.as_ref(), "provider-page-2");
         assert!(
             codec
-                .open(&authority, provider, &root, [5; 32], &token)
+                .open(&authority, provider, Some(&root), [5; 32], &token)
                 .is_err()
         );
     }
@@ -591,21 +622,21 @@ mod tests {
             .seal(
                 &authority,
                 provider,
-                &root,
+                Some(&root),
                 [4; 32],
                 "provider-page-2",
                 None,
             )
             .expect("first cursor");
         let opened = codec
-            .open(&authority, provider, &root, [4; 32], &first)
+            .open(&authority, provider, Some(&root), [4; 32], &first)
             .expect("open first");
         assert!(
             codec
                 .seal(
                     &authority,
                     provider,
-                    &root,
+                    Some(&root),
                     [4; 32],
                     "provider-page-2",
                     Some(&opened)
@@ -614,37 +645,58 @@ mod tests {
         );
     }
 
-    #[test]
-    fn catalogue_filters_roots_deduplicates_and_merges_by_native_identity() {
-        let base =
-            std::env::temp_dir().join(format!("runtrol-native-catalogue-{}", std::process::id()));
-        drop(std::fs::remove_dir_all(&base));
-        let project_path = base.join("project");
-        let outside_path = base.join("outside");
-        std::fs::create_dir_all(&project_path).expect("create project");
-        std::fs::create_dir_all(&outside_path).expect("create outside");
-        let project = AbsPath::canonicalize(project_path.to_str().expect("UTF-8 project"))
-            .expect("canonical project");
-        let outside = AbsPath::canonicalize(outside_path.to_str().expect("UTF-8 outside"))
-            .expect("canonical outside");
-        let root = AuthorizedRoot {
-            path: project.clone(),
-            identity: runtrol_security::ProjectRootIdentity::read(&project)
-                .expect("root identity")
-                .to_bytes(),
-        };
-        let authority = authority(&root);
-        let provider = CoreProviderId::parse("provider").expect("valid provider");
-        let managed = RuntimeSessionCatalogue::one_for_tests(provider, "native-1", &project);
-        let native = || NativeSessionId::new("native-1").expect("valid native");
-        let public = authorize_catalogue(
-            &NativeCursorCodec::new().expect("random codec"),
-            &authority,
-            &root,
-            std::slice::from_ref(&root),
-            &managed,
-            provider,
-            [4; 32],
+    /// The one provider answer both scope tests are judged against.
+    ///
+    /// Two rows inside a folder the integration holds (sharing one native identity, so
+    /// deduplication and managed-session merging are exercised) and one row in a folder it does
+    /// not. Which of those survive is exactly what the scope decides.
+    struct CatalogueFixture {
+        base: std::path::PathBuf,
+        root: AuthorizedRoot,
+        authority: AuthorizedIntegration,
+        provider: CoreProviderId,
+        managed: RuntimeSessionCatalogue,
+        project: AbsPath,
+        outside: AbsPath,
+    }
+
+    impl CatalogueFixture {
+        fn make(name: &str) -> Self {
+            let base = std::env::temp_dir().join(format!(
+                "runtrol-native-catalogue-{name}-{}",
+                std::process::id()
+            ));
+            drop(std::fs::remove_dir_all(&base));
+            let project_path = base.join("project");
+            let outside_path = base.join("outside");
+            std::fs::create_dir_all(&project_path).expect("create project");
+            std::fs::create_dir_all(&outside_path).expect("create outside");
+            let project = AbsPath::canonicalize(project_path.to_str().expect("UTF-8 project"))
+                .expect("canonical project");
+            let outside = AbsPath::canonicalize(outside_path.to_str().expect("UTF-8 outside"))
+                .expect("canonical outside");
+            let root = AuthorizedRoot {
+                path: project.clone(),
+                identity: runtrol_security::ProjectRootIdentity::read(&project)
+                    .expect("root identity")
+                    .to_bytes(),
+            };
+            let authority = authority(&root);
+            let provider = CoreProviderId::parse("provider").expect("valid provider");
+            let managed = RuntimeSessionCatalogue::one_for_tests(provider, "native-1", &project);
+            Self {
+                base,
+                root,
+                authority,
+                provider,
+                managed,
+                project,
+                outside,
+            }
+        }
+
+        fn answered(&self) -> ProviderCatalogue {
+            let native = || NativeSessionId::new("native-1").expect("valid native");
             ProviderCatalogue {
                 coverage: NativeCatalogueCoverage::Complete {
                     source: NativeCatalogueSource::OfficialProtocol,
@@ -652,7 +704,7 @@ mod tests {
                 sessions: vec![
                     NativeSessionEntry {
                         native: native(),
-                        cwd: project.as_str().into(),
+                        cwd: self.project.as_str().into(),
                         additional_directories: Vec::new(),
                         title: Some("Provider title".into()),
                         updated_at: None,
@@ -660,7 +712,7 @@ mod tests {
                     },
                     NativeSessionEntry {
                         native: native(),
-                        cwd: project.as_str().into(),
+                        cwd: self.project.as_str().into(),
                         additional_directories: Vec::new(),
                         title: None,
                         updated_at: None,
@@ -668,7 +720,7 @@ mod tests {
                     },
                     NativeSessionEntry {
                         native: NativeSessionId::new("native-outside").expect("valid native"),
-                        cwd: outside.as_str().into(),
+                        cwd: self.outside.as_str().into(),
                         additional_directories: Vec::new(),
                         title: None,
                         updated_at: None,
@@ -676,21 +728,80 @@ mod tests {
                     },
                 ],
                 next_cursor: None,
-            },
-        )
-        .expect("filter catalogue");
-        assert_eq!(public.sessions.len(), 1);
+            }
+        }
+
+        fn authorized(&self, scope: Option<&AuthorizedRoot>) -> NativeSessionCatalogue {
+            authorize_catalogue(
+                &NativeCursorCodec::new().expect("random codec"),
+                &self.authority,
+                scope,
+                std::slice::from_ref(&self.root),
+                &self.managed,
+                self.provider,
+                [4; 32],
+                self.answered(),
+            )
+            .expect("filter catalogue")
+        }
+    }
+
+    impl Drop for CatalogueFixture {
+        fn drop(&mut self) {
+            drop(std::fs::remove_dir_all(&self.base));
+        }
+    }
+
+    #[test]
+    fn a_named_folder_keeps_its_boundary_and_merges_by_native_identity() {
+        let fixture = CatalogueFixture::make("folder");
+        let public = fixture.authorized(Some(&fixture.root));
+        assert_eq!(
+            public.sessions.len(),
+            1,
+            "the row outside the folder is not shown"
+        );
         assert!(
             public
                 .sessions
                 .first()
-                .is_some_and(|session| session.already_managed_as.is_some())
+                .is_some_and(|session| session.already_managed_as.is_some()),
+            "the two rows sharing one native identity collapse into the managed one"
         );
         assert!(matches!(
             public.coverage,
             CatalogueCoverage::Partial { ref why, .. }
                 if why.contains("2 provider entries")
         ));
-        std::fs::remove_dir_all(base).expect("clean fixture");
+    }
+
+    #[test]
+    fn the_machine_scope_shows_a_conversation_whose_folder_was_never_approved() {
+        // The row whose folder was never approved is exactly the row the operator could not see
+        // before, and showing it is the whole point: every conversation on this machine in one
+        // list, reachable before any window is moved (`memory/uxContract.md`). This surface is the
+        // owner-only local endpoint, which the managed session index already opened for the same
+        // reason; the phone speaks a different wire that carries no native discovery at all.
+        let fixture = CatalogueFixture::make("machine");
+        let machine = fixture.authorized(None);
+        assert_eq!(
+            machine.sessions.len(),
+            2,
+            "the unapproved folder's row survives"
+        );
+        assert!(
+            machine
+                .sessions
+                .iter()
+                .any(|session| session.cwd.as_str() == fixture.outside.as_str()),
+            "and it is the one outside the approved root"
+        );
+        assert!(
+            machine
+                .sessions
+                .iter()
+                .any(|session| session.already_managed_as.is_some()),
+            "deduplication and managed-session matching are unchanged by the wider scope"
+        );
     }
 }

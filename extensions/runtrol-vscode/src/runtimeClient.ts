@@ -192,11 +192,28 @@ export class StudioRuntimeClient implements vscode.Disposable {
             "Existing chat discovery is not approved for this Runtrol Studio integration.",
           );
         }
+        // The machine, in one question. Measured 2026-08-20 against the installed CLIs: four of the
+        // five answer without a folder filter and every row they return carries its own folder, so
+        // asking per approved root was narrowing a list that the providers were already willing to
+        // give whole. That narrowing is what left yesterday's conversation invisible unless this
+        // window happened to have opened its folder.
+        const machineWide = await collectNativeChats(
+          runtime.providers(),
+          providerId,
+          [null],
+          Date.now,
+          signal,
+        );
+        if (!needsPerRootDiscovery(machineWide)) return machineWide;
+
+        // This provider only answers about one folder at a time, and says so by name. Approved
+        // roots are all this surface can offer it, and the catalogue's own coverage tells the
+        // reader that the answer is partial.
         const roots = [...new Set(grant.roots)];
         if (roots.length === 0) {
           return nativeCatalogueFailure(
             providerId,
-            "Existing chat discovery needs at least one approved workspace root.",
+            "This service lists conversations one workspace root at a time, and none is approved yet.",
           );
         }
         return await collectNativeChats(runtime.providers(), providerId, roots, Date.now, signal);
@@ -863,6 +880,18 @@ function selfApprovalPayload(pendingId: string): Uint8Array {
     JSON.stringify({ domain: "runtrol-runtime-self-approval-v1", pendingId }),
     "utf8",
   );
+}
+
+/// Whether a machine-wide answer came back empty because the question itself was refused.
+///
+/// Deliberately not matched against the daemon's wording. A sentence duplicated on both sides of a
+/// boundary is a contract nothing enforces: the day the refusal is reworded, the fallback stops
+/// happening and the sidebar quietly loses conversations with every gate still green. What is
+/// checked instead is the only thing that matters here, that nothing was found and something went
+/// wrong, and the folder-by-folder attempt that follows costs one more question in the case where
+/// the machine genuinely holds no conversations for this service.
+function needsPerRootDiscovery(catalogue: NativeChatCatalogue): boolean {
+  return catalogue.chats.length === 0 && catalogue.warning !== null;
 }
 
 function nativeCatalogueFailure(providerId: string, warning: string): NativeChatCatalogue {

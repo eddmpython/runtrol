@@ -23,15 +23,36 @@ pub const MAX_NATIVE_TITLE_BYTES: usize = 4 * 1024;
 /// The maximum byte length of a provider-owned timestamp string.
 pub const MAX_NATIVE_TIMESTAMP_BYTES: usize = 128;
 
-/// One explicit, root-scoped provider catalogue request.
+/// One explicit provider catalogue request, over one folder or over the whole machine.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NativeSessionQuery {
-    /// Canonical approved root used as the provider's official working-directory filter.
-    pub root: AbsPath,
+    /// Canonical folder used as the provider's official working-directory filter, or `None` for
+    /// every conversation the provider will name.
+    ///
+    /// Measured 2026-08-20 against the installed CLIs: four of the five answer without a folder
+    /// and every returned row carries its own `cwd` (codex `thread/list` omits its optional `cwd`
+    /// filter, ACP `session/list` treats `cwd` as a filter that means "all" when absent, and
+    /// `cline history` has no folder argument at all). The narrowing was ours, not theirs, and it
+    /// cost the product its one promise: every conversation on the machine in one list. A driver
+    /// that genuinely cannot answer without a folder says so through
+    /// [`ProviderCapabilities::native_session_catalogue`] and is asked per folder instead.
+    pub root: Option<AbsPath>,
     /// Opaque provider cursor from the immediately preceding page.
     pub cursor: Option<Box<str>>,
     /// Maximum entries Runtime is willing to receive.
     pub limit: u16,
+}
+
+impl NativeSessionQuery {
+    /// The folder this query filters on, for a driver that can only ask about one.
+    ///
+    /// A driver reaches for this only after declaring it cannot enumerate the machine; the daemon
+    /// never sends it a folderless query, so the absence is a contract violation rather than a
+    /// case to paper over.
+    #[must_use]
+    pub fn required_root(&self) -> Option<&AbsPath> {
+        self.root.as_ref()
+    }
 }
 
 /// The official surface that produced a provider catalogue.

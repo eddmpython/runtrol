@@ -10,6 +10,21 @@ and refactoring that no user can observe do not belong here.
 
 ## [Unreleased]
 
+### Added
+
+- The sidebar now lists conversations from folders this window has never opened. Each coding
+  service is asked about the whole machine in one question instead of once per approved folder,
+  which is what those services were already willing to answer: measured against the installed
+  CLIs, four of the five list every conversation they know without being given a folder, and each
+  one they return says which folder it belongs to. A service that genuinely can only answer one
+  folder at a time says so and is asked that way, unchanged.
+
+- When the list is not everything, the sidebar says why, in the service's own words. Claude Code,
+  for example, publishes the sessions it is running and not the conversations it has stored, so the
+  panel says that rather than letting an incomplete list read as complete. An empty project heading
+  now says "nothing listed" instead of claiming the folder holds no conversations, which is
+  something the heading cannot know.
+
 ## [0.1.9] - 2026-08-20
 
 ### Fixed

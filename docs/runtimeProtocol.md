@@ -68,7 +68,7 @@ connection cannot approve itself.
 |---|---|
 | `providers/list`, `providers/watch`, `providers/getCapabilities`, `providers/usage` | `provider.read` |
 | `providers/listModels` | `model.read` |
-| `providers/listNativeSessions` | `session.native.discover` plus an approved root |
+| `providers/listNativeSessions` | `session.native.discover`, plus an approved root when one is named |
 | `sessions/list`, `sessions/watchIndex`, `sessions/get` | `session.list` |
 | `sessions/start` | `session.start` plus an approved root |
 | `sessions/adoptNative`, `sessions/resume` | `session.resume` plus an approved root |
@@ -83,6 +83,21 @@ connection cannot approve itself.
 
 Notifications are `providers/changed`, `providers/watchEnded`, `sessions/indexChanged`, `sessions/indexEnded`,
 `sessions/event`, and `sessions/lagged`. Notification names cannot be invoked as requests.
+
+### Native discovery scope
+
+`providers/listNativeSessions` takes an optional `root`. Naming one keeps the old behaviour exactly:
+the folder must be in the caller's grant, and rows outside it are dropped. Omitting it asks the
+provider for every conversation it will name, which four of the five measured CLIs answer directly
+because their own listing treats the working directory as a filter rather than a required argument.
+Each returned row carries its own folder, so grouping stays a fact the provider reported.
+
+A folderless request is answered on the owner-only local endpoint, where a caller already holds
+machine-wide authority through the private administration wire, and where the managed session index
+made the same move for the same reason. It is refused by name for a provider whose own surface
+cannot enumerate without a folder, so the caller knows to ask per folder rather than receiving one
+folder's worth that reads as everything. Catalogue cursors bind the scope they were issued for, so a
+machine-wide cursor cannot be replayed into a folder listing or the other way round.
 
 ## Session and mutation rules
 

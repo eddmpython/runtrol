@@ -16,7 +16,8 @@ export type NativeCatalogueReader = {
 export async function collectNativeChats(
   reader: NativeCatalogueReader,
   providerId: string,
-  roots: readonly string[],
+  /// Where to look. A null entry asks the provider about the whole machine.
+  roots: readonly (string | null)[],
   now: () => number = Date.now,
   signal?: AbortSignal,
 ): Promise<NativeChatCatalogue> {
@@ -36,12 +37,18 @@ export async function collectNativeChats(
       try {
         catalogue = await reader.listNativeSessions({
           providerId,
-          root,
+          // Omitted, not null: absence is what asks for the machine, and a provider that can only
+          // answer about one folder refuses it by name so the caller can ask per folder instead.
+          ...(root === null ? {} : { root }),
           ...(cursor ? { cursor } : {}),
         });
       } catch (error) {
         if (signal?.aborted) signal.throwIfAborted();
-        limitations.push(`Discovery under ${root} failed: ${errorMessage(error)}`);
+        limitations.push(
+          root === null
+            ? `Discovery across this machine failed: ${errorMessage(error)}`
+            : `Discovery under ${root} failed: ${errorMessage(error)}`,
+        );
         continue roots;
       }
       signal?.throwIfAborted();
@@ -73,7 +80,7 @@ export async function collectNativeChats(
     limitations.push(`Only the first ${MAX_NATIVE_CHAT_ROWS} existing chats are shown.`);
   }
   if (pageLimitReached) {
-    limitations.push(`Existing chat discovery stopped after ${MAX_NATIVE_CATALOGUE_PAGES} pages per root.`);
+    limitations.push(`Existing chat discovery stopped after ${MAX_NATIVE_CATALOGUE_PAGES} pages per scope.`);
   }
   const warning = uniqueText(limitations).join(" ") || null;
   return {

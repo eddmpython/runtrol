@@ -46,13 +46,19 @@ const MAX_REASONING_ID_BYTES: usize = 64;
 const MAX_CURSOR_BYTES: usize = 1024;
 const MAX_NATIVE_PATH_BYTES: usize = 32 * 1024;
 
-/// Root-scoped official session listing with transcript repair explicitly disabled.
+/// Official session listing with transcript repair explicitly disabled, over one folder or all.
+///
+/// `cwd` is optional in this CLI's own generated schema and documented there as "Optional cwd
+/// filter", so it is omitted rather than guessed for a machine-wide query. Measured 2026-08-20 on
+/// 0.148: omitting it answered 45 threads across 14 folders in 134 ms, and every row still carried
+/// its own `cwd`.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ThreadListParams<'a> {
     cursor: Option<&'a str>,
     limit: u16,
-    cwd: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cwd: Option<&'a str>,
     archived: bool,
     use_state_db_only: bool,
     sort_key: &'static str,
@@ -264,6 +270,14 @@ impl Provider for CodexProvider {
         Err(catalogue_too_large(self.id, "pages"))
     }
 
+    /// `thread/list` takes `cwd` as an optional filter, per this CLI's own generated schema.
+    ///
+    /// Measured 2026-08-20 on 0.148: omitting it answered 45 threads across 14 folders in 134 ms,
+    /// each row carrying its own `cwd`.
+    fn enumerates_machine(&self) -> bool {
+        true
+    }
+
     async fn native_sessions(
         &self,
         query: NativeSessionQuery,
@@ -283,14 +297,14 @@ impl Provider for CodexProvider {
             )?;
         }
         let conn = self.connection().await?;
-        let root = query.root.to_string();
+        let root = query.root.as_ref().map(ToString::to_string);
         let answer = conn
             .call(
                 "thread/list",
                 &ThreadListParams {
                     cursor: query.cursor.as_deref(),
                     limit: query.limit,
-                    cwd: &root,
+                    cwd: root.as_deref(),
                     archived: false,
                     use_state_db_only: true,
                     sort_key: "updated_at",

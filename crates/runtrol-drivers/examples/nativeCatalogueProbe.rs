@@ -39,7 +39,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let root = AbsPath::canonicalize(&workspace)?;
     let first = provider
         .native_sessions(NativeSessionQuery {
-            root: root.clone(),
+            root: Some(root.clone()),
             cursor: None,
             limit: 100,
         })
@@ -77,7 +77,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     }
     let second = provider
         .native_sessions(NativeSessionQuery {
-            root,
+            root: Some(root),
             cursor: first.next_cursor,
             limit: 100,
         })

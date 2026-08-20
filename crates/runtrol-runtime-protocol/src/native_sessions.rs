@@ -14,14 +14,20 @@ pub const MAX_NATIVE_ADOPTION_TOKEN_BYTES: usize = 2 * 1024;
 /// Lifetime of one boot-local native catalogue cursor.
 pub const NATIVE_CURSOR_LIFETIME_MS: u64 = 5 * 60_000;
 
-/// Select one provider and one exact approved root for explicit native discovery.
+/// Select one provider, and either one approved folder or the whole machine, for native discovery.
 #[derive(Clone, Debug, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ListNativeSessionsParams {
     /// Opaque provider identity returned by `providers/list`.
     pub provider_id: ProviderId,
-    /// Exact canonical root already present in the authenticated integration grant.
-    pub root: String,
+    /// Exact canonical root already present in the authenticated integration grant, or absent to
+    /// ask for every conversation the provider will name.
+    ///
+    /// Absence is answered only on the owner-only local endpoint, and only by a provider whose own
+    /// surface enumerates without a folder filter. A caller that omits it and gets a refusal knows
+    /// to ask per folder; a caller that supplies it gets exactly the folder it named, as before.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub root: Option<String>,
     /// Runtime-wrapped opaque cursor returned by the preceding page.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cursor: Option<String>,

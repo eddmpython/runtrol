@@ -973,7 +973,7 @@
     },
     "ListNativeSessionsParams": {
       "additionalProperties": false,
-      "description": "Select one provider and one exact approved root for explicit native discovery.",
+      "description": "Select one provider, and either one approved folder or the whole machine, for native discovery.",
       "properties": {
         "cursor": {
           "description": "Runtime-wrapped opaque cursor returned by the preceding page.",
@@ -987,13 +987,15 @@
           "description": "Opaque provider identity returned by `providers/list`."
         },
         "root": {
-          "description": "Exact canonical root already present in the authenticated integration grant.",
-          "type": "string"
+          "description": "Exact canonical root already present in the authenticated integration grant, or absent to\nask for every conversation the provider will name.\n\nAbsence is answered only on the owner-only local endpoint, and only by a provider whose own\nsurface enumerates without a folder filter. A caller that omits it and gets a refusal knows\nto ask per folder; a caller that supplies it gets exactly the folder it named, as before.",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [
-        "providerId",
-        "root"
+        "providerId"
       ],
       "type": "object"
     },

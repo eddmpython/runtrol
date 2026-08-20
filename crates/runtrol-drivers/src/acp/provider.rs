@@ -173,6 +173,17 @@ impl Provider for AcpProvider {
         })
     }
 
+    /// Both paths this driver takes answer without a folder.
+    ///
+    /// Measured 2026-08-20: the ACP v1 `ListSessionsRequest` has no required field and documents
+    /// `cwd` as a filter (grok 1.0.5 answered 30 sessions across 30 folders, opencode 1.2.27
+    /// answered 36 across 36, and supplying an unrelated folder returned none); a manifest-declared
+    /// CLI listing has no folder argument at all (`cline history --help`). Either way every row
+    /// carries its own `cwd`.
+    fn enumerates_machine(&self) -> bool {
+        true
+    }
+
     async fn native_sessions(
         &self,
         query: NativeSessionQuery,

@@ -19,10 +19,26 @@ use crate::framing::{Incoming, LineError, Lines, RequestId};
 
 const SESSION_LIST: &str = "session/list";
 
+/// Where to start a child that is being asked about the machine rather than about one folder.
+///
+/// The system temporary directory, because it exists on every target and is not the operator's
+/// home: `runtrol-security`'s workspace rules refuse roots that overlap a credential directory,
+/// and starting a provider inside one would put this driver on the wrong side of that boundary for
+/// no gain. The agent's answer does not depend on it (measured 2026-08-20 on grok and opencode).
+fn spawn_directory() -> std::path::PathBuf {
+    std::env::temp_dir()
+}
+
 /// Parameters supported by stable ACP v1 session discovery.
+///
+/// `cwd` is a filter in this protocol, not a scope: measured 2026-08-20 against grok 1.0.5 and
+/// opencode 1.2.27, omitting it returns every session the agent knows (30 and 36 rows across as
+/// many distinct folders), and supplying an unrelated folder returns none. So the field is omitted
+/// for a machine-wide query rather than filled with a guess.
 #[derive(Serialize)]
 struct ListParams<'a> {
-    cwd: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cwd: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     cursor: Option<&'a str>,
 }
@@ -78,7 +94,16 @@ impl CatalogueConnection {
         command
             .args(program.leading())
             .args(&arguments)
-            .current_dir(query.root.as_std_path())
+            // The agent is asked about folders, not run inside them, and a machine-wide query names
+            // none. Measured 2026-08-20: spawning grok and opencode from an unrelated directory
+            // changed neither answer. The home directory is used when there is no folder to pick,
+            // because a child must start somewhere that exists.
+            .current_dir(
+                query
+                    .root
+                    .as_ref()
+                    .map_or_else(spawn_directory, |root| root.as_std_path().to_path_buf()),
+            )
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::null())
@@ -159,12 +184,12 @@ impl CatalogueConnection {
             .get("loadSession")
             .and_then(serde_json::Value::as_bool)
             .unwrap_or(false);
-        let cwd = query.root.to_string();
+        let cwd = query.root.as_ref().map(ToString::to_string);
         let answer = self
             .call(
                 SESSION_LIST,
                 &ListParams {
-                    cwd: &cwd,
+                    cwd: cwd.as_deref(),
                     cursor: query.cursor.as_deref(),
                 },
                 "listing ACP sessions",

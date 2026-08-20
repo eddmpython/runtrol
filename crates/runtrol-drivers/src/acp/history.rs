@@ -19,7 +19,7 @@ use std::time::Duration;
 
 use runtrol_childproc::{Containment, Program, capture};
 use runtrol_provider::{
-    MAX_NATIVE_SESSION_ITEMS, NativeCatalogueCoverage, NativeCatalogueSource,
+    AbsPath, MAX_NATIVE_SESSION_ITEMS, NativeCatalogueCoverage, NativeCatalogueSource,
     NativeResumeCapability, NativeSessionCatalogue, NativeSessionEntry, NativeSessionId,
     NativeSessionQuery, ProviderError, ProviderId,
 };
@@ -100,7 +100,12 @@ pub(super) async fn list(
             doing: "reading the conversation list this CLI printed",
             detail: error.to_string(),
         })?;
-    Ok(page(records, query.root.as_str(), query.limit, asked))
+    Ok(page(
+        records,
+        query.root.as_ref().map(AbsPath::as_str),
+        query.limit,
+        asked,
+    ))
 }
 
 /// Turn records into one bounded page.
@@ -115,7 +120,7 @@ pub(super) async fn list(
 /// stopped early, and that is knowable only by receiving as many records as were requested.
 fn page(
     records: Vec<Record>,
-    root: &str,
+    root: Option<&str>,
     limit: u16,
     asked: Option<usize>,
 ) -> NativeSessionCatalogue {
@@ -145,7 +150,11 @@ fn page(
             dropped += 1;
             continue;
         };
-        if !under(&cwd, root) {
+        // A folder narrows the page; no folder means the machine. This CLI has no folder argument
+        // of its own (measured 2026-08-20: `cline history --help` offers only --json, --limit,
+        // --page and --config), so its listing was always machine-wide and this line was the only
+        // thing making it look otherwise.
+        if root.is_some_and(|root| !under(&cwd, root)) {
             continue;
         }
         let title = record
@@ -217,7 +226,7 @@ mod tests {
 
     /// The fixture, read as a driver that asked for one more record than it would keep. Two records come back,
     /// so any request for two or more proves the CLI had nothing further.
-    fn decoded(root: &str, limit: u16) -> NativeSessionCatalogue {
+    fn decoded(root: Option<&str>, limit: u16) -> NativeSessionCatalogue {
         let records: Vec<Record> =
             serde_json::from_str(REAL_SHAPE).expect("the real shape decodes");
         let asked = usize::from(limit).saturating_add(1);
@@ -226,7 +235,7 @@ mod tests {
 
     #[test]
     fn the_four_fields_a_catalogue_needs_come_through() {
-        let catalogue = decoded("/work/alpha", 50);
+        let catalogue = decoded(Some("/work/alpha"), 50);
         assert_eq!(catalogue.sessions.len(), 2);
         let first = catalogue
             .sessions
@@ -247,7 +256,7 @@ mod tests {
         // messages, token counts and costs, and a list is exactly where that starts leaking in: somebody adds a
         // preview so the row reads better. Asserted on the whole decoded page rather than field by field, so a
         // field added later is covered the day it is written.
-        let catalogue = decoded("/work/alpha", 50);
+        let catalogue = decoded(Some("/work/alpha"), 50);
         let rendered = format!("{catalogue:?}");
         for forbidden in [
             "CONVERSATION_BODY_THAT_MUST_NOT_BE_READ",
@@ -267,14 +276,14 @@ mod tests {
 
     #[test]
     fn a_page_that_had_to_drop_something_says_so_instead_of_claiming_completeness() {
-        let complete = decoded("/work/alpha", 50);
+        let complete = decoded(Some("/work/alpha"), 50);
         assert!(matches!(
             complete.coverage,
             NativeCatalogueCoverage::Complete {
                 source: NativeCatalogueSource::OfficialCli
             }
         ));
-        let clipped = decoded("/work/alpha", 1);
+        let clipped = decoded(Some("/work/alpha"), 1);
         assert_eq!(clipped.sessions.len(), 1);
         assert!(matches!(
             clipped.coverage,
@@ -296,7 +305,7 @@ mod tests {
             r#"[{"sessionId":"a","cwd":"/elsewhere"},{"sessionId":"b","cwd":"/elsewhere"}]"#,
         )
         .expect("decodes");
-        let catalogue = page(records, "/work/alpha", 1, Some(2));
+        let catalogue = page(records, Some("/work/alpha"), 1, Some(2));
         assert!(
             catalogue.sessions.is_empty(),
             "nothing in the page belongs to this root"
@@ -313,7 +322,7 @@ mod tests {
         // driver that received fewer records than it asked for has seen the CLI's whole listing.
         let records: Vec<Record> =
             serde_json::from_str(r#"[{"sessionId":"a","cwd":"/work/alpha"}]"#).expect("decodes");
-        let catalogue = page(records, "/work/alpha", 50, Some(51));
+        let catalogue = page(records, Some("/work/alpha"), 50, Some(51));
         assert!(matches!(
             catalogue.coverage,
             NativeCatalogueCoverage::Complete { .. }
@@ -326,7 +335,7 @@ mod tests {
         // Guessing between them is how an operator comes to trust a list that is missing conversations.
         let records: Vec<Record> =
             serde_json::from_str(r#"[{"sessionId":"a","cwd":"/work/alpha"}]"#).expect("decodes");
-        let catalogue = page(records, "/work/alpha", 50, None);
+        let catalogue = page(records, Some("/work/alpha"), 50, None);
         assert!(matches!(
             catalogue.coverage,
             NativeCatalogueCoverage::Partial { .. }
@@ -337,7 +346,7 @@ mod tests {
     fn resume_stays_unknown_because_a_listing_cannot_know_it() {
         // The listing says a conversation exists. Only the agent handshake says whether it can be reopened, and
         // claiming availability here would offer a row that fails on click.
-        for entry in decoded("/work/alpha", 50).sessions {
+        for entry in decoded(Some("/work/alpha"), 50).sessions {
             assert_eq!(entry.resume, NativeResumeCapability::Unknown);
         }
     }
@@ -347,7 +356,7 @@ mod tests {
         let records: Vec<Record> =
             serde_json::from_str(r#"[{"cwd":"/work/alpha"},{"sessionId":"","cwd":"/work/alpha"}]"#)
                 .expect("decodes");
-        let catalogue = page(records, "/work/alpha", 50, Some(51));
+        let catalogue = page(records, Some("/work/alpha"), 50, Some(51));
         assert!(catalogue.sessions.is_empty());
         assert!(matches!(
             catalogue.coverage,
