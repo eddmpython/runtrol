@@ -285,14 +285,33 @@ struct Fragment<'line> {
     /// The nested kind, which is the one that matters.
     #[serde(rename = "type")]
     kind: Option<&'line str>,
+    /// On the fragment that opens a message: the message it opens, whose identifier binds every later delta.
+    #[serde(default, borrow)]
+    message: Option<&'line RawValue>,
 }
 
-/// The one thing runtrol reads about a whole message: whether its content is a list of blocks.
+/// The one thing runtrol reads about a whole message: whether its content is a list of blocks, and which
+/// message the provider says it is.
 #[derive(Deserialize)]
 struct Message<'line> {
+    /// The provider's own identifier for the message. Measured on the real CLI (2.1.237): the `assistant`
+    /// frame and the `message_start` fragment both carry it, and the deltas in between carry nothing, so
+    /// this is the one name that joins a streamed message to its whole.
+    #[serde(default)]
+    id: Option<&'line str>,
     /// The blocks, when the provider sent a list rather than a bare string.
     #[serde(default, borrow)]
     content: Option<Vec<&'line RawValue>>,
+}
+
+/// The identifier a whole message (or the fragment that opens one) carries, when it carries one.
+fn message_identity(message: Option<&RawValue>) -> Option<&str> {
+    match serde_json::from_str::<Message<'_>>(message?.get()) {
+        Ok(message) => message.id,
+        // Not a message object at all. The caller falls back to the exchange identifier, which is what every
+        // frame carried before the message's own name was read; nothing is lost but the better name.
+        Err(_) => None,
+    }
 }
 
 /// A content block's kind, and the identifiers that bind a call to the result that answers it.
@@ -537,7 +556,11 @@ fn ended(line: &Bytes, envelope: &Envelope<'_>) -> Ended {
 /// A whole message, from either side, as the events its content blocks are.
 fn whole_message(line: &Bytes, kind: &str, envelope: &Envelope<'_>) -> Frame {
     let user = kind == "user";
-    let id = message_id(envelope.request_id);
+    // The message's own identifier first, the exchange identifier as the fallback. The deltas that streamed
+    // this message carried the message identifier (from its opening fragment), never the exchange one, so
+    // this is what lets a subscriber recognise the whole as the message it already showed piece by piece.
+    let id =
+        message_id(message_identity(envelope.message)).or_else(|| message_id(envelope.request_id));
     let parent = tool_call(envelope.parent_tool_use_id);
 
     let mut bodies = content_blocks(envelope.message)
@@ -659,8 +682,20 @@ fn said(
 fn fragment(line: &Bytes, envelope: &Envelope<'_>) -> EventBody {
     let nested = nested_kind(envelope.event);
 
+    // The opening fragment names the message; the deltas after it name nothing (measured on the real CLI),
+    // and the stateful session fills them in from the opening it saw. The exchange identifier is kept as the
+    // fallback for a CLI that does put it on fragments.
+    let opened = envelope.event.and_then(|event| {
+        match serde_json::from_str::<Fragment<'_>>(event.get()) {
+            Ok(fragment) => fragment.message,
+            // A fragment whose shape is not this one opens no message; it is relayed nameless and the open
+            // message's name (if any) is supplied by the session, exactly like every other delta.
+            Err(_) => None,
+        }
+    });
     let chunk = Chunk {
-        message_id: message_id(envelope.request_id),
+        message_id: message_id(message_identity(opened))
+            .or_else(|| message_id(envelope.request_id)),
         delta: true,
         parent: tool_call(envelope.parent_tool_use_id),
         content: payload_of(line, envelope.event),
@@ -976,6 +1011,44 @@ mod tests {
         match ending {
             TurnEvent::Ended { declared_by, .. } => assert!(declared_by.is_the_providers_word()),
             other => panic!("expected an ending, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_streamed_message_and_its_whole_share_the_message_identifier() {
+        // Measured on the real CLI (2.1.237): `message_start` carries `event.message.id`, the deltas carry
+        // nothing, and the final `assistant` frame carries `message.id` (plus a request_id the fragments never
+        // had). A subscriber joins the pieces to the whole by the message identifier, so that is the one used
+        // wherever it exists; the exchange identifier is only the fallback.
+        let opening = line(&format!(
+            r#"{{"type":"stream_event","session_id":"{SESSION}","event":{{"type":"message_start","message":{{"id":"msg_01","role":"assistant","content":[]}}}}}}"#
+        ));
+        match read(&opening).expect("readable") {
+            Frame::Body(body) => assert_eq!(
+                body.message_id().map(|id| id.as_str().to_owned()),
+                Some("msg_01".to_owned())
+            ),
+            other => panic!("expected content, got {other:?}"),
+        }
+        let delta = line(&format!(
+            r#"{{"type":"stream_event","session_id":"{SESSION}","event":{{"type":"content_block_delta","index":0,"delta":{{"type":"text_delta","text":"h"}}}}}}"#
+        ));
+        match read(&delta).expect("readable") {
+            Frame::Body(body) => {
+                assert!(body.message_id().is_none(), "a bare delta names no message");
+            }
+            other => panic!("expected content, got {other:?}"),
+        }
+        let whole = line(&format!(
+            r#"{{"type":"assistant","session_id":"{SESSION}","request_id":"req_01","message":{{"id":"msg_01","role":"assistant","content":[{{"type":"text","text":"hello"}}]}}}}"#
+        ));
+        match read(&whole).expect("readable") {
+            Frame::Body(body) => assert_eq!(
+                body.message_id().map(|id| id.as_str().to_owned()),
+                Some("msg_01".to_owned()),
+                "the whole message is named by the message, not the exchange"
+            ),
+            other => panic!("expected content, got {other:?}"),
         }
     }
 

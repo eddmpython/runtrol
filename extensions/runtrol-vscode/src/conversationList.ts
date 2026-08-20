@@ -114,6 +114,9 @@ export type ProjectGroup = {
   readonly kind: ProjectKind;
   /// Whether this VS Code window is open on it.
   readonly current: boolean;
+  /// The parent folder's name, set only when another heading has the same name, so two folders called
+  /// "new-chat" in different places are told apart without renaming either.
+  readonly qualifier: string | null;
   readonly rows: readonly Conversation[];
   /// How many of them have stopped and want the reader.
   readonly attention: number;
@@ -208,7 +211,23 @@ export function projects(
       place.rows,
     ));
   }
-  return groups.sort(byNearestToTheReader);
+  return qualified(groups).sort(byNearestToTheReader);
+}
+
+/// Headings that share a name get their parent folder's name beside it.
+function qualified(groups: readonly ProjectGroup[]): ProjectGroup[] {
+  const counts = new Map<string, number>();
+  for (const heading of groups) counts.set(heading.name, (counts.get(heading.name) ?? 0) + 1);
+  return groups.map((heading) => (
+    (counts.get(heading.name) ?? 0) > 1
+      ? { ...heading, qualifier: parentName(heading.workspace) }
+      : heading
+  ));
+}
+
+function parentName(workspace: string): string | null {
+  const parts = workspace.replaceAll("\\", "/").split("/").filter(Boolean);
+  return parts.length >= 2 ? parts[parts.length - 2] ?? null : null;
 }
 
 function group(
@@ -225,6 +244,7 @@ function group(
     workspace,
     kind,
     current,
+    qualifier: null,
     rows,
     attention: rows.filter(needsYou).length,
     live: rows.filter((row) => row.live).length,
@@ -315,8 +335,9 @@ export function projectDetail(group: ProjectGroup): string {
   // folder outside the approved roots, both arrive here as zero rows. Claiming the folder is empty
   // would be a statement the extension cannot support, and the reader would stop looking. The view
   // message above the tree carries the reason in the service's own words.
-  if (group.rows.length === 0) return "nothing listed";
   const parts: string[] = [];
+  if (group.qualifier) parts.push(`in ${group.qualifier}`);
+  if (group.rows.length === 0) return [...parts, "nothing listed"].join(" · ");
   if (group.attention > 0) parts.push(`${group.attention} waiting`);
   if (group.live > 0) parts.push(`${group.live} live`);
   parts.push(group.rows.length === 1 ? "1 conversation" : `${group.rows.length} conversations`);
@@ -515,17 +536,20 @@ export function elapsed(atMs: number | null, nowMs: number): string | null {
 /// A timestamp a coding service reported, in whichever way that service reports one.
 ///
 /// The protocol asks a driver for the provider's own representation rather than a house format, so more than one
-/// arrives here: the Agent Client Protocol and cline print ISO 8601, and Claude Code prints milliseconds since
-/// the epoch. Reading only the first spelling left every row from the second with no time at all, which pushed it
-/// below every dated row and stripped the elapsed part of its subtitle.
+/// arrives here: the Agent Client Protocol and cline print ISO 8601, Claude Code prints milliseconds since the
+/// epoch, and Codex prints seconds since the epoch (measured in the real window, 2026-08-20: read as
+/// milliseconds, every Codex row said "2952w"). Reading only the first spelling left every row from the second
+/// with no time at all, which pushed it below every dated row and stripped the elapsed part of its subtitle.
 ///
-/// Reading both is not interpretation. Each is an unambiguous machine format and neither says anything about what
-/// the conversation contains.
+/// Reading all three is not interpretation. Each is an unambiguous machine format and none says anything about
+/// what the conversation contains. Seconds and milliseconds are told apart by magnitude: no coding CLI existed
+/// before 1973, so a bare number below a hundred billion can only be seconds.
 function instant(value: string | null | undefined): number | null {
   if (!value) return null;
   if (/^\d+$/.test(value)) {
-    const millis = Number(value);
-    return Number.isSafeInteger(millis) ? millis : null;
+    const number = Number(value);
+    if (!Number.isSafeInteger(number)) return null;
+    return number < 100_000_000_000 ? number * 1_000 : number;
   }
   const parsed = Date.parse(value);
   return Number.isFinite(parsed) ? parsed : null;

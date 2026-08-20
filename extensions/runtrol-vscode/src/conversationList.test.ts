@@ -519,6 +519,47 @@ test("one folder reached by two spellings is one discovered heading", () => {
 
 const SCRATCH = below(ROOT, "storage", "no-project");
 
+test("a timestamp in seconds, milliseconds or ISO 8601 lands on the same instant", () => {
+  // Codex prints seconds, Claude Code prints milliseconds, ACP and cline print ISO 8601. Measured in the real
+  // window: seconds read as milliseconds put every Codex row 56 years in the past ("2952w").
+  const at = Date.parse("2026-08-20T10:00:00Z");
+  const rows = conversations(
+    [],
+    PROVIDERS,
+    [
+      nativeChat({ nativeSessionId: "seconds", providerId: "codex", updatedAt: String(at / 1000) }),
+      nativeChat({ nativeSessionId: "millis", providerId: "claude", updatedAt: String(at) }),
+      nativeChat({ nativeSessionId: "iso", providerId: "opencode", updatedAt: "2026-08-20T10:00:00Z" }),
+    ],
+    null,
+  );
+  for (const row of rows) {
+    assert.equal(row.updatedAtMs, at, `${row.native?.nativeSessionId} read wrong`);
+  }
+});
+
+test("two folders with one name are told apart by their parent, without renaming either", () => {
+  // Measured in the real window: Codex parks projectless chats in dated folders all called new-chat, and two
+  // identical headings read as one project listed twice.
+  const first = below(ROOT, "2026-08-19", "new-chat");
+  const second = below(ROOT, "2026-08-20", "new-chat");
+  const rows = conversations(
+    [session({ sessionId: "a", workspace: first }), session({ sessionId: "b", workspace: second })],
+    PROVIDERS,
+    [],
+    null,
+  );
+  const groups = projects([], rows, []);
+  assert.equal(groups.length, 2);
+  assert.deepEqual(new Set(groups.map((group) => group.qualifier)), new Set(["2026-08-19", "2026-08-20"]));
+  for (const group of groups) {
+    assert.equal(group.name, "new-chat", "the name stays the folder's own");
+    assert.ok(projectDetail(group).startsWith(`in ${group.qualifier}`));
+  }
+  const lone = projects([], conversations([session({ sessionId: "a", workspace: first })], PROVIDERS, [], null), []);
+  assert.equal(lone[0]?.qualifier, null, "a name nobody else has needs no qualifier");
+});
+
 test("a conversation started with no project is loose beneath the headings, never a heading of its own", () => {
   // Condition 3 of the operator's contract: a conversation can exist with no project at all. It runs in the
   // scratch folder, and that folder is an implementation detail: never a heading, never in the row's detail,

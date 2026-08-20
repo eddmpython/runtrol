@@ -25,6 +25,50 @@ and refactoring that no user can observe do not belong here.
   now says "nothing listed" instead of claiming the folder holds no conversations, which is
   something the heading cannot know.
 
+- The sidebar shows every project on this machine, the way the Codex and Claude sidebars do: every
+  folder a coding service holds conversations in is a heading, with its conversations beneath it.
+  This window's folder comes first, the operator's created projects keep their rename and remove,
+  and any other folder can be made a project from its heading in one click. A heading never
+  appears empty: a discovered folder exists exactly as long as a conversation names it. Two
+  folders with the same name are told apart by their parent folder.
+
+- New chat opens as a draft tab: a greeting, the composer, and chips for the project, the branch,
+  the coding service, the model, the reasoning effort and the access mode. Each chip is its own
+  picker, nothing runs until the first message, and that message starts the conversation in the
+  same tab with exactly those choices. The + on a project heading opens the same draft with the
+  folder already answered. A draft survives a window reload with its choices.
+
+- A conversation can be started with no project at all. It runs in the extension's own scratch
+  folder, sits beneath the project headings as a plain row, never repeats that folder's name, and
+  never asks the writer-collision question.
+
+- The composer is the card every chat app has converged on: where the conversation runs across the
+  top, the message in the middle, the controls along the bottom with send at the right edge. The +
+  attaches images to the next message (sent through the public Runtime's block input, never stored),
+  and the branch of the conversation's folder is read off its own repository.
+
+- Every conversation tab's chips say where it runs and who answers. On a live conversation, the
+  project chip offers the one explicit move to that folder as the window, and the service chip
+  offers a new conversation in the same folder with another service.
+
+### Fixed
+
+- A conversation listed from the whole machine can actually be opened. The proof the listing
+  handed out was bound to a folder scope that no approved folder could ever match, so every such
+  row refused to open; the proof now opens on the same owner-only terms the listing was given.
+
+- A Claude Code reply no longer appears twice. The streamed pieces and the assembled message are
+  recognised as one message by the message's own name, which the real CLI puts on the opening
+  fragment and on the whole and on nothing in between; the deltas in between are given that name
+  as they pass, and the whole replaces what the pieces built.
+
+- Codex conversations no longer read as fifty-six years old. Codex reports its timestamps in
+  seconds; they were read as milliseconds.
+
+- When a service's list leaves conversations out, the sidebar says what was left out and why
+  ("their folders no longer exist, or they repeat or overrun entries") instead of an internal
+  filtering phrase.
+
 ## [0.1.9] - 2026-08-20
 
 ### Fixed

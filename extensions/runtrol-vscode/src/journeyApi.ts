@@ -4,6 +4,7 @@ import type { ConversationPanels } from "./conversationPanels";
 import { Controller } from "./controller";
 import type { ProviderLine, SessionLine } from "./runtimeTypes";
 import { RuntimeState } from "./state";
+import { workspaceCollisions } from "./workspaceCollision";
 
 export type JourneyApi = {
   providers(): readonly ProviderLine[];
@@ -25,6 +26,20 @@ export type JourneyApi = {
   openWorkspace(session: string): Promise<void>;
   close(session: string, now?: boolean): Promise<void>;
   verifySelected(session: string): Promise<void>;
+  /// The eye pass: a draft tab on a folder (or on no project at all), with a service preselected.
+  openDraft(workspace: string | null, providerId?: string): Promise<void>;
+  /// The eye pass: send the focused draft's first message, which starts its conversation in the same tab.
+  /// Returns the session the tab became.
+  sendFocusedDraft(text: string): Promise<string>;
+  /// The eye pass: open up to `limit` listed conversations as tabs, in list order, skipping any that refuse
+  /// and any whose folder already has a live writer (so no collision question can block a headless run).
+  /// Returns how many opened, and why each refusal refused (the harness prints them: a refusal is a fact
+  /// about the product, not noise).
+  openListed(limit: number): Promise<{ opened: number; refused: string[] }>;
+  /// How many provider-owned conversations the services have listed so far.
+  nativeChatCount(): number;
+  /// Wait until one session reports a lifecycle, or fail at the deadline.
+  waitForLifecycle(session: string, lifecycle: SessionLine["lifecycle"], deadlineMs: number): Promise<void>;
 };
 
 export function journeyApi(
@@ -73,5 +88,69 @@ export function journeyApi(
       await controller.selectedWatchReady();
       await conversation.bindingFor(session)?.settled();
     }),
+    openDraft: (workspace, providerId) => afterReady(async () => {
+      await controller.openDraft({ workspace, providerId: providerId ?? null });
+    }),
+    sendFocusedDraft: (text) => afterReady(async () => {
+      const binding = conversation.focused();
+      if (!binding?.draft) throw new Error("no draft tab is focused");
+      await controller.sendDraft(binding, text);
+      const session = binding.session;
+      if (!session) throw new Error("the draft did not become a session");
+      return session.sessionId;
+    }),
+    openListed: (limit) => afterReady(async () => {
+      let opened = 0;
+      const refused: string[] = [];
+      for (const row of state.conversations) {
+        if (opened >= limit) break;
+        if (!row.canOpen || row.open || row.projectless) continue;
+        if (row.session && conversation.bindingFor(row.session.sessionId)) continue;
+        if (!row.session && workspaceCollisions(row.workspace, state.sessions).length > 0) continue;
+        try {
+          await within(controller.select(row), 30_000);
+          opened += 1;
+        } catch (error) {
+          // A conversation its service will not reopen right now is skipped, not fatal: the eye pass wants
+          // tabs on screen, and the next row is as good a tab as this one. The reason is kept and printed.
+          refused.push(`${row.serviceName} ${row.title}: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      }
+      return { opened, refused };
+    }),
+    nativeChatCount: () => state.nativeChats.length,
+    waitForLifecycle: (session, lifecycle, deadlineMs) => afterReady(() => new Promise<void>((resolve, reject) => {
+      const matches = (): boolean =>
+        state.sessions.some((candidate) => candidate.sessionId === session && candidate.lifecycle === lifecycle);
+      if (matches()) {
+        resolve();
+        return;
+      }
+      const timer = setTimeout(() => {
+        subscription.dispose();
+        const current = state.sessions.find((candidate) => candidate.sessionId === session);
+        reject(new Error(
+          `session ${session} did not reach ${lifecycle} within ${deadlineMs} ms (now ${current?.lifecycle ?? "absent"})`,
+        ));
+      }, deadlineMs);
+      const subscription = state.onDidChange(() => {
+        if (!matches()) return;
+        clearTimeout(timer);
+        subscription.dispose();
+        resolve();
+      });
+    })),
   };
+}
+
+function within<T>(work: Promise<T>, milliseconds: number): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  return Promise.race([
+    work,
+    new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => reject(new Error(`exceeded ${milliseconds} ms`)), milliseconds);
+    }),
+  ]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
 }

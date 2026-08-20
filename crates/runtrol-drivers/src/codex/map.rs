@@ -317,6 +317,18 @@ pub fn read(method: &str, params: Option<&Bytes>) -> Result<Frame, MapError> {
     }
 }
 
+/// An item the provider handed over when a conversation was resumed, as the event it is.
+///
+/// `thread/resume` answers with the thread's turns and their items (the CLI's own generated schema, read
+/// 2026-08-20: `Thread.turns[].items[]`, populated unless `excludeTurns` is asked for). The provider handing
+/// the conversation over is the provider showing it, and relaying those items is how a reopened conversation
+/// reads like the conversation it is instead of an empty page. Nothing is stored: the items travel once,
+/// whole, in the order the provider laid them out, through the same binding a live item takes.
+pub(super) fn resumed_item(item: &RawValue) -> Frame {
+    let body = Bytes::copy_from_slice(item.get().as_bytes());
+    item_frame("thread/resume", &body, Some(item), true)
+}
+
 /// One item, started or completed.
 ///
 /// A named kind becomes the event runtrol has an opinion about, and everything else travels whole. `durable`

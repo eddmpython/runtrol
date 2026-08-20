@@ -194,6 +194,23 @@ impl CodexAgent {
                 },
             });
         }
+        if matches!(intent.disposition, Disposition::Resume { .. }) {
+            // The conversation as the provider handed it over: its turns' items, relayed as the events they
+            // are so a reopened thread reads like the thread (measured before this: a resumed Codex thread
+            // opened as an empty page). Bounded to the tail, because the subscriber ring is bounded and the
+            // most recent exchange is what a person reopening a conversation came back for.
+            for item in resumed_items(&answer) {
+                match map::resumed_item(item) {
+                    Frame::Body(body) => announced.push_back(Produced { src_end: 0, body }),
+                    Frame::Unbound(unmapped) => announced.push_back(Produced {
+                        src_end: 0,
+                        body: EventBody::Unmapped(unmapped),
+                    }),
+                    // An item is never a turn boundary; those two frames cannot come out of one.
+                    Frame::Started { .. } | Frame::Ended(_) => {}
+                }
+            }
+        }
 
         Ok(Self {
             provider,
@@ -534,6 +551,50 @@ fn open_call(
             why: "this driver serves a fresh conversation and a resume, and nothing else yet",
         }),
     }
+}
+
+/// How many handed-over items a resume replays, counted from the most recent.
+///
+/// The subscriber's replay ring is bounded (64 KiB), so a whole long thread would only push its own
+/// beginning out; the tail is what a person reopening a conversation came back for, and anything older is
+/// still the provider's to show in its own surface.
+const MAX_RESUMED_ITEMS: usize = 64;
+
+/// The items a `thread/resume` answer hands over, oldest first, bounded to the most recent.
+fn resumed_items(answer: &Bytes) -> Vec<&RawValue> {
+    let Ok(resumed) = serde_json::from_slice::<Resumed<'_>>(answer) else {
+        // An answer without readable turns resumes as it always did: attached, with nothing to replay. The
+        // thread itself was already read by `thread_of`, so nothing about the session is lost here.
+        return Vec::new();
+    };
+    let items: Vec<&RawValue> = resumed
+        .thread
+        .and_then(|thread| thread.turns)
+        .unwrap_or_default()
+        .into_iter()
+        .flat_map(|turn| turn.items.unwrap_or_default())
+        .collect();
+    let skip = items.len().saturating_sub(MAX_RESUMED_ITEMS);
+    items.into_iter().skip(skip).collect()
+}
+
+/// The shape of a resume answer runtrol reads: the thread's turns and their items, nothing else.
+#[derive(Deserialize)]
+struct Resumed<'line> {
+    #[serde(default, borrow)]
+    thread: Option<ResumedThread<'line>>,
+}
+
+#[derive(Deserialize)]
+struct ResumedThread<'line> {
+    #[serde(default, borrow)]
+    turns: Option<Vec<ResumedTurn<'line>>>,
+}
+
+#[derive(Deserialize)]
+struct ResumedTurn<'line> {
+    #[serde(default, borrow)]
+    items: Option<Vec<&'line RawValue>>,
 }
 
 /// One prompt, as the parameters this CLI reads.
@@ -903,6 +964,8 @@ fn approval_notice(method: &str, error: &ApprovalBuildError) -> EventBody {
 
 #[cfg(test)]
 mod tests {
+    use std::fmt::Write as _;
+
     use runtrol_provider::AbsPath;
 
     use super::*;
@@ -951,6 +1014,50 @@ mod tests {
             params.get("threadId").and_then(serde_json::Value::as_str),
             Some("thread_abc")
         );
+    }
+
+    #[test]
+    fn a_resume_replays_the_items_the_provider_handed_over_most_recent_last() {
+        // The answer shape the CLI's own schema documents: turns, each with items. Every item goes through
+        // the same binding a live item takes, so a user message reads as one and an agent message as one.
+        let answer = Bytes::from_static(
+            br#"{"thread":{"id":"thread_abc","turns":[{"id":"turn_1","status":"completed","items":[{"type":"userMessage","id":"item_1","content":[{"type":"text","text":"hi"}]},{"type":"agentMessage","id":"item_2","text":"hello"}]},{"id":"turn_2","status":"completed","items":[{"type":"commandExecution","id":"item_3","status":"completed","command":"ls"}]}]},"model":"gpt-5"}"#,
+        );
+        let items = resumed_items(&answer);
+        assert_eq!(items.len(), 3, "every item of every turn, in order");
+        let kinds: Vec<&str> = items
+            .iter()
+            .map(|item| match map::resumed_item(item) {
+                Frame::Body(EventBody::UserMessageChunk(_)) => "user",
+                Frame::Body(EventBody::AgentMessageChunk(_)) => "agent",
+                Frame::Body(EventBody::ToolCallUpdate(_)) => "tool",
+                _ => "other",
+            })
+            .collect();
+        assert_eq!(kinds, vec!["user", "agent", "tool"]);
+
+        let mut long =
+            String::from(r#"{"thread":{"turns":[{"id":"t","status":"completed","items":["#);
+        for index in 0..(MAX_RESUMED_ITEMS + 10) {
+            if index > 0 {
+                long.push(',');
+            }
+            write!(
+                long,
+                r#"{{"type":"agentMessage","id":"i{index}","text":"{index}"}}"#
+            )
+            .expect("writing into a String cannot fail");
+        }
+        long.push_str("]}]}}");
+        let long = Bytes::from(long);
+        let tail = resumed_items(&long);
+        assert_eq!(tail.len(), MAX_RESUMED_ITEMS, "bounded to the most recent");
+        assert!(
+            tail.first()
+                .is_some_and(|item| item.get().contains(r#""id":"i10""#)),
+            "the oldest ten are the ones left out"
+        );
+        assert!(resumed_items(&Bytes::from_static(br#"{"thread":{"id":"t"}}"#)).is_empty());
     }
 
     #[test]

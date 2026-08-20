@@ -262,9 +262,18 @@ fn decode_adoption(
     }
     let root_digest = cursor.fixed::<32>()?;
     let root_identity = cursor.fixed::<24>()?;
-    if !approved_roots
+    // A proof sealed for a named folder opens only while that folder is still an approved root. A proof
+    // sealed by the machine-wide listing carries the machine scope instead of a folder: that listing is
+    // answered only on the owner-only local endpoint, the proof is bound to this integration's key, this
+    // provider binary, this exact workspace and a five-minute life, so it opens on the same terms the
+    // listing was given. Measured before this arm existed: every conversation the machine-wide list showed
+    // refused to open, because no approved root could ever match the machine scope.
+    let (machine_scope, machine_identity) = scope_bytes(None);
+    let machine_wide = root_digest == machine_scope && root_identity == machine_identity;
+    let folder_approved = approved_roots
         .iter()
-        .any(|root| digest(root.path.as_str()) == root_digest && root.identity == root_identity)
+        .any(|root| digest(root.path.as_str()) == root_digest && root.identity == root_identity);
+    if !(machine_wide || folder_approved)
         || cursor.fixed::<32>()? != binary_identity
         || cursor.fixed::<32>()? != digest(workspace.as_str())
     {
@@ -503,7 +512,7 @@ fn map_coverage(
         }),
         ProviderCoverage::Complete { source } => Ok(CatalogueCoverage::Partial {
             source: map_source(source),
-            why: format!("{omitted} provider entries failed approved-root or duplicate filtering"),
+            why: omitted_sentence(omitted),
         }),
         ProviderCoverage::Partial { source, why } => {
             if why.len() > MAX_REASON_BYTES || why.chars().any(char::is_control) {
@@ -512,9 +521,7 @@ fn map_coverage(
             let why = if omitted == 0 {
                 String::from(why)
             } else {
-                format!(
-                    "{why}; {omitted} provider entries failed approved-root or duplicate filtering"
-                )
+                format!("{why}; {}", omitted_sentence(omitted))
             };
             Ok(CatalogueCoverage::Partial {
                 source: map_source(source),
@@ -529,6 +536,21 @@ fn map_coverage(
                 why: String::from(why),
             })
         }
+    }
+}
+
+/// Why some of what the provider listed is not shown, in words a reader can act on.
+///
+/// Every omission has one of three causes: the folder the conversation names no longer exists (so nothing
+/// could reopen it there), the entry repeats one already shown, or the entry is outside the bounds this
+/// surface accepts (or, for a named-folder request, outside that folder). The count is the provider's own.
+fn omitted_sentence(omitted: usize) -> String {
+    if omitted == 1 {
+        "1 listed conversation is not shown: its folder no longer exists, or it repeats or overruns an entry".to_owned()
+    } else {
+        format!(
+            "{omitted} listed conversations are not shown: their folders no longer exist, or they repeat or overrun entries"
+        )
     }
 }
 
@@ -606,6 +628,126 @@ mod tests {
             codec
                 .open(&authority, provider, Some(&root), [5; 32], &token)
                 .is_err()
+        );
+    }
+
+    #[test]
+    fn a_machine_wide_adoption_proof_opens_for_the_same_workspace_whatever_the_roots() {
+        // The listing that minted it had no folder; the proof must open on the same terms, bound to the
+        // workspace it named, rather than demanding a root that the machine scope can never match.
+        let root = AuthorizedRoot {
+            path: AbsPath::new(if cfg!(windows) { r"C:\work" } else { "/work" }).expect("absolute"),
+            identity: [9; 24],
+        };
+        let authority = authority(&root);
+        let provider = CoreProviderId::parse("provider").expect("valid provider");
+        let codec = NativeCursorCodec::new().expect("random codec");
+        let workspace = AbsPath::new(if cfg!(windows) {
+            r"C:\elsewhere"
+        } else {
+            "/elsewhere"
+        })
+        .expect("absolute");
+        let proof = codec
+            .seal_adoption(&authority, provider, None, [4; 32], "native-1", &workspace)
+            .expect("sealed");
+        codec
+            .open_adoption(
+                &authority,
+                &[],
+                provider,
+                [4; 32],
+                "native-1",
+                &workspace,
+                &proof,
+            )
+            .expect("a machine-wide proof opens with no approved roots at all");
+        codec
+            .open_adoption(
+                &authority,
+                std::slice::from_ref(&root),
+                provider,
+                [4; 32],
+                "native-1",
+                &workspace,
+                &proof,
+            )
+            .expect("and with unrelated approved roots");
+        let other =
+            AbsPath::new(if cfg!(windows) { r"C:\other" } else { "/other" }).expect("absolute");
+        assert!(
+            codec
+                .open_adoption(
+                    &authority,
+                    &[],
+                    provider,
+                    [4; 32],
+                    "native-1",
+                    &other,
+                    &proof
+                )
+                .is_err(),
+            "the workspace is still bound"
+        );
+        assert!(
+            codec
+                .open_adoption(
+                    &authority,
+                    &[],
+                    provider,
+                    [5; 32],
+                    "native-1",
+                    &workspace,
+                    &proof
+                )
+                .is_err(),
+            "and so is the provider binary"
+        );
+    }
+
+    #[test]
+    fn a_folder_adoption_proof_still_needs_its_folder_approved() {
+        let root = AuthorizedRoot {
+            path: AbsPath::new(if cfg!(windows) { r"C:\work" } else { "/work" }).expect("absolute"),
+            identity: [9; 24],
+        };
+        let authority = authority(&root);
+        let provider = CoreProviderId::parse("provider").expect("valid provider");
+        let codec = NativeCursorCodec::new().expect("random codec");
+        let proof = codec
+            .seal_adoption(
+                &authority,
+                provider,
+                Some(&root),
+                [4; 32],
+                "native-1",
+                &root.path,
+            )
+            .expect("sealed");
+        codec
+            .open_adoption(
+                &authority,
+                std::slice::from_ref(&root),
+                provider,
+                [4; 32],
+                "native-1",
+                &root.path,
+                &proof,
+            )
+            .expect("opens while the folder is approved");
+        assert!(
+            codec
+                .open_adoption(
+                    &authority,
+                    &[],
+                    provider,
+                    [4; 32],
+                    "native-1",
+                    &root.path,
+                    &proof
+                )
+                .is_err(),
+            "a folder proof does not open once its folder is gone from the grant"
         );
     }
 
@@ -771,7 +913,7 @@ mod tests {
         assert!(matches!(
             public.coverage,
             CatalogueCoverage::Partial { ref why, .. }
-                if why.contains("2 provider entries")
+                if why.contains("2 listed conversations are not shown")
         ));
     }
 

@@ -38,9 +38,9 @@ use async_trait::async_trait;
 use runtrol_childproc::contain::{ChildGuard, TrackedChild, TrackedCommand};
 use runtrol_childproc::{Containment, Program, SpawnError};
 use runtrol_provider::{
-    Agent, AgentCommand, ApprovalId, ApprovalRequest, CloseMode, ContentBlock, Declarant,
-    Disposition, EventBody, Level, Notice, NoticeCode, Opaque, OpenIntent, Produced, ProviderError,
-    ProviderId, SessionId, StopReason, TurnEvent, TurnId, WallMs, WithdrawnReason,
+    Agent, AgentCommand, ApprovalId, ApprovalRequest, Chunk, CloseMode, ContentBlock, Declarant,
+    Disposition, EventBody, Level, MessageId, Notice, NoticeCode, Opaque, OpenIntent, Produced,
+    ProviderError, ProviderId, SessionId, StopReason, TurnEvent, TurnId, WallMs, WithdrawnReason,
 };
 use tokio::io::AsyncWriteExt as _;
 use tokio::process::ChildStdin;
@@ -75,6 +75,14 @@ pub struct ClaudeAgent {
     ///
     /// Held here because this is what sent the prompt. The mapping is pure and cannot know it.
     running: Option<TurnId>,
+    /// The message the provider is streaming right now, from the fragment that opened it.
+    ///
+    /// Held here for the same reason as the turn: the mapping is pure and sees one line at a time, and the
+    /// real CLI names a message only on its opening fragment and on its whole (measured on 2.1.237). The
+    /// deltas in between name nothing, and a subscriber shown nameless deltas cannot append them to one
+    /// another, nor recognise the whole that follows as the same message. So each nameless delta is given
+    /// the name of the message that is open. Correlation, not interpretation: nothing is read but the name.
+    streaming_message: Option<MessageId>,
     /// Which turn number to use next.
     next_turn: u32,
     /// Which control-switch request number to use next, separate from turns so an interrupt and a switch sent
@@ -159,6 +167,7 @@ impl ClaudeAgent {
             stdin: Some(stdin),
             lines: Lines::new(stdout),
             running: None,
+            streaming_message: None,
             next_turn: 0,
             next_switch: 0,
             pending_switches: BTreeMap::new(),
@@ -167,6 +176,33 @@ impl ClaudeAgent {
             approvals: ApprovalBook::new(),
             finished: false,
         })
+    }
+
+    /// Give a nameless streamed fragment the name of the message that is open, and remember the name an
+    /// opening fragment carries. A whole message closes the stream.
+    fn correlate_stream(&mut self, body: EventBody) -> EventBody {
+        match body {
+            EventBody::AgentMessageChunk(chunk) if chunk.delta => {
+                EventBody::AgentMessageChunk(self.named(chunk))
+            }
+            EventBody::AgentThoughtChunk(chunk) if chunk.delta => {
+                EventBody::AgentThoughtChunk(self.named(chunk))
+            }
+            EventBody::AgentMessageChunk(_) | EventBody::AgentThoughtChunk(_) => {
+                self.streaming_message = None;
+                body
+            }
+            other => other,
+        }
+    }
+
+    /// The fragment with the open message's name, remembering a name the fragment itself carries.
+    fn named(&mut self, mut chunk: Chunk) -> Chunk {
+        match &chunk.message_id {
+            Some(id) => self.streaming_message = Some(id.clone()),
+            None => chunk.message_id.clone_from(&self.streaming_message),
+        }
+        chunk
     }
 
     /// Write one line to the child's input.
@@ -269,6 +305,7 @@ impl ClaudeAgent {
 
             Frame::Ended(ended) => {
                 // The provider's own word, which is the only thing that means the outcome is known.
+                self.streaming_message = None;
                 let turn = self.running.take().unwrap_or_else(|| self.mint_turn());
                 self.src_end = self.src_end.saturating_add(1);
                 Produced {
@@ -282,6 +319,7 @@ impl ClaudeAgent {
             }
 
             Frame::Body(body) => {
+                let body = self.correlate_stream(body);
                 // A fragment belongs to the current source boundary. A complete body advances the boundary.
                 if !body.is_fragment() {
                     self.src_end = self.src_end.saturating_add(1);
@@ -293,6 +331,8 @@ impl ClaudeAgent {
             }
 
             Frame::Bodies { first, rest } => {
+                // A whole message closes whatever was streaming.
+                self.streaming_message = None;
                 // One line of the provider's stream is one source position, however many events it turned out
                 // to be. The boundary advances once and every event off that line carries the same one.
                 self.src_end = self.src_end.saturating_add(1);

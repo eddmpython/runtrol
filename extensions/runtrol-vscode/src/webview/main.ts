@@ -902,6 +902,37 @@ function appendMessage(side: string, text: string, delta = false, messageId = ""
   }
   const last = conversation.lastElementChild as HTMLElement | null;
   const lastCharacters = Number(last?.dataset.characters ?? 0);
+  // The whole of a message that was already streamed piece by piece. Claude Code sends both: the deltas as
+  // they happen and the assembled message after (measured in the real window: the reply appeared twice,
+  // once in pieces and once whole). The whole replaces what the pieces built, because it is the same message
+  // and the provider's final word on it; a second whole with the same name is a further block of the same
+  // message and is appended like any other.
+  if (!delta && messageId) {
+    const streamed = conversation.querySelector<HTMLElement>(
+      `[data-message-id="${cssEscape(messageId)}"][data-side="${cssEscape(side)}"][data-streamed="1"]`,
+    );
+    if (streamed) {
+      visibleCharacters -= Number(streamed.dataset.characters ?? 0);
+      delete streamed.dataset.streamed;
+      streamed.replaceChildren();
+      if (side === "theirs") {
+        streamed.dataset.raw = text;
+        if (hasMarkdownTrigger(text)) {
+          streamed.dataset.md = "1";
+          repaintMarkdown(streamed, text);
+        } else {
+          delete streamed.dataset.md;
+          appendAuthorAndText(streamed, side, text);
+        }
+      } else {
+        appendAuthorAndText(streamed, side, text);
+      }
+      streamed.dataset.characters = String(text.length);
+      visibleCharacters += text.length;
+      trim();
+      return;
+    }
+  }
   if (
     delta
     && messageId
@@ -935,6 +966,8 @@ function appendMessage(side: string, text: string, delta = false, messageId = ""
   if (messageId) {
     item.dataset.messageId = messageId;
   }
+  // Built from pieces: the whole, if it comes, replaces this rather than repeating it.
+  if (delta) item.dataset.streamed = "1";
   item.dataset.characters = String(text.length);
   if (side === "theirs") {
     item.dataset.raw = text;
