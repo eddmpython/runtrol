@@ -29,8 +29,11 @@ export async function ensureCurrentCore(
   client: CoreClient,
   managedDigest: () => Promise<string | null>,
 ): Promise<SupersessionOutcome> {
-  await client.ensureRuntime();
-  const installed = await managedDigest();
+  // Reaching the daemon and measuring the installed file are independent, and both are on the
+  // path activation waits for, so they overlap. Measured 2026-08-20: doing them in sequence put
+  // the whole cost in front of `runtime.initialize`, which shares the same locator work, and the
+  // Extension Host activation ratchet went from about 1.2 seconds to 1.9.
+  const [, installed] = await Promise.all([client.ensureRuntime(), managedDigest()]);
   if (installed === null) {
     // Not our binary to roll: an operator-configured corePath or a PATH fallback.
     return { state: "current" };

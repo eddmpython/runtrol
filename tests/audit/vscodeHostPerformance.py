@@ -31,6 +31,12 @@ band is bimodal rather than drift (1500, then 2600 which the very next day-end r
 three times the quiet best), activationMs 857~1516 (1350). Each budget now sits past its
 observed band (2500, 2600, 1800), which still goes red on any real regression beyond machine noise; a budget
 inside the band is a coin flip that trains people to rerun instead of to read.
+
+sessionSwitchP95Ms joined them on 2026-08-20 (125 -> 175). It was isolated the way the others were: the
+same gate was run on the tree as it stood before the day's changes, from a `git archive` of that commit,
+and produced 120.9, 126.0, and 144.6 on three trials. Two of three were already over the old budget with
+none of the day's code present, so the budget sat inside the band and passing was a matter of which trial
+happened to be quickest. The new value clears the observed worst by a fifth.
 """
 
 from __future__ import annotations
