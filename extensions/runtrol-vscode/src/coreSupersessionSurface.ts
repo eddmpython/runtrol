@@ -72,10 +72,19 @@ async function offerManualCoreRestart(
   locator: CoreLocator,
   detail: string,
 ): Promise<void> {
+  // `detail` is the old daemon's own refusal, which for a pre-retire build is its list of
+  // commands. It stays out of the sentence: a person deciding whether to press a button needs
+  // what will happen, not the vocabulary of a program they never asked about. This extension logs
+  // nowhere by design, so the reason travels only when the restart itself fails, where it helps.
+  //
+  // Stated plainly rather than hedged. Unlike managed retirement, which refuses while any
+  // conversation has a live process, this path cannot ask an older daemon what it is running, so
+  // the person pressing the button is the one who knows whether an agent is mid-turn.
   const restart = "Restart the Runtrol Core";
   const picked = await vscode.window.showWarningMessage(
-    `An older Runtrol Core is still serving this machine (${detail}). ` +
-      "Restarting applies the installed update; conversations resume from their saved state.",
+    "An older Runtrol Core is still running, so the Runtrol update has not taken effect yet. "
+      + "Restarting it applies the update: conversations reopen from their saved state, and any "
+      + "agent that is working right now stops mid-turn.",
     restart,
   );
   if (picked !== restart) return;
@@ -87,7 +96,8 @@ async function offerManualCoreRestart(
     void vscode.window.showInformationMessage("The Runtrol Core is now on the installed build.");
   } catch (error) {
     void vscode.window.showErrorMessage(
-      `Restarting the Runtrol Core failed: ${error instanceof Error ? error.message : String(error)}`,
+      `Restarting the Runtrol Core failed: ${error instanceof Error ? error.message : String(error)}`
+        + ` (the running Core reported: ${detail})`,
     );
   }
 }
@@ -103,6 +113,11 @@ function stopExactExecutable(executable: string): Promise<void> {
   // Inside a PowerShell single-quoted literal only the quote itself needs doubling; backslashes
   // are literal characters there, and doubling them would make the path match nothing.
   const escaped = executable.replaceAll("'", "''");
+  // `-eq` on strings is case-insensitive in PowerShell, which is the intent and not an accident:
+  // measured 2026-08-20, the same daemon was reported as both `C:\...` and `c:\...` depending on
+  // who asked, and VS Code's own fsPath can lower the drive letter. Identity here is the path,
+  // never the process name: `Name='runtrol.exe'` only narrows the scan, and a build somewhere else
+  // on disk (the operator's own, another checkout's) must survive this untouched.
   const script =
     `Get-CimInstance Win32_Process -Filter "Name='runtrol.exe'" | ` +
     `Where-Object { $_.ExecutablePath -eq '${escaped}' } | ` +

@@ -144,6 +144,30 @@ numeric process or group identifier. It revalidates the keeper PID, kernel start
 for non-zombie members to disappear, and refuses an ambiguous live group. No process-name or environment scan is
 used. Windows provides the corresponding kernel-owned cleanup through the job object.
 
+## Rolling a running Runtime onto an installed build
+
+Installing an update replaces the Runtime binary on disk, but a daemon that is already running keeps serving from the
+image it started with. Until 0.1.9 nothing ever ended that state, so a Runtime change reached a machine only when its
+daemon happened to exit, and a client that assumed otherwise broke against it.
+
+The daemon measures its own executable once at boot and announces that digest in both greetings. A manager that
+installed the binary compares the announced digest with the file it installed. Only that manager acts, and only on
+the executable it owns: an operator-configured Runtime path or one found on `PATH` is never rolled, because replacing
+somebody else's build is not an update.
+
+On a difference, the manager sends `retire` on the private wire. The daemon refuses while any conversation still has
+a live process, naming how many, so retirement can never take a working agent with it; the manager retries when the
+machine goes idle. With nothing running, the answer is written first and the process then exits, because a
+retirement that worked must not be reported as a failure. There is nothing to drain: durable state is written
+atomically at each mutation, and the successor starts the way any daemon starts, on the next request.
+
+`retire` is permanently local. It carries `LocalScope::RuntimeRetire`, which no grant can hold, because choosing
+which binary answers every later request is executable authority in the same sense as installing a provider.
+
+A daemon old enough not to know the request refuses it by name. That case cannot be resolved silently, since the
+manager cannot ask such a daemon what it is running, so the person at the machine is offered one explicit restart
+that stops exactly the executable the manager installed, matched by path and never by process name.
+
 ## Storage boundary
 
 redb is the metadata store. It has no background worker thread and requires no external database service. The daemon

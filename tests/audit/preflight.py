@@ -247,6 +247,14 @@ GATES: dict[str, tuple[str, list[str]]] = {
         "활성 세션을 보존하는 VSIX 갱신과 롤백",
         [*PY, f"{HOOKS}/vscodeUpgradeRollback.py"],
     ),
+    "shippedRuntimeInteropSelftest": (
+        "출하된 Runtime 상호운용 게이트 자체 검증",
+        [*PY, f"{HOOKS}/shippedRuntimeInterop.py", "--selftest"],
+    ),
+    "shippedRuntimeInterop": (
+        "이 빌드의 클라이언트가 실제 출하된 Runtime 들과 hello 를 끝낸다",
+        [*PY, f"{HOOKS}/shippedRuntimeInterop.py"],
+    ),
     "vscodeEventCoverageSelftest": (
         "VS Code 이벤트 표현 게이트 자체 검증",
         [*PY, f"{HOOKS}/vscodeEventCoverage.py", "--selftest"],
@@ -459,6 +467,8 @@ SUITES: dict[str, tuple[str, ...]] = {
         "remoteResilienceFaultInjection",
         "vscodeUpgradeRollbackSelftest",
         "vscodeUpgradeRollback",
+        "shippedRuntimeInteropSelftest",
+        "shippedRuntimeInterop",
         "vscodeEventCoverageSelftest",
         "vscodeEventCoverage",
         "liveMemoryBudgetSelftest",
@@ -479,6 +489,8 @@ SUITES: dict[str, tuple[str, ...]] = {
         "vscodeRealProviderJourney",
         "vscodeUpgradeRollbackSelftest",
         "vscodeUpgradeRollback",
+        "shippedRuntimeInteropSelftest",
+        "shippedRuntimeInterop",
         "vscodeEventCoverageSelftest",
         "vscodeEventCoverage",
         "cargoFmt",

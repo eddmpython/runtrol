@@ -382,6 +382,12 @@ jobs:
         env:
           TMPDIR: ${{ matrix.os == 'macos-latest' && '/tmp' || runner.temp }}
         run: python -X utf8 tests/audit/vscodeUpgradeRollback.py
+      - name: 출하된 Runtime 상호운용 게이트 자체 검증
+        run: python -X utf8 tests/audit/shippedRuntimeInterop.py --selftest
+      - name: 이 빌드의 클라이언트가 실제 출하된 Runtime 들과 hello 를 끝낸다
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python -X utf8 tests/audit/shippedRuntimeInterop.py
       - name: VS Code 이벤트 표현 게이트 자체 검증
         run: python -X utf8 tests/audit/vscodeEventCoverage.py --selftest
       - name: provider 어휘의 모든 이벤트가 VS Code 표현을 갖는다

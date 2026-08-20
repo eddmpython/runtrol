@@ -15,6 +15,23 @@ lists and select the newest common value. No common value returns `protocolIncom
 inventory, or mutation. Until three finalized revisions exist, the support matrix contains only revisions that have
 actually shipped.
 
+### The initialization exchange is permanently compatible
+
+`runtime/initialize` is the one exchange every shipped version must be able to complete with every other, because
+version skew is only discoverable by talking. Its types therefore never reject unknown fields, and every field added
+after a revision was finalized carries a default, so absence means the feature does not exist on that side rather
+than that the message is invalid. Adding a required field to this exchange inside a finalized revision is a breaking
+change to every installed Runtime, which is exactly the defect that shipped in 0.1.8 and reached users.
+
+Two gates hold this. `hello_corpus/` keeps one fixture per shipped shape of the initialization result and requires
+both the Rust types and the TypeScript validator to accept all of them, and requires the current shape to be present
+so a new field cannot be added without recording it. `shippedRuntimeInterop` downloads the Runtime binaries out of
+the last published packages, runs each one, and requires this build's client to complete a real initialization
+against it before the release pipeline will publish.
+
+Everything after the initialization exchange may assume both ends are the same build, because a manager that
+installed the Runtime rolls an older daemon forward before using it. See `docs/coreRuntime.md`.
+
 ## Local transport and locator
 
 Runtime publishes an owner-readable `runtime.locator.json` only after its public endpoint is ready. The locator names

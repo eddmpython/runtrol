@@ -164,6 +164,16 @@ jobs:
         env:
           TMPDIR: ${{ matrix.family == 'macos' && '/tmp' || runner.temp }}
         run: python -X utf8 tests/audit/vscodeUpgradeRollback.py --archive release/runtrol-studio-${{ needs.prepare.outputs.version }}-${{ matrix.target }}.vsix
+      # The release-blocking twin of the hello corpus: this candidate's client must still complete a
+      # real handshake with the Runtime binaries already installed on people's machines. Checked
+      # here, where the answer can still stop a release, because 0.1.8 proved that a package which
+      # passes every other gate can still be dead on arrival for everyone with a daemon running.
+      - name: Shipped Runtime interoperability gate selftest
+        run: python -X utf8 tests/audit/shippedRuntimeInterop.py --selftest
+      - name: Greet every recently shipped Runtime with this candidate's client
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python -X utf8 tests/audit/shippedRuntimeInterop.py
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: runtrol-studio-${{ needs.prepare.outputs.version }}-${{ matrix.target }}

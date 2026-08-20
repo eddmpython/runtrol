@@ -65,6 +65,12 @@ export async function ensureCurrentCore(
 }
 
 /// Connect to the successor, riding out the moment where the retiring daemon still owns the pipe.
+///
+/// Measured 2026-08-20 on Windows: a full retire-to-successor cycle takes about 1.04 seconds and
+/// barely varies, so the first attempts are expected to fail while the old process is still
+/// exiting. The backoff sums past nine seconds before giving up, which is a wide margin over the
+/// measurement rather than a number that felt right, because the cost of stopping too early is an
+/// extension that reports a broken Core on a machine where nothing is wrong.
 export async function retryWhileTheOldDaemonExits(client: CoreClient): Promise<void> {
   const attempts = 10;
   for (let attempt = 1; ; attempt += 1) {
