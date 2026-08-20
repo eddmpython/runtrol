@@ -110,10 +110,12 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
             "export function awaitsVerification",
             "export function isBroken",
         ],
-        "controller.ts": [
+        "conversationPanels.ts": [
             "private watchAbort",
-            "private indexAbort",
             "this.watchAbort?.abort()",
+        ],
+        "controller.ts": [
+            "private indexAbort",
             "this.runtime.inventory()",
             "this.startSessionIndexWatch()",
             "this.startProviderVerification(",
@@ -189,8 +191,9 @@ def selftest() -> int:
             "the installed executable has not completed a verified probe "
             "export function awaitsVerification export function isBroken"
         ),
+        "conversationPanels.ts": "private watchAbort; this.watchAbort?.abort()",
         "controller.ts": (
-            'private watchAbort; private indexAbort; this.watchAbort?.abort(); '
+            'private indexAbort; '
             'this.runtime.inventory(); this.startSessionIndexWatch(); this.startProviderVerification( '
             'this.runtime.verifyProvider( awaitsVerification( '
             'reconnect workspaceCollisions '
@@ -249,6 +252,13 @@ def selftest() -> int:
         (package, {**sources, "controller.ts": sources["controller.ts"].replace("this.runtime.inventory()", "")}),
         (package, {**sources, "controller.ts": sources["controller.ts"].replace("this.runtime.verifyProvider(", "")}),
         (package, {**sources, "extension.ts": sources["extension.ts"].replace("selfApproveIntegration", "")}),
+        (
+            package,
+            {
+                **sources,
+                "conversationPanels.ts": sources["conversationPanels.ts"].replace("this.watchAbort?.abort()", ""),
+            },
+        ),
     ]
     for index, (changed_package, changed_sources) in enumerate(mutations, start=1):
         if not sourceViolations(changed_package, changed_sources):

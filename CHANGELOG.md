@@ -10,6 +10,8 @@ and refactoring that no user can observe do not belong here.
 
 ## [Unreleased]
 
+## [0.1.8] - 2026-08-20
+
 ### Added
 
 - Conversations now open like files: each one gets its own editor tab, so several conversations can be
