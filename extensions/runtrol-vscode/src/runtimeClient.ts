@@ -15,6 +15,7 @@ import {
   type IntegrationGrant,
   type ManagedSessionList,
   type ProviderList,
+  type PublicInputBlock,
   type RuntimeClient,
   type RuntimeModelCatalog,
   type RuntimeProviderCapabilities,
@@ -293,6 +294,23 @@ export class StudioRuntimeClient implements vscode.Disposable {
         leaseId: lease.leaseId,
         leaseGeneration: lease.leaseGeneration,
         input,
+      });
+    });
+  }
+
+  /// One message made of several blocks (text and images), under the same lease as plain input.
+  ///
+  /// The bytes travel once and are never kept: the image rides this request and nothing else. Whether a
+  /// service accepts images is its own published capability; a refusal arrives as the daemon's error.
+  async submitBlocks(session: RuntimeSessionAction, blocks: readonly PublicInputBlock[]): Promise<void> {
+    await this.mutate(async (runtime) => {
+      const lease = await this.ensureControl(runtime, session);
+      await runtime.sessions().submitBlocks({
+        requestId: newMutationRequestId(),
+        sessionId: session.sessionId,
+        leaseId: lease.leaseId,
+        leaseGeneration: lease.leaseGeneration,
+        blocks,
       });
     });
   }

@@ -10,6 +10,8 @@ import { Controller } from "./controller";
 import { CoreClient } from "./core/client";
 import { CoreLocator } from "./core/locator";
 import { superviseCoreCurrency } from "./coreSupersessionSurface";
+import { NO_PROJECT_LABEL, readDraftState } from "./draft";
+import { readGitBranch } from "./gitBranch";
 import {
   confirmRuntimeForget,
   manageIntegrations,
@@ -20,13 +22,13 @@ import {
 import { journeyApi, type JourneyApi } from "./journeyApi";
 import { MissionController } from "./mission/controller";
 import { MissionTree } from "./mission/tree";
-import { projectlessRoot } from "./projectlessWorkspace";
+import { isProjectless, projectlessRoot } from "./projectlessWorkspace";
 import { ProjectStore } from "./projects";
 import { managePhones, pairPhone, reviewPhonePairings } from "./pairingAdministration";
 import type { RemoteConnection } from "./protocol";
 import { SelectionStore } from "./selectionStore";
 import { ServiceTroubleReported } from "./serviceHelp";
-import { providerDisplayName, sessionTitle } from "./sessionDisplay";
+import { providerDisplayName, sessionTitle, workspaceName } from "./sessionDisplay";
 import { RuntimeState } from "./state";
 import { StudioRuntimeClient } from "./runtimeClient";
 import { workspaceCovers, workspaceIdentity } from "./workspaceCollision";
@@ -106,32 +108,50 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
     return action();
   };
   let controller: Controller;
+  // The operator's own projects. Global state, because the panel manages the whole machine from any window.
+  // Built before the controller because a draft's project picker offers them first.
+  const projectStore = new ProjectStore(context.globalState);
   const conversation = new ConversationPanels(
     context.extensionUri,
     runtime,
     state,
-    (session, message) => {
+    (binding, message) => {
+      // Every action names the tab it came from. A draft tab has no session: its first message starts one,
+      // and its chips pick what that start will use; a live tab's chips switch the running session.
+      const session = binding.session;
       if (message.type === "prompt") {
-        void run(() => afterReady(() => controller.prompt(message.text, session)));
-      } else if (message.type === "startChat") {
-        void run(() => afterReady(() => controller.startSession()));
-      } else if (message.type === "startConfiguredChat") {
-        void run(() => afterReady(() => controller.startConfiguredSession()));
+        void run(() => afterReady(() => session
+          ? controller.prompt(message.text, session, binding)
+          : controller.sendDraft(binding, message.text)));
       } else if (message.type === "answerApproval") {
+        if (!session) return;
         void run(() => afterReady(
           () => controller.answerApproval(message.approval, message.option, message.subjectDigest, session),
         ));
       } else if (message.type === "switchModel") {
-        void run(() => afterReady(() => controller.switchModel(message.available)));
+        void run(() => afterReady(() => controller.switchModel(message.available, binding)));
       } else if (message.type === "switchMode") {
-        void run(() => afterReady(() => controller.switchMode(message.available)));
+        void run(() => afterReady(() => controller.switchMode(message.available, binding)));
       } else if (message.type === "switchEffort") {
-        void run(() => afterReady(() => controller.switchEffort(message.model)));
+        void run(() => afterReady(() => controller.switchEffort(message.model, binding)));
+      } else if (message.type === "pickProject") {
+        void run(() => afterReady(() => session
+          ? controller.pickProjectForLive(binding)
+          : controller.pickDraftProject(binding)));
+      } else if (message.type === "pickService") {
+        void run(() => afterReady(() => session
+          ? controller.pickServiceForLive(binding)
+          : controller.pickDraftService(binding)));
+      } else if (message.type === "attach") {
+        void run(() => afterReady(() => controller.attach(binding)));
+      } else if (message.type === "removeAttachment") {
+        controller.removeAttachment(binding, message.index);
       } else if (message.type === "mentionFile") {
-        void run(() => afterReady(() => controller.insertFileMention(session)));
+        void run(() => afterReady(() => controller.insertFileMention(session ?? undefined)));
       } else if (message.type === "interrupt") {
         // Interrupt is dispatched by its own name, never as a fallback: an action this validator
         // accepts but no branch handles must do nothing, not stop a running agent.
+        if (!session) return;
         void run(() => afterReady(() => controller.interrupt(session)));
       }
     },
@@ -139,11 +159,21 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
     (session) => providerDisplayName(session.providerId, state.providers),
     (session) => {
       // The focused tab is the selection: the tree highlight and every command that says "the current
-      // conversation" follow whichever conversation tab the reader is actually in.
-      state.select(session.sessionId);
+      // conversation" follow whichever conversation tab the reader is actually in. A draft selects nothing.
+      state.select(session?.sessionId ?? null);
+    },
+    async (session) => {
+      // Where the conversation runs, for the chips: the folder's name and branch, or "No project" for the
+      // scratch folder, whose path is an implementation detail nobody should read.
+      const projectless = isProjectless(session.workspace, state.projectlessRoot);
+      return {
+        project: projectless ? NO_PROJECT_LABEL : workspaceName(session.workspace) || session.workspace,
+        projectPath: projectless ? null : session.workspace,
+        branch: projectless ? null : await readGitBranch(session.workspace),
+      };
     },
   );
-  controller = new Controller(context, client, runtime, state, conversation, selection);
+  controller = new Controller(context, client, runtime, state, conversation, selection, projectStore);
   // The window's folders follow into the grant's roots. Enrollment read them once; without this, every folder
   // opened after first activation stayed outside conversation discovery, silently.
   const rootFollowing = new WorkspaceRootFollowing({
@@ -156,9 +186,6 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
   const missionController = new MissionController(client, controller, state, context);
   const candidateController = new CandidateController(client);
   const missions = new MissionTree(missionController);
-  // The operator's own projects. A heading exists because they created it here, never because a folder
-  // happened to hold conversations. Global state, because the panel manages the whole machine from any window.
-  const projectStore = new ProjectStore(context.globalState);
   const conversations = new ConversationsTree(state, projectStore);
   const usage = new UsageTree({
     usage: () => runtime.providersUsage(),
@@ -503,13 +530,19 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
   context.subscriptions.push(
     vscode.window.registerWebviewPanelSerializer(ConversationView.viewType, {
       deserializeWebviewPanel: async (panel, webviewState: unknown) => {
-        // The restored tab names its own session (stamped into webview state on every reset). Rebinding
-        // waits for the list; a tab whose session no longer exists closes rather than showing a guess.
-        const named = (webviewState as { sessionId?: unknown } | undefined)?.sessionId;
+        // The restored tab names its own session, or the draft it was showing (stamped into webview state on
+        // every reset). Rebinding waits for the list; a tab whose session no longer exists closes rather than
+        // showing a guess, and a draft comes back with the choices it had.
+        const stamped = (webviewState ?? {}) as { sessionId?: unknown; draft?: unknown };
+        const draft = readDraftState(stamped.draft);
         await afterReady(async () => {
-          const session = typeof named === "string"
-            ? state.sessions.find((candidate) => candidate.sessionId === named) ?? null
-            : state.selected;
+          if (draft) {
+            await controller.restoreDraft(panel, draft);
+            return;
+          }
+          const session = typeof stamped.sessionId === "string"
+            ? state.sessions.find((candidate) => candidate.sessionId === stamped.sessionId) ?? null
+            : null;
           if (!session) {
             panel.dispose();
             return;

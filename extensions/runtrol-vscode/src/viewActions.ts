@@ -7,14 +7,19 @@
 
 export type ViewAction =
   | { type: "prompt"; text: string }
-  | { type: "startChat" }
-  | { type: "startConfiguredChat" }
   | { type: "answerApproval"; approval: string; option: number; subjectDigest: number[] }
   | { type: "switchModel"; available: string[] }
   | { type: "switchMode"; available: string[] }
   | { type: "switchEffort"; model: string }
+  | { type: "pickProject" }
+  | { type: "pickService" }
+  | { type: "attach" }
+  | { type: "removeAttachment"; index: number }
   | { type: "mentionFile" }
   | { type: "interrupt" };
+
+/// The most attachments one message carries, which is also the protocol's published image bound.
+export const MAX_ATTACHMENTS = 8;
 
 export function isViewAction(value: unknown): value is ViewAction {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
@@ -49,11 +54,16 @@ export function isViewAction(value: unknown): value is ViewAction {
       && available.length <= 64
       && available.every((id) => typeof id === "string" && id.length > 0 && id.length <= 200);
   }
+  if (type === "removeAttachment") {
+    const index = (value as { index?: unknown }).index;
+    return Number.isInteger(index) && (index as number) >= 0 && (index as number) < MAX_ATTACHMENTS;
+  }
   // Exactly the actions the dispatcher handles. "openWorkspace" and "close" once passed here without a
   // dispatcher branch, so they fell into the interrupt fallback: a message the page never sends today,
   // but one hostile byte away from stopping a running agent.
-  return type === "startChat"
-    || type === "startConfiguredChat"
+  return type === "pickProject"
+    || type === "pickService"
+    || type === "attach"
     || type === "mentionFile"
     || type === "interrupt";
 }

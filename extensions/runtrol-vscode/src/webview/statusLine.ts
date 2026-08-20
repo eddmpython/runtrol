@@ -21,15 +21,14 @@ export type UsageFacts = {
 export const NO_FACTS: ConversationFacts = { service: "", model: "", effort: "", mode: "" };
 export const NO_USAGE: UsageFacts = { usage: null, primary: null, secondary: null, reached: false };
 
-/// Who is being spoken to, and which model the service says is answering.
-export function agentLine(facts: ConversationFacts, requestedModel = ""): string {
-  // Mode and effort are deliberately absent: each renders on its own chip, which is also its own
-  // switch. The model was a confirmed value sharing a chip with a merely-requested one (the effort),
-  // and one chip must not mix the two kinds of fact.
-  return [facts.service, chipText(facts.model, requestedModel)]
-    .map((part) => part.trim())
-    .filter(Boolean)
-    .join(" · ");
+/// Which model the service says is answering, for the model chip.
+///
+/// The service has its own chip above the composer (it is where the conversation runs, like the project),
+/// and mode and effort each render on their own chip, which is also their own switch. The model was a
+/// confirmed value sharing a chip with a merely-requested one (the effort), and one chip must not mix the
+/// two kinds of fact.
+export function modelLine(facts: ConversationFacts, requestedModel = ""): string {
+  return chipText(facts.model.trim(), requestedModel.trim());
 }
 
 /// A chip's text while a switch is in flight.

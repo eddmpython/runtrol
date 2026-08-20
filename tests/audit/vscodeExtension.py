@@ -345,11 +345,14 @@ def run() -> int:
     # mid-conversation model switch), each reviewed at the crossing. Raised 272 -> 288 KiB on 2026-08-20 when
     # the nativeParity sweep crossed it with deliberate features again (the service remedy surface, the effort
     # chip and requested-suffix, message queueing, @file mentions, per-project start defaults, and the fan-out
-    # gate picker), each reviewed at the crossing. A dependency slipping in still trips it.
+    # gate picker), each reviewed at the crossing. Raised 288 -> 304 KiB on 2026-08-20 when the GUI identity
+    # build crossed it with the draft conversation tab (project, service, model, effort and mode chips as
+    # pickers), image attachments through sessions/submitBlocks, and the branch chip read off the folder's own
+    # repository, each reviewed at the crossing. A dependency slipping in still trips it.
     bundles = [EXTENSION / "dist" / name for name in ("extension.js", "webview.js", "webview.css")]
     for bundle in bundles:
-        if not bundle.is_file() or bundle.stat().st_size > 288 * 1024:
-            failures.append(f"{bundle.relative_to(ROOT)} is missing or exceeds 288 KiB")
+        if not bundle.is_file() or bundle.stat().st_size > 304 * 1024:
+            failures.append(f"{bundle.relative_to(ROOT)} is missing or exceeds 304 KiB")
     if failures:
         print("[vscodeExtension] FAIL. bundle contract violations:", file=sys.stderr)
         for failure in failures:

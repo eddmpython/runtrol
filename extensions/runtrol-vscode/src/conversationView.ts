@@ -1,5 +1,6 @@
 import * as vscode from "vscode";
 
+import type { DraftChips, DraftState } from "./draft";
 import type { SessionLine } from "./runtimeTypes";
 import { providerDisplayName, sessionTitle } from "./sessionDisplay";
 import { isViewAction, type ViewAction } from "./viewActions";
@@ -21,6 +22,19 @@ export type WebviewPerformance = {
 type FrameEnvelope = {
   generation: number;
   payload: unknown;
+};
+
+/// Where a live conversation runs, as the chips say it.
+export type ConversationContext = {
+  readonly project: string;
+  readonly projectPath: string | null;
+  readonly branch: string | null;
+};
+
+/// One attachment as the page lists it: a name and a size, never the bytes.
+export type AttachmentLabel = {
+  readonly name: string;
+  readonly kilobytes: number;
 };
 
 type MeasurementWaiter = {
@@ -50,6 +64,8 @@ export class ConversationView implements vscode.Disposable {
   static readonly viewType = "runtrol.conversation";
   private panel: vscode.WebviewPanel | null = null;
   private selected: SessionLine | null = null;
+  /// The draft this tab shows while no session exists yet, with the record the page stamps into its state.
+  private draft: { chips: DraftChips; state: DraftState } | null = null;
   private generation = 0;
   private pendingFrames: FrameEnvelope[] = [];
   private posting: Promise<void> | null = null;
@@ -138,7 +154,7 @@ export class ConversationView implements vscode.Disposable {
         const becameReady = !this.visibleReady;
         this.visibleReady = true;
         if (ready === "startup" || becameReady) {
-          this.reset(this.selected);
+          this.reset(this.selected, this.draft);
           this.visibility(true);
         }
         return;
@@ -177,8 +193,13 @@ export class ConversationView implements vscode.Disposable {
     panel.webview.html = this.html(panel.webview);
   }
 
-  reset(session: SessionLine | null): number {
+  /// Show one session, or one draft (a conversation that has not started), in a fresh document.
+  reset(
+    session: SessionLine | null,
+    draft: { chips: DraftChips; state: DraftState } | null = null,
+  ): number {
     this.selected = session;
+    this.draft = session ? null : draft;
     if (this.panel) {
       this.panel.title = this.panelTitle(session);
     }
@@ -191,8 +212,27 @@ export class ConversationView implements vscode.Disposable {
       title: session ? this.titleOf(session) : null,
       provider: session ? this.providerOf(session) : null,
       generation: this.generation,
+      draft: this.draft?.chips ?? null,
+      draftState: this.draft?.state ?? null,
     });
     return this.generation;
+  }
+
+  /// The draft's chips changed (a project, service, model, effort or mode was picked).
+  updateDraft(chips: DraftChips, state: DraftState): void {
+    if (this.selected) return;
+    this.draft = { chips, state };
+    void this.panel?.webview.postMessage({ type: "draft", draft: chips, draftState: state });
+  }
+
+  /// Where a live conversation runs, for the chips above the composer: its folder and branch.
+  updateContext(context: ConversationContext): void {
+    void this.panel?.webview.postMessage({ type: "context", context });
+  }
+
+  /// The images waiting to ride with the next message, as names the page lists above the field.
+  updateAttachments(items: readonly AttachmentLabel[]): void {
+    void this.panel?.webview.postMessage({ type: "attachments", items });
   }
 
   updateSession(session: SessionLine): void {
@@ -452,7 +492,8 @@ export class ConversationView implements vscode.Disposable {
   }
 
   private panelTitle(session: SessionLine | null): string {
-    return session ? `Runtrol: ${this.titleOf(session)}` : "Runtrol Chat";
+    if (session) return `Runtrol: ${this.titleOf(session)}`;
+    return this.draft ? "Runtrol: New chat" : "Runtrol Chat";
   }
 
   private html(webview: vscode.Webview): string {
@@ -479,19 +520,35 @@ export class ConversationView implements vscode.Disposable {
     <ul id="commands" class="commands" role="listbox" aria-label="Commands this coding service offers" hidden></ul>
     <!-- Messages typed while the agent worked, sent one per turn boundary. This page's memory only. -->
     <ul id="queued" class="queued" aria-label="Messages waiting for the turn to end" hidden></ul>
-    <div class="composer-field">
+    <!--
+      One card, the shape every chat composer now has: where the conversation runs across the top, the
+      message in the middle, and the controls along the bottom with send at the right edge.
+    -->
+    <div class="composer-card">
+      <div class="composer-context">
+        <button id="project-chip" class="chip chip-button" type="button" title="Project"></button>
+        <span id="branch-chip" class="chip" hidden></span>
+        <button id="service-chip" class="chip chip-button" type="button" title="Coding service"></button>
+      </div>
+      <ul id="attachments" class="attachments" aria-label="Images attached to the next message" hidden></ul>
       <textarea id="prompt" rows="1" aria-label="Message" placeholder="Message" disabled></textarea>
-      <button id="send" type="submit" aria-label="Send" title="Send" disabled hidden>
-        <span aria-hidden="true">&#8593;</span>
-      </button>
-      <button id="interrupt" type="button" aria-label="Stop" title="Stop" disabled hidden>
-        <span aria-hidden="true">&#9632;</span>
-      </button>
+      <div class="composer-bar">
+        <button id="attach" class="bar-button" type="button" aria-label="Add an image" title="Add an image" disabled>
+          <span aria-hidden="true">+</span>
+        </button>
+        <button id="mode-chip" class="chip chip-button" type="button" title="Access mode" hidden></button>
+        <span class="composer-spacer"></span>
+        <button id="model-chip" class="chip chip-button" type="button" title="Model" hidden></button>
+        <button id="effort-chip" class="chip chip-button" type="button" title="Reasoning effort" hidden></button>
+        <button id="send" type="submit" aria-label="Send" title="Send" disabled hidden>
+          <span aria-hidden="true">&#8593;</span>
+        </button>
+        <button id="interrupt" type="button" aria-label="Stop" title="Stop" disabled hidden>
+          <span aria-hidden="true">&#9632;</span>
+        </button>
+      </div>
     </div>
     <div class="composer-foot">
-      <span id="agent-chip" class="chip" hidden></span>
-      <span id="mode-chip" class="chip" hidden></span>
-      <span id="effort-chip" class="chip" hidden></span>
       <span id="usage-chip" class="chip" hidden></span>
       <span id="send-hint" class="send-hint" hidden></span>
     </div>

@@ -26,8 +26,8 @@ import {
 } from "./slashCommands";
 import { afterFrameOrDelay } from "./renderReady";
 import {
-  agentLine,
   chipText,
+  modelLine,
   NO_FACTS,
   NO_USAGE,
   usageLine,
@@ -35,8 +35,19 @@ import {
   type UsageFacts,
 } from "./statusLine";
 import { limitTelemetry, usageTelemetry } from "./telemetry";
+import { draftGreeting, type DraftChips } from "../draft";
 import { sessionTitle } from "../sessionDisplay";
 import type { SessionLine as Session } from "../runtimeTypes";
+
+/// Where a live conversation runs, as the host says it.
+type ConversationContext = {
+  project: string;
+  projectPath: string | null;
+  branch: string | null;
+};
+
+/// One attachment as the host lists it.
+type AttachmentLabel = { name: string; kilobytes: number };
 
 
 type FrameEnvelope = {
@@ -45,8 +56,19 @@ type FrameEnvelope = {
 };
 
 type Incoming =
-  | { type: "reset"; session: Session | null; title: string | null; provider: string | null; generation: number }
+  | {
+    type: "reset";
+    session: Session | null;
+    title: string | null;
+    provider: string | null;
+    generation: number;
+    draft: DraftChips | null;
+    draftState: unknown;
+  }
   | { type: "session"; session: Session; title: string; provider: string }
+  | { type: "draft"; draft: DraftChips; draftState: unknown }
+  | { type: "context"; context: ConversationContext }
+  | { type: "attachments"; items: AttachmentLabel[] }
   | { type: "frames"; batch: FrameEnvelope[]; gap: boolean }
   | { type: "status"; message: string; kind: "info" | "warning" | "error" }
   | { type: "readyProbe" }
@@ -117,30 +139,40 @@ const prompt = element<HTMLTextAreaElement>("prompt");
 const send = element<HTMLButtonElement>("send");
 const sendHint = element<HTMLSpanElement>("send-hint");
 const interrupt = element<HTMLButtonElement>("interrupt");
-const agentChip = element<HTMLSpanElement>("agent-chip");
-// The chip is also the switch: the place that says which model answers is the place to change it.
-agentChip.title = "Switch model";
-agentChip.addEventListener("click", () => {
+// Every chip is also its switch: the place that says a fact is the place to change it. On a draft the chips
+// choose what the conversation will start with; on a live conversation they switch the running session
+// (the project and service chips then offer the honest next thing: a new conversation here).
+const projectChip = element<HTMLButtonElement>("project-chip");
+projectChip.addEventListener("click", () => vscode.postMessage({ type: "pickProject" }));
+const branchChip = element<HTMLSpanElement>("branch-chip");
+const serviceChip = element<HTMLButtonElement>("service-chip");
+serviceChip.addEventListener("click", () => vscode.postMessage({ type: "pickService" }));
+const modelChip = element<HTMLButtonElement>("model-chip");
+modelChip.addEventListener("click", () => {
   vscode.postMessage({ type: "switchModel", available: switchableModels });
 });
-const modeChip = element<HTMLSpanElement>("mode-chip");
-// Same principle for the permission mode: the place that says it is the place to change it.
-modeChip.title = "Switch mode";
+const modeChip = element<HTMLButtonElement>("mode-chip");
 modeChip.addEventListener("click", () => {
   vscode.postMessage({ type: "switchMode", available: switchableModeIds });
 });
-const effortChip = element<HTMLSpanElement>("effort-chip");
-// And for the reasoning effort. Its own chip because the model is a confirmed value and the effort a
-// requested one, and one chip must not mix the two kinds of fact.
-effortChip.title = "Switch reasoning effort";
+// Its own chip because the model is a confirmed value and the effort a requested one, and one chip must
+// not mix the two kinds of fact.
+const effortChip = element<HTMLButtonElement>("effort-chip");
 effortChip.addEventListener("click", () => {
   vscode.postMessage({ type: "switchEffort", model: facts.model });
 });
+const attach = element<HTMLButtonElement>("attach");
+attach.addEventListener("click", () => vscode.postMessage({ type: "attach" }));
+const attachmentList = element<HTMLUListElement>("attachments");
 const usageChip = element<HTMLSpanElement>("usage-chip");
 const commandMenu = element<HTMLUListElement>("commands");
 const queuedList = element<HTMLUListElement>("queued");
 const pending: unknown[] = [];
 let selected: Session | null = null;
+/// The draft this page shows while no session exists: the chips of a conversation that has not started.
+let draft: DraftChips | null = null;
+/// Where the live conversation runs, once the host has said.
+let context: ConversationContext | null = null;
 let generation = 0;
 let pendingHead = 0;
 let scheduled = false;
@@ -172,14 +204,33 @@ let mentionPending = false;
 window.addEventListener("message", ({ data }: MessageEvent<Incoming>) => {
   if (data.type === "reset") {
     // The tab's identity, persisted where VS Code keeps webview state, so a restored tab knows which
-    // session it was showing and the extension can rebind it instead of guessing.
-    vscode.setState({ sessionId: data.session?.sessionId ?? null });
+    // session (or which draft) it was showing and the extension can rebind it instead of guessing.
+    vscode.setState(data.session ? { sessionId: data.session.sessionId } : { draft: data.draftState });
+    draft = data.session ? null : data.draft;
+    context = null;
     reset(data.session, data.title, data.provider, data.generation);
     return;
   }
   if (data.type === "session") {
     selected = data.session;
     renderSession(data.session, data.title, data.provider);
+    return;
+  }
+  if (data.type === "draft") {
+    if (selected) return;
+    vscode.setState({ draft: data.draftState });
+    draft = data.draft;
+    paintFacts();
+    paintGreeting();
+    return;
+  }
+  if (data.type === "context") {
+    context = data.context;
+    paintFacts();
+    return;
+  }
+  if (data.type === "attachments") {
+    paintAttachments(data.items);
     return;
   }
   if (data.type === "status") {
@@ -231,7 +282,9 @@ vscode.postMessage({ type: "webviewReady" });
 composer.addEventListener("submit", (event) => {
   event.preventDefault();
   const text = prompt.value;
-  if (!selected || !text.trim()) {
+  // A draft sends its first message with no session yet; the host starts one with the chips as set.
+  if (!selected && !draft) return;
+  if (!text.trim() && attachmentList.hidden) {
     return;
   }
   if (!promptWasSendable) {
@@ -333,6 +386,7 @@ function reset(
   renderSession(session, displayTitle, provider);
   prompt.value = "";
   resizePrompt();
+  paintAttachments([]);
   renderEmptyState(session);
   afterFrameOrDelay(
     {
@@ -352,13 +406,15 @@ function reset(
 function renderSession(session: Session | null, displayTitle: string | null, provider: string | null): void {
   currentProvider = provider || "Coding agent";
   currentTitle = session ? displayTitle || sessionTitle(session) : null;
-  document.body.classList.toggle("no-chat", !session);
+  document.body.classList.toggle("no-chat", !session && !draft);
+  document.body.classList.toggle("drafting", !session && draft !== null);
   document.body.classList.toggle("opening", session?.lifecycle === "cold");
   document.body.classList.toggle("working", session?.lifecycle === "hotRunning");
   document.body.classList.toggle("throttled", session?.waitingOn === "quota");
   facts = { ...facts, service: session ? currentProvider : "" };
   paintFacts();
-  const canSend = session?.lifecycle === "hotIdle";
+  // A draft is always sendable: its first message is what starts the conversation.
+  const canSend = session ? session.lifecycle === "hotIdle" : draft !== null;
   const canInterrupt = session?.lifecycle === "hotRunning";
   // A turn that stopped for a person is still a running turn, so the lifecycle alone would say "working" about
   // the one session that is actually waiting on the reader.
@@ -373,9 +429,13 @@ function renderSession(session: Session | null, displayTitle: string | null, pro
   sendHint.hidden = !canSend;
   interrupt.disabled = !canInterrupt;
   interrupt.hidden = !canInterrupt;
+  // Images ride with a message, so they can be added whenever one can be written.
+  attach.disabled = !canSend && !canInterrupt;
   prompt.setAttribute("aria-label", session ? `Message ${currentProvider}` : "Message");
   prompt.placeholder = !session
-    ? "Message"
+    ? draft
+      ? "Ask anything"
+      : "Message"
     : canSend
       ? `Message ${currentProvider}`
       : waitingOnYou
@@ -433,27 +493,66 @@ function paintQueued(): void {
   queuedList.hidden = false;
 }
 
-/// The one line under the composer that replaced an entire panel.
+/// The chips around the composer: where the conversation runs, who answers, and how.
+///
+/// A draft paints its choices (each chip is the picker for that choice); a live conversation paints what
+/// the host and the service said. Either way the chip is the place that says the fact and the place to
+/// change it, and a chip with nothing true to say stays hidden rather than guessing.
 function paintFacts(): void {
-  const agent = agentLine(facts, requested.model);
-  agentChip.textContent = agent;
-  agentChip.hidden = !agent;
-  const mode = chipText(facts.mode, requested.mode);
-  modeChip.textContent = mode;
-  modeChip.hidden = !mode;
-  const effort = chipText(facts.effort, requested.effort);
-  effortChip.textContent = effort;
-  effortChip.hidden = !effort;
+  const place = draft ?? context;
+  setChip(projectChip, place?.project ?? "");
+  setChip(branchChip, place?.branch ?? "");
+  projectChip.title = place?.projectPath ?? "Project";
+  setChip(serviceChip, draft ? draft.service : facts.service);
+  setChip(modelChip, draft ? draft.model : modelLine(facts, requested.model));
+  setChip(effortChip, draft ? draft.effort : chipText(facts.effort, requested.effort));
+  setChip(modeChip, draft ? draft.mode : chipText(facts.mode, requested.mode));
   const spent = usageLine(usage, Date.now());
   usageChip.textContent = spent;
   usageChip.hidden = !spent;
   usageChip.classList.toggle("limit-reached", usage.reached);
 }
 
+function setChip(chip: HTMLElement, text: string): void {
+  chip.textContent = text;
+  chip.hidden = !text;
+}
+
+/// The greeting of a draft, redrawn when its project changes (the words name the project).
+function paintGreeting(): void {
+  if (!draft || selected) return;
+  const heading = conversation.querySelector<HTMLElement>("[data-placeholder='true'] h1");
+  if (heading) heading.textContent = draftGreeting(draft);
+}
+
+/// The images waiting to ride with the next message, each with its own remove.
+function paintAttachments(items: readonly AttachmentLabel[]): void {
+  if (items.length === 0) {
+    attachmentList.hidden = true;
+    attachmentList.replaceChildren();
+    return;
+  }
+  attachmentList.replaceChildren(...items.map((item, index) => {
+    const row = document.createElement("li");
+    row.className = "attachment";
+    const label = document.createElement("span");
+    label.className = "attachment-name";
+    label.textContent = `${item.name} · ${item.kilobytes} KB`;
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "attachment-remove";
+    remove.textContent = "×";
+    remove.title = "Remove this image";
+    remove.setAttribute("aria-label", `Remove ${item.name}`);
+    remove.addEventListener("click", () => vscode.postMessage({ type: "removeAttachment", index }));
+    row.append(label, remove);
+    return row;
+  }));
+  attachmentList.hidden = false;
+}
+
 function renderEmptyState(session: Session | null): void {
-  const emptyCopy = conversationEmptyCopy(session, currentProvider, currentTitle);
   const empty = document.createElement("section");
-  empty.className = `empty-state empty-${emptyCopy.tone}`;
   empty.dataset.placeholder = "true";
   empty.dataset.characters = "0";
   const mark = document.createElement("div");
@@ -461,25 +560,21 @@ function renderEmptyState(session: Session | null): void {
   mark.textContent = "R";
   const heading = document.createElement("h1");
   const detail = document.createElement("p");
+  if (!session && draft) {
+    // A conversation about to begin: the greeting the chat apps use, naming the project, and nothing else
+    // in the way of the composer.
+    empty.className = "empty-state empty-hero empty-draft";
+    heading.textContent = draftGreeting(draft);
+    detail.textContent = "";
+    empty.append(mark, heading);
+    conversation.append(empty);
+    return;
+  }
+  const emptyCopy = conversationEmptyCopy(session, currentProvider, currentTitle);
+  empty.className = `empty-state empty-${emptyCopy.tone}`;
   heading.textContent = emptyCopy.heading;
   detail.textContent = emptyCopy.detail;
   empty.append(mark, heading, detail);
-  if (!session) {
-    const start = document.createElement("button");
-    start.type = "button";
-    start.className = "empty-primary";
-    start.textContent = "New conversation";
-    start.addEventListener("click", () => vscode.postMessage({ type: "startChat" }));
-    empty.append(start);
-    // The deliberate flow, made findable: it used to live only in the view's overflow menu, which is
-    // where a feature goes to be undiscovered.
-    const configured = document.createElement("button");
-    configured.type = "button";
-    configured.className = "empty-secondary";
-    configured.textContent = "Choose service, model and effort...";
-    configured.addEventListener("click", () => vscode.postMessage({ type: "startConfiguredChat" }));
-    empty.append(configured);
-  }
   conversation.append(empty);
 }
 

@@ -5,7 +5,6 @@ import { isViewAction } from "./viewActions";
 
 test("accepts exactly the actions the dispatcher handles", () => {
   assert.ok(isViewAction({ type: "prompt", text: "hello" }));
-  assert.ok(isViewAction({ type: "startChat" }));
   assert.ok(isViewAction({ type: "interrupt" }));
   assert.ok(isViewAction({
     type: "answerApproval",
@@ -17,6 +16,11 @@ test("accepts exactly the actions the dispatcher handles", () => {
   assert.ok(isViewAction({ type: "switchMode", available: ["plan"] }));
   assert.ok(isViewAction({ type: "switchEffort", model: "gpt-5" }));
   assert.ok(isViewAction({ type: "switchEffort", model: "" }), "an unknown model is refused later, honestly");
+  assert.ok(isViewAction({ type: "pickProject" }));
+  assert.ok(isViewAction({ type: "pickService" }));
+  assert.ok(isViewAction({ type: "attach" }));
+  assert.ok(isViewAction({ type: "removeAttachment", index: 0 }));
+  assert.ok(isViewAction({ type: "mentionFile" }));
 });
 
 // Regression: these two names once validated without a dispatcher branch, so the dispatcher's
@@ -24,6 +28,7 @@ test("accepts exactly the actions the dispatcher handles", () => {
 test("refuses action names that have no dispatcher branch", () => {
   assert.equal(isViewAction({ type: "openWorkspace" }), false);
   assert.equal(isViewAction({ type: "close" }), false);
+  assert.equal(isViewAction({ type: "startChat" }), false, "the draft tab replaced the start buttons");
   assert.equal(isViewAction({ type: "anythingElse" }), false);
 });
 
@@ -38,6 +43,9 @@ test("refuses malformed payloads for known action names", () => {
     isViewAction({ type: "switchMode", available: Array.from({ length: 65 }, () => "m") }),
     false,
   );
+  assert.equal(isViewAction({ type: "removeAttachment", index: -1 }), false);
+  assert.equal(isViewAction({ type: "removeAttachment", index: 8 }), false, "bounded by the image limit");
+  assert.equal(isViewAction({ type: "removeAttachment", index: "0" }), false);
   assert.equal(isViewAction(null), false);
   assert.equal(isViewAction([]), false);
   assert.equal(isViewAction("interrupt"), false);
