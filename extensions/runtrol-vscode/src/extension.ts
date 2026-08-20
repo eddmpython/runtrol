@@ -415,6 +415,18 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
       "runtrol.openWorkspace",
       (item) => run(() => afterReady(() => controller.openWorkspace(item))),
     ),
+    vscode.commands.registerCommand(
+      "runtrol.openProjectWorkspace",
+      (item) => run(async () => {
+        if (!(item instanceof ProjectItem)) return;
+        // The explicit move the contract requires: only this button changes what the window is open on.
+        await vscode.commands.executeCommand(
+          "vscode.openFolder",
+          vscode.Uri.file(item.group.workspace),
+          { forceNewWindow: false },
+        );
+      }),
+    ),
     vscode.commands.registerCommand("runtrol.interrupt", () => run(() => afterReady(() => controller.interrupt()))),
     vscode.commands.registerCommand(
       "runtrol.closeSession",

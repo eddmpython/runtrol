@@ -1,4 +1,6 @@
-import { readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { performance } from "node:perf_hooks";
 
 import * as vscode from "vscode";
@@ -298,6 +300,11 @@ async function eyePass(api: ExtensionApi, projectFolder: string, resultPath: str
     throw new Error("the performance-only project seeder is unavailable");
   }
   await api.seedProject(projectFolder);
+  // A project this window is NOT open on, so the photograph shows the move button that only draws on
+  // non-current headings (the contract: moving the window is the one explicit act).
+  const elsewhere = path.join(os.tmpdir(), "runtrol-eyepass-elsewhere");
+  await mkdir(elsewhere, { recursive: true });
+  await api.seedProject(elsewhere);
   if (!api.openFirstConversation) {
     throw new Error("the performance-only conversation opener is unavailable");
   }

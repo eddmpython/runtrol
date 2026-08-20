@@ -233,6 +233,12 @@
         "icon": "$(edit)"
       },
       {
+        "command": "runtrol.openProjectWorkspace",
+        "title": "Open Project as Window",
+        "category": "Runtrol",
+        "icon": "$(link-external)"
+      },
+      {
         "command": "runtrol.openWorkspace",
         "title": "Runtrol: Open Conversation Project",
         "icon": "$(folder-opened)"
@@ -546,22 +552,27 @@
         {
           "command": "runtrol.newConversationInProject",
           "group": "inline@1",
+          "when": "view == runtrol.sessions && viewItem =~ /^runtrol\\.project/"
+        },
+        {
+          "command": "runtrol.openProjectWorkspace",
+          "group": "inline@2",
           "when": "view == runtrol.sessions && viewItem == runtrol.project"
         },
         {
           "command": "runtrol.newConfiguredConversationInProject",
           "group": "1_manage@0",
-          "when": "view == runtrol.sessions && viewItem == runtrol.project"
+          "when": "view == runtrol.sessions && viewItem =~ /^runtrol\\.project/"
         },
         {
           "command": "runtrol.renameProject",
           "group": "1_manage@1",
-          "when": "view == runtrol.sessions && viewItem == runtrol.project"
+          "when": "view == runtrol.sessions && viewItem =~ /^runtrol\\.project/"
         },
         {
           "command": "runtrol.removeProject",
           "group": "1_manage@2",
-          "when": "view == runtrol.sessions && viewItem == runtrol.project"
+          "when": "view == runtrol.sessions && viewItem =~ /^runtrol\\.project/"
         },
         {
           "command": "runtrol.renameSession",

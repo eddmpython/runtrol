@@ -86,7 +86,9 @@ export class ProjectItem extends vscode.TreeItem {
     );
     this.id = group.key;
     this.description = projectDetail(group);
-    this.contextValue = "runtrol.project";
+    // The move button draws only on headings that are not this window: opening the folder you are already
+    // in is not a move, and the contract (memory/uxContract.md) wants moving to be the one explicit act.
+    this.contextValue = group.current ? "runtrol.project.current" : "runtrol.project";
     this.resourceUri = vscode.Uri.file(group.workspace);
     this.iconPath = group.attention > 0
       ? new vscode.ThemeIcon("folder", new vscode.ThemeColor("notificationsWarningIcon.foreground"))
