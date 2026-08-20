@@ -10,6 +10,8 @@ and refactoring that no user can observe do not belong here.
 
 ## [Unreleased]
 
+## [0.1.9] - 2026-08-20
+
 ### Fixed
 
 - Updating the extension no longer breaks against the still-running older Core. 0.1.8 failed its
@@ -17,7 +19,9 @@ and refactoring that no user can observe do not belong here.
   public schema"), because new required fields had joined a finalized protocol revision. The hello
   is now eternally compatible in both directions: fields added after a revision was finalized are
   optional forever, unknown fields are ignored, and a corpus of every shipped hello is enforced in
-  CI so no future release can regress this.
+  CI so no future release can regress this. A second gate downloads the Core binaries out of the
+  last three published packages, runs each as a real daemon, and requires this build's client to
+  complete a real handshake against it, so the same break cannot reach anyone again.
 
 ### Added
 
