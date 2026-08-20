@@ -39,6 +39,7 @@ type ExtensionApi = {
   verifyRestoredSession?(sessionId: string): Promise<void>;
   hasConversationIn?(folder: string): Promise<boolean>;
   openFirstConversation?(): Promise<void>;
+  openCrossProjectConversation?(): Promise<void>;
   waitForConversationIn?(folder: string, deadlineMs: number): Promise<number>;
   seedProject?(folder: string): Promise<void>;
 };
@@ -284,6 +285,18 @@ async function measureFollow(target: string, resultPath: string): Promise<Record
     throw new Error("VS Code refused to add the second workspace folder");
   }
   const followArrivalMs = await api.waitForConversationIn(target, 30_000);
+  currentStage = "cross-project-open";
+  // The operator's exact pain, held as a gate (memory/uxContract.md): a conversation whose folder this
+  // window has NOT opened must select and open as a conversation tab right here, without moving the window.
+  if (!api.openCrossProjectConversation) {
+    throw new Error("the performance-only cross-project opener is unavailable");
+  }
+  await within(
+    api.openCrossProjectConversation(),
+    15_000,
+    "opening a conversation from an unopened folder",
+  );
+  await requireConversationEditor();
   await eyePass(api, first, resultPath);
   return { vscode: vscode.version, followArrivalMs };
 }

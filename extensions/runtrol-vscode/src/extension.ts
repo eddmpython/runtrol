@@ -26,7 +26,7 @@ import { ServiceTroubleReported } from "./serviceHelp";
 import { providerDisplayName, sessionTitle } from "./sessionDisplay";
 import { RuntimeState } from "./state";
 import { StudioRuntimeClient } from "./runtimeClient";
-import { workspaceIdentity } from "./workspaceCollision";
+import { workspaceCovers, workspaceIdentity } from "./workspaceCollision";
 import { WorkspaceRootFollowing } from "./workspaceRoots";
 import { ConversationsTree, ProjectItem, ServiceProblemItem } from "./trees";
 import { UsageTree } from "./usageTree";
@@ -42,6 +42,7 @@ export type RuntrolExtensionApi = {
   waitForConversationIn?(folder: string, deadlineMs: number): Promise<number>;
   seedProject?(folder: string): Promise<void>;
   openFirstConversation?(): Promise<void>;
+  openCrossProjectConversation?(): Promise<void>;
   readonly journey?: JourneyApi;
 };
 
@@ -661,6 +662,27 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
         }
         await controller.select(openable);
         await vscode.commands.executeCommand("runtrol.openConversation");
+      }
+      : undefined,
+    openCrossProjectConversation: MEASURED_HOST
+      ? async () => {
+        // The contract in memory/uxContract.md, provable: a conversation whose folder this window never
+        // opened selects and opens as a tab right here. Managed rows only, because native rows still ride
+        // the enrollment roots until discovery goes machine-wide.
+        const open = (vscode.workspace.workspaceFolders ?? []).map((folder) => folder.uri.fsPath);
+        const rows = conversationRows(state.sessions, state.providers, state.nativeChats, null);
+        const away = rows.find((row) =>
+          row.canOpen
+          && row.session !== null
+          && !open.some((folder) => workspaceCovers(folder, row.workspace)));
+        if (!away) {
+          throw new Error("no conversation outside the open folders to prove the contract with");
+        }
+        await controller.select(away);
+        await vscode.commands.executeCommand("runtrol.openConversation");
+        if (state.selected?.sessionId !== away.session?.sessionId) {
+          throw new Error("selecting the away conversation did not take");
+        }
       }
       : undefined,
     journey: journeyApi(controller, state, conversation, afterReady, context.extensionMode),
