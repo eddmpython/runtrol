@@ -20,6 +20,7 @@ import {
 import { journeyApi, type JourneyApi } from "./journeyApi";
 import { MissionController } from "./mission/controller";
 import { MissionTree } from "./mission/tree";
+import { projectlessRoot } from "./projectlessWorkspace";
 import { ProjectStore } from "./projects";
 import { managePhones, pairPhone, reviewPhonePairings } from "./pairingAdministration";
 import type { RemoteConnection } from "./protocol";
@@ -79,7 +80,9 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
       initializationStage = `runtime:${stage}`;
     },
   );
-  const state = new RuntimeState();
+  // Conversations started with no project run in the extension's own scratch folder; the state knows it so
+  // every derived row agrees on which conversations are projectless.
+  const state = new RuntimeState(projectlessRoot(context.globalStorageUri.fsPath));
   const selection = new SelectionStore(context.globalStorageUri.fsPath);
   let settleReady: ((error?: unknown) => void) | null = null;
   let lifecycle: Promise<void> = new Promise<void>((resolve, reject) => {
@@ -368,6 +371,15 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
         for (const folder of chosen) {
           await projectStore.create(folder.fsPath);
         }
+      }),
+    ),
+    vscode.commands.registerCommand(
+      "runtrol.createProjectHere",
+      // A discovered or open folder promoted to a created project, in one click from its heading. The folder
+      // is already answered by the heading, so no dialog; rename is one right-click away afterwards.
+      (item: unknown) => run(async () => {
+        if (!(item instanceof ProjectItem)) return;
+        await projectStore.create(item.group.workspace);
       }),
     ),
     vscode.commands.registerCommand(
@@ -670,7 +682,7 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
       ? async () => {
         // The eye pass photographs a real conversation, so it opens the first one the tree would show,
         // through the same selection path a click takes.
-        const rows = conversationRows(state.sessions, state.providers, state.nativeChats, null);
+        const rows = conversationRows(state.sessions, state.providers, state.nativeChats, null, state.projectlessRoot);
         const openable = rows.find((row) => row.canOpen);
         if (!openable) {
           throw new Error("no openable conversation for the eye pass");
@@ -685,7 +697,7 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
         // opened selects and opens as a tab right here. Managed rows only, because native rows still ride
         // the enrollment roots until discovery goes machine-wide.
         const open = (vscode.workspace.workspaceFolders ?? []).map((folder) => folder.uri.fsPath);
-        const rows = conversationRows(state.sessions, state.providers, state.nativeChats, null);
+        const rows = conversationRows(state.sessions, state.providers, state.nativeChats, null, state.projectlessRoot);
         const away = rows.find((row) =>
           row.canOpen
           && row.session !== null

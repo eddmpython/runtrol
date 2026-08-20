@@ -446,7 +446,7 @@ test("a conversation with no folder is not filed under an invented one", () => {
   const groups = projects([record(ALPHA)], rows, [ALPHA]);
   assert.equal(groups.length, 1, "only the created project is a heading");
   assert.equal(groups[0]?.name, "alpha");
-  const unfiled = loose([record(ALPHA)], rows, []);
+  const unfiled = loose(rows);
   assert.equal(unfiled.length, 1);
   assert.equal(unfiled[0]?.session?.sessionId, "b");
 });
@@ -455,25 +455,101 @@ test("a folder that is only whitespace files nowhere", () => {
   const rows = conversations([session({ sessionId: "a", workspace: "   " })], PROVIDERS, [], null);
   const filed = projects([record(ALPHA)], rows, []).flatMap((group) => group.rows);
   assert.equal(filed.length, 0);
-  assert.equal(loose([record(ALPHA)], rows, []).length, 1);
+  assert.equal(loose(rows).length, 1);
 });
 
-test("a folder becomes a heading only when somebody created it or has it open", () => {
-  // The regression this shape exists to prevent, in both directions. The panel once invented a heading for
-  // every folder any conversation had run in (measured: thirty auto-headings named workspace-1 through
-  // workspace-30, rejected by the operator on sight), and the correction then over-shot and flattened even
-  // the window's own open folder into rows that repeated its name (rejected again, 2026-08-20). Opening a
-  // folder is the operator's act exactly like creating a project: the open folder is a heading, everything
-  // neither created nor open stays a plain row.
+test("every folder a conversation names is a heading, and the open one comes first", () => {
+  // The operator's contract (memory/uxContract.md, 2026-08-20): the panel shows the whole machine's
+  // projects, folder = heading, conversations beneath it, the way the Codex and Claude sidebars draw them.
+  // The CLI's own listing says which folder a conversation belongs to, so a folder holding conversations is
+  // a heading whether or not anybody created or opened it here. The open folder is this window's project
+  // and leads; nothing with a real folder is left loose.
   const rows = conversations(spread([ALPHA, BETA, GAMMA]), PROVIDERS, [], null);
   const groups = projects([], rows, [ALPHA]);
-  assert.equal(groups.length, 1, "the open folder is the one heading");
+  assert.equal(groups.length, 3, "three folders, three headings");
   assert.equal(groups[0]?.name, "alpha");
+  assert.equal(groups[0]?.kind, "open");
   assert.equal(groups[0]?.current, true, "the open folder is this window's project");
   assert.equal(groups[0]?.rows.length, 2, "its own conversations file under it");
-  const unfiled = loose([], rows, [ALPHA]);
-  assert.equal(unfiled.length, rows.length - 2, "folders nobody created or opened stay plain rows");
-  assert.equal(projects([], rows, []).length, 0, "with nothing created and nothing open, no headings");
+  for (const other of groups.slice(1)) {
+    assert.equal(other.kind, "discovered", `${other.name} exists because a service reported conversations there`);
+    assert.equal(other.current, false);
+    assert.equal(other.rows.length, 2);
+  }
+  assert.equal(loose(rows).length, 0, "a conversation with a real folder is never loose");
+  assert.equal(projects([], [], []).length, 0, "with no conversations, no discovered headings: no empty walls");
+});
+
+test("a discovered folder never appears empty: it lives exactly as long as a conversation names it", () => {
+  // The 2026-08-19 regression was thirty empty auto-headings. A discovered heading is derived from the rows,
+  // so a folder that stops holding conversations stops being a heading in the same breath.
+  const before = conversations(spread([BETA], 1), PROVIDERS, [], null);
+  assert.equal(projects([], before, []).length, 1);
+  assert.equal(projects([], [], []).length, 0);
+});
+
+test("a created project covering a discovered folder draws the one heading", () => {
+  const rows = conversations(
+    [session({ sessionId: "deep", workspace: below(ALPHA, "packages", "core") })],
+    PROVIDERS,
+    [],
+    null,
+  );
+  const groups = projects([record(ALPHA)], rows, []);
+  assert.equal(groups.length, 1, "creation is the more deliberate act and one row never appears twice");
+  assert.equal(groups[0]?.kind, "created");
+  assert.equal(groups[0]?.rows.length, 1);
+});
+
+test("one folder reached by two spellings is one discovered heading", () => {
+  if (process.platform !== "win32") return;
+  const rows = conversations(
+    [
+      session({ sessionId: "lower", workspace: "c:\work\beta" }),
+      session({ sessionId: "upper", workspace: "C:\WORK\beta" }),
+    ],
+    PROVIDERS,
+    [],
+    null,
+  );
+  const groups = projects([], rows, []);
+  assert.equal(groups.length, 1, "casing does not split one folder into two headings");
+  assert.equal(groups[0]?.rows.length, 2);
+});
+
+const SCRATCH = below(ROOT, "storage", "no-project");
+
+test("a conversation started with no project is loose beneath the headings, never a heading of its own", () => {
+  // Condition 3 of the operator's contract: a conversation can exist with no project at all. It runs in the
+  // scratch folder, and that folder is an implementation detail: never a heading, never in the row's detail,
+  // never its title.
+  const rows = conversations(
+    [
+      session({ sessionId: "filed", workspace: ALPHA }),
+      session({ sessionId: "free", workspace: SCRATCH }),
+      session({ sessionId: "free-too", workspace: SCRATCH, providerId: "codex" }),
+    ],
+    PROVIDERS,
+    [],
+    null,
+    SCRATCH,
+  );
+  const free = rows.filter((row) => row.projectless);
+  assert.equal(free.length, 2);
+  for (const row of free) {
+    assert.equal(row.folder, "", "the scratch folder is not a folder the person chose");
+    assert.ok(!row.title.includes("no-project"), `${row.title} leaks the scratch folder`);
+    assert.ok(!conversationDetail(row, NOW).includes("no-project"));
+  }
+  const groups = projects([], rows, []);
+  assert.deepEqual(groups.map((group) => group.name), ["alpha"], "only the real folder is a heading");
+  assert.equal(loose(rows).length, 2, "the projectless conversations are the loose rows");
+});
+
+test("without a scratch folder nothing is projectless", () => {
+  const rows = conversations([session({ sessionId: "s", workspace: SCRATCH })], PROVIDERS, [], null, null);
+  assert.equal(rows[0]?.projectless, false);
+  assert.equal(projects([], rows, []).length, 1, "then it is simply a folder, and folders are headings");
 });
 
 test("a created project standing on the open folder draws the one heading", () => {
@@ -512,7 +588,7 @@ test("a conversation in a subfolder files under the project that covers it", () 
   );
   const groups = projects([record(ALPHA)], rows, []);
   assert.equal(groups[0]?.rows.length, 1);
-  assert.equal(loose([record(ALPHA)], rows, []).length, 0);
+  assert.equal(loose(rows).length, 0);
 });
 
 test("nested projects file a conversation under the deepest one", () => {
@@ -549,7 +625,7 @@ test("every conversation is either in a project or loose, never both and never n
   );
   const records = [record(ALPHA), record(BETA)];
   const filed = projects(records, rows, []).flatMap((group) => group.rows);
-  const unfiled = loose(records, rows, []);
+  const unfiled = loose(rows);
   assert.equal(filed.length + unfiled.length, rows.length);
   const seen = new Set([...filed, ...unfiled].map((row) => row.key));
   assert.equal(seen.size, rows.length, "no row is drawn twice");
@@ -693,5 +769,5 @@ test("the same folder reached two ways files into one project", () => {
   );
   const groups = projects([record(ALPHA)], rows, []);
   assert.equal(groups[0]?.rows.length, 1, "casing did not push the conversation out of its project");
-  assert.equal(loose([record(ALPHA)], rows, []).length, 0);
+  assert.equal(loose(rows).length, 0);
 });

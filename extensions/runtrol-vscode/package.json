@@ -383,6 +383,10 @@
         "icon": "$(new-folder)"
       },
       {
+        "command": "runtrol.createProjectHere",
+        "title": "Make This Folder a Project"
+      },
+      {
         "command": "runtrol.renameProject",
         "title": "Runtrol: Rename Project"
       },
@@ -435,6 +439,10 @@
         },
         {
           "command": "runtrol.newConfiguredConversationInProject",
+          "when": "false"
+        },
+        {
+          "command": "runtrol.createProjectHere",
           "when": "false"
         },
         {
@@ -557,7 +565,7 @@
         {
           "command": "runtrol.openProjectWorkspace",
           "group": "inline@2",
-          "when": "view == runtrol.sessions && viewItem == runtrol.project"
+          "when": "view == runtrol.sessions && viewItem =~ /^runtrol\\.project\\.[a-z]+$/"
         },
         {
           "command": "runtrol.newConfiguredConversationInProject",
@@ -565,14 +573,24 @@
           "when": "view == runtrol.sessions && viewItem =~ /^runtrol\\.project/"
         },
         {
+          "command": "runtrol.createProjectHere",
+          "group": "1_manage@1",
+          "when": "view == runtrol.sessions && viewItem =~ /^runtrol\\.project\\.(open|discovered)/"
+        },
+        {
           "command": "runtrol.renameProject",
           "group": "1_manage@1",
-          "when": "view == runtrol.sessions && viewItem =~ /^runtrol\\.project/"
+          "when": "view == runtrol.sessions && viewItem =~ /^runtrol\\.project\\.created/"
         },
         {
           "command": "runtrol.removeProject",
           "group": "1_manage@2",
-          "when": "view == runtrol.sessions && viewItem =~ /^runtrol\\.project/"
+          "when": "view == runtrol.sessions && viewItem =~ /^runtrol\\.project\\.created/"
+        },
+        {
+          "command": "runtrol.openProjectWorkspace",
+          "group": "2_window@1",
+          "when": "view == runtrol.sessions && viewItem =~ /^runtrol\\.project\\.[a-z]+$/"
         },
         {
           "command": "runtrol.renameSession",

@@ -1,3 +1,4 @@
+import { isProjectless } from "./projectlessWorkspace";
 import type { ProjectRecord } from "./projects";
 import type { NativeChatLine, ProviderLine, SessionLine } from "./runtimeTypes";
 import { providerDisplayName, providerIcon, workspaceName } from "./sessionDisplay";
@@ -34,6 +35,12 @@ export type Conversation = {
   readonly title: string;
   readonly workspace: string;
   readonly folder: string;
+  /// Whether it runs in the scratch folder, which is what a conversation started with no project is.
+  ///
+  /// Such a row never files under a heading and never repeats its folder, because the folder was never the
+  /// person's choice; it sits as a plain row beneath the projects, the way the chat apps people already use
+  /// show a conversation nobody filed anywhere.
+  readonly projectless: boolean;
   /// When the coding service last touched it, when the service reports that at all.
   readonly updatedAtMs: number | null;
   readonly activity: ConversationActivity;
@@ -48,11 +55,15 @@ export type Conversation = {
 };
 
 /// Every conversation on this machine, in the order to show them.
+///
+/// `projectlessRoot` is the scratch folder conversations without a project run in (null when this surface
+/// has none); rows inside it are marked so the tree keeps them loose instead of inventing a heading.
 export function conversations(
   sessions: readonly SessionLine[],
   providers: readonly ProviderLine[],
   nativeChats: readonly NativeChatLine[],
   selectedSessionId: string | null,
+  projectlessRoot: string | null = null,
 ): Conversation[] {
   const nativeByKey = new Map<string, NativeChatLine>();
   for (const chat of nativeChats) {
@@ -66,13 +77,20 @@ export function conversations(
       ? conversationKey(session.providerId, session.nativeSessionId)
       : `session:${encodeURIComponent(session.sessionId)}`;
     claimed.add(key);
-    rows.push(supervised(session, nativeByKey.get(key) ?? null, key, providers, selectedSessionId));
+    rows.push(supervised(
+      session,
+      nativeByKey.get(key) ?? null,
+      key,
+      providers,
+      selectedSessionId,
+      projectlessRoot,
+    ));
   }
   for (const [key, chat] of nativeByKey) {
     // A chat the daemon already supervises is the same conversation, not a second one. The service half only
     // contributes its title and timestamp, which the supervised row above has already taken.
     if (claimed.has(key) || chat.alreadyManagedAs) continue;
-    rows.push(providerOwned(chat, key, providers));
+    rows.push(providerOwned(chat, key, providers, projectlessRoot));
   }
   return rows.sort(byMostRecentlyActive).map(disambiguated(rows));
 }
@@ -89,6 +107,11 @@ export type ProjectGroup = {
   readonly name: string;
   /// The path, for the hover and for opening it.
   readonly workspace: string;
+  /// Why this heading exists: the operator created it, this window is open on it, or a coding service
+  /// reported conversations in it. The tree offers different actions for each (a created project can be
+  /// renamed and removed; a discovered folder can be made a project), and the rule that one heading is
+  /// drawn per place does not depend on which kind won.
+  readonly kind: ProjectKind;
   /// Whether this VS Code window is open on it.
   readonly current: boolean;
   readonly rows: readonly Conversation[];
@@ -102,20 +125,28 @@ export type ProjectGroup = {
   readonly holdsOpen: boolean;
 };
 
-/// Conversations gathered under this machine's projects: the ones the operator created, and the folders this
-/// window has open.
+export type ProjectKind = "created" | "open" | "discovered";
+
+/// Conversations gathered under this machine's projects: the ones the operator created, the folders this
+/// window has open, and every other folder a coding service reports conversations in.
 ///
-/// **A heading exists because somebody acted, never because a folder happened to hold conversations.** Creating
-/// a project is such an act, and so is opening a folder into the window: a person looking at their own window
-/// calls that folder their project, and a flat list that repeats its name on every row is the same wall of text
-/// with the structure thrown away. What never becomes a heading is a folder nobody created and nobody has open
-/// (2026-08-19: an earlier version invented thirty headings named workspace-1 through workspace-30 out of
-/// exactly such folders, and the operator rejected it in those words).
+/// **The panel shows the whole machine's projects** (operator contract, `memory/uxContract.md`, restated
+/// 2026-08-20 against the Paseo, Codex and Claude sidebars: folder = project heading, conversations beneath
+/// it). A folder a coding service ran in is a project the person worked on, and the CLI's own listing is the
+/// authority on which folder a conversation belongs to (thin principle: the service files it, runtrol shows
+/// it). So a folder holding conversations is a heading whether or not anybody created or opened it here.
+/// What is still never invented is a heading with nothing in it: a discovered folder exists only while a
+/// conversation names it, so a machine with no conversations shows no wall of empty folder names (the
+/// 2026-08-19 regression was thirty empty auto-headings, and this rule keeps that impossible).
 ///
-/// A created project with nothing in it yet is still returned: it was made a moment ago and a heading that
-/// vanished would read as the creation failing. A conversation inside nested projects files under the deepest
-/// one, which is the folder a person would call its home; a created project wins over an open folder covering
-/// the same conversation, because creation is the more deliberate act and one row must never appear twice.
+/// One heading per place. A created project wins over an open folder covering the same conversation, and
+/// either wins over a discovered folder, because creation and opening are the more deliberate acts and one row
+/// must never appear twice. A conversation inside nested created projects files under the deepest one, which
+/// is the folder a person would call its home. A created project with nothing in it yet is still returned: it
+/// was made a moment ago and a heading that vanished would read as the creation failing.
+///
+/// Conversations without a project (the scratch folder, or no folder at all) are deliberately absent here:
+/// they are the plain rows `loose` returns, beneath the headings.
 export function projects(
   records: readonly ProjectRecord[],
   rows: readonly Conversation[],
@@ -123,23 +154,19 @@ export function projects(
 ): ProjectGroup[] {
   const filed = new Map<string, Conversation[]>(records.map((record) => [record.key, []]));
   for (const row of rows) {
+    if (unfiled(row)) continue;
     const home = projectOf(records, row);
     if (home) filed.get(home.key)?.push(row);
   }
-  const groups = records.map((record) => {
-    const group = filed.get(record.key) ?? [];
-    return {
-      key: `project:${encodeURIComponent(record.key)}`,
-      name: record.name,
-      workspace: record.workspace,
-      current: openWorkspaces.some((folder) =>
-        workspaceCovers(record.workspace, folder) || workspaceCovers(folder, record.workspace)),
-      rows: group,
-      attention: group.filter(needsYou).length,
-      live: group.filter((row) => row.live).length,
-      holdsOpen: group.some((row) => row.open),
-    };
-  });
+  const groups: ProjectGroup[] = records.map((record) => group(
+    `project:${encodeURIComponent(record.key)}`,
+    record.name,
+    record.workspace,
+    "created",
+    openWorkspaces.some((folder) =>
+      workspaceCovers(record.workspace, folder) || workspaceCovers(folder, record.workspace)),
+    filed.get(record.key) ?? [],
+  ));
   const seen = new Set<string>();
   for (const folder of openWorkspaces) {
     if (!folder.trim()) continue;
@@ -151,20 +178,63 @@ export function projects(
     const represented = records.some((record) =>
       workspaceCovers(record.workspace, folder) || workspaceCovers(folder, record.workspace));
     if (represented) continue;
-    const group = rows.filter((row) =>
-      !projectOf(records, row) && openFolderOf(openWorkspaces, row) === identity);
-    groups.push({
-      key: `folder:${encodeURIComponent(identity)}`,
-      name: workspaceName(folder) || folder,
-      workspace: folder,
-      current: true,
-      rows: group,
-      attention: group.filter(needsYou).length,
-      live: group.filter((row) => row.live).length,
-      holdsOpen: group.some((row) => row.open),
-    });
+    groups.push(group(
+      `folder:${encodeURIComponent(identity)}`,
+      workspaceName(folder) || folder,
+      folder,
+      "open",
+      true,
+      rows.filter((row) =>
+        !unfiled(row) && !projectOf(records, row) && openFolderOf(openWorkspaces, row) === identity),
+    ));
+  }
+  // Every other folder a conversation names, exactly as the service spelled it. Grouped by identity so one
+  // folder reached by two casings is one heading; the first spelling seen is the one shown.
+  const discovered = new Map<string, { workspace: string; rows: Conversation[] }>();
+  for (const row of rows) {
+    if (unfiled(row) || projectOf(records, row) || openFolderOf(openWorkspaces, row) !== null) continue;
+    const identity = workspaceIdentity(row.workspace);
+    const place = discovered.get(identity) ?? { workspace: row.workspace, rows: [] };
+    place.rows.push(row);
+    discovered.set(identity, place);
+  }
+  for (const [identity, place] of discovered) {
+    groups.push(group(
+      `discovered:${encodeURIComponent(identity)}`,
+      workspaceName(place.workspace) || place.workspace,
+      place.workspace,
+      "discovered",
+      false,
+      place.rows,
+    ));
   }
   return groups.sort(byNearestToTheReader);
+}
+
+function group(
+  key: string,
+  name: string,
+  workspace: string,
+  kind: ProjectKind,
+  current: boolean,
+  rows: readonly Conversation[],
+): ProjectGroup {
+  return {
+    key,
+    name,
+    workspace,
+    kind,
+    current,
+    rows,
+    attention: rows.filter(needsYou).length,
+    live: rows.filter((row) => row.live).length,
+    holdsOpen: rows.some((row) => row.open),
+  };
+}
+
+/// Whether a conversation has no project to file under: it runs in the scratch folder, or names no folder.
+function unfiled(row: Conversation): boolean {
+  return row.projectless || !row.workspace.trim();
 }
 
 /// The deepest open folder that covers a conversation, by identity, or null for none.
@@ -196,22 +266,19 @@ function projectOf(records: readonly ProjectRecord[], row: Conversation): Projec
   return home;
 }
 
-/// The conversations that belong to no created project, in the order the rows already have.
+/// The conversations that belong to no project, in the order the rows already have.
 ///
-/// They sit at the top level beside the project headings, not inside one. An earlier version filed them under a
-/// heading called "No project", which turns an absence into a category and reads as a folder the person forgot
-/// about. The chat apps people already use do not do that: a project is a place you can put a conversation, and
-/// a conversation you did not put anywhere is simply a conversation.
+/// Exactly the ones started without a project (they run in the scratch folder) and the ones a service reported
+/// with no folder at all. They sit at the top level beneath the project headings, not inside one. An earlier
+/// version filed them under a heading called "No project", which turns an absence into a category and reads as
+/// a folder the person forgot about. The chat apps people already use do not do that: a project is a place you
+/// can put a conversation, and a conversation you did not put anywhere is simply a conversation.
 ///
 /// Below the headings rather than above them, because a project is a place somebody chose and a loose
-/// conversation is one they did not.
-export function loose(
-  records: readonly ProjectRecord[],
-  rows: readonly Conversation[],
-  openWorkspaces: readonly string[],
-): Conversation[] {
-  return rows.filter((row) =>
-    !projectOf(records, row) && openFolderOf(openWorkspaces, row) === null);
+/// conversation is one they did not. Every conversation with a real folder is under a heading (`projects`), so
+/// together the two functions split the list with nothing falling through and nothing drawn twice.
+export function loose(rows: readonly Conversation[]): Conversation[] {
+  return rows.filter(unfiled);
 }
 
 /// This window's project first, then whatever was touched most recently.
@@ -272,18 +339,23 @@ function supervised(
   key: string,
   providers: readonly ProviderLine[],
   selectedSessionId: string | null,
+  projectlessRoot: string | null,
 ): Conversation {
+  const projectless = isProjectless(session.workspace, projectlessRoot);
   return {
     key,
     providerId: session.providerId,
     serviceName: providerDisplayName(session.providerId, providers),
     serviceIcon: providerIcon(session.providerId, providers),
+    // A projectless conversation never borrows the scratch folder's name: that name is an implementation
+    // detail, and a row called "no-project" would read as a folder the person forgot about.
     title: session.label?.trim()
       || native?.title?.trim()
-      || workspaceName(session.workspace)
+      || (projectless ? "" : workspaceName(session.workspace))
       || untitled(session.nativeSessionId || session.sessionId),
     workspace: session.workspace,
-    folder: workspaceName(session.workspace),
+    folder: projectless ? "" : workspaceName(session.workspace),
+    projectless,
     updatedAtMs: instant(native?.updatedAt),
     activity: activityOf(session),
     live: session.hot,
@@ -299,16 +371,21 @@ function providerOwned(
   chat: NativeChatLine,
   key: string,
   providers: readonly ProviderLine[],
+  projectlessRoot: string | null,
 ): Conversation {
   const resumable = chat.resume === "available" && Boolean(chat.adoptionToken);
+  const projectless = isProjectless(chat.cwd, projectlessRoot);
   return {
     key,
     providerId: chat.providerId,
     serviceName: providerDisplayName(chat.providerId, providers),
     serviceIcon: providerIcon(chat.providerId, providers),
-    title: chat.title?.trim() || workspaceName(chat.cwd) || untitled(chat.nativeSessionId),
+    title: chat.title?.trim()
+      || (projectless ? "" : workspaceName(chat.cwd))
+      || untitled(chat.nativeSessionId),
     workspace: chat.cwd,
-    folder: workspaceName(chat.cwd),
+    folder: projectless ? "" : workspaceName(chat.cwd),
+    projectless,
     updatedAtMs: instant(chat.updatedAt),
     activity: "saved",
     live: false,

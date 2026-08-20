@@ -23,6 +23,11 @@ export class RuntimeState implements vscode.Disposable {
 
   readonly onDidChange = this.changedEmitter.event;
 
+  /// `projectlessRoot` is the scratch folder conversations without a project run in (null when this
+  /// surface has none). Held here because every derived row reads it, and one place answering "is this
+  /// conversation projectless" keeps the sidebar, the switcher and the tabs in agreement.
+  constructor(readonly projectlessRoot: string | null = null) {}
+
   get sessions(): readonly SessionLine[] {
     return this.sessionRows;
   }
@@ -60,6 +65,7 @@ export class RuntimeState implements vscode.Disposable {
       this.providerRows,
       this.nativeChats,
       this.selectedId,
+      this.projectlessRoot,
     );
     return this.conversationRows;
   }

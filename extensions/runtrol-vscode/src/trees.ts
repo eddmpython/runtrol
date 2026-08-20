@@ -65,11 +65,12 @@ export class ServiceProblemItem extends vscode.TreeItem {
   }
 }
 
-/// One project the operator created, holding the conversations that belong to it.
+/// One project heading: a folder the operator created a project on, has open in this window, or that a coding
+/// service reports conversations in. The conversations beneath it are the rows.
 ///
-/// A heading exists because somebody made this project in the panel, never because a folder happened to hold
-/// conversations. Folder-derived headings were shipped once and rejected by the operator: a machine full of
-/// conversations became a wall of folder names nobody asked for.
+/// The panel shows the whole machine's projects (memory/uxContract.md): every folder that holds a conversation
+/// is a heading, the way the Codex and Claude sidebars draw them. What is still never drawn is an empty folder
+/// nobody created: a discovered heading lives exactly as long as a conversation names that folder.
 export class ProjectItem extends vscode.TreeItem {
   constructor(readonly group: ProjectGroup) {
     super(
@@ -86,10 +87,13 @@ export class ProjectItem extends vscode.TreeItem {
     );
     this.id = group.key;
     this.description = projectDetail(group);
-    // The move button draws only on headings that are not this window: opening the folder you are already
-    // in is not a move, and the contract (memory/uxContract.md) wants moving to be the one explicit act.
-    this.contextValue = group.current ? "runtrol.project.current" : "runtrol.project";
+    // What the heading offers depends on why it exists and whether it is this window. The move button draws
+    // only on headings that are not this window: opening the folder you are already in is not a move, and the
+    // contract (memory/uxContract.md) wants moving to be the one explicit act. Rename and remove belong to
+    // created projects; a discovered or open folder offers "make this a project" instead.
+    this.contextValue = projectContextValue(group);
     this.resourceUri = vscode.Uri.file(group.workspace);
+    this.tooltip = group.workspace;
     this.iconPath = group.attention > 0
       ? new vscode.ThemeIcon("folder", new vscode.ThemeColor("notificationsWarningIcon.foreground"))
       : new vscode.ThemeIcon(group.current ? "folder-opened" : "folder");
@@ -97,6 +101,11 @@ export class ProjectItem extends vscode.TreeItem {
       label: `${group.name}${group.current ? ", this window's project" : ""}, ${this.description}`,
     };
   }
+}
+
+/// The context value the menus key on: `runtrol.project.<kind>` plus `.current` for this window's own folder.
+function projectContextValue(group: ProjectGroup): string {
+  return `runtrol.project.${group.kind}${group.current ? ".current" : ""}`;
 }
 
 export type ChatTreeItem = ConversationItem | ServiceProblemItem | ProjectItem;
@@ -167,7 +176,7 @@ function tooltip(conversation: Conversation): vscode.MarkdownString {
     `**${conversation.title}**`,
     "",
     `${conversation.serviceName} · ${spokenActivity(conversation)}`,
-    conversation.workspace,
+    conversation.projectless ? "No project" : conversation.workspace,
   ];
   if (conversation.blocked) lines.push("", conversation.blocked);
   const markdown = new vscode.MarkdownString(lines.join("\n\n"));
@@ -357,10 +366,8 @@ export class ConversationsTree implements vscode.TreeDataProvider<ChatTreeItem>,
     this.decorations.update(rows);
     const records = this.projectRecords.all();
     const groups = projects(records, rows, this.openWorkspaces());
-    // Beside the headings, not under one. A conversation nobody filed is still a conversation.
-    const unfiled = loose(records, rows, this.openWorkspaces()).map(
-      (row) => new ConversationItem(row, nowMs),
-    );
+    // Beneath the headings, not under one. A conversation started with no project is still a conversation.
+    const unfiled = loose(rows).map((row) => new ConversationItem(row, nowMs));
     const problems = this.state.providers
       .filter(isBroken)
       .map((provider) => new ServiceProblemItem(provider));
