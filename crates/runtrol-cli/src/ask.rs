@@ -251,6 +251,7 @@ mod tests {
                         providers: Vec::new(),
                         device: None,
                         push_public_key: None,
+                        build_digest: None,
                     })
                     .expect("writable");
                     drop(connection.send(&welcome).await);
@@ -311,6 +312,7 @@ mod tests {
                     providers: Vec::new(),
                     device: None,
                     push_public_key: None,
+                    build_digest: None,
                 })
                 .expect("writable");
                 if connection.recv().await.is_ok() {

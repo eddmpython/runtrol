@@ -136,7 +136,7 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
             "watchSessions",
             "watchSessionIndexWithReconnect",
         ],
-        "core/locator.ts": ['["endpoint"]', 'candidates.push("runtrol")', "runtimeExecutable"],
+        "core/locator.ts": ['["endpoint"]', 'executable: "runtrol"', "runtimeExecutable"],
         "core/managedCore.ts": [
             "createReadStream",
             "copyFile(source, incoming)",
@@ -205,7 +205,7 @@ def selftest() -> int:
             "providerSnapshot sessionSnapshot watchSessions "
             "watchSessionIndexWithReconnect"
         ),
-        "core/locator.ts": '["endpoint"] candidates.push("runtrol") runtimeExecutable',
+        "core/locator.ts": '["endpoint"] executable: "runtrol" runtimeExecutable',
         "core/managedCore.ts": (
             "createReadStream copyFile(source, incoming) link(executable, preserved) "
             "rename(incoming, executable) unlink(file) removeInactiveImages"

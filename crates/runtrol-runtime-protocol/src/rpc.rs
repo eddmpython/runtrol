@@ -81,9 +81,20 @@ pub enum JsonRpcResponse {
     Error(ErrorResponse),
 }
 
+// The hello is eternal: every runtime and every client that ever shipped must be able to finish
+// `runtime/initialize` with each other, because version skew is only discovered by talking. The
+// structs of this exchange therefore never deny unknown fields (an older side must survive a newer
+// side's additions) and every field added after a revision was finalized carries `serde(default)`
+// (a newer side must survive an older side's silence; absence means the feature does not exist
+// there). Everything after the hello may assume same-version peers: the supersession contract
+// rolls an older daemon forward before any other method is used. Shipped daemons before 0.1.9
+// still deny unknown hello params, so new params fields stay forbidden until that floor is gone.
+// Broken on 2026-08-20 when required limits fields joined a finalized revision and every
+// installed daemon failed the new client's schema at hello.
+
 /// Safe client presentation metadata.
 #[derive(Clone, Debug, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct ClientInfo {
     /// Product display name.
     pub name: String,
@@ -93,7 +104,7 @@ pub struct ClientInfo {
 
 /// Client features understood by the initial read-only revision.
 #[derive(Clone, Debug, Default, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct ClientCapabilities {
     /// Whether the client preserves bounded unknown optional event extensions.
     #[serde(default)]
@@ -102,7 +113,7 @@ pub struct ClientCapabilities {
 
 /// Initialization is negotiation only. Inventory is a separate authorized request.
 #[derive(Clone, Debug, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct InitializeParams {
     /// Every finalized revision the client implements.
     pub supported_revisions: Vec<ProtocolRevision>,
@@ -118,7 +129,7 @@ pub struct InitializeParams {
 
 /// Public Runtime instance facts used to reject a stale or replaced locator.
 #[derive(Clone, Debug, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct RuntimeInstance {
     /// Changes when a newly installed Runtime home is created.
     pub instance_id: String,
@@ -126,6 +137,11 @@ pub struct RuntimeInstance {
     pub version: String,
     /// Target class of the running artifact.
     pub platform: String,
+    /// SHA-256 of the running executable, measured at boot. Absent on runtimes older than
+    /// 2026-08-20; a manager that installed the binary treats absence or mismatch as an older
+    /// daemon and supersedes it instead of speaking a possibly different dialect past the hello.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub build_digest: Option<String>,
 }
 
 /// Public product capabilities for the selected revision.
@@ -134,7 +150,7 @@ pub struct RuntimeInstance {
     reason = "the negotiated public wire needs independent closed capability flags"
 )]
 #[derive(Clone, Debug, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct RuntimeCapabilities {
     /// Local integration enrollment is implemented.
     pub integration_enrollment: bool,
@@ -154,17 +170,21 @@ pub struct RuntimeCapabilities {
 
 /// Numeric public bounds advertised during initialization.
 #[derive(Clone, Debug, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct RuntimeLimits {
     /// Maximum frame payload before allocation.
     pub max_frame_bytes: usize,
     /// Maximum caller input bytes.
     pub max_input_bytes: usize,
-    /// Maximum base64 characters for one attached image.
+    /// Maximum base64 characters for one attached image. Zero on runtimes that predate block
+    /// submission (before 2026-08-20): absent means the feature does not exist there.
+    #[serde(default)]
     pub max_attachment_base64_bytes: usize,
-    /// Maximum blocks in one submitted block set.
+    /// Maximum blocks in one submitted block set. Zero when block submission does not exist.
+    #[serde(default)]
     pub max_input_blocks: usize,
-    /// Maximum images in one submitted block set.
+    /// Maximum images in one submitted block set. Zero when block submission does not exist.
+    #[serde(default)]
     pub max_input_images: usize,
     /// Maximum opaque model selection bytes on session start.
     pub max_model_selection_bytes: usize,
@@ -224,7 +244,7 @@ impl Default for RuntimeLimits {
 
 /// Successful initialization before integration authorization.
 #[derive(Clone, Debug, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct InitializeResult {
     /// Newest common finalized revision.
     pub selected_revision: ProtocolRevision,
@@ -245,14 +265,19 @@ mod tests {
     use crate::revision::REVISION_2026_08_13;
 
     #[test]
-    fn closed_initialization_rejects_unknown_security_shaped_fields() {
+    fn the_hello_tolerates_unknown_fields_and_grants_nothing_for_them() {
+        // The hello is the one exchange where every shipped version must understand every other,
+        // so unknown fields are ignored rather than fatal. Nothing is granted by an ignored
+        // field: authority comes only from the typed authentication proof and enrollment.
         let json = r#"{
             "supportedRevisions":["2026-08-13"],
             "client":{"name":"fixture","version":"1.0.0"},
             "clientCapabilities":{},
             "scope":"session.input.write"
         }"#;
-        assert!(serde_json::from_str::<InitializeParams>(json).is_err());
+        let params = serde_json::from_str::<InitializeParams>(json).expect("tolerant hello");
+        assert!(params.authentication.is_none());
+        assert_eq!(params.client.name, "fixture");
     }
 
     #[test]

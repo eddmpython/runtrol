@@ -147,6 +147,9 @@ impl DiscoveryGates {
 /// the same preparation completes, never duplicating it. Composing stays probe-free: this runs after the
 /// listener is up, so it delays nothing.
 async fn prewarm_providers(composed: Arc<Composed>, discovering: Arc<DiscoveryGates>) {
+    // Measure the executable's own digest inside the boot window, so the first hello answers from
+    // cache instead of reading the image while an operator waits.
+    let _warmed = crate::build_identity::build_digest();
     // Two at a time, deliberately gentle: each meeting starts up to a few CLI processes, and measured
     // 2026-08-20, warming all five at once saturated the machine at the exact moment the operator's own
     // first request arrives, making that request slower than the cold it hides. A racing real request
@@ -1590,7 +1593,7 @@ fn abandon_reply(
             drop(cancelling.send(ReservationAsked::ReleaseProviderUpdate(reservation)));
             false
         }
-        Reply::One(_) | Reply::Watching(_) | Reply::WatchingSessions => false,
+        Reply::One(_) | Reply::Watching(_) | Reply::WatchingSessions | Reply::Retiring => false,
     }
 }
 
@@ -1974,6 +1977,16 @@ async fn converse_inner(
                 if write(&mut connection, &response).await.is_err() {
                     return;
                 }
+            }
+
+            // The retirement stands whether or not the answer could be written: the caller asked
+            // this build to stop serving, and a caller that vanished first changes nothing about
+            // that. Exit code 0 because retiring on request is this process working as designed.
+            Reply::Retiring => {
+                // ok: the answer is best-effort on a process that is about to exist no more; the
+                // caller detects the exit itself by respawning and greeting the successor.
+                drop(write(&mut connection, &Response::Done).await);
+                std::process::exit(0);
             }
 
             // This connection is a view of a session from here on. It stops when the session's stream ends or when

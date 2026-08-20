@@ -2078,6 +2078,7 @@ mod tests {
                 instance_id: instance_id.to_owned(),
                 version: "0.1.1".to_owned(),
                 platform: "test".to_owned(),
+                build_digest: None,
             },
             server_capabilities: runtrol_runtime_protocol::RuntimeCapabilities {
                 integration_enrollment: true,
@@ -2146,6 +2147,7 @@ mod tests {
                 instance_id: instance_id.to_owned(),
                 version: "0.1.1".to_owned(),
                 platform: "test".to_owned(),
+                build_digest: None,
             },
             server_capabilities: runtrol_runtime_protocol::RuntimeCapabilities {
                 integration_enrollment: true,

@@ -68,6 +68,10 @@ pub enum Needed {
 /// rather than allowed. `Request` is open ended on purpose, which is what makes that arm necessary and what makes
 /// `scopeWall.py` necessary beside it: the compiler cannot tell anyone here that a variant went unmapped.
 #[must_use]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one arm per public request is the point of this registry, so it grows with the wire"
+)]
 pub fn needed(request: &Request) -> Needed {
     match request {
         Request::Hello { .. } => {
@@ -169,6 +173,8 @@ pub fn needed(request: &Request) -> Needed {
         // Close also removes runtrol's durable pointer. The provider still owns its conversation, but removing
         // the only runtrol list entry is irreversible here and therefore needs the separate delete authority.
         Request::Close { .. } => Needed::Scope(DeviceScope::SessionDelete),
+
+        Request::Retire => Needed::AtTheMachine(LocalScope::RuntimeRetire),
 
         Request::StopEverything => Needed::Anyone(
             "the security posture requires the panic button to work from anywhere with no permission, and the \
@@ -395,6 +401,7 @@ mod tests {
                 now: false,
             },
             Request::StopEverything,
+            Request::Retire,
             Request::Consult,
             Request::ConsultWire {
                 from: "claude".into(),
@@ -629,6 +636,20 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn retiring_the_runtime_is_never_remote() {
+        // Which binary answers every later request is executable authority, and a hostile relay
+        // must not be able to bounce the daemon. No grant can carry this to a device.
+        let ledger = GrantLedger::new();
+        let phone = Caller::Device {
+            device: DeviceId::now(),
+        };
+        assert!(matches!(
+            allowed(&phone, &Request::Retire, &ledger),
+            Err(WallRefusal::NeverRemote { .. })
+        ));
     }
 
     #[test]

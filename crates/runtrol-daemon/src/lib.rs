@@ -14,6 +14,7 @@
 //! - [`consult`] wiring one CLI into another as a consultant, through the CLIs' own commands
 //! - [`serve`] one owner of the sessions, and a task for every connection beside it
 
+mod build_identity;
 pub mod compose;
 mod consult;
 mod crash;

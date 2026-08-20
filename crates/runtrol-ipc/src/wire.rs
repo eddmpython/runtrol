@@ -504,6 +504,13 @@ pub enum Request {
     /// is the safe direction.
     StopEverything,
 
+    /// Ask an idle daemon to exit so the replaced-on-disk binary serves the next request.
+    ///
+    /// Refused while any conversation still has a live process: retiring must never take an agent with it. The
+    /// caller that installed the new binary starts the successor the same way it starts any daemon, so the answer
+    /// to "done" is a respawn, not a wait.
+    Retire,
+
     /// Every cross-consult direction this build knows, with its current wired state.
     ///
     /// Read-only: the state lives in the CLIs' own configuration and is asked for fresh, so there is no second
@@ -545,6 +552,13 @@ pub enum Response {
         device: Option<Box<DeviceAuthorityLine>>,
         /// Stable VAPID application-server key on authenticated paired-device connections.
         push_public_key: Option<Box<str>>,
+        /// SHA-256 of the executable this daemon is running, when it could measure itself.
+        ///
+        /// Added 2026-08-20 for supersession: the manager that installed the binary compares this
+        /// with the file on disk and retires an older daemon. Absent on older daemons, and absence
+        /// means exactly that: an older daemon.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        build_digest: Option<Box<str>>,
     },
 
     /// The sessions and any damaged rows the daemon could not read.
@@ -1682,6 +1696,7 @@ mod tests {
             ],
             device: None,
             push_public_key: None,
+            build_digest: None,
         };
         let encoded = serde_json::to_string(&response).expect("writable");
         let back: Response = serde_json::from_str(&encoded).expect("readable");

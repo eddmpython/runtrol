@@ -11,6 +11,7 @@ import {
 type Connected = {
   transport: FrameTransport;
   providers: PrivateProviderLine[];
+  buildDigest: string | null;
 };
 
 export class CoreClient {
@@ -21,6 +22,11 @@ export class CoreClient {
 
   async ensureRuntime(): Promise<void> {
     await this.command();
+  }
+
+  /// The running daemon's announced executable digest, or null when it predates announcing one.
+  async announcedBuildDigest(): Promise<string | null> {
+    return (await this.command()).buildDigest;
   }
 
   async availableProviders(): Promise<PrivateProviderLine[]> {
@@ -73,7 +79,11 @@ export class CoreClient {
       if (welcome.say !== "welcome") {
         throw new Error(`the daemon greeted with ${welcome.say}`);
       }
-      return { transport, providers: welcome.with.providers };
+      return {
+        transport,
+        providers: welcome.with.providers,
+        buildDigest: welcome.with.build_digest ?? null,
+      };
     } catch (error) {
       transport.close();
       throw error;

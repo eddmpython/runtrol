@@ -49,6 +49,14 @@ pub(crate) enum Reply {
     Watching(Box<SessionView>),
     /// The caller is now watching the current session index.
     WatchingSessions,
+    /// The idle daemon retires: answer done, then this process exits.
+    ///
+    /// A separate shape because only the connection loop knows when the answer has actually been
+    /// written, and exiting before that would make the caller report failure for a retirement that
+    /// worked. Accepted exclusively with zero live agent processes, so there is nothing to drain:
+    /// durable state is written atomically at each mutation, and the successor daemon is started
+    /// by the caller exactly the way any daemon is started.
+    Retiring,
     /// The session is closed, and its process is still being stopped.
     ///
     /// A separate shape because stopping is a wait, and the answer is not known until it is over. Handing the wait out
@@ -1109,6 +1117,7 @@ pub(crate) fn answer_prepared(
                         &conversation.caller,
                     ),
                     push_public_key: push_public_key(composed, &conversation.caller),
+                    build_digest: crate::build_identity::build_digest().map(Into::into),
                 })
             }
             Err(ours) => Reply::One(refuse(&format!(
@@ -1460,6 +1469,19 @@ pub(crate) fn answer_prepared(
             // Reported rather than swallowed. An operator who pressed the panic button has to know whether it worked.
             Err(error) => Reply::One(refuse(&error.to_string())),
         },
+
+        Request::Retire => {
+            let hot = sessions
+                .live_sessions()
+                .filter(|live| live.tier.has_a_process())
+                .count();
+            if hot > 0 {
+                return Reply::One(refuse(&format!(
+                    "{hot} conversation(s) still have a live process; retire waits for an idle machine"
+                )));
+            }
+            Reply::Retiring
+        }
 
         // The exchange already happened in the connection task. What is verified here is the binding: the
         // answer must be the one computed for this exact request, the rule every prepared result follows.
@@ -2463,12 +2485,17 @@ mod tests {
                 providers,
                 device,
                 push_public_key,
+                build_digest,
             }) => {
                 assert_eq!(wire, runtrol_ipc::WIRE_VERSION);
                 assert!(!providers.is_empty(), "a fresh install has providers");
                 assert!(providers.iter().any(|one| one.usable));
                 assert!(device.is_none());
                 assert!(push_public_key.is_none());
+                assert!(
+                    build_digest.is_some_and(|digest| digest.len() == 64),
+                    "the greeting announces this executable's digest for supersession",
+                );
             }
             other => panic!("expected a welcome, got {}", shape(&other)),
         }
@@ -3117,6 +3144,38 @@ mod tests {
         clean(composed, &path);
     }
 
+    #[tokio::test]
+    async fn retire_answers_retiring_only_on_an_idle_machine() {
+        let (composed, path) = composed_for("retire-idle-only");
+        let mut sessions = SessionManager::new();
+        let session = SessionId::now();
+        attach_and_store(&composed, &mut sessions, session, &path);
+
+        let mut conversation = Conversation::at_the_machine();
+        greet(&mut conversation, &composed, &mut sessions).await;
+        match answer(&mut conversation, &composed, &mut sessions, Request::Retire).await {
+            Reply::One(Response::Failed(failure)) => {
+                assert!(
+                    failure.message.contains("live process"),
+                    "the refusal names why: {}",
+                    failure.message
+                );
+            }
+            other => panic!("expected the hot refusal, got {}", shape(&other)),
+        }
+
+        // With no live process anywhere, the exit decision goes to the connection loop, which is
+        // the only layer that knows when the answer has actually been written.
+        let mut idle = SessionManager::new();
+        let mut fresh = Conversation::at_the_machine();
+        greet(&mut fresh, &composed, &mut idle).await;
+        match answer(&mut fresh, &composed, &mut idle, Request::Retire).await {
+            Reply::Retiring => {}
+            other => panic!("expected the retirement, got {}", shape(&other)),
+        }
+        clean(composed, &path);
+    }
+
     /// Agree a wire format, so the rest of a test can ask for something.
     async fn greet(
         conversation: &mut Conversation,
@@ -3140,6 +3199,7 @@ mod tests {
         match reply {
             Reply::One(response) => format!("{response:?}"),
             Reply::Watching(_) | Reply::WatchingSessions => "a subscription".to_owned(),
+            Reply::Retiring => "a retirement".to_owned(),
             Reply::Stopping { how, .. } => format!("a process still stopping, {how:?}"),
             Reply::Cleaning { agents, .. } => format!("{} processes still stopping", agents.len()),
             Reply::Sending { .. } => "a provider command in flight".to_owned(),

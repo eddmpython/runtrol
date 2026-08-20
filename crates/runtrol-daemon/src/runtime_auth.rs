@@ -573,7 +573,8 @@ fn random_bytes<const N: usize>() -> Result<[u8; N], AuthorizationFailure> {
     Ok(bytes)
 }
 
-fn hex(bytes: &[u8]) -> String {
+/// Lowercase hex, shared where a digest needs writing down (`build_identity` reuses this owner).
+pub(crate) fn hex(bytes: &[u8]) -> String {
     let mut output = String::with_capacity(bytes.len().saturating_mul(2));
     for byte in bytes {
         output.push(hex_digit(byte >> 4));

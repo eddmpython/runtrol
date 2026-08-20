@@ -233,7 +233,6 @@
       ]
     },
     "ClientCapabilities": {
-      "additionalProperties": false,
       "description": "Client features understood by the initial read-only revision.",
       "properties": {
         "opaqueEventExtensions": {
@@ -245,7 +244,6 @@
       "type": "object"
     },
     "ClientInfo": {
-      "additionalProperties": false,
       "description": "Safe client presentation metadata.",
       "properties": {
         "name": {
@@ -625,7 +623,6 @@
       "type": "object"
     },
     "InitializeParams": {
-      "additionalProperties": false,
       "description": "Initialization is negotiation only. Inventory is a separate authorized request.",
       "properties": {
         "authentication": {
@@ -665,7 +662,6 @@
       "type": "object"
     },
     "InitializeResult": {
-      "additionalProperties": false,
       "description": "Successful initialization before integration authorization.",
       "properties": {
         "grant": {
@@ -1906,7 +1902,6 @@
       ]
     },
     "RuntimeCapabilities": {
-      "additionalProperties": false,
       "description": "Public product capabilities for the selected revision.",
       "properties": {
         "integrationEnrollment": {
@@ -2189,9 +2184,15 @@
       "type": "object"
     },
     "RuntimeInstance": {
-      "additionalProperties": false,
       "description": "Public Runtime instance facts used to reject a stale or replaced locator.",
       "properties": {
+        "buildDigest": {
+          "description": "SHA-256 of the running executable, measured at boot. Absent on runtimes older than\n2026-08-20; a manager that installed the binary treats absence or mismatch as an older\ndaemon and supersedes it instead of speaking a possibly different dialect past the hello.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "instanceId": {
           "description": "Changes when a newly installed Runtime home is created.",
           "type": "string"
@@ -2213,7 +2214,6 @@
       "type": "object"
     },
     "RuntimeLimits": {
-      "additionalProperties": false,
       "description": "Numeric public bounds advertised during initialization.",
       "properties": {
         "challengeLifetimeMs": {
@@ -2241,7 +2241,8 @@
           "type": "integer"
         },
         "maxAttachmentBase64Bytes": {
-          "description": "Maximum base64 characters for one attached image.",
+          "default": 0,
+          "description": "Maximum base64 characters for one attached image. Zero on runtimes that predate block\nsubmission (before 2026-08-20): absent means the feature does not exist there.",
           "format": "uint",
           "minimum": 0,
           "type": "integer"
@@ -2260,7 +2261,8 @@
           "type": "integer"
         },
         "maxInputBlocks": {
-          "description": "Maximum blocks in one submitted block set.",
+          "default": 0,
+          "description": "Maximum blocks in one submitted block set. Zero when block submission does not exist.",
           "format": "uint",
           "minimum": 0,
           "type": "integer"
@@ -2272,7 +2274,8 @@
           "type": "integer"
         },
         "maxInputImages": {
-          "description": "Maximum images in one submitted block set.",
+          "default": 0,
+          "description": "Maximum images in one submitted block set. Zero when block submission does not exist.",
           "format": "uint",
           "minimum": 0,
           "type": "integer"
@@ -2339,9 +2342,6 @@
       "required": [
         "maxFrameBytes",
         "maxInputBytes",
-        "maxAttachmentBase64Bytes",
-        "maxInputBlocks",
-        "maxInputImages",
         "maxModelSelectionBytes",
         "maxReasoningSelectionBytes",
         "maxNativeAdoptionTokenBytes",

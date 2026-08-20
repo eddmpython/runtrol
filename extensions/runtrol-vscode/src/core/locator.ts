@@ -9,6 +9,10 @@ import { materializeManagedCore } from "./managedCore";
 type LocatedCore = {
   executable: string;
   endpoint: string;
+  // SHA-256 of the managed Core this extension installed, when that is the executable in use.
+  // Null for an operator-configured corePath or a PATH fallback: supersession only acts on a
+  // binary this extension owns, never on somebody else's build.
+  managedDigest: string | null;
 };
 
 export class CoreLocator {
@@ -25,6 +29,11 @@ export class CoreLocator {
     return (await this.locate()).executable;
   }
 
+  /// The digest of the extension-installed Core when it is the executable in use, or null.
+  async managedDigest(): Promise<string | null> {
+    return (await this.locate()).managedDigest;
+  }
+
   invalidate(): void {
     this.located = null;
   }
@@ -38,12 +47,12 @@ export class CoreLocator {
       process.platform === "win32" ? "runtrol.exe" : "runtrol",
     ).fsPath;
 
-    const candidates: string[] = [];
+    const candidates: { executable: string; managedDigest: string | null }[] = [];
     if (configured) {
       if (!path.isAbsolute(configured)) {
         throw new Error("runtrol.corePath must be an absolute path");
       }
-      candidates.push(configured);
+      candidates.push({ executable: configured, managedDigest: null });
     } else {
       let bundledExists = false;
       try {
@@ -57,16 +66,16 @@ export class CoreLocator {
       }
       if (bundledExists) {
         const managed = await materializeManagedCore(bundled, this.context.globalStorageUri.fsPath);
-        candidates.push(managed.executable);
+        candidates.push({ executable: managed.executable, managedDigest: managed.digest });
       }
-      candidates.push("runtrol");
+      candidates.push({ executable: "runtrol", managedDigest: null });
     }
 
     const failures: string[] = [];
-    for (const executable of candidates) {
+    for (const { executable, managedDigest } of candidates) {
       try {
         const endpoint = await probeEndpoint(executable);
-        return { executable, endpoint };
+        return { executable, endpoint, managedDigest };
       } catch (error) {
         failures.push(`${executable}: ${error instanceof Error ? error.message : String(error)}`);
       }

@@ -681,6 +681,7 @@ fn initialize(
             instance_id: instance_id.to_owned(),
             version: env!("CARGO_PKG_VERSION").to_owned(),
             platform: platform_name().to_owned(),
+            build_digest: crate::build_identity::build_digest().map(str::to_owned),
         },
         server_capabilities: RuntimeCapabilities {
             integration_enrollment: true,

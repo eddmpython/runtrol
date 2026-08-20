@@ -10,6 +10,24 @@ and refactoring that no user can observe do not belong here.
 
 ## [Unreleased]
 
+### Fixed
+
+- Updating the extension no longer breaks against the still-running older Core. 0.1.8 failed its
+  first hello on every machine with a running daemon ("InitializeResult violates the selected
+  public schema"), because new required fields had joined a finalized protocol revision. The hello
+  is now eternally compatible in both directions: fields added after a revision was finalized are
+  optional forever, unknown fields are ignored, and a corpus of every shipped hello is enforced in
+  CI so no future release can regress this.
+
+### Added
+
+- The Core now rolls itself forward. The daemon announces its own executable digest in the
+  greeting; when the extension sees a daemon older than the Core it installed, it asks that daemon
+  to retire (refused while any conversation still has a live process, retried once the machine is
+  idle) and the next request starts the new build. A daemon too old to know "retire" gets a single
+  explicit "Restart the Runtrol Core" button instead of silence. `runtrol retire` does the same
+  from a terminal.
+
 ## [0.1.8] - 2026-08-20
 
 ### Added

@@ -9,6 +9,7 @@ import { ConversationView, type WebviewPerformance } from "./conversationView";
 import { Controller } from "./controller";
 import { CoreClient } from "./core/client";
 import { CoreLocator } from "./core/locator";
+import { superviseCoreCurrency } from "./coreSupersessionSurface";
 import {
   confirmRuntimeForget,
   manageIntegrations,
@@ -464,7 +465,9 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
       void run(() => afterReady(() => rootFollowing.follow()));
     }),
   );
-  const runtimeInitialization = runtime.initialize();
+  // Before the Runtime integration speaks: rolling an older daemon forward here is what lets
+  // everything past the hello assume the daemon and this extension are the same build.
+  const runtimeInitialization = superviseCoreCurrency(client, locator).then(() => runtime.initialize());
   const controllerInitialization = runtimeInitialization.then(async () => {
     initializationStage = "controller";
     await controller.initialize();

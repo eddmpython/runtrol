@@ -265,6 +265,7 @@ mod tests {
             ],
             device: None,
             push_public_key: None,
+            build_digest: None,
         };
         let lines = render(&response);
         assert_eq!(lines.len(), 2, "both are shown");
