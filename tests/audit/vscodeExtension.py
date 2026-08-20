@@ -314,11 +314,14 @@ def run() -> int:
 
     # The ceiling is a bloat tripwire, not a target. Raised 256 -> 272 KiB on 2026-08-19 when the minified
     # extension bundle crossed it with deliberate features (operator-created projects, the usage strip, and the
-    # mid-conversation model switch), each reviewed at the crossing. A dependency slipping in still trips it.
+    # mid-conversation model switch), each reviewed at the crossing. Raised 272 -> 288 KiB on 2026-08-20 when
+    # the nativeParity sweep crossed it with deliberate features again (the service remedy surface, the effort
+    # chip and requested-suffix, message queueing, @file mentions, per-project start defaults, and the fan-out
+    # gate picker), each reviewed at the crossing. A dependency slipping in still trips it.
     bundles = [EXTENSION / "dist" / name for name in ("extension.js", "webview.js", "webview.css")]
     for bundle in bundles:
-        if not bundle.is_file() or bundle.stat().st_size > 272 * 1024:
-            failures.append(f"{bundle.relative_to(ROOT)} is missing or exceeds 272 KiB")
+        if not bundle.is_file() or bundle.stat().st_size > 288 * 1024:
+            failures.append(f"{bundle.relative_to(ROOT)} is missing or exceeds 288 KiB")
     if failures:
         print("[vscodeExtension] FAIL. bundle contract violations:", file=sys.stderr)
         for failure in failures:

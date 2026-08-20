@@ -68,6 +68,12 @@ export type MissionLine = {
   awaiting_input: number;
 };
 
+export type GateLine = {
+  gate_id: string;
+  program: string;
+  timeout_ms: number;
+};
+
 export type MissionTaskLine = {
   task_id: string;
   key: string;
@@ -214,6 +220,7 @@ export type Request =
       ask: "missionRegisterGate";
       with: { gate_id: string; program: string; arguments: string[]; timeout_ms: number };
     }
+  | { ask: "missionListGates" }
   | { ask: "missionValidate"; with: { project: string; mission_ref: string } }
   | { ask: "missionList" }
   | { ask: "missionGet"; with: { mission_id: string } }
@@ -300,6 +307,7 @@ export type Response =
   | { say: "runtimeForgetRequests"; with: RuntimeForgetLine[] }
   | { say: "runtimeKeyRotationRequests"; with: RuntimeKeyRotationLine[] }
   | { say: "missions"; with: MissionLine[] }
+  | { say: "missionGates"; with: GateLine[] }
   | { say: "mission"; with: MissionSnapshot }
   | { say: "missionWorkspace"; with: MissionWorkspace }
   | { say: "missionInstruction"; with: MissionInstruction }

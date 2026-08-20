@@ -141,7 +141,7 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
     openFolders: () => (vscode.workspace.workspaceFolders ?? []).map((folder) => folder.uri.fsPath),
     warn: (message) => void vscode.window.showWarningMessage(message),
   });
-  const missionController = new MissionController(client, controller, state);
+  const missionController = new MissionController(client, controller, state, context);
   const candidateController = new CandidateController(client);
   const missions = new MissionTree(missionController);
   // The operator's own projects. A heading exists because they created it here, never because a folder
@@ -187,7 +187,9 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
     ),
     vscode.commands.registerCommand(
       "runtrol.registerMissionGate",
-      () => run(() => afterMissionReady(() => missionController.registerGate())),
+      () => run(() => afterMissionReady(async () => {
+        await missionController.registerGate();
+      })),
     ),
     vscode.commands.registerCommand(
       "runtrol.openMission",

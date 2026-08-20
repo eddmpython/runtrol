@@ -111,7 +111,11 @@ pub fn needed(request: &Request) -> Needed {
         | Request::RuntimeKeyRotationConfirm { .. } => {
             Needed::AtTheMachine(LocalScope::IntegrationAdmin)
         }
-        Request::MissionRegisterGate { .. } => Needed::AtTheMachine(LocalScope::GateRegister),
+        // Listing shares the registering scope: the audience is the same person deciding what to
+        // register or reference, and gate programs are machine-local facts that never leave the PC.
+        Request::MissionRegisterGate { .. } | Request::MissionListGates => {
+            Needed::AtTheMachine(LocalScope::GateRegister)
+        }
         Request::MissionValidate { .. } => Needed::AtTheMachine(LocalScope::MissionCreate),
         Request::MissionList | Request::MissionGet { .. } => {
             Needed::Scope(DeviceScope::MissionRead)

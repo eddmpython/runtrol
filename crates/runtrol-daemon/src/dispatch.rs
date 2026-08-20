@@ -1153,6 +1153,7 @@ pub(crate) fn answer_prepared(
         },
 
         mission @ (Request::MissionRegisterGate { .. }
+        | Request::MissionListGates
         | Request::MissionValidate { .. }
         | Request::MissionList
         | Request::MissionGet { .. }

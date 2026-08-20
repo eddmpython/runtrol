@@ -5,12 +5,14 @@ import * as vscode from "vscode";
 import type { Controller } from "../controller";
 import type { CoreClient } from "../core/client";
 import type {
+  GateLine,
   MissionLine,
   MissionSnapshot,
   MissionTaskLine,
   Response,
 } from "../protocol";
 import type { RuntimeState } from "../state";
+import { workspaceIdentity } from "../workspaceCollision";
 import {
   MAX_BRANCHES,
   MIN_BRANCHES,
@@ -19,6 +21,40 @@ import {
   instructionDigest,
   missionSpec,
 } from "./fanOut";
+import { branchFromHead, gitdirTarget } from "./gitHead";
+
+/// Where each project's last fan-out shape is remembered (output roots only, never instruction text).
+const FAN_OUT_DEFAULTS_KEY = "runtrol.fanOutDefaults";
+
+/// The current branch of the repository at `folder`, or null when it cannot be read honestly.
+///
+/// Read-only: `.git/HEAD` is the repository's own statement, and a linked worktree's one-line
+/// `gitdir:` indirection is followed exactly one step because one step is what git writes there.
+async function currentBranch(folder: string): Promise<string | null> {
+  const read = async (file: string): Promise<string | null> => {
+    try {
+      return new TextDecoder().decode(await vscode.workspace.fs.readFile(vscode.Uri.file(file)));
+    } catch {
+      // A folder without a readable repository is the normal miss; the caller's prefilled
+      // question is the handling.
+      return null;
+    }
+  };
+  const dotGit = path.join(folder, ".git");
+  const stat = await vscode.workspace.fs.stat(vscode.Uri.file(dotGit)).then(
+    (value) => value,
+    () => null,
+  );
+  if (!stat) return null;
+  let headFile = path.join(dotGit, "HEAD");
+  if (stat.type === vscode.FileType.File) {
+    const target = gitdirTarget((await read(dotGit)) ?? "");
+    if (!target) return null;
+    headFile = path.join(path.isAbsolute(target) ? target : path.join(folder, target), "HEAD");
+  }
+  const head = await read(headFile);
+  return head === null ? null : branchFromHead(head);
+}
 
 export type MissionSelection = {
   readonly mission?: MissionLine;
@@ -37,6 +73,7 @@ export class MissionController implements vscode.Disposable {
     private readonly client: CoreClient,
     private readonly sessions: Controller,
     private readonly runtimeState: RuntimeState,
+    private readonly context: vscode.ExtensionContext,
   ) {}
 
   get missions(): readonly MissionLine[] {
@@ -138,15 +175,40 @@ export class MissionController implements vscode.Disposable {
       validateInput: branchProblem,
     });
     if (!branches) return;
-    const gateId = await vscode.window.showInputBox({
+    // Offered from the registry instead of typed from memory. Asked rather than invented, still: a
+    // Gate decides whether an attempt succeeded, and inventing one that checks nothing would
+    // produce a fan-out whose attempts all pass regardless of what they did.
+    const gateId = await this.chooseGate();
+    if (!gateId) return;
+
+    // The repository's own word on where it stands, prefilled rather than assumed: a detached HEAD
+    // or an unreadable repository falls back to the question with the old default.
+    const detectedBranch = await currentBranch(folder.uri.fsPath);
+    const baseRef = await vscode.window.showInputBox({
       title: "Try one instruction several ways",
-      // Asked rather than invented. A Gate decides whether an attempt succeeded, and inventing one that checks
-      // nothing would produce a fan-out whose attempts all pass regardless of what they did.
-      prompt: "Which registered Gate decides whether an attempt worked?",
-      placeHolder: "the Gate ID you registered for this project",
+      prompt: "Which ref do the attempts branch from?",
+      value: detectedBranch ?? "main",
       ignoreFocusOut: true,
     });
-    if (!gateId?.trim()) return;
+    if (!baseRef?.trim()) return;
+
+    // The blast radius somebody declared last time, offered again. The project's own source
+    // directory stays the first-time default: an attempt allowed to write anywhere is an attempt
+    // whose blast radius nobody declared.
+    const projectKey = workspaceIdentity(folder.uri.fsPath);
+    const rootsText = await vscode.window.showInputBox({
+      title: "Try one instruction several ways",
+      prompt: "Which directories may the attempts write to? (comma separated, project relative)",
+      value: this.fanOutRoots(projectKey).join(", "),
+      ignoreFocusOut: true,
+    });
+    if (rootsText === undefined) return;
+    const outputRoots = rootsText
+      .split(",")
+      .map((root) => root.trim())
+      .filter(Boolean);
+    if (outputRoots.length === 0) return;
+    await this.rememberFanOutRoots(projectKey, outputRoots);
 
     const document = await vscode.workspace.openTextDocument({
       language: "toml",
@@ -154,11 +216,9 @@ export class MissionController implements vscode.Disposable {
         instruction,
         instructionRef,
         branches: Number(branches),
-        gateId: gateId.trim(),
-        baseRef: "main",
-        // The project's own source directory is the honest default: an attempt allowed to write anywhere is an
-        // attempt whose blast radius nobody declared.
-        outputRoots: ["src"],
+        gateId,
+        baseRef: baseRef.trim(),
+        outputRoots,
       }),
     });
     await vscode.window.showTextDocument(document, { preview: false });
@@ -167,24 +227,90 @@ export class MissionController implements vscode.Disposable {
     );
   }
 
-  async registerGate(): Promise<void> {
+  /// The Gate for this fan-out: registered ones offered first, registering chained in, typing kept
+  /// as the escape for an identity the registry does not hold yet.
+  private async chooseGate(): Promise<string | null> {
+    const response = (await this.client.read({ ask: "missionListGates" })).response;
+    const gates: GateLine[] = response.say === "missionGates" ? response.with : [];
+    const picked = await vscode.window.showQuickPick(
+      [
+        ...gates.map((gate) => ({
+          label: gate.gate_id,
+          description: gate.program,
+          detail: `hard timeout ${gate.timeout_ms} ms`,
+          choice: "registered" as const,
+        })),
+        {
+          label: "Register a new Gate...",
+          description: "one registration per project, then every fan-out reuses it",
+          detail: undefined,
+          choice: "register" as const,
+        },
+        {
+          label: "Type a Gate ID...",
+          description: "for an identity this registry does not hold yet",
+          detail: undefined,
+          choice: "type" as const,
+        },
+      ],
+      {
+        title: "Which registered Gate decides whether an attempt worked?",
+        placeHolder: gates.length === 0
+          ? "No Gate is registered yet; register one once and every fan-out reuses it"
+          : "A Gate decides whether an attempt worked; nothing passes without one",
+      },
+    );
+    if (!picked) return null;
+    if (picked.choice === "registered") return picked.label;
+    if (picked.choice === "register") return this.registerGate();
+    const typed = await vscode.window.showInputBox({
+      title: "Try one instruction several ways",
+      prompt: "Which registered Gate decides whether an attempt worked?",
+      placeHolder: "the Gate ID you registered for this project",
+      ignoreFocusOut: true,
+    });
+    return typed?.trim() || null;
+  }
+
+  private fanOutRoots(projectKey: string): string[] {
+    const stored = this.context.globalState.get(FAN_OUT_DEFAULTS_KEY);
+    if (stored === null || typeof stored !== "object" || Array.isArray(stored)) return ["src"];
+    const entry = (stored as Record<string, unknown>)[projectKey];
+    if (entry === null || typeof entry !== "object" || Array.isArray(entry)) return ["src"];
+    const roots = (entry as { outputRoots?: unknown }).outputRoots;
+    return Array.isArray(roots) && roots.length > 0 && roots.every((root) => typeof root === "string")
+      ? roots
+      : ["src"];
+  }
+
+  private async rememberFanOutRoots(projectKey: string, outputRoots: string[]): Promise<void> {
+    const stored = this.context.globalState.get(FAN_OUT_DEFAULTS_KEY);
+    const record = stored !== null && typeof stored === "object" && !Array.isArray(stored)
+      ? { ...(stored as Record<string, unknown>) }
+      : {};
+    record[projectKey] = { outputRoots };
+    await this.context.globalState.update(FAN_OUT_DEFAULTS_KEY, record);
+  }
+
+  /// Register one Gate and hand back its identity, so a fan-out can chain straight into using it.
+  async registerGate(): Promise<string | null> {
     const gateId = await requiredInput("Register deterministic Gate", "Stable Gate ID");
-    if (!gateId) return;
+    if (!gateId) return null;
     const program = await requiredInput("Register deterministic Gate", "Executable name, without shell text");
-    if (!program) return;
+    if (!program) return null;
     const argumentsText = await vscode.window.showInputBox({
       title: "Register deterministic Gate",
       prompt: "Fixed argument vector as a JSON string array",
       value: "[]",
       ignoreFocusOut: true,
     });
-    if (argumentsText === undefined) return;
+    if (argumentsText === undefined) return null;
     const parsed: unknown = JSON.parse(argumentsText);
     if (!Array.isArray(parsed) || !parsed.every((value) => typeof value === "string")) {
       throw new Error("Gate arguments must be a JSON string array");
     }
     const timeoutText = await requiredInput("Register deterministic Gate", "Hard timeout in milliseconds", "60000");
-    if (!timeoutText) return;
+    if (!timeoutText) return null;
     const timeout = Number(timeoutText);
     if (!Number.isSafeInteger(timeout) || timeout <= 0) {
       throw new Error("the Gate timeout must be a positive integer");
@@ -194,6 +320,7 @@ export class MissionController implements vscode.Disposable {
       with: { gate_id: gateId, program, arguments: parsed, timeout_ms: timeout },
     })).response, "Gate registration");
     await vscode.window.showInformationMessage(`Registered Gate ${gateId}.`);
+    return gateId;
   }
 
   async openMission(selection?: MissionSelection): Promise<void> {

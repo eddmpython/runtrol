@@ -10,8 +10,8 @@ use std::{
 use runtrol_childproc::{Containment, SpawnError, capture, capture_in, resolve};
 use runtrol_core::ProjectIdentity;
 use runtrol_ipc::wire::{
-    MissionCapabilityLine, MissionInstruction, MissionLine, MissionSnapshot, MissionTaskLine,
-    MissionWorkspace, Request, Response,
+    GateLine, MissionCapabilityLine, MissionInstruction, MissionLine, MissionSnapshot,
+    MissionTaskLine, MissionWorkspace, Request, Response,
 };
 use runtrol_ledger::{
     ArtifactEvidence, ArtifactId, ArtifactRecord, GateEvidence, GateRunRecord, Ledger,
@@ -345,6 +345,16 @@ impl MissionController {
                 project,
                 mission_ref,
             ),
+            Request::MissionListGates => Ok(Response::MissionGates(
+                self.gates
+                    .definitions()
+                    .map(|definition| GateLine {
+                        gate_id: definition.id.clone(),
+                        program: definition.program.clone(),
+                        timeout_ms: definition.timeout_ms,
+                    })
+                    .collect(),
+            )),
             Request::MissionList => self.list(ledger),
             Request::MissionGet { mission_id } => self.get(ledger, mission_id),
             Request::MissionStart {
@@ -2588,6 +2598,44 @@ gate_refs = ["fixture-check"]
         fn drop(&mut self) {
             let _ignored = std::fs::remove_dir_all(&self.root);
         }
+    }
+
+    #[test]
+    fn registered_gates_are_listed_in_stable_identity_order() {
+        // The listing exists so a fan-out flow can offer the registered gates instead of making
+        // the operator retype an identity from memory. Ids, programs, timeouts, nothing else.
+        let scratch = Scratch::make();
+        let mut controller = MissionController::default();
+        for (gate_id, timeout_ms) in [("zz-later", 2_000), ("aa-first", 1_000)] {
+            assert!(matches!(
+                controller.answer(
+                    &scratch.ledger,
+                    &[],
+                    &[],
+                    &Request::MissionRegisterGate {
+                        gate_id: gate_id.into(),
+                        program: "fixture".into(),
+                        arguments: Vec::new(),
+                        timeout_ms,
+                    },
+                ),
+                Response::Done
+            ));
+        }
+        let listed = controller.answer(&scratch.ledger, &[], &[], &Request::MissionListGates);
+        let Response::MissionGates(gates) = listed else {
+            panic!("expected the gate listing, got {listed:?}");
+        };
+        assert_eq!(
+            gates
+                .iter()
+                .map(|gate| gate.gate_id.as_ref())
+                .collect::<Vec<_>>(),
+            vec!["aa-first", "zz-later"],
+            "stable identity order, not registration order"
+        );
+        assert_eq!(gates[0].program.as_ref(), "fixture");
+        assert_eq!(gates[0].timeout_ms, 1_000);
     }
 
     #[test]

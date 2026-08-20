@@ -238,6 +238,13 @@ pub enum Request {
         timeout_ms: u64,
     },
 
+    /// List the fixed local gate definitions, machine-only like registering one.
+    ///
+    /// Exists so a fan-out flow can offer the registered gates instead of making the operator
+    /// retype an identity from memory. Ids, programs and timeouts only: the registry holds nothing
+    /// else worth disclosing, and this never leaves the machine.
+    MissionListGates,
+
     /// Load and validate one exact project Mission file without starting work.
     MissionValidate {
         /// Canonical project directory selected at the PC.
@@ -609,6 +616,9 @@ pub enum Response {
     /// Bounded Mission catalogue.
     Missions(Vec<MissionLine>),
 
+    /// The fixed local gate definitions, in stable identity order.
+    MissionGates(Vec<GateLine>),
+
     /// One exact Mission and Task state snapshot.
     Mission(Box<MissionSnapshot>),
 
@@ -823,6 +833,17 @@ pub struct RuntimeKeyRotationLine {
     pub new_key_fingerprint: Box<str>,
     /// Expiry in Unix milliseconds.
     pub expires_at_ms: u64,
+}
+
+/// One fixed local gate definition, as offered to a fan-out flow.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct GateLine {
+    /// Stable project-local gate identity.
+    pub gate_id: Box<str>,
+    /// Executable the definition names, shown so the operator recognises what a gate runs.
+    pub program: Box<str>,
+    /// Hard timeout.
+    pub timeout_ms: u64,
 }
 
 /// One bounded Mission catalogue row.

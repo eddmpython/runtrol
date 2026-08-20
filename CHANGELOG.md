@@ -27,6 +27,12 @@ and refactoring that no user can observe do not belong here.
 - Removing a project shows an Undo toast instead of asking for confirmation up front: the misclick is
   covered without making every deliberate removal answer a question first.
 
+- "Try One Instruction Several Ways..." lost its friction: the Gate question is now a pick from the
+  registered Gates (with registering a new one chained in), the base ref is prefilled from the
+  repository's own HEAD, and the writable directories are remembered per project instead of always
+  resetting to `src`. The reviewed, unsaved Mission document contract is unchanged: registration is once
+  per project, and after it a fan-out is one command.
+
 - Opening the model picker twice no longer asks the provider twice. Model catalogues are remembered for
   five minutes against the exact installed binary (a login change still surfaces quickly, and a replaced
   binary is always re-asked), and starting a session with a chosen model reuses the same answer instead of
