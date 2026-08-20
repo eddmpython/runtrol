@@ -15,6 +15,8 @@ test("accepts exactly the actions the dispatcher handles", () => {
   }));
   assert.ok(isViewAction({ type: "switchModel", available: ["sonnet"] }));
   assert.ok(isViewAction({ type: "switchMode", available: ["plan"] }));
+  assert.ok(isViewAction({ type: "switchEffort", model: "gpt-5" }));
+  assert.ok(isViewAction({ type: "switchEffort", model: "" }), "an unknown model is refused later, honestly");
 });
 
 // Regression: these two names once validated without a dispatcher branch, so the dispatcher's
@@ -30,6 +32,8 @@ test("refuses malformed payloads for known action names", () => {
   assert.equal(isViewAction({ type: "answerApproval", approval: "a", option: "0", subjectDigest: [] }), false);
   assert.equal(isViewAction({ type: "answerApproval", approval: "a", option: 0, subjectDigest: [256] }), false);
   assert.equal(isViewAction({ type: "switchModel", available: [""] }), false);
+  assert.equal(isViewAction({ type: "switchEffort", model: "m".repeat(201) }), false);
+  assert.equal(isViewAction({ type: "switchEffort" }), false);
   assert.equal(
     isViewAction({ type: "switchMode", available: Array.from({ length: 65 }, () => "m") }),
     false,

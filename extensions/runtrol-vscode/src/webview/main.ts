@@ -25,6 +25,7 @@ import {
 import { afterFrameOrDelay } from "./renderReady";
 import {
   agentLine,
+  chipText,
   NO_FACTS,
   NO_USAGE,
   usageLine,
@@ -48,7 +49,8 @@ type Incoming =
   | { type: "status"; message: string; kind: "info" | "warning" | "error" }
   | { type: "readyProbe" }
   | { type: "measureStart"; id: string }
-  | { type: "measureEnd"; id: string; producedFrames: number; droppedFrames: number };
+  | { type: "measureEnd"; id: string; producedFrames: number; droppedFrames: number }
+  | { type: "switchRequested"; what: "model" | "mode" | "effort"; value: string };
 
 type VsCodeApi = {
   postMessage(message: unknown): void;
@@ -123,6 +125,13 @@ modeChip.title = "Switch mode";
 modeChip.addEventListener("click", () => {
   vscode.postMessage({ type: "switchMode", available: switchableModeIds });
 });
+const effortChip = element<HTMLSpanElement>("effort-chip");
+// And for the reasoning effort. Its own chip because the model is a confirmed value and the effort a
+// requested one, and one chip must not mix the two kinds of fact.
+effortChip.title = "Switch reasoning effort";
+effortChip.addEventListener("click", () => {
+  vscode.postMessage({ type: "switchEffort", model: facts.model });
+});
 const usageChip = element<HTMLSpanElement>("usage-chip");
 const commandMenu = element<HTMLUListElement>("commands");
 const pending: unknown[] = [];
@@ -147,6 +156,9 @@ let usage: UsageFacts = NO_USAGE;
 let switchableModels: string[] = [];
 /// The modes this session announced, empty when the choice comes from the service's declared set instead.
 let switchableModeIds: string[] = [];
+/// Switches sent but not yet confirmed by the provider. Each rides its chip as a "(requested)"
+/// suffix and is cleared by the matching confirmation event, or at turn end as the fallback.
+let requested = { model: "", mode: "", effort: "" };
 
 window.addEventListener("message", ({ data }: MessageEvent<Incoming>) => {
   if (data.type === "reset") {
@@ -172,6 +184,11 @@ window.addEventListener("message", ({ data }: MessageEvent<Incoming>) => {
   }
   if (data.type === "measureEnd") {
     endMeasurement(data.id, data.producedFrames, data.droppedFrames);
+    return;
+  }
+  if (data.type === "switchRequested") {
+    requested = { ...requested, [data.what]: data.value };
+    paintFacts();
     return;
   }
   const frames = data.batch
@@ -330,11 +347,15 @@ function renderSession(session: Session | null, displayTitle: string | null, pro
 
 /// The one line under the composer that replaced an entire panel.
 function paintFacts(): void {
-  const agent = agentLine(facts);
+  const agent = agentLine(facts, requested.model);
   agentChip.textContent = agent;
   agentChip.hidden = !agent;
-  modeChip.textContent = facts.mode;
-  modeChip.hidden = !facts.mode;
+  const mode = chipText(facts.mode, requested.mode);
+  modeChip.textContent = mode;
+  modeChip.hidden = !mode;
+  const effort = chipText(facts.effort, requested.effort);
+  effortChip.textContent = effort;
+  effortChip.hidden = !effort;
   const spent = usageLine(usage, Date.now());
   usageChip.textContent = spent;
   usageChip.hidden = !spent;
@@ -463,6 +484,15 @@ function present(payload: unknown): void {
     return;
   }
   if (presentation.kind === "turn") {
+    if (string(body.step) === "ended") {
+      // In-flight switches do not outlive the turn. Model and mode have confirmation events, so an
+      // unconfirmed request reverts honestly here. The effort never gets a confirmation (no CLI
+      // sends one), so the accepted request becomes the displayed value, exactly as the attach-time
+      // effort was itself only ever the requested one.
+      if (requested.effort) facts = { ...facts, effort: requested.effort };
+      requested = { model: "", mode: "", effort: "" };
+      paintFacts();
+    }
     // A turn beginning and ending is already visible: the composer swaps its button and the row changes state.
     // Printing "Turn started" into the transcript says what the reader can already see, and it says it in the
     // protocol's words. Only an ending that stopped for a reason worth acting on earns a line.
@@ -583,6 +613,7 @@ function resetSessionTelemetry(): void {
   facts = { ...NO_FACTS, service: currentProvider };
   usage = NO_USAGE;
   switchableModels = [];
+  requested = { model: "", mode: "", effort: "" };
   paintFacts();
   // A command list belongs to one conversation. Carrying it across would offer the previous service's commands
   // to the next one, and the wrong list is worse than none: it looks authoritative.
@@ -601,6 +632,8 @@ function updateAttachment(body: UnknownRecord): void {
 
 function updateMode(body: UnknownRecord): void {
   facts = { ...facts, mode: string(body.mode_id) };
+  // The provider's word arrived; the request is no longer in flight, whatever it asked for.
+  requested = { ...requested, mode: "" };
   if (Array.isArray(body.available_ids)) {
     switchableModeIds = body.available_ids.filter(
       (id): id is string => typeof id === "string" && id.length > 0,
@@ -612,6 +645,7 @@ function updateMode(body: UnknownRecord): void {
 /// The provider's own word on which model answers now, and which ones this session may switch to.
 function updateModel(body: UnknownRecord): void {
   facts = { ...facts, model: string(body.model_id) };
+  requested = { ...requested, model: "" };
   if (Array.isArray(body.available_ids)) {
     switchableModels = body.available_ids.filter(
       (id): id is string => typeof id === "string" && id.length > 0,

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { agentLine, NO_FACTS, NO_USAGE, usageLine } from "./statusLine";
+import { agentLine, chipText, NO_FACTS, NO_USAGE, usageLine } from "./statusLine";
 
 const NOW = Date.parse("2026-08-17T12:00:00Z");
 
@@ -10,8 +10,19 @@ test("the agent line names only what is actually known", () => {
   assert.equal(agentLine({ ...NO_FACTS, service: "Claude Code" }), "Claude Code");
   assert.equal(
     agentLine({ service: "Codex", model: "gpt-5", effort: "high", mode: "auto" }),
-    "Codex · gpt-5 · high",
-    "the mode renders on its own chip, never twice",
+    "Codex · gpt-5",
+    "mode and effort render on their own chips, never twice",
+  );
+});
+
+test("a requested switch rides as a suffix and never displaces the confirmed value", () => {
+  assert.equal(chipText("gpt-5", ""), "gpt-5");
+  assert.equal(chipText("gpt-5", "gpt-5-mini"), "gpt-5 → gpt-5-mini (requested)");
+  assert.equal(chipText("", "high"), "high (requested)");
+  assert.equal(chipText("plan", "plan"), "plan (requested)", "a same-value request is still only requested");
+  assert.equal(
+    agentLine({ ...NO_FACTS, service: "Codex", model: "gpt-5" }, "gpt-5-mini"),
+    "Codex · gpt-5 → gpt-5-mini (requested)",
   );
 });
 

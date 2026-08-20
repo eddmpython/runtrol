@@ -1196,6 +1196,43 @@ export class Controller implements vscode.Disposable {
       throw new Error("no conversation is selected");
     }
     await this.runtime.setModel(runtimeAction(session), model, reasoningEffort);
+    // Sent, not confirmed: the chip shows the request as a suffix until the provider's own
+    // announcement replaces it (or the turn ends without one).
+    this.conversation.switchRequested("model", model);
+    if (reasoningEffort !== undefined) {
+      this.conversation.switchRequested("effort", reasoningEffort);
+    }
+  }
+
+  /// Switch only the reasoning effort, keeping the model the provider says is answering.
+  ///
+  /// `sessions/setModel` is the one switch surface and it requires the model, so the page reports
+  /// which one is currently answering. A conversation whose provider never announced an answering
+  /// model has nothing true to attach an effort to, and this says so instead of guessing one.
+  async switchEffort(currentModel: string): Promise<void> {
+    const session = this.state.selected;
+    if (!session) return;
+    if (!currentModel) {
+      this.conversation.status(
+        `${providerDisplayName(session.providerId, this.state.providers)} has not announced which model is answering, so the effort has nothing to attach to; its own settings stay in control.`,
+        "info",
+      );
+      return;
+    }
+    const catalogue = await this.runtime.models(session.providerId);
+    const model = modelOptions(catalogue).find((option) => option.id === currentModel)?.model ?? null;
+    const efforts = reasoningOptions(catalogue, model);
+    if (efforts.length === 0) {
+      this.conversation.status(
+        `${providerDisplayName(session.providerId, this.state.providers)} reports no reasoning efforts for ${currentModel}; its own settings stay in control.`,
+        "info",
+      );
+      return;
+    }
+    const picked = await this.pickReasoningEffort(catalogue, model, "Switch reasoning effort");
+    if (picked === undefined) return;
+    await this.runtime.setModel(runtimeAction(session), currentModel, picked ?? undefined);
+    this.conversation.switchRequested("effort", picked ?? "default");
   }
 
   /// Switch the governing permission mode of the open conversation, from its own header chip.
@@ -1237,6 +1274,7 @@ export class Controller implements vscode.Disposable {
       throw new Error("no conversation is selected");
     }
     await this.runtime.setMode(runtimeAction(session), mode);
+    this.conversation.switchRequested("mode", mode);
   }
 
   /// One effort picker for every path that asks: `undefined` is a cancel, `null` is the provider's default.

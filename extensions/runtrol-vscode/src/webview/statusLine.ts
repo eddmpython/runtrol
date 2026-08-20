@@ -21,13 +21,28 @@ export type UsageFacts = {
 export const NO_FACTS: ConversationFacts = { service: "", model: "", effort: "", mode: "" };
 export const NO_USAGE: UsageFacts = { usage: null, primary: null, secondary: null, reached: false };
 
-/// Who is being spoken to, and how they are configured.
-export function agentLine(facts: ConversationFacts): string {
-  // The mode is deliberately absent: it renders on its own chip, which is also its own switch.
-  return [facts.service, facts.model, facts.effort]
+/// Who is being spoken to, and which model the service says is answering.
+export function agentLine(facts: ConversationFacts, requestedModel = ""): string {
+  // Mode and effort are deliberately absent: each renders on its own chip, which is also its own
+  // switch. The model was a confirmed value sharing a chip with a merely-requested one (the effort),
+  // and one chip must not mix the two kinds of fact.
+  return [facts.service, chipText(facts.model, requestedModel)]
     .map((part) => part.trim())
     .filter(Boolean)
     .join(" · ");
+}
+
+/// A chip's text while a switch is in flight.
+///
+/// The confirmed value keeps its place and the request rides as a suffix, so the chip never shows a
+/// requested value where a confirmed one belongs. "(requested)" rather than a timing claim, because
+/// when it applies is the provider's business: the suffix disappears exactly when the provider
+/// confirms, and that disappearance is the timing.
+export function chipText(current: string, requested: string): string {
+  if (!requested) return current;
+  return current && current !== requested
+    ? `${current} → ${requested} (requested)`
+    : `${requested} (requested)`;
 }
 
 /// What this conversation has spent, shown only once a number actually exists.

@@ -12,6 +12,11 @@ and refactoring that no user can observe do not belong here.
 
 ### Added
 
+- The reasoning effort has its own chip under the composer, and clicking it switches only the effort while
+  keeping the answering model. While any switch (model, mode, or effort) is in flight, the chip keeps the
+  provider's confirmed value and shows the request as a suffix ("gpt-5 → gpt-5-mini (requested)"); the
+  suffix disappears exactly when the provider confirms, which is also when the change actually applies.
+
 - A session can be started in a chosen permission mode (for example plan) through the public Runtime:
   `sessions/start` takes an optional `permission`, validated against the same switchable-mode boundary as
   mid-session switching, so modes that remove safety prompts stay unreachable for every caller. Resuming a

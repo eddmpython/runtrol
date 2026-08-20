@@ -233,6 +233,12 @@ export class ConversationView implements vscode.Disposable {
     void this.panel?.webview.postMessage({ type: "status", message, kind });
   }
 
+  /// A switch was sent to the provider and is not yet confirmed. The chip shows the request as a
+  /// suffix beside the confirmed value; the matching confirmation event clears it.
+  switchRequested(what: "model" | "mode" | "effort", value: string): void {
+    void this.panel?.webview.postMessage({ type: "switchRequested", what, value });
+  }
+
   async measurePerformance(framesPerSecond = 3_000, durationMs = 5_000): Promise<WebviewPerformance> {
     if (framesPerSecond <= 0 || durationMs <= 0) {
       throw new Error("Webview measurement rate and duration must be positive");
@@ -473,6 +479,7 @@ export class ConversationView implements vscode.Disposable {
     <div class="composer-foot">
       <span id="agent-chip" class="chip" hidden></span>
       <span id="mode-chip" class="chip" hidden></span>
+      <span id="effort-chip" class="chip" hidden></span>
       <span id="usage-chip" class="chip" hidden></span>
       <span id="send-hint" class="send-hint" hidden></span>
     </div>

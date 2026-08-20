@@ -11,6 +11,7 @@ export type ViewAction =
   | { type: "answerApproval"; approval: string; option: number; subjectDigest: number[] }
   | { type: "switchModel"; available: string[] }
   | { type: "switchMode"; available: string[] }
+  | { type: "switchEffort"; model: string }
   | { type: "interrupt" };
 
 export function isViewAction(value: unknown): value is ViewAction {
@@ -31,6 +32,12 @@ export function isViewAction(value: unknown): value is ViewAction {
       && typeof candidate.option === "number"
       && Array.isArray(candidate.subjectDigest)
       && candidate.subjectDigest.every((byte) => Number.isInteger(byte) && byte >= 0 && byte <= 255);
+  }
+  if (type === "switchEffort") {
+    // The page reports which model is currently answering so the effort attaches to it; empty is
+    // allowed (the controller refuses honestly) but bulk is not.
+    const model = (value as { model?: unknown }).model;
+    return typeof model === "string" && model.length <= 200;
   }
   if (type === "switchModel" || type === "switchMode") {
     const available = (value as { available?: unknown }).available;
