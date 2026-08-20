@@ -265,27 +265,24 @@ impl RuntimeSessionCatalogue {
         self.sessions.first().map(|row| row.session)
     }
 
-    /// Filter against canonical current paths before any descriptor leaves Runtime.
+    /// Every managed session on the machine, for a caller that already passed the scope wall.
+    ///
+    /// Deliberately not root-bounded (operator contract, 2026-08-20, `memory/uxContract.md`): the Runtime
+    /// endpoint is owner-only local, and a local process already holds machine-wide authority through the
+    /// admin wire, so bounding this second local wire by enrollment roots protected nothing while it broke
+    /// the product's one promise: every conversation on the machine in one list, controllable before any
+    /// window is moved. Root bounds remain exactly where they are security: the phone wire.
     pub(crate) fn authorized(
         &self,
-        authority: &AuthorizedIntegration,
+        _authority: &AuthorizedIntegration,
     ) -> Result<ManagedSessionList, RuntimeInventoryFailure> {
         if !self.available {
             return Err(RuntimeInventoryFailure::Unavailable);
         }
-        let roots = approved_roots(authority)?;
         let sessions = self
             .sessions
             .iter()
-            .filter_map(|session| {
-                let Ok(workspace) = AbsPath::canonicalize(&session.workspace) else {
-                    return None;
-                };
-                roots
-                    .iter()
-                    .any(|root| workspace.is_under(&root.path))
-                    .then(|| session.descriptor.clone())
-            })
+            .map(|session| session.descriptor.clone())
             .collect();
         let warnings = if self.unreadable == 0 {
             Vec::new()
@@ -298,26 +295,20 @@ impl RuntimeSessionCatalogue {
         Ok(ManagedSessionList { sessions, warnings })
     }
 
-    /// Resolve one authorized public session identity without revealing sessions outside the grant.
+    /// Resolve one public session identity. Machine-wide for the same reason [`Self::authorized`] is.
     pub(crate) fn authorized_session(
         &self,
-        authority: &AuthorizedIntegration,
+        _authority: &AuthorizedIntegration,
         requested: &runtrol_runtime_protocol::RuntimeSessionId,
     ) -> Result<runtrol_provider::SessionId, RuntimeInventoryFailure> {
         if !self.available {
             return Err(RuntimeInventoryFailure::Unavailable);
         }
-        let roots = approved_roots(authority)?;
         let session = self
             .sessions
             .iter()
             .find(|session| session.descriptor.session_id.as_str() == requested.as_str())
             .ok_or(RuntimeInventoryFailure::SessionNotFound)?;
-        let workspace = AbsPath::canonicalize(&session.workspace)
-            .map_err(|_| RuntimeInventoryFailure::SessionNotFound)?;
-        if !roots.iter().any(|root| workspace.is_under(&root.path)) {
-            return Err(RuntimeInventoryFailure::SessionNotFound);
-        }
         Ok(session.session)
     }
 
@@ -335,7 +326,7 @@ impl RuntimeSessionCatalogue {
             .map(|row| row.provider)
     }
 
-    /// Read one authorized public descriptor without revealing sessions outside the grant.
+    /// Read one public descriptor. Machine-wide for the same reason the listing is.
     pub(crate) fn authorized_descriptor(
         &self,
         authority: &AuthorizedIntegration,
@@ -348,13 +339,12 @@ impl RuntimeSessionCatalogue {
     /// Resolve the provider pointer and exact current workspace needed to heat one managed session.
     pub(crate) fn authorized_managed_session(
         &self,
-        authority: &AuthorizedIntegration,
+        _authority: &AuthorizedIntegration,
         requested: &runtrol_runtime_protocol::RuntimeSessionId,
     ) -> Result<AuthorizedManagedSession, RuntimeInventoryFailure> {
         if !self.available {
             return Err(RuntimeInventoryFailure::Unavailable);
         }
-        let roots = approved_roots(authority)?;
         let session = self
             .sessions
             .iter()
@@ -362,9 +352,6 @@ impl RuntimeSessionCatalogue {
             .ok_or(RuntimeInventoryFailure::SessionNotFound)?;
         let workspace = AbsPath::canonicalize(&session.workspace)
             .map_err(|_| RuntimeInventoryFailure::SessionNotFound)?;
-        if !roots.iter().any(|root| workspace.is_under(&root.path)) {
-            return Err(RuntimeInventoryFailure::SessionNotFound);
-        }
         Ok(AuthorizedManagedSession {
             session: session.session,
             provider: session.provider,
@@ -377,25 +364,18 @@ impl RuntimeSessionCatalogue {
     /// Find an authorized managed pointer by the only safe native merge key.
     pub(crate) fn managed_as(
         &self,
-        authority: &AuthorizedIntegration,
+        _authority: &AuthorizedIntegration,
         provider: CoreProviderId,
         native: &NativeSessionId,
     ) -> Result<Option<RuntimeSessionId>, RuntimeInventoryFailure> {
         if !self.available {
             return Err(RuntimeInventoryFailure::Unavailable);
         }
-        let roots = approved_roots(authority)?;
         Ok(self.sessions.iter().find_map(|session| {
             if session.provider != provider || session.native.as_deref() != Some(native.as_str()) {
                 return None;
             }
-            let Ok(workspace) = AbsPath::canonicalize(&session.workspace) else {
-                return None;
-            };
-            roots
-                .iter()
-                .any(|root| workspace.is_under(&root.path))
-                .then(|| session.descriptor.session_id.clone())
+            Some(session.descriptor.session_id.clone())
         }))
     }
 }
@@ -438,17 +418,17 @@ pub(crate) fn authorized_roots(
     approved_roots(authority)
 }
 
-/// Resolve any exact current workspace under the integration's current approved roots.
+/// Resolve any exact current workspace on the machine.
+///
+/// Machine-wide for the same reason session reads are (`memory/uxContract.md`): the local surface starts
+/// and resumes conversations wherever they live, without moving the window there first. The path still has
+/// to exist and canonicalize, so a session cannot be aimed at a name that resolves elsewhere later.
 pub(crate) fn authorized_workspace(
-    authority: &AuthorizedIntegration,
+    _authority: &AuthorizedIntegration,
     requested: &str,
 ) -> Result<AuthorizedWorkspace, RuntimeInventoryFailure> {
     let workspace = AbsPath::canonicalize(requested)
         .map_err(|_| RuntimeInventoryFailure::RootAuthorityChanged)?;
-    let roots = approved_roots(authority)?;
-    if !roots.iter().any(|root| workspace.is_under(&root.path)) {
-        return Err(RuntimeInventoryFailure::RootAuthorityChanged);
-    }
     Ok(AuthorizedWorkspace { path: workspace })
 }
 
@@ -482,7 +462,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn replaced_root_invalidates_public_session_authority() {
+    fn the_local_surface_sees_the_machine_even_when_an_enrollment_root_was_replaced() {
         let base = std::env::temp_dir().join(format!(
             "runtrol-runtime-root-replacement-{}",
             std::process::id()
@@ -542,10 +522,18 @@ mod tests {
         let retired = base.join("retired");
         std::fs::rename(&project_path, &retired).expect("retire approved directory");
         std::fs::create_dir(&project_path).expect("replace directory at same path");
-        assert!(matches!(
-            catalogue.authorized(&authority),
-            Err(RuntimeInventoryFailure::RootAuthorityChanged)
-        ));
+        // The operator contract (memory/uxContract.md): the owner-only local wire is machine-wide, so
+        // enrollment-root drift never hides a managed session here. Root identity keeps mattering exactly
+        // where it is security: the phone wire, whose own tests pin that a replaced directory disappears.
+        assert_eq!(
+            catalogue
+                .authorized(&authority)
+                .expect("the local surface stays machine-wide")
+                .sessions
+                .len(),
+            1,
+            "a replaced enrollment root must not hide the machine from its owner"
+        );
         std::fs::remove_dir_all(&base).expect("clean root replacement fixture");
     }
 }
