@@ -20,11 +20,12 @@ use runtrol_provider::{
 use runtrol_runtime_protocol::{
     AcquireControlParams, CONTROL_LEASE_LIFETIME_MS, ControlLease, ControlLeaseParams,
     CoolSessionParams, EventCursor, ForgetSessionParams, IDEMPOTENCY_WINDOW_MS, LifecycleState,
-    ListPendingApprovalsParams, MAX_INPUT_BYTES, MUTATION_CLOCK_SKEW_MS, MutationRequestId,
-    PendingApproval, PendingApprovalList, RespondApprovalParams, RuntimeApprovalKind,
+    ListPendingApprovalsParams, MAX_ATTACHMENT_BASE64_BYTES, MAX_INPUT_BLOCKS, MAX_INPUT_BYTES,
+    MAX_INPUT_IMAGES, MUTATION_CLOCK_SKEW_MS, MutationRequestId, PendingApproval,
+    PendingApprovalList, PublicInputBlock, RespondApprovalParams, RuntimeApprovalKind,
     RuntimeApprovalOption, RuntimeApprovalOptionKind, RuntimeApprovalRisk, RuntimeErrorKind,
     RuntimeMethod, SessionDescriptor, SessionOpenResult, SetModeParams, SetModelParams,
-    SubmitInputParams, WaitingOn, WatchEventsParams, WatchEventsResult,
+    SubmitBlocksParams, SubmitInputParams, WaitingOn, WatchEventsParams, WatchEventsResult,
 };
 use runtrol_store::{
     IntegrationKey, IntegrationMutationKey, IntegrationMutationRow, IntegrationMutationState, Store,
@@ -57,6 +58,13 @@ pub(crate) enum RuntimeControlRequest {
     Submit {
         session: SessionId,
         params: SubmitInputParams,
+    },
+    /// Submit typed content blocks (text and images) under the caller's lease.
+    SubmitBlocks {
+        /// The exact managed session.
+        session: SessionId,
+        /// The validated public parameters.
+        params: SubmitBlocksParams,
     },
     SetModel {
         session: SessionId,
@@ -446,6 +454,9 @@ impl RuntimeControl {
             }
             RuntimeControlRequest::Submit { session, params } => {
                 self.submit(store, sessions, integration, session, params)
+            }
+            RuntimeControlRequest::SubmitBlocks { session, params } => {
+                self.submit_blocks(store, sessions, integration, session, params)
             }
             RuntimeControlRequest::SetModel { session, params } => {
                 self.set_model(store, sessions, integration, session, params)
@@ -960,6 +971,76 @@ impl RuntimeControl {
                 mutation,
                 taken,
                 command: AgentCommand::Prompt(vec![ContentBlock::Text(params.input.into())]),
+            },
+            Err(_) => self.deny(
+                store,
+                mutation,
+                RuntimeControlFailure::new(
+                    RuntimeErrorKind::SessionConflict,
+                    "the session cannot accept input in its current state",
+                ),
+            ),
+        }
+    }
+
+    /// The typed sibling of [`Self::submit`]: the same lease and the same idempotent mutation
+    /// record, with each block transported as it arrived. Runtime holds the frame only for the
+    /// duration of the relay and stores no attachment, thumbnail, or copy.
+    fn submit_blocks(
+        &mut self,
+        store: &Store,
+        sessions: &mut SessionManager,
+        integration: IntegrationKey,
+        session: SessionId,
+        params: SubmitBlocksParams,
+    ) -> RuntimeControlReply {
+        if let Err(why) = blocks_within_bounds(&params.blocks) {
+            return RuntimeControlReply::Failed(RuntimeControlFailure::new(
+                RuntimeErrorKind::InvalidRequest,
+                why,
+            ));
+        }
+        let authenticator = self.authenticate_submit_blocks(&params);
+        let mutation = match self.begin(
+            store,
+            integration,
+            RuntimeMethod::SessionsSubmitBlocks,
+            &params.request_id,
+            authenticator,
+        ) {
+            Ok(Begun::New(key)) => key,
+            Ok(Begun::Replay(reply)) => return *reply,
+            Err(failure) => return RuntimeControlReply::Failed(failure),
+        };
+        if let Err(failure) = self.verify_lease_values(
+            sessions,
+            integration,
+            session,
+            &params.lease_id,
+            params.lease_generation,
+        ) {
+            return self.deny(store, mutation, failure);
+        }
+        match sessions.take_agent(session) {
+            Ok(taken) => RuntimeControlReply::Sending {
+                mutation,
+                taken,
+                command: AgentCommand::Prompt(
+                    params
+                        .blocks
+                        .into_iter()
+                        .map(|block| match block {
+                            PublicInputBlock::Text { text } => ContentBlock::Text(text.into()),
+                            PublicInputBlock::Image {
+                                media_type,
+                                base64_data,
+                            } => ContentBlock::Image {
+                                media_type: media_type.into(),
+                                base64: base64_data.into(),
+                            },
+                        })
+                        .collect(),
+                ),
             },
             Err(_) => self.deny(
                 store,
@@ -1565,6 +1646,32 @@ impl RuntimeControl {
         finish_mac(mac)
     }
 
+    fn authenticate_submit_blocks(&self, params: &SubmitBlocksParams) -> [u8; 32] {
+        let mut mac = self.mac(RuntimeMethod::SessionsSubmitBlocks);
+        feed(&mut mac, params.session_id.as_str().as_bytes());
+        feed(&mut mac, params.lease_id.as_bytes());
+        feed(&mut mac, &params.lease_generation.to_le_bytes());
+        for block in &params.blocks {
+            // Kind then fields, each length-framed by `feed`, so two block lists that concatenate to
+            // the same bytes still authenticate differently.
+            match block {
+                PublicInputBlock::Text { text } => {
+                    feed(&mut mac, b"text");
+                    feed(&mut mac, text.as_bytes());
+                }
+                PublicInputBlock::Image {
+                    media_type,
+                    base64_data,
+                } => {
+                    feed(&mut mac, b"image");
+                    feed(&mut mac, media_type.as_bytes());
+                    feed(&mut mac, base64_data.as_bytes());
+                }
+            }
+        }
+        finish_mac(mac)
+    }
+
     fn authenticate_set_model(&self, params: &SetModelParams) -> [u8; 32] {
         let mut mac = self.mac(RuntimeMethod::SessionsSetModel);
         feed(&mut mac, params.session_id.as_str().as_bytes());
@@ -1667,6 +1774,51 @@ fn compare_replay(
         MutationOutcome::Open(result) => Ok(RuntimeControlReply::Opened(result.clone())),
         MutationOutcome::Failed(failure) => Ok(RuntimeControlReply::Failed(*failure)),
     }
+}
+
+/// The transport bounds one submitted block set must sit inside.
+///
+/// Transport sanity only, never content knowledge: the media type must merely say it is an image,
+/// and every ceiling is a published constant a caller can read before sending. An oversized
+/// attachment is refused whole, because truncating one would send a prompt the operator did not write.
+fn blocks_within_bounds(blocks: &[PublicInputBlock]) -> Result<(), &'static str> {
+    if blocks.is_empty() {
+        return Err("a block submission carries at least one block");
+    }
+    if blocks.len() > MAX_INPUT_BLOCKS {
+        return Err("the submission exceeds the advertised block limit");
+    }
+    let mut text_bytes = 0_usize;
+    let mut images = 0_usize;
+    for block in blocks {
+        match block {
+            PublicInputBlock::Text { text } => {
+                text_bytes = text_bytes.saturating_add(text.len());
+            }
+            PublicInputBlock::Image {
+                media_type,
+                base64_data,
+            } => {
+                images += 1;
+                if media_type.is_empty()
+                    || media_type.len() > 128
+                    || !media_type.starts_with("image/")
+                {
+                    return Err("an attachment names no usable image media type");
+                }
+                if base64_data.is_empty() || base64_data.len() > MAX_ATTACHMENT_BASE64_BYTES {
+                    return Err("an attachment is empty or exceeds the advertised byte limit");
+                }
+            }
+        }
+    }
+    if text_bytes > MAX_INPUT_BYTES {
+        return Err("caller input exceeds the advertised byte limit");
+    }
+    if images > MAX_INPUT_IMAGES {
+        return Err("the submission exceeds the advertised image limit");
+    }
+    Ok(())
 }
 
 fn feed(mac: &mut Hmac<Sha256>, value: &[u8]) {
@@ -2132,6 +2284,46 @@ mod tests {
     };
 
     use super::*;
+
+    #[test]
+    fn block_bounds_refuse_emptiness_bulk_and_the_wrong_kind_of_type() {
+        let text = |body: &str| PublicInputBlock::Text {
+            text: body.to_owned(),
+        };
+        let image = |media: &str, data: &str| PublicInputBlock::Image {
+            media_type: media.to_owned(),
+            base64_data: data.to_owned(),
+        };
+        assert!(blocks_within_bounds(&[text("hello"), image("image/png", "aGVsbG8=")]).is_ok());
+        assert!(blocks_within_bounds(&[]).is_err(), "emptiness");
+        assert!(
+            blocks_within_bounds(&vec![text("x"); MAX_INPUT_BLOCKS + 1]).is_err(),
+            "block bulk"
+        );
+        assert!(
+            blocks_within_bounds(&vec![image("image/png", "aGVsbG8="); MAX_INPUT_IMAGES + 1])
+                .is_err(),
+            "image bulk"
+        );
+        assert!(
+            blocks_within_bounds(&[image("application/pdf", "aGVsbG8=")]).is_err(),
+            "a non-image media type on an image block"
+        );
+        assert!(
+            blocks_within_bounds(&[image("image/png", "")]).is_err(),
+            "an empty attachment"
+        );
+        let oversized = "a".repeat(MAX_ATTACHMENT_BASE64_BYTES + 1);
+        assert!(
+            blocks_within_bounds(&[image("image/png", &oversized)]).is_err(),
+            "attachment bulk is refused whole, never truncated"
+        );
+        let long_text = "t".repeat(MAX_INPUT_BYTES + 1);
+        assert!(
+            blocks_within_bounds(&[text(&long_text)]).is_err(),
+            "text keeps the published input ceiling"
+        );
+    }
 
     struct QuietAgent(SessionId);
 

@@ -14,9 +14,9 @@ use crate::{
     RuntimeEventNotification, RuntimeLocatorRecord, RuntimeMethod, RuntimeModelCatalog,
     RuntimeProviderCapabilities, ServerChallenge, SessionDescriptor,
     SessionIndexChangedNotification, SessionIndexEndedNotification, SessionOpenResult,
-    SetModeParams, SetModelParams, StartSessionParams, SubmitInputParams, WatchEnrollmentParams,
-    WatchEventsParams, WatchEventsResult, WatchProvidersParams, WatchProvidersResult,
-    WatchSessionIndexParams, WatchSessionIndexResult,
+    SetModeParams, SetModelParams, StartSessionParams, SubmitBlocksParams, SubmitInputParams,
+    WatchEnrollmentParams, WatchEventsParams, WatchEventsResult, WatchProvidersParams,
+    WatchProvidersResult, WatchSessionIndexParams, WatchSessionIndexResult,
 };
 
 /// Checked schema filename inside this package.
@@ -64,6 +64,7 @@ struct PublicProtocolSchema {
     cool_session: CoolSessionParams,
     forget_session: ForgetSessionParams,
     submit_input: SubmitInputParams,
+    submit_blocks: SubmitBlocksParams,
     set_model: SetModelParams,
     set_mode: SetModeParams,
     watch_events: WatchEventsParams,

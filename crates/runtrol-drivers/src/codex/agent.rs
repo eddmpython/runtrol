@@ -560,6 +560,13 @@ fn prompt_params(
             ContentBlock::Text(text) => {
                 serde_json::json!({"type": "text", "text": text.to_string()})
             }
+            // The CLI's own UserInput image variant takes a URL, and a data URL carries the bytes
+            // without touching the filesystem (its schema also offers localImage-by-path, which
+            // would make the prompt depend on a file that can move).
+            ContentBlock::Image { media_type, base64 } => serde_json::json!({
+                "type": "image",
+                "url": format!("data:{media_type};base64,{base64}"),
+            }),
             // Forwarded whole. A block shape runtrol has never heard of still reaches the provider, which is
             // what keeps runtrol a pipe rather than a gate on which features are reachable. A payload that is
             // not readable JSON goes as text rather than being dropped: the operator wrote it, and losing
@@ -572,7 +579,7 @@ fn prompt_params(
                 return Err(ProviderError::Unsupported {
                     provider,
                     what: format!("{other:?}"),
-                    why: "this driver can send text and a native block, and nothing else yet",
+                    why: "this driver can send text, images, and a native block, and nothing else yet",
                 });
             }
         });
@@ -1038,6 +1045,33 @@ mod tests {
         assert_eq!(
             with.pointer("/effort").and_then(serde_json::Value::as_str),
             Some("high")
+        );
+
+        let with_image = prompt_params(
+            a_provider(),
+            "thread_abc",
+            &[ContentBlock::Image {
+                media_type: "image/png".into(),
+                base64: "aGVsbG8=".into(),
+            }],
+            None,
+            None,
+            None,
+        )
+        .expect("writable");
+        assert_eq!(
+            with_image
+                .pointer("/input/0/type")
+                .and_then(serde_json::Value::as_str),
+            Some("image"),
+            "the CLI's own UserInput image variant"
+        );
+        assert_eq!(
+            with_image
+                .pointer("/input/0/url")
+                .and_then(serde_json::Value::as_str),
+            Some("data:image/png;base64,aGVsbG8="),
+            "a data URL carries the bytes without touching the filesystem"
         );
 
         let without = prompt_params(

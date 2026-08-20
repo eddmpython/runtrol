@@ -157,6 +157,7 @@ pub(super) struct Prompt<'a> {
 #[serde(untagged)]
 pub(super) enum PromptBlock<'a> {
     Text(TextBlock<'a>),
+    Image(ImageBlock<'a>),
     Native(&'a Opaque),
 }
 
@@ -166,6 +167,17 @@ pub(super) struct TextBlock<'a> {
     #[serde(rename = "type")]
     pub(super) type_: &'static str,
     pub(super) text: &'a str,
+}
+
+/// ACP image content, the standard block shape (measured accepted where
+/// `promptCapabilities.image` is announced true).
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct ImageBlock<'a> {
+    #[serde(rename = "type")]
+    pub(super) type_: &'static str,
+    pub(super) mime_type: &'a str,
+    pub(super) data: &'a str,
 }
 
 /// Parameters for cancellation.

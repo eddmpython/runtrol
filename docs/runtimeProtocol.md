@@ -55,7 +55,7 @@ connection cannot approve itself.
 | `sessions/list`, `sessions/watchIndex`, `sessions/get` | `session.list` |
 | `sessions/start` | `session.start` plus an approved root |
 | `sessions/adoptNative`, `sessions/resume` | `session.resume` plus an approved root |
-| `sessions/acquireControl`, `sessions/submitInput`, `sessions/setModel`, `sessions/setMode` | `session.input.write` and the current lease where applicable |
+| `sessions/acquireControl`, `sessions/submitInput`, `sessions/submitBlocks`, `sessions/setModel`, `sessions/setMode` | `session.input.write` and the current lease where applicable |
 | `sessions/watchEvents`, `approvals/listPending` | `session.output.read` and authorized session visibility |
 | `sessions/interrupt`, `sessions/cool` | `session.stop` and the current lease |
 | `sessions/forget` | `session.delete`, a cold session, and exact local confirmation |

@@ -1588,6 +1588,54 @@
       ],
       "type": "object"
     },
+    "PublicInputBlock": {
+      "description": "One typed piece of caller input, transported without rewriting.\n\nIts own method (`sessions/submitBlocks`) rather than a widened `sessions/submitInput`, because one\nDTO holding both a plain string and a block list would carry two representations of the same\nprompt and two validation regimes for one method.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "Text, exactly as written.",
+          "properties": {
+            "text": {
+              "description": "The caller's text, never rewritten.",
+              "type": "string"
+            },
+            "type": {
+              "const": "text",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "text"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "One attached image, as bytes.",
+          "properties": {
+            "base64Data": {
+              "description": "The image bytes, base64 encoded and never inspected.",
+              "type": "string"
+            },
+            "mediaType": {
+              "description": "The IANA media type the attachment declared, e.g. `image/png`.",
+              "type": "string"
+            },
+            "type": {
+              "const": "image",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "mediaType",
+            "base64Data"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "RequestEnrollmentParams": {
       "additionalProperties": false,
       "description": "Prove possession of the key attached to a new enrollment.",
@@ -2192,6 +2240,12 @@
           "minimum": 0,
           "type": "integer"
         },
+        "maxAttachmentBase64Bytes": {
+          "description": "Maximum base64 characters for one attached image.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
         "maxFrameBytes": {
           "description": "Maximum frame payload before allocation.",
           "format": "uint",
@@ -2205,8 +2259,20 @@
           "minimum": 0,
           "type": "integer"
         },
+        "maxInputBlocks": {
+          "description": "Maximum blocks in one submitted block set.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
         "maxInputBytes": {
           "description": "Maximum caller input bytes.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "maxInputImages": {
+          "description": "Maximum images in one submitted block set.",
           "format": "uint",
           "minimum": 0,
           "type": "integer"
@@ -2273,6 +2339,9 @@
       "required": [
         "maxFrameBytes",
         "maxInputBytes",
+        "maxAttachmentBase64Bytes",
+        "maxInputBlocks",
+        "maxInputImages",
         "maxModelSelectionBytes",
         "maxReasoningSelectionBytes",
         "maxNativeAdoptionTokenBytes",
@@ -2449,6 +2518,11 @@
         {
           "const": "sessions/submitInput",
           "description": "Submit caller-owned input without rewriting or implicit retry.",
+          "type": "string"
+        },
+        {
+          "const": "sessions/submitBlocks",
+          "description": "Submit caller-owned typed content blocks (text and images) without rewriting.",
           "type": "string"
         },
         {
@@ -3135,6 +3209,45 @@
       ],
       "type": "object"
     },
+    "SubmitBlocksParams": {
+      "additionalProperties": false,
+      "description": "Submit typed caller-owned content blocks under one exact control lease.",
+      "properties": {
+        "blocks": {
+          "description": "The blocks, in the order the caller composed them.",
+          "items": {
+            "$ref": "#/$defs/PublicInputBlock"
+          },
+          "type": "array"
+        },
+        "leaseGeneration": {
+          "description": "Exact current lease generation.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "leaseId": {
+          "description": "Opaque lease identity returned on acquisition.",
+          "type": "string"
+        },
+        "requestId": {
+          "$ref": "#/$defs/MutationRequestId",
+          "description": "Caller-minted idempotency identity."
+        },
+        "sessionId": {
+          "$ref": "#/$defs/RuntimeSessionId",
+          "description": "Exact Runtime-managed session."
+        }
+      },
+      "required": [
+        "requestId",
+        "sessionId",
+        "leaseId",
+        "leaseGeneration",
+        "blocks"
+      ],
+      "type": "object"
+    },
     "SubmitInputParams": {
       "additionalProperties": false,
       "description": "Submit caller-owned input under one exact control lease.",
@@ -3472,6 +3585,9 @@
     "start_session": {
       "$ref": "#/$defs/StartSessionParams"
     },
+    "submit_blocks": {
+      "$ref": "#/$defs/SubmitBlocksParams"
+    },
     "submit_input": {
       "$ref": "#/$defs/SubmitInputParams"
     },
@@ -3533,6 +3649,7 @@
     "cool_session",
     "forget_session",
     "submit_input",
+    "submit_blocks",
     "set_model",
     "set_mode",
     "watch_events",
@@ -3561,9 +3678,12 @@
     "controlLeaseLifetimeMs": 30000,
     "enrollmentLifetimeMs": 600000,
     "idempotencyWindowMs": 86400000,
+    "maxAttachmentBase64Bytes": 4194304,
     "maxFrameBytes": 16842752,
     "maxIdempotencyRecords": 2048,
+    "maxInputBlocks": 16,
     "maxInputBytes": 1048576,
+    "maxInputImages": 8,
     "maxModelSelectionBytes": 4096,
     "maxNativeAdoptionTokenBytes": 2048,
     "maxNativePublicCursorBytes": 8192,

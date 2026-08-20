@@ -6,9 +6,12 @@ export const PUBLIC_LIMITS = {
   "controlLeaseLifetimeMs": 30000,
   "enrollmentLifetimeMs": 600000,
   "idempotencyWindowMs": 86400000,
+  "maxAttachmentBase64Bytes": 4194304,
   "maxFrameBytes": 16842752,
   "maxIdempotencyRecords": 2048,
+  "maxInputBlocks": 16,
   "maxInputBytes": 1048576,
+  "maxInputImages": 8,
   "maxModelSelectionBytes": 4096,
   "maxNativeAdoptionTokenBytes": 2048,
   "maxNativePublicCursorBytes": 8192,
@@ -214,6 +217,13 @@ export interface ProviderWatchEndedNotification { readonly reason: ProviderWatch
 /** A changed complete provider inventory snapshot. */
 export interface ProvidersChangedNotification { readonly snapshot: ProviderList; readonly subscriptionId: string; }
 
+/** One typed piece of caller input, transported without rewriting.
+
+Its own method (`sessions/submitBlocks`) rather than a widened `sessions/submitInput`, because one
+DTO holding both a plain string and a block list would carry two representations of the same
+prompt and two validation regimes for one method. */
+export type PublicInputBlock = { readonly text: string; readonly type: "text"; } | { readonly base64Data: string; readonly mediaType: string; readonly type: "image"; };
+
 /** Prove possession of the key attached to a new enrollment. */
 export interface RequestEnrollmentParams { readonly manifest: EnrollmentManifest; readonly signature: string; }
 
@@ -257,13 +267,13 @@ export interface RuntimeEventNotification { readonly event: unknown; readonly ev
 export interface RuntimeInstance { readonly instanceId: string; readonly platform: string; readonly version: string; }
 
 /** Numeric public bounds advertised during initialization. */
-export interface RuntimeLimits { readonly challengeLifetimeMs: number; readonly controlLeaseLifetimeMs: number; readonly enrollmentLifetimeMs: number; readonly idempotencyWindowMs: number; readonly maxFrameBytes: number; readonly maxIdempotencyRecords: number; readonly maxInputBytes: number; readonly maxModelSelectionBytes: number; readonly maxNativeAdoptionTokenBytes: number; readonly maxNativePublicCursorBytes: number; readonly maxPageItems: number; readonly maxPendingEnrollments: number; readonly maxReasoningSelectionBytes: number; readonly maxRevisionOffers: number; readonly maxSubscriptions: number; readonly nativeCursorLifetimeMs: number; }
+export interface RuntimeLimits { readonly challengeLifetimeMs: number; readonly controlLeaseLifetimeMs: number; readonly enrollmentLifetimeMs: number; readonly idempotencyWindowMs: number; readonly maxAttachmentBase64Bytes: number; readonly maxFrameBytes: number; readonly maxIdempotencyRecords: number; readonly maxInputBlocks: number; readonly maxInputBytes: number; readonly maxInputImages: number; readonly maxModelSelectionBytes: number; readonly maxNativeAdoptionTokenBytes: number; readonly maxNativePublicCursorBytes: number; readonly maxPageItems: number; readonly maxPendingEnrollments: number; readonly maxReasoningSelectionBytes: number; readonly maxRevisionOffers: number; readonly maxSubscriptions: number; readonly nativeCursorLifetimeMs: number; }
 
 /** Operational bootstrap data published only after the public endpoint is ready. */
 export interface RuntimeLocatorRecord { readonly endpoint: string; readonly endpointKind: RuntimeEndpointKind; readonly instanceId: string; readonly processId: number; readonly runtimeVersion: string; readonly schema: number; }
 
 /** A public Runtime method implemented by the initial read-only boundary. */
-export type RuntimeMethod = "runtime/initialize" | "runtime/initialized" | "runtime/challenge" | "integrations/requestEnrollment" | "integrations/watchEnrollment" | "integrations/getGrant" | "integrations/rotateKey" | "providers/usage" | "providers/list" | "providers/watch" | "providers/getCapabilities" | "providers/listModels" | "providers/listNativeSessions" | "sessions/list" | "sessions/watchIndex" | "sessions/get" | "sessions/start" | "sessions/adoptNative" | "sessions/resume" | "sessions/acquireControl" | "sessions/renewControl" | "sessions/releaseControl" | "sessions/submitInput" | "sessions/setModel" | "sessions/setMode" | "sessions/watchEvents" | "sessions/interrupt" | "sessions/cool" | "sessions/forget" | "approvals/listPending" | "approvals/respond" | "sessions/indexChanged" | "sessions/indexEnded" | "providers/changed" | "providers/watchEnded" | "sessions/event" | "sessions/lagged" | "runtime/panicStop";
+export type RuntimeMethod = "runtime/initialize" | "runtime/initialized" | "runtime/challenge" | "integrations/requestEnrollment" | "integrations/watchEnrollment" | "integrations/getGrant" | "integrations/rotateKey" | "providers/usage" | "providers/list" | "providers/watch" | "providers/getCapabilities" | "providers/listModels" | "providers/listNativeSessions" | "sessions/list" | "sessions/watchIndex" | "sessions/get" | "sessions/start" | "sessions/adoptNative" | "sessions/resume" | "sessions/acquireControl" | "sessions/renewControl" | "sessions/releaseControl" | "sessions/submitInput" | "sessions/submitBlocks" | "sessions/setModel" | "sessions/setMode" | "sessions/watchEvents" | "sessions/interrupt" | "sessions/cool" | "sessions/forget" | "approvals/listPending" | "approvals/respond" | "sessions/indexChanged" | "sessions/indexEnded" | "providers/changed" | "providers/watchEnded" | "sessions/event" | "sessions/lagged" | "runtime/panicStop";
 
 /** The current model information Runtime can truthfully expose. */
 export type RuntimeModelCatalog = { readonly coverage: "known"; readonly models: ReadonlyArray<RuntimeModelChoice>; } | { readonly aliases: ReadonlyArray<string>; readonly coverage: "aliases"; readonly reasoningEfforts: ReadonlyArray<RuntimeReasoningChoice>; readonly why: string; } | { readonly aliases: ReadonlyArray<string>; readonly coverage: "partial"; readonly models: ReadonlyArray<RuntimeModelChoice>; readonly reasoningEfforts: ReadonlyArray<RuntimeReasoningChoice>; readonly why: string; } | { readonly coverage: "unknown"; readonly why: string; } | { readonly coverage: "unsupported"; readonly why: string; };
@@ -319,6 +329,9 @@ export interface SetModelParams { readonly leaseGeneration: number; readonly lea
 
 /** Start a new provider-native session in one exact authorized workspace. */
 export interface StartSessionParams { readonly access: SessionWorkspaceAccess; readonly model?: string | null; readonly permission?: string | null; readonly providerId: ProviderId; readonly reasoningEffort?: string | null; readonly requestId: MutationRequestId; readonly workspace: string; }
+
+/** Submit typed caller-owned content blocks under one exact control lease. */
+export interface SubmitBlocksParams { readonly blocks: ReadonlyArray<PublicInputBlock>; readonly leaseGeneration: number; readonly leaseId: string; readonly requestId: MutationRequestId; readonly sessionId: RuntimeSessionId; }
 
 /** Submit caller-owned input under one exact control lease. */
 export interface SubmitInputParams { readonly input: string; readonly leaseGeneration: number; readonly leaseId: string; readonly requestId: MutationRequestId; readonly sessionId: RuntimeSessionId; }

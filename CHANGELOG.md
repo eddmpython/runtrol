@@ -27,6 +27,13 @@ and refactoring that no user can observe do not belong here.
 - Removing a project shows an Undo toast instead of asking for confirmation up front: the misclick is
   covered without making every deliberate removal answer a question first.
 
+- Images can travel with a prompt. The public Runtime gained `sessions/submitBlocks` (typed text and
+  image blocks under the same lease and idempotency discipline as plain input; Runtime transports the
+  frame and stores no attachment), and every driver speaks its own CLI's measured image surface: Claude
+  Code's base64 content block, codex's data-URL input, and the ACP image block gated on the agent's own
+  `promptCapabilities.image` announcement (cline announces true, grok false, and a service that cannot
+  take an image refuses loudly instead of dropping a piece of the prompt).
+
 - "Try One Instruction Several Ways..." lost its friction: the Gate question is now a pick from the
   registered Gates (with registering a new one chained in), the base ref is prefilled from the
   repository's own HEAD, and the writable directories are remembered per project instead of always

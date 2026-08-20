@@ -592,6 +592,16 @@ fn prompt_frame(provider: ProviderId, blocks: &[ContentBlock]) -> Result<String,
             ContentBlock::Text(text) => {
                 serde_json::json!({"type": "text", "text": text.to_string()})
             }
+            // The CLI's own base64 content-block shape (measured 2026-08-20: a stream-json turn
+            // carrying one answered normally, and the frame is not echoed back on the stream).
+            ContentBlock::Image { media_type, base64 } => serde_json::json!({
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": media_type.to_string(),
+                    "data": base64.to_string(),
+                },
+            }),
             // Forwarded whole. A block shape runtrol has never heard of still reaches the provider, which is what
             // keeps runtrol a pipe rather than a gate on which features are reachable. A payload that is not
             // readable JSON goes as text rather than being dropped: the operator wrote it, and losing part of a
@@ -606,7 +616,7 @@ fn prompt_frame(provider: ProviderId, blocks: &[ContentBlock]) -> Result<String,
                 return Err(ProviderError::Unsupported {
                     provider,
                     what: format!("{other:?}"),
-                    why: "this driver can send text and a native block, and nothing else yet",
+                    why: "this driver can send text, images, and a native block, and nothing else yet",
                 });
             }
         });
@@ -1223,6 +1233,43 @@ mod tests {
         .expect("writable");
         assert!(!frame.contains('\n'), "{frame}");
         assert!(!frame.contains('\r'), "{frame}");
+    }
+
+    #[test]
+    fn an_image_block_becomes_the_cli_base64_source_shape() {
+        // The measured shape (2026-08-20): a stream-json turn carrying this content block answered
+        // normally, and the user frame is not echoed back on the stream.
+        let frame = prompt_frame(
+            a_provider(),
+            &[
+                ContentBlock::Text("what color is this".into()),
+                ContentBlock::Image {
+                    media_type: "image/png".into(),
+                    base64: "aGVsbG8=".into(),
+                },
+            ],
+        )
+        .expect("writable");
+        let parsed: serde_json::Value = serde_json::from_str(&frame).expect("readable");
+        let image = parsed
+            .pointer("/message/content/1")
+            .expect("the image block");
+        assert_eq!(
+            image.pointer("/type").and_then(|v| v.as_str()),
+            Some("image")
+        );
+        assert_eq!(
+            image.pointer("/source/type").and_then(|v| v.as_str()),
+            Some("base64")
+        );
+        assert_eq!(
+            image.pointer("/source/media_type").and_then(|v| v.as_str()),
+            Some("image/png")
+        );
+        assert_eq!(
+            image.pointer("/source/data").and_then(|v| v.as_str()),
+            Some("aGVsbG8=")
+        );
     }
 
     #[test]

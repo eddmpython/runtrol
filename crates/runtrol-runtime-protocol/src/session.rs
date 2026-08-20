@@ -159,6 +159,62 @@ pub struct SubmitInputParams {
     pub input: String,
 }
 
+/// Maximum base64 characters accepted for one attached image.
+///
+/// Four MiB of base64 (three MiB of pixels) covers a full-screen capture with room to spare, and it
+/// keeps one submission far inside the frame ceiling. Runtime transports attachments and stores
+/// nothing: an oversized one is refused, never truncated.
+pub const MAX_ATTACHMENT_BASE64_BYTES: usize = 4 * 1024 * 1024;
+
+/// Maximum images in one submitted block set.
+pub const MAX_INPUT_IMAGES: usize = 8;
+
+/// Maximum blocks in one submitted block set.
+pub const MAX_INPUT_BLOCKS: usize = 16;
+
+/// One typed piece of caller input, transported without rewriting.
+///
+/// Its own method (`sessions/submitBlocks`) rather than a widened `sessions/submitInput`, because one
+/// DTO holding both a plain string and a block list would carry two representations of the same
+/// prompt and two validation regimes for one method.
+#[derive(Clone, Debug, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
+#[serde(
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields,
+    tag = "type"
+)]
+pub enum PublicInputBlock {
+    /// Text, exactly as written.
+    Text {
+        /// The caller's text, never rewritten.
+        text: String,
+    },
+    /// One attached image, as bytes.
+    Image {
+        /// The IANA media type the attachment declared, e.g. `image/png`.
+        media_type: String,
+        /// The image bytes, base64 encoded and never inspected.
+        base64_data: String,
+    },
+}
+
+/// Submit typed caller-owned content blocks under one exact control lease.
+#[derive(Clone, Debug, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SubmitBlocksParams {
+    /// Caller-minted idempotency identity.
+    pub request_id: MutationRequestId,
+    /// Exact Runtime-managed session.
+    pub session_id: RuntimeSessionId,
+    /// Opaque lease identity returned on acquisition.
+    pub lease_id: String,
+    /// Exact current lease generation.
+    pub lease_generation: u64,
+    /// The blocks, in the order the caller composed them.
+    pub blocks: Vec<PublicInputBlock>,
+}
+
 /// Switch the answering model under one exact control lease.
 ///
 /// A relay of the operator's choice through the provider's own switch surface, never a rewrite: what the

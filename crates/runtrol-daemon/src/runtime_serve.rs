@@ -22,10 +22,10 @@ use runtrol_runtime_protocol::{
     RuntimeInstance, RuntimeLimits, RuntimeMethod, RuntimeModelCatalog, RuntimeModelChoice,
     RuntimeProviderCapabilities, RuntimeReasoningChoice, RuntimeSessionId,
     SessionIndexChangedNotification, SessionIndexEndReason, SessionIndexEndedNotification,
-    SessionWorkspaceAccess, SetModeParams, SetModelParams, StartSessionParams, SubmitInputParams,
-    SuccessResponse, WatchEnrollmentParams, WatchEventsParams, WatchEventsResult,
-    WatchProvidersParams, WatchProvidersResult, WatchSessionIndexParams, WatchSessionIndexResult,
-    negotiate,
+    SessionWorkspaceAccess, SetModeParams, SetModelParams, StartSessionParams, SubmitBlocksParams,
+    SubmitInputParams, SuccessResponse, WatchEnrollmentParams, WatchEventsParams,
+    WatchEventsResult, WatchProvidersParams, WatchProvidersResult, WatchSessionIndexParams,
+    WatchSessionIndexResult, negotiate,
 };
 use runtrol_store::IntegrationAuditOutcome;
 use runtrol_store::{EnrollmentKey, IntegrationKeyRotation};
@@ -503,6 +503,7 @@ async fn dispatch_public(
             | RuntimeMethod::SessionsRenewControl
             | RuntimeMethod::SessionsReleaseControl
             | RuntimeMethod::SessionsSubmitInput
+            | RuntimeMethod::SessionsSubmitBlocks
             | RuntimeMethod::SessionsSetModel
             | RuntimeMethod::SessionsSetMode
             | RuntimeMethod::SessionsWatchEvents
@@ -556,6 +557,7 @@ fn required_scope(method: RuntimeMethod) -> Option<AppScope> {
         }
         RuntimeMethod::SessionsAcquireControl
         | RuntimeMethod::SessionsSubmitInput
+        | RuntimeMethod::SessionsSubmitBlocks
         | RuntimeMethod::SessionsSetModel
         | RuntimeMethod::SessionsSetMode => Some(AppScope::SessionInputWrite),
         RuntimeMethod::SessionsWatchEvents | RuntimeMethod::ApprovalsListPending => {
@@ -2450,6 +2452,7 @@ enum ParsedSessionOperation {
     Renew(ControlLeaseParams),
     Release(ControlLeaseParams),
     Submit(SubmitInputParams),
+    SubmitBlocks(SubmitBlocksParams),
     SetModel(SetModelParams),
     SetMode(SetModeParams),
     Watch {
@@ -2470,6 +2473,7 @@ impl ParsedSessionOperation {
                 &params.session_id
             }
             Self::Submit(params) => &params.session_id,
+            Self::SubmitBlocks(params) => &params.session_id,
             Self::SetModel(params) => &params.session_id,
             Self::SetMode(params) => &params.session_id,
             Self::Watch { params, .. } => &params.session_id,
@@ -2489,6 +2493,7 @@ impl ParsedSessionOperation {
             Self::Renew(params) => RuntimeControlRequest::Renew { session, params },
             Self::Release(params) => RuntimeControlRequest::Release { session, params },
             Self::Submit(params) => RuntimeControlRequest::Submit { session, params },
+            Self::SubmitBlocks(params) => RuntimeControlRequest::SubmitBlocks { session, params },
             Self::SetModel(params) => RuntimeControlRequest::SetModel { session, params },
             Self::SetMode(params) => RuntimeControlRequest::SetMode { session, params },
             Self::Watch {
@@ -2536,6 +2541,9 @@ fn parse_session_operation(
         RuntimeMethod::SessionsSubmitInput => serde_json::from_value(params)
             .map(ParsedSessionOperation::Submit)
             .map_err(|_| "session input parameters are invalid"),
+        RuntimeMethod::SessionsSubmitBlocks => serde_json::from_value(params)
+            .map(ParsedSessionOperation::SubmitBlocks)
+            .map_err(|_| "session block parameters are invalid"),
         RuntimeMethod::SessionsSetModel => serde_json::from_value(params)
             .map(ParsedSessionOperation::SetModel)
             .map_err(|_| "model switch parameters are invalid"),

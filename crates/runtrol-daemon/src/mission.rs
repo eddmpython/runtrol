@@ -2634,8 +2634,9 @@ gate_refs = ["fixture-check"]
             vec!["aa-first", "zz-later"],
             "stable identity order, not registration order"
         );
-        assert_eq!(gates[0].program.as_ref(), "fixture");
-        assert_eq!(gates[0].timeout_ms, 1_000);
+        let first = gates.first().expect("the listing holds the first gate");
+        assert_eq!(first.program.as_ref(), "fixture");
+        assert_eq!(first.timeout_ms, 1_000);
     }
 
     #[test]

@@ -51,6 +51,11 @@ pub struct AcpAgent {
     /// The gate for [`Self::switch_mode`]: measured, one agent answers `session/set_mode` with an empty
     /// success for any identifier while announcing no modes, so only announced identifiers are relayed.
     announced_mode_ids: Box<[Box<str>]>,
+    /// Whether initialize announced `promptCapabilities.image: true`.
+    ///
+    /// The gate for sending an image block. Measured: cline announces true, grok announces false,
+    /// and an unannounced capability reads as absent because absent support silently drops a prompt piece.
+    accepts_images: bool,
     deferred: VecDeque<DeferredFrame>,
     deferred_bytes: usize,
     finished: bool,
@@ -120,6 +125,7 @@ impl AcpAgent {
             interrupt_requested: false,
             announced: VecDeque::with_capacity(2),
             announced_mode_ids: Box::new([]),
+            accepts_images: false,
             deferred: VecDeque::new(),
             deferred_bytes: 0,
             finished: false,
@@ -159,6 +165,7 @@ impl AcpAgent {
             .and_then(serde_json::Value::as_bool)
             .unwrap_or(false);
         let caps = capabilities(provider, &initialization.agent_capabilities)?;
+        agent.accepts_images = announces_image_support(&initialization.agent_capabilities);
 
         let opened = match &intent.disposition {
             Disposition::Fresh => {
@@ -586,27 +593,7 @@ impl Agent for AcpAgent {
                         why: "ACP permits one active prompt per session",
                     });
                 }
-                let mut prompt = Vec::with_capacity(blocks.len());
-                for block in &blocks {
-                    match block {
-                        ContentBlock::Text(text) => {
-                            prompt.push(wire::PromptBlock::Text(wire::TextBlock {
-                                type_: "text",
-                                text,
-                            }));
-                        }
-                        ContentBlock::Native(payload) => {
-                            prompt.push(wire::PromptBlock::Native(payload));
-                        }
-                        other => {
-                            return Err(ProviderError::Unsupported {
-                                provider: self.provider,
-                                what: format!("{other:?}"),
-                                why: "this ACP v1 binding can send text and native content blocks",
-                            });
-                        }
-                    }
-                }
+                let prompt = prompt_blocks(self.provider, self.accepts_images, &blocks)?;
                 let id = self.issue();
                 let frame = jsonrpc::write_question(
                     &id,
@@ -907,6 +894,66 @@ fn line_error(provider: ProviderId, doing: &'static str, error: &LineError) -> P
 /// mode. A silently dropped override would open a session that quietly ignores the operator's
 /// explicit choice (the reasoning effort did exactly that until 2026-08-20), so every override is
 /// refused loudly here.
+/// The operator's blocks as ACP prompt content, or a loud refusal for a piece that cannot travel.
+///
+/// The image gate is the agent's own initialize announcement, because an agent that said
+/// `promptCapabilities.image: false` (measured: grok) would take the prompt with a piece silently
+/// missing, and a prompt missing one of its parts is a prompt the operator did not write.
+fn prompt_blocks(
+    provider: ProviderId,
+    accepts_images: bool,
+    blocks: &[ContentBlock],
+) -> Result<Vec<wire::PromptBlock<'_>>, ProviderError> {
+    let mut prompt = Vec::with_capacity(blocks.len());
+    for block in blocks {
+        match block {
+            ContentBlock::Text(text) => {
+                prompt.push(wire::PromptBlock::Text(wire::TextBlock {
+                    type_: "text",
+                    text,
+                }));
+            }
+            ContentBlock::Image { media_type, base64 } => {
+                if !accepts_images {
+                    return Err(ProviderError::Unsupported {
+                        provider,
+                        what: "an image attachment".to_owned(),
+                        why: "this agent announced no image support at initialize",
+                    });
+                }
+                prompt.push(wire::PromptBlock::Image(wire::ImageBlock {
+                    type_: "image",
+                    mime_type: media_type,
+                    data: base64,
+                }));
+            }
+            ContentBlock::Native(payload) => {
+                prompt.push(wire::PromptBlock::Native(payload));
+            }
+            other => {
+                return Err(ProviderError::Unsupported {
+                    provider,
+                    what: format!("{other:?}"),
+                    why: "this ACP v1 binding can send text, images, and native content blocks",
+                });
+            }
+        }
+    }
+    Ok(prompt)
+}
+
+/// Whether the initialize answer announced `promptCapabilities.image: true`.
+///
+/// Anything else, including absence, reads as no: sending an image an agent never claimed to take
+/// would drop a piece of the prompt silently (measured: grok announces false, cline true).
+fn announces_image_support(values: &serde_json::Map<String, serde_json::Value>) -> bool {
+    values
+        .get("promptCapabilities")
+        .and_then(|caps| caps.get("image"))
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false)
+}
+
 fn refuse_unsupported_open_overrides(
     provider: ProviderId,
     intent: &OpenIntent,
@@ -938,6 +985,27 @@ mod tests {
             reasoning_effort: None,
             permission: None,
         }
+    }
+
+    #[test]
+    fn image_support_is_read_from_the_initialize_announcement_and_absence_reads_as_no() {
+        // Measured 2026-08-20: cline announces {"promptCapabilities": {"image": true}}, grok
+        // announces false. Absence is no, because absent support silently drops a prompt piece.
+        let says = |json: &str| -> bool {
+            let values: serde_json::Map<String, serde_json::Value> =
+                serde_json::from_str(json).expect("a readable capability object");
+            announces_image_support(&values)
+        };
+        assert!(says(
+            r#"{"promptCapabilities":{"image":true,"audio":false}}"#
+        ));
+        assert!(!says(r#"{"promptCapabilities":{"image":false}}"#));
+        assert!(!says(r#"{"promptCapabilities":{}}"#));
+        assert!(!says("{}"));
+        assert!(
+            !says(r#"{"promptCapabilities":{"image":"yes"}}"#),
+            "a non-bool is not a yes"
+        );
     }
 
     #[test]

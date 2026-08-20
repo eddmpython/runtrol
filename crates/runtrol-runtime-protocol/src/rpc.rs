@@ -160,6 +160,12 @@ pub struct RuntimeLimits {
     pub max_frame_bytes: usize,
     /// Maximum caller input bytes.
     pub max_input_bytes: usize,
+    /// Maximum base64 characters for one attached image.
+    pub max_attachment_base64_bytes: usize,
+    /// Maximum blocks in one submitted block set.
+    pub max_input_blocks: usize,
+    /// Maximum images in one submitted block set.
+    pub max_input_images: usize,
     /// Maximum opaque model selection bytes on session start.
     pub max_model_selection_bytes: usize,
     /// Maximum opaque reasoning effort selection bytes on session start.
@@ -195,6 +201,9 @@ impl Default for RuntimeLimits {
         Self {
             max_frame_bytes: MAX_FRAME_BYTES,
             max_input_bytes: MAX_INPUT_BYTES,
+            max_attachment_base64_bytes: crate::MAX_ATTACHMENT_BASE64_BYTES,
+            max_input_blocks: crate::MAX_INPUT_BLOCKS,
+            max_input_images: crate::MAX_INPUT_IMAGES,
             max_model_selection_bytes: crate::MAX_MODEL_SELECTION_BYTES,
             max_reasoning_selection_bytes: crate::MAX_REASONING_SELECTION_BYTES,
             max_native_adoption_token_bytes: crate::MAX_NATIVE_ADOPTION_TOKEN_BYTES,

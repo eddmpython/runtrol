@@ -78,6 +78,9 @@ pub enum RuntimeMethod {
     /// Submit caller-owned input without rewriting or implicit retry.
     #[serde(rename = "sessions/submitInput")]
     SessionsSubmitInput,
+    /// Submit caller-owned typed content blocks (text and images) without rewriting.
+    #[serde(rename = "sessions/submitBlocks")]
+    SessionsSubmitBlocks,
     /// Switch the answering model under the current control lease.
     #[serde(rename = "sessions/setModel")]
     SessionsSetModel,
@@ -153,6 +156,7 @@ impl RuntimeMethod {
             Self::SessionsRenewControl => "sessions/renewControl",
             Self::SessionsReleaseControl => "sessions/releaseControl",
             Self::SessionsSubmitInput => "sessions/submitInput",
+            Self::SessionsSubmitBlocks => "sessions/submitBlocks",
             Self::SessionsSetModel => "sessions/setModel",
             Self::SessionsSetMode => "sessions/setMode",
             Self::SessionsWatchEvents => "sessions/watchEvents",
@@ -206,6 +210,7 @@ impl FromStr for RuntimeMethod {
             "sessions/renewControl" => Ok(Self::SessionsRenewControl),
             "sessions/releaseControl" => Ok(Self::SessionsReleaseControl),
             "sessions/submitInput" => Ok(Self::SessionsSubmitInput),
+            "sessions/submitBlocks" => Ok(Self::SessionsSubmitBlocks),
             "sessions/setModel" => Ok(Self::SessionsSetModel),
             "sessions/setMode" => Ok(Self::SessionsSetMode),
             "sessions/watchEvents" => Ok(Self::SessionsWatchEvents),
@@ -260,6 +265,7 @@ mod tests {
             RuntimeMethod::SessionsRenewControl,
             RuntimeMethod::SessionsReleaseControl,
             RuntimeMethod::SessionsSubmitInput,
+            RuntimeMethod::SessionsSubmitBlocks,
             RuntimeMethod::SessionsSetModel,
             RuntimeMethod::SessionsSetMode,
             RuntimeMethod::SessionsWatchEvents,

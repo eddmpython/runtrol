@@ -16,10 +16,10 @@ use runtrol_runtime_protocol::{
     RuntimeMethod, RuntimeModelCatalog, RuntimeProviderCapabilities, RuntimeSessionId,
     ServerChallenge, SessionDescriptor, SessionIndexChangedNotification,
     SessionIndexEndedNotification, SessionOpenResult, SetModeParams, SetModelParams,
-    StartSessionParams, SubmitInputParams, SuccessResponse, WatchEnrollmentParams,
-    WatchEventsParams, WatchEventsResult, WatchProvidersParams, WatchProvidersResult,
-    WatchSessionIndexParams, WatchSessionIndexResult, enrollment_signing_payload,
-    initialization_signing_payload, key_rotation_signing_payload,
+    StartSessionParams, SubmitBlocksParams, SubmitInputParams, SuccessResponse,
+    WatchEnrollmentParams, WatchEventsParams, WatchEventsResult, WatchProvidersParams,
+    WatchProvidersResult, WatchSessionIndexParams, WatchSessionIndexResult,
+    enrollment_signing_payload, initialization_signing_payload, key_rotation_signing_payload,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -1223,6 +1223,24 @@ impl SessionClient<'_> {
         Ok(())
     }
 
+    /// Forward caller-owned typed blocks (text and images) unchanged under one exact lease generation.
+    ///
+    /// # Errors
+    ///
+    /// Public client and Runtime failures, including the provider's own loud refusal when it cannot
+    /// take an attachment. An ambiguous provider boundary returns `outcomeUnknown`.
+    pub async fn submit_blocks(&mut self, params: &SubmitBlocksParams) -> Result<(), ClientError> {
+        let _: EmptyResult = self
+            .runtime
+            .call_mutation(
+                RuntimeMethod::SessionsSubmitBlocks,
+                &params.request_id,
+                params,
+            )
+            .await?;
+        Ok(())
+    }
+
     /// Relay the operator's model choice through the provider's own switch surface.
     ///
     /// What the session actually answers with stays the provider's word, arriving on the event stream.
@@ -1629,6 +1647,7 @@ async fn receive_session_notification(
         | RuntimeMethod::SessionsRenewControl
         | RuntimeMethod::SessionsReleaseControl
         | RuntimeMethod::SessionsSubmitInput
+        | RuntimeMethod::SessionsSubmitBlocks
         | RuntimeMethod::SessionsSetModel
         | RuntimeMethod::SessionsSetMode
         | RuntimeMethod::SessionsWatchEvents

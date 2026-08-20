@@ -53,6 +53,7 @@ import type {
   SetModeParams,
   SetModelParams,
   StartSessionParams,
+  SubmitBlocksParams,
   SubmitInputParams,
   WatchEventsParams,
   WatchEventsResult,
@@ -602,6 +603,33 @@ export class SessionClient {
       throw new RuntimeProtocolError("session input exceeds the public byte limit");
     }
     requireEmpty(await callMutation(this.runtime, "sessions/submitInput", params, undefined));
+  }
+
+  /** Forward typed caller-owned blocks (text and images) unchanged under one exact lease generation.
+   * Runtime transports the frame and stores no attachment; a provider that cannot take an image
+   * refuses loudly instead of dropping a piece of the prompt. */
+  public async submitBlocks(params: SubmitBlocksParams): Promise<void> {
+    let textBytes = 0;
+    let images = 0;
+    for (const block of params.blocks) {
+      if (block.type === "text") {
+        textBytes += Buffer.byteLength(block.text, "utf8");
+      } else {
+        images += 1;
+        if (block.base64Data.length > PUBLIC_LIMITS.maxAttachmentBase64Bytes) {
+          throw new RuntimeProtocolError("an attachment exceeds the public byte limit");
+        }
+      }
+    }
+    if (
+      params.blocks.length === 0
+      || params.blocks.length > PUBLIC_LIMITS.maxInputBlocks
+      || images > PUBLIC_LIMITS.maxInputImages
+      || textBytes > PUBLIC_LIMITS.maxInputBytes
+    ) {
+      throw new RuntimeProtocolError("the block submission exceeds a public limit");
+    }
+    requireEmpty(await callMutation(this.runtime, "sessions/submitBlocks", params, undefined));
   }
 
   /** Relay the operator's model choice through the provider's own switch surface. What the session actually

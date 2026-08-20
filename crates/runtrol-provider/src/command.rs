@@ -24,6 +24,17 @@ use crate::path::AbsPath;
 pub enum ContentBlock {
     /// Text, exactly as it was written.
     Text(Box<str>),
+    /// One image, as bytes the operator attached.
+    ///
+    /// Base64 because that is how every measured input surface wants it (claude's content block,
+    /// codex's data URL, ACP's image block). A driver whose provider cannot take an image refuses
+    /// loudly rather than sending a prompt with a piece silently missing.
+    Image {
+        /// The IANA media type the attachment declared, e.g. `image/png`.
+        media_type: Box<str>,
+        /// The image bytes, base64 encoded and never inspected.
+        base64: Box<str>,
+    },
     /// A block shape runtrol has no binding for, forwarded whole.
     ///
     /// What lets a surface use a provider feature that arrived after this binary did.
