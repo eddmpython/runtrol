@@ -82,6 +82,14 @@ pub struct ProviderCapabilities {
     pub cooling: ProviderCapability,
     /// An official provider-native session catalogue may be requested.
     pub native_session_catalogue: ProviderCapability,
+    /// The answering model can be switched mid-session.
+    pub set_model: ProviderCapability,
+    /// The reasoning effort can be switched mid-session.
+    ///
+    /// Distinct from the catalogue's per-model efforts on purpose: a CLI can offer an effort at open
+    /// time and refuse to change it afterwards (measured on claude 2.1.235), and a surface that only
+    /// learns this from the refusal cannot say "applies from the next session" before the attempt.
+    pub set_reasoning_effort: ProviderCapability,
 }
 
 impl ProviderCapabilities {
@@ -97,6 +105,8 @@ impl ProviderCapabilities {
             approvals: missing(),
             cooling: missing(),
             native_session_catalogue: missing(),
+            set_model: missing(),
+            set_reasoning_effort: missing(),
         }
     }
 }

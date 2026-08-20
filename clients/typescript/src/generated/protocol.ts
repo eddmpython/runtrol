@@ -272,7 +272,7 @@ export type RuntimeModelCatalog = { readonly coverage: "known"; readonly models:
 export interface RuntimeModelChoice { readonly description: string; readonly displayName: string; readonly id: string; readonly isDefault: boolean; readonly reasoningEfforts: ReadonlyArray<RuntimeReasoningChoice>; }
 
 /** Structural lifecycle and event capabilities for one exact provider installation. */
-export interface RuntimeProviderCapabilities { readonly approvals: ProviderCapabilityObservation; readonly cooling: ProviderCapabilityObservation; readonly freshSession: ProviderCapabilityObservation; readonly freshness: CapabilityFreshness; readonly interrupt: ProviderCapabilityObservation; readonly nativeSessionCatalogue: ProviderCapabilityObservation; readonly providerId: ProviderId; readonly resume: ProviderCapabilityObservation; readonly structuredEvents: ProviderCapabilityObservation; }
+export interface RuntimeProviderCapabilities { readonly approvals: ProviderCapabilityObservation; readonly cooling: ProviderCapabilityObservation; readonly freshSession: ProviderCapabilityObservation; readonly freshness: CapabilityFreshness; readonly interrupt: ProviderCapabilityObservation; readonly nativeSessionCatalogue: ProviderCapabilityObservation; readonly providerId: ProviderId; readonly resume: ProviderCapabilityObservation; readonly setModel?: ProviderCapabilityObservation | null; readonly setReasoningEffort?: ProviderCapabilityObservation | null; readonly structuredEvents: ProviderCapabilityObservation; }
 
 /** One opaque reasoning-effort option reported by a provider. */
 export interface RuntimeReasoningChoice { readonly description: string; readonly id: string; }

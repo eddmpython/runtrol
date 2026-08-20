@@ -100,6 +100,15 @@ impl Provider for ClaudeProvider {
             // answer it produces is never complete. Declaring it unsupported hid every session a person started
             // outside runtrol, including the ones waiting on that person.
             native_session_catalogue: cli(),
+            // The control channel's set_model succeeds mid-session (measured 2.1.x).
+            set_model: cli(),
+            // Measured 2.1.235: the control channel refuses set_effort and set_reasoning_effort.
+            // The effort is an open-time flag on this CLI, so a new choice applies from the next
+            // session, and this observation is what lets a surface say so before the attempt.
+            set_reasoning_effort: ProviderCapability::unsupported(
+                "the installed CLI refuses a mid-session effort switch; the effort is an open-time \
+                 flag, so a new choice applies from the next session",
+            ),
         }
     }
 

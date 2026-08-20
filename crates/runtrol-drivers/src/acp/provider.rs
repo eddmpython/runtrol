@@ -137,6 +137,16 @@ impl Provider for AcpProvider {
             native_session_catalogue: ProviderCapability::unknown(
                 "the ACP agent announces session catalogue support during initialization",
             ),
+            // The vendor extension `session/set_model` exists only where the session announced a
+            // model set; an agent without it answers method-not-found, loudly.
+            set_model: ProviderCapability::unknown(
+                "the ACP agent announces switchable models per session",
+            ),
+            // Measured on grok 1.0.x: session/set_reasoning_effort is method-not-found, set_model
+            // ignores an extra effort field, and no session announces a config option for it.
+            set_reasoning_effort: ProviderCapability::unsupported(
+                "no ACP surface announces a mid-session effort switch",
+            ),
         }
     }
 

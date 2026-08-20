@@ -8,6 +8,7 @@ export type {
   ProviderUsageWindow,
   RuntimeModelCatalog as ModelCatalog,
   RuntimeModelChoice as ModelChoice,
+  RuntimeProviderCapabilities as ProviderCapabilities,
   RuntimeReasoningChoice as ReasoningChoice,
   SessionDescriptor as SessionLine,
   SessionWorkspaceAccess as WorkspaceAccess,

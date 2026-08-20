@@ -204,6 +204,10 @@ impl Provider for CodexProvider {
             approvals: protocol(),
             cooling: ProviderCapability::available(ProviderCapabilitySource::DriverContract),
             native_session_catalogue: protocol(),
+            // Its own schema documents turn/start's model and effort overrides as applying to this
+            // and subsequent turns, so both switches ride the next turn.
+            set_model: protocol(),
+            set_reasoning_effort: protocol(),
         }
     }
 

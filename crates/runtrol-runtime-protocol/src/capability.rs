@@ -83,6 +83,19 @@ pub struct RuntimeProviderCapabilities {
     pub cooling: ProviderCapabilityObservation,
     /// An official provider-native session catalogue may be requested.
     pub native_session_catalogue: ProviderCapabilityObservation,
+    /// The answering model can be switched mid-session.
+    ///
+    /// Optional for the same lockstep-additive reason as `waitingOn`: absent when an older Runtime
+    /// answers, never guessed at.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub set_model: Option<ProviderCapabilityObservation>,
+    /// The reasoning effort can be switched mid-session.
+    ///
+    /// Distinct from the catalogue's per-model efforts: a CLI can offer an effort at open time and
+    /// refuse to change it afterwards, and this is what lets a surface say "applies from the next
+    /// session" before the attempt instead of after the refusal.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub set_reasoning_effort: Option<ProviderCapabilityObservation>,
 }
 
 #[cfg(test)]

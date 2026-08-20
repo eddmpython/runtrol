@@ -1318,6 +1318,19 @@ export class Controller implements vscode.Disposable {
   async switchEffort(currentModel: string): Promise<void> {
     const session = this.state.selected;
     if (!session) return;
+    // The provider's own word on whether a mid-session effort switch exists, read before the
+    // attempt so a service that cannot do it says "from the next conversation" instead of failing.
+    const capability = (await this.runtime.capabilities(session.providerId)).setReasoningEffort;
+    if (capability && capability.availability !== "available") {
+      const name = providerDisplayName(session.providerId, this.state.providers);
+      this.conversation.status(
+        `${name} cannot switch the reasoning effort mid-conversation`
+        + `${capability.why ? ` (${capability.why})` : ""}. `
+        + 'Start one with "New Conversation with Service, Model and Effort..." instead.',
+        "info",
+      );
+      return;
+    }
     if (!currentModel) {
       this.conversation.status(
         `${providerDisplayName(session.providerId, this.state.providers)} has not announced which model is answering, so the effort has nothing to attach to; its own settings stay in control.`,

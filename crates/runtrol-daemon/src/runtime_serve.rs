@@ -1085,6 +1085,8 @@ fn provider_capabilities(
         approvals: provider_capability(capabilities.approvals),
         cooling: provider_capability(capabilities.cooling),
         native_session_catalogue: provider_capability(capabilities.native_session_catalogue),
+        set_model: Some(provider_capability(capabilities.set_model)),
+        set_reasoning_effort: Some(provider_capability(capabilities.set_reasoning_effort)),
     }
 }
 

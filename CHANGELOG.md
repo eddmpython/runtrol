@@ -27,6 +27,11 @@ and refactoring that no user can observe do not belong here.
 - Removing a project shows an Undo toast instead of asking for confirmation up front: the misclick is
   covered without making every deliberate removal answer a question first.
 
+- `providers/getCapabilities` now reports whether the model and the reasoning effort can be switched
+  mid-session, per provider. The effort chip reads it before trying: a service that cannot switch (Claude
+  Code refuses a mid-session effort change; the effort is an open-time flag there) says "from the next
+  conversation" up front instead of failing after the pick.
+
 - Codex conversations now show which model is answering. The open answer's own `model` field becomes the
   attach-time announcement, and the CLI's `thread/settings/updated` notification keeps the chip current
   mid-session, so the model chip no longer freezes on the requested value for this service. Measured from

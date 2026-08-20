@@ -17,6 +17,7 @@ import {
   type ProviderList,
   type RuntimeClient,
   type RuntimeModelCatalog,
+  type RuntimeProviderCapabilities,
   type SessionDescriptor,
   type SessionWorkspaceAccess,
   type ValidatedLocator,
@@ -155,6 +156,10 @@ export class StudioRuntimeClient implements vscode.Disposable {
 
   async models(providerId: string): Promise<RuntimeModelCatalog> {
     return this.read((runtime) => runtime.providers().listModels(providerId));
+  }
+
+  async capabilities(providerId: string): Promise<RuntimeProviderCapabilities> {
+    return this.read((runtime) => runtime.providers().getCapabilities(providerId));
   }
 
   async verifyProvider(providerId: string): Promise<void> {
