@@ -28,7 +28,7 @@ import { RuntimeState } from "./state";
 import { StudioRuntimeClient } from "./runtimeClient";
 import { workspaceIdentity } from "./workspaceCollision";
 import { WorkspaceRootFollowing } from "./workspaceRoots";
-import { ConversationsTree, ProjectItem } from "./trees";
+import { ConversationsTree, ProjectItem, ServiceProblemItem } from "./trees";
 import { UsageTree } from "./usageTree";
 
 export type RuntrolExtensionApi = {
@@ -374,6 +374,14 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
           }
           return undefined;
         });
+      }),
+    ),
+    vscode.commands.registerCommand(
+      "runtrol.fixService",
+      // From the problem row, so nobody has to attempt a conversation just to be told the remedy.
+      (item: unknown) => run(async () => {
+        if (!(item instanceof ServiceProblemItem)) return;
+        await afterReady(() => controller.fixService(item.provider));
       }),
     ),
     vscode.commands.registerCommand(

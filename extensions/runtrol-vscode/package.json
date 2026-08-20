@@ -72,6 +72,7 @@
     "onCommand:runtrol.refresh",
     "onCommand:runtrol.restartExtensionHost",
     "onCommand:runtrol.checkProviderUpdates",
+    "onCommand:runtrol.fixService",
     "onCommand:runtrol.remoteConnectionStatus",
     "onCommand:runtrol.pairPhone",
     "onCommand:runtrol.reviewPhonePairings",
@@ -156,6 +157,11 @@
         "command": "runtrol.checkProviderUpdates",
         "title": "Runtrol: Check Provider Updates",
         "icon": "$(cloud-download)"
+      },
+      {
+        "command": "runtrol.fixService",
+        "title": "Runtrol: Fix Coding Service...",
+        "icon": "$(wrench)"
       },
       {
         "command": "runtrol.remoteConnectionStatus",
@@ -523,6 +529,11 @@
         }
       ],
       "view/item/context": [
+        {
+          "command": "runtrol.fixService",
+          "group": "inline@1",
+          "when": "view == runtrol.sessions && viewItem == runtrol.serviceProblem"
+        },
         {
           "command": "runtrol.newConversationInProject",
           "group": "inline@1",

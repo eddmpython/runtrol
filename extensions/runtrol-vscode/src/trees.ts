@@ -52,7 +52,7 @@ export class ConversationItem extends vscode.TreeItem {
 /// A coding service that is simply not installed is not a problem and gets no row. Discovery decides what exists,
 /// and a list of things the reader does not have is not a list they asked for.
 export class ServiceProblemItem extends vscode.TreeItem {
-  constructor(provider: ProviderLine) {
+  constructor(readonly provider: ProviderLine) {
     super(`${provider.displayName} needs attention`, vscode.TreeItemCollapsibleState.None);
     this.id = `runtrol.problem.${encodeURIComponent(provider.providerId)}`;
     this.description = "Unavailable";

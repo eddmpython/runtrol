@@ -27,6 +27,11 @@ and refactoring that no user can observe do not belong here.
 - Removing a project shows an Undo toast instead of asking for confirmation up front: the misclick is
   covered without making every deliberate removal answer a question first.
 
+- A coding service that cannot start now offers its own remedies from its sidebar row: the wrench on the
+  "needs attention" row lists the service's own sign-in, install, and diagnose commands, and the chosen
+  line is placed in your terminal unexecuted, exactly like the start-failure dialog. Nobody has to attempt
+  a conversation just to be told how to fix the service.
+
 - Replies now render the light markdown coding agents actually write: fenced code blocks with a copy
   button, inline code, headings, lists, bold, italic, and web links that open in the browser. Plain text
   is untouched and costs nothing; anything the small grammar does not recognize stays exactly as typed.

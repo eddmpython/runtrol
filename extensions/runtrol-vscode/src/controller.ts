@@ -663,6 +663,32 @@ export class Controller implements vscode.Disposable {
     throw new ServiceTroubleReported(sentence);
   }
 
+  /// Offer a struggling service's own remedies from its row, before any conversation has failed.
+  ///
+  /// The same vocabulary the start-failure dialog uses (`troubleOf` + `offersFor`), reachable from the
+  /// sidebar's problem row so a person does not have to attempt a conversation just to be told how to fix
+  /// the service. The chosen line lands in their terminal unexecuted, exactly like every other offer.
+  async fixService(provider: ProviderLine): Promise<void> {
+    const trouble = troubleOf(undefined, provider);
+    const offers = offersFor(provider, trouble);
+    if (offers.length === 0) {
+      void vscode.window.showInformationMessage(
+        provider.installation.why
+          ?? `${provider.displayName} cannot currently start a conversation, and it declares no help commands.`,
+      );
+      return;
+    }
+    const picked = await vscode.window.showQuickPick(
+      offers.map((offer) => ({ label: offer.label, detail: offer.because, offer })),
+      {
+        title: `${provider.displayName} needs attention`,
+        placeHolder: "The chosen command is placed in your terminal, never run for you",
+      },
+    );
+    if (!picked) return;
+    this.offerInTerminal(picked.offer);
+  }
+
   /// Type a coding service's own command into the operator's terminal and stop there.
   ///
   /// `false` is the whole point of this method: the line is placed, not run. Runtrol fetching and executing
