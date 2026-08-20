@@ -119,6 +119,8 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
         void run(() => afterReady(() => controller.switchMode(message.available)));
       } else if (message.type === "switchEffort") {
         void run(() => afterReady(() => controller.switchEffort(message.model)));
+      } else if (message.type === "mentionFile") {
+        void run(() => afterReady(() => controller.insertFileMention()));
       } else if (message.type === "interrupt") {
         // Interrupt is dispatched by its own name, never as a fallback: an action this validator
         // accepts but no branch handles must do nothing, not stop a running agent.

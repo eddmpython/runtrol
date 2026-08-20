@@ -27,6 +27,10 @@ and refactoring that no user can observe do not belong here.
 - Removing a project shows an Undo toast instead of asking for confirmation up front: the misclick is
   covered without making every deliberate removal answer a question first.
 
+- Typing @ at the start of a word in the composer opens a workspace file picker, and the chosen path is
+  inserted as plain text where the @ was. Nothing is interpreted: what an @path means stays the coding
+  service's own business, exactly like a slash command's argument.
+
 - Typing no longer waits for the agent. While a turn runs, the composer stays open and Enter queues the
   message onto a strip above it (up to eight, each with its own cancel); when the turn ends, queued
   messages go out one per turn, in order. The queue lives only in the open conversation page, exactly like

@@ -735,6 +735,37 @@ export class Controller implements vscode.Disposable {
     this.offerInTerminal(picked.offer);
   }
 
+  /// Offer the workspace's files for an @-mention and insert the chosen path as plain text.
+  ///
+  /// The path is text and nothing more: what an @path means stays the coding service's business,
+  /// exactly like a slash command's argument. The picker lives here because only the Extension Host
+  /// may list files; the page only reports that an @ was typed.
+  async insertFileMention(): Promise<void> {
+    const session = this.state.selected;
+    const base = session && workspaceIsOpen(session.workspace)
+      ? session.workspace
+      : vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? null;
+    const files = await vscode.workspace.findFiles(
+      "**/*",
+      "**/{node_modules,.git,target,dist,out,.venv,__pycache__}/**",
+      2_000,
+    );
+    if (files.length === 0) {
+      this.conversation.insertComposerText(null);
+      this.conversation.status("No workspace files are available to mention.", "info");
+      return;
+    }
+    const picked = await vscode.window.showQuickPick(
+      files
+        .map((file) => ({
+          label: (base ? path.relative(base, file.fsPath) : file.fsPath).replaceAll("\\", "/"),
+        }))
+        .sort((left, right) => left.label.length - right.label.length || left.label.localeCompare(right.label)),
+      { title: "Mention a file", placeHolder: "The chosen path is inserted as plain text" },
+    );
+    this.conversation.insertComposerText(picked ? `${picked.label} ` : null);
+  }
+
   /// Type a coding service's own command into the operator's terminal and stop there.
   ///
   /// `false` is the whole point of this method: the line is placed, not run. Runtrol fetching and executing

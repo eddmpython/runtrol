@@ -239,6 +239,11 @@ export class ConversationView implements vscode.Disposable {
     void this.panel?.webview.postMessage({ type: "switchRequested", what, value });
   }
 
+  /// Put the chosen mention text where the @ was typed, or (null) just hand focus back on cancel.
+  insertComposerText(text: string | null): void {
+    void this.panel?.webview.postMessage({ type: "insertText", text });
+  }
+
   async measurePerformance(framesPerSecond = 3_000, durationMs = 5_000): Promise<WebviewPerformance> {
     if (framesPerSecond <= 0 || durationMs <= 0) {
       throw new Error("Webview measurement rate and duration must be positive");

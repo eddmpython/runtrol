@@ -10,6 +10,7 @@ import {
 } from "./presentation";
 import { conversationEmptyCopy, sendShortcutHint } from "./conversationCopy";
 import { hasMarkdownTrigger, parseMarkdown, type Block, type Inline } from "./markdown";
+import { insertMention, mentionTriggered } from "./mention";
 import { planEntriesOf, planGlyph } from "./plan";
 import { cancelQueued, pushQueued, queuedLabel, takeQueued } from "./queue";
 import { toolActivityLineKeeping, toolActivityOf } from "./toolActivity";
@@ -51,7 +52,8 @@ type Incoming =
   | { type: "readyProbe" }
   | { type: "measureStart"; id: string }
   | { type: "measureEnd"; id: string; producedFrames: number; droppedFrames: number }
-  | { type: "switchRequested"; what: "model" | "mode" | "effort"; value: string };
+  | { type: "switchRequested"; what: "model" | "mode" | "effort"; value: string }
+  | { type: "insertText"; text: string | null };
 
 type VsCodeApi = {
   postMessage(message: unknown): void;
@@ -163,6 +165,8 @@ let switchableModeIds: string[] = [];
 let requested = { model: "", mode: "", effort: "" };
 /// Messages typed while the agent worked, sent one per turn boundary. This page's memory only.
 let queued: readonly string[] = [];
+/// An @-mention picker is open in the host; further @ keystrokes wait until it answers.
+let mentionPending = false;
 
 window.addEventListener("message", ({ data }: MessageEvent<Incoming>) => {
   if (data.type === "reset") {
@@ -193,6 +197,19 @@ window.addEventListener("message", ({ data }: MessageEvent<Incoming>) => {
   if (data.type === "switchRequested") {
     requested = { ...requested, [data.what]: data.value };
     paintFacts();
+    return;
+  }
+  if (data.type === "insertText") {
+    mentionPending = false;
+    if (data.text !== null) {
+      const caret = prompt.selectionStart ?? prompt.value.length;
+      const inserted = insertMention(prompt.value, caret, data.text);
+      prompt.value = inserted.value;
+      prompt.setSelectionRange(inserted.caret, inserted.caret);
+      resizePrompt();
+      refreshCommands();
+    }
+    prompt.focus();
     return;
   }
   const frames = data.batch
@@ -263,6 +280,11 @@ prompt.addEventListener("keydown", (event) => {
 prompt.addEventListener("input", () => {
   resizePrompt();
   refreshCommands();
+  // A word-starting @ opens the host's file picker; the chosen path comes back as plain text.
+  if (selected && !mentionPending && mentionTriggered(prompt.value, prompt.selectionStart ?? prompt.value.length)) {
+    mentionPending = true;
+    vscode.postMessage({ type: "mentionFile" });
+  }
 });
 prompt.addEventListener("blur", () => {
   // Only after the click that may have landed on the menu has been delivered.
