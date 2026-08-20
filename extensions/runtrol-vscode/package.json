@@ -398,6 +398,12 @@
         "key": "ctrl+k ctrl+o",
         "mac": "cmd+k cmd+o",
         "when": "!terminalFocus"
+      },
+      {
+        "command": "runtrol.interrupt",
+        "key": "ctrl+k ctrl+i",
+        "mac": "cmd+k cmd+i",
+        "when": "!editorTextFocus && !terminalFocus"
       }
     ],
     "menus": {

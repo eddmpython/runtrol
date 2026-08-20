@@ -234,6 +234,16 @@ prompt.addEventListener("blur", () => {
   setTimeout(closeCommands, 120);
 });
 interrupt.addEventListener("click", () => vscode.postMessage({ type: "interrupt" }));
+// Escape stops the running turn. Document-level because the composer is disabled while the agent
+// works, so nothing else in this page can hold focus for the key. Guards, in order: a consumed
+// Escape (the command menu closes itself on the composer and prevents default) is not a stop; a
+// hidden or disabled stop button means the session is not interruptible right now.
+document.addEventListener("keydown", (event) => {
+  if (event.key !== "Escape" || event.isComposing || event.defaultPrevented) return;
+  if (interrupt.hidden || interrupt.disabled) return;
+  event.preventDefault();
+  vscode.postMessage({ type: "interrupt" });
+});
 conversation.addEventListener("scroll", () => {
   followsTail = conversation.scrollHeight - conversation.scrollTop - conversation.clientHeight < 24;
 }, { passive: true });

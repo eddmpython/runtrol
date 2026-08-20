@@ -2,15 +2,8 @@ import * as vscode from "vscode";
 
 import type { SessionLine } from "./runtimeTypes";
 import { providerDisplayName, sessionTitle } from "./sessionDisplay";
+import { isViewAction, type ViewAction } from "./viewActions";
 import { webviewReadyKind } from "./webviewReady";
-
-type ViewAction =
-  | { type: "prompt"; text: string }
-  | { type: "startChat" }
-  | { type: "answerApproval"; approval: string; option: number; subjectDigest: number[] }
-  | { type: "switchModel"; available: string[] }
-  | { type: "switchMode"; available: string[] }
-  | { type: "interrupt" };
 
 export type WebviewPerformance = {
   baselineFrameP95Ms: number;
@@ -611,39 +604,6 @@ function performanceMetrics(value: unknown): WebviewPerformance | null {
 
 function delay(milliseconds: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
-}
-
-function isViewAction(value: unknown): value is ViewAction {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) {
-    return false;
-  }
-  const type = (value as { type?: unknown }).type;
-  if (type === "prompt") {
-    return typeof (value as { text?: unknown }).text === "string";
-  }
-  if (type === "answerApproval") {
-    const candidate = value as {
-      approval?: unknown;
-      option?: unknown;
-      subjectDigest?: unknown;
-    };
-    return typeof candidate.approval === "string"
-      && typeof candidate.option === "number"
-      && Array.isArray(candidate.subjectDigest)
-      && candidate.subjectDigest.every((byte) => Number.isInteger(byte) && byte >= 0 && byte <= 255);
-  }
-  if (type === "switchModel" || type === "switchMode") {
-    const available = (value as { available?: unknown }).available;
-    // Bounded like everything else that crosses the webview boundary: the set is display data from the
-    // provider's own announcement, and a hostile page must not be able to smuggle bulk through it.
-    return Array.isArray(available)
-      && available.length <= 64
-      && available.every((id) => typeof id === "string" && id.length > 0 && id.length <= 200);
-  }
-  return type === "startChat"
-    || type === "openWorkspace"
-    || type === "interrupt"
-    || type === "close";
 }
 
 function nonceValue(): string {

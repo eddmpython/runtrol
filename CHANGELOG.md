@@ -10,6 +10,18 @@ and refactoring that no user can observe do not belong here.
 
 ## [Unreleased]
 
+### Added
+
+- A running turn can be stopped from the keyboard. Escape in the conversation view stops the turn while the
+  stop button is offered, and `Ctrl+K Ctrl+I` (`Cmd+K Cmd+I` on macOS) does the same from anywhere in the
+  window, joining the existing conversation chords.
+
+### Fixed
+
+- A message from the conversation page that no handler recognizes is now dropped instead of falling through
+  to the interrupt path. No shipped page ever sent such a message, but the fallback meant one malformed
+  message away from stopping a running agent.
+
 ## [0.1.6] - 2026-08-20
 
 ### Fixed
