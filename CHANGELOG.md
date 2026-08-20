@@ -10,7 +10,15 @@ and refactoring that no user can observe do not belong here.
 
 ## [Unreleased]
 
+## [0.1.7] - 2026-08-20
+
 ### Added
+
+- The sidebar now shows every conversation on this machine, and any of them opens right here. Runtrol-managed
+  sessions from folders this window never opened appear below the headings, clicking one opens its
+  conversation as an editor tab in this window (the agent keeps working in its own folder), and moving VS Code
+  to that project is a separate explicit button on the project's heading, never a side effect of a click. The
+  enrollment-root boundary that used to hide and refuse them remains only where it is security: the phone.
 
 - The reasoning effort has its own chip under the composer, and clicking it switches only the effort while
   keeping the answering model. While any switch (model, mode, or effort) is in flight, the chip keeps the
