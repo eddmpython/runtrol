@@ -393,7 +393,13 @@ def run() -> int:
         print("[shippedRuntimeInterop] SKIP. nothing has been published yet.")
         return 0
 
-    raw = tempfile.mkdtemp(prefix="runtrol-interop-")
+    # Short on purpose. A Unix domain socket path has a hard kernel limit (104 bytes, 108 on Linux)
+    # and the daemon refuses to start past it. macOS hands out temporary directories like
+    # /private/var/folders/_5/zjnzxgh147qcg3bb5cg2wvqw0000gn/T/, which alone is most of the budget:
+    # measured 2026-08-20, this gate stopped two release jobs with "the socket path ... is longer
+    # than this kernel's limit of 103 bytes". /tmp exists on both Unix targets and leaves room.
+    base = "/tmp" if sys.platform != "win32" and Path("/tmp").is_dir() else None
+    raw = tempfile.mkdtemp(prefix="rti", dir=base)
     try:
         scratch = Path(raw)
         for version in versions:
