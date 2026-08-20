@@ -891,6 +891,34 @@ def stopProcess(child: subprocess.Popen[str] | None) -> None:
         child.wait(timeout=2.0)
 
 
+def describe(pids: set[int]) -> str:
+    """Name exact process identifiers for a failure message, without reading command lines.
+
+    Only the identifier and the executable name, which is what a person needs to recognise what
+    stayed alive. Command lines and environments stay unread here exactly as in `processTable`:
+    this gate drives a real coding CLI, and its arguments are not this gate's business.
+    """
+    if sys.platform == "win32":
+        command = (
+            "Get-CimInstance Win32_Process | ForEach-Object { "
+            "'{0} {1}' -f $_.ProcessId,$_.Name }"
+        )
+        listed = subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", command],
+            capture_output=True, text=True, timeout=15.0, check=False,
+        )
+    else:
+        listed = subprocess.run(
+            ["ps", "-axo", "pid=,comm="], capture_output=True, text=True, timeout=15.0, check=False
+        )
+    names: dict[int, str] = {}
+    for line in listed.stdout.splitlines():
+        parts = line.split(maxsplit=1)
+        if len(parts) == 2 and parts[0].isdigit():
+            names[int(parts[0])] = parts[1].strip()
+    return ", ".join(f"{pid} ({names.get(pid, 'unknown')})" for pid in sorted(pids))
+
+
 def processTable() -> dict[int, int]:
     """Read only process and parent identifiers, never command lines or environment."""
     if sys.platform == "win32":
@@ -955,15 +983,54 @@ def descendants(parent: int) -> set[int]:
 TEARDOWN_DEADLINE_SECONDS = 30.0
 
 
-def waitGone(pids: set[int]) -> set[int]:
-    """Wait for process teardown and return the exact survivors."""
+def waitGone(pids: set[int], started_after: float | None = None) -> set[int]:
+    """Wait for process teardown and return the exact survivors.
+
+    A leaked process is one that is still the process this gate observed. An identifier alone does
+    not say that: the operating system reissues numbers, and measured 2026-08-20 a freed identifier
+    came back as an unrelated `grep` a second later, which this gate then reported as a leak of a
+    process that had exited cleanly. When the caller knows when its work began, a candidate older
+    than that is a different process wearing a recycled number and is not a survivor.
+    """
     deadline = time.monotonic() + TEARDOWN_DEADLINE_SECONDS
     alive = pids
     while alive and time.monotonic() < deadline:
         alive = pids.intersection(processTable())
+        if alive and started_after is not None:
+            alive = {pid for pid in alive if not startedBefore(pid, started_after)}
         if alive:
             time.sleep(0.05)
     return alive
+
+
+def startedBefore(pid: int, moment: float) -> bool:
+    """Whether this identifier belongs to a process that already existed at `moment`.
+
+    Unix epoch seconds on both sides. An unreadable creation time answers False, so an unknown
+    process is still treated as a possible survivor rather than dismissed.
+    """
+    if sys.platform == "win32":
+        command = (
+            f"$p = Get-CimInstance Win32_Process -Filter 'ProcessId={pid}'; "
+            "if ($p) { [int64]($p.CreationDate.ToUniversalTime() - "
+            "(Get-Date '1970-01-01Z').ToUniversalTime()).TotalSeconds }"
+        )
+        listed = subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", command],
+            capture_output=True, text=True, timeout=15.0, check=False,
+        )
+    else:
+        # Elapsed seconds since the process started, which needs no timezone or locale parsing.
+        listed = subprocess.run(
+            ["ps", "-o", "etimes=", "-p", str(pid)],
+            capture_output=True, text=True, timeout=15.0, check=False,
+        )
+        elapsed = listed.stdout.strip()
+        if not elapsed.isdigit():
+            return False
+        return (time.time() - int(elapsed)) < moment
+    text = listed.stdout.strip()
+    return bool(text) and text.lstrip("-").isdigit() and int(text) < int(moment)
 
 
 def exercise(claude: str) -> None:

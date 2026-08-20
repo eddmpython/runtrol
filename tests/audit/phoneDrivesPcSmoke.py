@@ -161,6 +161,11 @@ def exercise(mode: str, require_external: bool) -> None:
             }[mode]
             command = ["cargo", "test", "-p", "runtrol-daemon", test_name, "--", "--exact", "--nocapture"]
             output = root / "cargo-output.txt"
+            # Everything this gate is responsible for begins after this instant. A process older
+            # than it wearing one of the observed identifiers is the operating system recycling a
+            # number, not a leak (measured 2026-08-20, when a freed identifier came back as an
+            # unrelated `grep` and this gate reported a clean run as a survivor).
+            began = time.time()
             with output.open("w+", encoding="utf-8") as captured:
                 child = subprocess.Popen(
                     command,
@@ -191,7 +196,15 @@ def exercise(mode: str, require_external: bool) -> None:
                 captured.seek(0)
                 detail = captured.read()
             observed.update(approval.descendants(child.pid))
-            cleanup_complete = not approval.waitGone(observed)
+            # Naming the survivors, because "something survived" cannot be acted on: the operator
+            # (or the next reader of this gate) needs to know which process refused to go.
+            survivors = approval.waitGone(observed, started_after=began)
+            if survivors:
+                print(
+                    f"[phoneDrivesPcSmoke] survivors: {approval.describe(survivors)}",
+                    file=sys.stderr,
+                )
+            cleanup_complete = not survivors
             evidence = Evidence(
                 cli_probed=cli_probed,
                 cargo_passed=child.returncode == 0,
