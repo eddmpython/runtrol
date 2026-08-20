@@ -660,11 +660,6 @@
           "scope": "machine",
           "description": "Optional absolute path to a runtrol executable. The bundled core and PATH are discovered automatically when empty."
         },
-        "runtrol.followWorkspace": {
-          "type": "boolean",
-          "default": true,
-          "description": "Open the selected session's workspace or worktree in this window."
-        },
         "runtrol.relayOrigin": {
           "type": "string",
           "default": "",

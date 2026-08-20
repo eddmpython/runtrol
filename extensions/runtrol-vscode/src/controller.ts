@@ -304,10 +304,9 @@ export class Controller implements vscode.Disposable {
 
   select(
     value: SelectionTarget,
-    follow = true,
     reveal = true,
   ): Promise<void> {
-    const selected = this.selectionTail.then(() => this.selectNow(value, follow, reveal));
+    const selected = this.selectionTail.then(() => this.selectNow(value, reveal));
     this.selectionTail = selected.catch(() => undefined);
     return selected;
   }
@@ -324,7 +323,7 @@ export class Controller implements vscode.Disposable {
       resolveApplied = resolve;
       rejectApplied = reject;
     });
-    const selected = this.selectionTail.then(() => this.selectNow(value, false, false, () => {
+    const selected = this.selectionTail.then(() => this.selectNow(value, false, () => {
       applied = true;
       resolveApplied();
     }));
@@ -344,13 +343,12 @@ export class Controller implements vscode.Disposable {
 
   private async selectNow(
     value: SelectionTarget,
-    follow: boolean,
     reveal: boolean,
     afterApplied: () => void = () => undefined,
   ): Promise<void> {
     const pausedDiscoveries = this.beginForegroundAction();
     try {
-      await this.applySelection(value, follow, reveal, afterApplied);
+      await this.applySelection(value, reveal, afterApplied);
     } finally {
       this.endForegroundAction(pausedDiscoveries);
     }
@@ -368,7 +366,6 @@ export class Controller implements vscode.Disposable {
 
   private async applySelection(
     value: SelectionTarget,
-    follow: boolean,
     reveal: boolean,
     afterApplied: () => void,
   ): Promise<void> {
@@ -399,14 +396,10 @@ export class Controller implements vscode.Disposable {
     this.state.forgetCursor(session.sessionId);
     this.conversation.reset(session);
 
-    const follows = vscode.workspace.getConfiguration("runtrol").get<boolean>("followWorkspace", true);
-    if (follow && follows && !workspaceIsOpen(session.workspace)) {
-      await stored;
-      await vscode.commands.executeCommand("vscode.openFolder", vscode.Uri.file(session.workspace), {
-        forceNewWindow: false,
-      });
-      return;
-    }
+    // Deliberately no window-follow here. Selecting a conversation opens its tab and NOTHING else moves
+    // (memory/uxContract.md): moving VS Code to the project is the heading's explicit button. An earlier
+    // followWorkspace setting made a click silently replace the whole window, which is the exact behavior
+    // the operator dictated out.
     void stored.catch((error: unknown) => {
       this.conversation.status(
         `Cannot remember the selected session: ${error instanceof Error ? error.message : String(error)}`,
@@ -663,7 +656,7 @@ export class Controller implements vscode.Disposable {
         permission,
       );
       await this.refresh();
-      await this.select(opened.sessionId, follow);
+      await this.select(opened.sessionId);
       return opened.sessionId;
     } catch (error) {
       if (error instanceof ServiceTroubleReported) throw error;

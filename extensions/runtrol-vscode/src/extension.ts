@@ -548,7 +548,7 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
 
         const resumeStarted = performance.now();
         await performanceDeadline(
-          controller.select(cold.sessionId, false),
+          controller.select(cold.sessionId),
           10_000,
           "cold session selection",
         );
@@ -585,7 +585,7 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
         for (let round = 0; round < SESSION_SWITCH_ROUNDS; round += 1) {
           for (const session of hot) {
             const started = performance.now();
-            await controller.select(session.sessionId, false);
+            await controller.select(session.sessionId);
             await Promise.all([
               controller.selectedWatchReady(),
               conversation.waitForCurrentRender(),

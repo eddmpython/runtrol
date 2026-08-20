@@ -15,7 +15,7 @@ export type JourneyApi = {
     reasoningEffort?: string | null,
     permission?: string | null,
   ): Promise<string>;
-  select(session: string, follow?: boolean): Promise<void>;
+  select(session: string): Promise<void>;
   prompt(text: string): Promise<void>;
   switchModel(model: string): Promise<void>;
   switchMode(mode: string): Promise<void>;
@@ -46,7 +46,7 @@ export function journeyApi(
     start: (provider, workspace, model = null, reasoningEffort = null, permission = null) => afterReady(
       () => controller.startResolvedSession(provider, workspace, model, reasoningEffort, "exclusive", false, permission),
     ),
-    select: (session, follow = false) => afterReady(() => controller.select(session, follow)),
+    select: (session) => afterReady(() => controller.select(session)),
     prompt: (text) => afterReady(() => controller.prompt(text)),
     switchModel: (model) => afterReady(() => controller.switchSelectedModel(model)),
     switchMode: (mode) => afterReady(() => controller.switchSelectedMode(mode)),
