@@ -45,6 +45,9 @@ ALLOWED_ROOT: frozenset[str] = frozenset(
         # L-local (gitignored)
         "CLAUDE.md",
         "AGENTS.md",
+        # 운영자와 AI 사이의 약속 기록 (L-memory). 운영자 지시 2026-08-20: 루트의 폴더로 두되
+        # 깃 추적은 하지 않는다. 정본은 이 폴더이고 harness 쪽 memory/MEMORY.md 는 포인터다.
+        "memory",
         "PLAN.md",
         "TODO.md",
         # L-public 문서. README 는 4 개 언어가 정본이다 (한국어가 기준, 나머지는 투영)
