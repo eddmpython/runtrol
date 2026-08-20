@@ -148,6 +148,12 @@ pub struct Startup {
     pub answering_with: Option<Box<str>>,
     /// The permission mode in force at attachment, by the CLI's own name for it.
     pub starting_mode: Option<Box<str>>,
+    /// Whether the frame names the CLI's slash commands.
+    ///
+    /// This CLI announces them only here, inside the frame it says hello with (measured: no separate
+    /// update follows). The flag lets the agent re-emit the whole frame as the one dedicated
+    /// commands event every service shares.
+    pub announces_commands: bool,
     /// The whole startup object, unread.
     pub payload: Opaque,
 }
@@ -214,6 +220,12 @@ struct Envelope<'line> {
     /// On the startup and status frames: the permission mode in force.
     #[serde(default, rename = "permissionMode")]
     permission_mode: Option<&'line str>,
+    /// On the startup frame: whether it names its slash commands.
+    ///
+    /// Presence only. The list itself stays in the payload, which travels whole; lifting the names
+    /// would be a second copy of the vendor's own words.
+    #[serde(default, borrow)]
+    slash_commands: Option<&'line RawValue>,
     /// On the quota frame: where the account stands.
     #[serde(default, borrow)]
     rate_limit_info: Option<&'line RawValue>,
@@ -482,6 +494,7 @@ fn startup(line: &Bytes, envelope: &Envelope<'_>) -> Result<Startup, MapError> {
         version: envelope.claude_code_version.map(Into::into),
         answering_with: envelope.model.map(Into::into),
         starting_mode: envelope.permission_mode.map(Into::into),
+        announces_commands: envelope.slash_commands.is_some(),
         payload: whole_line(line),
     })
 }
@@ -829,7 +842,24 @@ mod tests {
                     startup.answering_with.as_deref(),
                     Some("claude-haiku-4-5-20251001")
                 );
+                assert!(
+                    startup.announces_commands,
+                    "the recorded frame names slash_commands, and that presence is the flag"
+                );
             }
+            other => panic!("expected a startup, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_startup_without_slash_commands_announces_none() {
+        // Presence is the only thing read: an init frame that says nothing about commands must not
+        // produce a commands event, because an empty dedicated update means withdrawal to a reader.
+        let bare = line(&format!(
+            r#"{{"type":"system","subtype":"init","session_id":"{SESSION}","capabilities":[]}}"#
+        ));
+        match read(&bare).expect("readable") {
+            Frame::Started(startup) => assert!(!startup.announces_commands),
             other => panic!("expected a startup, got {other:?}"),
         }
     }

@@ -243,6 +243,17 @@ impl ClaudeAgent {
                         },
                     });
                 }
+                if startup.announces_commands {
+                    // This CLI names its slash commands only inside the frame it says hello with. Re-emitted
+                    // whole as the one dedicated commands event every service shares, so a surface reads a
+                    // single vocabulary instead of digging through per-dialect attachment payloads.
+                    self.announced.push_back(Produced {
+                        src_end: self.src_end,
+                        body: EventBody::AvailableCommandsUpdate {
+                            payload: startup.payload.clone(),
+                        },
+                    });
+                }
                 Produced {
                     src_end: self.src_end,
                     body: EventBody::Attached(Box::new(runtrol_provider::Attached {
