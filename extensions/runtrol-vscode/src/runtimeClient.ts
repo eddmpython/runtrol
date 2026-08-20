@@ -208,6 +208,7 @@ export class StudioRuntimeClient implements vscode.Disposable {
     access: SessionWorkspaceAccess,
     model: string | null,
     reasoningEffort: string | null,
+    permission: string | null = null,
   ): Promise<SessionDescriptor> {
     return this.mutate(async (runtime) => {
       const opened = await runtime.sessions().start({
@@ -217,6 +218,7 @@ export class StudioRuntimeClient implements vscode.Disposable {
         access,
         ...(model ? { model } : {}),
         ...(reasoningEffort ? { reasoningEffort } : {}),
+        ...(permission ? { permission } : {}),
       });
       await this.rememberControl(opened.control);
       return opened.session;

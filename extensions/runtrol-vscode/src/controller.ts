@@ -569,6 +569,7 @@ export class Controller implements vscode.Disposable {
       configuration.reasoningEffort,
       selectedWorkspace.access,
       true,
+      configuration.permission,
     );
   }
 
@@ -593,6 +594,7 @@ export class Controller implements vscode.Disposable {
     reasoningEffort: string | null,
     access: WorkspaceAccess,
     follow: boolean,
+    permission: string | null = null,
   ): Promise<string> {
     const provider = this.state.providers.find((candidate) => candidate.providerId === providerId);
     if (!provider) {
@@ -612,6 +614,7 @@ export class Controller implements vscode.Disposable {
         access,
         model,
         reasoningEffort,
+        permission,
       );
       await this.refresh();
       await this.select(opened.sessionId, follow);
@@ -1340,9 +1343,32 @@ export class Controller implements vscode.Disposable {
       selectedModel.model,
       `New chat with ${provider.displayName}: reasoning effort`,
     );
-    return selectedEffort === undefined
-      ? null
-      : { model: selectedModel.id, reasoningEffort: selectedEffort };
+    if (selectedEffort === undefined) return null;
+
+    // The starting permission mode, offered from the same switchable vocabulary the daemon enforces
+    // (so nothing offered here can be refused there), and only when this service declares one. The
+    // modes that remove safety prompts are absent from that vocabulary by construction.
+    const modes = provider.switchableModes ?? [];
+    let permission: string | null = null;
+    if (modes.length > 0) {
+      const pickedMode = await vscode.window.showQuickPick(
+        [
+          {
+            label: "Provider default",
+            id: null as string | null,
+            description: "Use the installed CLI's current permission mode",
+          },
+          ...modes.map((id) => ({ label: id, id: id as string | null, description: "" })),
+        ],
+        {
+          title: `New chat with ${provider.displayName}: permission mode`,
+          placeHolder: "Choose the mode this conversation starts in",
+        },
+      );
+      if (!pickedMode) return null;
+      permission = pickedMode.id;
+    }
+    return { model: selectedModel.id, reasoningEffort: selectedEffort, permission };
   }
 
   private async chooseStartWorkspace(): Promise<StartWorkspace | null> {
@@ -1451,6 +1477,7 @@ type StartWorkspace = {
 type StartConfiguration = {
   model: string | null;
   reasoningEffort: string | null;
+  permission: string | null;
 };
 
 /// A row without a supervised session must carry the provider-owned chat that opens it.

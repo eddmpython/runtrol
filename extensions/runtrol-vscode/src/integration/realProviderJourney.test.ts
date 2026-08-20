@@ -10,7 +10,13 @@ import type { ProviderLine, SessionLine } from "../runtimeTypes";
 type JourneyApi = {
   providers(): readonly ProviderLine[];
   sessions(): readonly SessionLine[];
-  start(provider: string, workspace: string, model?: string | null): Promise<string>;
+  start(
+    provider: string,
+    workspace: string,
+    model?: string | null,
+    reasoningEffort?: string | null,
+    permission?: string | null,
+  ): Promise<string>;
   select(session: string, follow?: boolean): Promise<void>;
   prompt(text: string): Promise<void>;
   switchModel(model: string): Promise<void>;
@@ -183,10 +189,14 @@ async function journey(resultPath: string): Promise<void> {
     }
 
     currentStage = "starting-second-session";
+    // Started in plan mode through the public spine (StartSessionParams.permission -> daemon
+    // vocabulary gate -> the CLI's own --permission-mode flag). The claude driver refuses an
+    // explicit choice whose flag its parser did not confirm, and the CLI refuses an invalid value
+    // loudly, so this start succeeding is itself evidence the choice traveled.
     const secondSession = await within(
-      api.journey.start(provider, secondWorkspace),
+      api.journey.start(provider, secondWorkspace, null, null, "plan"),
       30_000,
-      "starting the second installed-provider session",
+      "starting the second installed-provider session in plan mode",
     );
     currentSecondSession = secondSession;
     await api.journey.verifySelected(secondSession);

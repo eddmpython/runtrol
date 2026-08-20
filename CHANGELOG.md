@@ -21,7 +21,11 @@ and refactoring that no user can observe do not belong here.
   `sessions/start` takes an optional `permission`, validated against the same switchable-mode boundary as
   mid-session switching, so modes that remove safety prompts stay unreachable for every caller. Resuming a
   session (`sessions/resume`) now also takes the optional model and reasoning effort the drivers already
-  honored.
+  honored. "New Conversation with Service, Model and Effort..." now offers that starting mode as its last
+  question, only for services that declare a switchable set.
+
+- Removing a project shows an Undo toast instead of asking for confirmation up front: the misclick is
+  covered without making every deliberate removal answer a question first.
 
 - Replies now render the light markdown coding agents actually write: fenced code blocks with a copy
   button, inline code, headings, lists, bold, italic, and web links that open in the browser. Plain text
