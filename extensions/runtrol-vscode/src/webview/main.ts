@@ -9,8 +9,10 @@ import {
   type UnknownRecord,
 } from "./presentation";
 import { conversationEmptyCopy, sendShortcutHint } from "./conversationCopy";
+import { planEntriesOf, planGlyph } from "./plan";
 import { toolActivityLineKeeping, toolActivityOf } from "./toolActivity";
 import { toolDetail } from "./toolDetail";
+import { declaredDiffs, unifiedLineKind, type DeclaredDiff } from "./toolDiff";
 import {
   asksForCommands,
   completed,
@@ -488,6 +490,10 @@ function present(payload: unknown): void {
     }
     if (presentation.textKey === "mode.updated") updateMode(body);
     if (presentation.textKey === "model.updated") updateModel(body);
+    // A plan with readable entries is shown as the checklist the service sent. Only a plan event
+    // without one falls through to the one-line notice, because inventing entries would be worse
+    // than saying "Plan updated".
+    if (presentation.textKey === "plan.updated" && renderPlan(body)) return;
     // Kept out of the transcript below and remembered here. "The command list changed" is not something anybody
     // came to read, but the list itself is the only way to find out what this CLI can be told to do.
     if (presentation.textKey === "commands.updated") adoptCommands(body, true);
@@ -816,10 +822,22 @@ function appendTool(body: UnknownRecord, part: "call" | "result"): void {
   for (const pre of item.querySelectorAll("pre.tool-detail")) {
     slots.set(pre.getAttribute("data-slot") ?? IN, pre.textContent ?? "");
   }
-  const detail = toolDetail(body);
-  if (detail) slots.set(part === "result" ? OUT : IN, detail);
+  const slot = part === "result" ? OUT : IN;
+  // A change the service declared as a change is shown in colour, once: the raw detail skips only the
+  // keys whose every entry the diff rendering covered. Rendered diffs persist per slot like the raw
+  // detail, because a later frame for the same call may not repeat the change it declared earlier.
+  const declared = declaredDiffs(body);
+  const diffBlocks = new Map<string, HTMLElement>();
+  for (const block of item.querySelectorAll<HTMLElement>("div.tool-diffs")) {
+    diffBlocks.set(block.getAttribute("data-slot") ?? IN, block);
+  }
+  if (declared.diffs.length > 0) {
+    diffBlocks.set(slot, diffContainer(declared.diffs, slot));
+  }
+  const detail = toolDetail(body, declared.consumed);
+  if (detail) slots.set(slot, detail);
 
-  if (slots.size === 0) {
+  if (slots.size === 0 && diffBlocks.size === 0) {
     item.replaceChildren(document.createTextNode(line));
     item.dataset.characters = String(line.length);
     visibleCharacters += line.length;
@@ -835,12 +853,17 @@ function appendTool(body: UnknownRecord, part: "call" | "result"): void {
   summary.textContent = line;
   panel.append(summary);
   let length = line.length;
-  for (const slot of [IN, OUT]) {
-    const text = slots.get(slot);
+  for (const side of [IN, OUT]) {
+    const block = diffBlocks.get(side);
+    if (block) {
+      panel.append(block);
+      length += block.textContent?.length ?? 0;
+    }
+    const text = slots.get(side);
     if (!text) continue;
     const pre = document.createElement("pre");
     pre.className = "tool-detail";
-    pre.setAttribute("data-slot", slot);
+    pre.setAttribute("data-slot", side);
     pre.textContent = text;
     panel.append(pre);
     length += text.length;
@@ -849,6 +872,85 @@ function appendTool(body: UnknownRecord, part: "call" | "result"): void {
   item.dataset.characters = String(length);
   visibleCharacters += length;
   trim();
+}
+
+/// Declared changes, coloured by nothing but what the service itself said.
+function diffContainer(diffs: DeclaredDiff[], slot: string): HTMLElement {
+  const container = document.createElement("div");
+  container.className = "tool-diffs";
+  container.setAttribute("data-slot", slot);
+  for (const diff of diffs) {
+    const block = document.createElement("div");
+    block.className = "tool-diff";
+    if (diff.path) {
+      const path = document.createElement("div");
+      path.className = "diff-path";
+      path.textContent = diff.path;
+      block.append(path);
+    }
+    if (diff.kind === "unified") {
+      const pre = document.createElement("pre");
+      pre.className = "diff-body";
+      for (const lineText of diff.text.split("\n")) {
+        const row = document.createElement("span");
+        row.className = `diff-${unifiedLineKind(lineText)}`;
+        row.textContent = `${lineText}\n`;
+        pre.append(row);
+      }
+      block.append(pre);
+    } else {
+      if (diff.oldText) block.append(diffSide("diff-del", diff.oldText));
+      if (diff.newText) block.append(diffSide("diff-add", diff.newText));
+    }
+    container.append(block);
+  }
+  return container;
+}
+
+function diffSide(kind: string, text: string): HTMLPreElement {
+  const pre = document.createElement("pre");
+  pre.className = `diff-body ${kind}`;
+  pre.textContent = text;
+  return pre;
+}
+
+/// The plan as the service last announced it: one element, updated in place.
+///
+/// The service resends the whole plan on every change (that is the ACP shape), so the session keeps a
+/// single plan element rather than a growing history of checklists.
+function renderPlan(body: UnknownRecord): boolean {
+  const entries = planEntriesOf(body);
+  if (entries.length === 0) return false;
+  clearPlaceholder();
+  const existing = conversation.querySelector<HTMLElement>("[data-plan='true']");
+  const item = existing ?? document.createElement("article");
+  if (!existing) {
+    item.className = "message plan";
+    item.dataset.plan = "true";
+    conversation.append(item);
+  }
+  visibleCharacters -= Number(item.dataset.characters ?? 0);
+  const label = document.createElement("span");
+  label.className = "message-author";
+  label.textContent = "Plan";
+  const list = document.createElement("ul");
+  list.className = "plan-entries";
+  let length = label.textContent.length;
+  for (const entry of entries) {
+    const row = document.createElement("li");
+    row.className = `plan-entry plan-${entry.status}`;
+    const glyph = document.createElement("span");
+    glyph.className = "plan-glyph";
+    glyph.textContent = planGlyph(entry.status);
+    row.append(glyph, document.createTextNode(entry.content));
+    list.append(row);
+    length += entry.content.length + 1;
+  }
+  item.replaceChildren(label, list);
+  item.dataset.characters = String(length);
+  visibleCharacters += length;
+  trim();
+  return true;
 }
 
 /// The call's own arguments, as the service sent them.

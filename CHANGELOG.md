@@ -12,6 +12,13 @@ and refactoring that no user can observe do not belong here.
 
 ### Added
 
+- An agent's plan is now shown as the checklist it sent, updating in place as steps complete, instead of
+  the fixed line "Plan updated". A plan event without readable entries still falls back to that line.
+
+- A change the service declared as a change is now coloured inside the tool panel: added and removed text
+  in the editor's own diff colours, for the two shapes services actually send (protocol diff blocks and
+  unified diff text). Tool arguments that merely look like patches stay as plain detail, exactly as before.
+
 - A running turn can be stopped from the keyboard. Escape in the conversation view stops the turn while the
   stop button is offered, and `Ctrl+K Ctrl+I` (`Cmd+K Cmd+I` on macOS) does the same from anywhere in the
   window, joining the existing conversation chords.

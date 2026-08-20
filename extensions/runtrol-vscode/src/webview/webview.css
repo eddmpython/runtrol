@@ -361,6 +361,94 @@ body.no-chat #composer {
 }
 
 /*
+ * A change the service declared as a change, in the host's own diff colours.
+ *
+ * Only declared shapes are coloured (ACP diff blocks, unified diff text); everything else stays in the raw
+ * detail above. The colours come from the diff editor's theme tokens so light and dark both read.
+ */
+.tool-diff {
+  margin: 0.35rem 0 0;
+}
+
+.diff-path {
+  color: var(--vscode-descriptionForeground);
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 0.85em;
+}
+
+pre.diff-body {
+  margin: 0.15rem 0 0;
+  padding: 0.5rem 0.6rem;
+  overflow-x: auto;
+  max-height: 18rem;
+  border-radius: 0.4rem;
+  background: var(--vscode-textCodeBlock-background, var(--vscode-editor-background));
+  color: var(--vscode-editor-foreground);
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 0.85em;
+  white-space: pre;
+}
+
+pre.diff-body.diff-add {
+  background: var(--vscode-diffEditor-insertedTextBackground, rgb(80 160 80 / 20%));
+}
+
+pre.diff-body.diff-del {
+  background: var(--vscode-diffEditor-removedTextBackground, rgb(200 80 80 / 20%));
+}
+
+.diff-body span {
+  display: block;
+}
+
+.diff-body .diff-add {
+  background: var(--vscode-diffEditor-insertedTextBackground, rgb(80 160 80 / 20%));
+}
+
+.diff-body .diff-del {
+  background: var(--vscode-diffEditor-removedTextBackground, rgb(200 80 80 / 20%));
+}
+
+.diff-body .diff-hunk {
+  color: var(--vscode-descriptionForeground);
+}
+
+/*
+ * The plan as the service last announced it. One checklist per session, updated in place, because the
+ * service resends the whole plan on every change and a history of checklists would drown the transcript.
+ */
+.message.plan {
+  margin-bottom: 1rem;
+  padding-left: 0.8rem;
+  border-left: 2px solid var(--vscode-progressBar-background, var(--vscode-charts-blue));
+  font-size: 0.9em;
+}
+
+.plan-entries {
+  margin: 0.2rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.plan-entry {
+  padding: 0.08rem 0;
+}
+
+.plan-glyph {
+  margin-right: 0.45rem;
+  color: var(--vscode-descriptionForeground);
+}
+
+.plan-entry.plan-in_progress .plan-glyph {
+  color: var(--vscode-progressBar-background, var(--vscode-charts-blue));
+}
+
+.plan-entry.plan-completed {
+  color: var(--vscode-descriptionForeground);
+  text-decoration: line-through;
+}
+
+/*
  * The coding service's own commands, above the field they will be typed into.
  *
  * Above rather than below because the composer already sits at the bottom of the panel, and a menu opening

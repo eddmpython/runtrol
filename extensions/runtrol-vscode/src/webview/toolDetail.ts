@@ -7,6 +7,8 @@ const MAX_TOOL_DETAIL = 4000;
 /// The names already on the summary line. Repeating them inside the panel is noise.
 const ON_THE_SUMMARY = new Set(["title", "name"]);
 
+const NOTHING: ReadonlySet<string> = new Set();
+
 /// What a tool call carries, laid out the way a person reads it.
 ///
 /// Every key the service sent is shown, in the order it sent them, under the name it gave them. Nothing is
@@ -17,10 +19,14 @@ const ON_THE_SUMMARY = new Set(["title", "name"]);
 /// What changes is only how a value is spelled. This used to be `JSON.stringify`, which writes a newline as the
 /// two characters backslash and n: a command's output came out as one line running off the right edge of a
 /// panel two hundred pixels wide, which is the opposite of showing what the tool printed. Text is shown as text.
-export function toolDetail(body: UnknownRecord): string {
+///
+/// `except` names payload keys the caller already rendered elsewhere in the same panel (a declared
+/// diff shown in colour). Nothing is dropped: those bytes are on screen once, in their better form,
+/// instead of twice.
+export function toolDetail(body: UnknownRecord, except: ReadonlySet<string> = NOTHING): string {
   const payload = record(body.payload);
   if (!payload) return "";
-  const shown = Object.entries(payload).filter(([key]) => !ON_THE_SUMMARY.has(key));
+  const shown = Object.entries(payload).filter(([key]) => !ON_THE_SUMMARY.has(key) && !except.has(key));
   if (shown.length === 0) return "";
   const text = fields(shown, "");
   return text.length > MAX_TOOL_DETAIL ? `${text.slice(0, MAX_TOOL_DETAIL)}\n...` : text;
