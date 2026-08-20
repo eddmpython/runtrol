@@ -74,13 +74,7 @@ impl AcpAgent {
         intent: &OpenIntent,
         contained_by: &Containment,
     ) -> Result<Self, ProviderError> {
-        if intent.model.is_some() || intent.permission.is_some() {
-            return Err(ProviderError::Unsupported {
-                provider,
-                what: "a model or permission override at session creation".to_owned(),
-                why: "ACP v1 does not carry either field in session/new or session/load",
-            });
-        }
+        refuse_unsupported_open_overrides(provider, intent)?;
 
         let arguments: Vec<String> = transport_argv.iter().map(ToString::to_string).collect();
         let mut checked = program.leading().to_vec();
@@ -907,9 +901,69 @@ fn line_error(provider: ProviderId, doing: &'static str, error: &LineError) -> P
     }
 }
 
+/// Refuse open-time overrides ACP v1 cannot carry, before any process is spawned.
+///
+/// `session/new` and `session/load` have no field for a model, a reasoning effort, or a permission
+/// mode. A silently dropped override would open a session that quietly ignores the operator's
+/// explicit choice (the reasoning effort did exactly that until 2026-08-20), so every override is
+/// refused loudly here.
+fn refuse_unsupported_open_overrides(
+    provider: ProviderId,
+    intent: &OpenIntent,
+) -> Result<(), ProviderError> {
+    if intent.model.is_some() || intent.reasoning_effort.is_some() || intent.permission.is_some() {
+        return Err(ProviderError::Unsupported {
+            provider,
+            what: "a model, reasoning effort, or permission override at session creation"
+                .to_owned(),
+            why: "ACP v1 carries none of these fields in session/new or session/load",
+        });
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
+    use runtrol_provider::AbsPath;
+
     use super::*;
+
+    fn an_intent() -> OpenIntent {
+        OpenIntent {
+            session: SessionId::now(),
+            workspace: AbsPath::new(if cfg!(windows) { r"C:\work" } else { "/work" })
+                .expect("valid"),
+            disposition: Disposition::Fresh,
+            model: None,
+            reasoning_effort: None,
+            permission: None,
+        }
+    }
+
+    #[test]
+    fn every_open_override_is_refused_loudly_and_none_passes() {
+        // Regression: the guard once checked only model and permission, so a reasoning effort was
+        // silently dropped and the session opened as if the operator had chosen nothing.
+        let provider = ProviderId::parse("acp-test").expect("the test's own id must be valid");
+        let plain = an_intent();
+        assert!(refuse_unsupported_open_overrides(provider, &plain).is_ok());
+
+        let mut with_model = an_intent();
+        with_model.model = Some("m".into());
+        let mut with_effort = an_intent();
+        with_effort.reasoning_effort = Some("high".into());
+        let mut with_permission = an_intent();
+        with_permission.permission = Some("plan".into());
+        for overridden in [with_model, with_effort, with_permission] {
+            assert!(
+                matches!(
+                    refuse_unsupported_open_overrides(provider, &overridden),
+                    Err(ProviderError::Unsupported { .. })
+                ),
+                "an open-time override must be refused, not dropped",
+            );
+        }
+    }
 
     #[test]
     fn an_announced_mode_state_becomes_the_event_and_a_null_announcement_becomes_nothing() {
