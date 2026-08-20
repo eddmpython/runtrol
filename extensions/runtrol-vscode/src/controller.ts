@@ -36,7 +36,13 @@ import { StudioRuntimeClient } from "./runtimeClient";
 import { sessionStateLabel } from "./runtimeProjection";
 import type { ModelOption } from "./sessionConfiguration";
 import { modelOptions, reasoningOptions, RECENT_SERVICE_KEY } from "./sessionConfiguration";
-import { workspaceCollisions, type WorkspaceCollision } from "./workspaceCollision";
+import {
+  readStartDefaults,
+  rememberStartDefault,
+  START_DEFAULTS_KEY,
+  type StartDefault,
+} from "./startDefaults";
+import { workspaceCollisions, workspaceIdentity, type WorkspaceCollision } from "./workspaceCollision";
 
 const NATIVE_ADOPTION_REFRESH_MS = 4 * 60_000;
 /// Existing conversations are discovered as soon as the surface is idle enough to ask.
@@ -559,17 +565,57 @@ export class Controller implements vscode.Disposable {
     if (!provider) return;
     const selectedWorkspace = await this.chooseStartWorkspace();
     if (!selectedWorkspace) return;
-    const configuration = await this.chooseStartConfiguration(provider);
+    await this.finishConfiguredStart(provider, selectedWorkspace.workspace, selectedWorkspace.access);
+  }
+
+  /// The deliberate path from a project heading: the folder is already answered, the rest is asked.
+  async startConfiguredSessionInWorkspace(workspace: string): Promise<void> {
+    const provider = await this.chooseService();
+    if (!provider) return;
+    const decided = await this.startDecision(workspace, "keep");
+    if (decided === null || decided === "another") return;
+    await this.finishConfiguredStart(provider, workspace, decided);
+  }
+
+  private async finishConfiguredStart(
+    provider: ProviderLine,
+    workspace: string,
+    access: WorkspaceAccess,
+  ): Promise<void> {
+    const configuration = await this.chooseStartConfiguration(provider, workspace);
     if (!configuration) return;
     await this.rememberService(provider.providerId);
+    // Remembered to pre-highlight this project's next configured start, never to skip a question.
+    await this.rememberStartDefault(workspace, {
+      providerId: provider.providerId,
+      model: configuration.model,
+      effort: configuration.reasoningEffort,
+      permission: configuration.permission,
+    });
     await this.startResolvedSession(
       provider.providerId,
-      selectedWorkspace.workspace,
+      workspace,
       configuration.model,
       configuration.reasoningEffort,
-      selectedWorkspace.access,
+      access,
       true,
       configuration.permission,
+    );
+  }
+
+  private startDefaultOf(workspace: string): StartDefault | null {
+    const defaults = readStartDefaults(this.context.globalState.get(START_DEFAULTS_KEY));
+    return defaults[workspaceIdentity(workspace)] ?? null;
+  }
+
+  private async rememberStartDefault(
+    workspace: string,
+    choice: Omit<StartDefault, "atMs">,
+  ): Promise<void> {
+    const defaults = readStartDefaults(this.context.globalState.get(START_DEFAULTS_KEY));
+    await this.context.globalState.update(
+      START_DEFAULTS_KEY,
+      rememberStartDefault(defaults, workspaceIdentity(workspace), choice, Date.now()),
     );
   }
 
@@ -1311,9 +1357,19 @@ export class Controller implements vscode.Disposable {
     catalogue: ModelCatalog,
     model: ModelOption["model"],
     title: string,
+    preferred: string | null = null,
   ): Promise<string | null | undefined> {
     const efforts = reasoningOptions(catalogue, model);
     if (efforts.length === 0) return null;
+    const effortChoices = leadWith(
+      efforts.map((choice) => ({
+        label: choice.id,
+        id: choice.id as string | null,
+        description: choice.description || "Reported by the installed CLI",
+      })),
+      (choice) => choice.id === preferred && preferred !== null,
+      "Last used here",
+    );
     const picked = await vscode.window.showQuickPick(
       [
         {
@@ -1321,11 +1377,7 @@ export class Controller implements vscode.Disposable {
           id: null,
           description: "Use the installed CLI's current effort setting",
         },
-        ...efforts.map((choice) => ({
-          label: choice.id,
-          id: choice.id,
-          description: choice.description || "Reported by the installed CLI",
-        })),
+        ...effortChoices,
       ],
       {
         title,
@@ -1335,9 +1387,20 @@ export class Controller implements vscode.Disposable {
     return picked ? picked.id : undefined;
   }
 
-  private async chooseStartConfiguration(provider: ProviderLine): Promise<StartConfiguration | null> {
+  private async chooseStartConfiguration(
+    provider: ProviderLine,
+    workspace: string,
+  ): Promise<StartConfiguration | null> {
     const catalogue = await this.runtime.models(provider.providerId);
-    const choices = modelOptions(catalogue);
+    // What this project's last configured start chose, used only to lead each list: the question is
+    // still asked, so the installed CLI's own settings stay the only automatic authority.
+    const remembered = this.startDefaultOf(workspace);
+    const recall = remembered?.providerId === provider.providerId ? remembered : null;
+    const choices = leadWith(
+      modelOptions(catalogue),
+      (choice) => choice.id === recall?.model,
+      "Last used here",
+    );
     // A question with one possible answer is not a choice. When the installed CLI reports no selectable
     // catalogue, the only available answer is whatever that CLI already uses, and a picker saying so costs a
     // keystroke to convey nothing. Effort is still asked about below when this CLI reports any, because that
@@ -1368,6 +1431,7 @@ export class Controller implements vscode.Disposable {
       catalogue,
       selectedModel.model,
       `New chat with ${provider.displayName}: reasoning effort`,
+      recall?.effort ?? null,
     );
     if (selectedEffort === undefined) return null;
 
@@ -1377,6 +1441,11 @@ export class Controller implements vscode.Disposable {
     const modes = provider.switchableModes ?? [];
     let permission: string | null = null;
     if (modes.length > 0) {
+      const modeChoices = leadWith(
+        modes.map((id) => ({ label: id, id: id as string | null, description: "" })),
+        (choice) => choice.id === recall?.permission,
+        "Last used here",
+      );
       const pickedMode = await vscode.window.showQuickPick(
         [
           {
@@ -1384,7 +1453,7 @@ export class Controller implements vscode.Disposable {
             id: null as string | null,
             description: "Use the installed CLI's current permission mode",
           },
-          ...modes.map((id) => ({ label: id, id: id as string | null, description: "" })),
+          ...modeChoices,
         ],
         {
           title: `New chat with ${provider.displayName}: permission mode`,
@@ -1505,6 +1574,21 @@ type StartConfiguration = {
   reasoningEffort: string | null;
   permission: string | null;
 };
+
+/// Move the remembered choice to the front of a picker and say why it leads.
+///
+/// Reordering, never preselecting-and-skipping: the question is still asked, the remembered answer is
+/// just the one Enter lands on. Everything else keeps its order.
+function leadWith<T extends { description?: string }>(
+  choices: T[],
+  remembered: (choice: T) => boolean,
+  why: string,
+): T[] {
+  const index = choices.findIndex(remembered);
+  if (index < 0) return choices;
+  const led = { ...choices[index], description: why } as T;
+  return [led, ...choices.slice(0, index), ...choices.slice(index + 1)];
+}
 
 /// A row without a supervised session must carry the provider-owned chat that opens it.
 ///

@@ -107,6 +107,8 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
         void run(() => afterReady(() => controller.prompt(message.text)));
       } else if (message.type === "startChat") {
         void run(() => afterReady(() => controller.startSession()));
+      } else if (message.type === "startConfiguredChat") {
+        void run(() => afterReady(() => controller.startConfiguredSession()));
       } else if (message.type === "answerApproval") {
         void run(() => afterReady(
           () => controller.answerApproval(message.approval, message.option, message.subjectDigest),
@@ -325,6 +327,15 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
         // command invoked with the wrong thing must refuse rather than start a session somewhere surprising.
         if (!(item instanceof ProjectItem)) return;
         await controller.startSessionInWorkspace(item.group.workspace);
+      })),
+    ),
+    vscode.commands.registerCommand(
+      "runtrol.newConfiguredConversationInProject",
+      // The deliberate flow, one right-click away from the heading it starts in. The folder question is
+      // already answered by the heading; service, model, effort, and mode are still asked.
+      (item: unknown) => run(() => afterReady(async () => {
+        if (!(item instanceof ProjectItem)) return;
+        await controller.startConfiguredSessionInWorkspace(item.group.workspace);
       })),
     ),
     vscode.commands.registerCommand(

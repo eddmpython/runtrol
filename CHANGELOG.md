@@ -27,6 +27,13 @@ and refactoring that no user can observe do not belong here.
 - Removing a project shows an Undo toast instead of asking for confirmation up front: the misclick is
   covered without making every deliberate removal answer a question first.
 
+- The deliberate start flow is findable now: "New Conversation with Service, Model and Effort..." sits on
+  every project heading's right-click menu and as a second button on the empty conversation page, not only
+  in the view's overflow menu. Each project also remembers its last explicit choice and leads every picker
+  with it ("Last used here"), so the second configured start in the same project is three Enters. Nothing
+  is skipped: the quick path still sends nothing, and the installed CLI's own settings stay the only
+  automatic authority.
+
 - A coding service that cannot start now offers its own remedies from its sidebar row: the wrench on the
   "needs attention" row lists the service's own sign-in, install, and diagnose commands, and the chosen
   line is placed in your terminal unexecuted, exactly like the start-failure dialog. Nobody has to attempt

@@ -8,6 +8,7 @@
 export type ViewAction =
   | { type: "prompt"; text: string }
   | { type: "startChat" }
+  | { type: "startConfiguredChat" }
   | { type: "answerApproval"; approval: string; option: number; subjectDigest: number[] }
   | { type: "switchModel"; available: string[] }
   | { type: "switchMode"; available: string[] }
@@ -50,5 +51,5 @@ export function isViewAction(value: unknown): value is ViewAction {
   // Exactly the actions the dispatcher handles. "openWorkspace" and "close" once passed here without a
   // dispatcher branch, so they fell into the interrupt fallback: a message the page never sends today,
   // but one hostile byte away from stopping a running agent.
-  return type === "startChat" || type === "interrupt";
+  return type === "startChat" || type === "startConfiguredChat" || type === "interrupt";
 }

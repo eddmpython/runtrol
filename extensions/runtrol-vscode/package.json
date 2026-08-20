@@ -84,6 +84,7 @@
     "onCommand:runtrol.switchSession",
     "onCommand:runtrol.startSession",
     "onCommand:runtrol.startConfiguredSession",
+    "onCommand:runtrol.newConfiguredConversationInProject",
     "onCommand:runtrol.selectSession",
     "onCommand:runtrol.openConversation",
     "onCommand:runtrol.renameSession",
@@ -162,6 +163,10 @@
         "command": "runtrol.fixService",
         "title": "Runtrol: Fix Coding Service...",
         "icon": "$(wrench)"
+      },
+      {
+        "command": "runtrol.newConfiguredConversationInProject",
+        "title": "New Conversation with Service, Model and Effort..."
       },
       {
         "command": "runtrol.remoteConnectionStatus",
@@ -423,6 +428,10 @@
           "when": "false"
         },
         {
+          "command": "runtrol.newConfiguredConversationInProject",
+          "when": "false"
+        },
+        {
           "command": "runtrol.renameProject",
           "when": "false"
         },
@@ -537,6 +546,11 @@
         {
           "command": "runtrol.newConversationInProject",
           "group": "inline@1",
+          "when": "view == runtrol.sessions && viewItem == runtrol.project"
+        },
+        {
+          "command": "runtrol.newConfiguredConversationInProject",
+          "group": "1_manage@0",
           "when": "view == runtrol.sessions && viewItem == runtrol.project"
         },
         {

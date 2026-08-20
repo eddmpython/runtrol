@@ -133,6 +133,21 @@ body {
   border-radius: 999px;
 }
 
+/* The deliberate flow: present, quieter than the one-click path. */
+.empty-secondary {
+  margin-top: 0.6rem;
+  padding: 0.35rem 1rem;
+  border: 1px solid var(--vscode-editorWidget-border, var(--vscode-widget-border, transparent));
+  border-radius: 999px;
+  color: var(--vscode-descriptionForeground);
+  background: transparent;
+  cursor: pointer;
+}
+
+.empty-quiet .empty-secondary {
+  display: none;
+}
+
 /*
  * The agent speaks in the page and the person speaks in a bubble.
  *

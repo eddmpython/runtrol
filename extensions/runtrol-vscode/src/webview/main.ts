@@ -383,6 +383,14 @@ function renderEmptyState(session: Session | null): void {
     start.textContent = "New conversation";
     start.addEventListener("click", () => vscode.postMessage({ type: "startChat" }));
     empty.append(start);
+    // The deliberate flow, made findable: it used to live only in the view's overflow menu, which is
+    // where a feature goes to be undiscovered.
+    const configured = document.createElement("button");
+    configured.type = "button";
+    configured.className = "empty-secondary";
+    configured.textContent = "Choose service, model and effort...";
+    configured.addEventListener("click", () => vscode.postMessage({ type: "startConfiguredChat" }));
+    empty.append(configured);
   }
   conversation.append(empty);
 }
