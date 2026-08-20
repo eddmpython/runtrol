@@ -18,9 +18,22 @@ import { workspaceIdentity } from "./workspaceCollision";
 
 const NOW = Date.parse("2026-08-17T12:00:00Z");
 
-const ALPHA = "C:\\work\\alpha";
-const BETA = "C:\\work\\beta";
-const GAMMA = "C:\\work\\gamma";
+// Paths here are built for the platform the tests run on. The product compares workspaces with
+// that platform's own rules (`workspaceCovers` takes its separator and casing from it), so a
+// hardcoded backslash is a folder name on Linux rather than a separator, and containment tests
+// that pass on Windows fail in CI. Measured 2026-08-20: four were red on the Linux runner and
+// green on every developer machine.
+const ROOT = process.platform === "win32" ? "C:\\work" : "/work";
+const SEP = process.platform === "win32" ? "\\" : "/";
+
+/// One path below another, in the separator this platform actually uses.
+function below(base: string, ...parts: readonly string[]): string {
+  return [base, ...parts].join(SEP);
+}
+
+const ALPHA = below(ROOT, "alpha");
+const BETA = below(ROOT, "beta");
+const GAMMA = below(ROOT, "gamma");
 
 /// A project the operator created on this folder, the way the store would record it.
 function record(workspace: string, name?: string): ProjectRecord {
@@ -42,7 +55,7 @@ function session(overrides: Partial<SessionLine> & Pick<SessionLine, "sessionId"
     providerId: "claude",
     nativeSessionId: null,
     label: null,
-    workspace: "C:\\work\\alpha",
+    workspace: ALPHA,
     hot: false,
     lifecycle: "cold",
     looksStuck: false,
@@ -54,7 +67,7 @@ function session(overrides: Partial<SessionLine> & Pick<SessionLine, "sessionId"
 function nativeChat(overrides: Partial<NativeChatLine> & Pick<NativeChatLine, "nativeSessionId">): NativeChatLine {
   return {
     providerId: "codex",
-    cwd: "C:\\work\\beta",
+    cwd: BETA,
     additionalDirectories: [],
     title: null,
     updatedAt: null,
@@ -81,7 +94,7 @@ test("one list holds supervised sessions and provider-owned chats alike", () => 
 
 test("a supervised session and the chat it came from are one row, not two", () => {
   const rows = conversations(
-    [session({ sessionId: "s1", providerId: "codex", nativeSessionId: "n1", workspace: "C:\\work\\beta" })],
+    [session({ sessionId: "s1", providerId: "codex", nativeSessionId: "n1", workspace: BETA })],
     PROVIDERS,
     [nativeChat({ nativeSessionId: "n1", title: "Refactor the parser", updatedAt: "2026-08-17T11:30:00Z" })],
     null,
@@ -96,7 +109,7 @@ test("a supervised session and the chat it came from are one row, not two", () =
 test("opening a saved chat keeps the same row identity", () => {
   const before = conversations([], PROVIDERS, [nativeChat({ nativeSessionId: "n1" })], null);
   const after = conversations(
-    [session({ sessionId: "s1", providerId: "codex", nativeSessionId: "n1", workspace: "C:\\work\\beta" })],
+    [session({ sessionId: "s1", providerId: "codex", nativeSessionId: "n1", workspace: BETA })],
     PROVIDERS,
     [nativeChat({ nativeSessionId: "n1", alreadyManagedAs: "s1" })],
     "s1",
@@ -111,8 +124,8 @@ test("opening a saved chat keeps the same row identity", () => {
 test("turn state never reorders the list", () => {
   const idle = conversations(
     [
-      session({ sessionId: "s1", hot: true, lifecycle: "hotIdle", workspace: "C:\\work\\alpha" }),
-      session({ sessionId: "s2", hot: true, lifecycle: "hotIdle", workspace: "C:\\work\\beta" }),
+      session({ sessionId: "s1", hot: true, lifecycle: "hotIdle", workspace: ALPHA }),
+      session({ sessionId: "s2", hot: true, lifecycle: "hotIdle", workspace: BETA }),
     ],
     PROVIDERS,
     [],
@@ -120,8 +133,8 @@ test("turn state never reorders the list", () => {
   );
   const working = conversations(
     [
-      session({ sessionId: "s1", hot: true, lifecycle: "hotIdle", workspace: "C:\\work\\alpha" }),
-      session({ sessionId: "s2", hot: true, lifecycle: "hotRunning", workspace: "C:\\work\\beta" }),
+      session({ sessionId: "s1", hot: true, lifecycle: "hotIdle", workspace: ALPHA }),
+      session({ sessionId: "s2", hot: true, lifecycle: "hotRunning", workspace: BETA }),
     ],
     PROVIDERS,
     [],
@@ -158,8 +171,8 @@ test("a stuck session asks for attention without leaving its place", () => {
 test("rows a person could not tell apart get an identity", () => {
   const rows = conversations(
     [
-      session({ sessionId: "s1", workspace: "C:\\work\\alpha" }),
-      session({ sessionId: "s2", workspace: "C:\\work\\alpha" }),
+      session({ sessionId: "s1", workspace: ALPHA }),
+      session({ sessionId: "s2", workspace: ALPHA }),
     ],
     PROVIDERS,
     [],
@@ -191,13 +204,13 @@ test("elapsed time reads the way a chat list writes it", () => {
 test("a turn that stopped for a person outranks one that is merely working", () => {
   const rows = conversations(
     [
-      session({ sessionId: "s1", hot: true, lifecycle: "hotRunning", workspace: "C:\\work\\alpha" }),
+      session({ sessionId: "s1", hot: true, lifecycle: "hotRunning", workspace: ALPHA }),
       session({
         sessionId: "s2",
         hot: true,
         lifecycle: "hotRunning",
         waitingOn: "person",
-        workspace: "C:\\work\\beta",
+        workspace: BETA,
       }),
     ],
     PROVIDERS,
@@ -238,11 +251,11 @@ test("a broken session outranks a waiting one, because it cannot be answered eit
 test("the badge counts exactly the conversations a person has to act on", () => {
   const rows = conversations(
     [
-      session({ sessionId: "s1", hot: true, lifecycle: "hotRunning", waitingOn: "person", workspace: "C:\work\a" }),
-      session({ sessionId: "s2", hot: true, lifecycle: "failed", workspace: "C:\work\b" }),
-      session({ sessionId: "s3", hot: true, lifecycle: "hotRunning", waitingOn: "quota", workspace: "C:\work\c" }),
-      session({ sessionId: "s4", hot: true, lifecycle: "hotRunning", workspace: "C:\work\d" }),
-      session({ sessionId: "s5", hot: true, lifecycle: "hotIdle", workspace: "C:\work\e" }),
+      session({ sessionId: "s1", hot: true, lifecycle: "hotRunning", waitingOn: "person", workspace: below(ROOT, "a") }),
+      session({ sessionId: "s2", hot: true, lifecycle: "failed", workspace: below(ROOT, "b") }),
+      session({ sessionId: "s3", hot: true, lifecycle: "hotRunning", waitingOn: "quota", workspace: below(ROOT, "c") }),
+      session({ sessionId: "s4", hot: true, lifecycle: "hotRunning", workspace: below(ROOT, "d") }),
+      session({ sessionId: "s5", hot: true, lifecycle: "hotIdle", workspace: below(ROOT, "e") }),
     ],
     PROVIDERS,
     [],
@@ -269,11 +282,11 @@ function waitingFleet(openIndex: number | null) {
   // Five running agents. Two of them stopped for a person, one is throttled, two are simply working.
   const rows = conversations(
     [
-      session({ sessionId: "s1", hot: true, lifecycle: "hotRunning", workspace: "C:\work\a" }),
-      session({ sessionId: "s2", hot: true, lifecycle: "hotRunning", waitingOn: "person", workspace: "C:\work\b" }),
-      session({ sessionId: "s3", hot: true, lifecycle: "hotRunning", waitingOn: "quota", workspace: "C:\work\c" }),
-      session({ sessionId: "s4", hot: true, lifecycle: "hotRunning", waitingOn: "person", workspace: "C:\work\d" }),
-      session({ sessionId: "s5", hot: true, lifecycle: "hotIdle", workspace: "C:\work\e" }),
+      session({ sessionId: "s1", hot: true, lifecycle: "hotRunning", workspace: below(ROOT, "a") }),
+      session({ sessionId: "s2", hot: true, lifecycle: "hotRunning", waitingOn: "person", workspace: below(ROOT, "b") }),
+      session({ sessionId: "s3", hot: true, lifecycle: "hotRunning", waitingOn: "quota", workspace: below(ROOT, "c") }),
+      session({ sessionId: "s4", hot: true, lifecycle: "hotRunning", waitingOn: "person", workspace: below(ROOT, "d") }),
+      session({ sessionId: "s5", hot: true, lifecycle: "hotIdle", workspace: below(ROOT, "e") }),
     ],
     PROVIDERS,
     [],
@@ -337,8 +350,8 @@ test("a throttled or working agent is never somewhere the key sends you", () => 
 test("nothing waiting means nowhere to go, not an arbitrary conversation", () => {
   const rows = conversations(
     [
-      session({ sessionId: "s1", hot: true, lifecycle: "hotRunning", workspace: "C:\work\a" }),
-      session({ sessionId: "s2", hot: true, lifecycle: "hotIdle", workspace: "C:\work\b" }),
+      session({ sessionId: "s1", hot: true, lifecycle: "hotRunning", workspace: below(ROOT, "a") }),
+      session({ sessionId: "s2", hot: true, lifecycle: "hotIdle", workspace: below(ROOT, "b") }),
     ],
     PROVIDERS,
     [],
@@ -363,9 +376,9 @@ test("a conversation key is legal as a tree element id", () => {
   // Measured in CI: a NUL separator reads fine as a map key and is not a legal element id. VS Code mangled it,
   // could no longer resolve the element, and every reveal rejected. Fourteen rejections in one run.
   const rows = conversations(
-    [session({ sessionId: "s1", providerId: "codex", nativeSessionId: "ses_1/2 3", workspace: "C:\work\a" })],
+    [session({ sessionId: "s1", providerId: "codex", nativeSessionId: "ses_1/2 3", workspace: below(ROOT, "a") })],
     PROVIDERS,
-    [nativeChat({ nativeSessionId: "n 1", providerId: "opencode", cwd: "C:\work\b" })],
+    [nativeChat({ nativeSessionId: "n 1", providerId: "opencode", cwd: below(ROOT, "b") })],
     null,
   );
 
