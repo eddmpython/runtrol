@@ -8,8 +8,8 @@ import { workspaceCovers } from "./workspaceCollision";
 /// transcript under it. So "a chat with no project" is not a chat with no folder, it is a chat whose
 /// folder the person did not choose. That folder is this one, inside the extension's own global
 /// storage: per user, persistent (a temp directory is swept, and a swept folder makes the saved
-/// conversation unresumable, which is what happened to the opencode sessions measured in
-/// `mainPlan/nativeParity`), and outside every credential directory the security wall refuses.
+/// conversation unresumable: measured 2026-08-18 on this machine, both opencode sessions sat in deleted
+/// temp folders and could not be reopened), and outside every credential directory the security wall refuses.
 ///
 /// One folder rather than one per chat. A person who starts three quick questions has started three
 /// chats, not three projects, and the tree treats everything under this root as the plain rows at the
