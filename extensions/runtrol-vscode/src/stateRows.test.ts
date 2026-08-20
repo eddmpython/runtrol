@@ -1,8 +1,17 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import type { ProviderLine, SessionLine } from "./runtimeTypes";
-import { providerRowsEqual, sessionRowsEqual } from "./stateRows";
+import type { CatalogueCoverage, NativeChatCatalogue, ProviderLine, SessionLine } from "./runtimeTypes";
+import { incompleteDiscovery, providerRowsEqual, sessionRowsEqual } from "./stateRows";
+
+/// One service's catalogue answer, carrying only what the sentence builder reads.
+function catalogue(providerId: string, coverage: CatalogueCoverage): NativeChatCatalogue {
+  return { providerId, coverage, chats: [], loadedAtMs: 0, warning: null };
+}
+
+function provider(providerId: string, displayName: string): ProviderLine {
+  return { providerId, displayName, installation: { state: "usable", version: "1.0.0" } };
+}
 
 const SESSION: SessionLine = {
   sessionId: "session-1",
@@ -53,4 +62,47 @@ test("every visible provider field invalidates the snapshot", () => {
     assert.equal(providerRowsEqual([PROVIDER], [{ ...PROVIDER, ...changed }]), false);
   }
   assert.equal(providerRowsEqual([PROVIDER], []), false);
+});
+
+test("a complete catalogue says nothing, because there is nothing to qualify", () => {
+  const reasons = incompleteDiscovery(
+    [catalogue("claude", { kind: "complete", source: "officialCli" })],
+    [provider("claude", "Claude Code")],
+  );
+  assert.equal(reasons, null);
+});
+
+test("a partial catalogue is quoted in the service's own words, under its own name", () => {
+  const reasons = incompleteDiscovery(
+    [catalogue("claude", {
+      kind: "partial",
+      source: "officialCli",
+      why: "this CLI lists the sessions it is running, not the conversations it has stored",
+    })],
+    [provider("claude", "Claude Code")],
+  );
+  assert.equal(
+    reasons,
+    "Claude Code: this CLI lists the sessions it is running, not the conversations it has stored",
+  );
+});
+
+test("every incomplete service is named, so nobody has to guess which chats are missing", () => {
+  const reasons = incompleteDiscovery(
+    [
+      catalogue("claude", { kind: "partial", source: "officialCli", why: "running sessions only" }),
+      catalogue("codex", { kind: "complete", source: "officialCli" }),
+      catalogue("grok", { kind: "unsupported", why: "this service lists nothing" }),
+    ],
+    [provider("claude", "Claude Code"), provider("codex", "Codex"), provider("grok", "Grok")],
+  );
+  assert.equal(reasons, "Claude Code: running sessions only · Grok: this service lists nothing");
+});
+
+test("a service the provider list has never heard of is named by its identifier, not dropped", () => {
+  const reasons = incompleteDiscovery(
+    [catalogue("mystery", { kind: "unsupported", why: "no enumerable surface" })],
+    [],
+  );
+  assert.equal(reasons, "mystery: no enumerable surface");
 });

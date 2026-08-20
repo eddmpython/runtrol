@@ -243,7 +243,12 @@ function latestActivity(rows: readonly Conversation[]): number | null {
 
 /// The muted line beside a project heading.
 export function projectDetail(group: ProjectGroup): string {
-  if (group.rows.length === 0) return "no conversations yet";
+  // "nothing listed" rather than "no conversations yet". The heading knows what reached this list,
+  // not what exists in that folder: a service that only enumerates its running sessions, or a
+  // folder outside the approved roots, both arrive here as zero rows. Claiming the folder is empty
+  // would be a statement the extension cannot support, and the reader would stop looking. The view
+  // message above the tree carries the reason in the service's own words.
+  if (group.rows.length === 0) return "nothing listed";
   const parts: string[] = [];
   if (group.attention > 0) parts.push(`${group.attention} waiting`);
   if (group.live > 0) parts.push(`${group.live} live`);

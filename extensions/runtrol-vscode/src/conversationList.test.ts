@@ -491,14 +491,16 @@ test("a grouped row does not repeat the folder its heading already names", () =>
   assert.ok(!conversationDetail(row, Date.now(), true).includes(row.folder));
 });
 
-test("a created project with no conversations yet still shows its heading", () => {
-  // It was made a moment ago. A heading that vanished until a conversation arrived would read as the creation
-  // having failed.
+test("an empty heading says what the list holds, never what the folder holds", () => {
+  // It was made a moment ago, so the heading stays: one that vanished until a conversation arrived
+  // would read as the creation having failed. What it must not do is claim the folder is empty.
+  // Zero rows here also happens when a service enumerates only its running sessions, or when the
+  // folder sits outside the approved roots, and the heading cannot tell those apart.
   const groups = projects([record(ALPHA)], [], []);
   assert.equal(groups.length, 1);
   assert.equal(groups[0]?.rows.length, 0);
   assert.ok(groups[0]);
-  assert.equal(projectDetail(groups[0]), "no conversations yet");
+  assert.equal(projectDetail(groups[0]), "nothing listed");
 });
 
 test("a conversation in a subfolder files under the project that covers it", () => {

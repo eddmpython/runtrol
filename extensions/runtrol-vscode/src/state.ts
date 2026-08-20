@@ -8,7 +8,7 @@ import type {
   SessionLine,
   WatchCursor,
 } from "./runtimeTypes";
-import { providerRowsEqual, sessionRowsEqual } from "./stateRows";
+import { incompleteDiscovery, providerRowsEqual, sessionRowsEqual } from "./stateRows";
 
 export type RuntimeStateChange = "rows" | "selection";
 
@@ -37,6 +37,13 @@ export class RuntimeState implements vscode.Disposable {
 
   nativeCatalogue(providerId: string): NativeChatCatalogue | null {
     return this.nativeCatalogues.get(providerId) ?? null;
+  }
+
+  /// Why this list is not everything, in each service's own words, or null when it is everything.
+  ///
+  /// The sentence itself is built by a pure function so it can be tested without an Extension Host.
+  get incompleteDiscovery(): string | null {
+    return incompleteDiscovery([...this.nativeCatalogues.values()], this.providerRows);
   }
 
   get selected(): SessionLine | null {
