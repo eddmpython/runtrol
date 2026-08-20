@@ -335,6 +335,26 @@ def buildClient() -> None:
     npm = shutil.which("npm.cmd" if sys.platform == "win32" else "npm") or shutil.which("npm")
     if npm is None:
         raise LookupError("npm is absent")
+    # The compiler needs this package's own dependencies, and no workflow installs them for it:
+    # the release pipeline installs the extension's. Measured 2026-08-20, the release stopped here
+    # with "Entry point of type library 'node' specified in compilerOptions". A gate prepares what
+    # it needs; skipped when the tree already has them, so a developer machine pays nothing.
+    if not (CLIENT / "node_modules").is_dir():
+        installed = subprocess.run(
+            [npm, "ci"],
+            cwd=CLIENT,
+            capture_output=True,
+            text=True,
+            timeout=TIMEOUT_S * 5,
+            check=False,
+            shell=sys.platform == "win32",
+        )
+        if installed.returncode != 0:
+            detail = (installed.stderr or installed.stdout).strip().splitlines()
+            raise Failed(
+                "the public client's dependencies could not be installed for this gate: "
+                + (detail[-1] if detail else f"npm ci returned {installed.returncode}")
+            )
     built = subprocess.run(
         [npm, "run", "build"],
         cwd=CLIENT,
