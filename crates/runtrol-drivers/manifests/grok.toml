@@ -55,3 +55,10 @@ under_home = [".grok"]
 # line runtrol could verify installs it.
 sign_in = ["login"]
 diagnose = ["doctor"]
+
+# No mid-session reasoning-effort surface, measured (2026-08-20, grok 1.0.x over ACP stdio):
+# `session/new` announces per-model efforts inside `_meta.reasoningEfforts` (vendor extension), but
+# `session/set_reasoning_effort` answers method-not-found, `session/set_model` silently ignores an
+# extra reasoningEffort field, and `session/set_config_option` exists structurally while the session
+# announces no config options and its value schema is private. So the announced efforts are not
+# lifted into an event: offering a switch nothing can perform would be a lie in a picker.
