@@ -9,6 +9,7 @@ import {
   type UnknownRecord,
 } from "./presentation";
 import { conversationEmptyCopy, sendShortcutHint } from "./conversationCopy";
+import { hasMarkdownTrigger, parseMarkdown, type Block, type Inline } from "./markdown";
 import { planEntriesOf, planGlyph } from "./plan";
 import { toolActivityLineKeeping, toolActivityOf } from "./toolActivity";
 import { toolDetail } from "./toolDetail";
@@ -683,11 +684,20 @@ function appendMessage(side: string, text: string, delta = false, messageId = ""
     && last.dataset.side === side
     && lastCharacters + text.length <= MAX_MESSAGE_CHARACTERS
   ) {
-    const tail = last.lastChild;
-    if (tail instanceof Text) {
-      tail.appendData(text);
+    if (side === "theirs") {
+      // The raw text rides on the element so a trigger arriving mid-stream can re-read everything
+      // said so far. Scanning the whole raw rather than just the delta is what catches a marker
+      // split across two chunks, and the raw is bounded by the same per-element ceiling as the text.
+      const raw = (last.dataset.raw ?? "") + text;
+      last.dataset.raw = raw;
+      if (last.dataset.md === "1" || hasMarkdownTrigger(raw)) {
+        last.dataset.md = "1";
+        repaintMarkdown(last, raw);
+      } else {
+        appendTailText(last, text);
+      }
     } else {
-      last.append(document.createTextNode(text));
+      appendTailText(last, text);
     }
     last.dataset.characters = String(lastCharacters + text.length);
     visibleCharacters += text.length;
@@ -701,6 +711,23 @@ function appendMessage(side: string, text: string, delta = false, messageId = ""
     item.dataset.messageId = messageId;
   }
   item.dataset.characters = String(text.length);
+  if (side === "theirs") {
+    item.dataset.raw = text;
+    if (hasMarkdownTrigger(text)) {
+      item.dataset.md = "1";
+      repaintMarkdown(item, text);
+    } else {
+      appendAuthorAndText(item, side, text);
+    }
+  } else {
+    appendAuthorAndText(item, side, text);
+  }
+  visibleCharacters += text.length;
+  conversation.append(item);
+  trim();
+}
+
+function appendAuthorAndText(item: HTMLElement, side: string, text: string): void {
   const author = messageAuthor(side);
   if (author) {
     const label = document.createElement("span");
@@ -709,9 +736,110 @@ function appendMessage(side: string, text: string, delta = false, messageId = ""
     item.append(label);
   }
   item.append(document.createTextNode(text));
-  visibleCharacters += text.length;
-  conversation.append(item);
-  trim();
+}
+
+function appendTailText(item: HTMLElement, text: string): void {
+  const tail = item.lastChild;
+  if (tail instanceof Text) {
+    tail.appendData(text);
+  } else {
+    item.append(document.createTextNode(text));
+  }
+}
+
+/// The agent's reply, re-read as a whole and repainted.
+///
+/// A whole-element repaint per delta is deliberate: an element holds at most MAX_MESSAGE_CHARACTERS,
+/// so the parse is bounded, and messages without any markdown never reach here (the trigger check is
+/// the hot path). Every leaf below is a text node; no conversation byte ever becomes markup.
+function repaintMarkdown(item: HTMLElement, raw: string): void {
+  const nodes: Node[] = [];
+  const author = messageAuthor("theirs");
+  if (author) {
+    const label = document.createElement("span");
+    label.className = "message-author";
+    label.textContent = author;
+    nodes.push(label);
+  }
+  for (const block of parseMarkdown(raw)) {
+    nodes.push(blockNode(block));
+  }
+  item.replaceChildren(...nodes);
+}
+
+function blockNode(block: Block): Node {
+  if (block.kind === "codeBlock") {
+    const wrap = document.createElement("div");
+    wrap.className = "md-code";
+    const copy = document.createElement("button");
+    copy.type = "button";
+    copy.className = "code-copy";
+    copy.textContent = "Copy";
+    copy.title = "Copy code";
+    const pre = document.createElement("pre");
+    const code = document.createElement("code");
+    code.textContent = block.text;
+    pre.append(code);
+    copy.addEventListener("click", () => {
+      // Failure is silent by design: the button is a convenience over selectable text that is
+      // already on screen, and a clipboard refusal must not interrupt reading.
+      void navigator.clipboard.writeText(code.textContent ?? "").catch(() => undefined);
+    });
+    wrap.append(copy, pre);
+    return wrap;
+  }
+  if (block.kind === "heading") {
+    const level = Math.min(6, Math.max(1, block.level));
+    const heading = document.createElement(`h${level}`);
+    heading.className = "md-heading";
+    heading.append(...inlineNodes(block.inlines));
+    return heading;
+  }
+  if (block.kind === "list") {
+    const list = document.createElement(block.ordered ? "ol" : "ul");
+    list.className = "md-list";
+    for (const item of block.items) {
+      const row = document.createElement("li");
+      row.append(...inlineNodes(item));
+      list.append(row);
+    }
+    return list;
+  }
+  const paragraph = document.createElement("p");
+  paragraph.className = "md-paragraph";
+  paragraph.append(...inlineNodes(block.inlines));
+  return paragraph;
+}
+
+function inlineNodes(inlines: Inline[]): Node[] {
+  return inlines.map((inline) => {
+    if (inline.kind === "code") {
+      const code = document.createElement("code");
+      code.textContent = inline.text;
+      return code;
+    }
+    if (inline.kind === "strong") {
+      const strong = document.createElement("strong");
+      strong.textContent = inline.text;
+      return strong;
+    }
+    if (inline.kind === "em") {
+      const em = document.createElement("em");
+      em.textContent = inline.text;
+      return em;
+    }
+    if (inline.kind === "link") {
+      // The parser only produces http(s) addresses, and the webview's own link handler opens them
+      // in the external browser. The full address rides on the tooltip so the text cannot disguise
+      // the destination.
+      const anchor = document.createElement("a");
+      anchor.href = inline.href;
+      anchor.title = inline.href;
+      anchor.textContent = inline.text;
+      return anchor;
+    }
+    return document.createTextNode(inline.text);
+  });
 }
 
 function messageAuthor(side: string): string | null {

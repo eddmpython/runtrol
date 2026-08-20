@@ -12,6 +12,10 @@ and refactoring that no user can observe do not belong here.
 
 ### Added
 
+- Replies now render the light markdown coding agents actually write: fenced code blocks with a copy
+  button, inline code, headings, lists, bold, italic, and web links that open in the browser. Plain text
+  is untouched and costs nothing; anything the small grammar does not recognize stays exactly as typed.
+
 - An agent's plan is now shown as the checklist it sent, updating in place as steps complete, instead of
   the fixed line "Plan updated". A plan event without readable entries still falls back to that line.
 
