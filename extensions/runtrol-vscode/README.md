@@ -47,7 +47,7 @@ and available account-limit windows together. Missing provider telemetry is show
 
 ## Requirements
 
-- Desktop VS Code 1.100 or newer.
+- Desktop VS Code 1.106 or newer (the version that lets an extension place a view in the secondary side bar).
 - Windows, macOS, or Linux on x64 or ARM64.
 - A trusted local filesystem workspace. Virtual workspaces and browser-only VS Code cannot start local provider CLIs.
 - At least one supported coding-agent CLI installed and authenticated with its own official account flow.

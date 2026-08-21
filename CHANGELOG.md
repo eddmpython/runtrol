@@ -23,6 +23,39 @@ and refactoring that no user can observe do not belong here.
   letting an incomplete list read as complete. An empty project heading now says "nothing listed"
   instead of claiming the folder holds no conversations, which is something the heading cannot know.
 
+- Choosing a model, a reasoning effort, an access mode, a coding service or a project now happens in
+  the composer, in a popover hanging from the chip that was clicked, the way every chat composer
+  offers its menus, instead of a picker at the top of the window. Arrow keys move, Enter chooses,
+  Escape dismisses, a click elsewhere closes. The slash-command menu was already there; now every
+  choice the composer offers is answered where it was asked. The command palette keeps the same
+  choices for a command invoked from the palette.
+
+- The sidebar's "not every chat is listed" notice is one line; the services' own reasons moved
+  behind an (i) in the Conversations title ("Why Are Some Chats Not Listed?"). Printed in full they
+  had become a nine-line wall above the first conversation.
+
+- A conversation can live in any of the window's own places, not only an editor tab: the bottom panel
+  beside the terminals, or the secondary side bar beside the code. Right-click a conversation and
+  choose "Open Conversation in Panel", "in Side Bar" or "as Tab"; the conversation moves, stays one
+  conversation, and the place remembers it across a reload. VS Code 1.106 or newer is required from
+  this version on, which is the version that lets an extension place a view in the secondary side bar.
+
+- One command spreads the open conversation tabs over a grid of editor groups: "Arrange
+  Conversations in a Grid" (`Ctrl+K Ctrl+G`), as square as the count allows (two by two, three by
+  three), VS Code drawing and sizing the groups. Nine is the editor's column bound, and the command
+  says when tabs were left where they were.
+
+- A change a coding service declares opens in VS Code's own diff editor. The tab names the change
+  with an "Open diff" button instead of drawing a coloured patch; before and after open as read-only
+  documents side by side (a unified patch as a read-only `.diff` document). Nothing is written to disk.
+
+- Reopening a stored Claude Code conversation shows the conversation, the way `claude --resume` draws
+  it in a terminal: the last stretch of the stored exchange (operator messages, tool calls and their
+  results, replies) appears in the tab before anything new, read from the CLI's own store and relayed
+  through the same path as live frames. Claude Code's stream prints no history on resume; this reads
+  back what the CLI itself stored, bounded to the most recent records, and keeps no copy. Codex threads
+  already did this from their own resume answer, so reopened conversations now read alike on both.
+
 - In a Claude Code conversation the operator's own messages now appear on the operator's side, as
   they do for Codex and the ACP services. Claude Code re-emits each message it was sent when asked
   with its own `--replay-user-messages` flag (measured on the installed CLI), and the driver asks

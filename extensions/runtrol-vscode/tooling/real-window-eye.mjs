@@ -105,7 +105,9 @@ try {
   process.stdout.write(`isolated Runtime at ${reached.stdout.trim()} (home ${runtrolHome}, pid ${daemon.pid})\n`);
 
   await build({
-    entryPoints: [path.join(extensionRoot, "src", "integration", "realWindowEye.test.ts")],
+    // RUNTROL_EYE_ENTRY names another entry under src/integration (a focused probe); the poses it announces
+    // are photographed the same way.
+    entryPoints: [path.join(extensionRoot, "src", "integration", `${process.env.RUNTROL_EYE_ENTRY || "realWindowEye"}.test.ts`)],
     outfile: testEntry,
     bundle: true,
     external: ["vscode"],

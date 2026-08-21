@@ -4,8 +4,12 @@ import readline from "node:readline";
 type ApprovalFact = {
   kind: "approval";
   approval: string;
+  /// The one reject-once option, when the provider offers exactly one (the journey denies with it); -1 otherwise.
   option: number;
+  /// The first allow option, when the provider offers one; null otherwise (the eye pass approves with it).
+  allow: number | null;
   subjectDigest: number[];
+  /// The file the approval concerns, when the provider names one in its subject; "" otherwise.
   target: string;
 };
 
@@ -159,25 +163,26 @@ function watchFact(value: unknown, session: string): Fact | null {
     const rejection = options.filter(
       (option) => record(option) && option.kind === "rejectOnce" && Number.isInteger(option.id),
     );
+    const allowance = options.find(
+      (option) => record(option) && (option.kind === "allowOnce" || option.kind === "allowAlways") && Number.isInteger(option.id),
+    );
     const digest = Array.isArray(body.subject_digest) ? body.subject_digest : [];
     const subject = record(body.subject) ? body.subject : null;
     const input = subject && record(subject.input) ? subject.input : null;
     if (
       typeof body.id !== "string"
-      || rejection.length !== 1
       || digest.length !== 32
       || !digest.every((byte) => Number.isInteger(byte) && Number(byte) >= 0 && Number(byte) <= 255)
-      || !input
-      || typeof input.file_path !== "string"
     ) {
       throw new Error("the provider approval omitted its exact authorization boundary");
     }
     return {
       kind: "approval",
       approval: body.id,
-      option: Number(rejection[0]?.id),
+      option: rejection.length === 1 ? Number(rejection[0]?.id) : -1,
+      allow: record(allowance) ? Number(allowance.id) : null,
       subjectDigest: digest.map(Number),
-      target: input.file_path,
+      target: input && typeof input.file_path === "string" ? input.file_path : "",
     };
   }
   if (body.event === "turn" && body.step === "ended") {

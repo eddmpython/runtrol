@@ -1,9 +1,10 @@
 import * as vscode from "vscode";
 
+import { type ConversationSurface, type Place, tabSurface } from "./conversationSurface";
 import type { DraftChips, DraftState } from "./draft";
 import type { SessionLine } from "./runtimeTypes";
 import { providerDisplayName, sessionTitle } from "./sessionDisplay";
-import { isViewAction, type ViewAction } from "./viewActions";
+import { type MenuAnchor, type MenuItem, MAX_MENU_ITEMS, isViewAction, type ViewAction } from "./viewActions";
 import { webviewReadyKind } from "./webviewReady";
 
 export type WebviewPerformance = {
@@ -62,7 +63,11 @@ class RetryableMeasurementError extends Error {}
 
 export class ConversationView implements vscode.Disposable {
   static readonly viewType = "runtrol.conversation";
-  private panel: vscode.WebviewPanel | null = null;
+  /// The place this conversation is shown in right now (a tab, the panel, the side bar), or none.
+  private surface: ConversationSurface | null = null;
+  /// Listeners on the current surface, dropped when it is replaced or goes away. A view surface outlives the
+  /// conversations shown in it, so its listeners cannot be left to the surface's own disposal.
+  private surfaceGuards: vscode.Disposable[] = [];
   private selected: SessionLine | null = null;
   /// The draft this tab shows while no session exists yet, with the record the page stamps into its state.
   private draft: { chips: DraftChips; state: DraftState } | null = null;
@@ -76,6 +81,10 @@ export class ConversationView implements vscode.Disposable {
   private renderedGeneration = 0;
   private visibleReady = false;
   private showQueue: Promise<void> = Promise.resolve();
+  /// The popover the page is showing for a chip, and who is waiting for its answer. One at a time: a new
+  /// question closes the old one with no answer.
+  private pendingMenu: { id: string; resolve(choice: string | null): void } | null = null;
+  private menuSerial = 0;
 
   constructor(
     private readonly extensionUri: vscode.Uri,
@@ -86,20 +95,32 @@ export class ConversationView implements vscode.Disposable {
   ) {}
 
   get isOpen(): boolean {
-    return this.panel !== null;
+    return this.surface !== null;
+  }
+
+  /// Where this conversation is shown, or null while it has no surface.
+  get place(): Place | null {
+    return this.surface?.place ?? null;
   }
 
   /// On screen with a webview that said hello, which is when frames can land.
   get isVisible(): boolean {
-    return this.panel?.visible === true && this.visibleReady;
+    return this.surface?.visible === true && this.visibleReady;
   }
 
-  adopt(panel: vscode.WebviewPanel): Promise<void> {
+  /// Show this conversation on a surface somebody else made: a tab VS Code restored, or one of the
+  /// workbench's views. A previous surface closes (a tab) or is emptied (a view).
+  adopt(surface: ConversationSurface): Promise<void> {
     const pending = this.showQueue.then(() => {
-      this.attach(panel);
+      this.attach(surface);
     });
     this.showQueue = pending.catch(() => undefined);
     return pending;
+  }
+
+  /// Move a tab to an editor column, leaving focus where it is. A view has no column and stays.
+  revealIn(column: vscode.ViewColumn): void {
+    if (this.surface?.place === "tab") this.surface.reveal(true, column);
   }
 
   async show(preserveFocus = false): Promise<void> {
@@ -109,18 +130,19 @@ export class ConversationView implements vscode.Disposable {
   }
 
   private async showNow(preserveFocus: boolean): Promise<void> {
-    const panel = this.panel ?? this.createPanel();
+    const surface = this.surface ?? this.createTab();
     if (preserveFocus) {
-      if (!panel.visible) {
-        panel.reveal(panel.viewColumn ?? vscode.ViewColumn.Active, true);
+      if (!surface.visible) {
+        surface.reveal(true);
       }
     } else {
-      await focusPanel(panel);
+      await focusSurface(surface);
     }
-    await this.waitForVisibleWebview(panel);
+    await this.waitForVisibleWebview(surface);
   }
 
-  private createPanel(): vscode.WebviewPanel {
+  /// A fresh editor tab, the default place: beside whatever is open, like a file.
+  private createTab(): ConversationSurface {
     const panel = vscode.window.createWebviewPanel(
       ConversationView.viewType,
       this.panelTitle(this.selected),
@@ -131,19 +153,21 @@ export class ConversationView implements vscode.Disposable {
         retainContextWhenHidden: false,
       },
     );
-    this.attach(panel);
-    return panel;
+    const surface = tabSurface(panel, vscode.Uri.joinPath(this.extensionUri, "resources", "symbol.svg"));
+    this.attach(surface);
+    return surface;
   }
 
-  private attach(panel: vscode.WebviewPanel): void {
-    if (this.panel && this.panel !== panel) {
-      this.panel.dispose();
+  private attach(surface: ConversationSurface): void {
+    if (this.surface && this.surface !== surface) {
+      this.dropSurfaceGuards();
+      this.surface.dispose();
     }
-    this.panel = panel;
+    this.surface = surface;
     this.visibleReady = false;
-    panel.iconPath = vscode.Uri.joinPath(this.extensionUri, "resources", "symbol.svg");
-    panel.title = this.panelTitle(this.selected);
-    panel.webview.onDidReceiveMessage((message: unknown) => {
+    surface.title = this.panelTitle(this.selected);
+    const guards = this.surfaceGuards;
+    guards.push(surface.webview.onDidReceiveMessage((message: unknown) => {
       const ready = webviewReadyKind(message);
       if (ready) {
         if (ready === "startup" && this.measurements.size > 0) {
@@ -168,29 +192,40 @@ export class ConversationView implements vscode.Disposable {
       if (!isViewAction(message)) {
         return;
       }
+      if (message.type === "menuChoice") {
+        this.receiveMenuChoice(message.menu, message.choice);
+        return;
+      }
       this.action(message);
-    });
-    panel.onDidChangeViewState(({ webviewPanel }) => {
-      if (webviewPanel.visible || this.panel !== panel) {
+    }));
+    guards.push(surface.onDidChangeVisibility(() => {
+      if (surface.visible || this.surface !== surface) {
         return;
       }
       this.visibleReady = false;
       this.visibility(false);
+      this.closeMenu();
       this.rejectMeasurements(new RetryableMeasurementError(
         "the Runtrol Webview became hidden during measurement",
       ));
-    });
-    panel.onDidDispose(() => {
-      if (this.panel === panel) {
-        this.panel = null;
+    }));
+    guards.push(surface.onDidDispose(() => {
+      if (this.surface === surface) {
+        this.dropSurfaceGuards();
+        this.surface = null;
         this.visibleReady = false;
         this.visibility(false);
         this.pendingFrames = [];
         this.rejectMeasurements(new Error("the Runtrol Webview closed during measurement"));
         this.rejectRenderWaiters(new Error("the Runtrol Webview closed before painting the selected session"));
       }
-    });
-    panel.webview.html = this.html(panel.webview);
+    }));
+    surface.webview.html = this.html(surface.webview);
+  }
+
+  private dropSurfaceGuards(): void {
+    for (const guard of this.surfaceGuards) guard.dispose();
+    this.surfaceGuards = [];
   }
 
   /// Show one session, or one draft (a conversation that has not started), in a fresh document.
@@ -200,13 +235,14 @@ export class ConversationView implements vscode.Disposable {
   ): number {
     this.selected = session;
     this.draft = session ? null : draft;
-    if (this.panel) {
-      this.panel.title = this.panelTitle(session);
+    if (this.surface) {
+      this.surface.title = this.panelTitle(session);
     }
     this.generation += 1;
     this.pendingFrames = [];
     this.postGap = false;
-    void this.panel?.webview.postMessage({
+    this.closeMenu();
+    void this.surface?.webview.postMessage({
       type: "reset",
       session,
       title: session ? this.titleOf(session) : null,
@@ -222,25 +258,25 @@ export class ConversationView implements vscode.Disposable {
   updateDraft(chips: DraftChips, state: DraftState): void {
     if (this.selected) return;
     this.draft = { chips, state };
-    void this.panel?.webview.postMessage({ type: "draft", draft: chips, draftState: state });
+    void this.surface?.webview.postMessage({ type: "draft", draft: chips, draftState: state });
   }
 
   /// Where a live conversation runs, for the chips above the composer: its folder and branch.
   updateContext(context: ConversationContext): void {
-    void this.panel?.webview.postMessage({ type: "context", context });
+    void this.surface?.webview.postMessage({ type: "context", context });
   }
 
   /// The images waiting to ride with the next message, as names the page lists above the field.
   updateAttachments(items: readonly AttachmentLabel[]): void {
-    void this.panel?.webview.postMessage({ type: "attachments", items });
+    void this.surface?.webview.postMessage({ type: "attachments", items });
   }
 
   updateSession(session: SessionLine): void {
     this.selected = session;
-    if (this.panel) {
-      this.panel.title = this.panelTitle(session);
+    if (this.surface) {
+      this.surface.title = this.panelTitle(session);
     }
-    void this.panel?.webview.postMessage({
+    void this.surface?.webview.postMessage({
       type: "session",
       session,
       title: this.titleOf(session),
@@ -260,7 +296,7 @@ export class ConversationView implements vscode.Disposable {
   }
 
   frame(payload: unknown): boolean {
-    if (!this.panel?.visible || !this.visibleReady) {
+    if (!this.surface?.visible || !this.visibleReady) {
       return false;
     }
     if (this.pendingFrames.length >= MAX_PENDING_POSTS) {
@@ -275,18 +311,60 @@ export class ConversationView implements vscode.Disposable {
   }
 
   status(message: string, kind: "info" | "warning" | "error" = "info"): void {
-    void this.panel?.webview.postMessage({ type: "status", message, kind });
+    void this.surface?.webview.postMessage({ type: "status", message, kind });
   }
 
   /// A switch was sent to the provider and is not yet confirmed. The chip shows the request as a
   /// suffix beside the confirmed value; the matching confirmation event clears it.
   switchRequested(what: "model" | "mode" | "effort", value: string): void {
-    void this.panel?.webview.postMessage({ type: "switchRequested", what, value });
+    void this.surface?.webview.postMessage({ type: "switchRequested", what, value });
+  }
+
+  /// Ask the page to offer choices in a popover hanging from a chip, where the click was, and wait for the
+  /// answer: the chosen item's id, or null when the reader dismissed it. The composer is where the question
+  /// was asked, so that is where it is answered (the Codex and ChatGPT composers do the same); the command
+  /// palette stays the path for a command invoked from the palette.
+  showMenu(anchor: MenuAnchor, title: string, items: readonly MenuItem[]): Promise<string | null> {
+    this.closeMenu();
+    if (!this.surface || !this.visibleReady) return Promise.resolve(null);
+    this.menuSerial += 1;
+    const id = `menu-${this.menuSerial}`;
+    const offered = items.slice(0, MAX_MENU_ITEMS);
+    return new Promise<string | null>((resolve) => {
+      this.pendingMenu = { id, resolve };
+      void this.surface?.webview.postMessage({ type: "menu", menu: id, anchor, title, items: offered });
+    });
+  }
+
+  /// Click a chip on the page as a person would. The journey and the eye pass drive this.
+  clickChip(anchor: MenuAnchor): void {
+    void this.surface?.webview.postMessage({ type: "clickChip", anchor });
+  }
+
+  private closeMenu(): void {
+    const pending = this.pendingMenu;
+    if (!pending) return;
+    this.pendingMenu = null;
+    void this.surface?.webview.postMessage({ type: "menuClose", menu: pending.id });
+    pending.resolve(null);
+  }
+
+  private receiveMenuChoice(menu: string, choice: string | null): void {
+    const pending = this.pendingMenu;
+    if (!pending || pending.id !== menu) return;
+    this.pendingMenu = null;
+    pending.resolve(choice);
+  }
+
+  /// Open the newest declared change on the page in the diff editor, as a click on its button would. The
+  /// journey and the eye pass drive this; a person clicks.
+  openLatestDiff(): void {
+    void this.surface?.webview.postMessage({ type: "openLatestDiff" });
   }
 
   /// Put the chosen mention text where the @ was typed, or (null) just hand focus back on cancel.
   insertComposerText(text: string | null): void {
-    void this.panel?.webview.postMessage({ type: "insertText", text });
+    void this.surface?.webview.postMessage({ type: "insertText", text });
   }
 
   async measurePerformance(framesPerSecond = 3_000, durationMs = 5_000): Promise<WebviewPerformance> {
@@ -297,9 +375,9 @@ export class ConversationView implements vscode.Disposable {
     for (let attempt = 0; attempt < MEASUREMENT_ATTEMPTS; attempt += 1) {
       try {
         await this.show(true);
-        const panel = this.panel;
-        if (!panel) throw new Error("the Runtrol conversation panel did not open");
-        return await this.measurePerformanceOnce(panel, framesPerSecond, durationMs);
+        const surface = this.surface;
+        if (!surface) throw new Error("the Runtrol conversation panel did not open");
+        return await this.measurePerformanceOnce(surface, framesPerSecond, durationMs);
       } catch (error) {
         if (!(error instanceof RetryableMeasurementError)) throw error;
         retryable = error;
@@ -309,11 +387,11 @@ export class ConversationView implements vscode.Disposable {
   }
 
   private async measurePerformanceOnce(
-    panel: vscode.WebviewPanel,
+    surface: ConversationSurface,
     framesPerSecond: number,
     durationMs: number,
   ): Promise<WebviewPerformance> {
-    const webview = panel.webview;
+    const webview = surface.webview;
     const id = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
     const waiter = measurementWaiter();
     const droppedBefore = this.droppedFrames;
@@ -326,7 +404,7 @@ export class ConversationView implements vscode.Disposable {
         waiter.ready,
         "the Runtrol Webview did not acknowledge measurement startup",
       );
-      if (this.panel !== panel || !panel.visible || !this.visibleReady) {
+      if (this.surface !== surface || !surface.visible || !this.visibleReady) {
         throw new RetryableMeasurementError("the Runtrol Webview changed before measurement load");
       }
       const total = Math.ceil(framesPerSecond * durationMs / 1_000);
@@ -359,29 +437,30 @@ export class ConversationView implements vscode.Disposable {
     }
   }
 
-  private async waitForVisibleWebview(panel: vscode.WebviewPanel): Promise<void> {
+  private async waitForVisibleWebview(surface: ConversationSurface): Promise<void> {
     const deadline = Date.now() + VISIBLE_READY_TIMEOUT_MS;
     const reloadAt = Date.now() + VISIBLE_READY_RELOAD_MS;
     let nextProbeAt = 0;
     let reloaded = false;
-    while (this.panel === panel && Date.now() < deadline) {
-      if (panel.visible && this.visibleReady) return;
-      if (!reloaded && panel.visible && Date.now() >= reloadAt) {
+    while (this.surface === surface && Date.now() < deadline) {
+      if (surface.visible && this.visibleReady) return;
+      if (!reloaded && surface.visible && Date.now() >= reloadAt) {
         reloaded = true;
         this.visibleReady = false;
-        panel.webview.html = this.html(panel.webview);
+        surface.webview.html = this.html(surface.webview);
       }
       if (Date.now() >= nextProbeAt) {
         nextProbeAt = Date.now() + 250;
-        void panel.webview.postMessage({ type: "readyProbe" });
+        void surface.webview.postMessage({ type: "readyProbe" });
       }
       await delay(25);
     }
-    if (this.panel !== panel) {
+    if (this.surface !== surface) {
       throw new Error("the Runtrol Webview closed before becoming ready");
     }
     throw new RetryableMeasurementError(
-      `the visible Runtrol Webview was not ready within ${VISIBLE_READY_TIMEOUT_MS} ms`,
+      `the visible Runtrol Webview was not ready within ${VISIBLE_READY_TIMEOUT_MS} ms `
+      + `(place ${surface.place}, visible ${surface.visible}, ready ${this.visibleReady})`,
     );
   }
 
@@ -400,11 +479,11 @@ export class ConversationView implements vscode.Disposable {
   }
 
   private async flushPosts(): Promise<void> {
-    while (this.panel && this.pendingFrames.length > 0) {
+    while (this.surface && this.pendingFrames.length > 0) {
       const batch = this.pendingFrames.splice(0, POST_BATCH);
       const gap = this.postGap;
       this.postGap = false;
-      const delivered = await this.panel.webview.postMessage({ type: "frames", batch, gap });
+      const delivered = await this.surface.webview.postMessage({ type: "frames", batch, gap });
       if (!delivered) {
         this.pendingFrames = [];
         return;
@@ -483,8 +562,10 @@ export class ConversationView implements vscode.Disposable {
   }
 
   dispose(): void {
-    this.panel?.dispose();
-    this.panel = null;
+    this.closeMenu();
+    this.dropSurfaceGuards();
+    this.surface?.dispose();
+    this.surface = null;
     this.visibleReady = false;
     this.pendingFrames = [];
     this.rejectMeasurements(new Error("the Runtrol conversation panel was disposed"));
@@ -531,6 +612,8 @@ export class ConversationView implements vscode.Disposable {
         <button id="service-chip" class="chip chip-button" type="button" title="Coding service"></button>
       </div>
       <ul id="attachments" class="attachments" aria-label="Images attached to the next message" hidden></ul>
+      <!-- The popover a chip opens: the choices for that chip, answered where they were asked. -->
+      <ul id="chip-menu" class="commands chip-menu" role="listbox" aria-label="Choices" hidden></ul>
       <textarea id="prompt" rows="1" aria-label="Message" placeholder="Message" disabled></textarea>
       <div class="composer-bar">
         <button id="attach" class="bar-button" type="button" aria-label="Add an image" title="Add an image" disabled>
@@ -559,8 +642,15 @@ export class ConversationView implements vscode.Disposable {
   }
 }
 
-function focusPanel(panel: vscode.WebviewPanel): Promise<void> {
-  if (panel.visible && panel.active && conversationTabIsActive()) return Promise.resolve();
+/// Bring a surface to the front and wait until VS Code agrees it is there: a tab has to be the active editor
+/// of its group and the active tab of the window; a view only has to be visible.
+function focusSurface(surface: ConversationSurface): Promise<void> {
+  const focused = (): boolean => (
+    surface.place === "tab"
+      ? surface.visible && surface.active && conversationTabIsActive()
+      : surface.visible
+  );
+  if (focused()) return Promise.resolve();
   return new Promise((resolve, reject) => {
     let settled = false;
     const listeners: vscode.Disposable[] = [];
@@ -576,19 +666,19 @@ function focusPanel(panel: vscode.WebviewPanel): Promise<void> {
       }
     };
     const check = () => {
-      if (panel.visible && panel.active && conversationTabIsActive()) settle();
+      if (focused()) settle();
     };
     const timeout = setTimeout(
-      () => settle(new Error("VS Code did not activate the Runtrol conversation tab within 2000 ms")),
+      () => settle(new Error("VS Code did not activate the Runtrol conversation within 2000 ms")),
       2_000,
     );
     listeners.push(
-      panel.onDidChangeViewState(check),
+      surface.onDidChangeVisibility(check),
       vscode.window.tabGroups.onDidChangeTabs(check),
       vscode.window.tabGroups.onDidChangeTabGroups(check),
-      panel.onDidDispose(() => settle(new Error("the Runtrol conversation tab closed before activation"))),
+      surface.onDidDispose(() => settle(new Error("the Runtrol conversation closed before activation"))),
     );
-    panel.reveal(panel.viewColumn ?? vscode.ViewColumn.Active, false);
+    surface.reveal(false);
     check();
   });
 }

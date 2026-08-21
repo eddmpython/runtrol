@@ -72,7 +72,8 @@ the original daemon and provider processes instead of making a versioned extensi
 - Conversations are listed machine-wide, in one question per service, from the service's own surface: a listing
   protocol method, a listing command, or (for a CLI that publishes neither, Claude Code) the names in the CLI's own
   store, read as identity, folder, the CLI's own title and last write, never a message. When a list is not everything
-  the sidebar says why in the service's own words, above the list. A conversation started without a project runs in
+  the sidebar says so in one line above the list, and the services' own reasons sit behind an (i) in the view's
+  title. A conversation started without a project runs in
   the extension's own scratch folder and is listed beneath the headings as a loose row, with no folder name and no
   collision question.
 - The project this window is open on is first and open. Any project holding a conversation that stopped for the operator
@@ -115,6 +116,17 @@ the original daemon and provider processes instead of making a versioned extensi
   twenty tabs are arranged, split and sized by VS Code's own editor groups, and the focused tab is the selected
   conversation. Prompts and interrupts travel only to the tab that sent them. Tabs survive a window reload by their
   session identity, and a tab whose session no longer exists is closed rather than guessed at.
+- A conversation can live in any of the window's own places: an editor tab (the default), the bottom panel beside
+  the terminals, or the secondary side bar beside the code. Each place is a VS Code surface; Runtrol adds no pane
+  system of its own. A conversation is in one place at a time and watched once; moving it is a row command ("Open
+  Conversation in Panel / in Side Bar / as Tab"), and the conversation a place showed before a reload comes back to
+  it. One command ("Arrange Conversations in a Grid", `Ctrl+K Ctrl+G`) spreads the open conversation tabs over
+  editor groups as square as they come (two by two, three by two, three by three; nine is the editor's column
+  bound and the command says when tabs were left in place). VS Code draws, sizes and lets the operator drag them.
+- A change a coding service declares (an ACP diff block, a Codex unified change) is named in the tab with an
+  "Open diff" button and opened in VS Code's own diff editor: two read-only virtual documents for before and after,
+  or a read-only `.diff` document for a unified patch. The page draws and colours no diff; the texts are held in
+  memory only, bounded, and never written to disk.
 - When the Conversations view becomes visible and no conversation tab exists, Studio opens that selected in-progress
   chat without blocking ready. A restored editor tab is reused as VS Code left it.
 - Existing provider-owned chats start loading as soon as the first inventory is ready, instead of waiting for a later idle window.
@@ -146,6 +158,10 @@ the original daemon and provider processes instead of making a versioned extensi
   unusable and the rest premature. Only the announced name and description are read; a command's argument schema stays
   the service's business, because the value of passing a slash command through untouched is that the service decides
   what it means.
+- Every choice the composer offers (project, service, model, reasoning effort, access mode) is answered in the
+  composer: the chip's popover opens where the chip is, keyboard and mouse both work, and a click elsewhere
+  dismisses it. No picker appears at the top of the window for a chip; the command palette keeps the same
+  choices for commands invoked from the palette. The slash menu is the same kind of popover.
 - Changing the model or the permission mode mid conversation is the chip that displays it. The pick travels
   `sessions/setModel` or `sessions/setMode` to the service's own switch surface (a control channel, the next turn's
   own override field, or the protocol's announced call, whichever that CLI actually has), and the chip then shows
@@ -169,6 +185,23 @@ the original daemon and provider processes instead of making a versioned extensi
 - Core-owned project and working-tree identity prevents concurrent writers in equal, ancestor, or descendant paths.
   Linked worktrees remain independent, and only an explicit user action permits shared access.
 
+## Surface and driver contracts (what a new place or a new service has to implement, and nothing else)
+
+Two contracts keep the conversation window from growing a branch per place or per service.
+
+- **A place is one binding surface.** `ConversationSurface` (`conversationSurface.ts`) is all the page, the
+  bindings and the controller know about where a conversation is shown: a webview to post to, `visible` to pause
+  the watch by, a title, `reveal`, and two lifetime events (visibility changed, disposed). An editor tab and a
+  workbench view both implement it; adding a place (a new view, an editor in another column) is one implementation
+  and two lines of `package.json`, with no change to the page, the watch, the chips or the controller. The
+  per-place state the workbench does not keep (which conversation a view showed) is the binding layer's, stored
+  as a session identity only.
+- **A service is one driver.** The Runtime's provider trait and manifest are the whole of what a coding service
+  contributes; the window reads the provider-neutral event vocabulary (messages, tool calls, approvals, turns,
+  notices, usage) and the provider's own words inside it. A new service reaches every place, the sidebar, the
+  chips and the diff editor without a line in the extension (the isolation gate `tests/audit/providerIsolation.rs`
+  guards the Runtime half; the extension has no provider branch to guard).
+
 ## Module boundaries
 
 | Module | Owns | Must not own |
@@ -181,7 +214,10 @@ the original daemon and provider processes instead of making a versioned extensi
 | `state.ts` | provider, session, cursor, and selection metadata in memory | conversation frames |
 | `selectionStore.ts` | one bounded selected-session identifier | prompts, replies, or provider state |
 | `controller.ts` | user actions, one watch lifetime, workspace binding | transcript discovery or agent loops |
-| `conversationView.ts` | one editor panel, CSP, and Extension Host to Webview transport | retained conversation state or a second live renderer |
+| `conversationSurface.ts` | the place contract: tab and workbench-view surfaces, the empty-place page | conversation state, watches, or any place-specific rendering |
+| `conversationView.ts` | one conversation page on one surface, CSP, and Extension Host to Webview transport | retained conversation state or a second live renderer |
+| `conversationPanels.ts` | one binding per conversation (surface + watch), the two workbench places, the grid | provider branches or conversation content |
+| `diffDocuments.ts` | declared changes as read-only virtual documents for VS Code's diff editor | files on disk or a transcript of changes |
 | `webview/` | bounded active rendering and input | durable storage or background sessions |
 | `mission/controller.ts` and `mission/tree.ts` | Mission review, local actions, Task rows, and one native editor document | provider input without local Send or optimistic completion |
 | `capability/controller.ts` | candidate inbox, native diff review, and exact local trust actions | capability text injection or user-wide trust |
@@ -278,7 +314,7 @@ specified in [automatic updates](automaticUpdates.md).
 | `vscodeExtension` | thin extension boundary, TypeScript, framing, storage, queue, renderer, and bundle limits |
 | `vscodeHostPerformance` | real 30-session Extension Host and Webview responsiveness on three operating systems |
 | `vscodeRealProviderJourney` | installed provider discovery and a complete real CLI control journey |
-| `node tooling/real-window-eye.mjs` | the eye pass: an isolated VS Code window and an isolated Runtime with the real installed CLIs, real folders and real conversations, photographed in the draft, conversation and tabs poses, with a real throwaway deletion; the pictures are the judgement |
+| `node tooling/real-window-eye.mjs` | the eye pass: an isolated VS Code window and an isolated Runtime with the real installed CLIs, real folders and real conversations, photographed in the draft, conversation, tabs, reopened, grid, places, diff and diff-editor poses, with a real throwaway deletion; the pictures are the judgement. `RUNTROL_EYE_ENTRY=placeProbe` runs the focused place probe instead |
 | `missionGrowthContracts` | Mission state, exact Send, evidence, integration, capability trust, local scope, tamper, and rollback |
 | `missionLiveJourney` | two installed provider CLIs complete five reviewed Tasks and an explicit reuse, tamper, and rollback journey through production IPC |
 | `vscodePackage` | six-target SSOT, exact archive contents, Core bytes, workflow integrity, and listing metadata |

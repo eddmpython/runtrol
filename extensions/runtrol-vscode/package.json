@@ -31,7 +31,7 @@
     "theme": "dark"
   },
   "engines": {
-    "vscode": "^1.100.0"
+    "vscode": "^1.106.0"
   },
   "categories": [
     "Other",
@@ -124,6 +124,20 @@
           "title": "Runtrol",
           "icon": "resources/symbol.svg"
         }
+      ],
+      "panel": [
+        {
+          "id": "runtrolPanel",
+          "title": "Runtrol Chat",
+          "icon": "resources/symbol.svg"
+        }
+      ],
+      "secondarySidebar": [
+        {
+          "id": "runtrolSide",
+          "title": "Runtrol Chat",
+          "icon": "resources/symbol.svg"
+        }
       ]
     },
     "views": {
@@ -141,6 +155,22 @@
           "id": "runtrol.usage",
           "name": "Usage",
           "visibility": "collapsed"
+        }
+      ],
+      "runtrolPanel": [
+        {
+          "id": "runtrol.conversationPanel",
+          "name": "Conversation",
+          "type": "webview",
+          "icon": "resources/symbol.svg"
+        }
+      ],
+      "runtrolSide": [
+        {
+          "id": "runtrol.conversationSide",
+          "name": "Conversation",
+          "type": "webview",
+          "icon": "resources/symbol.svg"
         }
       ]
     },
@@ -399,6 +429,31 @@
       {
         "command": "runtrol.removeProject",
         "title": "Runtrol: Remove Project"
+      },
+      {
+        "command": "runtrol.openConversationInPanel",
+        "title": "Runtrol: Open Conversation in Panel",
+        "icon": "$(layout-panel)"
+      },
+      {
+        "command": "runtrol.openConversationInSideBar",
+        "title": "Runtrol: Open Conversation in Side Bar",
+        "icon": "$(layout-sidebar-right)"
+      },
+      {
+        "command": "runtrol.openConversationInTab",
+        "title": "Runtrol: Open Conversation as Tab",
+        "icon": "$(window)"
+      },
+      {
+        "command": "runtrol.arrangeConversationGrid",
+        "title": "Runtrol: Arrange Conversations in a Grid",
+        "icon": "$(layout)"
+      },
+      {
+        "command": "runtrol.explainListing",
+        "title": "Runtrol: Why Are Some Chats Not Listed?",
+        "icon": "$(info)"
       }
     ],
     "keybindings": [
@@ -431,6 +486,11 @@
         "key": "ctrl+k ctrl+i",
         "mac": "cmd+k cmd+i",
         "when": "!editorTextFocus && !terminalFocus"
+      },
+      {
+        "command": "runtrol.arrangeConversationGrid",
+        "key": "ctrl+k ctrl+g",
+        "mac": "cmd+k cmd+g"
       }
     ],
     "menus": {
@@ -559,6 +619,16 @@
           "command": "runtrol.capabilityInbox",
           "when": "view == runtrol.missions",
           "group": "navigation@4"
+        },
+        {
+          "command": "runtrol.arrangeConversationGrid",
+          "when": "view == runtrol.sessions",
+          "group": "navigation@5"
+        },
+        {
+          "command": "runtrol.explainListing",
+          "when": "view == runtrol.sessions && runtrol.listingIncomplete",
+          "group": "navigation@6"
         }
       ],
       "view/item/context": [
@@ -671,6 +741,21 @@
           "command": "runtrol.retryMissionTask",
           "when": "view == runtrol.missions && (viewItem == runtrol.missionTask.retryable || viewItem == runtrol.missionTask.retryable.session)",
           "group": "inline@1"
+        },
+        {
+          "command": "runtrol.openConversationInTab",
+          "group": "2_place@0",
+          "when": "view == runtrol.sessions && viewItem =~ /^runtrol\\.conversation/"
+        },
+        {
+          "command": "runtrol.openConversationInPanel",
+          "group": "2_place@1",
+          "when": "view == runtrol.sessions && viewItem =~ /^runtrol\\.conversation/"
+        },
+        {
+          "command": "runtrol.openConversationInSideBar",
+          "group": "2_place@2",
+          "when": "view == runtrol.sessions && viewItem =~ /^runtrol\\.conversation/"
         }
       ]
     },
@@ -715,7 +800,7 @@
     "@runtrol/runtime-client": "file:../../clients/typescript",
     "@types/node": "^24.0.0",
     "@types/qrcode": "^1.5.5",
-    "@types/vscode": "^1.100.0",
+    "@types/vscode": "~1.106.0",
     "@vscode/test-electron": "3.1.0",
     "@vscode/vsce": "3.9.3-5",
     "esbuild": "^0.25.0",

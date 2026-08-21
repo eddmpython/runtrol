@@ -5,6 +5,8 @@ import { PUBLIC_LIMITS, type PublicInputBlock } from "@runtrol/runtime-client";
 import * as vscode from "vscode";
 
 import type { Attachment, ConversationBinding, ConversationPanels, DraftRecord } from "./conversationPanels";
+import type { Place } from "./conversationSurface";
+import type { MenuAnchor, MenuItem } from "./viewActions";
 import type { ConversationView } from "./conversationView";
 import { CoreClient } from "./core/client";
 import { draftChips, newDraftId, NO_PROJECT_LABEL, type DraftState } from "./draft";
@@ -584,12 +586,13 @@ export class Controller implements vscode.Disposable {
       if (!row.projectless && row.workspace.trim()) add(row.workspace, row.serviceName);
     }
     choices.push({ label: "$(folder-opened) Browse for a folder...", workspace: null, browse: true });
-    const picked = await vscode.window.showQuickPick(choices, {
-      title: "Project for this conversation",
-      placeHolder: "Where the coding service runs",
-      matchOnDescription: true,
-      matchOnDetail: true,
-    });
+    const picked = await this.pickFrom(
+      binding,
+      "project",
+      "Project for this conversation",
+      "Where the coding service runs",
+      choices,
+    );
     if (!picked) return;
     if (picked.browse) {
       const chosen = await vscode.window.showOpenDialog({
@@ -610,7 +613,7 @@ export class Controller implements vscode.Disposable {
   async pickDraftService(binding: ConversationBinding): Promise<void> {
     const draft = binding.draft;
     if (!draft) return;
-    const provider = await this.chooseService(true);
+    const provider = await this.chooseService(true, binding);
     if (!provider) return;
     // A model or effort chosen for one service means nothing to another; they revert to the new service's
     // own defaults, and the chips say so.
@@ -633,7 +636,11 @@ export class Controller implements vscode.Disposable {
       this.say(`${provider.displayName} reports no selectable models; its own settings stay in control.`, "info");
       return;
     }
-    const picked = await vscode.window.showQuickPick(
+    const picked = await this.pickFrom(
+      binding,
+      "model",
+      `${provider.displayName}: model`,
+      "Choose a model reported by the installed CLI",
       [
         {
           label: "Provider default",
@@ -643,7 +650,6 @@ export class Controller implements vscode.Disposable {
         },
         ...choices,
       ],
-      { title: `${provider.displayName}: model`, placeHolder: "Choose a model reported by the installed CLI" },
     );
     if (!picked) return;
     // The effort belongs to a model; a new model starts from that model's default.
@@ -666,6 +672,7 @@ export class Controller implements vscode.Disposable {
       model,
       `${provider.displayName}: reasoning effort`,
       draft.state.effort,
+      binding,
     );
     if (picked === undefined) return;
     await this.amendDraft(binding, { effort: picked });
@@ -681,7 +688,11 @@ export class Controller implements vscode.Disposable {
       this.say(`${provider.displayName} declares no switchable modes; its own surface stays in control.`, "info");
       return;
     }
-    const picked = await vscode.window.showQuickPick(
+    const picked = await this.pickFrom(
+      binding,
+      "mode",
+      `${provider.displayName}: access mode`,
+      "The mode this conversation starts in",
       [
         {
           label: "Provider default",
@@ -694,10 +705,33 @@ export class Controller implements vscode.Disposable {
           "Chosen",
         ),
       ],
-      { title: `${provider.displayName}: access mode`, placeHolder: "The mode this conversation starts in" },
     );
     if (!picked) return;
     await this.amendDraft(binding, { permission: picked.id });
+  }
+
+  /// Offer choices where the question was asked: in the composer, hanging from the chip that was clicked,
+  /// when the conversation's page is on screen; in the command palette otherwise (a command invoked from
+  /// the palette, a page not yet ready). One list, two places; the choice itself is the same object either way.
+  private async pickFrom<T extends { label: string; description?: string; detail?: string }>(
+    binding: ConversationBinding | undefined,
+    anchor: MenuAnchor,
+    title: string,
+    placeHolder: string,
+    choices: readonly T[],
+  ): Promise<T | undefined> {
+    if (binding?.view.isVisible) {
+      const items: MenuItem[] = choices.map((choice, index) => ({
+        id: String(index),
+        label: withoutCodicons(choice.label),
+        ...(choice.description ? { description: choice.description } : {}),
+        ...(choice.detail ? { detail: choice.detail } : {}),
+      }));
+      const chosen = await binding.view.showMenu(anchor, title, items);
+      if (chosen === null) return undefined;
+      return choices[Number(chosen)];
+    }
+    return vscode.window.showQuickPick([...choices], { title, placeHolder, matchOnDescription: true, matchOnDetail: true });
   }
 
   private requireDraftProvider(draft: DraftState): ProviderLine | null {
@@ -822,10 +856,13 @@ export class Controller implements vscode.Disposable {
       detail: projectless ? undefined : session.workspace,
       act: "draft",
     });
-    const picked = await vscode.window.showQuickPick(choices, {
-      title: projectless ? NO_PROJECT_LABEL : workspaceName(session.workspace),
-      placeHolder: projectless ? "This conversation runs with no project" : session.workspace,
-    });
+    const picked = await this.pickFrom(
+      binding,
+      "project",
+      projectless ? NO_PROJECT_LABEL : workspaceName(session.workspace),
+      projectless ? "This conversation runs with no project" : session.workspace,
+      choices,
+    );
     if (!picked) return;
     if (picked.act === "window") {
       await vscode.commands.executeCommand(
@@ -846,7 +883,11 @@ export class Controller implements vscode.Disposable {
     const usable = this.state.providers.filter(isUsable);
     if (usable.length === 0) return;
     const projectless = isProjectless(session.workspace, this.state.projectlessRoot);
-    const picked = await vscode.window.showQuickPick(
+    const picked = await this.pickFrom(
+      binding,
+      "service",
+      `New conversation ${projectless ? "with no project" : `in ${workspaceName(session.workspace)}`}`,
+      "Choose the service for a new conversation here",
       usable.map((provider) => ({
         label: provider.displayName,
         description: provider.providerId === session.providerId
@@ -854,10 +895,6 @@ export class Controller implements vscode.Disposable {
           : provider.installation.version ?? "",
         provider,
       })),
-      {
-        title: `New conversation ${projectless ? "with no project" : `in ${workspaceName(session.workspace)}`}`,
-        placeHolder: "Choose the service for a new conversation here",
-      },
     );
     if (!picked) return;
     await this.openDraft({
@@ -886,19 +923,22 @@ export class Controller implements vscode.Disposable {
 
   /// Which coding service, asked only when there is a choice to make (or always, from a chip that IS the
   /// question).
-  private async chooseService(always = false): Promise<ProviderLine | null> {
+  private async chooseService(always = false, binding?: ConversationBinding): Promise<ProviderLine | null> {
     const usable = this.state.providers.filter(isUsable);
     if (usable.length === 0) {
       throw new Error("no installed coding-agent CLI is currently usable");
     }
     const recent = this.context.globalState.get<string>(RECENT_SERVICE_KEY);
-    const picked = usable.length === 1 && !always ? { provider: usable[0] } : await vscode.window.showQuickPick(
+    const picked = usable.length === 1 && !always ? { provider: usable[0] } : await this.pickFrom(
+      binding,
+      "service",
+      "New conversation",
+      "Choose a coding service",
       usable.map((provider) => ({
         label: provider.displayName,
         description: provider.providerId === recent ? "Last used" : provider.installation.version ?? "",
         provider,
       })),
-      { title: "New conversation", placeHolder: "Choose a coding service" },
     );
     return picked?.provider ?? null;
   }
@@ -1163,6 +1203,47 @@ export class Controller implements vscode.Disposable {
     const selected = this.state.selected;
     if (!selected) return;
     await this.panels.open(selected);
+  }
+
+  /// Show a conversation in one of the window's places: a tab, the bottom panel, the secondary side bar.
+  /// From a row (opening or adopting it first, exactly as a click would), or the selected conversation.
+  async placeConversation(place: Place, value?: ConversationItem | SessionLine): Promise<void> {
+    let session = await this.sessionToPlace(value);
+    if (!session.hot) {
+      this.state.select(session.sessionId);
+      const opening = await this.panels.openIn(session, place, true);
+      opening.view.status("Opening the saved chat...", "info");
+      session = await this.resumeSession(session);
+    }
+    this.state.select(session.sessionId);
+    await this.panels.openIn(session, place);
+  }
+
+  /// The grid, for the journey and the eye pass: the numbers rather than the sentence.
+  arrangeGridForJourney(): Promise<{ arranged: number; leftInPlace: number }> {
+    return this.panels.arrangeGrid();
+  }
+
+  /// Spread the open conversation tabs over a grid of editor groups; one command, one screen of agents.
+  async arrangeConversationGrid(): Promise<void> {
+    const result = await this.panels.arrangeGrid();
+    const sentence = result.arranged === 0
+      ? "Open a conversation or two first; the grid arranges the conversation tabs that are open."
+      : result.leftInPlace === 0
+        ? `${result.arranged} conversations arranged in a grid.`
+        : `${result.arranged} conversations arranged in a grid; ${result.leftInPlace} left where they were (nine is the most the editor addresses by column).`;
+    vscode.window.setStatusBarMessage(sentence, 4_000);
+  }
+
+  private async sessionToPlace(value?: ConversationItem | SessionLine): Promise<SessionLine> {
+    if (!value) return this.requireSelected();
+    if (!(value instanceof ConversationItem)) return value;
+    const row = value.conversation;
+    if (row.session) return row.session;
+    if (!row.canOpen) throw new Error(row.blocked ?? "that conversation cannot be opened");
+    const adopted = await this.adoptNativeChat(requireNative(row));
+    if (!adopted) throw new Error(`${row.title} could not be opened`);
+    return adopted;
   }
 
   async revealConversationOnEntry(): Promise<void> {
@@ -1582,12 +1663,12 @@ export class Controller implements vscode.Disposable {
     let model: string | null = null;
     let effort: string | null = null;
     if (available.length > 0) {
-      const picked = await vscode.window.showQuickPick(
+      const picked = await this.pickFrom(
+        binding,
+        "model",
+        "Switch model",
+        "Models this conversation says it can switch to",
         available.map((id) => ({ label: id })),
-        {
-          title: "Switch model",
-          placeHolder: "Models this conversation says it can switch to",
-        },
       );
       if (!picked) return;
       model = picked.label;
@@ -1601,16 +1682,21 @@ export class Controller implements vscode.Disposable {
         );
         return;
       }
-      const picked = await vscode.window.showQuickPick(choices, {
-        title: "Switch model",
-        placeHolder: "Choose a model reported by the installed CLI",
-      });
+      const picked = await this.pickFrom(
+        binding,
+        "model",
+        "Switch model",
+        "Choose a model reported by the installed CLI",
+        choices,
+      );
       if (!picked) return;
       model = picked.id;
       const pickedEffort = await this.pickReasoningEffort(
         catalogue,
         picked.model,
         "Switch model: reasoning effort",
+        null,
+        binding,
       );
       if (pickedEffort === undefined) return;
       effort = pickedEffort;
@@ -1676,7 +1762,7 @@ export class Controller implements vscode.Disposable {
       );
       return;
     }
-    const picked = await this.pickReasoningEffort(catalogue, model, "Switch reasoning effort");
+    const picked = await this.pickReasoningEffort(catalogue, model, "Switch reasoning effort", null, binding);
     if (picked === undefined) return;
     await this.runtime.setModel(runtimeAction(session), currentModel, picked ?? undefined);
     this.viewOf(this.state.selected)?.switchRequested("effort", picked ?? "default");
@@ -1706,12 +1792,12 @@ export class Controller implements vscode.Disposable {
       );
       return;
     }
-    const picked = await vscode.window.showQuickPick(
+    const picked = await this.pickFrom(
+      binding,
+      "mode",
+      "Switch mode",
+      "Modes this service accepts a switch to",
       choices.map((id) => ({ label: id })),
-      {
-        title: "Switch mode",
-        placeHolder: "Modes this service accepts a switch to",
-      },
     );
     if (!picked) return;
     await this.switchSelectedMode(picked.label);
@@ -1734,6 +1820,7 @@ export class Controller implements vscode.Disposable {
     model: ModelOption["model"],
     title: string,
     preferred: string | null = null,
+    binding?: ConversationBinding,
   ): Promise<string | null | undefined> {
     const efforts = reasoningOptions(catalogue, model);
     if (efforts.length === 0) return null;
@@ -1746,19 +1833,19 @@ export class Controller implements vscode.Disposable {
       (choice) => choice.id === preferred && preferred !== null,
       "Last used here",
     );
-    const picked = await vscode.window.showQuickPick(
+    const picked = await this.pickFrom(
+      binding,
+      "effort",
+      title,
+      "Choose an effort reported for this model",
       [
         {
           label: "Provider default",
-          id: null,
+          id: null as string | null,
           description: "Use the installed CLI's current effort setting",
         },
         ...effortChoices,
       ],
-      {
-        title,
-        placeHolder: "Choose an effort reported for this model",
-      },
     );
     return picked ? picked.id : undefined;
   }
@@ -1958,6 +2045,11 @@ type StartConfiguration = {
 ///
 /// Reordering, never preselecting-and-skipping: the question is still asked, the remembered answer is
 /// just the one Enter lands on. Everything else keeps its order.
+/// A QuickPick label without its `$(icon)` glyphs, for the page's popover, which draws no codicons.
+function withoutCodicons(label: string): string {
+  return label.replace(/\$\([a-z0-9-]+\)\s*/gu, "").trim();
+}
+
 function leadWith<T extends { description?: string }>(
   choices: T[],
   remembered: (choice: T) => boolean,

@@ -314,13 +314,22 @@ export class ConversationsTree implements vscode.TreeDataProvider<ChatTreeItem>,
   /// conversation and is told nothing concludes it is gone and leaves for another tool, so the
   /// qualification belongs where the list is, not in a log. The view's own message area is used
   /// rather than a row, because a row would sort, count, and be clickable, and this is none of those.
+  /// The services' own reasons the list is not everything, for the (i) in the title.
+  listingReasons(): string | null {
+    return this.state.incompleteDiscovery;
+  }
+
   private updateDiscoveryNotice(): void {
     const view = this.view;
     if (!view) return;
     const reasons = this.state.incompleteDiscovery;
     if (reasons === this.noticed) return;
     this.noticed = reasons;
-    view.message = reasons === null ? undefined : `Not every chat is listed. ${reasons}`;
+    // One line above the list; the services' own reasons stay one click away behind the (i) in the view's
+    // title (measured in the real window: printed in full they were a nine-line wall the reader met before
+    // the first conversation).
+    view.message = reasons === null ? undefined : "Not every chat is listed (see the (i) above).";
+    void vscode.commands.executeCommand("setContext", "runtrol.listingIncomplete", reasons !== null);
   }
 
   private updateBadge(): void {

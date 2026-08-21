@@ -36,6 +36,17 @@ export type JourneyApi = {
   /// Returns how many opened, and why each refusal refused (the harness prints them: a refusal is a fact
   /// about the product, not noise).
   openListed(limit: number): Promise<{ opened: number; refused: string[] }>;
+  /// Show a session in one of the window's places: "tab", "panel" (bottom) or "sideBar" (secondary).
+  placeConversation(session: string, place: "tab" | "panel" | "sideBar"): Promise<void>;
+  /// Spread the open conversation tabs over an editor grid; how many were arranged.
+  arrangeGrid(): Promise<{ arranged: number; leftInPlace: number }>;
+  /// Open the newest declared change of the focused conversation in the diff editor.
+  openLatestDiff(): Promise<void>;
+  /// Click a chip of the focused conversation's composer, as a person would; its choices open in the page.
+  clickChip(anchor: "project" | "service" | "model" | "effort" | "mode"): Promise<void>;
+  /// Open the newest stored conversation of a service that has a title (a reopened conversation with history),
+  /// returning its session id, or null when the service lists none.
+  openStoredWithTitle(providerId: string): Promise<string | null>;
   /// How many provider-owned conversations the services have listed so far.
   nativeChatCount(): number;
   /// The eye pass: whether a provider-owned conversation with this native identity is currently listed.
@@ -124,6 +135,41 @@ export function journeyApi(
         }
       }
       return { opened, refused };
+    }),
+    placeConversation: (session, place) => afterReady(async () => {
+      const line = state.sessions.find((candidate) => candidate.sessionId === session);
+      if (!line) throw new Error("that session is not listed");
+      await controller.placeConversation(place, line);
+      await conversation.bindingFor(session)?.settled();
+    }),
+    arrangeGrid: () => afterReady(() => controller.arrangeGridForJourney()),
+    clickChip: (anchor) => afterReady(async () => {
+      const binding = conversation.focused();
+      if (!binding) throw new Error("no conversation tab is focused");
+      binding.view.clickChip(anchor);
+    }),
+    openLatestDiff: () => afterReady(async () => {
+      const binding = conversation.focused();
+      if (!binding) throw new Error("no conversation tab is focused");
+      binding.view.openLatestDiff();
+    }),
+    openStoredWithTitle: (providerId) => afterReady(async () => {
+      const row = state.conversations.find(
+        (candidate) => candidate.providerId === providerId
+          && candidate.canOpen
+          && !candidate.open
+          && !candidate.projectless
+          && candidate.session === null
+          && candidate.native !== null
+          && candidate.native.title !== null
+          && workspaceCollisions(candidate.workspace, state.sessions).length === 0,
+      );
+      if (!row) return null;
+      await within(controller.select(row), 30_000);
+      const session = state.sessions.find(
+        (candidate) => candidate.nativeSessionId === row.native?.nativeSessionId,
+      );
+      return session?.sessionId ?? null;
     }),
     nativeChatCount: () => state.nativeChats.length,
     nativeChatListed: (providerId, nativeSessionId) => state.nativeChats.some(

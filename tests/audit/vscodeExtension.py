@@ -31,8 +31,11 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
 
     contributes = package.get("contributes")
     contribution_text = json.dumps(contributes, sort_keys=True)
-    if "secondarySidebar" in contribution_text:
-        found.append("the manifest contributes an unsupported secondary sidebar container")
+    # A view container in the secondary side bar is a contribution VS Code accepts from 1.106 on (measured in
+    # the 1.132 workbench's manifest schema, announced with 1.106). Contributing it under an older engine floor
+    # would ship a manifest part of the floor's own VS Code cannot place.
+    if "secondarySidebar" in contribution_text and not engineAtLeast(package, (1, 106)):
+        found.append("the manifest contributes a secondary side bar container below the VS Code 1.106 engine floor")
     if '"activitybar"' not in contribution_text:
         found.append("the extension has no Activity Bar control surface")
 
@@ -91,7 +94,7 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
         "conversationView.ts": [
             "webviewReady",
             "createWebviewPanel",
-            "focusPanel",
+            "focusSurface",
             "conversationTabIsActive",
             "onDidChangeTabs",
             "onDidChangeTabGroups",
@@ -169,9 +172,23 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
     return found
 
 
+def engineAtLeast(package: dict, floor: tuple[int, int]) -> bool:
+    """Whether the manifest's VS Code engine range starts at or above `floor` (major, minor)."""
+    engines = package.get("engines")
+    declared = engines.get("vscode") if isinstance(engines, dict) else None
+    if not isinstance(declared, str):
+        return False
+    digits = declared.lstrip("^~>=v ").split(".")
+    try:
+        major, minor = int(digits[0]), int(digits[1])
+    except (IndexError, ValueError):
+        return False
+    return (major, minor) >= floor
+
+
 def selftest() -> int:
     """Prove the detector rejects each class of defect."""
-    package = {"contributes": {"viewsContainers": {"activitybar": []}}}
+    package = {"engines": {"vscode": "^1.106.0"}, "contributes": {"viewsContainers": {"activitybar": []}}}
     sources = {
         "core/framing.ts": (
             "MAX_FRAME_BYTES MAX_QUEUED_FRAMES MAX_QUEUED_BYTES setImmediate "
@@ -179,7 +196,7 @@ def selftest() -> int:
         ),
         "webview/main.ts": "MAX_VISIBLE_ITEMS MAX_VISIBLE_CHARACTERS MAX_BATCH",
         "conversationView.ts": (
-            "webviewReady createWebviewPanel focusPanel conversationTabIsActive "
+            "webviewReady createWebviewPanel focusSurface conversationTabIsActive "
             "onDidChangeTabs onDidChangeTabGroups MEASUREMENT_ATTEMPTS withinMeasurementStage "
             "waitForVisibleWebview retainContextWhenHidden: false"
         ),
@@ -227,7 +244,7 @@ def selftest() -> int:
 
     mutations = [
         ({**package, "dependencies": {"some-runtime": "1"}}, sources),
-        ({"contributes": {"viewsContainers": {"secondarySidebar": []}}}, sources),
+        ({"engines": {"vscode": "^1.100.0"}, "contributes": {"viewsContainers": {"activitybar": [], "secondarySidebar": []}}}, sources),
         (package, {**sources, "webview/main.ts": "localStorage MAX_VISIBLE_ITEMS"}),
         (package, {**sources, "controller.ts": "setInterval("}),
         (package, {**sources, "core/framing.ts": "MAX_FRAME_BYTES"}),
@@ -348,11 +365,14 @@ def run() -> int:
     # gate picker), each reviewed at the crossing. Raised 288 -> 304 KiB on 2026-08-20 when the GUI identity
     # build crossed it with the draft conversation tab (project, service, model, effort and mode chips as
     # pickers), image attachments through sessions/submitBlocks, and the branch chip read off the folder's own
-    # repository, each reviewed at the crossing. A dependency slipping in still trips it.
+    # repository, each reviewed at the crossing. Raised 304 -> 320 KiB on 2026-08-21 when the places build
+    # crossed it: a conversation surface contract (tab, bottom panel, secondary side bar) with two workbench
+    # view providers, the one-command editor grid, and the per-place memory, each reviewed at the crossing.
+    # A dependency slipping in still trips it.
     bundles = [EXTENSION / "dist" / name for name in ("extension.js", "webview.js", "webview.css")]
     for bundle in bundles:
-        if not bundle.is_file() or bundle.stat().st_size > 304 * 1024:
-            failures.append(f"{bundle.relative_to(ROOT)} is missing or exceeds 304 KiB")
+        if not bundle.is_file() or bundle.stat().st_size > 320 * 1024:
+            failures.append(f"{bundle.relative_to(ROOT)} is missing or exceeds 320 KiB")
     if failures:
         print("[vscodeExtension] FAIL. bundle contract violations:", file=sys.stderr)
         for failure in failures:

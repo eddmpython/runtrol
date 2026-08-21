@@ -5,6 +5,7 @@ import path from "node:path";
 import * as vscode from "vscode";
 
 import { extensionUnderTest } from "./extensionUnderTest.test";
+import { Watcher } from "./realProviderWatch.test";
 import type { ProviderLine, SessionLine } from "../runtimeTypes";
 
 /// The real-window eye pass.
@@ -20,10 +21,17 @@ type JourneyApi = {
   start(provider: string, workspace: string): Promise<string>;
   prompt(text: string): Promise<void>;
   close(session: string, now?: boolean): Promise<void>;
+  select(session: string): Promise<void>;
+  answerApproval(approval: string, option: number, subjectDigest: number[]): Promise<void>;
   verifySelected(session: string): Promise<void>;
   openDraft(workspace: string | null, providerId?: string): Promise<void>;
   sendFocusedDraft(text: string): Promise<string>;
   openListed(limit: number): Promise<{ opened: number; refused: string[] }>;
+  placeConversation(session: string, place: "tab" | "panel" | "sideBar"): Promise<void>;
+  arrangeGrid(): Promise<{ arranged: number; leftInPlace: number }>;
+  openStoredWithTitle(providerId: string): Promise<string | null>;
+  openLatestDiff(): Promise<void>;
+  clickChip(anchor: "project" | "service" | "model" | "effort" | "mode"): Promise<void>;
   nativeChatCount(): number;
   nativeChatListed(providerId: string, nativeSessionId: string): boolean;
   deleteNativeListed(providerId: string, nativeSessionId: string): Promise<void>;
@@ -96,6 +104,19 @@ async function eyePass(resultPath: string): Promise<void> {
   await delay(1_500);
   await capture(resultPath, "draft", { nativeChats: journey.nativeChatCount() });
 
+  // Pose 1b: the model chip's choices, open in the composer where the chip is (not a palette at the top of
+  // the window). The service chip's choices the same way afterwards, then both closed.
+  currentStage = "menu";
+  await journey.clickChip("model");
+  await delay(1_500);
+  await capture(resultPath, "menu", { anchor: "model" });
+  await vscode.commands.executeCommand("workbench.action.focusActiveEditorGroup").then(undefined, () => undefined);
+  await journey.clickChip("service");
+  await delay(1_200);
+  await capture(resultPath, "menuService", { anchor: "service" });
+  await journey.clickChip("service");
+  await delay(600);
+
   // Pose 2: the draft's first message starts a real conversation in this repository, in the same tab,
   // answered by the installed provider, tools and all.
   currentStage = "sending-draft";
@@ -137,12 +158,55 @@ async function eyePass(resultPath: string): Promise<void> {
     groups: vscode.window.tabGroups.all.length,
   });
 
-  // Pose 4 (no picture, a fact): a throwaway conversation of a provider that can delete is started in a
+  // Pose 4: a stored conversation of the provider, reopened from the sidebar: its history shows, the way the
+  // provider's own resume draws it (Codex from its resume answer, Claude Code from its own store).
+  currentStage = "reopening";
+  await vscode.commands.executeCommand("workbench.action.editorLayoutSingle").then(undefined, () => undefined);
+  const reopened = await within(journey.openStoredWithTitle(providerId), 60_000, "reopening a stored conversation");
+  await delay(2_500);
+  await capture(resultPath, "reopened", { reopened });
+
+  // Pose 5: the grid. One command spreads the open conversation tabs over editor groups; VS Code arranges.
+  currentStage = "grid";
+  const grid = await journey.arrangeGrid();
+  await delay(2_000);
+  await capture(resultPath, "grid", grid);
+
+  // Pose 6: the places. The conversation this pass started goes to the bottom panel; another to the secondary
+  // side bar; the tabs stay where they are. One conversation, one place, one watch each.
+  // Hot sessions only, in two different folders: a conversation the hot ceiling cooled would have to be
+  // heated again to be placed, and two conversations of one folder cannot both write there (the Runtime's
+  // working-tree contract), so the pass picks what can move right now.
+  currentStage = "placing";
+  const placing: Record<string, string> = {};
+  const hot = journey.sessions().filter((line) => line.hot);
+  const forPanel = hot.find((line) => line.sessionId === reopened) ?? hot.find((line) => line.sessionId === session) ?? hot[0] ?? null;
+  const panelSession = forPanel?.sessionId ?? null;
+  if (panelSession) {
+    await journey.placeConversation(panelSession, "panel").catch((error: unknown) => {
+      placing.panel = error instanceof Error ? error.message : String(error);
+    });
+  }
+  const second = hot.find((line) => line.sessionId !== panelSession && line.workspace !== forPanel?.workspace)?.sessionId ?? null;
+  if (second) {
+    await journey.placeConversation(second, "sideBar").catch((error: unknown) => {
+      placing.sideBar = error instanceof Error ? error.message : String(error);
+    });
+  }
+  await delay(2_500);
+  await capture(resultPath, "places", { panel: panelSession, sideBar: second, failures: placing });
+
+  // Pose 7: a throwaway conversation of a provider that can delete is started in a scratch folder and asked
+  // to write a file, so the service declares a change: the tab names it with an "Open diff" button, and the
+  // change opens in VS Code's own diff editor (two pictures). Then the conversation is handed back to the
+  // provider (closed and forgotten here), deleted through the provider's own surface from the sidebar's row,
+  // and the provider's list no longer names it (a fact). Real CLI, real store, a conversation nobody will
+  // miss. Skipped when no installed provider can delete.
   // scratch folder, handed back to the provider (closed and forgotten here), then deleted through the
   // provider's own surface from the sidebar's row, and the provider's list no longer names it. Real CLI,
   // real store, a conversation nobody will miss. Skipped when no installed provider can delete.
   currentStage = "deleting";
-  const deletion = await deletionProof(journey, providerIdForDeletion(journey.providers()));
+  const deletion = await deletionProof(journey, providerIdForDeletion(journey.providers()), resultPath);
 
   // Leave nothing running: every session this window opened closes, in the isolated Runtime.
   currentStage = "closing";
@@ -157,6 +221,9 @@ async function eyePass(resultPath: string): Promise<void> {
       tabs,
       opened: listed.opened,
       refused: listed.refused,
+      reopened,
+      grid,
+      places: { panel: panelSession, sideBar: second, failures: placing },
       deletion,
     }),
     "utf8",
@@ -171,7 +238,11 @@ function providerIdForDeletion(providers: readonly ProviderLine[]): string | nul
     : null;
 }
 
-async function deletionProof(journey: JourneyApi, providerId: string | null): Promise<Record<string, unknown>> {
+async function deletionProof(
+  journey: JourneyApi,
+  providerId: string | null,
+  resultPath: string,
+): Promise<Record<string, unknown>> {
   if (!providerId) return { skipped: "no installed provider publishes a deletion surface" };
   const scratch = await mkdtemp(path.join(os.tmpdir(), "runtrol-eye-delete-"));
   try {
@@ -179,18 +250,54 @@ async function deletionProof(journey: JourneyApi, providerId: string | null): Pr
     const native = journey.sessions().find((line) => line.sessionId === session)?.nativeSessionId ?? null;
     if (!native) throw new Error("the throwaway conversation announced no native identity");
     // One real turn, because the provider stores a thread only once something was said (measured on
-    // Codex 0.148: a fresh thread with no turn has no rollout to list or delete).
+    // Codex 0.148: a fresh thread with no turn has no rollout to list or delete). The turn writes a file,
+    // so the service declares a change and the diff poses have something real to show.
     await journey.verifySelected(session);
-    await journey.prompt("Reply with exactly: ok");
+    // The service asks before it writes (default-deny); the pass answers each question with the service's own
+    // first allow option, exactly as a person clicking the card would, through the same approval path.
+    const watch = new Watcher(requiredEnvironment("RUNTROL_TEST_CORE"), session);
+    await watch.ready;
+    let approvalsAnswered = 0;
+    let approvalsUnanswerable = 0;
+    const answering = (async () => {
+      for (;;) {
+        const fact = await watch.next("approval", 300_000).catch(() => null);
+        if (!fact) return;
+        if (fact.allow === null) {
+          approvalsUnanswerable += 1;
+          continue;
+        }
+        await journey.answerApproval(fact.approval, fact.allow, fact.subjectDigest);
+        approvalsAnswered += 1;
+      }
+    })();
+    await journey.prompt("Create a file named hello.txt in this folder containing exactly the word hi, then reply: done");
     await journey.waitForLifecycle(session, "hotRunning", 30_000).catch(() => undefined);
-    await journey.waitForLifecycle(session, "hotIdle", 180_000);
+    await journey.waitForLifecycle(session, "hotIdle", 240_000);
+    await watch.stop().catch(() => undefined);
+    await answering.catch(() => undefined);
+    await vscode.commands.executeCommand("workbench.action.editorLayoutSingle").then(undefined, () => undefined);
+    await journey.select(session);
+    await delay(1_500);
+    await capture(resultPath, "diff", { session, approvalsAnswered, approvalsUnanswerable });
+    await journey.openLatestDiff();
+    await delay(2_500);
+    await capture(resultPath, "diffEditor", { session });
     // Handed back to the provider: closed and forgotten here, so the row is the provider's alone.
     await within(journey.close(session, true), 60_000, "forgetting the throwaway conversation");
     await within(journey.refreshChats(), 90_000, "listing after the close");
     const listedBefore = journey.nativeChatListed(providerId, native);
     await within(journey.deleteNativeListed(providerId, native), 90_000, "deleting through the provider");
     const listedAfter = journey.nativeChatListed(providerId, native);
-    return { providerId, native, listedBefore, listedAfter, deleted: listedBefore && !listedAfter };
+    return {
+      providerId,
+      native,
+      listedBefore,
+      listedAfter,
+      deleted: listedBefore && !listedAfter,
+      approvalsAnswered,
+      approvalsUnanswerable,
+    };
   } finally {
     await rm(scratch, { recursive: true, force: true }).catch(() => undefined);
   }

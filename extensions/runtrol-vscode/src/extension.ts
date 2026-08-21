@@ -5,6 +5,8 @@ import * as vscode from "vscode";
 import { CandidateController } from "./capability/controller";
 import { conversations as conversationRows } from "./conversationList";
 import { ConversationPanels } from "./conversationPanels";
+import { PANEL_VIEW_ID, SIDE_BAR_VIEW_ID } from "./conversationSurface";
+import { DiffDocuments } from "./diffDocuments";
 import { ConversationView, type WebviewPerformance } from "./conversationView";
 import { Controller } from "./controller";
 import { CoreClient } from "./core/client";
@@ -111,6 +113,10 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
   // The operator's own projects. Global state, because the panel manages the whole machine from any window.
   // Built before the controller because a draft's project picker offers them first.
   const projectStore = new ProjectStore(context.globalState);
+  const diffDocuments = new DiffDocuments();
+  context.subscriptions.push(
+    vscode.workspace.registerTextDocumentContentProvider(DiffDocuments.scheme, diffDocuments),
+  );
   const conversation = new ConversationPanels(
     context.extensionUri,
     runtime,
@@ -148,6 +154,10 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
         controller.removeAttachment(binding, message.index);
       } else if (message.type === "mentionFile") {
         void run(() => afterReady(() => controller.insertFileMention(session ?? undefined)));
+      } else if (message.type === "openDiff") {
+        // A change the service declared, opened where VS Code shows changes. No session needed: the
+        // change's text came with the frame and goes straight to the editor.
+        void run(() => diffDocuments.open(message.diff));
       } else if (message.type === "interrupt") {
         // Interrupt is dispatched by its own name, never as a fallback: an action this validator
         // accepts but no branch handles must do nothing, not stop a running agent.
@@ -173,6 +183,15 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
       };
     },
   );
+  conversation.rememberPlaces({
+    read: (place) => {
+      const value = context.workspaceState.get<unknown>(`runtrol.place.${place}`);
+      return typeof value === "string" ? value : null;
+    },
+    write: (place, sessionId) => {
+      void context.workspaceState.update(`runtrol.place.${place}`, sessionId ?? undefined);
+    },
+  });
   controller = new Controller(context, client, runtime, state, conversation, selection, projectStore);
   // The window's folders follow into the grant's roots. Enrollment read them once; without this, every folder
   // opened after first activation stayed outside conversation discovery, silently.
@@ -479,6 +498,61 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
     vscode.commands.registerCommand(
       "runtrol.closeSession",
       (item) => run(() => afterReady(() => controller.close(item))),
+    ),
+    vscode.commands.registerCommand(
+      "runtrol.explainListing",
+      () => {
+        const reasons = conversations.listingReasons();
+        void vscode.window.showInformationMessage(
+          reasons
+            ? `Not every chat is listed. ${reasons}`
+            : "Every conversation the installed coding services list is shown.",
+        );
+      },
+    ),
+    vscode.commands.registerCommand(
+      "runtrol.openConversationInPanel",
+      (item?: unknown) => run(() => afterReady(
+        () => controller.placeConversation("panel", item instanceof ConversationItem ? item : undefined),
+      )),
+    ),
+    vscode.commands.registerCommand(
+      "runtrol.openConversationInSideBar",
+      (item?: unknown) => run(() => afterReady(
+        () => controller.placeConversation("sideBar", item instanceof ConversationItem ? item : undefined),
+      )),
+    ),
+    vscode.commands.registerCommand(
+      "runtrol.openConversationInTab",
+      (item?: unknown) => run(() => afterReady(
+        () => controller.placeConversation("tab", item instanceof ConversationItem ? item : undefined),
+      )),
+    ),
+    vscode.commands.registerCommand(
+      "runtrol.arrangeConversationGrid",
+      () => run(() => afterReady(() => controller.arrangeConversationGrid())),
+    ),
+    // The two workbench places a conversation can live in besides a tab. Resolved by VS Code when first
+    // shown; a conversation placed there before a reload comes back once the session list is ready.
+    vscode.window.registerWebviewViewProvider(
+      PANEL_VIEW_ID,
+      conversation.viewProvider("panel", (place, sessionId) => {
+        void run(() => afterReady(async () => {
+          const session = state.sessions.find((candidate) => candidate.sessionId === sessionId) ?? null;
+          if (session) await controller.placeConversation(place, session);
+        }));
+      }),
+      { webviewOptions: { retainContextWhenHidden: false } },
+    ),
+    vscode.window.registerWebviewViewProvider(
+      SIDE_BAR_VIEW_ID,
+      conversation.viewProvider("sideBar", (place, sessionId) => {
+        void run(() => afterReady(async () => {
+          const session = state.sessions.find((candidate) => candidate.sessionId === sessionId) ?? null;
+          if (session) await controller.placeConversation(place, session);
+        }));
+      }),
+      { webviewOptions: { retainContextWhenHidden: false } },
     ),
     vscode.commands.registerCommand(
       "runtrol.deleteConversation",

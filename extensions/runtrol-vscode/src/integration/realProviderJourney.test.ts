@@ -118,6 +118,7 @@ async function journey(resultPath: string): Promise<void> {
     currentStage = "approval-prompt";
     await api.journey.prompt("perform the requested deterministic action");
     const firstApproval = await watch.next("approval", 60_000);
+    if (firstApproval.option < 0) throw new Error("the provider approval offered no single reject-once option");
     if (firstApproval.target !== target) {
       throw new Error(`the approval targeted ${firstApproval.target}, expected ${target}`);
     }

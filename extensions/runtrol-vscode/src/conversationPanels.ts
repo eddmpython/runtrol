@@ -1,5 +1,14 @@
 import * as vscode from "vscode";
 
+import { gridCells, gridLayout } from "./conversationGrid";
+import {
+  type ConversationSurface,
+  type Place,
+  emptyPlaceHtml,
+  tabSurface,
+  viewIdOf,
+  viewSurface,
+} from "./conversationSurface";
 import { ConversationView, type AttachmentLabel, type ConversationContext } from "./conversationView";
 import type { DraftChips, DraftState } from "./draft";
 import type { StudioRuntimeClient } from "./runtimeClient";
@@ -20,6 +29,22 @@ export type DraftRecord = {
   readonly chips: DraftChips;
 };
 
+/// Which conversation each workbench place last showed, remembered across reloads (the view comes back
+/// empty otherwise, and the operator put a conversation there on purpose).
+export type PlaceMemory = {
+  read(place: Exclude<Place, "tab">): string | null;
+  write(place: Exclude<Place, "tab">, sessionId: string | null): void;
+};
+
+/// What arranging the open tabs into a grid did.
+export type GridResult = {
+  readonly arranged: number;
+  readonly leftInPlace: number;
+};
+
+/// How long a workbench view may take to resolve after it is asked to show.
+const VIEW_RESOLVE_TIMEOUT_MS = 5_000;
+
 /// One conversation tab per session, with the file-click grammar the operator dictated
 /// (memory/uxContract.md): clicking a conversation opens ITS tab beside whatever is already open, exactly
 /// like clicking a file, and the tabs split, move, and close under the editor's own rules.
@@ -32,10 +57,20 @@ export type DraftRecord = {
 /// (`retainContextWhenHidden: false`), which pauses its watch through the visibility callback, so the live
 /// cost of many tabs is only the visible ones. There is deliberately no cap on bindings: a binding whose
 /// panel closed removes itself, so the map's size is the number of open conversation tabs and nothing else.
+///
+/// A tab is the default place. The same conversation can instead live in one of the workbench's views (the
+/// bottom panel beside the terminals, the secondary side bar beside the code); the binding is the same, only
+/// its surface differs, and a conversation is in exactly one place at a time so its watch runs once.
 export class ConversationPanels implements vscode.Disposable {
   private readonly bindings = new Map<string, ConversationBinding>();
   private focusedKey: string | null = null;
   private disposed = false;
+  /// The workbench views VS Code has resolved, by place, and who is waiting for one to resolve.
+  private readonly views = new Map<Exclude<Place, "tab">, vscode.WebviewView>();
+  private readonly viewWaiters = new Map<Exclude<Place, "tab">, Array<(view: vscode.WebviewView) => void>>();
+  /// The binding shown in each workbench view right now.
+  private readonly occupants = new Map<Exclude<Place, "tab">, ConversationBinding>();
+  private placeMemory: PlaceMemory = { read: () => null, write: () => {} };
 
   constructor(
     private readonly extensionUri: vscode.Uri,
@@ -61,7 +96,7 @@ export class ConversationPanels implements vscode.Disposable {
     return this.bindings.get(sessionId) ?? null;
   }
 
-  /// Open this session's conversation tab: reveal the existing one, or create it beside the others.
+  /// Open this session's conversation where it already is, or in a tab beside the others.
   async open(session: SessionLine, preserveFocus = false): Promise<ConversationBinding> {
     const existing = this.bindings.get(session.sessionId);
     if (existing) {
@@ -72,6 +107,109 @@ export class ConversationPanels implements vscode.Disposable {
     const binding = this.bind(session, null);
     await binding.view.show(preserveFocus);
     return binding;
+  }
+
+  /// Open this session in one of the workbench's places. A tab is `open`; the panel and the side bar are
+  /// views VS Code resolves once: the conversation shown there before leaves (as a closed tab would), and
+  /// this session's own tab, if it had one, closes, so the conversation is in one place and watched once.
+  async openIn(session: SessionLine, place: Place, preserveFocus = false): Promise<ConversationBinding> {
+    if (place === "tab") {
+      const existing = this.bindings.get(session.sessionId);
+      if (existing && existing.view.place !== "tab") {
+        // Back to a tab: the view surface goes, a tab is made on the next show.
+        existing.view.dispose();
+      }
+      return this.open(session, preserveFocus);
+    }
+    const view = await this.ensureView(place);
+    const previous = this.occupants.get(place);
+    if (previous && previous.session?.sessionId === session.sessionId) {
+      previous.updateSession(session);
+      await previous.view.show(preserveFocus);
+      return previous;
+    }
+    previous?.dispose();
+    const binding = this.bindings.get(session.sessionId) ?? this.bind(session, null);
+    binding.updateSession(session);
+    this.occupants.set(place, binding);
+    this.placeMemory.write(place, session.sessionId);
+    await binding.view.adopt(viewSurface(view, place, () => {
+      if (this.occupants.get(place) === binding) {
+        this.occupants.delete(place);
+        this.placeMemory.write(place, null);
+      }
+      if (this.views.get(place) === view) view.webview.html = emptyPlaceHtml(place);
+    }));
+    await binding.view.show(preserveFocus);
+    return binding;
+  }
+
+  /// The provider VS Code calls when one of the two workbench places is shown for the first time.
+  viewProvider(
+    place: Exclude<Place, "tab">,
+    restore: (place: Exclude<Place, "tab">, sessionId: string) => void,
+  ): vscode.WebviewViewProvider {
+    return {
+      resolveWebviewView: (view) => {
+        view.webview.options = {
+          enableScripts: true,
+          localResourceRoots: [vscode.Uri.joinPath(this.extensionUri, "dist")],
+        };
+        view.webview.html = emptyPlaceHtml(place);
+        this.views.set(place, view);
+        view.onDidDispose(() => {
+          if (this.views.get(place) === view) this.views.delete(place);
+          this.occupants.get(place)?.dispose();
+        });
+        const waiters = this.viewWaiters.get(place) ?? [];
+        this.viewWaiters.delete(place);
+        for (const waiter of waiters) waiter(view);
+        // Nobody asked for this view just now: it is the window coming back, so the conversation it
+        // showed before comes back with it, when that conversation still exists.
+        if (waiters.length === 0) {
+          const sessionId = this.placeMemory.read(place);
+          if (sessionId) restore(place, sessionId);
+        }
+      },
+    };
+  }
+
+  /// Remember which conversation each place shows, across reloads.
+  rememberPlaces(memory: PlaceMemory): void {
+    this.placeMemory = memory;
+  }
+
+  /// Spread the open conversation tabs over a grid of editor groups, VS Code doing the arranging.
+  async arrangeGrid(): Promise<GridResult> {
+    const tabs = [...this.bindings.values()].filter((binding) => binding.view.place === "tab");
+    const cells = gridCells(tabs.length);
+    if (cells.length === 0) return { arranged: 0, leftInPlace: tabs.length };
+    await vscode.commands.executeCommand("vscode.setEditorLayout", gridLayout(tabs.length));
+    cells.forEach((cell, index) => {
+      tabs[index]?.view.revealIn(cell as vscode.ViewColumn);
+    });
+    return { arranged: cells.length, leftInPlace: tabs.length - cells.length };
+  }
+
+  /// The workbench view for a place, shown and resolved. VS Code contributes a `<viewId>.focus` command for
+  /// every view; asking it to focus is what makes the workbench resolve the view through the provider.
+  private async ensureView(place: Exclude<Place, "tab">): Promise<vscode.WebviewView> {
+    const existing = this.views.get(place);
+    if (existing) {
+      existing.show(true);
+      return existing;
+    }
+    const resolved = new Promise<vscode.WebviewView>((resolve, reject) => {
+      const waiters = this.viewWaiters.get(place) ?? [];
+      waiters.push(resolve);
+      this.viewWaiters.set(place, waiters);
+      setTimeout(
+        () => reject(new Error(`VS Code did not show the Runtrol ${place === "panel" ? "panel" : "side bar"} view within ${VIEW_RESOLVE_TIMEOUT_MS} ms`)),
+        VIEW_RESOLVE_TIMEOUT_MS,
+      );
+    });
+    await vscode.commands.executeCommand(`${viewIdOf(place)}.focus`);
+    return resolved;
   }
 
   /// Open a new tab holding a draft: nothing started, everything ready to be.
@@ -90,15 +228,19 @@ export class ConversationPanels implements vscode.Disposable {
       existing.dispose();
     }
     const binding = this.bind(session, null);
-    await binding.view.adopt(panel);
+    await binding.view.adopt(this.restoredTab(panel));
     return binding;
   }
 
   /// Adopt a restored panel that was showing a draft, with the choices it had stamped.
   async adoptDraft(panel: vscode.WebviewPanel, draft: DraftRecord): Promise<ConversationBinding> {
     const binding = this.bind(null, draft);
-    await binding.view.adopt(panel);
+    await binding.view.adopt(this.restoredTab(panel));
     return binding;
+  }
+
+  private restoredTab(panel: vscode.WebviewPanel): ConversationSurface {
+    return tabSurface(panel, vscode.Uri.joinPath(this.extensionUri, "resources", "symbol.svg"));
   }
 
   /// A draft's conversation started: the same tab is now that session's tab.
@@ -161,6 +303,9 @@ export class ConversationPanels implements vscode.Disposable {
       binding.dispose();
     }
     this.bindings.clear();
+    this.occupants.clear();
+    this.views.clear();
+    this.viewWaiters.clear();
   }
 }
 
