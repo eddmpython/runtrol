@@ -1970,12 +1970,18 @@ pub(crate) fn provider_failure(error: &ProviderError) -> RuntimeControlFailure {
         ),
         // Nothing is broken. The capability is absent, and saying so plainly stops the caller from
         // offering an action that cannot work.
-        ProviderError::Unsupported { .. } | ProviderError::NativeRefused { .. } => {
-            RuntimeControlFailure::new(
-                RuntimeErrorKind::CapabilityUnavailable,
-                "this coding service does not offer what the request needs",
-            )
-        }
+        ProviderError::Unsupported { .. } => RuntimeControlFailure::new(
+            RuntimeErrorKind::CapabilityUnavailable,
+            "this coding service does not offer what the request needs",
+        ),
+        // The capability exists and the service declined this one request (measured: Codex refuses to
+        // resume a thread another Codex window is writing, "already has an active writer"). The same
+        // category, because the caller's branch is the same, but not the same sentence: "does not
+        // offer" would send a person looking for a missing feature that is not missing.
+        ProviderError::NativeRefused { .. } => RuntimeControlFailure::new(
+            RuntimeErrorKind::CapabilityUnavailable,
+            "this coding service refused this request for the conversation",
+        ),
         // The CLI changed shape underneath us. Distinct from the above because the fix is a vendor
         // bug report, and reporting it as anything else buries the one failure worth escalating.
         ProviderError::Protocol { .. } => RuntimeControlFailure::new(
@@ -3136,6 +3142,26 @@ mod tests {
             how: "cli auth login".into(),
         });
         assert_eq!(failure.kind, RuntimeErrorKind::PresenceRequired);
+    }
+
+    #[test]
+    fn a_refusal_is_not_reported_as_a_missing_feature() {
+        // Measured in the real window: a Codex thread open in another Codex window refuses to resume
+        // ("already has an active writer"). Saying the service "does not offer" resuming would be
+        // false, and a person would go looking for a feature that is there.
+        let refused = provider_failure(&ProviderError::NativeRefused {
+            provider: ProviderId::parse("mapped").expect("provider id"),
+            doing: "resuming",
+            detail: "thread already has an active writer".into(),
+        });
+        let absent = provider_failure(&ProviderError::Unsupported {
+            provider: ProviderId::parse("mapped").expect("provider id"),
+            what: "resume".into(),
+            why: "this CLI has no such command",
+        });
+        assert_eq!(refused.kind, absent.kind);
+        assert_ne!(refused.message, absent.message);
+        assert!(refused.message.contains("refused"));
     }
 
     #[test]
