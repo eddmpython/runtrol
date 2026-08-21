@@ -4,7 +4,7 @@
 
 한국어 | [English](README_EN.md) | [中文](README_ZH.md) | [日本語](README_JA.md)
 
-> 상태: **코어와 주력 VS Code 확장을 구현했고 `Runtrol Studio 0.1.9`를 6개 네이티브 플랫폼 대상으로 공개했다.** 실시간 세션 인덱스, 실물 Extension Host와 초당 3,000 프레임 Webview 성능 ratchet, 설치된 실물 CLI의 전체 조작 여정, 깨끗한 Marketplace 설치, 활성 세션을 보존하는 VSIX 갱신과 롤백을 검증했다. 독립 데스크톱 GUI 코드와 실행 경로는 제거됐고 PC 표면은 VS Code 확장 하나다. 공개 Runtime 프로토콜, Rust와 TypeScript SDK, 외부 패키지 소비 게이트, 서명된 standalone Runtime 6개 대상 배포 파이프라인도 구현했다. 확증된 provider 채널의 자동 갱신, 배타 실행, 정확한 롤백도 구현했다. 로컬 Mission DAG, 결정적 Receipt, 수동 통합, 프로젝트 Capability의 명시적 재사용과 변조 롤백도 두 설치형 CLI의 헤드리스 여정으로 검증했다. [Marketplace 확장](https://marketplace.visualstudio.com/items?itemName=runtrol.runtrol-studio)과 [GitHub Pages 사이트](https://eddmpython.github.io/runtrol/)가 공개되어 있다. 릴레이 기반 휴대폰 PWA, VS Code 페어링, 세부 권한 편집, 내용 없는 Web Push, Mission 조회와 중단 표면을 구현했다. 대화 헤더의 칩으로 답하는 모델과 permission mode 를 대화 중에 바꾸며, 선택은 각 CLI 자신의 전환 표면으로 중계되고 칩은 서비스가 답한 값만 보여 준다 (설치된 실물 Claude Code 여정 게이트가 전환과 복귀를 CLI 자체 공지로 검증). 대화 목록의 프로젝트 헤딩은 운영자가 직접 만들며, 폴더가 자동으로 헤딩이 되지 않는다. 페어링된 기기의 권한은 승인한 workspace root 로 한정된다: 세션 목록과 감시, 모든 세션 명령, Mission 조회가 같은 live root 검증을 통과해야 하고 root 회수는 즉시 효력을 갖는다. provider 준비는 provider 별 lane 으로 병렬화되어 cold 첫 만남 5 개가 직렬 18.1초 대신 8.7초에 끝나고, 새로 연 폴더의 기존 대화는 새로고침 없이 도착한다. 대화는 저마다 에디터 탭으로 열려 여러 대화를 동시에 띄우고 화면을 분할하며, 입력과 중단은 그 탭의 대화로 간다. 확장 갱신 뒤에도 돌고 있던 옛 코어가 유휴가 되는 즉시 새 빌드로 스스로 굴려져, 업데이트가 재시작 없이 실제로 도달한다. PWA 모듈이 production 데몬과 실물 CLI를 관통하는 세션, 승인, 원격 단절 복원 여정도 활성 게이트로 검증한다. iOS 실기기 설치와 Web Push 운영 확인은 미검증 기여자 operator evidence로 남으며 현재 완료 범위와 점수에서 제외한다.
+> 상태: **코어와 주력 VS Code 확장을 구현했고 `Runtrol Studio 0.1.9`를 6개 네이티브 플랫폼 대상으로 공개했다.** 실시간 세션 인덱스, 실물 Extension Host와 초당 3,000 프레임 Webview 성능 ratchet, 설치된 실물 CLI의 전체 조작 여정, 깨끗한 Marketplace 설치, 활성 세션을 보존하는 VSIX 갱신과 롤백을 검증했다. 독립 데스크톱 GUI 코드와 실행 경로는 제거됐고 PC 표면은 VS Code 확장 하나다. 공개 Runtime 프로토콜, Rust와 TypeScript SDK, 외부 패키지 소비 게이트, 서명된 standalone Runtime 6개 대상 배포 파이프라인도 구현했다. 확증된 provider 채널의 자동 갱신, 배타 실행, 정확한 롤백도 구현했다. 로컬 Mission DAG, 결정적 Receipt, 수동 통합, 프로젝트 Capability의 명시적 재사용과 변조 롤백도 두 설치형 CLI의 헤드리스 여정으로 검증했다. [Marketplace 확장](https://marketplace.visualstudio.com/items?itemName=runtrol.runtrol-studio)과 [GitHub Pages 사이트](https://eddmpython.github.io/runtrol/)가 공개되어 있다. 릴레이 기반 휴대폰 PWA, VS Code 페어링, 세부 권한 편집, 내용 없는 Web Push, Mission 조회와 중단 표면을 구현했다. 대화 헤더의 칩으로 답하는 모델과 permission mode 를 대화 중에 바꾸며, 선택은 각 CLI 자신의 전환 표면으로 중계되고 칩은 서비스가 답한 값만 보여 준다 (설치된 실물 Claude Code 여정 게이트가 전환과 복귀를 CLI 자체 공지로 검증). 대화 목록의 프로젝트 헤딩은 운영자가 직접 만들며, 폴더가 자동으로 헤딩이 되지 않는다. 페어링된 기기의 권한은 승인한 workspace root 로 한정된다: 세션 목록과 감시, 모든 세션 명령, Mission 조회가 같은 live root 검증을 통과해야 하고 root 회수는 즉시 효력을 갖는다. provider 준비는 provider 별 lane 으로 병렬화되어 cold 첫 만남 5 개가 직렬 18.1초 대신 8.7초에 끝나고, 새로 연 폴더의 기존 대화는 새로고침 없이 도착한다. 대화는 저마다 에디터 탭으로 열려 여러 대화를 동시에 띄우고 화면을 분할하며, 입력과 중단은 그 탭의 대화로 간다. 확장 갱신 뒤에도 돌고 있던 옛 코어가 유휴가 되는 즉시 새 빌드로 스스로 굴려져, 업데이트가 재시작 없이 실제로 도달한다. PWA 모듈이 production 데몬과 실물 CLI를 관통하는 세션, 승인, 원격 단절 복원 여정도 활성 게이트로 검증한다. 프로젝트 헤딩의 클릭 한 번으로 Agent Tools를 켜면 설치된 코딩 에이전트가 공개 Runtime의 루트 제한 7개 도구로 다른 작업을 위임할 수 있고, 끄면 provider 등록, Runtime 권한, 보호된 로컬 자격이 함께 회수된다. iOS 실기기 설치와 Web Push 운영 확인은 미검증 기여자 operator evidence로 남으며 현재 완료 범위와 점수에서 제외한다.
 > 아래 점수 대부분이 0 인 것은 코드가 없어서가 아니라 그 축을 단언하는 게이트가 아직 없어서다.
 
 보안 경계와 기본 거부 설정은 [SECURITY.md](SECURITY.md)에 정리되어 있다.
@@ -28,7 +28,7 @@ Code-hot workspace는 bounded 상태를 유지한다. streaming과 background �
 - **대화 선택과 workspace 전환을 결박한다.** session 선택 즉시 대화와 파일 맥락을 전환하고, 실제 편집이 필요할 때만 정확한 workspace 또는 worktree를 Code-hot으로 승격한다. 대화 본문을 읽어 경로를 추측하지 않는다.
 - **기기 연결과 세션 소유권을 분리한다.** VS Code와 폰은 같은 Core에 페어링된 표면이며 어느 쪽도 세션을 소유하지 않는다. 창, 기기, 네트워크 경로가 바뀌어도 Core가 세션을 살려 둔다. Tailscale 같은 기존 사설망은 발견되면 직결 경로로 활용할 수 있지만 페어링, push, 정합성은 그것에 의존하지 않는다.
 - **사람이 항상 우선이다.** 긴 streaming, 여러 agent, build, test 중에도 사용자의 입력, 스크롤, 편집기와 파일 탐색이 먼저 반응한다.
-- **얇은 경계는 바뀌지 않는다.** credential, transcript, 모델 API key, conversation copy를 소유하지 않는다.
+- **얇은 경계는 바뀌지 않는다.** provider 계정 credential, transcript, 모델 API key, conversation copy를 소유하지 않는다.
 
 현재 총점은 **66/140, 평균 4.7/10** 이다. 활성 CI 게이트가 선 축은 열둘이다.
 10 점은 실제 환경에서 완결 여정이 반복 검증된 상태다.
@@ -120,6 +120,17 @@ Code-hot workspace는 bounded 상태를 유지한다. streaming과 background �
 공개 릴리스 `0.1.9`과 6개 플랫폼별 VSIX는 [GitHub Releases](https://github.com/eddmpython/runtrol/releases/tag/vscode-v0.1.9)에서도 받을 수 있다.
 Marketplace 설치는 VS Code가 자동 갱신한다. 예전 버전을 VSIX로 직접 설치했다면 VS Code가 그 확장의 자동 갱신을 끄므로 Marketplace에서 한 번 다시 설치한다.
 
+## 에이전트에게 Runtrol 맡기기
+
+프로젝트 헤딩의 반짝임 버튼에서 **Enable Agent Tools for This Project**를 누르면 된다. 설치된 코딩
+에이전트는 provider와 모델을 발견하고, 그 프로젝트 안의 세션을 시작하고, 지시를 보내고, 이벤트를
+읽고, 정확한 세션을 멈출 수 있다. 프로젝트 행에 `Agent Tools`가 나타나면 준비된 상태다.
+
+권한은 그 canonical 프로젝트 root 하나에만 묶인다. 승인 응답, 대화 삭제, 몰래 공유 시작, API key,
+transcript 사본, Runtrol 자체 agent loop는 없다. **Disable Agent Tools for This Project**를 누르면 Runtime
+권한과 OS 보호 자격이 삭제되고, 마지막 프로젝트라면 provider 등록도 제거된다. 정확한 경계는
+[Agent Tools 운영 문서](docs/agentTools.md)에 있다.
+
 ## runtrol 이 필요 없는 사람
 
 **공급자 하나만 쓴다면 그 공급자 자신의 원격 제어가 더 낫다. 이걸 먼저 적는다.**
@@ -136,7 +147,7 @@ Claude 앱에 Codex 세션은 영원히 안 뜬다. 그건 기능 차이가 아�
 - **채팅 클라이언트가 아니다.** 대화의 렌더링은 각 CLI 가 이미 하는 일이다. runtrol 은 그 출력을 옮길 뿐 해석하지 않는다.
 - **모델 프록시가 아니다.** 모델 API 를 부르지 않고, 토큰을 읽지 않고, 요청을 중계하지 않는다. 설계 취향이 아니라 생존 조건이다.
 - **IDE 가 아니다.** diff 를 보여주는 것까지가 경계이고, 편집하는 것은 경계 밖이다.
-- **에이전트 프레임워크가 아니다.** 플래너, 서브에이전트 오케스트레이션, 자율 루프 없다. 그건 각 CLI 안에 이미 있고 더 잘한다.
+- **자체 에이전트 프레임워크가 아니다.** Runtrol 소유 플래너나 자율 루프는 없다. 제한된 Runtime 도구를 provider 소유 agent loop에 제공하지만 그 loop가 되지는 않는다.
 - **호스팅 서비스가 아니다.** 계정도, 로그인도, 요금제도 없다.
 - **터미널 멀티플렉서가 아니다.** tmux 를 대체하려는 게 아니라 **요구하지 않으려는 것이다.**
 

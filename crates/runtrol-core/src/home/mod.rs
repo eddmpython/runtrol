@@ -32,7 +32,7 @@ use std::io;
 
 use runtrol_provider::{AbsPath, PathError};
 
-pub use layout::{Endpoint, Layout};
+pub use layout::{AgentToolSlot, Endpoint, Layout};
 pub use os::Ignored;
 use os::Unusable;
 

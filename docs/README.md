@@ -14,6 +14,7 @@
 | [runtimeIntegration.md](runtimeIntegration.md) | Rust and TypeScript SDK adoption, enrollment, least privilege, reconnect, failure recovery, and credential lifecycle |
 | [runtimeSecurity.md](runtimeSecurity.md) | public endpoint trust layers, data ownership, authorization, hostile provider input, hosted companions, and incident response |
 | [runtimeOperations.md](runtimeOperations.md) | standalone Runtime artifacts, install, locator repair, administration, update, rollback, and uninstall |
+| [agentTools.md](agentTools.md) | one-click project enablement, the fixed seven-tool MCP catalogue, root-bound Runtime authority, provider registration, revocation, recovery, and real CLI verification |
 | [missionOperations.md](missionOperations.md) | reviewed Mission schema, local authority, Task scheduling, worktrees, evidence Receipts, integration, recovery, bounds, and verification |
 | [capabilityTrust.md](capabilityTrust.md) | project capability schemas, provenance, independent verification, exact approval, explicit reuse, tamper detection, and rollback |
 | [productSurfaces.md](productSurfaces.md) | public surface ownership, the VS Code-only PC decision, 30-session interaction contract, GitHub Pages distribution, and phone PWA boundary |

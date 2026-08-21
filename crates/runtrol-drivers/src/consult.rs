@@ -36,6 +36,158 @@ pub struct McpRegistrar {
     /// command run with an invented control name, because one measured CLI answers an absent subcommand
     /// with its parent help and exit zero, so an exit code alone cannot be trusted without a control.
     pub get: &'static [&'static str],
+    /// Words after `<name>` when reading one registration.
+    ///
+    /// Some CLIs can return a machine-readable shape only when an explicit flag follows the name. Keeping
+    /// that word in the driver means the daemon does not know which CLI has that surface.
+    pub get_suffix: &'static [&'static str],
+    /// How this CLI's official `get` answer proves the command it will actually start.
+    pub readback: McpReadback,
+}
+
+/// A provider CLI's official MCP registration readback shape.
+///
+/// These are deliberately output contracts rather than configuration file contracts. The provider CLI owns
+/// its file and runtrol reads only the answer from the same command surface that performed the mutation.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum McpReadback {
+    /// Human-readable labeled fields: `Type`, `Command`, `Args`, and a blank `Environment` section.
+    LabeledText,
+    /// A JSON object with a closed stdio transport containing command, arguments, environment, and cwd.
+    Json,
+}
+
+/// Whether a present MCP registration is the exact authority-free stdio entry runtrol expected.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum McpRegistrationState {
+    /// Exact command and arguments, no environment or cwd, and enabled when the format exposes that state.
+    ExactEnabled,
+    /// Exact command and arguments with no ambient authority, but explicitly disabled by the provider.
+    ExactDisabled,
+    /// A registration with this name exists, but it is not runtrol's exact entry.
+    Different,
+}
+
+impl McpRegistrar {
+    /// Classify one successful official `get` answer against the exact stdio entry runtrol expects.
+    ///
+    /// # Errors
+    ///
+    /// The answer is not valid UTF-8 or no longer has the declared output shape. Shape drift is an error,
+    /// never permission to overwrite or remove an entry whose ownership cannot be proved.
+    pub fn registration_state(
+        &self,
+        stdout: &[u8],
+        name: &str,
+        command: &str,
+        args: &[&str],
+    ) -> Result<McpRegistrationState, String> {
+        match self.readback {
+            McpReadback::LabeledText => labeled_registration(stdout, name, command, args),
+            McpReadback::Json => json_registration(stdout, name, command, args),
+        }
+    }
+}
+
+fn labeled_registration(
+    stdout: &[u8],
+    name: &str,
+    command: &str,
+    args: &[&str],
+) -> Result<McpRegistrationState, String> {
+    let text = core::str::from_utf8(stdout)
+        .map_err(|_| "the MCP registration readback was not UTF-8".to_owned())?;
+    let lines: Vec<&str> = text.lines().collect();
+    let kind = one_labeled_value(&lines, "Type")?;
+    let read_command = one_labeled_value(&lines, "Command")?;
+    let read_args = one_labeled_value(&lines, "Args")?;
+    let environment_at = lines
+        .iter()
+        .position(|line| *line == "  Environment:")
+        .ok_or_else(|| "the MCP registration readback has no Environment field".to_owned())?;
+    let has_environment = lines
+        .iter()
+        .skip(environment_at.saturating_add(1))
+        .take_while(|line| !line.trim().is_empty())
+        .any(|line| !line.trim().is_empty());
+    let expected_args = args.join(" ");
+    let expected_heading = format!("{name}:");
+
+    if lines.iter().any(|line| *line == expected_heading)
+        && kind == "stdio"
+        && read_command == command
+        && read_args == expected_args
+        && !has_environment
+    {
+        Ok(McpRegistrationState::ExactEnabled)
+    } else {
+        Ok(McpRegistrationState::Different)
+    }
+}
+
+fn one_labeled_value<'line>(lines: &[&'line str], label: &str) -> Result<&'line str, String> {
+    let prefix = format!("  {label}:");
+    let mut values = lines.iter().filter_map(|line| {
+        line.strip_prefix(&prefix)
+            .map(|value| value.strip_prefix(' ').unwrap_or(value))
+    });
+    let value = values
+        .next()
+        .ok_or_else(|| format!("the MCP registration readback has no {label} field"))?;
+    if values.next().is_some() {
+        return Err(format!(
+            "the MCP registration readback has more than one {label} field"
+        ));
+    }
+    Ok(value)
+}
+
+fn json_registration(
+    stdout: &[u8],
+    name: &str,
+    command: &str,
+    args: &[&str],
+) -> Result<McpRegistrationState, String> {
+    let read: JsonRegistration = serde_json::from_slice(stdout)
+        .map_err(|error| format!("the MCP registration JSON could not be read: {error}"))?;
+    let exact = read.name == name
+        && read.transport.kind == "stdio"
+        && read.transport.command == command
+        && read
+            .transport
+            .args
+            .iter()
+            .map(String::as_str)
+            .eq(args.iter().copied())
+        && read.transport.env.is_null()
+        && read.transport.env_vars.is_empty()
+        && read.transport.cwd.is_null();
+    if !exact {
+        return Ok(McpRegistrationState::Different);
+    }
+    if read.enabled {
+        Ok(McpRegistrationState::ExactEnabled)
+    } else {
+        Ok(McpRegistrationState::ExactDisabled)
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct JsonRegistration {
+    name: String,
+    enabled: bool,
+    transport: JsonTransport,
+}
+
+#[derive(serde::Deserialize)]
+struct JsonTransport {
+    #[serde(rename = "type")]
+    kind: String,
+    command: String,
+    args: Vec<String>,
+    env: serde_json::Value,
+    env_vars: Vec<String>,
+    cwd: serde_json::Value,
 }
 
 /// How one CLI serves itself as an MCP server, and which of its tools is a consultation.
@@ -97,6 +249,7 @@ mod tests {
                 .iter()
                 .chain(registrar.remove)
                 .chain(registrar.get)
+                .chain(registrar.get_suffix)
             {
                 assert!(
                     !word.contains(".json") && !word.contains(".toml"),
@@ -144,5 +297,106 @@ mod tests {
             )
         });
         assert!(served, "no driver offers a consultable server");
+    }
+
+    #[test]
+    fn labeled_readback_proves_only_the_exact_authority_free_entry() {
+        let registrar = McpRegistrar {
+            add: &[],
+            remove: &[],
+            get: &[],
+            get_suffix: &[],
+            readback: McpReadback::LabeledText,
+        };
+        let exact = "runtrolTools:\n  Status: connected\n  Type: stdio\n  Command: C:\\runtrol.exe\n  Args: mcp\n  Environment:\n\nTo remove this server, run: remove\n";
+        assert_eq!(
+            registrar
+                .registration_state(
+                    exact.as_bytes(),
+                    "runtrolTools",
+                    "C:\\runtrol.exe",
+                    &["mcp"],
+                )
+                .expect("declared shape"),
+            McpRegistrationState::ExactEnabled
+        );
+
+        for different in [
+            exact.replace("runtrolTools:", "somebodyElse:"),
+            exact.replace("C:\\runtrol.exe", "C:\\other.exe"),
+            exact.replace("  Args: mcp", "  Args: mcp --root anywhere"),
+            exact.replace("  Environment:\n\n", "  Environment:\n    TOKEN=secret\n\n"),
+        ] {
+            assert_eq!(
+                registrar
+                    .registration_state(
+                        different.as_bytes(),
+                        "runtrolTools",
+                        "C:\\runtrol.exe",
+                        &["mcp"],
+                    )
+                    .expect("declared shape"),
+                McpRegistrationState::Different
+            );
+        }
+    }
+
+    #[test]
+    fn json_readback_distinguishes_exact_disabled_and_foreign_entries() {
+        let registrar = McpRegistrar {
+            add: &[],
+            remove: &[],
+            get: &[],
+            get_suffix: &["--json"],
+            readback: McpReadback::Json,
+        };
+        let readback = |enabled: bool, command: &str, env: serde_json::Value| {
+            serde_json::to_vec(&serde_json::json!({
+                "name": "runtrolTools",
+                "enabled": enabled,
+                "transport": {
+                    "type": "stdio",
+                    "command": command,
+                    "args": ["mcp"],
+                    "env": env,
+                    "env_vars": [],
+                    "cwd": null
+                }
+            }))
+            .expect("JSON")
+        };
+        assert_eq!(
+            registrar
+                .registration_state(
+                    &readback(true, "runtrol", serde_json::Value::Null),
+                    "runtrolTools",
+                    "runtrol",
+                    &["mcp"],
+                )
+                .expect("declared shape"),
+            McpRegistrationState::ExactEnabled
+        );
+        assert_eq!(
+            registrar
+                .registration_state(
+                    &readback(false, "runtrol", serde_json::Value::Null),
+                    "runtrolTools",
+                    "runtrol",
+                    &["mcp"],
+                )
+                .expect("declared shape"),
+            McpRegistrationState::ExactDisabled
+        );
+        assert_eq!(
+            registrar
+                .registration_state(
+                    &readback(true, "other", serde_json::json!({"TOKEN": "secret"})),
+                    "runtrolTools",
+                    "runtrol",
+                    &["mcp"],
+                )
+                .expect("declared shape"),
+            McpRegistrationState::Different
+        );
     }
 }

@@ -88,7 +88,9 @@ pub fn needed(request: &Request) -> Needed {
         | Request::RemoteConnection
         | Request::Consult => Needed::Scope(DeviceScope::ConfigRead),
         Request::ProviderUpdate { .. } => Needed::AtTheMachine(LocalScope::ProviderUpdate),
-        Request::RemoteConfigure { .. } => Needed::AtTheMachine(LocalScope::ConfigWrite),
+        Request::RemoteConfigure { .. } | Request::AgentToolsWire | Request::AgentToolsUnwire => {
+            Needed::AtTheMachine(LocalScope::ConfigWrite)
+        }
         Request::PairingBegin
         | Request::PairingProposals
         | Request::PairingApprovalBegin { .. }

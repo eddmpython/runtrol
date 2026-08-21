@@ -4,7 +4,7 @@
 
 [한국어](README.md) | [English](README_EN.md) | [中文](README_ZH.md) | 日本語
 
-> ステータス: **コアと主力 VS Code 拡張を実装し、`Runtrol Studio 0.1.9` を六つの native target 向けに公開した。** live session index、実物 Extension Host と秒間 3,000 frame Webview の性能 ratchet、インストール済み実物 CLI の完全な操作 journey、Marketplace からの clean install、active session を維持する VSIX upgrade と rollback を検証済みである。独立したデスクトップ GUI のコードと実行経路は削除され、VS Code 拡張が唯一の PC surface である。公開 Runtime protocol、Rust と TypeScript SDK、外部 packed consumer gate、署名付き六 target standalone Runtime release pipeline も実装した。確認済み provider channel の自動更新には process exclusion と正確な rollback も実装した。[Marketplace 拡張](https://marketplace.visualstudio.com/items?itemName=runtrol.runtrol-studio)、[GitHub Pages サイト](https://eddmpython.github.io/runtrol/)、リレー接続のスマートフォン PWA、本文を持たない Web Push、Mission 監督 surface を実装した。会話ヘッダーのチップから応答モデルと permission mode を会話中に切り替えられ、選択はその CLI 自身の切り替え surface に中継され、チップはサービスが答えた値だけを表示する(インストール済み実物 Claude Code の journey gate が切り替えと復帰を CLI 自身のアナウンスで検証する)。会話リストのプロジェクト見出しはオペレーターが作るものであり、フォルダーが勝手に見出しになることはない。ペアリング済みデバイスの権限は承認された workspace root に限定される: session index、すべての session コマンド、Mission の読み取りが同じ live root 検証を通り、root の取り消しは即時に効く。provider の準備は provider ごとの lane で並列化され、cold の初回 5 件が直列 18.1 秒に対して 8.7 秒で終わり、新しく開いたフォルダーの既存会話はリフレッシュなしで届く。会話はそれぞれ独立したエディタータブで開き、複数の会話を同時に並べて画面分割でき、入力と中断はそのタブの会話に向かう。拡張の更新後も動き続けていた旧 Core は、マシンがアイドルになった瞬間に新しいビルドへ自ら入れ替わり、更新が再起動なしで実際に届く。active gate は shipped PWA module を production daemon とインストール済み実物 CLI に通し、session、approval、remote disconnect recovery journey を検証する。iOS 実機へのインストールと Web Push の運用確認は未検証の contributor operator evidence として残し、現在の完了範囲とスコアから除外する。以下のスコアの多くが 0 なのは、コードがないからではなく、その軸を断言するゲートがまだない
+> ステータス: **コアと主力 VS Code 拡張を実装し、`Runtrol Studio 0.1.9` を六つの native target 向けに公開した。** live session index、実物 Extension Host と秒間 3,000 frame Webview の性能 ratchet、インストール済み実物 CLI の完全な操作 journey、Marketplace からの clean install、active session を維持する VSIX upgrade と rollback を検証済みである。独立したデスクトップ GUI のコードと実行経路は削除され、VS Code 拡張が唯一の PC surface である。公開 Runtime protocol、Rust と TypeScript SDK、外部 packed consumer gate、署名付き六 target standalone Runtime release pipeline も実装した。確認済み provider channel の自動更新には process exclusion と正確な rollback も実装した。[Marketplace 拡張](https://marketplace.visualstudio.com/items?itemName=runtrol.runtrol-studio)、[GitHub Pages サイト](https://eddmpython.github.io/runtrol/)、リレー接続のスマートフォン PWA、本文を持たない Web Push、Mission 監督 surface を実装した。会話ヘッダーのチップから応答モデルと permission mode を会話中に切り替えられ、選択はその CLI 自身の切り替え surface に中継され、チップはサービスが答えた値だけを表示する(インストール済み実物 Claude Code の journey gate が切り替えと復帰を CLI 自身のアナウンスで検証する)。会話リストのプロジェクト見出しはオペレーターが作るものであり、フォルダーが勝手に見出しになることはない。ペアリング済みデバイスの権限は承認された workspace root に限定される: session index、すべての session コマンド、Mission の読み取りが同じ live root 検証を通り、root の取り消しは即時に効く。provider の準備は provider ごとの lane で並列化され、cold の初回 5 件が直列 18.1 秒に対して 8.7 秒で終わり、新しく開いたフォルダーの既存会話はリフレッシュなしで届く。会話はそれぞれ独立したエディタータブで開き、複数の会話を同時に並べて画面分割でき、入力と中断はそのタブの会話に向かう。拡張の更新後も動き続けていた旧 Core は、マシンがアイドルになった瞬間に新しいビルドへ自ら入れ替わり、更新が再起動なしで実際に届く。active gate は shipped PWA module を production daemon とインストール済み実物 CLI に通し、session、approval、remote disconnect recovery journey を検証する。プロジェクト見出しを一度クリックすると Agent Tools が有効になり、インストール済みコーディングエージェントは project root に限定された七つの公開 Runtime tool で作業を委譲できる。無効化すると provider 登録、Runtime 権限、保護されたローカル資格情報が削除される。iOS 実機へのインストールと Web Push の運用確認は未検証の contributor operator evidence として残し、現在の完了範囲とスコアから除外する。以下のスコアの多くが 0 なのは、コードがないからではなく、その軸を断言するゲートがまだない
 > からである。
 
 The security boundary and default-deny settings are documented in [SECURITY.md](SECURITY.md).
@@ -28,7 +28,7 @@ streaming と background 作業が入力、スクロール、セッション切�
 - **会話選択と workspace 切り替えを結び付ける。** session 選択時に会話とファイル文脈を即座に切り替え、実際の編集が必要な時だけ正確な workspace または worktree を Code-hot にする。会話本文から path を推測しない。
 - **デバイス接続とセッション所有権を分離する。** VS Code とスマートフォンは同じ Core にペアリングされた操作面であり、どちらもセッションを所有しない。ウィンドウ、デバイス、ネットワーク経路が変わっても Core がセッションを維持する。Tailscale など既存のプライベートネットワークは検出時に直結経路として使えるが、ペアリング、push、正しさはそれに依存しない。
 - **人間が常に最優先である。** 長い streaming、複数 agent、build、test の最中でも入力、スクロール、editor、ファイル移動が先に反応する。
-- **薄い境界は変わらない。** credential、transcript、model API key、conversation copy を所有しない。
+- **薄い境界は変わらない。** provider account credential、transcript、model API key、conversation copy を所有しない。
 
 現在の合計は **66/140、平均 4.7/10** である。有効な CI ゲートが立つ軸は十二である。
 10 点は、実際の環境で完結した道筋が繰り返し検証された状態を指す。
@@ -120,6 +120,17 @@ streaming と background 作業が入力、スクロール、セッション切�
 公開リリース `0.1.9` と六つの platform VSIX は [GitHub Releases](https://github.com/eddmpython/runtrol/releases/tag/vscode-v0.1.9) からも取得できる。
 Marketplace からインストールした拡張は VS Code が自動更新する。以前の版を VSIX から直接インストールした場合、VS Code はその拡張の自動更新を無効にするため、Marketplace から一度再インストールする。
 
+## エージェントに Runtrol を使わせる
+
+プロジェクト見出しの sparkle を選び、**Enable Agent Tools for This Project** を実行する。インストール済み
+コーディングエージェントは provider と model を発見し、project session の開始、instruction の送信、
+event の読み取り、正確な session の停止を行える。プロジェクト行に `Agent Tools` と表示されれば準備完了である。
+
+権限はその canonical project root 一つに限定される。approval の応答、会話の削除、暗黙の shared start、
+API key、transcript の複製、Runtrol 所有 agent loop は存在しない。**Disable Agent Tools for This Project**
+は Runtime 権限と OS 保護資格情報を削除し、最後の project を無効化した場合は provider 登録も削除する。
+正確な契約は [Agent Tools](docs/agentTools.md) にある。
+
 ## runtrol が要らない人
 
 **プロバイダーを一つしか使わないなら、そのプロバイダー自身のリモートコントロールの方が良い。これを先に書いておく。**
@@ -136,7 +147,7 @@ Claude アプリに Codex のセッションは永遠に出ない。これは機
 - **チャットクライアントではない。** 会話の描画は各 CLI がすでにやっていることである。runtrol はその出力を運ぶだけで解釈しない。
 - **モデルプロキシではない。** モデル API を呼ばず、トークンを読まず、リクエストを中継しない。設計上の好みではなく生存条件である。
 - **IDE ではない。** diff を見せるところまでが境界で、編集することは境界の外である。
-- **エージェントフレームワークではない。** プランナー、サブエージェントのオーケストレーション、自律ループはない。それは各 CLI の中にすでにあり、そちらの方が上手い。
+- **独自のエージェントフレームワークではない。** Runtrol は planner や autonomous loop を所有しない。provider 所有 agent loop に bounded Runtime tool を提供するが、その loop 自体にはならない。
 - **ホスティングサービスではない。** アカウントもログインも料金プランもない。
 - **ターミナルマルチプレクサではない。** tmux を置き換えるのではなく、**要求しない**ためのものである。
 

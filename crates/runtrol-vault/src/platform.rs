@@ -59,6 +59,8 @@ mod current {
         LocalBlob::new(output, true).copy()
     }
 
+    pub(super) fn delete(_: &AbsPath, _: &[u8]) {}
+
     type Protect = unsafe extern "system" fn(
         *const CRYPT_INTEGER_BLOB,
         windows_sys::core::PCWSTR,
@@ -219,6 +221,28 @@ mod current {
             .map_err(|error| platform("reading the native machine identity", error))
     }
 
+    pub(super) fn delete(path: &AbsPath, protected: &[u8]) -> Result<(), VaultError> {
+        let expected = account_for(path);
+        if protected != expected.as_bytes() {
+            return Err(VaultError::platform_detail(
+                "binding the native protected-secret entry for deletion",
+                "the vault lookup identifier does not match its canonical path",
+            ));
+        }
+        match entry(
+            &expected,
+            "opening the native protected-secret entry for deletion",
+        )?
+        .delete_credential()
+        {
+            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+            Err(error) => Err(platform(
+                "deleting the native protected-secret entry",
+                error,
+            )),
+        }
+    }
+
     fn account_for(path: &AbsPath) -> String {
         let mut hasher = Sha256::new();
         hasher.update(ACCOUNT_DOMAIN);
@@ -269,4 +293,14 @@ pub(crate) fn protect(path: &AbsPath, plaintext: &[u8]) -> Result<Vec<u8>, Vault
 
 pub(crate) fn unprotect(path: &AbsPath, ciphertext: &[u8]) -> Result<Vec<u8>, VaultError> {
     current::unprotect(path, ciphertext)
+}
+
+#[cfg(windows)]
+pub(crate) fn delete(path: &AbsPath, ciphertext: &[u8]) {
+    current::delete(path, ciphertext);
+}
+
+#[cfg(not(windows))]
+pub(crate) fn delete(path: &AbsPath, ciphertext: &[u8]) -> Result<(), VaultError> {
+    current::delete(path, ciphertext)
 }

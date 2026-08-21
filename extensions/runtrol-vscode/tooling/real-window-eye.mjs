@@ -37,6 +37,7 @@ await stat(core);
 const folder = path.resolve(process.env.RUNTROL_EYE_FOLDER || repositoryRoot);
 await stat(folder);
 const providerId = process.env.RUNTROL_EYE_PROVIDER || "claude";
+const eyeEntry = process.env.RUNTROL_EYE_ENTRY || "realWindowEye";
 const outDir = path.resolve(process.env.RUNTROL_EYE_OUT || path.join(os.tmpdir(), "runtrol-eye"));
 await mkdir(outDir, { recursive: true });
 
@@ -67,7 +68,14 @@ const runtrolHome = runtimeState.home;
 const workspaceFile = path.join(temporary, "runtrol-eye.code-workspace");
 const titleMatch = "runtrol-eye (Workspace)";
 
-const environment = runtimeState.environment;
+const environment = { ...runtimeState.environment };
+if (eyeEntry === "agentToolsEye") {
+  // Agent Tools intentionally changes provider MCP configuration. The focused eye pass receives clean provider
+  // homes inside this harness's owned temporary directory, so proving the shipped command can never mutate the
+  // operator's own Claude or Codex configuration.
+  environment.CLAUDE_CONFIG_DIR = path.join(temporary, "claude");
+  environment.CODEX_HOME = path.join(temporary, "codex");
+}
 
 let daemon = null;
 let daemonStderr = "";
@@ -81,6 +89,12 @@ try {
   await mkdir(path.join(userData, "User"), { recursive: true });
   await mkdir(extensions, { recursive: true });
   await mkdir(runtrolHome, { recursive: true });
+  if (eyeEntry === "agentToolsEye") {
+    await Promise.all([
+      mkdir(environment.CLAUDE_CONFIG_DIR, { recursive: true }),
+      mkdir(environment.CODEX_HOME, { recursive: true }),
+    ]);
+  }
   await writeFile(workspaceFile, JSON.stringify({ folders: [{ path: folder }] }), "utf8");
   await writeFile(
     path.join(userData, "User", "settings.json"),
@@ -108,7 +122,7 @@ try {
   await build({
     // RUNTROL_EYE_ENTRY names another entry under src/integration (a focused probe); the poses it announces
     // are photographed the same way.
-    entryPoints: [path.join(extensionRoot, "src", "integration", `${process.env.RUNTROL_EYE_ENTRY || "realWindowEye"}.test.ts`)],
+    entryPoints: [path.join(extensionRoot, "src", "integration", `${eyeEntry}.test.ts`)],
     outfile: testEntry,
     bundle: true,
     external: ["vscode"],
@@ -155,7 +169,9 @@ try {
   // host, so nothing inside the test runner survives to press the next key. A plain (non-test) isolated window
   // is opened on this repository, Ctrl+K Ctrl+Shift+P picks another project, the title changes, Ctrl+K Ctrl+B
   // brings it back, the title changes back; both photographed.
-  const back = await backProof(testEnvironment);
+  const back = eyeEntry === "realWindowEye"
+    ? await backProof(testEnvironment)
+    : { skipped: `focused ${eyeEntry} eye pass` };
   process.stdout.write(`RUNTROL_EYE ${JSON.stringify({ ...result, back, outDir })}\n`);
 } catch (error) {
   const progress = await readFile(resultPath, "utf8").then((text) => JSON.parse(text)).catch(() => null);

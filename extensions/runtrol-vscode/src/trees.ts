@@ -77,7 +77,7 @@ export class ServiceProblemItem extends vscode.TreeItem {
 /// is a heading, the way the Codex and Claude sidebars draw them. What is still never drawn is an empty folder
 /// nobody created: a discovered heading lives exactly as long as a conversation names that folder.
 export class ProjectItem extends vscode.TreeItem {
-  constructor(readonly group: ProjectGroup) {
+  constructor(readonly group: ProjectGroup, agentToolsEnabled = false) {
     super(
       group.name,
       // A project with nothing in it yet has nothing to disclose, so it draws as a plain row whose only invite
@@ -91,14 +91,17 @@ export class ProjectItem extends vscode.TreeItem {
           : vscode.TreeItemCollapsibleState.Collapsed,
     );
     this.id = group.key;
-    this.description = projectDetail(group);
+    const detail = projectDetail(group);
+    this.description = agentToolsEnabled ? `${detail} · Agent Tools` : detail;
     // What the heading offers depends on why it exists and whether it is this window. The move button draws
     // only on headings that are not this window: opening the folder you are already in is not a move, and the
     // contract (memory/uxContract.md) wants moving to be the one explicit act. Rename and remove belong to
     // created projects; a discovered or open folder offers "make this a project" instead.
     this.contextValue = projectContextValue(group);
     this.resourceUri = vscode.Uri.file(group.workspace);
-    this.tooltip = group.workspace;
+    this.tooltip = agentToolsEnabled
+      ? `${group.workspace}\nAgent Tools enabled for this project`
+      : group.workspace;
     this.iconPath = group.attention > 0
       ? new vscode.ThemeIcon("folder", new vscode.ThemeColor("notificationsWarningIcon.foreground"))
       : new vscode.ThemeIcon(group.current ? "folder-opened" : "folder");
@@ -118,6 +121,11 @@ export type ChatTreeItem = ConversationItem | ServiceProblemItem | ProjectItem;
 /// Where the tree learns which projects the operator has created, without owning their storage.
 export type ProjectsPort = {
   all(): readonly ProjectRecord[];
+  onDidChange(listener: () => void): { dispose(): void };
+};
+
+export type AgentToolsPort = {
+  enabled(workspace: string): boolean;
   onDidChange(listener: () => void): { dispose(): void };
 };
 
@@ -200,6 +208,7 @@ export class ConversationsTree implements vscode.TreeDataProvider<ChatTreeItem>,
   readonly onDidChangeTreeData = this.changedEmitter.event;
   private readonly subscription: vscode.Disposable;
   private readonly projectSubscription: { dispose(): void };
+  private readonly agentToolsSubscription: { dispose(): void } | null;
   private items: ChatTreeItem[] | undefined;
   /// The heading each conversation belongs under, by conversation key. Empty while the list is flat.
   private parents: Map<string, ProjectItem> | undefined;
@@ -227,12 +236,17 @@ export class ConversationsTree implements vscode.TreeDataProvider<ChatTreeItem>,
   constructor(
     private readonly state: RuntimeState,
     private readonly projectRecords: ProjectsPort,
+    private readonly agentTools: AgentToolsPort | null = null,
     private readonly now: () => number = () => Date.now(),
   ) {
     this.projectSubscription = projectRecords.onDidChange(() => {
       this.forgetItems();
       this.changedEmitter.fire(undefined);
     });
+    this.agentToolsSubscription = agentTools?.onDidChange(() => {
+      this.forgetItems();
+      this.changedEmitter.fire(undefined);
+    }) ?? null;
     this.subscription = state.onDidChange((change) => {
       if (change === "selection") {
         // Selection changes which row is scrolled to, not what any row says. No `ConversationItem` reads
@@ -303,6 +317,7 @@ export class ConversationsTree implements vscode.TreeDataProvider<ChatTreeItem>,
     this.forgetItems();
     this.subscription.dispose();
     this.projectSubscription.dispose();
+    this.agentToolsSubscription?.dispose();
     this.decorations.dispose();
     this.changedEmitter.dispose();
   }
@@ -415,7 +430,7 @@ export class ConversationsTree implements vscode.TreeDataProvider<ChatTreeItem>,
 
     const headings: ProjectItem[] = [];
     for (const group of groups) {
-      const heading = new ProjectItem(group);
+      const heading = new ProjectItem(group, this.agentTools?.enabled(group.workspace) ?? false);
       headings.push(heading);
       grouped.set(group.key, group.rows);
       // The parent map is the cheap half and reveal needs it immediately, so it is built now. The rows

@@ -221,6 +221,7 @@ Two contracts keep the conversation window from growing a branch per place or pe
 | `core/framing.ts` | bounded four-byte frame transport | request meaning or conversation rendering |
 | `protocol.ts` | TypeScript projection of the Rust wire | provider-specific fields |
 | `runtimeClient.ts` | approved public Runtime identity, validated-locator lifetime, inventory, lifecycle, and streams | provider credentials or conversation storage |
+| `agentTools.ts` | exact Core enable, disable, and list commands plus in-memory project badge state | provider configuration, integration secrets, or Runtime grant policy |
 | `state.ts` | provider, session, cursor, and selection metadata in memory | conversation frames |
 | `selectionStore.ts` | one bounded selected-session identifier | prompts, replies, or provider state |
 | `controller.ts` | user actions, one watch lifetime, workspace binding | transcript discovery or agent loops |
@@ -253,6 +254,19 @@ one exact project version. Approval opens the built-in VS Code file or diff revi
 and archive are also modal local actions. Candidate bodies stay in project files, and no action injects those bodies
 into a Task. The detailed contracts are [Mission operations](missionOperations.md) and
 [project capability trust](capabilityTrust.md).
+
+## Agent Tools surface
+
+Every project heading offers **Enable Agent Tools for This Project** as an inline action. The heading appends
+`Agent Tools` after Core confirms the canonical project root, and one `tools list` call restores all enabled badges
+after activation, including in a window with no open folder. Disable is available from the same heading and the
+command palette.
+
+The Extension Host passes one absolute project path as one argv word to the exact managed Core. It does not receive
+an integration secret, inspect provider configuration, or implement grant policy. Core owns official provider MCP
+registration, Runtime enrollment, protected credential lifecycle, and revocation. Changes are serialized inside one
+Extension Host, while the daemon's provider lanes serialize official configuration commands across windows. The full
+authority and protocol contract is [Agent Tools](agentTools.md).
 
 ## Performance contract
 
@@ -325,7 +339,8 @@ specified in [automatic updates](automaticUpdates.md).
 | `vscodeExtension` | thin extension boundary, TypeScript, framing, storage, queue, renderer, and bundle limits |
 | `vscodeHostPerformance` | real 30-session Extension Host and Webview responsiveness on three operating systems |
 | `vscodeRealProviderJourney` | installed provider discovery and a complete real CLI control journey |
-| `node tooling/real-window-eye.mjs` | the eye pass: an isolated VS Code window and an isolated Runtime with the real installed CLIs, real folders and real conversations, photographed in the draft, conversation, tabs, reopened, grid, places, diff and diff-editor poses, with a real throwaway deletion; the pictures are the judgement. `RUNTROL_EYE_ENTRY=placeProbe` runs the focused place probe instead |
+| `node tooling/real-window-eye.mjs` | the eye pass: an isolated VS Code window and an isolated Runtime with the real installed CLIs, real folders and real conversations, photographed in the draft, conversation, tabs, reopened, grid, places, diff and diff-editor poses, with a real throwaway deletion; the pictures are the judgement. `RUNTROL_EYE_ENTRY=placeProbe` runs the focused place probe and `RUNTROL_EYE_ENTRY=agentToolsEye` runs the zero-model-turn Agent Tools enable and revoke proof in isolated provider homes |
+| `agentToolsSmoke` | real installed provider CLIs, official MCP registration, modern and legacy discovery, fixed tool catalogue, root isolation, Runtime reads, complete revocation, and post-revocation default deny with zero model turns |
 | `missionGrowthContracts` | Mission state, exact Send, evidence, integration, capability trust, local scope, tamper, and rollback |
 | `missionLiveJourney` | two installed provider CLIs complete five reviewed Tasks and an explicit reuse, tamper, and rollback journey through production IPC |
 | `vscodePackage` | six-target SSOT, exact archive contents, Core bytes, workflow integrity, and listing metadata |

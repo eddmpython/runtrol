@@ -16,6 +16,11 @@ The public product has three surfaces with distinct jobs:
 
 The Core is the only session owner. Closing VS Code, closing the PWA, or changing the network route does not transfer ownership to another surface.
 
+Installed coding agents may also reach the Core through the project-scoped [Agent Tools](agentTools.md) MCP surface.
+That is an agent-facing Runtime adapter, not a fourth user interface or another session owner. Studio enables and
+revokes it; the provider-owned agent loop chooses calls; Core keeps the same workspace, lease, approval, and process
+boundaries.
+
 ## Why there is no separate desktop GUI
 
 A second PC window would duplicate session navigation, workspace selection, keyboard behavior, accessibility work, packaging, signing, update policy, and performance gates. It would also split the user's attention from the editor where repository work already happens.

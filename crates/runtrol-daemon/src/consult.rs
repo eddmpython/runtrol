@@ -8,16 +8,19 @@
 //!
 //! # Where the truth lives
 //!
-//! In the registering CLI's configuration, asked for fresh with its own `get` command every time. A copy held
-//! here would be a second place for the state to live, and the operator can change the first place without
-//! runtrol in the room.
+//! In the registering CLI's configuration, asked for fresh with its own `get` command every time. The driver
+//! reads back the command, arguments, environment, working directory, and enabled state that the CLI exposes,
+//! so a matching name never becomes permission to overwrite or remove somebody else's entry. A copy held here
+//! would be a second place for the state to live, and the operator can change the first place without runtrol in
+//! the room.
 //!
 //! # Why every judgement runs against a control name
 //!
 //! Measured: one CLI answers a subcommand it does not have by printing its parent help and exiting zero. An
 //! exit code alone therefore proves nothing. Every `get` is judged beside the same command run with an
-//! invented name that must not exist: only "the real name succeeds and the invented one fails" reads as
-//! wired, and a CLI that answers both the same way is reported as unreadable rather than guessed about.
+//! invented name that must not exist. Only "the real name succeeds, the invented one fails, and the real
+//! command reads back exactly" counts as wired. A CLI that answers both names the same way or changes its
+//! readback shape is reported as unreadable rather than guessed about.
 //!
 //! # Why the server is asked for its tool list before anything is registered
 //!
@@ -28,7 +31,7 @@
 use core::time::Duration;
 
 use runtrol_childproc::{Output, Program, capture, capture_with_input};
-use runtrol_drivers::{ConsultTool, McpConsultServer, McpRegistrar};
+use runtrol_drivers::{ConsultTool, McpConsultServer, McpRegistrar, McpRegistrationState};
 use runtrol_ipc::wire::{ConsultLine, ConsultState, Request, Response};
 use runtrol_provider::ProviderId;
 
@@ -46,6 +49,9 @@ const CONSULT_DEADLINE: Duration = Duration::from_secs(15);
 /// Same doctrine as the probe's control flags: a CLI's answer about the real name means nothing until the
 /// same question about a name nobody registered is answered differently.
 const CONTROL_NAME: &str = "runtrolConsultAbsentControl";
+
+/// The stable entry coding agents see in their provider's MCP catalogue.
+const AGENT_TOOLS_NAME: &str = "runtrolTools";
 
 /// The `tools/list` question, written whole and closed, the shape [`capture_with_input`] exists for.
 ///
@@ -72,6 +78,14 @@ pub(crate) async fn answer(composed: &Composed, request: &Request) -> Response {
         Request::Consult => Response::Consult(status(composed).await),
         Request::ConsultWire { from, to } => change(composed, from, to, Change::Wire).await,
         Request::ConsultUnwire { from, to } => change(composed, from, to, Change::Unwire).await,
+        Request::AgentToolsWire => match wire_agent_tools(composed).await {
+            Ok(()) => Response::Done,
+            Err(why) => refuse(&why),
+        },
+        Request::AgentToolsUnwire => match unwire_agent_tools(composed).await {
+            Ok(()) => Response::Done,
+            Err(why) => refuse(&why),
+        },
         _ => refuse("consult preparation does not belong to this request"),
     }
 }
@@ -80,8 +94,243 @@ pub(crate) async fn answer(composed: &Composed, request: &Request) -> Response {
 pub(crate) const fn is_consult(request: &Request) -> bool {
     matches!(
         request,
-        Request::Consult | Request::ConsultWire { .. } | Request::ConsultUnwire { .. }
+        Request::Consult
+            | Request::ConsultWire { .. }
+            | Request::ConsultUnwire { .. }
+            | Request::AgentToolsWire
+            | Request::AgentToolsUnwire
     )
+}
+
+/// One installed provider whose official CLI can register the Agent Tools server.
+struct AgentRegistrar {
+    provider: Box<str>,
+    program: Program,
+    registrar: McpRegistrar,
+}
+
+fn agent_registrars(composed: &Composed) -> Vec<AgentRegistrar> {
+    let mut targets = Vec::new();
+    for provider in composed.registry.all() {
+        let Some(kind) = composed.driver_for(provider.manifest.kind.as_str()) else {
+            continue;
+        };
+        let Some(registrar) = kind.consult.registrar else {
+            continue;
+        };
+        let Ok(program) = runtrol_core::locate(&provider.manifest) else {
+            continue;
+        };
+        targets.push(AgentRegistrar {
+            provider: provider.id().as_str().into(),
+            program,
+            registrar,
+        });
+    }
+    targets
+}
+
+fn this_executable() -> Result<Program, String> {
+    let executable = std::env::current_exe()
+        .map_err(|error| format!("cannot locate this runtrol executable: {error}"))?;
+    let executable = executable
+        .to_str()
+        .ok_or_else(|| "this runtrol executable path is not UTF-8".to_owned())?;
+    runtrol_childproc::resolve(executable).map_err(|error| error.to_string())
+}
+
+/// Remove the Agent Tools registration through each provider's official CLI and verify it is gone.
+async fn unwire_agent_tools(composed: &Composed) -> Result<(), String> {
+    let server_program = this_executable()?;
+    let expected_args = ["mcp"];
+    let targets = agent_registrars(composed);
+
+    // Ownership is proved everywhere before the first mutation. A collision in one provider must not leave
+    // the other provider half-unwired, and a name alone is never authority to remove somebody else's entry.
+    let mut owned = Vec::new();
+    for target in &targets {
+        match exact_registration(
+            composed,
+            &target.program,
+            &target.registrar,
+            AGENT_TOOLS_NAME,
+            server_program.path().as_str(),
+            &expected_args,
+        )
+        .await?
+        {
+            None => {}
+            Some(McpRegistrationState::ExactEnabled | McpRegistrationState::ExactDisabled) => {
+                owned.push(target);
+            }
+            Some(McpRegistrationState::Different) => {
+                return Err(format!(
+                    "{} has an MCP entry named {AGENT_TOOLS_NAME}, but it is not this exact runtrol executable. runtrol left it untouched",
+                    target.provider
+                ));
+            }
+        }
+    }
+
+    let mut failures = Vec::new();
+    for target in owned {
+        if let Err(why) = remove_registration(composed, target, AGENT_TOOLS_NAME).await {
+            failures.push(why);
+        }
+    }
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(failures.join("; "))
+    }
+}
+
+/// Register this exact executable's bounded Agent Tools server in every usable CLI registrar.
+async fn wire_agent_tools(composed: &Composed) -> Result<(), String> {
+    let server_program = this_executable()?;
+    verify_agent_tools(composed, &server_program).await?;
+    let targets = agent_registrars(composed);
+    if targets.is_empty() {
+        return Err(
+            "no installed provider CLI exposes an official MCP registration command in this build"
+                .to_owned(),
+        );
+    }
+
+    let expected_args = ["mcp"];
+    let mut missing = Vec::new();
+    for target in &targets {
+        match exact_registration(
+            composed,
+            &target.program,
+            &target.registrar,
+            AGENT_TOOLS_NAME,
+            server_program.path().as_str(),
+            &expected_args,
+        )
+        .await?
+        {
+            None => missing.push(target),
+            Some(McpRegistrationState::ExactEnabled) => {}
+            Some(McpRegistrationState::ExactDisabled) => {
+                return Err(format!(
+                    "{} has this exact {AGENT_TOOLS_NAME} entry disabled. enable or remove it in that CLI before retrying",
+                    target.provider
+                ));
+            }
+            Some(McpRegistrationState::Different) => {
+                return Err(format!(
+                    "{} already has an MCP entry named {AGENT_TOOLS_NAME} that points somewhere else. runtrol will not overwrite it",
+                    target.provider
+                ));
+            }
+        }
+    }
+
+    let mut added: Vec<&AgentRegistrar> = Vec::new();
+    for target in missing {
+        let mut add: Vec<&str> = target.registrar.add.to_vec();
+        add.extend([
+            AGENT_TOOLS_NAME,
+            "--",
+            server_program.path().as_str(),
+            "mcp",
+        ]);
+        let add_output = match ask(composed, &target.program, &add, &[]).await {
+            Ok(output) => output,
+            Err(why) => {
+                return Err(with_agent_tools_rollback(composed, &added, why).await);
+            }
+        };
+        match exact_registration(
+            composed,
+            &target.program,
+            &target.registrar,
+            AGENT_TOOLS_NAME,
+            server_program.path().as_str(),
+            &expected_args,
+        )
+        .await
+        {
+            Ok(Some(McpRegistrationState::ExactEnabled)) => added.push(target),
+            Ok(state) => {
+                let why = format!(
+                    "{} did not register the exact enabled Agent Tools entry ({state:?}). it said: {}",
+                    target.provider,
+                    said(&add_output)
+                );
+                return Err(with_agent_tools_rollback(composed, &added, why).await);
+            }
+            Err(why) => {
+                return Err(with_agent_tools_rollback(composed, &added, why).await);
+            }
+        }
+    }
+    Ok(())
+}
+
+async fn with_agent_tools_rollback(
+    composed: &Composed,
+    added: &[&AgentRegistrar],
+    why: String,
+) -> String {
+    let mut rollback_failures = Vec::new();
+    for target in added.iter().rev() {
+        if let Err(error) = remove_registration(composed, target, AGENT_TOOLS_NAME).await {
+            rollback_failures.push(error);
+        }
+    }
+    if rollback_failures.is_empty() {
+        why
+    } else {
+        format!(
+            "{why}; rollback also failed: {}",
+            rollback_failures.join("; ")
+        )
+    }
+}
+
+async fn remove_registration(
+    composed: &Composed,
+    target: &AgentRegistrar,
+    name: &str,
+) -> Result<(), String> {
+    let removed = ask(composed, &target.program, target.registrar.remove, &[name]).await?;
+    if registration(composed, &target.program, &target.registrar, name)
+        .await?
+        .is_some()
+    {
+        Err(format!(
+            "{} still has {name} registered after removal. it said: {}",
+            target.provider,
+            said(&removed)
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+/// Ask the exact local MCP server for its catalogue before any provider configuration changes.
+async fn verify_agent_tools(composed: &Composed, program: &Program) -> Result<(), String> {
+    let output = capture_with_input(
+        program,
+        &["mcp".to_owned()],
+        TOOLS_LIST_HANDSHAKE,
+        CONSULT_DEADLINE,
+        &composed.containment,
+    )
+    .await
+    .map_err(|error| error.to_string())?;
+    let names = tools_named(&output.stdout);
+    if names.iter().any(|name| name == "runtrol_start")
+        && names.iter().any(|name| name == "runtrol_send")
+    {
+        return Ok(());
+    }
+    Err(format!(
+        "this runtrol executable did not expose the required Agent Tools catalogue. it said: {}",
+        said(&output)
+    ))
 }
 
 /// Which way a toggle is being flipped.
@@ -175,33 +424,54 @@ async fn line_of(composed: &Composed, direction: &Direction<'_>) -> ConsultLine 
         Ok(program) => program,
         Err(error) => return line(ConsultState::Unsupported, Some(error.to_string())),
     };
-    match registered(
+    let (to_name, _) = match runtrol_core::locate_named(&direction.to.manifest) {
+        Ok(located) => located,
+        Err(error) => return line(ConsultState::Unsupported, Some(error.to_string())),
+    };
+    let name = consult_name(direction.to.id());
+    match exact_registration(
         composed,
         &from_program,
         &wireable.registrar,
-        &consult_name(direction.to.id()),
+        &name,
+        to_name,
+        wireable.server.serve,
     )
     .await
     {
-        Ok(true) => line(ConsultState::Wired, None),
-        Ok(false) => line(ConsultState::Unwired, None),
+        Ok(Some(McpRegistrationState::ExactEnabled)) => line(ConsultState::Wired, None),
+        Ok(None) => line(ConsultState::Unwired, None),
+        Ok(Some(McpRegistrationState::ExactDisabled)) => line(
+            ConsultState::Unsupported,
+            Some(format!(
+                "the {name} registration is exact but disabled in {}",
+                direction.from.id()
+            )),
+        ),
+        Ok(Some(McpRegistrationState::Different)) => line(
+            ConsultState::Unsupported,
+            Some(format!(
+                "{} already has a different MCP entry named {name}; runtrol will not overwrite or remove it",
+                direction.from.id()
+            )),
+        ),
         Err(why) => line(ConsultState::Unsupported, Some(why)),
     }
 }
 
-/// Whether `name` is registered in the CLI behind `program`, judged beside the control name.
+/// Read one present registration from the CLI behind `program`, judged beside the control name.
 ///
 /// # Errors
 ///
 /// A sentence, when the CLI's answers cannot be told apart or it could not be run at all.
-async fn registered(
+async fn registration(
     composed: &Composed,
     program: &Program,
     registrar: &McpRegistrar,
     name: &str,
-) -> Result<bool, String> {
-    let target = ask(composed, program, registrar.get, &[name]).await?;
-    let control = ask(composed, program, registrar.get, &[CONTROL_NAME]).await?;
+) -> Result<Option<Output>, String> {
+    let target = get_registration(composed, program, registrar, name).await?;
+    let control = get_registration(composed, program, registrar, CONTROL_NAME).await?;
     if control.succeeded() {
         // The CLI treated a name nobody registered as existing, which is what an absent subcommand looks
         // like on the CLI that answers those with its parent help. Nothing can be concluded from the target.
@@ -210,7 +480,53 @@ async fn registered(
             program.path()
         ));
     }
-    Ok(target.succeeded())
+    Ok(target.succeeded().then_some(target))
+}
+
+async fn get_registration(
+    composed: &Composed,
+    program: &Program,
+    registrar: &McpRegistrar,
+    name: &str,
+) -> Result<Output, String> {
+    let words: Vec<&str> = registrar
+        .get
+        .iter()
+        .copied()
+        .chain(core::iter::once(name))
+        .chain(registrar.get_suffix.iter().copied())
+        .collect();
+    ask(composed, program, &words, &[]).await
+}
+
+/// Classify a present registration against one exact authority-free stdio command.
+async fn exact_registration(
+    composed: &Composed,
+    program: &Program,
+    registrar: &McpRegistrar,
+    name: &str,
+    command: &str,
+    args: &[&str],
+) -> Result<Option<McpRegistrationState>, String> {
+    let Some(output) = registration(composed, program, registrar, name).await? else {
+        return Ok(None);
+    };
+    if output.truncated {
+        return Err(format!(
+            "{} returned a truncated registration readback for {name}, so runtrol cannot prove who owns it",
+            program.path()
+        ));
+    }
+    registrar
+        .registration_state(&output.stdout, name, command, args)
+        .map(Some)
+        .map_err(|why| {
+            format!(
+                "{} returned an unreadable registration for {name}: {why}. it said: {}",
+                program.path(),
+                said(&output)
+            )
+        })
 }
 
 /// Flip one direction, then answer with the same full status a status request gets.
@@ -236,10 +552,37 @@ async fn change(composed: &Composed, from: &str, to: &str, how: Change) -> Respo
         Ok(program) => program,
         Err(error) => return refuse(&error.to_string()),
     };
+    let (to_name, to_program) = match runtrol_core::locate_named(&direction.to.manifest) {
+        Ok(located) => located,
+        Err(error) => return refuse(&error.to_string()),
+    };
     let name = consult_name(to_id);
-    let already = match registered(composed, &from_program, &wireable.registrar, &name).await {
-        Ok(wired) => wired,
+    let state = match exact_registration(
+        composed,
+        &from_program,
+        &wireable.registrar,
+        &name,
+        to_name,
+        wireable.server.serve,
+    )
+    .await
+    {
+        Ok(state) => state,
         Err(why) => return refuse(&why),
+    };
+    let already = match state {
+        Some(McpRegistrationState::ExactEnabled) => true,
+        None => false,
+        Some(McpRegistrationState::ExactDisabled) => {
+            return refuse(&format!(
+                "the {name} registration is exact but disabled in {from}"
+            ));
+        }
+        Some(McpRegistrationState::Different) => {
+            return refuse(&format!(
+                "{from} already has a different MCP entry named {name}; runtrol will not overwrite or remove it"
+            ));
+        }
     };
 
     let outcome = match how {
@@ -247,7 +590,18 @@ async fn change(composed: &Composed, from: &str, to: &str, how: Change) -> Respo
         // for a transition, and refusing would make the toggle order-sensitive for no one's benefit.
         Change::Wire if already => Ok(()),
         Change::Unwire if !already => Ok(()),
-        Change::Wire => wire(composed, direction, &wireable, &from_program, &name).await,
+        Change::Wire => {
+            wire(
+                composed,
+                direction,
+                &wireable,
+                &from_program,
+                &name,
+                to_name,
+                &to_program,
+            )
+            .await
+        }
         Change::Unwire => unwire(composed, &wireable, &from_program, &name).await,
     };
     match outcome {
@@ -263,14 +617,13 @@ async fn wire(
     wireable: &Wireable,
     from_program: &Program,
     name: &str,
+    to_name: &str,
+    to_program: &Program,
 ) -> Result<(), String> {
     // The counterpart's server command, as it will be written into the registering CLI's configuration: the
     // candidate name rather than a resolved path, because a path goes stale on the counterpart's next update
     // while the name keeps meaning "whatever is installed".
-    let (to_name, to_program) =
-        runtrol_core::locate_named(&direction.to.manifest).map_err(|error| error.to_string())?;
-
-    verify_consult_tool(composed, &to_program, &wireable.server, wireable.tool).await?;
+    verify_consult_tool(composed, to_program, &wireable.server, wireable.tool).await?;
 
     let mut add: Vec<&str> = wireable.registrar.add.to_vec();
     add.push(name);
@@ -281,14 +634,22 @@ async fn wire(
 
     // The add's own exit code is not the judgement, because the CLI that answers absent subcommands with
     // help also exits zero for them. The get that follows is.
-    if registered(composed, from_program, &wireable.registrar, name).await? {
-        Ok(())
-    } else {
-        Err(format!(
-            "{} did not register {name}. it said: {}",
+    match exact_registration(
+        composed,
+        from_program,
+        &wireable.registrar,
+        name,
+        to_name,
+        wireable.server.serve,
+    )
+    .await?
+    {
+        Some(McpRegistrationState::ExactEnabled) => Ok(()),
+        state => Err(format!(
+            "{} did not register the exact enabled {name} entry ({state:?}). it said: {}",
             direction.from.id(),
             said(&added)
-        ))
+        )),
     }
 }
 
@@ -300,7 +661,10 @@ async fn unwire(
     name: &str,
 ) -> Result<(), String> {
     let removed = ask(composed, from_program, wireable.registrar.remove, &[name]).await?;
-    if registered(composed, from_program, &wireable.registrar, name).await? {
+    if registration(composed, from_program, &wireable.registrar, name)
+        .await?
+        .is_some()
+    {
         Err(format!(
             "the registration {name} is still there after removal. the CLI said: {}",
             said(&removed)

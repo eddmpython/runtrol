@@ -24,6 +24,20 @@ const ALLOWED_EDGES: &[(&str, &[&str])] = &[
     ("runtrol-runtime-protocol", &[]),
     // Public consumer SDK. Its only workspace dependency is the public wire contract.
     ("runtrol-runtime-client", &["runtrol-runtime-protocol"]),
+    // Agent Tools is a top-level local surface over the public Runtime. It can ask private local administration
+    // only to approve its own proved enrollment and register through provider-owned CLI commands.
+    (
+        "runtrol-agent-tools",
+        &[
+            "runtrol-provider",
+            "runtrol-core",
+            "runtrol-vault",
+            "runtrol-runtime-protocol",
+            "runtrol-runtime-client",
+            "runtrol-ipc",
+            "runtrol-cli",
+        ],
+    ),
     // Mission evidence accepts provider identities but no conversation-capable events or control layers.
     ("runtrol-ledger", &["runtrol-provider"]),
     (
@@ -98,6 +112,7 @@ const ALLOWED_EDGES: &[(&str, &[&str])] = &[
     (
         "runtrol",
         &[
+            "runtrol-agent-tools",
             "runtrol-cli",
             "runtrol-daemon",
             "runtrol-drivers",

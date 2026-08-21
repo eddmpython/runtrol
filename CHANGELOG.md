@@ -12,6 +12,17 @@ and refactoring that no user can observe do not belong here.
 
 ### Added
 
+- A project heading can enable **Agent Tools** in one click. The installed coding-agent CLIs receive one
+  provider-neutral MCP server through their own official registration commands, then can discover providers and
+  models, list project sessions, start exclusive work, send unchanged instructions, read bounded events, and stop
+  exact sessions through the public Runtime. Each project has its own root-bound, OS-protected identity; approvals,
+  shared starts, deletion, provider secrets, transcript copies, and a Runtrol-owned agent loop remain outside the
+  tool catalogue. Disabling the last project removes provider registrations, Runtime authority, and local
+  credentials. An existing or externally replaced registration is never overwritten or removed: exact ownership is
+  proved through each provider's official readback, and a failed first enable rolls its new Runtime authority back.
+  The project badge, real installed CLI smoke, outside-root denial, and complete revocation have been verified with
+  zero model turns.
+
 - The sidebar now lists conversations from folders this window has never opened. Each coding
   service is asked about the whole machine in one question instead of once per approved folder,
   which is what those services were already willing to answer: measured against the installed

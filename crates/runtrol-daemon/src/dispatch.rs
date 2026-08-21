@@ -180,6 +180,10 @@ pub(crate) enum ConsultAsked {
         /// The provider being unregistered.
         to: Box<str>,
     },
+    /// This executable being registered as Agent Tools in every usable provider CLI.
+    AgentToolsWire,
+    /// This executable's Agent Tools registration being removed from every usable provider CLI.
+    AgentToolsUnwire,
 }
 
 impl ConsultAsked {
@@ -195,6 +199,8 @@ impl ConsultAsked {
                 from: from.clone(),
                 to: to.clone(),
             }),
+            Request::AgentToolsWire => Some(Self::AgentToolsWire),
+            Request::AgentToolsUnwire => Some(Self::AgentToolsUnwire),
             _ => None,
         }
     }
@@ -1510,7 +1516,9 @@ pub(crate) fn answer_prepared(
         // answer must be the one computed for this exact request, the rule every prepared result follows.
         consult @ (Request::Consult
         | Request::ConsultWire { .. }
-        | Request::ConsultUnwire { .. }) => match prepared {
+        | Request::ConsultUnwire { .. }
+        | Request::AgentToolsWire
+        | Request::AgentToolsUnwire) => match prepared {
             Prepared::Consult { asked, response }
                 if ConsultAsked::of(&consult).as_ref() == Some(&asked) =>
             {

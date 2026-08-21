@@ -25,7 +25,9 @@ pub mod consult;
 pub mod framing;
 pub mod kinds;
 
-pub use consult::{ConsultSurface, ConsultTool, McpConsultServer, McpRegistrar};
+pub use consult::{
+    ConsultSurface, ConsultTool, McpConsultServer, McpReadback, McpRegistrar, McpRegistrationState,
+};
 pub use framing::{FrameError, Incoming, LineError, Lines, Pending, RequestId};
 pub use kinds::{DriverContext, DriverKind, KINDS, MANIFESTS, MakeDriver};
 

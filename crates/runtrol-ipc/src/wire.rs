@@ -541,6 +541,15 @@ pub enum Request {
         /// The CLI being unregistered.
         to: Box<str>,
     },
+
+    /// Register this exact runtrol executable as an Agent Tools MCP server in every usable provider CLI.
+    ///
+    /// Each provider's own official registration command performs the change. No provider configuration file
+    /// is read or written by runtrol.
+    AgentToolsWire,
+
+    /// Remove this exact runtrol Agent Tools MCP registration through every usable provider CLI.
+    AgentToolsUnwire,
 }
 
 /// What the daemon answers.
@@ -1466,6 +1475,8 @@ mod tests {
                 from: "claude".into(),
                 to: "codex".into(),
             },
+            Request::AgentToolsWire,
+            Request::AgentToolsUnwire,
         ] {
             let back = round_trip_request(&request);
             assert_eq!(

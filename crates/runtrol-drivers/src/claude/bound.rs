@@ -212,6 +212,8 @@ pub const CONSULT: crate::consult::ConsultSurface = crate::consult::ConsultSurfa
         add: &["mcp", "add", "--scope", "user"],
         remove: &["mcp", "remove", "--scope", "user"],
         get: &["mcp", "get"],
+        get_suffix: &[],
+        readback: crate::consult::McpReadback::LabeledText,
     }),
     server: Some(crate::consult::McpConsultServer {
         serve: &["mcp", "serve"],

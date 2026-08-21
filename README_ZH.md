@@ -4,7 +4,7 @@
 
 [한국어](README.md) | [English](README_EN.md) | 中文 | [日本語](README_JA.md)
 
-> 状态：**内核和主要 VS Code 扩展已经实现，`Runtrol Studio 0.1.9` 已面向六个原生目标公开发布。** 实时会话索引、真实 Extension Host 和每秒 3,000 帧 Webview 性能门槛、已安装真实 CLI 的完整操作旅程、全新 Marketplace 安装，以及保留活动会话的 VSIX 升级与回滚都已验证。独立桌面 GUI 代码和执行路径已经删除，VS Code 扩展是唯一 PC 界面。公共 Runtime 协议、Rust 和 TypeScript SDK、外部打包消费门槛，以及六目标签名 standalone Runtime 发布流程也已经实现。已确认 provider 渠道的自动更新也具备进程互斥与精确回滚。[Marketplace 扩展](https://marketplace.visualstudio.com/items?itemName=runtrol.runtrol-studio)、[GitHub Pages 站点](https://eddmpython.github.io/runtrol/)、基于中继的手机 PWA、无正文 Web Push 和 Mission 监督界面都已实现。对话标题栏的芯片可以在对话中切换应答模型和 permission mode，选择通过该 CLI 自身的切换界面中继，芯片只显示服务实际回答的值(已安装真实 Claude Code 的旅程门禁通过 CLI 自身的公告验证切换与恢复)。对话列表的项目标题由操作者亲手创建，文件夹不会自动变成标题。已配对设备的权限被限定在批准的 workspace root 内：会话索引、所有会话命令和 Mission 读取都要通过同一个 live root 验证，撤销 root 立即生效。provider 准备按 provider 分车道并行，五个 cold 首次探测从串行 18.1 秒降到 8.7 秒，新打开文件夹的既有对话无需刷新即可到达。每个对话都以独立编辑器标签页打开，多个对话可以同时显示并分屏，输入与中断都指向该标签页的对话。扩展更新后仍在运行的旧内核会在机器空闲时自动滚动到新构建，更新无需重启即可真正生效。活动门禁会让已发布的 PWA 模块通过 production daemon 驱动已安装的真实 CLI，验证会话、批准和远程断线恢复旅程。iOS 真机安装与 Web Push 运行确认仍是未经验证的贡献者 operator evidence，不计入当前完成范围和评分。
+> 状态：**内核和主要 VS Code 扩展已经实现，`Runtrol Studio 0.1.9` 已面向六个原生目标公开发布。** 实时会话索引、真实 Extension Host 和每秒 3,000 帧 Webview 性能门槛、已安装真实 CLI 的完整操作旅程、全新 Marketplace 安装，以及保留活动会话的 VSIX 升级与回滚都已验证。独立桌面 GUI 代码和执行路径已经删除，VS Code 扩展是唯一 PC 界面。公共 Runtime 协议、Rust 和 TypeScript SDK、外部打包消费门槛，以及六目标签名 standalone Runtime 发布流程也已经实现。已确认 provider 渠道的自动更新也具备进程互斥与精确回滚。[Marketplace 扩展](https://marketplace.visualstudio.com/items?itemName=runtrol.runtrol-studio)、[GitHub Pages 站点](https://eddmpython.github.io/runtrol/)、基于中继的手机 PWA、无正文 Web Push 和 Mission 监督界面都已实现。对话标题栏的芯片可以在对话中切换应答模型和 permission mode，选择通过该 CLI 自身的切换界面中继，芯片只显示服务实际回答的值(已安装真实 Claude Code 的旅程门禁通过 CLI 自身的公告验证切换与恢复)。对话列表的项目标题由操作者亲手创建，文件夹不会自动变成标题。已配对设备的权限被限定在批准的 workspace root 内：会话索引、所有会话命令和 Mission 读取都要通过同一个 live root 验证，撤销 root 立即生效。provider 准备按 provider 分车道并行，五个 cold 首次探测从串行 18.1 秒降到 8.7 秒，新打开文件夹的既有对话无需刷新即可到达。每个对话都以独立编辑器标签页打开，多个对话可以同时显示并分屏，输入与中断都指向该标签页的对话。扩展更新后仍在运行的旧内核会在机器空闲时自动滚动到新构建，更新无需重启即可真正生效。活动门禁会让已发布的 PWA 模块通过 production daemon 驱动已安装的真实 CLI，验证会话、批准和远程断线恢复旅程。在项目标题上点击一次即可启用 Agent Tools，让已安装的编码代理通过七个受项目根限制的公共 Runtime 工具委派工作；禁用时会移除 provider 注册、Runtime 权限和受保护的本地凭据。iOS 真机安装与 Web Push 运行确认仍是未经验证的贡献者 operator evidence，不计入当前完成范围和评分。
 > 下面多数分数为 0，不是因为没有代码，而是因为还没有门禁去断言那些轴。
 
 The security boundary and default-deny settings are documented in [SECURITY.md](SECURITY.md).
@@ -27,7 +27,7 @@ active subscription 与 Code-hot workspace 始终有界。streaming 与后台工
 - **对话选择与 workspace 切换绑定。** 选择 session 后立即切换对话和文件上下文，只有真正需要编辑时才把准确的 workspace 或 worktree 提升为 Code-hot。绝不读取对话内容来猜测路径。
 - **设备连接与会话所有权相互分离。** VS Code 和手机只是配对到同一 Core 的操作界面，双方都不拥有会话。即使窗口、设备或网络路径改变，Core 仍保持会话存活。Tailscale 等现有私有网络可在被发现后作为直连路径，但配对、推送和正确性绝不依赖它。
 - **人始终优先。** 即使存在长 streaming、多个 agent、build 与 test，输入、滚动、editor 和文件导航也必须先响应。
-- **薄边界永不改变。** 不持有 credential、transcript、model API key 或 conversation copy。
+- **薄边界永不改变。** 不持有 provider 账户 credential、transcript、model API key 或 conversation copy。
 
 当前总分为 **66/140，平均 4.7/10**。十二个轴由启用的 CI 门禁支撑。
 10 分意味着完整旅程已在真实环境中被反复验证。
@@ -119,6 +119,16 @@ active subscription 与 Code-hot workspace 始终有界。streaming 与后台工
 公开版本 `0.1.9` 与六个平台 VSIX 也可从 [GitHub Releases](https://github.com/eddmpython/runtrol/releases/tag/vscode-v0.1.9) 获取。
 VS Code 会自动更新从 Marketplace 安装的扩展。如果旧版本是直接通过 VSIX 安装的，请从 Marketplace 重新安装一次，因为 VS Code 会关闭手动 VSIX 安装的自动更新。
 
+## 让代理使用 Runtrol
+
+点击项目标题上的闪光按钮并选择 **Enable Agent Tools for This Project**。已安装的编码代理可以发现
+provider 和模型、启动项目会话、发送指令、读取事件并停止准确的会话。项目行显示 `Agent Tools` 时即已就绪。
+
+权限只绑定到该 canonical 项目根。它不能回答批准、删除对话、静默共享工作树，也不持有 API key、
+transcript 副本或 Runtrol 自有 agent loop。选择 **Disable Agent Tools for This Project** 会移除 Runtime
+权限与受 OS 保护的凭据；禁用最后一个项目时也会移除 provider 注册。完整契约见
+[Agent Tools](docs/agentTools.md)。
+
 ## 不需要 runtrol 的人
 
 **如果你只用一个供应商，那么该供应商自己的远程控制更好。这一点先写在前面。**
@@ -135,7 +145,7 @@ Codex 会话永远不会出现在 Claude 应用里。这不是功能差距，而
 - **不是聊天客户端。** 渲染对话是各个 CLI 已经在做的事。runtrol 只搬运输出，不解释它。
 - **不是模型代理。** 不调用模型 API，不读取令牌，不中继请求。这不是设计偏好，而是生存条件。
 - **不是 IDE。** 展示 diff 是边界，编辑 diff 在边界之外。
-- **不是代理框架。** 没有规划器、子代理编排、自主循环。那些各个 CLI 里已经有，而且做得更好。
+- **不是自有代理框架。** Runtrol 不拥有规划器或自主循环。它向 provider 自有 agent loop 提供受限 Runtime 工具，但不会成为那个 loop。
 - **不是托管服务。** 没有账户，没有登录，没有套餐。
 - **不是终端复用器。** 目标不是取代 tmux，而是**不要求 tmux**。
 

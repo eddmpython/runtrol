@@ -12,6 +12,11 @@ import { RelayChannel } from "../src/relay.js";
 const mode = argv[2];
 if (!["drive", "approval", "resilience"].includes(mode)) fail("live phone mode is invalid");
 
+// A watch is a correctness boundary, not the latency ratchet. Cold provider startup shares the machine with
+// preceding Extension Host and packaging gates in preflight, so one scheduler pause must not outrank the explicit
+// 60-second journey deadline. The separate vscodeHostPerformance gate owns latency measurements.
+const WATCH_EVENT_TIMEOUT_MS = 15_000;
+
 async function journey(identity, config, journeyMode) {
   if (journeyMode === "resilience") return resilienceJourney(identity, config);
   const controller = await connectCore(identity, config);
@@ -45,7 +50,7 @@ async function journey(identity, config, journeyMode) {
     while (Date.now() < deadline && !complete(evidence, journeyMode)) {
       const response = await Promise.race([
         watcher.nextWatch(),
-        timeout(5_000, "the phone watch produced no event"),
+        timeout(WATCH_EVENT_TIMEOUT_MS, "the phone watch produced no event"),
       ]);
       if (response.say === "lagged") throw new Error("the phone event watch lagged");
       inspectEvent(response.with?.payload, evidence);
@@ -178,7 +183,7 @@ async function collectTurn(watcher, after) {
   while (Date.now() < deadline) {
     const response = await Promise.race([
       watcher.nextWatch(),
-      timeout(5_000, "the resilience watch produced no event"),
+      timeout(WATCH_EVENT_TIMEOUT_MS, "the resilience watch produced no event"),
     ]);
     if (response.say === "lagged") throw new Error("the resilience watch lagged");
     const next = readCursor(response.with?.next_expected);

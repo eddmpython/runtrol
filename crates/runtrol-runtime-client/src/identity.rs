@@ -2,7 +2,9 @@
 
 use base64ct::{Base64UrlUnpadded, Encoding as _};
 use ed25519_dalek::{Signer as _, SigningKey};
-use runtrol_runtime_protocol::IntegrationGrant;
+use runtrol_runtime_protocol::{
+    IntegrationGrant, PendingEnrollmentId, self_approval_signing_payload,
+};
 
 use crate::ClientError;
 
@@ -52,6 +54,26 @@ impl IntegrationIdentity {
     #[must_use]
     pub fn public_key_base64(&self) -> String {
         Base64UrlUnpadded::encode_string(self.signing.verifying_key().as_bytes())
+    }
+
+    /// Sign the one pending enrollment identity for a local self-approval request.
+    ///
+    /// This deliberately exposes only the domain-separated self-approval proof rather than a general signing
+    /// primitive. The returned signature cannot authenticate a Runtime connection or another enrollment.
+    ///
+    /// # Errors
+    ///
+    /// Canonical protocol serialization failed, which indicates an implementation defect.
+    pub fn self_approval_signature(
+        &self,
+        pending_id: &PendingEnrollmentId,
+    ) -> Result<String, ClientError> {
+        let payload = self_approval_signing_payload(pending_id).map_err(|error| {
+            ClientError::Protocol(format!(
+                "the self-approval proof payload cannot be encoded: {error}"
+            ))
+        })?;
+        Ok(self.sign_base64(&payload))
     }
 
     pub(crate) fn sign_base64(&self, payload: &[u8]) -> String {

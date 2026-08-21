@@ -1,0 +1,27 @@
+[package]
+name = "runtrol-agent-tools"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[dependencies]
+getrandom = { workspace = true }
+runtrol-cli = { workspace = true }
+runtrol-core = { workspace = true }
+runtrol-ipc = { workspace = true }
+runtrol-provider = { workspace = true }
+runtrol-runtime-client = { workspace = true }
+runtrol-runtime-protocol = { workspace = true }
+runtrol-vault = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true, features = ["std"] }
+sha2 = { workspace = true, features = ["std"] }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["time"] }
+
+[lints]
+workspace = true

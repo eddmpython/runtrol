@@ -21,6 +21,7 @@
 //! | the capability trust index | exact local digest approvals, without capability bodies |
 //! | the provider update journal | verified version floors and rollback pins, never provider content |
 //! | the machine identity vault | the per-user OS protector and Noise handshake assembly |
+//! | `agent-tools/` | project-scoped public Runtime integration identities and grants |
 //! | the daemon crash file | the detached daemon's panic hook writes it; the operator and gates read it |
 //! | the endpoint | the daemon binds it, the CLI connects to it |
 //! | the Runtime locator and endpoint | enrolled public SDK clients discover and connect to the separate surface |
@@ -71,6 +72,9 @@ const PROVIDER_UPDATES: &str = "provider-updates.json";
 /// The operating-system-protected long-lived machine identity.
 const MACHINE_IDENTITY: &str = "machine-identity.vault";
 
+/// Project-scoped Agent Tools Runtime credentials.
+const AGENT_TOOLS: &str = "agent-tools";
+
 /// Where the detached daemon's panic hook records why it died.
 const DAEMON_CRASH_LOG: &str = "daemon-crash.log";
 
@@ -84,7 +88,7 @@ const RUNTIME_INSTANCE: &str = "runtime-instance.json";
 ///
 /// Created up front rather than on first write, so that `rm -rf $RUNTROL_HOME` followed by a start
 /// is a supported sequence rather than a race between whoever writes first.
-const DIRECTORIES: [&str; 2] = [PROVIDERS, PROCESS_GUARDS];
+const DIRECTORIES: [&str; 3] = [PROVIDERS, PROCESS_GUARDS, AGENT_TOOLS];
 
 /// Every path runtrol uses inside its home directory, resolved.
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -109,6 +113,8 @@ pub struct Layout {
     provider_updates: AbsPath,
     /// The operating-system-protected machine identity.
     machine_identity: AbsPath,
+    /// Project-scoped Agent Tools Runtime credentials.
+    agent_tools: AbsPath,
     /// Where the detached daemon's panic hook records why it died.
     daemon_crash_log: AbsPath,
     /// Where public SDK clients find the running Runtime instance.
@@ -147,6 +153,7 @@ impl Layout {
             probe_cache: entry(PROBE_CACHE)?,
             provider_updates: entry(PROVIDER_UPDATES)?,
             machine_identity: entry(MACHINE_IDENTITY)?,
+            agent_tools: entry(AGENT_TOOLS)?,
             daemon_crash_log: entry(DAEMON_CRASH_LOG)?,
             runtime_locator: entry(RUNTIME_LOCATOR)?,
             runtime_instance: entry(RUNTIME_INSTANCE)?,
@@ -216,6 +223,29 @@ impl Layout {
         &self.machine_identity
     }
 
+    /// The directory containing project-scoped Agent Tools credentials.
+    #[must_use]
+    pub const fn agent_tools(&self) -> &AbsPath {
+        &self.agent_tools
+    }
+
+    /// Resolve one digest-named Agent Tools credential slot.
+    ///
+    /// # Errors
+    ///
+    /// The slot name or fixed child names cannot be joined safely below the Agent Tools directory.
+    pub fn agent_tool_slot(
+        &self,
+        slot: &str,
+    ) -> Result<AgentToolSlot, runtrol_provider::PathError> {
+        let directory = self.agent_tools.join(slot)?;
+        Ok(AgentToolSlot {
+            identity: directory.join("identity.vault")?,
+            grant: directory.join("grant.json")?,
+            directory,
+        })
+    }
+
     /// Where the detached daemon's panic hook records why it died.
     #[must_use]
     pub const fn daemon_crash_log(&self) -> &AbsPath {
@@ -248,7 +278,7 @@ impl Layout {
 
     /// The directories that have to exist before anything writes.
     pub(crate) const fn directories(&self) -> [&AbsPath; DIRECTORIES.len()] {
-        [&self.providers, &self.process_guards]
+        [&self.providers, &self.process_guards, &self.agent_tools]
     }
 
     /// Every file and directory this layout names, for tests that must see the whole set.
@@ -264,10 +294,39 @@ impl Layout {
             &self.probe_cache,
             &self.provider_updates,
             &self.machine_identity,
+            &self.agent_tools,
             &self.daemon_crash_log,
             &self.runtime_locator,
             &self.runtime_instance,
         ]
+    }
+}
+
+/// Every path in one project-scoped Agent Tools credential slot.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct AgentToolSlot {
+    directory: AbsPath,
+    identity: AbsPath,
+    grant: AbsPath,
+}
+
+impl AgentToolSlot {
+    /// The slot directory.
+    #[must_use]
+    pub const fn directory(&self) -> &AbsPath {
+        &self.directory
+    }
+
+    /// The operating-system-protected integration identity.
+    #[must_use]
+    pub const fn identity(&self) -> &AbsPath {
+        &self.identity
+    }
+
+    /// The public approved Runtime grant.
+    #[must_use]
+    pub const fn grant(&self) -> &AbsPath {
+        &self.grant
     }
 }
 

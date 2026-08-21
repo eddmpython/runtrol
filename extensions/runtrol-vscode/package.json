@@ -114,7 +114,9 @@
     "onCommand:runtrol.quarantineCapability",
     "onCommand:runtrol.rollbackCapability",
     "onCommand:runtrol.archiveCapability",
-    "onCommand:runtrol.deleteConversation"
+    "onCommand:runtrol.deleteConversation",
+    "onCommand:runtrol.enableAgentTools",
+    "onCommand:runtrol.disableAgentTools"
   ],
   "contributes": {
     "viewsContainers": {
@@ -423,6 +425,18 @@
         "title": "Make This Folder a Project"
       },
       {
+        "command": "runtrol.enableAgentTools",
+        "title": "Enable Agent Tools for This Project",
+        "category": "Runtrol",
+        "icon": "$(sparkle)"
+      },
+      {
+        "command": "runtrol.disableAgentTools",
+        "title": "Disable Agent Tools for This Project",
+        "category": "Runtrol",
+        "icon": "$(circle-slash)"
+      },
+      {
         "command": "runtrol.renameProject",
         "title": "Runtrol: Rename Project"
       },
@@ -703,6 +717,11 @@
           "when": "view == runtrol.sessions && viewItem =~ /^runtrol\\.project/"
         },
         {
+          "command": "runtrol.enableAgentTools",
+          "group": "inline@3",
+          "when": "view == runtrol.sessions && viewItem =~ /^runtrol\\.project/"
+        },
+        {
           "command": "runtrol.openProjectWorkspace",
           "group": "inline@2",
           "when": "view == runtrol.sessions && viewItem =~ /^runtrol\\.project\\.[a-z]+$/"
@@ -726,6 +745,11 @@
           "command": "runtrol.removeProject",
           "group": "1_manage@2",
           "when": "view == runtrol.sessions && viewItem =~ /^runtrol\\.project\\.created/"
+        },
+        {
+          "command": "runtrol.disableAgentTools",
+          "group": "1_manage@3",
+          "when": "view == runtrol.sessions && viewItem =~ /^runtrol\\.project/"
         },
         {
           "command": "runtrol.openProjectWorkspace",

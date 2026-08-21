@@ -298,6 +298,8 @@ pub const CONSULT: crate::consult::ConsultSurface = crate::consult::ConsultSurfa
         add: &["mcp", "add"],
         remove: &["mcp", "remove"],
         get: &["mcp", "get"],
+        get_suffix: &["--json"],
+        readback: crate::consult::McpReadback::Json,
     }),
     server: Some(crate::consult::McpConsultServer {
         serve: &["mcp-server"],

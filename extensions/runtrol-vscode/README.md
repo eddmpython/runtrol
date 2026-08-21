@@ -45,6 +45,23 @@ short label, and **Runtrol: Switch Chat** for fast project, service, state, and 
 The conversation header keeps the active model, reasoning effort, provider mode, context use, provider-reported cost,
 and available account-limit windows together. Missing provider telemetry is shown as unavailable instead of estimated.
 
+## Agent Tools
+
+Select the sparkle on a project heading, or run **Runtrol: Enable Agent Tools for This Project**, to let installed
+coding agents delegate bounded project work through Runtrol. The project row says `Agent Tools` when ready. Runtrol
+uses each provider CLI's official MCP registration command and discovers providers, models, and sessions at runtime.
+No provider configuration file is edited directly.
+
+Authority is limited to that canonical project root. Starts are exclusive, instructions and events pass unchanged,
+and provider approvals always stay with you in Runtrol. Agent Tools cannot answer approvals, delete provider
+conversations, silently share a working tree, hold an API key, keep a transcript copy, or run its own agent loop.
+
+Run **Runtrol: Disable Agent Tools for This Project** to revoke the project's Runtime authority and remove its
+protected local credential. The global provider registration is removed when the last enabled project is disabled.
+Runtrol verifies the exact command through each provider's official readback before overwriting or removing
+anything, so a same-named entry that points elsewhere is reported and left untouched.
+See the complete [Agent Tools contract](https://github.com/eddmpython/runtrol/blob/main/docs/agentTools.md).
+
 ## Requirements
 
 - Desktop VS Code 1.106 or newer (the version that lets an extension place a view in the secondary side bar).
@@ -84,6 +101,8 @@ processes stay alive.
 - **Runtrol: Open Current Chat**
 - **Runtrol: Refresh Chats and Services**
 - **Runtrol: Check Provider Updates**
+- **Runtrol: Enable Agent Tools for This Project**
+- **Runtrol: Disable Agent Tools for This Project**
 - **Runtrol: Restart Extension Host**
 - **Runtrol: Pair a Phone**
 

@@ -2,6 +2,7 @@ import path from "node:path";
 
 import * as vscode from "vscode";
 
+import { AgentToolsController, type AgentToolsAction } from "./agentTools";
 import { CandidateController } from "./capability/controller";
 import { conversations as conversationRows } from "./conversationList";
 import { ConversationPanels } from "./conversationPanels";
@@ -75,6 +76,7 @@ const MEASURED_HOST = process.env.RUNTROL_VSCODE_PERFORMANCE === "1";
 export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi {
   const locator = new CoreLocator(context);
   const client = new CoreClient(locator);
+  const agentTools = new AgentToolsController(() => locator.runtimeExecutable());
   let initializationStage = "runtime:bootstrap";
   const runtime = new StudioRuntimeClient(
     context,
@@ -210,7 +212,7 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
   const missionController = new MissionController(client, controller, state, context);
   const candidateController = new CandidateController(client);
   const missions = new MissionTree(missionController);
-  const conversations = new ConversationsTree(state, projectStore);
+  const conversations = new ConversationsTree(state, projectStore, agentTools);
   const usage = new UsageTree({
     usage: () => runtime.providersUsage(),
     providers: () => state.providers,
@@ -222,6 +224,7 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
     controller,
     missionController,
     candidateController,
+    agentTools,
     conversation,
     missions,
     conversations,
@@ -432,6 +435,18 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
         if (!(item instanceof ProjectItem)) return;
         await projectStore.create(item.group.workspace);
       }),
+    ),
+    vscode.commands.registerCommand(
+      "runtrol.enableAgentTools",
+      (item?: unknown) => run(() => afterReady(
+        () => changeAgentTools(agentTools, "enable", item instanceof ProjectItem ? item : undefined),
+      )),
+    ),
+    vscode.commands.registerCommand(
+      "runtrol.disableAgentTools",
+      (item?: unknown) => run(() => afterReady(
+        () => changeAgentTools(agentTools, "disable", item instanceof ProjectItem ? item : undefined),
+      )),
     ),
     vscode.commands.registerCommand(
       "runtrol.renameProject",
@@ -701,6 +716,13 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
     await lifecycle;
     await configureRemoteConnection(client);
   });
+  void run(async () => {
+    await lifecycle;
+    const workingDirectory = vscode.workspace.workspaceFolders
+      ?.find((folder) => folder.uri.scheme === "file")
+      ?.uri.fsPath ?? vscode.env.appRoot;
+    await agentTools.refresh(workingDirectory);
+  });
   return {
     get ready() {
       return lifecycle;
@@ -887,6 +909,61 @@ function testIntegrationRoots(context: vscode.ExtensionContext): readonly string
     throw new Error("RUNTROL_TEST_INTEGRATION_ROOTS must contain at most 32 absolute paths");
   }
   return [...new Set(value)];
+}
+
+async function changeAgentTools(
+  controller: AgentToolsController,
+  action: AgentToolsAction,
+  item?: ProjectItem,
+): Promise<void> {
+  const workspace = item?.group.workspace ?? await chooseAgentToolsProject();
+  if (!workspace) return;
+  const name = path.basename(workspace) || workspace;
+  const changing = action === "enable" ? "Enabling" : "Disabling";
+  const result = await vscode.window.withProgress(
+    {
+      location: vscode.ProgressLocation.Notification,
+      title: `${changing} Agent Tools for ${name}`,
+      cancellable: false,
+    },
+    () => action === "enable" ? controller.enable(workspace) : controller.disable(workspace),
+  );
+  const warning = result.lines.find((line) => line.startsWith("warning:"));
+  if (warning) void vscode.window.showWarningMessage(warning);
+  if (action === "enable") {
+    void vscode.window.showInformationMessage(
+      `Agent Tools are ready for ${name}. Coding agents can now delegate through Runtrol; approvals stay with you.`,
+    );
+  } else {
+    void vscode.window.showInformationMessage(
+      result.alreadySettled
+        ? `Agent Tools were already off for ${name}.`
+        : `Agent Tools are off for ${name}. Runtime authority and local credentials were removed.`,
+    );
+  }
+}
+
+async function chooseAgentToolsProject(): Promise<string | null> {
+  const folders = (vscode.workspace.workspaceFolders ?? [])
+    .filter((folder) => folder.uri.scheme === "file");
+  if (folders.length === 0) {
+    await vscode.window.showWarningMessage("Open a local project folder before enabling Agent Tools.");
+    return null;
+  }
+  if (folders.length === 1) return folders[0]?.uri.fsPath ?? null;
+  const picked = await vscode.window.showQuickPick(
+    folders.map((folder) => ({
+      label: folder.name,
+      detail: folder.uri.fsPath,
+      workspace: folder.uri.fsPath,
+    })),
+    {
+      title: "Project for Agent Tools",
+      placeHolder: "Choose the one project root coding agents may orchestrate",
+      matchOnDetail: true,
+    },
+  );
+  return picked?.workspace ?? null;
 }
 
 function performanceDeadline<T>(pending: Promise<T>, timeoutMs: number, label: string): Promise<T> {

@@ -16,6 +16,7 @@ members = [
     "crates/runtrol-update",
     "crates/runtrol-runtime-protocol",
     "crates/runtrol-runtime-client",
+    "crates/runtrol-agent-tools",
     "crates/runtrol-ledger",
     "crates/runtrol-orchestrator",
     "crates/runtrol-growth",
@@ -132,6 +133,7 @@ runtrol-vault = { path = "crates/runtrol-vault" }
 runtrol-update = { path = "crates/runtrol-update" }
 runtrol-runtime-protocol = { path = "crates/runtrol-runtime-protocol", version = "0.1.1" }
 runtrol-runtime-client = { path = "crates/runtrol-runtime-client" }
+runtrol-agent-tools = { path = "crates/runtrol-agent-tools" }
 runtrol-ledger = { path = "crates/runtrol-ledger" }
 runtrol-orchestrator = { path = "crates/runtrol-orchestrator" }
 runtrol-growth = { path = "crates/runtrol-growth" }

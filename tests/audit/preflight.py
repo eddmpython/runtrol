@@ -390,6 +390,17 @@ GATES: dict[str, tuple[str, list[str]]] = {
         "자문 토글 배선·검증·원상복구 (실물 CLI)",
         [*PY, f"{HOOKS}/crossConsultSmoke.py"],
     ),
+    # Agent Tools is the coding-agent-facing orchestration surface. This gate spends no model turn: it uses real CLI
+    # registration commands, collision and replacement probes, raw MCP discovery, and read-only Runtime inventory
+    # inside isolated homes, then proves disable removed both authority and credentials.
+    "agentToolsSmokeSelftest": (
+        "Agent Tools 생명주기 게이트 자체 검증",
+        [*PY, f"{HOOKS}/agentToolsSmoke.py", "--selftest"],
+    ),
+    "agentToolsSmoke": (
+        "Agent Tools 충돌 방어, root 격리, MCP 호출, 완전 회수 (실물 CLI)",
+        [*PY, f"{HOOKS}/agentToolsSmoke.py"],
+    ),
     "modelDetectionSmokeSelftest": (
         "모델 자동 인식 게이트 자체 검증",
         [*PY, f"{HOOKS}/modelDetectionSmoke.py", "--selftest"],
@@ -516,6 +527,7 @@ CARGO_GATES = frozenset(
         "genericAcpSmoke",
         "externalAcpSmokeSelftest",
         "externalAcpSmoke",
+        "agentToolsSmoke",
         "claudeApprovalSmokeSelftest",
         "claudeApprovalSmoke",
         "phoneDrivesPcSmoke",

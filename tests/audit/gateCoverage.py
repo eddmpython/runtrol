@@ -67,6 +67,12 @@ LOCAL_ONLY: dict[str, str] = {
     "logins they need, so it runs where they live: the operator's own preflight",
     "crossConsultSmokeSelftest": "the same script with a flag, kept beside the gate it proves for the same "
     "reason as the lifecycle selftest above",
+    "agentToolsSmoke": "it drives every installed provider CLI's official MCP registration commands and the "
+    "built Runtime product in isolated homes, including collision rollback and replacement preservation. hosted "
+    "runners do not have those operator-installed CLIs, so the cost-free journey runs in the operator's own "
+    "preflight",
+    "agentToolsSmokeSelftest": "the same script's mutation proof is kept beside the operator-side product gate "
+    "whose judgements it proves",
     "clippyCrossCfg": "the workflow runs this gate too, and it has to name a different target: each "
     "runner cross-compiles toward the platform it is not, so the local command targets linux and the "
     "linux runner targets windows. the gate is present on both sides; only the argument differs, which "

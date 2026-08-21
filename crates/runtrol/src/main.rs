@@ -30,6 +30,10 @@ enum Personality {
     Endpoint,
     /// Inspect and print the native-client-validated public Runtime locator.
     RuntimeLocator,
+    /// Serve the permission-bounded Agent Tools MCP protocol on stdio.
+    AgentToolsMcp,
+    /// Enable or inspect Agent Tools locally.
+    AgentToolsCommand(Vec<String>),
     /// Ask the daemon something and print the answer.
     Command(Vec<String>),
     /// Say what the words could have been.
@@ -89,6 +93,8 @@ fn main() -> ExitCode {
         Personality::Daemon => run(serving()),
         Personality::Endpoint => run(endpointing()),
         Personality::RuntimeLocator => runtime_locating(),
+        Personality::AgentToolsMcp => run(agent_tools_serving()),
+        Personality::AgentToolsCommand(words) => run(agent_tools_commanding(&words)),
         Personality::Command(words) => run(commanding(&words)),
         Personality::Usage(message) => {
             report(&message);
@@ -101,7 +107,7 @@ fn main() -> ExitCode {
 fn choose(words: &[String]) -> Personality {
     match words.first().map(String::as_str) {
         None => Personality::Usage(
-            "runtrol <command>. try: endpoint, runtime-locator, list, start, resume, say, answer, stop, watch, close, consult, panic"
+            "runtrol <command>. try: endpoint, runtime-locator, tools, list, start, resume, say, answer, stop, watch, close, consult, panic"
                 .to_owned(),
         ),
         // Spelled as a subcommand rather than inferred from how the program was invoked. Inferring it from the
@@ -109,7 +115,58 @@ fn choose(words: &[String]) -> Personality {
         Some(word) if word == runtrol_cli::DAEMON_ARGUMENT => Personality::Daemon,
         Some(word) if word == ENDPOINT_ARGUMENT => Personality::Endpoint,
         Some(word) if word == RUNTIME_LOCATOR_ARGUMENT => Personality::RuntimeLocator,
+        Some("mcp") => Personality::AgentToolsMcp,
+        Some("tools") => Personality::AgentToolsCommand(words.get(1..).unwrap_or_default().to_vec()),
         Some(_) => Personality::Command(words.to_vec()),
+    }
+}
+
+/// Serve Agent Tools without allowing diagnostics onto its protocol stdout.
+fn agent_tools_serving() -> impl FnOnce(&tokio::runtime::Runtime) -> ExitCode {
+    |runtime| match runtime.block_on(runtrol_agent_tools::serve()) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            report(&error.to_string());
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// Run one local Agent Tools administration command.
+fn agent_tools_commanding(words: &[String]) -> impl FnOnce(&tokio::runtime::Runtime) -> ExitCode {
+    move |runtime| {
+        let endpoint = match runtrol_daemon::endpoint(None) {
+            Ok(endpoint) => endpoint,
+            Err(error) => {
+                report(&format!(
+                    "cannot tell where runtrol keeps its files: {error}"
+                ));
+                return ExitCode::FAILURE;
+            }
+        };
+        let executable = match std::env::current_exe() {
+            Ok(executable) => executable,
+            Err(error) => {
+                report(&format!("cannot tell where runtrol itself is: {error}"));
+                return ExitCode::FAILURE;
+            }
+        };
+        let context = runtrol_agent_tools::CommandContext {
+            endpoint,
+            executable,
+        };
+        match runtime.block_on(runtrol_agent_tools::run_command(words, &context)) {
+            Ok(lines) => {
+                for line in lines {
+                    say(&line);
+                }
+                ExitCode::SUCCESS
+            }
+            Err(error) => {
+                report(&error.to_string());
+                ExitCode::FAILURE
+            }
+        }
     }
 }
 
@@ -385,6 +442,17 @@ mod tests {
             choose(&typed(RUNTIME_LOCATOR_ARGUMENT)),
             Personality::RuntimeLocator
         ));
+    }
+
+    #[test]
+    fn agent_tools_protocol_and_local_administration_are_distinct_personalities() {
+        assert!(matches!(choose(&typed("mcp")), Personality::AgentToolsMcp));
+        match choose(&typed("tools enable project")) {
+            Personality::AgentToolsCommand(words) => {
+                assert_eq!(words, typed("enable project"));
+            }
+            _ => panic!("expected the Agent Tools administration personality"),
+        }
     }
 
     #[test]

@@ -1,6 +1,6 @@
-//! Per-user operating-system protection for runtrol's long-lived machine identity.
+//! Per-user operating-system protection for runtrol's fixed-size long-lived secrets.
 //!
-//! The vault owns no conversation data and accepts exactly one fixed-size secret. On Windows the file contains a
+//! The vault owns no conversation data and each file contains exactly one fixed-size secret. On Windows the file contains a
 //! DPAPI `CurrentUser` blob bound to runtrol-specific optional entropy. On macOS and Unix the file contains only a
 //! path-bound lookup identifier for the current user's native Keychain or Secret Service entry. The plaintext exists
 //! only in zeroizing memory while daemon assembly derives the Noise keypair. No platform writes a raw-key fallback.
@@ -19,14 +19,29 @@ const FORMAT_VERSION: u8 = 1;
 const SECRET_BYTES: usize = 32;
 const HEADER_BYTES: usize = MAGIC.len() + 1;
 
-/// A long-lived machine identity secret held only in zeroizing memory.
+/// A long-lived protected secret held only in zeroizing memory.
 ///
 /// It implements neither `Debug`, `Display`, nor `Clone`. A diagnostic cannot print it and a caller cannot copy it
 /// accidentally while passing it to the Noise constructor.
 #[derive(Zeroize, ZeroizeOnDrop)]
-pub struct MachineSecret([u8; SECRET_BYTES]);
+pub struct ProtectedSecret([u8; SECRET_BYTES]);
 
-impl MachineSecret {
+impl ProtectedSecret {
+    /// Open an existing per-user protected identity without creating a replacement.
+    ///
+    /// Use this when another durable record already names the identity. A missing envelope is an error because
+    /// silently generating a different key would leave that record bound to authority this process cannot hold.
+    ///
+    /// # Errors
+    ///
+    /// [`VaultError`] when the envelope is missing, malformed, undecryptable, or cannot be read.
+    pub fn load(path: &AbsPath) -> Result<Self, VaultError> {
+        let encoded = std::fs::read(path.as_std_path()).map_err(|error| {
+            VaultError::io("reading an existing protected identity", path, &error)
+        })?;
+        Self::decode(path, &encoded)
+    }
+
     /// Open the per-user protected identity at `path`, or generate and durably create it once.
     ///
     /// Existing malformed or undecryptable files are refused and never replaced. Replacing one would silently sever
@@ -54,6 +69,35 @@ impl MachineSecret {
         &self.0
     }
 
+    /// Delete one protected secret from both native storage and its Runtrol-owned envelope.
+    ///
+    /// Missing envelopes are already deleted. An existing malformed envelope is refused and preserved, because
+    /// guessing which native credential it named could remove another identity.
+    ///
+    /// # Errors
+    ///
+    /// The envelope is malformed, native secret deletion is refused, or the file cannot be removed.
+    pub fn delete(path: &AbsPath) -> Result<(), VaultError> {
+        let encoded = match std::fs::read(path.as_std_path()) {
+            Ok(encoded) => encoded,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => {
+                return Err(VaultError::io(
+                    "reading a protected secret for deletion",
+                    path,
+                    &error,
+                ));
+            }
+        };
+        let protected = decode_envelope(path, &encoded)?;
+        #[cfg(windows)]
+        platform::delete(path, protected);
+        #[cfg(not(windows))]
+        platform::delete(path, protected)?;
+        std::fs::remove_file(path.as_std_path())
+            .map_err(|error| VaultError::io("removing a protected secret envelope", path, &error))
+    }
+
     fn create(path: &AbsPath) -> Result<Self, VaultError> {
         let mut secret = Self([0; SECRET_BYTES]);
         getrandom::fill(&mut secret.0).map_err(|_| VaultError::RandomUnavailable)?;
@@ -77,6 +121,12 @@ impl MachineSecret {
         Ok(secret)
     }
 }
+
+/// The daemon's long-lived Noise machine identity.
+///
+/// Kept as a type alias so existing pairing code retains its domain name while integrations can use the
+/// same reviewed fixed-size operating-system protection without pretending their key is the daemon identity.
+pub type MachineSecret = ProtectedSecret;
 
 fn encode(protected: &[u8]) -> Vec<u8> {
     let mut encoded = Vec::with_capacity(HEADER_BYTES + protected.len());
@@ -293,6 +343,22 @@ mod tests {
 
         let restored = MachineSecret::load_or_create(&file).expect("restore protected identity");
         assert_eq!(restored.as_bytes(), &expected);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn an_existing_secret_can_be_deleted_without_leaving_an_envelope() {
+        let file = path("windows-delete");
+        if file.as_std_path().exists() {
+            std::fs::remove_file(file.as_std_path()).expect("clear previous vault");
+        }
+        drop(ProtectedSecret::load_or_create(&file).expect("create protected identity"));
+
+        ProtectedSecret::delete(&file).expect("delete protected identity");
+
+        assert!(!file.as_std_path().exists());
+        ProtectedSecret::delete(&file).expect("repeated deletion is settled");
+        assert!(ProtectedSecret::load(&file).is_err());
     }
 
     #[cfg(windows)]
