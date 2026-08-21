@@ -15,7 +15,7 @@ import { planEntriesOf, planGlyph } from "./plan";
 import { cancelQueued, pushQueued, queuedLabel, takeQueued } from "./queue";
 import { toolActivityLineKeeping, toolActivityOf } from "./toolActivity";
 import { toolDetail } from "./toolDetail";
-import { declaredDiffs, unifiedLineKind, type DeclaredDiff } from "./toolDiff";
+import { declaredDiffs, type DeclaredDiff } from "./toolDiff";
 import {
   asksForCommands,
   completed,
@@ -75,7 +75,14 @@ type Incoming =
   | { type: "measureStart"; id: string }
   | { type: "measureEnd"; id: string; producedFrames: number; droppedFrames: number }
   | { type: "switchRequested"; what: "model" | "mode" | "effort"; value: string }
-  | { type: "insertText"; text: string | null };
+  | { type: "insertText"; text: string | null }
+  | { type: "openLatestDiff" }
+  | { type: "menu"; menu: string; anchor: MenuAnchor; title: string; items: MenuItem[] }
+  | { type: "menuClose"; menu: string }
+  | { type: "clickChip"; anchor: MenuAnchor };
+
+type MenuAnchor = "project" | "service" | "model" | "effort" | "mode";
+type MenuItem = { id: string; label: string; description?: string; detail?: string };
 
 type VsCodeApi = {
   setState(state: unknown): void;
@@ -166,6 +173,9 @@ attach.addEventListener("click", () => vscode.postMessage({ type: "attach" }));
 const attachmentList = element<HTMLUListElement>("attachments");
 const usageChip = element<HTMLSpanElement>("usage-chip");
 const commandMenu = element<HTMLUListElement>("commands");
+const chipMenu = element<HTMLUListElement>("chip-menu");
+/// The popover a chip opened, if one is open: which question, its items, and the highlighted row.
+let openMenu: { id: string; anchor: MenuAnchor; items: MenuItem[]; highlighted: number } | null = null;
 const queuedList = element<HTMLUListElement>("queued");
 const pending: unknown[] = [];
 let selected: Session | null = null;
@@ -252,6 +262,25 @@ window.addEventListener("message", ({ data }: MessageEvent<Incoming>) => {
   if (data.type === "switchRequested") {
     requested = { ...requested, [data.what]: data.value };
     paintFacts();
+    return;
+  }
+  if (data.type === "menu") {
+    openChipMenu(data.menu, data.anchor, data.title, data.items);
+    return;
+  }
+  if (data.type === "menuClose") {
+    if (openMenu?.id === data.menu) hideChipMenu();
+    return;
+  }
+  if (data.type === "clickChip") {
+    chipOf(data.anchor)?.click();
+    return;
+  }
+  if (data.type === "openLatestDiff") {
+    // The host asking on the operator's behalf (the journey and the eye pass drive it): the newest declared
+    // change on the page opens exactly as a click on its button would.
+    const buttons = conversation.querySelectorAll<HTMLButtonElement>("button.diff-open");
+    buttons[buttons.length - 1]?.click();
     return;
   }
   if (data.type === "insertText") {
@@ -353,11 +382,124 @@ interrupt.addEventListener("click", () => vscode.postMessage({ type: "interrupt"
 // Escape (the command menu closes itself on the composer and prevents default) is not a stop; a
 // hidden or disabled stop button means the session is not interruptible right now.
 document.addEventListener("keydown", (event) => {
+  if (openMenu && !event.isComposing) {
+    // The popover owns the keys while it is open: arrows move, Enter chooses, Escape dismisses.
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      const step = event.key === "ArrowDown" ? 1 : -1;
+      openMenu.highlighted = (openMenu.highlighted + step + openMenu.items.length) % openMenu.items.length;
+      paintChipMenu();
+      return;
+    }
+    if (event.key === "Enter") {
+      event.preventDefault();
+      chooseMenuItem(openMenu.items[openMenu.highlighted] ?? null);
+      return;
+    }
+    if (event.key === "Escape") {
+      event.preventDefault();
+      chooseMenuItem(null);
+      return;
+    }
+    return;
+  }
   if (event.key !== "Escape" || event.isComposing || event.defaultPrevented) return;
   if (interrupt.hidden || interrupt.disabled) return;
   event.preventDefault();
   vscode.postMessage({ type: "interrupt" });
 });
+// A click anywhere else dismisses the popover, as every menu does.
+document.addEventListener("mousedown", (event) => {
+  if (!openMenu) return;
+  const target = event.target instanceof Node ? event.target : null;
+  if (target && (chipMenu.contains(target) || chipOf(openMenu.anchor)?.contains(target))) return;
+  chooseMenuItem(null);
+});
+
+function chipOf(anchor: MenuAnchor): HTMLElement | null {
+  const id = anchor === "project" ? "project-chip"
+    : anchor === "service" ? "service-chip"
+      : anchor === "model" ? "model-chip"
+        : anchor === "effort" ? "effort-chip"
+          : "mode-chip";
+  return document.getElementById(id);
+}
+
+/// Show the choices for a chip, hanging from that chip, highlighted on the first row.
+function openChipMenu(id: string, anchor: MenuAnchor, title: string, items: MenuItem[]): void {
+  openMenu = { id, anchor, items, highlighted: 0 };
+  chipMenu.setAttribute("aria-label", title);
+  chipMenu.dataset.anchor = anchor;
+  paintChipMenu();
+  const chip = chipOf(anchor);
+  const card = chipMenu.parentElement;
+  if (chip && card) {
+    // Left edge on the chip, clamped inside the card; the bar's chips are near the right edge.
+    const cardBox = card.getBoundingClientRect();
+    const chipBox = chip.getBoundingClientRect();
+    const left = Math.max(0, Math.min(chipBox.left - cardBox.left, cardBox.width - chipMenu.offsetWidth - 8));
+    chipMenu.style.left = `${left}px`;
+  }
+}
+
+function paintChipMenu(): void {
+  if (!openMenu) {
+    chipMenu.hidden = true;
+    chipMenu.replaceChildren();
+    return;
+  }
+  const menu = openMenu;
+  chipMenu.replaceChildren(...menu.items.map((item, index) => {
+    const row = document.createElement("li");
+    row.className = index === menu.highlighted ? "command command-active" : "command";
+    row.setAttribute("role", "option");
+    row.setAttribute("aria-selected", index === menu.highlighted ? "true" : "false");
+    const name = document.createElement("span");
+    name.className = "command-name";
+    name.textContent = item.label;
+    row.append(name);
+    if (item.description) {
+      const description = document.createElement("span");
+      description.className = "command-description";
+      description.textContent = item.description;
+      row.append(description);
+    }
+    if (item.detail) {
+      const detail = document.createElement("span");
+      detail.className = "command-detail";
+      detail.textContent = item.detail;
+      row.append(detail);
+    }
+    row.addEventListener("mousedown", (event) => {
+      event.preventDefault();
+      chooseMenuItem(item);
+    });
+    row.addEventListener("mousemove", () => {
+      if (menu.highlighted !== index) {
+        menu.highlighted = index;
+        paintChipMenu();
+      }
+    });
+    return row;
+  }));
+  chipMenu.hidden = false;
+  chipMenu.querySelector<HTMLElement>(".command-active")?.scrollIntoView({ block: "nearest" });
+}
+
+function hideChipMenu(): void {
+  openMenu = null;
+  chipMenu.hidden = true;
+  chipMenu.replaceChildren();
+  chipMenu.style.left = "";
+}
+
+function chooseMenuItem(item: MenuItem | null): void {
+  const menu = openMenu;
+  if (!menu) return;
+  hideChipMenu();
+  vscode.postMessage({ type: "menuChoice", menu: menu.id, choice: item ? item.id : null });
+  prompt.focus();
+}
 conversation.addEventListener("scroll", () => {
   followsTail = conversation.scrollHeight - conversation.scrollTop - conversation.clientHeight < 24;
 }, { passive: true });
@@ -1209,9 +1351,10 @@ function appendTool(body: UnknownRecord, part: "call" | "result"): void {
     slots.set(pre.getAttribute("data-slot") ?? IN, pre.textContent ?? "");
   }
   const slot = part === "result" ? OUT : IN;
-  // A change the service declared as a change is shown in colour, once: the raw detail skips only the
-  // keys whose every entry the diff rendering covered. Rendered diffs persist per slot like the raw
-  // detail, because a later frame for the same call may not repeat the change it declared earlier.
+  // A change the service declared as a change is named once, with a button that opens it in VS Code's own
+  // diff editor: the raw detail skips only the keys whose every entry that row covered. Rows persist per
+  // slot like the raw detail, because a later frame for the same call may not repeat the change it declared
+  // earlier.
   const declared = declaredDiffs(body);
   const diffBlocks = new Map<string, HTMLElement>();
   for (const block of item.querySelectorAll<HTMLElement>("div.tool-diffs")) {
@@ -1260,44 +1403,50 @@ function appendTool(body: UnknownRecord, part: "call" | "result"): void {
   trim();
 }
 
-/// Declared changes, coloured by nothing but what the service itself said.
+/// Declared changes, one row each: the path the service named and a button that opens the change in VS
+/// Code's own diff editor. The page draws no diff and colours nothing; the editor that already knows how to
+/// show a change shows it, which is also how the Codex and Claude apps hand a change to the reader.
 function diffContainer(diffs: DeclaredDiff[], slot: string): HTMLElement {
   const container = document.createElement("div");
   container.className = "tool-diffs";
   container.setAttribute("data-slot", slot);
   for (const diff of diffs) {
-    const block = document.createElement("div");
-    block.className = "tool-diff";
-    if (diff.path) {
-      const path = document.createElement("div");
-      path.className = "diff-path";
-      path.textContent = diff.path;
-      block.append(path);
-    }
-    if (diff.kind === "unified") {
-      const pre = document.createElement("pre");
-      pre.className = "diff-body";
-      for (const lineText of diff.text.split("\n")) {
-        const row = document.createElement("span");
-        row.className = `diff-${unifiedLineKind(lineText)}`;
-        row.textContent = `${lineText}\n`;
-        pre.append(row);
-      }
-      block.append(pre);
-    } else {
-      if (diff.oldText) block.append(diffSide("diff-del", diff.oldText));
-      if (diff.newText) block.append(diffSide("diff-add", diff.newText));
-    }
-    container.append(block);
+    const row = document.createElement("div");
+    row.className = "tool-diff";
+    const path = document.createElement("span");
+    path.className = "diff-path";
+    path.textContent = diff.path || "(a change with no path)";
+    const measure = document.createElement("span");
+    measure.className = "diff-measure";
+    measure.textContent = diffMeasure(diff);
+    const open = document.createElement("button");
+    open.type = "button";
+    open.className = "diff-open";
+    open.textContent = "Open diff";
+    open.title = "Open this change in the diff editor";
+    open.addEventListener("click", () => {
+      vscode.postMessage({ type: "openDiff", diff });
+    });
+    row.append(path, measure, open);
+    container.append(row);
   }
   return container;
 }
 
-function diffSide(kind: string, text: string): HTMLPreElement {
-  const pre = document.createElement("pre");
-  pre.className = `diff-body ${kind}`;
-  pre.textContent = text;
-  return pre;
+/// What the row says about the size of a change, read from nothing but the change's own text.
+function diffMeasure(diff: DeclaredDiff): string {
+  if (diff.kind === "unified") {
+    let added = 0;
+    let removed = 0;
+    for (const lineText of diff.text.split("\n")) {
+      if (lineText.startsWith("+") && !lineText.startsWith("+++")) added += 1;
+      else if (lineText.startsWith("-") && !lineText.startsWith("---")) removed += 1;
+    }
+    return `+${added} -${removed}`;
+  }
+  const before = diff.oldText ? diff.oldText.split("\n").length : 0;
+  const after = diff.newText ? diff.newText.split("\n").length : 0;
+  return `${before} -> ${after} lines`;
 }
 
 /// The plan as the service last announced it: one element, updated in place.

@@ -5,6 +5,8 @@
 // `isViewAction`: the page runs remote-rendered conversation content, so an action name that the
 // dispatcher does not explicitly handle must be dropped, never defaulted into another action.
 
+import { type DeclaredDiff, isDeclaredDiff } from "./webview/toolDiff";
+
 export type ViewAction =
   | { type: "prompt"; text: string }
   | { type: "answerApproval"; approval: string; option: number; subjectDigest: number[] }
@@ -16,7 +18,24 @@ export type ViewAction =
   | { type: "attach" }
   | { type: "removeAttachment"; index: number }
   | { type: "mentionFile" }
+  | { type: "openDiff"; diff: DeclaredDiff }
+  | { type: "menuChoice"; menu: string; choice: string | null }
   | { type: "interrupt" };
+
+/// A choice offered in the composer's own popover, where the chip was clicked.
+export type MenuItem = {
+  readonly id: string;
+  readonly label: string;
+  readonly description?: string;
+  readonly detail?: string;
+};
+
+/// Which chip a popover hangs from.
+export type MenuAnchor = "project" | "service" | "model" | "effort" | "mode";
+
+/// The most choices one popover lists; a catalogue longer than this is the provider's, and the rest stays in
+/// the command palette path.
+export const MAX_MENU_ITEMS = 64;
 
 /// The most attachments one message carries, which is also the protocol's published image bound.
 export const MAX_ATTACHMENTS = 8;
@@ -57,6 +76,15 @@ export function isViewAction(value: unknown): value is ViewAction {
   if (type === "removeAttachment") {
     const index = (value as { index?: unknown }).index;
     return Number.isInteger(index) && (index as number) >= 0 && (index as number) < MAX_ATTACHMENTS;
+  }
+  if (type === "openDiff") {
+    return isDeclaredDiff((value as { diff?: unknown }).diff);
+  }
+  if (type === "menuChoice") {
+    const candidate = value as { menu?: unknown; choice?: unknown };
+    return typeof candidate.menu === "string"
+      && candidate.menu.length <= 64
+      && (candidate.choice === null || (typeof candidate.choice === "string" && candidate.choice.length <= 64));
   }
   // Exactly the actions the dispatcher handles. "openWorkspace" and "close" once passed here without a
   // dispatcher branch, so they fell into the interrupt fallback: a message the page never sends today,

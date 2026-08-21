@@ -482,12 +482,13 @@ body.no-chat #composer {
 }
 
 /*
- * A change the service declared as a change, in the host's own diff colours.
- *
- * Only declared shapes are coloured (ACP diff blocks, unified diff text); everything else stays in the raw
- * detail above. The colours come from the diff editor's theme tokens so light and dark both read.
+ * A change the service declared as a change: one row naming it, and a button that opens it in VS Code's own
+ * diff editor. The page draws no diff; the editor does, in its own colours.
  */
 .tool-diff {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
   margin: 0.35rem 0 0;
 }
 
@@ -495,43 +496,32 @@ body.no-chat #composer {
   color: var(--vscode-descriptionForeground);
   font-family: var(--vscode-editor-font-family, monospace);
   font-size: 0.85em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-pre.diff-body {
-  margin: 0.15rem 0 0;
-  padding: 0.5rem 0.6rem;
-  overflow-x: auto;
-  max-height: 18rem;
-  border-radius: 0.4rem;
-  background: var(--vscode-textCodeBlock-background, var(--vscode-editor-background));
-  color: var(--vscode-editor-foreground);
-  font-family: var(--vscode-editor-font-family, monospace);
-  font-size: 0.85em;
-  white-space: pre;
-}
-
-pre.diff-body.diff-add {
-  background: var(--vscode-diffEditor-insertedTextBackground, rgb(80 160 80 / 20%));
-}
-
-pre.diff-body.diff-del {
-  background: var(--vscode-diffEditor-removedTextBackground, rgb(200 80 80 / 20%));
-}
-
-.diff-body span {
-  display: block;
-}
-
-.diff-body .diff-add {
-  background: var(--vscode-diffEditor-insertedTextBackground, rgb(80 160 80 / 20%));
-}
-
-.diff-body .diff-del {
-  background: var(--vscode-diffEditor-removedTextBackground, rgb(200 80 80 / 20%));
-}
-
-.diff-body .diff-hunk {
+.diff-measure {
   color: var(--vscode-descriptionForeground);
+  font-size: 0.8em;
+  white-space: nowrap;
+}
+
+.diff-open {
+  margin-left: auto;
+  padding: 0.1rem 0.55rem;
+  border: 1px solid var(--vscode-button-border, transparent);
+  border-radius: 0.3rem;
+  background: var(--vscode-button-secondaryBackground);
+  color: var(--vscode-button-secondaryForeground);
+  font: inherit;
+  font-size: 0.85em;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.diff-open:hover {
+  background: var(--vscode-button-secondaryHoverBackground);
 }
 
 /*
@@ -635,6 +625,39 @@ pre.diff-body.diff-del {
 
 .commands[hidden] {
   display: none;
+}
+
+/*
+ * A chip's popover: the same listbox as the slash menu, hung from the chip inside the composer card. Chosen
+ * where it was asked, like every chat composer's model and mode menus.
+ */
+.composer-card {
+  position: relative;
+}
+
+.chip-menu {
+  position: absolute;
+  bottom: calc(100% - 0.5rem);
+  left: 0.5rem;
+  z-index: 3;
+  min-width: 16rem;
+  max-width: min(28rem, calc(100% - 1rem));
+  margin: 0;
+}
+
+.chip-menu .command {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  column-gap: 0.5rem;
+}
+
+.chip-menu .command-detail {
+  grid-column: 1 / -1;
+  color: var(--vscode-descriptionForeground);
+  font-size: 0.8em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .command {

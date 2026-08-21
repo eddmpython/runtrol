@@ -6,6 +6,11 @@ import { isViewAction } from "./viewActions";
 test("accepts exactly the actions the dispatcher handles", () => {
   assert.ok(isViewAction({ type: "prompt", text: "hello" }));
   assert.ok(isViewAction({ type: "interrupt" }));
+  assert.ok(isViewAction({ type: "openDiff", diff: { kind: "unified", path: "a.rs", text: "+x" } }));
+  assert.ok(isViewAction({ type: "menuChoice", menu: "m1", choice: "3" }));
+  assert.ok(isViewAction({ type: "menuChoice", menu: "m1", choice: null }));
+  assert.equal(isViewAction({ type: "menuChoice", menu: "m1", choice: 3 }), false);
+  assert.equal(isViewAction({ type: "openDiff", diff: { kind: "unified", path: "a.rs" } }), false);
   assert.ok(isViewAction({
     type: "answerApproval",
     approval: "a-1",
