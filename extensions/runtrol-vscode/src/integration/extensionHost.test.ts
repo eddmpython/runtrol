@@ -9,6 +9,7 @@ import { extensionUnderTest } from "./extensionUnderTest.test";
 
 let currentStage = "starting";
 const EXTENSION_INITIALIZATION_HANG_TIMEOUT_MS = 15_000;
+const SESSION_MANAGEMENT_HANG_TIMEOUT_MS = 30_000;
 
 type ExtensionApi = {
   readonly ready: Promise<void>;
@@ -168,7 +169,7 @@ async function measure(resultPath: string): Promise<Record<string, number | stri
   }
   const switched = await within(
     api.measureSessionManagement(managedSessionIds()),
-    20_000,
+    SESSION_MANAGEMENT_HANG_TIMEOUT_MS,
     "30-session management and eight hot session switches",
   );
 

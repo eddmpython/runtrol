@@ -153,6 +153,21 @@ Core rechecks the current integrated project artifacts against all passing Recei
 Gate set on that tree. Only an exact match with all Gates passing moves the Mission to `completed`. Runtrol does not
 merge, rebase, resolve conflicts, or select a branch automatically.
 
+For an ordinary `all_tasks` Mission, **Review Mission Landing Queue** replaces a blind jump from Receipts to final
+verification. Studio rejects missing Receipt evidence, unsafe or non-canonical paths, case-folded overlapping project
+targets, missing workspace Artifacts, non-file project targets, non-UTF-8 Artifact text, and review sides above 8 MiB
+combined before it opens a review. It then combines every sealed Artifact into one native VS Code changes editor, up
+to a fixed 1,024 Artifact review bound. The left side is the current project at review time and the right side is the
+exact passing Receipt result. Both are bounded, read-only in-memory snapshots, so applying files or
+Core cleaning a finished worktree cannot invalidate the open review. They are never written to disk and contain no
+conversation content.
+
+The review does not apply, merge, stage, or commit a file. After the operator integrates the reviewed result, **Run
+Gates and complete** closes the Landing review and invokes the existing Core completion request. Core still compares
+the live project bytes with every Receipt and reruns the fixed Gates. If other ordinary Missions are waiting across
+projects, Studio reports the exact count and offers **Review next**. `choose_one` Missions remain on Fleet Compare and
+its explicit winner selection path.
+
 ## Recovery and retention
 
 The Mission ledger is a separate redb file from ordinary session pointers. It holds at most 100 Missions in one
@@ -184,7 +199,8 @@ renderer. The normal sequence is:
 5. Select the same action when a wave is Ready. It runs fixed Gates, seals Receipts, and starts the next eligible wave.
 6. Use granular recovery only for a failed, retryable, missing, or ambiguous Task. Working sessions, person or quota
    waits, comparison policy, and integration never advance by inference.
-7. Verify and complete integration locally.
+7. For an ordinary Mission, open **Review Mission Landing Queue**, integrate the reviewed Receipt Artifacts, then
+   select **Run Gates and complete**. Use the direct completion command only as the explicit recovery path.
 8. Archive the terminal Mission.
 
 A `choose_one` comparison keeps its specialized `Run All Reviewed Attempts` and explicit result comparison flow.
@@ -244,6 +260,12 @@ Missions and 1,000 Tasks to remain at or below 50 ms p95.
 IPC. It seals different content for the same Artifact, rejects completion with the non-applied passing Task, accepts
 the exact applied Task, archives the Mission, and proves session cleanup. The focused real Extension Host eye pass
 visually verifies the reviewed Mission, two-column conversation grid, integrating results, and native Artifact diffs.
+
+The focused `missionFlightDeckEye` Extension Host journey also runs two separate Git projects through one installed
+provider CLI. It opens all two-file Receipt Landings in native multi-diff editors, completes the first Mission while
+the second stays `integrating`, opens the next queued Landing, completes both, and exits with every owned process
+clean. The reviewed, completed, and next-Landing screenshots are inspected directly. This focused eye pass is product
+evidence and does not create a new North Star score axis.
 
 These gates prove product wiring and deterministic evidence. They do not claim that one provider or capability is
 better, that a linked worktree is a sandbox, or that loopback model output represents account-backed model quality.

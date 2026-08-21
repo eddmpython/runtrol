@@ -11,6 +11,11 @@
 > 여러 프로젝트의 현재 안전한 파동을 함께 진행한다. 실제 Extension Host에서 두 Git 프로젝트를 한 동작으로
 > 동시에 시작하고 다음 한 동작으로 둘 다 `integrating`까지 보냈다.
 >
+> `Review Mission Landing Queue`는 일반 Mission의 모든 통과 Receipt Artifact를 현재 프로젝트와 한 개의
+> VS Code native multi-diff에서 검토한다. 파일은 바꾸지 않으며, 명시적 완료 동작이 기존 Core의 정확한
+> Receipt 비교와 고정 Gate를 실행한 뒤 다음 프로젝트를 잇는다. 실제 Extension Host에서 두 Git 프로젝트의
+> Landing을 차례로 검토하고 완료했다.
+>
 > 폰 알림은 이제 대화 내용을 싣지 않은 채 실제로 운영자를 기다리는 첫 세션으로 직행한다. `Needs you`
 > 수와 다음 대기 세션 이동은 사람 대기만 포함하고 계정 한도 대기는 구분한다. 실물 CLI 승인 게이트가
 > 승인 중 진입과 답변 뒤 해제를 검증한다.

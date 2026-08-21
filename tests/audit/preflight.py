@@ -434,6 +434,9 @@ GATES: dict[str, tuple[str, list[str]]] = {
     "cargoDeny": ("공급망·기각 원장 (cargo-deny)", ["cargo", "deny", "check"]),
 }
 
+PERFORMANCE_GATES = ("vscodeHostPerformanceSelftest", "vscodeHostPerformance")
+
+
 SUITES: dict[str, tuple[str, ...]] = {
     "lint": (
         "noScriptsDir",
@@ -517,7 +520,12 @@ SUITES: dict[str, tuple[str, ...]] = {
         "cargoFmt",
         "cargoClippy",
     ),
-    "preflight": tuple(GATES),
+    # Measure the product before the full suite heats and loads the shared runner.
+    # Every gate still runs exactly once.
+    "preflight": (
+        *PERFORMANCE_GATES,
+        *(name for name in GATES if name not in PERFORMANCE_GATES),
+    ),
 }
 
 CARGO_GATES = frozenset(

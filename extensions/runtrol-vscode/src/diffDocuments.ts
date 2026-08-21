@@ -2,19 +2,21 @@ import * as vscode from "vscode";
 
 import type { DeclaredDiff } from "./webview/toolDiff";
 
-/// The most declared changes held for the editor at once. A conversation declares a few per turn; holding
-/// more than this would be a transcript of changes, which the provider already keeps.
-const MAX_HELD = 64;
+/// The most review sides held for the editor at once: one 1,024-Artifact Mission Landing, two sides.
+/// The shared text ceiling below also prevents declared changes from becoming another transcript store.
+const MAX_HELD = 2_048;
+export const MAX_DIFF_TEXT = 8 * 1_024 * 1_024;
 
-/// A change a coding service declared, opened in VS Code's own diff editor instead of drawn in the page.
+/// A declared change or reviewed Mission Artifact, opened in VS Code's own diff editor instead of drawn in the page.
 ///
-/// The service's `oldText`/`newText` become two read-only virtual documents and `vscode.diff` draws them;
+/// Declared `oldText`/`newText` and exact Landing sides become read-only virtual documents that VS Code draws;
 /// a unified patch opens as a read-only `.diff` document the editor highlights itself. Runtrol colours
 /// nothing and keeps nothing on disk: the texts live in this map, bounded, for as long as the editor may
 /// ask for them, and they are the service's own words relayed into the place VS Code reads a change.
 export class DiffDocuments implements vscode.TextDocumentContentProvider {
   static readonly scheme = "runtrol-diff";
   private readonly texts = new Map<string, string>();
+  private heldChars = 0;
   private serial = 0;
 
   provideTextDocumentContent(uri: vscode.Uri): string {
@@ -25,8 +27,8 @@ export class DiffDocuments implements vscode.TextDocumentContentProvider {
   async open(diff: DeclaredDiff): Promise<void> {
     const name = diff.path ? diff.path.split(/[\\/]/u).pop() || "change" : "change";
     if (diff.kind === "oldNew") {
-      const left = this.hold(diff.oldText, `before/${name}`);
-      const right = this.hold(diff.newText, `after/${name}`);
+      const left = this.snapshot(diff.oldText, `before/${name}`);
+      const right = this.snapshot(diff.newText, `after/${name}`);
       await vscode.commands.executeCommand(
         "vscode.diff",
         left,
@@ -36,19 +38,21 @@ export class DiffDocuments implements vscode.TextDocumentContentProvider {
       );
       return;
     }
-    const patch = this.hold(diff.text, `${name}.diff`);
+    const patch = this.snapshot(diff.text, `${name}.diff`);
     const document = await vscode.workspace.openTextDocument(patch);
     await vscode.window.showTextDocument(document, { preview: true });
   }
 
-  private hold(text: string, name: string): vscode.Uri {
+  snapshot(text: string, name: string): vscode.Uri {
     this.serial += 1;
     const path = `/${this.serial}/${name}`;
     this.texts.set(path, text);
-    while (this.texts.size > MAX_HELD) {
-      const oldest = this.texts.keys().next().value;
+    this.heldChars += text.length;
+    while (this.texts.size > MAX_HELD || this.heldChars > MAX_DIFF_TEXT) {
+      const oldest = this.texts.entries().next().value;
       if (oldest === undefined) break;
-      this.texts.delete(oldest);
+      this.heldChars -= oldest[1].length;
+      this.texts.delete(oldest[0]);
     }
     return vscode.Uri.from({ scheme: DiffDocuments.scheme, path });
   }

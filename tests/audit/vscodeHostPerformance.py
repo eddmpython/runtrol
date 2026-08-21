@@ -42,6 +42,18 @@ rssGrowthBytes joined them on 2026-08-21 (48 MiB -> 64 MiB) after VS Code 1.132.
 machine's band. The unchanged HEAD archive produced 51.55, 53.76, and 49.15 MiB, so every trial failed
 the old budget without the day's code. The current tree produced 56.44, 54.31, and 55.16 MiB. The new
 finite ceiling stays above that observed band while continuing to reject unbounded retention.
+
+sessionSwitchP95Ms was recalibrated again on 2026-08-22 (175 -> 310) after a persistent reference-machine
+band shift. The exact unchanged HEAD archive produced 256.8, 220.4, and 248.8 ms, so every trial failed
+the old budget without the day's code. The final tree produced 201.4, 436.1, and 208.6 ms, with a faster
+best trial than HEAD. The new ceiling clears the unchanged worst by a fifth while the three-trial minimum
+continues to reject a repeatable product regression beyond the observed band.
+
+The session-management hang guard moved from 20 to 30 seconds on 2026-08-22 after one cumulative full
+preflight run exhausted the old guard before producing metrics. Three immediate isolated trials all finished,
+and the gate passed at 289.0 ms. This guard detects a stuck measurement; the unchanged field ratchets still
+decide whether a completed measurement is fast enough. Full preflight runs this gate pair before heat-producing
+gates so the ratchet measures the product rather than accumulated suite load.
 """
 
 from __future__ import annotations
@@ -80,6 +92,8 @@ EXPECTED_DROPPED_FRAMES = 0
 MEASUREMENT_TRIALS = 3
 INITIALIZATION_TIMEOUT_DECLARATION = "const EXTENSION_INITIALIZATION_HANG_TIMEOUT_MS = 15_000;"
 INITIALIZATION_TIMEOUT_USE = "within(api.ready, EXTENSION_INITIALIZATION_HANG_TIMEOUT_MS"
+SESSION_TIMEOUT_DECLARATION = "const SESSION_MANAGEMENT_HANG_TIMEOUT_MS = 30_000;"
+SESSION_TIMEOUT_USE = "SESSION_MANAGEMENT_HANG_TIMEOUT_MS,"
 
 
 def loadBudget() -> dict[str, float]:
@@ -157,6 +171,10 @@ def hostContractProblems(source: str) -> list[str]:
         found.append("the Extension Host initialization hang timeout is not the exact 15 second guard")
     if source.count(INITIALIZATION_TIMEOUT_USE) != 3:
         found.append("initial activation, reload, and follow do not share the initialization hang guard")
+    if SESSION_TIMEOUT_DECLARATION not in source:
+        found.append("the session-management hang guard is not the exact 30 second guard")
+    if source.count(SESSION_TIMEOUT_USE) != 1:
+        found.append("session management does not use its one hang guard")
     return found
 
 
@@ -242,9 +260,11 @@ def selftest() -> int:
         return 2
     host_source = (
         f"{INITIALIZATION_TIMEOUT_DECLARATION}\n"
+        f"{SESSION_TIMEOUT_DECLARATION}\n"
         f"{INITIALIZATION_TIMEOUT_USE}, 'initial');\n"
         f"{INITIALIZATION_TIMEOUT_USE}, 'reload');\n"
         f"{INITIALIZATION_TIMEOUT_USE}, 'follow');\n"
+        f"within(measure(), {SESSION_TIMEOUT_USE} 'sessions');\n"
     )
     if hostContractProblems(host_source):
         print("[vscodeHostPerformance --selftest] FAIL. the host contract fixture was rejected.", file=sys.stderr)
@@ -252,6 +272,8 @@ def selftest() -> int:
     host_mutations = (
         host_source.replace("15_000", "5_000"),
         host_source.replace(f"{INITIALIZATION_TIMEOUT_USE}, 'reload');\n", ""),
+        host_source.replace("30_000", "10_000"),
+        host_source.replace(f"within(measure(), {SESSION_TIMEOUT_USE} 'sessions');\n", ""),
     )
     if any(not hostContractProblems(mutation) for mutation in host_mutations):
         print("[vscodeHostPerformance --selftest] FAIL. a host timeout defect escaped.", file=sys.stderr)

@@ -11,6 +11,11 @@
 > projects. A real Extension Host started two separate Git projects in one action and moved both to `integrating` in
 > the next action.
 >
+> `Review Mission Landing Queue` compares every passing Receipt Artifact from an ordinary Mission with the current
+> project in one native VS Code multi-diff. It changes no files. One explicit completion action runs the existing
+> exact Receipt comparison and fixed Gates in Core, then continues to the next project. A real Extension Host
+> reviewed and completed two separate Git project Landings in sequence.
+>
 > A phone notification now opens the first session that is actually waiting for the operator without carrying
 > conversation content. The `Needs you` count and next action include person waits only and keep account limits
 > separate. The real CLI approval gate verifies entry while pending and removal after the answer.

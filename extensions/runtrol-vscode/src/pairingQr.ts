@@ -1,12 +1,7 @@
-import * as QRCode from "qrcode/lib/browser";
+import * as QRCode from "qrcode/lib/core/qrcode";
+import * as SvgRenderer from "qrcode/lib/renderer/svg-tag";
 
-export async function pairingQrDataUrl(value: string): Promise<string> {
-  const svg = await QRCode.toString(value, {
-    type: "svg",
-    errorCorrectionLevel: "M",
-    margin: 3,
-    width: 320,
-    color: { dark: "#101418", light: "#ffffff" },
-  });
+export function pairingQrDataUrl(value: string): string {
+  const svg = SvgRenderer.render(QRCode.create(value));
   return `data:image/svg+xml;base64,${Buffer.from(svg).toString("base64")}`;
 }

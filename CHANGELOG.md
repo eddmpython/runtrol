@@ -12,6 +12,14 @@ and refactoring that no user can observe do not belong here.
 
 ### Added
 
+- **Review Mission Landing Queue** turns ordinary Mission integration into a cross-project, Receipt-first review.
+  Every sealed UTF-8 Artifact from one passing Mission opens together in one native VS Code changes editor against
+  the current project. The bounded read-only review changes no files. One explicit action closes the review, asks
+  Core to compare the live project with every Receipt and rerun the fixed Gates, then reports the remaining queue and
+  offers the next waiting project. Unsafe paths, overlapping targets, incomplete evidence, missing files, oversized
+  or non-UTF-8 text, and comparison Missions stay out. A real Extension Host landed two separate Git projects in
+  sequence without editor lifecycle errors.
+
 - **Continue Ready Missions** turns the Missions view into a bounded multi-project flight deck. One local modal lists
   the exact digest and currently safe action for up to eight reviewed ordinary Missions, then advances each through
   the existing Mission Momentum requests. Running work is handled before a new start; expired review, recovery,

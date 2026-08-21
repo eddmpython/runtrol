@@ -10,6 +10,10 @@
 > `Continue Ready Missions` 可一次审查最多八个精确 Mission 摘要，并同时推进多个项目当前安全的波次。真实 Extension Host 用一次操作启动了两个独立 Git 项目，并在下一次操作中将两者都推进到 `integrating`。
 > 下面多数分数为 0，不是因为没有代码，而是因为还没有门禁去断言那些轴。
 >
+> `Review Mission Landing Queue` 会在一个 VS Code 原生多文件 diff 中，将普通 Mission 的所有通过 Receipt
+> Artifact 与当前项目进行比较。它不会修改文件。一次明确的完成操作会让现有 Core 执行精确 Receipt
+> 比较与固定 Gate，然后继续下一个项目。真实 Extension Host 已依次审查并完成两个独立 Git 项目的 Landing。
+>
 > 手机通知现在不会携带对话内容，并会打开第一个真正等待操作者的会话。`Needs you` 数量与下一项操作
 > 只包含等待人员的状态，并与账户限额等待区分。真实 CLI 批准门禁验证等待时出现、回答后消失。
 

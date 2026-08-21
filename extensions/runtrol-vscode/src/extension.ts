@@ -211,7 +211,7 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
     openFolders: () => (vscode.workspace.workspaceFolders ?? []).map((folder) => folder.uri.fsPath),
     warn: (message) => void vscode.window.showWarningMessage(message),
   });
-  const missionController = new MissionController(client, controller, state, context);
+  const missionController = new MissionController(client, controller, state, context, diffDocuments);
   const candidateController = new CandidateController(client);
   const missions = new MissionTree(missionController);
   const conversations = new ConversationsTree(state, projectStore, agentTools);
@@ -274,6 +274,10 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
     vscode.commands.registerCommand(
       "runtrol.continueReadyMissions",
       () => run(() => afterMissionReady(() => missionController.continueReadyMissions())),
+    ),
+    vscode.commands.registerCommand(
+      "runtrol.reviewMissionLanding",
+      (item) => run(() => afterMissionReady(() => missionController.reviewMissionLanding(item))),
     ),
     vscode.commands.registerCommand(
       "runtrol.launchFleet",

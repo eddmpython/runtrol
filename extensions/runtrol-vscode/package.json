@@ -98,6 +98,7 @@
     "onCommand:runtrol.startMission",
     "onCommand:runtrol.continueMission",
     "onCommand:runtrol.continueReadyMissions",
+    "onCommand:runtrol.reviewMissionLanding",
     "onCommand:runtrol.launchFleet",
     "onCommand:runtrol.prepareMissionTask",
     "onCommand:runtrol.sendTaskInstruction",
@@ -328,6 +329,11 @@
         "command": "runtrol.continueReadyMissions",
         "title": "Runtrol: Continue Ready Missions",
         "icon": "$(run-all)"
+      },
+      {
+        "command": "runtrol.reviewMissionLanding",
+        "title": "Runtrol: Review Mission Landing Queue",
+        "icon": "$(diff-multiple)"
       },
       {
         "command": "runtrol.launchFleet",
@@ -699,29 +705,34 @@
           "group": "5_recover@1"
         },
         {
-          "command": "runtrol.fanOutInstruction",
+          "command": "runtrol.reviewMissionLanding",
           "when": "view == runtrol.missions",
           "group": "navigation@1"
         },
         {
-          "command": "runtrol.validateMission",
+          "command": "runtrol.fanOutInstruction",
           "when": "view == runtrol.missions",
           "group": "navigation@2"
         },
         {
-          "command": "runtrol.registerMissionGate",
+          "command": "runtrol.validateMission",
           "when": "view == runtrol.missions",
           "group": "navigation@3"
         },
         {
-          "command": "runtrol.refresh",
+          "command": "runtrol.registerMissionGate",
           "when": "view == runtrol.missions",
           "group": "navigation@4"
         },
         {
-          "command": "runtrol.capabilityInbox",
+          "command": "runtrol.refresh",
           "when": "view == runtrol.missions",
           "group": "navigation@5"
+        },
+        {
+          "command": "runtrol.capabilityInbox",
+          "when": "view == runtrol.missions",
+          "group": "navigation@6"
         },
         {
           "command": "runtrol.arrangeConversationGrid",
@@ -831,7 +842,7 @@
           "group": "inline@3"
         },
         {
-          "command": "runtrol.completeMissionIntegration",
+          "command": "runtrol.reviewMissionLanding",
           "when": "view == runtrol.missions && viewItem == runtrol.mission.integrating",
           "group": "inline@1"
         },

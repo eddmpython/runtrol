@@ -23,6 +23,8 @@ type JourneyApi = {
   validateMissionFile(file: string): Promise<MissionSnapshot>;
   continueReadyMissions(operatorChoiceProvider: string): Promise<FlightDeckResult>;
   mission(missionId: string): Promise<MissionSnapshot>;
+  reviewMissionLanding(missionId: string): Promise<void>;
+  completeMissionIntegration(missionId: string): Promise<MissionSnapshot>;
   close(session: string, now?: boolean): Promise<void>;
   waitForLifecycle(session: string, lifecycle: SessionLine["lifecycle"], deadlineMs: number): Promise<void>;
 };
@@ -150,13 +152,65 @@ async function eyePass(resultPath: string, sessions: string[]): Promise<void> {
     );
   }
   const integrating = await Promise.all(reviewed.map((snapshot) => journey.mission(snapshot.mission.mission_id)));
-  for (const snapshot of integrating) assertMission(snapshot, "integrating", ["passed"]);
+  for (const snapshot of integrating) {
+    assertMission(snapshot, "integrating", ["passed"]);
+    if (snapshot.tasks[0]?.artifact_paths.length !== 2) {
+      throw new Error(`${snapshot.mission.name} did not seal both reviewed Artifacts`);
+    }
+  }
   await showMissions();
   await capture(resultPath, "flightDeckIntegrating", {
     missions: integrating.length,
     states: integrating.map((snapshot) => snapshot.mission.state),
     passed: integrating.map((snapshot) => snapshot.mission.passed_tasks),
   });
+
+  currentStage = "reviewing-landing";
+  const firstLanding = integrating[0];
+  await journey.reviewMissionLanding(firstLanding.mission.mission_id);
+  await waitFor(
+    () => vscode.window.tabGroups.all.some((group) =>
+      group.tabs.some((tab) => tab.label.includes("Receipt Landing"))
+    ),
+    10_000,
+    "the native Receipt Landing multi-diff",
+  );
+  await delay(1_200);
+  await capture(resultPath, "missionLandingReview", {
+    mission: firstLanding.mission.name,
+    artifacts: firstLanding.tasks[0]?.artifact_paths.length,
+    editors: vscode.window.tabGroups.all.flatMap((group) => group.tabs).length,
+  });
+
+  currentStage = "completing-landing";
+  await applyTaskArtifacts(firstLanding);
+  const completed = await journey.completeMissionIntegration(firstLanding.mission.mission_id);
+  assertMission(completed, "completed", ["passed"]);
+  const secondStillWaiting = await journey.mission(integrating[1].mission.mission_id);
+  assertMission(secondStillWaiting, "integrating", ["passed"]);
+  await showMissions();
+  await capture(resultPath, "missionLandingCompleted", {
+    completed: completed.mission.name,
+    remaining: secondStillWaiting.mission.name,
+  });
+
+  currentStage = "reviewing-next-landing";
+  await journey.reviewMissionLanding(secondStillWaiting.mission.mission_id);
+  await waitFor(
+    () => vscode.window.tabGroups.all.some((group) =>
+      group.tabs.some((tab) => tab.label.includes("Receipt Landing"))
+    ),
+    10_000,
+    "the next native Receipt Landing multi-diff",
+  );
+  await delay(1_200);
+  await capture(resultPath, "missionLandingNext", {
+    mission: secondStillWaiting.mission.name,
+    completed: completed.mission.name,
+  });
+  await applyTaskArtifacts(secondStillWaiting);
+  const allCompleted = await journey.completeMissionIntegration(secondStillWaiting.mission.mission_id);
+  assertMission(allCompleted, "completed", ["passed"]);
 
   currentStage = "closing";
   for (const session of [...sessions]) {
@@ -165,7 +219,7 @@ async function eyePass(resultPath: string, sessions: string[]): Promise<void> {
   }
   await writeFile(
     resultPath,
-    JSON.stringify({ stage: "complete", missions: 2, started: 2, verified: 2 }),
+    JSON.stringify({ stage: "complete", missions: 2, started: 2, verified: 2, landed: 2 }),
     "utf8",
   );
 }
@@ -200,7 +254,7 @@ instruction_ref = "instructions/task.md"
 instruction_sha256 = "${instructionSha256}"
 workspace_mode = "isolated_worktree"
 provider_selector = ${JSON.stringify(`runtime:${provider}`)}
-output_roots = ["outputs/result.txt"]
+output_roots = ["outputs"]
 gate_refs = ["flight-deck-eye-check"]
 `;
   await writeFile(path.join(folder, "mission.toml"), mission, "utf8");
@@ -213,7 +267,18 @@ async function writeTaskArtifact(snapshot: MissionSnapshot, content: string): Pr
   if (!task?.workspace || task.output_roots.length !== 1) {
     throw new Error(`${snapshot.mission.name} has no exact prepared Artifact path`);
   }
-  await writeFile(path.join(task.workspace, task.output_roots[0]), content, "utf8");
+  await writeFile(path.join(task.workspace, "outputs", "result.txt"), content, "utf8");
+  await writeFile(path.join(task.workspace, "outputs", "summary.txt"), `${snapshot.mission.name} summary\n`, "utf8");
+}
+
+async function applyTaskArtifacts(snapshot: MissionSnapshot): Promise<void> {
+  const task = snapshot.tasks[0];
+  if (!task?.workspace) throw new Error(`${snapshot.mission.name} has no sealed Task workspace`);
+  for (const artifact of task.artifact_paths) {
+    const target = path.join(snapshot.mission.project, ...artifact.split("/"));
+    await mkdir(path.dirname(target), { recursive: true });
+    await writeFile(target, await readFile(path.join(task.workspace, ...artifact.split("/"))));
+  }
 }
 
 function assertMission(snapshot: MissionSnapshot, missionState: string, taskStates: readonly string[]): void {

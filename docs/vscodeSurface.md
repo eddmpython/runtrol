@@ -230,7 +230,7 @@ Two contracts keep the conversation window from growing a branch per place or pe
 | `conversationPanels.ts` | one binding per conversation (surface + watch), the two workbench places, the grid | provider branches or conversation content |
 | `diffDocuments.ts` | declared changes as read-only virtual documents for VS Code's diff editor | files on disk or a transcript of changes |
 | `webview/` | bounded active rendering and input | durable storage or background sessions |
-| `mission/controller.ts`, `mission/momentum.ts`, and `mission/tree.ts` | Mission review, safe-wave continuation, local recovery actions, reviewed fleet launch, Task rows, native Artifact comparison, and one native editor document | provider input without confirmed local authority, project file merging, transcript inference, or optimistic completion |
+| `mission/controller.ts`, `mission/momentum.ts`, and `mission/tree.ts` | Mission review, safe-wave continuation, local recovery actions, reviewed fleet launch, Receipt Landing Queue, Task rows, native Artifact comparison, and one native editor document | provider input without confirmed local authority, project file merging, transcript inference, or optimistic completion |
 | `capability/controller.ts` | candidate inbox, native diff review, and exact local trust actions | capability text injection or user-wide trust |
 
 ## Mission and capability surface
@@ -263,6 +263,15 @@ Pause, safe resume, cancel, bounded retry, integrated-tree verification, complet
 commands. Ordinary Missions require every Task to pass. A reviewed `choose_one` Mission waits for every attempt to
 finish, compares sealed Artifact paths in native diff editors, and completes only with one exact passing Task. The
 extension does not merge or edit project files.
+
+An ordinary integrating Mission exposes **Review Mission Landing Queue** instead of direct completion as its primary
+row action. The same command in the Missions title and command palette orders every eligible project deterministically
+and asks for a Mission when more than one is ready. One native VS Code changes editor compares every sealed UTF-8
+Artifact from its passing Receipts against the current project, up to a fixed 1,024 Artifact review bound. Review
+sides are bounded read-only memory documents with an 8 MiB combined text ceiling, not project writes or conversation
+storage. The explicit **Run Gates and complete** action closes that editor, invokes
+the existing Core verification, reports how many other projects are ready, and offers **Review next**. The old direct
+completion command remains available for recovery, and `choose_one` rows continue to open Fleet Compare.
 
 The Capability Candidate Inbox uses a native quick pick and Markdown review document. Verification and approval name
 one exact project version. Approval opens the built-in VS Code file or diff review first. Reject, quarantine, rollback,
@@ -355,7 +364,7 @@ specified in [automatic updates](automaticUpdates.md).
 | `vscodeHostPerformance` | real 30-session Extension Host and Webview responsiveness on three operating systems |
 | `vscodeRealProviderJourney` | installed provider discovery and a complete real CLI control journey |
 | `node tooling/real-window-eye.mjs` | the eye pass: an isolated VS Code window and an isolated Runtime with the real installed CLIs, real folders and real conversations, photographed in the draft, conversation, tabs, reopened, grid, places, diff and diff-editor poses, with a real throwaway deletion; the pictures are the judgement. `RUNTROL_EYE_ENTRY=placeProbe` runs the focused place probe and `RUNTROL_EYE_ENTRY=agentToolsEye` runs the zero-model-turn Agent Tools enable and revoke proof in isolated provider homes |
-| `RUNTROL_EYE_ENTRY=missionFlightDeckEye node tooling/real-window-eye.mjs` | two separate Git projects and reviewed Missions start together through one flight, open two real native conversations in the VS Code grid, and reach integration together through the next flight |
+| `RUNTROL_EYE_ENTRY=missionFlightDeckEye node tooling/real-window-eye.mjs` | two separate Git projects and reviewed Missions start together through one flight, reach integration together through the next flight, review every sealed Artifact in native Receipt Landing multi-diffs, complete the first while the second waits, and continue through the next Landing without editor lifecycle errors |
 | `agentToolsSmoke` | real installed provider CLIs, official MCP registration, modern and legacy discovery, fixed tool catalogue, root isolation, Runtime reads, complete revocation, and post-revocation default deny with zero model turns |
 | `missionGrowthContracts` | Mission state, exact Send, evidence, integration, capability trust, local scope, tamper, and rollback |
 | `missionLiveJourney` | two installed provider CLIs complete five reviewed Tasks and an explicit reuse, tamper, and rollback journey through production IPC |

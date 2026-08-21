@@ -10,6 +10,11 @@
 > 通常の Mission は `Continue Reviewed Mission` 一回で現在安全な wave を開始し、完了した Task を固定 Gate で封印し、次の DAG wave を準備して正確なレビュー済み指示を送る。実物 CLI と Extension Host の二段階 journey で検証した。
 > `Continue Ready Missions` は最大八つの正確な Mission digest を一度にレビューし、複数 project の現在安全な wave をまとめて進める。実物 Extension Host で二つの Git project を一回で開始し、次の一回で両方を `integrating` に進めた。
 >
+> `Review Mission Landing Queue` は通常 Mission のすべての passing Receipt Artifact を、現在の project と
+> 一つの VS Code native multi-diff で比較する。ファイルは変更しない。明示的な完了操作が既存 Core の
+> 正確な Receipt 比較と固定 Gate を実行し、次の project へ続く。実物 Extension Host で二つの Git project
+> の Landing を順にレビューして完了した。
+>
 > スマートフォン通知は会話内容を運ばず、実際にオペレーターを待つ最初の session を開く。`Needs you`
 > の件数と次への移動は person wait だけを含み、account limit は区別する。実物 CLI approval gate が
 > approval 中の表示と回答後の解除を検証する。
