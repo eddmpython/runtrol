@@ -19,7 +19,7 @@ use runtrol_ledger::{
     ReceiptInput, RunOutcome, RunRecord, TaskRecord, TaskState,
 };
 use runtrol_orchestrator::{
-    CapabilitySelection, GateDefinition, GateOutcome, GateRegistry, GateRequest,
+    CapabilitySelection, CompletionPolicy, GateDefinition, GateOutcome, GateRegistry, GateRequest,
     MAX_INSTRUCTION_BYTES, MAX_MISSION_BYTES, MissionValidator, ProviderSelector,
     RecoveryTaskState, ResourceBudget, Scheduler, SchedulerEffect, SchedulerError,
     ValidatedMission, WorkingDirectoryRule, WorkspaceMode,
@@ -1369,7 +1369,7 @@ impl MissionController {
                     .retry(intent.run_id)
                     .map_err(|_| "the scheduler refused the retryable result")?;
             } else {
-                scheduler
+                let effects = scheduler
                     .fail(intent.run_id)
                     .map_err(|_| "the scheduler refused the failed result")?;
                 if active.validated.spec.limits.stop_on_critical_failure {
@@ -1381,6 +1381,32 @@ impl MissionController {
                             MissionState::Failed,
                         )
                         .map_err(|_| "the Mission failure could not be committed")?;
+                } else if effects
+                    .iter()
+                    .any(|effect| matches!(effect, SchedulerEffect::PresentIntegration))
+                {
+                    snapshot
+                        .mission
+                        .transition(
+                            format!("integrating-{}", intent.run_id).into(),
+                            MissionState::Running,
+                            MissionState::Integrating,
+                        )
+                        .map_err(|_| "the Mission cannot enter integration review")?;
+                } else if effects
+                    .iter()
+                    .any(|effect| matches!(effect, SchedulerEffect::FinishWithoutPassingResult))
+                {
+                    snapshot
+                        .mission
+                        .transition(
+                            format!("no-passing-result-{}", intent.run_id).into(),
+                            MissionState::Running,
+                            MissionState::Failed,
+                        )
+                        .map_err(|_| "the Mission failure could not be committed")?;
+                } else {
+                    reserve_available(&mut snapshot, scheduler)?;
                 }
             }
         }
@@ -1397,6 +1423,7 @@ impl MissionController {
         &self,
         ledger: &Ledger,
         mission_id: &str,
+        selected_task_id: Option<&str>,
     ) -> Result<IntegrationIntent, &'static str> {
         let mission_id: MissionId = mission_id
             .parse()
@@ -1409,20 +1436,50 @@ impl MissionController {
             .snapshot(mission_id)
             .map_err(|_| "the Mission ledger cannot be read")?
             .ok_or("the Mission does not exist")?;
-        if snapshot.mission.state != MissionState::Integrating
-            || snapshot
-                .tasks
-                .iter()
-                .any(|task| task.state != TaskState::Passed)
-        {
+        if snapshot.mission.state != MissionState::Integrating {
             return Err("the Mission is not ready for integrated-tree verification");
         }
+        let selected_task = match active.validated.spec.completion_policy {
+            CompletionPolicy::AllTasks => {
+                if selected_task_id.is_some()
+                    || snapshot
+                        .tasks
+                        .iter()
+                        .any(|task| task.state != TaskState::Passed)
+                {
+                    return Err(
+                        "the all-Task Mission requires every Task to pass without a selection",
+                    );
+                }
+                None
+            }
+            CompletionPolicy::ChooseOne => {
+                let selected: runtrol_ledger::TaskId = selected_task_id
+                    .ok_or("the comparison Mission requires one selected passing Task")?
+                    .parse()
+                    .map_err(|_| "the selected Task identity is invalid")?;
+                if !snapshot
+                    .tasks
+                    .iter()
+                    .any(|task| task.id == selected && task.state == TaskState::Passed)
+                {
+                    return Err("the selected comparison Task did not pass");
+                }
+                Some(selected)
+            }
+        };
         review_files_current(&active.validated, &snapshot.mission.mission_ref)?;
         if policy_digest(&self.gates, &active.validated) != snapshot.mission.policy_sha256 {
             return Err("the reviewed Mission Gate policy changed");
         }
+        let receipts = snapshot
+            .receipts
+            .iter()
+            .filter(|(_, receipt)| selected_task.is_none_or(|task_id| receipt.task_id == task_id));
         let mut artifacts = BTreeMap::new();
-        for (_, receipt) in &snapshot.receipts {
+        let mut selected_run = None;
+        for (_, receipt) in receipts {
+            selected_run = Some(receipt.run_id);
             for artifact in &receipt.artifacts {
                 if artifacts
                     .insert(artifact.path.clone(), artifact.clone())
@@ -1435,15 +1492,12 @@ impl MissionController {
         if artifacts.is_empty() {
             return Err("the Mission has no passing Artifact evidence to integrate");
         }
-        let run_id = snapshot
-            .receipts
-            .last()
-            .map(|(_, receipt)| receipt.run_id)
-            .ok_or("the Mission has no passing Run for integration Gates")?;
+        let run_id = selected_run.ok_or("the Mission has no passing Run for integration Gates")?;
         let mut gate_ids: Vec<&str> = active
             .validated
             .tasks
             .iter()
+            .filter(|task| selected_task.is_none_or(|task_id| task.id == task_id))
             .flat_map(|task| task.gate_refs.iter().map(AsRef::as_ref))
             .collect();
         gate_ids.sort_unstable();
@@ -1876,10 +1930,11 @@ async fn execute_gates(
 pub(crate) async fn prepare_integration(
     composed: &crate::compose::Composed,
     mission_id: &str,
+    selected_task_id: Option<&str>,
 ) -> Response {
     let intent = {
         let controller = composed.missions.lock().await;
-        match controller.integration_intent(&composed.ledger, mission_id) {
+        match controller.integration_intent(&composed.ledger, mission_id, selected_task_id) {
             Ok(intent) => intent,
             Err(message) => return failed(message),
         }
@@ -2351,7 +2406,7 @@ fn snapshot_of(snapshot: &LedgerSnapshot, active: Option<&ActiveMission>) -> Mis
     }
 }
 
-fn line_of(snapshot: &LedgerSnapshot, _active: Option<&ActiveMission>) -> MissionLine {
+fn line_of(snapshot: &LedgerSnapshot, active: Option<&ActiveMission>) -> MissionLine {
     let passed = snapshot
         .tasks
         .iter()
@@ -2367,6 +2422,13 @@ fn line_of(snapshot: &LedgerSnapshot, _active: Option<&ActiveMission>) -> Missio
         name: snapshot.mission.display_name.clone(),
         project: snapshot.mission.project_id.clone(),
         state: mission_state(snapshot.mission.state).into(),
+        completion_policy: active.map_or_else(
+            || "unavailableAfterRestart".into(),
+            |active| match active.validated.spec.completion_policy {
+                CompletionPolicy::AllTasks => "allTasks".into(),
+                CompletionPolicy::ChooseOne => "chooseOne".into(),
+            },
+        ),
         passed_tasks: u16::try_from(passed).unwrap_or(u16::MAX),
         total_tasks: u16::try_from(snapshot.tasks.len()).unwrap_or(u16::MAX),
         awaiting_input: u16::try_from(awaiting).unwrap_or(u16::MAX),
@@ -2424,6 +2486,18 @@ fn task_line(
             },
         ),
         output_roots: resolved.map_or_else(Vec::new, |task| task.output_roots.clone()),
+        artifact_paths: snapshot
+            .receipts
+            .iter()
+            .rev()
+            .find(|(_, receipt)| receipt.task_id == task.id)
+            .map_or_else(Vec::new, |(_, receipt)| {
+                receipt
+                    .artifacts
+                    .iter()
+                    .map(|artifact| artifact.path.clone())
+                    .collect()
+            }),
         gate_refs: resolved.map_or_else(Vec::new, |task| task.gate_refs.clone()),
         capability_versions: resolved.map_or_else(Vec::new, |task| {
             task.capability_versions
@@ -2773,7 +2847,7 @@ gate_refs = ["fixture-check"]
         assert_eq!(task.state.as_ref(), "passed");
         assert!(task.receipt_id.is_some());
         let integration = controller
-            .integration_intent(&scratch.ledger, &verified.mission.mission_id)
+            .integration_intent(&scratch.ledger, &verified.mission.mission_id, None)
             .expect("integration intent");
         let gates = integration
             .gate_requests
@@ -2938,7 +3012,7 @@ gate_refs = ["fixture-check"]
     #[tokio::test]
     #[expect(
         clippy::too_many_lines,
-        reason = "the two-branch product fixture proves Git creation and canonical project identity together"
+        reason = "the comparison fixture proves worktree isolation and exact selected Receipt integration together"
     )]
     async fn parallel_writers_receive_distinct_linked_worktrees() {
         let scratch = Scratch::make();
@@ -2965,17 +3039,12 @@ gate_refs = ["fixture-check"]
             &containment,
         )
         .await;
-        let instruction = b"write only the declared branch output\n";
-        for name in ["one", "two"] {
-            std::fs::write(
-                scratch
-                    .project
-                    .as_std_path()
-                    .join(format!("instructions/{name}.md")),
-                instruction,
-            )
-            .expect("instruction");
-        }
+        let instruction = b"write only the declared comparison output\n";
+        std::fs::write(
+            scratch.project.as_std_path().join("instructions/task.md"),
+            instruction,
+        )
+        .expect("instruction");
         let digest: [u8; 32] = Sha256::digest(instruction).into();
         let mission = format!(
             r#"schema = "runtrol.dev/mission/v1alpha1"
@@ -2983,30 +3052,31 @@ name = "parallel fixture"
 project_id = "parallel-project"
 base_ref = "main"
 require_clean_base = true
+completion_policy = "choose_one"
 
 [limits]
 max_parallel_tasks = 2
 max_hot_providers = 2
-max_runs_per_task = 2
-max_repair_cycles = 1
-stop_on_critical_failure = true
+max_runs_per_task = 1
+max_repair_cycles = 0
+stop_on_critical_failure = false
 
 [[tasks]]
 id = "branch-one"
-instruction_ref = "instructions/one.md"
+instruction_ref = "instructions/task.md"
 instruction_sha256 = "{}"
 workspace_mode = "isolated_worktree"
 provider_selector = "operator_choice"
-output_roots = ["outputs/one"]
+output_roots = ["outputs/result.txt"]
 gate_refs = ["fixture-check"]
 
 [[tasks]]
 id = "branch-two"
-instruction_ref = "instructions/two.md"
+instruction_ref = "instructions/task.md"
 instruction_sha256 = "{}"
 workspace_mode = "isolated_worktree"
 provider_selector = "operator_choice"
-output_roots = ["outputs/two"]
+output_roots = ["outputs/result.txt"]
 gate_refs = ["fixture-check"]
 "#,
             hex(&digest),
@@ -3092,6 +3162,114 @@ gate_refs = ["fixture-check"]
             .expect("second identity");
         assert_ne!(first.worktree(), second.worktree());
         assert_eq!(first.common_store(), second.common_store());
+        let mut passing_digests = Vec::new();
+        for (index, (task, workspace)) in validated.tasks.iter().zip(&prepared).enumerate() {
+            let runtime_session = runtrol_provider::SessionId::now().to_string();
+            assert!(matches!(
+                controller.answer(
+                    &scratch.ledger,
+                    &[],
+                    &[],
+                    &Request::MissionBindSession {
+                        mission_id: mission_id.clone(),
+                        task_id: task.task_id.clone(),
+                        session_id: runtime_session.into(),
+                        provider_runtime_id: "fixture-provider".into(),
+                        native_session_id: None,
+                        workspace: workspace.as_str().into(),
+                    },
+                ),
+                Response::Mission(_)
+            ));
+            let Response::MissionInstruction(sent) = controller.answer(
+                &scratch.ledger,
+                &[],
+                &[],
+                &Request::MissionSendTaskInstruction {
+                    mission_id: mission_id.clone(),
+                    task_id: task.task_id.clone(),
+                    instruction_sha256: hex(&digest).into(),
+                },
+            ) else {
+                panic!("exact comparison instruction");
+            };
+            let intent = controller
+                .verification_intent(
+                    &scratch.ledger,
+                    &sent.mission_id,
+                    &sent.task_id,
+                    &format!("native-{index}"),
+                )
+                .expect("verification intent");
+            let gate = intent.gate_requests.first().expect("Gate request").clone();
+            let artifact_digest = [u8::try_from(index + 1).expect("bounded fixture"); 32];
+            passing_digests.push(artifact_digest);
+            controller
+                .commit_verification(
+                    &scratch.ledger,
+                    &intent,
+                    Ok(VerificationEvidence {
+                        binary_fingerprint: [9; 32],
+                        artifacts: vec![ArtifactEvidence {
+                            path: "outputs/result.txt".into(),
+                            sha256: artifact_digest,
+                            size: 12,
+                        }],
+                        finish_tree: format!("snapshot:{index}").into(),
+                        gates: vec![GateResult {
+                            request: gate,
+                            outcome: GateOutcome::Passed,
+                            duration_ms: 1,
+                        }],
+                    }),
+                )
+                .expect("passing comparison result");
+        }
+        let Response::Mission(snapshot) = controller.answer(
+            &scratch.ledger,
+            &[],
+            &[],
+            &Request::MissionGet {
+                mission_id: mission_id.clone(),
+            },
+        ) else {
+            panic!("comparison snapshot");
+        };
+        assert_eq!(snapshot.mission.state.as_ref(), "integrating");
+        assert_eq!(snapshot.mission.completion_policy.as_ref(), "chooseOne");
+        assert!(
+            controller
+                .integration_intent(&scratch.ledger, &mission_id, None)
+                .is_err()
+        );
+        let selected_task_id = validated
+            .tasks
+            .get(1)
+            .expect("second validated task")
+            .task_id
+            .clone();
+        let selected = controller
+            .integration_intent(
+                &scratch.ledger,
+                &mission_id,
+                Some(selected_task_id.as_ref()),
+            )
+            .expect("selected passing result");
+        assert_eq!(selected.expected_artifacts.len(), 1);
+        let selected_digest = selected
+            .expected_artifacts
+            .first()
+            .expect("selected artifact")
+            .sha256;
+        assert_eq!(
+            selected_digest,
+            *passing_digests.get(1).expect("second passing digest")
+        );
+        assert_ne!(
+            selected_digest,
+            *passing_digests.first().expect("first passing digest")
+        );
+
         for workspace in prepared {
             git_ok(
                 &git,

@@ -4,7 +4,10 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use runtrol_ledger::{RunId, TaskId};
 
-use crate::{InstructionRef, ProviderSelector, ValidatedMission, ValidatedTask, WorkspaceMode};
+use crate::{
+    CompletionPolicy, InstructionRef, ProviderSelector, ValidatedMission, ValidatedTask,
+    WorkspaceMode,
+};
 
 /// Global scheduler resource ceiling supplied by daemon composition.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -72,6 +75,8 @@ pub enum SchedulerEffect {
     },
     /// Present passed branches for local integration review.
     PresentIntegration,
+    /// Finish a comparison Mission because every attempt ended without a passing result.
+    FinishWithoutPassingResult,
     /// Release only the proven reservation identity.
     ReleaseResources {
         /// Run whose resources are released.
@@ -215,10 +220,11 @@ impl Scheduler {
             .find(|task| self.states.get(&task.key) == Some(&Eligibility::Ready))
             .cloned()
             .ok_or(SchedulerError::NothingReady)?;
-        if self
-            .reservations
-            .values()
-            .any(|active| claims_overlap(&active.output_roots, &task.output_roots))
+        if self.mission.spec.completion_policy == CompletionPolicy::AllTasks
+            && self
+                .reservations
+                .values()
+                .any(|active| claims_overlap(&active.output_roots, &task.output_roots))
         {
             return Err(SchedulerError::OutputClaim);
         }
@@ -277,12 +283,8 @@ impl Scheduler {
             }
         }
         let mut effects = vec![SchedulerEffect::ReleaseResources { run_id }];
-        if self
-            .states
-            .values()
-            .all(|state| *state == Eligibility::Passed)
-        {
-            effects.push(SchedulerEffect::PresentIntegration);
+        if let Some(effect) = self.completion_effect() {
+            effects.push(effect);
         }
         Ok(effects)
     }
@@ -306,7 +308,7 @@ impl Scheduler {
     ///
     /// # Errors
     /// Returns [`SchedulerError::NotReserved`] when the exact Run owns no reservation.
-    pub fn fail(&mut self, run_id: RunId) -> Result<SchedulerEffect, SchedulerError> {
+    pub fn fail(&mut self, run_id: RunId) -> Result<Vec<SchedulerEffect>, SchedulerError> {
         let key = self
             .reservations
             .iter()
@@ -314,7 +316,11 @@ impl Scheduler {
             .ok_or(SchedulerError::NotReserved)?;
         self.reservations.remove(&key);
         self.states.insert(key, Eligibility::Terminal);
-        Ok(SchedulerEffect::ReleaseResources { run_id })
+        let mut effects = vec![SchedulerEffect::ReleaseResources { run_id }];
+        if let Some(effect) = self.completion_effect() {
+            effects.push(effect);
+        }
+        Ok(effects)
     }
 
     /// Reopen one locally reviewed blocked or retryable Task after recovery.
@@ -372,6 +378,33 @@ impl Scheduler {
     #[must_use]
     pub fn eligibility(&self, key: &str) -> Option<Eligibility> {
         self.states.get(key).copied()
+    }
+
+    fn completion_effect(&self) -> Option<SchedulerEffect> {
+        match self.mission.spec.completion_policy {
+            CompletionPolicy::AllTasks => self
+                .states
+                .values()
+                .all(|state| *state == Eligibility::Passed)
+                .then_some(SchedulerEffect::PresentIntegration),
+            CompletionPolicy::ChooseOne => {
+                let finished = self
+                    .states
+                    .values()
+                    .all(|state| matches!(state, Eligibility::Passed | Eligibility::Terminal));
+                if !finished {
+                    None
+                } else if self
+                    .states
+                    .values()
+                    .any(|state| *state == Eligibility::Passed)
+                {
+                    Some(SchedulerEffect::PresentIntegration)
+                } else {
+                    Some(SchedulerEffect::FinishWithoutPassingResult)
+                }
+            }
+        }
     }
 }
 
@@ -433,7 +466,7 @@ pub enum SchedulerError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{MissionLimits, MissionSpec};
+    use crate::{CompletionPolicy, MissionLimits, MissionSpec};
     use runtrol_core::ProjectIdentity;
     use runtrol_provider::AbsPath;
 
@@ -496,6 +529,7 @@ mod tests {
                     project_id: "project".into(),
                     base_ref: "main".into(),
                     require_clean_base: true,
+                    completion_policy: CompletionPolicy::AllTasks,
                     limits: MissionLimits {
                         max_parallel_tasks: 2,
                         max_hot_providers: 2,
@@ -559,5 +593,105 @@ mod tests {
         );
         assert_eq!(scheduler.cancel().len(), 1);
         assert_eq!(scheduler.reserve_next(), Err(SchedulerError::Cancelled));
+    }
+
+    #[test]
+    fn choose_one_runs_overlapping_attempts_and_finishes_after_all_results() {
+        let scratch = Scratch::make();
+        let mut mission = scratch.mission();
+        mission.spec.completion_policy = CompletionPolicy::ChooseOne;
+        mission.spec.limits.max_runs_per_task = 1;
+        mission.spec.limits.max_repair_cycles = 0;
+        mission.spec.limits.stop_on_critical_failure = false;
+        let first_instruction = mission
+            .tasks
+            .first()
+            .expect("first task")
+            .instruction
+            .clone();
+        let first_output_roots = mission
+            .tasks
+            .first()
+            .expect("first task")
+            .output_roots
+            .clone();
+        let second_task = mission.tasks.get_mut(1).expect("second task");
+        second_task.depends_on.clear();
+        second_task.instruction = first_instruction;
+        second_task.output_roots = first_output_roots;
+        let mut scheduler = Scheduler::new(
+            mission,
+            ResourceBudget {
+                max_hot_providers: 2,
+            },
+        )
+        .expect("scheduler");
+        let SchedulerEffect::PrepareSession(first) = scheduler.reserve_next().expect("first")
+        else {
+            panic!("expected first preparation");
+        };
+        let SchedulerEffect::PrepareSession(second) = scheduler.reserve_next().expect("second")
+        else {
+            panic!("expected second preparation");
+        };
+        assert_eq!(
+            scheduler.pass(first.run_id).expect("pass"),
+            vec![SchedulerEffect::ReleaseResources {
+                run_id: first.run_id
+            }]
+        );
+        assert_eq!(
+            scheduler.fail(second.run_id).expect("fail"),
+            vec![
+                SchedulerEffect::ReleaseResources {
+                    run_id: second.run_id
+                },
+                SchedulerEffect::PresentIntegration,
+            ]
+        );
+    }
+
+    #[test]
+    fn choose_one_reports_when_every_attempt_fails() {
+        let scratch = Scratch::make();
+        let mut mission = scratch.mission();
+        mission.spec.completion_policy = CompletionPolicy::ChooseOne;
+        let first_output_roots = mission
+            .tasks
+            .first()
+            .expect("first task")
+            .output_roots
+            .clone();
+        let second_task = mission.tasks.get_mut(1).expect("second task");
+        second_task.depends_on.clear();
+        second_task.output_roots = first_output_roots;
+        let mut scheduler = Scheduler::new(
+            mission,
+            ResourceBudget {
+                max_hot_providers: 2,
+            },
+        )
+        .expect("scheduler");
+        let SchedulerEffect::PrepareSession(first) = scheduler.reserve_next().expect("first")
+        else {
+            panic!("expected first preparation");
+        };
+        let SchedulerEffect::PrepareSession(second) = scheduler.reserve_next().expect("second")
+        else {
+            panic!("expected second preparation");
+        };
+        assert_eq!(
+            scheduler.fail(first.run_id).expect("first failure").len(),
+            1
+        );
+        assert_eq!(
+            scheduler.fail(second.run_id).expect("second failure"),
+            vec![
+                SchedulerEffect::ReleaseResources {
+                    run_id: second.run_id
+                },
+                SchedulerEffect::FinishWithoutPassingResult,
+            ]
+        );
     }
 }

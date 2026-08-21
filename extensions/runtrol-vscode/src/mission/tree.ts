@@ -13,7 +13,7 @@ export class MissionItem extends vscode.TreeItem implements MissionSelection {
     this.mission = mission;
     this.description = `${mission.state}  ${mission.passed_tasks}/${mission.total_tasks}`;
     this.tooltip = `${mission.name}\n${mission.project}\nState: ${mission.state}\n${mission.awaiting_input} awaiting local Send`;
-    this.contextValue = `runtrol.mission.${mission.state}`;
+    this.contextValue = `runtrol.mission.${mission.state}${mission.completion_policy === "chooseOne" ? ".chooseOne" : ""}`;
     this.iconPath = new vscode.ThemeIcon(missionIcon(mission.state));
     this.command = {
       command: "runtrol.openMission",
@@ -40,7 +40,10 @@ export class MissionTaskItem extends vscode.TreeItem implements MissionSelection
       `Gates: ${task.passed_gates} passed, ${task.failed_gates} failed`,
       `Receipt: ${task.receipt_id ?? "not sealed"}`,
     ].join("\n");
-    this.contextValue = `runtrol.missionTask.${task.state}${task.session_id ? ".session" : ""}`;
+    this.contextValue = [
+      `runtrol.missionTask.${task.state}${task.session_id ? ".session" : ""}`,
+      mission.completion_policy === "chooseOne" ? `chooseOne.${mission.state}` : "",
+    ].filter(Boolean).join(".");
     this.iconPath = new vscode.ThemeIcon(taskIcon(task.state));
     this.command = task.session_id
       ? { command: "runtrol.openTaskSession", title: "Open Task Session", arguments: [this] }

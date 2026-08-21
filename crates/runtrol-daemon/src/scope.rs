@@ -460,6 +460,7 @@ mod tests {
             },
             Request::MissionCompleteIntegration {
                 mission_id: "msn_fixture".into(),
+                task_id: None,
             },
             Request::MissionArchive {
                 mission_id: "msn_fixture".into(),

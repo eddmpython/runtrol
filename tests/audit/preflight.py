@@ -199,6 +199,14 @@ GATES: dict[str, tuple[str, list[str]]] = {
         "실물 두 provider의 검토, 실행, Receipt, 통합, 보관 여정",
         [*PY, f"{HOOKS}/missionLiveJourney.py", "--require-external"],
     ),
+    "fleetComparisonSmokeSelftest": (
+        "병렬 결과 비교 게이트 자체 검증",
+        [*PY, f"{HOOKS}/fleetComparisonSmoke.py", "--selftest"],
+    ),
+    "fleetComparisonSmoke": (
+        "실물 두 provider의 병렬 worktree 실행, 비교, 선택 결과 통합",
+        [*PY, f"{HOOKS}/fleetComparisonSmoke.py", "--require-external"],
+    ),
     "vscodePackageSelftest": (
         "VS Code 플랫폼 패키지 게이트 자체 검증",
         [*PY, f"{HOOKS}/vscodePackage.py", "--selftest"],
@@ -470,6 +478,8 @@ SUITES: dict[str, tuple[str, ...]] = {
         "vscodeRealProviderJourney",
         "missionLiveJourneySelftest",
         "missionLiveJourney",
+        "fleetComparisonSmokeSelftest",
+        "fleetComparisonSmoke",
         "phoneDrivesPcSmokeSelftest",
         "phoneDrivesPcSmoke",
         "approvalRoundtripSmokeSelftest",
@@ -520,6 +530,7 @@ CARGO_GATES = frozenset(
         "vscodeRealProviderJourney",
         "missionLiveJourneySelftest",
         "missionLiveJourney",
+        "fleetComparisonSmoke",
         "vscodeUpgradeRollback",
         "cargoTest",
         "sessionOverlapGuard",
@@ -591,12 +602,13 @@ def skipReasonFor(name: str) -> str | None:
         return f"{CROSS_TARGET} C 컴파일러 없음"
     if name == "externalAcpSmoke" and shutil.which("opencode") is None:
         return "독립 ACP CLI 미설치 (npm install --global opencode-ai@1.2.27)"
-    if name == "missionLiveJourney" and shutil.which("opencode") is None:
+    if name in {"missionLiveJourney", "fleetComparisonSmoke"} and shutil.which("opencode") is None:
         return "독립 ACP CLI 미설치 (npm install --global opencode-ai@1.2.27)"
     if name in {
         "approvalRoundtripSmoke",
         "claudeApprovalSmoke",
         "missionLiveJourney",
+        "fleetComparisonSmoke",
         "phoneDrivesPcSmoke",
         "remoteResilienceFaultInjection",
         "vscodeRealProviderJourney",
@@ -605,6 +617,7 @@ def skipReasonFor(name: str) -> str | None:
     if name in {
         "approvalRoundtripSmoke",
         "missionLiveJourney",
+        "fleetComparisonSmoke",
         "phoneDrivesPcSmoke",
         "remoteResilienceFaultInjection",
     } and shutil.which("node") is None:

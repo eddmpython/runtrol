@@ -62,6 +62,20 @@ Runtrol verifies the exact command through each provider's official readback bef
 anything, so a same-named entry that points elsewhere is reported and left untouched.
 See the complete [Agent Tools contract](https://github.com/eddmpython/runtrol/blob/main/docs/agentTools.md).
 
+## Parallel attempts
+
+Run **Runtrol: Try One Instruction Several Ways...** to compose a reviewed comparison Mission from an instruction
+file you already own. Choose two through four attempts, one registered deterministic Gate, the discovered coding
+services, the Git base, and the allowed output roots. Runtrol opens the generated TOML without saving it so you can
+read it and choose its project path before validation.
+
+After validation, **Runtrol: Run All Reviewed Attempts** prepares one isolated linked worktree and native provider
+session per attempt, rechecks the exact instruction bytes, sends them under one local confirmation, and arranges the
+conversation tabs as a VS Code editor grid. When the attempts finish, verify their declared Artifacts and Gates.
+**Runtrol: Compare Passing Results** opens the same Artifact from each passing worktree in native VS Code diff
+editors. Apply the result you want to the project, then verify and complete from that passing Task row. Final
+integration uses only the selected Task Receipt. Failed alternatives are results, not hidden retries.
+
 ## Requirements
 
 - Desktop VS Code 1.106 or newer (the version that lets an extension place a view in the secondary side bar).
@@ -103,6 +117,10 @@ processes stay alive.
 - **Runtrol: Check Provider Updates**
 - **Runtrol: Enable Agent Tools for This Project**
 - **Runtrol: Disable Agent Tools for This Project**
+- **Runtrol: Try One Instruction Several Ways...**
+- **Runtrol: Run All Reviewed Attempts**
+- **Runtrol: Compare Passing Results**
+- **Runtrol: Verify and Complete Mission Integration**
 - **Runtrol: Restart Extension Host**
 - **Runtrol: Pair a Phone**
 

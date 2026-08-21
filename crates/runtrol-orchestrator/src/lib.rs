@@ -18,8 +18,8 @@ pub use scheduler::{
     Scheduler, SchedulerEffect, SchedulerError,
 };
 pub use spec::{
-    CapabilitySelection, InstructionRef, MissionLimits, MissionSpec, ProviderSelector, TaskSpec,
-    WorkspaceMode,
+    CapabilitySelection, CompletionPolicy, InstructionRef, MissionLimits, MissionSpec,
+    ProviderSelector, TaskSpec, WorkspaceMode,
 };
 pub use validate::{
     FindingCode, MissionFinding, MissionValidator, ValidatedMission, ValidatedTask,

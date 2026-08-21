@@ -351,6 +351,9 @@ pub enum Request {
     MissionCompleteIntegration {
         /// Runtrol Mission identity.
         mission_id: Box<str>,
+        /// Exact passing Task selected by a `choose_one` Mission, otherwise absent.
+        #[serde(default)]
+        task_id: Option<Box<str>>,
     },
 
     /// Compact one completed, failed, or cancelled Mission into immutable history.
@@ -915,6 +918,8 @@ pub struct MissionLine {
     pub project: Box<str>,
     /// Closed Mission state name.
     pub state: Box<str>,
+    /// `allTasks`, `chooseOne`, or `unavailableAfterRestart`.
+    pub completion_policy: Box<str>,
     /// Passed Tasks.
     pub passed_tasks: u16,
     /// Total Tasks.
@@ -959,6 +964,8 @@ pub struct MissionTaskLine {
     pub provider_selector: Box<str>,
     /// Declared output claims.
     pub output_roots: Vec<Box<str>>,
+    /// Passing receipt Artifact paths, without file contents.
+    pub artifact_paths: Vec<Box<str>>,
     /// Exact deterministic gate references.
     pub gate_refs: Vec<Box<str>>,
     /// Exact locally approved project capabilities selected by the reviewed Mission.

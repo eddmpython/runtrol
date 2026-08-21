@@ -1,4 +1,4 @@
-export const WIRE_VERSION = 24;
+export const WIRE_VERSION = 25;
 
 export type PrivateProviderLine = {
   id: string;
@@ -75,6 +75,7 @@ export type MissionLine = {
   name: string;
   project: string;
   state: string;
+  completion_policy: "allTasks" | "chooseOne" | "unavailableAfterRestart";
   passed_tasks: number;
   total_tasks: number;
   awaiting_input: number;
@@ -95,6 +96,7 @@ export type MissionTaskLine = {
   workspace_mode: "readOnlyBase" | "isolatedWorktree" | "unavailableAfterRestart";
   provider_selector: string;
   output_roots: string[];
+  artifact_paths: string[];
   gate_refs: string[];
   capability_versions: Array<{ capability_id: string; version_sha256: string }>;
   session_id: string | null;
@@ -260,7 +262,7 @@ export type Request =
     }
   | { ask: "missionVerifyTask"; with: { mission_id: string; task_id: string } }
   | { ask: "missionRetryTask"; with: { mission_id: string; task_id: string } }
-  | { ask: "missionCompleteIntegration"; with: { mission_id: string } }
+  | { ask: "missionCompleteIntegration"; with: { mission_id: string; task_id: string | null } }
   | { ask: "missionArchive"; with: { mission_id: string } }
   | { ask: "capabilityPropose"; with: { project: string; candidate_ref: string } }
   | { ask: "capabilityList" }

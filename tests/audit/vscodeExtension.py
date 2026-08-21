@@ -371,11 +371,14 @@ def run() -> int:
     # Raised 320 -> 336 KiB on 2026-08-21 (evening) when the "know without opening, answer without opening" build
     # crossed it: the activity watch and its row word, sign-in and approval from the row, the back key and the
     # keyboard project switch, one prompt to N services, each reviewed at the crossing.
+    # Raised 336 -> 352 KiB on 2026-08-22 when Fleet Compare crossed it: reviewed choose-one Missions, parallel
+    # isolated launch, the conversation grid, native result diffs, and selected-Receipt completion, reviewed in
+    # the real Extension Host at the crossing.
     # A dependency slipping in still trips it.
     bundles = [EXTENSION / "dist" / name for name in ("extension.js", "webview.js", "webview.css")]
     for bundle in bundles:
-        if not bundle.is_file() or bundle.stat().st_size > 336 * 1024:
-            failures.append(f"{bundle.relative_to(ROOT)} is missing or exceeds 336 KiB")
+        if not bundle.is_file() or bundle.stat().st_size > 352 * 1024:
+            failures.append(f"{bundle.relative_to(ROOT)} is missing or exceeds 352 KiB")
     if failures:
         print("[vscodeExtension] FAIL. bundle contract violations:", file=sys.stderr)
         for failure in failures:

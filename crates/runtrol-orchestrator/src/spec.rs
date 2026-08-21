@@ -16,10 +16,24 @@ pub struct MissionSpec {
     pub base_ref: Box<str>,
     /// Whether validation refuses a changed base.
     pub require_clean_base: bool,
+    /// How passing Task evidence closes the Mission.
+    #[serde(default)]
+    pub completion_policy: CompletionPolicy,
     /// Numeric execution bounds.
     pub limits: MissionLimits,
     /// Closed Task graph.
     pub tasks: Vec<TaskSpec>,
+}
+
+/// Reviewed Mission completion behavior.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CompletionPolicy {
+    /// Every Task must pass and every receipt contributes integration evidence.
+    #[default]
+    AllTasks,
+    /// Competing isolated attempts finish together and one passing receipt is selected locally.
+    ChooseOne,
 }
 
 /// Hard Mission scheduler bounds.

@@ -451,6 +451,12 @@ jobs:
         env:
           TMPDIR: ${{ matrix.os == 'macos-latest' && '/tmp' || runner.temp }}
         run: python -X utf8 tests/audit/missionLiveJourney.py --require-external
+      - name: 병렬 결과 비교 게이트 자체 검증
+        run: python -X utf8 tests/audit/fleetComparisonSmoke.py --selftest
+      - name: 실물 두 provider의 병렬 worktree 실행, 비교, 선택 결과 통합
+        env:
+          TMPDIR: ${{ matrix.os == 'macos-latest' && '/tmp' || runner.temp }}
+        run: python -X utf8 tests/audit/fleetComparisonSmoke.py --require-external
       - name: 실물 Codex 고정 판본 설치
         run: npm install --global @openai/codex@0.146.0
       - name: 고정 판본 credential-free 모델 fixture 준비

@@ -23,7 +23,7 @@ import {
 } from "./fanOut";
 import { branchFromHead, gitdirTarget } from "./gitHead";
 
-/// Where each project's last fan-out shape is remembered (output roots only, never instruction text).
+/// Where each project's last fan-out shape is remembered, never instruction text.
 const FAN_OUT_DEFAULTS_KEY = "runtrol.fanOutDefaults";
 
 /// The current branch of the repository at `folder`, or null when it cannot be read honestly.
@@ -105,6 +105,10 @@ export class MissionController implements vscode.Disposable {
     });
     const source = selected?.[0];
     if (!source) return;
+    await this.validateMissionFile(source);
+  }
+
+  async validateMissionFile(source: vscode.Uri): Promise<MissionSnapshot> {
     const folder = vscode.workspace.getWorkspaceFolder(source);
     if (!folder) {
       throw new Error("the Mission file must be inside an open VS Code workspace");
@@ -119,6 +123,7 @@ export class MissionController implements vscode.Disposable {
     })).response;
     const snapshot = requireResponse(response, "mission");
     await this.acceptSnapshot(snapshot, true);
+    return snapshot;
   }
 
   /// Write the Mission that tries one instruction several ways at once, each attempt in its own worktree.
@@ -162,7 +167,12 @@ export class MissionController implements vscode.Disposable {
     // Read, never written. The digest has to be over the bytes already on disk, because those are the bytes the
     // operator reviewed and the ones Mission will bind the task to.
     const bytes = await vscode.workspace.fs.readFile(instructionUri);
-    const instruction = new TextDecoder().decode(bytes);
+    let instruction: string;
+    try {
+      instruction = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    } catch {
+      throw new Error("the instruction file must be valid UTF-8");
+    }
     if (!instruction.trim()) {
       throw new Error("that instruction file is empty");
     }
@@ -175,6 +185,10 @@ export class MissionController implements vscode.Disposable {
       validateInput: branchProblem,
     });
     if (!branches) return;
+    const branchCount = Number(branches);
+    const projectKey = workspaceIdentity(folder.uri.fsPath);
+    const providerIds = await this.chooseFanOutProviders(projectKey, branchCount);
+    if (!providerIds) return;
     // Offered from the registry instead of typed from memory. Asked rather than invented, still: a
     // Gate decides whether an attempt succeeded, and inventing one that checks nothing would
     // produce a fan-out whose attempts all pass regardless of what they did.
@@ -195,7 +209,6 @@ export class MissionController implements vscode.Disposable {
     // The blast radius somebody declared last time, offered again. The project's own source
     // directory stays the first-time default: an attempt allowed to write anywhere is an attempt
     // whose blast radius nobody declared.
-    const projectKey = workspaceIdentity(folder.uri.fsPath);
     const rootsText = await vscode.window.showInputBox({
       title: "Try one instruction several ways",
       prompt: "Which directories may the attempts write to? (comma separated, project relative)",
@@ -208,17 +221,18 @@ export class MissionController implements vscode.Disposable {
       .map((root) => root.trim())
       .filter(Boolean);
     if (outputRoots.length === 0) return;
-    await this.rememberFanOutRoots(projectKey, outputRoots);
+    await this.rememberFanOutDefaults(projectKey, outputRoots, providerIds);
 
     const document = await vscode.workspace.openTextDocument({
       language: "toml",
-      content: missionSpec(fanOutName(instruction, new Date()), instructionDigest(instruction), {
+      content: missionSpec(fanOutName(instruction, new Date()), instructionDigest(bytes), {
         instruction,
         instructionRef,
-        branches: Number(branches),
+        branches: branchCount,
         gateId,
         baseRef: baseRef.trim(),
         outputRoots,
+        providerIds,
       }),
     });
     await vscode.window.showTextDocument(document, { preview: false });
@@ -283,12 +297,62 @@ export class MissionController implements vscode.Disposable {
       : ["src"];
   }
 
-  private async rememberFanOutRoots(projectKey: string, outputRoots: string[]): Promise<void> {
+  private fanOutProviderIds(projectKey: string): string[] {
+    const stored = this.context.globalState.get(FAN_OUT_DEFAULTS_KEY);
+    if (stored === null || typeof stored !== "object" || Array.isArray(stored)) return [];
+    const entry = (stored as Record<string, unknown>)[projectKey];
+    if (entry === null || typeof entry !== "object" || Array.isArray(entry)) return [];
+    const providers = (entry as { providerIds?: unknown }).providerIds;
+    return Array.isArray(providers) && providers.every((provider) => typeof provider === "string")
+      ? providers
+      : [];
+  }
+
+  private async chooseFanOutProviders(projectKey: string, branches: number): Promise<string[] | null> {
+    const usable = this.runtimeState.providers.filter((provider) => provider.installation.state === "usable");
+    if (usable.length === 0) throw new Error("no installed coding-agent CLI is currently usable");
+    const remembered = new Set(this.fanOutProviderIds(projectKey));
+    const defaults = remembered.size > 0
+      ? remembered
+      : new Set(usable.slice(0, Math.min(branches, usable.length)).map((provider) => provider.providerId));
+    while (true) {
+      const selected = await vscode.window.showQuickPick(
+        usable.map((provider) => ({
+          label: provider.displayName,
+          description: provider.providerId,
+          id: provider.providerId,
+          picked: defaults.has(provider.providerId),
+        })),
+        {
+          title: "Which coding services should try it?",
+          placeHolder: "Selected services are assigned round-robin to the reviewed attempts",
+          canPickMany: true,
+          ignoreFocusOut: true,
+        },
+      );
+      if (!selected) return null;
+      if (selected.length === 0) {
+        await vscode.window.showWarningMessage("Select at least one runtime-discovered coding service.");
+        continue;
+      }
+      if (selected.length > branches) {
+        await vscode.window.showWarningMessage(`Select no more than the ${branches} attempts being created.`);
+        continue;
+      }
+      return selected.map((provider) => provider.id);
+    }
+  }
+
+  private async rememberFanOutDefaults(
+    projectKey: string,
+    outputRoots: string[],
+    providerIds: string[],
+  ): Promise<void> {
     const stored = this.context.globalState.get(FAN_OUT_DEFAULTS_KEY);
     const record = stored !== null && typeof stored === "object" && !Array.isArray(stored)
       ? { ...(stored as Record<string, unknown>) }
       : {};
-    record[projectKey] = { outputRoots };
+    record[projectKey] = { outputRoots, providerIds };
     await this.context.globalState.update(FAN_OUT_DEFAULTS_KEY, record);
   }
 
@@ -357,40 +421,141 @@ export class MissionController implements vscode.Disposable {
     await this.acceptSnapshot(started, true);
   }
 
+  async launchFleet(selection?: MissionSelection): Promise<void> {
+    const mission = selection?.mission ?? await this.pickMission("Run Reviewed Attempts");
+    if (!mission) return;
+    const reviewed = await this.get(mission.mission_id);
+    if (reviewed.mission.state !== "validated" || reviewed.mission.completion_policy !== "chooseOne") {
+      throw new Error("only a validated choose-one Mission can launch all reviewed attempts");
+    }
+    const assignments = new Map<string, string>();
+    for (const task of reviewed.tasks) {
+      const provider = await this.chooseProvider(task.provider_selector);
+      if (!provider) return;
+      assignments.set(task.task_id, provider);
+    }
+    const assignmentText = reviewed.tasks
+      .map((task) => `${task.key}: ${assignments.get(task.task_id)}`)
+      .join("\n");
+    const action = await vscode.window.showWarningMessage(
+      `Run all ${reviewed.tasks.length} reviewed attempts for ${reviewed.mission.name}?`,
+      {
+        modal: true,
+        detail: `Mission SHA-256 ${reviewed.mission_sha256}\n${assignmentText}\n\nEvery exact instruction is rechecked, then sent to its prepared session.`,
+      },
+      "Run all attempts",
+    );
+    if (action !== "Run all attempts") return;
+    await this.runFleet(reviewed, assignments);
+  }
+
+  async launchFleetForJourney(missionId: string): Promise<string[]> {
+    const reviewed = await this.get(missionId);
+    if (reviewed.mission.state !== "validated" || reviewed.mission.completion_policy !== "chooseOne") {
+      throw new Error("the journey requires one validated choose-one Mission");
+    }
+    const assignments = new Map<string, string>();
+    for (const task of reviewed.tasks) {
+      const provider = await this.chooseProvider(task.provider_selector);
+      if (!provider) throw new Error("the reviewed provider selection was cancelled");
+      assignments.set(task.task_id, provider);
+    }
+    return this.runFleet(reviewed, assignments);
+  }
+
+  async registerGateForJourney(gateId: string, program: string, arguments_: string[]): Promise<void> {
+    requireDone((await this.client.once({
+      ask: "missionRegisterGate",
+      with: { gate_id: gateId, program, arguments: arguments_, timeout_ms: 30_000 },
+    })).response, "Gate registration");
+  }
+
+  async verifyTaskForJourney(missionId: string, taskId: string): Promise<MissionSnapshot> {
+    const snapshot = requireResponse((await this.client.once({
+      ask: "missionVerifyTask",
+      with: { mission_id: missionId, task_id: taskId },
+    })).response, "mission");
+    await this.acceptSnapshot(snapshot, false);
+    return snapshot;
+  }
+
+  private async runFleet(
+    reviewed: MissionSnapshot,
+    assignments: ReadonlyMap<string, string>,
+  ): Promise<string[]> {
+    return vscode.window.withProgress(
+      {
+        location: vscode.ProgressLocation.Notification,
+        title: `Running ${reviewed.tasks.length} reviewed attempts`,
+        cancellable: false,
+      },
+      async (progress) => {
+        const sessionIds: string[] = [];
+        try {
+          let current = requireResponse((await this.client.once({
+            ask: "missionStart",
+            with: {
+              mission_id: reviewed.mission.mission_id,
+              mission_sha256: reviewed.mission_sha256,
+            },
+          })).response, "mission");
+          for (const [index, task] of reviewed.tasks.entries()) {
+            progress.report({ message: `Preparing ${task.key}`, increment: 45 / reviewed.tasks.length });
+            const prepared = await this.prepareTaskSession(
+              current.mission.mission_id,
+              task,
+              assignments.get(task.task_id) as string,
+            );
+            current = prepared.snapshot;
+            sessionIds.push(prepared.sessionId);
+          }
+
+          const instructions = [];
+          for (const task of reviewed.tasks) {
+            progress.report({ message: `Checking ${task.instruction_ref}`, increment: 20 / reviewed.tasks.length });
+            instructions.push(requireResponse((await this.client.once({
+              ask: "missionSendTaskInstruction",
+              with: {
+                mission_id: reviewed.mission.mission_id,
+                task_id: task.task_id,
+                instruction_sha256: task.instruction_sha256,
+              },
+            })).response, "missionInstruction"));
+          }
+          progress.report({ message: "Sending reviewed instructions", increment: 20 });
+          const submissions = await Promise.allSettled(
+            instructions.map((instruction) =>
+              this.sessions.submitResolvedInput(instruction.session_id, instruction.instruction)
+            ),
+          );
+          const failed = submissions.filter((result) => result.status === "rejected").length;
+          if (failed > 0) {
+            throw new Error(`${failed} of ${submissions.length} provider submissions failed; Mission state was kept for explicit recovery`);
+          }
+          progress.report({ message: "Opening the attempt grid", increment: 15 });
+          for (const sessionId of sessionIds) await this.sessions.select(sessionId);
+          await this.sessions.arrangeConversationGrid();
+          current = await this.get(reviewed.mission.mission_id);
+          await this.acceptSnapshot(current, false);
+          void vscode.window.showInformationMessage(
+            `${sessionIds.length} reviewed attempts are running in isolated worktrees.`,
+          );
+          return sessionIds;
+        } catch (error) {
+          await this.refresh().catch(() => undefined);
+          throw error;
+        }
+      },
+    );
+  }
+
   async prepareTask(selection?: MissionSelection): Promise<void> {
     const selected = await this.resolveTask(selection, ["reserved"], "Prepare Mission Task");
     if (!selected) return;
-    const workspace = requireResponse((await this.client.once({
-      ask: "missionPrepareTask",
-      with: { mission_id: selected.mission.mission_id, task_id: selected.task.task_id },
-    })).response, "missionWorkspace");
     const provider = await this.chooseProvider(selected.task.provider_selector);
     if (!provider) return;
-    const access = selected.task.workspace_mode === "readOnlyBase" ? "shared" : "exclusive";
-    const sessionId = await this.sessions.startResolvedSession(
-      provider,
-      workspace.workspace,
-      null,
-      null,
-      access,
-      false,
-    );
-    const session = this.runtimeState.sessions.find((candidate) => candidate.sessionId === sessionId);
-    if (!session) {
-      throw new Error("Runtime started the Task session but did not list its exact descriptor");
-    }
-    const snapshot = requireResponse((await this.client.once({
-      ask: "missionBindSession",
-      with: {
-        mission_id: selected.mission.mission_id,
-        task_id: selected.task.task_id,
-        session_id: session.sessionId,
-        provider_runtime_id: session.providerId,
-        native_session_id: session.nativeSessionId ?? null,
-        workspace: session.workspace,
-      },
-    })).response, "mission");
-    await this.acceptSnapshot(snapshot, true);
+    const prepared = await this.prepareTaskSession(selected.mission.mission_id, selected.task, provider);
+    await this.acceptSnapshot(prepared.snapshot, true);
   }
 
   async sendTaskInstruction(selection?: MissionSelection): Promise<void> {
@@ -482,23 +647,106 @@ export class MissionController implements vscode.Disposable {
   async completeIntegration(selection?: MissionSelection): Promise<void> {
     const mission = selection?.mission ?? await this.pickMission("Complete Mission Integration");
     if (!mission) return;
-    if (mission.state !== "integrating") {
+    const snapshot = await this.get(mission.mission_id);
+    if (snapshot.mission.state !== "integrating") {
       throw new Error("the Mission is not waiting for integrated-tree verification");
     }
+    let selectedTask: MissionTaskLine | null = null;
+    if (snapshot.mission.completion_policy === "chooseOne") {
+      selectedTask = selection?.task
+        ? snapshot.tasks.find((task) => task.task_id === selection.task?.task_id && task.state === "passed") ?? null
+        : null;
+      if (!selectedTask) {
+        const picked = await vscode.window.showQuickPick(
+          snapshot.tasks
+            .filter((task) => task.state === "passed")
+            .map((task) => ({
+              label: task.key,
+              description: task.provider_selector,
+              detail: `${task.artifact_paths.length} sealed Artifacts  ${task.workspace ?? "workspace unavailable"}`,
+              task,
+            })),
+          {
+            title: "Which passing result did you apply to the project?",
+            placeHolder: "Final verification uses only this exact Task Receipt",
+          },
+        );
+        if (!picked) return;
+        selectedTask = picked.task;
+      }
+    }
     const action = await vscode.window.showWarningMessage(
-      `Verify the integrated project tree and complete ${mission.name}?`,
+      selectedTask
+        ? `Verify the project with ${selectedTask.key} and complete ${snapshot.mission.name}?`
+        : `Verify the integrated project tree and complete ${snapshot.mission.name}?`,
       {
         modal: true,
-        detail: "Current project Artifacts must exactly match passing Task Receipts. Every reviewed Gate runs again before completion.",
+        detail: selectedTask
+          ? "Current project Artifacts must exactly match the selected passing Task Receipt. Its reviewed Gates run again before completion."
+          : "Current project Artifacts must exactly match passing Task Receipts. Every reviewed Gate runs again before completion.",
       },
       "Verify and complete",
     );
     if (action !== "Verify and complete") return;
-    const snapshot = requireResponse((await this.client.once({
+    const completed = requireResponse((await this.client.once({
       ask: "missionCompleteIntegration",
-      with: { mission_id: mission.mission_id },
+      with: { mission_id: snapshot.mission.mission_id, task_id: selectedTask?.task_id ?? null },
     })).response, "mission");
-    await this.acceptSnapshot(snapshot, true);
+    await this.acceptSnapshot(completed, true);
+  }
+
+  async compareResults(selection?: MissionSelection): Promise<void> {
+    const mission = selection?.mission ?? await this.pickMission("Compare Passing Results");
+    if (!mission) return;
+    const snapshot = await this.get(mission.mission_id);
+    if (snapshot.mission.completion_policy !== "chooseOne") {
+      throw new Error("result comparison is available for choose-one Missions");
+    }
+    const passed = snapshot.tasks.filter((task) =>
+      task.state === "passed" && task.workspace !== null && task.artifact_paths.length > 0
+    );
+    if (passed.length === 0) throw new Error("no passing result has sealed Artifact paths to compare");
+    const paths = [...new Set(passed.flatMap((task) => task.artifact_paths))].sort();
+    const artifact = paths.length === 1
+      ? paths[0]
+      : (await vscode.window.showQuickPick(
+        paths.map((candidate) => ({
+          label: candidate,
+          description: `${passed.filter((task) => task.artifact_paths.includes(candidate)).length} passing results`,
+          artifact: candidate,
+        })),
+        { title: "Compare one declared Artifact across passing results" },
+      ))?.artifact;
+    if (!artifact) return;
+    if (!safeArtifactPath(artifact)) throw new Error("Core returned an unsafe Artifact path");
+    const candidates = passed.filter((task) => task.artifact_paths.includes(artifact));
+    const projectUri = fileUnder(snapshot.mission.project, artifact);
+    const projectExists = await vscode.workspace.fs.stat(projectUri).then(
+      (stat) => (stat.type & vscode.FileType.File) !== 0,
+      () => false,
+    );
+    const baseline = projectExists ? projectUri : fileUnder(candidates[0].workspace as string, artifact);
+    const comparisons = projectExists ? candidates : candidates.slice(1);
+    if (comparisons.length === 0) {
+      await vscode.window.showTextDocument(baseline, { preview: false });
+      await vscode.window.showInformationMessage(
+        `${artifact} is new and only one passing attempt produced it, so its file was opened directly.`,
+      );
+      return;
+    }
+    for (const [index, task] of comparisons.entries()) {
+      await vscode.commands.executeCommand(
+        "vscode.diff",
+        baseline,
+        fileUnder(task.workspace as string, artifact),
+        `${task.key}: ${artifact}`,
+        {
+          preview: false,
+          preserveFocus: index + 1 < comparisons.length,
+          viewColumn: index + 1,
+        },
+      );
+    }
   }
 
   async archiveMission(selection?: MissionSelection): Promise<void> {
@@ -589,6 +837,42 @@ export class MissionController implements vscode.Disposable {
     return selected?.id ?? null;
   }
 
+  private async prepareTaskSession(
+    missionId: string,
+    task: MissionTaskLine,
+    provider: string,
+  ): Promise<{ snapshot: MissionSnapshot; sessionId: string }> {
+    const workspace = requireResponse((await this.client.once({
+      ask: "missionPrepareTask",
+      with: { mission_id: missionId, task_id: task.task_id },
+    })).response, "missionWorkspace");
+    const access = task.workspace_mode === "readOnlyBase" ? "shared" : "exclusive";
+    const sessionId = await this.sessions.startResolvedSession(
+      provider,
+      workspace.workspace,
+      null,
+      null,
+      access,
+      false,
+    );
+    const session = this.runtimeState.sessions.find((candidate) => candidate.sessionId === sessionId);
+    if (!session) {
+      throw new Error("Runtime started the Task session but did not list its exact descriptor");
+    }
+    const snapshot = requireResponse((await this.client.once({
+      ask: "missionBindSession",
+      with: {
+        mission_id: missionId,
+        task_id: task.task_id,
+        session_id: session.sessionId,
+        provider_runtime_id: session.providerId,
+        native_session_id: session.nativeSessionId ?? null,
+        workspace: session.workspace,
+      },
+    })).response, "mission");
+    return { snapshot, sessionId };
+  }
+
   private async pickMission(title: string): Promise<MissionLine | null> {
     await this.refresh();
     const selected = await vscode.window.showQuickPick(
@@ -660,6 +944,8 @@ function missionDocument(snapshot: MissionSnapshot): string {
     "",
     `State: ${inline(snapshot.mission.state)}`,
     "",
+    `Completion policy: ${inline(snapshot.mission.completion_policy)}`,
+    "",
     `Project: ${inline(snapshot.mission.project)}`,
     "",
     `Source: ${inline(snapshot.mission_ref)}`,
@@ -691,6 +977,8 @@ function missionDocument(snapshot: MissionSnapshot): string {
       "",
       `Outputs: ${task.output_roots.map(inline).join(", ")}`,
       "",
+      `Artifacts: ${task.artifact_paths.map(inline).join(", ") || "not sealed"}`,
+      "",
       `Gates: ${task.gate_refs.map(inline).join(", ")}  Passed ${task.passed_gates}  Failed ${task.failed_gates}`,
       "",
       `Capabilities: ${task.capability_versions.map((capability) => `${inline(capability.capability_id)} at ${inline(capability.version_sha256)}`).join(", ") || "none"}`,
@@ -712,6 +1000,18 @@ function missionDocument(snapshot: MissionSnapshot): string {
 
 function inline(value: string): string {
   return `\`${value.replaceAll("`", "'").replaceAll("\r", " ").replaceAll("\n", " ")}\``;
+}
+
+function safeArtifactPath(value: string): boolean {
+  return value.length > 0
+    && !value.startsWith("/")
+    && !value.startsWith("\\")
+    && !value.includes(":")
+    && value.split(/[\\/]/u).every((part) => part.length > 0 && part !== "." && part !== "..");
+}
+
+function fileUnder(root: string, relative: string): vscode.Uri {
+  return vscode.Uri.file(path.join(root, ...relative.split("/")));
 }
 
 async function requiredInput(title: string, prompt: string, value?: string): Promise<string | null> {

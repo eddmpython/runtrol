@@ -23,6 +23,7 @@ function spec(branches = 3): string {
     gateId: "check",
     baseRef: "main",
     outputRoots: ["src"],
+    providerIds: ["runtime-a", "runtime-b"],
   });
 }
 
@@ -69,14 +70,14 @@ test("a failed attempt is a result, so nothing is retried behind the operator's 
   const written = spec(2);
   assert.ok(written.includes("max_runs_per_task = 1"));
   assert.ok(written.includes("max_repair_cycles = 0"));
+  assert.ok(written.includes("stop_on_critical_failure = false"));
+  assert.ok(written.includes('completion_policy = "choose_one"'));
 });
 
-test("nothing here chooses which coding service runs an attempt", () => {
-  const written = spec(2);
-  assert.equal(written.match(/provider_selector = "operator_choice"/gu)?.length, 2);
-  for (const service of ["claude", "codex", "cline", "opencode"]) {
-    assert.equal(written.includes(service), false, `${service} was named in a generated Mission`);
-  }
+test("runtime-discovered provider choices are assigned round-robin", () => {
+  const written = spec(3);
+  assert.equal(written.match(/provider_selector = "runtime:runtime-a"/gu)?.length, 2);
+  assert.equal(written.match(/provider_selector = "runtime:runtime-b"/gu)?.length, 1);
 });
 
 test("the generated document explains itself, because the operator reads it before starting", () => {
@@ -96,4 +97,19 @@ test("the name says which fan-out this was", () => {
 test("every attempt points at the operator's own instruction file", () => {
   // The path the operator chose, not one this code invented. Mission reads that file; nothing here writes it.
   assert.equal(spec(3).match(/instruction_ref = "docs[/]attempt[.]md"/gu)?.length, 3);
+});
+
+test("generated TOML quotes reviewed values instead of allowing structure injection", () => {
+  const written = missionSpec('quoted " name', "a".repeat(64), {
+    instruction: INSTRUCTION,
+    instructionRef: 'docs/"attempt".md',
+    branches: 2,
+    gateId: 'check"gate',
+    baseRef: 'main"ref',
+    outputRoots: ['src/"quoted"'],
+    providerIds: ['runtime"id'],
+  });
+  assert.ok(written.includes('name = "quoted \\" name"'));
+  assert.ok(written.includes('instruction_ref = "docs/\\"attempt\\".md"'));
+  assert.ok(written.includes('provider_selector = "runtime:runtime\\"id"'));
 });

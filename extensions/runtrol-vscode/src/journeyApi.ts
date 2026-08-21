@@ -2,6 +2,8 @@ import * as vscode from "vscode";
 
 import type { ConversationPanels } from "./conversationPanels";
 import { Controller } from "./controller";
+import type { MissionController } from "./mission/controller";
+import type { MissionSnapshot } from "./protocol";
 import type { ProviderLine, SessionLine } from "./runtimeTypes";
 import { RuntimeState } from "./state";
 import { workspaceCollisions } from "./workspaceCollision";
@@ -72,10 +74,17 @@ export type JourneyApi = {
   refreshChats(): Promise<void>;
   /// Wait until one session reports a lifecycle, or fail at the deadline.
   waitForLifecycle(session: string, lifecycle: SessionLine["lifecycle"], deadlineMs: number): Promise<void>;
+  registerMissionGate(gateId: string, program: string, arguments_: string[]): Promise<void>;
+  validateMissionFile(file: string): Promise<MissionSnapshot>;
+  launchFleet(missionId: string): Promise<string[]>;
+  mission(missionId: string): Promise<MissionSnapshot>;
+  verifyMissionTask(missionId: string, taskId: string): Promise<MissionSnapshot>;
+  compareMissionResults(missionId: string): Promise<void>;
 };
 
 export function journeyApi(
   controller: Controller,
+  missions: MissionController,
   state: RuntimeState,
   conversation: ConversationPanels,
   afterReady: <T>(action: () => Promise<T>) => Promise<T>,
@@ -215,6 +224,19 @@ export function journeyApi(
       await controller.deleteNativeWithoutAsking(row);
     }),
     refreshChats: () => afterReady(() => controller.refreshChats()),
+    registerMissionGate: (gateId, program, arguments_) => afterReady(
+      () => missions.registerGateForJourney(gateId, program, arguments_),
+    ),
+    validateMissionFile: (file) => afterReady(() => missions.validateMissionFile(vscode.Uri.file(file))),
+    launchFleet: (missionId) => afterReady(() => missions.launchFleetForJourney(missionId)),
+    mission: (missionId) => afterReady(() => missions.snapshot(missionId)),
+    verifyMissionTask: (missionId, taskId) => afterReady(
+      () => missions.verifyTaskForJourney(missionId, taskId),
+    ),
+    compareMissionResults: (missionId) => afterReady(async () => {
+      const snapshot = await missions.snapshot(missionId);
+      await missions.compareResults({ mission: snapshot.mission });
+    }),
     waitForLifecycle: (session, lifecycle, deadlineMs) => afterReady(() => new Promise<void>((resolve, reject) => {
       const matches = (): boolean =>
         state.sessions.some((candidate) => candidate.sessionId === session && candidate.lifecycle === lifecycle);

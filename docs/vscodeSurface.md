@@ -230,7 +230,7 @@ Two contracts keep the conversation window from growing a branch per place or pe
 | `conversationPanels.ts` | one binding per conversation (surface + watch), the two workbench places, the grid | provider branches or conversation content |
 | `diffDocuments.ts` | declared changes as read-only virtual documents for VS Code's diff editor | files on disk or a transcript of changes |
 | `webview/` | bounded active rendering and input | durable storage or background sessions |
-| `mission/controller.ts` and `mission/tree.ts` | Mission review, local actions, Task rows, and one native editor document | provider input without local Send or optimistic completion |
+| `mission/controller.ts` and `mission/tree.ts` | Mission review, local actions, reviewed fleet launch, Task rows, native Artifact comparison, and one native editor document | provider input without local Send, project file merging, or optimistic completion |
 | `capability/controller.ts` | candidate inbox, native diff review, and exact local trust actions | capability text injection or user-wide trust |
 
 ## Mission and capability surface
@@ -246,8 +246,9 @@ versions, Gate counts, and the latest passing Run and Receipt IDs. It uses VS Co
 create another Webview or another provider stream.
 
 Pause, safe resume, cancel, bounded retry, integrated-tree verification, completion, and archive are explicit local
-commands. Integration remains unavailable until every Task has passed. The extension does not merge or edit project
-files.
+commands. Ordinary Missions require every Task to pass. A reviewed `choose_one` Mission waits for every attempt to
+finish, compares sealed Artifact paths in native diff editors, and completes only with one exact passing Task. The
+extension does not merge or edit project files.
 
 The Capability Candidate Inbox uses a native quick pick and Markdown review document. Verification and approval name
 one exact project version. Approval opens the built-in VS Code file or diff review first. Reject, quarantine, rollback,

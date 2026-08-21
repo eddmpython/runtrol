@@ -266,6 +266,8 @@ pub(crate) enum Prepared {
     MissionIntegration {
         /// Bound Mission identity.
         mission_id: Box<str>,
+        /// Bound selected comparison Task identity.
+        task_id: Option<Box<str>>,
         /// Exact integration result.
         response: Response,
     },
@@ -1023,7 +1025,11 @@ pub(crate) async fn prepare_mission_integration(
     composed: &Composed,
     request: &Request,
 ) -> Prepared {
-    let Request::MissionCompleteIntegration { mission_id } = request else {
+    let Request::MissionCompleteIntegration {
+        mission_id,
+        task_id,
+    } = request
+    else {
         return Prepared::None;
     };
     if !conversation.greeted()
@@ -1038,7 +1044,9 @@ pub(crate) async fn prepare_mission_integration(
     }
     Prepared::MissionIntegration {
         mission_id: mission_id.clone(),
-        response: crate::mission::prepare_integration(composed, mission_id).await,
+        task_id: task_id.clone(),
+        response: crate::mission::prepare_integration(composed, mission_id, task_id.as_deref())
+            .await,
     }
 }
 
@@ -1276,11 +1284,15 @@ pub(crate) fn answer_prepared(
             other => mismatched(other),
         },
 
-        Request::MissionCompleteIntegration { mission_id } => match prepared {
+        Request::MissionCompleteIntegration {
+            mission_id,
+            task_id,
+        } => match prepared {
             Prepared::MissionIntegration {
                 mission_id: prepared_mission,
+                task_id: prepared_task,
                 response,
-            } if prepared_mission == mission_id => Reply::One(response),
+            } if prepared_mission == mission_id && prepared_task == task_id => Reply::One(response),
             other => mismatched(other),
         },
 
@@ -2435,6 +2447,7 @@ mod tests {
             name: "One mission".into(),
             project: project.into(),
             state: "running".into(),
+            completion_policy: "allTasks".into(),
             passed_tasks: 0,
             total_tasks: 1,
             awaiting_input: 0,

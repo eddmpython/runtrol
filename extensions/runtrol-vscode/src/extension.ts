@@ -266,6 +266,10 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
       (item) => run(() => afterMissionReady(() => missionController.startMission(item))),
     ),
     vscode.commands.registerCommand(
+      "runtrol.launchFleet",
+      (item) => run(() => afterMissionReady(() => missionController.launchFleet(item))),
+    ),
+    vscode.commands.registerCommand(
       "runtrol.prepareMissionTask",
       (item) => run(() => afterMissionReady(() => missionController.prepareTask(item))),
     ),
@@ -296,6 +300,10 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
     vscode.commands.registerCommand(
       "runtrol.completeMissionIntegration",
       (item) => run(() => afterMissionReady(() => missionController.completeIntegration(item))),
+    ),
+    vscode.commands.registerCommand(
+      "runtrol.compareMissionResults",
+      (item) => run(() => afterMissionReady(() => missionController.compareResults(item))),
     ),
     vscode.commands.registerCommand(
       "runtrol.archiveMission",
@@ -883,7 +891,7 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
         }
       }
       : undefined,
-    journey: journeyApi(controller, state, conversation, afterReady, context.extensionMode, (sessionId) => (
+    journey: journeyApi(controller, missionController, state, conversation, afterReady, context.extensionMode, (sessionId) => (
       conversations.revealSession(sessionId)
     )),
   };

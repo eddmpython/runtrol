@@ -29,6 +29,7 @@ name = "reviewed-change"
 project_id = "operator-visible-project-label"
 base_ref = "main"
 require_clean_base = true
+completion_policy = "all_tasks"
 
 [limits]
 max_parallel_tasks = 2
@@ -60,6 +61,14 @@ gate_refs = ["project-check"]
 `provider_selector` is either `operator_choice` or `runtime:<runtime-id>`, where the runtime ID is an exact current
 observation. Provider names, versions, models, flags, and session paths are not schema constants.
 
+`completion_policy` defaults to `all_tasks`, which preserves the ordinary DAG contract: every Task must pass and
+every passing Receipt contributes integration evidence. `choose_one` is the narrow comparison contract. It requires
+two through four dependency-free Tasks with the same instruction, handoffs, output roots, Gates, and capability
+versions. Every Task uses an isolated worktree, runs once, has no repair cycle, and terminal failure does not stop the
+other attempts. Overlapping output roots are permitted only inside this contract. Integration review begins after
+every attempt is terminal and at least one passed. Final verification names one passing Task and uses only that
+Task's Receipt and Gates. If no attempt passes, the Mission fails.
+
 The active bounds are:
 
 | Boundary | Limit |
@@ -67,7 +76,7 @@ The active bounds are:
 | Mission file | 256 KiB |
 | Instruction file | 256 KiB |
 | Tasks in one Mission | 1,000 |
-| Parallel Tasks | 2 |
+| Parallel Tasks | 2 normally, 4 for a validated `choose_one` comparison |
 | Hot provider reservations | 8 |
 | Runs per Task | 2 |
 | Repair cycles | 1 |
@@ -176,11 +185,11 @@ renderer. The normal sequence is:
 Step 2 assumes a Mission file exists. Writing one by hand is the part that kept the commonest shape of this flow
 unused: one instruction, tried several ways at once, compared, and the best kept.
 
-Studio composes that file. It takes an instruction file the operator already wrote, an attempt count, and the Gate
-that judges an attempt, and produces a Mission whose Tasks carry no dependencies (so they run at once) and each
-declare `isolated_worktree` (so no two write the same files). Attempts are bounded at four because each owns a
-worktree and a hot provider. Each attempt runs once with no repair cycles: a fan-out compares attempts, and
-retrying one silently would mean the thing being compared changed while being compared.
+Studio composes that file. It takes an instruction file the operator already wrote, an attempt count, discovered
+provider choices, and the Gate that judges an attempt. It produces a `choose_one` Mission whose Tasks carry no
+dependencies and each declare `isolated_worktree`. Attempts are bounded at four because each owns a worktree and a
+hot provider. Each attempt runs once with no repair cycles: a comparison treats failure as a result, and retrying one
+silently would mean the thing being compared changed while being compared.
 
 Three things it does not do, each for a stated reason:
 
@@ -194,6 +203,16 @@ Three things it does not do, each for a stated reason:
   fan-out whose attempts all pass regardless of what they did. The operator names a registered Gate. Registration
   is per project, not per fan-out.
 
+After the operator saves and validates the document, `Run All Reviewed Attempts` replaces the repeated start,
+prepare, bind, and Send actions for this reviewed shape. One modal confirmation names the Mission digest and exact
+provider assignment. Studio prepares every linked worktree and public Runtime session, rechecks every instruction,
+submits the exact bytes, opens the native conversation tabs, and invokes the existing VS Code grid command.
+
+After verification, `Compare Passing Results` groups the same sealed Artifact path across passing worktrees and opens
+one native VS Code diff per attempt against the current project file. It does not merge or copy files. The operator
+applies the chosen result to the project and completes from that passing Task row; Core then verifies the project
+against only the selected Receipt.
+
 ## Verification and claim limit
 
 `missionGrowthContracts` proves state, scheduling, exact Send, recovery, evidence, integration, local scope, explicit
@@ -202,6 +221,10 @@ Core IPC to complete five reviewed Tasks, two integrations, two archives, exact 
 rollback, and cleanup against deterministic loopback model endpoints. `missionLedger` requires a snapshot of 100
 Missions and 1,000 Tasks to remain at or below 50 ms p95.
 
+`fleetComparisonSmoke` runs two installed provider CLIs concurrently in distinct linked worktrees through production
+IPC. It seals different content for the same Artifact, rejects completion with the non-applied passing Task, accepts
+the exact applied Task, archives the Mission, and proves session cleanup. The focused real Extension Host eye pass
+visually verifies the reviewed Mission, two-column conversation grid, integrating results, and native Artifact diffs.
+
 These gates prove product wiring and deterministic evidence. They do not claim that one provider or capability is
 better, that a linked worktree is a sandbox, or that loopback model output represents account-backed model quality.
-

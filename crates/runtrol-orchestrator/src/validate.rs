@@ -8,9 +8,9 @@ use runtrol_provider::AbsPath;
 use sha2::{Digest as _, Sha256};
 
 use crate::{
-    CapabilitySelection, GateRegistry, InstructionRef, MAX_CAPABILITY_REFS, MAX_GATE_REFS,
-    MAX_INSTRUCTION_BYTES, MAX_MISSION_BYTES, MAX_OUTPUT_ROOTS, MAX_TASK_KEY_BYTES, MISSION_SCHEMA,
-    MissionSpec, ProviderSelector, TaskSpec, WorkspaceMode,
+    CapabilitySelection, CompletionPolicy, GateRegistry, InstructionRef, MAX_CAPABILITY_REFS,
+    MAX_GATE_REFS, MAX_INSTRUCTION_BYTES, MAX_MISSION_BYTES, MAX_OUTPUT_ROOTS, MAX_TASK_KEY_BYTES,
+    MISSION_SCHEMA, MissionSpec, ProviderSelector, TaskSpec, WorkspaceMode,
 };
 
 /// Stable structural validation failure class.
@@ -38,6 +38,8 @@ pub enum FindingCode {
     Provider,
     /// A write Task did not request an isolated worktree.
     Workspace,
+    /// The selected completion policy and Task graph disagree.
+    CompletionPolicy,
 }
 
 /// One typed validation finding without untrusted file or process output.
@@ -119,6 +121,7 @@ impl MissionValidator {
             findings.push(finding(FindingCode::Schema, None));
         }
         validate_limits(&spec, &mut findings);
+        validate_completion_policy(&spec, &mut findings);
         let mut keys = BTreeSet::new();
         for task in &spec.tasks {
             if !valid_task_key(&task.id) || !keys.insert(task.id.clone()) {
@@ -127,7 +130,7 @@ impl MissionValidator {
         }
         let graph = graph_of(&spec.tasks, &keys, &mut findings);
         detect_cycles(&graph, &mut findings);
-        detect_overlaps(&spec.tasks, &graph, &mut findings);
+        detect_overlaps(&spec, &graph, &mut findings);
 
         let mut tasks = Vec::with_capacity(spec.tasks.len());
         for task in &spec.tasks {
@@ -224,14 +227,47 @@ fn validate_capabilities(
 
 fn validate_limits(spec: &MissionSpec, findings: &mut Vec<MissionFinding>) {
     let limits = spec.limits;
+    let parallel_valid = match spec.completion_policy {
+        CompletionPolicy::AllTasks => (1..=2).contains(&limits.max_parallel_tasks),
+        CompletionPolicy::ChooseOne => (2..=4).contains(&limits.max_parallel_tasks),
+    };
     if spec.tasks.is_empty()
         || spec.tasks.len() > runtrol_ledger::MAX_TASKS_PER_MISSION
-        || !(1..=2).contains(&limits.max_parallel_tasks)
+        || !parallel_valid
         || !(1..=8).contains(&limits.max_hot_providers)
         || !(1..=2).contains(&limits.max_runs_per_task)
         || limits.max_repair_cycles > 1
     {
         findings.push(finding(FindingCode::Bound, None));
+    }
+}
+
+fn validate_completion_policy(spec: &MissionSpec, findings: &mut Vec<MissionFinding>) {
+    if spec.completion_policy != CompletionPolicy::ChooseOne {
+        return;
+    }
+    let Some(first) = spec.tasks.first() else {
+        return;
+    };
+    let limits = spec.limits;
+    let invalid_limits = !(2..=4).contains(&spec.tasks.len())
+        || spec.tasks.len() != usize::from(limits.max_parallel_tasks)
+        || limits.max_hot_providers < limits.max_parallel_tasks
+        || limits.max_runs_per_task != 1
+        || limits.max_repair_cycles != 0
+        || limits.stop_on_critical_failure;
+    let invalid_task = spec.tasks.iter().any(|task| {
+        !task.depends_on.is_empty()
+            || task.workspace_mode != WorkspaceMode::IsolatedWorktree
+            || task.instruction_ref != first.instruction_ref
+            || task.instruction_sha256 != first.instruction_sha256
+            || task.handoff_refs != first.handoff_refs
+            || task.output_roots != first.output_roots
+            || task.gate_refs != first.gate_refs
+            || task.capability_versions != first.capability_versions
+    });
+    if invalid_limits || invalid_task {
+        findings.push(finding(FindingCode::CompletionPolicy, None));
     }
 }
 
@@ -316,10 +352,14 @@ fn reaches(
 }
 
 fn detect_overlaps(
-    tasks: &[TaskSpec],
+    spec: &MissionSpec,
     graph: &BTreeMap<Box<str>, Vec<Box<str>>>,
     findings: &mut Vec<MissionFinding>,
 ) {
+    if spec.completion_policy == CompletionPolicy::ChooseOne {
+        return;
+    }
+    let tasks = &spec.tasks;
     for (index, left) in tasks.iter().enumerate() {
         if left.workspace_mode != WorkspaceMode::IsolatedWorktree {
             continue;
@@ -584,6 +624,54 @@ gate_refs = ["check"]
             findings
                 .iter()
                 .any(|finding| finding.code == FindingCode::OutputOverlap)
+        );
+    }
+
+    #[test]
+    fn choose_one_allows_only_matching_isolated_root_attempts() {
+        let scratch = Scratch::make();
+        let mission = String::from_utf8(scratch.mission("", "src"))
+            .expect("Mission UTF-8")
+            .replacen(
+                "require_clean_base = true",
+                "require_clean_base = true\ncompletion_policy = \"choose_one\"",
+                1,
+            )
+            .replacen("max_runs_per_task = 2", "max_runs_per_task = 1", 1)
+            .replacen("max_repair_cycles = 1", "max_repair_cycles = 0", 1)
+            .replacen(
+                "stop_on_critical_failure = true",
+                "stop_on_critical_failure = false",
+                1,
+            );
+        let validated = MissionValidator::validate(
+            mission.as_bytes(),
+            &scratch.canonical,
+            &scratch.project(),
+            &gates(),
+            &["fixture-runtime".into()],
+            &[],
+        )
+        .expect("valid comparison Mission");
+        assert_eq!(
+            validated.spec.completion_policy,
+            CompletionPolicy::ChooseOne
+        );
+
+        let invalid = mission.replacen("depends_on = []", "depends_on = [\"first\"]", 1);
+        let findings = MissionValidator::validate(
+            invalid.as_bytes(),
+            &scratch.canonical,
+            &scratch.project(),
+            &gates(),
+            &["fixture-runtime".into()],
+            &[],
+        )
+        .expect_err("dependent comparison attempt must fail");
+        assert!(
+            findings
+                .iter()
+                .any(|finding| finding.code == FindingCode::CompletionPolicy)
         );
     }
 
