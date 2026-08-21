@@ -32,6 +32,10 @@ type JourneyApi = {
   openStoredWithTitle(providerId: string): Promise<string | null>;
   openLatestDiff(): Promise<void>;
   clickChip(anchor: "project" | "service" | "model" | "effort" | "mode"): Promise<void>;
+  alsoAsk(providerId: string): Promise<void>;
+  rowTool(session: string): string | null;
+  answerFromRow(session: string, how: "allow" | "decline"): Promise<void>;
+  revealRow(session: string): Promise<void>;
   nativeChatCount(): number;
   nativeChatListed(providerId: string, nativeSessionId: string): boolean;
   deleteNativeListed(providerId: string, nativeSessionId: string): Promise<void>;
@@ -124,9 +128,54 @@ async function eyePass(resultPath: string): Promise<void> {
   await journey.verifySelected(session);
   currentStage = "answering";
   await journey.waitForLifecycle(session, "hotRunning", 30_000).catch(() => undefined);
+  // Pose 2a: the row names the tool the service says is running, while it runs, in the service's own word.
+  // Bounded wait: a fast answer may finish before any tool is named, and that is recorded, not forced.
+  const toolDeadline = Date.now() + 40_000;
+  let rowTool: string | null = null;
+  while (Date.now() < toolDeadline) {
+    rowTool = journey.rowTool(session);
+    if (rowTool) break;
+    await delay(200);
+  }
+  if (rowTool) {
+    await journey.revealRow(session);
+    await capture(resultPath, "activity", { session, rowTool });
+  }
   await journey.waitForLifecycle(session, "hotIdle", 240_000);
   await delay(1_200);
   await capture(resultPath, "conversation", { session });
+
+  // Pose 2b: one prompt to two services. A draft on the same folder with a second service added ("also ask"),
+  // sent once; two tabs start, the grid lines them up. Skipped when only one service is usable.
+  currentStage = "fan-out";
+  const second = journey.providers().find(
+    (provider) => provider.providerId !== providerId && provider.installation.state === "usable",
+  );
+  let fanOut: Record<string, unknown> = { skipped: "one usable service" };
+  if (second) {
+    await journey.openDraft(folder, providerId);
+    await delay(800);
+    await journey.alsoAsk(second.providerId);
+    await delay(600);
+    await capture(resultPath, "fanOutDraft", { also: second.providerId });
+    let first: string | null = null;
+    let failure: string | null = null;
+    try {
+      first = await within(journey.sendFocusedDraft("Reply with exactly: ok"), 180_000, "sending the fan-out draft");
+    } catch (error) {
+      failure = error instanceof Error ? error.message : String(error);
+    }
+    await delay(4_000);
+    const started = journey.sessions().filter((line) => line.hot).length;
+    // Named sendFailure, not failure: the photographer reads a top-level "failure" as the pass having failed.
+    await capture(resultPath, "fanOut", { first, also: second.providerId, hot: started, sendFailure: failure });
+    fanOut = { first, also: second.providerId, hot: started, sendFailure: failure };
+    for (const line of journey.sessions()) {
+      if (line.sessionId !== session) {
+        await journey.waitForLifecycle(line.sessionId, "hotIdle", 120_000).catch(() => undefined);
+      }
+    }
+  }
 
   // Pose 3: many conversation tabs, the editor's own groups doing the arranging.
   currentStage = "opening-tabs";
@@ -187,14 +236,14 @@ async function eyePass(resultPath: string): Promise<void> {
       placing.panel = error instanceof Error ? error.message : String(error);
     });
   }
-  const second = hot.find((line) => line.sessionId !== panelSession && line.workspace !== forPanel?.workspace)?.sessionId ?? null;
-  if (second) {
-    await journey.placeConversation(second, "sideBar").catch((error: unknown) => {
+  const sideSession = hot.find((line) => line.sessionId !== panelSession && line.workspace !== forPanel?.workspace)?.sessionId ?? null;
+  if (sideSession) {
+    await journey.placeConversation(sideSession, "sideBar").catch((error: unknown) => {
       placing.sideBar = error instanceof Error ? error.message : String(error);
     });
   }
   await delay(2_500);
-  await capture(resultPath, "places", { panel: panelSession, sideBar: second, failures: placing });
+  await capture(resultPath, "places", { panel: panelSession, sideBar: sideSession, failures: placing });
 
   // Pose 7: a throwaway conversation of a provider that can delete is started in a scratch folder and asked
   // to write a file, so the service declares a change: the tab names it with an "Open diff" button, and the
@@ -223,7 +272,9 @@ async function eyePass(resultPath: string): Promise<void> {
       refused: listed.refused,
       reopened,
       grid,
-      places: { panel: panelSession, sideBar: second, failures: placing },
+      places: { panel: panelSession, sideBar: sideSession, failures: placing },
+      fanOut,
+      rowTool,
       deletion,
     }),
     "utf8",
@@ -259,12 +310,24 @@ async function deletionProof(
     await watch.ready;
     let approvalsAnswered = 0;
     let approvalsUnanswerable = 0;
+    let answeredFromRow = false;
     const answering = (async () => {
       for (;;) {
         const fact = await watch.next("approval", 300_000).catch(() => null);
         if (!fact) return;
         if (fact.allow === null) {
           approvalsUnanswerable += 1;
+          continue;
+        }
+        if (!answeredFromRow) {
+          // The first question is answered from the sidebar row, as a person would without opening the tab:
+          // the row says "Needs you", its inline allow is pressed, and the row changes. Photographed first.
+          answeredFromRow = true;
+          await delay(1_200);
+          await journey.revealRow(session);
+          await capture(resultPath, "rowApproval", { session });
+          await journey.answerFromRow(session, "allow");
+          approvalsAnswered += 1;
           continue;
         }
         await journey.answerApproval(fact.approval, fact.allow, fact.subjectDigest);

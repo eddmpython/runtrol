@@ -454,6 +454,40 @@
         "command": "runtrol.explainListing",
         "title": "Runtrol: Why Are Some Chats Not Listed?",
         "icon": "$(info)"
+      },
+      {
+        "command": "runtrol.returnToPreviousProject",
+        "title": "Runtrol: Back to Previous Project",
+        "icon": "$(arrow-left)"
+      },
+      {
+        "command": "runtrol.signInFromRow",
+        "title": "Sign In to This Service",
+        "category": "Runtrol",
+        "icon": "$(key)"
+      },
+      {
+        "command": "runtrol.allowFromRow",
+        "title": "Allow (the service's own first allow option)",
+        "category": "Runtrol",
+        "icon": "$(check)"
+      },
+      {
+        "command": "runtrol.declineFromRow",
+        "title": "Decline (the service's own first decline option)",
+        "category": "Runtrol",
+        "icon": "$(circle-slash)"
+      },
+      {
+        "command": "runtrol.answerFromRow",
+        "title": "Answer the Question...",
+        "category": "Runtrol",
+        "icon": "$(comment-discussion)"
+      },
+      {
+        "command": "runtrol.switchProject",
+        "title": "Runtrol: Switch Window to Project...",
+        "icon": "$(folder-opened)"
       }
     ],
     "keybindings": [
@@ -491,6 +525,16 @@
         "command": "runtrol.arrangeConversationGrid",
         "key": "ctrl+k ctrl+g",
         "mac": "cmd+k cmd+g"
+      },
+      {
+        "command": "runtrol.returnToPreviousProject",
+        "key": "ctrl+k ctrl+b",
+        "mac": "cmd+k cmd+b"
+      },
+      {
+        "command": "runtrol.switchProject",
+        "key": "ctrl+k ctrl+shift+p",
+        "mac": "cmd+k cmd+shift+p"
       }
     ],
     "menus": {
@@ -521,6 +565,22 @@
         },
         {
           "command": "runtrol.deleteConversation",
+          "when": "false"
+        },
+        {
+          "command": "runtrol.signInFromRow",
+          "when": "false"
+        },
+        {
+          "command": "runtrol.allowFromRow",
+          "when": "false"
+        },
+        {
+          "command": "runtrol.declineFromRow",
+          "when": "false"
+        },
+        {
+          "command": "runtrol.answerFromRow",
           "when": "false"
         }
       ],
@@ -684,7 +744,7 @@
         },
         {
           "command": "runtrol.closeSession",
-          "when": "view == runtrol.sessions && viewItem == runtrol.conversation.live",
+          "when": "view == runtrol.sessions && viewItem =~ /^runtrol\\.conversation\\.live/",
           "group": "inline@3"
         },
         {
@@ -756,6 +816,26 @@
           "command": "runtrol.openConversationInSideBar",
           "group": "2_place@2",
           "when": "view == runtrol.sessions && viewItem =~ /^runtrol\\.conversation/"
+        },
+        {
+          "command": "runtrol.allowFromRow",
+          "group": "inline@0",
+          "when": "view == runtrol.sessions && viewItem =~ /^runtrol\\.conversation\\.live(\\.|$).*needsYou/"
+        },
+        {
+          "command": "runtrol.declineFromRow",
+          "group": "inline@0",
+          "when": "view == runtrol.sessions && viewItem =~ /^runtrol\\.conversation\\.live(\\.|$).*needsYou/"
+        },
+        {
+          "command": "runtrol.answerFromRow",
+          "group": "1_answer@0",
+          "when": "view == runtrol.sessions && viewItem =~ /^runtrol\\.conversation\\.live(\\.|$).*needsYou/"
+        },
+        {
+          "command": "runtrol.signInFromRow",
+          "group": "inline@0",
+          "when": "view == runtrol.sessions && viewItem =~ /^runtrol\\.conversation\\.live(\\.|$).*signIn/"
         }
       ]
     },

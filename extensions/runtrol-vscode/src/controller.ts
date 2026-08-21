@@ -26,7 +26,7 @@ import type {
   WorkspaceAccess,
 } from "./runtimeTypes";
 import type { Conversation } from "./conversationList";
-import { attentionCount, nextNeedingYou } from "./conversationList";
+import { attentionCount, nextNeedingYou, projects } from "./conversationList";
 import { conversationDeletion, deletionQuestion } from "./conversationDeletion";
 import { conversationChoices } from "./conversationPicker";
 import { awaitsVerification, isUsable } from "./providerHealth";
@@ -104,7 +104,13 @@ export class Controller implements vscode.Disposable {
     this.status.name = "Runtrol chats";
     this.status.command = "runtrol.switchSession";
     this.status.show();
-    context.subscriptions.push(this.status, state.onDidChange(() => this.updateStatus()));
+    context.subscriptions.push(
+      this.status,
+      state.onDidChange(() => this.updateStatus()),
+      state.onDidChange((change) => {
+        if (change === "rows") void this.rememberKnownProjects();
+      }),
+    );
   }
 
   async initialize(): Promise<void> {
@@ -416,6 +422,23 @@ export class Controller implements vscode.Disposable {
     afterApplied();
   }
 
+  /// Open a conversation with the access the operator decided, on the public Runtime. A shared open is the
+  /// public Runtime's one presence-gated open (a second writer in a working tree somebody is already writing
+  /// in); the Runtime client confirms the person's own choice at the machine and retries, so from here both
+  /// accesses are one call (measured 2026-08-21: every "Start here anyway", "Resume anyway" and scratch-folder
+  /// path used to send shared with no confirmation, and the refusal was misread as a sign-in problem).
+  private async openWithAccess(
+    open:
+      | { kind: "start"; providerId: string; workspace: string; model: string | null; effort: string | null; permission: string | null }
+      | { kind: "adopt"; native: NativeChatLine },
+    access: WorkspaceAccess,
+  ): Promise<string> {
+    const opened = open.kind === "start"
+      ? await this.runtime.start(open.providerId, open.workspace, access, open.model, open.effort, open.permission)
+      : await this.runtime.adoptNative(open.native, access);
+    return opened.sessionId;
+  }
+
   private async resumeSession(session: SessionLine): Promise<SessionLine> {
     if (!session.nativeSessionId) {
       throw new Error("that cold session has no provider-owned conversation identifier to resume");
@@ -476,9 +499,9 @@ export class Controller implements vscode.Disposable {
       if (action !== "Resume anyway") return null;
       access = "shared";
     }
-    const opened = await this.runtime.adoptNative(current, access);
+    const openedId = await this.openWithAccess({ kind: "adopt", native: current }, access);
     await this.refresh();
-    const adopted = this.state.sessions.find((session) => session.sessionId === opened.sessionId);
+    const adopted = this.state.sessions.find((session) => session.sessionId === openedId);
     if (!adopted) {
       throw new Error("the resumed existing chat is absent from the current session index");
     }
@@ -514,6 +537,7 @@ export class Controller implements vscode.Disposable {
       id: newDraftId(),
       workspace: seed.workspace,
       providerId: provider?.providerId ?? null,
+      alsoProviderIds: [],
       model: recall?.model ?? null,
       effort: recall?.effort ?? null,
       permission: recall?.permission ?? null,
@@ -609,16 +633,56 @@ export class Controller implements vscode.Disposable {
     await this.amendDraft(binding, { workspace: picked.workspace });
   }
 
-  /// Which coding service answers this draft. Every usable one is offered, the last used leading.
+  /// Which coding service answers this draft. Every usable one is offered, the last used leading, and beneath
+  /// them "Also ask <service>": the same first message goes to that service too, in its own tab (one prompt,
+  /// N agents, the grid one key away). Choosing an "also" toggles it; choosing a service makes it the one
+  /// this tab becomes.
   async pickDraftService(binding: ConversationBinding): Promise<void> {
     const draft = binding.draft;
     if (!draft) return;
-    const provider = await this.chooseService(true, binding);
-    if (!provider) return;
+    const usable = this.state.providers.filter(isUsable);
+    if (usable.length === 0) throw new Error("no installed coding-agent CLI is currently usable");
+    const recent = this.context.globalState.get<string>(RECENT_SERVICE_KEY);
+    type Choice = { label: string; description?: string; provider: ProviderLine; also: boolean };
+    const primary: Choice[] = usable.map((provider) => ({
+      label: provider.displayName,
+      description: provider.providerId === draft.state.providerId
+        ? "This tab's service"
+        : provider.providerId === recent ? "Last used" : provider.installation.version ?? "",
+      provider,
+      also: false,
+    }));
+    const others: Choice[] = usable
+      .filter((provider) => provider.providerId !== draft.state.providerId)
+      .map((provider) => ({
+        label: `Also ask ${provider.displayName}`,
+        description: draft.state.alsoProviderIds.includes(provider.providerId)
+          ? "Asked too (choose again to drop)"
+          : "The same first message, in its own tab",
+        provider,
+        also: true,
+      }));
+    const picked = await this.pickFrom(
+      binding,
+      "service",
+      "Coding service for this conversation",
+      "Choose a coding service",
+      [...primary, ...(draft.state.providerId ? others : [])],
+    );
+    if (!picked) return;
+    if (picked.also) {
+      const id = picked.provider.providerId;
+      const current = draft.state.alsoProviderIds;
+      await this.amendDraft(binding, {
+        alsoProviderIds: current.includes(id) ? current.filter((other) => other !== id) : [...current, id],
+      });
+      return;
+    }
     // A model or effort chosen for one service means nothing to another; they revert to the new service's
-    // own defaults, and the chips say so.
+    // own defaults, and the chips say so. The "also" set drops the service that became primary.
     await this.amendDraft(binding, {
-      providerId: provider.providerId,
+      providerId: picked.provider.providerId,
+      alsoProviderIds: draft.state.alsoProviderIds.filter((other) => other !== picked.provider.providerId),
       model: null,
       effort: null,
       permission: null,
@@ -754,7 +818,12 @@ export class Controller implements vscode.Disposable {
       await this.reportServiceTrouble(provider, troubleOf(undefined, provider));
     }
     const workspace = draft.state.workspace ?? await this.ensureProjectlessRoot();
-    const decided = await this.startDecision(workspace, "keep");
+    const also = draft.state.alsoProviderIds
+      .map((id) => this.state.providers.find((candidate) => candidate.providerId === id) ?? null)
+      .filter((candidate): candidate is ProviderLine => candidate !== null && isUsable(candidate));
+    // N agents on one folder is the operator's explicit choice of concurrent writers, which is the one case
+    // the working-tree contract lets through as shared access; one agent asks the usual question.
+    const decided = also.length > 0 ? "shared" : await this.startDecision(workspace, "keep");
     if (decided === null || decided === "another") return;
     await this.rememberService(provider.providerId);
     if (draft.state.model !== null || draft.state.effort !== null || draft.state.permission !== null) {
@@ -767,16 +836,19 @@ export class Controller implements vscode.Disposable {
     }
     const pausedDiscoveries = this.beginForegroundAction();
     try {
-      const opened = await this.runtime.start(
-        provider.providerId,
-        workspace,
+      const openedId = await this.openWithAccess(
+        {
+          kind: "start",
+          providerId: provider.providerId,
+          workspace,
+          model: draft.state.model,
+          effort: draft.state.effort,
+          permission: draft.state.permission,
+        },
         decided,
-        draft.state.model,
-        draft.state.effort,
-        draft.state.permission,
       );
       await this.refresh();
-      const session = this.state.sessions.find((candidate) => candidate.sessionId === opened.sessionId);
+      const session = this.state.sessions.find((candidate) => candidate.sessionId === openedId);
       if (!session) throw new Error("the started conversation is absent from the current session index");
       this.panels.becomeSession(binding, session);
       this.state.select(session.sessionId);
@@ -787,6 +859,7 @@ export class Controller implements vscode.Disposable {
         );
       });
       await this.send(binding, session, text);
+      if (also.length > 0) await this.askOthersToo(also, workspace, text, binding);
     } catch (error) {
       if (error instanceof ServiceTroubleReported) throw error;
       const trouble = troubleOf(errorKindOf(error), provider);
@@ -795,6 +868,37 @@ export class Controller implements vscode.Disposable {
     } finally {
       this.endForegroundAction(pausedDiscoveries);
     }
+  }
+
+  /// The same first message to each further service, each in its own tab beside the first, then the grid.
+  /// One service refusing (a folder it will not write in, a sign-in it needs) is said on the first tab and
+  /// does not stop the others.
+  private async askOthersToo(
+    also: readonly ProviderLine[],
+    workspace: string,
+    text: string,
+    from: ConversationBinding,
+  ): Promise<void> {
+    for (const provider of also) {
+      try {
+        const openedId = await this.openWithAccess(
+          { kind: "start", providerId: provider.providerId, workspace, model: null, effort: null, permission: null },
+          "shared",
+        );
+        await this.refresh();
+        const session = this.state.sessions.find((candidate) => candidate.sessionId === openedId);
+        if (!session) throw new Error("the started conversation is absent from the current session index");
+        const binding = await this.panels.open(session, true);
+        await this.runtime.submitInput(runtimeAction(session), text);
+        binding.view.status("", "info");
+      } catch (error) {
+        from.view.status(
+          `${provider.displayName} could not be asked too: ${error instanceof Error ? error.message : String(error)}`,
+          "warning",
+        );
+      }
+    }
+    await this.panels.arrangeGrid();
   }
 
   /// The scratch folder, created on first use. One `mkdir` of an empty directory; nothing is written in it
@@ -865,11 +969,7 @@ export class Controller implements vscode.Disposable {
     );
     if (!picked) return;
     if (picked.act === "window") {
-      await vscode.commands.executeCommand(
-        "vscode.openFolder",
-        vscode.Uri.file(session.workspace),
-        { forceNewWindow: false },
-      );
+      await this.switchWindowTo(session.workspace);
       return;
     }
     await this.openDraft({ workspace: projectless ? null : session.workspace, providerId: session.providerId });
@@ -1041,17 +1141,13 @@ export class Controller implements vscode.Disposable {
     }
     const pausedDiscoveries = this.beginForegroundAction();
     try {
-      const opened = await this.runtime.start(
-        provider.providerId,
-        workspace,
+      const openedId = await this.openWithAccess(
+        { kind: "start", providerId: provider.providerId, workspace, model, effort: reasoningEffort, permission },
         access,
-        model,
-        reasoningEffort,
-        permission,
       );
       await this.refresh();
-      await this.select(opened.sessionId);
-      return opened.sessionId;
+      await this.select(openedId);
+      return openedId;
     } catch (error) {
       if (error instanceof ServiceTroubleReported) throw error;
       const trouble = troubleOf(errorKindOf(error), provider);
@@ -1205,6 +1301,158 @@ export class Controller implements vscode.Disposable {
     await this.panels.open(selected);
   }
 
+  /// Move this window to another project, remembering where it was so one key brings it back.
+  ///
+  /// The only way the window changes what it is open on (the contract: opening a conversation never moves the
+  /// window). The previous target is one string in global state, read by the window that replaces this one.
+  async switchWindowTo(workspace: string): Promise<void> {
+    const current = currentWindowTarget();
+    if (current) await this.context.globalState.update(PREVIOUS_PROJECT_KEY, current);
+    await vscode.commands.executeCommand("vscode.openFolder", vscode.Uri.file(workspace), { forceNewWindow: false });
+  }
+
+  /// Move this window to one of the machine's projects from the keyboard (`Ctrl+K Ctrl+Shift+P`): every
+  /// project heading the sidebar shows, plus this window's folders, in one list; the same switch the heading's
+  /// button makes, reachable without the mouse.
+  async switchProject(): Promise<void> {
+    type Choice = vscode.QuickPickItem & { workspace: string };
+    const projectChoices = (): Choice[] => {
+      const seen = new Set<string>();
+      const choices: Choice[] = [];
+      const add = (workspace: string, description: string): void => {
+        const identity = workspaceIdentity(workspace);
+        if (seen.has(identity)) return;
+        seen.add(identity);
+        choices.push({ label: workspaceName(workspace) || workspace, description, detail: workspace, workspace });
+      };
+      const openFolders = (vscode.workspace.workspaceFolders ?? []).map((folder) => folder.uri.fsPath);
+      for (const group of projects(this.projectRecords.all(), this.state.conversations, openFolders)) {
+        add(group.workspace, group.current ? "This window" : `${group.rows.length} conversation${group.rows.length === 1 ? "" : "s"}`);
+      }
+      for (const folder of vscode.workspace.workspaceFolders ?? []) add(folder.uri.fsPath, "This window");
+      // Projects any window of this machine has listed before: a fresh window's own list is still loading,
+      // and the keyboard should not wait for it.
+      for (const workspace of this.context.globalState.get<string[]>(KNOWN_PROJECTS_KEY) ?? []) add(workspace, "Seen before");
+      return choices;
+    };
+    // A live list: a fresh window is still discovering the machine's conversations while the picker is open,
+    // so the list fills in as they arrive instead of asking the person to close and reopen it.
+    const picker = vscode.window.createQuickPick<Choice>();
+    picker.title = "Switch this window to a project";
+    picker.placeholder = "The window moves there; Ctrl+K Ctrl+B brings it back";
+    picker.matchOnDescription = true;
+    picker.matchOnDetail = true;
+    picker.items = projectChoices();
+    picker.busy = this.discoveringNativeChats();
+    const follow = this.state.onDidChange((change) => {
+      if (change !== "rows") return;
+      const active = picker.activeItems[0]?.workspace ?? null;
+      picker.items = projectChoices();
+      picker.busy = this.discoveringNativeChats();
+      const again = active ? picker.items.find((item) => item.workspace === active) : undefined;
+      if (again) picker.activeItems = [again];
+    });
+    const picked = await new Promise<Choice | undefined>((resolve) => {
+      picker.onDidAccept(() => resolve(picker.selectedItems[0]));
+      picker.onDidHide(() => resolve(undefined));
+      picker.show();
+    });
+    follow.dispose();
+    picker.dispose();
+    if (!picked) return;
+    if (workspaceIsOpen(picked.workspace)) {
+      this.say(`${picked.label} is already this window.`, "info");
+      return;
+    }
+    await this.switchWindowTo(picked.workspace);
+  }
+
+  /// Whether any service's stored conversations are still being listed (the picker says so with a spinner).
+  private discoveringNativeChats(): boolean {
+    return this.state.providers.filter(isUsable).some((provider) => this.state.nativeCatalogue(provider.providerId) === null);
+  }
+
+  /// The remembered project folders, for the harness.
+  knownProjectsForJourney(): readonly string[] {
+    return this.context.globalState.get<string[]>(KNOWN_PROJECTS_KEY) ?? [];
+  }
+
+  /// Remember the projects the sidebar shows, so the keyboard switch can offer them in a window that has not
+  /// listed anything yet. Paths only, bounded, newest last.
+  private async rememberKnownProjects(): Promise<void> {
+    const known = this.context.globalState.get<string[]>(KNOWN_PROJECTS_KEY) ?? [];
+    const seen = new Set(known.map((workspace) => workspaceIdentity(workspace)));
+    const next = [...known];
+    const openFolders = (vscode.workspace.workspaceFolders ?? []).map((folder) => folder.uri.fsPath);
+    for (const group of projects(this.projectRecords.all(), this.state.conversations, openFolders)) {
+      const identity = workspaceIdentity(group.workspace);
+      if (seen.has(identity)) continue;
+      seen.add(identity);
+      next.push(group.workspace);
+    }
+    if (next.length === known.length) return;
+    await this.context.globalState.update(KNOWN_PROJECTS_KEY, next.slice(-MAX_KNOWN_PROJECTS));
+  }
+
+  /// Back to the project this window was on before the last switch (`Ctrl+K Ctrl+B`), in the same window.
+  async returnToPreviousProject(): Promise<void> {
+    const previous = this.context.globalState.get<string>(PREVIOUS_PROJECT_KEY) ?? null;
+    const current = currentWindowTarget();
+    if (!previous || previous === current) {
+      this.say("No previous project to return to: this window has not moved yet.", "info");
+      return;
+    }
+    if (current) await this.context.globalState.update(PREVIOUS_PROJECT_KEY, current);
+    await vscode.commands.executeCommand("vscode.openFolder", vscode.Uri.parse(previous), { forceNewWindow: false });
+  }
+
+  /// The service's own sign-in line, placed in the operator's terminal from the row that says it is needed.
+  async signInFromRow(value?: ConversationItem | SessionLine): Promise<void> {
+    const session = this.sessionOf(value);
+    const provider = this.state.providers.find((candidate) => candidate.providerId === session.providerId) ?? null;
+    const signIn = provider ? offersFor(provider, "needsSigningIn").find((offer) => offer.command === provider.help?.signIn) ?? null : null;
+    if (!provider || !signIn) {
+      this.say(
+        `${providerDisplayName(session.providerId, this.state.providers)} declares no sign-in command; sign in at its own surface.`,
+        "info",
+      );
+      return;
+    }
+    this.offerInTerminal(signIn);
+  }
+
+  /// Answer the question a conversation is waiting on from its row, with the service's own options, without
+  /// opening the page. "allow" and "decline" take the first option of that kind; "choose" lists them all.
+  async answerFromRow(value: ConversationItem | SessionLine | undefined, how: "allow" | "decline" | "choose"): Promise<void> {
+    const session = this.sessionOf(value);
+    const pending = await this.runtime.listPendingApprovals(runtimeAction(session));
+    const approval = pending[0];
+    if (!approval) {
+      this.say(`${sessionTitle(session)} is not waiting on a question right now.`, "info");
+      await this.refresh();
+      return;
+    }
+    const usable = approval.options.filter((option) => option.unavailable == null);
+    let option = null as (typeof usable)[number] | null;
+    if (how === "choose") {
+      const picked = await vscode.window.showQuickPick(
+        usable.map((candidate) => ({ label: candidate.label, description: candidate.kind, candidate })),
+        { title: `${sessionTitle(session)}: ${approval.kind}`, placeHolder: "The service's own options, answered from the sidebar" },
+      );
+      option = picked?.candidate ?? null;
+    } else {
+      const wanted = how === "allow" ? ["allowOnce", "allowAlways"] : ["rejectOnce", "rejectAlways"];
+      option = usable.find((candidate) => wanted.includes(candidate.kind)) ?? null;
+      if (!option) {
+        this.say(`${sessionTitle(session)} offers no ${how} option for this question; choose from its own list instead.`, "info");
+        return;
+      }
+    }
+    if (!option) return;
+    await this.runtime.answerApproval(runtimeAction(session), approval.approvalId, option.optionId, approval.subjectDigest);
+    await this.refresh();
+  }
+
   /// Show a conversation in one of the window's places: a tab, the bottom panel, the secondary side bar.
   /// From a row (opening or adopting it first, exactly as a click would), or the selected conversation.
   async placeConversation(place: Place, value?: ConversationItem | SessionLine): Promise<void> {
@@ -1217,6 +1465,18 @@ export class Controller implements vscode.Disposable {
     }
     this.state.select(session.sessionId);
     await this.panels.openIn(session, place);
+  }
+
+  /// "Also ask", for the journey and the eye pass: the same amendment the service chip's menu makes.
+  async alsoAskForJourney(binding: ConversationBinding, providerId: string): Promise<void> {
+    const draft = binding.draft;
+    if (!draft || draft.state.alsoProviderIds.includes(providerId)) return;
+    await this.amendDraft(binding, { alsoProviderIds: [...draft.state.alsoProviderIds, providerId] });
+  }
+
+  /// What the back key would return to, for the harness.
+  previousProjectForJourney(): string | null {
+    return this.context.globalState.get<string>(PREVIOUS_PROJECT_KEY) ?? null;
   }
 
   /// The grid, for the journey and the eye pass: the numbers rather than the sentence.
@@ -1371,9 +1631,7 @@ export class Controller implements vscode.Disposable {
       await vscode.commands.executeCommand("workbench.view.explorer");
       return;
     }
-    await vscode.commands.executeCommand("vscode.openFolder", vscode.Uri.file(session.workspace), {
-      forceNewWindow: false,
-    });
+    await this.switchWindowTo(session.workspace);
   }
 
   dispose(): void {
@@ -2045,6 +2303,20 @@ type StartConfiguration = {
 ///
 /// Reordering, never preselecting-and-skipping: the question is still asked, the remembered answer is
 /// just the one Enter lands on. Everything else keeps its order.
+/// Where global state remembers the project this window was on before its last switch.
+const PREVIOUS_PROJECT_KEY = "runtrol.previousProject";
+/// Where global state remembers the project folders any window has listed, for the keyboard switch.
+const KNOWN_PROJECTS_KEY = "runtrol.knownProjects";
+const MAX_KNOWN_PROJECTS = 200;
+
+/// What this window is open on, as a string `vscode.openFolder` takes back: the workspace file when there is
+/// one, else the first folder; null for an empty window.
+function currentWindowTarget(): string | null {
+  return vscode.workspace.workspaceFile?.toString()
+    ?? vscode.workspace.workspaceFolders?.[0]?.uri.toString()
+    ?? null;
+}
+
 /// A QuickPick label without its `$(icon)` glyphs, for the page's popover, which draws no codicons.
 function withoutCodicons(label: string): string {
   return label.replace(/\$\([a-z0-9-]+\)\s*/gu, "").trim();

@@ -13,7 +13,18 @@ export async function reviewRuntimeRequests(client: CoreClient): Promise<void> {
   if (rotations.say !== "runtimeKeyRotationRequests") {
     throw new Error(`the daemon answered Runtime key rotation listing with ${rotations.say}`);
   }
+  const sharedOpens = await ask(client, { ask: "runtimeSharedOpenRequests" });
+  if (sharedOpens.say !== "runtimeSharedOpenRequests") {
+    throw new Error(`the daemon answered Runtime shared open listing with ${sharedOpens.say}`);
+  }
   const requests = [
+    ...sharedOpens.with.map((request) => ({
+      label: request.integration_label,
+      description: "Open a second writer in a working tree",
+      detail: `${request.provider_id}  ${request.workspace}  ${request.operation}`,
+      requestKind: "sharedOpen" as const,
+      request,
+    })),
     ...forgets.with.map((request) => ({
       label: request.integration_label,
       description: "Forget Runtime session pointer",
@@ -61,6 +72,23 @@ export async function reviewRuntimeRequests(client: CoreClient): Promise<void> {
     await vscode.window.showInformationMessage("Runtrol: The integration key rotation was confirmed.");
     return;
   }
+  if (selected.requestKind === "sharedOpen") {
+    const confirmed = await vscode.window.showWarningMessage(
+      `Allow ${selected.request.integration_label} to open a ${selected.request.provider_id} session in ${selected.request.workspace} next to the writers already there?`,
+      { modal: true },
+      "Allow Shared Open",
+    );
+    if (confirmed !== "Allow Shared Open") {
+      return;
+    }
+    const decided = await ask(client, {
+      ask: "runtimeSharedOpenConfirm",
+      with: { confirmation_id: selected.request.confirmation_id },
+    });
+    expectDone(decided, "Runtime shared open confirmation");
+    await vscode.window.showInformationMessage("Runtrol: The shared-writer session open was confirmed.");
+    return;
+  }
   const confirmed = await vscode.window.showWarningMessage(
     `Allow ${selected.request.integration_label} to forget Runtime session ${selected.request.session_id}? Provider-owned conversation state is not deleted.`,
     { modal: true },
@@ -75,6 +103,29 @@ export async function reviewRuntimeRequests(client: CoreClient): Promise<void> {
   });
   expectDone(decided, "Runtime session forget confirmation");
   await vscode.window.showInformationMessage("Runtrol: The Runtime metadata removal request was confirmed.");
+}
+
+/// Confirm the Studio's own shared-writer open: the person chose it here, so the Runtime's queued question is
+/// answered on their behalf, for exactly the request and folder they chose.
+export async function confirmRuntimeSharedOpen(
+  client: CoreClient,
+  confirmationId: string,
+  workspace: string,
+): Promise<boolean> {
+  const response = await ask(client, { ask: "runtimeSharedOpenRequests" });
+  if (response.say !== "runtimeSharedOpenRequests") {
+    throw new Error(`the daemon answered Runtime shared open listing with ${response.say}`);
+  }
+  const request = response.with.find(
+    (candidate) => candidate.confirmation_id === confirmationId && candidate.workspace === workspace,
+  );
+  if (!request || request.expires_at_ms <= Date.now()) return false;
+  const decided = await ask(client, {
+    ask: "runtimeSharedOpenConfirm",
+    with: { confirmation_id: request.confirmation_id },
+  });
+  expectDone(decided, "Runtime shared open confirmation");
+  return true;
 }
 
 export async function confirmRuntimeForget(

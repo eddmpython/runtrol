@@ -23,6 +23,42 @@ and refactoring that no user can observe do not belong here.
   letting an incomplete list read as complete. An empty project heading now says "nothing listed"
   instead of claiming the folder holds no conversations, which is something the heading cannot know.
 
+- The sidebar says what each running conversation is doing, without opening it: the tool the coding
+  service says is running ("Bash", "Run npm test", "Edit"), in the service's own word, on the row while it
+  runs, gone when it ends. A service that asks the operator to sign in is said on its rows as "Sign in
+  needed", and the row's key places that service's own sign-in command in the terminal (never run).
+
+- A conversation that stopped for a question can be answered from its row: the "Needs you" row carries
+  the service's own first allow and decline options as inline buttons, and "Answer the Question..." lists
+  every option the service offered, in its words. The tab need not be opened; the row changes when the
+  answer lands.
+
+- Moving the window between projects is a keyboard round trip: "Switch Window to Project..."
+  (`Ctrl+K Ctrl+Shift+P`) lists every project the sidebar knows and moves this window there, and
+  `Ctrl+K Ctrl+B` brings it back to the project it was on before, in the same window. The heading's
+  button and a conversation's project chip remember the same way.
+
+- "Needs you" now actually lights up when a coding service asks a question. The sidebar's state, its badge,
+  the status bar count and "Open Next Waiting" all read the Runtime's "waiting on a person" fact, and the
+  Runtime derived that fact only from a turn event no installed service sends; the question itself now counts
+  as the turn waiting on a person, and its withdrawal (or the next event after the answer) as the wait ending.
+  The sidebar also repaints when only that fact changes; it used to call two snapshots equal when nothing
+  but "waiting on a person" differed.
+
+- "Start here anyway" and "Resume anyway" (a second agent on a folder another agent is writing in), and a
+  second conversation with no project, now actually open. They asked the public Runtime for shared
+  working-tree access, which it refused outright as a local operator action, and the refusal was shown as
+  a sign-in problem. Shared opens now take the same road as the Runtime's other locally decided mutations:
+  the public Runtime queues the exact request and answers `presenceRequired`, Runtrol Studio confirms the
+  choice its person just made at the machine and sends the unchanged request again, and the conversation
+  lives under the public Runtime as every other does. Any other integration's shared open shows up in
+  "Review Runtime requests" with the service and the folder, for the operator to allow.
+
+- One prompt to several services: the service chip of a new chat offers "Also ask <service>"; the first
+  message then starts a conversation per chosen service, each in its own tab, and the grid lines them up.
+  Several agents on one folder is the operator's explicit choice there, so they share the folder (the
+  Runtime's working-tree contract); a service that cannot be asked says why on the first tab.
+
 - Choosing a model, a reasoning effort, an access mode, a coding service or a project now happens in
   the composer, in a popover hanging from the chip that was clicked, the way every chat composer
   offers its menus, instead of a picker at the top of the window. Arrow keys move, Enter chooses,

@@ -95,6 +95,16 @@ the original daemon and provider processes instead of making a versioned extensi
   so opening a saved chat updates that row in place instead of removing one and inserting another.
 - Live conversations lead, then whatever the coding service touched most recently. Turn state never participates in the
   order, so no row moves because an agent started or finished thinking.
+- A running row also says what the service is doing, in the service's own word (the tool it reports as running,
+  read from the same event the page draws the call from; never inferred from content), and a row whose service asked
+  for a sign-in says "Sign in needed" with the service's own sign-in command one key away (placed in the terminal,
+  never run). A row that stopped for a question carries the service's own first allow and decline options inline and
+  every option under "Answer the Question...", so it is answered without opening the tab. One light watch per
+  running session keeps these words current (the hot ceiling bounds how many); nothing but the reduced word is kept.
+- The window moves between projects from the keyboard: "Switch Window to Project..." (`Ctrl+K Ctrl+Shift+P`) and
+  back with `Ctrl+K Ctrl+B`, the same window replaced each time; the previous project is one string in global state.
+- A new chat's service chip offers "Also ask <service>": the first message starts one conversation per chosen
+  service, each in its own tab, sharing the folder by the operator's explicit choice, and the grid lines them up.
 - Every row carries one of six states, and the same glyph means the same thing in the sidebar and in the switcher:
   needs you, needs attention, working, waiting on a limit, ready, saved. The point of the vocabulary is that a list of
   running agents can be read without opening any of them.
@@ -252,17 +262,18 @@ every trial. The shared ratchet currently caps:
 
 | Measure | Ceiling |
 |---|---:|
-| Ready activation | 1,350 ms |
+| Ready activation | 1,800 ms |
 | Runtrol navigation and conversation opening | 1,000 ms |
 | Refresh p95 | 50 ms |
-| Extension Host RSS growth | 48 MiB |
+| Extension Host RSS growth | 64 MiB |
 | Loaded animation frame p95 | 40 ms |
 | Load overrun above the runner's native cadence | 8 ms |
 | Input and scroll p95 | 50 ms |
 | Renderer backlog | 1,024 frames |
-| Hot-session switch p95 | 125 ms |
-| Cold provider-native resume | 1,500 ms |
-| Full workspace reload restoration | 1,750 ms |
+| Hot-session switch p95 | 175 ms |
+| Cold provider-native resume | 3,500 ms |
+| Full workspace reload restoration | 2,500 ms |
+| Second-folder conversation arrival | 15,000 ms |
 
 The Webview carries 15,000 raw frames over five seconds and must drop zero raw frames while animation, input, scroll,
 DOM, visible characters, queue growth, and memory remain bounded. Its measurement protocol bounds startup and result

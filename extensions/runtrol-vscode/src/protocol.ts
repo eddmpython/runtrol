@@ -58,6 +58,18 @@ export type RuntimeKeyRotationLine = {
   expires_at_ms: number;
 };
 
+/// A public caller asking to write in a working tree somebody is already writing in; the public Runtime
+/// holds it until the person at this machine says yes.
+export type RuntimeSharedOpenLine = {
+  confirmation_id: string;
+  integration_id: string;
+  integration_label: string;
+  operation: string;
+  provider_id: string;
+  workspace: string;
+  expires_at_ms: number;
+};
+
 export type MissionLine = {
   mission_id: string;
   name: string;
@@ -216,6 +228,8 @@ export type Request =
   | { ask: "runtimeForgetConfirm"; with: { confirmation_id: string } }
   | { ask: "runtimeKeyRotationRequests" }
   | { ask: "runtimeKeyRotationConfirm"; with: { confirmation_id: string } }
+  | { ask: "runtimeSharedOpenRequests" }
+  | { ask: "runtimeSharedOpenConfirm"; with: { confirmation_id: string } }
   | {
       ask: "missionRegisterGate";
       with: { gate_id: string; program: string; arguments: string[]; timeout_ms: number };
@@ -312,6 +326,7 @@ export type Response =
   | { say: "integrations"; with: IntegrationLine[] }
   | { say: "runtimeForgetRequests"; with: RuntimeForgetLine[] }
   | { say: "runtimeKeyRotationRequests"; with: RuntimeKeyRotationLine[] }
+  | { say: "runtimeSharedOpenRequests"; with: RuntimeSharedOpenLine[] }
   | { say: "missions"; with: MissionLine[] }
   | { say: "missionGates"; with: GateLine[] }
   | { say: "mission"; with: MissionSnapshot }

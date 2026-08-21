@@ -44,6 +44,20 @@ export type JourneyApi = {
   openLatestDiff(): Promise<void>;
   /// Click a chip of the focused conversation's composer, as a person would; its choices open in the page.
   clickChip(anchor: "project" | "service" | "model" | "effort" | "mode"): Promise<void>;
+  /// Add a service to the focused draft's "also ask" set, as choosing it in the service chip's menu would.
+  alsoAsk(providerId: string): Promise<void>;
+  /// The sidebar row's activity word for a session (the provider's running tool), or null.
+  rowTool(session: string): string | null;
+  /// The sidebar row's state for a session ("needsYou", "working", ...), or null when it has no row.
+  rowActivity(session: string): string | null;
+  /// Whether a session's row says a question is pending, and answer it from the row as the inline button would.
+  answerFromRow(session: string, how: "allow" | "decline"): Promise<void>;
+  /// The previous-project memory the back key reads, for the harness to assert.
+  previousProject(): string | null;
+  /// Select a session's row in the sidebar (its inline actions show on a selected row).
+  revealRow(session: string): Promise<void>;
+  /// The project folders remembered for the keyboard switch, for the harness to assert.
+  knownProjects(): readonly string[];
   /// Open the newest stored conversation of a service that has a title (a reopened conversation with history),
   /// returning its session id, or null when the service lists none.
   openStoredWithTitle(providerId: string): Promise<string | null>;
@@ -66,6 +80,7 @@ export function journeyApi(
   conversation: ConversationPanels,
   afterReady: <T>(action: () => Promise<T>) => Promise<T>,
   extensionMode: vscode.ExtensionMode,
+  revealRow: (sessionId: string) => Promise<void> = async () => {},
 ): JourneyApi | undefined {
   if (
     extensionMode !== vscode.ExtensionMode.Test
@@ -143,6 +158,21 @@ export function journeyApi(
       await conversation.bindingFor(session)?.settled();
     }),
     arrangeGrid: () => afterReady(() => controller.arrangeGridForJourney()),
+    alsoAsk: (providerId) => afterReady(async () => {
+      const binding = conversation.focused();
+      if (!binding?.draft) throw new Error("no draft tab is focused");
+      await controller.alsoAskForJourney(binding, providerId);
+    }),
+    rowTool: (session) => state.conversationOf(session)?.tool ?? null,
+    rowActivity: (session) => state.conversationOf(session)?.activity ?? null,
+    answerFromRow: (session, how) => afterReady(async () => {
+      const line = state.sessions.find((candidate) => candidate.sessionId === session);
+      if (!line) throw new Error("that session is not listed");
+      await controller.answerFromRow(line, how);
+    }),
+    previousProject: () => controller.previousProjectForJourney(),
+    revealRow: (session) => afterReady(() => revealRow(session)),
+    knownProjects: () => controller.knownProjectsForJourney(),
     clickChip: (anchor) => afterReady(async () => {
       const binding = conversation.focused();
       if (!binding) throw new Error("no conversation tab is focused");

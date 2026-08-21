@@ -37,6 +37,11 @@ same gate was run on the tree as it stood before the day's changes, from a `git 
 and produced 120.9, 126.0, and 144.6 on three trials. Two of three were already over the old budget with
 none of the day's code present, so the budget sat inside the band and passing was a matter of which trial
 happened to be quickest. The new value clears the observed worst by a fifth.
+
+rssGrowthBytes joined them on 2026-08-21 (48 MiB -> 64 MiB) after VS Code 1.132.1 moved the reference
+machine's band. The unchanged HEAD archive produced 51.55, 53.76, and 49.15 MiB, so every trial failed
+the old budget without the day's code. The current tree produced 56.44, 54.31, and 55.16 MiB. The new
+finite ceiling stays above that observed band while continuing to reject unbounded retention.
 """
 
 from __future__ import annotations

@@ -8,6 +8,7 @@ import type {
   SessionLine,
   WatchCursor,
 } from "./runtimeTypes";
+import { NO_ACTIVITY, type SessionActivity } from "./sessionActivity";
 import { incompleteDiscovery, providerRowsEqual, sessionRowsEqual } from "./stateRows";
 
 export type RuntimeStateChange = "rows" | "selection";
@@ -18,6 +19,8 @@ export class RuntimeState implements vscode.Disposable {
   private sessionRows: readonly SessionLine[] = [];
   private providerRows: readonly ProviderLine[] = [];
   private readonly nativeCatalogues = new Map<string, NativeChatCatalogue>();
+  /// What each running conversation is doing, from the activity watch; absent means nothing known.
+  private readonly activities = new Map<string, SessionActivity>();
   private selectedId: string | null = null;
   private conversationRows: readonly Conversation[] | null = null;
 
@@ -66,8 +69,32 @@ export class RuntimeState implements vscode.Disposable {
       this.nativeChats,
       this.selectedId,
       this.projectlessRoot,
+      this.activities,
     );
     return this.conversationRows;
+  }
+
+  /// What a conversation is doing right now, as the activity watch last reduced it.
+  activity(sessionId: string): SessionActivity {
+    return this.activities.get(sessionId) ?? NO_ACTIVITY;
+  }
+
+  /// The activity watch's coalesced update: several sessions at once, one repaint.
+  setActivities(updates: ReadonlyArray<readonly [string, SessionActivity]>): void {
+    let changed = false;
+    for (const [sessionId, activity] of updates) {
+      const current = this.activities.get(sessionId) ?? NO_ACTIVITY;
+      if (current.tool === activity.tool && current.signInNeeded === activity.signInNeeded) continue;
+      if (activity.tool === null && !activity.signInNeeded) {
+        this.activities.delete(sessionId);
+      } else {
+        this.activities.set(sessionId, activity);
+      }
+      changed = true;
+    }
+    if (!changed) return;
+    this.conversationRows = null;
+    this.changedEmitter.fire("rows");
   }
 
   conversationOf(sessionId: string): Conversation | null {
@@ -87,6 +114,10 @@ export class RuntimeState implements vscode.Disposable {
     }
     if (this.selectedId && !sessions.some((session) => session.sessionId === this.selectedId)) {
       this.selectedId = null;
+    }
+    const listed = new Set(sessions.map((session) => session.sessionId));
+    for (const sessionId of this.activities.keys()) {
+      if (!listed.has(sessionId)) this.activities.delete(sessionId);
     }
     this.changedEmitter.fire("rows");
   }
@@ -131,6 +162,7 @@ export class RuntimeState implements vscode.Disposable {
 
   dispose(): void {
     this.cursors.clear();
+    this.activities.clear();
     this.nativeCatalogues.clear();
     this.changedEmitter.dispose();
   }

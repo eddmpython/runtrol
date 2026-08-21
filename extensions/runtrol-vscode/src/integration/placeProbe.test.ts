@@ -15,6 +15,7 @@ type JourneyApi = {
   placeConversation(session: string, place: "tab" | "panel" | "sideBar"): Promise<void>;
   nativeChatCount(): number;
   close(session: string, now?: boolean): Promise<void>;
+  knownProjects(): readonly string[];
 };
 
 type ExtensionApi = { readonly ready: Promise<void>; readonly journey?: JourneyApi };
@@ -59,6 +60,8 @@ export async function run(): Promise<void> {
     }
     await delay(1_500);
     await capture(resultPath, "placeSide", { ...report });
+    await delay(2_000);
+    report.knownProjects = journey.knownProjects().length;
     for (const line of journey.sessions()) await journey.close(line.sessionId, true).catch(() => undefined);
     await writeFile(resultPath, JSON.stringify({ stage: "complete", ...report }), "utf8");
   } catch (error) {

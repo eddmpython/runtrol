@@ -17,6 +17,8 @@ function row(overrides: Partial<Conversation> = {}): Conversation {
     projectless: false,
     updatedAtMs: null,
     activity: "saved",
+    tool: null,
+    signInNeeded: false,
     live: false,
     open: false,
     session: null,

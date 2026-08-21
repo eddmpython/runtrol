@@ -14,6 +14,7 @@ import {
   type EventCursor,
   type IntegrationGrant,
   type ManagedSessionList,
+  type PendingApproval,
   type ProviderList,
   type PublicInputBlock,
   type RuntimeClient,
@@ -107,6 +108,10 @@ export class StudioRuntimeClient implements vscode.Disposable {
     private readonly confirmForget: (
       confirmationId: string,
       sessionId: string,
+    ) => Promise<boolean>,
+    private readonly confirmSharedOpen: (
+      confirmationId: string,
+      workspace: string,
     ) => Promise<boolean>,
     private readonly additionalEnrollmentRoots: readonly string[] = [],
     private readonly reportInitialization: (stage: string) => void = () => undefined,
@@ -234,7 +239,7 @@ export class StudioRuntimeClient implements vscode.Disposable {
     permission: string | null = null,
   ): Promise<SessionDescriptor> {
     return this.mutate(async (runtime) => {
-      const opened = await runtime.sessions().start({
+      const params = {
         requestId: newMutationRequestId(),
         providerId,
         workspace,
@@ -242,7 +247,8 @@ export class StudioRuntimeClient implements vscode.Disposable {
         ...(model ? { model } : {}),
         ...(reasoningEffort ? { reasoningEffort } : {}),
         ...(permission ? { permission } : {}),
-      });
+      };
+      const opened = await this.openConfirmingShared(access, workspace, () => runtime.sessions().start(params));
       await this.rememberControl(opened.control);
       return opened.session;
     });
@@ -250,17 +256,41 @@ export class StudioRuntimeClient implements vscode.Disposable {
 
   async resume(session: RuntimeSessionAction, access: SessionWorkspaceAccess): Promise<SessionDescriptor> {
     return this.mutate(async (runtime) => {
-      const opened = await runtime.sessions().resume({
+      const params = {
         requestId: newMutationRequestId(),
         sessionId: session.sessionId,
         expectedLifecycle: session.lifecycle,
         expectedSessionGeneration: session.generation,
         workspace: session.workspace,
         access,
-      });
+      };
+      const opened = await this.openConfirmingShared(access, session.workspace, () => runtime.sessions().resume(params));
       await this.rememberControl(opened.control);
       return opened.session;
     });
+  }
+
+  /// One public open, sent again once after the person's own shared-writer choice is confirmed at the machine.
+  ///
+  /// The public Runtime grants a second writer in a working tree only after a local action. For the Studio that
+  /// action is the click that chose "shared" (Start here anyway, Resume anyway, asking several services at
+  /// once), so the confirmation is made on the person's behalf and the same request, same mutation identity, is
+  /// sent again. An exclusive open that says presenceRequired is something else (a service asking to be signed
+  /// in) and is left to the caller.
+  private async openConfirmingShared<Opened>(
+    access: SessionWorkspaceAccess,
+    workspace: string,
+    open: () => Promise<Opened>,
+  ): Promise<Opened> {
+    try {
+      return await open();
+    } catch (error) {
+      if (access !== "shared" || !presenceConfirmation(error)) throw error;
+      if (!await this.confirmSharedOpen(error.failure.correlationId, workspace)) {
+        throw new Error("the exact shared-writer session open was not confirmed locally");
+      }
+      return open();
+    }
   }
 
   async adoptNative(
@@ -272,14 +302,15 @@ export class StudioRuntimeClient implements vscode.Disposable {
       throw new Error("that existing chat has no current Runtime adoption proof");
     }
     return this.mutate(async (runtime) => {
-      const opened = await runtime.sessions().adoptNative({
+      const params = {
         requestId: newMutationRequestId(),
         providerId: native.providerId,
         nativeSessionId: native.nativeSessionId,
         workspace: native.cwd,
         access,
         adoptionToken,
-      });
+      };
+      const opened = await this.openConfirmingShared(access, native.cwd, () => runtime.sessions().adoptNative(params));
       await this.rememberControl(opened.control);
       return opened.session;
     });
@@ -406,7 +437,7 @@ export class StudioRuntimeClient implements vscode.Disposable {
       try {
         await runtime.sessions().forget(forget);
       } catch (error) {
-        if (!forgetConfirmation(error)) throw error;
+        if (!presenceConfirmation(error)) throw error;
         if (!await this.confirmForget(error.failure.correlationId, current.sessionId)) {
           throw new Error("the exact Runtime session removal was not confirmed locally");
         }
@@ -430,6 +461,22 @@ export class StudioRuntimeClient implements vscode.Disposable {
         workspace: native.cwd,
       });
     });
+  }
+
+  /// The questions a conversation is waiting on, with the provider's own options, for answering from the
+  /// sidebar row without opening the page. Read under the same control lease an answer takes.
+  async listPendingApprovals(session: RuntimeSessionAction): Promise<readonly PendingApproval[]> {
+    let approvals: readonly PendingApproval[] = [];
+    await this.mutate(async (runtime) => {
+      const lease = await this.ensureControl(runtime, session);
+      const pending = await runtime.approvals().listPending({
+        sessionId: session.sessionId,
+        leaseId: lease.leaseId,
+        leaseGeneration: lease.leaseGeneration,
+      });
+      approvals = pending.approvals;
+    });
+    return approvals;
   }
 
   async answerApproval(
@@ -1026,7 +1073,8 @@ function sameBytes(left: readonly number[], right: readonly number[]): boolean {
   return left.length === right.length && left.every((byte, index) => byte === right[index]);
 }
 
-function forgetConfirmation(error: unknown): error is RuntimeRequestError {
+/// The public Runtime holding one exact mutation for a decision at this machine (forget, shared open).
+function presenceConfirmation(error: unknown): error is RuntimeRequestError {
   return error instanceof RuntimeRequestError
     && error.failure.code === "presenceRequired"
     && error.failure.operatorAction === "reviewRuntimeRequestsInRuntrolStudio";

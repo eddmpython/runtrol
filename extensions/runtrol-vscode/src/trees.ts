@@ -26,9 +26,14 @@ export class ConversationItem extends vscode.TreeItem {
     // A conversation that stopped for the reader says so first. The service and the folder are what distinguish
     // rows from each other; this is what distinguishes one row from every other thing they could be doing.
     const detail = conversationDetail(conversation, nowMs, grouped);
-    this.description = conversation.activity === "needsYou"
-      ? `Needs you · ${detail}`
-      : detail;
+    // What the reader needs to know without opening it, first: that it wants them, that its service wants a
+    // sign-in, or (while it runs) the tool the service says is running, in the service's own word.
+    const lead = conversation.signInNeeded
+      ? "Sign in needed"
+      : conversation.activity === "needsYou"
+        ? "Needs you"
+        : conversation.tool;
+    this.description = lead ? `${lead} · ${detail}` : detail;
     this.contextValue = contextValue(conversation);
     this.iconPath = icon(conversation);
     // What the badge attaches to. A scheme of its own so the row does not also collect whatever git and the
@@ -168,7 +173,12 @@ function spokenActivity(conversation: Conversation): string {
 
 function contextValue(conversation: Conversation): string {
   if (!conversation.canOpen) return "runtrol.conversation.blocked";
-  return conversation.session ? "runtrol.conversation.live" : "runtrol.conversation.saved";
+  if (!conversation.session) return "runtrol.conversation.saved";
+  // Suffixes the row's inline actions key on: a pending question gets allow and decline, a sign-in need gets
+  // the service's own sign-in line. Menus match these by prefix, so the base value stays stable.
+  const suffix = (conversation.activity === "needsYou" ? ".needsYou" : "")
+    + (conversation.signInNeeded ? ".signIn" : "");
+  return `runtrol.conversation.live${suffix}`;
 }
 
 function tooltip(conversation: Conversation): vscode.MarkdownString {
@@ -347,6 +357,17 @@ export class ConversationsTree implements vscode.TreeDataProvider<ChatTreeItem>,
           ? "1 conversation is waiting for you"
           : `${waiting} conversations are waiting for you`,
       };
+  }
+
+  /// Select one conversation's row (the harness: the row's inline actions show on a selected row).
+  async revealSession(sessionId: string): Promise<void> {
+    const view = this.view;
+    if (!view) return;
+    this.ensureItems();
+    const conversation = this.state.conversationOf(sessionId);
+    const row = conversation ? this.rowFor(conversation.key) : null;
+    if (!row) return;
+    await view.reveal(row, { select: true, focus: true });
   }
 
   private revealOpenConversation(): void {

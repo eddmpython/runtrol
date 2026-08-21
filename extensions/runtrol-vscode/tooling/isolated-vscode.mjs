@@ -17,6 +17,12 @@ export const TESTED_VSCODE_VERSION = "1.132.1";
 
 export const isolatedProfileSettings = Object.freeze({
   "chat.agentHost.enabled": false,
+  // The built-in Copilot chat is not part of the product under test. Left at its defaults, a fresh profile opens
+  // it in the secondary side bar with focus and puts its sign-in button in the title bar; typed keys then land
+  // in its composer (measured 2026-08-21: a palette command typed by the harness was submitted to Copilot, which
+  // answered with "Sign in to use GitHub Copilot"), and every picture carries a panel nobody asked for.
+  "chat.commandCenter.enabled": false,
+  "workbench.secondarySideBar.defaultVisibility": "hidden",
   "extensions.autoCheckUpdates": false,
   "extensions.autoUpdate": false,
   "telemetry.telemetryLevel": "off",

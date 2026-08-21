@@ -14,6 +14,9 @@ export type DraftState = {
   readonly workspace: string | null;
   /// The coding service, or null while none is usable or chosen.
   readonly providerId: string | null;
+  /// Further services asked the same first message, each in its own tab beside this one (one prompt, N
+  /// agents). Empty for the ordinary one-service draft.
+  readonly alsoProviderIds: readonly string[];
   /// Explicit choices, or null for the installed CLI's own setting.
   readonly model: string | null;
   readonly effort: string | null;
@@ -51,11 +54,13 @@ export function draftChips(
   serviceName: string | null,
   branch: string | null,
 ): DraftChips {
+  const more = draft.alsoProviderIds.length;
   return {
     project: draft.workspace === null ? NO_PROJECT_LABEL : workspaceName(draft.workspace) || draft.workspace,
     projectPath: draft.workspace,
     branch: draft.workspace === null ? null : branch,
-    service: serviceName ?? NO_SERVICE_LABEL,
+    // "+N": the same message goes to N more services, each in its own tab.
+    service: more > 0 ? `${serviceName ?? NO_SERVICE_LABEL} +${more}` : serviceName ?? NO_SERVICE_LABEL,
     model: draft.model ?? DEFAULT_MODEL_LABEL,
     effort: draft.effort ?? DEFAULT_EFFORT_LABEL,
     mode: draft.permission ?? DEFAULT_MODE_LABEL,
@@ -78,10 +83,14 @@ export function readDraftState(value: unknown): DraftState | null {
   if (typeof raw.id !== "string" || !raw.id.startsWith("draft:") || raw.id.length > 64) return null;
   const text = (field: unknown): string | null =>
     typeof field === "string" && field.length > 0 && field.length <= 4_096 ? field : null;
+  const also = Array.isArray(raw.alsoProviderIds)
+    ? raw.alsoProviderIds.filter((id): id is string => typeof id === "string" && id.length > 0 && id.length <= 64).slice(0, 8)
+    : [];
   return {
     id: raw.id,
     workspace: text(raw.workspace),
     providerId: text(raw.providerId),
+    alsoProviderIds: also,
     model: text(raw.model),
     effort: text(raw.effort),
     permission: text(raw.permission),

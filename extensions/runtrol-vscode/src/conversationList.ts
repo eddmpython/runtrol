@@ -9,6 +9,8 @@ import { workspaceCovers, workspaceIdentity } from "./workspaceCollision";
 /// Ordered by how much it wants from the reader. `needsYou` is the only one that is actually urgent, and keeping
 /// it a separate value from `attention` is deliberate: something that broke and something that is politely
 /// waiting are different errands, and a surface that merged them would send the reader to the wrong one.
+import { NO_ACTIVITY, type SessionActivity } from "./sessionActivity";
+
 export type ConversationActivity =
   | "needsYou"
   | "attention"
@@ -44,6 +46,11 @@ export type Conversation = {
   /// When the coding service last touched it, when the service reports that at all.
   readonly updatedAtMs: number | null;
   readonly activity: ConversationActivity;
+  /// The tool the provider says is running right now (its own name or classification, the line the page draws
+  /// for that call), or null. Read off the provider's events by the activity watch; never inferred.
+  readonly tool: string | null;
+  /// Whether the provider said this conversation needs the operator to sign in.
+  readonly signInNeeded: boolean;
   /// Whether a provider process is currently supervising it.
   readonly live: boolean;
   readonly open: boolean;
@@ -64,6 +71,7 @@ export function conversations(
   nativeChats: readonly NativeChatLine[],
   selectedSessionId: string | null,
   projectlessRoot: string | null = null,
+  activities: ReadonlyMap<string, SessionActivity> = new Map(),
 ): Conversation[] {
   const nativeByKey = new Map<string, NativeChatLine>();
   for (const chat of nativeChats) {
@@ -84,6 +92,7 @@ export function conversations(
       providers,
       selectedSessionId,
       projectlessRoot,
+      activities.get(session.sessionId) ?? NO_ACTIVITY,
     ));
   }
   for (const [key, chat] of nativeByKey) {
@@ -361,6 +370,7 @@ function supervised(
   providers: readonly ProviderLine[],
   selectedSessionId: string | null,
   projectlessRoot: string | null,
+  activity: SessionActivity,
 ): Conversation {
   const projectless = isProjectless(session.workspace, projectlessRoot);
   return {
@@ -379,6 +389,8 @@ function supervised(
     projectless,
     updatedAtMs: instant(native?.updatedAt),
     activity: activityOf(session),
+    tool: activity.tool,
+    signInNeeded: activity.signInNeeded,
     live: session.hot,
     open: session.sessionId === selectedSessionId,
     session,
@@ -409,6 +421,8 @@ function providerOwned(
     projectless,
     updatedAtMs: instant(chat.updatedAt),
     activity: "saved",
+    tool: null,
+    signInNeeded: false,
     live: false,
     open: false,
     session: null,

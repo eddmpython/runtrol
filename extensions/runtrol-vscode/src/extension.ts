@@ -6,6 +6,7 @@ import { CandidateController } from "./capability/controller";
 import { conversations as conversationRows } from "./conversationList";
 import { ConversationPanels } from "./conversationPanels";
 import { PANEL_VIEW_ID, SIDE_BAR_VIEW_ID } from "./conversationSurface";
+import { ActivityWatcher } from "./activityWatch";
 import { DiffDocuments } from "./diffDocuments";
 import { ConversationView, type WebviewPerformance } from "./conversationView";
 import { Controller } from "./controller";
@@ -16,6 +17,7 @@ import { NO_PROJECT_LABEL, readDraftState } from "./draft";
 import { readGitBranch } from "./gitBranch";
 import {
   confirmRuntimeForget,
+  confirmRuntimeSharedOpen,
   manageIntegrations,
   reviewIntegrationEnrollments,
   reviewRuntimeRequests,
@@ -79,6 +81,7 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
     () => locator.runtimeExecutable(),
     (pendingId, signature) => selfApproveIntegration(client, pendingId, signature),
     (confirmationId, sessionId) => confirmRuntimeForget(client, confirmationId, sessionId),
+    (confirmationId, workspace) => confirmRuntimeSharedOpen(client, confirmationId, workspace),
     testIntegrationRoots(context),
     (stage) => {
       initializationStage = `runtime:${stage}`;
@@ -113,6 +116,8 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
   // The operator's own projects. Global state, because the panel manages the whole machine from any window.
   // Built before the controller because a draft's project picker offers them first.
   const projectStore = new ProjectStore(context.globalState);
+  // The sidebar's "what is it doing" word for every running conversation, page open or not.
+  context.subscriptions.push(new ActivityWatcher(runtime, state));
   const diffDocuments = new DiffDocuments();
   context.subscriptions.push(
     vscode.workspace.registerTextDocumentContentProvider(DiffDocuments.scheme, diffDocuments),
@@ -487,12 +492,40 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
       (item) => run(async () => {
         if (!(item instanceof ProjectItem)) return;
         // The explicit move the contract requires: only this button changes what the window is open on.
-        await vscode.commands.executeCommand(
-          "vscode.openFolder",
-          vscode.Uri.file(item.group.workspace),
-          { forceNewWindow: false },
-        );
+        await controller.switchWindowTo(item.group.workspace);
       }),
+    ),
+    vscode.commands.registerCommand(
+      "runtrol.returnToPreviousProject",
+      () => run(() => controller.returnToPreviousProject()),
+    ),
+    vscode.commands.registerCommand(
+      "runtrol.switchProject",
+      () => run(() => afterReady(() => controller.switchProject())),
+    ),
+    vscode.commands.registerCommand(
+      "runtrol.signInFromRow",
+      (item?: unknown) => run(() => afterReady(
+        () => controller.signInFromRow(item instanceof ConversationItem ? item : undefined),
+      )),
+    ),
+    vscode.commands.registerCommand(
+      "runtrol.allowFromRow",
+      (item?: unknown) => run(() => afterReady(
+        () => controller.answerFromRow(item instanceof ConversationItem ? item : undefined, "allow"),
+      )),
+    ),
+    vscode.commands.registerCommand(
+      "runtrol.declineFromRow",
+      (item?: unknown) => run(() => afterReady(
+        () => controller.answerFromRow(item instanceof ConversationItem ? item : undefined, "decline"),
+      )),
+    ),
+    vscode.commands.registerCommand(
+      "runtrol.answerFromRow",
+      (item?: unknown) => run(() => afterReady(
+        () => controller.answerFromRow(item instanceof ConversationItem ? item : undefined, "choose"),
+      )),
     ),
     vscode.commands.registerCommand("runtrol.interrupt", () => run(() => afterReady(() => controller.interrupt()))),
     vscode.commands.registerCommand(
@@ -828,7 +861,9 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
         }
       }
       : undefined,
-    journey: journeyApi(controller, state, conversation, afterReady, context.extensionMode),
+    journey: journeyApi(controller, state, conversation, afterReady, context.extensionMode, (sessionId) => (
+      conversations.revealSession(sessionId)
+    )),
   };
 }
 

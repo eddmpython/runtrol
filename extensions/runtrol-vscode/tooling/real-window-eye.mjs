@@ -22,6 +22,7 @@ import { build } from "esbuild";
 
 import { extensionIdentifier, extensionRoot } from "./extension-manifest.mjs";
 import {
+  acquireVSCode,
   isolatedLaunchArguments,
   isolatedProfileSettings,
   isolatedRuntimeState,
@@ -150,7 +151,12 @@ try {
     photograph(),
   ]);
   const result = JSON.parse(await readFile(resultPath, "utf8"));
-  process.stdout.write(`RUNTROL_EYE ${JSON.stringify({ ...result, outDir })}\n`);
+  // The window switch and the back key, proved with real windows from outside: a switch reloads the extension
+  // host, so nothing inside the test runner survives to press the next key. A plain (non-test) isolated window
+  // is opened on this repository, Ctrl+K Ctrl+Shift+P picks another project, the title changes, Ctrl+K Ctrl+B
+  // brings it back, the title changes back; both photographed.
+  const back = await backProof(testEnvironment);
+  process.stdout.write(`RUNTROL_EYE ${JSON.stringify({ ...result, back, outDir })}\n`);
 } catch (error) {
   const progress = await readFile(resultPath, "utf8").then((text) => JSON.parse(text)).catch(() => null);
   if (progress?.failure) {
@@ -169,6 +175,134 @@ try {
     await Promise.race([exited, delay(5_000)]);
   }
   await rm(temporary, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }).catch(() => undefined);
+}
+
+/// The switch-and-back proof. Returns what was seen; never throws for a missing second project (it says so).
+async function backProof(environment) {
+  const defaultOther = path.join(path.dirname(repositoryRoot.replace(/[\\/]$/u, "")), "taxly");
+  const other = path.resolve(process.env.RUNTROL_EYE_BACK_FOLDER || defaultOther);
+  const otherExists = await stat(other).then((info) => info.isDirectory()).catch(() => false);
+  if (!otherExists) return { skipped: `no second project folder at ${other}` };
+  const here = repositoryRoot.replace(/[\\/]$/u, "");
+  const hereName = path.basename(here);
+  const otherName = path.basename(other);
+  // Only this harness's own development-host window is ever matched, pressed or photographed: the operator's
+  // own VS Code is open on this very repository, and a bare folder name would find it first.
+  const hereTitle = `Development Host] ${hereName}`;
+  const otherTitle = `Development Host] ${otherName}`;
+  const { executable } = await acquireVSCode(path.join(os.tmpdir(), "runtrol-vscode-test-cache"));
+  const child = spawn(
+    executable,
+    [
+      here,
+      ...isolatedLaunchArguments,
+      // What the test runner passes on its own; a plain launch shows the welcome and the account onboarding
+      // otherwise, and a modal in front of the editor takes every key (measured: the first press landed on
+      // "Welcome to VS Code").
+      "--skip-welcome",
+      "--skip-release-notes",
+      "--disable-extensions",
+      "--disable-workspace-trust",
+      `--extensionDevelopmentPath=${extensionUnderTestRoot}`,
+      `--user-data-dir=${userData}`,
+      `--extensions-dir=${extensions}`,
+    ],
+    { env: environment, stdio: "ignore", windowsHide: false, detached: false },
+  );
+  const seen = { opened: false, switched: false, returned: false, returnedBy: null };
+  try {
+    seen.opened = await waitForTitle(hereTitle, 90_000);
+    if (!seen.opened) return { ...seen, failure: "the window on this repository never appeared" };
+    // The extension activates on the first command; the list it offers is read after ready. A breath for both.
+    await delay(15_000);
+    // Anything modal that still came up (an onboarding the flags do not cover) closes on Escape; a bare
+    // Escape on the editor does nothing.
+    press(hereTitle, "{ESC}");
+    await delay(1_000);
+    // The switch goes through the command palette, which opens whatever has focus (a fresh window focuses its
+    // chat input, where a chord is that input's); the back step is the key itself, the palette only as the
+    // recorded fallback so the result says which worked.
+    press(hereTitle, "^+p");
+    await delay(1_500);
+    press(hereTitle, "Runtrol: Switch Window to Project{ENTER}");
+    // The picker reads the project list after the extension is ready; a fresh window takes a few seconds.
+    await delay(8_000);
+    capture(hereTitle, path.join(outDir, "switchPicker.png"));
+    press(hereTitle, `${otherName}{ENTER}`);
+    seen.switched = await waitForTitle(otherTitle, 60_000);
+    if (!seen.switched) capture(hereTitle, path.join(outDir, "switchFailed.png"));
+    if (seen.switched) {
+      await delay(1_500);
+      capture(otherTitle, path.join(outDir, "switched.png"));
+      await delay(12_000);
+      press(otherTitle, "{ESC}");
+      await delay(500);
+      press(otherTitle, "^k^b");
+      seen.returned = await waitForTitle(hereTitle, 30_000);
+      seen.returnedBy = seen.returned ? "key" : null;
+      if (!seen.returned) {
+        press(otherTitle, "^+p");
+        await delay(1_500);
+        press(otherTitle, "Runtrol: Back to Previous Project{ENTER}");
+        seen.returned = await waitForTitle(hereTitle, 30_000);
+        seen.returnedBy = seen.returned ? "palette" : null;
+      }
+      if (seen.returned) {
+        await delay(1_500);
+        capture(hereTitle, path.join(outDir, "returned.png"));
+      }
+    }
+    return seen;
+  } finally {
+    // Only this harness's own child (its exact PID tree), never another VS Code.
+    spawnSync("taskkill", ["/PID", String(child.pid), "/T", "/F"], { windowsHide: true });
+  }
+}
+
+function press(titleMatch, keys) {
+  const pressed = spawnSync(
+    "powershell.exe",
+    [
+      "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+      "-File", path.join(extensionRoot, "tooling", "press-keys.ps1"),
+      "-TitleMatch", titleMatch,
+      "-Keys", keys,
+    ],
+    { encoding: "utf8", timeout: 30_000, windowsHide: true },
+  );
+  process.stdout.write(`${pressed.stdout}${pressed.stderr}`.trim() + "\n");
+}
+
+function capture(titleMatch, outPath) {
+  const shot = spawnSync(
+    "powershell.exe",
+    [
+      "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+      "-File", path.join(extensionRoot, "tooling", "capture-window.ps1"),
+      "-TitleMatch", titleMatch,
+      "-OutPath", outPath,
+    ],
+    { encoding: "utf8", timeout: 30_000, windowsHide: true },
+  );
+  process.stdout.write(`${shot.stdout}${shot.stderr}`.trim() + "\n");
+}
+
+/// Whether a window whose title contains the text appears within the deadline.
+async function waitForTitle(titleMatch, deadlineMs) {
+  const deadline = Date.now() + deadlineMs;
+  while (Date.now() < deadline) {
+    const found = spawnSync(
+      "powershell.exe",
+      [
+        "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command",
+        `(Get-Process | Where-Object { $_.MainWindowTitle -like "*${titleMatch}*" } | Select-Object -First 1).MainWindowTitle`,
+      ],
+      { encoding: "utf8", timeout: 15_000, windowsHide: true },
+    );
+    if (found.stdout.trim()) return true;
+    await delay(1_000);
+  }
+  return false;
 }
 
 /// Photograph every pose the entry announces, by window title, into the output directory.
