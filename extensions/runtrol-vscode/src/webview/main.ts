@@ -446,7 +446,7 @@ function renderSession(session: Session | null, displayTitle: string | null, pro
             ? `Message ${currentProvider}. Enter queues it for the end of this turn`
             : session.lifecycle === "failed"
               ? "This conversation needs attention"
-              : "Reopening the saved conversation";
+              : "Paused. Open it again from the sidebar to continue";
   if (canSend && !promptWasSendable) {
     // The turn just ended. One queued message goes now (one per transition, so an answer arrives
     // between messages exactly as if the person had typed each one at the moment it became possible).

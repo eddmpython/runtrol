@@ -955,10 +955,11 @@ body.throttled #service-chip::after {
   content: "waiting on a limit";
 }
 
+/* A conversation whose process is not running: paused, not broken, and not pretending to open. */
 body.opening #service-chip::after {
   margin-left: 0.4rem;
-  content: "opening";
-  animation: runtrol-pulse 1.6s ease-in-out infinite;
+  color: var(--vscode-descriptionForeground);
+  content: "paused";
 }
 
 @media (max-width: 600px) {
@@ -978,8 +979,7 @@ body.opening #service-chip::after {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  body.working #service-chip::after,
-  body.opening #service-chip::after {
+  body.working #service-chip::after {
     animation: none;
   }
 }

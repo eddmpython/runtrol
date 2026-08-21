@@ -267,8 +267,16 @@ export class ConversationBinding implements vscode.Disposable {
   }
 
   updateSession(session: SessionLine): void {
+    const wasHot = this.current?.hot ?? false;
     this.current = session;
     this.view.updateSession(session);
+    // A paused conversation that came back (the operator reopened it, or it was heated for a prompt) is
+    // watched again from the top: its process is new, so the old cursor names nothing.
+    if (session.hot && !wasHot && this.view.isVisible && !this.watchAbort) {
+      this.state.forgetCursor(session.sessionId);
+      this.view.status("", "info");
+      this.ensureWatch();
+    }
   }
 
   /// The draft's choices changed.
@@ -363,6 +371,19 @@ export class ConversationBinding implements vscode.Disposable {
         retryMs = 250;
       } catch (error) {
         if (signal.aborted) {
+          return;
+        }
+        // A conversation that is not running cannot be watched, and that is not a fault to retry. It was
+        // paused: either the operator closed its process, or the Runtime released it to keep the running set
+        // small (eight hot processes, the memory contract). Measured in the real window: the tab of a
+        // conversation paused under the reader showed "sessionNotFound" in red and retried forever, while
+        // the truth was one calm sentence. The watch resumes by itself when the session is hot again.
+        if (this.current && !this.current.hot) {
+          this.view.status(
+            "Paused: this conversation is not running right now. Open it again from the sidebar to continue.",
+            "info",
+          );
+          this.watchAbort = null;
           return;
         }
         this.view.status(error instanceof Error ? error.message : String(error), "error");
