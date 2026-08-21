@@ -194,9 +194,11 @@ renderer. The normal sequence is:
 1. Register fixed local Gates.
 2. Validate a project Mission file.
 3. Review the digest, limits, Tasks, providers, workspaces, Gates, and capability versions.
-4. Select `Continue Reviewed Mission` within the five-minute approval window. It starts and sends the first eligible
-   wave after one confirmation.
-5. Select the same action when a wave is Ready. It runs fixed Gates, seals Receipts, and starts the next eligible wave.
+4. For an ordinary Mission, select `Arm Mission Auto Flight` within the five-minute approval window. One exact local
+   confirmation starts the first eligible wave and authorizes later safe waves while this Studio window is open.
+   `Continue Reviewed Mission` remains the one-wave explicit path.
+5. Auto Flight observes Runtime lifecycle rows. When a sent Task has completed one proven provider turn, it runs fixed
+   Gates, seals the Receipt, and starts the next eligible DAG wave without another click.
 6. Use granular recovery only for a failed, retryable, missing, or ambiguous Task. Working sessions, person or quota
    waits, comparison policy, and integration never advance by inference.
 7. For an ordinary Mission, open **Review Mission Landing Queue**, integrate the reviewed Receipt Artifacts, then
@@ -214,6 +216,31 @@ reported without preventing an unrelated Mission from reaching its own exact saf
 share one runtime-discovered provider selected for that flight, or keep individual choices. Newly started native
 conversation tabs are arranged once after the batch. This is local composition, not a Core scheduler or remote start
 surface.
+
+### Mission Auto Flight
+
+Auto Flight is one bounded PC-local arm for reviewed ordinary Missions. The Missions title action can arm up to eight
+exact Mission digests in one modal. A row action arms one Mission. Operator-choice Tasks share the one
+runtime-discovered provider selected at arm time; reviewed fixed selectors remain fixed. The row shows a rocket and
+`AUTO`, and its inline stop action revokes future provider input immediately.
+
+The arm persists only the Mission ID and SHA-256, the optional runtime-discovered provider choice, and Task, session,
+and lifecycle-generation identifiers. It stores no instruction, provider output, event, transcript path, Gate output,
+or Artifact bytes. Runtime row changes drive reevaluation, so Auto Flight adds no timer or polling loop and does not
+become another scheduler or agent loop.
+
+An automatic Send follows a strict order. Core first commits the exact reviewed Send intent. Studio then records the
+bound session's current `sessionGeneration` in extension global state before any provider input is submitted. That
+Task can be verified automatically only after the same session returns to `hotIdle` with a greater generation. A
+still-idle session is never completion evidence. If the process stops between any of these steps, the existing
+ambiguous-submission marker or generation marker makes recovery explicit instead of duplicating or optimistically
+verifying work.
+
+Working Tasks and person or quota waits retain the arm. Pausing a Mission retains it without advancing. Expired or
+changed authority, ambiguous delivery, a missing or replaced session, Gate failure, retry or recovery state,
+comparison flow, cancellation, and any other stopped state disarm it. Reaching `integrating` also disarms it and
+offers Receipt Landing. Applying Artifacts, merging, final Gate verification, and Mission completion always remain
+explicit operator actions.
 
 ### Composing the parallel-attempt Mission
 
@@ -266,6 +293,11 @@ provider CLI. It opens all two-file Receipt Landings in native multi-diff editor
 the second stays `integrating`, opens the next queued Landing, completes both, and exits with every owned process
 clean. The reviewed, completed, and next-Landing screenshots are inspected directly. This focused eye pass is product
 evidence and does not create a new North Star score axis.
+
+The focused `missionAutoFlightEye` Extension Host journey arms one two-wave dependency Mission once against an
+installed provider CLI. It proves two provider sessions, two fixed Gate verifications, two sealed Receipts, zero
+operator continuation actions, arrival at `integrating`, and automatic authority removal. The reviewed, armed, and
+arrived screenshots are inspected directly. This is product evidence, not a new North Star score axis.
 
 These gates prove product wiring and deterministic evidence. They do not claim that one provider or capability is
 better, that a linked worktree is a sandbox, or that loopback model output represents account-backed model quality.

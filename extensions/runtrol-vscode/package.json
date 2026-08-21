@@ -97,6 +97,8 @@
     "onCommand:runtrol.openMission",
     "onCommand:runtrol.startMission",
     "onCommand:runtrol.continueMission",
+    "onCommand:runtrol.armMissionAutoFlight",
+    "onCommand:runtrol.disarmMissionAutoFlight",
     "onCommand:runtrol.continueReadyMissions",
     "onCommand:runtrol.reviewMissionLanding",
     "onCommand:runtrol.launchFleet",
@@ -324,6 +326,16 @@
         "command": "runtrol.continueMission",
         "title": "Runtrol: Continue Reviewed Mission",
         "icon": "$(run-all)"
+      },
+      {
+        "command": "runtrol.armMissionAutoFlight",
+        "title": "Runtrol: Arm Mission Auto Flight",
+        "icon": "$(rocket)"
+      },
+      {
+        "command": "runtrol.disarmMissionAutoFlight",
+        "title": "Runtrol: Disarm Mission Auto Flight",
+        "icon": "$(debug-stop)"
       },
       {
         "command": "runtrol.continueReadyMissions",
@@ -630,9 +642,14 @@
       ],
       "view/title": [
         {
-          "command": "runtrol.continueReadyMissions",
+          "command": "runtrol.armMissionAutoFlight",
           "when": "view == runtrol.missions",
           "group": "navigation@0"
+        },
+        {
+          "command": "runtrol.continueReadyMissions",
+          "when": "view == runtrol.missions",
+          "group": "navigation@1"
         },
         {
           "command": "runtrol.startSession",
@@ -817,9 +834,19 @@
           "group": "inline@3"
         },
         {
-          "command": "runtrol.continueMission",
+          "command": "runtrol.armMissionAutoFlight",
           "when": "view == runtrol.missions && (viewItem == runtrol.mission.validated || viewItem == runtrol.mission.running)",
           "group": "inline@1"
+        },
+        {
+          "command": "runtrol.disarmMissionAutoFlight",
+          "when": "view == runtrol.missions && viewItem =~ /^runtrol\\.mission\\.(validated|running|paused)\\.autoFlight$/",
+          "group": "inline@1"
+        },
+        {
+          "command": "runtrol.continueMission",
+          "when": "view == runtrol.missions && (viewItem == runtrol.mission.validated || viewItem == runtrol.mission.running)",
+          "group": "inline@2"
         },
         {
           "command": "runtrol.launchFleet",

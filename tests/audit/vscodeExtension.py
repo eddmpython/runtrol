@@ -107,6 +107,7 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
             "afterReady",
             "selfApproveIntegration(client, pendingId, signature)",
             'initializationStage = "runtime:bootstrap"',
+            "missionController.startAutoFlights()",
         ],
         "providerHealth.ts": [
             "the installed executable has not completed a verified probe",
@@ -127,6 +128,19 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
             "reconnect",
             "workspaceCollisions",
             '"Start here anyway"',
+        ],
+        "mission/autoFlight.ts": [
+            "MAX_AUTO_FLIGHTS",
+            "sessionGeneration",
+            "recordAutoFlightSubmissions",
+            "readAutoFlightArms",
+        ],
+        "mission/controller.ts": [
+            "AUTO_FLIGHTS_KEY",
+            "runtimeState.onDidChange",
+            "beforeSubmissions",
+            "recordSubmissions",
+            "startAutoFlights",
         ],
         "core/client.ts": ["commandConnection", "commandTail"],
         "runtimeClient.ts": [
@@ -202,7 +216,7 @@ def selftest() -> int:
         ),
         "extension.ts": (
             "afterReady selfApproveIntegration(client, pendingId, signature) "
-            'initializationStage = "runtime:bootstrap"'
+            'initializationStage = "runtime:bootstrap" missionController.startAutoFlights()'
         ),
         "providerHealth.ts": (
             "the installed executable has not completed a verified probe "
@@ -215,6 +229,12 @@ def selftest() -> int:
             'this.runtime.verifyProvider( awaitsVerification( '
             'reconnect workspaceCollisions '
             '"Start here anyway"'
+        ),
+        "mission/autoFlight.ts": (
+            "MAX_AUTO_FLIGHTS sessionGeneration recordAutoFlightSubmissions readAutoFlightArms"
+        ),
+        "mission/controller.ts": (
+            "AUTO_FLIGHTS_KEY runtimeState.onDidChange beforeSubmissions recordSubmissions startAutoFlights"
         ),
         "core/client.ts": "commandConnection commandTail",
         "runtimeClient.ts": (
@@ -269,6 +289,13 @@ def selftest() -> int:
         (package, {**sources, "controller.ts": sources["controller.ts"].replace("this.runtime.inventory()", "")}),
         (package, {**sources, "controller.ts": sources["controller.ts"].replace("this.runtime.verifyProvider(", "")}),
         (package, {**sources, "extension.ts": sources["extension.ts"].replace("selfApproveIntegration", "")}),
+        (
+            package,
+            {
+                **sources,
+                "mission/autoFlight.ts": sources["mission/autoFlight.ts"].replace("sessionGeneration", ""),
+            },
+        ),
         (
             package,
             {
@@ -374,11 +401,14 @@ def run() -> int:
     # Raised 336 -> 352 KiB on 2026-08-22 when Fleet Compare crossed it: reviewed choose-one Missions, parallel
     # isolated launch, the conversation grid, native result diffs, and selected-Receipt completion, reviewed in
     # the real Extension Host at the crossing.
+    # Raised 352 -> 368 KiB on 2026-08-22 when Mission Auto Flight crossed it at 374114 bytes: bounded local
+    # authority, event-driven DAG waves, durable lifecycle-generation proof, immediate disarm, and explicit
+    # Receipt Landing, reviewed in the real Extension Host at the crossing.
     # A dependency slipping in still trips it.
     bundles = [EXTENSION / "dist" / name for name in ("extension.js", "webview.js", "webview.css")]
     for bundle in bundles:
-        if not bundle.is_file() or bundle.stat().st_size > 352 * 1024:
-            failures.append(f"{bundle.relative_to(ROOT)} is missing or exceeds 352 KiB")
+        if not bundle.is_file() or bundle.stat().st_size > 368 * 1024:
+            failures.append(f"{bundle.relative_to(ROOT)} is missing or exceeds 368 KiB")
     extension_bundle = EXTENSION / "dist" / "extension.js"
     if extension_bundle.is_file() and "RUNTROL_VSCODE_REAL_PROVIDER_JOURNEY" in extension_bundle.read_text(
         encoding="utf-8"

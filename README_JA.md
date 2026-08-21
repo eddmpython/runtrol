@@ -15,6 +15,12 @@
 > 正確な Receipt 比較と固定 Gate を実行し、次の project へ続く。実物 Extension Host で二つの Git project
 > の Landing を順にレビューして完了した。
 >
+> `Mission Auto Flight` はレビュー済みの通常 Mission を PC で一度 arm し、各実物 provider turn を
+> lifecycle generation で証明して固定 Gate と Receipt を封印し、次の安全な DAG wave を自動で開始する。
+> person、quota 待ちと pause はそのまま待ち、権限 drift、曖昧な送信、recovery state では即座に解除する。
+> 実物二 wave CLI journey はオペレーターの Continue 0 回で `integrating` 到着と自動権限回収を検証し、
+> 三つの画面状態を直接目視確認した。最終 Receipt Landing と integration は常に明示的な操作として残る。
+>
 > スマートフォン通知は会話内容を運ばず、実際にオペレーターを待つ最初の session を開く。`Needs you`
 > の件数と次への移動は person wait だけを含み、account limit は区別する。実物 CLI approval gate が
 > approval 中の表示と回答後の解除を検証する。

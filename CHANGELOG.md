@@ -12,6 +12,14 @@ and refactoring that no user can observe do not belong here.
 
 ### Added
 
+- **Mission Auto Flight** moves a reviewed ordinary DAG through every later proven-safe wave after one PC-local arm.
+  Up to eight exact Mission digests can be armed together. Runtime lifecycle events drive the flow with no polling;
+  each automatic Send stores the exact session generation before provider input, and fixed Gate verification waits
+  for that same session to complete a real turn. Person or quota waits and pause retain the arm. Authority drift,
+  ambiguous delivery, missing sessions, recovery, failure, comparison, cancellation, and arrival at integration
+  remove it. Receipt Landing and final integration stay explicit. A real installed CLI completed two dependent
+  waves, two Gate checks, and two Receipts with zero operator Continue actions in a photographed Extension Host.
+
 - **Review Mission Landing Queue** turns ordinary Mission integration into a cross-project, Receipt-first review.
   Every sealed UTF-8 Artifact from one passing Mission opens together in one native VS Code changes editor against
   the current project. The bounded read-only review changes no files. One explicit action closes the review, asks

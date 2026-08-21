@@ -16,6 +16,12 @@
 > exact Receipt comparison and fixed Gates in Core, then continues to the next project. A real Extension Host
 > reviewed and completed two separate Git project Landings in sequence.
 >
+> `Mission Auto Flight` arms a reviewed ordinary Mission once on the PC, proves each real provider turn through its
+> lifecycle generation, seals fixed Gates and Receipts, and starts the next safe DAG wave automatically. It waits for
+> person or quota input and pause, and disarms on authority drift, ambiguous delivery, or recovery. A real two-wave
+> CLI journey reached `integrating` with zero operator Continue actions, removed its own authority, and had all three
+> screen states inspected directly. Final Receipt Landing and integration always remain explicit.
+>
 > A phone notification now opens the first session that is actually waiting for the operator without carrying
 > conversation content. The `Needs you` count and next action include person waits only and keep account limits
 > separate. The real CLI approval gate verifies entry while pending and removal after the answer.

@@ -8,13 +8,21 @@ type MissionNode = MissionItem | MissionTaskItem;
 export class MissionItem extends vscode.TreeItem implements MissionSelection {
   readonly mission: MissionLine;
 
-  constructor(mission: MissionLine) {
+  constructor(mission: MissionLine, autoFlightArmed: boolean) {
     super(mission.name, vscode.TreeItemCollapsibleState.Collapsed);
     this.mission = mission;
-    this.description = `${mission.state}  ${mission.passed_tasks}/${mission.total_tasks}`;
-    this.tooltip = `${mission.name}\n${mission.project}\nState: ${mission.state}\n${mission.awaiting_input} awaiting local Send`;
-    this.contextValue = `runtrol.mission.${mission.state}${mission.completion_policy === "chooseOne" ? ".chooseOne" : ""}`;
-    this.iconPath = new vscode.ThemeIcon(missionIcon(mission.state));
+    this.description = autoFlightArmed
+      ? `AUTO  ${mission.passed_tasks}/${mission.total_tasks}`
+      : `${mission.state}  ${mission.passed_tasks}/${mission.total_tasks}`;
+    this.tooltip = [
+      mission.name,
+      mission.project,
+      `State: ${mission.state}`,
+      autoFlightArmed ? "Auto Flight: armed on this PC" : "",
+      `${mission.awaiting_input} awaiting local Send`,
+    ].filter(Boolean).join("\n");
+    this.contextValue = `runtrol.mission.${mission.state}${mission.completion_policy === "chooseOne" ? ".chooseOne" : ""}${autoFlightArmed ? ".autoFlight" : ""}`;
+    this.iconPath = new vscode.ThemeIcon(autoFlightArmed ? "rocket" : missionIcon(mission.state));
     this.command = {
       command: "runtrol.openMission",
       title: "Open Mission",
@@ -68,7 +76,7 @@ export class MissionTree implements vscode.TreeDataProvider<MissionNode>, vscode
     if (!element) {
       return [...this.controller.missions]
         .sort((left, right) => left.name.localeCompare(right.name) || left.mission_id.localeCompare(right.mission_id))
-        .map((mission) => new MissionItem(mission));
+        .map((mission) => new MissionItem(mission, this.controller.isAutoFlightArmed(mission.mission_id)));
     }
     if (element instanceof MissionTaskItem) return [];
     const response = await this.controllerSnapshot(element.mission.mission_id);

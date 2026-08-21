@@ -24,6 +24,14 @@ import {
 } from "./fanOut";
 import { AmbiguousSubmissions } from "./ambiguousSubmissions";
 import {
+  MAX_AUTO_FLIGHTS,
+  AutoFlights,
+  createAutoFlightArm,
+  decideAutoFlight,
+  restrictAutoFlightMomentum,
+  type AutoFlightTurn,
+} from "./autoFlight";
+import {
   missionFlightDeck,
   type MissionFlightDeck,
 } from "./flightDeck";
@@ -44,6 +52,8 @@ import {
 const FAN_OUT_DEFAULTS_KEY = "runtrol.fanOutDefaults";
 /// Task identities whose durable local Send intent exists without a confirmed public Runtime delivery.
 const AMBIGUOUS_TASK_SUBMISSIONS_KEY = "runtrol.ambiguousMissionTaskSubmissions";
+/// Exact local authority and Runtime generation markers for at most eight armed Mission Auto Flights.
+const AUTO_FLIGHTS_KEY = "runtrol.missionAutoFlights";
 const COMPLETE_LANDING = "Run Gates and complete";
 const REVIEW_NEXT_LANDING = "Review next";
 const LANDING_NOT_READY = "Mission cannot land";
@@ -95,6 +105,12 @@ type MissionProviderChooser = (
   tasks: readonly MissionTaskLine[],
 ) => Promise<ReadonlyMap<string, string> | null>;
 
+type MissionAdvanceOptions = {
+  readonly showProgress?: boolean;
+  readonly verifyTaskIds?: ReadonlySet<string>;
+  readonly beforeSubmissions?: (submissions: readonly AutoFlightTurn[]) => Promise<void>;
+};
+
 type MissionFlightFailure = {
   readonly missionId: string;
   readonly name: string;
@@ -119,6 +135,15 @@ export class MissionController implements vscode.Disposable {
   /// A durable Mission Send intent can exist when the public Runtime delivery failed or lost its answer. The
   /// convenience path must not mistake the still-idle session for completed provider work, including after restart.
   private readonly ambiguousTaskSubmissions: AmbiguousSubmissions;
+  private readonly autoFlights: AutoFlights;
+  private readonly autoFlightSubscription: vscode.Disposable;
+  /// An operator disarm takes effect in memory before the durable removal finishes. This closes the only await
+  /// boundary before provider input while keeping the persisted arm conservative if storage itself refuses.
+  private readonly autoFlightRevocations = new Set<string>();
+  private autoFlightsStarted = false;
+  private autoFlightPending = false;
+  private autoFlightRun: Promise<void> | null = null;
+  private disposed = false;
 
   readonly onDidChange = this.changedEmitter.event;
 
@@ -133,6 +158,13 @@ export class MissionController implements vscode.Disposable {
       context.globalState.get<readonly string[]>(AMBIGUOUS_TASK_SUBMISSIONS_KEY, []),
       (taskIds) => context.globalState.update(AMBIGUOUS_TASK_SUBMISSIONS_KEY, taskIds),
     );
+    this.autoFlights = new AutoFlights(
+      context.globalState.get<unknown>(AUTO_FLIGHTS_KEY, []),
+      (arms) => context.globalState.update(AUTO_FLIGHTS_KEY, arms),
+    );
+    this.autoFlightSubscription = runtimeState.onDidChange((change) => {
+      if (change === "rows") this.scheduleAutoFlights();
+    });
   }
 
   get missions(): readonly MissionLine[] {
@@ -145,6 +177,16 @@ export class MissionController implements vscode.Disposable {
 
   async initialize(): Promise<void> {
     await this.refresh();
+  }
+
+  /// Restored authority is observed only after both Core and Runtime have completed their first exact listings.
+  startAutoFlights(): void {
+    this.autoFlightsStarted = true;
+    this.scheduleAutoFlights();
+  }
+
+  isAutoFlightArmed(missionId: string): boolean {
+    return !this.autoFlightRevocations.has(missionId) && this.autoFlights.isArmed(missionId);
   }
 
   async refresh(): Promise<void> {
@@ -480,6 +522,178 @@ export class MissionController implements vscode.Disposable {
     await this.acceptSnapshot(started, true);
   }
 
+  async armMissionAutoFlight(selection?: MissionSelection): Promise<void> {
+    const available = MAX_AUTO_FLIGHTS - this.autoFlights.current().length;
+    if (available <= 0) {
+      await vscode.window.showInformationMessage(
+        `The local limit of ${MAX_AUTO_FLIGHTS} armed Mission Auto Flights is already in use.`,
+      );
+      return;
+    }
+
+    let selected: readonly MissionLine[];
+    if (selection?.mission) {
+      if (this.autoFlights.isArmed(selection.mission.mission_id)) {
+        await vscode.window.showInformationMessage(`${selection.mission.name} already has Auto Flight armed.`);
+        return;
+      }
+      selected = [selection.mission];
+    } else {
+      await this.refresh();
+      const candidates = this.rows.filter((mission) =>
+        (mission.state === "validated" || mission.state === "running")
+        && mission.completion_policy === "allTasks"
+        && !this.autoFlights.isArmed(mission.mission_id)
+      ).sort((left, right) => left.name.localeCompare(right.name) || left.mission_id.localeCompare(right.mission_id));
+      if (candidates.length === 0) {
+        await vscode.window.showInformationMessage("No reviewed ordinary Mission is available for Auto Flight.");
+        return;
+      }
+      const picks = await vscode.window.showQuickPick(
+        candidates.map((mission) => ({
+          label: mission.name,
+          description: mission.state,
+          detail: `${mission.passed_tasks}/${mission.total_tasks}  ${mission.project}`,
+          mission,
+        })),
+        {
+          title: "Arm Mission Auto Flight",
+          placeHolder: candidates.length
+            ? `Select up to ${available} reviewed ordinary Missions`
+            : "No reviewed ordinary Mission is available",
+          canPickMany: true,
+        },
+      );
+      if (!picks || picks.length === 0) return;
+      if (picks.length > available) {
+        await vscode.window.showWarningMessage(`Select no more than ${available} Missions for this Auto Flight arm.`);
+        return;
+      }
+      selected = picks.map((pick) => pick.mission);
+    }
+
+    const reviewed: MissionSnapshot[] = [];
+    for (const mission of selected) {
+      const snapshot = await this.get(mission.mission_id);
+      createAutoFlightArm(snapshot, null, this.runtimeState.sessions, this.momentum(snapshot), Date.now());
+      reviewed.push(snapshot);
+    }
+    const needsOperatorChoice = reviewed.some((snapshot) => snapshot.tasks.some((task) =>
+      task.provider_selector === "operatorChoice"
+      && (task.state === "pending" || task.state === "reserved")
+    ));
+    const operatorChoiceProvider = needsOperatorChoice
+      ? await this.chooseProvider("operatorChoice")
+      : null;
+    if (needsOperatorChoice && !operatorChoiceProvider) return;
+    for (const snapshot of reviewed) {
+      this.resolveWaveProviders(
+        snapshot.tasks.filter((task) => task.state === "pending" || task.state === "reserved"),
+        operatorChoiceProvider,
+      );
+    }
+
+    const providerDetail = operatorChoiceProvider
+      ? `Operator-choice Tasks: ${operatorChoiceProvider}`
+      : "Providers: reviewed fixed selectors or already bound sessions";
+    const action = await vscode.window.showWarningMessage(
+      `Arm Auto Flight for ${reviewed.length} reviewed Mission${reviewed.length === 1 ? "" : "s"}?`,
+      {
+        modal: true,
+        detail: [
+          providerDetail,
+          "Every later safe DAG wave may start while this Studio window is open. Integration stays explicit.",
+          "",
+          ...reviewed.flatMap((snapshot) => [
+            `${snapshot.mission.name}  ${snapshot.mission.project}`,
+            `Mission SHA-256 ${snapshot.mission_sha256}`,
+          ]),
+        ].join("\n"),
+      },
+      "Arm Auto Flight",
+    );
+    if (action !== "Arm Auto Flight") return;
+
+    const arms = [];
+    for (const reviewedSnapshot of reviewed) {
+      const exact = await this.get(reviewedSnapshot.mission.mission_id);
+      if (exact.mission_sha256 !== reviewedSnapshot.mission_sha256) {
+        throw new Error(`Mission ${reviewedSnapshot.mission.name} changed after review; Auto Flight was not armed`);
+      }
+      arms.push(createAutoFlightArm(
+        exact,
+        operatorChoiceProvider,
+        this.runtimeState.sessions,
+        this.momentum(exact),
+        Date.now(),
+      ));
+    }
+    await this.autoFlights.armMany(arms);
+    for (const arm of arms) this.autoFlightRevocations.delete(arm.missionId);
+    this.changedEmitter.fire();
+    this.scheduleAutoFlights();
+    await vscode.window.showInformationMessage(
+      `${arms.length} Mission Auto Flight${arms.length === 1 ? " is" : "s are"} armed on this PC.`,
+    );
+  }
+
+  async disarmMissionAutoFlight(selection?: MissionSelection): Promise<void> {
+    const current = this.autoFlights.current().filter((arm) => !this.autoFlightRevocations.has(arm.missionId));
+    let missionId = selection?.mission?.mission_id ?? null;
+    let name = selection?.mission?.name ?? null;
+    if (!missionId) {
+      if (current.length === 0) {
+        await vscode.window.showInformationMessage("No Mission Auto Flight is armed.");
+        return;
+      }
+      const pick = await vscode.window.showQuickPick(
+        current.map((arm) => {
+          const mission = this.rows.find((candidate) => candidate.mission_id === arm.missionId);
+          return {
+            label: mission?.name ?? arm.missionId,
+            description: mission?.state ?? "restored",
+            detail: mission?.project ?? `Mission SHA-256 ${arm.missionSha256}`,
+            missionId: arm.missionId,
+          };
+        }),
+        { title: "Disarm Mission Auto Flight", placeHolder: current.length ? "Select one arm" : "No Auto Flight is armed" },
+      );
+      if (!pick) return;
+      missionId = pick.missionId;
+      name = pick.label;
+    }
+    if (!this.autoFlights.isArmed(missionId)) {
+      await vscode.window.showInformationMessage(`${name ?? missionId} does not have Auto Flight armed.`);
+      return;
+    }
+    this.autoFlightRevocations.add(missionId);
+    await this.autoFlights.disarm(missionId);
+    this.changedEmitter.fire();
+    await vscode.window.showInformationMessage(`${name ?? missionId} Auto Flight is disarmed.`);
+  }
+
+  async armMissionAutoFlightForJourney(
+    missionId: string,
+    operatorChoiceProvider: string | null,
+  ): Promise<void> {
+    const snapshot = await this.get(missionId);
+    this.resolveWaveProviders(
+      snapshot.tasks.filter((task) => task.state === "pending" || task.state === "reserved"),
+      operatorChoiceProvider,
+    );
+    const arm = createAutoFlightArm(
+      snapshot,
+      operatorChoiceProvider,
+      this.runtimeState.sessions,
+      this.momentum(snapshot),
+      Date.now(),
+    );
+    await this.autoFlights.arm(arm);
+    this.autoFlightRevocations.delete(missionId);
+    this.changedEmitter.fire();
+    await this.runAutoFlights();
+  }
+
   async continueMission(selection?: MissionSelection): Promise<void> {
     const mission = selection?.mission ?? await this.pickMission("Continue Reviewed Mission");
     if (!mission) return;
@@ -666,9 +880,16 @@ export class MissionController implements vscode.Disposable {
     initial: MissionSnapshot,
     chooseProviders: MissionProviderChooser,
     placeSessions = true,
+    options: MissionAdvanceOptions = {},
   ): Promise<MissionAdvanceResult> {
     let current = initial;
-    let momentum = this.momentum(current);
+    const exactMomentum = (snapshot: MissionSnapshot): MissionMomentum => {
+      const value = this.momentum(snapshot);
+      return options.verifyTaskIds
+        ? restrictAutoFlightMomentum(value, options.verifyTaskIds)
+        : value;
+    };
+    let momentum = exactMomentum(current);
 
     let verified = 0;
     if (momentum.start) {
@@ -679,16 +900,13 @@ export class MissionController implements vscode.Disposable {
           mission_sha256: current.mission_sha256,
         },
       })).response, "mission");
-      momentum = this.momentum(current);
+      momentum = exactMomentum(current);
     }
 
     if (momentum.verify.length > 0) {
-      current = await vscode.window.withProgress(
-        {
-          location: vscode.ProgressLocation.Notification,
-          title: `Checking finished Tasks in ${current.mission.name}`,
-          cancellable: false,
-        },
+      current = await withMissionProgress(
+        options.showProgress !== false,
+        `Checking finished Tasks in ${current.mission.name}`,
         async (progress) => {
           let snapshot = current;
           for (const task of momentum.verify) {
@@ -711,7 +929,7 @@ export class MissionController implements vscode.Disposable {
       );
     }
 
-    momentum = this.momentum(current);
+    momentum = exactMomentum(current);
     if (momentum.manual.length > 0) {
       await this.acceptSnapshot(current, false);
       return {
@@ -740,12 +958,9 @@ export class MissionController implements vscode.Disposable {
       };
     }
 
-    const sentSessions = await vscode.window.withProgress(
-      {
-        location: vscode.ProgressLocation.Notification,
-        title: `Starting the next reviewed wave in ${current.mission.name}`,
-        cancellable: false,
-      },
+    const sentSessions = await withMissionProgress(
+      options.showProgress !== false,
+      `Starting the next reviewed wave in ${current.mission.name}`,
       async (progress) => {
         let snapshot = current;
         for (const task of momentum.prepare) {
@@ -783,6 +998,24 @@ export class MissionController implements vscode.Disposable {
         }
 
         progress.report({ message: "Sending exact reviewed instructions", increment: 30 });
+        if (instructions.length > 0 && options.beforeSubmissions) {
+          const turns = instructions.map(({ task, instruction }) => {
+            const session = this.runtimeState.sessions.find(
+              (candidate) => candidate.sessionId === instruction.session_id,
+            );
+            if (!session
+              || session.lifecycle !== "hotIdle"
+              || (session.waitingOn !== null && session.waitingOn !== undefined)) {
+              throw new Error(`Task ${task.key} no longer has an exact idle Runtime session before provider input`);
+            }
+            return {
+              taskId: task.task_id,
+              sessionId: session.sessionId,
+              sessionGeneration: session.sessionGeneration,
+            };
+          });
+          await options.beforeSubmissions(turns);
+        }
         const submissions = await Promise.allSettled(instructions.map(async ({ task, instruction }) => {
           await this.sessions.submitResolvedInput(instruction.session_id, instruction.instruction);
           await this.clearAmbiguousSubmission(task.task_id);
@@ -1292,6 +1525,9 @@ export class MissionController implements vscode.Disposable {
   }
 
   dispose(): void {
+    this.disposed = true;
+    this.autoFlightPending = false;
+    this.autoFlightSubscription.dispose();
     this.documents.dispose();
     this.changedEmitter.dispose();
   }
@@ -1446,25 +1682,141 @@ export class MissionController implements vscode.Disposable {
 
   private resolveWaveProviders(
     tasks: readonly MissionTaskLine[],
-    operatorChoiceProvider: string,
+    operatorChoiceProvider: string | null,
   ): ReadonlyMap<string, string> {
     const usable = new Set(
       this.runtimeState.providers
         .filter((provider) => provider.installation.state === "usable")
         .map((provider) => provider.providerId),
     );
-    if (!usable.has(operatorChoiceProvider)) {
+    if (tasks.some((task) => task.provider_selector === "operatorChoice")
+      && (!operatorChoiceProvider || !usable.has(operatorChoiceProvider))) {
       throw new Error(`the selected provider ${operatorChoiceProvider} is not currently usable`);
     }
     return new Map(tasks.map((task) => {
       const provider = task.provider_selector === "operatorChoice"
-        ? operatorChoiceProvider
+        ? operatorChoiceProvider as string
         : task.provider_selector;
       if (!usable.has(provider)) {
         throw new Error(`the reviewed provider ${provider} is not currently usable`);
       }
       return [task.task_id, provider];
     }));
+  }
+
+  private scheduleAutoFlights(): void {
+    if (!this.autoFlightsStarted || this.disposed || !this.hasLiveAutoFlight()) return;
+    void this.runAutoFlights().catch((error: unknown) => {
+      if (this.disposed) return;
+      void vscode.window.showWarningMessage(
+        `Mission Auto Flight stopped locally: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    });
+  }
+
+  private runAutoFlights(): Promise<void> {
+    if (!this.autoFlightsStarted || this.disposed || !this.hasLiveAutoFlight()) return Promise.resolve();
+    this.autoFlightPending = true;
+    if (this.autoFlightRun) return this.autoFlightRun;
+    const running = this.drainAutoFlights();
+    this.autoFlightRun = running;
+    void running.then(
+      () => this.finishAutoFlightRun(running, true),
+      () => this.finishAutoFlightRun(running, false),
+    );
+    return running;
+  }
+
+  private finishAutoFlightRun(running: Promise<void>, continuePending: boolean): void {
+    if (this.autoFlightRun !== running) return;
+    this.autoFlightRun = null;
+    if (!continuePending) this.autoFlightPending = false;
+    if (continuePending && this.autoFlightPending) this.scheduleAutoFlights();
+  }
+
+  private async drainAutoFlights(): Promise<void> {
+    while (this.autoFlightPending && this.hasLiveAutoFlight() && !this.disposed) {
+      this.autoFlightPending = false;
+      for (const listed of this.autoFlights.current()) {
+        if (this.autoFlightRevocations.has(listed.missionId)) continue;
+        const arm = this.autoFlights.get(listed.missionId);
+        if (!arm) continue;
+        try {
+          const snapshot = await this.get(arm.missionId);
+          const decision = decideAutoFlight(
+            arm,
+            snapshot,
+            this.momentum(snapshot),
+            this.runtimeState.sessions,
+            Date.now(),
+          );
+          if (decision.kind === "wait") {
+            await this.autoFlights.reconcile(arm.missionId, snapshot);
+            continue;
+          }
+          if (decision.kind === "arrived") {
+            await this.arriveAutoFlight(snapshot);
+            continue;
+          }
+          if (decision.kind === "disarm") {
+            await this.stopAutoFlight(snapshot.mission.name, arm.missionId, decision.reason);
+            continue;
+          }
+
+          const verifyTaskIds = new Set(decision.momentum.verify.map((task) => task.task_id));
+          const result = await this.advanceMomentum(
+            snapshot,
+            (tasks) => Promise.resolve(this.resolveWaveProviders(tasks, arm.operatorChoiceProvider)),
+            false,
+            {
+              showProgress: false,
+              verifyTaskIds,
+              beforeSubmissions: async (submissions) => {
+                await this.autoFlights.recordSubmissions(arm.missionId, submissions);
+                if (!this.isAutoFlightArmed(arm.missionId)) {
+                  throw new Error("the operator disarmed Auto Flight before provider input");
+                }
+              },
+            },
+          );
+          await this.autoFlights.reconcile(arm.missionId, result.snapshot);
+          this.changedEmitter.fire();
+          this.autoFlightPending = true;
+        } catch (error) {
+          await this.stopAutoFlight(
+            this.rows.find((mission) => mission.mission_id === arm.missionId)?.name ?? arm.missionId,
+            arm.missionId,
+            error instanceof Error ? error.message : String(error),
+          );
+        }
+      }
+    }
+  }
+
+  private hasLiveAutoFlight(): boolean {
+    return this.autoFlights.current().some((arm) => !this.autoFlightRevocations.has(arm.missionId));
+  }
+
+  private async stopAutoFlight(name: string, missionId: string, reason: string): Promise<void> {
+    this.autoFlightRevocations.add(missionId);
+    await this.autoFlights.disarm(missionId);
+    this.changedEmitter.fire();
+    void vscode.window.showWarningMessage(`Auto Flight stopped for ${name}: ${reason}.`);
+  }
+
+  private async arriveAutoFlight(snapshot: MissionSnapshot): Promise<void> {
+    const missionId = snapshot.mission.mission_id;
+    this.autoFlightRevocations.add(missionId);
+    await this.autoFlights.disarm(missionId);
+    this.changedEmitter.fire();
+    void vscode.window.showInformationMessage(
+      `${snapshot.mission.name} Auto Flight arrived at explicit Receipt Landing.`,
+      "Review Landing",
+    ).then((action) => {
+      if (action === "Review Landing") {
+        void vscode.commands.executeCommand("runtrol.reviewMissionLanding", { mission: snapshot.mission });
+      }
+    }, () => undefined);
   }
 
   private markSubmissionAmbiguous(taskId: string): Promise<void> {
@@ -1612,8 +1964,27 @@ export class MissionController implements vscode.Disposable {
     this.snapshots.set(snapshot.mission.mission_id, snapshot);
     this.documents.update(snapshot);
     await this.refresh();
+    this.scheduleAutoFlights();
     if (show) await this.documents.show(snapshot.mission.mission_id);
   }
+}
+
+type MissionProgress = vscode.Progress<{ readonly message?: string; readonly increment?: number }>;
+
+async function withMissionProgress<T>(
+  visible: boolean,
+  title: string,
+  work: (progress: MissionProgress) => Promise<T>,
+): Promise<T> {
+  if (!visible) return work({ report: () => undefined });
+  return await vscode.window.withProgress(
+    {
+      location: vscode.ProgressLocation.Notification,
+      title,
+      cancellable: false,
+    },
+    work,
+  );
 }
 
 class MissionDocumentProvider implements vscode.TextDocumentContentProvider, vscode.Disposable {

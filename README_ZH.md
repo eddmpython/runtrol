@@ -14,6 +14,12 @@
 > Artifact 与当前项目进行比较。它不会修改文件。一次明确的完成操作会让现有 Core 执行精确 Receipt
 > 比较与固定 Gate，然后继续下一个项目。真实 Extension Host 已依次审查并完成两个独立 Git 项目的 Landing。
 >
+> `Mission Auto Flight` 只需在 PC 上为已审查的普通 Mission 授权一次。它通过 lifecycle generation 证明每个
+> 真实 provider turn，封存固定 Gate 与 Receipt，并自动启动下一个安全 DAG 波次。遇到人员、quota 等待或暂停
+> 时会保持等待，遇到权限漂移、模糊传输或恢复状态时会立即解除。真实双波次 CLI 旅程以零次操作者
+> Continue 到达 `integrating`，自动收回权限，并直接目视检查了三个屏幕状态。最终 Receipt Landing 与集成
+> 始终保持显式操作。
+>
 > 手机通知现在不会携带对话内容，并会打开第一个真正等待操作者的会话。`Needs you` 数量与下一项操作
 > 只包含等待人员的状态，并与账户限额等待区分。真实 CLI 批准门禁验证等待时出现、回答后消失。
 

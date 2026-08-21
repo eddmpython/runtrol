@@ -62,6 +62,22 @@ Runtrol verifies the exact command through each provider's official readback bef
 anything, so a same-named entry that points elsewhere is reported and left untouched.
 See the complete [Agent Tools contract](https://github.com/eddmpython/runtrol/blob/main/docs/agentTools.md).
 
+## Mission Auto Flight
+
+Validate an ordinary reviewed Mission, then select **Runtrol: Arm Mission Auto Flight**. One local confirmation can
+arm up to eight exact Mission digests. While that Studio window stays open, Runtrol starts each safe DAG wave, waits
+for the real provider turn to finish, runs the fixed Gates, seals the Receipt, and starts the next eligible wave.
+The row's rocket and `AUTO` marker show the arm; its stop action revokes future provider input immediately.
+
+Auto Flight pauses for working sessions, person or quota waits, and a paused Mission. It stops and removes its arm on
+authority drift, ambiguous delivery, missing sessions, recovery or failure, comparison flow, cancellation, or any
+other unsafe state. Reaching `integrating` also removes the arm. Receipt review, applying Artifacts, final Gates, and
+completion always remain explicit.
+
+The durable arm contains only Mission, Task, session, provider, and lifecycle-generation identifiers. No instruction,
+reply, transcript, Gate output, or Artifact content is stored. Runtime events drive it without polling, and it never
+replaces the provider CLI's own agent loop.
+
 ## Parallel attempts
 
 Run **Runtrol: Try One Instruction Several Ways...** to compose a reviewed comparison Mission from an instruction
@@ -120,6 +136,8 @@ processes stay alive.
 - **Runtrol: Try One Instruction Several Ways...**
 - **Runtrol: Run All Reviewed Attempts**
 - **Runtrol: Compare Passing Results**
+- **Runtrol: Arm Mission Auto Flight**
+- **Runtrol: Disarm Mission Auto Flight**
 - **Runtrol: Verify and Complete Mission Integration**
 - **Runtrol: Restart Extension Host**
 - **Runtrol: Pair a Phone**

@@ -230,18 +230,30 @@ Two contracts keep the conversation window from growing a branch per place or pe
 | `conversationPanels.ts` | one binding per conversation (surface + watch), the two workbench places, the grid | provider branches or conversation content |
 | `diffDocuments.ts` | declared changes as read-only virtual documents for VS Code's diff editor | files on disk or a transcript of changes |
 | `webview/` | bounded active rendering and input | durable storage or background sessions |
-| `mission/controller.ts`, `mission/momentum.ts`, and `mission/tree.ts` | Mission review, safe-wave continuation, local recovery actions, reviewed fleet launch, Receipt Landing Queue, Task rows, native Artifact comparison, and one native editor document | provider input without confirmed local authority, project file merging, transcript inference, or optimistic completion |
+| `mission/controller.ts`, `mission/autoFlight.ts`, `mission/momentum.ts`, and `mission/tree.ts` | Mission review, bounded local Auto Flight authority, safe-wave continuation, local recovery actions, reviewed fleet launch, Receipt Landing Queue, Task rows, native Artifact comparison, and one native editor document | provider input without confirmed local authority, project file merging, transcript inference, polling, or optimistic completion |
 | `capability/controller.ts` | candidate inbox, native diff review, and exact local trust actions | capability text injection or user-wide trust |
 
 ## Mission and capability surface
 
 The Missions tree is part of the existing Runtrol activity container. It lists Core snapshots and exposes actions only
 when the matching state permits them. Validation selects a project Mission file. An ordinary validated or running
-Mission has one primary `Continue Reviewed Mission` action. Its modal review shows the exact Mission digest and the
-currently safe work. One confirmation starts a validated Mission, verifies exact `Ready` Task sessions with fixed
-Gates, prepares newly eligible workspaces and public Runtime sessions, and sends exact reviewed instructions. The same
-action stops at working sessions, person or quota waits, failure, retry, missing identity, comparison policy, and
-integration. It reads scheduler and bounded Runtime metadata only, never provider events or conversation content.
+Mission offers `Arm Mission Auto Flight` as its primary path and `Continue Reviewed Mission` as its explicit one-wave
+path. The arm modal shows each exact Mission digest, project, and runtime-discovered operator-choice provider. One
+confirmation can arm up to eight ordinary Missions. Armed rows show a rocket and `AUTO`; disarm is their immediate
+inline action.
+
+Auto Flight uses only Mission scheduler state and bounded Runtime metadata. Runtime row changes trigger reevaluation,
+with no polling. Before automatic provider input, Studio durably records the exact Task, session, and current
+`sessionGeneration`. Automatic Gate verification requires that same session to return `hotIdle` at a greater
+generation. Working, person-waiting, quota-waiting, and paused Missions keep their arm without advancing. Authority
+drift, ambiguous submission, missing or replaced sessions, recovery states, failure, specialized comparison,
+cancellation, and other stopped states disarm it. Arrival at `integrating` disarms and offers Receipt Landing. No
+instruction, provider output, event, transcript path, Gate output, or Artifact content enters extension storage.
+
+The explicit Continue modal still shows the exact Mission digest and currently safe work. One confirmation starts a
+validated Mission, verifies exact `Ready` Task sessions with fixed Gates, prepares newly eligible workspaces and
+public Runtime sessions, and sends exact reviewed instructions. Both paths stop at unproven work and keep project
+integration explicit.
 
 Start, Prepare, Send, and Verify remain command-palette and Task-row recovery actions. A provider submission whose
 success is unknown is persisted as ambiguous before transport and cannot be auto-verified, including after Extension
@@ -365,6 +377,7 @@ specified in [automatic updates](automaticUpdates.md).
 | `vscodeRealProviderJourney` | installed provider discovery and a complete real CLI control journey |
 | `node tooling/real-window-eye.mjs` | the eye pass: an isolated VS Code window and an isolated Runtime with the real installed CLIs, real folders and real conversations, photographed in the draft, conversation, tabs, reopened, grid, places, diff and diff-editor poses, with a real throwaway deletion; the pictures are the judgement. `RUNTROL_EYE_ENTRY=placeProbe` runs the focused place probe and `RUNTROL_EYE_ENTRY=agentToolsEye` runs the zero-model-turn Agent Tools enable and revoke proof in isolated provider homes |
 | `RUNTROL_EYE_ENTRY=missionFlightDeckEye node tooling/real-window-eye.mjs` | two separate Git projects and reviewed Missions start together through one flight, reach integration together through the next flight, review every sealed Artifact in native Receipt Landing multi-diffs, complete the first while the second waits, and continue through the next Landing without editor lifecycle errors |
+| `RUNTROL_EYE_ENTRY=missionAutoFlightEye node tooling/real-window-eye.mjs` | one reviewed two-wave dependency Mission is armed once, starts two real provider sessions, verifies two fixed Gates, reaches `integrating` with zero operator continuation actions, removes its own authority, and is photographed before arm, while armed, and after arrival |
 | `agentToolsSmoke` | real installed provider CLIs, official MCP registration, modern and legacy discovery, fixed tool catalogue, root isolation, Runtime reads, complete revocation, and post-revocation default deny with zero model turns |
 | `missionGrowthContracts` | Mission state, exact Send, evidence, integration, capability trust, local scope, tamper, and rollback |
 | `missionLiveJourney` | two installed provider CLIs complete five reviewed Tasks and an explicit reuse, tamper, and rollback journey through production IPC |

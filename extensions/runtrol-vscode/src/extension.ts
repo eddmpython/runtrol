@@ -272,6 +272,14 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
       (item) => run(() => afterMissionReady(() => missionController.continueMission(item))),
     ),
     vscode.commands.registerCommand(
+      "runtrol.armMissionAutoFlight",
+      (item) => run(() => afterMissionReady(() => missionController.armMissionAutoFlight(item))),
+    ),
+    vscode.commands.registerCommand(
+      "runtrol.disarmMissionAutoFlight",
+      (item) => run(() => afterMissionReady(() => missionController.disarmMissionAutoFlight(item))),
+    ),
+    vscode.commands.registerCommand(
       "runtrol.continueReadyMissions",
       () => run(() => afterMissionReady(() => missionController.continueReadyMissions())),
     ),
@@ -668,7 +676,10 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
     initializationStage = "mission";
     throw error;
   });
-  controllerInitialization.then(
+  const readyInitialization = Promise.all([controllerInitialization, missionLifecycle]).then(() => {
+    missionController.startAutoFlights();
+  });
+  readyInitialization.then(
     () => {
       initializationStage = "ready";
       settleReady?.();
