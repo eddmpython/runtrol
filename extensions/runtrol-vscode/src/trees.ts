@@ -309,8 +309,8 @@ export class ConversationsTree implements vscode.TreeDataProvider<ChatTreeItem>,
   /// The count on the activity bar icon, so a blocked agent is visible from a different view entirely.
   /// Say, above the list, when the list is not everything.
   ///
-  /// The services answer this themselves and the sentence is theirs ("this CLI lists the sessions it
-  /// is running, not the conversations it has stored"). A reader who cannot find yesterday's
+  /// The services answer this themselves and the sentence is theirs ("some stored conversations
+  /// name no folder and are not shown"). A reader who cannot find yesterday's
   /// conversation and is told nothing concludes it is gone and leaves for another tool, so the
   /// qualification belongs where the list is, not in a log. The view's own message area is used
   /// rather than a row, because a row would sort, count, and be clickable, and this is none of those.

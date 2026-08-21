@@ -36,9 +36,8 @@ export function providerRowsEqual(left: readonly ProviderLine[], right: readonly
 
 /// Why the conversation list is not everything, in each service's own words, or null when it is.
 ///
-/// The daemon and the drivers already build these sentences ("this CLI lists the sessions it is
-/// running, not the conversations it has stored"), and the extension used to keep them for a single
-/// error path. A reader who cannot see yesterday's conversation and is told nothing concludes the
+/// The daemon and the drivers already build these sentences ("some stored conversations name no
+/// folder and are not shown"), and the extension used to keep them for a single error path. A reader who cannot see yesterday's conversation and is told nothing concludes the
 /// list is complete and goes looking somewhere else, so the honest sentence belongs beside the list
 /// it qualifies. Named per service, because "some chats are missing" tells nobody which ones.
 ///

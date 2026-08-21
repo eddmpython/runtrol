@@ -557,6 +557,7 @@ const fn map_source(source: ProviderSource) -> CatalogueSource {
     match source {
         ProviderSource::OfficialProtocol => CatalogueSource::OfficialProtocol,
         ProviderSource::OfficialCli => CatalogueSource::OfficialCli,
+        ProviderSource::ProviderStore => CatalogueSource::ProviderStore,
     }
 }
 

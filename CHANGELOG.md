@@ -19,11 +19,30 @@ and refactoring that no user can observe do not belong here.
   one they return says which folder it belongs to. A service that genuinely can only answer one
   folder at a time says so and is asked that way, unchanged.
 
-- When the list is not everything, the sidebar says why, in the service's own words. Claude Code,
-  for example, publishes the sessions it is running and not the conversations it has stored, so the
-  panel says that rather than letting an incomplete list read as complete. An empty project heading
-  now says "nothing listed" instead of claiming the folder holds no conversations, which is
-  something the heading cannot know.
+- When the list is not everything, the sidebar says why, in the service's own words, rather than
+  letting an incomplete list read as complete. An empty project heading now says "nothing listed"
+  instead of claiming the folder holds no conversations, which is something the heading cannot know.
+
+- In a Claude Code conversation the operator's own messages now appear on the operator's side, as
+  they do for Codex and the ACP services. Claude Code re-emits each message it was sent when asked
+  with its own `--replay-user-messages` flag (measured on the installed CLI), and the driver asks
+  whenever the CLI's parser confirms the flag; an older CLI without it simply shows replies only, as
+  before. Nothing is echoed locally: the words shown are the ones the provider handed back.
+
+- A conversation a coding service declines to open (measured: a Codex thread another Codex window is
+  writing to) is reported as refused, not as a feature the service "does not offer". The feature is
+  there; the service said no to this one request, and the sentence now says that.
+
+- The sidebar's "not every chat is listed" notice says each reason once. A service that lists in
+  pages repeated its omission sentence on every page, and the first page of a store carried two
+  sentences joined together, so the notice had grown into a twelve-line wall above the list.
+
+- Claude Code's stored conversations are listed, with the titles Claude Code gave them, under the
+  folders they ran in. The CLI publishes no command for what it has stored, so the sidebar names them
+  from the CLI's own store: the conversation's identity, its folder, its title and its last write,
+  read as they are. No message is read, nothing is copied, and the store stays the only home of the
+  conversation. Measured on the machine that built this: 265 conversations across 49 folders named
+  in 1.4 s. The previous listing showed only the Claude Code processes running at that moment.
 
 - The sidebar shows every project on this machine, the way the Codex and Claude sidebars do: every
   folder a coding service holds conversations in is a heading, with its conversations beneath it.

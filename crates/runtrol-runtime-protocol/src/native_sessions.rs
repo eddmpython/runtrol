@@ -41,6 +41,9 @@ pub enum CatalogueSource {
     OfficialProtocol,
     /// A provider-owned structured CLI command.
     OfficialCli,
+    /// The provider's own store, read for the names of what it holds (identity, folder, the provider's own
+    /// title and time), used when the provider publishes no listing surface. Never a conversation's content.
+    ProviderStore,
 }
 
 /// Honest native catalogue coverage for the current provider and root context.

@@ -1,9 +1,10 @@
 """Gate: runtrol keeps no copy of anybody's conversation.
 
 This is the product's one absolute rule expressed as something a machine can check. runtrol supervises coding
-CLIs and transports only their live events. It neither discovers nor reads provider transcript paths, and it never
-duplicates conversation content in its own store. The provider CLI alone owns any durable transcript and native
-resume surface.
+CLIs and transports only their live events. It never duplicates conversation content in its own store, and when
+it reads a provider's own store at all (a CLI that publishes no listing command) it reads only the names on the
+doors: identity, folder, the provider's own title and time, never a message. The provider CLI alone owns any
+durable transcript and native resume surface.
 
 The rule dies by convenience, not by decision. Nobody sets out to keep transcripts. Somebody adds a preview so a
 list looks nicer, or a last-message column so sorting works, and each step is small. So the check is structural

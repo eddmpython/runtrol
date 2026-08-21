@@ -39,7 +39,7 @@ export type CapabilityFreshness = "current" | "stale";
 export type CatalogueCoverage = { readonly kind: "complete"; readonly source: CatalogueSource; } | { readonly kind: "partial"; readonly source: CatalogueSource; readonly why: string; } | { readonly kind: "unsupported"; readonly why: string; };
 
 /** The official provider surface used for discovery. */
-export type CatalogueSource = "officialProtocol" | "officialCli";
+export type CatalogueSource = "officialProtocol" | "officialCli" | "providerStore";
 
 /** Client features understood by the initial read-only revision. */
 export interface ClientCapabilities { readonly opaqueEventExtensions?: boolean; }

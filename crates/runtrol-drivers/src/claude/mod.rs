@@ -20,10 +20,11 @@
 pub mod agent;
 mod approval;
 pub mod bound;
+mod home;
 pub mod map;
 mod models;
 pub mod provider;
-mod sessions;
+mod store;
 
 pub use agent::ClaudeAgent;
 pub use bound::{BoundFlag, BoundFrame, CONSULT, CONTROL, FLAGS, FRAMES, TERMINAL};

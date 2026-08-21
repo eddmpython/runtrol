@@ -63,6 +63,9 @@ pub enum NativeCatalogueSource {
     OfficialProtocol,
     /// A provider-owned structured CLI command.
     OfficialCli,
+    /// The provider's own store, read as it is for the names of what it holds: identity, folder, the
+    /// provider's own title and time. Never a conversation's content, never a copy.
+    ProviderStore,
 }
 
 /// Honest coverage for one provider catalogue page.

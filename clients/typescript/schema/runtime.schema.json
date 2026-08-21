@@ -229,6 +229,11 @@
           "const": "officialCli",
           "description": "A provider-owned structured CLI command.",
           "type": "string"
+        },
+        {
+          "const": "providerStore",
+          "description": "The provider's own store, read for the names of what it holds (identity, folder, the provider's own\ntitle and time), used when the provider publishes no listing surface. Never a conversation's content.",
+          "type": "string"
         }
       ]
     },

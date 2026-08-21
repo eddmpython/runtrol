@@ -17,6 +17,7 @@ use runtrol_provider::{
 
 use crate::claude::agent::ClaudeAgent;
 use crate::claude::models::{ClaudeModels, discover_reasoning_efforts};
+use crate::claude::store::ClaudeStore;
 
 /// The driver for the CLI that runs one process per session.
 #[derive(Debug)]
@@ -34,6 +35,8 @@ pub struct ClaudeProvider {
     contained_by: Arc<Containment>,
     /// Stable aliases plus exact options read from provider-owned state on each discovery request.
     models: ClaudeModels,
+    /// The conversations this CLI has stored, named from its own store on each listing request.
+    store: ClaudeStore,
     /// Bound flags confirmed by this installed CLI's own parser.
     available_flags: BTreeSet<Box<str>>,
     /// Optional bound flags not confirmed by the parser and what their absence means.
@@ -58,6 +61,7 @@ impl ClaudeProvider {
             program,
             contained_by,
             models: ClaudeModels::from_environment(models),
+            store: ClaudeStore::from_environment(),
             available_flags,
             unavailable_flags,
         }
@@ -95,11 +99,14 @@ impl Provider for ClaudeProvider {
             interrupt: ProviderCapability::available(ProviderCapabilitySource::DriverContract),
             approvals: cli(),
             cooling: ProviderCapability::available(ProviderCapabilitySource::DriverContract),
-            // The roster command, not a conversation catalogue. This CLI publishes which of its sessions are
-            // running and publishes nothing about the ones it has stored, so the capability is available and the
-            // answer it produces is never complete. Declaring it unsupported hid every session a person started
-            // outside runtrol, including the ones waiting on that person.
-            native_session_catalogue: cli(),
+            // This CLI publishes no command or protocol method for the conversations it has stored (measured
+            // 2.1.238: `claude agents` is a roster of running processes, `claude project` only purges, the
+            // resume picker is a terminal). The driver names them from the CLI's own store instead, the one
+            // place the CLI resumes them from, reading only identity, folder and the CLI's own title. That is a
+            // driver contract, not a CLI surface, and the capability says which.
+            native_session_catalogue: ProviderCapability::available(
+                ProviderCapabilitySource::DriverContract,
+            ),
             // The control channel's set_model succeeds mid-session (measured 2.1.x).
             set_model: cli(),
             // Measured 2.1.235: the control channel refuses set_effort and set_reasoning_effort.
@@ -117,12 +124,8 @@ impl Provider for ClaudeProvider {
         }
     }
 
-    /// The roster answers without a folder, and it is still only a roster.
-    ///
-    /// `--cwd` is a filter on this command (measured 2026-08-20: omitting it returned eight rows
-    /// across four projects), so the machine-wide query is honest about its own scope. What it
-    /// cannot become is complete: this CLI publishes no surface for the conversations it has
-    /// stored, which the catalogue's coverage says in its own words on every page.
+    /// The store holds every folder's conversations side by side, so a query without a folder is
+    /// answered with all of them, each row naming its own folder.
     fn enumerates_machine(&self) -> bool {
         true
     }
@@ -135,14 +138,17 @@ impl Provider for ClaudeProvider {
         // the installed CLI rather than assumed. Runtime only offers to open a row it was told is resumable, so
         // guessing high would put a row on screen that fails on click and guessing low would hide every one.
         let resumable = self.available_flags.contains("--resume");
-        crate::claude::sessions::list(
-            self.id,
-            &self.program,
-            resumable,
-            &query,
-            &self.contained_by,
-        )
-        .await
+        let store = self.store.clone();
+        let provider = self.id;
+        // Directory listing and bounded file reads: blocking work, kept off the reactor so a slow disk cannot
+        // stall every other provider's answer.
+        tokio::task::spawn_blocking(move || store.list(provider, resumable, &query))
+            .await
+            .map_err(|join| ProviderError::Protocol {
+                provider,
+                doing: "reading the conversations this CLI has stored",
+                detail: join.to_string(),
+            })?
     }
 
     async fn models(&self) -> Result<ModelCatalog, ProviderError> {

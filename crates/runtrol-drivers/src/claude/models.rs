@@ -6,7 +6,7 @@
 //! the result is partial.
 
 use std::collections::BTreeSet;
-use std::ffi::{OsStr, OsString};
+use std::ffi::OsString;
 use std::fs::File;
 use std::io::BufReader;
 use std::path::{Path, PathBuf};
@@ -19,14 +19,11 @@ use runtrol_provider::{
 use serde::de::{SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer};
 
+use crate::claude::home::{HomeProblem, operator_home};
+
 const CONFIG_FILE: &str = ".claude.json";
 const HELP_DEADLINE: Duration = Duration::from_secs(10);
 const MAX_REASONING_ID_BYTES: usize = 128;
-
-#[cfg(windows)]
-const OPERATOR_HOME_ENV: &str = "USERPROFILE";
-#[cfg(not(windows))]
-const OPERATOR_HOME_ENV: &str = "HOME";
 
 /// The stable aliases and provider-owned options found for one request.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -52,7 +49,7 @@ impl ClaudeModels {
     pub(super) fn from_environment(models: ModelAliases) -> Self {
         Self {
             aliases: models.aliases,
-            config: config_path_from(|name| std::env::var_os(name)),
+            config: config_path_from(&mut |name| std::env::var_os(name)),
         }
     }
 
@@ -315,39 +312,10 @@ fn unique_aliases(aliases: &[Box<str>]) -> Vec<Box<str>> {
         .collect()
 }
 
-#[derive(Clone, Debug)]
-enum HomeProblem {
-    Missing,
-    Empty,
-    Relative(PathBuf),
-}
-
-impl core::fmt::Display for HomeProblem {
-    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match self {
-            Self::Missing => write!(formatter, "{OPERATOR_HOME_ENV} is not set"),
-            Self::Empty => write!(formatter, "{OPERATOR_HOME_ENV} is empty"),
-            Self::Relative(path) => write!(
-                formatter,
-                "{OPERATOR_HOME_ENV} is not an absolute path: {path}",
-                path = path.display()
-            ),
-        }
-    }
-}
-
 fn config_path_from(
-    mut look: impl FnMut(&str) -> Option<OsString>,
+    look: &mut impl FnMut(&str) -> Option<OsString>,
 ) -> Result<PathBuf, HomeProblem> {
-    let value = look(OPERATOR_HOME_ENV).ok_or(HomeProblem::Missing)?;
-    if value == OsStr::new("") {
-        return Err(HomeProblem::Empty);
-    }
-    let home = PathBuf::from(value);
-    if !home.is_absolute() {
-        return Err(HomeProblem::Relative(home));
-    }
-    Ok(home.join(CONFIG_FILE))
+    Ok(operator_home(look)?.join(CONFIG_FILE))
 }
 
 #[cfg(test)]
@@ -534,20 +502,17 @@ mod tests {
 
     #[test]
     fn the_provider_home_must_come_from_an_absolute_runtime_environment_value() {
-        let missing = config_path_from(|_| None).expect_err("a missing home must stay unknown");
+        let missing =
+            config_path_from(&mut |_| None).expect_err("a missing home must stay unknown");
         assert!(missing.to_string().contains("is not set"));
 
-        let empty = config_path_from(|_| Some(OsString::new()))
-            .expect_err("an empty home must stay unknown");
-        assert!(empty.to_string().contains("is empty"));
-
-        let relative = config_path_from(|_| Some(OsString::from("relative/home")))
+        let relative = config_path_from(&mut |_| Some(OsString::from("relative/home")))
             .expect_err("a relative home must not be guessed");
         assert!(relative.to_string().contains("is not an absolute path"));
 
         let scratch = Scratch::new("home");
-        let path = config_path_from(|name| {
-            assert_eq!(name, OPERATOR_HOME_ENV);
+        let path = config_path_from(&mut |name| {
+            assert_eq!(name, crate::claude::home::OPERATOR_HOME_ENV);
             Some(scratch.0.clone().into_os_string())
         })
         .expect("an absolute runtime home must resolve");
