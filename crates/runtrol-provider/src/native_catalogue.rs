@@ -148,6 +148,20 @@ impl NativeSessionCatalogue {
     }
 }
 
+/// One provider-native conversation to delete, through the provider's own surface.
+///
+/// Deleting is the provider's act, never runtrol's: runtrol holds no copy and removes nothing itself, it asks
+/// the CLI that owns the conversation to remove it (codex `thread/delete`, cline `history delete`). A provider
+/// with no such surface says so and the conversation stays where it is. The folder travels with the request
+/// because a CLI that scopes its store by folder is asked in that folder.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NativeSessionDeletion {
+    /// The provider's own name for the conversation.
+    pub native: NativeSessionId,
+    /// Where the conversation ran.
+    pub cwd: AbsPath,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

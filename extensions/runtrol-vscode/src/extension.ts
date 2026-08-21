@@ -33,7 +33,7 @@ import { RuntimeState } from "./state";
 import { StudioRuntimeClient } from "./runtimeClient";
 import { workspaceCovers, workspaceIdentity } from "./workspaceCollision";
 import { WorkspaceRootFollowing } from "./workspaceRoots";
-import { ConversationsTree, ProjectItem, ServiceProblemItem } from "./trees";
+import { ConversationItem, ConversationsTree, ProjectItem, ServiceProblemItem } from "./trees";
 import { UsageTree } from "./usageTree";
 
 export type RuntrolExtensionApi = {
@@ -479,6 +479,15 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
     vscode.commands.registerCommand(
       "runtrol.closeSession",
       (item) => run(() => afterReady(() => controller.close(item))),
+    ),
+    vscode.commands.registerCommand(
+      "runtrol.deleteConversation",
+      // From the row's X on conversations only the provider holds. Guarded, because a command invoked with
+      // the wrong thing must refuse rather than delete something surprising.
+      (item: unknown) => run(async () => {
+        if (!(item instanceof ConversationItem)) return;
+        await afterReady(() => controller.deleteConversation(item));
+      }),
     ),
     vscode.workspace.onDidChangeConfiguration((event) => {
       if (event.affectsConfiguration("runtrol.corePath")) {

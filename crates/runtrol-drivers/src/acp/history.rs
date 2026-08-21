@@ -20,8 +20,8 @@ use std::time::Duration;
 use runtrol_childproc::{Containment, Program, capture};
 use runtrol_provider::{
     AbsPath, MAX_NATIVE_SESSION_ITEMS, NativeCatalogueCoverage, NativeCatalogueSource,
-    NativeResumeCapability, NativeSessionCatalogue, NativeSessionEntry, NativeSessionId,
-    NativeSessionQuery, ProviderError, ProviderId,
+    NativeResumeCapability, NativeSessionCatalogue, NativeSessionDeletion, NativeSessionEntry,
+    NativeSessionId, NativeSessionQuery, ProviderError, ProviderId,
 };
 use serde::Deserialize;
 
@@ -106,6 +106,60 @@ pub(super) async fn list(
         query.limit,
         asked,
     ))
+}
+
+/// Ask the CLI to delete one conversation it owns, by the command its manifest declares.
+///
+/// The identifier goes last, as one argument, never interpolated into anything. A non-zero exit is the
+/// CLI refusing in its own words, relayed bounded; runtrol does not retry and does not touch the store.
+///
+/// # Errors
+///
+/// [`ProviderError::NativeRefused`] when the command exits non-zero, [`ProviderError::Protocol`] when it
+/// cannot be run at all.
+pub(super) async fn delete(
+    provider: ProviderId,
+    program: &Program,
+    argv: &[Box<str>],
+    deletion: &NativeSessionDeletion,
+    contained_by: &Containment,
+) -> Result<(), ProviderError> {
+    let arguments = delete_arguments(argv, deletion.native.as_str());
+    let output = capture(program, &arguments, LISTING_DEADLINE, contained_by)
+        .await
+        .map_err(|error| ProviderError::Protocol {
+            provider,
+            doing: "deleting a conversation this CLI owns",
+            detail: error.to_string(),
+        })?;
+    if output.code == Some(0) {
+        return Ok(());
+    }
+    let said = String::from_utf8_lossy(&output.stderr);
+    let said = said.trim();
+    let said = if said.is_empty() {
+        String::from_utf8_lossy(&output.stdout).trim().to_owned()
+    } else {
+        said.to_owned()
+    };
+    Err(ProviderError::NativeRefused {
+        provider,
+        doing: "deleting a conversation this CLI owns",
+        detail: format!(
+            "the command exited with {} ({})",
+            output
+                .code
+                .map_or_else(|| "a signal".to_owned(), |code| code.to_string()),
+            bounded(&said),
+        ),
+    })
+}
+
+/// The delete command line: the manifest's words, then the identifier as its own argument.
+fn delete_arguments(argv: &[Box<str>], native: &str) -> Vec<String> {
+    let mut arguments: Vec<String> = argv.iter().map(ToString::to_string).collect();
+    arguments.push(native.to_owned());
+    arguments
 }
 
 /// Turn records into one bounded page.

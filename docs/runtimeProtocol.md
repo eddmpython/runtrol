@@ -76,6 +76,7 @@ connection cannot approve itself.
 | `sessions/watchEvents`, `approvals/listPending` | `session.output.read` and authorized session visibility |
 | `sessions/interrupt`, `sessions/cool` | `session.stop` and the current lease |
 | `sessions/forget` | `session.delete`, a cold session, and exact local confirmation |
+| `sessions/deleteNative` | `session.delete`; the provider's own deletion surface does the deleting, and a conversation Runtime supervises is refused until it is forgotten |
 | `approvals/respond` | `approval.respond.low` or `approval.respond.high`, plus the current lease |
 | `sessions/renewControl`, `sessions/releaseControl` | The current lease generation |
 | `integrations/getGrant`, `integrations/rotateKey` | The authenticated integration, with local confirmation for rotation |

@@ -416,6 +416,22 @@ export class StudioRuntimeClient implements vscode.Disposable {
     });
   }
 
+  /// Ask the provider that owns a stored conversation to delete it, through the Runtime's relay.
+  ///
+  /// The Runtime stores nothing and deletes nothing itself; it hands the request to the CLI that owns the
+  /// conversation, and a CLI with no such surface refuses as `capabilityUnavailable`. No lease: the act is
+  /// about a conversation nobody supervises.
+  async deleteNative(native: NativeChatLine): Promise<void> {
+    await this.mutate(async (runtime) => {
+      await runtime.sessions().deleteNative({
+        requestId: newMutationRequestId(),
+        providerId: native.providerId,
+        nativeSessionId: native.nativeSessionId,
+        workspace: native.cwd,
+      });
+    });
+  }
+
   async answerApproval(
     session: RuntimeSessionAction,
     approvalId: string,

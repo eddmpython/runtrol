@@ -1,4 +1,6 @@
-import { readFile, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 
 import * as vscode from "vscode";
 
@@ -23,6 +25,9 @@ type JourneyApi = {
   sendFocusedDraft(text: string): Promise<string>;
   openListed(limit: number): Promise<{ opened: number; refused: string[] }>;
   nativeChatCount(): number;
+  nativeChatListed(providerId: string, nativeSessionId: string): boolean;
+  deleteNativeListed(providerId: string, nativeSessionId: string): Promise<void>;
+  refreshChats(): Promise<void>;
   waitForLifecycle(session: string, lifecycle: SessionLine["lifecycle"], deadlineMs: number): Promise<void>;
 };
 
@@ -132,6 +137,13 @@ async function eyePass(resultPath: string): Promise<void> {
     groups: vscode.window.tabGroups.all.length,
   });
 
+  // Pose 4 (no picture, a fact): a throwaway conversation of a provider that can delete is started in a
+  // scratch folder, handed back to the provider (closed and forgotten here), then deleted through the
+  // provider's own surface from the sidebar's row, and the provider's list no longer names it. Real CLI,
+  // real store, a conversation nobody will miss. Skipped when no installed provider can delete.
+  currentStage = "deleting";
+  const deletion = await deletionProof(journey, providerIdForDeletion(journey.providers()));
+
   // Leave nothing running: every session this window opened closes, in the isolated Runtime.
   currentStage = "closing";
   for (const line of journey.sessions()) {
@@ -139,9 +151,49 @@ async function eyePass(resultPath: string): Promise<void> {
   }
   await writeFile(
     resultPath,
-    JSON.stringify({ stage: "complete", vscode: vscode.version, tabs, opened: listed.opened, refused: listed.refused }),
+    JSON.stringify({
+      stage: "complete",
+      vscode: vscode.version,
+      tabs,
+      opened: listed.opened,
+      refused: listed.refused,
+      deletion,
+    }),
     "utf8",
   );
+}
+
+/// The provider the deletion proof uses: Codex when it is installed and usable (its `thread/delete` is the
+/// surface measured), otherwise none.
+function providerIdForDeletion(providers: readonly ProviderLine[]): string | null {
+  return providers.some((provider) => provider.providerId === "codex" && provider.installation.state === "usable")
+    ? "codex"
+    : null;
+}
+
+async function deletionProof(journey: JourneyApi, providerId: string | null): Promise<Record<string, unknown>> {
+  if (!providerId) return { skipped: "no installed provider publishes a deletion surface" };
+  const scratch = await mkdtemp(path.join(os.tmpdir(), "runtrol-eye-delete-"));
+  try {
+    const session = await within(journey.start(providerId, scratch), 60_000, "starting the throwaway conversation");
+    const native = journey.sessions().find((line) => line.sessionId === session)?.nativeSessionId ?? null;
+    if (!native) throw new Error("the throwaway conversation announced no native identity");
+    // One real turn, because the provider stores a thread only once something was said (measured on
+    // Codex 0.148: a fresh thread with no turn has no rollout to list or delete).
+    await journey.verifySelected(session);
+    await journey.prompt("Reply with exactly: ok");
+    await journey.waitForLifecycle(session, "hotRunning", 30_000).catch(() => undefined);
+    await journey.waitForLifecycle(session, "hotIdle", 180_000);
+    // Handed back to the provider: closed and forgotten here, so the row is the provider's alone.
+    await within(journey.close(session, true), 60_000, "forgetting the throwaway conversation");
+    await within(journey.refreshChats(), 90_000, "listing after the close");
+    const listedBefore = journey.nativeChatListed(providerId, native);
+    await within(journey.deleteNativeListed(providerId, native), 90_000, "deleting through the provider");
+    const listedAfter = journey.nativeChatListed(providerId, native);
+    return { providerId, native, listedBefore, listedAfter, deleted: listedBefore && !listedAfter };
+  } finally {
+    await rm(scratch, { recursive: true, force: true }).catch(() => undefined);
+  }
 }
 
 /// Hold still and let the harness photograph; continue when it says it has.

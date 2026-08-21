@@ -72,6 +72,25 @@ pub struct AdoptNativeSessionParams {
     pub adoption_token: String,
 }
 
+/// Delete one provider-native conversation through the provider's own surface.
+///
+/// The provider does the deleting; Runtime relays the request and stores nothing. Refused when the provider
+/// publishes no surface for it (`capabilityUnavailable`), and answered with the provider's own refusal
+/// otherwise. A conversation Runtime currently supervises is not deleted under it: forget the supervised
+/// pointer first.
+#[derive(Clone, Debug, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DeleteNativeSessionParams {
+    /// Caller-minted mutation identity.
+    pub request_id: MutationRequestId,
+    /// Opaque provider identity returned with the native catalogue entry.
+    pub provider_id: ProviderId,
+    /// Provider-owned opaque session identity returned unchanged.
+    pub native_session_id: String,
+    /// Exact canonical workspace returned with the native catalogue entry.
+    pub workspace: String,
+}
+
 /// Heat one existing Runtime-managed cold session.
 #[derive(Clone, Debug, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

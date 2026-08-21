@@ -99,6 +99,9 @@ pub enum RuntimeMethod {
     /// Forget one cold Runtime pointer after local confirmation.
     #[serde(rename = "sessions/forget")]
     SessionsForget,
+    /// Delete one provider-native conversation through the provider's own surface.
+    #[serde(rename = "sessions/deleteNative")]
+    SessionsDeleteNative,
     /// Read pending structured provider approvals for one controlled session.
     #[serde(rename = "approvals/listPending")]
     ApprovalsListPending,
@@ -163,6 +166,7 @@ impl RuntimeMethod {
             Self::SessionsInterrupt => "sessions/interrupt",
             Self::SessionsCool => "sessions/cool",
             Self::SessionsForget => "sessions/forget",
+            Self::SessionsDeleteNative => "sessions/deleteNative",
             Self::ApprovalsListPending => "approvals/listPending",
             Self::ApprovalsRespond => "approvals/respond",
             Self::SessionsIndexChanged => "sessions/indexChanged",
@@ -217,6 +221,7 @@ impl FromStr for RuntimeMethod {
             "sessions/interrupt" => Ok(Self::SessionsInterrupt),
             "sessions/cool" => Ok(Self::SessionsCool),
             "sessions/forget" => Ok(Self::SessionsForget),
+            "sessions/deleteNative" => Ok(Self::SessionsDeleteNative),
             "approvals/listPending" => Ok(Self::ApprovalsListPending),
             "approvals/respond" => Ok(Self::ApprovalsRespond),
             "sessions/indexChanged" => Ok(Self::SessionsIndexChanged),
@@ -272,6 +277,7 @@ mod tests {
             RuntimeMethod::SessionsInterrupt,
             RuntimeMethod::SessionsCool,
             RuntimeMethod::SessionsForget,
+            RuntimeMethod::SessionsDeleteNative,
             RuntimeMethod::ApprovalsListPending,
             RuntimeMethod::ApprovalsRespond,
             RuntimeMethod::SessionsIndexChanged,

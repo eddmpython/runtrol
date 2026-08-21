@@ -38,6 +38,13 @@ export type JourneyApi = {
   openListed(limit: number): Promise<{ opened: number; refused: string[] }>;
   /// How many provider-owned conversations the services have listed so far.
   nativeChatCount(): number;
+  /// The eye pass: whether a provider-owned conversation with this native identity is currently listed.
+  nativeChatListed(providerId: string, nativeSessionId: string): boolean;
+  /// The eye pass: delete a provider-owned conversation through the provider, without the modal question
+  /// (a headless window cannot answer one). The same relay and the same refresh the row's button uses.
+  deleteNativeListed(providerId: string, nativeSessionId: string): Promise<void>;
+  /// The eye pass: ask the services for their lists again and wait for the answers.
+  refreshChats(): Promise<void>;
   /// Wait until one session reports a lifecycle, or fail at the deadline.
   waitForLifecycle(session: string, lifecycle: SessionLine["lifecycle"], deadlineMs: number): Promise<void>;
 };
@@ -119,6 +126,19 @@ export function journeyApi(
       return { opened, refused };
     }),
     nativeChatCount: () => state.nativeChats.length,
+    nativeChatListed: (providerId, nativeSessionId) => state.nativeChats.some(
+      (chat) => chat.providerId === providerId && chat.nativeSessionId === nativeSessionId,
+    ),
+    deleteNativeListed: (providerId, nativeSessionId) => afterReady(async () => {
+      const row = state.conversations.find(
+        (candidate) => candidate.providerId === providerId
+          && candidate.native?.nativeSessionId === nativeSessionId
+          && candidate.session === null,
+      );
+      if (!row?.native) throw new Error("that provider-owned conversation is not listed");
+      await controller.deleteNativeWithoutAsking(row);
+    }),
+    refreshChats: () => afterReady(() => controller.refreshChats()),
     waitForLifecycle: (session, lifecycle, deadlineMs) => afterReady(() => new Promise<void>((resolve, reject) => {
       const matches = (): boolean =>
         state.sessions.some((candidate) => candidate.sessionId === session && candidate.lifecycle === lifecycle);

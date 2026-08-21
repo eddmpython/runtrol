@@ -90,6 +90,12 @@ pub struct ProviderCapabilities {
     /// time and refuse to change it afterwards (measured on claude 2.1.235), and a surface that only
     /// learns this from the refusal cannot say "applies from the next session" before the attempt.
     pub set_reasoning_effort: ProviderCapability,
+    /// A stored provider-native conversation can be deleted through the provider's own surface.
+    ///
+    /// Said up front so a surface offers the act only where it exists: a CLI that publishes no way to
+    /// delete what it stored (claude) is told apart from one that does (codex `thread/delete`, cline
+    /// `history delete`) before anybody clicks.
+    pub native_session_delete: ProviderCapability,
 }
 
 impl ProviderCapabilities {
@@ -107,6 +113,7 @@ impl ProviderCapabilities {
             native_session_catalogue: missing(),
             set_model: missing(),
             set_reasoning_effort: missing(),
+            native_session_delete: missing(),
         }
     }
 }

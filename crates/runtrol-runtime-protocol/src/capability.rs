@@ -96,6 +96,12 @@ pub struct RuntimeProviderCapabilities {
     /// session" before the attempt instead of after the refusal.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub set_reasoning_effort: Option<ProviderCapabilityObservation>,
+    /// A stored provider-native conversation can be deleted through the provider's own surface.
+    ///
+    /// Optional for the same lockstep-additive reason as the two above: absent when an older Runtime
+    /// answers, never guessed at. A surface offers the act only where this says it exists.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_session_delete: Option<ProviderCapabilityObservation>,
 }
 
 #[cfg(test)]

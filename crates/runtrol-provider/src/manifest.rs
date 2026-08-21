@@ -646,6 +646,13 @@ pub struct SessionCatalogue {
     /// Absent means the driver cannot prove completeness and must not claim it.
     #[serde(default)]
     pub limit_flag: Option<Box<str>>,
+    /// Arguments to the CLI's own command for deleting one stored conversation, when it has one.
+    ///
+    /// The conversation's own identifier is appended as the last argument. Empty means the CLI publishes no
+    /// such command and the driver says so; it never reaches into the provider's store instead. Measured on
+    /// cline 3.0.55: `cline history delete --session-id <id>`.
+    #[serde(default)]
+    pub delete: Vec<Box<str>>,
 }
 
 impl SessionCatalogue {
@@ -656,6 +663,9 @@ impl SessionCatalogue {
         }
         if let Some(flag) = &self.limit_flag {
             HelpCommands::refuse_unless_one_word(flag)?;
+        }
+        for argument in &self.delete {
+            HelpCommands::refuse_unless_one_word(argument)?;
         }
         Ok(())
     }

@@ -25,6 +25,7 @@ import type {
 } from "./runtimeTypes";
 import type { Conversation } from "./conversationList";
 import { attentionCount, nextNeedingYou } from "./conversationList";
+import { conversationDeletion, deletionQuestion } from "./conversationDeletion";
 import { conversationChoices } from "./conversationPicker";
 import { awaitsVerification, isUsable } from "./providerHealth";
 import type { HelpOffer, ServiceTrouble } from "./serviceHelp";
@@ -1204,6 +1205,47 @@ export class Controller implements vscode.Disposable {
       option,
       subjectDigest,
     );
+  }
+
+  /// Delete a conversation from the row's X.
+  ///
+  /// Two acts under one word, decided before anything is asked: a supervised conversation is closed and
+  /// forgotten here (the existing close flow, Runtrol's pointer); a provider-owned one is deleted by the
+  /// provider through its own surface, after a modal question naming the service, and only where the
+  /// provider says it can. A provider that cannot says why, in its own words, and nothing is attempted.
+  async deleteConversation(value: ConversationItem | Conversation): Promise<void> {
+    const row = value instanceof ConversationItem ? value.conversation : value;
+    if (row.session) {
+      await this.close(row.session);
+      return;
+    }
+    const native = row.native;
+    if (!native) throw new Error(`${row.title} has nothing left to delete`);
+    const capabilities = await this.runtime.capabilities(row.providerId).catch(() => null);
+    const decision = conversationDeletion(row, capabilities);
+    if (decision.kind === "unsupported") {
+      void vscode.window.showInformationMessage(decision.why);
+      return;
+    }
+    if (decision.kind !== "deleteNative") return;
+    const question = deletionQuestion(row);
+    const choice = await vscode.window.showWarningMessage(
+      question.message,
+      { modal: true, detail: question.detail },
+      question.button,
+    );
+    if (choice !== question.button) return;
+    await this.deleteNativeWithoutAsking(row);
+  }
+
+  /// The deletion itself, after the question (or, for the headless journey, instead of it): the provider
+  /// deletes, then its list is asked again rather than edited, because the list is the provider's word on
+  /// what still exists.
+  async deleteNativeWithoutAsking(row: Conversation): Promise<void> {
+    const native = row.native;
+    if (!native) throw new Error(`${row.title} has nothing left to delete`);
+    await this.runtime.deleteNative(native);
+    await this.loadNativeChats(row.providerId, true);
   }
 
   async close(value?: ConversationItem | SessionLine): Promise<void> {

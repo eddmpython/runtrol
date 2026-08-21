@@ -7,8 +7,8 @@ use async_trait::async_trait;
 use runtrol_childproc::{Containment, Program, capture};
 use runtrol_provider::{
     Agent, MAX_MODEL_CHOICES, ModelAliases, ModelCatalog, ModelChoice, NativeSessionCatalogue,
-    NativeSessionQuery, OpenIntent, Provider, ProviderCapabilities, ProviderCapability,
-    ProviderCapabilitySource, ProviderError, ProviderId, SessionCatalogue,
+    NativeSessionDeletion, NativeSessionQuery, OpenIntent, Provider, ProviderCapabilities,
+    ProviderCapability, ProviderCapabilitySource, ProviderError, ProviderId, SessionCatalogue,
 };
 
 use crate::acp::agent::AcpAgent;
@@ -147,7 +147,38 @@ impl Provider for AcpProvider {
             set_reasoning_effort: ProviderCapability::unsupported(
                 "no ACP surface announces a mid-session effort switch",
             ),
+            // The protocol has no delete (measured on grok 1.0.5: `session/delete` is method-not-found
+            // and the handshake announces list, resume and close only), so the act exists exactly where
+            // the CLI publishes its own command for it (cline `history delete`), declared in the manifest.
+            native_session_delete: if self.sessions.delete.is_empty() {
+                ProviderCapability::unsupported(
+                    "this coding service publishes no command or protocol method for deleting a stored conversation",
+                )
+            } else {
+                ProviderCapability::available(ProviderCapabilitySource::OfficialCli)
+            },
         }
+    }
+
+    async fn delete_native_session(
+        &self,
+        deletion: NativeSessionDeletion,
+    ) -> Result<(), ProviderError> {
+        if self.sessions.delete.is_empty() {
+            return Err(ProviderError::Unsupported {
+                provider: self.id,
+                what: "deleting a provider-native conversation".to_owned(),
+                why: "this coding service publishes no command or protocol method for deleting a stored conversation",
+            });
+        }
+        crate::acp::history::delete(
+            self.id,
+            &self.program,
+            &self.sessions.delete,
+            &deletion,
+            &self.contained_by,
+        )
+        .await
     }
 
     async fn models(&self) -> Result<ModelCatalog, ProviderError> {

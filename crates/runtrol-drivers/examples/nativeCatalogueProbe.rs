@@ -33,6 +33,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             // Left unset so the probe exercises the path a CLI takes when this build does not know how to bound
             // its listing, which is the case that must never report a complete answer.
             limit_flag: None,
+            delete: Vec::new(),
         },
         Vec::new(),
     );

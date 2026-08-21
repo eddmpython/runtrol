@@ -109,6 +109,11 @@ impl Provider for ClaudeProvider {
                 "the installed CLI refuses a mid-session effort switch; the effort is an open-time \
                  flag, so a new choice applies from the next session",
             ),
+            // The CLI publishes no surface for what it stores: no listing and no deletion. Saying so here
+            // keeps a surface from offering an act that would have to reach into the provider's own files.
+            native_session_delete: ProviderCapability::unsupported(
+                "Claude Code publishes no command or protocol method for its stored conversations",
+            ),
         }
     }
 

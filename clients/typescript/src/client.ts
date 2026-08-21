@@ -9,6 +9,7 @@ import type {
   ControlLease,
   ControlLeaseParams,
   CoolSessionParams,
+  DeleteNativeSessionParams,
   EnrollmentDecision,
   EnrollmentManifest,
   EnrollmentReceipt,
@@ -653,6 +654,12 @@ export class SessionClient {
 
   public async forget(params: ForgetSessionParams): Promise<void> {
     requireEmpty(await callMutation(this.runtime, "sessions/forget", params, undefined));
+  }
+
+  /** Delete one provider-native conversation through the provider's own surface. Runtime relays the request
+   * and stores nothing; a provider without such a surface refuses as `capabilityUnavailable`. */
+  public async deleteNative(params: DeleteNativeSessionParams): Promise<void> {
+    requireEmpty(await callMutation(this.runtime, "sessions/deleteNative", params, undefined));
   }
 
   public async watchEvents(params: WatchEventsParams): Promise<EventSubscription> {

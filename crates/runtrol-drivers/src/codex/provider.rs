@@ -20,9 +20,9 @@ use runtrol_provider::{
     Agent, MAX_MODEL_CHOICES, MAX_NATIVE_CURSOR_BYTES, MAX_NATIVE_SESSION_ITEMS,
     MAX_NATIVE_TIMESTAMP_BYTES, MAX_NATIVE_TITLE_BYTES, MAX_REASONING_CHOICES, ModelCatalog,
     ModelChoice, NativeCatalogueCoverage, NativeCatalogueSource, NativeResumeCapability,
-    NativeSessionCatalogue, NativeSessionEntry, NativeSessionId, NativeSessionQuery, OpenIntent,
-    Provider, ProviderCapabilities, ProviderCapability, ProviderCapabilitySource, ProviderError,
-    ProviderId, ReasoningChoice,
+    NativeSessionCatalogue, NativeSessionDeletion, NativeSessionEntry, NativeSessionId,
+    NativeSessionQuery, OpenIntent, Provider, ProviderCapabilities, ProviderCapability,
+    ProviderCapabilitySource, ProviderError, ProviderId, ReasoningChoice,
 };
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
@@ -214,7 +214,24 @@ impl Provider for CodexProvider {
             // and subsequent turns, so both switches ride the next turn.
             set_model: protocol(),
             set_reasoning_effort: protocol(),
+            // Its own generated schema carries `thread/delete` (and `thread/archive`); delete is the act
+            // the operator named, and it is the CLI's own.
+            native_session_delete: protocol(),
         }
+    }
+
+    async fn delete_native_session(
+        &self,
+        deletion: NativeSessionDeletion,
+    ) -> Result<(), ProviderError> {
+        let conn = self.connection().await?;
+        conn.call(
+            "thread/delete",
+            &serde_json::json!({ "threadId": deletion.native.as_str() }),
+            "deleting a native session",
+        )
+        .await
+        .map(|_answer| ())
     }
 
     async fn models(&self) -> Result<ModelCatalog, ProviderError> {

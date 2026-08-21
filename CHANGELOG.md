@@ -51,6 +51,17 @@ and refactoring that no user can observe do not belong here.
   project chip offers the one explicit move to that folder as the window, and the service chip
   offers a new conversation in the same folder with another service.
 
+- A conversation the coding service stores can be deleted from the sidebar, by the service itself:
+  the row's trash button asks the provider through its own deletion surface (Codex `thread/delete`,
+  Cline `history delete`), after a question that names the service and promises no undo. A service
+  that publishes no such surface (Claude Code) says so in its own words instead of offering an act
+  that could not work. Runtrol holds no copy and deletes nothing itself. The public Runtime carries
+  this as `sessions/deleteNative` under `session.delete`, and both SDKs call it.
+
+- A reopened Codex conversation now reads as the conversation it is: the CLI hands over its recent
+  turns on resume and they are shown, most recent turns only, so a long thread does not arrive as one
+  enormous frame.
+
 ### Fixed
 
 - A conversation listed from the whole machine can actually be opened. The proof the listing
@@ -65,9 +76,23 @@ and refactoring that no user can observe do not belong here.
 - Codex conversations no longer read as fifty-six years old. Codex reports its timestamps in
   seconds; they were read as milliseconds.
 
-- When a service's list leaves conversations out, the sidebar says what was left out and why
-  ("their folders no longer exist, or they repeat or overrun entries") instead of an internal
-  filtering phrase.
+- When a service's list leaves conversations out, the sidebar says why ("their folders no longer
+  exist, or they repeat or overrun entries") instead of an internal filtering phrase, once per reason
+  rather than once per page.
+
+- Opening a stored Grok (or any ACP) conversation longer than a few turns no longer fails. The
+  protocol replays the whole history before answering the load, and a fixed ceiling refused every
+  conversation past sixteen updates; the replay now keeps its tail and says once how much older
+  history the service still holds.
+
+- Opening a long Codex thread no longer takes every other Codex conversation down with it. The whole
+  thread used to arrive in one frame; one real thread exceeded the transport's line limit, which ended
+  the shared connection. The resume is bounded to the most recent turns, and an oversized frame on a
+  shared connection is refused once and skipped instead of ending the connection.
+
+- When a provider refuses to reopen a conversation, the sidebar now reports the provider's own kind
+  of refusal (not installed, not signed in, over quota, unsupported, unreadable) instead of "the
+  mutation may have happened and cannot be repeated safely".
 
 ## [0.1.9] - 2026-08-20
 

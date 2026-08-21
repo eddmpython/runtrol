@@ -4,21 +4,21 @@ use base64ct::{Base64UrlUnpadded, Encoding as _};
 use runtrol_runtime_protocol::{
     AcquireControlParams, AdoptNativeSessionParams, AppScope, CHALLENGE_LIFETIME_MS,
     ClientCapabilities, ClientInfo, ControlLease, ControlLeaseParams, CoolSessionParams,
-    EnrollmentDecision, EnrollmentManifest, EnrollmentReceipt, ErrorResponse, EventCursor,
-    FINALIZED_REVISIONS, ForgetSessionParams, GetProviderCapabilitiesParams, GetSessionParams,
-    InitializeParams, InitializeResult, IntegrationAuthentication, IntegrationGrant, JsonRpcId,
-    JsonRpcNotification, JsonRpcRequest, JsonRpcResponse, LaggedNotification, ListModelsParams,
-    ListNativeSessionsParams, ListPendingApprovalsParams, ManagedSessionList, MutationRequestId,
-    NativeSessionCatalogue, PendingApprovalList, PendingEnrollmentId, ProviderId, ProviderList,
-    ProviderUsageList, ProviderWatchEndedNotification, ProvidersChangedNotification,
-    RequestEnrollmentParams, RespondApprovalParams, ResumeSessionParams,
-    RotateIntegrationKeyParams, RuntimeError, RuntimeErrorKind, RuntimeEventNotification,
-    RuntimeMethod, RuntimeModelCatalog, RuntimeProviderCapabilities, RuntimeSessionId,
-    ServerChallenge, SessionDescriptor, SessionIndexChangedNotification,
-    SessionIndexEndedNotification, SessionOpenResult, SetModeParams, SetModelParams,
-    StartSessionParams, SubmitBlocksParams, SubmitInputParams, SuccessResponse,
-    WatchEnrollmentParams, WatchEventsParams, WatchEventsResult, WatchProvidersParams,
-    WatchProvidersResult, WatchSessionIndexParams, WatchSessionIndexResult,
+    DeleteNativeSessionParams, EnrollmentDecision, EnrollmentManifest, EnrollmentReceipt,
+    ErrorResponse, EventCursor, FINALIZED_REVISIONS, ForgetSessionParams,
+    GetProviderCapabilitiesParams, GetSessionParams, InitializeParams, InitializeResult,
+    IntegrationAuthentication, IntegrationGrant, JsonRpcId, JsonRpcNotification, JsonRpcRequest,
+    JsonRpcResponse, LaggedNotification, ListModelsParams, ListNativeSessionsParams,
+    ListPendingApprovalsParams, ManagedSessionList, MutationRequestId, NativeSessionCatalogue,
+    PendingApprovalList, PendingEnrollmentId, ProviderId, ProviderList, ProviderUsageList,
+    ProviderWatchEndedNotification, ProvidersChangedNotification, RequestEnrollmentParams,
+    RespondApprovalParams, ResumeSessionParams, RotateIntegrationKeyParams, RuntimeError,
+    RuntimeErrorKind, RuntimeEventNotification, RuntimeMethod, RuntimeModelCatalog,
+    RuntimeProviderCapabilities, RuntimeSessionId, ServerChallenge, SessionDescriptor,
+    SessionIndexChangedNotification, SessionIndexEndedNotification, SessionOpenResult,
+    SetModeParams, SetModelParams, StartSessionParams, SubmitBlocksParams, SubmitInputParams,
+    SuccessResponse, WatchEnrollmentParams, WatchEventsParams, WatchEventsResult,
+    WatchProvidersParams, WatchProvidersResult, WatchSessionIndexParams, WatchSessionIndexResult,
     enrollment_signing_payload, initialization_signing_payload, key_rotation_signing_payload,
 };
 use serde::Serialize;
@@ -1315,6 +1315,29 @@ impl SessionClient<'_> {
         Ok(())
     }
 
+    /// Delete one provider-native conversation through the provider's own surface.
+    ///
+    /// Runtime relays the request and stores nothing; a provider without such a surface refuses as
+    /// `capabilityUnavailable`, and a conversation Runtime supervises is refused until it is forgotten.
+    ///
+    /// # Errors
+    ///
+    /// Public client and Runtime failures, including the provider's own refusal.
+    pub async fn delete_native(
+        &mut self,
+        params: &DeleteNativeSessionParams,
+    ) -> Result<(), ClientError> {
+        let _: EmptyResult = self
+            .runtime
+            .call_mutation(
+                RuntimeMethod::SessionsDeleteNative,
+                &params.request_id,
+                params,
+            )
+            .await?;
+        Ok(())
+    }
+
     /// Convert this connection into one bounded event subscription after the acknowledgement.
     ///
     /// The returned borrow prevents another request from sharing the dedicated stream connection.
@@ -1654,6 +1677,7 @@ async fn receive_session_notification(
         | RuntimeMethod::SessionsInterrupt
         | RuntimeMethod::SessionsCool
         | RuntimeMethod::SessionsForget
+        | RuntimeMethod::SessionsDeleteNative
         | RuntimeMethod::ApprovalsListPending
         | RuntimeMethod::ApprovalsRespond
         | RuntimeMethod::SessionsIndexChanged

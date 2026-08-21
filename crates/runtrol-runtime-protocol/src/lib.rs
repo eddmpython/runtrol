@@ -71,9 +71,9 @@ pub use session::{
     SetModelParams, SubmitBlocksParams, SubmitInputParams, WatchEventsParams, WatchEventsResult,
 };
 pub use session_open::{
-    AdoptNativeSessionParams, MAX_MODEL_SELECTION_BYTES, MAX_PERMISSION_SELECTION_BYTES,
-    MAX_REASONING_SELECTION_BYTES, ResumeSessionParams, SessionOpenResult, SessionWorkspaceAccess,
-    StartSessionParams,
+    AdoptNativeSessionParams, DeleteNativeSessionParams, MAX_MODEL_SELECTION_BYTES,
+    MAX_PERMISSION_SELECTION_BYTES, MAX_REASONING_SELECTION_BYTES, ResumeSessionParams,
+    SessionOpenResult, SessionWorkspaceAccess, StartSessionParams,
 };
 
 /// Maximum JSON payload bytes in one public Runtime frame.

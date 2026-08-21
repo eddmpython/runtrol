@@ -65,3 +65,6 @@ list = ["history", "--json"]
 # a history longer than fifty printed a page holding none of the requested root's conversations, and the
 # driver reported that empty page as a complete answer.
 limit_flag = "--limit"
+# Measured on 3.0.55: `cline history delete --session-id <id>` removes one stored conversation. The driver
+# appends the identifier as the last argument and relays a non-zero exit as the CLI's own refusal.
+delete = ["history", "delete", "--session-id"]

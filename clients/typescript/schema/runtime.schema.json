@@ -370,6 +370,35 @@
       ],
       "type": "object"
     },
+    "DeleteNativeSessionParams": {
+      "additionalProperties": false,
+      "description": "Delete one provider-native conversation through the provider's own surface.\n\nThe provider does the deleting; Runtime relays the request and stores nothing. Refused when the provider\npublishes no surface for it (`capabilityUnavailable`), and answered with the provider's own refusal\notherwise. A conversation Runtime currently supervises is not deleted under it: forget the supervised\npointer first.",
+      "properties": {
+        "nativeSessionId": {
+          "description": "Provider-owned opaque session identity returned unchanged.",
+          "type": "string"
+        },
+        "providerId": {
+          "$ref": "#/$defs/ProviderId",
+          "description": "Opaque provider identity returned with the native catalogue entry."
+        },
+        "requestId": {
+          "$ref": "#/$defs/MutationRequestId",
+          "description": "Caller-minted mutation identity."
+        },
+        "workspace": {
+          "description": "Exact canonical workspace returned with the native catalogue entry.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "requestId",
+        "providerId",
+        "nativeSessionId",
+        "workspace"
+      ],
+      "type": "object"
+    },
     "EnrollmentDecision": {
       "description": "Current enrollment decision.",
       "oneOf": [
@@ -2558,6 +2587,11 @@
           "type": "string"
         },
         {
+          "const": "sessions/deleteNative",
+          "description": "Delete one provider-native conversation through the provider's own surface.",
+          "type": "string"
+        },
+        {
           "const": "approvals/listPending",
           "description": "Read pending structured provider approvals for one controlled session.",
           "type": "string"
@@ -2811,6 +2845,17 @@
         "nativeSessionCatalogue": {
           "$ref": "#/$defs/ProviderCapabilityObservation",
           "description": "An official provider-native session catalogue may be requested."
+        },
+        "nativeSessionDelete": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProviderCapabilityObservation"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "A stored provider-native conversation can be deleted through the provider's own surface.\n\nOptional for the same lockstep-additive reason as the two above: absent when an older Runtime\nanswers, never guessed at. A surface offers the act only where this says it exists."
         },
         "providerId": {
           "$ref": "#/$defs/ProviderId",
@@ -3473,6 +3518,9 @@
     "cool_session": {
       "$ref": "#/$defs/CoolSessionParams"
     },
+    "delete_native_session": {
+      "$ref": "#/$defs/DeleteNativeSessionParams"
+    },
     "enrollment_decision": {
       "$ref": "#/$defs/EnrollmentDecision"
     },
@@ -3650,6 +3698,7 @@
     "control_lease_params",
     "cool_session",
     "forget_session",
+    "delete_native_session",
     "submit_input",
     "submit_blocks",
     "set_model",

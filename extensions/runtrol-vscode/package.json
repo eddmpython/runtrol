@@ -113,7 +113,8 @@
     "onCommand:runtrol.rejectCapability",
     "onCommand:runtrol.quarantineCapability",
     "onCommand:runtrol.rollbackCapability",
-    "onCommand:runtrol.archiveCapability"
+    "onCommand:runtrol.archiveCapability",
+    "onCommand:runtrol.deleteConversation"
   ],
   "contributes": {
     "viewsContainers": {
@@ -252,6 +253,11 @@
         "command": "runtrol.closeSession",
         "title": "Runtrol: Close Conversation",
         "icon": "$(close)"
+      },
+      {
+        "command": "runtrol.deleteConversation",
+        "title": "Runtrol: Delete Conversation",
+        "icon": "$(trash)"
       },
       {
         "command": "runtrol.fanOutInstruction",
@@ -452,6 +458,10 @@
         {
           "command": "runtrol.removeProject",
           "when": "false"
+        },
+        {
+          "command": "runtrol.deleteConversation",
+          "when": "false"
         }
       ],
       "view/title": [
@@ -605,6 +615,11 @@
         {
           "command": "runtrol.closeSession",
           "when": "view == runtrol.sessions && viewItem == runtrol.conversation.live",
+          "group": "inline@3"
+        },
+        {
+          "command": "runtrol.deleteConversation",
+          "when": "view == runtrol.sessions && (viewItem == runtrol.conversation.saved || viewItem == runtrol.conversation.blocked)",
           "group": "inline@3"
         },
         {

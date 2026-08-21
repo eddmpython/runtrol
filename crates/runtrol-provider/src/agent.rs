@@ -34,7 +34,7 @@ use crate::command::{AgentCommand, CloseMode, OpenIntent, Produced};
 use crate::error::ProviderError;
 use crate::event::ApprovalRequest;
 use crate::id::{ApprovalId, ProviderId, SessionId};
-use crate::native_catalogue::{NativeSessionCatalogue, NativeSessionQuery};
+use crate::native_catalogue::{NativeSessionCatalogue, NativeSessionDeletion, NativeSessionQuery};
 
 /// One coding CLI, as runtrol talks to it.
 ///
@@ -107,6 +107,26 @@ pub trait Provider: Send + Sync + 'static {
     /// so here rather than silently returning one folder's worth and letting it read as all.
     fn enumerates_machine(&self) -> bool {
         false
+    }
+
+    /// Delete one provider-native conversation through the provider's own surface.
+    ///
+    /// The default refuses: a driver written before this existed has not said its provider can do it, and
+    /// deleting is the one act a surface must never guess at. A driver that can asks its CLI and nothing
+    /// else; runtrol never touches the provider's store itself.
+    ///
+    /// # Errors
+    ///
+    /// [`ProviderError::Unsupported`] by default; otherwise whatever the provider's own surface answered.
+    async fn delete_native_session(
+        &self,
+        _deletion: NativeSessionDeletion,
+    ) -> Result<(), ProviderError> {
+        Err(ProviderError::Unsupported {
+            provider: self.id(),
+            what: "deleting a provider-native conversation".to_owned(),
+            why: "this driver reports no provider surface for deleting a stored conversation",
+        })
     }
 
     /// Open a session and bind to it.
