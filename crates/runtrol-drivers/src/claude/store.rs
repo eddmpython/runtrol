@@ -32,10 +32,11 @@
 
 use std::cmp::Reverse;
 use std::fs::{self, File};
-use std::io::Read;
+use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
+use bytes::Bytes;
 use runtrol_provider::{
     MAX_NATIVE_SESSION_ITEMS, NativeCatalogueCoverage, NativeCatalogueSource,
     NativeResumeCapability, NativeSessionCatalogue, NativeSessionEntry, NativeSessionId,
@@ -76,6 +77,34 @@ const FOLDER_KEY: &[u8] = b"\"cwd\":\"";
 
 /// The record field carrying the CLI's own title for the conversation, as the CLI spells it.
 const TITLE_KEY: &[u8] = b"\"aiTitle\":\"";
+
+/// How far back from the end of a conversation file a resume reads. A bound on bytes, not on records, because
+/// a record can be a pasted megabyte; what remains is split into whole lines and the first partial line dropped.
+const REPLAY_TAIL_BYTES: u64 = 4 * 1024 * 1024;
+
+/// How many message records a resume replays at most, the same bound the Codex driver applies to the items
+/// its `thread/resume` hands over, so a reopened conversation reads the same length on either service.
+const MAX_REPLAY_RECORDS: usize = 64;
+
+/// How many bytes of records a resume replays at most. The Runtime keeps 64 KiB of a session's events for
+/// a subscriber that joins late (the memory contract), and a tab subscribes moments after the resume; records
+/// past this would be relayed and forgotten before anybody saw them, so the tail is cut here instead.
+const MAX_REPLAY_BYTES: usize = 48 * 1024;
+
+/// The tail of one stored conversation, as the CLI wrote it, for a resume to show.
+///
+/// The CLI's own `--resume` in a terminal draws the stored conversation back; its stream-json mode prints none
+/// of it. So the driver reads what the CLI would have drawn, from the same file, and hands each record to the
+/// same frame reader a live frame goes through (a stored `assistant` or `user` record is the same shape as the
+/// live frame). Nothing is interpreted here: only which lines are message records is decided, from their
+/// `type`, and the rest is relayed as it is.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(crate) struct Replay {
+    /// Message records, oldest first, bounded.
+    pub(crate) records: Vec<Bytes>,
+    /// Why the tail could not be read, when it could not; the agent says so once and goes on.
+    pub(crate) problem: Option<Box<str>>,
+}
 
 /// The store, located once from the environment the CLI itself reads.
 #[derive(Clone, Debug)]
@@ -129,6 +158,126 @@ impl ClaudeStore {
             .transpose()?;
         Ok(page(&indexed, after.as_ref(), query, resumable))
     }
+}
+
+impl ClaudeStore {
+    /// The most recent message records of one stored conversation, for a resume to replay.
+    ///
+    /// A conversation the store does not hold (or a store that cannot be located) replays nothing, which is
+    /// what a fresh or foreign identifier should do; a file that exists and cannot be read says so.
+    #[must_use]
+    pub(super) fn recent_records(&self, native: &str) -> Replay {
+        let Ok(projects) = &self.projects else {
+            return Replay::default();
+        };
+        let Some(path) = conversation_path(projects, native) else {
+            return Replay::default();
+        };
+        match tail_records(&path) {
+            Ok(records) => Replay {
+                records,
+                problem: None,
+            },
+            Err(error) => Replay {
+                records: Vec::new(),
+                problem: Some(
+                    format!("the stored conversation could not be read back: {error}").into(),
+                ),
+            },
+        }
+    }
+}
+
+/// Where the store keeps one conversation: `projects/<any folder slug>/<native>.jsonl`.
+///
+/// The slug is lossy, so the folder is not computed from the workspace; the directories are few (one per
+/// folder the CLI ever ran in) and asking each is cheaper than guessing wrong.
+fn conversation_path(projects: &Path, native: &str) -> Option<PathBuf> {
+    if native.is_empty() || native.contains(['/', '\\', '.']) {
+        return None;
+    }
+    let file_name = format!("{native}.{CONVERSATION_EXTENSION}");
+    // A store that cannot be listed holds no conversation this driver can name, which is the same answer a
+    // missing store gives; the listing path says why when it matters.
+    let Ok(directories) = fs::read_dir(projects) else {
+        return None;
+    };
+    directories
+        .flatten()
+        .map(|entry| entry.path().join(&file_name))
+        .find(|candidate| candidate.is_file())
+}
+
+/// Read the bounded tail of the file and keep the message records in it, oldest first.
+fn tail_records(path: &Path) -> std::io::Result<Vec<Bytes>> {
+    let mut file = File::open(path)?;
+    let length = file.metadata()?.len();
+    let start = length.saturating_sub(REPLAY_TAIL_BYTES);
+    if start > 0 {
+        file.seek(SeekFrom::Start(start))?;
+    }
+    let mut bytes = Vec::with_capacity(usize::try_from(length - start).unwrap_or(0));
+    file.read_to_end(&mut bytes)?;
+    let mut lines = bytes.split(|byte| *byte == b'\n');
+    if start > 0 {
+        // The first line of a tail that did not begin at the file's start is a fragment of a record.
+        lines.next();
+    }
+    let mut records: Vec<Bytes> = lines
+        .filter(|line| is_message_record(line))
+        .map(Bytes::copy_from_slice)
+        .collect();
+    let skip = records.len().saturating_sub(MAX_REPLAY_RECORDS);
+    records.drain(..skip);
+    // Newest first is what survives a byte cut: the records are oldest-first, so the oldest go.
+    let mut bytes: usize = records.iter().map(Bytes::len).sum();
+    while bytes > MAX_REPLAY_BYTES && records.len() > 1 {
+        let oldest = records.remove(0);
+        bytes = bytes.saturating_sub(oldest.len());
+    }
+    // A tail that opens mid-exchange (a tool result whose call was cut, a reply whose question was cut)
+    // reads as nothing on the page; the page draws a tool result under the call it belongs to. So the tail
+    // opens at the newest prompt that still fits, when there is one, and the exchange reads whole.
+    if let Some(first_prompt) = records.iter().position(|record| is_prompt_record(record)) {
+        records.drain(..first_prompt);
+    }
+    Ok(records)
+}
+
+/// Whether a message record is the operator's own prompt (a `user` record that is not a tool result). The
+/// CLI marks a tool result's record with its `toolUseResult`, so the absence of that key on a `user` record
+/// is what a prompt looks like.
+fn is_prompt_record(line: &[u8]) -> bool {
+    #[derive(serde::Deserialize)]
+    struct Head<'line> {
+        #[serde(rename = "type")]
+        kind: Option<&'line str>,
+        #[serde(rename = "toolUseResult", default, borrow)]
+        tool_use_result: Option<&'line serde_json::value::RawValue>,
+    }
+    let Ok(head) = serde_json::from_slice::<Head<'_>>(line) else {
+        return false;
+    };
+    head.kind == Some("user") && head.tool_use_result.is_none()
+}
+
+/// Whether a stored line is a message record: the CLI's `user` or `assistant` type with a `message`, on the
+/// conversation's own thread. Everything else in the file (titles, queue marks, snapshots, sub-agent
+/// sidechains) is the CLI's bookkeeping and not part of what it draws back.
+fn is_message_record(line: &[u8]) -> bool {
+    #[derive(serde::Deserialize)]
+    struct Head<'line> {
+        #[serde(rename = "type")]
+        kind: Option<&'line str>,
+        #[serde(rename = "isSidechain", default)]
+        sidechain: bool,
+        #[serde(default, borrow)]
+        message: Option<&'line serde_json::value::RawValue>,
+    }
+    let Ok(head) = serde_json::from_slice::<Head<'_>>(line) else {
+        return false;
+    };
+    matches!(head.kind, Some("user" | "assistant")) && head.message.is_some() && !head.sidechain
 }
 
 /// One stored conversation as the directory listing knows it, before its file is opened.
@@ -813,6 +962,159 @@ mod tests {
             catalogue.coverage,
             NativeCatalogueCoverage::Unsupported { .. }
         ));
+    }
+
+    #[test]
+    fn a_resume_replays_the_conversation_tail_as_the_cli_wrote_it() {
+        let scratch = Scratch::new("replay");
+        let assistant = |text: &str| {
+            format!(
+                r#"{{"parentUuid":"u","isSidechain":false,"type":"assistant","message":{{"id":"msg_1","role":"assistant","content":[{{"type":"text","text":{text}}}]}},"uuid":"a1","cwd":"C:\\work\\alpha","sessionId":"s"}}"#,
+                text = serde_json::to_string(text).expect("text encodes"),
+            )
+        };
+        scratch.conversation(
+            "C--work-alpha",
+            ALPHA,
+            &[
+                r#"{"type":"agent-setting","agentSetting":"x","sessionId":"s"}"#.to_owned(),
+                user_record("C:\\work\\alpha", "first question"),
+                assistant("first answer"),
+                title_record("A title, not a message"),
+                r#"{"parentUuid":"a1","isSidechain":true,"type":"user","message":{"role":"user","content":"sub-agent prompt"},"uuid":"side","sessionId":"s"}"#.to_owned(),
+                user_record("C:\\work\\alpha", "second question"),
+                r#"{"type":"last-prompt","lastPrompt":"second question","sessionId":"s"}"#.to_owned(),
+            ],
+            1,
+        );
+        let replay = ClaudeStore::at(scratch.0.clone()).recent_records(ALPHA);
+        assert_eq!(replay.problem, None);
+        let texts: Vec<String> = replay
+            .records
+            .iter()
+            .map(|record| String::from_utf8_lossy(record).into_owned())
+            .collect();
+        let joined = texts.join(
+            "
+",
+        );
+        assert_eq!(texts.len(), 3, "{texts:?}");
+        for (index, expected) in ["first question", "first answer", "second question"]
+            .into_iter()
+            .enumerate()
+        {
+            assert!(
+                texts.get(index).is_some_and(|text| text.contains(expected)),
+                "record {index} should carry {expected:?}: {joined}"
+            );
+        }
+        assert!(
+            !texts.iter().any(|text| text.contains("sub-agent prompt")),
+            "a sidechain is the sub-agent's, not the conversation's"
+        );
+    }
+
+    #[test]
+    fn a_resume_replays_only_the_bounded_tail_and_drops_the_cut_record() {
+        // The tail is measured in bytes and starts mid-record; that fragment is dropped and the whole records
+        // after it are kept, the newest `MAX_REPLAY_RECORDS` of them.
+        let scratch = Scratch::new("replay-tail");
+        let filler = "x".repeat(1024);
+        let mut lines = Vec::new();
+        let total = MAX_REPLAY_RECORDS + 40;
+        for index in 0..total {
+            lines.push(user_record(
+                "C:\\work\\alpha",
+                &format!("{filler} q{index}"),
+            ));
+        }
+        // A huge early record, larger than the tail budget, so the tail starts inside it.
+        let huge = "y".repeat(usize::try_from(REPLAY_TAIL_BYTES).expect("fits") + 4096);
+        lines.insert(1, user_record("C:\\work\\alpha", &huge));
+        scratch.conversation("C--work-alpha", ALPHA, &lines, 1);
+        let replay = ClaudeStore::at(scratch.0.clone()).recent_records(ALPHA);
+        assert!(
+            replay.records.len() <= MAX_REPLAY_RECORDS,
+            "{} records",
+            replay.records.len()
+        );
+        assert!(
+            replay.records.iter().map(Bytes::len).sum::<usize>() <= MAX_REPLAY_BYTES,
+            "the byte bound holds as well"
+        );
+        let last = String::from_utf8_lossy(replay.records.last().expect("a record"));
+        assert!(last.contains(&format!("q{}", total - 1)));
+        assert!(
+            !replay
+                .records
+                .iter()
+                .any(|record| record.len() > 2 * 1024 * 1024),
+            "the cut record is never replayed as a fragment"
+        );
+    }
+
+    #[test]
+    fn a_resume_tail_opens_at_a_prompt_so_the_exchange_reads_whole() {
+        // The byte cut would otherwise leave a tool result whose call was cut in front, and the page draws a
+        // result only under its call. The tail starts at the newest prompt that fits.
+        let scratch = Scratch::new("replay-prompt-start");
+        let big = "z".repeat(20 * 1024);
+        let tool_result = |index: usize| {
+            format!(
+                r#"{{"parentUuid":"a","isSidechain":false,"type":"user","message":{{"role":"user","content":[{{"type":"tool_result","tool_use_id":"toolu_{index}","content":"{big}"}}]}},"uuid":"r{index}","cwd":"C:\\work\\alpha","sessionId":"s","toolUseResult":{{"stdout":"x"}}}}"#
+            )
+        };
+        let lines = vec![
+            user_record("C:\\work\\alpha", &format!("{big} q0")),
+            tool_result(0),
+            tool_result(1),
+            user_record("C:\\work\\alpha", "q1 short"),
+            tool_result(2),
+        ];
+        scratch.conversation("C--work-alpha", ALPHA, &lines, 1);
+        let replay = ClaudeStore::at(scratch.0.clone()).recent_records(ALPHA);
+        let first = String::from_utf8_lossy(replay.records.first().expect("a record"));
+        assert!(
+            first.contains("q1 short"),
+            "the tail opens at the newest prompt that fits: {first}"
+        );
+        assert_eq!(replay.records.len(), 2);
+    }
+
+    #[test]
+    fn a_resume_replays_no_more_bytes_than_a_late_subscriber_would_see() {
+        let scratch = Scratch::new("replay-bytes");
+        let big = "z".repeat(20 * 1024);
+        let lines: Vec<String> = (0..5)
+            .map(|index| user_record("C:\\work\\alpha", &format!("{big} q{index}")))
+            .collect();
+        scratch.conversation("C--work-alpha", ALPHA, &lines, 1);
+        let replay = ClaudeStore::at(scratch.0.clone()).recent_records(ALPHA);
+        let total: usize = replay.records.iter().map(Bytes::len).sum();
+        assert!(total <= MAX_REPLAY_BYTES, "{total} bytes replayed");
+        assert_eq!(replay.records.len(), 2, "the newest two fit");
+        let last = String::from_utf8_lossy(replay.records.last().expect("a record"));
+        assert!(last.contains("q4"));
+    }
+
+    #[test]
+    fn a_conversation_the_store_does_not_hold_replays_nothing() {
+        let scratch = Scratch::new("replay-none");
+        assert_eq!(
+            ClaudeStore::at(scratch.0.clone()).recent_records(BETA),
+            Replay::default()
+        );
+        assert_eq!(
+            ClaudeStore::at(scratch.0.clone()).recent_records("../escape"),
+            Replay::default()
+        );
+        assert_eq!(
+            ClaudeStore {
+                projects: Err(HomeProblem::Missing),
+            }
+            .recent_records(ALPHA),
+            Replay::default()
+        );
     }
 
     #[test]

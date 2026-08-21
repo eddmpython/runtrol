@@ -10,9 +10,9 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use runtrol_childproc::{Containment, Program};
 use runtrol_provider::{
-    Agent, ModelAliases, ModelCatalog, NativeSessionCatalogue, NativeSessionQuery, OpenIntent,
-    Provider, ProviderCapabilities, ProviderCapability, ProviderCapabilitySource, ProviderError,
-    ProviderId,
+    Agent, Disposition, ModelAliases, ModelCatalog, NativeSessionCatalogue, NativeSessionQuery,
+    OpenIntent, Provider, ProviderCapabilities, ProviderCapability, ProviderCapabilitySource,
+    ProviderError, ProviderId,
 };
 
 use crate::claude::agent::ClaudeAgent;
@@ -167,6 +167,26 @@ impl Provider for ClaudeProvider {
     }
 
     async fn open(&self, intent: OpenIntent) -> Result<Box<dyn Agent>, ProviderError> {
+        // A resume shows the stored conversation first, read from the CLI's own store (its stream-json mode
+        // prints no history; its terminal mode draws it). Read off the reactor, before the process starts,
+        // so the page receives the tail right behind the attachment.
+        let replay = match &intent.disposition {
+            Disposition::Resume { native } => {
+                let store = self.store.clone();
+                let native = native.to_string();
+                let provider = self.id;
+                Some(
+                    tokio::task::spawn_blocking(move || store.recent_records(&native))
+                        .await
+                        .map_err(|join| ProviderError::Protocol {
+                            provider,
+                            doing: "reading the stored conversation back",
+                            detail: join.to_string(),
+                        })?,
+                )
+            }
+            _ => None,
+        };
         // Returns as soon as the process exists and its streams are bound. Whether the provider has anything to say
         // yet is answered by events, not by this returning: the startup frame arrives on the stream like everything
         // else, and waiting for it here would make opening a session depend on a frame that a broken CLI never
@@ -178,6 +198,7 @@ impl Provider for ClaudeProvider {
             &self.contained_by,
             &self.available_flags,
             &self.unavailable_flags,
+            replay,
         )?;
         Ok(Box::new(agent))
     }

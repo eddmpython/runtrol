@@ -195,8 +195,30 @@ async fn open(provider: &dyn Provider, root: AbsPath, native: String) {
         })
         .await;
     match opened {
-        Ok(agent) => {
+        Ok(mut agent) => {
             println!("opened in {} ms", started.elapsed().as_millis());
+            // What the reopened conversation says first: the attachment and, on a provider that hands its
+            // history over (Codex items, the claude store's tail), the events that history becomes. Bounded
+            // by a short wait, because a resumed session says nothing more until asked.
+            let quiet = Duration::from_secs(12);
+            let mut kinds: Vec<String> = Vec::new();
+            while let Ok(Some(Ok(produced))) = tokio::time::timeout(quiet, agent.next()).await {
+                let kind = format!("{:?}", produced.body);
+                let name = kind.split(['(', ' ', '{']).next().unwrap_or("?").to_owned();
+                if kinds.len() < 8 {
+                    let shown: String = kind.chars().take(300).collect();
+                    println!("  {shown}");
+                    if let EventBody::Notice(notice) = &produced.body {
+                        let text: String = notice.payload.as_str().chars().take(400).collect();
+                        println!("    {text}");
+                    }
+                }
+                kinds.push(name);
+                if kinds.len() >= 200 {
+                    break;
+                }
+            }
+            println!("{} events after opening: {}", kinds.len(), kinds.join(", "));
             drop(agent.close(CloseMode::Kill).await);
         }
         Err(error) => {

@@ -47,6 +47,7 @@ use tokio::process::ChildStdin;
 
 use crate::claude::approval::{self, ApprovalBook, ApprovalBuildError, NativeAnswer};
 use crate::claude::map::{self, Frame};
+use crate::claude::store::Replay;
 use crate::framing::{LineError, Lines};
 
 /// A live session: one child process, its input, and its output.
@@ -118,13 +119,14 @@ impl ClaudeAgent {
     ///
     /// [`ProviderError::BinNotFound`] when the CLI is not installed, [`ProviderError::Spawn`] when it cannot be
     /// started, [`ProviderError::Unsupported`] when an argument cannot be passed at all.
-    pub fn start(
+    pub(crate) fn start(
         provider: ProviderId,
         program: &Program,
         intent: &OpenIntent,
         contained_by: &Containment,
         available_flags: &BTreeSet<Box<str>>,
         unavailable_flags: &BTreeMap<Box<str>, &'static str>,
+        replay: Option<Replay>,
     ) -> Result<Self, ProviderError> {
         let args = argv(provider, intent, available_flags, unavailable_flags)?;
         runtrol_childproc::check_all(&args).map_err(|error| ProviderError::Unsupported {
@@ -156,6 +158,20 @@ impl ClaudeAgent {
         let stdin = child.stdin.take().ok_or_else(|| missing("input"))?;
         let stdout = child.stdout.take().ok_or_else(|| missing("output"))?;
 
+        // The stored conversation goes out first, before the CLI has said anything. Measured on 2.1.238: on
+        // `--resume` this CLI prints its hello frame only after the first message it is sent (hook frames at
+        // once, `init` thirteen seconds later right behind the input), so a replay queued behind the
+        // attachment would show nothing until the operator spoke. The page paints what it is given; the
+        // attachment arrives when the CLI gets round to it.
+        let mut announced = VecDeque::new();
+        if let Some(replay) = replay {
+            announced.extend(
+                replay_bodies(replay)
+                    .into_iter()
+                    .map(|body| Produced { src_end: 0, body }),
+            );
+        }
+
         Ok(Self {
             provider,
             session: intent.session,
@@ -172,7 +188,7 @@ impl ClaudeAgent {
             next_switch: 0,
             pending_switches: BTreeMap::new(),
             src_end: 0,
-            announced: VecDeque::new(),
+            announced,
             approvals: ApprovalBook::new(),
             finished: false,
         })
@@ -253,71 +269,8 @@ impl ClaudeAgent {
     /// Turn a classified frame into what leaves the driver.
     fn produce(&mut self, frame: Frame) -> Produced {
         match frame {
-            Frame::Started(startup) => {
-                self.native = Some(startup.native.as_str().to_owned());
-                if let Some(mode) = startup.starting_mode.clone() {
-                    // The permission mode in force at attachment, by the CLI's own word, queued the same way
-                    // as the answering model below.
-                    self.announced.push_back(Produced {
-                        src_end: self.src_end,
-                        body: EventBody::CurrentModeUpdate {
-                            mode_id: mode,
-                            available_ids: None,
-                            payload: startup.payload.clone(),
-                        },
-                    });
-                }
-                if let Some(model) = startup.answering_with.clone() {
-                    // The CLI's own word on which model answers, queued to follow the attachment. Requested and
-                    // answering differ (measured), and only this one is the provider's.
-                    self.announced.push_back(Produced {
-                        src_end: self.src_end,
-                        body: EventBody::CurrentModelUpdate {
-                            model_id: model,
-                            available_ids: None,
-                            payload: startup.payload.clone(),
-                        },
-                    });
-                }
-                if startup.announces_commands {
-                    // This CLI names its slash commands only inside the frame it says hello with. Re-emitted
-                    // whole as the one dedicated commands event every service shares, so a surface reads a
-                    // single vocabulary instead of digging through per-dialect attachment payloads.
-                    self.announced.push_back(Produced {
-                        src_end: self.src_end,
-                        body: EventBody::AvailableCommandsUpdate {
-                            payload: startup.payload.clone(),
-                        },
-                    });
-                }
-                Produced {
-                    src_end: self.src_end,
-                    body: EventBody::Attached(Box::new(runtrol_provider::Attached {
-                        native: startup.native,
-                        // What runtrol asked for, not what will answer. The answering model stays in the payload.
-                        model_requested: self.model_requested.clone(),
-                        reasoning_effort_requested: self.reasoning_effort_requested.clone(),
-                        caps: startup.caps,
-                        payload: startup.payload,
-                    })),
-                }
-            }
-
-            Frame::Ended(ended) => {
-                // The provider's own word, which is the only thing that means the outcome is known.
-                self.streaming_message = None;
-                let turn = self.running.take().unwrap_or_else(|| self.mint_turn());
-                self.src_end = self.src_end.saturating_add(1);
-                Produced {
-                    src_end: self.src_end,
-                    body: EventBody::Turn(TurnEvent::Ended {
-                        turn,
-                        stop: ended.stop,
-                        declared_by: Declarant::Provider,
-                    }),
-                }
-            }
-
+            Frame::Started(startup) => self.attached(*startup),
+            Frame::Ended(ended) => self.ended(&ended),
             Frame::Body(body) => {
                 let body = self.correlate_stream(body);
                 // A fragment belongs to the current source boundary. A complete body advances the boundary.
@@ -329,46 +282,123 @@ impl ClaudeAgent {
                     body,
                 }
             }
-
-            Frame::Bodies { first, rest } => {
-                // A whole message closes whatever was streaming.
-                self.streaming_message = None;
-                // One line of the provider's stream is one source position, however many events it turned out
-                // to be. The boundary advances once and every event off that line carries the same one.
-                self.src_end = self.src_end.saturating_add(1);
-                // The queue is drained before the next line is read, so the blocks reach a subscriber in the
-                // order the provider laid them out.
-                for body in rest {
-                    self.announced.push_back(Produced {
-                        src_end: self.src_end,
-                        body,
-                    });
-                }
-                Produced {
-                    src_end: self.src_end,
-                    body: first,
-                }
-            }
-
-            Frame::Approval(_)
+            Frame::Bodies { first, rest } => self.bodies(first, rest),
+            Frame::Unbound(unmapped) => self.unbound(unmapped),
+            Frame::ControlResponse(_)
+            | Frame::Approval(_)
             | Frame::ApprovalCancelled(_)
-            | Frame::UnsupportedControl(_)
-            | Frame::ControlResponse(_) => Produced {
-                src_end: self.src_end,
-                body: EventBody::Notice(Box::new(Notice {
-                    level: Level::Error,
-                    code: NoticeCode::ProtocolViolation,
-                    retryable: false,
-                    payload: Opaque::owned(
-                        r#"{"controlFrame":"was not handled at the control boundary"}"#.to_owned(),
-                    ),
-                })),
-            },
+            | Frame::UnsupportedControl(_) => self.not_a_body(),
+        }
+    }
 
-            Frame::Unbound(unmapped) => Produced {
+    /// The attachment, with what the CLI said hello with queued to follow it: the mode and model in force
+    /// and its slash commands.
+    fn attached(&mut self, startup: map::Startup) -> Produced {
+        self.native = Some(startup.native.as_str().to_owned());
+        if let Some(mode) = startup.starting_mode.clone() {
+            // The permission mode in force at attachment, by the CLI's own word, queued the same way
+            // as the answering model below.
+            self.announced.push_back(Produced {
                 src_end: self.src_end,
-                body: EventBody::Unmapped(unmapped),
-            },
+                body: EventBody::CurrentModeUpdate {
+                    mode_id: mode,
+                    available_ids: None,
+                    payload: startup.payload.clone(),
+                },
+            });
+        }
+        if let Some(model) = startup.answering_with.clone() {
+            // The CLI's own word on which model answers, queued to follow the attachment. Requested and
+            // answering differ (measured), and only this one is the provider's.
+            self.announced.push_back(Produced {
+                src_end: self.src_end,
+                body: EventBody::CurrentModelUpdate {
+                    model_id: model,
+                    available_ids: None,
+                    payload: startup.payload.clone(),
+                },
+            });
+        }
+        if startup.announces_commands {
+            // This CLI names its slash commands only inside the frame it says hello with. Re-emitted
+            // whole as the one dedicated commands event every service shares, so a surface reads a
+            // single vocabulary instead of digging through per-dialect attachment payloads.
+            self.announced.push_back(Produced {
+                src_end: self.src_end,
+                body: EventBody::AvailableCommandsUpdate {
+                    payload: startup.payload.clone(),
+                },
+            });
+        }
+        Produced {
+            src_end: self.src_end,
+            body: EventBody::Attached(Box::new(runtrol_provider::Attached {
+                native: startup.native,
+                // What runtrol asked for, not what will answer. The answering model stays in the payload.
+                model_requested: self.model_requested.clone(),
+                reasoning_effort_requested: self.reasoning_effort_requested.clone(),
+                caps: startup.caps,
+                payload: startup.payload,
+            })),
+        }
+    }
+
+    /// The provider's own word that the turn ended, which is the only thing that means the outcome is known.
+    fn ended(&mut self, ended: &map::Ended) -> Produced {
+        self.streaming_message = None;
+        let turn = self.running.take().unwrap_or_else(|| self.mint_turn());
+        self.src_end = self.src_end.saturating_add(1);
+        Produced {
+            src_end: self.src_end,
+            body: EventBody::Turn(TurnEvent::Ended {
+                turn,
+                stop: ended.stop,
+                declared_by: Declarant::Provider,
+            }),
+        }
+    }
+
+    /// One provider line that turned out to be several events.
+    fn bodies(&mut self, first: EventBody, rest: Vec<EventBody>) -> Produced {
+        // A whole message closes whatever was streaming.
+        self.streaming_message = None;
+        // One line of the provider's stream is one source position, however many events it turned out
+        // to be. The boundary advances once and every event off that line carries the same one.
+        self.src_end = self.src_end.saturating_add(1);
+        // The queue is drained before the next line is read, so the blocks reach a subscriber in the
+        // order the provider laid them out.
+        for body in rest {
+            self.announced.push_back(Produced {
+                src_end: self.src_end,
+                body,
+            });
+        }
+        Produced {
+            src_end: self.src_end,
+            body: first,
+        }
+    }
+
+    /// A frame nobody bound, relayed whole under its own tag.
+    fn unbound(&self, unmapped: runtrol_provider::Unmapped) -> Produced {
+        Produced {
+            src_end: self.src_end,
+            body: EventBody::Unmapped(unmapped),
+        }
+    }
+
+    /// A control frame that reached the body path: the control boundary should have taken it.
+    fn not_a_body(&self) -> Produced {
+        Produced {
+            src_end: self.src_end,
+            body: EventBody::Notice(Box::new(Notice {
+                level: Level::Error,
+                code: NoticeCode::ProtocolViolation,
+                retryable: false,
+                payload: Opaque::owned(
+                    r#"{"controlFrame":"was not handled at the control boundary"}"#.to_owned(),
+                ),
+            })),
         }
     }
 
@@ -692,6 +722,47 @@ fn interrupt_frame(provider: ProviderId, request: u64) -> Result<String, Provide
         doing: "building an interrupt",
         detail: error.to_string(),
     })
+}
+
+/// The events a stored conversation's tail becomes, through the same reader a live frame goes through.
+///
+/// A record the reader cannot place (a shape this driver never bound) is left out and said once, so the page
+/// is never filled with noise and never silently short. Turn boundaries and control frames cannot come out of
+/// a stored message record and are not looked for.
+fn replay_bodies(replay: Replay) -> Vec<EventBody> {
+    let mut bodies = Vec::with_capacity(replay.records.len());
+    let mut unread = 0_usize;
+    for record in &replay.records {
+        match map::read(record) {
+            Ok(Frame::Body(body)) => bodies.push(body),
+            Ok(Frame::Bodies { first, rest }) => {
+                bodies.push(first);
+                bodies.extend(rest);
+            }
+            Ok(Frame::Unbound(unmapped)) => bodies.push(EventBody::Unmapped(unmapped)),
+            Ok(_) | Err(_) => unread = unread.saturating_add(1),
+        }
+    }
+    let mut problems = Vec::new();
+    if let Some(problem) = replay.problem {
+        problems.push(problem.to_string());
+    }
+    if unread > 0 {
+        problems.push(format!(
+            "{unread} stored records of this conversation could not be read back and are not shown"
+        ));
+    }
+    if !problems.is_empty() {
+        bodies.push(EventBody::Notice(Box::new(Notice {
+            level: Level::Info,
+            code: NoticeCode::Other,
+            retryable: false,
+            payload: Opaque::owned(
+                serde_json::json!({ "message": problems.join("; ") }).to_string(),
+            ),
+        })));
+    }
+    bodies
 }
 
 /// What a pending control request will announce if the CLI says yes.
@@ -1084,6 +1155,7 @@ fn unsupported_control_notice(subtype: &str) -> EventBody {
 
 #[cfg(test)]
 mod tests {
+    use bytes::Bytes;
     use runtrol_childproc::{SpawnError, resolve};
     use runtrol_provider::AbsPath;
 
@@ -1192,6 +1264,62 @@ mod tests {
         assert!(!args.iter().any(|arg| arg == "--model"));
         assert!(!args.iter().any(|arg| arg == "--effort"));
         assert!(!args.iter().any(|arg| arg == "--permission-mode"));
+    }
+
+    #[test]
+    fn a_stored_conversation_tail_replays_through_the_same_reader_as_live_frames() {
+        // What the store hands over is the CLI's own records, the same shape as its live frames; the reader
+        // that maps live frames maps them, so the page shows a reopened conversation exactly as it would have
+        // shown it while it happened. Measured shapes (2.1.238), shortened.
+        let records = vec![
+            Bytes::from_static(br#"{"parentUuid":null,"isSidechain":false,"type":"user","message":{"role":"user","content":[{"type":"text","text":"name this folder"}]},"uuid":"u1","cwd":"C:\\work","sessionId":"s"}"#),
+            Bytes::from_static(br#"{"parentUuid":"u1","isSidechain":false,"type":"assistant","message":{"id":"msg_01","role":"assistant","content":[{"type":"tool_use","id":"toolu_01","name":"Bash","input":{"command":"ls"}}]},"uuid":"a1","cwd":"C:\\work","sessionId":"s"}"#),
+            Bytes::from_static(br#"{"parentUuid":"a1","isSidechain":false,"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_01","content":"runtrol"}]},"uuid":"u2","cwd":"C:\\work","sessionId":"s","toolUseResult":{"stdout":"runtrol"}}"#),
+            Bytes::from_static(br#"{"parentUuid":"u2","isSidechain":false,"type":"assistant","message":{"id":"msg_02","role":"assistant","content":[{"type":"text","text":"It is runtrol."}]},"uuid":"a2","cwd":"C:\\work","sessionId":"s"}"#),
+        ];
+        let bodies = replay_bodies(Replay {
+            records,
+            problem: None,
+        });
+        let kinds: Vec<&str> = bodies
+            .iter()
+            .map(|body| match body {
+                EventBody::UserMessageChunk(_) => "user",
+                EventBody::AgentMessageChunk(_) => "agent",
+                EventBody::ToolCall(_) => "tool started",
+                EventBody::ToolCallUpdate(_) => "tool finished",
+                EventBody::Notice(_) => "notice",
+                _ => "other",
+            })
+            .collect();
+        assert_eq!(
+            kinds,
+            vec!["user", "tool started", "tool finished", "agent"],
+            "{bodies:?}"
+        );
+    }
+
+    #[test]
+    fn an_unreadable_stored_record_is_left_out_and_said_once() {
+        let bodies = replay_bodies(Replay {
+            records: vec![
+                Bytes::from_static(b"not json at all"),
+                Bytes::from_static(br#"{"type":"assistant","message":{"id":"msg_1","content":[{"type":"text","text":"kept"}]}}"#),
+            ],
+            problem: Some("the stored conversation could not be read back: fake".into()),
+        });
+        assert_eq!(bodies.len(), 2, "{bodies:?}");
+        assert!(matches!(
+            bodies.first(),
+            Some(EventBody::AgentMessageChunk(_))
+        ));
+        match bodies.last() {
+            Some(EventBody::Notice(notice)) => {
+                assert!(notice.payload.as_str().contains("1 stored records"));
+                assert!(notice.payload.as_str().contains("fake"));
+            }
+            other => panic!("expected one notice, got {other:?}"),
+        }
     }
 
     #[test]
