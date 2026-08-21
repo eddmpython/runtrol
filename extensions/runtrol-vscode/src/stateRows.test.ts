@@ -46,6 +46,7 @@ test("every visible session field invalidates the snapshot", () => {
     { hot: false },
     { lifecycle: "hotIdle" as const },
     { looksStuck: true },
+    { waitingOn: "person" as const },
     { sessionGeneration: 2 },
   ]) {
     assert.equal(sessionRowsEqual([SESSION], [{ ...SESSION, ...changed }]), false);

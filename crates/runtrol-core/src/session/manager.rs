@@ -48,7 +48,7 @@ use crate::events::{Published, SessionHub, SessionView};
 use crate::project::{ProjectError, ProjectIdentity, WorkspaceClaim};
 use crate::session::gauges::{AccountGauges, ProviderGauge};
 use crate::session::mint::Identity;
-use crate::session::state::{FailureCode, Observed, SessionState, Waiting};
+use crate::session::state::{FailureCode, Lifecycle, Observed, SessionState, Waiting};
 use crate::session::tier::{Admit, HotSession, MAX_HOT, Tier};
 
 /// A session operation could not be carried out.
@@ -1030,7 +1030,15 @@ impl SessionManager {
                 let stuck_before = live.state.looks_stuck();
                 let waiting_before = live.state.waiting();
                 let published = live.hub.publish(produced.src_end, produced.body);
-                if let Some(observed) = observed {
+                // Waiting is a fact about a running turn. A question that arrives (or goes away) while no turn is
+                // running has nothing to wait on, and is not a misbehaving driver either: it is a provider asking
+                // between turns, which the transition table refuses by design. Skipped rather than announced.
+                let waiting_between_turns =
+                    matches!(
+                        observed,
+                        Some(Observed::Blocked { .. } | Observed::Unblocked)
+                    ) && !matches!(live.state.lifecycle(), Lifecycle::Busy { .. });
+                if let (Some(observed), false) = (observed, waiting_between_turns) {
                     // A driver reporting something that cannot have happened becomes a notice rather than a panic. A
                     // supervisor that aborted on one misbehaving driver would take every other session with it.
                     if let Err(refusal) = live.state.observe(observed, published.event.at) {
@@ -1667,6 +1675,14 @@ fn observation_of(body: &EventBody) -> Option<Observed> {
             runtrol_provider::TurnEvent::Resumed { .. } => Some(Observed::Unblocked),
             _ => None,
         },
+        // A question asked of a person is the turn waiting on that person, whether or not the driver also says
+        // so with a blocked turn event (measured 2026-08-21: none of the installed drivers does, so "needs you"
+        // had never been true for an approval, and the one signal worth interrupting somebody for was silent).
+        // The question going away without an answer here is the turn no longer waiting.
+        EventBody::ApprovalRequested(_) => Some(Observed::Blocked {
+            on: Waiting::Person,
+        }),
+        EventBody::ApprovalWithdrawn { .. } => Some(Observed::Unblocked),
         EventBody::Detached(_) => Some(Observed::Detached),
         _ => None,
     }
@@ -3100,6 +3116,38 @@ mod tests {
             Some(Observed::Blocked {
                 on: crate::session::state::Waiting::Quota
             })
+        ));
+    }
+
+    #[test]
+    fn a_question_asked_of_a_person_is_the_turn_waiting_on_that_person() {
+        // Measured: no installed driver emits a blocked turn event around its approval request, so the
+        // request itself is the observation. The withdrawal is the unblocking; an answer leaves the turn to
+        // move on, and the next event clears the wait as every observation does.
+        let request = runtrol_provider::ApprovalRequest {
+            id: runtrol_provider::ApprovalId::now(),
+            turn: Some(TurnId { epoch: 0, index: 0 }),
+            tool_call: None,
+            kind: runtrol_provider::ApprovalKind::FileChange,
+            risk: runtrol_provider::RiskClass::Low,
+            options: Vec::new(),
+            subject: runtrol_provider::Opaque::owned("{}".to_owned()),
+            subject_incomplete: false,
+            subject_digest: [0_u8; 32],
+            expires_at: WallMs::now().plus_millis(1_000),
+        };
+        assert!(matches!(
+            observation_of(&EventBody::ApprovalRequested(Box::new(request))),
+            Some(Observed::Blocked {
+                on: crate::session::state::Waiting::Person
+            })
+        ));
+        assert!(matches!(
+            observation_of(&EventBody::ApprovalWithdrawn {
+                id: runtrol_provider::ApprovalId::now(),
+                why: runtrol_provider::WithdrawnReason::Expired,
+            }),
+            Some(Observed::Unblocked)
         ));
     }
 

@@ -15,6 +15,10 @@ export function sessionRowsEqual(left: readonly SessionLine[], right: readonly S
       && value.hot === candidate.hot
       && value.lifecycle === candidate.lifecycle
       && value.looksStuck === candidate.looksStuck
+      // What the row says first ("Needs you", "waiting on a limit") changes with nothing else in the row;
+      // a snapshot that differs only here must still repaint (measured: a question arrived and the row
+      // kept "working" because this comparison called the two snapshots equal).
+      && (value.waitingOn ?? null) === (candidate.waitingOn ?? null)
       && value.sessionGeneration === candidate.sessionGeneration;
   });
 }
