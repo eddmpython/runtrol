@@ -558,6 +558,11 @@ fn argv(
     if available_flags.contains("--include-partial-messages") {
         args.push("--include-partial-messages".to_owned());
     }
+    // The operator's own messages come back through the provider, as `user` frames, and the page shows them on
+    // the operator's side. Without the flag the conversation reads as replies to nothing.
+    if available_flags.contains("--replay-user-messages") {
+        args.push("--replay-user-messages".to_owned());
+    }
 
     match &intent.disposition {
         // runtrol issues the identifier. Measured: it comes back unchanged and becomes the name the CLI's own
@@ -1187,6 +1192,32 @@ mod tests {
         assert!(!args.iter().any(|arg| arg == "--model"));
         assert!(!args.iter().any(|arg| arg == "--effort"));
         assert!(!args.iter().any(|arg| arg == "--permission-mode"));
+    }
+
+    #[test]
+    fn the_operator_own_messages_are_asked_back_when_the_cli_can_replay_them() {
+        // Measured on 2.1.238: `--replay-user-messages` re-emits each stdin message as a `user` frame. Without
+        // it nothing shows the operator's side of the conversation, so the flag rides whenever the parser
+        // confirmed it and is simply absent when it did not (older CLI): degraded, not refused.
+        let args = argv(
+            a_provider(),
+            &an_intent(Disposition::Fresh),
+            &all_flags(),
+            &BTreeMap::new(),
+        )
+        .expect("served");
+        assert!(args.iter().any(|arg| arg == "--replay-user-messages"));
+
+        let mut flags = all_flags();
+        flags.remove("--replay-user-messages");
+        let args = argv(
+            a_provider(),
+            &an_intent(Disposition::Fresh),
+            &flags,
+            &BTreeMap::new(),
+        )
+        .expect("served without the replay flag");
+        assert!(!args.iter().any(|arg| arg == "--replay-user-messages"));
     }
 
     #[test]

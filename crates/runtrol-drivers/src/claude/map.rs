@@ -1258,6 +1258,23 @@ mod tests {
     }
 
     #[test]
+    fn the_operator_own_message_replayed_by_the_cli_is_shown_on_the_operator_side() {
+        // Measured on 2.1.238 with `--replay-user-messages`: the CLI re-emits the stdin message as a `user`
+        // frame marked `isReplay`. It is the operator's own words coming back through the provider, and the
+        // only way they are shown; a local echo would be runtrol authoring a line of the conversation.
+        let replayed = line(&format!(
+            r#"{{"type":"user","message":{{"role":"user","content":[{{"type":"text","text":"Reply with exactly: ok"}}]}},"session_id":"{SESSION}","parent_tool_use_id":null,"uuid":"386c249b-b892-4757-8fd5-0c5a36e2e4e9","timestamp":"2026-08-21T01:37:50.273Z","isReplay":true}}"#
+        ));
+        match read(&replayed).expect("readable") {
+            Frame::Body(EventBody::UserMessageChunk(chunk)) => {
+                assert!(chunk.content.as_str().contains("Reply with exactly: ok"));
+                assert!(!chunk.delta);
+            }
+            other => panic!("expected the operator's message, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn a_message_whose_content_is_not_a_list_is_relayed_whole() {
         // This CLI also sends `content` as a bare string, and a vendor is allowed to change the container. Either
         // way the message is relayed as one chunk, which is what this did before it read blocks at all.

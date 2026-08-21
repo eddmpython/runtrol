@@ -163,6 +163,14 @@ pub const FLAGS: &[BoundFlag] = &[
         required: false,
         without_it: "a message appears all at once instead of as it is written",
     },
+    // Measured on 2.1.238: with this flag the CLI re-emits each message it read from stdin as a `user` frame
+    // (`"isReplay":true`) before it answers. It is how the operator's own words reach the conversation through
+    // the provider's mouth rather than a local echo, which is the only way they are shown at all.
+    BoundFlag {
+        flag: "--replay-user-messages",
+        required: false,
+        without_it: "the operator's own messages are not shown in the conversation, only the replies",
+    },
     BoundFlag {
         flag: "--permission-mode",
         required: false,
