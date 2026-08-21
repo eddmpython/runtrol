@@ -266,6 +266,10 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
       (item) => run(() => afterMissionReady(() => missionController.startMission(item))),
     ),
     vscode.commands.registerCommand(
+      "runtrol.continueMission",
+      (item) => run(() => afterMissionReady(() => missionController.continueMission(item))),
+    ),
+    vscode.commands.registerCommand(
       "runtrol.launchFleet",
       (item) => run(() => afterMissionReady(() => missionController.launchFleet(item))),
     ),

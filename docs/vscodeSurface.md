@@ -230,15 +230,22 @@ Two contracts keep the conversation window from growing a branch per place or pe
 | `conversationPanels.ts` | one binding per conversation (surface + watch), the two workbench places, the grid | provider branches or conversation content |
 | `diffDocuments.ts` | declared changes as read-only virtual documents for VS Code's diff editor | files on disk or a transcript of changes |
 | `webview/` | bounded active rendering and input | durable storage or background sessions |
-| `mission/controller.ts` and `mission/tree.ts` | Mission review, local actions, reviewed fleet launch, Task rows, native Artifact comparison, and one native editor document | provider input without local Send, project file merging, or optimistic completion |
+| `mission/controller.ts`, `mission/momentum.ts`, and `mission/tree.ts` | Mission review, safe-wave continuation, local recovery actions, reviewed fleet launch, Task rows, native Artifact comparison, and one native editor document | provider input without confirmed local authority, project file merging, transcript inference, or optimistic completion |
 | `capability/controller.ts` | candidate inbox, native diff review, and exact local trust actions | capability text injection or user-wide trust |
 
 ## Mission and capability surface
 
 The Missions tree is part of the existing Runtrol activity container. It lists Core snapshots and exposes actions only
-when the matching state permits them. Validation selects a project Mission file. Start shows the exact Mission digest,
-Task count, and the fact that no instruction is sent automatically. Each reserved Task must be prepared, bound to its
-exact public Runtime session, and submitted through its own local `Send Task Instruction` action.
+when the matching state permits them. Validation selects a project Mission file. An ordinary validated or running
+Mission has one primary `Continue Reviewed Mission` action. Its modal review shows the exact Mission digest and the
+currently safe work. One confirmation starts a validated Mission, verifies exact `Ready` Task sessions with fixed
+Gates, prepares newly eligible workspaces and public Runtime sessions, and sends exact reviewed instructions. The same
+action stops at working sessions, person or quota waits, failure, retry, missing identity, comparison policy, and
+integration. It reads scheduler and bounded Runtime metadata only, never provider events or conversation content.
+
+Start, Prepare, Send, and Verify remain command-palette and Task-row recovery actions. A provider submission whose
+success is unknown is persisted as ambiguous before transport and cannot be auto-verified, including after Extension
+Host restart. `choose_one` Missions keep the specialized `Run All Reviewed Attempts` action.
 
 The reusable `runtrol-mission:` editor document shows the Mission source and digest, approval expiry, progress, Task
 state, instruction and policy digests, provider and session identities, workspace and base commit, selected capability

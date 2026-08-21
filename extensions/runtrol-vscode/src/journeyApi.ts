@@ -77,6 +77,10 @@ export type JourneyApi = {
   registerMissionGate(gateId: string, program: string, arguments_: string[]): Promise<void>;
   validateMissionFile(file: string): Promise<MissionSnapshot>;
   launchFleet(missionId: string): Promise<string[]>;
+  continueMission(
+    missionId: string,
+    operatorChoiceProvider: string,
+  ): Promise<{ snapshot: MissionSnapshot; sessionIds: readonly string[]; verified: number }>;
   mission(missionId: string): Promise<MissionSnapshot>;
   verifyMissionTask(missionId: string, taskId: string): Promise<MissionSnapshot>;
   compareMissionResults(missionId: string): Promise<void>;
@@ -229,6 +233,9 @@ export function journeyApi(
     ),
     validateMissionFile: (file) => afterReady(() => missions.validateMissionFile(vscode.Uri.file(file))),
     launchFleet: (missionId) => afterReady(() => missions.launchFleetForJourney(missionId)),
+    continueMission: (missionId, operatorChoiceProvider) => afterReady(
+      () => missions.continueMissionForJourney(missionId, operatorChoiceProvider),
+    ),
     mission: (missionId) => afterReady(() => missions.snapshot(missionId)),
     verifyMissionTask: (missionId, taskId) => afterReady(
       () => missions.verifyTaskForJourney(missionId, taskId),

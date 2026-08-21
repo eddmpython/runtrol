@@ -96,6 +96,7 @@
     "onCommand:runtrol.registerMissionGate",
     "onCommand:runtrol.openMission",
     "onCommand:runtrol.startMission",
+    "onCommand:runtrol.continueMission",
     "onCommand:runtrol.launchFleet",
     "onCommand:runtrol.prepareMissionTask",
     "onCommand:runtrol.sendTaskInstruction",
@@ -316,6 +317,11 @@
         "command": "runtrol.startMission",
         "title": "Runtrol: Start Reviewed Mission",
         "icon": "$(play)"
+      },
+      {
+        "command": "runtrol.continueMission",
+        "title": "Runtrol: Continue Reviewed Mission",
+        "icon": "$(run-all)"
       },
       {
         "command": "runtrol.launchFleet",
@@ -789,8 +795,8 @@
           "group": "inline@3"
         },
         {
-          "command": "runtrol.startMission",
-          "when": "view == runtrol.missions && viewItem == runtrol.mission.validated",
+          "command": "runtrol.continueMission",
+          "when": "view == runtrol.missions && (viewItem == runtrol.mission.validated || viewItem == runtrol.mission.running)",
           "group": "inline@1"
         },
         {

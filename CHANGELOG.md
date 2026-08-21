@@ -12,6 +12,14 @@ and refactoring that no user can observe do not belong here.
 
 ### Added
 
+- An ordinary reviewed Mission now advances one safe wave at a time from one **Continue Reviewed Mission** action.
+  The same confirmed local action starts a validated Mission, seals exact Ready Tasks with their fixed Gates,
+  prepares newly eligible workspaces and Runtime sessions, and sends unchanged reviewed instructions. It stops at
+  provider work, person or quota waits, failures, retries, missing identities, comparisons, and integration. Granular
+  recovery commands remain available. An uncertain provider delivery is persisted before transport and disables
+  automatic verification even after an Extension Host restart. A real two-stage Mission completed both waves through
+  an installed CLI in an isolated Extension Host.
+
 - Phone notifications now open the first session that is actually waiting for the operator. The phone session list
   shows a bounded `Needs you` count and cycles through every person wait while keeping account-limit waits separate.
   A normal narrow-screen launch stays on the list instead of opening an arbitrary first session. The generic Web Push

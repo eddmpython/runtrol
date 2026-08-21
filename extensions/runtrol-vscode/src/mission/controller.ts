@@ -21,10 +21,14 @@ import {
   instructionDigest,
   missionSpec,
 } from "./fanOut";
+import { AmbiguousSubmissions } from "./ambiguousSubmissions";
 import { branchFromHead, gitdirTarget } from "./gitHead";
+import { missionMomentum, type MissionMomentum } from "./momentum";
 
 /// Where each project's last fan-out shape is remembered, never instruction text.
 const FAN_OUT_DEFAULTS_KEY = "runtrol.fanOutDefaults";
+/// Task identities whose durable local Send intent exists without a confirmed public Runtime delivery.
+const AMBIGUOUS_TASK_SUBMISSIONS_KEY = "runtrol.ambiguousMissionTaskSubmissions";
 
 /// The current branch of the repository at `folder`, or null when it cannot be read honestly.
 ///
@@ -61,11 +65,21 @@ export type MissionSelection = {
   readonly task?: MissionTaskLine;
 };
 
+type MissionAdvanceResult = {
+  readonly snapshot: MissionSnapshot;
+  readonly verified: number;
+  readonly sessionIds: readonly string[];
+  readonly providerSelectionCancelled: boolean;
+};
+
 export class MissionController implements vscode.Disposable {
   private readonly changedEmitter = new vscode.EventEmitter<void>();
   private readonly documents = new MissionDocumentProvider();
   private rows: readonly MissionLine[] = [];
   private readonly snapshots = new Map<string, MissionSnapshot>();
+  /// A durable Mission Send intent can exist when the public Runtime delivery failed or lost its answer. The
+  /// convenience path must not mistake the still-idle session for completed provider work, including after restart.
+  private readonly ambiguousTaskSubmissions: AmbiguousSubmissions;
 
   readonly onDidChange = this.changedEmitter.event;
 
@@ -74,7 +88,12 @@ export class MissionController implements vscode.Disposable {
     private readonly sessions: Controller,
     private readonly runtimeState: RuntimeState,
     private readonly context: vscode.ExtensionContext,
-  ) {}
+  ) {
+    this.ambiguousTaskSubmissions = new AmbiguousSubmissions(
+      context.globalState.get<readonly string[]>(AMBIGUOUS_TASK_SUBMISSIONS_KEY, []),
+      (taskIds) => context.globalState.update(AMBIGUOUS_TASK_SUBMISSIONS_KEY, taskIds),
+    );
+  }
 
   get missions(): readonly MissionLine[] {
     return this.rows;
@@ -421,6 +440,228 @@ export class MissionController implements vscode.Disposable {
     await this.acceptSnapshot(started, true);
   }
 
+  async continueMission(selection?: MissionSelection): Promise<void> {
+    const mission = selection?.mission ?? await this.pickMission("Continue Reviewed Mission");
+    if (!mission) return;
+    let current = await this.get(mission.mission_id);
+    let momentum = this.momentum(current);
+    if (momentum.stopped === "specialized mission flow") {
+      throw new Error("a choose-one Mission uses Run All Reviewed Attempts and its explicit result comparison");
+    }
+    if (momentum.stopped) {
+      await this.showStoppedMomentum(current, momentum.stopped);
+      return;
+    }
+    if (momentum.manual.length > 0 || !hasMomentumWork(momentum)) {
+      await this.showWaitingMomentum(current, momentum);
+      return;
+    }
+
+    const action = await vscode.window.showWarningMessage(
+      `Continue ${current.mission.name} through every currently safe reviewed step?`,
+      {
+        modal: true,
+        detail: momentumConfirmation(current, momentum),
+      },
+      "Continue reviewed Mission",
+    );
+    if (action !== "Continue reviewed Mission") return;
+
+    const result = await this.advanceMomentum(current, (tasks) => this.chooseWaveProviders(tasks));
+    if (result.providerSelectionCancelled) {
+      await this.acceptSnapshot(result.snapshot, true);
+      return;
+    }
+    const remaining = this.momentum(result.snapshot);
+    if (remaining.manual.length > 0) {
+      await this.showWaitingMomentum(result.snapshot, remaining);
+      return;
+    }
+    if (remaining.stopped && remaining.stopped !== "integrating") {
+      await this.showStoppedMomentum(result.snapshot, remaining.stopped);
+      return;
+    }
+    await this.showMomentumResult(result.snapshot, result.verified, result.sessionIds.length);
+  }
+
+  async continueMissionForJourney(
+    missionId: string,
+    operatorChoiceProvider: string,
+  ): Promise<{ snapshot: MissionSnapshot; sessionIds: readonly string[]; verified: number }> {
+    const current = await this.get(missionId);
+    const momentum = this.momentum(current);
+    if (momentum.stopped) {
+      throw new Error(`the Mission cannot continue from ${momentum.stopped}`);
+    }
+    if (momentum.manual.length > 0 || !hasMomentumWork(momentum)) {
+      throw new Error("the Mission has no deterministic reviewed step to continue");
+    }
+    const result = await this.advanceMomentum(
+      current,
+      (tasks) => Promise.resolve(this.waveProvidersForJourney(tasks, operatorChoiceProvider)),
+    );
+    if (result.providerSelectionCancelled) {
+      throw new Error("the journey provider assignment was cancelled");
+    }
+    return {
+      snapshot: result.snapshot,
+      sessionIds: result.sessionIds,
+      verified: result.verified,
+    };
+  }
+
+  private async advanceMomentum(
+    initial: MissionSnapshot,
+    chooseProviders: (
+      tasks: readonly MissionTaskLine[],
+    ) => Promise<ReadonlyMap<string, string> | null>,
+  ): Promise<MissionAdvanceResult> {
+    let current = initial;
+    let momentum = this.momentum(current);
+
+    let verified = 0;
+    if (momentum.start) {
+      current = requireResponse((await this.client.once({
+        ask: "missionStart",
+        with: {
+          mission_id: current.mission.mission_id,
+          mission_sha256: current.mission_sha256,
+        },
+      })).response, "mission");
+      momentum = this.momentum(current);
+    }
+
+    if (momentum.verify.length > 0) {
+      current = await vscode.window.withProgress(
+        {
+          location: vscode.ProgressLocation.Notification,
+          title: `Checking finished Tasks in ${current.mission.name}`,
+          cancellable: false,
+        },
+        async (progress) => {
+          let snapshot = current;
+          for (const task of momentum.verify) {
+            if (snapshot.mission.state !== "running") break;
+            const exact = snapshot.tasks.find((candidate) => candidate.task_id === task.task_id);
+            if (exact?.state !== "running") continue;
+            progress.report({
+              message: `Running fixed Gates for ${exact.key}`,
+              increment: 100 / momentum.verify.length,
+            });
+            snapshot = requireResponse((await this.client.once({
+              ask: "missionVerifyTask",
+              with: { mission_id: snapshot.mission.mission_id, task_id: exact.task_id },
+            })).response, "mission");
+            verified += 1;
+            if (this.momentum(snapshot).manual.length > 0) break;
+          }
+          return snapshot;
+        },
+      );
+    }
+
+    momentum = this.momentum(current);
+    if (momentum.manual.length > 0) {
+      await this.acceptSnapshot(current, false);
+      return {
+        snapshot: current,
+        verified,
+        sessionIds: [],
+        providerSelectionCancelled: false,
+      };
+    }
+    if (momentum.stopped) {
+      await this.acceptSnapshot(current, false);
+      return {
+        snapshot: current,
+        verified,
+        sessionIds: [],
+        providerSelectionCancelled: false,
+      };
+    }
+    const assignments = await chooseProviders(momentum.prepare);
+    if (!assignments) {
+      return {
+        snapshot: current,
+        verified,
+        sessionIds: [],
+        providerSelectionCancelled: true,
+      };
+    }
+
+    const sentSessions = await vscode.window.withProgress(
+      {
+        location: vscode.ProgressLocation.Notification,
+        title: `Starting the next reviewed wave in ${current.mission.name}`,
+        cancellable: false,
+      },
+      async (progress) => {
+        let snapshot = current;
+        for (const task of momentum.prepare) {
+          progress.report({
+            message: `Preparing ${task.key}`,
+            increment: momentum.prepare.length === 0 ? 0 : 45 / momentum.prepare.length,
+          });
+          const prepared = await this.prepareTaskSession(
+            snapshot.mission.mission_id,
+            task,
+            requireProviderAssignment(assignments, task),
+          );
+          snapshot = prepared.snapshot;
+        }
+
+        const ready = this.momentum(snapshot).send;
+        const instructions = [];
+        for (const task of ready) {
+          progress.report({
+            message: `Rechecking ${task.instruction_ref}`,
+            increment: ready.length === 0 ? 0 : 25 / ready.length,
+          });
+          await this.markSubmissionAmbiguous(task.task_id);
+          instructions.push({
+            task,
+            instruction: requireResponse((await this.client.once({
+              ask: "missionSendTaskInstruction",
+              with: {
+                mission_id: snapshot.mission.mission_id,
+                task_id: task.task_id,
+                instruction_sha256: task.instruction_sha256,
+              },
+            })).response, "missionInstruction"),
+          });
+        }
+
+        progress.report({ message: "Sending exact reviewed instructions", increment: 30 });
+        const submissions = await Promise.allSettled(instructions.map(async ({ task, instruction }) => {
+          await this.sessions.submitResolvedInput(instruction.session_id, instruction.instruction);
+          await this.clearAmbiguousSubmission(task.task_id);
+          return instruction.session_id;
+        }));
+        const sessionIds = submissions.flatMap((result) => result.status === "fulfilled" ? [result.value] : []);
+        const failed = submissions.length - sessionIds.length;
+        current = await this.get(snapshot.mission.mission_id);
+        if (failed > 0) {
+          await this.acceptSnapshot(current, false);
+          throw new Error(
+            `${failed} of ${submissions.length} provider submissions are ambiguous; automatic verification is disabled for those Tasks`,
+          );
+        }
+        return sessionIds;
+      },
+    );
+
+    current = await this.get(current.mission.mission_id);
+    await this.acceptSnapshot(current, false);
+    for (const sessionId of sentSessions) await this.sessions.select(sessionId);
+    if (sentSessions.length > 1) await this.sessions.arrangeConversationGrid();
+    return {
+      snapshot: current,
+      verified,
+      sessionIds: sentSessions,
+      providerSelectionCancelled: false,
+    };
+  }
+
   async launchFleet(selection?: MissionSelection): Promise<void> {
     const mission = selection?.mission ?? await this.pickMission("Run Reviewed Attempts");
     if (!mission) return;
@@ -475,6 +716,7 @@ export class MissionController implements vscode.Disposable {
       ask: "missionVerifyTask",
       with: { mission_id: missionId, task_id: taskId },
     })).response, "mission");
+    await this.clearAmbiguousSubmission(taskId);
     await this.acceptSnapshot(snapshot, false);
     return snapshot;
   }
@@ -504,7 +746,7 @@ export class MissionController implements vscode.Disposable {
             const prepared = await this.prepareTaskSession(
               current.mission.mission_id,
               task,
-              assignments.get(task.task_id) as string,
+              requireProviderAssignment(assignments, task),
             );
             current = prepared.snapshot;
             sessionIds.push(prepared.sessionId);
@@ -513,20 +755,25 @@ export class MissionController implements vscode.Disposable {
           const instructions = [];
           for (const task of reviewed.tasks) {
             progress.report({ message: `Checking ${task.instruction_ref}`, increment: 20 / reviewed.tasks.length });
-            instructions.push(requireResponse((await this.client.once({
-              ask: "missionSendTaskInstruction",
-              with: {
-                mission_id: reviewed.mission.mission_id,
-                task_id: task.task_id,
-                instruction_sha256: task.instruction_sha256,
-              },
-            })).response, "missionInstruction"));
+            await this.markSubmissionAmbiguous(task.task_id);
+            instructions.push({
+              task,
+              instruction: requireResponse((await this.client.once({
+                ask: "missionSendTaskInstruction",
+                with: {
+                  mission_id: reviewed.mission.mission_id,
+                  task_id: task.task_id,
+                  instruction_sha256: task.instruction_sha256,
+                },
+              })).response, "missionInstruction"),
+            });
           }
           progress.report({ message: "Sending reviewed instructions", increment: 20 });
           const submissions = await Promise.allSettled(
-            instructions.map((instruction) =>
-              this.sessions.submitResolvedInput(instruction.session_id, instruction.instruction)
-            ),
+            instructions.map(async ({ task, instruction }) => {
+              await this.sessions.submitResolvedInput(instruction.session_id, instruction.instruction);
+              await this.clearAmbiguousSubmission(task.task_id);
+            }),
           );
           const failed = submissions.filter((result) => result.status === "rejected").length;
           if (failed > 0) {
@@ -570,6 +817,7 @@ export class MissionController implements vscode.Disposable {
       "Send Task Instruction",
     );
     if (action !== "Send Task Instruction") return;
+    await this.markSubmissionAmbiguous(selected.task.task_id);
     const instruction = requireResponse((await this.client.once({
       ask: "missionSendTaskInstruction",
       with: {
@@ -579,6 +827,7 @@ export class MissionController implements vscode.Disposable {
       },
     })).response, "missionInstruction");
     await this.sessions.submitResolvedInput(instruction.session_id, instruction.instruction);
+    await this.clearAmbiguousSubmission(selected.task.task_id);
     await this.openMission({ mission: selected.mission });
   }
 
@@ -601,6 +850,7 @@ export class MissionController implements vscode.Disposable {
       ask: "missionVerifyTask",
       with: { mission_id: selected.mission.mission_id, task_id: selected.task.task_id },
     })).response, "mission");
+    await this.clearAmbiguousSubmission(selected.task.task_id);
     await this.acceptSnapshot(snapshot, true);
   }
 
@@ -837,6 +1087,135 @@ export class MissionController implements vscode.Disposable {
     return selected?.id ?? null;
   }
 
+  private async chooseWaveProviders(
+    tasks: readonly MissionTaskLine[],
+  ): Promise<ReadonlyMap<string, string> | null> {
+    const assignments = new Map<string, string>();
+    const undecided: MissionTaskLine[] = [];
+    for (const task of tasks) {
+      if (task.provider_selector === "operatorChoice") {
+        undecided.push(task);
+        continue;
+      }
+      const provider = await this.chooseProvider(task.provider_selector);
+      if (!provider) return null;
+      assignments.set(task.task_id, provider);
+    }
+    if (undecided.length === 0) return assignments;
+    if (undecided.length === 1) {
+      const provider = await this.chooseProvider("operatorChoice");
+      if (!provider) return null;
+      assignments.set(undecided[0].task_id, provider);
+      return assignments;
+    }
+
+    const usable = this.runtimeState.providers.filter((provider) => provider.installation.state === "usable");
+    const individual = { label: "Assign each Task separately", description: "Choose per reviewed Task", id: null };
+    const selected = await vscode.window.showQuickPick(
+      [
+        ...usable.map((provider) => ({
+          label: provider.displayName,
+          description: provider.providerId,
+          detail: `Use for all ${undecided.length} ready Tasks`,
+          id: provider.providerId as string | null,
+        })),
+        individual,
+      ],
+      {
+        title: `Provider for ${undecided.length} ready Mission Tasks`,
+        placeHolder: "Use one runtime-discovered provider for this wave, or assign Tasks individually",
+      },
+    );
+    if (!selected) return null;
+    if (selected.id) {
+      for (const task of undecided) assignments.set(task.task_id, selected.id);
+      return assignments;
+    }
+    for (const task of undecided) {
+      const provider = await this.chooseProvider("operatorChoice");
+      if (!provider) return null;
+      assignments.set(task.task_id, provider);
+    }
+    return assignments;
+  }
+
+  private waveProvidersForJourney(
+    tasks: readonly MissionTaskLine[],
+    operatorChoiceProvider: string,
+  ): ReadonlyMap<string, string> {
+    const usable = new Set(
+      this.runtimeState.providers
+        .filter((provider) => provider.installation.state === "usable")
+        .map((provider) => provider.providerId),
+    );
+    if (!usable.has(operatorChoiceProvider)) {
+      throw new Error(`the journey provider ${operatorChoiceProvider} is not currently usable`);
+    }
+    return new Map(tasks.map((task) => {
+      const provider = task.provider_selector === "operatorChoice"
+        ? operatorChoiceProvider
+        : task.provider_selector;
+      if (!usable.has(provider)) {
+        throw new Error(`the reviewed provider ${provider} is not currently usable`);
+      }
+      return [task.task_id, provider];
+    }));
+  }
+
+  private markSubmissionAmbiguous(taskId: string): Promise<void> {
+    return this.ambiguousTaskSubmissions.mark(taskId);
+  }
+
+  private clearAmbiguousSubmission(taskId: string): Promise<void> {
+    return this.ambiguousTaskSubmissions.clear(taskId);
+  }
+
+  private momentum(snapshot: MissionSnapshot): MissionMomentum {
+    return missionMomentum(snapshot, this.runtimeState.sessions, this.ambiguousTaskSubmissions.current());
+  }
+
+  private async showStoppedMomentum(snapshot: MissionSnapshot, reason: string): Promise<void> {
+    if (reason === "integrating") {
+      await vscode.window.showInformationMessage(
+        `${snapshot.mission.name} is ready for explicit project integration and final Gate verification.`,
+      );
+      return;
+    }
+    await vscode.window.showInformationMessage(
+      `${snapshot.mission.name} is ${reason}; no reviewed Task wave can advance from that state.`,
+    );
+  }
+
+  private async showWaitingMomentum(snapshot: MissionSnapshot, momentum: MissionMomentum): Promise<void> {
+    if (momentum.manual.length > 0) {
+      await vscode.window.showWarningMessage(
+        `${momentum.manual.length} Tasks require explicit retry or recovery: ${momentum.manual.map((task) => task.key).join(", ")}.`,
+      );
+      return;
+    }
+    if (momentum.waiting.length > 0) {
+      await vscode.window.showInformationMessage(
+        `${momentum.waiting.length} Tasks are still working or waiting. Continue again when their exact sessions are Ready.`,
+      );
+      return;
+    }
+    await vscode.window.showInformationMessage(
+      `${snapshot.mission.name} has no deterministic next step. Open its review for the exact state.`,
+    );
+  }
+
+  private async showMomentumResult(snapshot: MissionSnapshot, verified: number, sent: number): Promise<void> {
+    const changes = [
+      verified > 0 ? `${verified} finished Tasks sealed` : "",
+      sent > 0 ? `${sent} reviewed Tasks started` : "",
+    ].filter(Boolean).join("; ");
+    const prefix = changes || "The reviewed Mission advanced";
+    const suffix = snapshot.mission.state === "integrating"
+      ? " It is ready for explicit project integration."
+      : "";
+    await vscode.window.showInformationMessage(`${prefix}.${suffix}`);
+  }
+
   private async prepareTaskSession(
     missionId: string,
     task: MissionTaskLine,
@@ -1000,6 +1379,37 @@ function missionDocument(snapshot: MissionSnapshot): string {
 
 function inline(value: string): string {
   return `\`${value.replaceAll("`", "'").replaceAll("\r", " ").replaceAll("\n", " ")}\``;
+}
+
+function hasMomentumWork(momentum: MissionMomentum): boolean {
+  return momentum.start
+    || momentum.verify.length > 0
+    || momentum.prepare.length > 0
+    || momentum.send.length > 0;
+}
+
+function requireProviderAssignment(
+  assignments: ReadonlyMap<string, string>,
+  task: MissionTaskLine,
+): string {
+  const provider = assignments.get(task.task_id);
+  if (!provider) throw new Error(`no provider was assigned to ${task.key}`);
+  return provider;
+}
+
+function momentumConfirmation(snapshot: MissionSnapshot, momentum: MissionMomentum): string {
+  const actions = momentum.start
+    ? `Start the Mission and send its first eligible wave from ${snapshot.tasks.length} reviewed Tasks.`
+    : [
+      momentum.verify.length > 0 ? `Seal ${momentum.verify.length} exact idle Tasks with their fixed Gates.` : "",
+      momentum.prepare.length > 0 ? `Prepare ${momentum.prepare.length} newly eligible Tasks.` : "",
+      momentum.send.length > 0 ? `Send ${momentum.send.length} already prepared exact instructions.` : "",
+    ].filter(Boolean).join("\n");
+  return [
+    `Mission SHA-256 ${snapshot.mission_sha256}`,
+    actions,
+    "Running, waiting, failed, retryable, and integration boundaries stay explicit.",
+  ].join("\n\n");
 }
 
 function safeArtifactPath(value: string): boolean {

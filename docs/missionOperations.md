@@ -88,14 +88,17 @@ The active bounds are:
 
 Validation binds the exact Mission digest, instruction paths and byte digests, canonical project and Git identity,
 Gate definition digests, provider runtime observations, output roots, limits, and selected capability versions.
-Starting requires a second local action carrying the exact Mission digest. That approval expires after five minutes.
+Starting requires a second confirmed local action carrying the exact Mission digest. `Continue Reviewed Mission` is
+that action for an ordinary Mission. That approval expires after five minutes.
 Any changed Mission file, instruction byte, Gate definition, project identity, or capability trust state requires a new
 validation.
 
-The scheduler can reserve an eligible Task and prepare its workspace. It cannot submit text. A Task becomes ready for
-input only after the operator binds an existing public Runtime session in the exact prepared workspace. `Send Task
-Instruction` is a distinct local PC action and transports the reviewed UTF-8 bytes unchanged through the ordinary
-provider-neutral session input boundary.
+The scheduler can reserve an eligible Task. It cannot prepare a workspace, start a provider, or submit text by itself.
+One confirmed `Continue Reviewed Mission` action composes the currently safe local operations: it verifies exact
+finished sessions with fixed Gates, prepares newly eligible workspaces, binds public Runtime sessions, rechecks the
+instruction bytes, and transports them unchanged through the ordinary provider-neutral session input boundary.
+Granular Start, Prepare, Send, and Verify commands remain available for explicit recovery. None is available to a
+remote caller.
 
 Mission creation, validation, start, Task preparation, Task Send, retry, integration, archive, Gate registration, and
 all capability mutations are local-only requests. A paired remote device cannot widen a Mission or cause model input.
@@ -161,6 +164,10 @@ or eligible work can be scheduled again. A reservation with no submission is rel
 boundary is ambiguous, so the Task and Mission become blocked instead of duplicating provider work. Resume is an
 explicit local safe-resume action.
 
+Studio also persists the narrower boundary where Core committed a local Send intent but the public Runtime delivery
+did not return success. Mission Momentum will not treat that session as finished after an Extension Host restart.
+The operator must use the exact Task recovery action. No prompt or provider output is stored with this marker.
+
 Deleting the Runtrol home removes Mission evidence and local trust state. It does not delete provider-native sessions,
 the repository, instructions, handoffs, outputs, or capability files.
 
@@ -172,13 +179,15 @@ renderer. The normal sequence is:
 1. Register fixed local Gates.
 2. Validate a project Mission file.
 3. Review the digest, limits, Tasks, providers, workspaces, Gates, and capability versions.
-4. Start within the five-minute approval window.
-5. Prepare each reserved Task and bind its exact provider session.
-6. Send each exact instruction locally.
-7. Verify the Task and inspect its Run and Receipt IDs.
-8. Retry only a blocked or retryable Task within the declared bound.
-9. Verify and complete integration locally.
-10. Archive the terminal Mission.
+4. Select `Continue Reviewed Mission` within the five-minute approval window. It starts and sends the first eligible
+   wave after one confirmation.
+5. Select the same action when a wave is Ready. It runs fixed Gates, seals Receipts, and starts the next eligible wave.
+6. Use granular recovery only for a failed, retryable, missing, or ambiguous Task. Working sessions, person or quota
+   waits, comparison policy, and integration never advance by inference.
+7. Verify and complete integration locally.
+8. Archive the terminal Mission.
+
+A `choose_one` comparison keeps its specialized `Run All Reviewed Attempts` and explicit result comparison flow.
 
 ### Composing the parallel-attempt Mission
 
