@@ -189,6 +189,16 @@ renderer. The normal sequence is:
 
 A `choose_one` comparison keeps its specialized `Run All Reviewed Attempts` and explicit result comparison flow.
 
+When several ordinary Missions are ready across the operator's projects, `Continue Ready Missions` is the bounded flight deck.
+It reads the current exact snapshots, puts running safe work before a new start, and lists every selected project,
+full Mission digest, and safe action in one local modal. One confirmation advances at most eight Missions through the
+same requests described above. More ready Missions stay counted for the next review. An expired review, a Task that
+needs recovery, a waiting-only Mission, `choose_one`, and integration never enter the batch. One failed Mission is
+reported without preventing an unrelated Mission from reaching its own exact safe result. Operator-choice Tasks may
+share one runtime-discovered provider selected for that flight, or keep individual choices. Newly started native
+conversation tabs are arranged once after the batch. This is local composition, not a Core scheduler or remote start
+surface.
+
 ### Composing the parallel-attempt Mission
 
 Step 2 assumes a Mission file exists. Writing one by hand is the part that kept the commonest shape of this flow

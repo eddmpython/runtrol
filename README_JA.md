@@ -8,6 +8,7 @@
 > からである。
 > Fleet Compare は同じレビュー済み指示を 2 から 4 個の隔離 worktree と provider session に一括送信し、VS Code の grid と native diff で比較した後、選択した一つの passing Receipt だけで最終検証する。この流れは実物二 CLI gate と実際の Extension Host 目視検査で検証した。
 > 通常の Mission は `Continue Reviewed Mission` 一回で現在安全な wave を開始し、完了した Task を固定 Gate で封印し、次の DAG wave を準備して正確なレビュー済み指示を送る。実物 CLI と Extension Host の二段階 journey で検証した。
+> `Continue Ready Missions` は最大八つの正確な Mission digest を一度にレビューし、複数 project の現在安全な wave をまとめて進める。実物 Extension Host で二つの Git project を一回で開始し、次の一回で両方を `integrating` に進めた。
 >
 > スマートフォン通知は会話内容を運ばず、実際にオペレーターを待つ最初の session を開く。`Needs you`
 > の件数と次への移動は person wait だけを含み、account limit は区別する。実物 CLI approval gate が

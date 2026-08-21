@@ -247,6 +247,13 @@ Start, Prepare, Send, and Verify remain command-palette and Task-row recovery ac
 success is unknown is persisted as ambiguous before transport and cannot be auto-verified, including after Extension
 Host restart. `choose_one` Missions keep the specialized `Run All Reviewed Attempts` action.
 
+The Missions view title exposes `Continue Ready Missions` for cross-project operation. It reviews up to eight exact
+ordinary Mission digests at once, prioritizes safe work already running, and advances each through Mission Momentum.
+Additional ready Missions stay visible for the next review. Waiting-only, expired, recovery, specialized comparison,
+and integration states are counted but excluded. A failure is attached to its Mission and does not stop unrelated
+reviewed work. All native conversation tabs started by the batch are placed through the existing VS Code grid once.
+No new renderer, provider parser, scheduler, or transcript owner is involved.
+
 The reusable `runtrol-mission:` editor document shows the Mission source and digest, approval expiry, progress, Task
 state, instruction and policy digests, provider and session identities, workspace and base commit, selected capability
 versions, Gate counts, and the latest passing Run and Receipt IDs. It uses VS Code's text document surface and does not
@@ -348,6 +355,7 @@ specified in [automatic updates](automaticUpdates.md).
 | `vscodeHostPerformance` | real 30-session Extension Host and Webview responsiveness on three operating systems |
 | `vscodeRealProviderJourney` | installed provider discovery and a complete real CLI control journey |
 | `node tooling/real-window-eye.mjs` | the eye pass: an isolated VS Code window and an isolated Runtime with the real installed CLIs, real folders and real conversations, photographed in the draft, conversation, tabs, reopened, grid, places, diff and diff-editor poses, with a real throwaway deletion; the pictures are the judgement. `RUNTROL_EYE_ENTRY=placeProbe` runs the focused place probe and `RUNTROL_EYE_ENTRY=agentToolsEye` runs the zero-model-turn Agent Tools enable and revoke proof in isolated provider homes |
+| `RUNTROL_EYE_ENTRY=missionFlightDeckEye node tooling/real-window-eye.mjs` | two separate Git projects and reviewed Missions start together through one flight, open two real native conversations in the VS Code grid, and reach integration together through the next flight |
 | `agentToolsSmoke` | real installed provider CLIs, official MCP registration, modern and legacy discovery, fixed tool catalogue, root isolation, Runtime reads, complete revocation, and post-revocation default deny with zero model turns |
 | `missionGrowthContracts` | Mission state, exact Send, evidence, integration, capability trust, local scope, tamper, and rollback |
 | `missionLiveJourney` | two installed provider CLIs complete five reviewed Tasks and an explicit reuse, tamper, and rollback journey through production IPC |

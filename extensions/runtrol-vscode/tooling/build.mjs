@@ -7,6 +7,7 @@ const extensionRoot = fileURLToPath(new URL("../", import.meta.url));
 const repositoryRoot = fileURLToPath(new URL("../../../", import.meta.url));
 const dist = path.join(extensionRoot, "dist");
 const resources = path.join(extensionRoot, "resources");
+const includeTestJourney = process.env.RUNTROL_INCLUDE_TEST_JOURNEY === "1";
 
 await rm(dist, { recursive: true, force: true });
 await mkdir(dist, { recursive: true });
@@ -32,6 +33,9 @@ await Promise.all([
     external: ["vscode"],
     alias: {
       "@runtrol/runtime-client": path.join(repositoryRoot, "clients/typescript/src/index.ts"),
+    },
+    define: {
+      RUNTROL_INCLUDE_TEST_JOURNEY: JSON.stringify(includeTestJourney),
     },
     minify: true,
     sourcemap: false,

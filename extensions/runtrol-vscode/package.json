@@ -97,6 +97,7 @@
     "onCommand:runtrol.openMission",
     "onCommand:runtrol.startMission",
     "onCommand:runtrol.continueMission",
+    "onCommand:runtrol.continueReadyMissions",
     "onCommand:runtrol.launchFleet",
     "onCommand:runtrol.prepareMissionTask",
     "onCommand:runtrol.sendTaskInstruction",
@@ -321,6 +322,11 @@
       {
         "command": "runtrol.continueMission",
         "title": "Runtrol: Continue Reviewed Mission",
+        "icon": "$(run-all)"
+      },
+      {
+        "command": "runtrol.continueReadyMissions",
+        "title": "Runtrol: Continue Ready Missions",
         "icon": "$(run-all)"
       },
       {
@@ -618,6 +624,11 @@
       ],
       "view/title": [
         {
+          "command": "runtrol.continueReadyMissions",
+          "when": "view == runtrol.missions",
+          "group": "navigation@0"
+        },
+        {
           "command": "runtrol.startSession",
           "when": "view == runtrol.sessions",
           "group": "navigation@0"
@@ -690,27 +701,27 @@
         {
           "command": "runtrol.fanOutInstruction",
           "when": "view == runtrol.missions",
-          "group": "navigation@0"
+          "group": "navigation@1"
         },
         {
           "command": "runtrol.validateMission",
           "when": "view == runtrol.missions",
-          "group": "navigation@1"
+          "group": "navigation@2"
         },
         {
           "command": "runtrol.registerMissionGate",
           "when": "view == runtrol.missions",
-          "group": "navigation@2"
+          "group": "navigation@3"
         },
         {
           "command": "runtrol.refresh",
           "when": "view == runtrol.missions",
-          "group": "navigation@3"
+          "group": "navigation@4"
         },
         {
           "command": "runtrol.capabilityInbox",
           "when": "view == runtrol.missions",
-          "group": "navigation@4"
+          "group": "navigation@5"
         },
         {
           "command": "runtrol.arrangeConversationGrid",

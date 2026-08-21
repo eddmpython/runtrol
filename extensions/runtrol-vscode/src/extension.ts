@@ -41,6 +41,8 @@ import { WorkspaceRootFollowing } from "./workspaceRoots";
 import { ConversationItem, ConversationsTree, ProjectItem, ServiceProblemItem } from "./trees";
 import { UsageTree } from "./usageTree";
 
+declare const RUNTROL_INCLUDE_TEST_JOURNEY: boolean;
+
 export type RuntrolExtensionApi = {
   readonly ready: Promise<void>;
   readonly initializationStage?: string;
@@ -268,6 +270,10 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
     vscode.commands.registerCommand(
       "runtrol.continueMission",
       (item) => run(() => afterMissionReady(() => missionController.continueMission(item))),
+    ),
+    vscode.commands.registerCommand(
+      "runtrol.continueReadyMissions",
+      () => run(() => afterMissionReady(() => missionController.continueReadyMissions())),
     ),
     vscode.commands.registerCommand(
       "runtrol.launchFleet",
@@ -895,9 +901,11 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
         }
       }
       : undefined,
-    journey: journeyApi(controller, missionController, state, conversation, afterReady, context.extensionMode, (sessionId) => (
-      conversations.revealSession(sessionId)
-    )),
+    journey: RUNTROL_INCLUDE_TEST_JOURNEY
+      ? journeyApi(controller, missionController, state, conversation, afterReady, context.extensionMode, (sessionId) => (
+        conversations.revealSession(sessionId)
+      ))
+      : undefined,
   };
 }
 

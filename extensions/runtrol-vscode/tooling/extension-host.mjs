@@ -29,11 +29,12 @@ await stat(fixture);
 
 const bundled = spawnSync(process.execPath, [path.join(extensionRoot, "tooling", "build.mjs")], {
   cwd: extensionRoot,
+  env: { ...process.env, RUNTROL_INCLUDE_TEST_JOURNEY: "1" },
   encoding: "utf8",
   windowsHide: true,
 });
 if (bundled.status !== 0) {
-  throw new Error(`production extension build failed:\n${bundled.stdout}${bundled.stderr}`);
+  throw new Error(`test extension build failed:\n${bundled.stdout}${bundled.stderr}`);
 }
 
 // macOS expands its per-user temporary directory to a path long enough to exceed the Unix-domain socket

@@ -379,6 +379,11 @@ def run() -> int:
     for bundle in bundles:
         if not bundle.is_file() or bundle.stat().st_size > 352 * 1024:
             failures.append(f"{bundle.relative_to(ROOT)} is missing or exceeds 352 KiB")
+    extension_bundle = EXTENSION / "dist" / "extension.js"
+    if extension_bundle.is_file() and "RUNTROL_VSCODE_REAL_PROVIDER_JOURNEY" in extension_bundle.read_text(
+        encoding="utf-8"
+    ):
+        failures.append("the production extension bundle contains the test-only Journey API")
     if failures:
         print("[vscodeExtension] FAIL. bundle contract violations:", file=sys.stderr)
         for failure in failures:

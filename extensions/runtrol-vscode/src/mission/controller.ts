@@ -22,8 +22,16 @@ import {
   missionSpec,
 } from "./fanOut";
 import { AmbiguousSubmissions } from "./ambiguousSubmissions";
+import {
+  missionFlightDeck,
+  type MissionFlightDeck,
+} from "./flightDeck";
 import { branchFromHead, gitdirTarget } from "./gitHead";
-import { missionMomentum, type MissionMomentum } from "./momentum";
+import {
+  hasMissionMomentumWork,
+  missionMomentum,
+  type MissionMomentum,
+} from "./momentum";
 
 /// Where each project's last fan-out shape is remembered, never instruction text.
 const FAN_OUT_DEFAULTS_KEY = "runtrol.fanOutDefaults";
@@ -70,6 +78,26 @@ type MissionAdvanceResult = {
   readonly verified: number;
   readonly sessionIds: readonly string[];
   readonly providerSelectionCancelled: boolean;
+};
+
+type MissionProviderChooser = (
+  tasks: readonly MissionTaskLine[],
+) => Promise<ReadonlyMap<string, string> | null>;
+
+type MissionFlightFailure = {
+  readonly missionId: string;
+  readonly name: string;
+  readonly project: string;
+  readonly message: string;
+};
+
+type MissionFlightAdvanceResult = {
+  readonly advanced: number;
+  readonly verified: number;
+  readonly sessionIds: readonly string[];
+  readonly failures: readonly MissionFlightFailure[];
+  readonly providerSelectionCancelled: boolean;
+  readonly remainingReady: number;
 };
 
 export class MissionController implements vscode.Disposable {
@@ -452,7 +480,7 @@ export class MissionController implements vscode.Disposable {
       await this.showStoppedMomentum(current, momentum.stopped);
       return;
     }
-    if (momentum.manual.length > 0 || !hasMomentumWork(momentum)) {
+    if (momentum.manual.length > 0 || !hasMissionMomentumWork(momentum)) {
       await this.showWaitingMomentum(current, momentum);
       return;
     }
@@ -484,6 +512,26 @@ export class MissionController implements vscode.Disposable {
     await this.showMomentumResult(result.snapshot, result.verified, result.sessionIds.length);
   }
 
+  async continueReadyMissions(): Promise<void> {
+    const deck = await this.currentFlightDeck();
+    if (deck.batch.length === 0) {
+      await vscode.window.showInformationMessage(flightDeckEmptyMessage(deck));
+      return;
+    }
+    const action = await vscode.window.showWarningMessage(
+      `Continue ${deck.batch.length} reviewed Missions through every currently safe step?`,
+      {
+        modal: true,
+        detail: flightDeckConfirmation(deck),
+      },
+      "Continue reviewed Missions",
+    );
+    if (action !== "Continue reviewed Missions") return;
+
+    const result = await this.advanceFlightDeck(deck, this.flightDeckProviderChooser());
+    await this.showFlightDeckResult(result, deck.batch.length);
+  }
+
   async continueMissionForJourney(
     missionId: string,
     operatorChoiceProvider: string,
@@ -493,12 +541,12 @@ export class MissionController implements vscode.Disposable {
     if (momentum.stopped) {
       throw new Error(`the Mission cannot continue from ${momentum.stopped}`);
     }
-    if (momentum.manual.length > 0 || !hasMomentumWork(momentum)) {
+    if (momentum.manual.length > 0 || !hasMissionMomentumWork(momentum)) {
       throw new Error("the Mission has no deterministic reviewed step to continue");
     }
     const result = await this.advanceMomentum(
       current,
-      (tasks) => Promise.resolve(this.waveProvidersForJourney(tasks, operatorChoiceProvider)),
+      (tasks) => Promise.resolve(this.resolveWaveProviders(tasks, operatorChoiceProvider)),
     );
     if (result.providerSelectionCancelled) {
       throw new Error("the journey provider assignment was cancelled");
@@ -510,11 +558,102 @@ export class MissionController implements vscode.Disposable {
     };
   }
 
+  async continueReadyMissionsForJourney(
+    operatorChoiceProvider: string,
+  ): Promise<{ missions: number; sessionIds: readonly string[]; verified: number; remainingReady: number }> {
+    const deck = await this.currentFlightDeck();
+    if (deck.batch.length === 0) {
+      throw new Error("no reviewed ordinary Mission has a deterministic step to continue");
+    }
+    const result = await this.advanceFlightDeck(
+      deck,
+      (tasks) => Promise.resolve(this.resolveWaveProviders(tasks, operatorChoiceProvider)),
+    );
+    if (result.providerSelectionCancelled) {
+      throw new Error("the Mission Flight Deck provider assignment was cancelled");
+    }
+    if (result.failures.length > 0) {
+      throw new Error(result.failures.map((failure) =>
+        `${failure.name} (${failure.project}, ${failure.missionId}): ${failure.message}`
+      ).join("; "));
+    }
+    return {
+      missions: result.advanced,
+      sessionIds: result.sessionIds,
+      verified: result.verified,
+      remainingReady: result.remainingReady,
+    };
+  }
+
+  private async currentFlightDeck(nowUnixMs = Date.now()): Promise<MissionFlightDeck> {
+    await this.refresh();
+    const active = this.rows.filter((mission) => (
+      mission.state === "validated"
+      || mission.state === "ready"
+      || mission.state === "running"
+      || mission.state === "paused"
+      || mission.state === "blocked"
+      || mission.state === "integrating"
+    ));
+    // MissionList is bounded at 100. Read every exact snapshot through the command connection's existing serialized
+    // ownership instead of trusting an older editor document or Mission row summary.
+    const snapshots: MissionSnapshot[] = [];
+    for (const mission of active) snapshots.push(await this.get(mission.mission_id));
+    return missionFlightDeck(
+      snapshots.map((snapshot) => ({ snapshot, momentum: this.momentum(snapshot) })),
+      nowUnixMs,
+    );
+  }
+
+  private async advanceFlightDeck(
+    deck: MissionFlightDeck,
+    chooseProviders: MissionProviderChooser,
+  ): Promise<MissionFlightAdvanceResult> {
+    let advanced = 0;
+    let verified = 0;
+    let providerSelectionCancelled = false;
+    let remainingReady = deck.remainingReady.length;
+    const sessionIds: string[] = [];
+    const failures: MissionFlightFailure[] = [];
+
+    for (const [index, entry] of deck.batch.entries()) {
+      try {
+        const result = await this.advanceMomentum(entry.snapshot, chooseProviders, false);
+        if (result.providerSelectionCancelled) {
+          await this.acceptSnapshot(result.snapshot, false);
+          providerSelectionCancelled = true;
+          remainingReady += deck.batch.length - index;
+          break;
+        }
+        advanced += 1;
+        verified += result.verified;
+        sessionIds.push(...result.sessionIds);
+      } catch (error) {
+        failures.push({
+          missionId: entry.snapshot.mission.mission_id,
+          name: entry.snapshot.mission.name,
+          project: entry.snapshot.mission.project,
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
+    await this.refresh();
+    await this.placeMissionSessions(sessionIds);
+    return {
+      advanced,
+      verified,
+      sessionIds,
+      failures,
+      providerSelectionCancelled,
+      remainingReady,
+    };
+  }
+
   private async advanceMomentum(
     initial: MissionSnapshot,
-    chooseProviders: (
-      tasks: readonly MissionTaskLine[],
-    ) => Promise<ReadonlyMap<string, string> | null>,
+    chooseProviders: MissionProviderChooser,
+    placeSessions = true,
   ): Promise<MissionAdvanceResult> {
     let current = initial;
     let momentum = this.momentum(current);
@@ -652,8 +791,7 @@ export class MissionController implements vscode.Disposable {
 
     current = await this.get(current.mission.mission_id);
     await this.acceptSnapshot(current, false);
-    for (const sessionId of sentSessions) await this.sessions.select(sessionId);
-    if (sentSessions.length > 1) await this.sessions.arrangeConversationGrid();
+    if (placeSessions) await this.placeMissionSessions(sentSessions);
     return {
       snapshot: current,
       verified,
@@ -1139,7 +1277,47 @@ export class MissionController implements vscode.Disposable {
     return assignments;
   }
 
-  private waveProvidersForJourney(
+  private flightDeckProviderChooser(): MissionProviderChooser {
+    let commonProvider: string | undefined;
+    let individual = false;
+    return async (tasks) => {
+      if (individual || !tasks.some((task) => task.provider_selector === "operatorChoice")) {
+        return this.chooseWaveProviders(tasks);
+      }
+      if (commonProvider) return this.resolveWaveProviders(tasks, commonProvider);
+      const usable = this.runtimeState.providers.filter((provider) => provider.installation.state === "usable");
+      const selected = await vscode.window.showQuickPick(
+        [
+          ...usable.map((provider) => ({
+            label: provider.displayName,
+            description: provider.providerId,
+            detail: "Use for every operator-choice Task in this flight",
+            providerId: provider.providerId as string | null,
+          })),
+          {
+            label: "Assign each Task separately",
+            description: "Keep provider choices independent",
+            providerId: null,
+          },
+        ],
+        { title: "Provider for this Mission flight" },
+      );
+      if (!selected) return null;
+      if (selected.providerId === null) {
+        individual = true;
+        return this.chooseWaveProviders(tasks);
+      }
+      commonProvider = selected.providerId;
+      return this.resolveWaveProviders(tasks, commonProvider);
+    };
+  }
+
+  private async placeMissionSessions(sessionIds: readonly string[]): Promise<void> {
+    for (const sessionId of sessionIds) await this.sessions.select(sessionId);
+    if (sessionIds.length > 1) await this.sessions.arrangeConversationGrid();
+  }
+
+  private resolveWaveProviders(
     tasks: readonly MissionTaskLine[],
     operatorChoiceProvider: string,
   ): ReadonlyMap<string, string> {
@@ -1149,7 +1327,7 @@ export class MissionController implements vscode.Disposable {
         .map((provider) => provider.providerId),
     );
     if (!usable.has(operatorChoiceProvider)) {
-      throw new Error(`the journey provider ${operatorChoiceProvider} is not currently usable`);
+      throw new Error(`the selected provider ${operatorChoiceProvider} is not currently usable`);
     }
     return new Map(tasks.map((task) => {
       const provider = task.provider_selector === "operatorChoice"
@@ -1214,6 +1392,34 @@ export class MissionController implements vscode.Disposable {
       ? " It is ready for explicit project integration."
       : "";
     await vscode.window.showInformationMessage(`${prefix}.${suffix}`);
+  }
+
+  private async showFlightDeckResult(result: MissionFlightAdvanceResult, selected: number): Promise<void> {
+    const summary = [
+      `${result.advanced} of ${selected} reviewed Missions advanced`,
+      `${result.verified} finished Tasks sealed`,
+      `${result.sessionIds.length} reviewed Tasks started`,
+    ].join("; ");
+    const suffix = result.remainingReady > 0
+      ? ` ${result.remainingReady} ready Missions remain for the next review.`
+      : "";
+    if (result.failures.length > 0) {
+      await vscode.window.showWarningMessage(
+        `${summary}. ${result.failures.length} Missions stopped at an explicit failure.${suffix}`,
+        {
+          modal: true,
+          detail: result.failures.map((failure) =>
+            `${failure.name} (${failure.project}, ${failure.missionId}): ${failure.message}`
+          ).join("\n"),
+        },
+      );
+      return;
+    }
+    if (result.providerSelectionCancelled) {
+      await vscode.window.showInformationMessage(`${summary}. Provider assignment was cancelled.${suffix}`);
+      return;
+    }
+    await vscode.window.showInformationMessage(`${summary}.${suffix}`);
   }
 
   private async prepareTaskSession(
@@ -1381,13 +1587,6 @@ function inline(value: string): string {
   return `\`${value.replaceAll("`", "'").replaceAll("\r", " ").replaceAll("\n", " ")}\``;
 }
 
-function hasMomentumWork(momentum: MissionMomentum): boolean {
-  return momentum.start
-    || momentum.verify.length > 0
-    || momentum.prepare.length > 0
-    || momentum.send.length > 0;
-}
-
 function requireProviderAssignment(
   assignments: ReadonlyMap<string, string>,
   task: MissionTaskLine,
@@ -1410,6 +1609,43 @@ function momentumConfirmation(snapshot: MissionSnapshot, momentum: MissionMoment
     actions,
     "Running, waiting, failed, retryable, and integration boundaries stay explicit.",
   ].join("\n\n");
+}
+
+function flightDeckEmptyMessage(deck: MissionFlightDeck): string {
+  return [
+    "No reviewed ordinary Mission has a safe deterministic step now.",
+    `${deck.waiting.length} are working or waiting; ${deck.manual.length} require review or recovery; ${deck.stopped.length} use a specialized or stopped flow.`,
+  ].join(" ");
+}
+
+function flightDeckConfirmation(deck: MissionFlightDeck): string {
+  const missions = deck.batch.map((entry, index) => [
+    `${index + 1}. ${entry.snapshot.mission.name}`,
+    `Project ${entry.snapshot.mission.project}`,
+    `Mission SHA-256 ${entry.snapshot.mission_sha256}`,
+    `Safe now: ${flightDeckAction(entry.momentum)}`,
+  ].join("\n")).join("\n\n");
+  const outside = [
+    deck.remainingReady.length > 0 ? `${deck.remainingReady.length} additional ready Missions stay queued.` : "",
+    deck.waiting.length > 0 ? `${deck.waiting.length} Missions are working or waiting.` : "",
+    deck.manual.length > 0 ? `${deck.manual.length} Missions require individual review or recovery.` : "",
+    deck.stopped.length > 0 ? `${deck.stopped.length} Missions use a specialized or stopped flow.` : "",
+  ].filter(Boolean).join("\n");
+  return [
+    missions,
+    outside,
+    "Operator-choice Tasks ask once for a shared discovered provider, with individual assignment still available.",
+    "Working, waiting, failed, retryable, ambiguous, comparison, and integration boundaries stay explicit.",
+  ].filter(Boolean).join("\n\n");
+}
+
+function flightDeckAction(momentum: MissionMomentum): string {
+  if (momentum.start) return "start the Mission and send its first eligible wave";
+  return [
+    momentum.verify.length > 0 ? `seal ${momentum.verify.length} finished Tasks` : "",
+    momentum.prepare.length > 0 ? `prepare ${momentum.prepare.length} newly eligible Tasks` : "",
+    momentum.send.length > 0 ? `send ${momentum.send.length} reviewed instructions` : "",
+  ].filter(Boolean).join("; ");
 }
 
 function safeArtifactPath(value: string): boolean {

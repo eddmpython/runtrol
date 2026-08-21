@@ -88,6 +88,13 @@ export function missionMomentum(
   return { start: false, verify, prepare, send, waiting, manual, stopped: null };
 }
 
+export function hasMissionMomentumWork(momentum: MissionMomentum): boolean {
+  return momentum.start
+    || momentum.verify.length > 0
+    || momentum.prepare.length > 0
+    || momentum.send.length > 0;
+}
+
 function classifyAwaitingInput(
   task: MissionTaskLine,
   sessionsById: ReadonlyMap<string, MomentumSession>,

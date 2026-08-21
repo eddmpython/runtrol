@@ -81,6 +81,9 @@ export type JourneyApi = {
     missionId: string,
     operatorChoiceProvider: string,
   ): Promise<{ snapshot: MissionSnapshot; sessionIds: readonly string[]; verified: number }>;
+  continueReadyMissions(
+    operatorChoiceProvider: string,
+  ): Promise<{ missions: number; sessionIds: readonly string[]; verified: number; remainingReady: number }>;
   mission(missionId: string): Promise<MissionSnapshot>;
   verifyMissionTask(missionId: string, taskId: string): Promise<MissionSnapshot>;
   compareMissionResults(missionId: string): Promise<void>;
@@ -235,6 +238,9 @@ export function journeyApi(
     launchFleet: (missionId) => afterReady(() => missions.launchFleetForJourney(missionId)),
     continueMission: (missionId, operatorChoiceProvider) => afterReady(
       () => missions.continueMissionForJourney(missionId, operatorChoiceProvider),
+    ),
+    continueReadyMissions: (operatorChoiceProvider) => afterReady(
+      () => missions.continueReadyMissionsForJourney(operatorChoiceProvider),
     ),
     mission: (missionId) => afterReady(() => missions.snapshot(missionId)),
     verifyMissionTask: (missionId, taskId) => afterReady(

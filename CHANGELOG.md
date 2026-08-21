@@ -12,6 +12,14 @@ and refactoring that no user can observe do not belong here.
 
 ### Added
 
+- **Continue Ready Missions** turns the Missions view into a bounded multi-project flight deck. One local modal lists
+  the exact digest and currently safe action for up to eight reviewed ordinary Missions, then advances each through
+  the existing Mission Momentum requests. Running work is handled before a new start; expired review, recovery,
+  waiting-only, comparison, and integration boundaries stay out. One failure cannot stop an unrelated Mission, one
+  provider choice can cover every operator-choice Task in the run, and all newly started native conversations are
+  arranged once. A real Extension Host advanced two separate Git projects from `validated` to `running` and then to
+  `integrating` through two Flight Deck actions.
+
 - An ordinary reviewed Mission now advances one safe wave at a time from one **Continue Reviewed Mission** action.
   The same confirmed local action starts a validated Mission, seals exact Ready Tasks with their fixed Gates,
   prepares newly eligible workspaces and Runtime sessions, and sends unchanged reviewed instructions. It stops at
