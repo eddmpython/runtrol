@@ -112,6 +112,46 @@ function native(nativeSessionId: string): NativeSessionCatalogue["sessions"][num
   };
 }
 
+test("a limitation said on every page is printed once", async () => {
+  // The Runtime repeats the omission sentence on each page that omitted something, and the first
+  // page of a store may carry the store's own sentence as well, joined with "; ". The sidebar's
+  // notice prints each distinct sentence once, in order of first appearance.
+  const reader: NativeCatalogueReader = {
+    async listNativeSessions(params) {
+      if (!params.cursor) {
+        return {
+          ...catalogue([native("a")], "page-2"),
+          coverage: {
+            kind: "partial",
+            source: "providerStore",
+            why: "some stored conversations name no folder and are not shown; some listed conversations are not shown: their folders no longer exist",
+          },
+        };
+      }
+      return {
+        ...catalogue([native("b")]),
+        coverage: {
+          kind: "partial",
+          source: "providerStore",
+          why: "some listed conversations are not shown: their folders no longer exist",
+        },
+      };
+    },
+  };
+
+  const result = await collectNativeChats(reader, "provider", [null], () => 42);
+
+  assert.equal(
+    result.warning,
+    "some stored conversations name no folder and are not shown; some listed conversations are not shown: their folders no longer exist",
+  );
+  assert.deepEqual(result.coverage, {
+    kind: "partial",
+    source: "providerStore",
+    why: result.warning,
+  });
+});
+
 test("a null scope asks about the machine by omitting the folder, not by naming one", async () => {
   // Absence is the request. A provider that filters on a folder it was handed cannot tell "every
   // folder" from "this one", so the field has to be missing rather than empty or null.

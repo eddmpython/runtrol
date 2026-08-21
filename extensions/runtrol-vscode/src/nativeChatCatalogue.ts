@@ -54,7 +54,11 @@ export async function collectNativeChats(
       signal?.throwIfAborted();
       coverages.push(catalogue.coverage);
       if (catalogue.coverage.kind !== "complete") {
-        limitations.push(catalogue.coverage.why);
+        // One sentence per limitation, not one string per page. The Runtime joins a page's reasons
+        // with "; " and says an omission on every page that has one, so three pages of one store
+        // would otherwise print the same sentence three times in the sidebar's notice (seen in the
+        // real window: a twelve-line wall above the list).
+        limitations.push(...sentencesOf(catalogue.coverage.why));
       }
       for (const session of catalogue.sessions) {
         chats.set(`${providerId}\0${session.nativeSessionId}`, { ...session, providerId });
@@ -82,7 +86,7 @@ export async function collectNativeChats(
   if (pageLimitReached) {
     limitations.push(`Existing chat discovery stopped after ${MAX_NATIVE_CATALOGUE_PAGES} pages per scope.`);
   }
-  const warning = uniqueText(limitations).join(" ") || null;
+  const warning = uniqueText(limitations).join("; ") || null;
   return {
     providerId,
     coverage: combinedCoverage(coverages, warning),
@@ -117,6 +121,11 @@ function combinedCoverage(
 
 function uniqueText(values: readonly string[]): string[] {
   return [...new Set(values.map((value) => value.trim()).filter(Boolean))];
+}
+
+/// The sentences of one coverage reason, as the Runtime joins them.
+function sentencesOf(why: string): string[] {
+  return why.split(";").map((sentence) => sentence.trim()).filter(Boolean);
 }
 
 function errorMessage(error: unknown): string {
