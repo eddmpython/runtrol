@@ -9,12 +9,12 @@ use runtrol_ipc::transport::Connection;
 use runtrol_provider::{CloseMode, Disposition, OpenIntent, WorkspaceAccess};
 use runtrol_runtime_protocol::{
     AcquireControlParams, AdoptNativeSessionParams, AppScope, ControlLeaseParams,
-    CoolSessionParams, ErrorResponse, FINALIZED_REVISIONS, ForgetSessionParams,
-    GetProviderCapabilitiesParams, GetSessionParams, InitializeParams, InitializeResult, JsonRpcId,
-    JsonRpcNotification, JsonRpcRequest, JsonRpcResponse, LaggedNotification, ListModelsParams,
-    ListNativeSessionsParams, ListPendingApprovalsParams, MAX_MODEL_SELECTION_BYTES,
-    MAX_NATIVE_ADOPTION_TOKEN_BYTES, MAX_NATIVE_PUBLIC_CURSOR_BYTES, MAX_PAGE_ITEMS,
-    MAX_REVISION_OFFERS, ProtocolRevision, ProviderCapabilityAvailability,
+    CoolSessionParams, DeleteNativeSessionParams, ErrorResponse, FINALIZED_REVISIONS,
+    ForgetSessionParams, GetProviderCapabilitiesParams, GetSessionParams, InitializeParams,
+    InitializeResult, JsonRpcId, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse,
+    LaggedNotification, ListModelsParams, ListNativeSessionsParams, ListPendingApprovalsParams,
+    MAX_MODEL_SELECTION_BYTES, MAX_NATIVE_ADOPTION_TOKEN_BYTES, MAX_NATIVE_PUBLIC_CURSOR_BYTES,
+    MAX_PAGE_ITEMS, MAX_REVISION_OFFERS, ProtocolRevision, ProviderCapabilityAvailability,
     ProviderCapabilityObservation, ProviderCapabilityProvenance, ProviderList, ProviderUsageList,
     ProviderWatchEndReason, ProviderWatchEndedNotification, ProvidersChangedNotification,
     RequestEnrollmentParams, RespondApprovalParams, ResumeSessionParams,
@@ -519,6 +519,9 @@ async fn dispatch_public(
             RuntimeMethod::SessionsForget => {
                 forget_session(state, composed, sessions, asking, returning, id, params).await
             }
+            RuntimeMethod::SessionsDeleteNative => {
+                delete_native_session(state, composed, discovering, sessions, id, params).await
+            }
             RuntimeMethod::Initialized
             | RuntimeMethod::Challenge
             | RuntimeMethod::ProvidersChanged
@@ -566,7 +569,9 @@ fn required_scope(method: RuntimeMethod) -> Option<AppScope> {
         RuntimeMethod::SessionsInterrupt | RuntimeMethod::SessionsCool => {
             Some(AppScope::SessionStop)
         }
-        RuntimeMethod::SessionsForget => Some(AppScope::SessionDelete),
+        RuntimeMethod::SessionsForget | RuntimeMethod::SessionsDeleteNative => {
+            Some(AppScope::SessionDelete)
+        }
         RuntimeMethod::ApprovalsRespond
         | RuntimeMethod::SessionsRenewControl
         | RuntimeMethod::SessionsReleaseControl
@@ -1090,6 +1095,7 @@ fn provider_capabilities(
         native_session_catalogue: provider_capability(capabilities.native_session_catalogue),
         set_model: Some(provider_capability(capabilities.set_model)),
         set_reasoning_effort: Some(provider_capability(capabilities.set_reasoning_effort)),
+        native_session_delete: Some(provider_capability(capabilities.native_session_delete)),
     }
 }
 
@@ -1758,6 +1764,105 @@ async fn forget_session(
     }
 }
 
+/// Delete one provider-native conversation through the provider's own surface.
+///
+/// The same authority the forget path needs (`session.delete`), on the owner-only local wire. Runtime
+/// verifies the folder still exists and that it does not itself supervise the conversation (a supervised
+/// pointer is forgotten first, through `sessions/forget`), then hands the request to the driver, which
+/// asks the CLI that owns the conversation. Runtime deletes nothing itself: it holds no copy to delete.
+async fn delete_native_session(
+    state: &mut PublicState,
+    composed: &Composed,
+    discovering: &crate::serve::DiscoveryGates,
+    sessions: &RuntimeSessionCatalogue,
+    id: JsonRpcId,
+    params: serde_json::Value,
+) -> Answer {
+    let Ok(params) = serde_json::from_value::<DeleteNativeSessionParams>(params) else {
+        return Answer::plain(
+            id,
+            RuntimeErrorKind::InvalidRequest,
+            "native session deletion parameters are invalid",
+        );
+    };
+    let authority = match authorized(state, &composed.store, Some(AppScope::SessionDelete)) {
+        Ok(authority) => authority.clone(),
+        Err(failure) => return Answer::failure(id, failure),
+    };
+    let Ok(provider) = runtrol_provider::ProviderId::parse(params.provider_id.as_str()) else {
+        return Answer::plain(
+            id,
+            RuntimeErrorKind::InvalidRequest,
+            "the selected provider identity is invalid",
+        );
+    };
+    let Ok(native) = runtrol_provider::NativeSessionId::new(&params.native_session_id) else {
+        return Answer::plain(
+            id,
+            RuntimeErrorKind::InvalidRequest,
+            "native session identity is invalid",
+        );
+    };
+    let workspace = match authorized_workspace(&authority, &params.workspace) {
+        Ok(workspace) => workspace.path,
+        Err(failure) => return inventory_failure(id, failure),
+    };
+    match sessions.managed_as(&authority, provider, &native) {
+        Ok(None) => {}
+        Ok(Some(_)) => {
+            return Answer::plain(
+                id,
+                RuntimeErrorKind::SessionConflict,
+                "Runtime supervises this conversation; forget the supervised session first",
+            );
+        }
+        Err(failure) => return inventory_failure(id, failure),
+    }
+    let prepared = tokio::time::timeout(
+        Duration::from_millis(crate::serve::MODEL_PREPARATION_BUDGET_MS),
+        async {
+            let _lane = discovering.lane(provider).lock_owned().await;
+            crate::provider_prepare::driver(composed, provider).await
+        },
+    )
+    .await;
+    let driver = match prepared {
+        Ok(Ok(driver)) => driver,
+        Ok(Err(_)) => {
+            return Answer::plain(
+                id,
+                RuntimeErrorKind::ProviderUnavailable,
+                "the selected provider could not be prepared",
+            );
+        }
+        Err(_) => {
+            return Answer::plain(
+                id,
+                RuntimeErrorKind::RuntimeUnavailable,
+                "provider preparation exceeded its bounded deadline",
+            );
+        }
+    };
+    let deleted = tokio::time::timeout(
+        Duration::from_millis(crate::serve::MODEL_PREPARATION_BUDGET_MS),
+        driver.delete_native_session(runtrol_provider::NativeSessionDeletion {
+            native,
+            cwd: workspace,
+        }),
+    )
+    .await;
+    match deleted {
+        Ok(Ok(())) => Answer::success(id, &serde_json::json!({})),
+        // The provider's own answer, by kind: unsupported stays unsupported, a refusal stays a refusal.
+        Ok(Err(error)) => control_failure(id, crate::runtime_control::provider_failure(&error)),
+        Err(_) => Answer::plain(
+            id,
+            RuntimeErrorKind::RuntimeUnavailable,
+            "the provider did not answer the deletion within its bounded deadline",
+        ),
+    }
+}
+
 fn forget_confirmation_failure(
     id: JsonRpcId,
     failure: crate::integration_admin::ForgetConfirmationError,
@@ -2283,7 +2388,22 @@ async fn perform_runtime_open(
             }
             send_opened(id, guard, returning, intent, agent).await
         }
-        Ok(Err(_)) | Err(_) => send_open_unknown(id, guard, returning).await,
+        // The provider said no, and said why. That is a denial with its own kind (not installed, not
+        // signed in, over quota, unsupported, unreadable), not an unknown outcome: nothing may have
+        // happened, and the caller's next move depends entirely on which it was. Measured 2026-08-21:
+        // every adoption refusal reached the sidebar as "the mutation may have happened", and the real
+        // reasons (two driver bounds) were only found by probing the drivers directly.
+        Ok(Err(error)) => {
+            send_open_denied(
+                id,
+                guard,
+                returning,
+                crate::runtime_control::provider_failure(&error),
+            )
+            .await
+        }
+        // Only the deadline passing is genuinely unknown: the provider may still be opening.
+        Err(_) => send_open_unknown(id, guard, returning).await,
     }
 }
 
@@ -2617,6 +2737,7 @@ fn parse_session_operation(
         | RuntimeMethod::SessionsAdoptNative
         | RuntimeMethod::SessionsResume
         | RuntimeMethod::SessionsForget
+        | RuntimeMethod::SessionsDeleteNative
         | RuntimeMethod::SessionsEvent
         | RuntimeMethod::SessionsLagged
         | RuntimeMethod::SessionsIndexChanged

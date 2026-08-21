@@ -151,7 +151,16 @@ impl CodexAgent {
         intent: &OpenIntent,
     ) -> Result<Self, ProviderError> {
         let (method, params, doing) = open_call(provider, intent)?;
-        let answer = conn.call(&method, &params, doing).await?;
+        let answer = match conn.call(&method, &params, doing).await {
+            Ok(answer) => answer,
+            // A CLI that does not know the bound (another build, or one that withdrew the opt-in) refuses
+            // the parameters by name. Ask plainly then, the way this driver always did; the transport's own
+            // line bound judges the answer and refuses only that one frame.
+            Err(ProviderError::NativeRefused { .. }) if is_bounded_resume(&params) => {
+                conn.call(&method, &plain_resume(&params), doing).await?
+            }
+            Err(error) => return Err(error),
+        };
 
         let native = thread_of(&answer).ok_or_else(|| ProviderError::Protocol {
             provider,
@@ -539,6 +548,20 @@ fn open_call(
                 "threadId".to_owned(),
                 serde_json::Value::String(native.to_string()),
             );
+            // The conversation's tail, not its whole. `thread/resume` populates `thread.turns` with every
+            // turn and every item unless told otherwise, and one real thread on this machine answered in a
+            // frame past the 16 MiB line limit, which ended the connection for every session on it
+            // (measured 2026-08-21). The CLI's own schema offers the bound: exclude the whole and ask for
+            // one page of the most recent turns with their full items in the same answer.
+            params.insert("excludeTurns".to_owned(), serde_json::Value::Bool(true));
+            params.insert(
+                "initialTurnsPage".to_owned(),
+                serde_json::json!({
+                    "limit": RESUMED_TURNS,
+                    "sortDirection": "desc",
+                    "itemsView": "full",
+                }),
+            );
             Ok((
                 "thread/resume".to_owned(),
                 serde_json::Value::Object(params),
@@ -553,24 +576,54 @@ fn open_call(
     }
 }
 
-/// How many handed-over items a resume replays, counted from the most recent.
+/// Whether these open parameters carry the resume bound (and so have a plain form to fall back to).
+fn is_bounded_resume(params: &serde_json::Value) -> bool {
+    params.get("excludeTurns").is_some() || params.get("initialTurnsPage").is_some()
+}
+
+/// The same resume without its bound: the thread whole, as the CLI always served it.
+fn plain_resume(params: &serde_json::Value) -> serde_json::Value {
+    let mut plain = params.clone();
+    if let Some(object) = plain.as_object_mut() {
+        object.remove("excludeTurns");
+        object.remove("initialTurnsPage");
+    }
+    plain
+}
+
+/// How many of the most recent turns a resume asks the CLI for, and replays.
 ///
 /// The subscriber's replay ring is bounded (64 KiB), so a whole long thread would only push its own
 /// beginning out; the tail is what a person reopening a conversation came back for, and anything older is
 /// still the provider's to show in its own surface.
+const RESUMED_TURNS: usize = 6;
+
+/// How many handed-over items a resume replays at most, counted from the most recent.
 const MAX_RESUMED_ITEMS: usize = 64;
 
 /// The items a `thread/resume` answer hands over, oldest first, bounded to the most recent.
+///
+/// The page asked for (`initialTurnsPage`, newest turn first) when the CLI honours it, and the whole
+/// `thread.turns` for a CLI that ignores the request and sends everything anyway.
 fn resumed_items(answer: &Bytes) -> Vec<&RawValue> {
     let Ok(resumed) = serde_json::from_slice::<Resumed<'_>>(answer) else {
         // An answer without readable turns resumes as it always did: attached, with nothing to replay. The
         // thread itself was already read by `thread_of`, so nothing about the session is lost here.
         return Vec::new();
     };
-    let items: Vec<&RawValue> = resumed
-        .thread
-        .and_then(|thread| thread.turns)
-        .unwrap_or_default()
+    let turns: Vec<ResumedTurn<'_>> = match resumed.initial_turns_page {
+        Some(page) => {
+            // Newest first as asked; replayed oldest first, the way the conversation happened.
+            let mut turns = page.data.unwrap_or_default();
+            turns.reverse();
+            turns
+        }
+        None => resumed
+            .thread
+            .and_then(|thread| thread.turns)
+            .unwrap_or_default(),
+    };
+    let items: Vec<&RawValue> = turns
         .into_iter()
         .flat_map(|turn| turn.items.unwrap_or_default())
         .collect();
@@ -578,11 +631,21 @@ fn resumed_items(answer: &Bytes) -> Vec<&RawValue> {
     items.into_iter().skip(skip).collect()
 }
 
-/// The shape of a resume answer runtrol reads: the thread's turns and their items, nothing else.
+/// The shape of a resume answer runtrol reads: the requested page of turns, or the thread's turns, and
+/// their items, nothing else.
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct Resumed<'line> {
     #[serde(default, borrow)]
     thread: Option<ResumedThread<'line>>,
+    #[serde(default, borrow)]
+    initial_turns_page: Option<ResumedPage<'line>>,
+}
+
+#[derive(Deserialize)]
+struct ResumedPage<'line> {
+    #[serde(default, borrow)]
+    data: Option<Vec<ResumedTurn<'line>>>,
 }
 
 #[derive(Deserialize)]
@@ -1013,6 +1076,67 @@ mod tests {
         assert_eq!(
             params.get("threadId").and_then(serde_json::Value::as_str),
             Some("thread_abc")
+        );
+        // The bound: never the whole thread in one frame, only the most recent turns with full items.
+        assert_eq!(
+            params
+                .get("excludeTurns")
+                .and_then(serde_json::Value::as_bool),
+            Some(true)
+        );
+        let page = params.get("initialTurnsPage").expect("a page is asked for");
+        assert_eq!(
+            page.get("sortDirection")
+                .and_then(serde_json::Value::as_str),
+            Some("desc")
+        );
+        assert_eq!(
+            page.get("itemsView").and_then(serde_json::Value::as_str),
+            Some("full")
+        );
+        assert_eq!(
+            page.get("limit").and_then(serde_json::Value::as_u64),
+            Some(RESUMED_TURNS as u64)
+        );
+    }
+
+    #[test]
+    fn a_refused_bound_has_a_plain_form_to_fall_back_to() {
+        let (_method, bounded, _doing) = open_call(
+            a_provider(),
+            &an_intent(Disposition::Resume {
+                native: "thread_abc".into(),
+            }),
+        )
+        .expect("served");
+        assert!(is_bounded_resume(&bounded));
+        let plain = plain_resume(&bounded);
+        assert!(!is_bounded_resume(&plain));
+        assert_eq!(
+            plain.get("threadId").and_then(serde_json::Value::as_str),
+            Some("thread_abc"),
+            "the thread itself is still named"
+        );
+    }
+
+    #[test]
+    fn a_resume_replays_the_requested_page_oldest_first() {
+        // The page comes newest first (as asked); the replay runs the way the conversation happened.
+        let answer = Bytes::from_static(
+            br#"{"thread":{"id":"t"},"initialTurnsPage":{"data":[{"id":"turn_2","status":"completed","items":[{"type":"agentMessage","id":"i2","text":"second"}]},{"id":"turn_1","status":"completed","items":[{"type":"agentMessage","id":"i1","text":"first"}]}]}}"#,
+        );
+        let items = resumed_items(&answer);
+        assert_eq!(items.len(), 2);
+        assert!(
+            items
+                .first()
+                .is_some_and(|item| item.get().contains(r#""id":"i1""#)),
+            "oldest first"
+        );
+        assert!(
+            items
+                .get(1)
+                .is_some_and(|item| item.get().contains(r#""id":"i2""#))
         );
     }
 

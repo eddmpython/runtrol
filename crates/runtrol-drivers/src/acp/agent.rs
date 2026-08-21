@@ -9,8 +9,8 @@ use runtrol_childproc::contain::{ChildGuard, TrackedChild, TrackedCommand};
 use runtrol_childproc::{Containment, Program, SpawnError};
 use runtrol_provider::{
     Agent, AgentCommand, Attached, CapabilitySet, CloseMode, ContentBlock, Declarant, Disposition,
-    EventBody, NativeSessionId, Opaque, OpenIntent, Produced, ProviderError, ProviderId, SessionId,
-    StopReason, TurnEvent, TurnId,
+    EventBody, Level, NativeSessionId, Notice, NoticeCode, Opaque, OpenIntent, Produced,
+    ProviderError, ProviderId, SessionId, StopReason, TurnEvent, TurnId,
 };
 use tokio::io::AsyncWriteExt as _;
 use tokio::process::ChildStdin;
@@ -19,8 +19,17 @@ use crate::acp::{map, wire};
 use crate::framing::jsonrpc;
 use crate::framing::{Incoming, LineError, Lines, RequestId};
 
-const MAX_DEFERRED_FRAMES: usize = 16;
-const MAX_DEFERRED_BYTES: usize = 128 * 1024;
+/// How much of a handshake's pre-answer traffic is kept, as the most recent frames.
+///
+/// `session/load` replays the whole conversation as `session/update` notifications before it answers
+/// (measured on grok 1.0.5: a two-screen conversation sent well over sixteen), and those notifications are
+/// the history the reopened tab shows. A hard ceiling refused every conversation longer than a few turns
+/// (measured 2026-08-21: "more than 16 frames or 131072 bytes arrived before the answer", on real
+/// conversations a person had just had). So the bound keeps the tail and counts what it dropped, and the
+/// session says so once before the first replayed frame. The subscriber ring downstream is 64 KiB, so a
+/// tail of this size is already more than any reader receives.
+const MAX_DEFERRED_FRAMES: usize = 256;
+const MAX_DEFERRED_BYTES: usize = 768 * 1024;
 const MAX_CAPABILITIES: usize = 64;
 const MAX_CAPABILITY_BYTES: usize = 128;
 
@@ -58,6 +67,8 @@ pub struct AcpAgent {
     accepts_images: bool,
     deferred: VecDeque<DeferredFrame>,
     deferred_bytes: usize,
+    /// Replayed frames the bound let go of, oldest first, said once when the kept ones drain.
+    deferred_dropped: usize,
     finished: bool,
 }
 
@@ -128,6 +139,7 @@ impl AcpAgent {
             accepts_images: false,
             deferred: VecDeque::new(),
             deferred_bytes: 0,
+            deferred_dropped: 0,
             finished: false,
         };
 
@@ -418,16 +430,24 @@ impl AcpAgent {
         question_answered: bool,
         doing: &'static str,
     ) -> Result<(), ProviderError> {
-        if self.deferred.len() >= MAX_DEFERRED_FRAMES
-            || self.deferred_bytes.saturating_add(line.len()) > MAX_DEFERRED_BYTES
-        {
+        if line.len() > MAX_DEFERRED_BYTES {
+            // One frame larger than the whole tail budget is not history, it is a transport fault.
             return Err(ProviderError::Protocol {
                 provider: self.provider,
                 doing,
-                detail: format!(
-                    "more than {MAX_DEFERRED_FRAMES} frames or {MAX_DEFERRED_BYTES} bytes arrived before the answer"
-                ),
+                detail: format!("a frame of {} bytes arrived before the answer", line.len()),
             });
+        }
+        // The tail is kept, the head is let go of and counted. A question the provider asked was already
+        // refused on arrival, so dropping its frame loses nothing a subscriber could act on.
+        while self.deferred.len() >= MAX_DEFERRED_FRAMES
+            || self.deferred_bytes.saturating_add(line.len()) > MAX_DEFERRED_BYTES
+        {
+            let Some(oldest) = self.deferred.pop_front() else {
+                break;
+            };
+            self.deferred_bytes = self.deferred_bytes.saturating_sub(oldest.line.len());
+            self.deferred_dropped = self.deferred_dropped.saturating_add(1);
         }
         self.deferred_bytes = self.deferred_bytes.saturating_add(line.len());
         self.deferred.push_back(DeferredFrame {
@@ -660,6 +680,23 @@ impl Agent for AcpAgent {
         }
         if self.finished {
             return None;
+        }
+        if self.deferred_dropped > 0 {
+            // Said once, before the kept tail: the reader sees where the replay starts and knows the
+            // provider keeps the rest. A count and a sentence, never the dropped content.
+            let dropped = self.deferred_dropped;
+            self.deferred_dropped = 0;
+            return Some(Ok(Produced {
+                src_end: 0,
+                body: EventBody::Notice(Box::new(Notice {
+                    level: Level::Info,
+                    code: NoticeCode::Other,
+                    retryable: false,
+                    payload: Opaque::owned(format!(
+                        r#"{{"message":"{dropped} earlier updates replayed by this coding service were left out; it keeps the whole conversation"}}"#
+                    )),
+                })),
+            }));
         }
         let line = if let Some(deferred) = self.deferred.pop_front() {
             self.deferred_bytes = self.deferred_bytes.saturating_sub(deferred.line.len());

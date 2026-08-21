@@ -110,6 +110,16 @@ pub struct Lines<R> {
     partial: Vec<u8>,
     /// Set once a line has been refused. Nothing more comes out after that.
     poisoned: bool,
+    /// Whether a refused line is skipped to its newline and reading continues, instead of poisoning the reader.
+    ///
+    /// For a stream one session owns, refusing and detaching is right: the provider stopped speaking the
+    /// protocol. For a stream many sessions share (one daemon answering every Codex conversation), one
+    /// oversized answer must not end every conversation on it (measured 2026-08-21: a single `thread/resume`
+    /// answer past the bound took the connection, and with it every session, down). The skipped line is
+    /// still refused by name, so whoever was waiting for it learns it never arrived.
+    skips_oversized: bool,
+    /// A refused line is being discarded up to its newline before the next one can start.
+    skipping: bool,
 }
 
 impl<R: AsyncRead + Unpin> Lines<R> {
@@ -120,6 +130,17 @@ impl<R: AsyncRead + Unpin> Lines<R> {
             capacity: READ_BUFFER,
             partial: Vec::new(),
             poisoned: false,
+            skips_oversized: false,
+            skipping: false,
+        }
+    }
+
+    /// Read lines from a stream many sessions share: an oversized line is refused once and skipped, and the
+    /// lines after it still come out.
+    pub fn skipping_oversized(source: R) -> Self {
+        Self {
+            skips_oversized: true,
+            ..Self::new(source)
         }
     }
 
@@ -176,6 +197,9 @@ impl<R: AsyncRead + Unpin> Lines<R> {
     async fn read_one(&mut self) -> Result<Option<Vec<u8>>, LineError> {
         if self.poisoned {
             return Err(LineError::Poisoned);
+        }
+        if self.skipping {
+            self.skip_to_newline().await?;
         }
 
         // Whatever a previous, abandoned call had already assembled. Empty in the ordinary case, because a line
@@ -239,7 +263,7 @@ impl<R: AsyncRead + Unpin> Lines<R> {
                     };
                 }
                 // The refused line's bytes go with the refusal rather than staying held: a reader that will never
-                // produce anything again has no reason to keep what it refused.
+                // produce anything again (or will skip the rest of this line) has no reason to keep what it refused.
                 Step::TooLong(bytes) => {
                     self.partial = Vec::new();
                     return Err(self.refuse(bytes));
@@ -274,12 +298,47 @@ impl<R: AsyncRead + Unpin> Lines<R> {
         self.partial.len()
     }
 
-    /// Refuse a line and stop reading for good.
+    /// Refuse a line: for good on a stream one session owns, for this line only on a shared stream.
     fn refuse(&mut self, bytes: usize) -> LineError {
-        self.poisoned = true;
+        if self.skips_oversized {
+            self.skipping = true;
+        } else {
+            self.poisoned = true;
+        }
         LineError::TooLong {
             bytes,
             max: MAX_LINE,
+        }
+    }
+
+    /// Discard the rest of a refused line, up to and including its newline (or the end of the stream).
+    ///
+    /// Bytes are consumed straight out of the reader's fixed buffer and never assembled, so a refused line of
+    /// any length costs the reader nothing beyond the buffer it already has.
+    async fn skip_to_newline(&mut self) -> Result<(), LineError> {
+        loop {
+            let (consume, done) = {
+                let available = self
+                    .reader
+                    .fill_buf()
+                    .await
+                    .map_err(|error| LineError::Io {
+                        detail: error.to_string(),
+                    })?;
+                if available.is_empty() {
+                    (0, true)
+                } else {
+                    match available.iter().position(|byte| *byte == b'\n') {
+                        Some(at) => (at.saturating_add(1), true),
+                        None => (available.len(), false),
+                    }
+                }
+            };
+            self.reader.consume(consume);
+            if done {
+                self.skipping = false;
+                return Ok(());
+            }
         }
     }
 }
@@ -513,6 +572,44 @@ mod tests {
             matches!(lines.next().await, Err(LineError::Poisoned)),
             "the reader must stay refused"
         );
+    }
+
+    #[tokio::test]
+    async fn a_shared_reader_refuses_an_oversized_line_once_and_hands_out_the_one_after_it() {
+        // The shared-stream contract: the oversized line is refused by name, nothing of it is handed out as
+        // a line, and the stream continues with the next record. A session-owned reader (above) stays
+        // poisoned instead, and both are deliberate.
+        let mut source = vec![b'x'; MAX_LINE + 1];
+        source.extend_from_slice(b"\n{\"after\":true}\n{\"later\":true}\n");
+        let mut lines = Lines::skipping_oversized(std::io::Cursor::new(source));
+
+        assert!(matches!(lines.next().await, Err(LineError::TooLong { .. })));
+        let after = lines
+            .next()
+            .await
+            .expect("reads on")
+            .expect("a line follows");
+        assert_eq!(&after[..], b"{\"after\":true}");
+        let later = lines
+            .next()
+            .await
+            .expect("reads on")
+            .expect("another follows");
+        assert_eq!(&later[..], b"{\"later\":true}");
+        assert!(lines.next().await.expect("the end is clean").is_none());
+        assert_eq!(
+            lines.partial_bytes(),
+            0,
+            "nothing of the refused line is kept"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_shared_reader_whose_oversized_line_never_ends_ends_cleanly() {
+        let source = vec![b'x'; MAX_LINE + 1];
+        let mut lines = Lines::skipping_oversized(std::io::Cursor::new(source));
+        assert!(matches!(lines.next().await, Err(LineError::TooLong { .. })));
+        assert!(lines.next().await.expect("the end is clean").is_none());
     }
 
     #[tokio::test]

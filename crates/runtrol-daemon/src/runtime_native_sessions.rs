@@ -543,15 +543,14 @@ fn map_coverage(
 ///
 /// Every omission has one of three causes: the folder the conversation names no longer exists (so nothing
 /// could reopen it there), the entry repeats one already shown, or the entry is outside the bounds this
-/// surface accepts (or, for a named-folder request, outside that folder). The count is the provider's own.
+/// surface accepts (or, for a named-folder request, outside that folder). Deliberately without a count: a
+/// listing arrives in pages and each page knows only its own omissions, so counted sentences from two pages
+/// read as two different facts in the sidebar ("27 ... 6 ..."), while the reason is one and is what a
+/// reader can act on.
 fn omitted_sentence(omitted: usize) -> String {
-    if omitted == 1 {
-        "1 listed conversation is not shown: its folder no longer exists, or it repeats or overruns an entry".to_owned()
-    } else {
-        format!(
-            "{omitted} listed conversations are not shown: their folders no longer exist, or they repeat or overrun entries"
-        )
-    }
+    debug_assert!(omitted > 0, "only an omission earns a sentence");
+    "some listed conversations are not shown: their folders no longer exist, or they repeat or overrun entries"
+        .to_owned()
 }
 
 const fn map_source(source: ProviderSource) -> CatalogueSource {
@@ -913,7 +912,7 @@ mod tests {
         assert!(matches!(
             public.coverage,
             CatalogueCoverage::Partial { ref why, .. }
-                if why.contains("2 listed conversations are not shown")
+                if why.contains("some listed conversations are not shown")
         ));
     }
 

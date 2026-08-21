@@ -1946,7 +1946,7 @@ fn open_failure(error: &SessionError) -> RuntimeControlFailure {
 /// after the caller observed it" to a surface whose only honest response was to show that sentence to
 /// a person. The kind is what a client branches on, so getting it wrong makes assistance impossible
 /// no matter how good the surface is.
-fn provider_failure(error: &ProviderError) -> RuntimeControlFailure {
+pub(crate) fn provider_failure(error: &ProviderError) -> RuntimeControlFailure {
     match error {
         // The CLI is not installed, or two of it are and choosing would silently pick one. Both are
         // resolved at the machine by installing or correcting `PATH`, never by retrying.

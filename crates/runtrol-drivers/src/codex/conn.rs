@@ -240,7 +240,9 @@ impl Connection {
         let unreadable = Arc::new(AtomicU64::new(0));
 
         let reader = tokio::spawn(read_forever(
-            Lines::new(stdout),
+            // Shared by every session on this daemon: one oversized answer is refused and skipped, never the
+            // end of every conversation.
+            Lines::skipping_oversized(stdout),
             Arc::clone(&stdin),
             Arc::clone(&pending),
             Arc::clone(&routes),
@@ -471,6 +473,12 @@ impl InitializationIo for Connection {
             HANDSHAKE,
             &serde_json::json!({
                 "clientInfo": {"name": client, "version": version},
+                // The CLI gates the fields that bound `thread/resume` (`excludeTurns`, `initialTurnsPage`)
+                // behind this opt-in (measured 2026-08-21 on 0.148: without it both answer -32600). Without
+                // the bound a resume returns the whole thread in one frame, and a real thread on this machine
+                // exceeded the 16 MiB line limit. Opting in changes nothing this driver reads elsewhere: every
+                // decoder here tolerates fields it does not know.
+                "capabilities": {"experimentalApi": true},
             }),
             "opening the connection",
         )
@@ -600,9 +608,18 @@ async fn read_forever(
                 }
             },
             Ok(None) => break "the provider's output ended",
-            Err(LineError::TooLong { .. } | LineError::Poisoned) => {
-                break "a frame went past the limit of the transport";
+            // One frame past the bound, skipped by the reader. It answered somebody or it was an event; the
+            // reader cannot say which, so everyone waiting for an answer is told it never arrived, and every
+            // session stays on the connection (measured 2026-08-21: one `thread/resume` answer past the
+            // bound used to end the connection for every Codex conversation at once).
+            Err(LineError::TooLong { .. }) => {
+                unreadable.fetch_add(1, Ordering::Relaxed);
+                pending
+                    .lock()
+                    .await
+                    .abandon_all(0, "a frame went past the limit of the transport");
             }
+            Err(LineError::Poisoned) => break "a frame went past the limit of the transport",
             Err(LineError::Io { .. }) => break "reading from the provider failed",
         }
     };
