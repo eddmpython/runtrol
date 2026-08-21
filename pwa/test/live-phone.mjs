@@ -28,9 +28,11 @@ async function journey(identity, config, journeyMode) {
     output_seen: false,
     provider_ended: false,
     approval_seen: false,
+    attention_listed: false,
     subject_complete: false,
     reject_once: false,
     answered: false,
+    attention_cleared: false,
     close_confirmed: false,
   };
   try {
@@ -56,6 +58,17 @@ async function journey(identity, config, journeyMode) {
       inspectEvent(response.with?.payload, evidence);
       if (journeyMode === "approval" && evidence.approval_seen && !evidence.answered) {
         const body = eventBody(response.with?.payload);
+        const waiting = sessionRow(await controller.list(), session);
+        if (waiting.waiting_on !== "person") {
+          throw new Error(
+            `the phone catalogue did not expose the real approval as a person wait: ${JSON.stringify({
+              doing: waiting.doing,
+              hot: waiting.hot,
+              waiting_on: waiting.waiting_on ?? null,
+            })}`,
+          );
+        }
+        evidence.attention_listed = true;
         const rejection = body.options.find((option) => option.kind === "rejectOnce");
         const answered = await controller.answerApproval(session, body.id, rejection.id, body.subject_digest);
         if (answered.say !== "done") throw new Error("Core did not accept the phone approval answer");
@@ -63,6 +76,13 @@ async function journey(identity, config, journeyMode) {
       }
     }
     if (!complete(evidence, journeyMode)) throw new Error("the phone journey did not reach its terminal evidence");
+    if (journeyMode === "approval") {
+      const continued = sessionRow(await controller.list(), session);
+      if (continued.waiting_on !== undefined && continued.waiting_on !== null) {
+        throw new Error("the answered phone approval remained in the focus queue");
+      }
+      evidence.attention_cleared = true;
+    }
     const closed = await controller.closeSession(session, true);
     if (closed.say !== "done") throw new Error("Core did not close the phone-owned session");
     evidence.close_confirmed = true;
@@ -215,10 +235,10 @@ async function collectTurn(watcher, after) {
 
 function sessionRow(response, session) {
   if (response.say !== "sessions" || !Array.isArray(response.with?.sessions)) {
-    throw new Error("Core returned no session catalogue during resilience testing");
+    throw new Error("Core returned no session catalogue during phone testing");
   }
   const row = response.with.sessions.find((candidate) => candidate?.session === session);
-  if (!row) throw new Error("the resilience session disappeared from the Core catalogue");
+  if (!row) throw new Error("the phone session disappeared from the Core catalogue");
   return row;
 }
 
@@ -298,7 +318,12 @@ function complete(evidence, journeyMode) {
   const terminal = evidence.output_seen && evidence.provider_ended;
   return journeyMode === "drive"
     ? terminal
-    : terminal && evidence.approval_seen && evidence.subject_complete && evidence.reject_once && evidence.answered;
+    : terminal
+      && evidence.approval_seen
+      && evidence.attention_listed
+      && evidence.subject_complete
+      && evidence.reject_once
+      && evidence.answered;
 }
 
 async function connectCore(identity, config) {

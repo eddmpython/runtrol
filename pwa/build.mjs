@@ -1,4 +1,4 @@
-import { cp, mkdir, readFile, rm } from "node:fs/promises";
+import { cp, mkdir, readFile, readdir, rm } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -27,7 +27,11 @@ await cp(
   join(output, "assets", "event-presentation.json"),
 );
 
-for (const file of ["app.js", "bytes.js", "core.js", "identityStore.js", "missions.js", "noise.js", "pairing.js", "presentation.js", "push.js", "records.js", "relay.js"]) {
+const sourceFiles = (await readdir(join(output, "src"), { withFileTypes: true }))
+  .filter((entry) => entry.isFile() && entry.name.endsWith(".js"))
+  .map((entry) => entry.name)
+  .sort();
+for (const file of sourceFiles) {
   const source = await readFile(join(output, "src", file), "utf8");
   if (source.includes("\u2013") || source.includes("\u2014")) {
     throw new Error(`${file} contains forbidden punctuation`);

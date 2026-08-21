@@ -1,6 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import {
+  attentionCount,
+  consumeAttentionRequest,
+  isAttentionMessage,
+  nextAttentionSession,
+  preferredSession,
+} from "../src/attention.js";
 import { base64UrlDecode, base64UrlEncode, concat, equalBytes, utf8 } from "../src/bytes.js";
 import { CoreClient, readDeviceAuthority, WIRE_VERSION } from "../src/core.js";
 import { validateConnection } from "../src/identityStore.js";
@@ -227,6 +234,38 @@ test("current Core authority replaces legacy pairing hints without widening", ()
     () => readDeviceAuthority({ scopes: ["session.list", "session.list"], roots: [], providers: [] }),
     /invalid/u,
   );
+});
+
+test("phone focus includes only person waits and cycles in stable catalogue order", () => {
+  const sessions = [
+    { session: "working", waiting_on: null },
+    { session: "quota", waiting_on: "quota" },
+    { session: "first", waiting_on: "person" },
+    { session: "unknown", waiting_on: "future" },
+    { session: "second", waiting_on: "person" },
+  ];
+  assert.equal(attentionCount(sessions), 2);
+  assert.equal(nextAttentionSession(sessions)?.session, "first");
+  assert.equal(nextAttentionSession(sessions, "first")?.session, "second");
+  assert.equal(nextAttentionSession(sessions, "second")?.session, "first");
+  assert.equal(preferredSession(sessions, null, null, false, true), null, "a phone opens on its bounded list");
+  assert.equal(preferredSession(sessions, null, "working", true, true)?.session, "first");
+  assert.equal(preferredSession(sessions, "second", "working", true, true)?.session, "second");
+  assert.equal(preferredSession(sessions, null, "quota", false, true)?.session, "quota");
+  assert.equal(preferredSession(sessions, null, null, false, false)?.session, "working");
+});
+
+test("a content-free attention launch is consumed without discarding other URL state", () => {
+  const replacements = [];
+  const requested = consumeAttentionRequest(
+    { href: "https://phone.example.test/runtrol/app/?source=push&attention=1" },
+    { replaceState: (...values) => replacements.push(values) },
+  );
+  assert.equal(requested, true);
+  assert.deepEqual(replacements, [[null, "", "/runtrol/app/?source=push"]]);
+  assert.equal(isAttentionMessage({ kind: "runtrolAttention" }), true);
+  assert.equal(isAttentionMessage({ kind: "runtrolAttention", session: "secret" }), false);
+  assert.equal(isAttentionMessage({ kind: "other" }), false);
 });
 
 function cipherPair() {

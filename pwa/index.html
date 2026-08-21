@@ -38,7 +38,10 @@
           <div id="session-browser">
             <div class="pane-heading">
               <div><p class="eyebrow">SESSIONS</p><h1><span id="session-count">0</span> on this PC</h1></div>
-              <button id="refresh" type="button">Refresh</button>
+              <div class="pane-actions">
+                <button id="next-attention" class="attention" type="button" hidden>Needs you <span id="attention-count">0</span></button>
+                <button id="refresh" type="button">Refresh</button>
+              </div>
             </div>
             <div id="session-list" class="session-list"></div>
             <form id="new-session" class="new-session">

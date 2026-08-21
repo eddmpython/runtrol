@@ -1,7 +1,7 @@
 import { text, utf8 } from "./bytes.js";
 import { connectThroughRelay } from "./relay.js";
 
-export const WIRE_VERSION = 25;
+export const WIRE_VERSION = 26;
 
 export class CoreClient {
   static async connect(connection, identity, dependencies) {

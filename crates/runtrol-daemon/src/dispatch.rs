@@ -24,10 +24,12 @@
 
 use runtrol_core::registry::KindStatus;
 use runtrol_core::session::SessionError;
-use runtrol_core::{ClosingReservation, OpenReservation, SessionManager, SessionView, TakenAgent};
+use runtrol_core::{
+    ClosingReservation, OpenReservation, SessionManager, SessionView, TakenAgent, Waiting,
+};
 use runtrol_ipc::wire::{
     ProviderLine, RemoteConnection, RemoteConnectionStage, RemoteConnectionState, Request,
-    Response, SessionLine, SessionListing, WireError,
+    Response, SessionLine, SessionListing, SessionWaiting, WireError,
 };
 use runtrol_provider::{
     AbsPath, Agent, AgentCommand, CloseMode, ContentBlock, Disposition, ModelCatalog,
@@ -1888,6 +1890,7 @@ pub(crate) fn list(composed: &Composed, sessions: &SessionManager, caller: &Call
                 workspace: session.workspace,
                 hot: session.hot,
                 doing: session.lifecycle.private_name().into(),
+                waiting_on: session.waiting.map(private_waiting),
                 looks_stuck: session.looks_stuck,
             })
             .collect(),
@@ -1898,6 +1901,13 @@ pub(crate) fn list(composed: &Composed, sessions: &SessionManager, caller: &Call
         caller,
         &composed.device_authority,
     ))
+}
+
+const fn private_waiting(waiting: Waiting) -> SessionWaiting {
+    match waiting {
+        Waiting::Person => SessionWaiting::Person,
+        Waiting::Quota => SessionWaiting::Quota,
+    }
 }
 
 /// Project one full listing down to what a caller may know exists.
@@ -2246,6 +2256,7 @@ mod tests {
             workspace: workspace.into(),
             hot: false,
             doing: "idle".into(),
+            waiting_on: None,
             looks_stuck: false,
         }
     }
@@ -2259,7 +2270,8 @@ mod tests {
             .expect("canonical granted root");
         let device = pair_phone_for_root(&composed, &granted, true);
 
-        let inside = listing_row(granted.as_str());
+        let mut inside = listing_row(granted.as_str());
+        inside.waiting_on = Some(SessionWaiting::Person);
         let nested = listing_row(&format!(
             "{}{}deeper",
             granted.as_str(),
@@ -2286,6 +2298,11 @@ mod tests {
             seen,
             vec![inside.session, nested.session],
             "exactly the rows under the granted root, nothing beside it"
+        );
+        assert_eq!(
+            phone.sessions.first().and_then(|line| line.waiting_on),
+            Some(SessionWaiting::Person),
+            "the root projection keeps the bounded attention fact"
         );
         assert!(
             phone.warnings.is_empty(),

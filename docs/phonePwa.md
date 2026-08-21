@@ -22,6 +22,22 @@ IndexedDB contains only the non-extractable X25519 private key, its public key, 
 
 The selected session owns one bounded live event view. Reconnect uses the exact Core cursor and reports an explicit gap when retained events are no longer available. ANSI control sequences are removed, bidirectional controls are expanded visibly, and approval options remain visible when unavailable so missing authority is not mistaken for a missing provider choice.
 
+## Needs You focus queue
+
+The session catalogue carries one bounded waiting fact already observed by Core: `person`, `quota`, or absent. It does
+not carry an approval identifier, subject, prompt, or event body. The phone counts only `person` waits, marks those
+rows as `Needs you`, and one button cycles through them in stable catalogue order. A quota wait stays visible as
+`Waiting on limit` and is never presented as an operator action.
+
+An ordinary narrow-screen launch remains on the session list. A generic notification click sends an in-memory
+`runtrolAttention` intent to an open application or opens `?attention=1`; the application consumes that parameter
+immediately and focuses the first current person wait after fetching the authenticated catalogue. The service worker
+never receives or stores a session identifier. If no current person wait exists, the application stays on the list.
+
+The focus fact is cleared by an explicit resume or by the turn moving or ending. A repeated start announcement for the
+same running turn does not clear it: installed Claude Code can publish an approval before acknowledging the same turn
+again, and that acknowledgement is not an answer.
+
 The active `remoteResilienceFaultInjection` gate cuts an authenticated phone watch socket and requires the retained
 suffix to resume from the exact cursor without a duplicate. It then aborts and recomposes the production server over
 the same durable home and device authorization, requires a cross-stream gap for the old cursor, and continues the
@@ -51,4 +67,6 @@ A useful contributor receipt records the date, iOS version, public application o
 - `cargo test -p runtrol-audit --test webPushContract` verifies device-bound encrypted endpoint storage, stable VAPID public-key shape, the empty production request body, and the generic service-worker notification boundary.
 - `python -X utf8 tests/audit/remoteResilienceFaultInjection.py --require-external` verifies exact replay after a network cut and explicit recovery through provider-native resume after a production Core restart.
 - daemon and security tests verify exact scope, root, provider, filesystem-identity, persistence, and Start and Resume enforcement.
+- `approvalRoundtripSmoke` also requires the real pending approval to appear as a `person` wait in the authenticated
+  phone catalogue and to disappear after the phone's exact rejection resumes the turn.
 - `npm --prefix site run build` publishes the reviewed application under `/app/` and holds the complete Pages artifact under the repository byte budget.

@@ -406,22 +406,30 @@ impl SessionState {
     ///
     /// [`Refused`] when the observation cannot have happened.
     pub fn observe(&mut self, observed: Observed, at: WallMs) -> Result<(), Refused> {
-        let observed_waiting = match observed {
-            Observed::Blocked { on } => Some(on),
+        let blocked_on = match &observed {
+            Observed::Blocked { on } => Some(*on),
             _ => None,
         };
+        let explicitly_unblocked = matches!(&observed, Observed::Unblocked);
         let next = self.lifecycle.after(observed, at)?;
-        if next != self.lifecycle {
+        let lifecycle_changed = next != self.lifecycle;
+        if lifecycle_changed {
             self.generation = self.generation.checked_add(1).ok_or(Refused {
                 from: self.lifecycle.name(),
                 observed: "advanced past its lifecycle generation limit",
             })?;
         }
-        // Blocking is the only observation that leaves something waiting. Every other one is evidence the turn
-        // moved, ended, or went away, and each of those means nobody is being waited on any more. Assigning
-        // unconditionally rather than only on the blocking arms is what keeps a stale "needs you" from
-        // outliving its turn.
-        self.waiting = observed_waiting;
+        // One provider acknowledges and then starts the same turn, so a repeated TurnStarted can arrive after its
+        // approval. That repeated lifecycle fact is not evidence that the question went away. Explicit unblocking
+        // or any real lifecycle move clears the wait; blocking replaces it; an idempotent lifecycle observation
+        // preserves it. This still makes a stale request unable to outlive its turn.
+        self.waiting = if let Some(on) = blocked_on {
+            Some(on)
+        } else if explicitly_unblocked || lifecycle_changed {
+            None
+        } else {
+            self.waiting
+        };
         self.lifecycle = next;
         self.last_seen = at;
         self.quiet_since = None;
@@ -754,6 +762,33 @@ mod tests {
             .expect("and then continues");
 
         assert_eq!(state.waiting(), None);
+        assert_eq!(state.lifecycle(), &Lifecycle::Busy { turn: turn(1) });
+    }
+
+    #[test]
+    fn the_same_turn_being_acknowledged_again_does_not_erase_its_question() {
+        // Measured with the installed Claude CLI: the approval is published before a second start fact for the same
+        // turn. The start is idempotent lifecycle metadata, not an answer to the approval.
+        let mut state = SessionState::new(now());
+        state.observe(Observed::Attaching, now()).expect("binding");
+        state.observe(Observed::Attached, now()).expect("bound");
+        state
+            .observe(Observed::TurnStarted { turn: turn(1) }, now())
+            .expect("a turn begins");
+        state
+            .observe(
+                Observed::Blocked {
+                    on: Waiting::Person,
+                },
+                now(),
+            )
+            .expect("the turn asks a question");
+
+        state
+            .observe(Observed::TurnStarted { turn: turn(1) }, now())
+            .expect("the same turn is acknowledged again");
+
+        assert_eq!(state.waiting(), Some(Waiting::Person));
         assert_eq!(state.lifecycle(), &Lifecycle::Busy { turn: turn(1) });
     }
 

@@ -49,6 +49,11 @@ Webview code must use the VS Code state and message boundary already covered by 
 
 The phone uses the relay transport in the current release. Noise IKpsk1 protects the one-use pairing exchange and Noise IK protects every later session. The relay receives routing presence and encrypted records only. Web Push is a separate content-free wake path: the service worker renders one generic notification and reconnects through the normal encrypted stream when opened. Direct LAN and peer-to-peer routing remain later connection optimizations and must not be implied by the current UI.
 
+On a narrow screen, the session list is the initial surface. Core's bounded `person` versus `quota` waiting fact drives
+one `Needs you` count and a cyclic next action; conversation events are not parsed to choose a destination. A generic
+notification carries only an attention intent, then the authenticated session catalogue decides the current target.
+No session identifier enters the notification, launch URL, service-worker cache, or durable browser storage.
+
 The Mission tab exists only when the authenticated greeting holds `mission.read`. It validates a closed set of
 Mission and Task states, bounds the catalogue and snapshot, renders with text nodes, and shows pause, safe resume, or
 cancel only when the current state and matching exact scope both permit that action. Mission creation, reviewed
@@ -57,8 +62,9 @@ local-only VS Code actions.
 
 `phoneDrivesPcSmoke` and `approvalRoundtripSmoke` execute the same shipped WebCrypto, Noise, record, and CoreClient
 modules in a headless phone process. They connect to the production daemon, drive an installed real CLI, observe
-streamed output or a real permission request, close the session, and verify process cleanup. The deterministic local
-model fixture discards request bodies, so these gates do not claim account-backed model behavior.
+streamed output or a real permission request, expose and clear that request through the phone focus catalogue, close
+the session, and verify process cleanup. The deterministic local model fixture discards request bodies, so these gates
+do not claim account-backed model behavior.
 
 `remoteResilienceFaultInjection` uses the same modules and CLI boundary. It cuts the authenticated watch socket,
 requires exact bounded replay without duplicate cursors, recomposes the production Core over the same durable home,

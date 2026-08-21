@@ -1,4 +1,4 @@
-export const WIRE_VERSION = 25;
+export const WIRE_VERSION = 26;
 
 export type PrivateProviderLine = {
   id: string;

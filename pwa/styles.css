@@ -14,6 +14,7 @@
 }
 
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 html, body { min-height: 100%; margin: 0; }
 body { background: var(--carbon); }
 button, input, select, textarea { font: inherit; }
@@ -57,6 +58,8 @@ input, select, textarea { width: 100%; padding: 11px 12px; background: var(--car
 .surface-tabs button[aria-pressed="true"] { border-color: var(--orange); color: var(--orange); }
 .pane-heading, .detail-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 20px; border-bottom: 1px solid var(--line); }
 .pane-heading h1, .detail-heading h2 { margin: 0; font-size: 20px; }
+.pane-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 7px; }
+.attention { border-color: #8b6b27; background: #302815; color: #f2c14e; font-weight: 800; }
 .session-list, .mission-list { display: grid; }
 .session-row, .mission-row { width: 100%; min-height: 70px; display: grid; grid-template-columns: 12px 1fr auto; align-items: center; gap: 10px; padding: 11px 16px; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; text-align: left; background: transparent; }
 .session-row:hover, .session-row.selected, .mission-row:hover, .mission-row.selected { background: var(--panel-strong); }
@@ -66,6 +69,8 @@ input, select, textarea { width: 100%; padding: 11px 12px; background: var(--car
 .session-row small, .session-row b, .mission-row small, .mission-row b { color: var(--muted); font-size: 11px; font-weight: 500; }
 .state-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--line); }
 .state-dot.hot, .state-dot.running { background: #52c58a; }
+.state-dot.needs-you { background: #f2c14e; box-shadow: 0 0 0 3px color-mix(in srgb, #f2c14e 22%, transparent); }
+.state-dot.quota { background: #83908c; }
 .state-dot.blocked, .state-dot.failed { background: var(--danger); }
 .state-dot.paused, .state-dot.integrating { background: #d0a33c; }
 .new-session { margin: 18px; padding: 16px; border: 1px solid var(--line); border-radius: 10px; }
@@ -108,8 +113,10 @@ footer button { min-height: 36px; font-size: 11px; }
   .shell { display: block; }
   .session-pane { border-right: 0; }
   .session-detail, .mission-detail { min-height: calc(100vh - 64px); }
-  .session-detail:not([hidden]), .mission-detail:not([hidden]) { position: fixed; inset: 0; z-index: 3; background: var(--carbon); padding-top: env(safe-area-inset-top); }
+  .session-detail:not([hidden]), .mission-detail:not([hidden]) { position: fixed; inset: 0; z-index: 5; background: var(--carbon); padding-top: env(safe-area-inset-top); }
   .detail-heading { padding-top: 14px; }
+  .pane-heading { align-items: center; }
+  .pane-actions { max-width: 56%; }
   .back { display: inline-flex; align-items: center; min-height: 34px; padding: 0 9px; color: var(--orange); }
   .detail-heading > div:first-of-type { flex: 1; }
   .path { max-width: 88vw; }

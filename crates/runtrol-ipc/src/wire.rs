@@ -1286,11 +1286,28 @@ pub struct SessionLine {
     pub hot: bool,
     /// What it is doing, in one word.
     pub doing: Box<str>,
+    /// What a running turn is waiting for, when it cannot continue by itself.
+    ///
+    /// This is bounded session metadata already observed by Core. It carries no approval identifier, subject, or
+    /// conversation content. A phone uses the distinction to go to a person wait without treating account quota as
+    /// something the operator can answer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub waiting_on: Option<SessionWaiting>,
     /// It has gone quiet, and the turn is still running.
     ///
     /// Both halves matter. A subscriber shows "this looks stuck" and offers to stop it; what it must not show is a
     /// completion runtrol invented.
     pub looks_stuck: bool,
+}
+
+/// Why a running session cannot continue by itself.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SessionWaiting {
+    /// A person has to answer an approval or a provider-native input request.
+    Person,
+    /// An account limit has to lapse. There is no useful operator action.
+    Quota,
 }
 
 /// Why something did not work.
@@ -1778,21 +1795,28 @@ mod tests {
             workspace: r"C:\work\dartlab".into(),
             hot: true,
             doing: "busy".into(),
+            waiting_on: Some(SessionWaiting::Person),
             looks_stuck: true,
         };
         let encoded = serde_json::to_string(&line).expect("writable");
         let back: SessionLine = serde_json::from_str(&encoded).expect("readable");
         assert!(back.looks_stuck);
         assert_eq!(&*back.doing, "busy", "quiet is not finished");
+        assert_eq!(back.waiting_on, Some(SessionWaiting::Person));
 
         let mut previous: serde_json::Value = serde_json::from_str(&encoded).expect("JSON");
         previous
             .as_object_mut()
             .expect("a session line is an object")
             .remove("label");
+        previous
+            .as_object_mut()
+            .expect("a session line is an object")
+            .remove("waiting_on");
         let compatible: SessionLine =
             serde_json::from_value(previous).expect("the additive field stays compatible");
         assert_eq!(compatible.label, None);
+        assert_eq!(compatible.waiting_on, None);
     }
 
     #[test]

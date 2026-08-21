@@ -1,4 +1,12 @@
 import { openDeviceStore } from "./identityStore.js";
+import {
+  attentionCount,
+  consumeAttentionRequest,
+  isAttentionMessage,
+  needsAttention,
+  nextAttentionSession,
+  preferredSession,
+} from "./attention.js";
 import { consumePairingFragment } from "./pairing.js";
 import { CoreClient, CoreFailure, readDeviceAuthority, withCore } from "./core.js";
 import { keyFingerprint, pairThroughRelay } from "./relay.js";
@@ -31,6 +39,7 @@ const state = {
   pushPublicKey: null,
   pushSynchronized: false,
   serviceWorker: null,
+  attentionRequested: false,
 };
 
 const status = element("connection-status");
@@ -52,6 +61,7 @@ const missionsTab = element("show-missions");
 const panic = element("panic");
 const forget = element("forget-device");
 const notifications = element("notifications");
+const nextAttention = element("next-attention");
 let visibleCharacters = 0;
 
 await boot();
@@ -59,6 +69,7 @@ await boot();
 async function boot() {
   try {
     state.pairing = consumePairingFragment(location, history);
+    state.attentionRequested = consumeAttentionRequest(location, history);
     state.presentation = await fetch("assets/event-presentation.json", { cache: "no-cache" }).then((response) => {
       if (!response.ok) throw new Error("event presentation contract is unavailable");
       return response.json();
@@ -82,6 +93,7 @@ async function boot() {
 
 function bindActions() {
   refresh.addEventListener("click", () => refreshSessions());
+  nextAttention.addEventListener("click", () => focusNextAttention());
   refreshMissions.addEventListener("click", () => runAction(async () => refreshMissionCatalogue()));
   sessionsTab.addEventListener("click", () => activateSurface("sessions"));
   missionsTab.addEventListener("click", () => runAction(async () => {
@@ -127,6 +139,7 @@ function bindActions() {
     prompt.value = "";
     runAction(async () => {
       await withCore(state.connection, state.identity, (client) => client.prompt(state.selected.session, value));
+      markSessionWaiting(state.selected.session, null);
       setStatus("Prompt delivered unchanged", "online");
     });
   });
@@ -140,8 +153,8 @@ function bindActions() {
     await refreshSessions();
   }));
   element("back-to-sessions").addEventListener("click", () => {
-    state.watchGeneration += 1;
-    sessionDetail.hidden = true;
+    clearSelection();
+    renderSessions();
   });
   element("back-to-missions").addEventListener("click", () => {
     missionDetail.hidden = true;
@@ -245,10 +258,12 @@ async function showSessions() {
   forget.hidden = false;
   notifications.hidden = !pushAvailable() || state.serviceWorker === null;
   activateSurface("sessions");
-  await refreshSessions();
+  const attentionRequested = state.attentionRequested;
+  state.attentionRequested = false;
+  await refreshSessions(null, attentionRequested);
 }
 
-async function refreshSessions(preferredSession = null) {
+async function refreshSessions(requestedSession = null, attentionRequested = false) {
   if (!state.connection) return;
   setStatus("Connecting to PC", "connecting");
   try {
@@ -269,10 +284,15 @@ async function refreshSessions(preferredSession = null) {
     configureSurfaceTabs();
     await synchronizeNotifications();
     renderSessions();
-    const selected = state.sessions.find((session) => session.session === (preferredSession ?? state.selected?.session));
+    const selected = preferredSession(
+      state.sessions,
+      requestedSession,
+      state.selected?.session ?? null,
+      attentionRequested,
+      isNarrowViewport(),
+    );
     if (selected) selectSession(selected);
-    else if (state.sessions.length > 0 && !state.selected) selectSession(state.sessions[0]);
-    else if (state.sessions.length === 0) clearSelection();
+    else clearSelection();
     setStatus("PC online", "online");
   } catch (error) {
     setStatus(failureMessage(error, "PC offline"), "offline");
@@ -327,19 +347,49 @@ async function forgetPushSubscription() {
 function renderSessions() {
   sessionList.replaceChildren();
   element("session-count").textContent = String(state.sessions.length);
+  const waiting = attentionCount(state.sessions);
+  element("attention-count").textContent = String(waiting);
+  nextAttention.hidden = waiting === 0;
+  nextAttention.setAttribute("aria-label", `${waiting} sessions need you. Open the next one.`);
   for (const session of state.sessions) {
     const button = document.createElement("button");
     button.type = "button";
     button.className = `session-row${session.session === state.selected?.session ? " selected" : ""}`;
     const title = safeVisibleText(session.label || workspaceName(session.workspace));
-    const detail = safeVisibleText(`${session.provider}  ${session.doing}`);
-    button.innerHTML = `<span class="state-dot ${session.hot ? "hot" : ""}"></span><span><strong></strong><small></small></span><b></b>`;
+    const activity = needsAttention(session)
+      ? "Needs you"
+      : session.waiting_on === "quota"
+        ? "Waiting on limit"
+        : session.doing;
+    const detail = safeVisibleText(`${session.provider}  ${activity}`);
+    const dot = needsAttention(session) ? "needs-you" : session.waiting_on === "quota" ? "quota" : session.hot ? "hot" : "";
+    button.classList.toggle("needs-you", needsAttention(session));
+    button.innerHTML = `<span class="state-dot ${dot}"></span><span><strong></strong><small></small></span><b></b>`;
     button.querySelector("strong").textContent = title;
     button.querySelector("small").textContent = detail;
     button.querySelector("b").textContent = session.hot ? "open" : "cold";
     button.addEventListener("click", () => selectSession(session));
     sessionList.append(button);
   }
+}
+
+function focusNextAttention() {
+  const next = nextAttentionSession(state.sessions, state.selected?.session ?? null);
+  if (!next) return;
+  activateSurface("sessions");
+  selectSession(next);
+}
+
+function markSessionWaiting(sessionId, waitingOn) {
+  let selected = null;
+  state.sessions = state.sessions.map((session) => {
+    if (session.session !== sessionId) return session;
+    const updated = { ...session, waiting_on: waitingOn };
+    if (state.selected?.session === sessionId) selected = updated;
+    return updated;
+  });
+  if (selected) state.selected = selected;
+  renderSessions();
 }
 
 function configureSurfaceTabs() {
@@ -553,6 +603,7 @@ function presentEvent(payload, session) {
   if (contract?.kind === "message") {
     appendOutput(contract.side, contentText(body));
   } else if (contract?.kind === "approval") {
+    markSessionWaiting(session.session, "person");
     appendApproval(body, session);
   } else if (contract?.kind === "tool") {
     appendOutput("meta", toolLine(body));
@@ -613,6 +664,7 @@ function appendApproval(body, session) {
         option.id,
         body.subject_digest,
       ));
+      markSessionWaiting(session.session, null);
       for (const choice of actions.querySelectorAll("button")) choice.disabled = true;
     }));
     actions.append(button);
@@ -725,12 +777,28 @@ function wait(milliseconds) {
 
 function registerServiceWorker() {
   if ("serviceWorker" in navigator) {
+    navigator.serviceWorker.addEventListener("message", (event) => {
+      if (!isAttentionMessage(event.data)) return;
+      state.attentionRequested = true;
+      if (!state.connection) return;
+      runAction(async () => {
+        activateSurface("sessions");
+        state.attentionRequested = false;
+        await refreshSessions(null, true);
+      });
+    });
     return navigator.serviceWorker.register("service-worker.js").catch((error) => {
       setStatus(`Install support failed: ${error instanceof Error ? error.message : String(error)}`, "offline");
       return null;
     });
   }
   return null;
+}
+
+function isNarrowViewport() {
+  return typeof window.matchMedia === "function"
+    ? window.matchMedia("(max-width: 760px)").matches
+    : window.innerWidth <= 760;
 }
 
 function element(id) {

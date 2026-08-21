@@ -12,6 +12,12 @@ and refactoring that no user can observe do not belong here.
 
 ### Added
 
+- Phone notifications now open the first session that is actually waiting for the operator. The phone session list
+  shows a bounded `Needs you` count and cycles through every person wait while keeping account-limit waits separate.
+  A normal narrow-screen launch stays on the list instead of opening an arbitrary first session. The generic Web Push
+  still carries no session identifier or conversation content, and the real installed-CLI approval gate proves that
+  the focus appears while approval is pending and clears after the answer.
+
 - A project heading can enable **Agent Tools** in one click. The installed coding-agent CLIs receive one
   provider-neutral MCP server through their own official registration commands, then can discover providers and
   models, list project sessions, start exclusive work, send unchanged instructions, read bounded events, and stop

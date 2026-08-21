@@ -3416,9 +3416,11 @@ mod tests {
         if mode == "approval" {
             for fact in [
                 "approval_seen",
+                "attention_listed",
                 "subject_complete",
                 "reject_once",
                 "answered",
+                "attention_cleared",
             ] {
                 assert!(evidence.facts.contains(fact), "{evidence:?}");
             }

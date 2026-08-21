@@ -1,9 +1,10 @@
-const CACHE_NAME = "runtrol-phone-v3";
+const CACHE_NAME = "runtrol-phone-v4";
 const APP_SHELL = [
   "./",
   "index.html",
   "styles.css",
   "manifest.webmanifest",
+  "src/attention.js",
   "src/app.js",
   "src/bytes.js",
   "src/core.js",
@@ -54,6 +55,10 @@ self.addEventListener("notificationclick", (event) => {
   event.notification.close();
   event.waitUntil(self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((clients) => {
     const current = clients.find((client) => "focus" in client);
-    return current ? current.focus() : self.clients.openWindow("./");
+    if (current) {
+      current.postMessage({ kind: "runtrolAttention" });
+      return current.focus();
+    }
+    return self.clients.openWindow("./?attention=1");
   }));
 });
