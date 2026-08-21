@@ -112,7 +112,9 @@ pub fn needed(request: &Request) -> Needed {
         | Request::RuntimeForgetRequests
         | Request::RuntimeForgetConfirm { .. }
         | Request::RuntimeKeyRotationRequests
-        | Request::RuntimeKeyRotationConfirm { .. } => {
+        | Request::RuntimeKeyRotationConfirm { .. }
+        | Request::RuntimeSharedOpenRequests
+        | Request::RuntimeSharedOpenConfirm { .. } => {
             Needed::AtTheMachine(LocalScope::IntegrationAdmin)
         }
         // Listing shares the registering scope: the audience is the same person deciding what to

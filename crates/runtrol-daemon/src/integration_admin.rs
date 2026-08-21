@@ -4,11 +4,12 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use runtrol_ipc::wire::{
     IntegrationEnrollmentLine, IntegrationLine, RuntimeForgetLine, RuntimeKeyRotationLine,
+    RuntimeSharedOpenLine,
 };
 use runtrol_provider::{AbsPath, WallMs};
 use runtrol_runtime_protocol::{
     AppScope, IDEMPOTENCY_WINDOW_MS, IntegrationId, MUTATION_CLOCK_SKEW_MS, MutationRequestId,
-    PendingEnrollmentId,
+    PendingEnrollmentId, RuntimeMethod,
 };
 use runtrol_security::{
     DenyList, GrantRequest, IntegrationProposal, LocalConsole, PresenceChallenge, WorkspaceRoot,
@@ -24,10 +25,10 @@ use crate::runtime_auth::{enrollment_key, integration_id, integration_key, pendi
 
 const MAX_APPROVAL_CHALLENGES: usize = 16;
 const APPROVAL_CHALLENGE_MS: u64 = runtrol_security::presence::CHALLENGE_WINDOW_MS;
-const MAX_FORGET_CONFIRMATIONS: usize = 64;
-const FORGET_CONFIRMATION_MS: u64 = 10 * 60_000;
-const MAX_KEY_ROTATION_CONFIRMATIONS: usize = 64;
-const KEY_ROTATION_CONFIRMATION_MS: u64 = 10 * 60_000;
+/// How many exact public mutations one confirmation table holds for a person to decide at once.
+const MAX_CONFIRMATIONS: usize = 64;
+/// How long a public mutation waits for the local decision before the caller has to ask again.
+const CONFIRMATION_MS: u64 = 10 * 60_000;
 
 /// One local approval challenge returned to the VS Code surface.
 pub(crate) struct ApprovalChallenge {
@@ -42,63 +43,195 @@ struct PendingApproval {
     expires_at: WallMs,
 }
 
-struct PendingForgetConfirmation {
-    integration: IntegrationKey,
+/// Whether one exact public mutation still needs a local approval action.
+#[derive(Clone)]
+pub(crate) enum Confirmation {
+    Awaiting { confirmation_id: Box<str> },
+    Confirmed,
+}
+
+/// Closed admission failures for one bounded local confirmation table.
+#[derive(Clone, Copy)]
+pub(crate) enum ConfirmationError {
+    InvalidRequestId,
+    IdempotencyConflict,
+    ResourceExhausted,
+    StateUnavailable,
+}
+
+/// What a public session-forget request would do, as the person deciding it must see it.
+#[derive(Clone, PartialEq, Eq)]
+struct ForgetSubject {
     session: runtrol_provider::SessionId,
     expected_session_generation: u64,
-    confirmation_id: Box<str>,
-    expires_at: WallMs,
-    confirmed: bool,
 }
 
-struct PendingKeyRotationConfirmation {
-    integration: IntegrationKey,
+/// What a public integration-key rotation would do.
+#[derive(Clone, PartialEq, Eq)]
+struct KeyRotationSubject {
     expected_key_generation: u64,
     new_public_key: [u8; 32],
+}
+
+/// What a public shared-writer session open would do: which operation, which coding service, in which
+/// working tree somebody is already writing.
+#[derive(Clone, PartialEq, Eq)]
+pub(crate) struct SharedOpenSubject {
+    pub(crate) method: RuntimeMethod,
+    pub(crate) provider: runtrol_provider::ProviderId,
+    pub(crate) workspace: AbsPath,
+}
+
+/// One exact public mutation waiting for a person at the machine, remembered under the caller's
+/// mutation identity.
+struct PendingConfirmation<Subject> {
+    integration: IntegrationKey,
+    subject: Subject,
     confirmation_id: Box<str>,
     expires_at: WallMs,
     confirmed: bool,
 }
 
-/// Whether one exact public forget request still needs a local approval action.
-#[derive(Clone)]
-pub(crate) enum ForgetConfirmation {
-    Awaiting { confirmation_id: Box<str> },
-    Confirmed,
+impl<Subject> PendingConfirmation<Subject> {
+    fn state(&self) -> Confirmation {
+        if self.confirmed {
+            Confirmation::Confirmed
+        } else {
+            Confirmation::Awaiting {
+                confirmation_id: self.confirmation_id.clone(),
+            }
+        }
+    }
 }
 
-/// Closed admission failures for the bounded local forget confirmation table.
-#[derive(Clone, Copy)]
-pub(crate) enum ForgetConfirmationError {
-    InvalidRequestId,
-    IdempotencyConflict,
-    ResourceExhausted,
-    StateUnavailable,
+/// One bounded table of exact public mutations, each awaiting a person at the machine.
+///
+/// Keyed by the integration's mutation identity, so the unchanged retry after approval finds its own
+/// decision and a retry with different parameters is refused rather than approved by proxy. Expired
+/// entries leave on every touch; nothing here outlives the process. Forget, key rotation and shared
+/// session opens are three instances of this one table, not three tables.
+struct Confirmations<Subject> {
+    prefix: &'static str,
+    pending: Mutex<BTreeMap<IntegrationMutationKey, PendingConfirmation<Subject>>>,
 }
 
-/// Whether one exact public key rotation still needs a local approval action.
-#[derive(Clone)]
-pub(crate) enum KeyRotationConfirmation {
-    Awaiting { confirmation_id: Box<str> },
-    Confirmed,
-}
+impl<Subject: PartialEq> Confirmations<Subject> {
+    fn new(prefix: &'static str) -> Self {
+        Self {
+            prefix,
+            pending: Mutex::new(BTreeMap::new()),
+        }
+    }
 
-/// Closed admission failures for the bounded local key rotation confirmation table.
-#[derive(Clone, Copy)]
-pub(crate) enum KeyRotationConfirmationError {
-    InvalidRequestId,
-    IdempotencyConflict,
-    ResourceExhausted,
-    StateUnavailable,
+    async fn existing(
+        &self,
+        integration: IntegrationKey,
+        request_id: &MutationRequestId,
+        subject: &Subject,
+    ) -> Result<Option<Confirmation>, ConfirmationError> {
+        let (key, now) = mutation_key(integration, request_id)?;
+        let mut pending = self.pending.lock().await;
+        pending.retain(|_, entry| entry.expires_at >= now);
+        let Some(entry) = pending.get(&key) else {
+            return Ok(None);
+        };
+        if entry.subject != *subject {
+            return Err(ConfirmationError::IdempotencyConflict);
+        }
+        Ok(Some(entry.state()))
+    }
+
+    async fn request(
+        &self,
+        integration: IntegrationKey,
+        request_id: &MutationRequestId,
+        subject: Subject,
+    ) -> Result<Confirmation, ConfirmationError> {
+        let (key, now) = mutation_key(integration, request_id)?;
+        let mut pending = self.pending.lock().await;
+        pending.retain(|_, entry| entry.expires_at >= now);
+        if let Some(entry) = pending.get(&key) {
+            if entry.subject != subject {
+                return Err(ConfirmationError::IdempotencyConflict);
+            }
+            return Ok(entry.state());
+        }
+        if pending.len() >= MAX_CONFIRMATIONS {
+            return Err(ConfirmationError::ResourceExhausted);
+        }
+        let confirmation_id = format!(
+            "{}_{}",
+            self.prefix,
+            hex(&random_key().map_err(|_| ConfirmationError::StateUnavailable)?)
+        )
+        .into_boxed_str();
+        pending.insert(
+            key,
+            PendingConfirmation {
+                integration,
+                subject,
+                confirmation_id: confirmation_id.clone(),
+                expires_at: now.plus_millis(CONFIRMATION_MS),
+                confirmed: false,
+            },
+        );
+        Ok(Confirmation::Awaiting { confirmation_id })
+    }
+
+    /// The requests still waiting, each drawn as one line for the local surface from the entry and its
+    /// integration's stored row.
+    async fn awaiting<Line>(
+        &self,
+        composed: &Composed,
+        line: impl Fn(&PendingConfirmation<Subject>, IntegrationRow) -> Line,
+    ) -> Result<Vec<Line>, AdminError> {
+        let now = WallMs::now();
+        let mut pending = self.pending.lock().await;
+        pending.retain(|_, entry| entry.expires_at >= now);
+        pending
+            .values()
+            .filter(|entry| !entry.confirmed)
+            .map(|entry| {
+                let integration = composed
+                    .store
+                    .get_integration(entry.integration)
+                    .map_err(|_| AdminError::state())?
+                    .ok_or_else(AdminError::state)?;
+                Ok(line(entry, integration))
+            })
+            .collect()
+    }
+
+    async fn confirm(&self, confirmation_id: &str, absent: &'static str) -> Result<(), AdminError> {
+        let now = WallMs::now();
+        let mut pending = self.pending.lock().await;
+        pending.retain(|_, entry| entry.expires_at >= now);
+        let entry = pending
+            .values_mut()
+            .find(|entry| entry.confirmation_id.as_ref() == confirmation_id)
+            .ok_or_else(|| AdminError::invalid(absent))?;
+        entry.confirmed = true;
+        Ok(())
+    }
 }
 
 /// Bounded one-use local integration approval state.
-#[derive(Default)]
 pub(crate) struct IntegrationAdmin {
     challenges: Mutex<BTreeMap<[u8; 16], PendingApproval>>,
-    forget_confirmations: Mutex<BTreeMap<IntegrationMutationKey, PendingForgetConfirmation>>,
-    key_rotation_confirmations:
-        Mutex<BTreeMap<IntegrationMutationKey, PendingKeyRotationConfirmation>>,
+    forgets: Confirmations<ForgetSubject>,
+    key_rotations: Confirmations<KeyRotationSubject>,
+    shared_opens: Confirmations<SharedOpenSubject>,
+}
+
+impl Default for IntegrationAdmin {
+    fn default() -> Self {
+        Self {
+            challenges: Mutex::new(BTreeMap::new()),
+            forgets: Confirmations::new("fgt"),
+            key_rotations: Confirmations::new("rot"),
+            shared_opens: Confirmations::new("sho"),
+        }
+    }
 }
 
 impl IntegrationAdmin {
@@ -108,25 +241,14 @@ impl IntegrationAdmin {
         request_id: &MutationRequestId,
         session: runtrol_provider::SessionId,
         expected_session_generation: u64,
-    ) -> Result<Option<ForgetConfirmation>, ForgetConfirmationError> {
-        let (key, now) = forget_key(integration, request_id)?;
-        let mut confirmations = self.forget_confirmations.lock().await;
-        confirmations.retain(|_, pending| pending.expires_at >= now);
-        let Some(pending) = confirmations.get(&key) else {
-            return Ok(None);
+    ) -> Result<Option<Confirmation>, ConfirmationError> {
+        let subject = ForgetSubject {
+            session,
+            expected_session_generation,
         };
-        if pending.session != session
-            || pending.expected_session_generation != expected_session_generation
-        {
-            return Err(ForgetConfirmationError::IdempotencyConflict);
-        }
-        Ok(Some(if pending.confirmed {
-            ForgetConfirmation::Confirmed
-        } else {
-            ForgetConfirmation::Awaiting {
-                confirmation_id: pending.confirmation_id.clone(),
-            }
-        }))
+        self.forgets
+            .existing(integration, request_id, &subject)
+            .await
     }
 
     pub(crate) async fn request_forget_confirmation(
@@ -135,83 +257,36 @@ impl IntegrationAdmin {
         request_id: &MutationRequestId,
         session: runtrol_provider::SessionId,
         expected_session_generation: u64,
-    ) -> Result<ForgetConfirmation, ForgetConfirmationError> {
-        let (key, now) = forget_key(integration, request_id)?;
-        let mut confirmations = self.forget_confirmations.lock().await;
-        confirmations.retain(|_, pending| pending.expires_at >= now);
-        if let Some(pending) = confirmations.get(&key) {
-            if pending.session != session
-                || pending.expected_session_generation != expected_session_generation
-            {
-                return Err(ForgetConfirmationError::IdempotencyConflict);
-            }
-            return Ok(if pending.confirmed {
-                ForgetConfirmation::Confirmed
-            } else {
-                ForgetConfirmation::Awaiting {
-                    confirmation_id: pending.confirmation_id.clone(),
-                }
-            });
-        }
-        if confirmations.len() >= MAX_FORGET_CONFIRMATIONS {
-            return Err(ForgetConfirmationError::ResourceExhausted);
-        }
-        let confirmation_id = format!(
-            "fgt_{}",
-            hex(&random_key().map_err(|_| { ForgetConfirmationError::StateUnavailable })?)
-        )
-        .into_boxed_str();
-        confirmations.insert(
-            key,
-            PendingForgetConfirmation {
-                integration,
-                session,
-                expected_session_generation,
-                confirmation_id: confirmation_id.clone(),
-                expires_at: now.plus_millis(FORGET_CONFIRMATION_MS),
-                confirmed: false,
-            },
-        );
-        Ok(ForgetConfirmation::Awaiting { confirmation_id })
+    ) -> Result<Confirmation, ConfirmationError> {
+        let subject = ForgetSubject {
+            session,
+            expected_session_generation,
+        };
+        self.forgets.request(integration, request_id, subject).await
     }
 
     pub(crate) async fn forget_requests(
         &self,
         composed: &Composed,
     ) -> Result<Vec<RuntimeForgetLine>, AdminError> {
-        let now = WallMs::now();
-        let mut confirmations = self.forget_confirmations.lock().await;
-        confirmations.retain(|_, pending| pending.expires_at >= now);
-        confirmations
-            .values()
-            .filter(|pending| !pending.confirmed)
-            .map(|pending| {
-                let integration = composed
-                    .store
-                    .get_integration(pending.integration)
-                    .map_err(|_| AdminError::state())?
-                    .ok_or_else(AdminError::state)?;
-                Ok(RuntimeForgetLine {
-                    confirmation_id: pending.confirmation_id.clone(),
-                    integration_id: integration_id(pending.integration).to_string().into(),
-                    integration_label: integration.label,
-                    session_id: pending.session.to_string().into(),
-                    expires_at_ms: pending.expires_at.as_millis(),
-                })
+        self.forgets
+            .awaiting(composed, |pending, integration| RuntimeForgetLine {
+                confirmation_id: pending.confirmation_id.clone(),
+                integration_id: integration_id(pending.integration).to_string().into(),
+                integration_label: integration.label,
+                session_id: pending.subject.session.to_string().into(),
+                expires_at_ms: pending.expires_at.as_millis(),
             })
-            .collect()
+            .await
     }
 
     pub(crate) async fn confirm_forget(&self, confirmation_id: &str) -> Result<(), AdminError> {
-        let now = WallMs::now();
-        let mut confirmations = self.forget_confirmations.lock().await;
-        confirmations.retain(|_, pending| pending.expires_at >= now);
-        let pending = confirmations
-            .values_mut()
-            .find(|pending| pending.confirmation_id.as_ref() == confirmation_id)
-            .ok_or_else(|| AdminError::invalid("the Runtime forget confirmation does not exist"))?;
-        pending.confirmed = true;
-        Ok(())
+        self.forgets
+            .confirm(
+                confirmation_id,
+                "the Runtime forget confirmation does not exist",
+            )
+            .await
     }
 
     pub(crate) async fn request_key_rotation_confirmation(
@@ -220,89 +295,84 @@ impl IntegrationAdmin {
         request_id: &MutationRequestId,
         expected_key_generation: u64,
         new_public_key: [u8; 32],
-    ) -> Result<KeyRotationConfirmation, KeyRotationConfirmationError> {
-        let (key, now) = key_rotation_key(integration, request_id)?;
-        let mut confirmations = self.key_rotation_confirmations.lock().await;
-        confirmations.retain(|_, pending| pending.expires_at >= now);
-        if let Some(pending) = confirmations.get(&key) {
-            if pending.expected_key_generation != expected_key_generation
-                || pending.new_public_key != new_public_key
-            {
-                return Err(KeyRotationConfirmationError::IdempotencyConflict);
-            }
-            return Ok(if pending.confirmed {
-                KeyRotationConfirmation::Confirmed
-            } else {
-                KeyRotationConfirmation::Awaiting {
-                    confirmation_id: pending.confirmation_id.clone(),
-                }
-            });
-        }
-        if confirmations.len() >= MAX_KEY_ROTATION_CONFIRMATIONS {
-            return Err(KeyRotationConfirmationError::ResourceExhausted);
-        }
-        let confirmation_id = format!(
-            "rot_{}",
-            hex(&random_key().map_err(|_| KeyRotationConfirmationError::StateUnavailable)?)
-        )
-        .into_boxed_str();
-        confirmations.insert(
-            key,
-            PendingKeyRotationConfirmation {
-                integration,
-                expected_key_generation,
-                new_public_key,
-                confirmation_id: confirmation_id.clone(),
-                expires_at: now.plus_millis(KEY_ROTATION_CONFIRMATION_MS),
-                confirmed: false,
-            },
-        );
-        Ok(KeyRotationConfirmation::Awaiting { confirmation_id })
+    ) -> Result<Confirmation, ConfirmationError> {
+        let subject = KeyRotationSubject {
+            expected_key_generation,
+            new_public_key,
+        };
+        self.key_rotations
+            .request(integration, request_id, subject)
+            .await
     }
 
     pub(crate) async fn key_rotation_requests(
         &self,
         composed: &Composed,
     ) -> Result<Vec<RuntimeKeyRotationLine>, AdminError> {
-        let now = WallMs::now();
-        let mut confirmations = self.key_rotation_confirmations.lock().await;
-        confirmations.retain(|_, pending| pending.expires_at >= now);
-        confirmations
-            .values()
-            .filter(|pending| !pending.confirmed)
-            .map(|pending| {
-                let integration = composed
-                    .store
-                    .get_integration(pending.integration)
-                    .map_err(|_| AdminError::state())?
-                    .ok_or_else(AdminError::state)?;
-                Ok(RuntimeKeyRotationLine {
-                    confirmation_id: pending.confirmation_id.clone(),
-                    integration_id: integration_id(pending.integration).to_string().into(),
-                    integration_label: integration.label,
-                    current_key_generation: pending.expected_key_generation,
-                    new_key_fingerprint: fingerprint(&pending.new_public_key).into(),
-                    expires_at_ms: pending.expires_at.as_millis(),
-                })
+        self.key_rotations
+            .awaiting(composed, |pending, integration| RuntimeKeyRotationLine {
+                confirmation_id: pending.confirmation_id.clone(),
+                integration_id: integration_id(pending.integration).to_string().into(),
+                integration_label: integration.label,
+                current_key_generation: pending.subject.expected_key_generation,
+                new_key_fingerprint: fingerprint(&pending.subject.new_public_key).into(),
+                expires_at_ms: pending.expires_at.as_millis(),
             })
-            .collect()
+            .await
     }
 
     pub(crate) async fn confirm_key_rotation(
         &self,
         confirmation_id: &str,
     ) -> Result<(), AdminError> {
-        let now = WallMs::now();
-        let mut confirmations = self.key_rotation_confirmations.lock().await;
-        confirmations.retain(|_, pending| pending.expires_at >= now);
-        let pending = confirmations
-            .values_mut()
-            .find(|pending| pending.confirmation_id.as_ref() == confirmation_id)
-            .ok_or_else(|| {
-                AdminError::invalid("the Runtime key rotation confirmation does not exist")
-            })?;
-        pending.confirmed = true;
-        Ok(())
+        self.key_rotations
+            .confirm(
+                confirmation_id,
+                "the Runtime key rotation confirmation does not exist",
+            )
+            .await
+    }
+
+    /// A public caller wants a second writer in a working tree somebody is already writing: queued for the
+    /// person at the machine, and the same request passes once they have said yes.
+    pub(crate) async fn request_shared_open_confirmation(
+        &self,
+        integration: IntegrationKey,
+        request_id: &MutationRequestId,
+        subject: SharedOpenSubject,
+    ) -> Result<Confirmation, ConfirmationError> {
+        self.shared_opens
+            .request(integration, request_id, subject)
+            .await
+    }
+
+    pub(crate) async fn shared_open_requests(
+        &self,
+        composed: &Composed,
+    ) -> Result<Vec<RuntimeSharedOpenLine>, AdminError> {
+        self.shared_opens
+            .awaiting(composed, |pending, integration| RuntimeSharedOpenLine {
+                confirmation_id: pending.confirmation_id.clone(),
+                integration_id: integration_id(pending.integration).to_string().into(),
+                integration_label: integration.label,
+                operation: pending.subject.method.as_str().into(),
+                provider_id: pending.subject.provider.as_str().into(),
+                workspace: pending.subject.workspace.as_str().into(),
+                expires_at_ms: pending.expires_at.as_millis(),
+            })
+            .await
+    }
+
+    pub(crate) async fn confirm_shared_open(
+        &self,
+        confirmation_id: &str,
+    ) -> Result<(), AdminError> {
+        self.shared_opens
+            .confirm(
+                confirmation_id,
+                "the Runtime shared open confirmation does not exist",
+            )
+            .await
     }
 
     pub(crate) fn enrollments(
@@ -880,40 +950,23 @@ fn parse_enrollment(value: &str) -> Result<EnrollmentKey, AdminError> {
         .map_err(|_| AdminError::invalid("the pending enrollment identity is malformed"))
 }
 
-fn forget_key(
+/// The table key for one caller's mutation, refused when the identity is malformed or outside the
+/// idempotency window every public mutation already lives in.
+fn mutation_key(
     integration: IntegrationKey,
     request_id: &MutationRequestId,
-) -> Result<(IntegrationMutationKey, WallMs), ForgetConfirmationError> {
+) -> Result<(IntegrationMutationKey, WallMs), ConfirmationError> {
     let now = WallMs::now();
     let Some(created_at) = request_id.unix_millis() else {
-        return Err(ForgetConfirmationError::InvalidRequestId);
+        return Err(ConfirmationError::InvalidRequestId);
     };
     if created_at > now.as_millis().saturating_add(MUTATION_CLOCK_SKEW_MS)
         || created_at.saturating_add(IDEMPOTENCY_WINDOW_MS) < now.as_millis()
     {
-        return Err(ForgetConfirmationError::InvalidRequestId);
+        return Err(ConfirmationError::InvalidRequestId);
     }
     let Some(request_bytes) = request_id.to_bytes() else {
-        return Err(ForgetConfirmationError::InvalidRequestId);
-    };
-    Ok((IntegrationMutationKey::new(integration, request_bytes), now))
-}
-
-fn key_rotation_key(
-    integration: IntegrationKey,
-    request_id: &MutationRequestId,
-) -> Result<(IntegrationMutationKey, WallMs), KeyRotationConfirmationError> {
-    let now = WallMs::now();
-    let Some(created_at) = request_id.unix_millis() else {
-        return Err(KeyRotationConfirmationError::InvalidRequestId);
-    };
-    if created_at > now.as_millis().saturating_add(MUTATION_CLOCK_SKEW_MS)
-        || created_at.saturating_add(IDEMPOTENCY_WINDOW_MS) < now.as_millis()
-    {
-        return Err(KeyRotationConfirmationError::InvalidRequestId);
-    }
-    let Some(request_bytes) = request_id.to_bytes() else {
-        return Err(KeyRotationConfirmationError::InvalidRequestId);
+        return Err(ConfirmationError::InvalidRequestId);
     };
     Ok((IntegrationMutationKey::new(integration, request_bytes), now))
 }

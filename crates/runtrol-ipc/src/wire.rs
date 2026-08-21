@@ -226,6 +226,15 @@ pub enum Request {
         confirmation_id: Box<str>,
     },
 
+    /// List public Runtime shared-writer session opens awaiting one local decision.
+    RuntimeSharedOpenRequests,
+
+    /// Confirm one exact public Runtime shared-writer session open at the machine.
+    RuntimeSharedOpenConfirm {
+        /// Opaque one-use local confirmation identity.
+        confirmation_id: Box<str>,
+    },
+
     /// Register one fixed deterministic gate for local Mission validation.
     MissionRegisterGate {
         /// Stable project-local gate identity.
@@ -627,6 +636,9 @@ pub enum Response {
     /// Public Runtime integration-key rotations awaiting one local decision.
     RuntimeKeyRotationRequests(Vec<RuntimeKeyRotationLine>),
 
+    /// Public Runtime shared-writer session opens awaiting one local decision.
+    RuntimeSharedOpenRequests(Vec<RuntimeSharedOpenLine>),
+
     /// Bounded Mission catalogue.
     Missions(Vec<MissionLine>),
 
@@ -845,6 +857,29 @@ pub struct RuntimeKeyRotationLine {
     pub current_key_generation: u64,
     /// Short fingerprint of the proposed replacement key.
     pub new_key_fingerprint: Box<str>,
+    /// Expiry in Unix milliseconds.
+    pub expires_at_ms: u64,
+}
+
+/// One public Runtime shared-writer session open safe for local presentation.
+///
+/// A second writer in a working tree is the one open the public Runtime will not grant on its own: it
+/// waits here for the person at the machine, who sees which operation, which coding service and which
+/// folder before saying yes.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct RuntimeSharedOpenLine {
+    /// Opaque one-use local confirmation identity.
+    pub confirmation_id: Box<str>,
+    /// Integration asking to open the session.
+    pub integration_id: Box<str>,
+    /// Operator-approved integration label.
+    pub integration_label: Box<str>,
+    /// The public session open method asked for (start, native adoption, or resume).
+    pub operation: Box<str>,
+    /// Coding service the session would run.
+    pub provider_id: Box<str>,
+    /// Working tree the session would share with the writers already there.
+    pub workspace: Box<str>,
     /// Expiry in Unix milliseconds.
     pub expires_at_ms: u64,
 }

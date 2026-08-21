@@ -79,7 +79,7 @@ mutations and never reacquire control silently.
 | `controlConflict`, `leaseExpired` | Refresh session state and require an explicit control decision |
 | `gap` | Replace the local view from the next complete snapshot and disclose the missing interval |
 | `outcomeUnknown` | Keep the original request ID and ask Runtime for current state, never submit new input automatically |
-| `presenceRequired` | Ask the operator to confirm the exact queued request in VS Code, then retry unchanged parameters |
+| `presenceRequired` | Ask the operator to confirm the exact queued request in VS Code, then retry unchanged parameters (session forget, integration key rotation, and any session open with shared working-tree access) |
 | `idempotencyConflict` | Treat request-ID reuse as a consumer defect and do not retry |
 
 ## Credential lifecycle

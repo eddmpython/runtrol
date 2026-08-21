@@ -714,6 +714,8 @@ pub(crate) const fn is_integration_admin(request: &Request) -> bool {
             | Request::RuntimeForgetConfirm { .. }
             | Request::RuntimeKeyRotationRequests
             | Request::RuntimeKeyRotationConfirm { .. }
+            | Request::RuntimeSharedOpenRequests
+            | Request::RuntimeSharedOpenConfirm { .. }
     )
 }
 
@@ -896,30 +898,49 @@ pub(crate) async fn prepare_integration_admin(
             roots,
         )
         .map(|()| Response::Done),
-        Request::RuntimeForgetRequests => composed
-            .integration_admin
-            .forget_requests(composed)
-            .await
-            .map(Response::RuntimeForgetRequests),
-        Request::RuntimeForgetConfirm { confirmation_id } => composed
-            .integration_admin
-            .confirm_forget(confirmation_id)
-            .await
-            .map(|()| Response::Done),
-        Request::RuntimeKeyRotationRequests => composed
-            .integration_admin
-            .key_rotation_requests(composed)
-            .await
-            .map(Response::RuntimeKeyRotationRequests),
-        Request::RuntimeKeyRotationConfirm { confirmation_id } => composed
-            .integration_admin
-            .confirm_key_rotation(confirmation_id)
-            .await
-            .map(|()| Response::Done),
-        _ => return Prepared::None,
+        _ => match runtime_confirmation_administration(composed, request).await {
+            Some(outcome) => outcome,
+            None => return Prepared::None,
+        },
     }
     .unwrap_or_else(|error| refuse(&error.to_string()));
     Prepared::IntegrationAdmin { response }
+}
+
+/// The public Runtime's queued decisions (session forget, integration key rotation, shared-writer session
+/// open), listed and confirmed at the machine. None when the request is not one of them.
+async fn runtime_confirmation_administration(
+    composed: &Composed,
+    request: &Request,
+) -> Option<Result<Response, crate::integration_admin::AdminError>> {
+    let admin = &composed.integration_admin;
+    Some(match request {
+        Request::RuntimeForgetRequests => admin
+            .forget_requests(composed)
+            .await
+            .map(Response::RuntimeForgetRequests),
+        Request::RuntimeForgetConfirm { confirmation_id } => admin
+            .confirm_forget(confirmation_id)
+            .await
+            .map(|()| Response::Done),
+        Request::RuntimeKeyRotationRequests => admin
+            .key_rotation_requests(composed)
+            .await
+            .map(Response::RuntimeKeyRotationRequests),
+        Request::RuntimeKeyRotationConfirm { confirmation_id } => admin
+            .confirm_key_rotation(confirmation_id)
+            .await
+            .map(|()| Response::Done),
+        Request::RuntimeSharedOpenRequests => admin
+            .shared_open_requests(composed)
+            .await
+            .map(Response::RuntimeSharedOpenRequests),
+        Request::RuntimeSharedOpenConfirm { confirmation_id } => admin
+            .confirm_shared_open(confirmation_id)
+            .await
+            .map(|()| Response::Done),
+        _ => return None,
+    })
 }
 
 /// Create or resolve one Mission Task workspace outside the single session owner.
@@ -1348,7 +1369,9 @@ pub(crate) fn answer_prepared(
         | Request::RuntimeForgetRequests
         | Request::RuntimeForgetConfirm { .. }
         | Request::RuntimeKeyRotationRequests
-        | Request::RuntimeKeyRotationConfirm { .. } => match prepared {
+        | Request::RuntimeKeyRotationConfirm { .. }
+        | Request::RuntimeSharedOpenRequests
+        | Request::RuntimeSharedOpenConfirm { .. } => match prepared {
             Prepared::IntegrationAdmin { response } => Reply::One(response),
             _ => Reply::One(refuse(
                 "integration administration was not completed for this request",

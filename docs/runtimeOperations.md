@@ -59,7 +59,7 @@ Use these VS Code commands:
 |---|---|
 | `Runtrol: Review Integration Requests` | Approve or deny exact pending identities, scopes, and roots |
 | `Runtrol: Manage Runtime Integrations` | Review and revoke installed consumer grants |
-| `Runtrol: Review Runtime Requests` | Confirm exact session-forget and key-rotation requests |
+| `Runtrol: Review Runtime Requests` | Confirm exact session-forget, key-rotation, and shared-writer session-open requests |
 
 Revocation stops future Runtime access and retires subscriptions. It does not stop or delete provider-native sessions.
 After a consumer key is lost or a grant is revoked, create a new identity and enroll again. Do not silently reuse the

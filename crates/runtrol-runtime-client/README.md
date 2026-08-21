@@ -16,6 +16,10 @@ observations. Runtime publishes only changed verified snapshots and never starts
 `SessionClient::forget` first returns `presenceRequired`. The operator approves that exact request from Runtrol Studio,
 then the consumer retries the unchanged request identity. Runtime removes only its pointer and never provider state.
 
+A session open with `SessionWorkspaceAccess::Shared` (a second writer in a working tree) follows the same step: `start`,
+`adopt_native` and `resume` first return `presenceRequired`, the operator allows that exact open from Runtrol Studio, and
+the unchanged request then opens the session.
+
 `IntegrationClient::rotate_key` proves ownership of a replacement Ed25519 key and then returns `presenceRequired`.
 Keep the replacement identity, mutation request ID, and previous key generation until the operator confirms the exact
 integration ID and replacement fingerprint in Runtrol Studio. Retry those unchanged values to receive credentials for

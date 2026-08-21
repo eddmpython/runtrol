@@ -839,7 +839,7 @@ async fn rotate_integration_key(
         )
         .await;
     match confirmation {
-        Ok(crate::integration_admin::KeyRotationConfirmation::Awaiting { confirmation_id }) => {
+        Ok(crate::integration_admin::Confirmation::Awaiting { confirmation_id }) => {
             return Answer::operator_action(
                 id,
                 RuntimeErrorKind::PresenceRequired,
@@ -848,8 +848,8 @@ async fn rotate_integration_key(
                 confirmation_id.into(),
             );
         }
-        Ok(crate::integration_admin::KeyRotationConfirmation::Confirmed) => {}
-        Err(failure) => return key_rotation_confirmation_failure(id, failure),
+        Ok(crate::integration_admin::Confirmation::Confirmed) => {}
+        Err(failure) => return confirmation_failure(id, failure, "key rotation"),
     }
     key_rotation_answer(
         id,
@@ -901,36 +901,6 @@ fn key_rotation_answer(
             id,
             RuntimeErrorKind::Internal,
             "Runtime could not rotate the integration key",
-        ),
-    }
-}
-
-fn key_rotation_confirmation_failure(
-    id: JsonRpcId,
-    failure: crate::integration_admin::KeyRotationConfirmationError,
-) -> Answer {
-    match failure {
-        crate::integration_admin::KeyRotationConfirmationError::InvalidRequestId => Answer::plain(
-            id,
-            RuntimeErrorKind::InvalidRequest,
-            "the key rotation request identity is invalid or outside its bounded lifetime",
-        ),
-        crate::integration_admin::KeyRotationConfirmationError::IdempotencyConflict => {
-            Answer::plain(
-                id,
-                RuntimeErrorKind::IdempotencyConflict,
-                "the key rotation request identity was already bound to different parameters",
-            )
-        }
-        crate::integration_admin::KeyRotationConfirmationError::ResourceExhausted => Answer::plain(
-            id,
-            RuntimeErrorKind::ResourceExhausted,
-            "too many integration key rotations are awaiting local confirmation",
-        ),
-        crate::integration_admin::KeyRotationConfirmationError::StateUnavailable => Answer::plain(
-            id,
-            RuntimeErrorKind::Internal,
-            "Runtime could not verify local key rotation confirmation state",
         ),
     }
 }
@@ -1722,19 +1692,19 @@ async fn forget_session(
                 )
                 .await
             {
-                Ok(Some(crate::integration_admin::ForgetConfirmation::Confirmed)) => {
-                    Ok(crate::integration_admin::ForgetConfirmation::Confirmed)
+                Ok(Some(crate::integration_admin::Confirmation::Confirmed)) => {
+                    Ok(crate::integration_admin::Confirmation::Confirmed)
                 }
-                Ok(Some(crate::integration_admin::ForgetConfirmation::Awaiting { .. }) | None) => {
+                Ok(Some(crate::integration_admin::Confirmation::Awaiting { .. }) | None) => {
                     return inventory_failure(id, RuntimeInventoryFailure::SessionNotFound);
                 }
-                Err(failure) => return forget_confirmation_failure(id, failure),
+                Err(failure) => return confirmation_failure(id, failure, "session forget"),
             }
         }
         Err(failure) => return inventory_failure(id, failure),
     };
     match confirmation {
-        Ok(crate::integration_admin::ForgetConfirmation::Awaiting { confirmation_id }) => {
+        Ok(crate::integration_admin::Confirmation::Awaiting { confirmation_id }) => {
             return Answer::operator_action(
                 id,
                 RuntimeErrorKind::PresenceRequired,
@@ -1743,8 +1713,8 @@ async fn forget_session(
                 confirmation_id.into(),
             );
         }
-        Ok(crate::integration_admin::ForgetConfirmation::Confirmed) => {}
-        Err(failure) => return forget_confirmation_failure(id, failure),
+        Ok(crate::integration_admin::Confirmation::Confirmed) => {}
+        Err(failure) => return confirmation_failure(id, failure, "session forget"),
     }
     let (answered, hearing) = oneshot::channel();
     if asking
@@ -1863,30 +1833,34 @@ async fn delete_native_session(
     }
 }
 
-fn forget_confirmation_failure(
+/// A presence-confirmation table refusing a request, said in the caller's own terms (`what` is the
+/// operation: "session forget", "key rotation", "shared session open").
+fn confirmation_failure(
     id: JsonRpcId,
-    failure: crate::integration_admin::ForgetConfirmationError,
+    failure: crate::integration_admin::ConfirmationError,
+    what: &str,
 ) -> Answer {
+    use crate::integration_admin::ConfirmationError;
     match failure {
-        crate::integration_admin::ForgetConfirmationError::InvalidRequestId => Answer::plain(
+        ConfirmationError::InvalidRequestId => Answer::plain(
             id,
             RuntimeErrorKind::InvalidRequest,
-            "the forget request identity is invalid or outside its bounded lifetime",
+            &format!("the {what} request identity is invalid or outside its bounded lifetime"),
         ),
-        crate::integration_admin::ForgetConfirmationError::IdempotencyConflict => Answer::plain(
+        ConfirmationError::IdempotencyConflict => Answer::plain(
             id,
             RuntimeErrorKind::IdempotencyConflict,
-            "the forget request identity was already bound to different parameters",
+            &format!("the {what} request identity was already bound to different parameters"),
         ),
-        crate::integration_admin::ForgetConfirmationError::ResourceExhausted => Answer::plain(
+        ConfirmationError::ResourceExhausted => Answer::plain(
             id,
             RuntimeErrorKind::ResourceExhausted,
-            "too many session forget requests are awaiting local confirmation",
+            &format!("too many {what} requests are awaiting local confirmation"),
         ),
-        crate::integration_admin::ForgetConfirmationError::StateUnavailable => Answer::plain(
+        ConfirmationError::StateUnavailable => Answer::plain(
             id,
             RuntimeErrorKind::Internal,
-            "Runtime could not verify local forget confirmation state",
+            &format!("Runtime could not verify local {what} confirmation state"),
         ),
     }
 }
@@ -1911,10 +1885,22 @@ async fn open_session(
         Ok(authority) => authority.clone(),
         Err(failure) => return Answer::failure(id, failure),
     };
-    let request = match build_open_request(method, params, &authority, sessions, composed) {
+    let request = match build_open_request(method, params, &authority, sessions, composed).await {
         Ok(request) => request,
         Err(OpenAdmissionFailure::Control(failure)) => return control_failure(id, failure),
         Err(OpenAdmissionFailure::Inventory(failure)) => return inventory_failure(id, failure),
+        Err(OpenAdmissionFailure::Presence { confirmation_id }) => {
+            return Answer::operator_action(
+                id,
+                RuntimeErrorKind::PresenceRequired,
+                "approve the exact shared-writer session open in Runtrol Studio, then retry this request",
+                "reviewRuntimeRequestsInRuntrolStudio",
+                confirmation_id.into(),
+            );
+        }
+        Err(OpenAdmissionFailure::Confirmation(failure)) => {
+            return confirmation_failure(id, failure, "shared session open");
+        }
     };
     let (answered, hearing) = oneshot::channel();
     if asking
@@ -1970,13 +1956,19 @@ async fn open_session(
 enum OpenAdmissionFailure {
     Control(RuntimeControlFailure),
     Inventory(RuntimeInventoryFailure),
+    /// A shared-writer open waiting for the person at the machine; the id names the exact request.
+    Presence {
+        confirmation_id: Box<str>,
+    },
+    /// The presence table refused to remember the request.
+    Confirmation(crate::integration_admin::ConfirmationError),
 }
 
 #[expect(
     clippy::too_many_lines,
     reason = "closed start, adoption, and resume shapes share one explicit authority-to-owner admission boundary"
 )]
-fn build_open_request(
+async fn build_open_request(
     method: RuntimeMethod,
     params: serde_json::Value,
     authority: &AuthorizedIntegration,
@@ -1991,7 +1983,16 @@ fn build_open_request(
             let provider = parse_open_provider(&params.provider_id)?;
             let workspace = authorized_workspace(authority, &params.workspace)
                 .map_err(OpenAdmissionFailure::Inventory)?;
-            let access = public_open_access(params.access)?;
+            let access = open_access(
+                composed,
+                authority,
+                &params.request_id,
+                method,
+                provider,
+                &workspace.path,
+                params.access,
+            )
+            .await?;
             let model = params.model.map(validate_model_selection).transpose()?;
             let reasoning_effort = params
                 .reasoning_effort
@@ -2046,7 +2047,16 @@ fn build_open_request(
             }
             let workspace = authorized_workspace(authority, &params.workspace)
                 .map_err(OpenAdmissionFailure::Inventory)?;
-            let access = public_open_access(params.access)?;
+            let access = open_access(
+                composed,
+                authority,
+                &params.request_id,
+                method,
+                provider,
+                &workspace.path,
+                params.access,
+            )
+            .await?;
             let claim = WorkspaceClaim::discover(workspace.path.clone(), access)
                 .map_err(|_| OpenAdmissionFailure::Control(workspace_conflict()))?;
             Ok(RuntimeOpenRequest {
@@ -2091,7 +2101,16 @@ fn build_open_request(
                     "the managed session has no usable provider-native resume identity",
                 ))
             })?;
-            let access = public_open_access(params.access)?;
+            let access = open_access(
+                composed,
+                authority,
+                &params.request_id,
+                method,
+                managed.provider,
+                &workspace.path,
+                params.access,
+            )
+            .await?;
             // Resume takes the same two optional selections as start: the codex driver already rides
             // them on thread/resume and the claude driver attaches its flags regardless of
             // disposition, so only this admission path was withholding them.
@@ -2134,16 +2153,40 @@ fn parse_open_provider(
     })
 }
 
-fn public_open_access(
+/// Writer collision posture for one public open. Exclusive is every caller's right. Shared is a decision
+/// for the person at the machine, so it waits in the presence table until they confirm this exact
+/// request (Runtrol Studio confirms its own click; anyone else's request is shown to the operator), and
+/// the unchanged retry then passes.
+async fn open_access(
+    composed: &Composed,
+    authority: &AuthorizedIntegration,
+    request_id: &runtrol_runtime_protocol::MutationRequestId,
+    method: RuntimeMethod,
+    provider: runtrol_provider::ProviderId,
+    workspace: &runtrol_provider::AbsPath,
     access: SessionWorkspaceAccess,
 ) -> Result<WorkspaceAccess, OpenAdmissionFailure> {
     match access {
         SessionWorkspaceAccess::Exclusive => Ok(WorkspaceAccess::Exclusive),
         SessionWorkspaceAccess::Shared => {
-            Err(OpenAdmissionFailure::Control(RuntimeControlFailure::new(
-                RuntimeErrorKind::PresenceRequired,
-                "shared writer admission requires a local operator action",
-            )))
+            let subject = crate::integration_admin::SharedOpenSubject {
+                method,
+                provider,
+                workspace: workspace.clone(),
+            };
+            match composed
+                .integration_admin
+                .request_shared_open_confirmation(authority.key, request_id, subject)
+                .await
+            {
+                Ok(crate::integration_admin::Confirmation::Confirmed) => {
+                    Ok(WorkspaceAccess::Shared)
+                }
+                Ok(crate::integration_admin::Confirmation::Awaiting { confirmation_id }) => {
+                    Err(OpenAdmissionFailure::Presence { confirmation_id })
+                }
+                Err(failure) => Err(OpenAdmissionFailure::Confirmation(failure)),
+            }
         }
     }
 }
@@ -4332,24 +4375,56 @@ listen = "stdio"
             runtrol_runtime_client::ClientError::Runtime(error)
                 if error.code == RuntimeErrorKind::IdempotencyConflict
         ));
+        let shared_start = runtrol_runtime_protocol::StartSessionParams {
+            request_id: runtrol_runtime_protocol::MutationRequestId::now(),
+            provider_id: runtrol_runtime_protocol::ProviderId::new("native-fixture"),
+            workspace: start_project.to_string(),
+            access: runtrol_runtime_protocol::SessionWorkspaceAccess::Shared,
+            model: None,
+            reasoning_effort: None,
+            permission: None,
+        };
         let shared = approved
             .sessions()
-            .start(&runtrol_runtime_protocol::StartSessionParams {
-                request_id: runtrol_runtime_protocol::MutationRequestId::now(),
-                provider_id: runtrol_runtime_protocol::ProviderId::new("native-fixture"),
-                workspace: start_project.to_string(),
-                access: runtrol_runtime_protocol::SessionWorkspaceAccess::Shared,
-                model: None,
-                reasoning_effort: None,
-                permission: None,
-            })
+            .start(&shared_start)
             .await
             .expect_err("public shared writer admission requires local presence");
-        assert!(matches!(
-            shared,
-            runtrol_runtime_client::ClientError::Runtime(error)
-                if error.code == RuntimeErrorKind::PresenceRequired
-        ));
+        assert!(
+            matches!(
+                &shared,
+                runtrol_runtime_client::ClientError::Runtime(error)
+                    if error.code == RuntimeErrorKind::PresenceRequired
+                    && error.operator_action.as_deref()
+                        == Some("reviewRuntimeRequestsInRuntrolStudio")
+                    && error.correlation_id.starts_with("sho_")
+            ),
+            "unexpected shared open admission: {shared:?}"
+        );
+        let Ok(pending_opens) = composed
+            .integration_admin
+            .shared_open_requests(&composed)
+            .await
+        else {
+            panic!("list exact shared open for local presentation");
+        };
+        let pending_open = pending_opens.first().expect("one pending shared open");
+        assert_eq!(pending_open.workspace.as_ref(), start_project.to_string());
+        assert_eq!(pending_open.provider_id.as_ref(), "native-fixture");
+        assert_eq!(pending_open.operation.as_ref(), "sessions/start");
+        assert!(
+            composed
+                .integration_admin
+                .confirm_shared_open(&pending_open.confirmation_id)
+                .await
+                .is_ok(),
+            "confirm exact shared open through local administration"
+        );
+        let shared_opened = approved
+            .sessions()
+            .start(&shared_start)
+            .await
+            .expect("retry exact shared start after local confirmation");
+        assert_ne!(shared_opened.session.session_id, started.session.session_id);
 
         let mut invalid_token = adoption_token.clone();
         invalid_token.push('x');
