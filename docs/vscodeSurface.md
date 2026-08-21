@@ -59,14 +59,32 @@ the original daemon and provider processes instead of making a versioned extensi
 - Fifteen sessions are the daily-use baseline and 30 sessions are the release load.
 - At most eight sessions own hot provider processes.
 - Exactly one selected session owns the full watch and Webview renderer.
-- The sidebar lists conversations, never coding services. A service is a fact printed on a row, never a parent node the
-  reader opens first, and there is no separate inventory view.
-- Projects are the only grouping, and only once grouping pays for itself. Below nine rows, or with every conversation in
-  one project, the list is flat: a heading there costs a click and shortens nothing. Above that the working tree becomes
-  the heading, because a working tree is what a person means by what they are working on. Grouping by coding service
-  would sort by an implementation detail, since one repository driven by two CLIs is one piece of work.
+- The sidebar is the one Paseo-style list of this machine: every project, every conversation of every installed
+  coding service, the way the Codex and Claude desktop sidebars read. It lists conversations, never coding services. A
+  service is a fact printed on a row, never a parent node the reader opens first, and there is no separate inventory
+  view.
+- Every folder a coding service holds conversations in is a project heading, with its conversations beneath it. A
+  heading is created by the operator, or is the folder this window has open, or is discovered because a conversation
+  names it (created > open > discovered, one heading per place). A discovered heading exists exactly as long as a
+  conversation names it, so no heading is ever empty. Two folders with the same name are told apart by their parent.
+  Grouping by coding service would sort by an implementation detail, since one repository driven by two CLIs is one
+  piece of work.
+- Conversations are listed machine-wide, in one question per service, from the service's own surface: a listing
+  protocol method, a listing command, or (for a CLI that publishes neither, Claude Code) the names in the CLI's own
+  store, read as identity, folder, the CLI's own title and last write, never a message. When a list is not everything
+  the sidebar says why in the service's own words, above the list. A conversation started without a project runs in
+  the extension's own scratch folder and is listed beneath the headings as a loose row, with no folder name and no
+  collision question.
 - The project this window is open on is first and open. Any project holding a conversation that stopped for the operator
   is open too, so no heading can hide the thing that wants them. Everything else is closed.
+- A conversation is deleted from its row. A Runtime-supervised conversation is closed and forgotten here (the
+  provider keeps its own record). A provider-owned stored conversation is deleted through the provider's own surface
+  (`sessions/deleteNative`: Codex `thread/delete`, Cline `history delete`) after a modal question naming the service;
+  a provider that publishes no such surface says so, in its own words, and nothing is attempted. Runtrol never removes
+  a provider's files itself.
+- Moving this window to a project is a button on its heading (and the live conversation's project chip), never a side
+  effect of opening a conversation. Opening is the file-click grammar: the conversation's tab opens here, the window
+  stays where it is, and the CLI runs in the conversation's own folder regardless.
 - Heading order ignores what is running inside it, for the same reason row order does. Waiting counts are printed in the
   heading; position reflects where the reader left it.
 - A heading's rows are built when that heading is first drawn, never before. Thirty projects means twenty-nine closed
@@ -93,18 +111,34 @@ the original daemon and provider processes instead of making a versioned extensi
   so the entry point never requires the mouse.
 - A coding service that is not installed produces no row. Only an installed service that still cannot run appears, and
   only once its capability probe has finished.
-- The selected conversation opens in one reusable editor tab with a bounded renderer and composer.
+- Each conversation opens in its own editor tab with a bounded renderer and composer, exactly as a file does: ten or
+  twenty tabs are arranged, split and sized by VS Code's own editor groups, and the focused tab is the selected
+  conversation. Prompts and interrupts travel only to the tab that sent them. Tabs survive a window reload by their
+  session identity, and a tab whose session no longer exists is closed rather than guessed at.
 - When the Conversations view becomes visible and no conversation tab exists, Studio opens that selected in-progress
   chat without blocking ready. A restored editor tab is reused as VS Code left it.
 - Existing provider-owned chats start loading as soon as the first inventory is ready, instead of waiting for a later idle window.
-- New Conversation asks nothing. The coding service is the one used last, the project is the one this window is open on,
-  and model and reasoning effort stay whatever the installed CLI already defaults to. A separate explicit command still
-  offers the full service, model, and effort flow, using only the opaque values the installed CLI returns through
-  Runtime plus an explicit Provider default choice.
+- New chat opens as a draft tab: a greeting, the composer, and chips for the project, the git branch, the coding
+  service, the model, the reasoning effort and the access mode. Each chip is its own picker, nothing runs until the
+  first message, and that message starts the conversation in the same tab with exactly those choices. The `+` on a
+  project heading opens the same draft with the folder already answered; the defaults are this window's folder, the
+  service used last, and the project's last explicit choices. A draft survives a window reload with its choices.
+- The composer is the one standard card rather than an invention: a context row (project, branch, service), the
+  message, and a bar with attach and access mode on the left and model, reasoning effort and send on the right. Images
+  travel once as `sessions/submitBlocks` content and are never stored. There is no microphone, because no installed
+  CLI takes audio.
 - The conversation editor carries no session panel. The service, the model the service says is answering, the
   requested reasoning effort, context use, provider-reported cost, and the tightest account-limit window appear as
   chips beneath the composer, and the permission mode has a chip of its own. Missing provider telemetry remains
   visibly absent and is never estimated, and an untouched quota window says nothing.
+- The conversation shows what the provider gives and nothing else: streamed replies named by the provider's own
+  message identity, tool calls and results under the provider's own tool names, approvals as the provider asked them,
+  and on resume whatever history the provider's own resume surface hands over (Codex replays its recent turns; Claude
+  Code's stream prints none, and the tab is the quiet empty state rather than a reconstruction). Runtrol authors no
+  line of it.
+- A conversation the Runtime released to keep the running set small (eight hot processes) reads as paused in its tab,
+  in one sentence, and watches itself again as soon as the session is hot; it is not an error and it is not retried
+  in red.
 - Enter sends and Shift+Enter writes a new line.
 - A message opening with `/` offers the commands the attached coding service announced, with that service's own
   descriptions. Only a leading slash opens the menu, since a slash inside a sentence belongs to a path. Choosing fills
@@ -244,6 +278,7 @@ specified in [automatic updates](automaticUpdates.md).
 | `vscodeExtension` | thin extension boundary, TypeScript, framing, storage, queue, renderer, and bundle limits |
 | `vscodeHostPerformance` | real 30-session Extension Host and Webview responsiveness on three operating systems |
 | `vscodeRealProviderJourney` | installed provider discovery and a complete real CLI control journey |
+| `node tooling/real-window-eye.mjs` | the eye pass: an isolated VS Code window and an isolated Runtime with the real installed CLIs, real folders and real conversations, photographed in the draft, conversation and tabs poses, with a real throwaway deletion; the pictures are the judgement |
 | `missionGrowthContracts` | Mission state, exact Send, evidence, integration, capability trust, local scope, tamper, and rollback |
 | `missionLiveJourney` | two installed provider CLIs complete five reviewed Tasks and an explicit reuse, tamper, and rollback journey through production IPC |
 | `vscodePackage` | six-target SSOT, exact archive contents, Core bytes, workflow integrity, and listing metadata |
