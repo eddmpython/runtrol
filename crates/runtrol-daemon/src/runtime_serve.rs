@@ -61,7 +61,7 @@ pub(crate) async fn serve_connection(
     providers: watch::Sender<Arc<ProviderList>>,
     mut sessions: watch::Receiver<Arc<RuntimeSessionCatalogue>>,
     mut account_gauges: watch::Receiver<Arc<ProviderUsageList>>,
-    asking: mpsc::Sender<RuntimeAsked>,
+    asking: mpsc::Sender<Box<RuntimeAsked>>,
     returning: mpsc::UnboundedSender<RuntimeReturned>,
 ) {
     let Ok(challenge) = challenge(&instance_id) else {
@@ -310,7 +310,7 @@ async fn answer(
     providers: &ProviderList,
     sessions: &RuntimeSessionCatalogue,
     usage: &ProviderUsageList,
-    asking: &mpsc::Sender<RuntimeAsked>,
+    asking: &mpsc::Sender<Box<RuntimeAsked>>,
     returning: &mpsc::UnboundedSender<RuntimeReturned>,
     request: JsonRpcRequest,
 ) -> Answer {
@@ -418,7 +418,7 @@ async fn dispatch_public(
     providers: &ProviderList,
     sessions: &RuntimeSessionCatalogue,
     usage: &ProviderUsageList,
-    asking: &mpsc::Sender<RuntimeAsked>,
+    asking: &mpsc::Sender<Box<RuntimeAsked>>,
     returning: &mpsc::UnboundedSender<RuntimeReturned>,
     method: RuntimeMethod,
     id: JsonRpcId,
@@ -1523,7 +1523,7 @@ async fn session_operation(
     state: &mut PublicState,
     composed: &Composed,
     sessions: &RuntimeSessionCatalogue,
-    asking: &mpsc::Sender<RuntimeAsked>,
+    asking: &mpsc::Sender<Box<RuntimeAsked>>,
     returning: &mpsc::UnboundedSender<RuntimeReturned>,
     method: RuntimeMethod,
     id: JsonRpcId,
@@ -1567,11 +1567,11 @@ async fn session_operation(
     let request = parsed.into_owner_request(session, approval_scopes);
     let (answered, hearing) = oneshot::channel();
     if asking
-        .send(RuntimeAsked {
+        .send(Box::new(RuntimeAsked {
             integration: authority.key,
             request,
             answered,
-        })
+        }))
         .await
         .is_err()
     {
@@ -1633,7 +1633,7 @@ async fn forget_session(
     state: &mut PublicState,
     composed: &Composed,
     sessions: &RuntimeSessionCatalogue,
-    asking: &mpsc::Sender<RuntimeAsked>,
+    asking: &mpsc::Sender<Box<RuntimeAsked>>,
     returning: &mpsc::UnboundedSender<RuntimeReturned>,
     id: JsonRpcId,
     params: serde_json::Value,
@@ -1718,11 +1718,11 @@ async fn forget_session(
     }
     let (answered, hearing) = oneshot::channel();
     if asking
-        .send(RuntimeAsked {
+        .send(Box::new(RuntimeAsked {
             integration: authority.key,
             request: RuntimeControlRequest::Forget { session, params },
             answered,
-        })
+        }))
         .await
         .is_err()
     {
@@ -1875,7 +1875,7 @@ async fn open_session(
     discovering: &crate::serve::DiscoveryGates,
     native_cursors: &NativeCursorCodec,
     sessions: &RuntimeSessionCatalogue,
-    asking: &mpsc::Sender<RuntimeAsked>,
+    asking: &mpsc::Sender<Box<RuntimeAsked>>,
     returning: &mpsc::UnboundedSender<RuntimeReturned>,
     method: RuntimeMethod,
     id: JsonRpcId,
@@ -1904,11 +1904,11 @@ async fn open_session(
     };
     let (answered, hearing) = oneshot::channel();
     if asking
-        .send(RuntimeAsked {
+        .send(Box::new(RuntimeAsked {
             integration: authority.key,
             request: RuntimeControlRequest::PrepareOpen(request),
             answered,
-        })
+        }))
         .await
         .is_err()
     {

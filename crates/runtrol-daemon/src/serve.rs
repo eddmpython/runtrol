@@ -177,8 +177,10 @@ async fn prewarm_providers(composed: Arc<Composed>, discovering: Arc<DiscoveryGa
         });
     }
     while meetings.join_next().await.is_some() {}
-    // The meetings parsed help texts and built throwaway drivers; hand those pages back so warming the
-    // machine does not raise what an idle daemon holds, which is a checked contract, not a mood.
+    // The meetings parsed help texts and built throwaway drivers; hand allocator pages back where the platform
+    // exposes that exact operation. Windows' primitive empties the whole working set, including live code that this
+    // warm-up exists to keep ready, so real session cleanup remains its release boundary there.
+    #[cfg(not(windows))]
     runtrol_childproc::footprint::release_unused_memory();
 }
 
@@ -347,7 +349,7 @@ enum SurfaceError {
 }
 
 struct ConnectionServices {
-    asking: mpsc::Sender<Asked>,
+    asking: mpsc::Sender<Box<Asked>>,
     reserving: mpsc::UnboundedSender<ReservationAsked>,
     returning: mpsc::UnboundedSender<AgentReturned>,
     composed: Arc<Composed>,
@@ -748,11 +750,13 @@ async fn serve_surfaces(
         &runtime_address,
     )
     .map_err(|error| ServeError::RuntimeBootstrap(error.to_string()))?;
-    let (asking, mut asked) = mpsc::channel::<Asked>(ASKED_QUEUE);
+    // Both owner queues preserve the 64-request admission contract without preallocating 64 copies of their large
+    // request envelopes while no client exists. Each active caller owns exactly one envelope allocation.
+    let (asking, mut asked) = mpsc::channel::<Box<Asked>>(ASKED_QUEUE);
     let (reserving, mut reservations) = mpsc::unbounded_channel::<ReservationAsked>();
     let (returning, mut returned) = mpsc::unbounded_channel::<AgentReturned>();
     let (runtime_asking, mut runtime_asked) =
-        mpsc::channel::<crate::runtime_control::RuntimeAsked>(ASKED_QUEUE);
+        mpsc::channel::<Box<crate::runtime_control::RuntimeAsked>>(ASKED_QUEUE);
     let (runtime_returning, mut runtime_returned) =
         mpsc::unbounded_channel::<crate::runtime_control::RuntimeReturned>();
     let mut runtime_control = crate::runtime_control::RuntimeControl::new()
@@ -1048,7 +1052,7 @@ async fn serve_surfaces(
             },
 
             Some(ask) = asked.recv() => {
-                let Asked { mut conversation, request, prepared, reservation, answered } = ask;
+                let Asked { mut conversation, request, prepared, reservation, answered } = *ask;
                 let mission_flight_signal = matches!(&request, Request::MissionFlightSignal { .. });
                 let mission_schedule_mutation = matches!(
                     &request,
@@ -1106,7 +1110,7 @@ async fn serve_surfaces(
                     integration,
                     request,
                     answered,
-                } = ask;
+                } = *ask;
                 let changes_index = !matches!(
                     &request,
                     crate::runtime_control::RuntimeControlRequest::Watch { .. }
@@ -2032,7 +2036,7 @@ async fn converse_inner(
             reservation,
             answered,
         };
-        if asking.send(ask).await.is_err() {
+        if asking.send(Box::new(ask)).await.is_err() {
             // The daemon stopped serving. There is nothing left to ask and nothing that could answer.
             return;
         }

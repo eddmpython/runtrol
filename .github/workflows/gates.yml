@@ -472,6 +472,12 @@ jobs:
         run: python -X utf8 tests/audit/fleetComparisonSmoke.py --require-external
       - name: 실물 Codex 고정 판본 설치
         run: npm install --global @openai/codex@0.146.0
+      - name: 실물 Grok 고정 판본 설치
+        shell: bash
+        run: |
+          curl -fsSL https://x.ai/cli/install.sh | bash -s 1.0.5
+          echo "$HOME/.grok/bin" >> "$GITHUB_PATH"
+          "$HOME/.grok/bin/grok" --version
       - name: 고정 판본 credential-free 모델 fixture 준비
         env:
           CODEX_HOME: ${{ runner.temp }}/runtrol-pinned-model-detection-codex
@@ -545,6 +551,11 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       # Deliberately unpinned. This job exists to notice the day a vendor changes its surface, so every provider
       # compiled into the build has to be here at whatever version it ships today.
+      - name: Install latest Grok provider CLI without credentials
+        shell: bash
+        run: |
+          curl -fsSL https://x.ai/cli/install.sh | bash
+          echo "$HOME/.grok/bin" >> "$GITHUB_PATH"
       - name: Install latest provider CLIs without credentials
         run: npm install --global --allow-scripts=@anthropic-ai/claude-code --allow-scripts=opencode-ai --allow-scripts=cline @anthropic-ai/claude-code @openai/codex opencode-ai cline
       - name: Seed provider-owned model cache fixture

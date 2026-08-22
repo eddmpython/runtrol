@@ -2159,7 +2159,7 @@ async fn discard_fixture_open_completion(
 )]
 pub(crate) async fn fixture_runtime_owner(
     composed: std::sync::Arc<crate::Composed>,
-    mut asked: mpsc::Receiver<RuntimeAsked>,
+    mut asked: mpsc::Receiver<Box<RuntimeAsked>>,
     mut returned: mpsc::UnboundedReceiver<RuntimeReturned>,
 ) {
     let mut control = RuntimeControl::new().expect("Runtime control");
@@ -2167,9 +2167,10 @@ pub(crate) async fn fixture_runtime_owner(
     loop {
         tokio::select! {
             request = asked.recv() => {
-                let Some(RuntimeAsked { integration, request, answered }) = request else {
+                let Some(request) = request else {
                     break;
                 };
+                let RuntimeAsked { integration, request, answered } = *request;
                 let reply = control.answer(&composed.store, &mut sessions, integration, request);
                 if let Err(reply) = answered.send(reply) {
                     match reply {
