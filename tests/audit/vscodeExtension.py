@@ -134,6 +134,8 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
             "sessionGeneration",
             "recordAutoFlightSubmissions",
             "readAutoFlightArms",
+            "pendingSignal",
+            "stageSignal",
         ],
         "mission/controller.ts": [
             "AUTO_FLIGHTS_KEY",
@@ -141,6 +143,9 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
             "beforeSubmissions",
             "recordSubmissions",
             "startAutoFlights",
+            "missionFlightSignal",
+            "missionFlightSignalClear",
+            "hasAutoFlightRecord",
         ],
         "core/client.ts": ["commandConnection", "commandTail"],
         "runtimeClient.ts": [
@@ -231,10 +236,12 @@ def selftest() -> int:
             '"Start here anyway"'
         ),
         "mission/autoFlight.ts": (
-            "MAX_AUTO_FLIGHTS sessionGeneration recordAutoFlightSubmissions readAutoFlightArms"
+            "MAX_AUTO_FLIGHTS sessionGeneration recordAutoFlightSubmissions readAutoFlightArms "
+            "pendingSignal stageSignal"
         ),
         "mission/controller.ts": (
-            "AUTO_FLIGHTS_KEY runtimeState.onDidChange beforeSubmissions recordSubmissions startAutoFlights"
+            "AUTO_FLIGHTS_KEY runtimeState.onDidChange beforeSubmissions recordSubmissions startAutoFlights "
+            "missionFlightSignal missionFlightSignalClear hasAutoFlightRecord"
         ),
         "core/client.ts": "commandConnection commandTail",
         "runtimeClient.ts": (

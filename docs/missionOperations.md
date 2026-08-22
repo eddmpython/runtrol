@@ -242,6 +242,14 @@ comparison flow, cancellation, and any other stopped state disarm it. Reaching `
 offers Receipt Landing. Applying Artifacts, merging, final Gate verification, and Mission completion always remain
 explicit operator actions.
 
+Every person wait, safety stop, or arrival at Receipt Landing is staged in a durable Studio outbox before Auto
+Flight gives up its input authority. The entry contains only a random signal UUID, Mission ID and digest, and one
+closed structural kind. Studio submits that exact UUID to Core, removes the arm only after Core acknowledges the
+idempotent record, and retries the same UUID after an Extension Host restart. Rearming clears older signals for that
+exact Mission digest. Core validates the current Mission, digest, state, and bound session before an authenticated
+phone can see a signal. This crash boundary cannot duplicate a wake or let uncertain delivery retain automatic
+provider-input authority.
+
 ### Composing the parallel-attempt Mission
 
 Step 2 assumes a Mission file exists. Writing one by hand is the part that kept the commonest shape of this flow

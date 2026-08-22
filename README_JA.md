@@ -24,6 +24,11 @@
 > スマートフォン通知は会話内容を運ばず、実際にオペレーターを待つ最初の session を開く。`Needs you`
 > の件数と次への移動は person wait だけを含み、account limit は区別する。実物 CLI approval gate が
 > approval 中の表示と回答後の解除を検証する。
+>
+> Auto Flight の person wait、安全な停止、Receipt Landing も同じ内容なしの通知を使う。認証後、
+> スマートフォンは Core の最大 64 件の構造 signal を読み、現在の root、Mission digest、state が一致する
+> 正確な session または Mission だけを開く。push に Mission ID、instruction、path、output はなく、端末には
+> opaque cursor だけが残る。
 
 The security boundary and default-deny settings are documented in [SECURITY.md](SECURITY.md).
 
@@ -187,7 +192,7 @@ Rust は目的ではなく、上の表の三つの軸のための手段である
 | `crates/` | 製品コア（Rust）。デーモン、プロバイダーアダプター、トランスポート。独立 GUI crate は存在しない | 実装済み |
 | [`clients/typescript/`](clients/typescript/) | 外部製品向け公開 Runtime TypeScript SDK | packed consumer 検証済み |
 | [`extensions/runtrol-vscode/`](extensions/runtrol-vscode/) | 唯一の PC surface `Runtrol Studio` | 30 session のリリース負荷を検証、0.1.9 公開済み |
-| [`pwa/`](pwa/) | モバイル PWA | リレー接続、セッション制御、承認、`Needs you` focus を実装済み |
+| [`pwa/`](pwa/) | モバイル PWA | リレー接続、セッション制御、承認、`Needs you` と Mission Flight Signals の正確な focus を実装済み |
 | [`site/`](site/) | [依存関係のない GitHub Pages ランディング](https://eddmpython.github.io/runtrol/) | 公開済み |
 | [`assets/brand/`](assets/brand/) | ロゴ。SVG が正本で、favicon・アイコン・ソーシャルカードはそこから派生する | |
 | [`docs/`](docs/README.md) | 運用ドキュメントの正本 | |

@@ -239,6 +239,46 @@ test("durable updates serialize and a failed write retains conservative authorit
   assert.equal(failing.isArmed(second.missionId), true);
 });
 
+test("a durable signal outbox revokes work and reuses one identity after restart", async () => {
+  const current = snapshot();
+  const arm = createAutoFlightArm(
+    current,
+    null,
+    [session("one", "hotIdle", 1)],
+    momentum({ verify: current.tasks }),
+    1,
+  );
+  const signal = {
+    signalId: "8e0d669c-bf52-4ba8-8c43-ad04a4039a3c",
+    kind: "stopped" as const,
+  };
+  let durable: readonly unknown[] = [];
+  const flights = new AutoFlights([], (arms) => {
+    durable = structuredClone(arms);
+    return Promise.resolve();
+  });
+  await flights.arm(arm);
+  await flights.stageSignal(arm.missionId, signal);
+  await flights.stageSignal(arm.missionId, signal);
+
+  const restored = new AutoFlights(durable, () => Promise.resolve());
+  const restoredArm = restored.get(arm.missionId);
+  assert.ok(restoredArm);
+  assert.deepEqual(restoredArm.pendingSignal, signal);
+  assert.deepEqual(decideAutoFlight(restoredArm, current, momentum(), [], 2), {
+    kind: "signal",
+    signal,
+  });
+  assert.equal(
+    decideAutoFlight(restoredArm, snapshot("completed"), momentum(), [], 2).kind,
+    "discard",
+  );
+  assert.deepEqual(
+    readAutoFlightArms([{ ...restoredArm, pendingSignal: { signalId: "prompt", kind: "stopped" } }]),
+    [],
+  );
+});
+
 test("several reviewed Missions arm in one durable bounded update", async () => {
   const writes: string[][] = [];
   const first = createAutoFlightArm(

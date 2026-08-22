@@ -56,6 +56,7 @@ input, select, textarea { width: 100%; padding: 11px 12px; background: var(--car
 .session-pane { border-right: 1px solid var(--line); background: var(--panel); }
 .surface-tabs { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; padding: 10px; border-bottom: 1px solid var(--line); }
 .surface-tabs button[aria-pressed="true"] { border-color: var(--orange); color: var(--orange); }
+.signal-count { display: inline-grid; min-width: 20px; height: 20px; place-items: center; margin-left: 5px; padding: 0 5px; border-radius: 999px; background: #f2c14e; color: #101514; font-size: 11px; font-weight: 900; }
 .pane-heading, .detail-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 20px; border-bottom: 1px solid var(--line); }
 .pane-heading h1, .detail-heading h2 { margin: 0; font-size: 20px; }
 .pane-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 7px; }
@@ -64,6 +65,8 @@ input, select, textarea { width: 100%; padding: 11px 12px; background: var(--car
 .session-row, .mission-row { width: 100%; min-height: 70px; display: grid; grid-template-columns: 12px 1fr auto; align-items: center; gap: 10px; padding: 11px 16px; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; text-align: left; background: transparent; }
 .session-row:hover, .session-row.selected, .mission-row:hover, .mission-row.selected { background: var(--panel-strong); }
 .session-row.selected, .mission-row.selected { box-shadow: inset 3px 0 var(--orange); }
+.mission-row.flight-signal { background: color-mix(in srgb, #f2c14e 9%, transparent); }
+.mission-row.flight-signal b { color: #f2c14e; font-weight: 800; }
 .session-row span:nth-child(2), .mission-row span:nth-child(2) { min-width: 0; display: grid; gap: 3px; }
 .session-row strong, .session-row small, .mission-row strong, .mission-row small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .session-row small, .session-row b, .mission-row small, .mission-row b { color: var(--muted); font-size: 11px; font-weight: 500; }
@@ -95,6 +98,7 @@ input, select, textarea { width: 100%; padding: 11px 12px; background: var(--car
 .composer { display: grid; grid-template-columns: 1fr auto; align-items: end; gap: 10px; padding: 12px max(14px, env(safe-area-inset-right)) max(12px, env(safe-area-inset-bottom)) max(14px, env(safe-area-inset-left)); border-top: 1px solid var(--line); background: var(--panel); }
 .composer textarea { min-height: 52px; max-height: 180px; resize: vertical; }
 .mission-content { min-height: 0; overflow: auto; padding: 18px; }
+.mission-flight-signal { margin: 0 0 12px; padding: 12px 14px; border: 1px solid #8b6b27; border-radius: 10px; background: #302815; color: #f2c14e; font-weight: 800; }
 .mission-summary { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 8px 16px; margin: 0 0 18px; padding: 16px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
 .mission-summary dt { color: var(--muted); }
 .mission-summary dd { margin: 0; overflow-wrap: anywhere; }

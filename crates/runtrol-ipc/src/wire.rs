@@ -271,6 +271,33 @@ pub enum Request {
         mission_id: Box<str>,
     },
 
+    /// Read bounded Mission Flight Signals after one opaque local phone cursor.
+    MissionFlightSignals {
+        /// Last signal cursor consumed on this phone, or no value on its first attention reconnect.
+        #[serde(default)]
+        after: Option<Box<str>>,
+    },
+
+    /// Commit one idempotent local Auto Flight wake destination.
+    MissionFlightSignal {
+        /// Producer-minted UUID reused across Extension Host restart and ambiguous local replies.
+        signal_id: Box<str>,
+        /// Exact Mission identity.
+        mission_id: Box<str>,
+        /// Exact reviewed Mission digest.
+        mission_sha256: Box<str>,
+        /// `stopped` or `landing`. Person signals are Core-owned session observations.
+        kind: Box<str>,
+    },
+
+    /// Remove retained signals superseded by a fresh exact local Auto Flight arm.
+    MissionFlightSignalClear {
+        /// Exact Mission identity.
+        mission_id: Box<str>,
+        /// Exact reviewed Mission digest.
+        mission_sha256: Box<str>,
+    },
+
     /// Approve and start one exact validated Mission locally.
     MissionStart {
         /// Runtrol Mission identity.
@@ -660,6 +687,15 @@ pub enum Response {
     /// One exact Mission and Task state snapshot.
     Mission(Box<MissionSnapshot>),
 
+    /// Bounded structural wake destinations visible through this caller's current Mission roots.
+    MissionFlightSignals(Box<MissionFlightSignalPage>),
+
+    /// Whether one local idempotent signal request committed a new row.
+    MissionFlightSignalRecorded {
+        /// True only for the transition that warrants one new bodyless push wake.
+        inserted: bool,
+    },
+
     /// Exact canonical workspace prepared for one Task.
     MissionWorkspace(Box<MissionWorkspace>),
 
@@ -926,6 +962,32 @@ pub struct MissionLine {
     pub total_tasks: u16,
     /// Tasks waiting for one local Send action.
     pub awaiting_input: u16,
+}
+
+/// One bounded page of structural Mission wake destinations.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct MissionFlightSignalPage {
+    /// Visible rows after the phone's prior cursor, oldest first.
+    pub signals: Vec<MissionFlightSignalLine>,
+    /// Current global tail cursor. The phone persists it locally after a successful reconnect.
+    pub next_cursor: Option<Box<str>>,
+    /// The requested cursor fell out of the fixed retention bound.
+    pub gap: bool,
+}
+
+/// One exact Mission or person-wait destination, never a push payload.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct MissionFlightSignalLine {
+    /// Opaque time-ordered signal cursor.
+    pub signal_id: Box<str>,
+    /// Exact Mission identity.
+    pub mission_id: Box<str>,
+    /// Exact reviewed Mission digest.
+    pub mission_sha256: Box<str>,
+    /// `person`, `stopped`, or `landing`.
+    pub kind: Box<str>,
+    /// Exact current Runtime session for a person wait.
+    pub session_id: Option<Box<str>>,
 }
 
 /// One exact Mission snapshot.
@@ -1432,6 +1494,66 @@ mod tests {
             serde_json::to_string(&Response::WatchingSessions).expect("writable"),
             r#"{"say":"watchingSessions"}"#
         );
+    }
+
+    #[test]
+    fn mission_flight_signal_wire_stays_structural_and_cursor_bounded() {
+        let request = Request::MissionFlightSignal {
+            signal_id: "018f0000-0000-7000-8000-000000000001".into(),
+            mission_id: "mission-7".into(),
+            mission_sha256: "ab".repeat(32).into(),
+            kind: "landing".into(),
+        };
+        assert_eq!(
+            serde_json::to_string(&request).expect("writable"),
+            format!(
+                "{{\"ask\":\"missionFlightSignal\",\"with\":{{\"signal_id\":\"018f0000-0000-7000-8000-000000000001\",\"mission_id\":\"mission-7\",\"mission_sha256\":\"{}\",\"kind\":\"landing\"}}}}",
+                "ab".repeat(32)
+            )
+        );
+
+        let page = Response::MissionFlightSignals(Box::new(MissionFlightSignalPage {
+            signals: vec![MissionFlightSignalLine {
+                signal_id: "018f0000-0000-7000-8000-000000000001".into(),
+                mission_id: "mission-7".into(),
+                mission_sha256: "ab".repeat(32).into(),
+                kind: "person".into(),
+                session_id: Some("018f0000-0000-7000-8000-000000000002".into()),
+            }],
+            next_cursor: Some("018f0000-0000-7000-8000-000000000001".into()),
+            gap: false,
+        }));
+        let encoded = serde_json::to_string(&page).expect("writable");
+        let value: serde_json::Value = serde_json::from_str(&encoded).expect("readable");
+        let object = value.as_object().expect("response object");
+        assert_eq!(
+            object.get("say").and_then(serde_json::Value::as_str),
+            Some("missionFlightSignals")
+        );
+        let content = object
+            .get("with")
+            .and_then(serde_json::Value::as_object)
+            .expect("response content");
+        let signals = content
+            .get("signals")
+            .and_then(serde_json::Value::as_array)
+            .expect("signals array");
+        assert_eq!(signals.len(), 1);
+        let signal = signals
+            .first()
+            .and_then(serde_json::Value::as_object)
+            .expect("signal object");
+        assert_eq!(
+            signal.get("kind").and_then(serde_json::Value::as_str),
+            Some("person")
+        );
+        assert_eq!(
+            signal.get("session_id").and_then(serde_json::Value::as_str),
+            Some("018f0000-0000-7000-8000-000000000002")
+        );
+        for forbidden in ["instruction", "workspace", "output", "artifact", "receipt"] {
+            assert!(!encoded.contains(forbidden), "{encoded}");
+        }
     }
 
     #[test]

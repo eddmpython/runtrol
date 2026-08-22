@@ -25,6 +25,10 @@
 > 폰 알림은 이제 대화 내용을 싣지 않은 채 실제로 운영자를 기다리는 첫 세션으로 직행한다. `Needs you`
 > 수와 다음 대기 세션 이동은 사람 대기만 포함하고 계정 한도 대기는 구분한다. 실물 CLI 승인 게이트가
 > 승인 중 진입과 답변 뒤 해제를 검증한다.
+>
+> Auto Flight의 사람 대기, 안전 중단, Receipt Landing도 같은 내용 없는 알림으로 도착한다. 폰은 인증 후
+> Core의 최대 64개 구조 신호를 읽고 현재 root, Mission digest, 상태가 그대로인 정확한 세션 또는 Mission만
+> 연다. 푸시에는 Mission ID, 지시, 경로, 출력이 없고 폰에는 opaque cursor만 남는다.
 
 보안 경계와 기본 거부 설정은 [SECURITY.md](SECURITY.md)에 정리되어 있다.
 
@@ -188,7 +192,7 @@ Rust 는 목적이 아니라 위 표의 세 축을 위한 수단이다.
 | `crates/` | 제품 코어 (Rust). daemon, provider 어댑터, 전송. 독립 GUI crate는 없다 | 구현됨 |
 | [`clients/typescript/`](clients/typescript/) | 외부 제품용 공개 Runtime TypeScript SDK | packed 소비 검증 |
 | [`extensions/runtrol-vscode/`](extensions/runtrol-vscode/) | 유일한 PC 표면 `Runtrol Studio` | 30개 세션 출시 부하 검증, 0.1.9 공개 |
-| [`pwa/`](pwa/) | 모바일 PWA | 릴레이 연결, 세션 제어, 승인, `Needs you` 직행 구현 |
+| [`pwa/`](pwa/) | 모바일 PWA | 릴레이 연결, 세션 제어, 승인, `Needs you`와 Mission Flight Signals 직행 구현 |
 | [`site/`](site/) | [무의존성 GitHub Pages 랜딩](https://eddmpython.github.io/runtrol/) | 공개됨 |
 | [`assets/brand/`](assets/brand/) | 로고. SVG 가 정본, 파비콘·아이콘·소셜 카드는 파생 | |
 | [`docs/`](docs/README.md) | 운영문서 정본 | |

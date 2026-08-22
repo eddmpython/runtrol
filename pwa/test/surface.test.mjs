@@ -6,6 +6,7 @@ const html = await readFile(new URL("../index.html", import.meta.url), "utf8");
 const app = await readFile(new URL("../src/app.js", import.meta.url), "utf8");
 const worker = await readFile(new URL("../service-worker.js", import.meta.url), "utf8");
 const styles = await readFile(new URL("../styles.css", import.meta.url), "utf8");
+const signals = await readFile(new URL("../src/missionSignals.js", import.meta.url), "utf8");
 
 test("the shipped CSP permits its own runtime presentation contract", () => {
   assert.match(html, /connect-src 'self' https: wss:;/u);
@@ -26,6 +27,16 @@ test("the session surface exposes one bounded attention entry point", () => {
   assert.match(html, /id="attention-count">0</u);
   assert.match(app, /nextAttentionSession\(state\.sessions, state\.selected\?\.session/u);
   assert.match(app, /session\.waiting_on === "quota"/u);
+});
+
+test("content-free attention resolves through bounded Mission Flight Signals", () => {
+  assert.match(html, /id="mission-signal-count"[^>]*hidden/u);
+  assert.match(html, /id="mission-flight-signal"[^>]*role="status"[^>]*hidden/u);
+  assert.match(app, /listMissionFlightSignals\(state\.connection\.missionSignalCursor\)/u);
+  assert.match(app, /missionFlightDestination\(state\.flightSignals, state\.sessions\)/u);
+  assert.match(signals, /const MAX_SIGNALS = 64;/u);
+  assert.match(signals, /row\.waiting_on === "person"/u);
+  assert.doesNotMatch(worker, /mission(?:Id|_id|:)/u);
 });
 
 test("hidden phone surfaces cannot occupy layout space", () => {

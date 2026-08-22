@@ -23,6 +23,7 @@
 //! - [`integrations`] public Runtime enrollments and exact app grants, without any consumer private key
 //! - [`integration_audit`] bounded public Runtime authorization metadata without caller or provider content
 //! - [`integration_mutations`] bounded durable mutation ambiguity records without caller input
+//! - [`mission_signals`] bounded structural Mission wake metadata without push or conversation content
 //! - [`error`] why the database could not be opened, read, or trusted
 
 pub mod codec;
@@ -31,6 +32,7 @@ pub mod error;
 mod integration_audit;
 mod integration_mutations;
 pub mod integrations;
+mod mission_signals;
 pub mod open;
 pub mod schema;
 pub mod sessions;
@@ -49,9 +51,13 @@ pub use integrations::{
     EnrollmentRow, EnrollmentState, IntegrationGrantChange, IntegrationKeyRotation,
     IntegrationRootRow, IntegrationRow,
 };
+pub use mission_signals::{
+    AppendMissionSignal, ListedMissionSignals, MISSION_SIGNAL_MAX_ROWS, MissionSignalKind,
+    MissionSignalRow,
+};
 pub use open::{CACHE_BYTES, Store};
 pub use schema::{
     DeviceKey, EnrollmentKey, IntegrationAuditKey, IntegrationKey, IntegrationMutationKey,
-    SCHEMA_VERSION, SessionKey,
+    MissionSignalKey, SCHEMA_VERSION, SessionKey,
 };
 pub use sessions::{Cursor, ListedSessions};

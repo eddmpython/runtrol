@@ -66,9 +66,30 @@ fn the_production_wake_path_has_an_empty_request_and_a_generic_notification() {
     assert!(worker.contains("Runtrol needs attention"));
     assert!(worker.contains("Open Runtrol to check your PC."));
     assert!(!worker.contains("event.data"));
-    for forbidden in ["session", "provider", "workspace", "approval", "prompt"] {
+    let notification = worker
+        .split("self.addEventListener(\"push\"")
+        .nth(1)
+        .and_then(|source| {
+            source
+                .split("self.addEventListener(\"notificationclick\"")
+                .next()
+        })
+        .expect("isolate the production push notification handler");
+    for forbidden in [
+        "session",
+        "provider",
+        "workspace",
+        "approval",
+        "prompt",
+        "mission",
+        "instruction",
+        "path",
+        "output",
+        "conversation",
+        "receipt",
+    ] {
         assert!(
-            !worker.to_ascii_lowercase().contains(forbidden),
+            !notification.to_ascii_lowercase().contains(forbidden),
             "service worker notification names {forbidden} content"
         );
     }

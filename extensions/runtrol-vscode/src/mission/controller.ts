@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import * as path from "node:path";
 
 import * as vscode from "vscode";
@@ -29,6 +30,8 @@ import {
   createAutoFlightArm,
   decideAutoFlight,
   restrictAutoFlightMomentum,
+  type AutoFlightArm,
+  type AutoFlightSignal,
   type AutoFlightTurn,
 } from "./autoFlight";
 import {
@@ -186,7 +189,12 @@ export class MissionController implements vscode.Disposable {
   }
 
   isAutoFlightArmed(missionId: string): boolean {
-    return !this.autoFlightRevocations.has(missionId) && this.autoFlights.isArmed(missionId);
+    return !this.autoFlightRevocations.has(missionId)
+      && this.autoFlights.get(missionId)?.pendingSignal === null;
+  }
+
+  hasAutoFlightRecord(missionId: string): boolean {
+    return this.autoFlights.get(missionId) !== null;
   }
 
   async refresh(): Promise<void> {
@@ -628,6 +636,7 @@ export class MissionController implements vscode.Disposable {
         Date.now(),
       ));
     }
+    for (const arm of arms) await this.clearMissionFlightSignals(arm.missionId, arm.missionSha256);
     await this.autoFlights.armMany(arms);
     for (const arm of arms) this.autoFlightRevocations.delete(arm.missionId);
     this.changedEmitter.fire();
@@ -638,7 +647,9 @@ export class MissionController implements vscode.Disposable {
   }
 
   async disarmMissionAutoFlight(selection?: MissionSelection): Promise<void> {
-    const current = this.autoFlights.current().filter((arm) => !this.autoFlightRevocations.has(arm.missionId));
+    const current = this.autoFlights.current().filter((arm) => (
+      !this.autoFlightRevocations.has(arm.missionId) && arm.pendingSignal === null
+    ));
     let missionId = selection?.mission?.mission_id ?? null;
     let name = selection?.mission?.name ?? null;
     if (!missionId) {
@@ -688,6 +699,7 @@ export class MissionController implements vscode.Disposable {
       this.momentum(snapshot),
       Date.now(),
     );
+    await this.clearMissionFlightSignals(arm.missionId, arm.missionSha256);
     await this.autoFlights.arm(arm);
     this.autoFlightRevocations.delete(missionId);
     this.changedEmitter.fire();
@@ -1738,7 +1750,7 @@ export class MissionController implements vscode.Disposable {
     while (this.autoFlightPending && this.hasLiveAutoFlight() && !this.disposed) {
       this.autoFlightPending = false;
       for (const listed of this.autoFlights.current()) {
-        if (this.autoFlightRevocations.has(listed.missionId)) continue;
+        if (this.autoFlightRevocations.has(listed.missionId) && !listed.pendingSignal) continue;
         const arm = this.autoFlights.get(listed.missionId);
         if (!arm) continue;
         try {
@@ -1750,6 +1762,14 @@ export class MissionController implements vscode.Disposable {
             this.runtimeState.sessions,
             Date.now(),
           );
+          if (decision.kind === "signal") {
+            await this.deliverAutoFlightSignal(arm, decision.signal);
+            continue;
+          }
+          if (decision.kind === "discard") {
+            await this.finishAutoFlightSignal(arm.missionId);
+            continue;
+          }
           if (decision.kind === "wait") {
             await this.autoFlights.reconcile(arm.missionId, snapshot);
             continue;
@@ -1794,12 +1814,18 @@ export class MissionController implements vscode.Disposable {
   }
 
   private hasLiveAutoFlight(): boolean {
-    return this.autoFlights.current().some((arm) => !this.autoFlightRevocations.has(arm.missionId));
+    return this.autoFlights.current().some((arm) => (
+      arm.pendingSignal !== null || !this.autoFlightRevocations.has(arm.missionId)
+    ));
   }
 
   private async stopAutoFlight(name: string, missionId: string, reason: string): Promise<void> {
     this.autoFlightRevocations.add(missionId);
-    await this.autoFlights.disarm(missionId);
+    const arm = this.autoFlights.get(missionId);
+    if (arm && !arm.pendingSignal) {
+      await this.autoFlights.stageSignal(missionId, { signalId: randomUUID(), kind: "stopped" });
+      this.autoFlightPending = true;
+    }
     this.changedEmitter.fire();
     void vscode.window.showWarningMessage(`Auto Flight stopped for ${name}: ${reason}.`);
   }
@@ -1807,7 +1833,11 @@ export class MissionController implements vscode.Disposable {
   private async arriveAutoFlight(snapshot: MissionSnapshot): Promise<void> {
     const missionId = snapshot.mission.mission_id;
     this.autoFlightRevocations.add(missionId);
-    await this.autoFlights.disarm(missionId);
+    const arm = this.autoFlights.get(missionId);
+    if (arm && !arm.pendingSignal) {
+      await this.autoFlights.stageSignal(missionId, { signalId: randomUUID(), kind: "landing" });
+      this.autoFlightPending = true;
+    }
     this.changedEmitter.fire();
     void vscode.window.showInformationMessage(
       `${snapshot.mission.name} Auto Flight arrived at explicit Receipt Landing.`,
@@ -1817,6 +1847,35 @@ export class MissionController implements vscode.Disposable {
         void vscode.commands.executeCommand("runtrol.reviewMissionLanding", { mission: snapshot.mission });
       }
     }, () => undefined);
+  }
+
+  private async deliverAutoFlightSignal(
+    arm: AutoFlightArm,
+    signal: AutoFlightSignal,
+  ): Promise<void> {
+    requireResponse((await this.client.once({
+      ask: "missionFlightSignal",
+      with: {
+        signal_id: signal.signalId,
+        mission_id: arm.missionId,
+        mission_sha256: arm.missionSha256,
+        kind: signal.kind,
+      },
+    })).response, "missionFlightSignalRecorded");
+    await this.finishAutoFlightSignal(arm.missionId);
+  }
+
+  private async finishAutoFlightSignal(missionId: string): Promise<void> {
+    this.autoFlightRevocations.add(missionId);
+    await this.autoFlights.disarm(missionId);
+    this.changedEmitter.fire();
+  }
+
+  private async clearMissionFlightSignals(missionId: string, missionSha256: string): Promise<void> {
+    requireDone((await this.client.once({
+      ask: "missionFlightSignalClear",
+      with: { mission_id: missionId, mission_sha256: missionSha256 },
+    })).response, "clearing prior Mission Flight Signals");
   }
 
   private markSubmissionAmbiguous(taskId: string): Promise<void> {

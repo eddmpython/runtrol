@@ -48,6 +48,7 @@ use runtrol_provider::{
     AbsPath, AgentCommand, CloseMode, ProviderError, ProviderId, SessionId, WorkspaceAccess,
 };
 use runtrol_security::Caller;
+use runtrol_store::{MissionSignalKind, MissionSignalRow};
 use runtrol_transport::{
     CryptoError, LinkKind, NoiseUpgrade, NoiseWebSocket, PhoneHttp, PhoneHttpError, SessionBinding,
     StaticKeypair, WebSocketLinkError, response,
@@ -285,6 +286,10 @@ pub enum ServeError {
     /// Runtime instance identity or atomic locator publication failed.
     #[error("Runtime public bootstrap failed: {0}")]
     RuntimeBootstrap(String),
+
+    /// A structural Mission wake destination could not be resolved without ambiguity.
+    #[error("Mission Flight Signal routing failed: {0}")]
+    MissionFlightSignal(String),
 }
 
 struct PhonePlane {
@@ -1037,6 +1042,7 @@ async fn serve_surfaces(
 
             Some(ask) = asked.recv() => {
                 let Asked { mut conversation, request, prepared, reservation, answered } = ask;
+                let mission_flight_signal = matches!(&request, Request::MissionFlightSignal { .. });
                 let changes_index = matches!(
                     &request,
                     Request::Start { .. }
@@ -1055,6 +1061,7 @@ async fn serve_surfaces(
                     prepared,
                     reservation,
                 );
+                let wakes_for_new_signal = wakes_for_new_mission_flight_signal(mission_flight_signal, &reply);
                 // The connection stopped while its request was being answered. Nothing to report and nowhere to
                 // report it: the caller is gone, and the sessions already record everything the request did.
                 let abandoned_agent = deliver_answer(
@@ -1072,6 +1079,9 @@ async fn serve_surfaces(
                         &sessions,
                         &provider_update_notices,
                     );
+                }
+                if wakes_for_new_signal {
+                    schedule_push_wakes(&mut connections, &composed, &push_wake_active);
                 }
             }
 
@@ -1351,6 +1361,32 @@ async fn serve_surfaces(
                 });
                 if let Some(published) = published {
                     let should_wake = published.event.body.deserves_a_notification();
+                    if index_changed
+                        && let runtrol_provider::EventBody::ApprovalRequested(request) = &published.event.body
+                    {
+                        let target = {
+                            let controller = composed.missions.lock().await;
+                            controller.flight_signal_mission_for_session(
+                                &composed.ledger,
+                                &session.to_string(),
+                            )
+                        };
+                        match target {
+                            Ok(Some((mission_id, mission_sha256))) => {
+                                composed.store.append_mission_signal(&MissionSignalRow {
+                                    dedupe: *request.id.as_bytes(),
+                                    mission_id,
+                                    mission_sha256,
+                                    kind: MissionSignalKind::Person,
+                                    session_id: Some(session.to_string().into()),
+                                })?;
+                            }
+                            Ok(None) => {}
+                            Err(message) => {
+                                break Err(ServeError::MissionFlightSignal(message.into()));
+                            }
+                        }
+                    }
                     if let Err(error) = crate::dispatch::persist_live(&composed, &sessions, session) {
                         break Err(error.into());
                     }
@@ -1439,6 +1475,14 @@ fn schedule_push_wakes(
             }
         }
     });
+}
+
+fn wakes_for_new_mission_flight_signal(is_signal_request: bool, reply: &Reply) -> bool {
+    is_signal_request
+        && matches!(
+            reply,
+            Reply::One(Response::MissionFlightSignalRecorded { inserted: true })
+        )
 }
 
 struct PushWakeGuard(Arc<AtomicBool>);
@@ -2433,6 +2477,28 @@ fn encode_response(response: &Response) -> Vec<u8> {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn only_the_first_committed_mission_flight_signal_wakes_phones() {
+        let request = Request::MissionFlightSignal {
+            signal_id: SessionId::now().to_string().into(),
+            mission_id: "01900000-0000-7000-8000-000000000001".into(),
+            mission_sha256: "11".repeat(32).into(),
+            kind: "landing".into(),
+        };
+        assert!(wakes_for_new_mission_flight_signal(
+            matches!(&request, Request::MissionFlightSignal { .. }),
+            &Reply::One(Response::MissionFlightSignalRecorded { inserted: true }),
+        ));
+        assert!(!wakes_for_new_mission_flight_signal(
+            matches!(&request, Request::MissionFlightSignal { .. }),
+            &Reply::One(Response::MissionFlightSignalRecorded { inserted: false }),
+        ));
+        assert!(!wakes_for_new_mission_flight_signal(
+            matches!(&Request::List, Request::MissionFlightSignal { .. }),
+            &Reply::One(Response::MissionFlightSignalRecorded { inserted: true }),
+        ));
+    }
 
     #[tokio::test]
     async fn preparation_lanes_are_per_provider_and_shared_per_provider() {

@@ -14,6 +14,20 @@ try {
   });
   const attached = await client.attachSession(opened.output.targetRef, { timeoutMs: 10_000 });
   sessionRef = attached.output;
+  if (options.fixture) {
+    await client.act(sessionRef, [{
+      kind: "waitFor",
+      expectedRisk: "read",
+      selector: "#setup",
+      state: "visible",
+      timeoutMs: 10_000,
+    }], { timeoutMs: 15_000 });
+    await client.command(sessionRef, "Runtime.evaluate", {
+      expression: visualFixture(options.fixture),
+      awaitPromise: true,
+      returnByValue: true,
+    }, { expectedRisk: "externalEffect", timeoutMs: 10_000 });
+  }
   const captured = await client.act(sessionRef, [
     {
       kind: "waitFor",
@@ -60,11 +74,51 @@ function commandOptions(arguments_) {
   const url = values.get("url");
   const output = values.get("output");
   const selector = values.get("selector");
+  const fixture = values.get("fixture") ?? null;
   if (!config || !path.isAbsolute(config)) throw new Error("--config must be an absolute path");
   if (!output || !path.isAbsolute(output)) throw new Error("--output must be an absolute path");
   if (!url || new URL(url).origin !== "http://127.0.0.1:4173") {
     throw new Error("--url must use the authorized local PWA origin");
   }
   if (!selector || selector.length > 200) throw new Error("--selector is required and bounded");
-  return { config, url, output, selector };
+  if (fixture !== null && !["mission-flight-list", "mission-flight-detail"].includes(fixture)) {
+    throw new Error("--fixture is not a supported visual state");
+  }
+  return { config, url, output, selector, fixture };
+}
+
+function visualFixture(kind) {
+  const showDetail = kind === "mission-flight-detail";
+  return `(() => {
+    const byId = (id) => document.getElementById(id);
+    byId("setup").hidden = true;
+    byId("sessions-view").hidden = false;
+    byId("session-browser").hidden = true;
+    byId("mission-browser").hidden = false;
+    byId("session-detail").hidden = true;
+    byId("mission-detail").hidden = ${showDetail ? "false" : "true"};
+    byId("show-missions").hidden = false;
+    byId("show-sessions").setAttribute("aria-pressed", "false");
+    byId("show-missions").setAttribute("aria-pressed", "true");
+    byId("connection-status").textContent = "PC online";
+    byId("connection-status").dataset.state = "online";
+    byId("mission-count").textContent = "2";
+    byId("mission-signal-count").hidden = false;
+    byId("mission-signal-count").textContent = "1";
+    byId("mission-list").innerHTML = '<button class="mission-row flight-signal selected" type="button"><span class="state-dot integrating"></span><span><strong>Release candidate</strong><small>C:\\\\work\\\\runtrol</small></span><b>LANDED</b></button><button class="mission-row" type="button"><span class="state-dot running"></span><span><strong>Documentation refresh</strong><small>C:\\\\work\\\\docs</small></span><b>2/4</b></button>';
+    byId("selected-mission-state").textContent = "INTEGRATING";
+    byId("selected-mission-title").textContent = "Release candidate";
+    byId("selected-mission-project").textContent = "C:\\\\work\\\\runtrol";
+    byId("mission-flight-signal").hidden = false;
+    byId("mission-flight-signal").textContent = "Receipt Landing ready";
+    byId("mission-progress").textContent = "4 of 4";
+    byId("mission-awaiting").textContent = "0";
+    byId("mission-source").textContent = "missions/release.toml";
+    byId("mission-policy").textContent = "51".repeat(32);
+    byId("mission-tasks").innerHTML = '<article class="mission-task"><h3>verify-package</h3><p>passed  isolatedWorktree  operatorChoice</p><p>instructions/verify-package.md</p><p>3 gates passed, 0 failed</p><p>Receipt rcpt_01</p></article>';
+    byId("pause-mission").hidden = true;
+    byId("resume-mission").hidden = true;
+    byId("cancel-mission").hidden = true;
+    return true;
+  })()`;
 }

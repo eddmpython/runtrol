@@ -33,7 +33,7 @@
         <nav class="session-pane" aria-label="PC control">
           <div class="surface-tabs" aria-label="Phone surfaces">
             <button id="show-sessions" type="button" aria-pressed="true">Sessions</button>
-            <button id="show-missions" type="button" aria-pressed="false" hidden>Missions</button>
+            <button id="show-missions" type="button" aria-pressed="false" hidden>Missions <span id="mission-signal-count" class="signal-count" hidden>0</span></button>
           </div>
           <div id="session-browser">
             <div class="pane-heading">
@@ -98,6 +98,7 @@
             </div>
           </div>
           <div class="mission-content">
+            <div id="mission-flight-signal" class="mission-flight-signal" role="status" hidden></div>
             <dl class="mission-summary">
               <dt>Tasks passed</dt><dd id="mission-progress"></dd>
               <dt>Awaiting PC input</dt><dd id="mission-awaiting"></dd>

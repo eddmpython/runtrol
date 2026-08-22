@@ -96,6 +96,15 @@ pub enum StoreError {
         why: &'static str,
     },
 
+    /// Bounded Mission Flight Signal metadata is malformed.
+    #[error("a stored Mission Flight Signal row is malformed at {field}: {why}")]
+    MissionSignalCodec {
+        /// Field that failed closed.
+        field: &'static str,
+        /// Structural reason.
+        why: &'static str,
+    },
+
     /// The storage engine failed while runtrol was doing something specific.
     ///
     /// `doing` is required. An engine error without the operation that produced it tells the operator that
@@ -124,6 +133,7 @@ impl StoreError {
                 | Self::SchemaTooOld { .. }
                 | Self::DeviceCodec { .. }
                 | Self::IntegrationCodec { .. }
+                | Self::MissionSignalCodec { .. }
         )
     }
 }

@@ -25,18 +25,23 @@
 use runtrol_core::registry::KindStatus;
 use runtrol_core::session::SessionError;
 use runtrol_core::{
-    ClosingReservation, OpenReservation, SessionManager, SessionView, TakenAgent, Waiting,
+    ClosingReservation, OpenReservation, SessionManager, SessionState, SessionView, TakenAgent,
+    Waiting,
 };
 use runtrol_ipc::wire::{
-    ProviderLine, RemoteConnection, RemoteConnectionStage, RemoteConnectionState, Request,
-    Response, SessionLine, SessionListing, SessionWaiting, WireError,
+    MissionFlightSignalLine, MissionFlightSignalPage, ProviderLine, RemoteConnection,
+    RemoteConnectionStage, RemoteConnectionState, Request, Response, SessionLine, SessionListing,
+    SessionWaiting, WireError,
 };
 use runtrol_provider::{
     AbsPath, Agent, AgentCommand, CloseMode, ContentBlock, Disposition, ModelCatalog,
     NativeSessionId, OpenIntent, Provider, ProviderId, SessionId, WallMs,
 };
 use runtrol_security::Caller;
-use runtrol_store::{SessionRow as StoredSession, StoreError};
+use runtrol_store::{
+    AppendMissionSignal, MissionSignalKey, MissionSignalKind, MissionSignalRow,
+    SessionRow as StoredSession, StoreError,
+};
 
 use crate::compose::Composed;
 
@@ -571,6 +576,246 @@ pub(crate) async fn complete_prepare_for(
             provider: provider.as_str().into(),
             response: refuse("provider preparation was paired with a different request shape"),
         },
+    }
+}
+
+fn list_mission_flight_signals(
+    composed: &Composed,
+    sessions: &SessionManager,
+    caller: &Caller,
+    after: Option<&str>,
+) -> Response {
+    let after = match after.map(parse_signal_cursor).transpose() {
+        Ok(after) => after,
+        Err(message) => return refuse(message),
+    };
+    let Ok(listed) = composed.store.list_mission_signals(after) else {
+        return refuse("Mission Flight Signal metadata cannot be read");
+    };
+    let roots = match caller {
+        Caller::Device { device } => Some(composed.device_authority.live_roots(*device)),
+        Caller::AtTheMachine => None,
+        _ => return refuse("this caller cannot read Mission Flight Signals"),
+    };
+    let Ok(controller) = composed.missions.try_lock() else {
+        return refuse("the Mission controller lock is damaged");
+    };
+    let mut visible = Vec::new();
+    for (key, row) in listed.signals {
+        let Ok(Some(snapshot)) =
+            controller.flight_signal_snapshot(&composed.ledger, &row.mission_id)
+        else {
+            continue;
+        };
+        let Ok(snapshot_digest) = parse_sha256(&snapshot.mission_sha256) else {
+            return refuse("the stored Mission digest is invalid");
+        };
+        if snapshot_digest != row.mission_sha256 {
+            continue;
+        }
+        if roots.as_ref().is_some_and(|roots| {
+            AbsPath::new(&snapshot.mission.project)
+                .map_or(true, |path| !roots.iter().any(|root| path.is_under(root)))
+        }) {
+            continue;
+        }
+        let current = match row.kind {
+            MissionSignalKind::Landing => snapshot.mission.state.as_ref() == "integrating",
+            MissionSignalKind::Stopped => matches!(
+                snapshot.mission.state.as_ref(),
+                "validated" | "ready" | "running" | "paused" | "blocked"
+            ),
+            MissionSignalKind::Person => row.session_id.as_deref().is_some_and(|session_id| {
+                snapshot
+                    .tasks
+                    .iter()
+                    .any(|task| task.session_id.as_deref() == Some(session_id))
+                    && session_waits_for_person(sessions, session_id)
+            }),
+        };
+        if !current {
+            continue;
+        }
+        visible.push(MissionFlightSignalLine {
+            signal_id: signal_cursor(key).into(),
+            mission_id: row.mission_id,
+            mission_sha256: encode_hex(&row.mission_sha256).into(),
+            kind: match row.kind {
+                MissionSignalKind::Person => "person".into(),
+                MissionSignalKind::Stopped => "stopped".into(),
+                MissionSignalKind::Landing => "landing".into(),
+            },
+            session_id: row.session_id,
+        });
+    }
+    Response::MissionFlightSignals(Box::new(MissionFlightSignalPage {
+        signals: visible,
+        next_cursor: listed.latest.map(|key| signal_cursor(key).into()),
+        gap: listed.gap,
+    }))
+}
+
+fn record_mission_flight_signal(
+    composed: &Composed,
+    signal_id: &str,
+    mission_id: &str,
+    mission_sha256: &str,
+    kind: &str,
+) -> Response {
+    let Ok(signal_id) = signal_id.parse::<SessionId>() else {
+        return refuse("the Mission Flight Signal identity is invalid");
+    };
+    let mission_sha256 = match parse_sha256(mission_sha256) {
+        Ok(digest) => digest,
+        Err(message) => return refuse(message),
+    };
+    let kind = match kind {
+        "stopped" => MissionSignalKind::Stopped,
+        "landing" => MissionSignalKind::Landing,
+        _ => return refuse("the local Mission Flight Signal kind is invalid"),
+    };
+    let snapshot = {
+        let Ok(controller) = composed.missions.try_lock() else {
+            return refuse("the Mission controller lock is damaged");
+        };
+        match controller.flight_signal_snapshot(&composed.ledger, mission_id) {
+            Ok(Some(snapshot)) => snapshot,
+            Ok(None) => return refuse("the Mission does not exist"),
+            Err(message) => return refuse(message),
+        }
+    };
+    let Ok(snapshot_digest) = parse_sha256(&snapshot.mission_sha256) else {
+        return refuse("the stored Mission digest is invalid");
+    };
+    if snapshot_digest != mission_sha256 {
+        return refuse("the reviewed Mission digest changed");
+    }
+    let valid_state = match kind {
+        MissionSignalKind::Landing => snapshot.mission.state.as_ref() == "integrating",
+        MissionSignalKind::Stopped => matches!(
+            snapshot.mission.state.as_ref(),
+            "validated" | "ready" | "running" | "paused" | "blocked"
+        ),
+        MissionSignalKind::Person => false,
+    };
+    if !valid_state {
+        return refuse("the Mission state does not match the local Flight Signal");
+    }
+    let row = MissionSignalRow {
+        dedupe: *signal_id.as_bytes(),
+        mission_id: mission_id.into(),
+        mission_sha256,
+        kind,
+        session_id: None,
+    };
+    match composed.store.append_mission_signal(&row) {
+        Ok(AppendMissionSignal::Inserted(_)) => {
+            Response::MissionFlightSignalRecorded { inserted: true }
+        }
+        Ok(AppendMissionSignal::Duplicate(_)) => {
+            Response::MissionFlightSignalRecorded { inserted: false }
+        }
+        Err(_) => refuse("Mission Flight Signal metadata cannot be saved"),
+    }
+}
+
+fn clear_mission_flight_signals(
+    composed: &Composed,
+    mission_id: &str,
+    mission_sha256: &str,
+) -> Response {
+    let mission_sha256 = match parse_sha256(mission_sha256) {
+        Ok(digest) => digest,
+        Err(message) => return refuse(message),
+    };
+    let snapshot = {
+        let Ok(controller) = composed.missions.try_lock() else {
+            return refuse("the Mission controller lock is damaged");
+        };
+        match controller.flight_signal_snapshot(&composed.ledger, mission_id) {
+            Ok(Some(snapshot)) => snapshot,
+            Ok(None) => return refuse("the Mission does not exist"),
+            Err(message) => return refuse(message),
+        }
+    };
+    let Ok(snapshot_digest) = parse_sha256(&snapshot.mission_sha256) else {
+        return refuse("the stored Mission digest is invalid");
+    };
+    if snapshot_digest != mission_sha256 {
+        return refuse("the reviewed Mission digest changed");
+    }
+    match composed
+        .store
+        .clear_mission_signals(mission_id, &mission_sha256)
+    {
+        Ok(_) => Response::Done,
+        Err(_) => refuse("Mission Flight Signal metadata cannot be cleared"),
+    }
+}
+
+fn parse_sha256(text: &str) -> Result<[u8; 32], &'static str> {
+    if text.len() != 64 {
+        return Err("the Mission digest is invalid");
+    }
+    let mut digest = [0_u8; 32];
+    for (slot, pair) in digest.iter_mut().zip(text.as_bytes().chunks_exact(2)) {
+        let Some(value) = hex_pair(pair) else {
+            return Err("the Mission digest is invalid");
+        };
+        *slot = value;
+    }
+    Ok(digest)
+}
+
+fn parse_signal_cursor(text: &str) -> Result<MissionSignalKey, &'static str> {
+    if text.len() != 32 {
+        return Err("the Mission Flight Signal cursor is invalid");
+    }
+    let mut bytes = [0_u8; 16];
+    for (slot, pair) in bytes.iter_mut().zip(text.as_bytes().chunks_exact(2)) {
+        let Some(value) = hex_pair(pair) else {
+            return Err("the Mission Flight Signal cursor is invalid");
+        };
+        *slot = value;
+    }
+    Ok(MissionSignalKey::from_bytes(bytes))
+}
+
+fn signal_cursor(key: MissionSignalKey) -> String {
+    encode_hex(&key.to_bytes())
+}
+
+fn session_waits_for_person(sessions: &SessionManager, session_id: &str) -> bool {
+    let Ok(session) = session_id.parse::<SessionId>() else {
+        return false;
+    };
+    sessions
+        .state(session)
+        .and_then(SessionState::waiting)
+        .is_some_and(|waiting| waiting == Waiting::Person)
+}
+
+fn hex_pair(pair: &[u8]) -> Option<u8> {
+    let high = hex_nibble(*pair.first()?)?;
+    let low = hex_nibble(*pair.get(1)?)?;
+    Some(high << 4 | low)
+}
+
+fn encode_hex(bytes: &[u8]) -> String {
+    use core::fmt::Write as _;
+
+    let mut encoded = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        let _ignored = write!(&mut encoded, "{byte:02x}");
+    }
+    encoded
+}
+
+const fn hex_nibble(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        _ => None,
     }
 }
 
@@ -1197,6 +1442,35 @@ pub(crate) fn answer_prepared(
                 "provider update inspection was not completed for this request",
             )),
         },
+
+        Request::MissionFlightSignals { after } => Reply::One(list_mission_flight_signals(
+            composed,
+            sessions,
+            conversation.caller(),
+            after.as_deref(),
+        )),
+
+        Request::MissionFlightSignal {
+            signal_id,
+            mission_id,
+            mission_sha256,
+            kind,
+        } => Reply::One(record_mission_flight_signal(
+            composed,
+            &signal_id,
+            &mission_id,
+            &mission_sha256,
+            &kind,
+        )),
+
+        Request::MissionFlightSignalClear {
+            mission_id,
+            mission_sha256,
+        } => Reply::One(clear_mission_flight_signals(
+            composed,
+            &mission_id,
+            &mission_sha256,
+        )),
 
         mission @ (Request::MissionRegisterGate { .. }
         | Request::MissionListGates
@@ -2213,6 +2487,9 @@ mod tests {
             runtrol_security::DeviceScope::SessionInputWrite
                 .to_string()
                 .into(),
+            runtrol_security::DeviceScope::MissionRead
+                .to_string()
+                .into(),
         ];
         if grant_workspace {
             scopes.push(
@@ -2500,6 +2777,105 @@ mod tests {
             }
             other => panic!("expected the not-exist refusal, got {other:?}"),
         }
+        clean(composed, &path);
+    }
+
+    #[tokio::test]
+    async fn mission_flight_signals_are_idempotent_current_and_root_bounded() {
+        let (composed, path) = composed_for("mission-flight-signals");
+        let project_dir = std::path::Path::new(&path).join("flight-project");
+        std::fs::create_dir(&project_dir).expect("create the Mission project");
+        let project = AbsPath::canonicalize(project_dir.to_str().expect("UTF-8 scratch path"))
+            .expect("canonical Mission project");
+        let device = pair_phone_for_root(&composed, &project, true);
+
+        let digest = [0x51; 32];
+        let mut mission = runtrol_ledger::MissionRecord::draft(digest, project.as_str().into());
+        mission.display_name = "Flight fixture".into();
+        mission.mission_ref = "mission.toml".into();
+        mission
+            .transition(
+                "fixture-validation".into(),
+                runtrol_ledger::MissionState::Draft,
+                runtrol_ledger::MissionState::Validated,
+            )
+            .expect("validate the fixture Mission");
+        let mission_id = mission.id;
+        composed
+            .ledger
+            .put(&runtrol_ledger::LedgerSnapshot {
+                mission,
+                tasks: Vec::new(),
+                runs: Vec::new(),
+                gate_runs: Vec::new(),
+                artifacts: Vec::new(),
+                receipts: Vec::new(),
+                compacted: false,
+            })
+            .expect("store the fixture Mission");
+
+        let mut sessions = SessionManager::new();
+        let mut local = Conversation::at_the_machine();
+        greet(&mut local, &composed, &mut sessions).await;
+        let signal_id = SessionId::now().to_string();
+        let request = Request::MissionFlightSignal {
+            signal_id: signal_id.into(),
+            mission_id: mission_id.to_string().into(),
+            mission_sha256: encode_hex(&digest).into(),
+            kind: "stopped".into(),
+        };
+        assert!(matches!(
+            answer(&mut local, &composed, &mut sessions, request.clone()).await,
+            Reply::One(Response::MissionFlightSignalRecorded { inserted: true })
+        ));
+        assert!(matches!(
+            answer(&mut local, &composed, &mut sessions, request).await,
+            Reply::One(Response::MissionFlightSignalRecorded { inserted: false })
+        ));
+
+        let mut phone = Conversation::from_device(device);
+        greet(&mut phone, &composed, &mut sessions).await;
+        let Reply::One(Response::MissionFlightSignals(visible)) = answer(
+            &mut phone,
+            &composed,
+            &mut sessions,
+            Request::MissionFlightSignals { after: None },
+        )
+        .await
+        else {
+            panic!("expected the visible Mission Flight Signal");
+        };
+        assert_eq!(
+            visible.signals.len(),
+            1,
+            "the duplicate producer wakes once"
+        );
+        assert_eq!(
+            visible.signals.first().map(|signal| signal.kind.as_ref()),
+            Some("stopped")
+        );
+        assert!(visible.next_cursor.is_some());
+
+        std::fs::remove_dir(&project_dir).expect("remove the approved project root");
+        std::fs::create_dir(&project_dir).expect("replace the approved project root");
+        let Reply::One(Response::MissionFlightSignals(revoked)) = answer(
+            &mut phone,
+            &composed,
+            &mut sessions,
+            Request::MissionFlightSignals { after: None },
+        )
+        .await
+        else {
+            panic!("expected the revoked Mission Flight Signal page");
+        };
+        assert!(
+            revoked.signals.is_empty(),
+            "a replaced root hides the destination without retaining stale authority"
+        );
+        assert!(
+            revoked.next_cursor.is_some(),
+            "the local phone cursor still advances over a hidden row"
+        );
         clean(composed, &path);
     }
 

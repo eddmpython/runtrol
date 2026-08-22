@@ -250,6 +250,12 @@ drift, ambiguous submission, missing or replaced sessions, recovery states, fail
 cancellation, and other stopped states disarm it. Arrival at `integrating` disarms and offers Receipt Landing. No
 instruction, provider output, event, transcript path, Gate output, or Artifact content enters extension storage.
 
+Before Auto Flight disarms for a person wait, safety stop, or Receipt Landing, Studio writes one random signal UUID
+and closed structural kind to a bounded global-state outbox. Pending delivery revokes provider-input authority
+immediately. Core records the exact UUID idempotently, and only that acknowledgement removes the outbox entry and
+arm. An Extension Host restart retries the same UUID; rearming clears stale signals for that exact Mission digest.
+No instruction, path, output, Receipt body, or push payload is added by this handoff.
+
 The explicit Continue modal still shows the exact Mission digest and currently safe work. One confirmation starts a
 validated Mission, verifies exact `Ready` Task sessions with fixed Gates, prepares newly eligible workspaces and
 public Runtime sessions, and sends exact reviewed instructions. Both paths stop at unproven work and keep project

@@ -29,6 +29,8 @@ use runtrol_security::LocalScope;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 
+type MissionFlightBinding = (Box<str>, [u8; 32]);
+
 /// Local Mission state not duplicated in the ledger: resolved scheduler values and live public session bindings.
 #[derive(Clone, Debug)]
 struct ActiveMission {
@@ -542,6 +544,51 @@ impl MissionController {
             .map_err(|_| "the Mission ledger cannot be read")?
             .ok_or("the Mission does not exist")?;
         Ok(Self::snapshot_response(&snapshot, self.active.get(&id)))
+    }
+
+    /// Read one exact active-aware snapshot for structural Mission Flight Signal validation.
+    pub(crate) fn flight_signal_snapshot(
+        &self,
+        ledger: &Ledger,
+        mission_id: &str,
+    ) -> Result<Option<MissionSnapshot>, &'static str> {
+        let id: MissionId = mission_id
+            .parse()
+            .map_err(|_| "the Mission identity is invalid")?;
+        let snapshot = ledger
+            .snapshot(id)
+            .map_err(|_| "the Mission ledger cannot be read")?;
+        Ok(snapshot.map(|snapshot| snapshot_of(&snapshot, self.active.get(&id))))
+    }
+
+    /// Resolve the one active Mission that owns an exact public Runtime session.
+    pub(crate) fn flight_signal_mission_for_session(
+        &self,
+        ledger: &Ledger,
+        session_id: &str,
+    ) -> Result<Option<MissionFlightBinding>, &'static str> {
+        let mut found = None;
+        for (mission_id, active) in &self.active {
+            if !active
+                .sessions
+                .values()
+                .any(|binding| binding.runtime_session.as_ref() == session_id)
+            {
+                continue;
+            }
+            if found.is_some() {
+                return Err("more than one Mission owns the same public Runtime session");
+            }
+            let snapshot = ledger
+                .snapshot(*mission_id)
+                .map_err(|_| "the Mission ledger cannot be read")?
+                .ok_or("the Mission disappeared while resolving its Runtime session")?;
+            found = Some((
+                mission_id.to_string().into(),
+                snapshot.mission.mission_sha256,
+            ));
+        }
+        Ok(found)
     }
 
     fn start(

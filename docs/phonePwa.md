@@ -4,7 +4,7 @@ The phone application is a paired control surface for the same Core that Runtrol
 
 ## Current release
 
-The application is served from `/runtrol/app/` on the permanent GitHub Pages origin. The supported connection path is the ciphertext relay. Content-free Web Push wakes the installed application when Core publishes an event that needs attention. A scope-gated Mission view exposes bounded metadata plus pause, safe resume, and cancel actions. Direct LAN and peer-to-peer routes are not part of this release.
+The application is served from `/runtrol/app/` on the permanent GitHub Pages origin. The supported connection path is the ciphertext relay. Content-free Web Push wakes the installed application when Core publishes an event that needs attention. After its authenticated reconnect, the phone can derive an exact current Auto Flight session or Mission destination from bounded structural Core signals. A scope-gated Mission view exposes bounded metadata plus pause, safe resume, and cancel actions. Direct LAN and peer-to-peer routes are not part of this release.
 
 Pairing begins only from `Runtrol: Pair a Phone` in VS Code. The QR carries a 120-second one-use pairing secret in the URL fragment. The PWA validates the complete fragment contract and removes it from the visible URL and history before opening any durable storage. Noise IKpsk1 authenticates the first device exchange. VS Code then displays the authenticated phone key and exact initial scopes and requires the operator to type the local three-word presence phrase.
 
@@ -18,7 +18,7 @@ Initial pairing grants only selected plain scopes. Starting or resuming a sessio
 
 ## Browser storage and rendering
 
-IndexedDB contains only the non-extractable X25519 private key, its public key, relay admission values, and the latest authority metadata. There is no transcript table or conversation cache. The service worker caches only reviewed application-shell files and never caches relay or Core traffic.
+IndexedDB contains only the non-extractable X25519 private key, its public key, relay admission values, the latest authority metadata, and one opaque Mission signal cursor per connection. There is no transcript table or conversation cache. The service worker caches only reviewed application-shell files and never caches relay or Core traffic.
 
 The selected session owns one bounded live event view. Reconnect uses the exact Core cursor and reports an explicit gap when retained events are no longer available. ANSI control sequences are removed, bidirectional controls are expanded visibly, and approval options remain visible when unavailable so missing authority is not mistaken for a missing provider choice.
 
@@ -44,13 +44,30 @@ the same durable home and device authorization, requires a cross-stream gap for 
 installed real CLI through its provider-native resume surface. The deterministic model counterpart is local and
 discards request bodies.
 
+## Mission Flight Signals
+
+Core retains at most 64 structural Auto Flight signals. Their kinds are closed to `person`, `stopped`, and `landing`.
+They contain a random signal identifier, Mission identity and digest, an optional exact session identity, and no
+instruction, provider output, event, project path, Gate output, Artifact content, or Receipt body.
+
+An authenticated phone with `mission.read` asks for signals after its opaque local cursor. The daemon filters every
+row through the device's current live workspace roots, then requires the exact Mission digest and current state to
+still match. A `person` signal must still name the bound Task session that waits for a person. `landing` must still be
+integrating. `stopped` must still be in one of the closed non-running safety states. Revoked, stale, or hidden rows do
+not render but still advance the page cursor, so reconnect cannot loop forever on an unauthorized row.
+
+The newest current `person` signal opens its exact session. Otherwise the newest current `stopped` or `landing`
+signal opens the exact Mission and shows a concise banner. The cursor is local phone state only. Reading signals does
+not acknowledge, mutate, or clear Core state, and it adds no remote start, arm, retry, Gate, integration, completion,
+or automatic provider-input authority.
+
 ## Web Push
 
 Notifications are enabled only by an explicit phone action. The browser subscription is bound to the stable P-256 VAPID public key returned by the authenticated PC. The PWA sends only the browser-issued endpoint through the existing Noise channel. It does not send content-encryption keys because Core deliberately sends an empty push body.
 
 Core derives separate VAPID signing and endpoint-storage keys from the operating-system-protected PC identity. The subscription endpoint is a bearer capability, so it is validated against the reviewed FCM and Apple push hosts, encrypted with device-bound authenticated encryption, and authenticated again during daemon restoration. Plain endpoint bytes are never stored.
 
-For an approval, blocked session, failure, or abnormal detach, Core selects only subscribed devices that hold `session.output.read`, resolves the reviewed push host, rejects the complete DNS answer set if any address is non-public, applies exact egress admission, authenticates WebPKI TLS, and sends an empty HTTP/2 POST with bounded VAPID authorization. The service worker ignores push data and always renders the same generic notification. Session, provider, workspace, prompt, approval subject, output, and identifiers never enter the push request or notification. The reconnect stream remains authoritative if delivery fails.
+For an approval, blocked session, failure, abnormal detach, or newly committed Mission Flight Signal, Core selects only an authorized subscribed device, resolves the reviewed push host, rejects the complete DNS answer set if any address is non-public, applies exact egress admission, authenticates WebPKI TLS, and sends an empty HTTP/2 POST with bounded VAPID authorization. The service worker ignores push data and always renders the same generic notification. Session, provider, workspace, prompt, approval subject, output, Mission ID, instruction, project path, Artifact, Receipt, and other identifiers never enter the push request or notification. The authenticated reconnect remains authoritative if delivery fails.
 
 iOS and iPadOS require adding the application to the Home Screen before notification permission can be granted. Browser subscription removal and `Forget this PC` both clear the server-side capability when Core is reachable. A locally removed browser subscription is already unusable if Core is offline.
 
@@ -62,11 +79,16 @@ A useful contributor receipt records the date, iOS version, public application o
 
 ## Verification
 
-- `npm --prefix pwa test` checks pairing-fragment handling, display hardening, canonical record framing, relay admission, explicit Core requests, current-authority replacement, VAPID binding, and subscription removal.
+- `npm --prefix pwa test` checks pairing-fragment handling, display hardening, canonical record framing, relay admission, explicit Core requests, current-authority replacement, strict Mission signal parsing and routing, VAPID binding, and subscription removal.
 - `cargo test -p runtrol-audit --test pwaInterop` runs a real WebCrypto peer against the production Rust transport for Noise IKpsk1 pairing, Noise IK reconnection, and bidirectional encrypted frames.
 - `cargo test -p runtrol-audit --test webPushContract` verifies device-bound encrypted endpoint storage, stable VAPID public-key shape, the empty production request body, and the generic service-worker notification boundary.
 - `python -X utf8 tests/audit/remoteResilienceFaultInjection.py --require-external` verifies exact replay after a network cut and explicit recovery through provider-native resume after a production Core restart.
 - daemon and security tests verify exact scope, root, provider, filesystem-identity, persistence, and Start and Resume enforcement.
+- daemon tests verify Mission signal producer idempotency, current-state filtering, root revocation, bounded paging, and
+  one generic wake for the first committed UUID only.
 - `approvalRoundtripSmoke` also requires the real pending approval to appear as a `person` wait in the authenticated
   phone catalogue and to disappear after the phone's exact rejection resumes the turn.
+- The narrow 390 by 844 PWA list and Mission detail signal states are rendered through the pinned public browser
+  control and inspected directly. The real Extension Host Auto Flight journey proves its durable signal outbox was
+  acknowledged before the arm disappeared.
 - `npm --prefix site run build` publishes the reviewed application under `/app/` and holds the complete Pages artifact under the repository byte budget.

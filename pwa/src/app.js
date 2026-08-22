@@ -11,6 +11,12 @@ import { consumePairingFragment } from "./pairing.js";
 import { CoreClient, CoreFailure, readDeviceAuthority, withCore } from "./core.js";
 import { keyFingerprint, pairThroughRelay } from "./relay.js";
 import { missionActions, readMissionCatalogue, readMissionSnapshot } from "./missions.js";
+import {
+  missionFlightDestination,
+  missionFlightBadge,
+  missionFlightLabel,
+  readMissionFlightSignals,
+} from "./missionSignals.js";
 import { disablePush, enablePush, pushAvailable, synchronizePush } from "./push.js";
 import {
   approvalOptions,
@@ -30,6 +36,7 @@ const state = {
   pairing: null,
   sessions: [],
   missions: [],
+  flightSignals: [],
   providers: [],
   selected: null,
   selectedMission: null,
@@ -234,6 +241,7 @@ async function showPairing() {
 function showUnpaired() {
   state.watchGeneration += 1;
   state.missions = [];
+  state.flightSignals = [];
   state.selectedMission = null;
   setup.hidden = false;
   sessionsView.hidden = true;
@@ -277,6 +285,21 @@ async function refreshSessions(requestedSession = null, attentionRequested = fal
       const response = await client.list();
       if (response.say !== "sessions") throw new Error("Core returned no session list");
       state.sessions = response.with.sessions;
+      if (attentionRequested && hasScope("mission.read")) {
+        const signalResponse = await client.listMissionFlightSignals(state.connection.missionSignalCursor);
+        if (signalResponse.say !== "missionFlightSignals") {
+          throw new Error("Core returned no Mission Flight Signals");
+        }
+        const page = readMissionFlightSignals(signalResponse.with);
+        state.flightSignals = page.signals;
+        state.connection = Object.freeze({
+          ...state.connection,
+          missionSignalCursor: page.next_cursor,
+        });
+        await state.store.saveConnection(state.connection);
+      } else if (attentionRequested) {
+        state.flightSignals = [];
+      }
     } finally {
       client.close();
     }
@@ -284,9 +307,18 @@ async function refreshSessions(requestedSession = null, attentionRequested = fal
     configureSurfaceTabs();
     await synchronizeNotifications();
     renderSessions();
+    renderFlightSignals();
+    const destination = attentionRequested
+      ? missionFlightDestination(state.flightSignals, state.sessions)
+      : null;
+    if (destination?.surface === "mission") {
+      activateSurface("missions");
+      await refreshMissionCatalogue(destination.missionId);
+      return;
+    }
     const selected = preferredSession(
       state.sessions,
-      requestedSession,
+      destination?.session?.session ?? requestedSession,
       state.selected?.session ?? null,
       attentionRequested,
       isNarrowViewport(),
@@ -436,9 +468,11 @@ function renderMissions() {
   missionList.replaceChildren();
   element("mission-count").textContent = String(state.missions.length);
   for (const mission of state.missions) {
+    const signal = latestMissionFlightSignal(mission.mission_id);
     const button = document.createElement("button");
     button.type = "button";
     button.className = `mission-row${mission.mission_id === state.selectedMission?.mission?.mission_id ? " selected" : ""}`;
+    button.classList.toggle("flight-signal", signal !== null);
     const dot = document.createElement("span");
     dot.className = `state-dot ${safeVisibleText(mission.state)}`;
     const labels = document.createElement("span");
@@ -448,7 +482,9 @@ function renderMissions() {
     project.textContent = safeVisibleText(mission.project);
     labels.append(title, project);
     const progress = document.createElement("b");
-    progress.textContent = `${Number(mission.passed_tasks) || 0}/${Number(mission.total_tasks) || 0}`;
+    progress.textContent = signal
+      ? missionFlightBadge(signal.kind)
+      : `${Number(mission.passed_tasks) || 0}/${Number(mission.total_tasks) || 0}`;
     button.append(dot, labels, progress);
     button.addEventListener("click", () => runAction(async () => selectMission(mission)));
     missionList.append(button);
@@ -477,6 +513,10 @@ function renderMissionSnapshot(snapshot) {
   element("mission-awaiting").textContent = String(Number(snapshot.mission.awaiting_input) || 0);
   element("mission-source").textContent = safeVisibleText(snapshot.mission_ref);
   element("mission-policy").textContent = safeVisibleText(snapshot.policy_sha256);
+  const signal = latestMissionFlightSignal(snapshot.mission.mission_id);
+  const signalBanner = element("mission-flight-signal");
+  signalBanner.hidden = signal === null;
+  signalBanner.textContent = signal ? missionFlightLabel(signal.kind) : "";
 
   const actions = missionActions(snapshot.mission, state.connection.scopes);
   element("pause-mission").hidden = !actions.pause;
@@ -511,6 +551,18 @@ function renderMissionSnapshot(snapshot) {
     tasks.append(bounded);
   }
   renderMissions();
+}
+
+function renderFlightSignals() {
+  const count = new Set(state.flightSignals.map((signal) => signal.mission_id)).size;
+  const badge = element("mission-signal-count");
+  badge.textContent = String(count);
+  badge.hidden = count === 0;
+  renderMissions();
+}
+
+function latestMissionFlightSignal(missionId) {
+  return state.flightSignals.findLast((signal) => signal.mission_id === missionId) ?? null;
 }
 
 async function changeMission(request) {

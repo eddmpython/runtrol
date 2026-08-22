@@ -18,18 +18,29 @@ export type AutoFlightTurn = {
   readonly sessionGeneration: number;
 };
 
+export type AutoFlightSignalKind = "stopped" | "landing";
+
+export type AutoFlightSignal = {
+  readonly signalId: string;
+  readonly kind: AutoFlightSignalKind;
+};
+
 export type AutoFlightArm = {
   readonly missionId: string;
   readonly missionSha256: string;
   readonly operatorChoiceProvider: string | null;
   readonly idleAuthorizedTaskIds: readonly string[];
   readonly turns: readonly AutoFlightTurn[];
+  /// A durable local outbox. Its presence revokes provider-input authority while an idempotent bodyless wake is sent.
+  readonly pendingSignal: AutoFlightSignal | null;
 };
 
 export type AutoFlightDecision =
   | { readonly kind: "advance"; readonly momentum: MissionMomentum }
   | { readonly kind: "wait" }
   | { readonly kind: "arrived" }
+  | { readonly kind: "signal"; readonly signal: AutoFlightSignal }
+  | { readonly kind: "discard" }
   | { readonly kind: "disarm"; readonly reason: string };
 
 export type AutoFlightWriter = (arms: readonly AutoFlightArm[]) => PromiseLike<void>;
@@ -79,7 +90,22 @@ export class AutoFlights {
     return this.persist((next) => {
       const arm = next.get(missionId);
       if (!arm) throw new Error("the Mission Auto Flight is no longer armed");
+      if (arm.pendingSignal) throw new Error("the Mission Auto Flight is already stopping");
       next.set(missionId, recordAutoFlightSubmissions(arm, submissions));
+    });
+  }
+
+  stageSignal(missionId: string, signal: AutoFlightSignal): Promise<void> {
+    return this.persist((next) => {
+      const arm = next.get(missionId);
+      if (!arm) throw new Error("the Mission Auto Flight is no longer armed");
+      if (arm.pendingSignal) {
+        if (arm.pendingSignal.signalId !== signal.signalId || arm.pendingSignal.kind !== signal.kind) {
+          throw new Error("the Mission Auto Flight already has another pending signal");
+        }
+        return;
+      }
+      next.set(missionId, { ...arm, pendingSignal: signal });
     });
   }
 
@@ -151,6 +177,7 @@ export function createAutoFlightArm(
     operatorChoiceProvider,
     idleAuthorizedTaskIds: idleAuthorizedTaskIds.sort(),
     turns: turns.sort(compareTurns),
+    pendingSignal: null,
   };
 }
 
@@ -168,6 +195,14 @@ export function decideAutoFlight(
   }
   if (snapshot.mission.completion_policy !== "allTasks") {
     return { kind: "disarm", reason: "the Mission now requires a specialized flow" };
+  }
+  if (arm.pendingSignal) {
+    const stillCurrent = arm.pendingSignal.kind === "landing"
+      ? snapshot.mission.state === "integrating"
+      : ["validated", "ready", "running", "paused", "blocked"].includes(snapshot.mission.state);
+    return stillCurrent
+      ? { kind: "signal", signal: arm.pendingSignal }
+      : { kind: "discard" };
   }
   if (snapshot.mission.state === "integrating") return { kind: "arrived" };
   if (snapshot.mission.state === "paused") return { kind: "wait" };
@@ -270,6 +305,8 @@ function readArm(value: unknown): AutoFlightArm | null {
   const turns = value.turns.map(readTurn);
   if (turns.some((turn) => turn === null)) return null;
   const exactTurns = turns as AutoFlightTurn[];
+  const pendingSignal = readSignal(value.pendingSignal);
+  if (value.pendingSignal !== undefined && value.pendingSignal !== null && !pendingSignal) return null;
   const taskIds = new Set(idle);
   for (const turn of exactTurns) {
     if (taskIds.has(turn.taskId)) return null;
@@ -281,7 +318,17 @@ function readArm(value: unknown): AutoFlightArm | null {
     operatorChoiceProvider: value.operatorChoiceProvider,
     idleAuthorizedTaskIds: idle,
     turns: exactTurns.sort(compareTurns),
+    pendingSignal,
   };
+}
+
+function readSignal(value: unknown): AutoFlightSignal | null {
+  if (value === undefined || value === null) return null;
+  if (!isRecord(value)
+    || typeof value.signalId !== "string"
+    || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(value.signalId)
+    || (value.kind !== "stopped" && value.kind !== "landing")) return null;
+  return { signalId: value.signalId.toLowerCase(), kind: value.kind };
 }
 
 function readTurn(value: unknown): AutoFlightTurn | null {

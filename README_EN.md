@@ -25,6 +25,11 @@
 > A phone notification now opens the first session that is actually waiting for the operator without carrying
 > conversation content. The `Needs you` count and next action include person waits only and keep account limits
 > separate. The real CLI approval gate verifies entry while pending and removal after the answer.
+>
+> Auto Flight person waits, safe stops, and Receipt Landing use the same content-free wake. After authentication, the
+> phone reads at most 64 structural Core signals and opens only the exact session or Mission whose root, Mission
+> digest, and current state still match. Push contains no Mission ID, instruction, path, or output, and the phone
+> retains only an opaque cursor.
 
 The security boundary and default-deny settings are documented in [SECURITY.md](SECURITY.md).
 
@@ -190,7 +195,7 @@ If those axes are not nailed down by gates, using Rust means nothing.
 | `crates/` | The product core (Rust). Daemon, provider adapters, and transport. There is no standalone GUI crate | Implemented |
 | [`clients/typescript/`](clients/typescript/) | Public Runtime TypeScript SDK for external products | Packed consumer verified |
 | [`extensions/runtrol-vscode/`](extensions/runtrol-vscode/) | The only PC surface, `Runtrol Studio` | 30-session release load verified, 0.1.9 public |
-| [`pwa/`](pwa/) | Mobile PWA | Relay connection, session control, approval, and `Needs you` focus implemented |
+| [`pwa/`](pwa/) | Mobile PWA | Relay connection, session control, approval, and exact `Needs you` and Mission Flight Signals focus implemented |
 | [`site/`](site/) | [Dependency-free GitHub Pages landing](https://eddmpython.github.io/runtrol/) | Live |
 | [`assets/brand/`](assets/brand/) | The logo. SVG is the source; favicons, icons, and social cards derive from it | |
 | [`docs/`](docs/README.md) | Operational documentation, source of truth | |

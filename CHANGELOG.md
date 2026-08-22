@@ -12,6 +12,14 @@ and refactoring that no user can observe do not belong here.
 
 ### Added
 
+- **Mission Flight Signals** turn Auto Flight state changes into one exact phone destination without putting that
+  destination in Web Push. Core retains at most 64 structural `person`, `stopped`, or `landing` signals, filters them
+  against the current workspace root, Mission digest, session binding, and Mission state, and returns them only after
+  the phone reconnects through its existing authenticated `mission.read` authority. Studio uses a durable idempotent
+  outbox, revokes automatic input while a signal is uncertain, and retries the same UUID after restart. The push body
+  remains empty, the phone stores only an opaque cursor, and no remote start, arm, retry, Gate, integration, or
+  completion authority was added. Real Extension Host and narrow-screen PWA states were inspected directly.
+
 - **Mission Auto Flight** moves a reviewed ordinary DAG through every later proven-safe wave after one PC-local arm.
   Up to eight exact Mission digests can be armed together. Runtime lifecycle events drive the flow with no polling;
   each automatic Send stores the exact session generation before provider input, and fixed Gate verification waits

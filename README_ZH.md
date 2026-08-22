@@ -22,6 +22,10 @@
 >
 > 手机通知现在不会携带对话内容，并会打开第一个真正等待操作者的会话。`Needs you` 数量与下一项操作
 > 只包含等待人员的状态，并与账户限额等待区分。真实 CLI 批准门禁验证等待时出现、回答后消失。
+>
+> Auto Flight 的人员等待、安全停止和 Receipt Landing 使用同一种无内容通知。手机通过认证后读取 Core
+> 中最多 64 个结构化信号，只打开 root、Mission digest 与当前状态仍完全匹配的会话或 Mission。推送不含
+> Mission ID、指令、路径或输出，手机只保留一个不透明 cursor。
 
 The security boundary and default-deny settings are documented in [SECURITY.md](SECURITY.md).
 
@@ -183,7 +187,7 @@ Rust 不是目的，而是上表中三个轴的手段。
 | `crates/` | 产品内核（Rust）。守护进程、供应商适配器与传输。不存在独立 GUI crate | 已实现 |
 | [`clients/typescript/`](clients/typescript/) | 面向外部产品的公共 Runtime TypeScript SDK | 已验证打包消费 |
 | [`extensions/runtrol-vscode/`](extensions/runtrol-vscode/) | 唯一 PC 界面 `Runtrol Studio` | 30 会话发布负载已验证，0.1.9 已公开 |
-| [`pwa/`](pwa/) | 移动端 PWA | 已实现中继连接、会话控制、批准与 `Needs you` 直达 |
+| [`pwa/`](pwa/) | 移动端 PWA | 已实现中继连接、会话控制、批准以及 `Needs you` 与 Mission Flight Signals 精确直达 |
 | [`site/`](site/) | [无依赖 GitHub Pages 落地页](https://eddmpython.github.io/runtrol/) | 已上线 |
 | [`assets/brand/`](assets/brand/) | 标志。SVG 为正本，favicon、图标与社交卡片皆由其派生 | |
 | [`docs/`](docs/README.md) | 运营文档正本 | |

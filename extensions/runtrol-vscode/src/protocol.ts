@@ -1,4 +1,4 @@
-export const WIRE_VERSION = 26;
+export const WIRE_VERSION = 27;
 
 export type PrivateProviderLine = {
   id: string;
@@ -115,6 +115,22 @@ export type MissionSnapshot = {
   policy_sha256: string;
   approval_expires_unix_ms: number;
   tasks: MissionTaskLine[];
+};
+
+export type MissionFlightSignalKind = "person" | "stopped" | "landing";
+
+export type MissionFlightSignalLine = {
+  signal_id: string;
+  mission_id: string;
+  mission_sha256: string;
+  kind: MissionFlightSignalKind;
+  session_id: string | null;
+};
+
+export type MissionFlightSignalPage = {
+  signals: MissionFlightSignalLine[];
+  next_cursor: string | null;
+  gap: boolean;
 };
 
 export type MissionWorkspace = {
@@ -240,6 +256,12 @@ export type Request =
   | { ask: "missionValidate"; with: { project: string; mission_ref: string } }
   | { ask: "missionList" }
   | { ask: "missionGet"; with: { mission_id: string } }
+  | { ask: "missionFlightSignals"; with: { after: string | null } }
+  | {
+      ask: "missionFlightSignal";
+      with: { signal_id: string; mission_id: string; mission_sha256: string; kind: "stopped" | "landing" };
+    }
+  | { ask: "missionFlightSignalClear"; with: { mission_id: string; mission_sha256: string } }
   | { ask: "missionStart"; with: { mission_id: string; mission_sha256: string } }
   | { ask: "missionPrepareTask"; with: { mission_id: string; task_id: string } }
   | { ask: "missionPause"; with: { mission_id: string } }
@@ -332,6 +354,8 @@ export type Response =
   | { say: "missions"; with: MissionLine[] }
   | { say: "missionGates"; with: GateLine[] }
   | { say: "mission"; with: MissionSnapshot }
+  | { say: "missionFlightSignals"; with: MissionFlightSignalPage }
+  | { say: "missionFlightSignalRecorded"; with: { inserted: boolean } }
   | { say: "missionWorkspace"; with: MissionWorkspace }
   | { say: "missionInstruction"; with: MissionInstruction }
   | { say: "capabilities"; with: CapabilityLine[] }

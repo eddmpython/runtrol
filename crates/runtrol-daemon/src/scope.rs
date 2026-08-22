@@ -125,12 +125,16 @@ pub fn needed(request: &Request) -> Needed {
             Needed::AtTheMachine(LocalScope::GateRegister)
         }
         Request::MissionValidate { .. } => Needed::AtTheMachine(LocalScope::MissionCreate),
-        Request::MissionList | Request::MissionGet { .. } => {
-            Needed::Scope(DeviceScope::MissionRead)
-        }
+        Request::MissionList
+        | Request::MissionGet { .. }
+        | Request::MissionFlightSignals { .. } => Needed::Scope(DeviceScope::MissionRead),
         Request::MissionStart { .. }
         | Request::MissionPrepareTask { .. }
-        | Request::MissionBindSession { .. } => Needed::AtTheMachine(LocalScope::MissionStart),
+        | Request::MissionBindSession { .. }
+        | Request::MissionFlightSignal { .. }
+        | Request::MissionFlightSignalClear { .. } => {
+            Needed::AtTheMachine(LocalScope::MissionStart)
+        }
         Request::MissionSendTaskInstruction { .. } => {
             Needed::AtTheMachine(LocalScope::MissionSendTaskInstruction)
         }
@@ -428,6 +432,17 @@ mod tests {
             Request::MissionList,
             Request::MissionGet {
                 mission_id: "msn_fixture".into(),
+            },
+            Request::MissionFlightSignals { after: None },
+            Request::MissionFlightSignal {
+                signal_id: SessionId::now().to_string().into(),
+                mission_id: "msn_fixture".into(),
+                mission_sha256: "11".repeat(32).into(),
+                kind: "landing".into(),
+            },
+            Request::MissionFlightSignalClear {
+                mission_id: "msn_fixture".into(),
+                mission_sha256: "11".repeat(32).into(),
             },
             Request::MissionStart {
                 mission_id: "msn_fixture".into(),

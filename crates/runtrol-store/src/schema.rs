@@ -47,6 +47,9 @@ const T_INTEGRATION_AUDIT_KEY: &str = "runtrol::IntegrationAuditKey@1";
 /// Type name for [`IntegrationMutationKey`], version included.
 const T_INTEGRATION_MUTATION_KEY: &str = "runtrol::IntegrationMutationKey@1";
 
+/// Type name for [`MissionSignalKey`], version included.
+const T_MISSION_SIGNAL_KEY: &str = "runtrol::MissionSignalKey@1";
+
 /// Key of the `meta` entry holding the schema version.
 pub const META_SCHEMA_VERSION: &str = "schema_version";
 
@@ -82,6 +85,10 @@ pub const INTEGRATION_AUDIT: TableDefinition<'static, IntegrationAuditKey, &[u8]
 /// Bounded durable mutation intents. Rows contain keyed authenticators, never caller input.
 pub const INTEGRATION_MUTATIONS: TableDefinition<'static, IntegrationMutationKey, &[u8]> =
     TableDefinition::new("integration_mutations");
+
+/// Bounded structural Mission wake metadata. No push payload or conversation content is stored here.
+pub const MISSION_SIGNALS: TableDefinition<'static, MissionSignalKey, &[u8]> =
+    TableDefinition::new("mission_signals");
 
 /// Provider identifier and native session identifier, to the runtrol session.
 ///
@@ -321,6 +328,12 @@ fixed_key!(
     "A time-ordered bounded public Runtime authorization audit key."
 );
 
+fixed_key!(
+    MissionSignalKey,
+    T_MISSION_SIGNAL_KEY,
+    "A time-ordered bounded Mission Flight Signal key."
+);
+
 /// One integration and one caller-minted UUIDv7 mutation identity.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub struct IntegrationMutationKey([u8; 32]);
@@ -403,6 +416,7 @@ mod tests {
         assert!(T_ENROLLMENT_KEY.ends_with(&suffix));
         assert!(T_INTEGRATION_AUDIT_KEY.ends_with(&suffix));
         assert!(T_INTEGRATION_MUTATION_KEY.ends_with(&suffix));
+        assert!(T_MISSION_SIGNAL_KEY.ends_with(&suffix));
     }
 
     #[test]

@@ -78,6 +78,11 @@ The durable arm contains only Mission, Task, session, provider, and lifecycle-ge
 reply, transcript, Gate output, or Artifact content is stored. Runtime events drive it without polling, and it never
 replaces the provider CLI's own agent loop.
 
+Person waits, safety stops, and Receipt Landing first enter a durable idempotent signal outbox. Pending delivery
+revokes automatic provider input, restart retries the same random UUID, and only Core acknowledgement removes the
+outbox entry and arm. A paired phone then derives the exact current destination after authentication. Web Push stays
+bodyless and carries no Mission ID, instruction, path, output, or Receipt content.
+
 ## Parallel attempts
 
 Run **Runtrol: Try One Instruction Several Ways...** to compose a reviewed comparison Mission from an instruction

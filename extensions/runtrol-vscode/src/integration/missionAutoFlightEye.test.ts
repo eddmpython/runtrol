@@ -17,6 +17,7 @@ type JourneyApi = {
   validateMissionFile(file: string): Promise<MissionSnapshot>;
   armMissionAutoFlight(missionId: string, operatorChoiceProvider: string | null): Promise<void>;
   autoFlightArmed(missionId: string): boolean;
+  autoFlightRetained(missionId: string): boolean;
   mission(missionId: string): Promise<MissionSnapshot>;
   close(session: string, now?: boolean): Promise<void>;
 };
@@ -110,13 +111,16 @@ async function eyePass(resultPath: string, sessions: string[]): Promise<void> {
     journey,
     reviewed.mission.mission_id,
     (snapshot) => snapshot.mission.state === "integrating"
-      && !journey.autoFlightArmed(reviewed.mission.mission_id),
+      && !journey.autoFlightRetained(reviewed.mission.mission_id),
     540_000,
     sessions,
   );
   assertMission(final, "integrating", ["passed", "passed"]);
   if (journey.autoFlightArmed(reviewed.mission.mission_id)) {
     throw new Error("Auto Flight retained authority after arriving at Receipt Landing");
+  }
+  if (journey.autoFlightRetained(reviewed.mission.mission_id)) {
+    throw new Error("Auto Flight retained its durable signal outbox after Core acknowledged Receipt Landing");
   }
   if (final.tasks.some((task) => task.artifact_paths.length !== 1)) {
     throw new Error("Auto Flight did not seal each reviewed Artifact exactly once");
