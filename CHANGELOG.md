@@ -10,6 +10,8 @@ and refactoring that no user can observe do not belong here.
 
 ## [Unreleased]
 
+## [0.1.10] - 2026-08-22
+
 ### Added
 
 - **Mission Flight Signals** turn Auto Flight state changes into one exact phone destination without putting that
@@ -214,6 +216,10 @@ and refactoring that no user can observe do not belong here.
   enormous frame.
 
 ### Fixed
+
+- An ordinary chat sent to several services no longer chooses linked worktrees automatically. Before any provider
+  starts, the operator explicitly chooses separate Core-owned worktrees or a shared current checkout, with the
+  collision consequence stated in the same local confirmation. Runtrol performs only that choice.
 
 - A conversation listed from the whole machine can actually be opened. The proof the listing
   handed out was bound to a folder scope that no approved folder could ever match, so every such
