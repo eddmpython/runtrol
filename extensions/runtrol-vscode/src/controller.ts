@@ -5,7 +5,8 @@ import { PUBLIC_LIMITS, type PublicInputBlock } from "@runtrol/runtime-client";
 import * as vscode from "vscode";
 
 import type { Attachment, ConversationBinding, ConversationPanels, DraftRecord } from "./conversationPanels";
-import { multiProviderPlacement, type StartDecision } from "./chatPlacement";
+import { parallelPlacementRequirement, type StartDecision } from "./chatPlacement";
+import { ConversationLauncher } from "./conversationLauncher";
 import type { Place } from "./conversationSurface";
 import type { MenuAnchor, MenuItem } from "./viewActions";
 import type { ConversationView } from "./conversationView";
@@ -93,6 +94,7 @@ export class Controller implements vscode.Disposable {
   /// One provider probe at a time. Each spawns a CLI, so the queue is what keeps activation answerable.
   private verificationTail: Promise<void> = Promise.resolve();
   private readonly isolatedWorkspaces: IsolatedWorkspaces;
+  private readonly conversationLauncher: ConversationLauncher;
 
   constructor(
     private readonly context: vscode.ExtensionContext,
@@ -108,6 +110,11 @@ export class Controller implements vscode.Disposable {
       client,
       () => runtime.integrationId(),
       () => runtime.reset(),
+    );
+    this.conversationLauncher = new ConversationLauncher(
+      runtime,
+      this.isolatedWorkspaces,
+      () => this.refreshIsolatedWorkspaces(),
     );
     this.status = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 20);
     this.status.name = "Runtrol chats";
@@ -515,74 +522,6 @@ export class Controller implements vscode.Disposable {
     return opened;
   }
 
-  /// Open a fresh provider in the person's selected checkout or in one Core-owned linked worktree.
-  /// Preparation and cleanup stay provider-neutral. A failed provider start releases only the exact clean
-  /// worktree Core returned; a successful start is bound before this method reports success.
-  private async openFresh(
-    providerId: string,
-    project: string,
-    decision: StartDecision,
-    model: string | null,
-    effort: string | null,
-    permission: string | null,
-  ): Promise<string> {
-    if (decision !== "isolated") {
-      return (await this.openWithAccess(
-        { kind: "start", providerId, workspace: project, model, effort, permission },
-        decision,
-      )).sessionId;
-    }
-    const isolated = await this.isolatedWorkspaces.prepare(project);
-    let opened: SessionLine;
-    try {
-      opened = await this.openWithAccess(
-        {
-          kind: "start",
-          providerId,
-          workspace: isolated.workspace,
-          model,
-          effort,
-          permission,
-        },
-        "exclusive",
-      );
-    } catch (error) {
-      try {
-        await this.isolatedWorkspaces.release(isolated.workspace, isolated.workspace_id, null);
-      } catch (cleanupError) {
-        throw new Error(
-          `${error instanceof Error ? error.message : String(error)}; Core also could not release the unused `
-          + `isolated workspace: ${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`,
-        );
-      } finally {
-        await this.refreshIsolatedWorkspaces().catch(() => undefined);
-      }
-      throw error;
-    }
-    try {
-      await this.isolatedWorkspaces.bind(isolated, opened.sessionId);
-    } catch (error) {
-      try {
-        await this.runtime.close(runtimeAction(opened), opened.lifecycle === "hotRunning");
-        await this.isolatedWorkspaces.release(isolated.workspace, isolated.workspace_id, null);
-      } catch (cleanupError) {
-        await this.refresh().catch(() => undefined);
-        throw new Error(
-          `The chat started in ${isolated.workspace}, but Core could not bind its cleanup ownership: `
-          + `${error instanceof Error ? error.message : String(error)}; the live chat could not be closed safely: `
-          + `${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`,
-        );
-      }
-      await this.refreshIsolatedWorkspaces().catch(() => undefined);
-      throw new Error(
-        `The chat started in ${isolated.workspace}, but Core could not bind its cleanup ownership: `
-        + `${error instanceof Error ? error.message : String(error)}`,
-      );
-    }
-    await this.refreshIsolatedWorkspaces();
-    return opened.sessionId;
-  }
-
   private async resumeSession(session: SessionLine): Promise<SessionLine> {
     if (!session.nativeSessionId) {
       throw new Error("that cold session has no provider-owned conversation identifier to resume");
@@ -953,7 +892,11 @@ export class Controller implements vscode.Disposable {
 
   /// The first message of a draft: start the conversation with the draft's choices, make this tab its
   /// tab, and send the words. A conversation with no project runs in the scratch folder.
-  async sendDraft(binding: ConversationBinding, text: string): Promise<void> {
+  async sendDraft(
+    binding: ConversationBinding,
+    text: string,
+    parallelPlacement?: "isolated" | "shared",
+  ): Promise<void> {
     const draft = binding.draft;
     if (!draft) return;
     const provider = this.requireDraftProvider(draft.state);
@@ -965,12 +908,15 @@ export class Controller implements vscode.Disposable {
     const also = draft.state.alsoProviderIds
       .map((id) => this.state.providers.find((candidate) => candidate.providerId === id) ?? null)
       .filter((candidate): candidate is ProviderLine => candidate !== null && isUsable(candidate));
-    // A multi-service message becomes one linked worktree per service. The projectless scratch directory is
-    // the only exception: it is not a Git checkout and carries no project files to isolate.
-    const decided = multiProviderPlacement(
+    const placement = parallelPlacementRequirement(
       also.length,
       isProjectless(workspace, this.state.projectlessRoot),
-    ) ?? await this.startDecision(workspace, "keep");
+    );
+    const decided = placement === "single"
+      ? await this.startDecision(workspace, "keep")
+      : placement === "sharedOnly"
+        ? "shared"
+        : parallelPlacement ?? await this.parallelStartDecision(workspace, also.length + 1);
     if (decided === null || decided === "another") return;
     await this.rememberService(provider.providerId);
     if (draft.state.model !== null || draft.state.effort !== null || draft.state.permission !== null) {
@@ -986,13 +932,15 @@ export class Controller implements vscode.Disposable {
       if (decided === "isolated") {
         binding.view.status(`Preparing separate workspaces for ${also.length + 1} services...`, "info");
       }
-      const openedId = await this.openFresh(
-        provider.providerId,
+      const openedId = await this.conversationLauncher.openFresh(
+        {
+          providerId: provider.providerId,
+          model: draft.state.model,
+          reasoningEffort: draft.state.effort,
+          permission: draft.state.permission,
+        },
         workspace,
         decided,
-        draft.state.model,
-        draft.state.effort,
-        draft.state.permission,
       );
       await this.refresh();
       const session = this.state.sessions.find((candidate) => candidate.sessionId === openedId);
@@ -1029,13 +977,15 @@ export class Controller implements vscode.Disposable {
   ): Promise<void> {
     for (const provider of also) {
       try {
-        const openedId = await this.openFresh(
-          provider.providerId,
+        const openedId = await this.conversationLauncher.openFresh(
+          {
+            providerId: provider.providerId,
+            model: null,
+            reasoningEffort: null,
+            permission: null,
+          },
           workspace,
           decision,
-          null,
-          null,
-          null,
         );
         await this.refresh();
         const session = this.state.sessions.find((candidate) => candidate.sessionId === openedId);
@@ -1293,13 +1243,15 @@ export class Controller implements vscode.Disposable {
     }
     const pausedDiscoveries = this.beginForegroundAction();
     try {
-      const openedId = await this.openFresh(
-        provider.providerId,
+      const openedId = await this.conversationLauncher.openFresh(
+        {
+          providerId: provider.providerId,
+          model,
+          reasoningEffort,
+          permission,
+        },
         workspace,
         access,
-        model,
-        reasoningEffort,
-        permission,
       );
       await this.refresh();
       await this.select(openedId);
@@ -2465,6 +2417,28 @@ export class Controller implements vscode.Disposable {
       return null;
     }
     return action === "Choose another" ? "another" : null;
+  }
+
+  /// A parallel team introduces its own writer collision even when no earlier chat is open. Runtrol describes
+  /// both consequences and executes only the placement the person explicitly chooses.
+  private async parallelStartDecision(
+    workspace: string,
+    services: number,
+  ): Promise<"isolated" | "shared" | null> {
+    const action = await vscode.window.showWarningMessage(
+      `Choose where ${services} coding services work in ${path.basename(workspace)}.`,
+      {
+        modal: true,
+        detail: "Separate worktrees creates and owns one clean linked checkout per service. "
+          + "Share current checkout lets every service write the selected folder, where their edits can collide. "
+          + "Runtrol does not choose either placement for you.",
+      },
+      "Separate worktrees",
+      "Share current checkout",
+    );
+    if (action === "Separate worktrees") return "isolated";
+    if (action === "Share current checkout") return "shared";
+    return null;
   }
 
   private requireSelected(): SessionLine {

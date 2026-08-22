@@ -1,14 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { multiProviderPlacement } from "./chatPlacement";
+import { parallelPlacementRequirement } from "./chatPlacement";
 
-test("multiple services never share a selected project checkout", () => {
-  assert.equal(multiProviderPlacement(1, false), "isolated");
-  assert.equal(multiProviderPlacement(7, false), "isolated");
+test("a real project leaves every parallel workspace choice to the person", () => {
+  assert.equal(parallelPlacementRequirement(1, false), "ask");
+  assert.equal(parallelPlacementRequirement(7, false), "ask");
 });
 
-test("one service keeps the ordinary collision decision and no-project chat needs no Git worktree", () => {
-  assert.equal(multiProviderPlacement(0, false), null);
-  assert.equal(multiProviderPlacement(2, true), "shared");
+test("one service keeps the ordinary path and projectless chat has no worktree choice", () => {
+  assert.equal(parallelPlacementRequirement(0, false), "single");
+  assert.equal(parallelPlacementRequirement(2, true), "sharedOnly");
 });

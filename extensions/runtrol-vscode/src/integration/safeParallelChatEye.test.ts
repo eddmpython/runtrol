@@ -20,7 +20,7 @@ type JourneyApi = {
   sessions(): readonly SessionLine[];
   openDraft(workspace: string | null, providerId?: string): Promise<void>;
   alsoAsk(providerId: string): Promise<void>;
-  sendFocusedDraft(text: string): Promise<string>;
+  sendFocusedDraft(text: string, parallelPlacement?: "isolated" | "shared"): Promise<string>;
   waitForLifecycle(session: string, lifecycle: SessionLine["lifecycle"], deadlineMs: number): Promise<void>;
   reconnect(): Promise<void>;
   close(session: string, now?: boolean): Promise<void>;
@@ -105,7 +105,7 @@ async function eyePass(resultPath: string, sessions: string[]): Promise<void> {
   });
 
   currentStage = "starting-isolated-parallel-chat";
-  const first = await within(journey.sendFocusedDraft(PROMPT), 300_000, "the isolated parallel send");
+  const first = await within(journey.sendFocusedDraft(PROMPT, "isolated"), 300_000, "the isolated parallel send");
   await waitFor(
     () => journey.sessions().filter((session) => !before.has(session.sessionId)).length === 2,
     60_000,

@@ -12,6 +12,7 @@ import {
   isolatedLaunchArguments,
   isolatedProfileSettings,
   isolatedRuntimeState,
+  quietExtensionTestArguments,
   TESTED_VSCODE_VERSION,
 } from "./isolated-vscode.mjs";
 
@@ -404,6 +405,7 @@ async function runHost(installed, testEntry, resultPath, testEnvironment, worksp
     launchArgs: [
       workspace,
       ...isolatedLaunchArguments,
+      ...(process.env.RUNTROL_VSCODE_CAPTURE ? [] : quietExtensionTestArguments),
       "--disable-extensions",
       `--user-data-dir=${userData}`,
       `--extensions-dir=${extensionsDirectory}`,
@@ -424,6 +426,7 @@ async function runInstalledCode(
   const arguments_ = [
     "--new-window",
     ...isolatedLaunchArguments,
+    ...(process.env.RUNTROL_VSCODE_CAPTURE ? [] : quietExtensionTestArguments),
     "--disable-extensions",
     "--disable-workspace-trust",
     "--skip-welcome",

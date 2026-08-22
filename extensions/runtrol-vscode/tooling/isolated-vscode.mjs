@@ -36,6 +36,13 @@ export const isolatedLaunchArguments = Object.freeze([
   "--disable-updates",
 ]);
 
+// Automated Extension Host gates still need Chromium and the VS Code API, but they do not need an operator-facing
+// window. Visual eye passes deliberately omit these arguments and remain the only tests allowed on the desktop.
+export const quietExtensionTestArguments = Object.freeze([
+  "--headless",
+  "--disable-gpu",
+]);
+
 /// Variables that tell a process it belongs to a VS Code extension host, and must not reach the one under test.
 ///
 /// `ELECTRON_RUN_AS_NODE` is the one that matters. Electron reads it before anything else and starts as plain
@@ -129,6 +136,7 @@ export function isolatedExtensionTestArguments(options) {
   return [
     options.workspace,
     ...isolatedLaunchArguments,
+    ...(options.visual ? [] : quietExtensionTestArguments),
     "--disable-extensions",
     `--user-data-dir=${options.userData}`,
     `--extensions-dir=${options.extensions}`,
@@ -223,6 +231,7 @@ export function runInstalledExtensionTest(options) {
     launchArgs: [
       options.workspace,
       ...isolatedLaunchArguments,
+      ...quietExtensionTestArguments,
       "--disable-workspace-trust",
       "--skip-welcome",
       `--user-data-dir=${options.userData}`,

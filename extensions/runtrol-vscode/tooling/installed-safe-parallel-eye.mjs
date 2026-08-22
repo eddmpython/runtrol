@@ -48,10 +48,12 @@ const outDir = path.resolve(
 );
 const screenshot = path.join(outDir, "installedSafeParallel.png");
 const draftScreenshot = path.join(outDir, "installedSafeParallelDraft.png");
+const placementScreenshot = path.join(outDir, "installedSafeParallelPlacement.png");
 const titleMatch = "installed-safe (Workspace)";
 let bundledCore = null;
 let managedCore = null;
 let vscodeProcess = null;
+let vscodeOutput = "";
 
 try {
   await Promise.all([
@@ -99,12 +101,21 @@ try {
     ],
     {
       env: runtimeState.environment,
-      stdio: "ignore",
+      stdio: ["ignore", "pipe", "pipe"],
       windowsHide: false,
     },
   );
+  for (const stream of [vscodeProcess.stdout, vscodeProcess.stderr]) {
+    stream.setEncoding("utf8").on("data", (chunk) => {
+      vscodeOutput = `${vscodeOutput}${chunk}`.slice(-16_000);
+    });
+  }
   vscodeProcess.unref();
-  await waitForWindow(titleMatch, 60_000);
+  await waitForWindow(titleMatch, 60_000, () => (
+    vscodeProcess.exitCode === null
+      ? null
+      : `VS Code exited ${String(vscodeProcess.exitCode)} before opening its window:\n${vscodeOutput}`
+  ));
   await delay(5_000);
   press(titleMatch, "^k^n");
   // Provider verification is intentionally serialized because every probe starts a CLI. Let the second real
@@ -120,6 +131,9 @@ try {
   click(titleMatch, 800, 798);
   await delay(300);
   press(titleMatch, "Reply with exactly: installed isolated parallel complete{ENTER}");
+  await delay(800);
+  capture(titleMatch, placementScreenshot);
+  press(titleMatch, "{ENTER}");
 
   const registryPath = path.join(runtimeState.home, "isolated-workspaces.json");
   const bound = await waitForBoundWorkspaces(registryPath, 2, 90_000);
@@ -178,6 +192,7 @@ try {
     registryStoredConversation: false,
     screenshot,
     draftScreenshot,
+    placementScreenshot,
     viewport: dimensions,
   })}\n`);
 } finally {
@@ -286,13 +301,15 @@ function click(title, x, y) {
   if (result.status !== 0) throw new Error(`window click failed:\n${result.stdout}${result.stderr}`);
 }
 
-async function waitForWindow(title, deadlineMs) {
+async function waitForWindow(title, deadlineMs, stopped = () => null) {
   const deadline = Date.now() + deadlineMs;
   for (;;) {
     try {
       press(title, "{ESC}");
       return;
     } catch {
+      const failure = stopped();
+      if (failure) throw new Error(failure);
       if (Date.now() > deadline) throw new Error(`timed out waiting for the ${title} window`);
       await delay(500);
     }

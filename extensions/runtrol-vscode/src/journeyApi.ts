@@ -32,7 +32,7 @@ export type JourneyApi = {
   openDraft(workspace: string | null, providerId?: string): Promise<void>;
   /// The eye pass: send the focused draft's first message, which starts its conversation in the same tab.
   /// Returns the session the tab became.
-  sendFocusedDraft(text: string): Promise<string>;
+  sendFocusedDraft(text: string, parallelPlacement?: "isolated" | "shared"): Promise<string>;
   /// The eye pass: open up to `limit` listed conversations as tabs, in list order, skipping any that refuse
   /// and any whose folder already has a live writer (so no collision question can block a headless run).
   /// Returns how many opened, and why each refusal refused (the harness prints them: a refusal is a fact
@@ -152,10 +152,10 @@ export function journeyApi(
     openDraft: (workspace, providerId) => afterReady(async () => {
       await controller.openDraft({ workspace, providerId: providerId ?? null });
     }),
-    sendFocusedDraft: (text) => afterReady(async () => {
+    sendFocusedDraft: (text, parallelPlacement) => afterReady(async () => {
       const binding = conversation.focused();
       if (!binding?.draft) throw new Error("no draft tab is focused");
-      await controller.sendDraft(binding, text);
+      await controller.sendDraft(binding, text, parallelPlacement);
       const session = binding.session;
       if (!session) throw new Error("the draft did not become a session");
       return session.sessionId;
