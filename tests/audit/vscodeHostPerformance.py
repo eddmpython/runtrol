@@ -331,7 +331,28 @@ def productBinaries() -> tuple[Path, Path]:
 
 
 def hostCommand() -> list[str]:
-    """Use a virtual display only where a Linux host has no real display."""
+    """Keep automated UI off the operator's desktop while retaining the real renderer."""
+    if sys.platform == "win32":
+        powershell = shutil.which("powershell.exe")
+        node = shutil.which("node.exe") or shutil.which("node")
+        runner = EXTENSION / "tooling" / "run-hidden-desktop.ps1"
+        if not powershell or not node or not runner.is_file():
+            raise RuntimeError("PowerShell, Node.js, and the hidden-desktop runner are required")
+        return [
+            powershell,
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            str(runner),
+            "-Executable",
+            node,
+            "-WorkingDirectory",
+            str(EXTENSION),
+            "-Argument",
+            "tooling/extension-host.mjs",
+        ]
     npm = shutil.which("npm.cmd" if sys.platform == "win32" else "npm")
     if not npm:
         raise RuntimeError("npm is required to test the VS Code extension")

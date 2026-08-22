@@ -90,6 +90,10 @@ coreEnvironment[pathKey] = `${path.dirname(fixture)}${path.delimiter}${process.e
 let daemon = null;
 let daemonStderr = "";
 const managedSessions = [];
+const automaticWindowArguments = process.env.RUNTROL_VSCODE_CAPTURE
+  || process.env.RUNTROL_VSCODE_HIDDEN_DESKTOP === "1"
+  ? []
+  : quietExtensionTestArguments;
 
 try {
   await rm(output, { recursive: true, force: true });
@@ -301,10 +305,17 @@ listen = "stdio"
   if (daemon?.exitCode === null) {
     const exited = new Promise((resolve) => daemon.once("close", resolve));
     daemon.kill();
-    await Promise.race([
-      exited,
-      delay(5_000).then(() => Promise.reject(new Error("test Core did not terminate within 5 seconds"))),
-    ]);
+    // A stuck Core used to reject here, which skipped the fixture sweep and the temporary
+    // directory removal below. The sweep escalates to SIGKILL, so record and keep going.
+    await Promise.race([exited, delay(5_000)]);
+    if (daemon.exitCode === null) {
+      cleanupFailures.push("test Core did not terminate within 5 seconds");
+    }
+  }
+  try {
+    await terminateCapturedIdentities([...ownedProcesses.values()]);
+  } catch (error) {
+    cleanupFailures.push(error.message);
   }
   await rm(output, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   await rm(temporary, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
@@ -411,7 +422,7 @@ async function runHost(installed, testEntry, resultPath, testEnvironment, worksp
     launchArgs: [
       workspace,
       ...isolatedLaunchArguments,
-      ...(process.env.RUNTROL_VSCODE_CAPTURE ? [] : quietExtensionTestArguments),
+      ...automaticWindowArguments,
       "--disable-extensions",
       `--user-data-dir=${userData}`,
       `--extensions-dir=${extensionsDirectory}`,
@@ -432,7 +443,7 @@ async function runInstalledCode(
   const arguments_ = [
     "--new-window",
     ...isolatedLaunchArguments,
-    ...(process.env.RUNTROL_VSCODE_CAPTURE ? [] : quietExtensionTestArguments),
+    ...automaticWindowArguments,
     "--disable-extensions",
     "--disable-workspace-trust",
     "--skip-welcome",
