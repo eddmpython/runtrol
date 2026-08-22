@@ -476,7 +476,11 @@ jobs:
         shell: bash
         run: |
           curl -fsSL https://x.ai/cli/install.sh | bash -s 1.0.5
-          echo "$HOME/.grok/bin" >> "$GITHUB_PATH"
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            cygpath --windows "$HOME/.grok/bin" >> "$GITHUB_PATH"
+          else
+            echo "$HOME/.grok/bin" >> "$GITHUB_PATH"
+          fi
           "$HOME/.grok/bin/grok" --version
       - name: 고정 판본 credential-free 모델 fixture 준비
         env:
@@ -555,7 +559,11 @@ jobs:
         shell: bash
         run: |
           curl -fsSL https://x.ai/cli/install.sh | bash
-          echo "$HOME/.grok/bin" >> "$GITHUB_PATH"
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            cygpath --windows "$HOME/.grok/bin" >> "$GITHUB_PATH"
+          else
+            echo "$HOME/.grok/bin" >> "$GITHUB_PATH"
+          fi
       - name: Install latest provider CLIs without credentials
         run: npm install --global --allow-scripts=@anthropic-ai/claude-code --allow-scripts=opencode-ai --allow-scripts=cline @anthropic-ai/claude-code @openai/codex opencode-ai cline
       - name: Seed provider-owned model cache fixture
