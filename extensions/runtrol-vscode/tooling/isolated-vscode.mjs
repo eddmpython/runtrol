@@ -350,9 +350,18 @@ function signalExactProcesses(identities, signal) {
     try {
       process.kill(identity.pid, signal);
     } catch (error) {
-      if (error.code !== "ESRCH") throw error;
+      // Windows can report EPERM after a process has entered kernel teardown but before enumeration stops
+      // returning its row. The bounded exact-identity wait below remains the authority: a real survivor is retried
+      // with SIGKILL and then fails cleanup, while an already exiting process converges without a false failure.
+      if (!isConvergentSignalError(error)) {
+        throw error;
+      }
     }
   }
+}
+
+export function isConvergentSignalError(error, platform = process.platform) {
+  return error?.code === "ESRCH" || (platform === "win32" && error?.code === "EPERM");
 }
 
 async function waitForExactProcesses(identities, milliseconds) {

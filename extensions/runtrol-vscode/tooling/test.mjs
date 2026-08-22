@@ -6,6 +6,7 @@ import path from "node:path";
 import { build } from "esbuild";
 
 import {
+  isConvergentSignalError,
   isolatedExtensionTestArguments,
   ownedTreeIdentities,
   terminateCapturedIdentities,
@@ -17,6 +18,7 @@ const out = path.join(extensionRoot, ".test-dist");
 await rm(out, { recursive: true, force: true });
 await mkdir(out, { recursive: true });
 verifyExtensionTestArguments();
+verifyConvergentSignalErrors();
 await verifyOwnedProcessTreeCleanup();
 
 // Every test beside the code it tests, discovered rather than listed.
@@ -120,6 +122,13 @@ async function verifyOwnedProcessTreeCleanup() {
       }
     }
   }
+}
+
+function verifyConvergentSignalErrors() {
+  assert.equal(isConvergentSignalError({ code: "ESRCH" }, "linux"), true);
+  assert.equal(isConvergentSignalError({ code: "EPERM" }, "win32"), true);
+  assert.equal(isConvergentSignalError({ code: "EPERM" }, "linux"), false);
+  assert.equal(isConvergentSignalError({ code: "EACCES" }, "win32"), false);
 }
 
 async function waitForProcessExit(pids, milliseconds) {
