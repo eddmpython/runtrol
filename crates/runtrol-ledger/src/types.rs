@@ -71,6 +71,11 @@ uuid_id!(
     "msn_"
 );
 uuid_id!(
+    /// One reviewed future Mission start.
+    ScheduleId,
+    "sch_"
+);
+uuid_id!(
     /// One schedulable Task.
     TaskId,
     "tsk_"
@@ -174,6 +179,54 @@ pub struct IntegrationRecord {
     pub selected_receipt_id: Option<ReceiptId>,
 }
 
+/// Durable lifecycle of one reviewed future Mission start.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum MissionScheduleState {
+    /// Waiting for the exact reviewed wall-clock instant.
+    Pending,
+    /// Due authority was claimed and Core is preparing or submitting the first Task wave.
+    Launching,
+    /// The first Task wave was submitted through the existing session boundary.
+    Started,
+    /// The operator cancelled the future start before its due instant.
+    Cancelled,
+    /// Exact Mission, Gate, provider, or workspace authority no longer matched at the due instant.
+    Refused,
+    /// Launch began but could not finish without an explicit operator decision.
+    Attention,
+}
+
+/// One exact runtime-discovered provider assignment retained without provider-specific meaning.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct MissionScheduleProvider {
+    /// Durable Task identity.
+    pub task_id: TaskId,
+    /// Opaque runtime-discovered provider identity.
+    pub provider_runtime_id: Box<str>,
+}
+
+/// One bounded, durable future Mission start authority.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct MissionSchedule {
+    /// Caller-minted identity that makes an ambiguous schedule response idempotent.
+    pub id: ScheduleId,
+    /// Inclusive Unix millisecond instant when Core may claim the start.
+    pub due_unix_ms: u64,
+    /// Mission bytes reviewed with this schedule.
+    pub mission_sha256: [u8; 32],
+    /// Gate and capability policy reviewed with this schedule.
+    pub policy_sha256: [u8; 32],
+    /// Complete Task-to-provider map in stable Task identity order.
+    pub providers: Vec<MissionScheduleProvider>,
+    /// Current closed schedule state.
+    pub state: MissionScheduleState,
+    /// First instant Core durably claimed this schedule.
+    pub claimed_unix_ms: Option<u64>,
+    /// Stable structural reason code, never provider output or conversation content.
+    pub failure: Option<Box<str>>,
+}
+
 /// Durable Mission row and its bounded transition journal.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct MissionRecord {
@@ -198,6 +251,9 @@ pub struct MissionRecord {
     /// Exact authority that completed integration, retained through terminal compaction.
     #[serde(default)]
     pub integration: Option<IntegrationRecord>,
+    /// Current reviewed future start and its terminal structural result.
+    #[serde(default)]
+    pub schedule: Option<MissionSchedule>,
     /// Current state.
     pub state: MissionState,
     /// Idempotent state journal, compacted only after a terminal checkpoint.
@@ -217,6 +273,7 @@ impl MissionRecord {
             policy_sha256: [0; 32],
             approval_expires_unix_ms: 0,
             integration: None,
+            schedule: None,
             state: MissionState::Draft,
             transitions: Vec::new(),
         }
@@ -455,16 +512,21 @@ mod tests {
     }
 
     #[test]
-    fn mission_rows_from_before_integration_evidence_remain_readable() {
+    fn mission_rows_from_before_optional_authority_remain_readable() {
         let mission = MissionRecord::draft([2; 32], "project".into());
         let mut encoded = serde_json::to_value(mission).expect("encode Mission row");
         encoded
             .as_object_mut()
             .expect("Mission row is a JSON object")
             .remove("integration");
+        encoded
+            .as_object_mut()
+            .expect("Mission row is a JSON object")
+            .remove("schedule");
 
         let restored: MissionRecord =
             serde_json::from_value(encoded).expect("read the prior Mission row shape");
         assert_eq!(restored.integration, None);
+        assert_eq!(restored.schedule, None);
     }
 }

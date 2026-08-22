@@ -85,6 +85,11 @@ export type JourneyApi = {
     operatorChoiceProvider: string,
   ): Promise<{ missions: number; sessionIds: readonly string[]; verified: number; remainingReady: number }>;
   armMissionAutoFlight(missionId: string, operatorChoiceProvider: string | null): Promise<void>;
+  scheduleMission(
+    missionId: string,
+    dueUnixMs: number,
+    operatorChoiceProvider: string | null,
+  ): Promise<MissionSnapshot>;
   autoFlightArmed(missionId: string): boolean;
   autoFlightRetained(missionId: string): boolean;
   refreshMissions(): Promise<void>;
@@ -247,6 +252,9 @@ export function journeyApi(
     ),
     armMissionAutoFlight: (missionId, operatorChoiceProvider) => afterReady(
       () => missions.armMissionAutoFlightForJourney(missionId, operatorChoiceProvider),
+    ),
+    scheduleMission: (missionId, dueUnixMs, operatorChoiceProvider) => afterReady(
+      () => missions.scheduleMissionForJourney(missionId, dueUnixMs, operatorChoiceProvider),
     ),
     autoFlightArmed: (missionId) => missions.isAutoFlightArmed(missionId),
     autoFlightRetained: (missionId) => missions.hasAutoFlightRecord(missionId),

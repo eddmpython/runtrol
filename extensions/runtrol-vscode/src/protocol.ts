@@ -1,4 +1,4 @@
-export const WIRE_VERSION = 27;
+export const WIRE_VERSION = 28;
 
 export type PrivateProviderLine = {
   id: string;
@@ -79,6 +79,20 @@ export type MissionLine = {
   passed_tasks: number;
   total_tasks: number;
   awaiting_input: number;
+  schedule?: MissionScheduleLine | null;
+};
+
+export type MissionScheduleProviderLine = {
+  task_id: string;
+  provider_runtime_id: string;
+};
+
+export type MissionScheduleLine = {
+  schedule_id: string;
+  due_unix_ms: number;
+  state: "pending" | "launching" | "started" | "cancelled" | "refused" | "attention";
+  providers: MissionScheduleProviderLine[];
+  failure: string | null;
 };
 
 export type GateLine = {
@@ -268,6 +282,21 @@ export type Request =
     }
   | { ask: "missionFlightSignalClear"; with: { mission_id: string; mission_sha256: string } }
   | { ask: "missionStart"; with: { mission_id: string; mission_sha256: string } }
+  | {
+    ask: "missionSchedule";
+    with: {
+      schedule_id: string;
+      replaces_schedule_id: string | null;
+      mission_id: string;
+      mission_sha256: string;
+      due_unix_ms: number;
+      providers: MissionScheduleProviderLine[];
+    };
+  }
+  | {
+    ask: "missionScheduleCancel";
+    with: { mission_id: string; mission_sha256: string; schedule_id: string };
+  }
   | { ask: "missionPrepareTask"; with: { mission_id: string; task_id: string } }
   | { ask: "missionPause"; with: { mission_id: string } }
   | { ask: "missionResumeSafe"; with: { mission_id: string } }

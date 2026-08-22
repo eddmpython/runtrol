@@ -19,7 +19,7 @@ REQUIRED: dict[str, tuple[str, ...]] = {
         "SchedulerEffect::PresentIntegration",
         "max_parallel_tasks",
     ),
-    "crates/runtrol-daemon/src/mission.rs": (
+    "crates/runtrol-daemon/src/mission/mod.rs": (
         "std::fs::read(canonical.as_std_path())",
         "MissionInstruction",
         "restart-ambiguous",

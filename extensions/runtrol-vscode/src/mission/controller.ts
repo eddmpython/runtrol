@@ -53,6 +53,14 @@ import {
   interruptedRecoveryPlan,
   recoveryTasks,
 } from "./recovery";
+import {
+  assertMissionScheduleAuthority,
+  localScheduleInput,
+  parseLocalScheduleInput,
+  reviewMissionSchedule,
+  tomorrowAtNine,
+  type MissionScheduleReview,
+} from "./schedule";
 import { MissionWaveRunner } from "./waveRunner";
 
 /// Where each project's last fan-out shape is remembered, never instruction text.
@@ -575,6 +583,96 @@ export class MissionController implements vscode.Disposable {
       },
     })).response, "mission");
     await this.acceptSnapshot(started, true);
+  }
+
+  async scheduleMission(selection?: MissionSelection): Promise<void> {
+    const mission = selection?.mission ?? await this.pickMission("Schedule Mission");
+    if (!mission) return;
+    const snapshot = await this.get(mission.mission_id);
+    if (snapshot.mission.state !== "validated") {
+      throw new Error("Mission must be validated before scheduling");
+    }
+    await this.acceptSnapshot(snapshot, true);
+    const dueUnixMs = await this.pickScheduleTime(Date.now());
+    if (dueUnixMs === null) return;
+    const assignments = await this.chooseWaveProviders(snapshot.tasks);
+    if (!assignments) return;
+    const review = reviewMissionSchedule(
+      snapshot,
+      `sch_${randomUUID()}`,
+      dueUnixMs,
+      assignments,
+      Date.now(),
+    );
+    const replacing = review.replacesScheduleId !== null;
+    const actionLabel = replacing ? "Replace schedule" : "Schedule Mission";
+    const action = await vscode.window.showWarningMessage(
+      `${replacing ? "Replace the schedule for" : "Schedule"} ${snapshot.mission.name}?`,
+      {
+        modal: true,
+        detail: scheduleConfirmationDetail(snapshot, review),
+      },
+      actionLabel,
+    );
+    if (action !== actionLabel) return;
+    const scheduled = await this.commitScheduleReview(review);
+    await this.acceptSnapshot(scheduled, true);
+    await vscode.window.showInformationMessage(
+      `${scheduled.mission.name} scheduled.`,
+    );
+  }
+
+  async cancelMissionSchedule(selection?: MissionSelection): Promise<void> {
+    const mission = selection?.mission ?? await this.pickPendingSchedule();
+    if (!mission) return;
+    const snapshot = await this.get(mission.mission_id);
+    const schedule = snapshot.mission.schedule;
+    if (!schedule || schedule.state !== "pending") {
+      throw new Error("Mission has no pending schedule");
+    }
+    const action = await vscode.window.showWarningMessage(
+      `Cancel ${snapshot.mission.name}'s scheduled start?`,
+      {
+        modal: true,
+        detail: `Due ${new Date(schedule.due_unix_ms).toLocaleString()}\nSchedule ${schedule.schedule_id}\nNo session has started.`,
+      },
+      "Cancel schedule",
+    );
+    if (action !== "Cancel schedule") return;
+    const current = await this.get(snapshot.mission.mission_id);
+    if (current.mission_sha256 !== snapshot.mission_sha256
+      || current.mission.schedule?.schedule_id !== schedule.schedule_id
+      || current.mission.schedule.state !== "pending") {
+      throw new Error("Mission schedule changed after review");
+    }
+    const cancelled = requireResponse((await this.client.once({
+      ask: "missionScheduleCancel",
+      with: {
+        mission_id: current.mission.mission_id,
+        mission_sha256: current.mission_sha256,
+        schedule_id: schedule.schedule_id,
+      },
+    })).response, "mission");
+    await this.acceptSnapshot(cancelled, true);
+  }
+
+  async scheduleMissionForJourney(
+    missionId: string,
+    dueUnixMs: number,
+    operatorChoiceProvider: string | null,
+  ): Promise<MissionSnapshot> {
+    const snapshot = await this.get(missionId);
+    const assignments = this.resolveWaveProviders(snapshot.tasks, operatorChoiceProvider);
+    const review = reviewMissionSchedule(
+      snapshot,
+      `sch_${randomUUID()}`,
+      dueUnixMs,
+      assignments,
+      Date.now(),
+    );
+    const scheduled = await this.commitScheduleReview(review);
+    await this.acceptSnapshot(scheduled, false);
+    return scheduled;
   }
 
   async armMissionAutoFlight(selection?: MissionSelection): Promise<void> {
@@ -1611,6 +1709,61 @@ export class MissionController implements vscode.Disposable {
     return selected?.id ?? null;
   }
 
+  private async pickScheduleTime(nowUnixMs: number): Promise<number | null> {
+    const hour = nowUnixMs + 60 * 60_000;
+    const tomorrow = tomorrowAtNine(nowUnixMs);
+    const selected = await vscode.window.showQuickPick([
+      { label: "In 15 minutes", description: localScheduleInput(nowUnixMs + 15 * 60_000), due: nowUnixMs + 15 * 60_000 },
+      { label: "In 1 hour", description: localScheduleInput(hour), due: hour },
+      { label: "Tomorrow at 09:00", description: localScheduleInput(tomorrow), due: tomorrow },
+      { label: "Choose exact local time...", due: null },
+    ], {
+      title: "When should Core start?",
+      placeHolder: "Core keeps it after Studio closes",
+    });
+    if (!selected) return null;
+    if (selected.due !== null) return selected.due;
+    const text = await vscode.window.showInputBox({
+      title: "Exact start time",
+      prompt: "Local YYYY-MM-DD HH:mm",
+      value: localScheduleInput(hour),
+      ignoreFocusOut: true,
+      validateInput: (value) => parseLocalScheduleInput(value) === null ? "Use YYYY-MM-DD HH:mm" : null,
+    });
+    return text === undefined ? null : parseLocalScheduleInput(text);
+  }
+
+  private async pickPendingSchedule(): Promise<MissionLine | null> {
+    await this.refresh();
+    const candidates = this.rows.filter((mission) => mission.schedule?.state === "pending");
+    const selected = await vscode.window.showQuickPick(
+      candidates.map((mission) => ({
+        label: mission.name,
+        description: new Date(mission.schedule!.due_unix_ms).toLocaleString(),
+        detail: mission.project,
+        mission,
+      })),
+      { title: "Cancel Mission Schedule", placeHolder: candidates.length ? "Select a pending schedule" : "No pending schedules" },
+    );
+    return selected?.mission ?? null;
+  }
+
+  private async commitScheduleReview(review: MissionScheduleReview): Promise<MissionSnapshot> {
+    const current = await this.get(review.missionId);
+    assertMissionScheduleAuthority(review, current);
+    return requireResponse((await this.client.once({
+      ask: "missionSchedule",
+      with: {
+        schedule_id: review.scheduleId,
+        replaces_schedule_id: review.replacesScheduleId,
+        mission_id: review.missionId,
+        mission_sha256: review.missionSha256,
+        due_unix_ms: review.dueUnixMs,
+        providers: [...review.providers],
+      },
+    })).response, "mission");
+  }
+
   private async chooseWaveProviders(
     tasks: readonly MissionTaskLine[],
   ): Promise<ReadonlyMap<string, string> | null> {
@@ -2113,10 +2266,28 @@ function missionDocument(snapshot: MissionSnapshot): string {
     "",
     `Policy SHA-256: ${inline(snapshot.policy_sha256)}`,
     "",
-    `Start approval expires: ${inline(new Date(snapshot.approval_expires_unix_ms).toISOString())}`,
+    `Immediate start approval expires: ${inline(new Date(snapshot.approval_expires_unix_ms).toISOString())}`,
     "",
     `Progress: ${snapshot.mission.passed_tasks}/${snapshot.mission.total_tasks}`,
     "",
+    ...(snapshot.mission.schedule ? [
+      "## Scheduled start",
+      "",
+      `State: ${inline(snapshot.mission.schedule.state)}`,
+      "",
+      `Due locally: ${inline(new Date(snapshot.mission.schedule.due_unix_ms).toLocaleString())}`,
+      "",
+      `Due instant: ${inline(new Date(snapshot.mission.schedule.due_unix_ms).toISOString())}`,
+      "",
+      `Schedule: ${inline(snapshot.mission.schedule.schedule_id)}`,
+      "",
+      `Failure: ${inline(snapshot.mission.schedule.failure ?? "none")}`,
+      "",
+      ...snapshot.mission.schedule.providers.flatMap((provider) => {
+        const task = snapshot.tasks.find((candidate) => candidate.task_id === provider.task_id);
+        return [`Provider for ${inline(task?.key ?? provider.task_id)}: ${inline(provider.provider_runtime_id)}`, ""];
+      }),
+    ] : []),
     ...(snapshot.integration?.selected_task_id ? [
       `Integrated winner Task: ${inline(snapshot.integration.selected_task_id)}`,
       "",
@@ -2161,6 +2332,24 @@ function missionDocument(snapshot: MissionSnapshot): string {
     "",
   );
   return lines.join("\n");
+}
+
+function scheduleConfirmationDetail(snapshot: MissionSnapshot, review: MissionScheduleReview): string {
+  const providers = review.providers.map((provider) => {
+    const task = snapshot.tasks.find((candidate) => candidate.task_id === provider.task_id);
+    return `${task?.key ?? provider.task_id}: ${provider.provider_runtime_id}`;
+  });
+  return [
+    `Local time ${new Date(review.dueUnixMs).toLocaleString()}`,
+    `Exact instant ${new Date(review.dueUnixMs).toISOString()}`,
+    `Mission SHA-256 ${review.missionSha256}`,
+    `Policy SHA-256 ${snapshot.policy_sha256}`,
+    review.replacesScheduleId ? `Replaces schedule ${review.replacesScheduleId}` : "Creates a new schedule",
+    "",
+    ...providers,
+    "",
+    "Core starts after Studio closes. Send is rechecked. Ambiguous Send blocks without replay.",
+  ].join("\n");
 }
 
 function inline(value: string): string {

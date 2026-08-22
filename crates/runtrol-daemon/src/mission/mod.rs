@@ -1,4 +1,9 @@
-//! Local Mission control above the provider-neutral scheduler and public Runtime session boundary.
+//! Provider-neutral local Mission control above the scheduler and public Runtime session boundary.
+
+mod scheduling;
+
+pub(crate) use scheduling::MissionScheduleExecution;
+use scheduling::schedule_line;
 
 use std::{
     collections::BTreeMap,
@@ -11,13 +16,14 @@ use runtrol_childproc::{Containment, SpawnError, capture, capture_in, resolve};
 use runtrol_core::ProjectIdentity;
 use runtrol_ipc::wire::{
     GateLine, MissionArtifactLine, MissionCapabilityLine, MissionInstruction,
-    MissionIntegrationLine, MissionLine, MissionSnapshot, MissionTaskLine, MissionWorkspace,
-    Request, Response,
+    MissionIntegrationLine, MissionLine, MissionScheduleLine, MissionScheduleProviderLine,
+    MissionSnapshot, MissionTaskLine, MissionWorkspace, Request, Response,
 };
 use runtrol_ledger::{
     ArtifactEvidence, ArtifactId, ArtifactRecord, GateEvidence, GateRunRecord, IntegrationRecord,
-    Ledger, LedgerSnapshot, MissionId, MissionRecord, MissionState, ProviderObservation, Receipt,
-    ReceiptId, ReceiptInput, RunOutcome, RunRecord, TaskId, TaskRecord, TaskState,
+    Ledger, LedgerSnapshot, MissionId, MissionRecord, MissionSchedule, MissionScheduleProvider,
+    MissionScheduleState, MissionState, ProviderObservation, Receipt, ReceiptId, ReceiptInput,
+    RunOutcome, RunRecord, ScheduleId, TaskId, TaskRecord, TaskState,
 };
 use runtrol_orchestrator::{
     CapabilitySelection, CompletionPolicy, GateDefinition, GateOutcome, GateRegistry, GateRequest,
@@ -220,7 +226,7 @@ impl MissionController {
                     )
                     .map_err(|_| "the Mission could not enter its recovery blocker")?;
             }
-            let scheduler = if matches!(
+            let mut scheduler = if matches!(
                 snapshot.mission.state,
                 MissionState::Running | MissionState::Paused | MissionState::Blocked
             ) {
@@ -238,6 +244,7 @@ impl MissionController {
             } else {
                 None
             };
+            reserve_recovered_work(&mut snapshot, scheduler.as_mut())?;
             ledger.put(&snapshot).map_err(|error| error.to_string())?;
             self.active.insert(
                 snapshot.mission.id,
@@ -313,6 +320,9 @@ impl MissionController {
         approved_capabilities: &[CapabilitySelection],
         request: &Request,
     ) -> Result<Response, &'static str> {
+        if let Some(answer) = self.try_schedule_answer(ledger, runtime_ids, request) {
+            return answer;
+        }
         match request {
             Request::MissionRegisterGate {
                 gate_id,
@@ -402,6 +412,39 @@ impl MissionController {
             } => self.retry_task(ledger, mission_id, task_id),
             Request::MissionArchive { mission_id } => self.archive(ledger, mission_id),
             _ => Err("the request is not a Mission operation"),
+        }
+    }
+
+    fn try_schedule_answer(
+        &self,
+        ledger: &Ledger,
+        runtime_ids: &[Box<str>],
+        request: &Request,
+    ) -> Option<Result<Response, &'static str>> {
+        match request {
+            Request::MissionSchedule {
+                schedule_id,
+                replaces_schedule_id,
+                mission_id,
+                mission_sha256,
+                due_unix_ms,
+                providers,
+            } => Some(self.schedule(
+                ledger,
+                runtime_ids,
+                schedule_id,
+                replaces_schedule_id.as_deref(),
+                mission_id,
+                mission_sha256,
+                *due_unix_ms,
+                providers,
+            )),
+            Request::MissionScheduleCancel {
+                mission_id,
+                mission_sha256,
+                schedule_id,
+            } => Some(self.cancel_schedule(ledger, mission_id, mission_sha256, schedule_id)),
+            _ => None,
         }
     }
 
@@ -604,6 +647,22 @@ impl MissionController {
         let id: MissionId = mission_id
             .parse()
             .map_err(|_| "the Mission identity is invalid")?;
+        let snapshot =
+            self.start_snapshot(ledger, approved_capabilities, id, mission_sha256, true)?;
+        ledger
+            .put(&snapshot)
+            .map_err(|_| "the Mission start could not be committed")?;
+        Ok(Self::snapshot_response(&snapshot, self.active.get(&id)))
+    }
+
+    fn start_snapshot(
+        &mut self,
+        ledger: &Ledger,
+        approved_capabilities: &[CapabilitySelection],
+        id: MissionId,
+        mission_sha256: &str,
+        require_fresh_approval: bool,
+    ) -> Result<LedgerSnapshot, &'static str> {
         let active = self
             .active
             .get_mut(&id)
@@ -615,7 +674,8 @@ impl MissionController {
             .snapshot(id)
             .map_err(|_| "the Mission ledger cannot be read")?
             .ok_or("the Mission does not exist")?;
-        if current_unix_ms()? >= snapshot.mission.approval_expires_unix_ms {
+        if require_fresh_approval && current_unix_ms()? >= snapshot.mission.approval_expires_unix_ms
+        {
             return Err("the local Mission start approval expired; validate it again");
         }
         ensure_review_current(
@@ -662,10 +722,7 @@ impl MissionController {
         }
         reserve_available(&mut snapshot, &mut scheduler)?;
         active.scheduler = Some(scheduler);
-        ledger
-            .put(&snapshot)
-            .map_err(|_| "the Mission start could not be committed")?;
-        Ok(Self::snapshot_response(&snapshot, self.active.get(&id)))
+        Ok(snapshot)
     }
 
     fn pause(&mut self, ledger: &Ledger, mission_id: &str) -> Result<Response, &'static str> {
@@ -2471,6 +2528,18 @@ fn reserve_available(
     }
 }
 
+fn reserve_recovered_work(
+    snapshot: &mut LedgerSnapshot,
+    scheduler: Option<&mut Scheduler>,
+) -> Result<(), &'static str> {
+    if snapshot.mission.state == MissionState::Running
+        && let Some(scheduler) = scheduler
+    {
+        reserve_available(snapshot, scheduler)?;
+    }
+    Ok(())
+}
+
 fn transition_task(
     snapshot: &mut LedgerSnapshot,
     task_id: runtrol_ledger::TaskId,
@@ -2539,6 +2608,7 @@ fn line_of(snapshot: &LedgerSnapshot, active: Option<&ActiveMission>) -> Mission
         passed_tasks: u16::try_from(passed).unwrap_or(u16::MAX),
         total_tasks: u16::try_from(snapshot.tasks.len()).unwrap_or(u16::MAX),
         awaiting_input: u16::try_from(awaiting).unwrap_or(u16::MAX),
+        schedule: snapshot.mission.schedule.as_ref().map(schedule_line),
     }
 }
 
@@ -2652,6 +2722,7 @@ fn mission_state(state: MissionState) -> &'static str {
         MissionState::Rejected => "rejected",
     }
 }
+
 fn task_state(state: TaskState) -> &'static str {
     match state {
         TaskState::Pending => "pending",
@@ -3506,6 +3577,222 @@ gate_refs = ["fixture-check"]
             .await
             .expect("Git fixture command");
         assert!(output.succeeded(), "Git fixture command failed");
+    }
+
+    #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one restart test keeps schedule persistence, claim, replay, and finish assertions together"
+    )]
+    fn future_schedule_survives_restart_and_has_one_durable_due_claim() {
+        let scratch = Scratch::make();
+        scratch.write_mission();
+        let gate_path = scratch
+            .project
+            .join("scheduled-gates.json")
+            .expect("gate path");
+        let mut before = MissionController::open(gate_path.clone()).expect("open gates");
+        assert!(matches!(
+            before.answer(
+                &scratch.ledger,
+                &[],
+                &[],
+                &Request::MissionRegisterGate {
+                    gate_id: "fixture-check".into(),
+                    program: "fixture".into(),
+                    arguments: Vec::new(),
+                    timeout_ms: 1_000,
+                },
+            ),
+            Response::Done
+        ));
+        let runtime_ids = vec!["runtime-fixture".into()];
+        let Response::Mission(validated) = before.answer(
+            &scratch.ledger,
+            &runtime_ids,
+            &[],
+            &Request::MissionValidate {
+                project: scratch.project.as_str().into(),
+                mission_ref: "mission.toml".into(),
+            },
+        ) else {
+            panic!("validated Mission");
+        };
+        let mission_id = validated.mission.mission_id.clone();
+        let task_id = validated.tasks.first().expect("Task").task_id.clone();
+        let schedule_id: Box<str> = ScheduleId::now().to_string().into();
+        let due_unix_ms = current_unix_ms().expect("clock") + 5_000;
+        let request = Request::MissionSchedule {
+            schedule_id: schedule_id.clone(),
+            replaces_schedule_id: None,
+            mission_id: mission_id.clone(),
+            mission_sha256: validated.mission_sha256.clone(),
+            due_unix_ms,
+            providers: vec![MissionScheduleProviderLine {
+                task_id: task_id.clone(),
+                provider_runtime_id: "runtime-fixture".into(),
+            }],
+        };
+        let Response::Mission(scheduled) =
+            before.answer(&scratch.ledger, &runtime_ids, &[], &request)
+        else {
+            panic!("scheduled Mission");
+        };
+        assert_eq!(
+            scheduled
+                .mission
+                .schedule
+                .as_ref()
+                .expect("schedule")
+                .state
+                .as_ref(),
+            "pending"
+        );
+        assert!(matches!(
+            before.answer(&scratch.ledger, &runtime_ids, &[], &request),
+            Response::Mission(_)
+        ));
+        drop(before);
+
+        let mut after = MissionController::open(gate_path).expect("restore gates");
+        let trust_path = scratch
+            .project
+            .join("scheduled-capability-trust.json")
+            .expect("trust path");
+        let mut growth = crate::growth::GrowthController::open(trust_path).expect("growth");
+        after
+            .recover(&scratch.ledger, &runtime_ids, &mut growth)
+            .expect("recover scheduled Mission");
+        assert_eq!(
+            MissionController::next_schedule_wake(&scratch.ledger).expect("next due"),
+            Some(due_unix_ms)
+        );
+        assert!(
+            after
+                .claim_due_schedule(&scratch.ledger, &mut growth, due_unix_ms - 1)
+                .expect("early claim")
+                .is_none()
+        );
+        let execution = after
+            .claim_due_schedule(&scratch.ledger, &mut growth, due_unix_ms)
+            .expect("due claim")
+            .expect("due execution");
+        assert_eq!(execution.mission_id, mission_id);
+        assert_eq!(execution.schedule_id, schedule_id);
+        assert_eq!(
+            execution.providers.get(&task_id).map(Box::as_ref),
+            Some("runtime-fixture")
+        );
+        let repeated = after
+            .claim_due_schedule(&scratch.ledger, &mut growth, due_unix_ms + 1)
+            .expect("repeated claim")
+            .expect("same launching execution");
+        assert_eq!(repeated.schedule_id, execution.schedule_id);
+        MissionController::finish_schedule_launch(
+            &scratch.ledger,
+            &execution.mission_id,
+            &execution.schedule_id,
+            None,
+        )
+        .expect("finish launch");
+        assert_eq!(
+            MissionController::next_schedule_wake(&scratch.ledger).expect("no wake"),
+            None
+        );
+        let snapshot = scratch
+            .ledger
+            .snapshot(mission_id.parse().expect("Mission ID"))
+            .expect("ledger")
+            .expect("snapshot");
+        assert_eq!(snapshot.mission.state, MissionState::Running);
+        assert_eq!(
+            snapshot.mission.schedule.expect("schedule").state,
+            MissionScheduleState::Started
+        );
+        assert_eq!(
+            snapshot.tasks.first().expect("Task").state,
+            TaskState::Reserved
+        );
+    }
+
+    #[test]
+    fn schedule_cancel_is_exact_and_prevents_a_due_claim() {
+        let scratch = Scratch::make();
+        scratch.write_mission();
+        let mut controller = MissionController::default();
+        assert!(matches!(
+            controller.answer(
+                &scratch.ledger,
+                &[],
+                &[],
+                &Request::MissionRegisterGate {
+                    gate_id: "fixture-check".into(),
+                    program: "fixture".into(),
+                    arguments: Vec::new(),
+                    timeout_ms: 1_000,
+                },
+            ),
+            Response::Done
+        ));
+        let runtime_ids = vec!["runtime-fixture".into()];
+        let Response::Mission(validated) = controller.answer(
+            &scratch.ledger,
+            &runtime_ids,
+            &[],
+            &Request::MissionValidate {
+                project: scratch.project.as_str().into(),
+                mission_ref: "mission.toml".into(),
+            },
+        ) else {
+            panic!("validated Mission");
+        };
+        let task_id = validated.tasks.first().expect("Task").task_id.clone();
+        let schedule_id: Box<str> = ScheduleId::now().to_string().into();
+        let due_unix_ms = current_unix_ms().expect("clock") + 5_000;
+        assert!(matches!(
+            controller.answer(
+                &scratch.ledger,
+                &runtime_ids,
+                &[],
+                &Request::MissionSchedule {
+                    schedule_id: schedule_id.clone(),
+                    replaces_schedule_id: None,
+                    mission_id: validated.mission.mission_id.clone(),
+                    mission_sha256: validated.mission_sha256.clone(),
+                    due_unix_ms,
+                    providers: vec![MissionScheduleProviderLine {
+                        task_id,
+                        provider_runtime_id: "runtime-fixture".into(),
+                    }],
+                },
+            ),
+            Response::Mission(_)
+        ));
+        assert!(matches!(
+            controller.answer(
+                &scratch.ledger,
+                &runtime_ids,
+                &[],
+                &Request::MissionScheduleCancel {
+                    mission_id: validated.mission.mission_id.clone(),
+                    mission_sha256: validated.mission_sha256,
+                    schedule_id: schedule_id.clone(),
+                },
+            ),
+            Response::Mission(_)
+        ));
+        assert_eq!(
+            MissionController::next_schedule_wake(&scratch.ledger).expect("wake"),
+            None
+        );
+        let snapshot = scratch
+            .ledger
+            .snapshot(validated.mission.mission_id.parse().expect("Mission ID"))
+            .expect("ledger")
+            .expect("snapshot");
+        let schedule = snapshot.mission.schedule.expect("schedule");
+        assert_eq!(schedule.id.to_string(), schedule_id.as_ref());
+        assert_eq!(schedule.state, MissionScheduleState::Cancelled);
     }
 
     #[test]

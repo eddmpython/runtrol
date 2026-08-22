@@ -11,7 +11,13 @@ export class MissionItem extends vscode.TreeItem implements MissionSelection {
   constructor(mission: MissionLine, autoFlightArmed: boolean) {
     super(mission.name, vscode.TreeItemCollapsibleState.Collapsed);
     this.mission = mission;
-    this.description = autoFlightArmed
+    this.description = mission.schedule?.state === "pending"
+      ? `SCHEDULED  ${new Date(mission.schedule.due_unix_ms).toLocaleString()}`
+      : mission.schedule?.state === "launching"
+      ? "SCHEDULED  launching"
+      : mission.schedule?.state === "attention" || mission.schedule?.state === "refused"
+      ? `SCHEDULE  ${mission.schedule.state}`
+      : autoFlightArmed
       ? `AUTO  ${mission.passed_tasks}/${mission.total_tasks}`
       : `${mission.state}  ${mission.passed_tasks}/${mission.total_tasks}`;
     this.tooltip = [
@@ -19,6 +25,10 @@ export class MissionItem extends vscode.TreeItem implements MissionSelection {
       mission.project,
       `State: ${mission.state}`,
       autoFlightArmed ? "Auto Flight: armed on this PC" : "",
+      mission.schedule
+        ? `Schedule: ${mission.schedule.state} at ${new Date(mission.schedule.due_unix_ms).toLocaleString()}`
+        : "",
+      mission.schedule?.failure ? `Schedule attention: ${mission.schedule.failure}` : "",
       mission.state === "blocked" && mission.completion_policy !== "unavailableAfterRestart"
         ? "Recovery: exact local confirmation can start fresh sessions"
         : "",
@@ -32,8 +42,15 @@ export class MissionItem extends vscode.TreeItem implements MissionSelection {
       : mission.completion_policy === "unavailableAfterRestart"
       ? ".unavailableAfterRestart"
       : "";
-    this.contextValue = `runtrol.mission.${mission.state}${policy}${autoFlightArmed ? ".autoFlight" : ""}`;
-    this.iconPath = new vscode.ThemeIcon(autoFlightArmed ? "rocket" : missionIcon(mission.state));
+    const schedule = mission.schedule?.state === "pending"
+      ? ".schedulePending"
+      : "";
+    this.contextValue = `runtrol.mission.${mission.state}${policy}${schedule}${autoFlightArmed ? ".autoFlight" : ""}`;
+    this.iconPath = new vscode.ThemeIcon(mission.schedule?.state === "pending"
+      ? "calendar"
+      : mission.schedule?.state === "attention" || mission.schedule?.state === "refused"
+      ? "warning"
+      : autoFlightArmed ? "rocket" : missionIcon(mission.state));
     this.command = {
       command: "runtrol.openMission",
       title: "Open Mission",

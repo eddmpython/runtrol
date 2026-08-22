@@ -268,6 +268,14 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
       (item) => run(() => afterMissionReady(() => missionController.startMission(item))),
     ),
     vscode.commands.registerCommand(
+      "runtrol.scheduleMission",
+      (item) => run(() => afterMissionReady(() => missionController.scheduleMission(item))),
+    ),
+    vscode.commands.registerCommand(
+      "runtrol.cancelMissionSchedule",
+      (item) => run(() => afterMissionReady(() => missionController.cancelMissionSchedule(item))),
+    ),
+    vscode.commands.registerCommand(
       "runtrol.continueMission",
       (item) => run(() => afterMissionReady(() => missionController.continueMission(item))),
     ),

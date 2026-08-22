@@ -783,6 +783,7 @@ async fn serve_surfaces(
     let discovering = Arc::new(DiscoveryGates::new(&composed.registry));
     let mut connections = JoinSet::new();
     let push_wake_active = Arc::new(AtomicBool::new(false));
+    let mission_schedule_wake = Arc::new(tokio::sync::Notify::new());
     let mut relay_hub = match relay {
         Some(relay) => {
             let identity = composed
@@ -863,6 +864,11 @@ async fn serve_surfaces(
             while clients.join_next().await.is_some() {}
         });
     }
+    connections.spawn(crate::mission_schedule::supervise(
+        Arc::clone(&composed),
+        composed.home.paths().endpoint().address().to_owned(),
+        Arc::clone(&mission_schedule_wake),
+    ));
     let (runtime_failed, mut runtime_failures) = mpsc::unbounded_channel();
     {
         let runtime_instance = runtime_instance.clone();
@@ -1043,6 +1049,10 @@ async fn serve_surfaces(
             Some(ask) = asked.recv() => {
                 let Asked { mut conversation, request, prepared, reservation, answered } = ask;
                 let mission_flight_signal = matches!(&request, Request::MissionFlightSignal { .. });
+                let mission_schedule_mutation = matches!(
+                    &request,
+                    Request::MissionSchedule { .. } | Request::MissionScheduleCancel { .. }
+                );
                 let changes_index = matches!(
                     &request,
                     Request::Start { .. }
@@ -1062,6 +1072,8 @@ async fn serve_surfaces(
                     reservation,
                 );
                 let wakes_for_new_signal = wakes_for_new_mission_flight_signal(mission_flight_signal, &reply);
+                let wakes_mission_schedule = mission_schedule_mutation
+                    && matches!(&reply, Reply::One(Response::Mission(_)));
                 // The connection stopped while its request was being answered. Nothing to report and nowhere to
                 // report it: the caller is gone, and the sessions already record everything the request did.
                 let abandoned_agent = deliver_answer(
@@ -1082,6 +1094,9 @@ async fn serve_surfaces(
                 }
                 if wakes_for_new_signal {
                     schedule_push_wakes(&mut connections, &composed, &push_wake_active);
+                }
+                if wakes_mission_schedule {
+                    mission_schedule_wake.notify_one();
                 }
             }
 

@@ -306,6 +306,32 @@ pub enum Request {
         mission_sha256: Box<str>,
     },
 
+    /// Commit or idempotently replace one exact future local Mission start.
+    MissionSchedule {
+        /// Caller-minted UUIDv7 schedule identity.
+        schedule_id: Box<str>,
+        /// Exact pending schedule being replaced, or none when review observed no pending schedule.
+        replaces_schedule_id: Option<Box<str>>,
+        /// Runtrol Mission identity.
+        mission_id: Box<str>,
+        /// Digest shown during local review.
+        mission_sha256: Box<str>,
+        /// Inclusive Unix millisecond instant when Core may start.
+        due_unix_ms: u64,
+        /// Complete reviewed Task-to-provider map.
+        providers: Vec<MissionScheduleProviderLine>,
+    },
+
+    /// Cancel one exact pending future Mission start locally.
+    MissionScheduleCancel {
+        /// Runtrol Mission identity.
+        mission_id: Box<str>,
+        /// Digest shown during local review.
+        mission_sha256: Box<str>,
+        /// Exact schedule identity currently shown to the operator.
+        schedule_id: Box<str>,
+    },
+
     /// Resolve and, when required, create the exact Task worktree before a public Runtime session starts.
     MissionPrepareTask {
         /// Runtrol Mission identity.
@@ -943,6 +969,30 @@ pub struct GateLine {
     pub timeout_ms: u64,
 }
 
+/// One exact provider assignment in a reviewed future Mission start.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct MissionScheduleProviderLine {
+    /// Durable Task identity.
+    pub task_id: Box<str>,
+    /// Opaque runtime-discovered provider identity.
+    pub provider_runtime_id: Box<str>,
+}
+
+/// One durable future Mission start safe for local presentation.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct MissionScheduleLine {
+    /// Idempotent schedule identity.
+    pub schedule_id: Box<str>,
+    /// Inclusive Unix millisecond due instant.
+    pub due_unix_ms: u64,
+    /// `pending`, `launching`, `started`, `cancelled`, `refused`, or `attention`.
+    pub state: Box<str>,
+    /// Exact complete Task-to-provider map.
+    pub providers: Vec<MissionScheduleProviderLine>,
+    /// Stable structural failure code, never provider output.
+    pub failure: Option<Box<str>>,
+}
+
 /// One bounded Mission catalogue row.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct MissionLine {
@@ -962,6 +1012,9 @@ pub struct MissionLine {
     pub total_tasks: u16,
     /// Tasks waiting for one local Send action.
     pub awaiting_input: u16,
+    /// Current reviewed future start and its structural outcome.
+    #[serde(default)]
+    pub schedule: Option<MissionScheduleLine>,
 }
 
 /// One bounded page of structural Mission wake destinations.

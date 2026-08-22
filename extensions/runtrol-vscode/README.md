@@ -83,6 +83,19 @@ revokes automatic provider input, restart retries the same random UUID, and only
 outbox entry and arm. A paired phone then derives the exact current destination after authentication. Web Push stays
 bodyless and carries no Mission ID, instruction, path, output, or Receipt content.
 
+## Core-owned Mission schedule
+
+Select **Runtrol: Schedule Reviewed Mission...** on a validated Mission. Pick 15 minutes, one hour, tomorrow at local
+09:00, or an exact local `YYYY-MM-DD HH:mm` time, then review the Mission and policy digests plus every Task-to-provider
+assignment. Core durably owns that one-shot wake, so the Studio window may close before it is due. A pending row shows
+the local time and offers **Runtrol: Cancel Mission Schedule**. Scheduling the same Mission again uses the exact current
+schedule as a compare-and-swap replacement instead of silently overwriting it.
+
+At the due instant Core rechecks the Mission, policy, capability, Gate, Task, provider, and workspace authority. It
+then uses the existing provider-neutral Mission Prepare, Start, Bind, Send-intent, and Prompt boundaries. It stores no
+instruction or conversation copy and holds no provider credential. Restart can reclaim a launch that has not submitted
+input, while an ambiguous submission becomes visible attention and is never repeated automatically.
+
 ## Parallel attempts
 
 Run **Runtrol: Try One Instruction Several Ways...** to compose a reviewed comparison Mission from an instruction
@@ -154,6 +167,8 @@ processes stay alive.
 - **Runtrol: Compare Passing Results**
 - **Runtrol: Arm Mission Auto Flight**
 - **Runtrol: Disarm Mission Auto Flight**
+- **Runtrol: Schedule Reviewed Mission...**
+- **Runtrol: Cancel Mission Schedule**
 - **Runtrol: Recover Interrupted Mission**
 - **Runtrol: Verify and Complete Mission Integration**
 - **Runtrol: Restart Extension Host**

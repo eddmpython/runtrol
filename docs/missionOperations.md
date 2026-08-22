@@ -230,19 +230,21 @@ renderer. The normal sequence is:
 1. Register fixed local Gates.
 2. Validate a project Mission file.
 3. Review the digest, limits, Tasks, providers, workspaces, Gates, and capability versions.
-4. For an ordinary Mission, select `Arm Mission Auto Flight` within the five-minute approval window. One exact local
-   confirmation starts the first eligible wave and authorizes later safe waves while this Studio window is open.
+4. To start later without keeping Studio open, select `Schedule Reviewed Mission...`, choose the local due time and
+   runtime-discovered providers, then confirm the exact Mission and policy authority. Core owns this one-shot wake.
+5. For an attended ordinary Mission, select `Arm Mission Auto Flight` within the five-minute approval window. One exact
+   local confirmation starts the first eligible wave and authorizes later safe waves while this Studio window is open.
    `Continue Reviewed Mission` remains the one-wave explicit path.
-5. Auto Flight observes Runtime lifecycle rows. When a sent Task has completed one proven provider turn, it runs fixed
+6. Auto Flight observes Runtime lifecycle rows. When a sent Task has completed one proven provider turn, it runs fixed
    Gates, seals the Receipt, and starts the next eligible DAG wave without another click.
-6. For a Core-interrupted blocked Mission, use **Recover Interrupted Mission** once to reopen its exact Tasks, resume
+7. For a Core-interrupted blocked Mission, use **Recover Interrupted Mission** once to reopen its exact Tasks, resume
    its scheduler, and start fresh sessions under the duplicate-effect warning. Use granular recovery for a failed,
    retryable, missing, or ambiguous Task. Working sessions, person or quota waits, comparison policy, and integration
    never advance by inference.
-7. Open **Review and Apply Mission Landing**. For `all_tasks`, inspect the combined Receipt multi-diff. For
+8. Open **Review and Apply Mission Landing**. For `all_tasks`, inspect the combined Receipt multi-diff. For
    `choose_one`, select one passing Task and inspect its winner multi-diff. Apply, rerun Gates, and complete in the one
    explicit action. Use direct completion only as a recovery path after a separately integrated tree.
-8. Archive the terminal Mission.
+9. Archive the terminal Mission.
 
 A `choose_one` comparison keeps its specialized **Run All Reviewed Attempts** and **Compare Passing Results** flow;
 winner selection and application then use the same exact Landing safety boundary as an ordinary Mission.
@@ -256,6 +258,30 @@ reported without preventing an unrelated Mission from reaching its own exact saf
 share one runtime-discovered provider selected for that flight, or keep individual choices. Newly started native
 conversation tabs are arranged once after the batch. This is local composition, not a Core scheduler or remote start
 surface.
+
+### Core-owned scheduled start
+
+A validated Mission can hold one durable one-shot schedule. Studio freezes the schedule ID, optional replaced schedule
+ID, due instant, Mission and policy digests, every reviewed Task identity and instruction digest, workspace mode,
+provider selector, and complete Task-to-runtime-provider mapping. The final confirmation shows the local and ISO due
+times plus that authority. Studio fetches the current snapshot again after confirmation before it asks Core to commit.
+
+Core accepts schedule and exact cancellation only from the machine-local Mission-start scope. A new schedule either
+observes no pending schedule or names the exact pending schedule it replaces. Cancellation binds the current Mission
+digest and schedule ID. Repeating the same schedule ID with the same authority is idempotent; reusing it for different
+authority is refused. Due time is bounded from one second through 366 days.
+
+The schedule actor is owned by Core, not the Extension Host. It stores only reviewed structural authority in the
+Mission ledger, wakes from the wall clock, and rechecks current capability, Mission, policy, Gate, Task, provider, and
+workspace authority. A successful claim atomically enters `launching`, starts the existing Mission scheduler, and
+reserves eligible Tasks before any provider process or input. The actor then connects to Core as a local client and
+uses the existing `MissionPrepareTask`, `Start`, `MissionBindSession`, `MissionSendTaskInstruction`, and `Prompt`
+requests. It contains no provider-specific flags, transcript parser, conversation storage, or model credential.
+
+Core restart preserves `pending`. A reclaimed `launching` schedule may continue only while provider input is still
+provably unsent. Send intent is durable before `Prompt`; loss after an ambiguous submission changes the schedule to
+`attention` instead of repeating input. Changed authority becomes `refused` with a closed structural reason. Pending,
+launching, started, cancelled, refused, and attention states are visible in the Mission document and tree.
 
 ### Mission Auto Flight
 
@@ -352,6 +378,13 @@ The focused `missionAutoFlightEye` Extension Host journey arms one two-wave depe
 installed provider CLI. It proves two provider sessions, two fixed Gate verifications, two sealed Receipts, zero
 operator continuation actions, arrival at `integrating`, and automatic authority removal. The reviewed, armed, and
 arrived screenshots are inspected directly. This is product evidence, not a new North Star score axis.
+
+The focused `missionScheduleEye` journey opens VS Code 1.132.1 at 1456 by 908, schedules a validated Mission against an
+installed provider CLI, captures the pending state, and closes the first Extension Host before the due instant. The
+isolated Core stays alive with no Studio process. After the due instant a second Extension Host reconnects to the same
+Core and observes the already started provider-native session, Mission `running`, schedule `started`, Task `running`,
+and the real provider reply. Both screenshots are inspected directly. Core tests separately prove restart persistence,
+one durable due claim, idempotent finish, and exact cancellation. This is product evidence, not a new North Star axis.
 
 These gates prove product wiring and deterministic evidence. They do not claim that one provider or capability is
 better, that a linked worktree is a sandbox, or that loopback model output represents account-backed model quality.

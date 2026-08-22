@@ -129,6 +129,8 @@ pub fn needed(request: &Request) -> Needed {
         | Request::MissionGet { .. }
         | Request::MissionFlightSignals { .. } => Needed::Scope(DeviceScope::MissionRead),
         Request::MissionStart { .. }
+        | Request::MissionSchedule { .. }
+        | Request::MissionScheduleCancel { .. }
         | Request::MissionPrepareTask { .. }
         | Request::MissionBindSession { .. }
         | Request::MissionFlightSignal { .. }

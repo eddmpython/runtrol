@@ -1478,6 +1478,8 @@ pub(crate) fn answer_prepared(
         | Request::MissionList
         | Request::MissionGet { .. }
         | Request::MissionStart { .. }
+        | Request::MissionSchedule { .. }
+        | Request::MissionScheduleCancel { .. }
         | Request::MissionPause { .. }
         | Request::MissionResumeSafe { .. }
         | Request::MissionCancel { .. }
@@ -2745,6 +2747,7 @@ mod tests {
             passed_tasks: 0,
             total_tasks: 1,
             awaiting_input: 0,
+            schedule: None,
         };
         let listing = Response::Missions(vec![mission_line(granted.as_str()), mission_line(&path)]);
         let caller = Caller::Device { device };

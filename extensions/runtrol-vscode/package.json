@@ -96,6 +96,8 @@
     "onCommand:runtrol.registerMissionGate",
     "onCommand:runtrol.openMission",
     "onCommand:runtrol.startMission",
+    "onCommand:runtrol.scheduleMission",
+    "onCommand:runtrol.cancelMissionSchedule",
     "onCommand:runtrol.continueMission",
     "onCommand:runtrol.armMissionAutoFlight",
     "onCommand:runtrol.disarmMissionAutoFlight",
@@ -322,6 +324,16 @@
         "command": "runtrol.startMission",
         "title": "Runtrol: Start Reviewed Mission",
         "icon": "$(play)"
+      },
+      {
+        "command": "runtrol.scheduleMission",
+        "title": "Runtrol: Schedule Reviewed Mission...",
+        "icon": "$(calendar)"
+      },
+      {
+        "command": "runtrol.cancelMissionSchedule",
+        "title": "Runtrol: Cancel Mission Schedule",
+        "icon": "$(trash)"
       },
       {
         "command": "runtrol.continueMission",
@@ -853,6 +865,16 @@
           "command": "runtrol.continueMission",
           "when": "view == runtrol.missions && (viewItem == runtrol.mission.validated || viewItem == runtrol.mission.running)",
           "group": "inline@2"
+        },
+        {
+          "command": "runtrol.scheduleMission",
+          "when": "view == runtrol.missions && viewItem =~ /^runtrol\\.mission\\.validated/",
+          "group": "inline@3"
+        },
+        {
+          "command": "runtrol.cancelMissionSchedule",
+          "when": "view == runtrol.missions && viewItem =~ /schedulePending/",
+          "group": "inline@4"
         },
         {
           "command": "runtrol.launchFleet",

@@ -72,6 +72,33 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
     if not recovery_entry:
         found.append("a recoverable blocked Mission must expose the exact interrupted-recovery action")
 
+    command_entries = contributes.get("commands") if isinstance(contributes, dict) else None
+    command_ids = {
+        entry.get("command")
+        for entry in command_entries if isinstance(entry, dict)
+    } if isinstance(command_entries, list) else set()
+    schedule_commands = {"runtrol.scheduleMission", "runtrol.cancelMissionSchedule"}
+    if not schedule_commands.issubset(command_ids):
+        found.append("Mission schedule and exact cancel commands must both be contributed")
+    activation_events = package.get("activationEvents")
+    activations = set(activation_events) if isinstance(activation_events, list) else set()
+    if not {f"onCommand:{command}" for command in schedule_commands}.issubset(activations):
+        found.append("Mission schedule and exact cancel commands must both activate the extension")
+    schedule_entry = any(
+        isinstance(entry, dict)
+        and entry.get("command") == "runtrol.scheduleMission"
+        and entry.get("when") == "view == runtrol.missions && viewItem =~ /^runtrol\\.mission\\.validated/"
+        for entry in winner_entries
+    )
+    cancel_schedule_entry = any(
+        isinstance(entry, dict)
+        and entry.get("command") == "runtrol.cancelMissionSchedule"
+        and entry.get("when") == "view == runtrol.missions && viewItem =~ /schedulePending/"
+        for entry in winner_entries
+    )
+    if not schedule_entry or not cancel_schedule_entry:
+        found.append("a reviewed Mission and its pending schedule must expose schedule and exact cancel actions")
+
     all_source = "\n".join(sources.values())
     forbidden = {
         "localStorage": "conversation-capable browser persistence",
@@ -84,6 +111,9 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
     for token, meaning in forbidden.items():
         if token in all_source:
             found.append(f"{meaning} is reachable through `{token}`")
+    for relative in ("mission/controller.ts", "mission/schedule.ts"):
+        if "setTimeout(" in sources.get(relative, ""):
+            found.append(f"Core-owned Mission wake must not be replaced by a timer in {relative}")
 
     writers = [relative for relative, source in sources.items() if "writeFile(" in source]
     expected_writers = {"selectionStore.ts"}
@@ -153,6 +183,8 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
             "selfApproveIntegration(client, pendingId, signature)",
             'initializationStage = "runtime:bootstrap"',
             "missionController.startAutoFlights()",
+            '"runtrol.scheduleMission"',
+            '"runtrol.cancelMissionSchedule"',
         ],
         "providerHealth.ts": [
             "the installed executable has not completed a verified probe",
@@ -195,6 +227,11 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
             "Integrated winner Receipt",
             "recoverInterruptedMission",
             "assertInterruptedRecoveryAuthority",
+            "reviewMissionSchedule",
+            "assertMissionScheduleAuthority",
+            "commitScheduleReview",
+            'ask: "missionScheduleCancel"',
+            "Core starts after Studio closes",
             "MissionWaveRunner",
             "for (const missionId of this.documents.openMissionIds())",
             "this.documents.update(await this.get(missionId))",
@@ -208,6 +245,20 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
             "providerSelector",
             "baseCommit",
             "The previous provider input may already have caused external effects",
+        ],
+        "mission/schedule.ts": [
+            "MIN_SCHEDULE_LEAD_MS",
+            "MAX_SCHEDULE_LEAD_MS",
+            "reviewMissionSchedule",
+            "assertMissionScheduleAuthority",
+            "missionSha256",
+            "snapshot.policy_sha256",
+            "task.instruction_sha256",
+            "task.provider_selector",
+            "task.workspace_mode",
+            "replacesScheduleId",
+            "dueUnixMs",
+            "providers",
         ],
         "mission/waveRunner.ts": [
             "hasAmbiguousSubmission",
@@ -300,6 +351,13 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
             "return undefined",
             "sessions: () => [...state.sessions]",
             'controller.startResolvedSession(provider, workspace, model, reasoningEffort, "exclusive", false, permission)',
+            "missions.scheduleMissionForJourney(missionId, dueUnixMs, operatorChoiceProvider)",
+        ],
+        "protocol.ts": [
+            "MissionScheduleLine",
+            'ask: "missionSchedule"',
+            "replaces_schedule_id",
+            'ask: "missionScheduleCancel"',
         ],
     }
     for relative, tokens in required.items():
@@ -328,8 +386,16 @@ def selftest() -> int:
     """Prove the detector rejects each class of defect."""
     package = {
         "engines": {"vscode": "^1.106.0"},
+        "activationEvents": [
+            "onCommand:runtrol.scheduleMission",
+            "onCommand:runtrol.cancelMissionSchedule",
+        ],
         "contributes": {
             "viewsContainers": {"activitybar": []},
+            "commands": [
+                {"command": "runtrol.scheduleMission"},
+                {"command": "runtrol.cancelMissionSchedule"},
+            ],
             "menus": {
                 "view/item/context": [
                     {
@@ -350,6 +416,14 @@ def selftest() -> int:
                             "/^runtrol\\.mission\\.blocked(\\.chooseOne)?(\\.autoFlight)?$/"
                         ),
                     },
+                    {
+                        "command": "runtrol.scheduleMission",
+                        "when": "view == runtrol.missions && viewItem =~ /^runtrol\\.mission\\.validated/",
+                    },
+                    {
+                        "command": "runtrol.cancelMissionSchedule",
+                        "when": "view == runtrol.missions && viewItem =~ /schedulePending/",
+                    },
                 ]
             },
         },
@@ -367,7 +441,8 @@ def selftest() -> int:
         ),
         "extension.ts": (
             "afterReady selfApproveIntegration(client, pendingId, signature) "
-            'initializationStage = "runtime:bootstrap" missionController.startAutoFlights()'
+            'initializationStage = "runtime:bootstrap" missionController.startAutoFlights() '
+            '"runtrol.scheduleMission" "runtrol.cancelMissionSchedule"'
         ),
         "providerHealth.ts": (
             "the installed executable has not completed a verified probe "
@@ -389,13 +464,19 @@ def selftest() -> int:
             "AUTO_FLIGHTS_KEY runtimeState.onDidChange beforeSubmissions recordSubmissions startAutoFlights "
             "missionFlightSignal missionFlightSignalClear hasAutoFlightRecord "
             "Integrated winner Task Integrated winner Receipt recoverInterruptedMission "
-            "assertInterruptedRecoveryAuthority MissionWaveRunner "
+            "assertInterruptedRecoveryAuthority reviewMissionSchedule assertMissionScheduleAuthority "
+            'commitScheduleReview ask: "missionScheduleCancel" Core starts after Studio closes MissionWaveRunner '
             "for (const missionId of this.documents.openMissionIds()) "
             "this.documents.update(await this.get(missionId)) refreshRows"
         ),
         "mission/recovery.ts": (
             "interruptedRecoveryPlan assertInterruptedRecoveryAuthority missionSha256 policySha256 "
             "providerSelector baseCommit The previous provider input may already have caused external effects"
+        ),
+        "mission/schedule.ts": (
+            "MIN_SCHEDULE_LEAD_MS MAX_SCHEDULE_LEAD_MS reviewMissionSchedule "
+            "assertMissionScheduleAuthority missionSha256 snapshot.policy_sha256 task.instruction_sha256 "
+            "task.provider_selector task.workspace_mode replacesScheduleId dueUnixMs providers"
         ),
         "mission/waveRunner.ts": (
             "hasAmbiguousSubmission markAmbiguousSubmission resolveInstruction submit clearAmbiguousSubmission"
@@ -445,7 +526,11 @@ def selftest() -> int:
             'extensionMode !== vscode.ExtensionMode.Test '
             'process.env.RUNTROL_VSCODE_REAL_PROVIDER_JOURNEY !== "1" return undefined '
             'sessions: () => [...state.sessions] '
-            'controller.startResolvedSession(provider, workspace, model, reasoningEffort, "exclusive", false, permission)'
+            'controller.startResolvedSession(provider, workspace, model, reasoningEffort, "exclusive", false, permission) '
+            "missions.scheduleMissionForJourney(missionId, dueUnixMs, operatorChoiceProvider)"
+        ),
+        "protocol.ts": (
+            'MissionScheduleLine ask: "missionSchedule" replaces_schedule_id ask: "missionScheduleCancel"'
         ),
     }
     if sourceViolations(package, sources):
@@ -454,10 +539,12 @@ def selftest() -> int:
 
     mutations = [
         ({**package, "dependencies": {"some-runtime": "1"}}, sources),
+        ({**package, "activationEvents": []}, sources),
         ({**package, "contributes": {"viewsContainers": {"activitybar": []}}}, sources),
         ({"engines": {"vscode": "^1.100.0"}, "contributes": {"viewsContainers": {"activitybar": [], "secondarySidebar": []}}}, sources),
         (package, {**sources, "webview/main.ts": "localStorage MAX_VISIBLE_ITEMS"}),
         (package, {**sources, "controller.ts": "setInterval("}),
+        (package, {**sources, "mission/controller.ts": sources["mission/controller.ts"] + " setTimeout("}),
         (package, {**sources, "core/framing.ts": "MAX_FRAME_BYTES"}),
         (
             package,
@@ -498,6 +585,22 @@ def selftest() -> int:
                 "mission/recovery.ts": sources["mission/recovery.ts"].replace(
                     "assertInterruptedRecoveryAuthority", ""
                 ),
+            },
+        ),
+        (
+            package,
+            {
+                **sources,
+                "mission/schedule.ts": sources["mission/schedule.ts"].replace(
+                    "task.instruction_sha256", ""
+                ),
+            },
+        ),
+        (
+            package,
+            {
+                **sources,
+                "protocol.ts": sources["protocol.ts"].replace("replaces_schedule_id", ""),
             },
         ),
         (

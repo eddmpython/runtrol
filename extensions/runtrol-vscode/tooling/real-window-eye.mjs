@@ -58,6 +58,7 @@ const mutatingProjectEntries = new Set([
   "missionFlightDeckEye",
   "missionMomentumEye",
   "missionRecoveryEye",
+  "missionScheduleEye",
 ]);
 // Focused Mission eyes build and commit their own fixture repository. Their default must live inside this harness's
 // owned temporary root, while an explicitly requested folder remains exact and ordinary read-only eyes keep the
@@ -169,12 +170,12 @@ try {
     ...(process.env.RUNTROL_EYE_TABS ? { RUNTROL_EYE_TABS: process.env.RUNTROL_EYE_TABS } : {}),
   };
 
-  await Promise.all([
+  const runEyeWindow = async (extraEnvironment = {}) => Promise.all([
     runTests({
       cachePath: path.join(os.tmpdir(), "runtrol-vscode-test-cache"),
       extensionDevelopmentPath: extensionUnderTestRoot,
       extensionTestsPath: testEntry,
-      extensionTestsEnv: testEnvironment,
+      extensionTestsEnv: { ...testEnvironment, ...extraEnvironment },
       launchArgs: [
         workspaceFile,
         ...isolatedLaunchArguments,
@@ -189,6 +190,33 @@ try {
     photograph(),
     restartRuntimeWhenRequested(),
   ]);
+  if (eyeEntry === "missionScheduleEye") {
+    await runEyeWindow({ RUNTROL_MISSION_SCHEDULE_PHASE: "schedule" });
+    const scheduled = JSON.parse(await readFile(resultPath, "utf8"));
+    if (scheduled.stage !== "complete" || scheduled.phase !== "scheduled") {
+      throw new Error(`the first Studio window did not freeze a schedule: ${JSON.stringify(scheduled)}`);
+    }
+    const studioClosedUnixMs = Date.now();
+    if (!(studioClosedUnixMs < scheduled.dueUnixMs)) {
+      throw new Error("the first Studio window did not close before the reviewed due instant");
+    }
+    process.stdout.write(
+      `closed first Studio window at ${studioClosedUnixMs}, before due ${scheduled.dueUnixMs}\n`,
+    );
+    await delay(Math.max(0, scheduled.dueUnixMs - Date.now()) + 6_000);
+    if (!daemon || daemon.exitCode !== null) {
+      throw new Error("the isolated Runtime stopped while Studio was closed");
+    }
+    await writeFile(resultPath, JSON.stringify({ stage: "launching-observer" }), "utf8");
+    await runEyeWindow({
+      RUNTROL_MISSION_SCHEDULE_PHASE: "observe",
+      RUNTROL_MISSION_SCHEDULE_ID: scheduled.missionId,
+      RUNTROL_MISSION_SCHEDULE_DUE: String(scheduled.dueUnixMs),
+      RUNTROL_MISSION_STUDIO_CLOSED: String(studioClosedUnixMs),
+    });
+  } else {
+    await runEyeWindow();
+  }
   const result = JSON.parse(await readFile(resultPath, "utf8"));
   // The window switch and the back key, proved with real windows from outside: a switch reloads the extension
   // host, so nothing inside the test runner survives to press the next key. A plain (non-test) isolated window

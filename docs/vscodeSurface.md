@@ -230,7 +230,7 @@ Two contracts keep the conversation window from growing a branch per place or pe
 | `conversationPanels.ts` | one binding per conversation (surface + watch), the two workbench places, the grid | provider branches or conversation content |
 | `diffDocuments.ts` | declared changes as read-only virtual documents for VS Code's diff editor | files on disk or a transcript of changes |
 | `webview/` | bounded active rendering and input | durable storage or background sessions |
-| `mission/controller.ts`, `mission/autoFlight.ts`, `mission/momentum.ts`, `mission/recovery.ts`, `mission/waveRunner.ts`, and `mission/tree.ts` | Mission review, bounded local Auto Flight authority, safe-wave continuation, exact interrupted-Mission recovery, the shared provider-neutral wave runner, reviewed fleet launch, Task rows, native Artifact comparison, and one native editor document | provider input without confirmed local authority, transcript inference, polling, or optimistic completion |
+| `mission/controller.ts`, `mission/schedule.ts`, `mission/autoFlight.ts`, `mission/momentum.ts`, `mission/recovery.ts`, `mission/waveRunner.ts`, and `mission/tree.ts` | Mission review, exact durable schedule review, bounded local Auto Flight authority, safe-wave continuation, exact interrupted-Mission recovery, the shared provider-neutral wave runner, reviewed fleet launch, Task rows, native Artifact comparison, and one native editor document | provider input without confirmed local authority, transcript inference, schedule timers, polling, or optimistic completion |
 | `mission/landing/` | deterministic ordinary queue and explicit Fleet winner selection, Receipt-evidence-bound native review, fixed-allocation reads, exact atomic Artifact replacement, drift and link defenses, and verified rollback | semantic merge, conflict resolution, staging, commits, provider knowledge, or conversation content |
 | `capability/controller.ts` | candidate inbox, native diff review, and exact local trust actions | capability text injection or user-wide trust |
 
@@ -242,6 +242,18 @@ Mission offers `Arm Mission Auto Flight` as its primary path and `Continue Revie
 path. The arm modal shows each exact Mission digest, project, and runtime-discovered operator-choice provider. One
 confirmation can arm up to eight ordinary Missions. Armed rows show a rocket and `AUTO`; disarm is their immediate
 inline action.
+
+A validated Mission also offers `Schedule Reviewed Mission...`. Presets cover 15 minutes, one hour, and tomorrow at
+local 09:00; a strict local input covers an exact minute. The confirmation freezes Mission and policy digests, Task
+instruction digests, selectors, workspace modes, complete runtime-discovered provider assignments, due instant, and
+the pending schedule ID being replaced. A post-confirmation read must match before commit. Pending rows show a calendar
+and local due time, expose exact cancellation, and the Mission document shows local and ISO time, schedule identity,
+provider mapping, state, and any closed structural failure.
+
+Neither `mission/controller.ts` nor `mission/schedule.ts` owns a due timer. Closing Studio leaves the schedule in the
+Core ledger. Reopening Studio only reads Core state. The Extension never starts a scheduled provider itself, stores no
+schedule authority outside Core, and adds no provider or transcript knowledge. The static extension gate injects a
+timer and removes schedule authority and compare-and-swap fields to prove those regressions make it red.
 
 Auto Flight uses only Mission scheduler state and bounded Runtime metadata. Runtime row changes trigger reevaluation,
 with no polling. Before automatic provider input, Studio durably records the exact Task, session, and current

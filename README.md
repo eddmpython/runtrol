@@ -30,6 +30,13 @@
 > 여정이 운영자 `Continue` 0회로 `integrating` 도착과 자동 권한 회수를 검증했고 세 화면을 직접 눈검수했다.
 > 최종 Receipt Landing과 통합은 항상 명시적이다.
 >
+> `Schedule Reviewed Mission`은 검토된 Mission, 정책, Task 지시문, workspace mode, runtime에서 발견된
+> provider 배정과 정확한 시작 시각을 Core에 한 번 고정한다. Studio를 닫아도 Core가 예약을 보존하고,
+> 시각이 되면 기존 공개 Mission과 세션 경계만으로 첫 파동을 시작한다. 예약 교체와 취소는 현재 schedule ID를
+> 다시 확인하며, 모호한 Send는 반복하지 않고 attention으로 멈춘다. 실제 VS Code 1.132.1의 첫 Host를 예약
+> 시각 전에 닫고 UI가 없는 구간에 실제 Claude Code 세션이 시작된 뒤, 두 번째 Host가 `started` 상태와 실제
+> 응답에 재접속하는 1456 x 908 여정을 검증했다.
+>
 > 폰 알림은 이제 대화 내용을 싣지 않은 채 실제로 운영자를 기다리는 첫 세션으로 직행한다. `Needs you`
 > 수와 다음 대기 세션 이동은 사람 대기만 포함하고 계정 한도 대기는 구분한다. 실물 CLI 승인 게이트가
 > 승인 중 진입과 답변 뒤 해제를 검증한다.
