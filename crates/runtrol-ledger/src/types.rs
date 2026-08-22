@@ -165,6 +165,15 @@ impl fmt::Debug for ArtifactId {
     }
 }
 
+/// Exact Receipt authority that moved one Mission from integration to completion.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct IntegrationRecord {
+    /// Explicit winner for a comparison Mission, absent for an all-Task Mission.
+    pub selected_task_id: Option<TaskId>,
+    /// Content-addressed Receipt paired with the selected comparison Task.
+    pub selected_receipt_id: Option<ReceiptId>,
+}
+
 /// Durable Mission row and its bounded transition journal.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct MissionRecord {
@@ -186,6 +195,9 @@ pub struct MissionRecord {
     /// Exclusive Unix millisecond deadline for the local start approval.
     #[serde(default)]
     pub approval_expires_unix_ms: u64,
+    /// Exact authority that completed integration, retained through terminal compaction.
+    #[serde(default)]
+    pub integration: Option<IntegrationRecord>,
     /// Current state.
     pub state: MissionState,
     /// Idempotent state journal, compacted only after a terminal checkpoint.
@@ -204,6 +216,7 @@ impl MissionRecord {
             project_id,
             policy_sha256: [0; 32],
             approval_expires_unix_ms: 0,
+            integration: None,
             state: MissionState::Draft,
             transitions: Vec::new(),
         }
@@ -439,5 +452,19 @@ mod tests {
             mission.transition("event".into(), MissionState::Draft, MissionState::Rejected),
             Err(StateError::ConflictingDuplicate)
         );
+    }
+
+    #[test]
+    fn mission_rows_from_before_integration_evidence_remain_readable() {
+        let mission = MissionRecord::draft([2; 32], "project".into());
+        let mut encoded = serde_json::to_value(mission).expect("encode Mission row");
+        encoded
+            .as_object_mut()
+            .expect("Mission row is a JSON object")
+            .remove("integration");
+
+        let restored: MissionRecord =
+            serde_json::from_value(encoded).expect("read the prior Mission row shape");
+        assert_eq!(restored.integration, None);
     }
 }

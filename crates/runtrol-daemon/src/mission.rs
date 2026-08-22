@@ -10,13 +10,14 @@ use std::{
 use runtrol_childproc::{Containment, SpawnError, capture, capture_in, resolve};
 use runtrol_core::ProjectIdentity;
 use runtrol_ipc::wire::{
-    GateLine, MissionArtifactLine, MissionCapabilityLine, MissionInstruction, MissionLine,
-    MissionSnapshot, MissionTaskLine, MissionWorkspace, Request, Response,
+    GateLine, MissionArtifactLine, MissionCapabilityLine, MissionInstruction,
+    MissionIntegrationLine, MissionLine, MissionSnapshot, MissionTaskLine, MissionWorkspace,
+    Request, Response,
 };
 use runtrol_ledger::{
-    ArtifactEvidence, ArtifactId, ArtifactRecord, GateEvidence, GateRunRecord, Ledger,
-    LedgerSnapshot, MissionId, MissionRecord, MissionState, ProviderObservation, Receipt,
-    ReceiptInput, RunOutcome, RunRecord, TaskRecord, TaskState,
+    ArtifactEvidence, ArtifactId, ArtifactRecord, GateEvidence, GateRunRecord, IntegrationRecord,
+    Ledger, LedgerSnapshot, MissionId, MissionRecord, MissionState, ProviderObservation, Receipt,
+    ReceiptId, ReceiptInput, RunOutcome, RunRecord, TaskId, TaskRecord, TaskState,
 };
 use runtrol_orchestrator::{
     CapabilitySelection, CompletionPolicy, GateDefinition, GateOutcome, GateRegistry, GateRequest,
@@ -106,6 +107,8 @@ struct VerificationEvidence {
 struct IntegrationIntent {
     mission_id: MissionId,
     project: AbsPath,
+    selected_task_id: Option<TaskId>,
+    selected_receipt_id: Option<ReceiptId>,
     expected_artifacts: Vec<ArtifactEvidence>,
     gate_requests: Vec<GateRequest>,
 }
@@ -1486,35 +1489,11 @@ impl MissionController {
         if snapshot.mission.state != MissionState::Integrating {
             return Err("the Mission is not ready for integrated-tree verification");
         }
-        let selected_task = match active.validated.spec.completion_policy {
-            CompletionPolicy::AllTasks => {
-                if selected_task_id.is_some()
-                    || snapshot
-                        .tasks
-                        .iter()
-                        .any(|task| task.state != TaskState::Passed)
-                {
-                    return Err(
-                        "the all-Task Mission requires every Task to pass without a selection",
-                    );
-                }
-                None
-            }
-            CompletionPolicy::ChooseOne => {
-                let selected: runtrol_ledger::TaskId = selected_task_id
-                    .ok_or("the comparison Mission requires one selected passing Task")?
-                    .parse()
-                    .map_err(|_| "the selected Task identity is invalid")?;
-                if !snapshot
-                    .tasks
-                    .iter()
-                    .any(|task| task.id == selected && task.state == TaskState::Passed)
-                {
-                    return Err("the selected comparison Task did not pass");
-                }
-                Some(selected)
-            }
-        };
+        let (selected_task, selected_receipt_id) = integration_selection(
+            active.validated.spec.completion_policy,
+            &snapshot,
+            selected_task_id,
+        )?;
         review_files_current(&active.validated, &snapshot.mission.mission_ref)?;
         if policy_digest(&self.gates, &active.validated) != snapshot.mission.policy_sha256 {
             return Err("the reviewed Mission Gate policy changed");
@@ -1560,6 +1539,8 @@ impl MissionController {
         Ok(IntegrationIntent {
             mission_id,
             project: active.validated.project.worktree().clone(),
+            selected_task_id: selected_task,
+            selected_receipt_id,
             expected_artifacts: artifacts.into_values().collect(),
             gate_requests,
         })
@@ -1601,6 +1582,10 @@ impl MissionController {
                 duration_ms: gate.duration_ms,
             });
         }
+        snapshot.mission.integration = Some(IntegrationRecord {
+            selected_task_id: intent.selected_task_id,
+            selected_receipt_id: intent.selected_receipt_id,
+        });
         snapshot
             .mission
             .transition(
@@ -2396,6 +2381,52 @@ fn read_review_file(root: &AbsPath, relative: &str, limit: usize) -> Result<Vec<
     Ok(bytes)
 }
 
+fn integration_selection(
+    policy: CompletionPolicy,
+    snapshot: &LedgerSnapshot,
+    requested_task_id: Option<&str>,
+) -> Result<(Option<TaskId>, Option<ReceiptId>), &'static str> {
+    let selected_task = match policy {
+        CompletionPolicy::AllTasks => {
+            if requested_task_id.is_some()
+                || snapshot
+                    .tasks
+                    .iter()
+                    .any(|task| task.state != TaskState::Passed)
+            {
+                return Err("the all-Task Mission requires every Task to pass without a selection");
+            }
+            None
+        }
+        CompletionPolicy::ChooseOne => {
+            let selected: TaskId = requested_task_id
+                .ok_or("the comparison Mission requires one selected passing Task")?
+                .parse()
+                .map_err(|_| "the selected Task identity is invalid")?;
+            if !snapshot
+                .tasks
+                .iter()
+                .any(|task| task.id == selected && task.state == TaskState::Passed)
+            {
+                return Err("the selected comparison Task did not pass");
+            }
+            Some(selected)
+        }
+    };
+    let selected_receipt = selected_task
+        .map(|task_id| {
+            snapshot
+                .receipts
+                .iter()
+                .rev()
+                .find(|(_, receipt)| receipt.task_id == task_id)
+                .map(|(receipt_id, _)| *receipt_id)
+                .ok_or("the selected comparison Task has no passing Receipt")
+        })
+        .transpose()?;
+    Ok((selected_task, selected_receipt))
+}
+
 fn policy_digest(gates: &GateRegistry, validated: &ValidatedMission) -> [u8; 32] {
     let mut gate_ids: Vec<&str> = validated
         .tasks
@@ -2464,6 +2495,16 @@ fn snapshot_of(snapshot: &LedgerSnapshot, active: Option<&ActiveMission>) -> Mis
         mission_ref: snapshot.mission.mission_ref.clone(),
         policy_sha256: hex(&snapshot.mission.policy_sha256).into(),
         approval_expires_unix_ms: snapshot.mission.approval_expires_unix_ms,
+        integration: snapshot.mission.integration.as_ref().map(|integration| {
+            MissionIntegrationLine {
+                selected_task_id: integration
+                    .selected_task_id
+                    .map(|task_id| task_id.to_string().into()),
+                selected_receipt_id: integration
+                    .selected_receipt_id
+                    .map(|receipt_id| receipt_id.to_string().into()),
+            }
+        }),
         tasks: snapshot
             .tasks
             .iter()
@@ -3364,6 +3405,82 @@ gate_refs = ["fixture-check"]
         assert_ne!(
             selected_digest,
             *passing_digests.first().expect("first passing digest")
+        );
+        let selected_receipt_id = snapshot
+            .tasks
+            .iter()
+            .find(|task| task.task_id == selected_task_id)
+            .and_then(|task| task.receipt_id.as_deref())
+            .expect("selected passing Receipt")
+            .to_owned();
+        let selected_run_id = snapshot
+            .tasks
+            .iter()
+            .find(|task| task.task_id == selected_task_id)
+            .and_then(|task| task.run_id.as_deref())
+            .expect("selected passing Run")
+            .to_owned();
+        assert!(!selected.gate_requests.is_empty());
+        assert!(
+            selected
+                .gate_requests
+                .iter()
+                .all(|request| request.run_id.to_string() == selected_run_id)
+        );
+        let integration_gates = selected
+            .gate_requests
+            .iter()
+            .cloned()
+            .map(|request| GateResult {
+                request,
+                outcome: GateOutcome::Passed,
+                duration_ms: 1,
+            })
+            .collect();
+        let completed = controller
+            .commit_integration(
+                &scratch.ledger,
+                &selected,
+                IntegrationEvidence {
+                    artifacts: selected.expected_artifacts.clone(),
+                    gates: integration_gates,
+                },
+            )
+            .expect("complete selected comparison result");
+        let Response::Mission(completed) = completed else {
+            panic!("completed comparison Mission");
+        };
+        let completion = completed
+            .integration
+            .expect("durable integration authority");
+        assert_eq!(
+            completion.selected_task_id.as_deref(),
+            Some(selected_task_id.as_ref())
+        );
+        assert_eq!(
+            completion.selected_receipt_id.as_deref(),
+            Some(selected_receipt_id.as_str())
+        );
+        let durable = scratch
+            .ledger
+            .snapshot(mission_id.parse().expect("Mission identity"))
+            .expect("read completed Mission")
+            .expect("completed Mission exists");
+        let durable_completion = durable
+            .mission
+            .integration
+            .expect("completion authority survives compaction");
+        assert_eq!(
+            durable_completion
+                .selected_task_id
+                .map(|task| task.to_string()),
+            Some(selected_task_id.to_string())
+        );
+        assert_eq!(
+            durable_completion
+                .selected_receipt_id
+                .map(|receipt| receipt.to_string()),
+            Some(selected_receipt_id)
         );
 
         for workspace in prepared {

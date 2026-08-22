@@ -4,10 +4,13 @@ import test from "node:test";
 import type { MissionSnapshot, MissionTaskLine } from "../../protocol";
 import {
   landingByteDriftProblem,
+  landingCompletionProblem,
   landingIdentity,
   missionLanding,
   missionLandingAuthority,
+  missionLandingForSelection,
   missionLandingQueue,
+  missionWinnerLanding,
   safeArtifactPath,
 } from "./model";
 
@@ -80,6 +83,43 @@ test("one landing combines every passed Task Receipt into one sorted target revi
 
 test("comparison Missions stay on their explicit winner-selection path", () => {
   assert.equal(missionLanding(snapshot("race", [task("one", ["src/main.ts"])], "chooseOne")), null);
+});
+
+test("one Fleet winner review contains only the exact selected passing Receipt", () => {
+  const race = snapshot("race", [
+    task("one", ["src/main.ts", "src/one.ts"]),
+    task("two", ["src/main.ts", "src/two.ts"]),
+  ], "chooseOne");
+  const winner = missionWinnerLanding(race, "task-two");
+
+  assert.ok(winner);
+  assert.deepEqual(winner.selection, { kind: "chooseOne", taskId: "task-two" });
+  assert.deepEqual(winner.artifacts.map((artifact) => artifact.path), ["src/main.ts", "src/two.ts"]);
+  assert.ok(winner.artifacts.every((artifact) => artifact.task.task_id === "task-two"));
+  assert.equal(missionWinnerLanding(race, "task-missing"), null);
+  race.tasks[1].state = "failed";
+  assert.equal(missionWinnerLanding(race, "task-two"), null);
+});
+
+test("Fleet winner authority rejects policy and selection drift", () => {
+  const race = snapshot("race", [
+    task("one", ["src/main.ts"]),
+    task("two", ["src/main.ts"]),
+  ], "chooseOne");
+  const first = missionWinnerLanding(race, "task-one");
+  const second = missionWinnerLanding(race, "task-two");
+
+  assert.ok(first);
+  assert.ok(second);
+  assert.notEqual(landingIdentity(first), landingIdentity(second));
+  assert.equal(missionLandingAuthority(race), null);
+  assert.equal(
+    missionLandingAuthority(snapshot("ordinary", [task("one", ["src/main.ts"])]), {
+      kind: "chooseOne",
+      taskId: "task-one",
+    }),
+    null,
+  );
 });
 
 test("missing durable evidence refuses a review that could falsely authorize completion", () => {
@@ -163,6 +203,44 @@ test("Landing identity survives only the expected integrating-to-completed lifec
   assert.ok(completed);
   assert.equal(landingIdentity(completed), landingIdentity(integrating));
   assert.equal(missionLanding(completedSnapshot), null);
+});
+
+test("winner authority survives completion but a new apply review cannot start after completion", () => {
+  assert.equal(missionWinnerLanding(
+    snapshot("winner", [task("one", ["src/main.ts"])], "chooseOne"),
+    "task-one",
+  )?.selection.kind, "chooseOne");
+  const completedWinner = snapshot("winner", [task("one", ["src/main.ts"])], "chooseOne");
+  completedWinner.mission.state = "completed";
+  assert.equal(missionWinnerLanding(completedWinner, "task-one"), null);
+  assert.equal(
+    missionLandingForSelection(completedWinner, { kind: "chooseOne", taskId: "task-one" }),
+    null,
+  );
+  assert.ok(missionLandingAuthority(completedWinner, { kind: "chooseOne", taskId: "task-one" }));
+});
+
+test("completed winner authority names the exact Task and Receipt even when candidate bytes match", () => {
+  const completed = snapshot("race", [
+    task("one", ["src/main.ts"]),
+    task("two", ["src/main.ts"]),
+  ], "chooseOne");
+  completed.mission.state = "completed";
+  completed.integration = {
+    selected_task_id: "task-two",
+    selected_receipt_id: "rcp_two",
+  };
+  const second = missionLandingAuthority(completed, { kind: "chooseOne", taskId: "task-two" });
+  assert.ok(second);
+  assert.equal(landingCompletionProblem(second), null);
+
+  completed.integration = {
+    selected_task_id: "task-one",
+    selected_receipt_id: "rcp_one",
+  };
+  const staleSecond = missionLandingAuthority(completed, { kind: "chooseOne", taskId: "task-two" });
+  assert.ok(staleSecond);
+  assert.match(landingCompletionProblem(staleSecond) ?? "", /different selected Task Receipt/);
 });
 
 test("source, target, existence, and Artifact-set drift are named before apply", () => {

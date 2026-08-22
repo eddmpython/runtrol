@@ -14,8 +14,8 @@ pub use receipt::{
 pub use state::{MissionState, StateError, TaskState, TransitionApplied, TransitionEvent};
 pub use store::{Ledger, LedgerError, LedgerSnapshot, ListedMissions};
 pub use types::{
-    ArtifactId, ArtifactRecord, GateRunId, GateRunRecord, MissionId, MissionRecord, ReceiptId,
-    RunId, RunOutcome, RunRecord, TaskId, TaskRecord,
+    ArtifactId, ArtifactRecord, GateRunId, GateRunRecord, IntegrationRecord, MissionId,
+    MissionRecord, ReceiptId, RunId, RunOutcome, RunRecord, TaskId, TaskRecord,
 };
 
 /// redb cache ceiling for the separate Mission ledger.

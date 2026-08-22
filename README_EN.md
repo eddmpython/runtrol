@@ -17,6 +17,12 @@
 > runs fixed Core Gates. A real Extension Host applied four Artifacts across two Git projects, rejected both project
 > and Receipt drift, recovered, kept the second Mission waiting while the first completed, and opened the next Landing.
 >
+> Fleet Compare no longer stops at comparison. Selecting one passing Task opens a native winner multi-diff containing
+> only that Task and Receipt. One public apply action writes the exact bytes without mixing another candidate, runs the
+> fixed Gates, and completes through Core. Core retains the selected Task and Receipt as durable terminal evidence, so
+> response-loss recovery cannot mistake a different candidate for success. A real Extension Host journey applied only
+> `attempt-2` from two distinct real CLI results and reached `completed`, with every target screen inspected directly.
+>
 > `Mission Auto Flight` arms a reviewed ordinary Mission once on the PC, proves each real provider turn through its
 > lifecycle generation, seals fixed Gates and Receipts, and starts the next safe DAG wave automatically. It waits for
 > person or quota input and pause, and disarms on authority drift, ambiguous delivery, or recovery. A real two-wave

@@ -177,8 +177,16 @@ success only when the Mission is `completed`, the reviewed Mission and Receipt a
 applied byte is still exact. A retry that already observes those facts performs no second write or completion request.
 During managed Core supersession, an older busy Core without Artifact evidence makes Landing unavailable instead of
 throwing or trusting Receipt paths alone. If other ordinary Missions are waiting across projects, Studio reports the
-exact count and offers **Review next**. `choose_one` Missions remain on Fleet Compare and its explicit winner-selection
-path.
+exact count and offers **Review next**.
+
+A `choose_one` Mission uses the same bounded and atomic Landing transaction with a narrower authority. The operator
+selects one passing Task from the Mission or its Task row. Studio names that Task in the native winner multi-diff and
+binds its Task ID, workspace, Run, Receipt, Artifact paths, sizes, and SHA-256 evidence into the review identity. No
+other candidate contributes an Artifact. **Apply <winner>, run Gates and complete** writes only that Receipt, passes
+the same Task ID to Core, reruns its fixed Gates, and completes only if the project still exactly matches the selected
+Receipt. The terminal ledger record retains that selected Task and Receipt through compaction. Studio requires both
+identities when recovering a lost completion response, so equal candidate bytes cannot make the wrong winner appear
+successful. Changing the selected Task, its evidence, either side's bytes, or the Mission authority refuses the action.
 
 ## Recovery and retention
 
@@ -213,12 +221,13 @@ renderer. The normal sequence is:
    Gates, seals the Receipt, and starts the next eligible DAG wave without another click.
 6. Use granular recovery only for a failed, retryable, missing, or ambiguous Task. Working sessions, person or quota
    waits, comparison policy, and integration never advance by inference.
-7. For an ordinary Mission, open **Review and Apply Mission Landing**, inspect every Receipt Artifact in the native
-   multi-diff, then select **Apply, run Gates and complete**. Use direct completion only as a recovery path after a
-   separately integrated tree.
+7. Open **Review and Apply Mission Landing**. For `all_tasks`, inspect the combined Receipt multi-diff. For
+   `choose_one`, select one passing Task and inspect its winner multi-diff. Apply, rerun Gates, and complete in the one
+   explicit action. Use direct completion only as a recovery path after a separately integrated tree.
 8. Archive the terminal Mission.
 
-A `choose_one` comparison keeps its specialized `Run All Reviewed Attempts` and explicit result comparison flow.
+A `choose_one` comparison keeps its specialized **Run All Reviewed Attempts** and **Compare Passing Results** flow;
+winner selection and application then use the same exact Landing safety boundary as an ordinary Mission.
 
 When several ordinary Missions are ready across the operator's projects, `Continue Ready Missions` is the bounded flight deck.
 It reads the current exact snapshots, puts running safe work before a new start, and lists every selected project,
@@ -292,9 +301,10 @@ provider assignment. Studio prepares every linked worktree and public Runtime se
 submits the exact bytes, opens the native conversation tabs, and invokes the existing VS Code grid command.
 
 After verification, `Compare Passing Results` groups the same sealed Artifact path across passing worktrees and opens
-one native VS Code diff per attempt against the current project file. It does not merge or copy files. The operator
-applies the chosen result to the project and completes from that passing Task row; Core then verifies the project
-against only the selected Receipt.
+one native VS Code diff per attempt against the current project file. It does not merge files. The operator selects a
+passing Task from the Mission or its Task row, reviews the exact winner Receipt, and uses one public action to apply
+its bytes and complete. Core verifies the project against only the selected Receipt and retains its exact Task and
+Receipt identities as terminal evidence.
 
 ## Verification and claim limit
 
@@ -305,9 +315,14 @@ rollback, and cleanup against deterministic loopback model endpoints. `missionLe
 Missions and 1,000 Tasks to remain at or below 50 ms p95.
 
 `fleetComparisonSmoke` runs two installed provider CLIs concurrently in distinct linked worktrees through production
-IPC. It seals different content for the same Artifact, rejects completion with the non-applied passing Task, accepts
-the exact applied Task, archives the Mission, and proves session cleanup. The focused real Extension Host eye pass
-visually verifies the reviewed Mission, two-column conversation grid, integrating results, and native Artifact diffs.
+IPC. It seals different content for the same Artifact, rejects the non-matching passing Task, accepts only the exact
+selected Receipt already represented by the committed Core fixture, archives the Mission, and proves session cleanup.
+The product application proof is the focused real Extension Host eye pass. It compares both candidates, selects
+`attempt-2`, rejects an apply request naming `attempt-1`, opens the exact winner Receipt, invokes the public primary
+action, changes the project to `attempt 2`, reaches `completed`, and cleans every owned session. The comparison,
+winner review, confirmation, and completed screenshots are inspected directly at 1456 by 906. The Core unit journey
+also proves that integration Gate requests use the selected Receipt Run and that selected Task and Receipt evidence
+survives terminal ledger compaction.
 
 The focused `missionFlightDeckEye` Extension Host journey also runs two separate Git projects through one installed
 provider CLI. It opens all two-file Receipt Landings in native multi-diff editors, completes the first Mission while

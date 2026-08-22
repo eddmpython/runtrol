@@ -879,6 +879,11 @@
           "group": "inline@1"
         },
         {
+          "command": "runtrol.reviewMissionLanding",
+          "when": "view == runtrol.missions && viewItem == runtrol.mission.integrating.chooseOne",
+          "group": "inline@2"
+        },
+        {
           "command": "runtrol.archiveMission",
           "when": "view == runtrol.missions && viewItem =~ /^runtrol\\.mission\\.(completed|failed|cancelled)/",
           "group": "inline@2"
@@ -901,6 +906,11 @@
         {
           "command": "runtrol.retryMissionTask",
           "when": "view == runtrol.missions && viewItem =~ /^runtrol\\.missionTask\\.retryable/",
+          "group": "inline@1"
+        },
+        {
+          "command": "runtrol.reviewMissionLanding",
+          "when": "view == runtrol.missions && viewItem =~ /^runtrol\\.missionTask\\.passed(\\.session)?\\.chooseOne\\.integrating$/",
           "group": "inline@1"
         },
         {

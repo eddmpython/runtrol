@@ -115,6 +115,10 @@ export type MissionSnapshot = {
   mission_ref: string;
   policy_sha256: string;
   approval_expires_unix_ms: number;
+  integration?: {
+    selected_task_id: string | null;
+    selected_receipt_id: string | null;
+  } | null;
   tasks: MissionTaskLine[];
 };
 

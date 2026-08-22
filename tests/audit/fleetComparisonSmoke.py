@@ -97,7 +97,9 @@ def writeProject(project: Path) -> None:
     outputs.mkdir()
     instruction = instructions / "compare.md"
     instruction.write_text("Inspect the reviewed fixture and reply with exactly: done\n", encoding="utf-8")
-    (outputs / "result.txt").write_text("base\n", encoding="utf-8")
+    # This smoke owns Core's selected-Receipt proof, not the Studio application path. Keep the project at the
+    # selected candidate from the committed fixture so no test helper applies a result after Receipt sealing.
+    (outputs / "result.txt").write_text("attempt 2\n", encoding="utf-8")
     mission = f'''schema = "runtrol.dev/mission/v1alpha1"
 name = "live fleet comparison"
 project_id = "fleet-comparison-fixture"
@@ -281,7 +283,6 @@ def exercise(claude: str, opencode: str) -> None:
             provider_requests = sum(
                 int(models[key].requests > request_counts[key]) for key in ("attempt-one", "attempt-two")
             )
-            (project / "outputs" / "result.txt").write_text("attempt 2\n", encoding="utf-8")
             wrong_result_rejected = False
             try:
                 live.ipc(
@@ -326,7 +327,7 @@ def exercise(claude: str, opencode: str) -> None:
                     cleanup_complete=cleanup_complete,
                 )
             )
-            print("[fleetComparisonSmoke] OK. two real CLIs competed and only the applied selected Receipt completed.")
+            print("[fleetComparisonSmoke] OK. two real CLIs competed and only the exact selected Receipt completed.")
         except Exception as error:
             stdout, stderr = process.stopDaemon(daemon)
             detail = (stderr or stdout or "the daemon exited without diagnostics").strip()

@@ -76,3 +76,19 @@ test("an ambiguous failure stays failed when Core did not reach completed", asyn
     /response lost/,
   );
 });
+
+test("a completed refresh cannot hide mismatched completion authority", async () => {
+  await assert.rejects(
+    completeLandingWithRecovery(
+      snapshot("integrating"),
+      async () => {
+        throw new Error("response lost");
+      },
+      async () => snapshot("completed"),
+      async () => {
+        throw new Error("different selected Task Receipt");
+      },
+    ),
+    /different selected Task Receipt/,
+  );
+});

@@ -16,6 +16,12 @@
 > Core の固定 Gate を実行する。実物 Extension Host で二つの Git project の四 Artifact を適用し、project と Receipt
 > の drift を拒否して復旧し、最初の完了中も二つ目を待機させたまま次の Landing を開いた。
 >
+> Fleet Compare は比較だけで止まらない。一つの passing Task を選ぶと、その Task と Receipt だけを含む native
+> winner multi-diff が開く。公開 apply 操作一回で他の候補を混ぜずに正確な byte を書き、固定 Gate を実行して
+> Core で Mission を完了する。Core は選択した Task と Receipt を永続的な終端証拠として保持するため、応答消失
+> 後の復旧が別の候補を成功と誤認しない。実物 Extension Host journey は異なる二つの実物 CLI 結果から
+> `attempt-2` だけを適用して `completed` に到達し、各目標画面を直接目視検査した。
+>
 > `Mission Auto Flight` はレビュー済みの通常 Mission を PC で一度 arm し、各実物 provider turn を
 > lifecycle generation で証明して固定 Gate と Receipt を封印し、次の安全な DAG wave を自動で開始する。
 > person、quota 待ちと pause はそのまま待ち、権限 drift、曖昧な送信、recovery state では即座に解除する。

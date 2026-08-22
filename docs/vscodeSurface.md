@@ -231,7 +231,7 @@ Two contracts keep the conversation window from growing a branch per place or pe
 | `diffDocuments.ts` | declared changes as read-only virtual documents for VS Code's diff editor | files on disk or a transcript of changes |
 | `webview/` | bounded active rendering and input | durable storage or background sessions |
 | `mission/controller.ts`, `mission/autoFlight.ts`, `mission/momentum.ts`, and `mission/tree.ts` | Mission review, bounded local Auto Flight authority, safe-wave continuation, local recovery actions, reviewed fleet launch, Task rows, native Artifact comparison, and one native editor document | provider input without confirmed local authority, transcript inference, polling, or optimistic completion |
-| `mission/landing/` | deterministic Landing queue, Receipt-evidence-bound native review, fixed-allocation reads, exact atomic Artifact replacement, drift and link defenses, and verified rollback | semantic merge, conflict resolution, staging, commits, provider knowledge, or conversation content |
+| `mission/landing/` | deterministic ordinary queue and explicit Fleet winner selection, Receipt-evidence-bound native review, fixed-allocation reads, exact atomic Artifact replacement, drift and link defenses, and verified rollback | semantic merge, conflict resolution, staging, commits, provider knowledge, or conversation content |
 | `capability/controller.ts` | candidate inbox, native diff review, and exact local trust actions | capability text injection or user-wide trust |
 
 ## Mission and capability surface
@@ -281,8 +281,8 @@ create another Webview or another provider stream.
 Pause, safe resume, cancel, bounded retry, integrated-tree verification, completion, and archive are explicit local
 commands. Ordinary Missions require every Task to pass. A reviewed `choose_one` Mission waits for every attempt to
 finish, compares sealed Artifact paths in native diff editors, and completes only with one exact passing Task. The
-extension never authors a merge, resolves conflicts, stages, or commits. Only an ordinary reviewed Landing can write
-the exact sealed bytes that the operator just compared.
+extension never authors a merge, resolves conflicts, stages, or commits. A reviewed Landing writes only the exact
+sealed bytes the operator just compared, either the ordinary all-Task set or one explicitly selected winner Receipt.
 
 An ordinary integrating Mission exposes **Review and Apply Mission Landing** instead of direct completion as its primary
 row action. The same command in the Missions title and command palette orders every eligible project deterministically
@@ -297,7 +297,16 @@ verified rollback, and Core completion. Core compares Receipt evidence before an
 how many other projects are ready and offers **Review next**. Gate failure retains the exact review and ordinary Git
 changes for a completion-only retry. A lost completion response refreshes Core authority and exact applied bytes, then
 converges without a second write. A busy older Core without Artifact evidence leaves Landing unavailable. The old direct
-completion command remains available for recovery, and `choose_one` rows continue to open Fleet Compare.
+completion command remains available for recovery.
+
+An integrating `choose_one` Mission exposes both candidate comparison and winner Landing. Selecting the Mission asks
+for one passing Task; selecting a passed Task keeps that exact Task. The winner name appears in the native multi-diff
+and confirmation. Review authority contains only that Task's Receipt and includes the selected Task ID. Apply uses the
+same bounded read, atomic transaction, lease, rollback, Gate, drift, and completion recovery path, while Core receives
+the same selected Task ID. A different candidate can neither enter the Artifact set nor replace the selection after
+review. Core retains the selected Task and Receipt through terminal compaction. The completed Mission document shows
+both identities, and response-loss recovery requires both before it accepts success even when two candidates have
+identical bytes.
 
 The Capability Candidate Inbox uses a native quick pick and Markdown review document. Verification and approval name
 one exact project version. Approval opens the built-in VS Code file or diff review first. Reject, quarantine, rollback,
@@ -394,6 +403,7 @@ specified in [automatic updates](automaticUpdates.md).
 | `node tooling/real-window-eye.mjs` | the eye pass: an isolated VS Code window and an isolated Runtime with the real installed CLIs, real folders and real conversations, photographed in the draft, conversation, tabs, reopened, grid, places, diff and diff-editor poses, with a real throwaway deletion; the pictures are the judgement. `RUNTROL_EYE_ENTRY=placeProbe` runs the focused place probe and `RUNTROL_EYE_ENTRY=agentToolsEye` runs the zero-model-turn Agent Tools enable and revoke proof in isolated provider homes |
 | `RUNTROL_EYE_ENTRY=missionFlightDeckEye node tooling/real-window-eye.mjs` | at 1456 by 906, two isolated Git projects and reviewed Missions start together through one flight, reach integration together through the next flight, review existing and new files in native Receipt Landing multi-diffs, select the public product action, reject five drift or local-boundary failures plus one passing Gate mutation, retain retry state, apply exact bytes, and complete both Missions. Review, confirmation, first-completed/second-waiting, and next-review screenshots are inspected directly |
 | `RUNTROL_EYE_ENTRY=missionAutoFlightEye node tooling/real-window-eye.mjs` | one reviewed two-wave dependency Mission is armed once, starts two real provider sessions, verifies two fixed Gates, reaches `integrating` with zero operator continuation actions, removes its own authority, and is photographed before arm, while armed, and after arrival |
+| `RUNTROL_EYE_ENTRY=fleetEye node tooling/real-window-eye.mjs` | two real CLI attempts reach passing Receipts, native diffs compare their distinct output, `attempt-2` opens as the only winner Receipt, an `attempt-1` apply request is rejected, the public primary action writes exactly `attempt 2`, and the Mission reaches `completed` with its selected Task and Receipt visible. Comparison, winner review, confirmation, and completed screenshots are inspected directly at 1456 by 906 |
 | `agentToolsSmoke` | real installed provider CLIs, official MCP registration, modern and legacy discovery, fixed tool catalogue, root isolation, Runtime reads, complete revocation, and post-revocation default deny with zero model turns |
 | `missionGrowthContracts` | Mission state, exact Send, evidence, integration, capability trust, local scope, tamper, and rollback |
 | `missionLiveJourney` | two installed provider CLIs complete five reviewed Tasks and an explicit reuse, tamper, and rollback journey through production IPC |

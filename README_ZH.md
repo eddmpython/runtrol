@@ -16,6 +16,12 @@
 > Extension Host 已在两个 Git 项目中应用四个 Artifact，拒绝项目与 Receipt 漂移并恢复，在第一个完成时保留
 > 第二个等待，随后打开下一个 Landing。
 >
+> Fleet Compare 不再止步于比较。选择一个已通过的 Task 后，会打开只包含该 Task 与 Receipt 的原生 winner
+> multi-diff。一次公开应用操作会在不混入其他候选结果的前提下写入精确字节，运行固定 Gate，并通过 Core
+> 完成 Mission。Core 会把选中的 Task 与 Receipt 保留为持久终态证据，因此响应丢失后的恢复不会把其他候选
+> 误判为成功。真实 Extension Host 旅程从两个不同的真实 CLI 结果中只应用了 `attempt-2`，到达
+> `completed`，并直接目视检查了每个目标画面。
+>
 > `Mission Auto Flight` 只需在 PC 上为已审查的普通 Mission 授权一次。它通过 lifecycle generation 证明每个
 > 真实 provider turn，封存固定 Gate 与 Receipt，并自动启动下一个安全 DAG 波次。遇到人员、quota 等待或暂停
 > 时会保持等待，遇到权限漂移、模糊传输或恢复状态时会立即解除。真实双波次 CLI 旅程以零次操作者

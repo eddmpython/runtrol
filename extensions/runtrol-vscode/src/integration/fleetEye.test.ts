@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
@@ -19,6 +20,8 @@ type JourneyApi = {
   mission(missionId: string): Promise<MissionSnapshot>;
   verifyMissionTask(missionId: string, taskId: string): Promise<MissionSnapshot>;
   compareMissionResults(missionId: string): Promise<void>;
+  reviewMissionLanding(missionId: string, taskId?: string): Promise<void>;
+  applyMissionLanding(missionId: string, taskId?: string): Promise<MissionSnapshot>;
   close(session: string, now?: boolean): Promise<void>;
   waitForLifecycle(session: string, lifecycle: SessionLine["lifecycle"], deadlineMs: number): Promise<void>;
 };
@@ -125,6 +128,75 @@ async function eyePass(resultPath: string, sessions: string[]): Promise<void> {
     groups: vscode.window.tabGroups.all.length,
   });
 
+  currentStage = "reviewing-winner";
+  const loser = snapshot.tasks[0];
+  const winner = snapshot.tasks[1];
+  if (!loser || !winner?.workspace) throw new Error("the Fleet did not preserve both passing candidates");
+  await journey.reviewMissionLanding(snapshot.mission.mission_id, winner.task_id);
+  await waitFor(
+    () => vscode.window.tabGroups.all.some((group) =>
+      group.tabs.some((tab) => tab.label.includes(`${winner.key} Winner Landing`))
+    ),
+    10_000,
+    "the selected winner multi-diff",
+  );
+  await assert.rejects(
+    journey.applyMissionLanding(snapshot.mission.mission_id, loser.task_id),
+    /Mission Landing must be the current review/,
+  );
+  await delay(1_200);
+  await capture(resultPath, "fleetWinnerReview", {
+    selected: winner.key,
+    receipt: winner.receipt_id,
+    artifacts: winner.artifact_paths,
+  });
+
+  currentStage = "confirming-winner";
+  const applyFleetWinner = Promise.resolve(vscode.commands.executeCommand(
+    "runtrol.reviewMissionLanding",
+    { mission: snapshot.mission, task: winner },
+  ));
+  await delay(1_200);
+  await capture(resultPath, "fleetWinnerApplyConfirmation", {
+    selected: winner.key,
+    rejected: loser.key,
+  });
+  await vscode.commands.executeCommand("notifications.focusToasts");
+  await vscode.commands.executeCommand("notification.acceptPrimaryAction");
+  await waitFor(
+    async () => (await journey.mission(snapshot.mission.mission_id)).mission.state === "completed",
+    60_000,
+    "the public winner Landing action to complete the Fleet",
+  );
+  await settleNotificationCommand(applyFleetWinner, 10_000);
+  const completed = await journey.mission(snapshot.mission.mission_id);
+  const projectResult = await readFile(path.join(folder, "outputs", "result.txt"), "utf8");
+  assert.equal(completed.mission.state, "completed");
+  assert.equal(completed.integration?.selected_task_id, winner.task_id);
+  assert.equal(completed.integration?.selected_receipt_id, winner.receipt_id);
+  assert.equal(projectResult, "attempt 2\n");
+  assert.notEqual(projectResult, "attempt 1\n");
+  await showMissions();
+  await vscode.commands.executeCommand("runtrol.openMission", { mission: completed.mission });
+  await waitFor(
+    () => {
+      const editor = vscode.window.activeTextEditor;
+      if (editor?.document.uri.scheme !== "runtrol-mission") return false;
+      const text = editor.document.getText();
+      return text.includes(`Integrated winner Task: \`${winner.task_id}\``)
+        && text.includes(`Integrated winner Receipt: \`${winner.receipt_id}\``);
+    },
+    10_000,
+    "the completed Mission's durable winner authority",
+  );
+  await capture(resultPath, "fleetWinnerCompleted", {
+    state: "completed",
+    selected: winner.key,
+    selectedTaskId: winner.task_id,
+    selectedReceiptId: winner.receipt_id,
+    projectResult: projectResult.trim(),
+  });
+
   currentStage = "closing";
   for (const session of [...sessions]) {
     await journey.close(session, true).catch(() => undefined);
@@ -132,7 +204,17 @@ async function eyePass(resultPath: string, sessions: string[]): Promise<void> {
   }
   await writeFile(
     resultPath,
-    JSON.stringify({ stage: "complete", policy: "chooseOne", attempts: 2, diff: true }),
+    JSON.stringify({
+      stage: "complete",
+      policy: "chooseOne",
+      attempts: 2,
+      diff: true,
+      selected: winner.key,
+      selectedTaskId: winner.task_id,
+      selectedReceiptId: winner.receipt_id,
+      state: "completed",
+      projectResult: projectResult.trim(),
+    }),
     "utf8",
   );
 }
@@ -206,12 +288,33 @@ async function capture(resultPath: string, pose: string, facts: Record<string, u
   }
 }
 
-async function waitFor(condition: () => boolean, deadlineMs: number, label: string): Promise<void> {
+async function waitFor(condition: () => boolean | Promise<boolean>, deadlineMs: number, label: string): Promise<void> {
   const deadline = Date.now() + deadlineMs;
-  while (!condition()) {
+  while (!await condition()) {
     if (Date.now() > deadline) throw new Error(`timed out waiting for ${label}`);
     await delay(100);
   }
+}
+
+async function settleNotificationCommand(work: PromiseLike<unknown>, deadlineMs: number): Promise<void> {
+  let settled = false;
+  let failure: unknown;
+  void Promise.resolve(work).then(
+    () => {
+      settled = true;
+    },
+    (error) => {
+      failure = error;
+      settled = true;
+    },
+  );
+  const deadline = Date.now() + deadlineMs;
+  while (!settled) {
+    await vscode.commands.executeCommand("notifications.clearAll");
+    if (Date.now() > deadline) throw new Error("the public Fleet winner command did not settle after completion");
+    await delay(100);
+  }
+  if (failure) throw failure;
 }
 
 async function within<T>(work: Thenable<T>, milliseconds: number, label: string): Promise<T> {

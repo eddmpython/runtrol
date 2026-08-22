@@ -1003,8 +1003,20 @@ pub struct MissionSnapshot {
     pub policy_sha256: Box<str>,
     /// Exclusive Unix millisecond deadline for the local start approval.
     pub approval_expires_unix_ms: u64,
+    /// Exact Receipt authority that completed integration, when completion has committed.
+    #[serde(default)]
+    pub integration: Option<MissionIntegrationLine>,
     /// Bounded Task rows.
     pub tasks: Vec<MissionTaskLine>,
+}
+
+/// Exact selected Receipt authority retained after Mission completion.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct MissionIntegrationLine {
+    /// Selected comparison Task, absent for an all-Task Mission.
+    pub selected_task_id: Option<Box<str>>,
+    /// Receipt paired with the selected comparison Task.
+    pub selected_receipt_id: Option<Box<str>>,
 }
 
 /// One bounded Task row without instruction or conversation bodies.

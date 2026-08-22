@@ -2765,6 +2765,7 @@ mod tests {
             mission_ref: "mission.md".into(),
             policy_sha256: "0".repeat(64).into(),
             approval_expires_unix_ms: 0,
+            integration: None,
             tasks: Vec::new(),
         }));
         match missions_visible_to(hidden, &caller, &composed.device_authority) {

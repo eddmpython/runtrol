@@ -4,7 +4,12 @@ import type { DiffDocuments } from "../../diffDocuments";
 import type { MissionSnapshot } from "../../protocol";
 import { applyReviewedLanding, assertReviewedLandingApplied } from "./apply";
 import { completeLandingWithRecovery } from "./completion";
-import { missionLanding, missionLandingQueue, type MissionLanding } from "./model";
+import {
+  missionLanding,
+  missionLandingQueue,
+  missionWinnerLanding,
+  type MissionLanding,
+} from "./model";
 import { openMissionLanding, type ReviewedMissionLanding } from "./review";
 
 const APPLY_LANDING = "Apply, run Gates and complete";
@@ -14,7 +19,7 @@ const LANDING_NOT_READY = "Mission cannot land";
 export type LandingHost = {
   readonly getSnapshot: (missionId: string) => Promise<MissionSnapshot>;
   readonly listIntegratingSnapshots: () => Promise<readonly MissionSnapshot[]>;
-  readonly complete: (snapshot: MissionSnapshot) => Promise<MissionSnapshot>;
+  readonly complete: (snapshot: MissionSnapshot, selectedTaskId: string | null) => Promise<MissionSnapshot>;
   readonly withProjectLease: <T>(
     snapshot: MissionSnapshot,
     action: () => Promise<T>,
@@ -37,24 +42,36 @@ export class MissionLandingController {
     private readonly host: LandingHost,
   ) {}
 
-  async reviewAndApply(missionId?: string): Promise<void> {
+  async reviewAndApply(missionId?: string, taskId?: string): Promise<void> {
     if (this.publicReviewActive) throw new Error("A Mission Landing review is already open");
     this.publicReviewActive = true;
     try {
       let nextMissionId = missionId;
       for (;;) {
-        const landing = await this.selectLanding(nextMissionId);
+        const landing = await this.selectLanding(nextMissionId, taskId);
         if (!landing) return;
         const review = await this.openAndRemember(landing);
+        const applyAction = landing.selection.kind === "chooseOne"
+          ? `Apply ${landing.artifacts[0]?.task.key ?? "winner"}, run Gates and complete`
+          : APPLY_LANDING;
+        const sourceScope = landing.selection.kind === "chooseOne"
+          ? ` from ${landing.artifacts[0]?.task.key ?? "the selected winner"} only`
+          : "";
         const action = await vscode.window.showWarningMessage(
-          `${landing.snapshot.mission.name}: apply ${landing.artifacts.length} sealed Artifacts, run fixed Gates, and complete?`,
-          APPLY_LANDING,
+          `${landing.snapshot.mission.name}: apply ${sealedArtifactLabel(landing.artifacts.length)}${sourceScope}, run fixed Gates, and complete?`,
+          applyAction,
         );
-        if (action !== APPLY_LANDING) {
+        if (action !== applyAction) {
           if (this.currentReview?.review === review) this.currentReview = null;
           return;
         }
         const completed = await this.applyAndComplete(review);
+        if (landing.selection.kind === "chooseOne") {
+          await vscode.window.showInformationMessage(
+            `${completed.mission.name} completed with ${landing.artifacts[0]?.task.key ?? "the selected winner"}.`,
+          );
+          return;
+        }
         const remaining = (await this.currentQueue()).length;
         const next = await vscode.window.showInformationMessage(
           `${completed.mission.name} completed. ${remaining > 0 ? `${remaining} ready to land.` : "Queue clear."}`,
@@ -62,21 +79,30 @@ export class MissionLandingController {
         );
         if (next !== REVIEW_NEXT_LANDING) return;
         nextMissionId = undefined;
+        taskId = undefined;
       }
     } finally {
       this.publicReviewActive = false;
     }
   }
 
-  async reviewForJourney(missionId: string): Promise<void> {
-    const landing = missionLanding(await this.host.getSnapshot(missionId));
+  async reviewForJourney(missionId: string, taskId?: string): Promise<void> {
+    const landing = await this.selectLanding(missionId, taskId);
     if (!landing) throw new Error(LANDING_NOT_READY);
     await this.openAndRemember(landing);
   }
 
-  async applyForJourney(missionId: string): Promise<MissionSnapshot> {
+  async applyForJourney(missionId: string, taskId?: string): Promise<MissionSnapshot> {
     const authority = this.currentReview;
-    if (!authority || authority.review.landing.snapshot.mission.mission_id !== missionId) {
+    const selection = authority?.review.landing.selection;
+    const exactSelection = taskId === undefined
+      ? selection?.kind === "allTasks"
+      : selection?.kind === "chooseOne" && selection.taskId === taskId;
+    if (
+      !authority
+      || authority.review.landing.snapshot.mission.mission_id !== missionId
+      || !exactSelection
+    ) {
       throw new Error("Mission Landing must be the current review before apply");
     }
     return this.applyAndComplete(authority.review);
@@ -86,11 +112,37 @@ export class MissionLandingController {
     this.currentReview = null;
   }
 
-  private async selectLanding(missionId?: string): Promise<MissionLanding | undefined> {
+  private async selectLanding(missionId?: string, taskId?: string): Promise<MissionLanding | undefined> {
     if (missionId) {
-      const landing = missionLanding(await this.host.getSnapshot(missionId));
-      if (!landing) throw new Error(LANDING_NOT_READY);
-      return landing;
+      const snapshot = await this.host.getSnapshot(missionId);
+      if (snapshot.mission.completion_policy !== "chooseOne") {
+        const landing = missionLanding(snapshot);
+        if (!landing) throw new Error(LANDING_NOT_READY);
+        return landing;
+      }
+      if (taskId) {
+        const landing = missionWinnerLanding(snapshot, taskId);
+        if (!landing) throw new Error(LANDING_NOT_READY);
+        return landing;
+      }
+      const winners = snapshot.tasks.flatMap((task) => {
+        const landing = missionWinnerLanding(snapshot, task.task_id);
+        return landing ? [{ task, landing }] : [];
+      });
+      if (winners.length === 0) throw new Error(LANDING_NOT_READY);
+      if (winners.length === 1) return winners[0]?.landing;
+      return vscode.window.showQuickPick(
+        winners.map(({ task, landing }) => ({
+          label: task.key,
+          description: task.provider_selector,
+          detail: `${sealedArtifactLabel(landing.artifacts.length)}  ${task.workspace ?? "workspace unavailable"}`,
+          landing,
+        })),
+        {
+          title: `Select one winner for ${snapshot.mission.name}`,
+          placeHolder: "Only this exact Task Receipt will enter the project",
+        },
+      ).then((picked) => picked?.landing);
     }
     const queue = await this.currentQueue();
     if (queue.length === 0) {
@@ -143,7 +195,10 @@ export class MissionLandingController {
         }
         const completed = await completeLandingWithRecovery(
           latest,
-          (snapshot) => this.host.complete(snapshot),
+          (snapshot) => this.host.complete(
+            snapshot,
+            review.landing.selection.kind === "chooseOne" ? review.landing.selection.taskId : null,
+          ),
           () => this.host.getSnapshot(missionId),
           (snapshot) => assertReviewedLandingApplied(review, snapshot),
         );
@@ -160,4 +215,8 @@ export class MissionLandingController {
       this.applying = false;
     }
   }
+}
+
+function sealedArtifactLabel(count: number): string {
+  return `${count} sealed Artifact${count === 1 ? "" : "s"}`;
 }

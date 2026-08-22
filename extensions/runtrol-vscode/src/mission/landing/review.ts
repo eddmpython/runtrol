@@ -52,7 +52,12 @@ export async function openMissionLanding(
 ): Promise<ReviewedMissionLanding> {
   const review = await readMissionLanding(landing);
   const tabsBefore = new Set(vscode.window.tabGroups.all.flatMap((group) => group.tabs));
-  const title = `${landing.snapshot.mission.name}${LANDING_SUFFIX}`;
+  const winner = landing.selection.kind === "chooseOne"
+    ? landing.artifacts[0]?.task.key
+    : null;
+  const title = winner
+    ? `${landing.snapshot.mission.name}: ${winner} Winner Landing`
+    : `${landing.snapshot.mission.name}${LANDING_SUFFIX}`;
   const resources: Array<[vscode.Uri, vscode.Uri, vscode.Uri]> = review.artifacts.map((artifact) => [
     artifact.target,
     documents.snapshot(artifact.targetText, `landing/${artifact.path}`),

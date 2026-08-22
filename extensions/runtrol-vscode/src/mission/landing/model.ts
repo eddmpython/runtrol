@@ -6,8 +6,13 @@ export type MissionLandingArtifact = {
   readonly evidence: NonNullable<MissionTaskLine["artifacts"]>[number];
 };
 
+export type LandingSelection =
+  | { readonly kind: "allTasks" }
+  | { readonly kind: "chooseOne"; readonly taskId: string };
+
 export type MissionLanding = {
   readonly snapshot: MissionSnapshot;
+  readonly selection: LandingSelection;
   readonly artifacts: readonly MissionLandingArtifact[];
 };
 
@@ -22,23 +27,42 @@ export const MAX_LANDING_ARTIFACTS = 1_024;
 /// Build the exact project-side review named by one ordinary Mission's passing Receipts.
 ///
 /// Every Artifact target appears once. Missing workspace or Receipt evidence refuses the whole review instead of
-/// opening a partial diff that could look complete. The specialized choose-one policy stays on Fleet Compare.
+/// opening a partial diff that could look complete.
 export function missionLanding(snapshot: MissionSnapshot): MissionLanding | null {
+  return missionLandingForSelection(snapshot, { kind: "allTasks" });
+}
+
+/// Build one mutually exclusive Fleet winner review. No other passing Task contributes an Artifact.
+export function missionWinnerLanding(snapshot: MissionSnapshot, taskId: string): MissionLanding | null {
+  return missionLandingForSelection(snapshot, { kind: "chooseOne", taskId });
+}
+
+export function missionLandingForSelection(
+  snapshot: MissionSnapshot,
+  selection: LandingSelection,
+): MissionLanding | null {
   if (snapshot.mission.state !== "integrating") return null;
-  return missionLandingAuthority(snapshot);
+  return missionLandingAuthority(snapshot, selection);
 }
 
 /// Recover the immutable Mission and Receipt authority after Core has crossed from integrating to completed.
 /// The lifecycle state is deliberately not part of the authority identity because a successful Landing changes it.
-export function missionLandingAuthority(snapshot: MissionSnapshot): MissionLanding | null {
-  if (
-    (snapshot.mission.state !== "integrating" && snapshot.mission.state !== "completed")
-    || snapshot.mission.completion_policy !== "allTasks"
-  ) return null;
+export function missionLandingAuthority(
+  snapshot: MissionSnapshot,
+  selection: LandingSelection = { kind: "allTasks" },
+): MissionLanding | null {
+  if (snapshot.mission.state !== "integrating" && snapshot.mission.state !== "completed") return null;
+  if (selection.kind === "allTasks" && snapshot.mission.completion_policy !== "allTasks") return null;
+  if (selection.kind === "chooseOne" && snapshot.mission.completion_policy !== "chooseOne") return null;
+
+  const tasks = selection.kind === "allTasks"
+    ? snapshot.tasks
+    : snapshot.tasks.filter((task) => task.task_id === selection.taskId);
+  if (selection.kind === "chooseOne" && tasks.length !== 1) return null;
 
   const artifacts: MissionLandingArtifact[] = [];
   const targets = new Set<string>();
-  for (const task of snapshot.tasks) {
+  for (const task of tasks) {
     if (task.state !== "passed" || !task.workspace || !task.receipt_id || task.artifact_paths.length === 0) {
       return null;
     }
@@ -65,7 +89,7 @@ export function missionLandingAuthority(snapshot: MissionSnapshot): MissionLandi
   }
   if (artifacts.length === 0) return null;
   artifacts.sort((left, right) => left.path.localeCompare(right.path));
-  return { snapshot, artifacts };
+  return { snapshot, selection, artifacts };
 }
 
 export function missionLandingQueue(snapshots: readonly MissionSnapshot[]): MissionLanding[] {
@@ -101,6 +125,7 @@ export function landingIdentity(landing: MissionLanding): string {
     policySha256: snapshot.policy_sha256,
     project: snapshot.mission.project,
     completionPolicy: snapshot.mission.completion_policy,
+    selection: landing.selection,
     artifacts: landing.artifacts.map((artifact) => ({
       path: artifact.path,
       taskId: artifact.task.task_id,
@@ -113,6 +138,21 @@ export function landingIdentity(landing: MissionLanding): string {
       receiptSha256: artifact.evidence.sha256,
     })),
   });
+}
+
+/// Refuse ambiguous completion recovery unless Core durably names the exact selected winner and Receipt.
+export function landingCompletionProblem(landing: MissionLanding): string | null {
+  if (landing.selection.kind !== "chooseOne") return null;
+  const selected = landing.artifacts[0]?.task;
+  const integration = landing.snapshot.integration;
+  if (
+    !selected
+    || integration?.selected_task_id !== landing.selection.taskId
+    || integration.selected_receipt_id !== selected.receipt_id
+  ) {
+    return "Core completion used a different selected Task Receipt";
+  }
+  return null;
 }
 
 export function landingByteDriftProblem(

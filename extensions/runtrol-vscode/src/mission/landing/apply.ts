@@ -6,10 +6,13 @@ import * as vscode from "vscode";
 import { writeAtomicLandingFile } from "./atomicFile";
 import {
   landingByteDriftProblem,
+  landingCompletionProblem,
   landingIdentity,
-  missionLanding,
   missionLandingAuthority,
+  missionLandingForSelection,
   sameBytes,
+  type MissionLanding,
+  type MissionLandingArtifact,
 } from "./model";
 import {
   readLandingArtifact,
@@ -30,7 +33,7 @@ export async function applyReviewedLanding(
   review: ReviewedMissionLanding,
   latestSnapshot: ReviewedMissionLanding["landing"]["snapshot"],
 ): Promise<void> {
-  const latest = missionLanding(latestSnapshot);
+  const latest = missionLandingForSelection(latestSnapshot, review.landing.selection);
   if (!latest || landingIdentity(latest) !== review.identity) {
     throw new Error("Mission or Receipt changed after Landing review");
   }
@@ -89,8 +92,8 @@ export async function applyReviewedLanding(
 }
 
 async function assertForwardCurrent(
-  latest: NonNullable<ReturnType<typeof missionLanding>>,
-  artifact: NonNullable<ReturnType<typeof missionLanding>>["artifacts"][number],
+  latest: MissionLanding,
+  artifact: MissionLandingArtifact,
   expected: { readonly path: string; readonly sourceBytes: Uint8Array; readonly targetBytes: Uint8Array | null },
 ): Promise<void> {
   const reread = await readLandingArtifact(latest, artifact);
@@ -99,8 +102,8 @@ async function assertForwardCurrent(
 }
 
 async function assertTargetCurrent(
-  latest: NonNullable<ReturnType<typeof missionLanding>>,
-  artifact: NonNullable<ReturnType<typeof missionLanding>>["artifacts"][number],
+  latest: MissionLanding,
+  artifact: MissionLandingArtifact,
   expected: Uint8Array | null,
 ): Promise<void> {
   const current = await readLandingTarget(latest, artifact);
@@ -113,9 +116,13 @@ export async function assertReviewedLandingApplied(
   review: ReviewedMissionLanding,
   latestSnapshot: ReviewedMissionLanding["landing"]["snapshot"],
 ): Promise<void> {
-  const latest = missionLandingAuthority(latestSnapshot);
+  const latest = missionLandingAuthority(latestSnapshot, review.landing.selection);
   if (!latest || landingIdentity(latest) !== review.identity) {
     throw new Error("Mission or Receipt changed after Landing apply");
+  }
+  if (latestSnapshot.mission.state === "completed") {
+    const completionProblem = landingCompletionProblem(latest);
+    if (completionProblem) throw new Error(completionProblem);
   }
   const current = await readMissionLanding(latest);
   if (current.artifacts.length !== review.artifacts.length) {
@@ -166,9 +173,9 @@ function requireArtifact(
 }
 
 function requireLatestArtifact(
-  artifacts: ReadonlyMap<string, NonNullable<ReturnType<typeof missionLanding>>["artifacts"][number]>,
+  artifacts: ReadonlyMap<string, MissionLandingArtifact>,
   artifactPath: string,
-): NonNullable<ReturnType<typeof missionLanding>>["artifacts"][number] {
+): MissionLandingArtifact {
   const artifact = artifacts.get(artifactPath);
   if (!artifact) throw new Error(`Mission no longer names Artifact: ${artifactPath}`);
   return artifact;

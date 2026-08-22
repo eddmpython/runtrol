@@ -18,6 +18,12 @@
 > 적용 버튼을 선택해 네 Artifact를 적용하고 봉인 후 원본 변조, 대상과 Receipt drift, 미저장 편집기, 링크
 > 교체, Gate의 파일 변경을 각각 거부한 뒤 복구와 재시도 완료까지 확인했다.
 >
+> Fleet Compare는 이제 비교에서 멈추지 않는다. 통과 Task 하나를 선택하면 그 Task 이름과 Receipt만 담은 native
+> winner multi-diff가 열리고, 공개 적용 버튼 한 번이 다른 후보를 섞지 않은 채 정확한 바이트를 적용하고 고정 Gate와
+> Core 완료까지 잇는다. Core는 완료 뒤에도 선택한 Task와 Receipt를 영구 증거로 남겨 응답 유실 복구가 다른 후보를
+> 성공으로 오인하지 못한다. 두 실제 CLI의 서로 다른 결과 중 `attempt-2`만 프로젝트에 적용해 `completed`가 되는
+> 실제 Extension Host 여정과 화면을 검증했다.
+>
 > `Mission Auto Flight`는 검토된 일반 Mission을 PC에서 한 번 무장하면, 실제 provider 턴의 세대 변화를
 > 증명한 뒤 고정 Gate와 Receipt를 봉인하고 다음 안전한 DAG 파동을 자동으로 시작한다. 사람과 quota 대기,
 > 일시정지는 그대로 기다리고, 권한 변화, 모호한 전송, 복구 상태에서는 즉시 해제된다. 두 파동 실물 CLI

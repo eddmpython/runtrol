@@ -39,6 +39,27 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
         found.append("the manifest contributes a secondary side bar container below the VS Code 1.106 engine floor")
     if '"activitybar"' not in contribution_text:
         found.append("the extension has no Activity Bar control surface")
+    menus = contributes.get("menus") if isinstance(contributes, dict) else None
+    item_context = menus.get("view/item/context") if isinstance(menus, dict) else None
+    winner_entries = item_context if isinstance(item_context, list) else []
+    winner_task_when = (
+        "view == runtrol.missions && viewItem =~ "
+        "/^runtrol\\.missionTask\\.passed(\\.session)?\\.chooseOne\\.integrating$/"
+    )
+    winner_task_entry = any(
+        isinstance(entry, dict)
+        and entry.get("command") == "runtrol.reviewMissionLanding"
+        and entry.get("when") == winner_task_when
+        for entry in winner_entries
+    )
+    winner_mission_entry = any(
+        isinstance(entry, dict)
+        and entry.get("command") == "runtrol.reviewMissionLanding"
+        and entry.get("when") == "view == runtrol.missions && viewItem == runtrol.mission.integrating.chooseOne"
+        for entry in winner_entries
+    )
+    if not winner_task_entry or not winner_mission_entry:
+        found.append("Fleet winner Landing must be reachable from both the integrating Mission and a passed Task")
 
     all_source = "\n".join(sources.values())
     forbidden = {
@@ -159,13 +180,25 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
             "missionFlightSignal",
             "missionFlightSignalClear",
             "hasAutoFlightRecord",
+            "Integrated winner Task",
+            "Integrated winner Receipt",
         ],
         "mission/landing/apply.ts": [
             "applyLandingTransaction",
+            "landingCompletionProblem",
             "readMissionLanding",
             "createLandingDirectories",
             "writeAtomicLandingFile",
             "readLandingTarget",
+        ],
+        "mission/landing/model.ts": [
+            "type LandingSelection",
+            "missionWinnerLanding",
+            'selection.kind === "chooseOne"',
+            "snapshot.tasks.filter",
+            "selection: landing.selection",
+            "landingCompletionProblem",
+            "selected_receipt_id",
         ],
         "mission/landing/review.ts": [
             "MAX_DIFF_TEXT",
@@ -191,6 +224,7 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
             'state: "reviewed" | "appliedAwaitingCore"',
             "withProjectLease",
             "completeLandingWithRecovery",
+            "review.landing.selection.taskId",
         ],
         "mission/projectLease.ts": [
             "runtrol-project-integration-leases",
@@ -259,7 +293,27 @@ def engineAtLeast(package: dict, floor: tuple[int, int]) -> bool:
 
 def selftest() -> int:
     """Prove the detector rejects each class of defect."""
-    package = {"engines": {"vscode": "^1.106.0"}, "contributes": {"viewsContainers": {"activitybar": []}}}
+    package = {
+        "engines": {"vscode": "^1.106.0"},
+        "contributes": {
+            "viewsContainers": {"activitybar": []},
+            "menus": {
+                "view/item/context": [
+                    {
+                        "command": "runtrol.reviewMissionLanding",
+                        "when": "view == runtrol.missions && viewItem == runtrol.mission.integrating.chooseOne",
+                    },
+                    {
+                        "command": "runtrol.reviewMissionLanding",
+                        "when": (
+                            "view == runtrol.missions && viewItem =~ "
+                            "/^runtrol\\.missionTask\\.passed(\\.session)?\\.chooseOne\\.integrating$/"
+                        ),
+                    },
+                ]
+            },
+        },
+    }
     sources = {
         "core/framing.ts": (
             "MAX_FRAME_BYTES MAX_QUEUED_FRAMES MAX_QUEUED_BYTES setImmediate "
@@ -293,11 +347,16 @@ def selftest() -> int:
         ),
         "mission/controller.ts": (
             "AUTO_FLIGHTS_KEY runtimeState.onDidChange beforeSubmissions recordSubmissions startAutoFlights "
-            "missionFlightSignal missionFlightSignalClear hasAutoFlightRecord"
+            "missionFlightSignal missionFlightSignalClear hasAutoFlightRecord "
+            "Integrated winner Task Integrated winner Receipt"
         ),
         "mission/landing/apply.ts": (
-            "applyLandingTransaction readMissionLanding createLandingDirectories "
+            "applyLandingTransaction landingCompletionProblem readMissionLanding createLandingDirectories "
             "writeAtomicLandingFile readLandingTarget"
+        ),
+        "mission/landing/model.ts": (
+            'type LandingSelection missionWinnerLanding selection.kind === "chooseOne" '
+            "snapshot.tasks.filter selection: landing.selection landingCompletionProblem selected_receipt_id"
         ),
         "mission/landing/review.ts": (
             "MAX_DIFF_TEXT document.isDirty tab.isDirty Receipt Artifact evidence mismatch"
@@ -311,7 +370,7 @@ def selftest() -> int:
         ),
         "mission/landing/controller.ts": (
             'private currentReview state: "reviewed" | "appliedAwaitingCore" withProjectLease '
-            "completeLandingWithRecovery"
+            "completeLandingWithRecovery review.landing.selection.taskId"
         ),
         "mission/projectLease.ts": (
             "runtrol-project-integration-leases acquireProcessLease ACTIVE_PROCESS_LEASES "
@@ -345,6 +404,7 @@ def selftest() -> int:
 
     mutations = [
         ({**package, "dependencies": {"some-runtime": "1"}}, sources),
+        ({**package, "contributes": {"viewsContainers": {"activitybar": []}}}, sources),
         ({"engines": {"vscode": "^1.100.0"}, "contributes": {"viewsContainers": {"activitybar": [], "secondarySidebar": []}}}, sources),
         (package, {**sources, "webview/main.ts": "localStorage MAX_VISIBLE_ITEMS"}),
         (package, {**sources, "controller.ts": "setInterval("}),
@@ -369,6 +429,15 @@ def selftest() -> int:
                 **sources,
                 "mission/landing/apply.ts": sources["mission/landing/apply.ts"].replace(
                     "applyLandingTransaction", ""
+                ),
+            },
+        ),
+        (
+            package,
+            {
+                **sources,
+                "mission/landing/model.ts": sources["mission/landing/model.ts"].replace(
+                    "missionWinnerLanding", ""
                 ),
             },
         ),

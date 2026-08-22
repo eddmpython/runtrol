@@ -169,7 +169,7 @@ export class MissionController implements vscode.Disposable {
             .map((mission) => this.get(mission.mission_id)),
         );
       },
-      complete: (snapshot) => this.verifyAndCompleteIntegration(snapshot, null),
+      complete: (snapshot, selectedTaskId) => this.verifyAndCompleteIntegration(snapshot, selectedTaskId),
       withProjectLease: (snapshot, action) => this.projectLeases.run(
         snapshot.mission.project,
         snapshot.mission.mission_id,
@@ -1302,7 +1302,7 @@ export class MissionController implements vscode.Disposable {
   }
 
   async reviewMissionLanding(selection?: MissionSelection): Promise<void> {
-    await this.landings.reviewAndApply(selection?.mission?.mission_id);
+    await this.landings.reviewAndApply(selection?.mission?.mission_id, selection?.task?.task_id);
   }
 
   async completeIntegration(selection?: MissionSelection): Promise<void> {
@@ -1352,16 +1352,16 @@ export class MissionController implements vscode.Disposable {
     await this.projectLeases.run(
       snapshot.mission.project,
       snapshot.mission.mission_id,
-      () => this.verifyAndCompleteIntegration(snapshot, selectedTask),
+      () => this.verifyAndCompleteIntegration(snapshot, selectedTask?.task_id ?? null),
     );
   }
 
-  async reviewMissionLandingForJourney(missionId: string): Promise<void> {
-    await this.landings.reviewForJourney(missionId);
+  async reviewMissionLandingForJourney(missionId: string, taskId?: string): Promise<void> {
+    await this.landings.reviewForJourney(missionId, taskId);
   }
 
-  async applyMissionLandingForJourney(missionId: string): Promise<MissionSnapshot> {
-    return this.landings.applyForJourney(missionId);
+  async applyMissionLandingForJourney(missionId: string, taskId?: string): Promise<MissionSnapshot> {
+    return this.landings.applyForJourney(missionId, taskId);
   }
 
   async compareResults(selection?: MissionSelection): Promise<void> {
@@ -1420,11 +1420,11 @@ export class MissionController implements vscode.Disposable {
 
   private async verifyAndCompleteIntegration(
     snapshot: MissionSnapshot,
-    selectedTask: MissionTaskLine | null,
+    selectedTaskId: string | null,
   ): Promise<MissionSnapshot> {
     const completed = requireResponse((await this.client.once({
       ask: "missionCompleteIntegration",
-      with: { mission_id: snapshot.mission.mission_id, task_id: selectedTask?.task_id ?? null },
+      with: { mission_id: snapshot.mission.mission_id, task_id: selectedTaskId },
     })).response, "mission");
     await this.acceptSnapshot(completed, true);
     return completed;
@@ -2023,6 +2023,12 @@ function missionDocument(snapshot: MissionSnapshot): string {
     "",
     `Progress: ${snapshot.mission.passed_tasks}/${snapshot.mission.total_tasks}`,
     "",
+    ...(snapshot.integration?.selected_task_id ? [
+      `Integrated winner Task: ${inline(snapshot.integration.selected_task_id)}`,
+      "",
+      `Integrated winner Receipt: ${inline(snapshot.integration.selected_receipt_id ?? "missing")}`,
+      "",
+    ] : []),
     "## Tasks",
     "",
   ];
