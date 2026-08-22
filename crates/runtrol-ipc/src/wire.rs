@@ -1028,6 +1028,9 @@ pub struct MissionTaskLine {
     pub output_roots: Vec<Box<str>>,
     /// Passing receipt Artifact paths, without file contents.
     pub artifact_paths: Vec<Box<str>>,
+    /// Exact path, size, and digest evidence from the passing Receipt, without file contents.
+    #[serde(default)]
+    pub artifacts: Vec<MissionArtifactLine>,
     /// Exact deterministic gate references.
     pub gate_refs: Vec<Box<str>>,
     /// Exact locally approved project capabilities selected by the reviewed Mission.
@@ -1046,6 +1049,17 @@ pub struct MissionTaskLine {
     pub passed_gates: u16,
     /// Failed deterministic Gate count across retained Runs.
     pub failed_gates: u16,
+}
+
+/// One content-free Artifact identity from a passing Receipt.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct MissionArtifactLine {
+    /// Normalized project-relative path.
+    pub path: Box<str>,
+    /// Exact sealed byte count.
+    pub size: u64,
+    /// Exact sealed SHA-256 digest.
+    pub sha256: Box<str>,
 }
 
 /// One explicit Mission capability reference without capability body bytes.

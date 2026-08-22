@@ -148,25 +148,37 @@ credentials are not Receipt fields.
 
 ## Integration
 
-When every Task has a passing Receipt, the Mission enters `integrating`. Completion remains a local manual action.
+When every Task has a passing Receipt, the Mission enters `integrating`. Landing remains a local explicit action.
 Core rechecks the current integrated project artifacts against all passing Receipts and reruns the distinct reviewed
-Gate set on that tree. Only an exact match with all Gates passing moves the Mission to `completed`. Runtrol does not
-merge, rebase, resolve conflicts, or select a branch automatically.
+Gate set on that tree. It collects and compares Artifact evidence before the Gates and again after them. Only both
+exact matches with all Gates passing move the Mission to `completed`. Runtrol does not merge, rebase, resolve
+conflicts, or select a branch automatically.
 
-For an ordinary `all_tasks` Mission, **Review Mission Landing Queue** replaces a blind jump from Receipts to final
+For an ordinary `all_tasks` Mission, **Review and Apply Mission Landing** replaces a blind jump from Receipts to final
 verification. Studio rejects missing Receipt evidence, unsafe or non-canonical paths, case-folded overlapping project
-targets, missing workspace Artifacts, non-file project targets, non-UTF-8 Artifact text, and review sides above 8 MiB
-combined before it opens a review. It then combines every sealed Artifact into one native VS Code changes editor, up
-to a fixed 1,024 Artifact review bound. The left side is the current project at review time and the right side is the
-exact passing Receipt result. Both are bounded, read-only in-memory snapshots, so applying files or
-Core cleaning a finished worktree cannot invalidate the open review. They are never written to disk and contain no
-conversation content.
+targets, missing workspace Artifacts, Receipt size or SHA-256 mismatches, non-file project targets, symbolic links
+below either reviewed root, dirty text, notebook or custom-editor tabs for an Artifact, non-UTF-8 Artifact text, and
+review sides above 8 MiB combined before it opens a review. It preflights every stat size before allocation and reads
+through fixed-length file handles that verify file identity and EOF. It combines
+every sealed Artifact into one native VS Code changes editor, up to a fixed 1,024 Artifact bound. The left side is the
+current project at review time and the right side is the exact passing Receipt result. Both are bounded read-only
+in-memory snapshots and contain no conversation content.
 
-The review does not apply, merge, stage, or commit a file. After the operator integrates the reviewed result, **Run
-Gates and complete** closes the Landing review and invokes the existing Core completion request. Core still compares
-the live project bytes with every Receipt and reruns the fixed Gates. If other ordinary Missions are waiting across
-projects, Studio reports the exact count and offers **Review next**. `choose_one` Missions remain on Fleet Compare and
-its explicit winner selection path.
+**Apply, run Gates and complete** re-fetches the exact Mission and Receipt identities and re-reads every source and
+target before the first write. Mission, Receipt, source, target, existence, link, or editor drift refuses the whole
+operation. Studio holds one cross-window lease for the canonical project through Core completion. Each target is
+prepared with exclusive creation in its verified parent, byte-checked, and atomically renamed only after one final
+source and target compare. If a later replacement or verification fails, rollback changes a target only while it still
+contains the exact bytes written by this action, then reads it again to prove restoration. It never stages or commits.
+Core compares all live project bytes with every Receipt before and after the fixed Gates. Gate failure or Gate mutation
+leaves visible Git changes and the Mission in `integrating`; the retained Landing can retry Core without rewriting
+already exact files. If the Core commits completion but its response is lost, Studio refreshes the snapshot and accepts
+success only when the Mission is `completed`, the reviewed Mission and Receipt authority is unchanged, and every
+applied byte is still exact. A retry that already observes those facts performs no second write or completion request.
+During managed Core supersession, an older busy Core without Artifact evidence makes Landing unavailable instead of
+throwing or trusting Receipt paths alone. If other ordinary Missions are waiting across projects, Studio reports the
+exact count and offers **Review next**. `choose_one` Missions remain on Fleet Compare and its explicit winner-selection
+path.
 
 ## Recovery and retention
 
@@ -201,8 +213,9 @@ renderer. The normal sequence is:
    Gates, seals the Receipt, and starts the next eligible DAG wave without another click.
 6. Use granular recovery only for a failed, retryable, missing, or ambiguous Task. Working sessions, person or quota
    waits, comparison policy, and integration never advance by inference.
-7. For an ordinary Mission, open **Review Mission Landing Queue**, integrate the reviewed Receipt Artifacts, then
-   select **Run Gates and complete**. Use the direct completion command only as the explicit recovery path.
+7. For an ordinary Mission, open **Review and Apply Mission Landing**, inspect every Receipt Artifact in the native
+   multi-diff, then select **Apply, run Gates and complete**. Use direct completion only as a recovery path after a
+   separately integrated tree.
 8. Archive the terminal Mission.
 
 A `choose_one` comparison keeps its specialized `Run All Reviewed Attempts` and explicit result comparison flow.
@@ -239,8 +252,8 @@ verifying work.
 Working Tasks and person or quota waits retain the arm. Pausing a Mission retains it without advancing. Expired or
 changed authority, ambiguous delivery, a missing or replaced session, Gate failure, retry or recovery state,
 comparison flow, cancellation, and any other stopped state disarm it. Reaching `integrating` also disarms it and
-offers Receipt Landing. Applying Artifacts, merging, final Gate verification, and Mission completion always remain
-explicit operator actions.
+offers Receipt Landing. Exact reviewed Artifact application, final Gate verification, and Mission completion share
+one explicit operator action. Semantic merging and conflict resolution remain outside Runtrol.
 
 Every person wait, safety stop, or arrival at Receipt Landing is staged in a durable Studio outbox before Auto
 Flight gives up its input authority. The entry contains only a random signal UUID, Mission ID and digest, and one

@@ -52,6 +52,18 @@ if (bundled.status !== 0) {
 }
 
 const temporary = await mkdtemp(path.join(os.tmpdir(), "runtrol-eye-window-"));
+const mutatingProjectEntries = new Set([
+  "fleetEye",
+  "missionAutoFlightEye",
+  "missionFlightDeckEye",
+  "missionMomentumEye",
+]);
+// Focused Mission eyes build and commit their own fixture repository. Their default must live inside this harness's
+// owned temporary root, while an explicitly requested folder remains exact and ordinary read-only eyes keep the
+// repository default documented above.
+const eyeFolder = !process.env.RUNTROL_EYE_FOLDER && mutatingProjectEntries.has(eyeEntry)
+  ? path.join(temporary, "project")
+  : folder;
 const extensionUnderTestRoot = path.join(temporary, "extension");
 const testEntry = path.join(temporary, "realWindowEye.test.cjs");
 const resultPath = path.join(temporary, "result.json");
@@ -81,6 +93,7 @@ if (eyeEntry === "agentToolsEye") {
 let daemon = null;
 let daemonStderr = "";
 try {
+  await mkdir(eyeFolder, { recursive: true });
   await mkdir(extensionUnderTestRoot, { recursive: true });
   await Promise.all([
     cp(path.join(extensionRoot, "package.json"), path.join(extensionUnderTestRoot, "package.json")),
@@ -96,7 +109,7 @@ try {
       mkdir(environment.CODEX_HOME, { recursive: true }),
     ]);
   }
-  await writeFile(workspaceFile, JSON.stringify({ folders: [{ path: folder }] }), "utf8");
+  await writeFile(workspaceFile, JSON.stringify({ folders: [{ path: eyeFolder }] }), "utf8");
   await writeFile(
     path.join(userData, "User", "settings.json"),
     JSON.stringify({
@@ -140,8 +153,9 @@ try {
     RUNTROL_TEST_EXTENSION_ID: extensionIdentifier,
     RUNTROL_VSCODE_REAL_PROVIDER_JOURNEY: "1",
     RUNTROL_VSCODE_RESULT: resultPath,
-    RUNTROL_EYE_FOLDER: folder,
+    RUNTROL_EYE_FOLDER: eyeFolder,
     RUNTROL_EYE_PROVIDER: providerId,
+    RUNTROL_EYE_NODE: process.execPath,
     ...(process.env.RUNTROL_EYE_PROMPT ? { RUNTROL_EYE_PROMPT: process.env.RUNTROL_EYE_PROMPT } : {}),
     ...(process.env.RUNTROL_EYE_TABS ? { RUNTROL_EYE_TABS: process.env.RUNTROL_EYE_TABS } : {}),
   };

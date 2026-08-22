@@ -26,6 +26,7 @@ function task(key: string, state = "running"): MissionTaskLine {
     provider_selector: "operatorChoice",
     output_roots: ["src"],
     artifact_paths: [],
+    artifacts: [],
     gate_refs: ["check"],
     capability_versions: [],
     session_id: `session-${key}`,

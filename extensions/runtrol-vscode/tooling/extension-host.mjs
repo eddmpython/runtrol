@@ -262,21 +262,32 @@ listen = "stdio"
   const result = { ...measured, ...restored, ...followed };
   process.stdout.write(`RUNTROL_VSCODE_HOST ${JSON.stringify(result)}\n`);
 } catch (error) {
+  let hostError = error;
+  const reported = await readFile(resultPath, "utf8")
+    .then((contents) => JSON.parse(contents))
+    .catch(() => null);
+  if (reported && typeof reported.failure === "string") {
+    hostError = new Error(
+      `the VS Code test failed at ${String(reported.stage || "unknown")}: ${reported.failure}`
+      + (typeof reported.stack === "string" ? `\n${reported.stack}` : ""),
+      { cause: error },
+    );
+  }
   if (daemon && daemon.exitCode !== null) {
     throw new Error(`the VS Code host run failed after Core exited with ${String(daemon?.exitCode)}`, {
-      cause: error,
+      cause: hostError,
     });
   }
   const crash = await readFile(path.join(runtrolHome, "daemon-crash.log"), "utf8").catch(
     (readError) => readError.code === "ENOENT" ? "" : Promise.reject(readError),
   );
   if (crash) {
-    throw new Error(`the VS Code host run failed after a Core crash:\n${crash}`, { cause: error });
+    throw new Error(`the VS Code host run failed after a Core crash:\n${crash}`, { cause: hostError });
   }
   if (daemonStderr) {
-    throw new Error(`the VS Code host run failed and Core reported:\n${daemonStderr}`, { cause: error });
+    throw new Error(`the VS Code host run failed and Core reported:\n${daemonStderr}`, { cause: hostError });
   }
-  throw error;
+  throw hostError;
 } finally {
   const cleanupFailures = [];
   for (const session of [...managedSessions].reverse()) {

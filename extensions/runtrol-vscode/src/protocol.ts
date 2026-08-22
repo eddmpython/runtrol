@@ -97,6 +97,7 @@ export type MissionTaskLine = {
   provider_selector: string;
   output_roots: string[];
   artifact_paths: string[];
+  artifacts?: Array<{ path: string; size: number; sha256: string }>;
   gate_refs: string[];
   capability_versions: Array<{ capability_id: string; version_sha256: string }>;
   session_id: string | null;

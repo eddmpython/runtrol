@@ -11,10 +11,12 @@
 > 여러 프로젝트의 현재 안전한 파동을 함께 진행한다. 실제 Extension Host에서 두 Git 프로젝트를 한 동작으로
 > 동시에 시작하고 다음 한 동작으로 둘 다 `integrating`까지 보냈다.
 >
-> `Review Mission Landing Queue`는 일반 Mission의 모든 통과 Receipt Artifact를 현재 프로젝트와 한 개의
-> VS Code native multi-diff에서 검토한다. 파일은 바꾸지 않으며, 명시적 완료 동작이 기존 Core의 정확한
-> Receipt 비교와 고정 Gate를 실행한 뒤 다음 프로젝트를 잇는다. 실제 Extension Host에서 두 Git 프로젝트의
-> Landing을 차례로 검토하고 완료했다.
+> `Review and Apply Mission Landing`은 일반 Mission의 모든 통과 Receipt Artifact를 현재 프로젝트와 한 개의
+> VS Code native multi-diff에서 검토한다. `Apply, run Gates and complete` 한 동작이 Mission, Receipt, 원본,
+> 대상, 링크, 미저장 편집기를 다시 확인하고 검증된 임시 파일의 원자적 교체로 기존 파일과 새 파일에 정확한
+> 바이트를 적용한다. Core는 고정 Gate 전후의 Artifact를 Receipt와 비교한다. 실제 Extension Host에서 공개
+> 적용 버튼을 선택해 네 Artifact를 적용하고 봉인 후 원본 변조, 대상과 Receipt drift, 미저장 편집기, 링크
+> 교체, Gate의 파일 변경을 각각 거부한 뒤 복구와 재시도 완료까지 확인했다.
 >
 > `Mission Auto Flight`는 검토된 일반 Mission을 PC에서 한 번 무장하면, 실제 provider 턴의 세대 변화를
 > 증명한 뒤 고정 Gate와 Receipt를 봉인하고 다음 안전한 DAG 파동을 자동으로 시작한다. 사람과 quota 대기,

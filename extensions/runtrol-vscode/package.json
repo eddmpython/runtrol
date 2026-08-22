@@ -344,7 +344,7 @@
       },
       {
         "command": "runtrol.reviewMissionLanding",
-        "title": "Runtrol: Review Mission Landing Queue",
+        "title": "Runtrol: Review and Apply Mission Landing",
         "icon": "$(diff-multiple)"
       },
       {

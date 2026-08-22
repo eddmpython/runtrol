@@ -10,9 +10,11 @@
 > `Continue Ready Missions` 可一次审查最多八个精确 Mission 摘要，并同时推进多个项目当前安全的波次。真实 Extension Host 用一次操作启动了两个独立 Git 项目，并在下一次操作中将两者都推进到 `integrating`。
 > 下面多数分数为 0，不是因为没有代码，而是因为还没有门禁去断言那些轴。
 >
-> `Review Mission Landing Queue` 会在一个 VS Code 原生多文件 diff 中，将普通 Mission 的所有通过 Receipt
-> Artifact 与当前项目进行比较。它不会修改文件。一次明确的完成操作会让现有 Core 执行精确 Receipt
-> 比较与固定 Gate，然后继续下一个项目。真实 Extension Host 已依次审查并完成两个独立 Git 项目的 Landing。
+> `Review and Apply Mission Landing` 会在一个 VS Code 原生多文件 diff 中，将普通 Mission 的所有通过 Receipt
+> Artifact 与当前项目进行比较。一次 `Apply, run Gates and complete` 操作会重新检查 Mission、Receipt、源与
+> 目标字节、链接和未保存编辑器，把已审查的精确字节应用到现有与新文件，再运行 Core 的固定 Gate。真实
+> Extension Host 已在两个 Git 项目中应用四个 Artifact，拒绝项目与 Receipt 漂移并恢复，在第一个完成时保留
+> 第二个等待，随后打开下一个 Landing。
 >
 > `Mission Auto Flight` 只需在 PC 上为已审查的普通 Mission 授权一次。它通过 lifecycle generation 证明每个
 > 真实 provider turn，封存固定 Gate 与 Receipt，并自动启动下一个安全 DAG 波次。遇到人员、quota 等待或暂停

@@ -10,10 +10,11 @@
 > 通常の Mission は `Continue Reviewed Mission` 一回で現在安全な wave を開始し、完了した Task を固定 Gate で封印し、次の DAG wave を準備して正確なレビュー済み指示を送る。実物 CLI と Extension Host の二段階 journey で検証した。
 > `Continue Ready Missions` は最大八つの正確な Mission digest を一度にレビューし、複数 project の現在安全な wave をまとめて進める。実物 Extension Host で二つの Git project を一回で開始し、次の一回で両方を `integrating` に進めた。
 >
-> `Review Mission Landing Queue` は通常 Mission のすべての passing Receipt Artifact を、現在の project と
-> 一つの VS Code native multi-diff で比較する。ファイルは変更しない。明示的な完了操作が既存 Core の
-> 正確な Receipt 比較と固定 Gate を実行し、次の project へ続く。実物 Extension Host で二つの Git project
-> の Landing を順にレビューして完了した。
+> `Review and Apply Mission Landing` は通常 Mission のすべての passing Receipt Artifact を、現在の project と
+> 一つの VS Code native multi-diff で比較する。`Apply, run Gates and complete` 一回で Mission、Receipt、source と
+> target の byte、link、未保存 editor を再確認し、既存 file と新規 file にレビュー済みの正確な byte を適用して
+> Core の固定 Gate を実行する。実物 Extension Host で二つの Git project の四 Artifact を適用し、project と Receipt
+> の drift を拒否して復旧し、最初の完了中も二つ目を待機させたまま次の Landing を開いた。
 >
 > `Mission Auto Flight` はレビュー済みの通常 Mission を PC で一度 arm し、各実物 provider turn を
 > lifecycle generation で証明して固定 Gate と Receipt を封印し、次の安全な DAG wave を自動で開始する。

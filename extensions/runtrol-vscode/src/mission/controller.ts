@@ -5,7 +5,7 @@ import * as vscode from "vscode";
 
 import type { Controller } from "../controller";
 import type { CoreClient } from "../core/client";
-import { MAX_DIFF_TEXT, type DiffDocuments } from "../diffDocuments";
+import type { DiffDocuments } from "../diffDocuments";
 import type {
   GateLine,
   MissionLine,
@@ -39,17 +39,14 @@ import {
   type MissionFlightDeck,
 } from "./flightDeck";
 import { branchFromHead, gitdirTarget } from "./gitHead";
-import {
-  missionLanding,
-  missionLandingQueue,
-  safeArtifactPath,
-  type MissionLanding,
-} from "./landing";
+import { MissionLandingController } from "./landing/controller";
+import { safeArtifactPath } from "./landing/model";
 import {
   hasMissionMomentumWork,
   missionMomentum,
   type MissionMomentum,
 } from "./momentum";
+import { MissionProjectLeases } from "./projectLease";
 
 /// Where each project's last fan-out shape is remembered, never instruction text.
 const FAN_OUT_DEFAULTS_KEY = "runtrol.fanOutDefaults";
@@ -57,11 +54,6 @@ const FAN_OUT_DEFAULTS_KEY = "runtrol.fanOutDefaults";
 const AMBIGUOUS_TASK_SUBMISSIONS_KEY = "runtrol.ambiguousMissionTaskSubmissions";
 /// Exact local authority and Runtime generation markers for at most eight armed Mission Auto Flights.
 const AUTO_FLIGHTS_KEY = "runtrol.missionAutoFlights";
-const COMPLETE_LANDING = "Run Gates and complete";
-const REVIEW_NEXT_LANDING = "Review next";
-const LANDING_NOT_READY = "Mission cannot land";
-const LANDING_SUFFIX = ": Receipt Landing";
-
 /// The current branch of the repository at `folder`, or null when it cannot be read honestly.
 ///
 /// Read-only: `.git/HEAD` is the repository's own statement, and a linked worktree's one-line
@@ -139,6 +131,8 @@ export class MissionController implements vscode.Disposable {
   /// convenience path must not mistake the still-idle session for completed provider work, including after restart.
   private readonly ambiguousTaskSubmissions: AmbiguousSubmissions;
   private readonly autoFlights: AutoFlights;
+  private readonly landings: MissionLandingController;
+  private readonly projectLeases = new MissionProjectLeases();
   private readonly autoFlightSubscription: vscode.Disposable;
   /// An operator disarm takes effect in memory before the durable removal finishes. This closes the only await
   /// boundary before provider input while keeping the persisted arm conservative if storage itself refuses.
@@ -155,7 +149,7 @@ export class MissionController implements vscode.Disposable {
     private readonly sessions: Controller,
     private readonly runtimeState: RuntimeState,
     private readonly context: vscode.ExtensionContext,
-    private readonly diffDocuments: DiffDocuments,
+    diffDocuments: DiffDocuments,
   ) {
     this.ambiguousTaskSubmissions = new AmbiguousSubmissions(
       context.globalState.get<readonly string[]>(AMBIGUOUS_TASK_SUBMISSIONS_KEY, []),
@@ -165,6 +159,23 @@ export class MissionController implements vscode.Disposable {
       context.globalState.get<unknown>(AUTO_FLIGHTS_KEY, []),
       (arms) => context.globalState.update(AUTO_FLIGHTS_KEY, arms),
     );
+    this.landings = new MissionLandingController(diffDocuments, {
+      getSnapshot: (missionId) => this.get(missionId),
+      listIntegratingSnapshots: async () => {
+        await this.refresh();
+        return Promise.all(
+          this.rows
+            .filter((mission) => mission.state === "integrating")
+            .map((mission) => this.get(mission.mission_id)),
+        );
+      },
+      complete: (snapshot) => this.verifyAndCompleteIntegration(snapshot, null),
+      withProjectLease: (snapshot, action) => this.projectLeases.run(
+        snapshot.mission.project,
+        snapshot.mission.mission_id,
+        action,
+      ),
+    });
     this.autoFlightSubscription = runtimeState.onDidChange((change) => {
       if (change === "rows") this.scheduleAutoFlights();
     });
@@ -245,9 +256,10 @@ export class MissionController implements vscode.Disposable {
   ///
   /// Two reasons that turned out to be the same reason.
   ///
-  /// The extension writes exactly two things to disk (the selected-session scalar and the managed Core), and an
-  /// instruction is the prompt an operator gives an agent. Writing that would make this surface a place where
-  /// conversation starts living, which is the boundary the writer contract exists to hold.
+  /// The extension never writes instruction or conversation content. Its audited disk mutations are limited to
+  /// small local preference state, the managed Core, exact reviewed Receipt Landing bytes, and its bounded writer
+  /// lease. Writing an instruction here would make this surface a place where conversation starts living, which is
+  /// the boundary the writer contract exists to hold.
   ///
   /// And Mission binds a task to the exact bytes of its instruction because those bytes are meant to have been
   /// reviewed. A document generated, saved and validated without the operator seeing it would keep every mechanism
@@ -1289,49 +1301,8 @@ export class MissionController implements vscode.Disposable {
     await this.acceptSnapshot(snapshot, true);
   }
 
-  /// Open every Artifact sealed by one ordinary Mission as a single native VS Code multi-diff.
-  ///
-  /// The left side snapshots the current project and the right side snapshots the exact passing Task workspace.
-  /// This is the landing question, not a second view of one agent's branch: what still differs between all reviewed
-  /// results and the project that final Gate verification will inspect? No file is applied or interpreted here.
   async reviewMissionLanding(selection?: MissionSelection): Promise<void> {
-    let landing: MissionLanding | undefined;
-    if (selection?.mission) {
-      const snapshot = await this.get(selection.mission.mission_id);
-      landing = missionLanding(snapshot) ?? undefined;
-      if (!landing) throw new Error(LANDING_NOT_READY);
-    } else {
-      const queue = await this.currentLandingQueue();
-      if (queue.length === 0) {
-        await vscode.window.showInformationMessage("Queue empty.");
-        return;
-      }
-      landing = queue.length === 1
-        ? queue[0]
-        : await vscode.window.showQuickPick(
-          queue.map((entry) => ({
-            label: entry.snapshot.mission.name,
-            description: `${entry.artifacts.length} sealed`,
-            detail: entry.snapshot.mission.project,
-            entry,
-          })),
-          { title: "Landing Queue" },
-        ).then((picked) => picked?.entry);
-    }
-    if (!landing) return;
-    await this.openMissionLanding(landing);
-    const action = await vscode.window.showInformationMessage(
-      `${landing.snapshot.mission.name}: ${landing.artifacts.length} sealed Artifacts.`,
-      COMPLETE_LANDING,
-    );
-    if (action !== COMPLETE_LANDING) return;
-    await this.verifyAndCompleteIntegration(landing.snapshot, null);
-    const remaining = (await this.currentLandingQueue()).length;
-    const next = await vscode.window.showInformationMessage(
-      `${landing.snapshot.mission.name} completed. ${remaining > 0 ? `${remaining} ready to land.` : "Queue clear."}`,
-      ...(remaining > 0 ? [REVIEW_NEXT_LANDING] : []),
-    );
-    if (next === REVIEW_NEXT_LANDING) await this.reviewMissionLanding();
+    await this.landings.reviewAndApply(selection?.mission?.mission_id);
   }
 
   async completeIntegration(selection?: MissionSelection): Promise<void> {
@@ -1378,17 +1349,19 @@ export class MissionController implements vscode.Disposable {
       "Verify and complete",
     );
     if (action !== "Verify and complete") return;
-    await this.verifyAndCompleteIntegration(snapshot, selectedTask);
+    await this.projectLeases.run(
+      snapshot.mission.project,
+      snapshot.mission.mission_id,
+      () => this.verifyAndCompleteIntegration(snapshot, selectedTask),
+    );
   }
 
   async reviewMissionLandingForJourney(missionId: string): Promise<void> {
-    const result = missionLanding(await this.get(missionId));
-    if (!result) throw new Error(LANDING_NOT_READY);
-    await this.openMissionLanding(result);
+    await this.landings.reviewForJourney(missionId);
   }
 
-  async completeIntegrationForJourney(missionId: string): Promise<MissionSnapshot> {
-    return this.verifyAndCompleteIntegration(await this.get(missionId), null);
+  async applyMissionLandingForJourney(missionId: string): Promise<MissionSnapshot> {
+    return this.landings.applyForJourney(missionId);
   }
 
   async compareResults(selection?: MissionSelection): Promise<void> {
@@ -1445,62 +1418,10 @@ export class MissionController implements vscode.Disposable {
     }
   }
 
-  private async currentLandingQueue(): Promise<readonly MissionLanding[]> {
-    await this.refresh();
-    const snapshots: MissionSnapshot[] = [];
-    for (const mission of this.rows.filter((candidate) => candidate.state === "integrating")) {
-      snapshots.push(await this.get(mission.mission_id));
-    }
-    return missionLandingQueue(snapshots);
-  }
-
-  private async openMissionLanding(landing: MissionLanding): Promise<void> {
-    const resources: Array<[vscode.Uri, vscode.Uri, vscode.Uri]> = [];
-    const decoder = new TextDecoder("utf-8", { fatal: true });
-    let heldBytes = 0;
-    for (const artifact of landing.artifacts) {
-      const source = fileUnder(artifact.task.workspace as string, artifact.path);
-      const sourceSize = await fileSize(source);
-      if (sourceSize < 0) {
-        throw new Error(`Missing Artifact: ${artifact.path}`);
-      }
-      const target = fileUnder(landing.snapshot.mission.project, artifact.path);
-      const targetSize = await fileSize(target);
-      if (targetSize === -2) {
-        throw new Error(`Not a file: ${artifact.path}`);
-      }
-      heldBytes += sourceSize + Math.max(0, targetSize);
-      if (heldBytes > MAX_DIFF_TEXT) throw new Error("Landing exceeds 8 MiB");
-      const original = this.diffDocuments.snapshot(
-        targetSize >= 0
-          ? decoder.decode(await vscode.workspace.fs.readFile(target))
-          : "",
-        `landing/${artifact.path}`,
-      );
-      const modified = this.diffDocuments.snapshot(
-        decoder.decode(await vscode.workspace.fs.readFile(source)),
-        `receipt/${artifact.path}`,
-      );
-      resources.push([
-        target,
-        original,
-        modified,
-      ]);
-    }
-    await vscode.commands.executeCommand(
-      "vscode.changes",
-      `${landing.snapshot.mission.name}${LANDING_SUFFIX}`,
-      resources,
-    );
-  }
-
   private async verifyAndCompleteIntegration(
     snapshot: MissionSnapshot,
     selectedTask: MissionTaskLine | null,
   ): Promise<MissionSnapshot> {
-    await vscode.window.tabGroups.close(vscode.window.tabGroups.all.flatMap((group) =>
-      group.tabs.filter((tab) => tab.label.endsWith(LANDING_SUFFIX))
-    ));
     const completed = requireResponse((await this.client.once({
       ask: "missionCompleteIntegration",
       with: { mission_id: snapshot.mission.mission_id, task_id: selectedTask?.task_id ?? null },
@@ -1540,6 +1461,8 @@ export class MissionController implements vscode.Disposable {
     this.disposed = true;
     this.autoFlightPending = false;
     this.autoFlightSubscription.dispose();
+    this.landings.dispose();
+    this.projectLeases.clear();
     this.documents.dispose();
     this.changedEmitter.dispose();
   }
@@ -2207,13 +2130,6 @@ function flightDeckAction(momentum: MissionMomentum): string {
 
 function fileUnder(root: string, relative: string): vscode.Uri {
   return vscode.Uri.file(path.join(root, ...relative.split(/[\\/]/u)));
-}
-
-async function fileSize(uri: vscode.Uri): Promise<number> {
-  return vscode.workspace.fs.stat(uri).then(
-    (stat) => (stat.type & vscode.FileType.File) !== 0 ? stat.size : -2,
-    () => -1,
-  );
 }
 
 async function requiredInput(title: string, prompt: string, value?: string): Promise<string | null> {

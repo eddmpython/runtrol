@@ -25,9 +25,18 @@ REQUIRED: dict[str, tuple[str, ...]] = {
         "restart-ambiguous",
         "run_workspace_preparation",
         "prepare_integration",
+        "integration_artifacts_match(&intent.expected_artifacts, &mut artifacts_before)",
+        "the integrated Artifact tree could not be resealed after Gates",
+        "MissionArtifactLine",
         "MissionState::Completed",
         "MISSION_START_APPROVAL_WINDOW",
         "the local Mission start approval expired; validate it again",
+    ),
+    "crates/runtrol-ipc/src/wire.rs": (
+        "pub struct MissionArtifactLine",
+        "pub size: u64",
+        "pub sha256: Box<str>",
+        "pub artifacts: Vec<MissionArtifactLine>",
     ),
     "crates/runtrol-growth/src/lib.rs": (
         "CapabilityVerification",

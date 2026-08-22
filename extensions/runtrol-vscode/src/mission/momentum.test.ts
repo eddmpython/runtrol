@@ -15,6 +15,7 @@ function task(taskId: string, state: string, sessionId: string | null = null): M
     provider_selector: "operatorChoice",
     output_roots: ["src"],
     artifact_paths: [],
+    artifacts: [],
     gate_refs: ["check"],
     capability_versions: [],
     session_id: sessionId,

@@ -28,13 +28,19 @@ and refactoring that no user can observe do not belong here.
   remove it. Receipt Landing and final integration stay explicit. A real installed CLI completed two dependent
   waves, two Gate checks, and two Receipts with zero operator Continue actions in a photographed Extension Host.
 
-- **Review Mission Landing Queue** turns ordinary Mission integration into a cross-project, Receipt-first review.
+- **Review and Apply Mission Landing** turns ordinary Mission integration into a cross-project, Receipt-first review.
   Every sealed UTF-8 Artifact from one passing Mission opens together in one native VS Code changes editor against
-  the current project. The bounded read-only review changes no files. One explicit action closes the review, asks
-  Core to compare the live project with every Receipt and rerun the fixed Gates, then reports the remaining queue and
-  offers the next waiting project. Unsafe paths, overlapping targets, incomplete evidence, missing files, oversized
-  or non-UTF-8 text, and comparison Missions stay out. A real Extension Host landed two separate Git projects in
-  sequence without editor lifecycle errors.
+  the current project. One explicit action rechecks the Mission, Receipt path, size and SHA-256 evidence, source bytes,
+  project bytes, symbolic-link boundary, and dirty text, notebook or custom-editor tabs. Each replacement is prepared
+  and verified in an exclusive same-directory file, then atomically renamed only after a final compare. A bounded
+  transaction verifies rollback, while a cross-window project lease prevents two Studio writers. Core compares the
+  tree both before and after fixed Gates, so a passing Gate that edits an Artifact cannot complete the Mission. Gate
+  failure deliberately leaves reviewed Git changes visible for repair and retry. A lost completion response converges
+  from refreshed Core authority and exact applied bytes without rewriting files. An older busy Core that does not yet
+  publish Artifact evidence leaves Landing unavailable instead of crashing or trusting paths alone. A real Extension
+  Host selected the public apply action, applied existing and new files across two Git projects, rejected pre-review
+  Receipt mutation, project and Receipt drift, a dirty editor, a symbolic-link swap and a Gate mutation, then recovered
+  and completed.
 
 - **Continue Ready Missions** turns the Missions view into a bounded multi-project flight deck. One local modal lists
   the exact digest and currently safe action for up to eight reviewed ordinary Missions, then advances each through

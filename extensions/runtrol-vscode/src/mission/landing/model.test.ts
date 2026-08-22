@@ -1,8 +1,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import type { MissionSnapshot, MissionTaskLine } from "../protocol";
-import { missionLanding, missionLandingQueue, safeArtifactPath } from "./landing";
+import type { MissionSnapshot, MissionTaskLine } from "../../protocol";
+import {
+  landingByteDriftProblem,
+  landingIdentity,
+  missionLanding,
+  missionLandingAuthority,
+  missionLandingQueue,
+  safeArtifactPath,
+} from "./model";
 
 function task(
   key: string,
@@ -19,6 +26,7 @@ function task(
     provider_selector: "operatorChoice",
     output_roots: ["src"],
     artifact_paths: artifactPaths,
+    artifacts: artifactPaths.map((path) => ({ path, size: 1, sha256: "55".repeat(32) })),
     gate_refs: ["check"],
     capability_versions: [],
     session_id: `session-${key}`,
@@ -75,10 +83,15 @@ test("comparison Missions stay on their explicit winner-selection path", () => {
 });
 
 test("missing durable evidence refuses a review that could falsely authorize completion", () => {
+  const oldCoreTask = task("old-core", ["src/a.ts"]);
+  delete oldCoreTask.artifacts;
   for (const broken of [
+    oldCoreTask,
     task("workspace", ["src/a.ts"], { workspace: null }),
     task("receipt", ["src/a.ts"], { receipt_id: null }),
     task("artifact", []),
+    task("metadata", ["src/a.ts"], { artifacts: [] }),
+    task("digest", ["src/a.ts"], { artifacts: [{ path: "src/a.ts", size: 1, sha256: "invalid" }] }),
   ]) {
     assert.equal(missionLanding(snapshot(broken.key, [broken])), null);
   }
@@ -89,11 +102,10 @@ test("unsafe and overlapping target paths are never hidden inside the combined r
   for (const value of ["../secret", "/root/file", "C:/outside", "src\\file", "src//file", "src/./file"]) {
     assert.equal(safeArtifactPath(value), false, value);
   }
-  const overlap = missionLanding(snapshot("overlap", [
+  assert.equal(missionLanding(snapshot("overlap", [
     task("one", ["src/main.ts"]),
     task("two", ["src/main.ts"]),
-  ]));
-  assert.equal(overlap, null);
+  ])), null);
   assert.equal(missionLanding(snapshot("case-overlap", [
     task("one", ["src/Main.ts"]),
     task("two", ["src/main.ts"]),
@@ -125,4 +137,43 @@ test("the cross-project queue is deterministic and exposes every excluded Missio
   ]);
 
   assert.deepEqual(queue.map((landing) => landing.snapshot.mission.mission_id), ["alpha", "zeta"]);
+});
+
+test("Landing identity changes with Mission, Receipt, workspace, and target authority", () => {
+  const original = missionLanding(snapshot("ship", [task("one", ["src/main.ts"])]));
+  assert.ok(original);
+  for (const changed of [
+    snapshot("ship", [task("one", ["src/main.ts"], { receipt_id: "rcp_changed" })]),
+    snapshot("ship", [task("one", ["src/main.ts"], { workspace: "C:/worktrees/changed" })]),
+    snapshot("ship", [task("one", ["src/other.ts"])]),
+  ]) {
+    const landing = missionLanding(changed);
+    assert.ok(landing);
+    assert.notEqual(landingIdentity(landing), landingIdentity(original));
+  }
+});
+
+test("Landing identity survives only the expected integrating-to-completed lifecycle transition", () => {
+  const integrating = missionLanding(snapshot("ship", [task("one", ["src/main.ts"])]));
+  const completedSnapshot = snapshot("ship", [task("one", ["src/main.ts"])]);
+  completedSnapshot.mission.state = "completed";
+  const completed = missionLandingAuthority(completedSnapshot);
+
+  assert.ok(integrating);
+  assert.ok(completed);
+  assert.equal(landingIdentity(completed), landingIdentity(integrating));
+  assert.equal(missionLanding(completedSnapshot), null);
+});
+
+test("source, target, existence, and Artifact-set drift are named before apply", () => {
+  const reviewed = [{
+    path: "src/main.ts",
+    sourceBytes: Uint8Array.of(1, 2),
+    targetBytes: Uint8Array.of(3),
+  }];
+  assert.equal(landingByteDriftProblem(reviewed, reviewed), null);
+  assert.match(landingByteDriftProblem(reviewed, [{ ...reviewed[0], sourceBytes: Uint8Array.of(2) }]) ?? "", /Receipt/);
+  assert.match(landingByteDriftProblem(reviewed, [{ ...reviewed[0], targetBytes: Uint8Array.of(4) }]) ?? "", /Project/);
+  assert.match(landingByteDriftProblem(reviewed, [{ ...reviewed[0], targetBytes: null }]) ?? "", /existence/);
+  assert.match(landingByteDriftProblem(reviewed, []) ?? "", /set/);
 });

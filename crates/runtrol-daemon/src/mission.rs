@@ -10,8 +10,8 @@ use std::{
 use runtrol_childproc::{Containment, SpawnError, capture, capture_in, resolve};
 use runtrol_core::ProjectIdentity;
 use runtrol_ipc::wire::{
-    GateLine, MissionCapabilityLine, MissionInstruction, MissionLine, MissionSnapshot,
-    MissionTaskLine, MissionWorkspace, Request, Response,
+    GateLine, MissionArtifactLine, MissionCapabilityLine, MissionInstruction, MissionLine,
+    MissionSnapshot, MissionTaskLine, MissionWorkspace, Request, Response,
 };
 use runtrol_ledger::{
     ArtifactEvidence, ArtifactId, ArtifactRecord, GateEvidence, GateRunRecord, Ledger,
@@ -1582,10 +1582,7 @@ impl MissionController {
         if snapshot.mission.state != MissionState::Integrating {
             return Err("the Mission left integration review");
         }
-        evidence
-            .artifacts
-            .sort_by(|left, right| left.path.cmp(&right.path));
-        if evidence.artifacts != intent.expected_artifacts
+        if !integration_artifacts_match(&intent.expected_artifacts, &mut evidence.artifacts)
             || evidence
                 .gates
                 .iter()
@@ -1992,17 +1989,31 @@ pub(crate) async fn prepare_integration(
         .iter()
         .map(|artifact| artifact.path.clone())
         .collect::<Vec<_>>();
-    let Ok(Ok(artifacts)) =
+    let Ok(Ok(mut artifacts_before)) =
         tokio::task::spawn_blocking(move || collect_artifacts_at(&workspace, &roots)).await
     else {
         return failed("the integrated Artifact tree could not be sealed");
     };
+    if !integration_artifacts_match(&intent.expected_artifacts, &mut artifacts_before) {
+        return failed("the integrated tree does not match passing Task evidence before Gates");
+    }
     let gates = execute_gates(
         &composed.containment,
         &intent.project,
         &intent.gate_requests,
     )
     .await;
+    let workspace = intent.project.clone();
+    let roots = intent
+        .expected_artifacts
+        .iter()
+        .map(|artifact| artifact.path.clone())
+        .collect::<Vec<_>>();
+    let Ok(Ok(artifacts)) =
+        tokio::task::spawn_blocking(move || collect_artifacts_at(&workspace, &roots)).await
+    else {
+        return failed("the integrated Artifact tree could not be resealed after Gates");
+    };
     let mut controller = composed.missions.lock().await;
     controller
         .commit_integration(
@@ -2011,6 +2022,14 @@ pub(crate) async fn prepare_integration(
             IntegrationEvidence { artifacts, gates },
         )
         .unwrap_or_else(failed)
+}
+
+fn integration_artifacts_match(
+    expected: &[ArtifactEvidence],
+    actual: &mut [ArtifactEvidence],
+) -> bool {
+    actual.sort_by(|left, right| left.path.cmp(&right.path));
+    actual == expected
 }
 
 async fn commit_verification_failure(
@@ -2512,6 +2531,11 @@ fn task_line(
         .iter()
         .filter(|gate| run_ids.contains(&gate.run_id) && gate.outcome.as_ref() != "passed")
         .count();
+    let receipt = snapshot
+        .receipts
+        .iter()
+        .rev()
+        .find(|(_, receipt)| receipt.task_id == task.id);
     MissionTaskLine {
         task_id: task.id.to_string().into(),
         key: resolved.map_or_else(|| task.id.to_string().into(), |task| task.key.clone()),
@@ -2533,18 +2557,24 @@ fn task_line(
             },
         ),
         output_roots: resolved.map_or_else(Vec::new, |task| task.output_roots.clone()),
-        artifact_paths: snapshot
-            .receipts
-            .iter()
-            .rev()
-            .find(|(_, receipt)| receipt.task_id == task.id)
-            .map_or_else(Vec::new, |(_, receipt)| {
-                receipt
-                    .artifacts
-                    .iter()
-                    .map(|artifact| artifact.path.clone())
-                    .collect()
-            }),
+        artifact_paths: receipt.map_or_else(Vec::new, |(_, receipt)| {
+            receipt
+                .artifacts
+                .iter()
+                .map(|artifact| artifact.path.clone())
+                .collect()
+        }),
+        artifacts: receipt.map_or_else(Vec::new, |(_, receipt)| {
+            receipt
+                .artifacts
+                .iter()
+                .map(|artifact| MissionArtifactLine {
+                    path: artifact.path.clone(),
+                    size: artifact.size,
+                    sha256: hex(&artifact.sha256).into(),
+                })
+                .collect()
+        }),
         gate_refs: resolved.map_or_else(Vec::new, |task| task.gate_refs.clone()),
         capability_versions: resolved.map_or_else(Vec::new, |task| {
             task.capability_versions
@@ -2558,18 +2588,8 @@ fn task_line(
         session_id: binding.map(|binding| binding.runtime_session.clone()),
         workspace: workspace.map(|binding| binding.workspace.as_str().into()),
         base_commit: workspace.map(|binding| binding.base_commit.clone()),
-        receipt_id: snapshot
-            .receipts
-            .iter()
-            .rev()
-            .find(|(_, receipt)| receipt.task_id == task.id)
-            .map(|(id, _)| id.to_string().into()),
-        run_id: snapshot
-            .receipts
-            .iter()
-            .rev()
-            .find(|(_, receipt)| receipt.task_id == task.id)
-            .map(|(_, receipt)| receipt.run_id.to_string().into()),
+        receipt_id: receipt.map(|(id, _)| id.to_string().into()),
+        run_id: receipt.map(|(_, receipt)| receipt.run_id.to_string().into()),
         passed_gates: u16::try_from(passed_gates).unwrap_or(u16::MAX),
         failed_gates: u16::try_from(failed_gates).unwrap_or(u16::MAX),
     }
@@ -2893,6 +2913,15 @@ gate_refs = ["fixture-check"]
         let task = verified.tasks.first().expect("one verified Task");
         assert_eq!(task.state.as_ref(), "passed");
         assert!(task.receipt_id.is_some());
+        let [artifact] = task.artifacts.as_slice() else {
+            panic!("expected one Receipt Artifact");
+        };
+        assert_eq!(
+            artifact.path.as_ref(),
+            ".runtrol/handoffs/report/result.txt"
+        );
+        assert_eq!(artifact.size, 12);
+        assert_eq!(artifact.sha256.as_ref(), hex(&[8; 32]));
         let integration = controller
             .integration_intent(&scratch.ledger, &verified.mission.mission_id, None)
             .expect("integration intent");
@@ -2932,6 +2961,26 @@ gate_refs = ["fixture-check"]
             panic!("archived Mission");
         };
         assert_eq!(archived.mission.state.as_ref(), "archived");
+    }
+
+    #[test]
+    fn integration_artifacts_are_rechecked_as_exact_receipt_evidence() {
+        let expected = vec![ArtifactEvidence {
+            path: "result.txt".into(),
+            sha256: [7; 32],
+            size: 12,
+        }];
+        let mut exact = expected.clone();
+        assert!(integration_artifacts_match(&expected, &mut exact));
+        let mut changed_by_gate = vec![ArtifactEvidence {
+            path: "result.txt".into(),
+            sha256: [8; 32],
+            size: 12,
+        }];
+        assert!(!integration_artifacts_match(
+            &expected,
+            &mut changed_by_gate
+        ));
     }
 
     #[test]

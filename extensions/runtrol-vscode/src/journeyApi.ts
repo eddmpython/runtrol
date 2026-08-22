@@ -91,7 +91,7 @@ export type JourneyApi = {
   verifyMissionTask(missionId: string, taskId: string): Promise<MissionSnapshot>;
   compareMissionResults(missionId: string): Promise<void>;
   reviewMissionLanding(missionId: string): Promise<void>;
-  completeMissionIntegration(missionId: string): Promise<MissionSnapshot>;
+  applyMissionLanding(missionId: string): Promise<MissionSnapshot>;
 };
 
 export function journeyApi(
@@ -261,7 +261,7 @@ export function journeyApi(
       await missions.compareResults({ mission: snapshot.mission });
     }),
     reviewMissionLanding: (missionId) => afterReady(() => missions.reviewMissionLandingForJourney(missionId)),
-    completeMissionIntegration: (missionId) => afterReady(() => missions.completeIntegrationForJourney(missionId)),
+    applyMissionLanding: (missionId) => afterReady(() => missions.applyMissionLandingForJourney(missionId)),
     waitForLifecycle: (session, lifecycle, deadlineMs) => afterReady(() => new Promise<void>((resolve, reject) => {
       const matches = (): boolean =>
         state.sessions.some((candidate) => candidate.sessionId === session && candidate.lifecycle === lifecycle);

@@ -1,8 +1,8 @@
 """Gate: the VS Code surface stays thin, bounded, buildable, and package-shaped.
 
 The gate deliberately checks the source contract before invoking the toolchain. A bundle that compiles can still
-poll, persist conversation data, keep hidden renderers alive, or ship runtime Node dependencies. The only product
-disk writers are the bounded selected-session scalar and the reviewed atomic managed-Core installer.
+poll, persist conversation data, keep hidden renderers alive, or ship runtime Node dependencies. Product disk writes
+are limited to the bounded selected-session scalar, reviewed Receipt Landing modules, and atomic Core installer.
 
 Usage::
 
@@ -13,6 +13,7 @@ Usage::
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -53,19 +54,31 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
             found.append(f"{meaning} is reachable through `{token}`")
 
     writers = [relative for relative, source in sources.items() if "writeFile(" in source]
-    if writers != ["selectionStore.ts"]:
+    expected_writers = {"selectionStore.ts"}
+    if set(writers) != expected_writers or len(writers) != len(expected_writers):
         found.append(
-            "the only filesystem writer must be selectionStore.ts, found "
+            "direct writeFile calls must stay in selectionStore.ts, found "
             + (", ".join(writers) if writers else "none")
+        )
+    handleWriters = [
+        relative
+        for relative, source in sources.items()
+        if "handle.write(" in source or re.search(r"\bopen\([^,\n]+,\s*[\"'][wax]", source)
+    ]
+    if handleWriters != ["mission/landing/atomicFile.ts"]:
+        found.append(
+            "write-capable file handles must stay in mission/landing/atomicFile.ts, found "
+            + (", ".join(handleWriters) if handleWriters else "none")
         )
     coreWriters = [
         relative
         for relative, source in sources.items()
         if any(token in source for token in ("copyFile(", "link(", "rename(", "unlink("))
     ]
-    if coreWriters != ["core/managedCore.ts"]:
+    expected_replacers = {"core/managedCore.ts", "mission/landing/atomicFile.ts"}
+    if set(coreWriters) != expected_replacers or len(coreWriters) != len(expected_replacers):
         found.append(
-            "the only managed Core writer must be core/managedCore.ts, found "
+            "atomic replacement must stay in managedCore.ts and mission/landing/atomicFile.ts, found "
             + (", ".join(coreWriters) if coreWriters else "none")
         )
     selection_source = sources.get("selectionStore.ts", "")
@@ -146,6 +159,45 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
             "missionFlightSignal",
             "missionFlightSignalClear",
             "hasAutoFlightRecord",
+        ],
+        "mission/landing/apply.ts": [
+            "applyLandingTransaction",
+            "readMissionLanding",
+            "createLandingDirectories",
+            "writeAtomicLandingFile",
+            "readLandingTarget",
+        ],
+        "mission/landing/review.ts": [
+            "MAX_DIFF_TEXT",
+            "document.isDirty",
+            "tab.isDirty",
+            "Receipt Artifact evidence mismatch",
+        ],
+        "mission/landing/localFile.ts": [
+            "inspectSafeLocalFile",
+            "readExactLocalFile",
+            "opened.dev !== file.device",
+            "named.isSymbolicLink()",
+        ],
+        "mission/landing/atomicFile.ts": [
+            'open(temporary, "wx+"',
+            "handle.write",
+            "handle.sync",
+            "beforeReplace",
+            "rename(temporary, target)",
+        ],
+        "mission/landing/controller.ts": [
+            "private currentReview",
+            'state: "reviewed" | "appliedAwaitingCore"',
+            "withProjectLease",
+            "completeLandingWithRecovery",
+        ],
+        "mission/projectLease.ts": [
+            "runtrol-project-integration-leases",
+            "acquireProcessLease",
+            "ACTIVE_PROCESS_LEASES",
+            "attempt < 3",
+            "process.kill(pid, 0)",
         ],
         "core/client.ts": ["commandConnection", "commandTail"],
         "runtimeClient.ts": [
@@ -243,6 +295,28 @@ def selftest() -> int:
             "AUTO_FLIGHTS_KEY runtimeState.onDidChange beforeSubmissions recordSubmissions startAutoFlights "
             "missionFlightSignal missionFlightSignalClear hasAutoFlightRecord"
         ),
+        "mission/landing/apply.ts": (
+            "applyLandingTransaction readMissionLanding createLandingDirectories "
+            "writeAtomicLandingFile readLandingTarget"
+        ),
+        "mission/landing/review.ts": (
+            "MAX_DIFF_TEXT document.isDirty tab.isDirty Receipt Artifact evidence mismatch"
+        ),
+        "mission/landing/localFile.ts": (
+            "inspectSafeLocalFile readExactLocalFile opened.dev !== file.device "
+            "named.isSymbolicLink()"
+        ),
+        "mission/landing/atomicFile.ts": (
+            'open(temporary, "wx+" handle.write handle.sync beforeReplace rename(temporary, target)'
+        ),
+        "mission/landing/controller.ts": (
+            'private currentReview state: "reviewed" | "appliedAwaitingCore" withProjectLease '
+            "completeLandingWithRecovery"
+        ),
+        "mission/projectLease.ts": (
+            "runtrol-project-integration-leases acquireProcessLease ACTIVE_PROCESS_LEASES "
+            "attempt < 3 process.kill(pid, 0)"
+        ),
         "core/client.ts": "commandConnection commandTail",
         "runtimeClient.ts": (
             "RuntimeLocator.system( RUNTIME_LOCATOR_SETTLE_MS isAbsolute(runtimeExecutable) withRuntimeLocator "
@@ -287,7 +361,53 @@ def selftest() -> int:
         (package, {**sources, "conversationView.ts": "webviewReady"}),
         (package, {**sources, "controller.ts": sources["controller.ts"].replace("workspaceCollisions", "")}),
         (package, {**sources, "controller.ts": sources["controller.ts"] + " writeFile("}),
+        (package, {**sources, "controller.ts": sources["controller.ts"] + ' open(file, "w")'}),
         (package, {**sources, "controller.ts": sources["controller.ts"] + " copyFile("}),
+        (
+            package,
+            {
+                **sources,
+                "mission/landing/apply.ts": sources["mission/landing/apply.ts"].replace(
+                    "applyLandingTransaction", ""
+                ),
+            },
+        ),
+        (
+            package,
+            {
+                **sources,
+                "mission/landing/localFile.ts": sources["mission/landing/localFile.ts"].replace(
+                    "named.isSymbolicLink()", ""
+                ),
+            },
+        ),
+        (
+            package,
+            {
+                **sources,
+                "mission/landing/atomicFile.ts": sources["mission/landing/atomicFile.ts"].replace(
+                    "beforeReplace", ""
+                ),
+            },
+        ),
+        (
+            package,
+            {
+                **sources,
+                "mission/landing/controller.ts": sources["mission/landing/controller.ts"].replace(
+                    "completeLandingWithRecovery", ""
+                ),
+            },
+        ),
+        (
+            package,
+            {
+                **sources,
+                "mission/projectLease.ts": sources["mission/projectLease.ts"].replace(
+                    "acquireProcessLease", ""
+                ),
+            },
+        ),
         (package, {**sources, "selectionStore.ts": sources["selectionStore.ts"] + " prompt"}),
         (package, {**sources, "selectionStore.ts": sources["selectionStore.ts"].replace("retryTransientWrite", "")}),
         (package, {**sources, "journeyApi.ts": "return undefined sessions: () => [...state.sessions]"}),
@@ -411,11 +531,15 @@ def run() -> int:
     # Raised 352 -> 368 KiB on 2026-08-22 when Mission Auto Flight crossed it at 374114 bytes: bounded local
     # authority, event-driven DAG waves, durable lifecycle-generation proof, immediate disarm, and explicit
     # Receipt Landing, reviewed in the real Extension Host at the crossing.
+    # Raised 368 -> 384 KiB on 2026-08-22 when Receipt Landing apply crossed it at 382764 bytes: exact reviewed
+    # Artifact writes, pre-apply drift and symlink defenses, bounded rollback, and one-action Gate completion.
+    # Raised 384 -> 400 KiB in the same review when the proof found and closed missing Receipt digests, unbounded
+    # pre-reads, non-atomic replacement, cross-window writer races, dirty non-text tabs, and Gate mutation races.
     # A dependency slipping in still trips it.
     bundles = [EXTENSION / "dist" / name for name in ("extension.js", "webview.js", "webview.css")]
     for bundle in bundles:
-        if not bundle.is_file() or bundle.stat().st_size > 368 * 1024:
-            failures.append(f"{bundle.relative_to(ROOT)} is missing or exceeds 368 KiB")
+        if not bundle.is_file() or bundle.stat().st_size > 400 * 1024:
+            failures.append(f"{bundle.relative_to(ROOT)} is missing or exceeds 400 KiB")
     extension_bundle = EXTENSION / "dist" / "extension.js"
     if extension_bundle.is_file() and "RUNTROL_VSCODE_REAL_PROVIDER_JOURNEY" in extension_bundle.read_text(
         encoding="utf-8"
