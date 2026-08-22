@@ -104,6 +104,7 @@ async function verifyOwnedProcessTreeCleanup() {
     assert.ok(processExists(descendant.pid), "the descendant is still running when the sweep starts");
 
     await terminateCapturedIdentities(captured);
+    await waitForProcessExit(captured.map((identity) => identity.pid), 5_000);
     assert.ok(
       captured.every((identity) => !processExists(identity.pid)),
       "the captured snapshot terminates the whole tree, descendants included",
@@ -118,6 +119,15 @@ async function verifyOwnedProcessTreeCleanup() {
         if (error.code !== "ESRCH") throw error;
       }
     }
+  }
+}
+
+async function waitForProcessExit(pids, milliseconds) {
+  const deadline = Date.now() + milliseconds;
+  while (pids.some(processExists) && Date.now() < deadline) {
+    // On Unix a terminated direct child keeps its PID until Node receives the close event and reaps it. Yielding
+    // here distinguishes that already-terminated state from a process that survived the cleanup signal.
+    await new Promise((resolve) => setTimeout(resolve, 50));
   }
 }
 
