@@ -246,7 +246,10 @@ async function measureRestore(expected: string): Promise<{
     throw new Error("the performance-only restored-session verifier is unavailable");
   }
   currentStage = "reload-selection";
-  await within(api.verifyRestoredSession(expected), 5_000, "restoring the selected hot session");
+  // The verifier owns the exact state assertion and its 10 second render-and-watch hang guard. A second,
+  // shorter timer here used to preempt that guard on a busy Windows runner even though the timing ratchet is
+  // deliberately aggregated across three trials below.
+  await api.verifyRestoredSession(expected);
   const selectedAt = performance.now();
   const reloadRestoreMs = selectedAt - started;
   const reloadActivationMs = activatedAt - started;
