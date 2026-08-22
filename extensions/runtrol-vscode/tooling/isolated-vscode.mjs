@@ -315,6 +315,36 @@ export async function terminateExactProcesses(marker, executable) {
   }
 }
 
+// Ownership proof for a tree we spawned ourselves. The caller holds the root PID, so every
+// descendant of it is ours by construction and no name matching is involved.
+export function ownedTreeIdentities(rootPid) {
+  const rows = processRows();
+  const pids = descendantPids(rows, rootPid);
+  pids.add(rootPid);
+  return rows.filter((row) => pids.has(row.pid) && row.pid !== process.pid);
+}
+
+// Terminates a tree captured earlier by ownedTreeIdentities. Killing a root does not reap its
+// children on Windows, and once the root dies its orphans are no longer reachable by descent, so
+// the identities have to be captured while the tree is alive and terminated from that snapshot.
+export async function terminateCapturedIdentities(identities) {
+  const owned = identities.filter((identity) => identity.pid !== process.pid);
+  if (owned.length === 0) {
+    return;
+  }
+  signalExactProcesses(owned, "SIGTERM");
+  let survivors = await waitForExactProcesses(owned, 5_000);
+  if (survivors.length > 0) {
+    signalExactProcesses(survivors, "SIGKILL");
+    survivors = await waitForExactProcesses(survivors, 5_000);
+  }
+  if (survivors.length > 0) {
+    throw new Error(
+      `owned process cleanup left exact PIDs ${survivors.map((row) => row.pid).join(", ")}`,
+    );
+  }
+}
+
 function signalExactProcesses(identities, signal) {
   for (const identity of identities) {
     try {

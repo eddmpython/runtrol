@@ -12,7 +12,9 @@ import {
   isolatedLaunchArguments,
   isolatedProfileSettings,
   isolatedRuntimeState,
+  ownedTreeIdentities,
   quietExtensionTestArguments,
+  terminateCapturedIdentities,
   TESTED_VSCODE_VERSION,
 } from "./isolated-vscode.mjs";
 
@@ -90,6 +92,9 @@ coreEnvironment[pathKey] = `${path.dirname(fixture)}${path.delimiter}${process.e
 let daemon = null;
 let daemonStderr = "";
 const managedSessions = [];
+// Core spawns one provider fixture per session as its own child. Those children outlive a kill of
+// the daemon root, so the tree is captured while it is alive and terminated from the snapshot.
+const ownedProcesses = new Map();
 const automaticWindowArguments = process.env.RUNTROL_VSCODE_CAPTURE
   || process.env.RUNTROL_VSCODE_HIDDEN_DESKTOP === "1"
   ? []
@@ -169,6 +174,7 @@ listen = "stdio"
     throw new Error(`test Core did not expose an endpoint:\n${reached.stdout}${reached.stderr}`);
   }
   for (const workspace of workspaces) startManagedSession(workspace);
+  captureOwnedProcesses();
   await build({
     entryPoints: [path.join(extensionRoot, "src", "integration", "extensionHost.test.ts")],
     outfile: testEntry,
@@ -287,6 +293,9 @@ listen = "stdio"
   throw hostError;
 } finally {
   const cleanupFailures = [];
+  // The test may open further sessions from inside VS Code, so the tree is captured once more
+  // while Core is still alive and can still be descended.
+  captureOwnedProcesses();
   for (const session of [...managedSessions].reverse()) {
     if (daemon?.exitCode !== null) {
       cleanupFailures.push(`Core exited before session ${session} could close`);
@@ -326,6 +335,17 @@ listen = "stdio"
 
 function delay(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+// Snapshots the Core tree so cleanup can reach fixtures that Core spawned. Enumerating processes
+// costs a PowerShell round trip, so this runs only outside the measured window.
+function captureOwnedProcesses() {
+  if (!daemon || daemon.exitCode !== null) {
+    return;
+  }
+  for (const identity of ownedTreeIdentities(daemon.pid)) {
+    ownedProcesses.set(identity.pid, identity);
+  }
 }
 
 function startManagedSession(workspace) {
