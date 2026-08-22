@@ -19,9 +19,20 @@ export class MissionItem extends vscode.TreeItem implements MissionSelection {
       mission.project,
       `State: ${mission.state}`,
       autoFlightArmed ? "Auto Flight: armed on this PC" : "",
+      mission.state === "blocked" && mission.completion_policy !== "unavailableAfterRestart"
+        ? "Recovery: exact local confirmation can start fresh sessions"
+        : "",
+      mission.state === "blocked" && mission.completion_policy === "unavailableAfterRestart"
+        ? "Recovery unavailable: the reviewed contract changed after restart"
+        : "",
       `${mission.awaiting_input} awaiting local Send`,
     ].filter(Boolean).join("\n");
-    this.contextValue = `runtrol.mission.${mission.state}${mission.completion_policy === "chooseOne" ? ".chooseOne" : ""}${autoFlightArmed ? ".autoFlight" : ""}`;
+    const policy = mission.completion_policy === "chooseOne"
+      ? ".chooseOne"
+      : mission.completion_policy === "unavailableAfterRestart"
+      ? ".unavailableAfterRestart"
+      : "";
+    this.contextValue = `runtrol.mission.${mission.state}${policy}${autoFlightArmed ? ".autoFlight" : ""}`;
     this.iconPath = new vscode.ThemeIcon(autoFlightArmed ? "rocket" : missionIcon(mission.state));
     this.command = {
       command: "runtrol.openMission",
@@ -103,7 +114,7 @@ function missionIcon(state: string): string {
 function taskIcon(state: string): string {
   if (state === "passed") return "pass";
   if (state === "failed" || state === "cancelled") return "error";
-  if (state === "awaitingInput" || state === "retryable") return "bell";
+  if (state === "awaitingInput" || state === "retryable" || state === "blocked") return "bell";
   if (state === "running" || state === "verifying") return "sync";
   return "circle-outline";
 }

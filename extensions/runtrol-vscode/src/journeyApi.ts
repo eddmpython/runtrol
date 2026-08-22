@@ -87,6 +87,7 @@ export type JourneyApi = {
   armMissionAutoFlight(missionId: string, operatorChoiceProvider: string | null): Promise<void>;
   autoFlightArmed(missionId: string): boolean;
   autoFlightRetained(missionId: string): boolean;
+  refreshMissions(): Promise<void>;
   mission(missionId: string): Promise<MissionSnapshot>;
   verifyMissionTask(missionId: string, taskId: string): Promise<MissionSnapshot>;
   compareMissionResults(missionId: string): Promise<void>;
@@ -123,10 +124,7 @@ export function journeyApi(
       () => controller.answerApproval(approval, option, subjectDigest),
     ),
     interrupt: () => afterReady(() => controller.interrupt()),
-    reconnect: () => afterReady(async () => {
-      await controller.reconnect();
-      await controller.selectedWatchReady();
-    }),
+    reconnect: () => afterReady(() => controller.reconnect()),
     openWorkspace: (session) => afterReady(async () => {
       const selected = state.sessions.find((candidate) => candidate.sessionId === session);
       if (!selected) {
@@ -252,6 +250,7 @@ export function journeyApi(
     ),
     autoFlightArmed: (missionId) => missions.isAutoFlightArmed(missionId),
     autoFlightRetained: (missionId) => missions.hasAutoFlightRecord(missionId),
+    refreshMissions: () => afterReady(() => missions.refresh()),
     mission: (missionId) => afterReady(() => missions.snapshot(missionId)),
     verifyMissionTask: (missionId, taskId) => afterReady(
       () => missions.verifyTaskForJourney(missionId, taskId),

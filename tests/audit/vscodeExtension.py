@@ -60,6 +60,17 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
     )
     if not winner_task_entry or not winner_mission_entry:
         found.append("Fleet winner Landing must be reachable from both the integrating Mission and a passed Task")
+    recovery_entry = any(
+        isinstance(entry, dict)
+        and entry.get("command") == "runtrol.recoverInterruptedMission"
+        and entry.get("when") == (
+            "view == runtrol.missions && viewItem =~ "
+            "/^runtrol\\.mission\\.blocked(\\.chooseOne)?(\\.autoFlight)?$/"
+        )
+        for entry in winner_entries
+    )
+    if not recovery_entry:
+        found.append("a recoverable blocked Mission must expose the exact interrupted-recovery action")
 
     all_source = "\n".join(sources.values())
     forbidden = {
@@ -182,6 +193,28 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
             "hasAutoFlightRecord",
             "Integrated winner Task",
             "Integrated winner Receipt",
+            "recoverInterruptedMission",
+            "assertInterruptedRecoveryAuthority",
+            "MissionWaveRunner",
+            "for (const missionId of this.documents.openMissionIds())",
+            "this.documents.update(await this.get(missionId))",
+            "refreshRows",
+        ],
+        "mission/recovery.ts": [
+            "interruptedRecoveryPlan",
+            "assertInterruptedRecoveryAuthority",
+            "missionSha256",
+            "policySha256",
+            "providerSelector",
+            "baseCommit",
+            "The previous provider input may already have caused external effects",
+        ],
+        "mission/waveRunner.ts": [
+            "hasAmbiguousSubmission",
+            "markAmbiguousSubmission",
+            "resolveInstruction",
+            "submit",
+            "clearAmbiguousSubmission",
         ],
         "mission/landing/apply.ts": [
             "applyLandingTransaction",
@@ -310,6 +343,13 @@ def selftest() -> int:
                             "/^runtrol\\.missionTask\\.passed(\\.session)?\\.chooseOne\\.integrating$/"
                         ),
                     },
+                    {
+                        "command": "runtrol.recoverInterruptedMission",
+                        "when": (
+                            "view == runtrol.missions && viewItem =~ "
+                            "/^runtrol\\.mission\\.blocked(\\.chooseOne)?(\\.autoFlight)?$/"
+                        ),
+                    },
                 ]
             },
         },
@@ -348,7 +388,17 @@ def selftest() -> int:
         "mission/controller.ts": (
             "AUTO_FLIGHTS_KEY runtimeState.onDidChange beforeSubmissions recordSubmissions startAutoFlights "
             "missionFlightSignal missionFlightSignalClear hasAutoFlightRecord "
-            "Integrated winner Task Integrated winner Receipt"
+            "Integrated winner Task Integrated winner Receipt recoverInterruptedMission "
+            "assertInterruptedRecoveryAuthority MissionWaveRunner "
+            "for (const missionId of this.documents.openMissionIds()) "
+            "this.documents.update(await this.get(missionId)) refreshRows"
+        ),
+        "mission/recovery.ts": (
+            "interruptedRecoveryPlan assertInterruptedRecoveryAuthority missionSha256 policySha256 "
+            "providerSelector baseCommit The previous provider input may already have caused external effects"
+        ),
+        "mission/waveRunner.ts": (
+            "hasAmbiguousSubmission markAmbiguousSubmission resolveInstruction submit clearAmbiguousSubmission"
         ),
         "mission/landing/apply.ts": (
             "applyLandingTransaction landingCompletionProblem readMissionLanding createLandingDirectories "
@@ -429,6 +479,33 @@ def selftest() -> int:
                 **sources,
                 "mission/landing/apply.ts": sources["mission/landing/apply.ts"].replace(
                     "applyLandingTransaction", ""
+                ),
+            },
+        ),
+        (
+            package,
+            {
+                **sources,
+                "mission/controller.ts": sources["mission/controller.ts"].replace(
+                    "this.documents.update(await this.get(missionId))", ""
+                ),
+            },
+        ),
+        (
+            package,
+            {
+                **sources,
+                "mission/recovery.ts": sources["mission/recovery.ts"].replace(
+                    "assertInterruptedRecoveryAuthority", ""
+                ),
+            },
+        ),
+        (
+            package,
+            {
+                **sources,
+                "mission/waveRunner.ts": sources["mission/waveRunner.ts"].replace(
+                    "markAmbiguousSubmission", ""
                 ),
             },
         ),

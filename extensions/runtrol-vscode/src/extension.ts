@@ -308,6 +308,10 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
       (item) => run(() => afterMissionReady(() => missionController.retryTask(item))),
     ),
     vscode.commands.registerCommand(
+      "runtrol.recoverInterruptedMission",
+      (item) => run(() => afterMissionReady(() => missionController.recoverInterruptedMission(item))),
+    ),
+    vscode.commands.registerCommand(
       "runtrol.pauseMission",
       (item) => run(() => afterMissionReady(() => missionController.pauseMission(item))),
     ),

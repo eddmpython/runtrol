@@ -106,6 +106,7 @@
     "onCommand:runtrol.sendTaskInstruction",
     "onCommand:runtrol.verifyMissionTask",
     "onCommand:runtrol.retryMissionTask",
+    "onCommand:runtrol.recoverInterruptedMission",
     "onCommand:runtrol.pauseMission",
     "onCommand:runtrol.resumeMission",
     "onCommand:runtrol.cancelMission",
@@ -371,6 +372,11 @@
         "command": "runtrol.retryMissionTask",
         "title": "Runtrol: Retry Mission Task",
         "icon": "$(redo)"
+      },
+      {
+        "command": "runtrol.recoverInterruptedMission",
+        "title": "Runtrol: Recover Interrupted Mission",
+        "icon": "$(debug-restart)"
       },
       {
         "command": "runtrol.pauseMission",
@@ -862,6 +868,11 @@
           "command": "runtrol.resumeMission",
           "when": "view == runtrol.missions && viewItem =~ /^runtrol\\.mission\\.paused/",
           "group": "inline@2"
+        },
+        {
+          "command": "runtrol.recoverInterruptedMission",
+          "when": "view == runtrol.missions && viewItem =~ /^runtrol\\.mission\\.blocked(\\.chooseOne)?(\\.autoFlight)?$/",
+          "group": "inline@1"
         },
         {
           "command": "runtrol.cancelMission",

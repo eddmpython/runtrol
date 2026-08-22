@@ -97,6 +97,17 @@ conversation tabs as a VS Code editor grid. When the attempts finish, verify the
 editors. Apply the result you want to the project, then verify and complete from that passing Task row. Final
 integration uses only the selected Task Receipt. Failed alternatives are results, not hidden retries.
 
+## Interrupted Mission recovery
+
+If Core restarts while a Mission Task is in flight, Runtrol blocks that Task rather than guessing whether provider
+input took effect. Select **Runtrol: Recover Interrupted Mission** on the blocked Mission. The confirmation names the
+exact reviewed digests, workspaces, and provider assignments and warns that fresh sessions may repeat external effects
+from the interrupted attempt. Esc changes nothing. Confirming rechecks the same authority, reopens only interrupted
+Tasks, safely resumes the scheduler, and starts fresh provider-native sessions with the unchanged instructions.
+
+If the reviewed Mission, instruction, Gate, capability, or workspace contract changed across restart, recovery stays
+unavailable. Validate the Mission again or cancel it instead. An uncertain Send is never repeated automatically.
+
 ## Requirements
 
 - Desktop VS Code 1.106 or newer (the version that lets an extension place a view in the secondary side bar).
@@ -143,6 +154,7 @@ processes stay alive.
 - **Runtrol: Compare Passing Results**
 - **Runtrol: Arm Mission Auto Flight**
 - **Runtrol: Disarm Mission Auto Flight**
+- **Runtrol: Recover Interrupted Mission**
 - **Runtrol: Verify and Complete Mission Integration**
 - **Runtrol: Restart Extension Host**
 - **Runtrol: Pair a Phone**

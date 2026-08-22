@@ -230,7 +230,7 @@ Two contracts keep the conversation window from growing a branch per place or pe
 | `conversationPanels.ts` | one binding per conversation (surface + watch), the two workbench places, the grid | provider branches or conversation content |
 | `diffDocuments.ts` | declared changes as read-only virtual documents for VS Code's diff editor | files on disk or a transcript of changes |
 | `webview/` | bounded active rendering and input | durable storage or background sessions |
-| `mission/controller.ts`, `mission/autoFlight.ts`, `mission/momentum.ts`, and `mission/tree.ts` | Mission review, bounded local Auto Flight authority, safe-wave continuation, local recovery actions, reviewed fleet launch, Task rows, native Artifact comparison, and one native editor document | provider input without confirmed local authority, transcript inference, polling, or optimistic completion |
+| `mission/controller.ts`, `mission/autoFlight.ts`, `mission/momentum.ts`, `mission/recovery.ts`, `mission/waveRunner.ts`, and `mission/tree.ts` | Mission review, bounded local Auto Flight authority, safe-wave continuation, exact interrupted-Mission recovery, the shared provider-neutral wave runner, reviewed fleet launch, Task rows, native Artifact comparison, and one native editor document | provider input without confirmed local authority, transcript inference, polling, or optimistic completion |
 | `mission/landing/` | deterministic ordinary queue and explicit Fleet winner selection, Receipt-evidence-bound native review, fixed-allocation reads, exact atomic Artifact replacement, drift and link defenses, and verified rollback | semantic merge, conflict resolution, staging, commits, provider knowledge, or conversation content |
 | `capability/controller.ts` | candidate inbox, native diff review, and exact local trust actions | capability text injection or user-wide trust |
 
@@ -265,6 +265,17 @@ integration explicit.
 Start, Prepare, Send, and Verify remain command-palette and Task-row recovery actions. A provider submission whose
 success is unknown is persisted as ambiguous before transport and cannot be auto-verified, including after Extension
 Host restart. `choose_one` Missions keep the specialized `Run All Reviewed Attempts` action.
+
+A Core restart turns any Task that crossed an in-flight or verification boundary into `blocked` and removes its stale
+session binding. A recoverable blocked Mission row exposes **Recover Interrupted Mission**. One focused Quick Pick
+shows the full Mission digest, policy digest, project, each exact workspace, runtime-discovered provider assignment,
+and the risk that prior external effects may be repeated. Esc performs no mutation. Confirmation re-fetches and
+compares every launch-relevant fact, reopens only blocked Tasks, safely resumes the scheduler, starts fresh public
+Runtime sessions, and rechecks each instruction before Send. The same shared wave runner launches Fleet and recovery,
+so the two paths cannot drift into different provider or ambiguity rules. A stop between reopen and resume is
+re-enterable from eligible or reserved state. Contract loss is shown as `unavailableAfterRestart` and has no recovery
+action. Mission refresh updates an already open virtual document together with its tree row, preventing a stale
+`running` document from contradicting the new `blocked` state.
 
 The Missions view title exposes `Continue Ready Missions` for cross-project operation. It reviews up to eight exact
 ordinary Mission digests at once, prioritizes safe work already running, and advances each through Mission Momentum.
@@ -404,6 +415,7 @@ specified in [automatic updates](automaticUpdates.md).
 | `RUNTROL_EYE_ENTRY=missionFlightDeckEye node tooling/real-window-eye.mjs` | at 1456 by 906, two isolated Git projects and reviewed Missions start together through one flight, reach integration together through the next flight, review existing and new files in native Receipt Landing multi-diffs, select the public product action, reject five drift or local-boundary failures plus one passing Gate mutation, retain retry state, apply exact bytes, and complete both Missions. Review, confirmation, first-completed/second-waiting, and next-review screenshots are inspected directly |
 | `RUNTROL_EYE_ENTRY=missionAutoFlightEye node tooling/real-window-eye.mjs` | one reviewed two-wave dependency Mission is armed once, starts two real provider sessions, verifies two fixed Gates, reaches `integrating` with zero operator continuation actions, removes its own authority, and is photographed before arm, while armed, and after arrival |
 | `RUNTROL_EYE_ENTRY=fleetEye node tooling/real-window-eye.mjs` | two real CLI attempts reach passing Receipts, native diffs compare their distinct output, `attempt-2` opens as the only winner Receipt, an `attempt-1` apply request is rejected, the public primary action writes exactly `attempt 2`, and the Mission reaches `completed` with its selected Task and Receipt visible. Comparison, winner review, confirmation, and completed screenshots are inspected directly at 1456 by 906 |
+| `RUNTROL_EYE_ENTRY=missionRecoveryEye node tooling/real-window-eye.mjs` | one real provider Mission is photographed in flight, its exact Core process is terminated and replaced over the same isolated home, the Mission and Task are photographed blocked, Esc proves the focused recovery confirmation performs no mutation, Enter starts a distinct fresh Runtime session, and the running recovery is photographed at the declared viewport |
 | `agentToolsSmoke` | real installed provider CLIs, official MCP registration, modern and legacy discovery, fixed tool catalogue, root isolation, Runtime reads, complete revocation, and post-revocation default deny with zero model turns |
 | `missionGrowthContracts` | Mission state, exact Send, evidence, integration, capability trust, local scope, tamper, and rollback |
 | `missionLiveJourney` | two installed provider CLIs complete five reviewed Tasks and an explicit reuse, tamper, and rollback journey through production IPC |

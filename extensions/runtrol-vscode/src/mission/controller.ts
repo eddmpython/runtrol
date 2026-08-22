@@ -47,6 +47,13 @@ import {
   type MissionMomentum,
 } from "./momentum";
 import { MissionProjectLeases } from "./projectLease";
+import {
+  assertInterruptedRecoveryAuthority,
+  interruptedRecoveryDetail,
+  interruptedRecoveryPlan,
+  recoveryTasks,
+} from "./recovery";
+import { MissionWaveRunner } from "./waveRunner";
 
 /// Where each project's last fan-out shape is remembered, never instruction text.
 const FAN_OUT_DEFAULTS_KEY = "runtrol.fanOutDefaults";
@@ -131,6 +138,7 @@ export class MissionController implements vscode.Disposable {
   /// convenience path must not mistake the still-idle session for completed provider work, including after restart.
   private readonly ambiguousTaskSubmissions: AmbiguousSubmissions;
   private readonly autoFlights: AutoFlights;
+  private readonly waveRunner: MissionWaveRunner;
   private readonly landings: MissionLandingController;
   private readonly projectLeases = new MissionProjectLeases();
   private readonly autoFlightSubscription: vscode.Disposable;
@@ -159,6 +167,25 @@ export class MissionController implements vscode.Disposable {
       context.globalState.get<unknown>(AUTO_FLIGHTS_KEY, []),
       (arms) => context.globalState.update(AUTO_FLIGHTS_KEY, arms),
     );
+    this.waveRunner = new MissionWaveRunner({
+      prepare: (missionId, task, provider) => this.prepareTaskSession(missionId, task, provider),
+      hasAmbiguousSubmission: (taskId) => this.ambiguousTaskSubmissions.current().has(taskId),
+      markAmbiguousSubmission: (taskId) => this.markSubmissionAmbiguous(taskId),
+      resolveInstruction: async (missionId, task) => {
+        const instruction = requireResponse((await this.client.once({
+          ask: "missionSendTaskInstruction",
+          with: {
+            mission_id: missionId,
+            task_id: task.task_id,
+            instruction_sha256: task.instruction_sha256,
+          },
+        })).response, "missionInstruction");
+        return { sessionId: instruction.session_id, instruction: instruction.instruction };
+      },
+      submit: (sessionId, instruction) => this.sessions.submitResolvedInput(sessionId, instruction),
+      clearAmbiguousSubmission: (taskId) => this.clearAmbiguousSubmission(taskId),
+      getSnapshot: (missionId) => this.get(missionId),
+    });
     this.landings = new MissionLandingController(diffDocuments, {
       getSnapshot: (missionId) => this.get(missionId),
       listIntegratingSnapshots: async () => {
@@ -209,6 +236,14 @@ export class MissionController implements vscode.Disposable {
   }
 
   async refresh(): Promise<void> {
+    await this.refreshRows();
+    for (const missionId of this.documents.openMissionIds()) {
+      if (!this.rows.some((mission) => mission.mission_id === missionId)) continue;
+      this.documents.update(await this.get(missionId));
+    }
+  }
+
+  private async refreshRows(): Promise<void> {
     const response = (await this.client.read({ ask: "missionList" })).response;
     this.rows = requireResponse(response, "missions");
     this.changedEmitter.fire();
@@ -1139,62 +1174,23 @@ export class MissionController implements vscode.Disposable {
         cancellable: false,
       },
       async (progress) => {
-        const sessionIds: string[] = [];
         try {
-          let current = requireResponse((await this.client.once({
+          const current = requireResponse((await this.client.once({
             ask: "missionStart",
             with: {
               mission_id: reviewed.mission.mission_id,
               mission_sha256: reviewed.mission_sha256,
             },
           })).response, "mission");
-          for (const [index, task] of reviewed.tasks.entries()) {
-            progress.report({ message: `Preparing ${task.key}`, increment: 45 / reviewed.tasks.length });
-            const prepared = await this.prepareTaskSession(
-              current.mission.mission_id,
-              task,
-              requireProviderAssignment(assignments, task),
-            );
-            current = prepared.snapshot;
-            sessionIds.push(prepared.sessionId);
-          }
-
-          const instructions = [];
-          for (const task of reviewed.tasks) {
-            progress.report({ message: `Checking ${task.instruction_ref}`, increment: 20 / reviewed.tasks.length });
-            await this.markSubmissionAmbiguous(task.task_id);
-            instructions.push({
-              task,
-              instruction: requireResponse((await this.client.once({
-                ask: "missionSendTaskInstruction",
-                with: {
-                  mission_id: reviewed.mission.mission_id,
-                  task_id: task.task_id,
-                  instruction_sha256: task.instruction_sha256,
-                },
-              })).response, "missionInstruction"),
-            });
-          }
-          progress.report({ message: "Sending reviewed instructions", increment: 20 });
-          const submissions = await Promise.allSettled(
-            instructions.map(async ({ task, instruction }) => {
-              await this.sessions.submitResolvedInput(instruction.session_id, instruction.instruction);
-              await this.clearAmbiguousSubmission(task.task_id);
-            }),
-          );
-          const failed = submissions.filter((result) => result.status === "rejected").length;
-          if (failed > 0) {
-            throw new Error(`${failed} of ${submissions.length} provider submissions failed; Mission state was kept for explicit recovery`);
-          }
+          const wave = await this.waveRunner.run(current, reviewed.tasks, assignments, progress, true);
           progress.report({ message: "Opening the attempt grid", increment: 15 });
-          for (const sessionId of sessionIds) await this.sessions.select(sessionId);
+          for (const sessionId of wave.sessionIds) await this.sessions.select(sessionId);
           await this.sessions.arrangeConversationGrid();
-          current = await this.get(reviewed.mission.mission_id);
-          await this.acceptSnapshot(current, false);
+          await this.acceptSnapshot(wave.snapshot, false);
           void vscode.window.showInformationMessage(
-            `${sessionIds.length} reviewed attempts are running in isolated worktrees.`,
+            `${wave.sessionIds.length} reviewed attempts are running in isolated worktrees.`,
           );
-          return sessionIds;
+          return [...wave.sessionIds];
         } catch (error) {
           await this.refresh().catch(() => undefined);
           throw error;
@@ -1259,6 +1255,98 @@ export class MissionController implements vscode.Disposable {
     })).response, "mission");
     await this.clearAmbiguousSubmission(selected.task.task_id);
     await this.acceptSnapshot(snapshot, true);
+  }
+
+  async recoverInterruptedMission(selection?: MissionSelection): Promise<void> {
+    let mission = selection?.mission ?? null;
+    if (!mission) {
+      await this.refresh();
+      const candidates = this.rows.filter((candidate) => (
+        candidate.state === "blocked" && candidate.completion_policy !== "unavailableAfterRestart"
+      ));
+      const selected = await vscode.window.showQuickPick(
+        candidates.map((candidate) => ({
+          label: candidate.name,
+          description: "recovery blocked",
+          detail: candidate.project,
+          mission: candidate,
+        })),
+        {
+          title: "Recover Interrupted Mission",
+          placeHolder: candidates.length ? "Select one blocked Mission" : "No blocked Mission needs recovery",
+        },
+      );
+      mission = selected?.mission ?? null;
+    }
+    if (!mission) return;
+
+    const reviewed = await this.get(mission.mission_id);
+    const plan = interruptedRecoveryPlan(reviewed);
+    await this.acceptSnapshot(reviewed, true);
+    const assignments = await this.chooseWaveProviders(recoveryTasks(plan, reviewed));
+    if (!assignments) return;
+    const detail = interruptedRecoveryDetail(plan, assignments).replace(/\n+/gu, "  |  ");
+    const action = await vscode.window.showQuickPick(
+      [{
+        label: `$(debug-restart) Recover ${plan.tasks.length} interrupted Task${plan.tasks.length === 1 ? "" : "s"}`,
+        description: plan.completionPolicy,
+        detail,
+        recover: true,
+      }],
+      {
+        title: `Recover ${plan.missionName}  |  Mission SHA-256 ${plan.missionSha256}`,
+        placeHolder: "Prior provider input may have caused external effects. Fresh sessions may repeat them. Esc cancels.",
+      },
+    );
+    if (!action?.recover) return;
+
+    const exact = await this.get(plan.missionId);
+    assertInterruptedRecoveryAuthority(plan, exact);
+    const result = await vscode.window.withProgress(
+      {
+        location: vscode.ProgressLocation.Notification,
+        title: `Recovering ${plan.missionName}`,
+        cancellable: false,
+      },
+      async (progress) => {
+        let current = exact;
+        const blocked = plan.tasks.filter((task) => task.state === "blocked");
+        for (const [index, planned] of blocked.entries()) {
+          progress.report({
+            message: `Reopening ${planned.key}`,
+            increment: blocked.length === 0 ? 0 : 20 / blocked.length,
+          });
+          const task = current.tasks.find((candidate) => candidate.task_id === planned.taskId);
+          if (task?.state !== "blocked") {
+            throw new Error(`recovery Task ${planned.key} is no longer blocked`);
+          }
+          current = requireResponse((await this.client.once({
+            ask: "missionRetryTask",
+            with: { mission_id: current.mission.mission_id, task_id: task.task_id },
+          })).response, "mission");
+          if (index === blocked.length - 1) progress.report({ message: "Resuming the exact scheduler" });
+        }
+        if (current.mission.state !== "blocked") {
+          throw new Error("the interrupted Mission left its blocked boundary before safe resume");
+        }
+        current = requireResponse((await this.client.once({
+          ask: "missionResumeSafe",
+          with: { mission_id: current.mission.mission_id },
+        })).response, "mission");
+        return this.waveRunner.run(
+          current,
+          recoveryTasks(plan, current),
+          assignments,
+          progress,
+          false,
+        );
+      },
+    );
+    await this.acceptSnapshot(result.snapshot, false);
+    await this.placeMissionSessions(result.sessionIds);
+    void vscode.window.showInformationMessage(
+      `${plan.missionName} recovered with ${result.sessionIds.length} fresh Runtime session${result.sessionIds.length === 1 ? "" : "s"}.`,
+    );
   }
 
   async retryTask(selection?: MissionSelection): Promise<void> {
@@ -1945,7 +2033,7 @@ export class MissionController implements vscode.Disposable {
   private async acceptSnapshot(snapshot: MissionSnapshot, show: boolean): Promise<void> {
     this.snapshots.set(snapshot.mission.mission_id, snapshot);
     this.documents.update(snapshot);
-    await this.refresh();
+    await this.refreshRows();
     this.scheduleAutoFlights();
     if (show) await this.documents.show(snapshot.mission.mission_id);
   }
@@ -1983,6 +2071,12 @@ class MissionDocumentProvider implements vscode.TextDocumentContentProvider, vsc
   update(snapshot: MissionSnapshot): void {
     this.snapshots.set(snapshot.mission.mission_id, snapshot);
     this.changedEmitter.fire(this.uri(snapshot.mission.mission_id));
+  }
+
+  openMissionIds(): readonly string[] {
+    return [...new Set(vscode.workspace.textDocuments
+      .filter((document) => document.uri.scheme === "runtrol-mission")
+      .map((document) => decodeURIComponent(document.uri.path.slice(1))))];
   }
 
   async show(missionId: string): Promise<void> {

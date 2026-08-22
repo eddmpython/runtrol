@@ -3622,5 +3622,42 @@ gate_refs = ["fixture-check"]
             .expect("ledger read")
             .expect("snapshot");
         assert!(snapshot.runs.is_empty(), "restart must not invent a Send");
+
+        let Response::Mission(reopened) = after.answer(
+            &scratch.ledger,
+            &[],
+            &[],
+            &Request::MissionRetryTask {
+                mission_id: mission_id.clone(),
+                task_id,
+            },
+        ) else {
+            panic!("reopened recovery Task");
+        };
+        assert_eq!(reopened.mission.state.as_ref(), "blocked");
+        assert_eq!(
+            reopened
+                .tasks
+                .first()
+                .expect("reopened Task")
+                .state
+                .as_ref(),
+            "eligible"
+        );
+        let Response::Mission(resumed) = after.answer(
+            &scratch.ledger,
+            &[],
+            &[],
+            &Request::MissionResumeSafe { mission_id },
+        ) else {
+            panic!("safely resumed Mission");
+        };
+        assert_eq!(resumed.mission.state.as_ref(), "running");
+        let resumed_task = resumed.tasks.first().expect("resumed Task");
+        assert_eq!(resumed_task.state.as_ref(), "reserved");
+        assert!(
+            resumed_task.session_id.is_none(),
+            "recovery must require one fresh Runtime session"
+        );
     }
 }

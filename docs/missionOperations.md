@@ -199,6 +199,22 @@ or eligible work can be scheduled again. A reservation with no submission is rel
 boundary is ambiguous, so the Task and Mission become blocked instead of duplicating provider work. Resume is an
 explicit local safe-resume action.
 
+For a blocked Mission whose reviewed contract still exists, Studio exposes **Recover Interrupted Mission** on the
+Mission row. The focused confirmation names the full Mission and policy digests, project, exact Task workspaces, and
+runtime-discovered provider assignments. It states that provider input before the restart may already have caused
+external effects and that fresh sessions can repeat them. Esc closes the confirmation without changing Core state.
+An already open Mission document is refreshed with the blocked snapshot at the same time as its tree row, so the
+operator never sees a stale running document beside a blocked action.
+
+After confirmation, Studio fetches the Mission again and requires the same digest, policy, Task states, instruction
+digests, provider selectors, workspace modes, paths, and base commits. It reopens only blocked Tasks, safely resumes
+the exact scheduler, starts fresh provider-native Runtime sessions, rechecks instruction bytes, and transports the
+unchanged instructions through the ordinary Send boundary. Both `all_tasks` and `choose_one` use the same shared wave
+runner. If Studio or Core stops between Task reopen and Mission resume, eligible or reserved Tasks remain part of the
+same explicit recovery boundary, so the next action completes only the unfinished steps. A second uncertain provider
+Send remains ambiguous and is never repeated automatically. `unavailableAfterRestart` means the reviewed contract
+could not be reconstructed, so Studio refuses recovery and requires validation or cancellation instead.
+
 Studio also persists the narrower boundary where Core committed a local Send intent but the public Runtime delivery
 did not return success. Mission Momentum will not treat that session as finished after an Extension Host restart.
 The operator must use the exact Task recovery action. No prompt or provider output is stored with this marker.
@@ -219,8 +235,10 @@ renderer. The normal sequence is:
    `Continue Reviewed Mission` remains the one-wave explicit path.
 5. Auto Flight observes Runtime lifecycle rows. When a sent Task has completed one proven provider turn, it runs fixed
    Gates, seals the Receipt, and starts the next eligible DAG wave without another click.
-6. Use granular recovery only for a failed, retryable, missing, or ambiguous Task. Working sessions, person or quota
-   waits, comparison policy, and integration never advance by inference.
+6. For a Core-interrupted blocked Mission, use **Recover Interrupted Mission** once to reopen its exact Tasks, resume
+   its scheduler, and start fresh sessions under the duplicate-effect warning. Use granular recovery for a failed,
+   retryable, missing, or ambiguous Task. Working sessions, person or quota waits, comparison policy, and integration
+   never advance by inference.
 7. Open **Review and Apply Mission Landing**. For `all_tasks`, inspect the combined Receipt multi-diff. For
    `choose_one`, select one passing Task and inspect its winner multi-diff. Apply, rerun Gates, and complete in the one
    explicit action. Use direct completion only as a recovery path after a separately integrated tree.

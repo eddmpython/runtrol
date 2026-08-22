@@ -57,6 +57,7 @@ const mutatingProjectEntries = new Set([
   "missionAutoFlightEye",
   "missionFlightDeckEye",
   "missionMomentumEye",
+  "missionRecoveryEye",
 ]);
 // Focused Mission eyes build and commit their own fixture repository. Their default must live inside this harness's
 // owned temporary root, while an explicitly requested folder remains exact and ordinary read-only eyes keep the
@@ -92,6 +93,17 @@ if (eyeEntry === "agentToolsEye") {
 
 let daemon = null;
 let daemonStderr = "";
+function launchRuntimeDaemon() {
+  const child = spawn(core, ["daemon"], {
+    env: environment,
+    stdio: ["ignore", "ignore", "pipe"],
+    windowsHide: true,
+  });
+  child.stderr.setEncoding("utf8").on("data", (chunk) => {
+    daemonStderr += chunk;
+  });
+  return child;
+}
 try {
   await mkdir(eyeFolder, { recursive: true });
   await mkdir(extensionUnderTestRoot, { recursive: true });
@@ -121,10 +133,7 @@ try {
     "utf8",
   );
 
-  daemon = spawn(core, ["daemon"], { env: environment, stdio: ["ignore", "ignore", "pipe"], windowsHide: true });
-  daemon.stderr.setEncoding("utf8").on("data", (chunk) => {
-    daemonStderr += chunk;
-  });
+  daemon = launchRuntimeDaemon();
   await delay(500);
   if (daemon.exitCode !== null) throw new Error(`the isolated Runtime stopped during startup:\n${daemonStderr}`);
   const reached = spawnSync(core, ["endpoint"], { env: environment, encoding: "utf8", timeout: 15_000, windowsHide: true });
@@ -178,6 +187,7 @@ try {
       vscodeExecutablePath: process.env.RUNTROL_TEST_VSCODE_EXECUTABLE || undefined,
     }),
     photograph(),
+    restartRuntimeWhenRequested(),
   ]);
   const result = JSON.parse(await readFile(resultPath, "utf8"));
   // The window switch and the back key, proved with real windows from outside: a switch reloads the extension
@@ -363,12 +373,62 @@ async function photograph() {
           throw new Error(`the ${pose} capture failed:\n${shot.stdout}${shot.stderr}`);
         }
         process.stdout.write(`captured ${pose} -> ${outPath} ${JSON.stringify(progress)}\n`);
+        if (eyeEntry === "missionRecoveryEye" && pose === "recoveryCancellation") {
+          press(titleMatch, "{ESC}");
+        }
+        if (eyeEntry === "missionRecoveryEye" && pose === "recoveryConfirmation") {
+          // This is the real focused Quick Pick. Press its selected recovery action from outside the Extension Host,
+          // the same input boundary the screenshot captured, rather than calling a test-only product method.
+          press(titleMatch, "{ENTER}");
+        }
         await writeFile(`${resultPath}.captured.${pose}`, "1", "utf8");
       }
     }
     await delay(300);
   }
   throw new Error("the eye pass never completed");
+}
+
+/// One focused fault pose kills only this harness's exact Runtime child and starts its successor over the same home.
+async function restartRuntimeWhenRequested() {
+  if (eyeEntry !== "missionRecoveryEye") return;
+  const deadline = Date.now() + 10 * 60_000;
+  while (Date.now() < deadline) {
+    const progress = await readFile(resultPath, "utf8").then((text) => JSON.parse(text)).catch(() => null);
+    if (progress && (typeof progress.failure === "string" || progress.stage === "complete")) return;
+    if (progress?.stage !== "fault:restartCore") {
+      await delay(200);
+      continue;
+    }
+    const previous = daemon;
+    if (!previous || previous.exitCode !== null) {
+      throw new Error("the isolated Runtime was not alive at the requested restart boundary");
+    }
+    const exited = new Promise((resolve) => previous.once("close", resolve));
+    previous.kill();
+    await Promise.race([
+      exited,
+      delay(5_000).then(() => Promise.reject(new Error("the faulted Runtime did not exit within 5 seconds"))),
+    ]);
+    daemon = launchRuntimeDaemon();
+    await delay(500);
+    if (daemon.exitCode !== null) throw new Error(`the successor Runtime stopped during startup:\n${daemonStderr}`);
+    const reached = spawnSync(core, ["endpoint"], {
+      env: environment,
+      encoding: "utf8",
+      timeout: 15_000,
+      windowsHide: true,
+    });
+    if (reached.status !== 0 || !reached.stdout.trim()) {
+      throw new Error(`the successor Runtime exposed no endpoint:\n${reached.stdout}${reached.stderr}`);
+    }
+    process.stdout.write(
+      `restarted isolated Runtime from pid ${previous.pid} to pid ${daemon.pid} at ${reached.stdout.trim()}\n`,
+    );
+    await writeFile(`${resultPath}.restarted`, JSON.stringify({ before: previous.pid, after: daemon.pid }), "utf8");
+    return;
+  }
+  throw new Error("the recovery eye never requested its Core restart fault");
 }
 
 function delay(milliseconds) {
