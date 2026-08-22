@@ -482,10 +482,7 @@ export class ReconnectingProviderSubscription {
     private readonly options: ClientOptions,
     policy: ReconnectPolicy,
   ) {
-    const signal = policy.signal
-      ? AbortSignal.any([policy.signal, this.#abort.signal])
-      : this.#abort.signal;
-    this.#policy = { ...policy, signal };
+    this.#policy = activeStreamPolicy(policy, this.#abort.signal, () => this.#closeCurrent());
   }
 
   public async initialize(): Promise<void> {
@@ -756,10 +753,7 @@ export class ReconnectingSessionIndexSubscription {
     private readonly options: ClientOptions,
     policy: ReconnectPolicy,
   ) {
-    const signal = policy.signal
-      ? AbortSignal.any([policy.signal, this.#abort.signal])
-      : this.#abort.signal;
-    this.#policy = { ...policy, signal };
+    this.#policy = activeStreamPolicy(policy, this.#abort.signal, () => this.#closeCurrent());
   }
 
   public async initialize(): Promise<void> {
@@ -879,10 +873,7 @@ export class ReconnectingEventSubscription {
     private readonly params: WatchEventsParams,
     policy: ReconnectPolicy,
   ) {
-    const signal = policy.signal
-      ? AbortSignal.any([policy.signal, this.#abort.signal])
-      : this.#abort.signal;
-    this.#policy = { ...policy, signal };
+    this.#policy = activeStreamPolicy(policy, this.#abort.signal, () => this.#closeCurrent());
     this.#accepted = params.after ? copyCursor(params.after) : null;
   }
 
@@ -968,6 +959,19 @@ function connectSelected(
   return locator
     ? connector.connect(locator, options, signal)
     : connector.connectSystem(options, signal);
+}
+
+/// One reconnect policy whose cancellation also wakes a stream already blocked in `receive`.
+/// Connection and subscription setup already observe the signal directly. Once setup returns, closing the
+/// dedicated transport is what makes an outstanding `next` settle instead of waiting for another event.
+function activeStreamPolicy(
+  policy: ReconnectPolicy,
+  ownedSignal: AbortSignal,
+  closeCurrent: () => void,
+): ReconnectPolicy {
+  const signal = policy.signal ? AbortSignal.any([policy.signal, ownedSignal]) : ownedSignal;
+  signal.addEventListener("abort", closeCurrent, { once: true });
+  return { ...policy, signal };
 }
 
 async function openRuntimeSubscription<T>(

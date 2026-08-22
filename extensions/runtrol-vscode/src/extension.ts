@@ -48,7 +48,10 @@ export type RuntrolExtensionApi = {
   readonly initializationStage?: string;
   refresh(): Promise<void>;
   measureWebview?(framesPerSecond?: number, durationMs?: number): Promise<WebviewPerformance>;
-  measureSessionManagement?(sessionIds: readonly string[]): Promise<SessionManagementPerformance>;
+  measureSessionManagement?(
+    sessionIds: readonly string[],
+    progress?: (stage: string) => void,
+  ): Promise<SessionManagementPerformance>;
   verifyRestoredSession?(sessionId: string): Promise<void>;
   hasConversationIn?(folder: string): Promise<boolean>;
   waitForConversationIn?(folder: string, deadlineMs: number): Promise<number>;
@@ -789,7 +792,7 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
       })
       : undefined,
     measureSessionManagement: MEASURED_HOST
-      ? (sessionIds) => afterReady(async () => {
+      ? (sessionIds, progress = () => {}) => afterReady(async () => {
         const expected = new Set(sessionIds);
         const managed = state.sessions.filter((session) => expected.has(session.sessionId));
         const initialHot = managed.filter((session) => session.hot);
@@ -801,11 +804,13 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
         }
 
         const resumeStarted = performance.now();
+        progress("cold-select");
         await performanceDeadline(
           controller.select(cold.sessionId),
           10_000,
           "cold session selection",
         );
+        progress("cold-watch-and-render");
         await Promise.all([
           performanceDeadline(
             controller.selectedWatchReady(),
@@ -837,13 +842,16 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
         }
         const samples: number[] = [];
         for (let round = 0; round < SESSION_SWITCH_ROUNDS; round += 1) {
-          for (const session of hot) {
+          for (const [index, session] of hot.entries()) {
             const started = performance.now();
+            progress(`round-${round + 1}-session-${index + 1}-select`);
             await controller.select(session.sessionId);
+            progress(`round-${round + 1}-session-${index + 1}-watch`);
             await controller.selectedWatchReady();
             samples.push(performance.now() - started);
           }
         }
+        progress("selection-persistence");
         await controller.selectionPersisted();
         return {
           sessionCount: current.length,
@@ -866,15 +874,14 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
       })
       : undefined,
     // The two follow probes exist for the live root-following proof: a real window opens a second folder and the
-    // harness watches that folder's conversation arrive. They consult both collections the conversation tree
-    // merges (supervised sessions and the provider-owned stored chats), through the same identity function
-    // collision detection uses, so the probe agrees with the product about what "a conversation here" means.
+    // harness watches that folder's provider-owned stored conversation arrive. Managed sessions are deliberately
+    // machine-wide on this owner-only local surface, so they cannot prove that a discovery root widened.
     hasConversationIn: MEASURED_HOST
-      ? (folder) => afterReady(async () => conversationVisibleIn(state, folder))
+      ? (folder) => afterReady(async () => nativeConversationVisibleIn(state, folder))
       : undefined,
     waitForConversationIn: MEASURED_HOST
       ? (folder, deadlineMs) => afterReady(() => new Promise<number>((resolve, reject) => {
-        const arrived = () => conversationVisibleIn(state, folder);
+        const arrived = () => nativeConversationVisibleIn(state, folder);
         if (arrived()) {
           resolve(0);
           return;
@@ -941,11 +948,10 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
   };
 }
 
-/// Whether any conversation, supervised or provider-owned, lives in this folder. The follow probes' one lens.
-function conversationVisibleIn(state: RuntimeState, folder: string): boolean {
+/// Whether provider discovery has made a stored conversation in this folder visible.
+function nativeConversationVisibleIn(state: RuntimeState, folder: string): boolean {
   const identity = workspaceIdentity(folder);
-  return state.sessions.some((session) => workspaceIdentity(session.workspace) === identity)
-    || state.nativeChats.some((chat) => workspaceIdentity(chat.cwd) === identity);
+  return state.nativeChats.some((chat) => workspaceIdentity(chat.cwd) === identity);
 }
 
 function testIntegrationRoots(context: vscode.ExtensionContext): readonly string[] {

@@ -12,6 +12,7 @@ import {
 import { ConversationView, type AttachmentLabel, type ConversationContext } from "./conversationView";
 import type { DraftChips, DraftState } from "./draft";
 import type { StudioRuntimeClient } from "./runtimeClient";
+import { SerializedWatch } from "./serializedWatch";
 import type { RuntimeState } from "./state";
 import type { SessionLine, WatchCursor } from "./runtimeTypes";
 import { MAX_ATTACHMENTS, type ViewAction } from "./viewActions";
@@ -316,8 +317,7 @@ export class ConversationPanels implements vscode.Disposable {
 /// could not say that for more than one tab at a time.
 export class ConversationBinding implements vscode.Disposable {
   readonly view: ConversationView;
-  private watchAbort: AbortController | null = null;
-  private watchReady: Promise<void> = Promise.resolve();
+  private readonly watch = new SerializedWatch();
   private current: SessionLine | null;
   private currentDraft: DraftRecord | null;
   private pendingAttachments: Attachment[] = [];
@@ -408,7 +408,7 @@ export class ConversationBinding implements vscode.Disposable {
   /// wait on this instead of sleeping.
   async settled(): Promise<void> {
     await this.view.waitForCurrentRender();
-    await this.watchReady;
+    await this.watch.settled();
   }
 
   updateSession(session: SessionLine): void {
@@ -417,7 +417,7 @@ export class ConversationBinding implements vscode.Disposable {
     this.view.updateSession(session);
     // A paused conversation that came back (the operator reopened it, or it was heated for a prompt) is
     // watched again from the top: its process is new, so the old cursor names nothing.
-    if (session.hot && !wasHot && this.view.isVisible && !this.watchAbort) {
+    if (session.hot && !wasHot && this.view.isVisible && !this.watch.requested) {
       this.state.forgetCursor(session.sessionId);
       this.view.status("", "info");
       this.ensureWatch();
@@ -473,20 +473,13 @@ export class ConversationBinding implements vscode.Disposable {
   }
 
   private ensureWatch(): void {
-    if (this.disposed || this.watchAbort || !this.current) return;
-    const abort = new AbortController();
-    this.watchAbort = abort;
-    let ready = () => {};
-    this.watchReady = new Promise<void>((resolve) => {
-      ready = resolve;
-    });
-    void this.watchLoop(this.current.sessionId, abort.signal, ready);
+    if (this.disposed || !this.current) return;
+    const sessionId = this.current.sessionId;
+    this.watch.start(sessionId, (signal, ready) => this.watchLoop(sessionId, signal, ready));
   }
 
   private pauseWatch(): void {
-    this.watchAbort?.abort();
-    this.watchAbort = null;
-    this.watchReady = Promise.resolve();
+    this.watch.pause();
   }
 
   private async watchLoop(sessionId: string, signal: AbortSignal, ready: () => void): Promise<void> {
@@ -528,7 +521,7 @@ export class ConversationBinding implements vscode.Disposable {
             "Paused: this conversation is not running right now. Open it again from the sidebar to continue.",
             "info",
           );
-          this.watchAbort = null;
+          this.pauseWatch();
           return;
         }
         this.view.status(error instanceof Error ? error.message : String(error), "error");
@@ -541,7 +534,7 @@ export class ConversationBinding implements vscode.Disposable {
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
-    this.pauseWatch();
+    this.watch.dispose();
     this.pendingAttachments = [];
     this.view.dispose();
     this.closed();

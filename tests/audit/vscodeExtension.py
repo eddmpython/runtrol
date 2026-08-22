@@ -192,8 +192,16 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
             "export function isBroken",
         ],
         "conversationPanels.ts": [
-            "private watchAbort",
-            "this.watchAbort?.abort()",
+            'import { SerializedWatch } from "./serializedWatch"',
+            "private readonly watch = new SerializedWatch()",
+            "this.watch.pause()",
+            "this.watch.dispose()",
+        ],
+        "serializedWatch.ts": [
+            "private active: AbortController",
+            "const previous = this.tail",
+            "const current = previous.then",
+            "this.active?.abort()",
         ],
         "controller.ts": [
             "private indexAbort",
@@ -448,7 +456,14 @@ def selftest() -> int:
             "the installed executable has not completed a verified probe "
             "export function awaitsVerification export function isBroken"
         ),
-        "conversationPanels.ts": "private watchAbort; this.watchAbort?.abort()",
+        "conversationPanels.ts": (
+            'import { SerializedWatch } from "./serializedWatch"; '
+            "private readonly watch = new SerializedWatch(); this.watch.pause(); this.watch.dispose()"
+        ),
+        "serializedWatch.ts": (
+            "private active: AbortController; const previous = this.tail; "
+            "const current = previous.then; this.active?.abort()"
+        ),
         "controller.ts": (
             'private indexAbort; '
             'this.runtime.inventory(); this.startSessionIndexWatch(); this.startProviderVerification( '
@@ -676,7 +691,7 @@ def selftest() -> int:
             package,
             {
                 **sources,
-                "conversationPanels.ts": sources["conversationPanels.ts"].replace("this.watchAbort?.abort()", ""),
+                "serializedWatch.ts": sources["serializedWatch.ts"].replace("this.active?.abort()", ""),
             },
         ),
     ]

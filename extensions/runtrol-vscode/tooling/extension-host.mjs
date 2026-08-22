@@ -78,7 +78,10 @@ const followFirst = path.join(followRoot, "alpha");
 const followTarget = path.join(followRoot, "beta");
 // A saved workspace file rather than a plain folder: adding a folder to a workspace-file window keeps the same
 // extension host alive, and a live host is the entire point of the phase.
-const followWorkspaceFile = path.join(followRoot, "follow.code-workspace");
+// Keep the workspace file outside both fixture folders and their parent. VS Code treats the file's own
+// directory as window context, so placing it above alpha and beta would grant beta before it is opened and
+// make the live root-following proof invalid.
+const followWorkspaceFile = path.join(temporary, "follow.code-workspace");
 const workspaceRoot = path.join(temporary, "workspaces");
 const workspaces = Array.from(
   { length: 30 },
@@ -96,7 +99,6 @@ const managedSessions = [];
 // the daemon root, so the tree is captured while it is alive and terminated from the snapshot.
 const ownedProcesses = new Map();
 const automaticWindowArguments = process.env.RUNTROL_VSCODE_CAPTURE
-  || process.env.RUNTROL_VSCODE_HIDDEN_DESKTOP === "1"
   ? []
   : quietExtensionTestArguments;
 
@@ -311,16 +313,9 @@ listen = "stdio"
       cleanupFailures.push(`session ${session}: ${closed.stderr || closed.stdout || "close failed"}`);
     }
   }
-  if (daemon?.exitCode === null) {
-    const exited = new Promise((resolve) => daemon.once("close", resolve));
-    daemon.kill();
-    // A stuck Core used to reject here, which skipped the fixture sweep and the temporary
-    // directory removal below. The sweep escalates to SIGKILL, so record and keep going.
-    await Promise.race([exited, delay(5_000)]);
-    if (daemon.exitCode === null) {
-      cleanupFailures.push("test Core did not terminate within 5 seconds");
-    }
-  }
+  // The exact tree snapshot includes Core itself. End the whole owned tree in one convergent sweep instead
+  // of waiting on ChildProcess.close, which can remain pending while a descendant still owns an inherited
+  // stream even after the root process has exited.
   try {
     await terminateCapturedIdentities([...ownedProcesses.values()]);
   } catch (error) {

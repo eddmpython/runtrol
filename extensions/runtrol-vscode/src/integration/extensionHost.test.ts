@@ -32,7 +32,10 @@ type ExtensionApi = {
     visibleCharacters: number;
     visibleItems: number;
   }>;
-  measureSessionManagement?(sessionIds: readonly string[]): Promise<{
+  measureSessionManagement?(
+    sessionIds: readonly string[],
+    progress?: (stage: string) => void,
+  ): Promise<{
     sessionCount: number;
     hotSessionCount: number;
     coldResumeMs: number;
@@ -173,7 +176,9 @@ async function measure(resultPath: string): Promise<Record<string, number | stri
     throw new Error("the performance-only hot-session measurement API is unavailable");
   }
   const switched = await within(
-    api.measureSessionManagement(managedSessionIds()),
+    api.measureSessionManagement(managedSessionIds(), (stage) => {
+      currentStage = `session-switch:${stage}`;
+    }),
     SESSION_MANAGEMENT_HANG_TIMEOUT_MS,
     "30-session management and eight hot session switches",
   );
