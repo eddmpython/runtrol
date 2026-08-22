@@ -1,5 +1,5 @@
 import { spawn, spawnSync } from "node:child_process";
-import { cp, mkdtemp, mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { cp, mkdtemp, mkdir, readdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -43,7 +43,10 @@ if (bundled.status !== 0) {
 // macOS expands its per-user temporary directory to a path long enough to exceed the Unix-domain socket
 // ceiling once runtrol's home and socket names are appended. `/tmp` is the kernel-stable short alias for
 // exactly this purpose, and the random suffix still isolates concurrent runs.
-const temporaryRoot = process.platform === "darwin" ? "/tmp" : os.tmpdir();
+// Canonicalize the temporary root before deriving any workspace names. Core canonicalizes approved roots and
+// provider-owned conversation paths at its security boundary; leaving only the harness on an alias such as
+// macOS `/tmp` or a Windows 8.3 name would falsely report that a conversation in the same folder never arrived.
+const temporaryRoot = await realpath(process.platform === "darwin" ? "/tmp" : os.tmpdir());
 const temporary = await mkdtemp(path.join(temporaryRoot, "runtrol-vscode-host-"));
 // A crashed earlier run leaves its whole isolated world behind, and those leftovers accumulate forever and even
 // surface as windows full of fake workspaces during later tests. Every run therefore starts by deleting its
