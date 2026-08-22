@@ -30,13 +30,26 @@ await Promise.all([
     platform: "node",
     format: "cjs",
     target: "node20",
-    external: ["vscode"],
+    // QR generation is a pairing-only feature. Its bounded sibling bundle is loaded by pairingQr.ts on demand,
+    // instead of charging every Extension Host activation for the encoder tables.
+    external: ["vscode", "./pairingQrVendor"],
     alias: {
       "@runtrol/runtime-client": path.join(repositoryRoot, "clients/typescript/src/index.ts"),
     },
     define: {
       RUNTROL_INCLUDE_TEST_JOURNEY: JSON.stringify(includeTestJourney),
     },
+    minify: true,
+    sourcemap: false,
+    logLevel: "info",
+  }),
+  build({
+    entryPoints: [path.join(extensionRoot, "src/pairingQrVendor.ts")],
+    outfile: path.join(dist, "pairingQrVendor.js"),
+    bundle: true,
+    platform: "node",
+    format: "cjs",
+    target: "node20",
     minify: true,
     sourcemap: false,
     logLevel: "info",

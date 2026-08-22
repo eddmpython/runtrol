@@ -12,6 +12,7 @@ function row(overrides: Partial<Conversation> = {}): Conversation {
     serviceName: "Codex",
     serviceIcon: "sparkle",
     title: "Refactor the parser",
+    homeWorkspace: "C:\\work\\alpha",
     workspace: "C:\\work\\alpha",
     folder: "alpha",
     projectless: false,

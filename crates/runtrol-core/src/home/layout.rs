@@ -18,6 +18,7 @@
 //! | `process-guards/` | child supervision, containing only bounded process identity records |
 //! | the probe cache | the binary-identity cache of what each installed CLI can do |
 //! | the Mission gate registry | fixed local Gate definitions, without process output |
+//! | the isolated workspace registry | Core-owned chat worktree identities and cleanup state |
 //! | the capability trust index | exact local digest approvals, without capability bodies |
 //! | the provider update journal | verified version floors and rollback pins, never provider content |
 //! | the machine identity vault | the per-user OS protector and Noise handshake assembly |
@@ -53,6 +54,9 @@ const MISSION_LEDGER: &str = "mission-ledger.redb";
 
 /// Fixed local Mission Gate definitions.
 const MISSION_GATES: &str = "mission-gates.json";
+
+/// Core-owned ordinary-chat worktrees and their exact cleanup state.
+const ISOLATED_WORKSPACES: &str = "isolated-workspaces.json";
 
 /// Exact local capability approvals and states.
 const CAPABILITY_TRUST: &str = "capability-trust.json";
@@ -101,6 +105,8 @@ pub struct Layout {
     mission_ledger: AbsPath,
     /// Fixed local Mission Gate registry.
     mission_gates: AbsPath,
+    /// Core-owned ordinary-chat worktree registry.
+    isolated_workspaces: AbsPath,
     /// Exact local capability approval index.
     capability_trust: AbsPath,
     /// The operator's manifest directory.
@@ -147,6 +153,7 @@ impl Layout {
             database: entry(DATABASE)?,
             mission_ledger: entry(MISSION_LEDGER)?,
             mission_gates: entry(MISSION_GATES)?,
+            isolated_workspaces: entry(ISOLATED_WORKSPACES)?,
             capability_trust: entry(CAPABILITY_TRUST)?,
             providers: entry(PROVIDERS)?,
             process_guards: entry(PROCESS_GUARDS)?,
@@ -185,6 +192,12 @@ impl Layout {
     #[must_use]
     pub const fn mission_gates(&self) -> &AbsPath {
         &self.mission_gates
+    }
+
+    /// Core-owned ordinary-chat worktree registry.
+    #[must_use]
+    pub const fn isolated_workspaces(&self) -> &AbsPath {
+        &self.isolated_workspaces
     }
 
     /// Exact local capability approval index.
@@ -288,6 +301,7 @@ impl Layout {
             &self.database,
             &self.mission_ledger,
             &self.mission_gates,
+            &self.isolated_workspaces,
             &self.capability_trust,
             &self.providers,
             &self.process_guards,

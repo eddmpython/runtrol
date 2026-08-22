@@ -155,6 +155,12 @@ pub fn needed(request: &Request) -> Needed {
         }
         Request::CapabilityRollback { .. } => Needed::AtTheMachine(LocalScope::CapabilityRollback),
         Request::CapabilityArchive { .. } => Needed::AtTheMachine(LocalScope::CapabilityArchive),
+        Request::WorkspaceIsolatePrepare { .. }
+        | Request::WorkspaceIsolateList
+        | Request::WorkspaceIsolateBind { .. }
+        | Request::WorkspaceIsolateRelease { .. } => {
+            Needed::AtTheMachine(LocalScope::WorkspaceShare)
+        }
         Request::MissionPause { .. } => Needed::Scope(DeviceScope::MissionPause),
         Request::MissionResumeSafe { .. } => Needed::Scope(DeviceScope::MissionResumeSafe),
         Request::MissionCancel { .. } => Needed::Scope(DeviceScope::MissionCancel),

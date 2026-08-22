@@ -103,8 +103,15 @@ the original daemon and provider processes instead of making a versioned extensi
   running session keeps these words current (the hot ceiling bounds how many); nothing but the reduced word is kept.
 - The window moves between projects from the keyboard: "Switch Window to Project..." (`Ctrl+K Ctrl+Shift+P`) and
   back with `Ctrl+K Ctrl+B`, the same window replaced each time; the previous project is one string in global state.
-- A new chat's service chip offers "Also ask <service>": the first message starts one conversation per chosen
-  service, each in its own tab, sharing the folder by the operator's explicit choice, and the grid lines them up.
+- A new chat's service chip and the `Also Ask Another Service` command add another installed service without a
+  second prompt. For a Git project, the first message asks Core to create one linked worktree per chosen service at
+  the exact clean base commit. Every Runtime session starts with exclusive access to its distinct path, while Studio
+  keeps the chats under the selected base-project heading and the grid lines them up. A projectless scratch chat is
+  the only shared-placement exception because it has no project files to isolate.
+- A single-service collision offers `Start isolated` as the primary safe action. Core durably records creating,
+  ready, bound, dirty-preserved, and released ownership. Studio rebinds a uniquely matching live Runtime session
+  after a restart, removes only abandoned clean worktrees, and shows the exact path of any dirty worktree it preserves.
+  No branch, merge, commit, prompt, reply, provider flag, or transcript enters that record.
 - Every row carries one of six states, and the same glyph means the same thing in the sidebar and in the switcher:
   needs you, needs attention, working, waiting on a limit, ready, saved. The point of the vocabulary is that a list of
   running agents can be read without opening any of them.
@@ -222,6 +229,9 @@ Two contracts keep the conversation window from growing a branch per place or pe
 | `protocol.ts` | TypeScript projection of the Rust wire | provider-specific fields |
 | `runtimeClient.ts` | approved public Runtime identity, validated-locator lifetime, inventory, lifecycle, and streams | provider credentials or conversation storage |
 | `agentTools.ts` | exact Core enable, disable, and list commands plus in-memory project badge state | provider configuration, integration secrets, or Runtime grant policy |
+| `chatPlacement.ts` | the provider-neutral decision between shared, exclusive, and isolated first-message placement | Git commands, provider names, or durable ownership |
+| `isolatedWorkspace.ts` | exact Core isolation requests and the exact generated Runtime root grant and revocation | Git execution, broad root removal, prompt content, or provider policy |
+| `pairingQr.ts`, `pairingQrVendor.ts` | pairing-time loading of the bounded QR encoder sibling bundle | activation-time encoder cost or pairing authority |
 | `state.ts` | provider, session, cursor, and selection metadata in memory | conversation frames |
 | `selectionStore.ts` | one bounded selected-session identifier | prompts, replies, or provider state |
 | `controller.ts` | user actions, one watch lifetime, workspace binding | transcript discovery or agent loops |
@@ -428,6 +438,8 @@ specified in [automatic updates](automaticUpdates.md).
 | `RUNTROL_EYE_ENTRY=missionAutoFlightEye node tooling/real-window-eye.mjs` | one reviewed two-wave dependency Mission is armed once, starts two real provider sessions, verifies two fixed Gates, reaches `integrating` with zero operator continuation actions, removes its own authority, and is photographed before arm, while armed, and after arrival |
 | `RUNTROL_EYE_ENTRY=fleetEye node tooling/real-window-eye.mjs` | two real CLI attempts reach passing Receipts, native diffs compare their distinct output, `attempt-2` opens as the only winner Receipt, an `attempt-1` apply request is rejected, the public primary action writes exactly `attempt 2`, and the Mission reaches `completed` with its selected Task and Receipt visible. Comparison, winner review, confirmation, and completed screenshots are inspected directly at 1456 by 906 |
 | `RUNTROL_EYE_ENTRY=missionRecoveryEye node tooling/real-window-eye.mjs` | one real provider Mission is photographed in flight, its exact Core process is terminated and replaced over the same isolated home, the Mission and Task are photographed blocked, Esc proves the focused recovery confirmation performs no mutation, Enter starts a distinct fresh Runtime session, and the running recovery is photographed at the declared viewport |
+| `RUNTROL_EYE_ENTRY=safeParallelChatEye node tooling/real-window-eye.mjs` | one draft starts real Claude Code and Codex sessions in distinct Core-owned linked worktrees, proves the same Git store and base commit, keeps the base checkout unchanged, force-restarts Core, recovers exact ownership, and removes only the exact clean worktrees and Runtime roots |
+| `node tooling/installed-safe-parallel-eye.mjs <exact-vsix>` | installs one exact VSIX in an isolated real VS Code profile, proves the bundled and managed Core digests match, then uses only the public new-chat and Also Ask commands to start two installed services in distinct worktrees and verify exact cleanup at 1456 by 908 |
 | `agentToolsSmoke` | real installed provider CLIs, official MCP registration, modern and legacy discovery, fixed tool catalogue, root isolation, Runtime reads, complete revocation, and post-revocation default deny with zero model turns |
 | `missionGrowthContracts` | Mission state, exact Send, evidence, integration, capability trust, local scope, tamper, and rollback |
 | `missionLiveJourney` | two installed provider CLIs complete five reviewed Tasks and an explicit reuse, tamper, and rollback journey through production IPC |

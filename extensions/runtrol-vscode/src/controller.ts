@@ -5,15 +5,18 @@ import { PUBLIC_LIMITS, type PublicInputBlock } from "@runtrol/runtime-client";
 import * as vscode from "vscode";
 
 import type { Attachment, ConversationBinding, ConversationPanels, DraftRecord } from "./conversationPanels";
+import { multiProviderPlacement, type StartDecision } from "./chatPlacement";
 import type { Place } from "./conversationSurface";
 import type { MenuAnchor, MenuItem } from "./viewActions";
 import type { ConversationView } from "./conversationView";
 import { CoreClient } from "./core/client";
 import { draftChips, newDraftId, NO_PROJECT_LABEL, type DraftState } from "./draft";
 import { readGitBranch } from "./gitBranch";
+import { IsolatedWorkspaces } from "./isolatedWorkspace";
 import { isProjectless } from "./projectlessWorkspace";
 import type { ProjectRecord } from "./projects";
 import type {
+  IsolatedWorkspaceLine,
   ProviderUpdateLine,
   Response,
 } from "./protocol";
@@ -89,6 +92,7 @@ export class Controller implements vscode.Disposable {
   private nativeDiscoveryGeneration = 0;
   /// One provider probe at a time. Each spawns a CLI, so the queue is what keeps activation answerable.
   private verificationTail: Promise<void> = Promise.resolve();
+  private readonly isolatedWorkspaces: IsolatedWorkspaces;
 
   constructor(
     private readonly context: vscode.ExtensionContext,
@@ -100,6 +104,11 @@ export class Controller implements vscode.Disposable {
     /// The projects the operator created, offered first when a draft picks its folder.
     private readonly projectRecords: { all(): readonly ProjectRecord[] },
   ) {
+    this.isolatedWorkspaces = new IsolatedWorkspaces(
+      client,
+      () => runtime.integrationId(),
+      () => runtime.reset(),
+    );
     this.status = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 20);
     this.status.name = "Runtrol chats";
     this.status.command = "runtrol.switchSession";
@@ -114,10 +123,15 @@ export class Controller implements vscode.Disposable {
   }
 
   async initialize(): Promise<void> {
-    const [inventory, remembered] = await Promise.all([
+    const [inventory, remembered, isolated] = await Promise.all([
       this.runtime.inventory(),
       this.selection.load(),
+      this.isolatedWorkspaces.list(),
     ]);
+    this.state.setIsolatedWorkspaces(await this.reconcileIsolatedWorkspaces(
+      isolated,
+      inventory.sessions.sessions,
+    ));
     this.applyListing(
       inventory.sessions.sessions,
       inventory.sessions.warnings,
@@ -135,13 +149,75 @@ export class Controller implements vscode.Disposable {
   }
 
   async refresh(): Promise<void> {
-    const inventory = await this.runtime.inventory();
+    const [inventory, isolated] = await Promise.all([
+      this.runtime.inventory(),
+      this.isolatedWorkspaces.list(),
+    ]);
     this.applyListing(
       inventory.sessions.sessions,
       inventory.sessions.warnings,
       inventory.providers.providers,
     );
+    this.state.setIsolatedWorkspaces(await this.reconcileIsolatedWorkspaces(
+      isolated,
+      inventory.sessions.sessions,
+    ));
     this.startProviderVerification(inventory.providers.providers);
+  }
+
+  private async refreshIsolatedWorkspaces(): Promise<void> {
+    this.state.setIsolatedWorkspaces(await this.isolatedWorkspaces.list());
+  }
+
+  /// Resolve worktree ownership left across an Extension Host or Core restart. Unbound preparation is unused
+  /// and may be removed only through Core's clean-only rule. A bound record whose Runtime session no longer
+  /// exists is the same cleanup after a close from another surface. Dirty results stay and are named to the user.
+  private async reconcileIsolatedWorkspaces(
+    listed: readonly IsolatedWorkspaceLine[],
+    sessions: readonly SessionLine[],
+  ): Promise<readonly IsolatedWorkspaceLine[]> {
+    const live = new Set(sessions.map((session) => session.sessionId));
+    let changed = false;
+    for (const workspace of listed) {
+      if (workspace.state === "ready") {
+        const opened = sessions.filter((session) => (
+          workspaceIdentity(session.workspace) === workspaceIdentity(workspace.workspace)
+        ));
+        if (opened.length === 1 && opened[0]) {
+          await this.isolatedWorkspaces.bind(workspace, opened[0].sessionId);
+          changed = true;
+          continue;
+        }
+      }
+      const abandoned = workspace.state === "creating" || workspace.state === "ready";
+      const closed = workspace.state === "bound"
+        && workspace.session_id !== null
+        && !live.has(workspace.session_id);
+      if (!abandoned && !closed) continue;
+      await this.isolatedWorkspaces.release(
+        workspace.workspace,
+        workspace.workspace_id,
+        workspace.session_id,
+      );
+      changed = true;
+    }
+    const current = changed ? await this.isolatedWorkspaces.list() : listed;
+    for (const workspace of current) {
+      if (workspace.state !== "preservedDirty") continue;
+      const warning = `isolated:${workspace.workspace_id}`;
+      if (this.seenWarnings.has(warning)) continue;
+      this.seenWarnings.add(warning);
+      void vscode.window.showWarningMessage(
+        "Runtrol kept an isolated workspace because it contains changes.",
+        { modal: false, detail: workspace.workspace },
+        "Open worktree",
+      ).then((action) => action === "Open worktree"
+        ? vscode.commands.executeCommand("vscode.openFolder", vscode.Uri.file(workspace.workspace), {
+          forceNewWindow: true,
+        })
+        : undefined);
+    }
+    return current;
   }
 
   /// Bring a freshly widened workspace root into view without tearing anything down.
@@ -432,10 +508,78 @@ export class Controller implements vscode.Disposable {
       | { kind: "start"; providerId: string; workspace: string; model: string | null; effort: string | null; permission: string | null }
       | { kind: "adopt"; native: NativeChatLine },
     access: WorkspaceAccess,
-  ): Promise<string> {
+  ): Promise<SessionLine> {
     const opened = open.kind === "start"
       ? await this.runtime.start(open.providerId, open.workspace, access, open.model, open.effort, open.permission)
       : await this.runtime.adoptNative(open.native, access);
+    return opened;
+  }
+
+  /// Open a fresh provider in the person's selected checkout or in one Core-owned linked worktree.
+  /// Preparation and cleanup stay provider-neutral. A failed provider start releases only the exact clean
+  /// worktree Core returned; a successful start is bound before this method reports success.
+  private async openFresh(
+    providerId: string,
+    project: string,
+    decision: StartDecision,
+    model: string | null,
+    effort: string | null,
+    permission: string | null,
+  ): Promise<string> {
+    if (decision !== "isolated") {
+      return (await this.openWithAccess(
+        { kind: "start", providerId, workspace: project, model, effort, permission },
+        decision,
+      )).sessionId;
+    }
+    const isolated = await this.isolatedWorkspaces.prepare(project);
+    let opened: SessionLine;
+    try {
+      opened = await this.openWithAccess(
+        {
+          kind: "start",
+          providerId,
+          workspace: isolated.workspace,
+          model,
+          effort,
+          permission,
+        },
+        "exclusive",
+      );
+    } catch (error) {
+      try {
+        await this.isolatedWorkspaces.release(isolated.workspace, isolated.workspace_id, null);
+      } catch (cleanupError) {
+        throw new Error(
+          `${error instanceof Error ? error.message : String(error)}; Core also could not release the unused `
+          + `isolated workspace: ${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`,
+        );
+      } finally {
+        await this.refreshIsolatedWorkspaces().catch(() => undefined);
+      }
+      throw error;
+    }
+    try {
+      await this.isolatedWorkspaces.bind(isolated, opened.sessionId);
+    } catch (error) {
+      try {
+        await this.runtime.close(runtimeAction(opened), opened.lifecycle === "hotRunning");
+        await this.isolatedWorkspaces.release(isolated.workspace, isolated.workspace_id, null);
+      } catch (cleanupError) {
+        await this.refresh().catch(() => undefined);
+        throw new Error(
+          `The chat started in ${isolated.workspace}, but Core could not bind its cleanup ownership: `
+          + `${error instanceof Error ? error.message : String(error)}; the live chat could not be closed safely: `
+          + `${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`,
+        );
+      }
+      await this.refreshIsolatedWorkspaces().catch(() => undefined);
+      throw new Error(
+        `The chat started in ${isolated.workspace}, but Core could not bind its cleanup ownership: `
+        + `${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+    await this.refreshIsolatedWorkspaces();
     return opened.sessionId;
   }
 
@@ -499,7 +643,7 @@ export class Controller implements vscode.Disposable {
       if (action !== "Resume anyway") return null;
       access = "shared";
     }
-    const openedId = await this.openWithAccess({ kind: "adopt", native: current }, access);
+    const openedId = (await this.openWithAccess({ kind: "adopt", native: current }, access)).sessionId;
     await this.refresh();
     const adopted = this.state.sessions.find((session) => session.sessionId === openedId);
     if (!adopted) {
@@ -607,7 +751,7 @@ export class Controller implements vscode.Disposable {
     for (const folder of vscode.workspace.workspaceFolders ?? []) add(folder.uri.fsPath, "Open in this window");
     for (const record of this.projectRecords.all()) add(record.workspace, record.name);
     for (const row of this.state.conversations) {
-      if (!row.projectless && row.workspace.trim()) add(row.workspace, row.serviceName);
+      if (!row.projectless && row.homeWorkspace.trim()) add(row.homeWorkspace, row.serviceName);
     }
     choices.push({ label: "$(folder-opened) Browse for a folder...", workspace: null, browse: true });
     const picked = await this.pickFrom(
@@ -821,9 +965,12 @@ export class Controller implements vscode.Disposable {
     const also = draft.state.alsoProviderIds
       .map((id) => this.state.providers.find((candidate) => candidate.providerId === id) ?? null)
       .filter((candidate): candidate is ProviderLine => candidate !== null && isUsable(candidate));
-    // N agents on one folder is the operator's explicit choice of concurrent writers, which is the one case
-    // the working-tree contract lets through as shared access; one agent asks the usual question.
-    const decided = also.length > 0 ? "shared" : await this.startDecision(workspace, "keep");
+    // A multi-service message becomes one linked worktree per service. The projectless scratch directory is
+    // the only exception: it is not a Git checkout and carries no project files to isolate.
+    const decided = multiProviderPlacement(
+      also.length,
+      isProjectless(workspace, this.state.projectlessRoot),
+    ) ?? await this.startDecision(workspace, "keep");
     if (decided === null || decided === "another") return;
     await this.rememberService(provider.providerId);
     if (draft.state.model !== null || draft.state.effort !== null || draft.state.permission !== null) {
@@ -836,16 +983,16 @@ export class Controller implements vscode.Disposable {
     }
     const pausedDiscoveries = this.beginForegroundAction();
     try {
-      const openedId = await this.openWithAccess(
-        {
-          kind: "start",
-          providerId: provider.providerId,
-          workspace,
-          model: draft.state.model,
-          effort: draft.state.effort,
-          permission: draft.state.permission,
-        },
+      if (decided === "isolated") {
+        binding.view.status(`Preparing separate workspaces for ${also.length + 1} services...`, "info");
+      }
+      const openedId = await this.openFresh(
+        provider.providerId,
+        workspace,
         decided,
+        draft.state.model,
+        draft.state.effort,
+        draft.state.permission,
       );
       await this.refresh();
       const session = this.state.sessions.find((candidate) => candidate.sessionId === openedId);
@@ -859,7 +1006,7 @@ export class Controller implements vscode.Disposable {
         );
       });
       await this.send(binding, session, text);
-      if (also.length > 0) await this.askOthersToo(also, workspace, text, binding);
+      if (also.length > 0) await this.askOthersToo(also, workspace, decided, text, binding);
     } catch (error) {
       if (error instanceof ServiceTroubleReported) throw error;
       const trouble = troubleOf(errorKindOf(error), provider);
@@ -876,14 +1023,19 @@ export class Controller implements vscode.Disposable {
   private async askOthersToo(
     also: readonly ProviderLine[],
     workspace: string,
+    decision: StartDecision,
     text: string,
     from: ConversationBinding,
   ): Promise<void> {
     for (const provider of also) {
       try {
-        const openedId = await this.openWithAccess(
-          { kind: "start", providerId: provider.providerId, workspace, model: null, effort: null, permission: null },
-          "shared",
+        const openedId = await this.openFresh(
+          provider.providerId,
+          workspace,
+          decision,
+          null,
+          null,
+          null,
         );
         await this.refresh();
         const session = this.state.sessions.find((candidate) => candidate.sessionId === openedId);
@@ -1067,7 +1219,7 @@ export class Controller implements vscode.Disposable {
   private async finishConfiguredStart(
     provider: ProviderLine,
     workspace: string,
-    access: WorkspaceAccess,
+    access: StartDecision,
   ): Promise<void> {
     const configuration = await this.chooseStartConfiguration(provider, workspace);
     if (!configuration) return;
@@ -1125,7 +1277,7 @@ export class Controller implements vscode.Disposable {
     workspace: string,
     model: string | null,
     reasoningEffort: string | null,
-    access: WorkspaceAccess,
+    access: StartDecision,
     follow: boolean,
     permission: string | null = null,
   ): Promise<string> {
@@ -1141,9 +1293,13 @@ export class Controller implements vscode.Disposable {
     }
     const pausedDiscoveries = this.beginForegroundAction();
     try {
-      const openedId = await this.openWithAccess(
-        { kind: "start", providerId: provider.providerId, workspace, model, effort: reasoningEffort, permission },
+      const openedId = await this.openFresh(
+        provider.providerId,
+        workspace,
         access,
+        model,
+        reasoningEffort,
+        permission,
       );
       await this.refresh();
       await this.select(openedId);
@@ -1377,6 +1533,52 @@ export class Controller implements vscode.Disposable {
     return this.context.globalState.get<string[]>(KNOWN_PROJECTS_KEY) ?? [];
   }
 
+  /// Add one more installed service to the focused draft from the Command Palette. This is the keyboard path to
+  /// the service chip's "Also ask" choice, so fan-out needs no pointer choreography and keeps one first message.
+  async alsoAskFocusedDraft(): Promise<void> {
+    const binding = this.panels.focused();
+    const draft = binding?.draft;
+    if (!binding || !draft) {
+      this.say("Open a new conversation draft before adding another service.", "info");
+      return;
+    }
+    const choices = this.state.providers.filter((provider) => (
+      isUsable(provider)
+      && provider.providerId !== draft.state.providerId
+      && !draft.state.alsoProviderIds.includes(provider.providerId)
+    ));
+    if (choices.length === 0) {
+      this.say("No other installed coding service is available for this draft.", "info");
+      return;
+    }
+    const picked = await vscode.window.showQuickPick(
+      choices.map((provider) => ({
+        label: provider.displayName,
+        description: provider.installation.version ?? undefined,
+        provider,
+      })),
+      {
+        title: "Also ask another service",
+        placeHolder: "The same first message opens in a separate workspace",
+      },
+    );
+    if (!picked) return;
+    await this.amendDraft(binding, {
+      alsoProviderIds: [...draft.state.alsoProviderIds, picked.provider.providerId],
+    });
+  }
+
+  async isolatedWorkspaceEvidenceForJourney(): Promise<{
+    workspaces: readonly IsolatedWorkspaceLine[];
+    roots: readonly string[];
+  }> {
+    const [workspaces, roots] = await Promise.all([
+      this.isolatedWorkspaces.list(),
+      this.isolatedWorkspaces.authorizedRoots(),
+    ]);
+    return { workspaces, roots };
+  }
+
   /// Remember the projects the sidebar shows, so the keyboard switch can offer them in a window that has not
   /// listed anything yet. Paths only, bounded, newest last.
   private async rememberKnownProjects(): Promise<void> {
@@ -1592,8 +1794,9 @@ export class Controller implements vscode.Disposable {
   async close(value?: ConversationItem | SessionLine): Promise<void> {
     const session = this.sessionOf(value);
     const action = session.lifecycle === "hotRunning" ? "Stop and close" : "Close in Runtrol";
+    const project = this.state.conversationOf(session.sessionId)?.folder || path.basename(session.workspace);
     const choice = await vscode.window.showWarningMessage(
-      `Close the ${session.providerId} chat in ${path.basename(session.workspace)}?`,
+      `Close the ${session.providerId} chat in ${project}?`,
       {
         modal: true,
         detail: "Runtrol stops supervising this chat. The coding service keeps its own chat history.",
@@ -1621,6 +1824,31 @@ export class Controller implements vscode.Disposable {
     }
     this.panels.bindingFor(session.sessionId)?.dispose();
     await this.runtime.close(runtimeAction(session), interruptRunning);
+    try {
+      const released = await this.isolatedWorkspaces.release(
+        session.workspace,
+        null,
+        session.sessionId,
+      );
+      if (released?.outcome === "preservedDirty") {
+        const action = await vscode.window.showWarningMessage(
+          "Runtrol kept the isolated workspace because it contains changes.",
+          { modal: false, detail: released.workspace },
+          "Open worktree",
+        );
+        if (action === "Open worktree") {
+          await vscode.commands.executeCommand("vscode.openFolder", vscode.Uri.file(released.workspace), {
+            forceNewWindow: true,
+          });
+        }
+      }
+      await this.refreshIsolatedWorkspaces();
+    } catch (error) {
+      void vscode.window.showWarningMessage(
+        `The chat closed, but its isolated workspace could not be cleaned up: `
+        + `${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
     await this.refresh();
   }
 
@@ -2208,25 +2436,26 @@ export class Controller implements vscode.Disposable {
   private async startDecision(
     workspace: string,
     alternatives: "offer" | "keep",
-  ): Promise<StartWorkspace["access"] | "another" | null> {
+  ): Promise<StartDecision | "another" | null> {
     const collisions = workspaceCollisions(workspace, this.state.sessions);
     if (collisions.length === 0) return "exclusive";
     // Two agents answering unrelated questions in the scratch folder are not two agents editing one
     // repository; the writer question is noise there, and a conversation with no project never asks it.
     if (isProjectless(workspace, this.state.projectlessRoot)) return "shared";
     const buttons = alternatives === "offer"
-      ? ["Focus existing", "Choose another", "Start here anyway"]
-      : ["Focus existing", "Start here anyway"];
+      ? ["Start isolated", "Focus existing", "Choose another", "Start here anyway"]
+      : ["Start isolated", "Focus existing", "Start here anyway"];
     const action = await vscode.window.showWarningMessage(
       `${path.basename(workspace)} overlaps ${collisions.length} running chat${
         collisions.length === 1 ? "" : "s"
       }.`,
       {
         modal: true,
-        detail: collisionDetail(collisions),
+        detail: `${collisionDetail(collisions)}\n\nStart isolated creates a clean linked checkout automatically.`,
       },
       ...buttons,
     );
+    if (action === "Start isolated") return "isolated";
     if (action === "Start here anyway") return "shared";
     if (action === "Focus existing") {
       const existing = await chooseCollision(collisions);
@@ -2278,8 +2507,11 @@ export class Controller implements vscode.Disposable {
       return;
     }
     const selected = this.state.selected;
+    const selectedProject = selected
+      ? this.state.conversationOf(selected.sessionId)?.folder || path.basename(selected.workspace)
+      : null;
     this.status.text = selected
-      ? `$(pulse) ${path.basename(selected.workspace)}  ${hot}/${this.state.sessions.length}`
+      ? `$(pulse) ${selectedProject}  ${hot}/${this.state.sessions.length}`
       : `$(pulse) Runtrol  ${hot}/${this.state.sessions.length}`;
     this.status.tooltip = `${hot} running conversations, ${this.state.sessions.length} total`;
     this.status.command = "runtrol.switchSession";
@@ -2290,7 +2522,7 @@ export class Controller implements vscode.Disposable {
 
 type StartWorkspace = {
   workspace: string;
-  access: WorkspaceAccess;
+  access: StartDecision;
 };
 
 type StartConfiguration = {

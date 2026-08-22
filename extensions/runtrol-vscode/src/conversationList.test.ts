@@ -92,6 +92,25 @@ test("one list holds supervised sessions and provider-owned chats alike", () => 
   assert.equal(rows[1]?.serviceName, "Codex");
 });
 
+test("a Core-owned worktree stays under the project the person selected", () => {
+  const worktree = below(ROOT, ".runtrol-worktrees", "chat-01234567");
+  const rows = conversations(
+    [session({ sessionId: "s1", workspace: worktree, hot: true, lifecycle: "hotIdle" })],
+    PROVIDERS,
+    [],
+    null,
+    null,
+    new Map(),
+    new Map([[workspaceIdentity(worktree), ALPHA]]),
+  );
+  const grouped = projects([record(ALPHA)], rows, []);
+
+  assert.equal(rows[0]?.workspace, worktree, "actions keep the exact provider working directory");
+  assert.equal(rows[0]?.homeWorkspace, ALPHA, "presentation keeps the selected project");
+  assert.equal(rows[0]?.title, "alpha");
+  assert.equal(grouped[0]?.rows[0]?.session?.sessionId, "s1");
+});
+
 test("a supervised session and the chat it came from are one row, not two", () => {
   const rows = conversations(
     [session({ sessionId: "s1", providerId: "codex", nativeSessionId: "n1", workspace: BETA })],

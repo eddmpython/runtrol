@@ -83,6 +83,7 @@
     "onCommand:runtrol.openNextWaiting",
     "onCommand:runtrol.switchSession",
     "onCommand:runtrol.startSession",
+    "onCommand:runtrol.alsoAsk",
     "onCommand:runtrol.startConfiguredSession",
     "onCommand:runtrol.newConfiguredConversationInProject",
     "onCommand:runtrol.selectSession",
@@ -260,6 +261,11 @@
         "command": "runtrol.startSession",
         "title": "Runtrol: New Conversation",
         "icon": "$(add)"
+      },
+      {
+        "command": "runtrol.alsoAsk",
+        "title": "Runtrol: Also Ask Another Service",
+        "icon": "$(split-horizontal)"
       },
       {
         "command": "runtrol.selectSession",

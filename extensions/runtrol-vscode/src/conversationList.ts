@@ -35,6 +35,9 @@ export type Conversation = {
   /// The glyph that stands for that service, which is what tells two rows apart without reading them.
   readonly serviceIcon: string;
   readonly title: string;
+  /// The project the person selected. For a Core-owned linked worktree this is its base checkout.
+  readonly homeWorkspace: string;
+  /// The exact directory where the provider process runs.
   readonly workspace: string;
   readonly folder: string;
   /// Whether it runs in the scratch folder, which is what a conversation started with no project is.
@@ -72,6 +75,7 @@ export function conversations(
   selectedSessionId: string | null,
   projectlessRoot: string | null = null,
   activities: ReadonlyMap<string, SessionActivity> = new Map(),
+  isolatedWorkspaceHomes: ReadonlyMap<string, string> = new Map(),
 ): Conversation[] {
   const nativeByKey = new Map<string, NativeChatLine>();
   for (const chat of nativeChats) {
@@ -93,6 +97,7 @@ export function conversations(
       selectedSessionId,
       projectlessRoot,
       activities.get(session.sessionId) ?? NO_ACTIVITY,
+      isolatedWorkspaceHomes,
     ));
   }
   for (const [key, chat] of nativeByKey) {
@@ -205,8 +210,8 @@ export function projects(
   const discovered = new Map<string, { workspace: string; rows: Conversation[] }>();
   for (const row of rows) {
     if (unfiled(row) || projectOf(records, row) || openFolderOf(openWorkspaces, row) !== null) continue;
-    const identity = workspaceIdentity(row.workspace);
-    const place = discovered.get(identity) ?? { workspace: row.workspace, rows: [] };
+    const identity = workspaceIdentity(row.homeWorkspace);
+    const place = discovered.get(identity) ?? { workspace: row.homeWorkspace, rows: [] };
     place.rows.push(row);
     discovered.set(identity, place);
   }
@@ -263,16 +268,16 @@ function group(
 
 /// Whether a conversation has no project to file under: it runs in the scratch folder, or names no folder.
 function unfiled(row: Conversation): boolean {
-  return row.projectless || !row.workspace.trim();
+  return row.projectless || !row.homeWorkspace.trim();
 }
 
 /// The deepest open folder that covers a conversation, by identity, or null for none.
 function openFolderOf(openWorkspaces: readonly string[], row: Conversation): string | null {
-  if (!row.workspace.trim()) return null;
+  if (!row.homeWorkspace.trim()) return null;
   let home: string | null = null;
   let homeLength = -1;
   for (const folder of openWorkspaces) {
-    if (!workspaceCovers(folder, row.workspace)) continue;
+    if (!workspaceCovers(folder, row.homeWorkspace)) continue;
     const identity = workspaceIdentity(folder);
     if (identity.length > homeLength) {
       home = identity;
@@ -286,10 +291,10 @@ function openFolderOf(openWorkspaces: readonly string[], row: Conversation): str
 ///
 /// Deepest folder wins when projects nest, because that is the one a person would call the conversation's home.
 function projectOf(records: readonly ProjectRecord[], row: Conversation): ProjectRecord | null {
-  if (!row.workspace.trim()) return null;
+  if (!row.homeWorkspace.trim()) return null;
   let home: ProjectRecord | null = null;
   for (const record of records) {
-    if (!workspaceCovers(record.workspace, row.workspace)) continue;
+    if (!workspaceCovers(record.workspace, row.homeWorkspace)) continue;
     if (!home || record.key.length > home.key.length) home = record;
   }
   return home;
@@ -371,8 +376,10 @@ function supervised(
   selectedSessionId: string | null,
   projectlessRoot: string | null,
   activity: SessionActivity,
+  isolatedWorkspaceHomes: ReadonlyMap<string, string>,
 ): Conversation {
-  const projectless = isProjectless(session.workspace, projectlessRoot);
+  const homeWorkspace = isolatedWorkspaceHomes.get(workspaceIdentity(session.workspace)) ?? session.workspace;
+  const projectless = isProjectless(homeWorkspace, projectlessRoot);
   return {
     key,
     providerId: session.providerId,
@@ -382,10 +389,11 @@ function supervised(
     // detail, and a row called "no-project" would read as a folder the person forgot about.
     title: session.label?.trim()
       || native?.title?.trim()
-      || (projectless ? "" : workspaceName(session.workspace))
+      || (projectless ? "" : workspaceName(homeWorkspace))
       || untitled(session.nativeSessionId || session.sessionId),
+    homeWorkspace,
     workspace: session.workspace,
-    folder: projectless ? "" : workspaceName(session.workspace),
+    folder: projectless ? "" : workspaceName(homeWorkspace),
     projectless,
     updatedAtMs: instant(native?.updatedAt),
     activity: activityOf(session),
@@ -416,6 +424,7 @@ function providerOwned(
     title: chat.title?.trim()
       || (projectless ? "" : workspaceName(chat.cwd))
       || untitled(chat.nativeSessionId),
+    homeWorkspace: chat.cwd,
     workspace: chat.cwd,
     folder: projectless ? "" : workspaceName(chat.cwd),
     projectless,

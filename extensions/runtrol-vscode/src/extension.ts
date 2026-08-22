@@ -184,9 +184,10 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
     async (session) => {
       // Where the conversation runs, for the chips: the folder's name and branch, or "No project" for the
       // scratch folder, whose path is an implementation detail nobody should read.
-      const projectless = isProjectless(session.workspace, state.projectlessRoot);
+      const home = state.conversationOf(session.sessionId)?.homeWorkspace ?? session.workspace;
+      const projectless = isProjectless(home, state.projectlessRoot);
       return {
-        project: projectless ? NO_PROJECT_LABEL : workspaceName(session.workspace) || session.workspace,
+        project: projectless ? NO_PROJECT_LABEL : workspaceName(home) || home,
         projectPath: projectless ? null : session.workspace,
         branch: projectless ? null : await readGitBranch(session.workspace),
       };
@@ -427,6 +428,10 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
     vscode.commands.registerCommand(
       "runtrol.startSession",
       () => run(() => afterReady(() => controller.startSession())),
+    ),
+    vscode.commands.registerCommand(
+      "runtrol.alsoAsk",
+      () => run(() => afterReady(() => controller.alsoAskFocusedDraft())),
     ),
     vscode.commands.registerCommand(
       "runtrol.startConfiguredSession",

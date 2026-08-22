@@ -251,6 +251,26 @@ pub(crate) enum Prepared {
         /// Exact response for the bound request.
         response: Response,
     },
+    /// One exact ordinary-chat worktree preparation completed outside the session owner.
+    IsolatedWorkspacePrepare {
+        /// Bound idempotent request identity.
+        request_id: Box<str>,
+        /// Bound project text.
+        project: Box<str>,
+        /// Exact preparation result.
+        response: Response,
+    },
+    /// One exact ordinary-chat worktree cleanup completed outside the session owner.
+    IsolatedWorkspaceRelease {
+        /// Bound optional Core ownership identity.
+        workspace_id: Option<Box<str>>,
+        /// Bound optional public Runtime session identity.
+        session_id: Option<Box<str>>,
+        /// Bound exact workspace text.
+        workspace: Box<str>,
+        /// Exact cleanup result.
+        response: Response,
+    },
     /// One exact Mission Task workspace was prepared outside the session owner.
     MissionWorkspace {
         /// Bound Mission identity.
@@ -1236,6 +1256,68 @@ pub(crate) async fn prepare_mission_workspace(
     }
 }
 
+/// Create or release one Core-owned ordinary-chat worktree outside the single session owner.
+pub(crate) async fn prepare_isolated_workspace(
+    conversation: &Conversation,
+    composed: &Composed,
+    request: &Request,
+) -> Prepared {
+    if !conversation.greeted()
+        || crate::scope::allowed(
+            conversation.caller(),
+            request,
+            &composed.device_authority.grants(),
+        )
+        .is_err()
+    {
+        return Prepared::None;
+    }
+    match request {
+        Request::WorkspaceIsolatePrepare {
+            request_id,
+            project,
+        } => {
+            let response = composed
+                .isolated_workspaces
+                .lock()
+                .await
+                .prepare(&composed.containment, request_id, project)
+                .await
+                .unwrap_or_else(|message| refuse(&message));
+            Prepared::IsolatedWorkspacePrepare {
+                request_id: request_id.clone(),
+                project: project.clone(),
+                response,
+            }
+        }
+        Request::WorkspaceIsolateRelease {
+            workspace_id,
+            session_id,
+            workspace,
+        } => {
+            let response = composed
+                .isolated_workspaces
+                .lock()
+                .await
+                .release(
+                    &composed.containment,
+                    workspace_id.as_deref(),
+                    session_id.as_deref(),
+                    workspace,
+                )
+                .await
+                .unwrap_or_else(|message| refuse(&message));
+            Prepared::IsolatedWorkspaceRelease {
+                workspace_id: workspace_id.clone(),
+                session_id: session_id.clone(),
+                workspace: workspace.clone(),
+                response,
+            }
+        }
+        _ => Prepared::None,
+    }
+}
+
 /// Run exact Artifact sealing and Gate execution outside the single session owner.
 pub(crate) async fn prepare_mission_verification(
     conversation: &Conversation,
@@ -1548,6 +1630,55 @@ pub(crate) fn answer_prepared(
                 response,
             } if prepared_mission == mission_id && prepared_task == task_id => Reply::One(response),
             other => mismatched(other),
+        },
+
+        Request::WorkspaceIsolatePrepare {
+            request_id,
+            project,
+        } => match prepared {
+            Prepared::IsolatedWorkspacePrepare {
+                request_id: prepared_id,
+                project: prepared_project,
+                response,
+            } if prepared_id == request_id && prepared_project == project => Reply::One(response),
+            other => mismatched(other),
+        },
+
+        Request::WorkspaceIsolateRelease {
+            workspace_id,
+            session_id,
+            workspace,
+        } => match prepared {
+            Prepared::IsolatedWorkspaceRelease {
+                workspace_id: prepared_id,
+                session_id: prepared_session,
+                workspace: prepared_workspace,
+                response,
+            } if prepared_id == workspace_id
+                && prepared_session == session_id
+                && prepared_workspace == workspace =>
+            {
+                Reply::One(response)
+            }
+            other => mismatched(other),
+        },
+
+        Request::WorkspaceIsolateList => match composed.isolated_workspaces.try_lock() {
+            Ok(controller) => Reply::One(controller.list()),
+            Err(_) => Reply::One(refuse("the isolated workspace controller lock is damaged")),
+        },
+
+        Request::WorkspaceIsolateBind {
+            workspace_id,
+            session_id,
+            workspace,
+        } => match composed.isolated_workspaces.try_lock() {
+            Ok(mut controller) => Reply::One(
+                controller
+                    .bind(&workspace_id, &session_id, &workspace)
+                    .unwrap_or_else(|message| refuse(&message)),
+            ),
+            Err(_) => Reply::One(refuse("the isolated workspace controller lock is damaged")),
         },
 
         Request::MissionVerifyTask {
@@ -2027,6 +2158,8 @@ fn bound(
         | Prepared::ProviderUpdates { .. }
         | Prepared::IntegrationAdmin { .. }
         | Prepared::PairingAdmin { .. }
+        | Prepared::IsolatedWorkspacePrepare { .. }
+        | Prepared::IsolatedWorkspaceRelease { .. }
         | Prepared::MissionWorkspace { .. }
         | Prepared::MissionVerification { .. }
         | Prepared::MissionIntegration { .. }

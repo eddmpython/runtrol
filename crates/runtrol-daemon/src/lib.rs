@@ -21,6 +21,7 @@ mod crash;
 pub mod dispatch;
 mod growth;
 mod integration_admin;
+mod isolated_workspace;
 mod mission;
 mod mission_schedule;
 mod pairing_admin;

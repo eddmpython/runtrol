@@ -10,6 +10,8 @@ import type {
 } from "./runtimeTypes";
 import { NO_ACTIVITY, type SessionActivity } from "./sessionActivity";
 import { incompleteDiscovery, providerRowsEqual, sessionRowsEqual } from "./stateRows";
+import type { IsolatedWorkspaceLine } from "./protocol";
+import { workspaceIdentity } from "./workspaceCollision";
 
 export type RuntimeStateChange = "rows" | "selection";
 
@@ -21,6 +23,7 @@ export class RuntimeState implements vscode.Disposable {
   private readonly nativeCatalogues = new Map<string, NativeChatCatalogue>();
   /// What each running conversation is doing, from the activity watch; absent means nothing known.
   private readonly activities = new Map<string, SessionActivity>();
+  private isolatedWorkspaceHomes: ReadonlyMap<string, string> = new Map();
   private selectedId: string | null = null;
   private conversationRows: readonly Conversation[] | null = null;
 
@@ -70,6 +73,7 @@ export class RuntimeState implements vscode.Disposable {
       this.selectedId,
       this.projectlessRoot,
       this.activities,
+      this.isolatedWorkspaceHomes,
     );
     return this.conversationRows;
   }
@@ -133,6 +137,22 @@ export class RuntimeState implements vscode.Disposable {
 
   setNativeCatalogue(catalogue: NativeChatCatalogue): void {
     this.nativeCatalogues.set(catalogue.providerId, catalogue);
+    this.conversationRows = null;
+    this.changedEmitter.fire("rows");
+  }
+
+  setIsolatedWorkspaces(workspaces: readonly IsolatedWorkspaceLine[]): void {
+    const next = new Map(workspaces.map((workspace) => [
+      workspaceIdentity(workspace.workspace),
+      workspace.project,
+    ]));
+    if (
+      next.size === this.isolatedWorkspaceHomes.size
+      && [...next].every(([key, value]) => this.isolatedWorkspaceHomes.get(key) === value)
+    ) {
+      return;
+    }
+    this.isolatedWorkspaceHomes = next;
     this.conversationRows = null;
     this.changedEmitter.fire("rows");
   }

@@ -63,8 +63,8 @@ use crate::dispatch::{
     Cleanup, CleanupReservation, Conversation, Discovered, Prepared, PreparedKind, Reply,
     answer_prepared, complete_prepare_for, discover, is_integration_admin, needs_driver,
     prepare_capability_verification, prepare_consult, prepare_integration_admin,
-    prepare_mission_integration, prepare_mission_verification, prepare_mission_workspace,
-    prepare_provider_updates, refuse,
+    prepare_isolated_workspace, prepare_mission_integration, prepare_mission_verification,
+    prepare_mission_workspace, prepare_provider_updates, refuse,
 };
 
 /// How many answered requests may be waiting to reach the one task that answers them.
@@ -1985,6 +1985,11 @@ async fn converse_inner(
             prepare_integration_admin(&conversation, &composed, &request).await
         } else if crate::dispatch::is_pairing_admin(&request) {
             crate::dispatch::prepare_pairing_admin(&conversation, &composed, &request).await
+        } else if matches!(
+            request,
+            Request::WorkspaceIsolatePrepare { .. } | Request::WorkspaceIsolateRelease { .. }
+        ) {
+            prepare_isolated_workspace(&conversation, &composed, &request).await
         } else if matches!(request, Request::MissionPrepareTask { .. }) {
             prepare_mission_workspace(&conversation, &composed, &request).await
         } else if matches!(request, Request::MissionVerifyTask { .. }) {

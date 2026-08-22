@@ -480,6 +480,37 @@ pub enum Request {
         capability_id: Box<str>,
     },
 
+    /// Create or resolve one Core-owned linked worktree for an ordinary chat.
+    WorkspaceIsolatePrepare {
+        /// Caller-minted canonical UUID, reused after an ambiguous reply.
+        request_id: Box<str>,
+        /// Exact Git checkout selected locally.
+        project: Box<str>,
+    },
+
+    /// List bounded Core-owned ordinary-chat worktrees for local presentation and restart recovery.
+    WorkspaceIsolateList,
+
+    /// Bind one prepared worktree to the exact Runtime session that opened in it.
+    WorkspaceIsolateBind {
+        /// Core-owned workspace identity returned by preparation.
+        workspace_id: Box<str>,
+        /// Public Runtime session identity.
+        session_id: Box<str>,
+        /// Exact canonical worktree returned by preparation.
+        workspace: Box<str>,
+    },
+
+    /// Release one exact Core-owned worktree after its Runtime session closes or a start fails.
+    WorkspaceIsolateRelease {
+        /// Core-owned identity when the caller received it, otherwise absent after an ambiguous bind.
+        workspace_id: Option<Box<str>>,
+        /// Bound Runtime session when one was established.
+        session_id: Option<Box<str>>,
+        /// Exact canonical worktree observed by the caller.
+        workspace: Box<str>,
+    },
+
     /// Begin a conversation that does not exist yet.
     Start {
         /// Which CLI.
@@ -724,6 +755,15 @@ pub enum Response {
 
     /// Exact canonical workspace prepared for one Task.
     MissionWorkspace(Box<MissionWorkspace>),
+
+    /// One exact Core-owned ordinary-chat worktree.
+    IsolatedWorkspace(Box<IsolatedWorkspaceLine>),
+
+    /// Bounded Core-owned ordinary-chat worktrees, including preserved dirty results.
+    IsolatedWorkspaces(Vec<IsolatedWorkspaceLine>),
+
+    /// Exact cleanup outcome for one Core-owned ordinary-chat worktree.
+    IsolatedWorkspaceReleased(Box<IsolatedWorkspaceReleaseLine>),
 
     /// Exact reviewed instruction bytes returned only to one local Send action.
     MissionInstruction(Box<MissionInstruction>),
@@ -1147,6 +1187,34 @@ pub struct MissionWorkspace {
     pub workspace: Box<str>,
     /// Exact Git commit resolved from the reviewed base reference.
     pub base_commit: Box<str>,
+}
+
+/// One Core-owned linked worktree for an ordinary chat.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct IsolatedWorkspaceLine {
+    /// Stable Core-owned workspace identity.
+    pub workspace_id: Box<str>,
+    /// Exact canonical base checkout selected by the operator.
+    pub project: Box<str>,
+    /// Exact canonical linked worktree.
+    pub workspace: Box<str>,
+    /// Frozen Git commit used to create the linked worktree.
+    pub base_commit: Box<str>,
+    /// `creating`, `ready`, `bound`, `preservedDirty`, or `released`.
+    pub state: Box<str>,
+    /// Bound public Runtime session, when one was established.
+    pub session_id: Option<Box<str>>,
+}
+
+/// Cleanup outcome for one Core-owned ordinary-chat worktree.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct IsolatedWorkspaceReleaseLine {
+    /// Stable Core-owned workspace identity.
+    pub workspace_id: Box<str>,
+    /// Exact worktree that was removed or preserved.
+    pub workspace: Box<str>,
+    /// `removed`, `preservedDirty`, or `alreadyRemoved`.
+    pub outcome: Box<str>,
 }
 
 /// Exact bytes and public Runtime target returned after one local Send action.

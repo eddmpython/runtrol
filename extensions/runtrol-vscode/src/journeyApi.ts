@@ -3,7 +3,7 @@ import * as vscode from "vscode";
 import type { ConversationPanels } from "./conversationPanels";
 import { Controller } from "./controller";
 import type { MissionController } from "./mission/controller";
-import type { MissionSnapshot } from "./protocol";
+import type { IsolatedWorkspaceLine, MissionSnapshot } from "./protocol";
 import type { ProviderLine, SessionLine } from "./runtimeTypes";
 import { RuntimeState } from "./state";
 import { workspaceCollisions } from "./workspaceCollision";
@@ -60,6 +60,10 @@ export type JourneyApi = {
   revealRow(session: string): Promise<void>;
   /// The project folders remembered for the keyboard switch, for the harness to assert.
   knownProjects(): readonly string[];
+  isolationEvidence(): Promise<{
+    workspaces: readonly IsolatedWorkspaceLine[];
+    roots: readonly string[];
+  }>;
   /// Open the newest stored conversation of a service that has a title (a reopened conversation with history),
   /// returning its session id, or null when the service lists none.
   openStoredWithTitle(providerId: string): Promise<string | null>;
@@ -197,6 +201,7 @@ export function journeyApi(
     previousProject: () => controller.previousProjectForJourney(),
     revealRow: (session) => afterReady(() => revealRow(session)),
     knownProjects: () => controller.knownProjectsForJourney(),
+    isolationEvidence: () => afterReady(() => controller.isolatedWorkspaceEvidenceForJourney()),
     clickChip: (anchor) => afterReady(async () => {
       const binding = conversation.focused();
       if (!binding) throw new Error("no conversation tab is focused");

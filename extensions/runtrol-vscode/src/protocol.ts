@@ -1,4 +1,4 @@
-export const WIRE_VERSION = 28;
+export const WIRE_VERSION = 29;
 
 export type PrivateProviderLine = {
   id: string;
@@ -157,6 +157,21 @@ export type MissionWorkspace = {
   task_id: string;
   workspace: string;
   base_commit: string;
+};
+
+export type IsolatedWorkspaceLine = {
+  workspace_id: string;
+  project: string;
+  workspace: string;
+  base_commit: string;
+  state: "creating" | "ready" | "bound" | "preservedDirty" | "released";
+  session_id: string | null;
+};
+
+export type IsolatedWorkspaceReleaseLine = {
+  workspace_id: string;
+  workspace: string;
+  outcome: "removed" | "preservedDirty" | "alreadyRemoved";
 };
 
 export type MissionInstruction = {
@@ -337,6 +352,20 @@ export type Request =
       with: { project: string; capability_id: string; version_sha256: string };
     }
   | { ask: "capabilityArchive"; with: { project: string; capability_id: string } }
+  | { ask: "workspaceIsolatePrepare"; with: { request_id: string; project: string } }
+  | { ask: "workspaceIsolateList" }
+  | {
+      ask: "workspaceIsolateBind";
+      with: { workspace_id: string; session_id: string; workspace: string };
+    }
+  | {
+      ask: "workspaceIsolateRelease";
+      with: {
+        workspace_id: string | null;
+        session_id: string | null;
+        workspace: string;
+      };
+    }
   | { ask: "rename"; with: { session: string; label: string | null } }
   // Ask an idle daemon to exit so the replaced-on-disk binary serves the next request. Daemons
   // older than 2026-08-20 refuse this by name, which is the legacy detection.
@@ -391,6 +420,9 @@ export type Response =
   | { say: "missionFlightSignals"; with: MissionFlightSignalPage }
   | { say: "missionFlightSignalRecorded"; with: { inserted: boolean } }
   | { say: "missionWorkspace"; with: MissionWorkspace }
+  | { say: "isolatedWorkspace"; with: IsolatedWorkspaceLine }
+  | { say: "isolatedWorkspaces"; with: IsolatedWorkspaceLine[] }
+  | { say: "isolatedWorkspaceReleased"; with: IsolatedWorkspaceReleaseLine }
   | { say: "missionInstruction"; with: MissionInstruction }
   | { say: "capabilities"; with: CapabilityLine[] }
   | { say: "done" }

@@ -37,6 +37,13 @@
 > 시각 전에 닫고 UI가 없는 구간에 실제 Claude Code 세션이 시작된 뒤, 두 번째 Host가 `started` 상태와 실제
 > 응답에 재접속하는 1456 x 908 여정을 검증했다.
 >
+> 일반 채팅의 `Also Ask Another Service`는 같은 첫 메시지를 선택한 각 서비스의 별도 linked worktree에서
+> 시작한다. Core가 깨끗한 Git 프로젝트의 정확한 HEAD를 고정하고 워크트리 생성, 세션 결박, 재시작 복구,
+> clean-only 정리를 소유한다. Studio는 Core가 만든 정확한 root만 Runtime에 승인하고 종료와 함께 회수하며,
+> 변경이 남은 워크트리는 삭제하지 않고 경로를 보여 준다. 정확한 0.1.9 VSIX를 설치한 VS Code 1.132.1에서
+> 공개 새 대화와 `Also Ask` 명령만으로 Claude Code와 Codex를 서로 다른 워크트리에 열고, 원본 checkout
+> 무변경과 정확한 정리를 검증한 1456 x 908 화면을 직접 확인했다.
+>
 > 폰 알림은 이제 대화 내용을 싣지 않은 채 실제로 운영자를 기다리는 첫 세션으로 직행한다. `Needs you`
 > 수와 다음 대기 세션 이동은 사람 대기만 포함하고 계정 한도 대기는 구분한다. 실물 CLI 승인 게이트가
 > 승인 중 진입과 답변 뒤 해제를 검증한다.
@@ -85,7 +92,7 @@ Code-hot workspace는 bounded 상태를 유지한다. streaming과 background �
 | 어디서나 같은 방법 | 8/10 | 활성 hosted CI가 정확한 네이티브 VSIX를 깨끗한 VS Code에 설치해, 구성된 Core 경로 없이 번들 Core를 발견하고 Runtrol을 열며 공개 새 대화 명령으로 `Runtrol: New chat` 작성 탭을 열었다 닫는다. 같은 게이트가 Windows, macOS, Linux에서 돌고 릴리스 행렬은 x64와 ARM64 6개 대상을 반복한다. 정적 계약과 실물 여정, multi-OS 증거만 주장한다. | Windows, macOS, Linux 에서 설치 방법과 조작이 같다. Windows 사용자가 WSL 이나 tmux 를 알 필요가 없다. |
 | 알아서 최신 | 5/10 | `vscodeUpgradeRollback` 이 세 운영체제에서 VSIX와 Core 교체 중 세션 생존을 검증한다. `cliUpdateRehearsal` 은 확증된 provider 갱신의 실패, 정확한 원복, 진동 방지를 결정론 fixture로 검증한다. 실계정 provider 설치를 CI에서 바꾸지는 않으므로 mock 층이다. | 앱과 설치된 에이전트 CLI 가 알아서 최신이고, 업데이트가 세션을 깨면 사용자가 손대기 전에 되돌아가 있다. 사용자가 버전을 신경 쓰는 순간이 없다. |
 | 모델 자동 인식 | 6/10 | hosted `modelDetectionSmoke --require-all` 은 자격증명 없이 최신 실물 CLI 를 설치해 Codex `model/list` 와 격리된 provider-owned option cache sentinel 을 포함한 Claude partial catalogue 를 검사하고, 관측한 identifier 가 production source 에 하드코딩되지 않았음을 확인한다. 특정 계정의 실제 사용 가능 여부는 주장하지 않아 live 한 종류의 천장 6 이다. | 지금 이 계정으로 쓸 수 있는 모델이 목록에 그대로 뜨고, 새 모델이 나와도 runtrol 을 고치지 않아도 뜬다. |
-| 세션끼리 안 밟기 | 5/10 | 실제 Git metadata와 production Core admission이 같은 worktree의 하위 폴더를 한 writer로 묶고, opening, live, closing 예약의 겹침을 원자적으로 거부한다. linked worktree와 운영자가 명시한 공유 시작은 구분한다. provider가 fixture라 mock 층이다. | 어느 세션이 어느 폴더에서 무엇을 고치는지 항상 구분되고, 두 세션이 같은 폴더를 만지게 되면 시작 전에 경고받으며, 공급자가 격리 수단 (워크트리) 을 내주면 시작 화면에서 그대로 쓴다. |
+| 세션끼리 안 밟기 | 5/10 | 실제 Git metadata와 production Core admission이 겹치는 writer를 원자적으로 거부한다. 제품은 일반 다중 서비스 채팅마다 Core 소유 linked worktree를 자동 생성하고 재시작 뒤 결박을 복원하며 clean-only로 정리한다. 정확한 설치 VSIX에서 실계정 Claude Code와 Codex의 분리 실행, 원본 무변경, 정확한 정리를 실측했지만, 활성 hosted 게이트의 provider는 fixture이므로 점수는 mock 층에 머문다. | 어느 세션이 어느 폴더에서 무엇을 고치는지 항상 구분되고, 두 세션이 같은 폴더를 만지게 되면 시작 전에 경고받으며, 공급자가 격리 수단 (워크트리) 을 내주면 시작 화면에서 그대로 쓴다. |
 | AI 끼리 서로 자문 | 3/10 | 토글이 실물 두 CLI 를 각자의 공식 명령으로 배선·검증·원상복구하고, 실제 턴 중 자문 수신까지 수기 실측했다 (2026-08-03). `crossConsultSmoke` 는 실물 구독 CLI 를 몰므로 운영자 기계에서 돌고, hosted CI 게이트가 없어 manual 층이다. | 토글 하나로 두 CLI 가 서로를 공식 표면 (MCP) 으로 등록해, 한 AI 가 턴 중에 다른 AI 의 의견을 직접 받아온다. 배선은 CLI 자신의 공식 명령으로만 만들고 (설정 파일을 직접 쓰지 않는다), 대화 본문은 여전히 runtrol 을 지나지 않는다. 사용자가 MCP 라는 개념을 몰라도 된다. |
 | 떠날 자유 | 5/10 | `uninstallLeavesNoTrace` 가 공급자 상태를 runtrol 홈 밖에 둔 채 실제 데몬과 자식 프로세스로 턴을 끝내고, 홈 전체를 삭제한 뒤 새 데몬에서 같은 원생 세션을 불러와 두 번째 턴을 끝낸다. 상대가 ACP fixture 이므로 mock 층이다. | runtrol 을 지워도 세션과 기록은 각 CLI 의 것으로 그대로 남아 원래 방식으로 이어진다. runtrol 이 인질로 잡는 데이터가 없다. |
 

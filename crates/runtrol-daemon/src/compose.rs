@@ -63,6 +63,10 @@ pub enum ComposeError {
     #[error("cannot restore the capability trust index: {0}")]
     CapabilityTrust(String),
 
+    /// Core-owned ordinary-chat worktree ownership could not be restored safely.
+    #[error("cannot restore isolated workspace ownership: {0}")]
+    IsolatedWorkspaces(String),
+
     /// The per-user operating-system vault could not protect or restore the machine identity.
     #[error(transparent)]
     Vault(#[from] runtrol_vault::VaultError),
@@ -295,6 +299,8 @@ pub struct Composed {
     pub ledger: Ledger,
     /// Local Mission validation, scheduler, and `GateDefinition` registry state.
     pub(crate) missions: Mutex<crate::mission::MissionController>,
+    /// Core-owned ordinary-chat linked worktrees and their exact cleanup state.
+    pub(crate) isolated_workspaces: Mutex<crate::isolated_workspace::IsolatedWorkspaceController>,
     /// Local project capability candidate and exact-digest trust state.
     pub(crate) growth: Mutex<crate::growth::GrowthController>,
     /// Local-only pending approval challenges for public Runtime integrations.
@@ -376,6 +382,10 @@ impl Composed {
         let mut missions =
             crate::mission::MissionController::open(home.paths().mission_gates().clone())
                 .map_err(ComposeError::MissionGates)?;
+        let isolated_workspaces = crate::isolated_workspace::IsolatedWorkspaceController::open(
+            home.paths().isolated_workspaces().clone(),
+        )
+        .map_err(ComposeError::IsolatedWorkspaces)?;
         let runtime_ids: Vec<Box<str>> = registry
             .usable()
             .map(|provider| provider.id().as_str().into())
@@ -394,6 +404,7 @@ impl Composed {
             store,
             ledger,
             missions: Mutex::new(missions),
+            isolated_workspaces: Mutex::new(isolated_workspaces),
             growth: Mutex::new(growth),
             integration_admin: crate::integration_admin::IntegrationAdmin::default(),
             pairing_admin: crate::pairing_admin::PairingAdmin::default(),
@@ -433,6 +444,10 @@ impl Composed {
         let mut missions =
             crate::mission::MissionController::open(home.paths().mission_gates().clone())
                 .map_err(ComposeError::MissionGates)?;
+        let isolated_workspaces = crate::isolated_workspace::IsolatedWorkspaceController::open(
+            home.paths().isolated_workspaces().clone(),
+        )
+        .map_err(ComposeError::IsolatedWorkspaces)?;
         let runtime_ids: Vec<Box<str>> = registry
             .usable()
             .map(|provider| provider.id().as_str().into())
@@ -451,6 +466,7 @@ impl Composed {
             store,
             ledger,
             missions: Mutex::new(missions),
+            isolated_workspaces: Mutex::new(isolated_workspaces),
             growth: Mutex::new(growth),
             integration_admin: crate::integration_admin::IntegrationAdmin::default(),
             pairing_admin: crate::pairing_admin::PairingAdmin::default(),
