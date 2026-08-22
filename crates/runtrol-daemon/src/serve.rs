@@ -148,9 +148,6 @@ impl DiscoveryGates {
 /// the same preparation completes, never duplicating it. Composing stays probe-free: this runs after the
 /// listener is up, so it delays nothing.
 async fn prewarm_providers(composed: Arc<Composed>, discovering: Arc<DiscoveryGates>) {
-    // Measure the executable's own digest inside the boot window, so the first hello answers from
-    // cache instead of reading the image while an operator waits.
-    let _warmed = crate::build_identity::build_digest();
     // Two at a time, deliberately gentle: each meeting starts up to a few CLI processes, and measured
     // 2026-08-20, warming all five at once saturated the machine at the exact moment the operator's own
     // first request arrives, making that request slower than the cold it hides. A racing real request
@@ -775,8 +772,12 @@ async fn serve_surfaces(
         Arc::new(crate::runtime_inventory::sessions(&composed, &sessions)?);
     let (runtime_sessions, _initial_runtime_sessions_receiver) =
         watch::channel(initial_runtime_sessions);
+    // Runtime refreshes this inventory before every method that consumes it. Keep the no-client daemon truly idle
+    // instead of walking PATH, statting provider binaries, and retaining presentation strings before a surface asks.
     let (runtime_providers, _initial_runtime_providers_receiver) =
-        watch::channel(Arc::new(crate::runtime_inventory::providers(&composed)));
+        watch::channel(Arc::new(runtrol_runtime_protocol::ProviderList {
+            providers: Vec::new(),
+        }));
     let (account_gauges, _initial_account_gauges_receiver) = watch::channel(Arc::new(
         crate::runtime_inventory::provider_usage(&sessions.account_gauges()),
     ));

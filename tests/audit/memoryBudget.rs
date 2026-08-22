@@ -205,9 +205,10 @@ fn an_idle_daemon_stays_inside_its_budget() {
          raising the budget is a decision about what runtrol costs to leave running, not an edit on the way past"
     );
 
-    // And a measurement that answered nothing would pass this gate forever.
+    // And a measurement that answered nothing would pass this gate forever. Do not invent a larger floor: on
+    // Windows the daemon explicitly releases its settled working set and can legitimately retain less than 1 MiB.
     assert!(
-        held > 1024 * 1024,
+        held > 0,
         "an idle daemon holding {held} bytes is not a measurement"
     );
 }
