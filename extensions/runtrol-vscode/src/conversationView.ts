@@ -54,8 +54,10 @@ type RenderWaiter = {
 
 const MAX_PENDING_POSTS = 4_096;
 const POST_BATCH = MAX_PENDING_POSTS;
-const VISIBLE_READY_TIMEOUT_MS = 5_000;
-const VISIBLE_READY_RELOAD_MS = 1_500;
+// A healthy page answers immediately. These bounds exist for a saturated Extension Host: reloading too early can
+// interrupt a page that is still starting, while a bounded later retry recovers a genuinely missed first load.
+const VISIBLE_READY_TIMEOUT_MS = 12_000;
+const VISIBLE_READY_RELOAD_MS = 4_000;
 const MEASUREMENT_ATTEMPTS = 2;
 const MEASUREMENT_STAGE_TIMEOUT_MS = 5_000;
 

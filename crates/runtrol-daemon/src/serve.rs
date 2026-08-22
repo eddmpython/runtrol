@@ -1455,7 +1455,12 @@ async fn serve_surfaces(
                 provider_update_notices.clear();
             }
 
-            Some(_finished) = connections.join_next(), if !connections.is_empty() => {}
+            Some(_finished) = connections.join_next(), if !connections.is_empty() => {
+                // JoinSet owns the completed task future until this exact branch removes it. Provider prewarming,
+                // connection supervisors, and other bounded jobs may have already released their inner buffers,
+                // but allocator relief before this point cannot return pages still referenced by the outer future.
+                runtrol_childproc::footprint::release_unused_memory();
+            }
         }
     };
 

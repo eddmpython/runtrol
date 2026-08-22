@@ -293,6 +293,18 @@ def waitWatcherReady(watcher: subprocess.Popen[str], output: Path) -> None:
     raise Failed("a watch client did not acknowledge its subscription")
 
 
+def warmIdleDaemon(binary: Path, environment: dict[str, str], workspace: Path) -> None:
+    """Finish provider preparation and first-session code paths before measuring idle RSS."""
+    session = acp.command(binary, environment, ["start", acp.PROVIDER, str(workspace)])
+    if acp.SESSION_RE.fullmatch(session) is None:
+        raise Failed(f"warm-up start returned no session identifier: {session!r}")
+    acp.command(binary, environment, ["close", session, "--now"])
+    # Close answers before the owner task has necessarily released its reservation. The same bounded pause used by
+    # the measured cases lets that cleanup and its allocator relief finish. No prompt is sent, so a large provider
+    # payload is never allocated before the baseline and cannot be hidden inside it.
+    time.sleep(0.25)
+
+
 def exerciseCase(
     binary: Path, fixture: Path, reply_bytes: int, admitted: bool
 ) -> Evidence:
@@ -307,6 +319,12 @@ def exerciseCase(
         watchers: list[subprocess.Popen[str]] = []
         outputPaths: list[Path] = []
         try:
+            # Hosted Linux daemon readiness deliberately precedes asynchronous provider preparation. Serializing one
+            # empty session through that provider lane makes baseline timing deterministic without loosening any
+            # memory ceiling. Windows EmptyWorkingSet intentionally makes a just-closed process colder than idle, and
+            # macOS already has its allocator-specific residual contract, so neither uses this Linux baseline step.
+            if sys.platform.startswith("linux"):
+                warmIdleDaemon(binary, environment, workspace)
             baseline = sample(daemon.pid, 0.5)
             peak = baseline
             cases = 1 if admitted else 3
