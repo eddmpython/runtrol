@@ -164,19 +164,7 @@ listen = "stdio"
   if (reached.status !== 0 || !reached.stdout.trim()) {
     throw new Error(`test Core did not expose an endpoint:\n${reached.stdout}${reached.stderr}`);
   }
-  for (const workspace of workspaces) {
-    const started = spawnSync(core, ["start", "fixture-acp", workspace], {
-      env: coreEnvironment,
-      encoding: "utf8",
-      timeout: 15_000,
-      windowsHide: true,
-    });
-    const session = started.stdout.trim();
-    if (started.status !== 0 || !session) {
-      throw new Error(`cannot start a hot ACP fixture session:\n${started.stdout}${started.stderr}`);
-    }
-    managedSessions.push(session);
-  }
+  for (const workspace of workspaces) startManagedSession(workspace);
   await build({
     entryPoints: [path.join(extensionRoot, "src", "integration", "extensionHost.test.ts")],
     outfile: testEntry,
@@ -242,6 +230,10 @@ listen = "stdio"
   );
   await restoreHost;
   const restored = JSON.parse(await readFile(restoreResultPath, "utf8"));
+  // These conversations are deliberately outside the measured window's approved root. The follow window first
+  // opens alpha and then adds beta, proving each real workspace event widens discovery. Without real sessions in
+  // both folders the phase waits for fixtures that do not exist and cannot test the product chain at all.
+  for (const workspace of [followFirst, followTarget]) startManagedSession(workspace);
   const followEnvironment = {
     ...testEnvironment,
     RUNTROL_VSCODE_RESULT: followResultPath,
@@ -323,6 +315,20 @@ listen = "stdio"
 
 function delay(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+function startManagedSession(workspace) {
+  const started = spawnSync(core, ["start", "fixture-acp", workspace], {
+    env: coreEnvironment,
+    encoding: "utf8",
+    timeout: 15_000,
+    windowsHide: true,
+  });
+  const session = started.stdout.trim();
+  if (started.status !== 0 || !session) {
+    throw new Error(`cannot start a hot ACP fixture session:\n${started.stdout}${started.stderr}`);
+  }
+  managedSessions.push(session);
 }
 
 // The eye-pass photographer. Only does anything when RUNTROL_VSCODE_CAPTURE names an output file: it waits for

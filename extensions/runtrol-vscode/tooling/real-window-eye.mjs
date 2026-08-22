@@ -26,6 +26,7 @@ import {
   isolatedLaunchArguments,
   isolatedProfileSettings,
   isolatedRuntimeState,
+  terminateExactProcesses,
   TESTED_VSCODE_VERSION,
 } from "./isolated-vscode.mjs";
 
@@ -324,8 +325,11 @@ async function backProof(environment) {
     }
     return seen;
   } finally {
-    // Only this harness's own child (its exact PID tree), never another VS Code.
-    spawnSync("taskkill", ["/PID", String(child.pid), "/T", "/F"], { windowsHide: true });
+    // A project switch can replace the original launcher with a new `Code.exe -n` root whose PID is not a child
+    // of the launcher any more. Match the isolated profile and this downloaded executable as well, otherwise the
+    // visual pass leaves a desktop singleton that later automated gates attach to.
+    if (child.exitCode === null) child.kill();
+    await terminateExactProcesses(userData, executable);
   }
 }
 

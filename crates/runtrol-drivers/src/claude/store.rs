@@ -687,6 +687,14 @@ mod tests {
         }
     }
 
+    fn absolute_test_path(tail: &str) -> String {
+        if cfg!(windows) {
+            format!("C:/{tail}")
+        } else {
+            format!("/{tail}")
+        }
+    }
+
     fn provider() -> ProviderId {
         ProviderId::parse("claude").expect("a valid id")
     }
@@ -876,26 +884,27 @@ mod tests {
     #[test]
     fn a_folder_query_keeps_only_its_own_conversations_however_the_cli_spelled_the_folder() {
         let scratch = Scratch::new("folder");
+        let root = absolute_test_path("work/alpha");
         scratch.conversation(
             "C--work-alpha",
             ALPHA,
-            &[user_record("c:\\work\\alpha", "hi")],
+            &[user_record(&absolute_test_path("WORK\\alpha"), "hi")],
             3,
         );
         scratch.conversation(
             "C--work-alpha-other",
             BETA,
-            &[user_record("C:\\work\\alpha-other", "hi")],
+            &[user_record(&absolute_test_path("work/alpha-other"), "hi")],
             2,
         );
         scratch.conversation(
             "C--work-alpha-nested",
             GAMMA,
-            &[user_record("C:/work/alpha/nested", "hi")],
+            &[user_record(&format!("{root}\\nested"), "hi")],
             1,
         );
         let catalogue = ClaudeStore::at(scratch.0.clone())
-            .list(provider(), true, &query(Some("C:/work/alpha"), None))
+            .list(provider(), true, &query(Some(&root), None))
             .expect("the store lists");
         let ids = catalogue
             .sessions
