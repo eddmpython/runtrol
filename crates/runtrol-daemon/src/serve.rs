@@ -1464,6 +1464,9 @@ async fn serve_surfaces(
                 // JoinSet owns the completed task future until this exact branch removes it. Provider prewarming,
                 // connection supervisors, and other bounded jobs may have already released their inner buffers,
                 // but allocator relief before this point cannot return pages still referenced by the outer future.
+                // On Windows this branch also sees startup preparation, where EmptyWorkingSet would purge live code
+                // rather than only released buffers. Explicit session and oversized-watch boundaries still reclaim it.
+                #[cfg(not(windows))]
                 runtrol_childproc::footprint::release_unused_memory();
             }
         }

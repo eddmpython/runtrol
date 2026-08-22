@@ -35,9 +35,10 @@ fn measure() -> std::io::Result<String> {
     let digest: [u8; 32] = hasher.finalize().into();
     // Reading the whole executable leaves its pages in this process's working set, and an idle
     // daemon's resident size is a checked contract, not a mood. Measured 2026-08-20: without this,
-    // the idle budget went from five green runs to five red ones, over by 65~270 KiB. The pages are
-    // handed back here rather than at the end of the boot, because provider warm-up runs after this
-    // and would otherwise refill the set before anything released it.
+    // the idle budget went from five green runs to five red ones, over by 65~270 KiB. Windows has no
+    // allocator-only equivalent: EmptyWorkingSet would evict the live code this identity protects and
+    // make the first real request fault it all back in, so session cleanup remains its release boundary.
+    #[cfg(not(windows))]
     runtrol_childproc::footprint::release_unused_memory();
     Ok(crate::runtime_auth::hex(&digest))
 }
