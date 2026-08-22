@@ -53,7 +53,7 @@ streaming と background 作業が入力、スクロール、セッション切�
 - **人間が常に最優先である。** 長い streaming、複数 agent、build、test の最中でも入力、スクロール、editor、ファイル移動が先に反応する。
 - **薄い境界は変わらない。** provider account credential、transcript、model API key、conversation copy を所有しない。
 
-現在の合計は **66/140、平均 4.7/10** である。有効な CI ゲートが立つ軸は十二である。
+現在の合計は **74/140、平均 5.3/10** である。有効な CI ゲートが立つ軸は十三である。
 10 点は、実際の環境で完結した道筋が繰り返し検証された状態を指す。
 **manual 層を超えるスコアの根拠は CI で実際に動くゲートである。自動実行されない経路は、どれほど実装済みに見えても 3 点を超えない。**
 
@@ -67,7 +67,7 @@ streaming と background 作業が入力、スクロール、セッション切�
 | スマホで承認 | 5/10 | active gate が実物 Claude Code の hidden Write approval を PWA watch path で受け、完全な subject、唯一の `rejectOnce`、32-byte digest を確認して拒否し、同じ provider turn の再開と終了を検証する。model counterpart は決定論的 loopback fixture なので mock 層である。 | エージェントが危険な操作の前で止まるとスマートフォンに表示され、そこで許可または拒否すると PC のセッションがただちに続く。 |
 | 切れても生き残る | 5/10 | shipped PWA module とインストール済み実物 CLI が network cut 後に exact cursor から replay し、Core restart 後は明示的 gap と native resume で続行する。model counterpart は mock である。 | スマートフォンのロック、ネットワーク切断、runtrol 再起動の後も、PC セッションは公式 resume surface から復旧できる。保持範囲内は正確な cursor から続き、範囲外は黙って飛ばさず明示的な gap になる。 |
 | 常駐コスト | 6/10 | 三つの hosted OS が一つの ratchet で実物 debug daemon の idle RSS と 10 秒間の idle CPU を測る。独立した二種類目の証拠がないため、上限は 6 のままである。 | 一日中つけっぱなしでも、ユーザーはその存在に気づかない。バッテリーにも、ファンにも、タスクマネージャーにも見えない。 |
-| どこでも同じやり方 | 0/10 | 未実装。 | Windows、macOS、Linux でインストール方法も操作も同じ。Windows ユーザーが WSL や tmux を知る必要がない。 |
+| どこでも同じやり方 | 8/10 | 有効な hosted CI が正確な native VSIX をクリーンな VS Code にインストールし、手動の Core path なしで同梱 Core を発見して Runtrol を開き、公開 command から `Runtrol: New chat` composer tab を開いて閉じる。同じ gate が Windows、macOS、Linux で動き、release matrix は x64 と ARM64 の六つの target でも繰り返す。主張するのは static contract、実物 journey、multi-OS evidence に限る。 | Windows、macOS、Linux でインストール方法も操作も同じ。Windows ユーザーが WSL や tmux を知る必要がない。 |
 | 勝手に最新 | 5/10 | `vscodeUpgradeRollback` は三つの OS で VSIX と Core 置換中の session continuity を検証する。`cliUpdateRehearsal` は決定的 fixture により、確認済み provider 更新の失敗、正確な復元、振動防止を検証する。hosted CI は実アカウントの provider installation を変更しないため、証拠は mock 層のままである。 | アプリとインストール済みのエージェント CLI が自動で最新を保ち、更新がセッションを壊したらユーザーが手を触れる前に戻っている。ユーザーがバージョンを気にする瞬間が存在しない。 |
 | モデル自動認識 | 6/10 | hosted `modelDetectionSmoke --require-all` は資格情報なしで最新の実物 CLI を導入し、Codex の `model/list` と隔離した provider-owned option cache sentinel を含む Claude partial catalogue を検査し、観測した identifier が production source にハードコードされていないことを確認する。特定アカウントでの利用可否までは証明しないため、live gate 一種類の上限 6 である。 | いまこのアカウントで実際に使えるモデルがそのまま一覧に出て、新しいモデルが出ても runtrol を直さずに現れる。 |
 | セッション同士が踏まない | 5/10 | 実際の Git metadata と production Core admission が同じ worktree の下位フォルダを一つの writer として扱い、opening、live、closing の重複予約を原子的に拒否する。linked worktree と運用者が明示した共有開始は区別する。provider は fixture なので mock 層である。 | どのセッションがどのフォルダで何を変えているかが常に区別でき、二つ目のセッションが同じフォルダに触れそうなときは開始前に警告され、プロバイダーが隔離手段（ワークツリー）を出しているなら開始画面でそのまま使える。 |

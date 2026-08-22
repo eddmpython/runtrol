@@ -152,12 +152,12 @@ jobs:
           --archive release/runtrol-studio-${{ needs.prepare.outputs.version }}-${{ matrix.target }}.vsix
           --target ${{ matrix.target }}
           --core target/vscode-release/release/${{ matrix.executable }}
-      - name: Install and activate the package in clean VS Code
-        if: matrix.family != 'linux'
-        run: node extensions/runtrol-vscode/tooling/installed-package.mjs release/runtrol-studio-${{ needs.prepare.outputs.version }}-${{ matrix.target }}.vsix
-      - name: Install and activate the package in clean VS Code on Linux
-        if: matrix.family == 'linux'
-        run: xvfb-run -a node extensions/runtrol-vscode/tooling/installed-package.mjs release/runtrol-studio-${{ needs.prepare.outputs.version }}-${{ matrix.target }}.vsix
+      - name: Install the package and complete the shared first-run journey
+        env:
+          TMPDIR: ${{ matrix.family == 'macos' && '/tmp' || runner.temp }}
+        run: >-
+          python -X utf8 tests/audit/crossPlatformMatrix.py
+          --archive release/runtrol-studio-${{ needs.prepare.outputs.version }}-${{ matrix.target }}.vsix
       - name: VS Code upgrade and rollback gate selftest
         run: python -X utf8 tests/audit/vscodeUpgradeRollback.py --selftest
       - name: Upgrade and roll back with one active session

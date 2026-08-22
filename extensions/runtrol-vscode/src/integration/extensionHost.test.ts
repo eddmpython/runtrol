@@ -5,6 +5,11 @@ import { performance } from "node:perf_hooks";
 
 import * as vscode from "vscode";
 
+import {
+  allTabs,
+  conversationTabDiagnostics,
+  isConversationEditor,
+} from "./conversationEditor.test";
 import { extensionUnderTest } from "./extensionUnderTest.test";
 
 let currentStage = "starting";
@@ -436,7 +441,7 @@ async function requireConversationEditor(): Promise<void> {
       throw new Error("the Runtrol conversation editor tab is not active");
     }
     await new Promise((resolve) => setTimeout(resolve, 25));
-    const refreshed = vscode.window.tabGroups.all.flatMap((group) => group.tabs);
+    const refreshed = allTabs();
     tab = refreshed.find((candidate) => isConversationEditor(candidate) && candidate.isActive)
       ?? refreshed.find(isConversationEditor)
       ?? tab;
@@ -450,7 +455,7 @@ async function waitForConversationEditor(): Promise<vscode.Tab | null> {
   for (;;) {
     // With one tab per conversation there can be several registered at once (restored tabs included);
     // the assertion is about the tab the reader is IN, so the active one wins the search.
-    const tabs = vscode.window.tabGroups.all.flatMap((group) => group.tabs);
+    const tabs = allTabs();
     const tab = tabs.find((candidate) => isConversationEditor(candidate) && candidate.isActive)
       ?? tabs.find(isConversationEditor);
     if (tab) {
@@ -473,24 +478,4 @@ async function hideAndRestoreConversation(): Promise<void> {
     "restoring the hidden Runtrol conversation",
   );
   await requireConversationEditor();
-}
-
-function isConversationEditor(tab: vscode.Tab): boolean {
-  if (!(tab.input instanceof vscode.TabInputWebview)) {
-    return false;
-  }
-  return tab.input.viewType === "runtrol.conversation"
-    || tab.input.viewType === "mainThreadWebview-runtrol.conversation";
-}
-
-function conversationTabDiagnostics(): string {
-  return JSON.stringify(vscode.window.tabGroups.all.flatMap((group) => group.tabs).map((tab) => {
-    const input = tab.input as { constructor?: { name?: unknown }; viewType?: unknown };
-    return {
-      active: tab.isActive,
-      input: typeof input.constructor?.name === "string" ? input.constructor.name : typeof tab.input,
-      label: tab.label,
-      viewType: typeof input.viewType === "string" ? input.viewType : null,
-    };
-  }));
 }

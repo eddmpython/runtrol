@@ -9,7 +9,6 @@ import {
 } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 
 import { build } from "esbuild";
 
@@ -30,7 +29,6 @@ import {
   terminateExactProcesses,
 } from "./isolated-vscode.mjs";
 
-const repositoryRoot = fileURLToPath(new URL("../../../", import.meta.url));
 const target = `${process.platform}-${process.arch}`;
 const source = process.argv[2];
 const marketplace = source === "--marketplace";
@@ -45,6 +43,7 @@ if (archive) {
 const temporaryRoot = process.platform === "darwin" ? "/tmp" : os.tmpdir();
 const MARKETPLACE_INSTALL_DEADLINE_MS = 15 * 60_000;
 const MARKETPLACE_INSTALL_INTERVAL_MS = 15_000;
+const PACKAGE_JOURNEY_DEADLINE_MS = 3 * 60_000;
 const temporary = await mkdtemp(path.join(temporaryRoot, "runtrol-vscode-package-"));
 const resultPath = path.join(temporary, "result.json");
 const runtimeState = isolatedRuntimeState(temporary);
@@ -52,6 +51,7 @@ const runtrolHome = runtimeState.home;
 const userData = path.join(temporary, "user-data");
 const extensions = path.join(temporary, "extensions");
 const verifier = path.join(temporary, "verifier");
+const workspace = path.join(temporary, "first-run-workspace");
 const testEntry = path.join(verifier, "installedPackage.test.cjs");
 let bundledCore = null;
 let managedCore = null;
@@ -61,6 +61,7 @@ try {
     mkdir(path.join(userData, "User"), { recursive: true }),
     mkdir(extensions, { recursive: true }),
     mkdir(verifier, { recursive: true }),
+    mkdir(workspace, { recursive: true }),
   ]);
   await Promise.all([
     writeFile(
@@ -129,17 +130,19 @@ try {
     RUNTROL_TEST_EXTENSION_TARGET: target,
     RUNTROL_TEST_INSTALLED_ROOT: extensions,
   };
-  await Promise.all([
+  await within(
     runInstalledExtensionTest({
       vscodeExecutablePath: vscode.executable,
       verifierRoot: verifier,
       testEntry,
       environment,
-      workspace: repositoryRoot,
+      workspace,
       userData,
       extensions,
     }),
-  ]);
+    PACKAGE_JOURNEY_DEADLINE_MS,
+    "installed package journey",
+  );
 
   const result = JSON.parse(await readFile(resultPath, "utf8"));
   if (typeof result.failure === "string") {
@@ -197,4 +200,16 @@ async function installPublishedMarketplaceExtension(cli, userData, extensions) {
 
 function delay(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+function within(work, milliseconds, label) {
+  let timer;
+  return Promise.race([
+    Promise.resolve(work),
+    new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`${label} exceeded ${milliseconds} ms`)), milliseconds);
+    }),
+  ]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
 }

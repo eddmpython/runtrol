@@ -354,16 +354,18 @@ Each VSIX contains exactly one matching native Core, the production bundles, can
 license. Source, tooling, development dependencies, performance budgets, and target metadata are excluded.
 
 The release workflow builds on every native runner, compares the packaged Core bytes with the built binary, installs
-the VSIX into a clean VS Code 1.132.1 profile, activates through the bundled Core, exercises upgrade and rollback with
-an active session, and uploads the package. Hosted extension gates use that same exact tested version unless an
-operator explicitly supplies another version. It creates a tagged GitHub Release only after all six jobs pass.
+the VSIX into a clean VS Code 1.132.1 profile, activates through the bundled Core, opens Runtrol, opens and closes a
+new-conversation composer through the public command, exercises upgrade and rollback with an active session, and
+uploads the package. Hosted extension gates use that same exact tested version unless an operator explicitly supplies
+another version. It creates a tagged GitHub Release only after all six jobs pass.
 
-The current public release is [Runtrol Studio 0.1.3](https://github.com/eddmpython/runtrol/releases/tag/vscode-v0.1.3).
+The current public release is [Runtrol Studio 0.1.9](https://github.com/eddmpython/runtrol/releases/tag/vscode-v0.1.9).
 All six native packages are published under one
 [Marketplace listing](https://marketplace.visualstudio.com/items?itemName=runtrol.runtrol-studio). Stable VS Code
 1.132.1 downloads the exact public package into an isolated profile on each native release runner, activates with no
-configured Core path, materializes the bundled Core, refreshes through it, and opens the contributed Runtrol view.
-Exact verifier processes and temporary profiles are removed afterward.
+configured Core path, materializes the bundled Core, refreshes through it, opens the contributed Runtrol view, and
+opens then closes the same new-conversation composer. Exact verifier processes and temporary profiles are removed
+afterward.
 
 Advancing `release-policy.json` by one patch on `main` starts the release automatically. GitHub Actions holds one
 Marketplace-only PAT as the `VSCE_PAT` repository secret. The pinned publisher client receives it only through the
@@ -388,10 +390,12 @@ specified in [automatic updates](automaticUpdates.md).
 | `missionGrowthContracts` | Mission state, exact Send, evidence, integration, capability trust, local scope, tamper, and rollback |
 | `missionLiveJourney` | two installed provider CLIs complete five reviewed Tasks and an explicit reuse, tamper, and rollback journey through production IPC |
 | `vscodePackage` | six-target SSOT, exact archive contents, Core bytes, workflow integrity, and listing metadata |
+| `crossPlatformContract` | one public command, automatic Core default, and unconditional first-run step across the shared six-target package contract |
+| `crossPlatformMatrix` | exact VSIX installation, bundled Core discovery, Runtrol opening, new-conversation draft, and exact close on native Windows, macOS, and Linux |
 | `vscodeUpgradeRollback` | active-session continuity across official VSIX upgrade and rollback |
 | `channelVerdict` | confirmed provider package ownership and closed update arguments |
 | `cliUpdateRehearsal` | failed provider target and exact verified rollback transaction |
-| `node tooling/installed-package.mjs --marketplace` | public Marketplace download, isolated activation, bundled Core, refresh, and view opening |
+| `node tooling/installed-package.mjs --marketplace` | public Marketplace download, isolated activation, bundled Core, refresh, view opening, and new-conversation draft opening and close |
 
 Every verifier uses an isolated profile marker and terminates only exact owned process identities. It must never close
 unrelated VS Code windows, extension hosts, daemons, or provider sessions.

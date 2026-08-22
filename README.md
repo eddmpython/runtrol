@@ -53,7 +53,7 @@ Code-hot workspace는 bounded 상태를 유지한다. streaming과 background �
 - **사람이 항상 우선이다.** 긴 streaming, 여러 agent, build, test 중에도 사용자의 입력, 스크롤, 편집기와 파일 탐색이 먼저 반응한다.
 - **얇은 경계는 바뀌지 않는다.** provider 계정 credential, transcript, 모델 API key, conversation copy를 소유하지 않는다.
 
-현재 총점은 **66/140, 평균 4.7/10** 이다. 활성 CI 게이트가 선 축은 열둘이다.
+현재 총점은 **74/140, 평균 5.3/10** 이다. 활성 CI 게이트가 선 축은 열셋이다.
 10 점은 실제 환경에서 완결 여정이 반복 검증된 상태다.
 **3 점을 넘는 점수의 근거는 CI 에서 실제로 도는 게이트다. 자동으로 실행되지 않는 경로는 구현돼 있어도 manual 층을 넘지 않는다.**
 
@@ -67,7 +67,7 @@ Code-hot workspace는 bounded 상태를 유지한다. streaming과 background �
 | 폰에서 승인 | 5/10 | 활성 게이트가 실물 Claude Code의 hidden Write 승인을 PWA watch 경로로 받고, 완전한 subject와 유일한 `rejectOnce`, 32 byte digest를 확인해 거부한 뒤 같은 provider 턴의 재개와 종료를 검증한다. model 상대가 결정론 loopback fixture라 mock 층이다. | 에이전트가 위험한 작업 앞에서 멈추면 폰에 뜨고, 폰에서 허용하거나 거부하면 PC 의 세션이 즉시 이어진다. |
 | 끊겨도 살아남기 | 5/10 | 실제 PWA 모듈과 설치된 실물 CLI가 네트워크 절단 뒤 exact cursor로 재생하고, Core 재시작 뒤 명시적 gap과 native resume로 이어진다. model 상대는 mock이다. | 폰이 잠기거나 네트워크가 끊기거나 runtrol 을 재시작해도 PC 세션은 공식 resume surface 로 복구된다. bounded window 안은 exact cursor 로 이어지고, 밖은 조용히 건너뛰지 않고 명시적 gap 으로 보인다. |
 | 상주 비용 | 6/10 | 세 hosted OS가 실제 debug daemon의 idle RSS와 10초 유휴 CPU를 하나의 ratchet으로 측정한다. 독립된 두 번째 증거 종류가 없어 천장은 6이다. | 하루 종일 켜 두어도 사용자가 존재를 눈치채지 못한다. 배터리, 팬, 작업 관리자 어디에서도 눈에 띄지 않는다. |
-| 어디서나 같은 방법 | 0/10 | 미구현. | Windows, macOS, Linux 에서 설치 방법과 조작이 같다. Windows 사용자가 WSL 이나 tmux 를 알 필요가 없다. |
+| 어디서나 같은 방법 | 8/10 | 활성 hosted CI가 정확한 네이티브 VSIX를 깨끗한 VS Code에 설치해, 구성된 Core 경로 없이 번들 Core를 발견하고 Runtrol을 열며 공개 새 대화 명령으로 `Runtrol: New chat` 작성 탭을 열었다 닫는다. 같은 게이트가 Windows, macOS, Linux에서 돌고 릴리스 행렬은 x64와 ARM64 6개 대상을 반복한다. 정적 계약과 실물 여정, multi-OS 증거만 주장한다. | Windows, macOS, Linux 에서 설치 방법과 조작이 같다. Windows 사용자가 WSL 이나 tmux 를 알 필요가 없다. |
 | 알아서 최신 | 5/10 | `vscodeUpgradeRollback` 이 세 운영체제에서 VSIX와 Core 교체 중 세션 생존을 검증한다. `cliUpdateRehearsal` 은 확증된 provider 갱신의 실패, 정확한 원복, 진동 방지를 결정론 fixture로 검증한다. 실계정 provider 설치를 CI에서 바꾸지는 않으므로 mock 층이다. | 앱과 설치된 에이전트 CLI 가 알아서 최신이고, 업데이트가 세션을 깨면 사용자가 손대기 전에 되돌아가 있다. 사용자가 버전을 신경 쓰는 순간이 없다. |
 | 모델 자동 인식 | 6/10 | hosted `modelDetectionSmoke --require-all` 은 자격증명 없이 최신 실물 CLI 를 설치해 Codex `model/list` 와 격리된 provider-owned option cache sentinel 을 포함한 Claude partial catalogue 를 검사하고, 관측한 identifier 가 production source 에 하드코딩되지 않았음을 확인한다. 특정 계정의 실제 사용 가능 여부는 주장하지 않아 live 한 종류의 천장 6 이다. | 지금 이 계정으로 쓸 수 있는 모델이 목록에 그대로 뜨고, 새 모델이 나와도 runtrol 을 고치지 않아도 뜬다. |
 | 세션끼리 안 밟기 | 5/10 | 실제 Git metadata와 production Core admission이 같은 worktree의 하위 폴더를 한 writer로 묶고, opening, live, closing 예약의 겹침을 원자적으로 거부한다. linked worktree와 운영자가 명시한 공유 시작은 구분한다. provider가 fixture라 mock 층이다. | 어느 세션이 어느 폴더에서 무엇을 고치는지 항상 구분되고, 두 세션이 같은 폴더를 만지게 되면 시작 전에 경고받으며, 공급자가 격리 수단 (워크트리) 을 내주면 시작 화면에서 그대로 쓴다. |

@@ -3,6 +3,11 @@ import path from "node:path";
 
 import * as vscode from "vscode";
 
+import {
+  activeConversationEditor,
+  allTabs,
+  isConversationEditor,
+} from "./conversationEditor.test";
 import { extensionUnderTest } from "./extensionUnderTest.test";
 
 type ExtensionApi = {
@@ -64,6 +69,45 @@ async function verifyInstalledPackage(resultPath: string): Promise<void> {
     "opening the installed Runtrol view",
   );
 
+  currentStage = "opening-new-conversation";
+  const tabsBeforeCommand = new Set(allTabs());
+  await within(
+    vscode.commands.executeCommand("runtrol.startSession"),
+    10_000,
+    "opening a new conversation through the public command",
+  );
+  const newConversationTabs = allTabs().filter(
+    (tab) => !tabsBeforeCommand.has(tab) && isConversationEditor(tab),
+  );
+  if (newConversationTabs.length !== 1) {
+    throw new Error(
+      `the public new-conversation command opened ${newConversationTabs.length} new Runtrol conversation tabs`,
+    );
+  }
+  const draft = newConversationTabs[0];
+  if (activeConversationEditor() !== draft) {
+    throw new Error("the new Runtrol conversation draft is not the active editor tab");
+  }
+  if (draft.label !== "Runtrol: New chat") {
+    throw new Error(`the installed new-conversation tab is titled ${draft.label}`);
+  }
+  const eyeDelay = packageEyeDelay();
+  if (eyeDelay > 0) {
+    currentStage = "reviewing-new-conversation";
+    await delay(eyeDelay);
+  }
+
+  currentStage = "closing-new-conversation";
+  const accepted = await within(
+    vscode.window.tabGroups.close(draft),
+    5_000,
+    "closing the installed new-conversation draft",
+  );
+  const draftClosed = accepted && !allTabs().includes(draft);
+  if (!draftClosed) {
+    throw new Error("the exact installed new-conversation draft remained open after close");
+  }
+
   await writeFile(
     resultPath,
     JSON.stringify({
@@ -73,9 +117,26 @@ async function verifyInstalledPackage(resultPath: string): Promise<void> {
       extensionPath: installedPath,
       bundledCore,
       configuredCore,
+      draftOpened: true,
+      draftTitle: draft.label,
+      draftClosed,
     }),
     "utf8",
   );
+}
+
+function packageEyeDelay(): number {
+  const raw = process.env.RUNTROL_TEST_PACKAGE_EYE_DELAY_MS;
+  if (raw === undefined) return 0;
+  const parsed = Number(raw);
+  if (!Number.isSafeInteger(parsed) || parsed < 0 || parsed > 120_000) {
+    throw new Error("RUNTROL_TEST_PACKAGE_EYE_DELAY_MS must be an integer from 0 to 120000");
+  }
+  return parsed;
+}
+
+function delay(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
 function within<T>(work: Thenable<T>, milliseconds: number, label: string): Promise<T> {

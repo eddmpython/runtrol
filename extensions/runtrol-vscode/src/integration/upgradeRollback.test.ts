@@ -3,6 +3,11 @@ import path from "node:path";
 
 import * as vscode from "vscode";
 
+import {
+  allTabs,
+  conversationTabDiagnostics,
+  isConversationEditor,
+} from "./conversationEditor.test";
 import { extensionUnderTest } from "./extensionUnderTest.test";
 
 type ExtensionApi = {
@@ -132,32 +137,10 @@ async function requireConversationEditor(): Promise<void> {
 
 async function waitForConversationEditor(): Promise<vscode.Tab | null> {
   for (;;) {
-    const tab = vscode.window.tabGroups.all
-      .flatMap((group) => group.tabs)
-      .find(isConversationEditor);
+    const tab = allTabs().find(isConversationEditor);
     if (tab) {
       return tab;
     }
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
-}
-
-function isConversationEditor(tab: vscode.Tab): boolean {
-  if (!(tab.input instanceof vscode.TabInputWebview)) {
-    return false;
-  }
-  return tab.input.viewType === "runtrol.conversation"
-    || tab.input.viewType === "mainThreadWebview-runtrol.conversation";
-}
-
-function conversationTabDiagnostics(): string {
-  return JSON.stringify(vscode.window.tabGroups.all.flatMap((group) => group.tabs).map((tab) => {
-    const input = tab.input as { constructor?: { name?: unknown }; viewType?: unknown };
-    return {
-      active: tab.isActive,
-      input: typeof input.constructor?.name === "string" ? input.constructor.name : typeof tab.input,
-      label: tab.label,
-      viewType: typeof input.viewType === "string" ? input.viewType : null,
-    };
-  }));
 }

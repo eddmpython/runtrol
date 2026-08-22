@@ -30,12 +30,16 @@ SEMVER = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$")
 PUBLIC_EXTENSION_NAME = "runtrol-studio"
 PUBLIC_PUBLISHER = "runtrol"
 EXPECTED_TARGETS = {
-    "darwin-arm64",
-    "darwin-x64",
-    "linux-arm64",
-    "linux-x64",
-    "win32-arm64",
-    "win32-x64",
+    "darwin-arm64": {"executable": "runtrol", "family": "macos", "runner": "macos-15"},
+    "darwin-x64": {"executable": "runtrol", "family": "macos", "runner": "macos-15-intel"},
+    "linux-arm64": {"executable": "runtrol", "family": "linux", "runner": "ubuntu-24.04-arm"},
+    "linux-x64": {"executable": "runtrol", "family": "linux", "runner": "ubuntu-24.04"},
+    "win32-arm64": {
+        "executable": "runtrol.exe",
+        "family": "windows",
+        "runner": "windows-11-vs2026-arm",
+    },
+    "win32-x64": {"executable": "runtrol.exe", "family": "windows", "runner": "windows-2025"},
 }
 EXTENSION_POLICY = json.loads((EXTENSION / "release-policy.json").read_text(encoding="utf-8"))
 EXTENSION_VERSION = EXTENSION_POLICY["version"]
@@ -46,6 +50,69 @@ class ArchiveEntry(NamedTuple):
 
     body: bytes
     mode: int
+
+
+def releasePackageJourneyProblems(releaseWorkflow: str) -> list[str]:
+    """Require the first-run journey inside every job of the six-target package matrix."""
+    jobMatch = re.search(
+        r"(?ms)^  package:\r?\n(?P<body>.*?)(?=^  [A-Za-z0-9_-]+:\r?\n|\Z)",
+        releaseWorkflow,
+    )
+    if jobMatch is None:
+        return ["vscode-release.yml has no package matrix job"]
+    job = jobMatch.group("body")
+    found: list[str] = []
+    for token in (
+        "matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}",
+        "runs-on: ${{ matrix.runner }}",
+    ):
+        if token not in job:
+            found.append(f"the package matrix is missing {token}")
+
+    stepMatch = re.search(
+        r"(?ms)^      - name: Install the package and complete the shared first-run journey\r?\n"
+        r"(?P<body>.*?)(?=^      - (?:name:|uses:)|\Z)",
+        job,
+    )
+    if stepMatch is None:
+        found.append("the package matrix has no active shared first-run step")
+        return found
+    step = stepMatch.group("body")
+    if re.search(r"(?m)^        if:", step):
+        found.append("the shared first-run step is conditional inside the package matrix")
+    for pattern, label in (
+        (
+            r"(?m)^          python -X utf8 tests/audit/crossPlatformMatrix\.py\s*$",
+            "the native first-run gate command",
+        ),
+        (
+            r"(?m)^          --archive release/runtrol-studio-"
+            r"\$\{\{ needs\.prepare\.outputs\.version \}\}-"
+            r"\$\{\{ matrix\.target \}\}\.vsix\s*$",
+            "the exact matrix-target archive",
+        ),
+    ):
+        if re.search(pattern, step) is None:
+            found.append(f"the shared first-run step is missing {label}")
+    return found
+
+
+def targetContractProblems(targets: dict[str, object]) -> list[str]:
+    """Validate the one exact native executable, family, and hosted runner map."""
+    found: list[str] = []
+    if set(targets) != set(EXPECTED_TARGETS):
+        found.append("release-targets.json does not name the six supported native Marketplace targets")
+    for target, expected in EXPECTED_TARGETS.items():
+        contract = targets.get(target)
+        if not isinstance(contract, dict):
+            continue
+        if contract.get("executable") != expected["executable"]:
+            found.append(f"{target} has the wrong Core executable name")
+        if contract.get("family") != expected["family"]:
+            found.append(f"{target} has the wrong runner family")
+        if contract.get("runner") != expected["runner"]:
+            found.append(f"{target} has the wrong native release runner")
+    return found
 
 
 def sourceProblems(
@@ -80,19 +147,7 @@ def sourceProblems(
     scripts = package.get("scripts")
     if not isinstance(scripts, dict) or scripts.get("package:native") != "node tooling/package.mjs":
         found.append("package:native is not the release packaging entry point")
-    if set(targets) != EXPECTED_TARGETS:
-        found.append("release-targets.json does not name the six supported native Marketplace targets")
-    for target, contract in targets.items():
-        expected = "runtrol.exe" if target.startswith("win32-") else "runtrol"
-        if not isinstance(contract, dict) or contract.get("executable") != expected:
-            found.append(f"{target} has the wrong Core executable name")
-            continue
-        family = "windows" if target.startswith("win32-") else "macos" if target.startswith("darwin-") else "linux"
-        if contract.get("family") != family:
-            found.append(f"{target} has the wrong runner family")
-        runner = contract.get("runner")
-        if not isinstance(runner, str) or not runner:
-            found.append(f"{target} has no native release runner")
+    found.extend(targetContractProblems(targets))
     requiredPackageTokens = (
         "packageManifest.version",
         "JSON.stringify(packageManifest",
@@ -151,6 +206,7 @@ def sourceProblems(
     for token in requiredWorkflowTokens:
         if token not in releaseWorkflow:
             found.append(f"vscode-release.yml is missing release contract {token}")
+    found.extend(releasePackageJourneyProblems(releaseWorkflow))
     for token in ("crates/runtrol-gui", "libwebkit2gtk-4.1-dev"):
         if token in releaseWorkflow:
             found.append(f"vscode-release.yml restores unused desktop release work {token}")
@@ -196,9 +252,12 @@ def sourceProblems(
             found.append(f".vscodeignore does not exclude {token}")
     for token in (
         "const MARKETPLACE_INSTALL_DEADLINE_MS = 15 * 60_000;",
+        "const PACKAGE_JOURNEY_DEADLINE_MS = 3 * 60_000;",
         "`${extensionIdentifier}@${packageManifest.version}`",
         "findInstalledExtension(extensions, packageManifest.version)",
         "Marketplace did not install",
+        '"installed package journey"',
+        "await terminateExactProcesses(temporary, managedCore)",
     ):
         if token not in installedPackageScript:
             found.append(f"installed-package.mjs is missing public release contract {token}")
@@ -509,14 +568,7 @@ def selftest() -> int:
         if not listingProblems(mutatedPackage, mutatedReadme):
             print(f"[vscodePackage --selftest] FAIL. listing mutation {index} escaped.", file=sys.stderr)
             return 2
-    targets = {}
-    for name in EXPECTED_TARGETS:
-        family = "windows" if name.startswith("win32-") else "macos" if name.startswith("darwin-") else "linux"
-        targets[name] = {
-            "executable": "runtrol.exe" if name.startswith("win32-") else "runtrol",
-            "family": family,
-            "runner": f"{family}-native",
-        }
+    targets = {name: dict(contract) for name, contract in EXPECTED_TARGETS.items()}
     packageScript = (
         "packageManifest.version JSON.stringify(packageManifest release-targets.json target !== nativeTarget \"--no-dependencies\" "
         "path.resolve(repositoryRoot, process.env.RUNTROL_CORE_BINARY) "
@@ -554,6 +606,19 @@ def selftest() -> int:
     gh release download
     gh release create
     uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+  package:
+    strategy:
+      matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Install the package and complete the shared first-run journey
+        env:
+          TMPDIR: ${{ runner.temp }}
+        run: >-
+          python -X utf8 tests/audit/crossPlatformMatrix.py
+          --archive release/runtrol-studio-${{ needs.prepare.outputs.version }}-${{ matrix.target }}.vsix
+      - name: Continue release checks
+        run: echo checked
     """
     marketplaceScript = """
     const VERIFY_DEADLINE_MS = 15 * 60_000;
@@ -567,9 +632,12 @@ def selftest() -> int:
     ignore = "tooling/** src/** node_modules/** performance-budget.json release-targets.json"
     installedPackageScript = """
     const MARKETPLACE_INSTALL_DEADLINE_MS = 15 * 60_000;
+    const PACKAGE_JOURNEY_DEADLINE_MS = 3 * 60_000;
     `${extensionIdentifier}@${packageManifest.version}`
     findInstalledExtension(extensions, packageManifest.version)
     Marketplace did not install
+    "installed package journey"
+    await terminateExactProcesses(temporary, managedCore)
     """
     if sourceProblems(
         sourcePackage,
@@ -590,6 +658,29 @@ def selftest() -> int:
     brokenSource = dict(sourcePackage)
     brokenSource["version"] = "0.1.0"
     floatingPublisher = {**sourcePackage, "devDependencies": {"@vscode/vsce": "^3.9.3"}}
+    wrongRunnerTargets = {name: dict(contract) for name, contract in targets.items()}
+    wrongRunnerTargets["win32-arm64"]["runner"] = "windows-2025"
+    targetMutations = (
+        {name: contract for name, contract in targets.items() if name != "linux-arm64"},
+        wrongRunnerTargets,
+    )
+    for index, mutatedTargets in enumerate(targetMutations, start=1):
+        if not sourceProblems(
+            sourcePackage,
+            mutatedTargets,
+            packageScript,
+            extensionManifestScript,
+            buildScript,
+            releaseWorkflow,
+            marketplaceScript,
+            coreManifest,
+            ignore,
+            installedPackageScript,
+            True,
+            True,
+        ):
+            print(f"[vscodePackage --selftest] FAIL. target mutation {index} escaped.", file=sys.stderr)
+            return 2
     sourceMutations = (
         (sourcePackage, releaseWorkflow.replace("push:", ""), marketplaceScript, coreManifest),
         (
@@ -617,6 +708,24 @@ def selftest() -> int:
         (
             sourcePackage,
             releaseWorkflow.replace("tests/audit/vscodeUpgradeRollback.py --archive", ""),
+            marketplaceScript,
+            coreManifest,
+        ),
+        (
+            sourcePackage,
+            releaseWorkflow.replace(
+                "python -X utf8 tests/audit/crossPlatformMatrix.py",
+                "python -X utf8 tests/audit/vscodePackage.py",
+            ),
+            marketplaceScript,
+            coreManifest,
+        ),
+        (
+            sourcePackage,
+            releaseWorkflow.replace(
+                "      - name: Install the package and complete the shared first-run journey",
+                "      - name: Install the package and complete the shared first-run journey\n        if: false",
+            ),
             marketplaceScript,
             coreManifest,
         ),
@@ -687,6 +796,7 @@ def selftest() -> int:
             return 2
     installedMutations = (
         installedPackageScript.replace("const MARKETPLACE_INSTALL_DEADLINE_MS = 15 * 60_000;", ""),
+        installedPackageScript.replace("const PACKAGE_JOURNEY_DEADLINE_MS = 3 * 60_000;", ""),
         installedPackageScript.replace("`${extensionIdentifier}@${packageManifest.version}`", "extensionIdentifier"),
         installedPackageScript.replace("findInstalledExtension(extensions, packageManifest.version)", ""),
     )
@@ -709,7 +819,8 @@ def selftest() -> int:
             return 2
     print(
         "[vscodePackage --selftest] OK. "
-        f"{len(mutations)} archive, {len(sourceMutations)} source, {len(installedMutations)} installer, "
+        f"{len(mutations)} archive, {len(targetMutations)} target, {len(sourceMutations)} source, "
+        f"{len(installedMutations)} installer, "
         f"and {len(listingMutations)} listing mutations "
         "make the gate red."
     )

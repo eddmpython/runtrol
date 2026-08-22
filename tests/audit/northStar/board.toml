@@ -116,10 +116,16 @@ gate = [
 
 [[axis]]
 key = "sameMethodEverywhere"
-tier = "none"
-additives = []
+# The package contract fixes the exact six native targets, runners, and an unconditional first-run release step. One
+# live gate installs an exact VSIX and drives the public command in clean real VS Code on hosted Windows, macOS, and
+# Linux. The release workflow repeats it on x64 and ARM64. No provider or fault-injection additive is claimed.
+tier = "realBothKinds"
+additives = ["multiOs"]
 name = { ko = "어디서나 같은 방법", en = "Same method everywhere", zh = "到哪都一样", ja = "どこでも同じやり方" }
-gate = [{ name = "crossPlatformMatrix", kind = "smoke" }]
+gate = [
+    { name = "crossPlatformContract", kind = "contract" },
+    { name = "crossPlatformMatrix", kind = "smoke" },
+]
 
 [[axis]]
 key = "currentWithoutAsking"

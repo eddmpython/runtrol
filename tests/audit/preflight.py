@@ -215,6 +215,22 @@ GATES: dict[str, tuple[str, list[str]]] = {
         "VS Code 릴리스 버전, 대상, 내용 allowlist 계약",
         [*PY, f"{HOOKS}/vscodePackage.py"],
     ),
+    "crossPlatformContractSelftest": (
+        "동일한 크로스 플랫폼 첫 실행 계약 자체 검증",
+        [*PY, f"{HOOKS}/crossPlatformContract.py", "--selftest"],
+    ),
+    "crossPlatformContract": (
+        "6개 네이티브 대상의 동일한 첫 실행 계약",
+        [*PY, f"{HOOKS}/crossPlatformContract.py"],
+    ),
+    "crossPlatformMatrixSelftest": (
+        "출하 VSIX 첫 실행 여정 자체 검증",
+        [*PY, f"{HOOKS}/crossPlatformMatrix.py", "--selftest"],
+    ),
+    "crossPlatformMatrix": (
+        "출하 VSIX 설치, 번들 Core, 새 대화 작성 탭, 닫기",
+        [*PY, f"{HOOKS}/crossPlatformMatrix.py"],
+    ),
     "versionSsotSelftest": (
         "릴리스 버전 정본 자체 검증",
         [*PY, f"{HOOKS}/versionSsot.py", "--selftest"],

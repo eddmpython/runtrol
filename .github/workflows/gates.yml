@@ -232,6 +232,15 @@ jobs:
       - name: VS Code 릴리스 버전, 대상, 내용 allowlist 계약
         if: needs.detect.outputs.hasWorkspace == 'true'
         run: python -X utf8 tests/audit/vscodePackage.py
+      - name: 동일한 크로스 플랫폼 첫 실행 계약 자체 검증
+        if: needs.detect.outputs.hasWorkspace == 'true'
+        run: python -X utf8 tests/audit/crossPlatformContract.py --selftest
+      - name: 6개 네이티브 대상의 동일한 첫 실행 계약
+        if: needs.detect.outputs.hasWorkspace == 'true'
+        run: python -X utf8 tests/audit/crossPlatformContract.py
+      - name: 출하 VSIX 첫 실행 여정 자체 검증
+        if: needs.detect.outputs.hasWorkspace == 'true'
+        run: python -X utf8 tests/audit/crossPlatformMatrix.py --selftest
       - name: 릴리스 버전 정본 자체 검증
         if: needs.detect.outputs.hasWorkspace == 'true'
         run: python -X utf8 tests/audit/versionSsot.py --selftest
@@ -372,6 +381,10 @@ jobs:
           key: vscode-test-${{ runner.os }}-${{ hashFiles('extensions/runtrol-vscode/package-lock.json', 'extensions/runtrol-vscode/tooling/isolated-vscode.mjs') }}
       - name: memory budget gate product binary
         run: cargo build -p runtrol --bin runtrol
+      - name: 출하 VSIX 설치, 번들 Core, 새 대화 작성 탭, 닫기
+        env:
+          TMPDIR: ${{ matrix.os == 'macos-latest' && '/tmp' || runner.temp }}
+        run: python -X utf8 tests/audit/crossPlatformMatrix.py
       - name: VS Code Extension Host 성능 게이트 자체 검증
         run: python -X utf8 tests/audit/vscodeHostPerformance.py --selftest
       - name: 실제 VS Code 활성화, 뷰, 갱신 p95, RSS ratchet

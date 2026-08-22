@@ -49,7 +49,7 @@ active subscription 与 Code-hot workspace 始终有界。streaming 与后台工
 - **人始终优先。** 即使存在长 streaming、多个 agent、build 与 test，输入、滚动、editor 和文件导航也必须先响应。
 - **薄边界永不改变。** 不持有 provider 账户 credential、transcript、model API key 或 conversation copy。
 
-当前总分为 **66/140，平均 4.7/10**。十二个轴由启用的 CI 门禁支撑。
+当前总分为 **74/140，平均 5.3/10**。十三个轴由启用的 CI 门禁支撑。
 10 分意味着完整旅程已在真实环境中被反复验证。
 **超过 manual 层的分数必须由 CI 中真正运行的门禁支撑。不会自动执行的路径，无论看起来实现得多完整，都不能超过 3 分。**
 
@@ -63,7 +63,7 @@ active subscription 与 Code-hot workspace 始终有界。streaming 与后台工
 | 在手机上批准 | 5/10 | 活动门禁通过 PWA watch 路径接收真实 Claude Code 的 hidden Write 批准，验证完整 subject、唯一 `rejectOnce` 与 32-byte digest，再确认同一 provider turn 恢复并结束。模型对端是确定性的 loopback fixture，因此处于 mock 层。 | 代理在危险操作前停下时会出现在手机上，在手机上允许或拒绝后，电脑上的会话立即继续。 |
 | 断了也活着 | 5/10 | 已发布的 PWA 模块和已安装的真实 CLI 在网络断开后按精确 cursor 重放，并在 Core 重启后通过明确 gap 和 native resume 继续。model 对端是 mock。 | 手机锁屏、网络中断或 runtrol 重启后，PC 会话仍可通过官方 resume surface 恢复。保留窗口内按精确 cursor 接续，窗口外明确显示 gap，绝不静默跳过。 |
 | 常驻成本 | 6/10 | 三个 hosted 操作系统都用同一个棘轮测量真实 debug daemon 的 idle RSS 与十秒 idle CPU。没有第二种独立证据，因此上限仍为 6。 | 整天开着，用户也察觉不到它的存在。电池、风扇、任务管理器里都看不见。 |
-| 到哪都一样 | 0/10 | 未实现。 | 在 Windows、macOS、Linux 上安装方式与操作方式相同。Windows 用户无需知道 WSL 或 tmux 是什么。 |
+| 到哪都一样 | 8/10 | 启用的 hosted CI 会把精确的原生 VSIX 安装到干净的 VS Code 中，在没有手动 Core 路径的情况下发现内置 Core，打开 Runtrol，并通过公开命令打开再关闭 `Runtrol: New chat` 编写标签页。同一门禁运行于 Windows、macOS、Linux，发布矩阵还会在 x64 与 ARM64 的六个目标上重复该旅程。这里只宣称静态契约、真实旅程与多操作系统证据。 | 在 Windows、macOS、Linux 上安装方式与操作方式相同。Windows 用户无需知道 WSL 或 tmux 是什么。 |
 | 自动保持最新 | 5/10 | `vscodeUpgradeRollback` 在三个操作系统中验证 VSIX 与 Core 替换期间的会话连续性。`cliUpdateRehearsal` 通过确定性 fixture 验证已确认 provider 更新的失败、精确恢复与防振荡。托管 CI 不会修改带真实账户的 provider 安装，因此证据仍处于 mock 层。 | 应用与已安装的代理 CLI 会自行保持最新；若更新破坏了会话，在用户动手之前它已经回滚。用户不存在需要关心版本的时刻。 |
 | 自动识别模型 | 6/10 | hosted `modelDetectionSmoke --require-all` 在无凭据环境中安装当前真实 CLI，检查 Codex 的 `model/list` 与包含隔离 provider-owned option cache sentinel 的 Claude partial catalogue，并拒绝在 production source 中硬编码观测 identifier。它不证明特定账户的实际可用性，因此一种 live gate 的上限为 6。 | 当前账户实际可用的模型原样出现在列表中，出现新模型时无需修改 runtrol 就会显示。 |
 | 会话之间不互踩 | 5/10 | 真实 Git metadata 与 production Core admission 会把同一 worktree 的子目录视为一个 writer，并原子拒绝 opening、live、closing 状态下重叠的预约。linked worktree 与操作员明确允许的共享启动保持独立。provider 是 fixture，因此属于 mock 层。 | 哪个会话在哪个文件夹改了什么始终可以区分；第二个会话将要触碰同一文件夹时，在开始前就会收到警告；供应商提供隔离手段（worktree）时，可直接在开始界面使用。 |
