@@ -79,7 +79,7 @@ try {
 
   const run = spawnSync(
     process.execPath,
-    ["--test", ...SUITES.map((suite) => path.join(out, `${suite}.js`))],
+    ["--test", "--test-reporter=tap", ...SUITES.map((suite) => path.join(out, `${suite}.js`))],
     { encoding: "utf8" },
   );
   const text = `${run.stdout}${run.stderr}`;
