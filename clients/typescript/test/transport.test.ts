@@ -39,6 +39,35 @@ test("closing a local transport retires its pipe before the next connection", as
   }
 });
 
+test("aborting a local transport wakes a pending read without waiting for the server", async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), "runtrol-runtime-transport-abort-"));
+  const endpoint = process.platform === "win32"
+    ? `\\\\.\\pipe\\runtrol-runtime-transport-abort-${process.pid}-${Date.now()}`
+    : path.join(directory, "runtime.sock");
+  const server = createServer();
+  let socket: Socket | null = null;
+  try {
+    server.listen(endpoint);
+    await once(server, "listening");
+    const opened = await open(server, endpoint);
+    socket = opened.socket;
+    const pending = opened.transport.receive();
+    opened.transport.abort?.();
+    await assert.rejects(
+      within(pending, 2_000, "aborted local transport read"),
+      /Runtime frame read failed|Runtime closed during a frame/u,
+    );
+  } finally {
+    socket?.destroy();
+    if (server.listening) {
+      const serverClosed = once(server, "close");
+      server.close();
+      await serverClosed;
+    }
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 async function open(server: Server, endpoint: string): Promise<{
   transport: Awaited<ReturnType<typeof connectLocalTransport>>;
   socket: Socket;

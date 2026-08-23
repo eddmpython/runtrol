@@ -54,13 +54,14 @@ export class SerializedWatch {
     this.tail = current.catch(() => undefined);
   }
 
-  pause(): void {
+  pause(): Promise<void> {
     this.generation += 1;
     this.desired = null;
     this.active?.abort();
     this.resolveReady();
     this.resolveReady = () => {};
     this.ready = Promise.resolve();
+    return this.tail;
   }
 
   dispose(): void {

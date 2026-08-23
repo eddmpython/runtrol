@@ -17,7 +17,7 @@ test("a replacement waits for the aborted watch to finish", async () => {
     await firstFinished;
   });
   await watch.settled();
-  watch.pause();
+  const retirement = watch.pause();
   watch.start("conversation", async (_signal, ready) => {
     started.push("second");
     ready();
@@ -26,6 +26,7 @@ test("a replacement waits for the aborted watch to finish", async () => {
   await Promise.resolve();
   assert.deepEqual(started, ["first"]);
   finishFirst();
+  await retirement;
   await watch.settled();
   assert.deepEqual(started, ["first", "second"]);
 });

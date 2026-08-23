@@ -1,9 +1,9 @@
 import * as vscode from "vscode";
 
-import { ActivityWatchGate } from "./activityWatchGate";
 import type { StudioRuntimeClient } from "./runtimeClient";
 import { activityAfter, sameActivity, type SessionActivity } from "./sessionActivity";
 import type { RuntimeState } from "./state";
+import type { WatchLifecycleGate } from "./watchLifecycleGate";
 
 /// How long activity changes are coalesced before the sidebar repaints. A turn streams many tool frames a
 /// second; the row needs the word, not every frame.
@@ -20,7 +20,6 @@ const RETRY_MS = 2_000;
 export class ActivityWatcher implements vscode.Disposable {
   private readonly watches = new Map<string, AbortController>();
   private readonly pending = new Map<string, SessionActivity>();
-  private readonly openings = new ActivityWatchGate();
   private repaint: NodeJS.Timeout | null = null;
   private readonly subscription: vscode.Disposable;
   private disposed = false;
@@ -28,6 +27,7 @@ export class ActivityWatcher implements vscode.Disposable {
   constructor(
     private readonly runtime: StudioRuntimeClient,
     private readonly state: RuntimeState,
+    private readonly lifecycle: WatchLifecycleGate,
   ) {
     this.subscription = state.onDidChange((change) => {
       if (change === "rows") this.sync();
@@ -60,7 +60,7 @@ export class ActivityWatcher implements vscode.Disposable {
 
   private async watch(sessionId: string, signal: AbortSignal): Promise<void> {
     while (!signal.aborted && !this.disposed) {
-      const releaseOpening = await this.openings.acquire(signal);
+      const releaseOpening = await this.lifecycle.acquire("background", signal);
       if (!releaseOpening) return;
       let opening = true;
       try {

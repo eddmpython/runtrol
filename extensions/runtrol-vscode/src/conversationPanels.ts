@@ -17,6 +17,7 @@ import type { RuntimeState } from "./state";
 import type { SessionLine, WatchCursor } from "./runtimeTypes";
 import { MAX_ATTACHMENTS, type ViewAction } from "./viewActions";
 import { refreshProviderTitleBindings } from "./nativeTitleRefresh";
+import type { WatchLifecycleGate } from "./watchLifecycleGate";
 
 /// One image waiting to ride with the next message. Page memory and this object only: never written anywhere.
 export type Attachment = {
@@ -78,6 +79,7 @@ export class ConversationPanels implements vscode.Disposable {
     private readonly extensionUri: vscode.Uri,
     private readonly runtime: StudioRuntimeClient,
     private readonly state: RuntimeState,
+    private readonly watchLifecycle: WatchLifecycleGate,
     private readonly action: (binding: ConversationBinding, message: ViewAction) => void,
     private readonly titleOf: (session: SessionLine) => string,
     private readonly providerOf: (session: SessionLine) => string,
@@ -284,6 +286,7 @@ export class ConversationPanels implements vscode.Disposable {
       this.extensionUri,
       this.runtime,
       this.state,
+      this.watchLifecycle,
       (message) => this.action(binding, message),
       this.titleOf,
       this.providerOf,
@@ -339,6 +342,7 @@ export class ConversationBinding implements vscode.Disposable {
     extensionUri: vscode.Uri,
     private readonly runtime: StudioRuntimeClient,
     private readonly state: RuntimeState,
+    private readonly watchLifecycle: WatchLifecycleGate,
     action: (message: ViewAction) => void,
     titleOf: (session: SessionLine) => string,
     providerOf: (session: SessionLine) => string,
@@ -489,18 +493,26 @@ export class ConversationBinding implements vscode.Disposable {
   }
 
   private pauseWatch(): void {
-    this.watch.pause();
+    void this.watch.pause();
   }
 
   private async watchLoop(sessionId: string, signal: AbortSignal, ready: () => void): Promise<void> {
     let retryMs = 250;
     while (!signal.aborted && !this.disposed) {
+      const releaseOpening = await this.watchLifecycle.acquire("foreground", signal);
+      if (!releaseOpening) return;
+      let opening = true;
       try {
         await this.runtime.watchEvents(
           sessionId,
           this.state.cursor(sessionId),
           {
-            started: ready,
+            started: () => {
+              ready();
+              if (!opening) return;
+              opening = false;
+              releaseOpening();
+            },
             event: (payload: unknown, nextExpected: WatchCursor) => {
               if (this.view.frame(payload)) {
                 this.state.advance(sessionId, nextExpected);
@@ -535,6 +547,8 @@ export class ConversationBinding implements vscode.Disposable {
           return;
         }
         this.view.status(error instanceof Error ? error.message : String(error), "error");
+      } finally {
+        if (opening) releaseOpening();
       }
       await abortableDelay(retryMs, signal);
       retryMs = Math.min(retryMs * 2, 5_000);
@@ -544,6 +558,7 @@ export class ConversationBinding implements vscode.Disposable {
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
+    void this.watch.pause();
     this.watch.dispose();
     this.pendingAttachments = [];
     this.view.dispose();

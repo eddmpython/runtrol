@@ -103,7 +103,11 @@ class FramedSocket implements RuntimeTransport {
   }
 
   public abort(): void {
-    this.#socket.destroy();
+    // A stream cancellation has to wake a pending read immediately, but a raw reset leaves the Runtime's
+    // named-pipe accept pool cleaning up behind a rapid sequence of tab switches. `destroySoon` drains the
+    // already-written protocol bytes, sends the peer an orderly end, and then tears down this unread side
+    // without waiting for the peer to answer.
+    this.#socket.destroySoon();
   }
 
   async #write(payload: Uint8Array): Promise<void> {

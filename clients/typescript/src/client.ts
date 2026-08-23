@@ -459,7 +459,7 @@ export class ProviderSubscription {
   }
 
   public close(): void {
-    this.transport.close();
+    abortTransport(this.transport);
   }
 
   private validateTarget(subscriptionId: string): void {
@@ -730,7 +730,7 @@ export class SessionIndexSubscription {
   }
 
   public close(): void {
-    this.transport.close();
+    abortTransport(this.transport);
   }
 
   private validateTarget(subscriptionId: string): void {
@@ -848,7 +848,7 @@ export class EventSubscription {
   }
 
   public close(): void {
-    this.transport.close();
+    abortTransport(this.transport);
   }
 
   private validateTarget(subscriptionId: string, sessionId: string): void {
