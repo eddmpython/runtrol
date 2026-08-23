@@ -296,6 +296,7 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
             '"runtrol.usageProblem"',
             "fixes available",
             "private gauges:",
+            "usageRowsEqual(this.rows, next)",
             '"Usage refresh failed. Showing the last report."',
         ],
         "usageDisplay.ts": [
@@ -636,6 +637,7 @@ def selftest() -> int:
             'this.accessibilityInformation `${row.name}, ${row.detail}` '
             'command: "runtrol.fixService" "runtrol.usageProblem" fixes available '
             'private gauges: "Usage refresh failed. Showing the last report."'
+            ' usageRowsEqual(this.rows, next)'
         ),
         "usageDisplay.ts": (
             'provider.installation.state !== "missing" detail: "No report yet" '
@@ -789,6 +791,7 @@ def selftest() -> int:
         ),
         (package, {**sources, "usageTree.ts": sources["usageTree.ts"].replace("accessibilityInformation", "")}),
         (package, {**sources, "usageTree.ts": sources["usageTree.ts"].replace("Usage refresh failed", "")}),
+        (package, {**sources, "usageTree.ts": sources["usageTree.ts"].replace("usageRowsEqual(this.rows, next)", "false")}),
         (package, {**sources, "stateRows.ts": sources["stateRows.ts"].replace("discoveryNotice", "")}),
         (package, {**sources, "usageTree.ts": sources["usageTree.ts"].replace('command: "runtrol.fixService"', "")}),
         (package, {**sources, "trees.ts": sources["trees.ts"] + " view.description"}),

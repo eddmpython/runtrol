@@ -11,6 +11,7 @@ import {
   ownedTreeIdentities,
   terminateCapturedIdentities,
 } from "./isolated-vscode.mjs";
+import { WINDOWS_PROCESS_ROWS_MAX_BUFFER_BYTES } from "./process-identity.mjs";
 
 const extensionRoot = fileURLToPath(new URL("../", import.meta.url));
 const repositoryRoot = fileURLToPath(new URL("../../../", import.meta.url));
@@ -19,6 +20,7 @@ await rm(out, { recursive: true, force: true });
 await mkdir(out, { recursive: true });
 verifyExtensionTestArguments();
 verifyConvergentSignalErrors();
+verifyProcessIdentityBuffer();
 await verifyOwnedProcessTreeCleanup();
 
 // Every test beside the code it tests, discovered rather than listed.
@@ -129,6 +131,14 @@ function verifyConvergentSignalErrors() {
   assert.equal(isConvergentSignalError({ code: "EPERM" }, "win32"), true);
   assert.equal(isConvergentSignalError({ code: "EPERM" }, "linux"), false);
   assert.equal(isConvergentSignalError({ code: "EACCES" }, "win32"), false);
+}
+
+function verifyProcessIdentityBuffer() {
+  assert.equal(
+    WINDOWS_PROCESS_ROWS_MAX_BUFFER_BYTES,
+    16 * 1024 * 1024,
+    "a busy Windows host has bounded headroom for the complete identity snapshot",
+  );
 }
 
 async function waitForProcessExit(pids, milliseconds) {

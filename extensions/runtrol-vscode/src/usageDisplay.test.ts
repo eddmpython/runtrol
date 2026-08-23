@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import type { ProviderLine, ProviderUsageGauge } from "./runtimeTypes";
-import { usageDetail, usageRows } from "./usageDisplay";
+import { usageDetail, usageRows, usageRowsEqual } from "./usageDisplay";
 
 const NOW = Date.parse("2026-08-18T12:00:00Z");
 
@@ -119,4 +119,21 @@ test("a last report never disguises a disconnected CLI as available", () => {
   assert.equal(rows[0]?.detail, "Disconnected · 48%");
   assert.equal(rows[0]?.state, "disconnected");
   assert.equal(rows[0]?.provider, null);
+});
+
+test("equivalent status snapshots do not demand another tree render", () => {
+  const rows = usageRows([gauge({ primary: { usedPercent: 48 } })], PROVIDERS, NOW);
+  assert.equal(usageRowsEqual(rows, structuredClone(rows)), true);
+});
+
+test("a visible or actionable status change demands another tree render", () => {
+  const rows = usageRows([], PROVIDERS, NOW);
+  assert.equal(usageRowsEqual(rows, rows.map((row, index) => (
+    index === 0 ? { ...row, detail: "Checking" } : row
+  ))), false);
+  assert.equal(usageRowsEqual(rows, rows.map((row, index) => (
+    index === 0
+      ? { ...row, provider: { ...row.provider, providerId: "replacement" } as ProviderLine }
+      : row
+  ))), false);
 });

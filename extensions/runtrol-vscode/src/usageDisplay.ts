@@ -24,6 +24,12 @@ export type UsageRow = {
   readonly tooltip: string;
 };
 
+/// Whether publishing the next snapshot would change anything visible or actionable in the tree.
+/// Comparing complete rows keeps provider-owned fix arguments as fresh as their label and status.
+export function usageRowsEqual(left: readonly UsageRow[], right: readonly UsageRow[]): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
 /// The strip's rows. Every installed CLI is present, including one still being checked or one that needs a fix.
 /// Missing CLIs stay absent. A last report whose provider disappeared remains as explicitly disconnected so a
 /// known limit never silently becomes a healthy-looking omission.

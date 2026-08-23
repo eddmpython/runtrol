@@ -1,7 +1,7 @@
 import * as vscode from "vscode";
 
 import type { ProviderLine, ProviderUsageGauge, ProviderUsageList } from "./runtimeTypes";
-import { usageRows, type UsageRow } from "./usageDisplay";
+import { usageRows, usageRowsEqual, type UsageRow } from "./usageDisplay";
 
 /// Every installed CLI's operational state and usage, kept open at the bottom of the Runtrol sidebar.
 ///
@@ -26,9 +26,7 @@ export class UsageTree implements vscode.TreeDataProvider<UsageItem>, vscode.Dis
 
   bindView(view: vscode.TreeView<UsageItem>): void {
     this.view = view;
-    this.rows = usageRows(this.gauges, this.ports.providers(), this.ports.now());
-    view.message = this.rows.length === 0 ? "No connected CLI." : undefined;
-    this.changedEmitter.fire(undefined);
+    this.publish(usageRows(this.gauges, this.ports.providers(), this.ports.now()), true);
     view.onDidChangeVisibility((event) => {
       if (event.visible) void this.refreshQuietly();
     });
@@ -38,8 +36,7 @@ export class UsageTree implements vscode.TreeDataProvider<UsageItem>, vscode.Dis
   sessionsChanged(): void {
     // Provider availability is already in memory. Draw that state immediately instead of waiting behind the usage
     // request, while retaining the last explicitly aged gauge until a fresh snapshot arrives.
-    this.rows = usageRows(this.gauges, this.ports.providers(), this.ports.now());
-    this.changedEmitter.fire(undefined);
+    this.publish(usageRows(this.gauges, this.ports.providers(), this.ports.now()));
     if (this.view?.visible) void this.refreshQuietly();
   }
 
@@ -52,11 +49,7 @@ export class UsageTree implements vscode.TreeDataProvider<UsageItem>, vscode.Dis
     try {
       const usage = await this.ports.usage();
       this.gauges = usage.providers;
-      this.rows = usageRows(this.gauges, this.ports.providers(), this.ports.now());
-      if (this.view) {
-        this.view.message = this.rows.length === 0 ? "No connected CLI." : undefined;
-      }
-      this.changedEmitter.fire(undefined);
+      this.publish(usageRows(this.gauges, this.ports.providers(), this.ports.now()));
     } finally {
       this.fetching = false;
       if (this.behind) {
@@ -73,6 +66,13 @@ export class UsageTree implements vscode.TreeDataProvider<UsageItem>, vscode.Dis
       // Previous reports remain visible, but the failure must not look like a successful current snapshot.
       if (this.view) this.view.message = "Usage refresh failed. Showing the last report.";
     }
+  }
+
+  private publish(next: UsageRow[], force = false): void {
+    const changed = !usageRowsEqual(this.rows, next);
+    this.rows = next;
+    if (this.view) this.view.message = this.rows.length === 0 ? "No connected CLI." : undefined;
+    if (changed || force) this.changedEmitter.fire(undefined);
   }
 
   getTreeItem(element: UsageItem): vscode.TreeItem {

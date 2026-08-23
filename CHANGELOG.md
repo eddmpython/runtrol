@@ -10,6 +10,11 @@ and refactoring that no user can observe do not belong here.
 
 ## [Unreleased]
 
+### Changed
+
+- Rapid conversation switching no longer redraws the CLI status and usage tree when its visible and actionable state
+  has not changed, keeping the fixed sidebar summary current without adding work to the switching path.
+
 ## [0.1.15] - 2026-08-23
 
 ### Fixed

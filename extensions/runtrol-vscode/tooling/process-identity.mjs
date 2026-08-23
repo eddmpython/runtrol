@@ -1,6 +1,10 @@
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 
+// Win32_Process includes every process command line. Busy development hosts can exceed Node's 1 MiB spawnSync
+// default even though the bounded JSON snapshot is still small enough to inspect safely in memory.
+export const WINDOWS_PROCESS_ROWS_MAX_BUFFER_BYTES = 16 * 1024 * 1024;
+
 export function processRows() {
   if (process.platform === "win32") {
     return windowsRows();
@@ -36,10 +40,22 @@ function windowsRows() {
   const result = spawnSync(
     "powershell.exe",
     ["-NoProfile", "-NonInteractive", "-Command", query],
-    { encoding: "utf8", timeout: 60_000, windowsHide: true },
+    {
+      encoding: "utf8",
+      timeout: 60_000,
+      windowsHide: true,
+      maxBuffer: WINDOWS_PROCESS_ROWS_MAX_BUFFER_BYTES,
+    },
   );
   if (result.status !== 0) {
-    throw new Error(`cannot inspect isolated Windows process identities: ${result.stderr}`);
+    const details = [
+      result.error instanceof Error ? result.error.message : "",
+      typeof result.stderr === "string" ? result.stderr.trim() : "",
+      `status=${String(result.status)}`,
+      result.signal ? `signal=${result.signal}` : "",
+    ].filter(Boolean).join("; ");
+    // stdout contains command lines and must never be copied into a diagnostic.
+    throw new Error(`cannot inspect isolated Windows process identities: ${details}`);
   }
   const decoded = JSON.parse(result.stdout || "[]");
   return (Array.isArray(decoded) ? decoded : [decoded]).map((row) => ({
