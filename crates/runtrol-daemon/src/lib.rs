@@ -71,10 +71,10 @@ pub fn endpoint(home: Option<&str>) -> Result<String, ComposeError> {
 /// different modules of this crate drive paths that claim it, and `cargo test` runs them in parallel, so without
 /// a shared lock whichever one lost the race failed with "the local approval surface is already in use".
 ///
-/// Observed as an intermittent red in CI and reproduced locally: the test passes alone and fails beside its
-/// siblings. Serializing here rather than in each module keeps the two call sites from drifting onto two locks,
+/// Observed as an intermittent red in CI and reproduced locally: a test passes alone and fails beside its
+/// siblings. Serializing here rather than in each module keeps the call sites from drifting onto separate locks,
 /// which would serialize nothing.
-/// Async-aware on purpose. One of the two call sites is an async test that holds this across an await, which a
+/// Async-aware on purpose. The async call sites hold this across an await, which a
 /// blocking guard would not survive, and this crate disallows the blocking one for exactly that reason.
 #[cfg(test)]
 pub(crate) fn console_lock() -> &'static tokio::sync::Mutex<()> {

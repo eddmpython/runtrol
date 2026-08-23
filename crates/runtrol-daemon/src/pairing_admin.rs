@@ -977,6 +977,10 @@ mod tests {
         reason = "one end-to-end authority test keeps approval, dispatch, persistence, and replacement invalidation together"
     )]
     async fn exact_device_authority_fails_closed_when_the_approved_directory_is_replaced() {
+        // `begin_authority` claims the same process-wide console as pairing approval and scope tests.
+        // Keep the whole challenge lifetime inside their shared test lock so parallel execution tests the
+        // authority contract instead of racing for the one local surface.
+        let _serialised = crate::console_lock().lock().await;
         let scratch = Scratch::make();
         let project = Scratch::make();
         let home = scratch.path.to_str().expect("UTF-8 scratch");
