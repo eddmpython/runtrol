@@ -10,6 +10,17 @@ and refactoring that no user can observe do not belong here.
 
 ## [Unreleased]
 
+## [0.1.12] - 2026-08-23
+
+### Changed
+
+- Switching among active conversations now retires the previous watch without waiting for another service event.
+  A hosted Extension Host gate holds selection changes below 175 ms p95, with the release candidate measuring 86.3 ms.
+- Runtime validation metadata is projected to the keywords the client executes while the complete public schema remains
+  packaged. The Studio bundle is 342.4 KiB, down from 388.0 KiB, with the same validation coverage.
+- Eight idle hot conversations now have a live whole-daemon memory contract. The Windows release journey measured
+  18.9 MiB at baseline, 22.9 MiB at peak, and 2.1 MiB of residual memory after cleanup.
+
 ## [0.1.11] - 2026-08-23
 
 ### Fixed
