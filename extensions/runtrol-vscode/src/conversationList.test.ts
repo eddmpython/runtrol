@@ -173,8 +173,11 @@ test("a chat the service cannot reopen says so instead of failing on click", () 
     null,
   );
 
-  assert.equal(rows[0]?.canOpen, false);
-  assert.ok(rows[0]?.blocked);
+  const [blocked] = rows;
+  assert.ok(blocked);
+  assert.equal(blocked.canOpen, false);
+  assert.ok(blocked.blocked);
+  assert.equal(conversationDetail(blocked, NOW), "Cannot reopen · time unknown");
 });
 
 test("a stuck session asks for attention without leaving its place", () => {
@@ -208,8 +211,8 @@ test("a conversation line contains state without repeating its provider or proje
 
   assert.ok(plain);
   assert.ok(named);
-  assert.equal(conversationDetail(plain, NOW), "Stopped");
-  assert.equal(conversationDetail(named, NOW), "Stopped");
+  assert.equal(conversationDetail(plain, NOW), "Stopped · time unknown");
+  assert.equal(conversationDetail(named, NOW), "Stopped · time unknown");
 });
 
 test("elapsed time reads the way a chat list writes it", () => {
@@ -630,6 +633,18 @@ test("every conversation row has one exact operational state", () => {
   assert.equal(conversationStatus({ ...base, activity: "attention" }), "Error");
   assert.equal(conversationStatus({ ...base, activity: "waitingOnQuota" }), "Limit");
   assert.equal(conversationStatus({ ...base, signInNeeded: true }), "Sign in needed");
+  assert.equal(conversationStatus({ ...base, canOpen: false }), "Cannot reopen");
+});
+
+test("a live conversation without a provider timestamp still says when it is active", () => {
+  const [row] = conversations(
+    [session({ sessionId: "live-time", hot: true, lifecycle: "hotRunning" })],
+    PROVIDERS,
+    [],
+    null,
+  );
+  assert.ok(row);
+  assert.equal(conversationDetail(row, NOW), "Running · now");
 });
 
 test("an open folder with no conversations is not a parent-looking project row", () => {

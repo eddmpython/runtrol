@@ -92,5 +92,8 @@ export class UsageItem extends vscode.TreeItem {
       row.icon,
       row.reached ? new vscode.ThemeColor("problemsErrorIcon.foreground") : undefined,
     );
+    this.accessibilityInformation = {
+      label: `${row.name}, ${row.detail}`,
+    };
   }
 }

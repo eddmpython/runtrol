@@ -11,9 +11,8 @@ import {
 } from "./conversationList";
 import { ConversationDecorations, conversationUri } from "./conversationDecorations";
 import type { ProjectRecord } from "./projects";
-import { isBroken } from "./providerHealth";
+import { awaitsVerification, isBroken, isUsable } from "./providerHealth";
 import type { ProviderLine } from "./runtimeTypes";
-import { workspaceName } from "./sessionDisplay";
 import { RuntimeState } from "./state";
 
 /// One conversation, as one row.
@@ -37,7 +36,9 @@ export class ConversationItem extends vscode.TreeItem {
       };
     }
     this.accessibilityInformation = {
-      label: `${conversation.title}, ${spokenActivity(conversation)}, ${this.description}`,
+      // The icon carries the service visually, so its name belongs here for readers that cannot see the icon.
+      // The description already contains state and time; repeating a second state word makes the row harder to scan.
+      label: `${conversation.title}, ${conversation.serviceName}, ${this.description}`,
     };
   }
 }
@@ -50,13 +51,22 @@ export class ServiceProblemItem extends vscode.TreeItem {
   constructor(readonly provider: ProviderLine) {
     super(`${provider.displayName} needs attention`, vscode.TreeItemCollapsibleState.None);
     this.id = `runtrol.problem.${encodeURIComponent(provider.providerId)}`;
-    this.description = "Unavailable";
-    this.tooltip = provider.installation.why ?? `${provider.displayName} cannot currently start a conversation.`;
+    this.description = "Unavailable · Fix";
+    const why = provider.installation.why ?? `${provider.displayName} cannot currently start a conversation.`;
+    this.tooltip = `${why}\n\nPress Enter for this service's fixes.`;
     this.contextValue = "runtrol.serviceProblem";
     this.iconPath = new vscode.ThemeIcon(
       "warning",
       new vscode.ThemeColor("problemsWarningIcon.foreground"),
     );
+    this.command = {
+      command: "runtrol.fixService",
+      title: "Fix coding service",
+      arguments: [this],
+    };
+    this.accessibilityInformation = {
+      label: `${provider.displayName}, unavailable, fixes available`,
+    };
   }
 }
 
@@ -222,6 +232,8 @@ export class ConversationsTree implements vscode.TreeDataProvider<ChatTreeItem>,
   private badged: number | null = null;
   /// The notice currently on screen, so an unchanged one is not written again.
   private noticed: string | null | undefined = undefined;
+  private usableProvider: boolean | null = null;
+  private verifyingProvider: boolean | null = null;
   private revealed: string | null = null;
 
   constructor(
@@ -241,7 +253,6 @@ export class ConversationsTree implements vscode.TreeDataProvider<ChatTreeItem>,
     this.workspaceSubscription = vscode.workspace.onDidChangeWorkspaceFolders(() => {
       this.forgetItems();
       this.changedEmitter.fire(undefined);
-      this.updateWindowDescription();
     });
     this.subscription = state.onDidChange((change) => {
       if (change === "selection") {
@@ -261,7 +272,7 @@ export class ConversationsTree implements vscode.TreeDataProvider<ChatTreeItem>,
       this.changedEmitter.fire(undefined);
       this.updateBadge();
       this.updateDiscoveryNotice();
-      this.updateWindowDescription();
+      this.updateWelcomeContext();
     });
   }
 
@@ -269,7 +280,7 @@ export class ConversationsTree implements vscode.TreeDataProvider<ChatTreeItem>,
     this.view = view;
     this.updateBadge();
     this.updateDiscoveryNotice();
-    this.updateWindowDescription();
+    this.updateWelcomeContext();
     this.revealOpenConversation();
   }
 
@@ -346,14 +357,26 @@ export class ConversationsTree implements vscode.TreeDataProvider<ChatTreeItem>,
   private updateDiscoveryNotice(): void {
     const view = this.view;
     if (!view) return;
-    const reasons = this.state.incompleteDiscovery;
-    if (reasons === this.noticed) return;
-    this.noticed = reasons;
-    // One line above the list; the services' own reasons stay one click away behind the (i) in the view's
-    // title (measured in the real window: printed in full they were a nine-line wall the reader met before
-    // the first conversation).
-    view.message = reasons === null ? undefined : "Not every chat is listed (see the (i) above).";
-    void vscode.commands.executeCommand("setContext", "runtrol.listingIncomplete", reasons !== null);
+    const notice = this.state.discoveryNotice;
+    if (notice === this.noticed) return;
+    this.noticed = notice;
+    // The essential coverage fact is on screen. The title action retains only the longer driver diagnosis.
+    view.message = notice ?? undefined;
+    void vscode.commands.executeCommand("setContext", "runtrol.listingIncomplete", notice !== null);
+  }
+
+  /// Distinguish a healthy first run from a machine with no usable coding service.
+  ///
+  /// Without this context both empty states received the same welcome, so a freshly installed and working CLI with
+  /// no conversations was incorrectly reported as missing. The welcome now gives the exact next action for each case.
+  private updateWelcomeContext(): void {
+    const usable = this.state.providers.some(isUsable);
+    const verifying = !usable && this.state.providers.some(awaitsVerification);
+    if (usable === this.usableProvider && verifying === this.verifyingProvider) return;
+    this.usableProvider = usable;
+    this.verifyingProvider = verifying;
+    void vscode.commands.executeCommand("setContext", "runtrol.hasUsableProvider", usable);
+    void vscode.commands.executeCommand("setContext", "runtrol.isVerifyingProvider", verifying);
   }
 
   private updateBadge(): void {
@@ -479,14 +502,4 @@ export class ConversationsTree implements vscode.TreeDataProvider<ChatTreeItem>,
     return (vscode.workspace.workspaceFolders ?? []).map((folder) => folder.uri.fsPath);
   }
 
-  private updateWindowDescription(): void {
-    const view = this.view;
-    if (!view) return;
-    const names = this.openWorkspaces().map((folder) => workspaceName(folder) || folder);
-    if (names.length === 0) {
-      view.description = undefined;
-      return;
-    }
-    view.description = names.length === 1 ? names[0] : `${names[0]} +${names.length - 1}`;
-  }
 }

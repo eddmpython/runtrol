@@ -527,14 +527,16 @@ function untitled(identity: string): string {
 
 /// The muted second line: current state and the service's timestamp, with no repeated provider or project name.
 export function conversationDetail(row: Conversation, nowMs: number, _grouped = false): string {
+  const when = elapsed(row.updatedAtMs, nowMs) ?? (row.live ? "now" : "time unknown");
   return [
     conversationStatus(row),
-    elapsed(row.updatedAtMs, nowMs),
-  ].filter((part): part is string => Boolean(part)).join(" · ");
+    when,
+  ].join(" · ");
 }
 
 /// The smallest complete state vocabulary for a conversation row.
 export function conversationStatus(row: Conversation): string {
+  if (!row.canOpen) return "Cannot reopen";
   if (row.signInNeeded) return "Sign in needed";
   switch (row.activity) {
     case "needsYou":

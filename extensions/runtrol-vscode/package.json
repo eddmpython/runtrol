@@ -997,7 +997,18 @@
     "viewsWelcome": [
       {
         "view": "runtrol.sessions",
-        "contents": "No coding-agent CLI was found on this machine.\n\nRuntrol supervises the CLIs you already have. Install one, then reopen this view.\n[Look again](command:runtrol.refresh)"
+        "contents": "No coding-agent CLI was found on this machine.\n\nRuntrol supervises the CLIs you already have. Install one, then reopen this view.\n[Look again](command:runtrol.refresh)",
+        "when": "!runtrol.hasUsableProvider && !runtrol.isVerifyingProvider"
+      },
+      {
+        "view": "runtrol.sessions",
+        "contents": "Checking the installed coding-agent CLI...",
+        "when": "runtrol.isVerifyingProvider"
+      },
+      {
+        "view": "runtrol.sessions",
+        "contents": "No conversations yet.\n\n[New Conversation](command:runtrol.startSession)",
+        "when": "runtrol.hasUsableProvider"
       },
       {
         "view": "runtrol.usage",

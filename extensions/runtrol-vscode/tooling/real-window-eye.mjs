@@ -11,6 +11,7 @@
 //   RUNTROL_EYE_PROVIDER the provider to start the conversation with (default: claude)
 //   RUNTROL_EYE_OUT      where the PNGs land (default: %TEMP%/runtrol-eye)
 //   RUNTROL_TEST_CORE    the runtrol executable (default: target/debug/runtrol[.exe])
+//   RUNTROL_EYE_SHELL_ONLY=1 runs only the project-switch and keyboard-back proof, with no provider turn
 import { spawn, spawnSync } from "node:child_process";
 import { cp, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
@@ -192,42 +193,53 @@ try {
     photograph(),
     restartRuntimeWhenRequested(),
   ]);
-  if (eyeEntry === "missionScheduleEye") {
-    await runEyeWindow({ RUNTROL_MISSION_SCHEDULE_PHASE: "schedule" });
-    const scheduled = JSON.parse(await readFile(resultPath, "utf8"));
-    if (scheduled.stage !== "complete" || scheduled.phase !== "scheduled") {
-      throw new Error(`the first Studio window did not freeze a schedule: ${JSON.stringify(scheduled)}`);
+  if (process.env.RUNTROL_EYE_SHELL_ONLY === "1") {
+    const back = await backProof(testEnvironment);
+    if (!back.switched || !back.returned) {
+      throw new Error(`the project switch and keyboard back proof did not complete: ${JSON.stringify(back)}`);
     }
-    const studioClosedUnixMs = Date.now();
-    if (!(studioClosedUnixMs < scheduled.dueUnixMs)) {
-      throw new Error("the first Studio window did not close before the reviewed due instant");
-    }
-    process.stdout.write(
-      `closed first Studio window at ${studioClosedUnixMs}, before due ${scheduled.dueUnixMs}\n`,
-    );
-    await delay(Math.max(0, scheduled.dueUnixMs - Date.now()) + 6_000);
-    if (!daemon || daemon.exitCode !== null) {
-      throw new Error("the isolated Runtime stopped while Studio was closed");
-    }
-    await writeFile(resultPath, JSON.stringify({ stage: "launching-observer" }), "utf8");
-    await runEyeWindow({
-      RUNTROL_MISSION_SCHEDULE_PHASE: "observe",
-      RUNTROL_MISSION_SCHEDULE_ID: scheduled.missionId,
-      RUNTROL_MISSION_SCHEDULE_DUE: String(scheduled.dueUnixMs),
-      RUNTROL_MISSION_STUDIO_CLOSED: String(studioClosedUnixMs),
-    });
+    process.stdout.write(`RUNTROL_EYE ${JSON.stringify({ stage: "complete", back, outDir })}\n`);
   } else {
-    await runEyeWindow();
+    if (eyeEntry === "missionScheduleEye") {
+      await runEyeWindow({ RUNTROL_MISSION_SCHEDULE_PHASE: "schedule" });
+      const scheduled = JSON.parse(await readFile(resultPath, "utf8"));
+      if (scheduled.stage !== "complete" || scheduled.phase !== "scheduled") {
+        throw new Error(`the first Studio window did not freeze a schedule: ${JSON.stringify(scheduled)}`);
+      }
+      const studioClosedUnixMs = Date.now();
+      if (!(studioClosedUnixMs < scheduled.dueUnixMs)) {
+        throw new Error("the first Studio window did not close before the reviewed due instant");
+      }
+      process.stdout.write(
+        `closed first Studio window at ${studioClosedUnixMs}, before due ${scheduled.dueUnixMs}\n`,
+      );
+      await delay(Math.max(0, scheduled.dueUnixMs - Date.now()) + 6_000);
+      if (!daemon || daemon.exitCode !== null) {
+        throw new Error("the isolated Runtime stopped while Studio was closed");
+      }
+      await writeFile(resultPath, JSON.stringify({ stage: "launching-observer" }), "utf8");
+      await runEyeWindow({
+        RUNTROL_MISSION_SCHEDULE_PHASE: "observe",
+        RUNTROL_MISSION_SCHEDULE_ID: scheduled.missionId,
+        RUNTROL_MISSION_SCHEDULE_DUE: String(scheduled.dueUnixMs),
+        RUNTROL_MISSION_STUDIO_CLOSED: String(studioClosedUnixMs),
+      });
+    } else {
+      await runEyeWindow();
+    }
+    const result = JSON.parse(await readFile(resultPath, "utf8"));
+    // The window switch and the back key, proved with real windows from outside: a switch reloads the extension
+    // host, so nothing inside the test runner survives to press the next key. A plain (non-test) isolated window
+    // is opened on this repository, Ctrl+K Ctrl+Shift+P picks another project, the title changes, Ctrl+K Ctrl+B
+    // brings it back, the title changes back; both photographed.
+    const back = eyeEntry === "realWindowEye"
+      ? await backProof(testEnvironment)
+      : { skipped: `focused ${eyeEntry} eye pass` };
+    if (eyeEntry === "realWindowEye" && (!back.switched || !back.returned)) {
+      throw new Error(`the project switch and keyboard back proof did not complete: ${JSON.stringify(back)}`);
+    }
+    process.stdout.write(`RUNTROL_EYE ${JSON.stringify({ ...result, back, outDir })}\n`);
   }
-  const result = JSON.parse(await readFile(resultPath, "utf8"));
-  // The window switch and the back key, proved with real windows from outside: a switch reloads the extension
-  // host, so nothing inside the test runner survives to press the next key. A plain (non-test) isolated window
-  // is opened on this repository, Ctrl+K Ctrl+Shift+P picks another project, the title changes, Ctrl+K Ctrl+B
-  // brings it back, the title changes back; both photographed.
-  const back = eyeEntry === "realWindowEye"
-    ? await backProof(testEnvironment)
-    : { skipped: `focused ${eyeEntry} eye pass` };
-  process.stdout.write(`RUNTROL_EYE ${JSON.stringify({ ...result, back, outDir })}\n`);
 } catch (error) {
   const progress = await readFile(resultPath, "utf8").then((text) => JSON.parse(text)).catch(() => null);
   if (progress?.failure) {
@@ -296,8 +308,11 @@ async function backProof(environment) {
     press(hereTitle, "^+p");
     await delay(1_500);
     press(hereTitle, "Runtrol: Switch Window to Project{ENTER}");
-    // The picker reads the project list after the extension is ready; a fresh window takes a few seconds.
-    await delay(8_000);
+    // The picker reads the project list after the extension is ready. A machine with hundreds of real stored
+    // conversations can spend more than eight seconds refreshing them before the command runs, so typing before the
+    // picker exists sends the project name into the editor and leaves the later picker untouched. This delay is a
+    // bounded shell-evidence allowance, not product waiting: the production command itself remains event-driven.
+    await delay(30_000);
     capture(hereTitle, path.join(outDir, "switchPicker.png"));
     press(hereTitle, `${otherName}{ENTER}`);
     seen.switched = await waitForTitle(otherTitle, 60_000);

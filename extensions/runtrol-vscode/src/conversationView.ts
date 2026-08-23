@@ -609,22 +609,22 @@ export class ConversationView implements vscode.Disposable {
     -->
     <div class="composer-card">
       <div class="composer-context">
-        <button id="project-chip" class="chip chip-button" type="button" title="Project"></button>
+        <button id="project-chip" class="chip chip-button" type="button" title="Project" aria-haspopup="listbox" aria-controls="chip-menu" aria-expanded="false"></button>
         <span id="branch-chip" class="chip" hidden></span>
-        <button id="service-chip" class="chip chip-button" type="button" title="Coding service"></button>
+        <button id="service-chip" class="chip chip-button" type="button" title="Coding service" aria-haspopup="listbox" aria-controls="chip-menu" aria-expanded="false"></button>
       </div>
       <ul id="attachments" class="attachments" aria-label="Images attached to the next message" hidden></ul>
       <!-- The popover a chip opens: the choices for that chip, answered where they were asked. -->
       <ul id="chip-menu" class="commands chip-menu" role="listbox" aria-label="Choices" hidden></ul>
-      <textarea id="prompt" rows="1" aria-label="Message" placeholder="Message" disabled></textarea>
+      <textarea id="prompt" rows="1" aria-label="Message" aria-controls="commands" aria-expanded="false" aria-autocomplete="list" placeholder="Message" disabled></textarea>
       <div class="composer-bar">
         <button id="attach" class="bar-button" type="button" aria-label="Add an image" title="Add an image" disabled>
           <span aria-hidden="true">+</span>
         </button>
-        <button id="mode-chip" class="chip chip-button" type="button" title="Access mode" hidden></button>
+        <button id="mode-chip" class="chip chip-button" type="button" title="Access mode" aria-haspopup="listbox" aria-controls="chip-menu" aria-expanded="false" hidden></button>
         <span class="composer-spacer"></span>
-        <button id="model-chip" class="chip chip-button" type="button" title="Model" hidden></button>
-        <button id="effort-chip" class="chip chip-button" type="button" title="Reasoning effort" hidden></button>
+        <button id="model-chip" class="chip chip-button" type="button" title="Model" aria-haspopup="listbox" aria-controls="chip-menu" aria-expanded="false" hidden></button>
+        <button id="effort-chip" class="chip chip-button" type="button" title="Reasoning effort" aria-haspopup="listbox" aria-controls="chip-menu" aria-expanded="false" hidden></button>
         <button id="send" type="submit" aria-label="Send" title="Send" disabled hidden>
           <span aria-hidden="true">&#8593;</span>
         </button>

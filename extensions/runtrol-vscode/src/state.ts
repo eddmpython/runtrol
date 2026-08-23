@@ -9,7 +9,7 @@ import type {
   WatchCursor,
 } from "./runtimeTypes";
 import { NO_ACTIVITY, type SessionActivity } from "./sessionActivity";
-import { incompleteDiscovery, providerRowsEqual, sessionRowsEqual } from "./stateRows";
+import { discoveryNotice, incompleteDiscovery, providerRowsEqual, sessionRowsEqual } from "./stateRows";
 import type { IsolatedWorkspaceLine } from "./protocol";
 import { workspaceIdentity } from "./workspaceCollision";
 
@@ -55,6 +55,11 @@ export class RuntimeState implements vscode.Disposable {
   /// The sentence itself is built by a pure function so it can be tested without an Extension Host.
   get incompleteDiscovery(): string | null {
     return incompleteDiscovery([...this.nativeCatalogues.values()], this.providerRows);
+  }
+
+  /// The click-free coverage summary printed directly above the list.
+  get discoveryNotice(): string | null {
+    return discoveryNotice([...this.nativeCatalogues.values()], this.providerRows);
   }
 
   get selected(): SessionLine | null {

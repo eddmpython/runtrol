@@ -51,6 +51,31 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
     ) if isinstance(runtrol_views, list) else None
     if not isinstance(usage_view, dict) or usage_view.get("visibility") != "visible":
         found.append("every connected CLI's usage must be expanded at the bottom of the Runtrol sidebar")
+    welcome_entries = contributes.get("viewsWelcome") if isinstance(contributes, dict) else None
+    welcomes = welcome_entries if isinstance(welcome_entries, list) else []
+    has_ready_welcome = any(
+        isinstance(entry, dict)
+        and entry.get("view") == "runtrol.sessions"
+        and entry.get("when") == "runtrol.hasUsableProvider"
+        and "command:runtrol.startSession" in str(entry.get("contents", ""))
+        for entry in welcomes
+    )
+    has_missing_welcome = any(
+        isinstance(entry, dict)
+        and entry.get("view") == "runtrol.sessions"
+        and entry.get("when") == "!runtrol.hasUsableProvider && !runtrol.isVerifyingProvider"
+        and "command:runtrol.refresh" in str(entry.get("contents", ""))
+        for entry in welcomes
+    )
+    has_verifying_welcome = any(
+        isinstance(entry, dict)
+        and entry.get("view") == "runtrol.sessions"
+        and entry.get("when") == "runtrol.isVerifyingProvider"
+        and "Checking" in str(entry.get("contents", ""))
+        for entry in welcomes
+    )
+    if not has_ready_welcome or not has_missing_welcome or not has_verifying_welcome:
+        found.append("the empty sidebar must distinguish usable, verifying, and absent coding-agent CLIs")
     menus = contributes.get("menus") if isinstance(contributes, dict) else None
     item_context = menus.get("view/item/context") if isinstance(menus, dict) else None
     winner_entries = item_context if isinstance(item_context, list) else []
@@ -119,6 +144,7 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
         "setInterval(": "polling loop",
         "scheduleRefresh": "session-list requery loop",
         "appendFile(": "filesystem write surface",
+        "see the (i)": "sidebar coverage hidden behind an information action",
     }
     for token, meaning in forbidden.items():
         if token in all_source:
@@ -177,7 +203,6 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
             "setImmediate",
             "this.socket.end()",
         ],
-        "webview/main.ts": ["MAX_VISIBLE_ITEMS", "MAX_VISIBLE_CHARACTERS", "MAX_BATCH"],
         "conversationView.ts": [
             "webviewReady",
             "createWebviewPanel",
@@ -189,6 +214,9 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
             "withinMeasurementStage",
             "waitForVisibleWebview",
             "retainContextWhenHidden: false",
+            'aria-haspopup="listbox"',
+            'aria-controls="commands"',
+            'aria-expanded="false"',
         ],
         "extension.ts": [
             "afterReady",
@@ -215,6 +243,35 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
             "conversationStatus(row)",
             'return "Running"',
             'return "Stopped"',
+            'return "Cannot reopen"',
+            'row.live ? "now" : "time unknown"',
+        ],
+        "stateRows.ts": [
+            "export function discoveryNotice",
+            'names(partial, "partial for")',
+            'names(unavailable, "unavailable for")',
+        ],
+        "trees.ts": [
+            "conversation.serviceName",
+            'command: "runtrol.fixService"',
+            'this.state.discoveryNotice',
+            '"runtrol.hasUsableProvider"',
+            '"runtrol.isVerifyingProvider"',
+            "awaitsVerification",
+            "fixes available",
+        ],
+        "webview/main.ts": [
+            "MAX_VISIBLE_ITEMS",
+            "MAX_VISIBLE_CHARACTERS",
+            "MAX_BATCH",
+            'setAttribute("aria-activedescendant"',
+            'setAttribute("aria-expanded"',
+            'removeAttribute("aria-activedescendant")',
+            "(item ? prompt : chip)?.focus()",
+        ],
+        "usageTree.ts": [
+            "this.accessibilityInformation",
+            "`${row.name}, ${row.detail}`",
         ],
         "usageDisplay.ts": [
             "providers.filter(isUsable)",
@@ -396,6 +453,8 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
         for token in tokens:
             if token not in source:
                 found.append(f"{relative} does not contain required contract `{token}`")
+    if "view.description" in sources.get("trees.ts", ""):
+        found.append("the machine-wide conversation view must not look scoped under the current folder")
     return found
 
 
@@ -428,6 +487,23 @@ def selftest() -> int:
                     {"id": "runtrol.usage", "name": "CLI Usage", "visibility": "visible"}
                 ]
             },
+            "viewsWelcome": [
+                {
+                    "view": "runtrol.sessions",
+                    "contents": "Look again (command:runtrol.refresh)",
+                    "when": "!runtrol.hasUsableProvider && !runtrol.isVerifyingProvider",
+                },
+                {
+                    "view": "runtrol.sessions",
+                    "contents": "Checking",
+                    "when": "runtrol.isVerifyingProvider",
+                },
+                {
+                    "view": "runtrol.sessions",
+                    "contents": "New Conversation (command:runtrol.startSession)",
+                    "when": "runtrol.hasUsableProvider",
+                },
+            ],
             "commands": [
                 {"command": "runtrol.scheduleMission"},
                 {"command": "runtrol.cancelMissionSchedule"},
@@ -469,11 +545,16 @@ def selftest() -> int:
             "MAX_FRAME_BYTES MAX_QUEUED_FRAMES MAX_QUEUED_BYTES setImmediate "
             "this.socket.end()"
         ),
-        "webview/main.ts": "MAX_VISIBLE_ITEMS MAX_VISIBLE_CHARACTERS MAX_BATCH",
+        "webview/main.ts": (
+            'MAX_VISIBLE_ITEMS MAX_VISIBLE_CHARACTERS MAX_BATCH '
+            'setAttribute("aria-activedescendant" setAttribute("aria-expanded" '
+            'removeAttribute("aria-activedescendant") (item ? prompt : chip)?.focus()'
+        ),
         "conversationView.ts": (
             "webviewReady createWebviewPanel focusSurface conversationTabIsActive "
             "onDidChangeTabs onDidChangeTabGroups MEASUREMENT_ATTEMPTS withinMeasurementStage "
-            "waitForVisibleWebview retainContextWhenHidden: false"
+            'waitForVisibleWebview retainContextWhenHidden: false aria-haspopup="listbox" '
+            'aria-controls="commands" aria-expanded="false"'
         ),
         "extension.ts": (
             "afterReady selfApproveIntegration(client, pendingId, signature) "
@@ -491,8 +572,18 @@ def selftest() -> int:
         ),
         "conversationList.ts": (
             'if (folderRows.length === 0) continue conversationStatus(row) '
-            'return "Running" return "Stopped"'
+            'return "Running" return "Stopped" return "Cannot reopen" '
+            'row.live ? "now" : "time unknown"'
         ),
+        "stateRows.ts": (
+            'export function discoveryNotice names(partial, "partial for") '
+            'names(unavailable, "unavailable for")'
+        ),
+        "trees.ts": (
+            'conversation.serviceName command: "runtrol.fixService" this.state.discoveryNotice '
+            '"runtrol.hasUsableProvider" "runtrol.isVerifyingProvider" awaitsVerification fixes available'
+        ),
+        "usageTree.ts": 'this.accessibilityInformation `${row.name}, ${row.detail}`',
         "usageDisplay.ts": 'providers.filter(isUsable) detail: "No report yet"',
         "serializedWatch.ts": (
             "private active: AbortController; const previous = this.tail; "
@@ -588,9 +679,17 @@ def selftest() -> int:
 
     hidden_usage = json.loads(json.dumps(package))
     hidden_usage["contributes"]["views"]["runtrol"][0]["visibility"] = "collapsed"
+    merged_welcomes = json.loads(json.dumps(package))
+    merged_welcomes["contributes"]["viewsWelcome"] = [
+        {
+            "view": "runtrol.sessions",
+            "contents": "No coding-agent CLI was found. (command:runtrol.refresh)",
+        }
+    ]
     mutations = [
         ({**package, "dependencies": {"some-runtime": "1"}}, sources),
         (hidden_usage, sources),
+        (merged_welcomes, sources),
         ({**package, "activationEvents": []}, sources),
         ({**package, "contributes": {"viewsContainers": {"activitybar": []}}}, sources),
         ({"engines": {"vscode": "^1.100.0"}, "contributes": {"viewsContainers": {"activitybar": [], "secondarySidebar": []}}}, sources),
@@ -608,6 +707,26 @@ def selftest() -> int:
             },
         ),
         (package, {**sources, "conversationView.ts": "webviewReady"}),
+        (
+            package,
+            {
+                **sources,
+                "webview/main.ts": sources["webview/main.ts"].replace(
+                    'setAttribute("aria-activedescendant"', ""
+                ),
+            },
+        ),
+        (package, {**sources, "usageTree.ts": sources["usageTree.ts"].replace("accessibilityInformation", "")}),
+        (package, {**sources, "stateRows.ts": sources["stateRows.ts"].replace("discoveryNotice", "")}),
+        (package, {**sources, "trees.ts": sources["trees.ts"].replace('command: "runtrol.fixService"', "")}),
+        (package, {**sources, "trees.ts": sources["trees.ts"] + " view.description"}),
+        (
+            package,
+            {
+                **sources,
+                "conversationList.ts": sources["conversationList.ts"].replace('return "Cannot reopen"', ""),
+            },
+        ),
         (package, {**sources, "controller.ts": sources["controller.ts"].replace("workspaceCollisions", "")}),
         (package, {**sources, "controller.ts": sources["controller.ts"] + " writeFile("}),
         (package, {**sources, "controller.ts": sources["controller.ts"] + ' open(file, "w")'}),

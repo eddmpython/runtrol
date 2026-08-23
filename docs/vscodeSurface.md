@@ -72,16 +72,20 @@ the original daemon and provider processes instead of making a versioned extensi
 - Conversations are listed machine-wide, in one question per service, from the service's own surface: a listing
   protocol method, a listing command, or (for a CLI that publishes neither, Claude Code) the names in the CLI's own
   store. A structured human-facing `name`, `title`, or `preview` may cross directly into the visible row without
-  persistence or semantic parsing. When a list is not everything
-  the sidebar says so in one line above the list, and the services' own reasons sit behind an (i) in the view's
-  title. A conversation started without a project runs in
+  persistence or semantic parsing. When a list is not everything, the sidebar names every affected service and says
+  whether its history is partial or unavailable directly above the list. The information action contains only the
+  longer driver diagnosis, never a core fact hidden from the list. A conversation started without a project runs in
   the extension's own scratch folder and is listed beneath the headings as a loose row, with no folder name and no
   collision question.
 - The project this window is open on is first and open when it has conversations. Any project holding a conversation
-  that stopped for the operator is open too, so no heading can hide the thing that wants them. Everything else is closed.
+  that stopped for the operator is open too, so no heading can hide the thing that wants them. Everything else is
+  closed. The machine-wide view title has no current-folder qualifier that could make the other projects look nested
+  under the window's folder; the first heading and its open-folder mark already identify the current project.
 - Project summaries contain only attention, running, and total counts. They never repeat the word `conversation`.
-- `Running`, `Ready`, `Stopped`, `Needs you`, `Error`, `Limit`, and `Sign in needed` are the complete row-state
-  vocabulary. Provider and project names are not repeated in a conversation detail line.
+- `Running`, `Ready`, `Stopped`, `Cannot reopen`, `Needs you`, `Error`, `Limit`, and `Sign in needed` are the complete
+  row-state vocabulary. Provider and project names are not repeated in a visual conversation detail line. Every row
+  also has a time. A live row without a provider timestamp says `now`; a stopped row says `time unknown` rather than
+  silently omitting the fact.
 - Every usable CLI has a row in the fixed `CLI Usage` area at the bottom of the same sidebar. The area is expanded by
   default. A CLI without a report says `No report yet`; it is never omitted and never shown as within limits.
 - A conversation is deleted from its row. A Runtime-supervised conversation is closed and forgotten here (the
@@ -133,8 +137,14 @@ the original daemon and provider processes instead of making a versioned extensi
   running agents is ambient; a count of agents that stopped for this person is a request.
 - New Conversation, Switch Conversation, Show Open Conversation, and Open Next Waiting each have a keyboard chord,
   so the entry point never requires the mouse.
+- Every visible provider mark has an equivalent spoken provider name. Tree rows announce their one state and time
+  once. Composer chip and slash-command listboxes expose expansion and the active option to assistive technology;
+  Escape closes a chip menu and returns focus to the chip that opened it.
 - A coding service that is not installed produces no row. Only an installed service that still cannot run appears, and
-  only once its capability probe has finished.
+  only once its capability probe has finished. That problem row says `Unavailable · Fix` and Enter opens the same
+  provider-owned remedies as its inline action. An empty tree distinguishes a usable CLI with no conversations from a
+  machine with no usable CLI, and gives the correct next action in each case. A newly discovered executable says it is
+  being checked until its verified probe completes; it is never briefly reported as missing.
 - Each conversation opens in its own editor tab with a bounded renderer and composer, exactly as a file does: ten or
   twenty tabs are arranged, split and sized by VS Code's own editor groups, and the focused tab is the selected
   conversation. Prompts and interrupts travel only to the tab that sent them. Tabs survive a window reload by their

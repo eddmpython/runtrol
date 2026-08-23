@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import type { CatalogueCoverage, NativeChatCatalogue, ProviderLine, SessionLine } from "./runtimeTypes";
-import { incompleteDiscovery, providerRowsEqual, sessionRowsEqual } from "./stateRows";
+import { discoveryNotice, incompleteDiscovery, providerRowsEqual, sessionRowsEqual } from "./stateRows";
 
 /// One service's catalogue answer, carrying only what the sentence builder reads.
 function catalogue(providerId: string, coverage: CatalogueCoverage): NativeChatCatalogue {
@@ -106,4 +106,32 @@ test("a service the provider list has never heard of is named by its identifier,
     [],
   );
   assert.equal(reasons, "mystery: no enumerable surface");
+});
+
+test("the visible coverage notice names every affected service without hiding the fact behind a click", () => {
+  const notice = discoveryNotice(
+    [
+      catalogue("claude", { kind: "partial", source: "officialCli", why: "running sessions only" }),
+      catalogue("codex", { kind: "complete", source: "officialCli" }),
+      catalogue("cline", { kind: "partial", source: "providerStore", why: "recent history only" }),
+      catalogue("grok", { kind: "unsupported", why: "no enumerable surface" }),
+    ],
+    [
+      provider("claude", "Claude Code"),
+      provider("codex", "Codex"),
+      provider("cline", "Cline"),
+      provider("grok", "Grok"),
+    ],
+  );
+  assert.equal(notice, "History: partial for Claude Code, Cline; unavailable for Grok.");
+});
+
+test("complete history needs no coverage notice", () => {
+  assert.equal(
+    discoveryNotice(
+      [catalogue("codex", { kind: "complete", source: "officialCli" })],
+      [provider("codex", "Codex")],
+    ),
+    null,
+  );
 });

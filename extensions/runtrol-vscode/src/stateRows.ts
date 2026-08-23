@@ -62,3 +62,38 @@ export function incompleteDiscovery(
   }
   return reasons.length === 0 ? null : [...new Set(reasons)].sort().join(" · ");
 }
+
+/// The compact coverage fact that belongs directly above the conversation list.
+///
+/// Exact driver explanations remain available from the information action, but the important fact cannot live
+/// behind that action. Grouping providers by partial and unavailable history keeps every affected service named
+/// without making the reader cross a paragraph before reaching the first conversation.
+export function discoveryNotice(
+  catalogues: readonly NativeChatCatalogue[],
+  providers: readonly ProviderLine[],
+): string | null {
+  const partial: string[] = [];
+  const unavailable: string[] = [];
+  for (const catalogue of catalogues) {
+    const coverage = catalogue.coverage;
+    if (!coverage || coverage.kind === "complete") continue;
+    const name = providers.find(
+      (provider) => provider.providerId === catalogue.providerId,
+    )?.displayName ?? catalogue.providerId;
+    if (coverage.kind === "partial") {
+      partial.push(name);
+    } else {
+      unavailable.push(name);
+    }
+  }
+  const parts = [
+    names(partial, "partial for"),
+    names(unavailable, "unavailable for"),
+  ].filter((part): part is string => part !== null);
+  return parts.length === 0 ? null : `History: ${parts.join("; ")}.`;
+}
+
+function names(values: readonly string[], prefix: string): string | null {
+  const unique = [...new Set(values)].sort();
+  return unique.length === 0 ? null : `${prefix} ${unique.join(", ")}`;
+}

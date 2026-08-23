@@ -427,11 +427,13 @@ function chipOf(anchor: MenuAnchor): HTMLElement | null {
 
 /// Show the choices for a chip, hanging from that chip, highlighted on the first row.
 function openChipMenu(id: string, anchor: MenuAnchor, title: string, items: MenuItem[]): void {
+  if (openMenu) hideChipMenu();
   openMenu = { id, anchor, items, highlighted: 0 };
   chipMenu.setAttribute("aria-label", title);
   chipMenu.dataset.anchor = anchor;
   paintChipMenu();
   const chip = chipOf(anchor);
+  chip?.setAttribute("aria-expanded", "true");
   const card = chipMenu.parentElement;
   if (chip && card) {
     // Left edge on the chip, clamped inside the card; the bar's chips are near the right edge.
@@ -451,6 +453,7 @@ function paintChipMenu(): void {
   const menu = openMenu;
   chipMenu.replaceChildren(...menu.items.map((item, index) => {
     const row = document.createElement("li");
+    row.id = `runtrol-chip-option-${index}`;
     row.className = index === menu.highlighted ? "command command-active" : "command";
     row.setAttribute("role", "option");
     row.setAttribute("aria-selected", index === menu.highlighted ? "true" : "false");
@@ -483,10 +486,14 @@ function paintChipMenu(): void {
     return row;
   }));
   chipMenu.hidden = false;
+  chipOf(menu.anchor)?.setAttribute("aria-activedescendant", `runtrol-chip-option-${menu.highlighted}`);
   chipMenu.querySelector<HTMLElement>(".command-active")?.scrollIntoView({ block: "nearest" });
 }
 
 function hideChipMenu(): void {
+  const chip = openMenu ? chipOf(openMenu.anchor) : null;
+  chip?.setAttribute("aria-expanded", "false");
+  chip?.removeAttribute("aria-activedescendant");
   openMenu = null;
   chipMenu.hidden = true;
   chipMenu.replaceChildren();
@@ -496,9 +503,12 @@ function hideChipMenu(): void {
 function chooseMenuItem(item: MenuItem | null): void {
   const menu = openMenu;
   if (!menu) return;
+  const chip = chipOf(menu.anchor);
   hideChipMenu();
   vscode.postMessage({ type: "menuChoice", menu: menu.id, choice: item ? item.id : null });
-  prompt.focus();
+  // A completed choice flows into writing the message. Escape returns to the control it dismissed instead of
+  // moving keyboard focus somewhere unrelated.
+  (item ? prompt : chip)?.focus();
 }
 conversation.addEventListener("scroll", () => {
   followsTail = conversation.scrollHeight - conversation.scrollTop - conversation.clientHeight < 24;
@@ -897,10 +907,13 @@ function paintCommands(): void {
   if (visibleCommands.length === 0) {
     commandMenu.hidden = true;
     commandMenu.replaceChildren();
+    prompt.setAttribute("aria-expanded", "false");
+    prompt.removeAttribute("aria-activedescendant");
     return;
   }
   commandMenu.replaceChildren(...visibleCommands.map((command, index) => {
     const row = document.createElement("li");
+    row.id = `runtrol-command-option-${index}`;
     row.className = index === highlighted ? "command command-active" : "command";
     row.setAttribute("role", "option");
     row.setAttribute("aria-selected", index === highlighted ? "true" : "false");
@@ -922,6 +935,8 @@ function paintCommands(): void {
     return row;
   }));
   commandMenu.hidden = false;
+  prompt.setAttribute("aria-expanded", "true");
+  prompt.setAttribute("aria-activedescendant", `runtrol-command-option-${highlighted}`);
 }
 
 function closeCommands(): void {
