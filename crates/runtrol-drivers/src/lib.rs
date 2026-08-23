@@ -23,13 +23,18 @@ pub mod claude;
 pub mod codex;
 pub mod consult;
 pub mod framing;
+mod generated_acp_registry;
 pub mod kinds;
 
 pub use consult::{
     ConsultSurface, ConsultTool, McpConsultServer, McpReadback, McpRegistrar, McpRegistrationState,
 };
 pub use framing::{FrameError, Incoming, LineError, Lines, Pending, RequestId};
-pub use kinds::{DriverContext, DriverKind, KINDS, MANIFESTS, MakeDriver};
+pub use generated_acp_registry::{
+    ACP_REGISTRY_ADAPTER_COUNT, ACP_REGISTRY_AGENT_COUNT, ACP_REGISTRY_REPLACED_COUNT,
+    ACP_REGISTRY_SCHEMA, ACP_REGISTRY_SHA256, ACP_REGISTRY_SKIPPED_COUNT, MANIFESTS,
+};
+pub use kinds::{DriverContext, DriverKind, KINDS, MakeDriver};
 
 /// What this build ships.
 ///

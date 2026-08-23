@@ -40,6 +40,7 @@ import { RuntimeState } from "./state";
 import { StudioRuntimeClient } from "./runtimeClient";
 import { workspaceCovers, workspaceIdentity } from "./workspaceCollision";
 import { UsageItem, UsageTree } from "./usageTree";
+import { installableProviders } from "./usageDisplay";
 import { WorkspaceRootFollowing } from "./workspaceRoots";
 import { ConversationItem, ConversationsTree, ProjectItem } from "./trees";
 
@@ -566,6 +567,29 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
           if (provider) await controller.fixService(provider);
         });
       }),
+    ),
+    vscode.commands.registerCommand(
+      "runtrol.discoverServices",
+      () => run(() => afterReady(async () => {
+        const installable = installableProviders(state.providers);
+        if (installable.length === 0) {
+          void vscode.window.showInformationMessage("Every catalogued coding service is already installed or needs a manual installer.");
+          return;
+        }
+        const picked = await vscode.window.showQuickPick(
+          installable.map((provider) => ({
+            label: provider.displayName,
+            description: "Not installed",
+            detail: provider.help?.install ?? undefined,
+            provider,
+          })),
+          {
+            title: "Add coding service",
+            placeHolder: "Choose a service. Its command is placed in the terminal and never run automatically.",
+          },
+        );
+        if (picked) await controller.fixService(picked.provider);
+      })),
     ),
     vscode.commands.registerCommand(
       "runtrol.selectSession",

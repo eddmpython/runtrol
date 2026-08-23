@@ -38,8 +38,11 @@ through another local administration surface is honoured instead of overridden. 
 enrollment still pending after that window, by signing the exact pending identity with the key that requested it.
 
 Studio becomes ready after one exact provider and managed-session inventory has populated navigation. Dedicated
-provider and managed-session streams then replace that inventory in the background. While those streams remain
-active, explicit refreshes reuse their latest snapshots instead of opening duplicate list requests. A lifecycle
+provider and managed-session streams then replace that inventory in the background. Provider-related requests use the
+current complete provider snapshot immediately and schedule one bounded filesystem restamp. A newly installed
+catalogue service then arrives on the provider watch without a provider-specific path or a restart; unchanged PATH
+directories, probe cache, and resolved executable identities publish nothing. Probe-cache writes invalidate the
+snapshot directly. Managed-session refreshes reuse the current stream snapshot. A lifecycle
 mutation invalidates the session snapshot until the stream or an exact list request replaces it.
 An installed executable without a verified probe remains visible while Studio starts its provider-neutral capability
 probe in the background. A successful probe refreshes the Runtime snapshot automatically. A failed probe stays
@@ -90,6 +93,11 @@ the original daemon and provider processes instead of making a versioned extensi
   expanded by default. `Checking`, `Unavailable · Fix`, current usage, a blocking limit, and `No report yet` are
   mutually honest states. A CLI without a report is never omitted and never shown as within limits. A disconnected
   last report says so instead of looking current.
+- The same fixed area ends with one `Add coding services` row when the generated official catalogue contains services
+  that are not installed. Its count is visible without expanding another view. Selecting it opens a searchable list
+  of missing services and their exact install lines. Selecting a service places the line in a terminal unexecuted;
+  Studio never downloads, installs, signs in, or starts a service implicitly. Installed catalogue services disappear
+  from that picker and appear as ordinary CLI status and usage rows through the same Runtime inventory.
 - A conversation is deleted from its row. A Runtime-supervised conversation is closed and forgotten here (the
   provider keeps its own record). A provider-owned stored conversation is deleted through the provider's own surface
   (`sessions/deleteNative`: Codex `thread/delete`, Cline `history delete`) after a modal question naming the service;
@@ -222,12 +230,15 @@ the original daemon and provider processes instead of making a versioned extensi
   the visible switch path.
 - An operator name is stored as bounded session metadata. Without one, the provider's own catalogue title or
   structured display preview is used and refreshed after a native identity appears and after each turn settles. A
-  project or provider name is never a conversation-title fallback. `Untitled` with a short stable identity is the
-  final fallback, and a short stable suffix appears only when actual titles collide.
+  project or provider name is never a conversation-title fallback. `Chat` with a short stable identity is the final
+  fallback, and a short stable suffix appears only when actual titles collide. Renaming a provider-owned saved row
+  adopts it only long enough to store the operator label and immediately cools the provider process again.
 - The selected session remains first. One fuzzy switcher searches project, provider, state, and workspace metadata.
 - Session-index subscribers receive one current snapshot and then only list-visible changes.
 - Selecting a cold session gives immediate feedback, resumes through its provider-native identity, and follows its
-  exact workspace.
+  exact workspace. If the only overlapping chat is idle, Studio cools its provider process and switches with no
+  dialog while preserving that chat. Only a turn that is still working asks whether to stop and switch or keep both
+  writers active.
 - One bounded selected-session scalar survives workspace reload. It contains no conversation content.
 - Core-owned project and working-tree identity prevents concurrent writers in equal, ancestor, or descendant paths.
   Linked worktrees remain independent, and only an explicit user action permits shared access.

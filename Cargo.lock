@@ -1644,6 +1644,7 @@ dependencies = [
  "async-trait",
  "bytes",
  "runtrol-childproc",
+ "runtrol-core",
  "runtrol-provider",
  "serde",
  "serde_json",

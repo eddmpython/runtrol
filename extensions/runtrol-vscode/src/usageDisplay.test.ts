@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import type { ProviderLine, ProviderUsageGauge } from "./runtimeTypes";
-import { usageDetail, usageRows, usageRowsEqual } from "./usageDisplay";
+import { installableProviders, usageDetail, usageRows, usageRowsEqual } from "./usageDisplay";
 
 const NOW = Date.parse("2026-08-18T12:00:00Z");
 
@@ -136,4 +136,25 @@ test("a visible or actionable status change demands another tree render", () => 
       ? { ...row, provider: { ...row.provider, providerId: "replacement" } as ProviderLine }
       : row
   ))), false);
+});
+
+test("the service catalogue offers only missing CLIs with an exact install line", () => {
+  const providers = [
+    ...PROVIDERS,
+    {
+      providerId: "available-later",
+      displayName: "Available Later",
+      installation: { state: "missing" },
+      help: { install: "npm install --global available-later@1.0.0" },
+    },
+    {
+      providerId: "manual-only",
+      displayName: "Manual Only",
+      installation: { state: "missing" },
+    },
+  ] as unknown as ProviderLine[];
+  assert.deepEqual(
+    installableProviders(providers).map((provider) => provider.providerId),
+    ["available-later"],
+  );
 });

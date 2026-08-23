@@ -1,18 +1,21 @@
 import * as vscode from "vscode";
 
 import type { ProviderLine, ProviderUsageGauge, ProviderUsageList } from "./runtimeTypes";
-import { usageRows, usageRowsEqual, type UsageRow } from "./usageDisplay";
+import { installableProviders, usageRows, usageRowsEqual, type UsageRow } from "./usageDisplay";
+
+type UsageTreeItem = UsageItem | ServiceCatalogueItem;
 
 /// Every installed CLI's operational state and usage, kept open at the bottom of the Runtrol sidebar.
 ///
 /// It refreshes from bounded Runtime snapshots when the session index changes. There is no timer and no hidden
 /// second page. A CLI that has not reported remains present and says so instead of being omitted or shown green.
-export class UsageTree implements vscode.TreeDataProvider<UsageItem>, vscode.Disposable {
-  private readonly changedEmitter = new vscode.EventEmitter<UsageItem | undefined>();
+export class UsageTree implements vscode.TreeDataProvider<UsageTreeItem>, vscode.Disposable {
+  private readonly changedEmitter = new vscode.EventEmitter<UsageTreeItem | undefined>();
   readonly onDidChangeTreeData = this.changedEmitter.event;
   private gauges: readonly ProviderUsageGauge[] = [];
   private rows: UsageRow[] = [];
-  private view: vscode.TreeView<UsageItem> | null = null;
+  private installable: ProviderLine[] = [];
+  private view: vscode.TreeView<UsageTreeItem> | null = null;
   private fetching = false;
   private behind = false;
 
@@ -24,7 +27,7 @@ export class UsageTree implements vscode.TreeDataProvider<UsageItem>, vscode.Dis
     },
   ) {}
 
-  bindView(view: vscode.TreeView<UsageItem>): void {
+  bindView(view: vscode.TreeView<UsageTreeItem>): void {
     this.view = view;
     this.publish(usageRows(this.gauges, this.ports.providers(), this.ports.now()), true);
     view.onDidChangeVisibility((event) => {
@@ -69,23 +72,52 @@ export class UsageTree implements vscode.TreeDataProvider<UsageItem>, vscode.Dis
   }
 
   private publish(next: UsageRow[], force = false): void {
-    const changed = !usageRowsEqual(this.rows, next);
+    const installable = installableProviders(this.ports.providers());
+    const catalogueChanged = installable.map((provider) => provider.providerId).join("\0")
+      !== this.installable.map((provider) => provider.providerId).join("\0");
+    const changed = !usageRowsEqual(this.rows, next) || catalogueChanged;
     this.rows = next;
-    if (this.view) this.view.message = this.rows.length === 0 ? "No connected CLI." : undefined;
+    this.installable = installable;
+    if (this.view) {
+      this.view.message = this.rows.length === 0 && this.installable.length === 0
+        ? "No connected CLI."
+        : undefined;
+    }
     if (changed || force) this.changedEmitter.fire(undefined);
   }
 
-  getTreeItem(element: UsageItem): vscode.TreeItem {
+  getTreeItem(element: UsageTreeItem): vscode.TreeItem {
     return element;
   }
 
-  getChildren(element?: UsageItem): UsageItem[] {
+  getChildren(element?: UsageTreeItem): UsageTreeItem[] {
     if (element) return [];
-    return this.rows.map((row) => new UsageItem(row));
+    return [
+      ...this.rows.map((row) => new UsageItem(row)),
+      ...(this.installable.length > 0 ? [new ServiceCatalogueItem(this.installable.length)] : []),
+    ];
   }
 
   dispose(): void {
     this.changedEmitter.dispose();
+  }
+}
+
+class ServiceCatalogueItem extends vscode.TreeItem {
+  constructor(count: number) {
+    super("Add coding services", vscode.TreeItemCollapsibleState.None);
+    this.id = "runtrol:service-catalogue";
+    this.description = `${count} available`;
+    this.tooltip = `${count} verified ACP Registry services can be added. Runtrol never installs one automatically.`;
+    this.contextValue = "runtrol.serviceCatalogue";
+    this.iconPath = new vscode.ThemeIcon("extensions");
+    this.command = {
+      command: "runtrol.discoverServices",
+      title: "Add coding services",
+    };
+    this.accessibilityInformation = {
+      label: `Add coding services, ${count} available`,
+    };
   }
 }
 

@@ -220,6 +220,12 @@ jobs:
       - name: Mission 실행, 복구, 로컬 승인, 명시적 Capability 재사용
         if: needs.detect.outputs.hasWorkspace == 'true'
         run: python -X utf8 tests/audit/missionGrowthContracts.py
+      - name: 공식 ACP Registry 검출기 자체 검증
+        if: needs.detect.outputs.hasWorkspace == 'true'
+        run: python -X utf8 tests/audit/acpRegistry.py --selftest
+      - name: 공식 에이전트 카탈로그는 로컬 설치본만 자동 연결
+        if: needs.detect.outputs.hasWorkspace == 'true'
+        run: python -X utf8 tests/audit/acpRegistry.py
       - name: VS Code 확장 게이트 자체 검증
         if: needs.detect.outputs.hasWorkspace == 'true'
         run: python -X utf8 tests/audit/vscodeExtension.py --selftest

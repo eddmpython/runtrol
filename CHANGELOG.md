@@ -10,6 +10,26 @@ and refactoring that no user can observe do not belong here.
 
 ## [Unreleased]
 
+### Added
+
+- The fixed sidebar service area now exposes an `Add coding services` row backed by a generated snapshot of the
+  official ACP Registry. Thirty safe local adapters, including GLM Agent, Qwen Code, and Gemini CLI, are available
+  without provider branches in Studio or Core. Runtrol auto-discovers an already installed executable; an explicit
+  service selection only places its exact install line in a terminal and never downloads or runs it automatically.
+- Provider inventory now reuses one structural snapshot while PATH directories, the probe cache, and resolved
+  executable identities remain unchanged. Provider-related requests return against the current complete snapshot
+  immediately while one background task restamps the filesystem and publishes any change. A real probe write
+  invalidates the snapshot immediately, keeping the larger service catalogue off refresh, start, and resume paths.
+
+### Fixed
+
+- Clicking another saved chat in the same project now cools an idle provider process and switches immediately while
+  preserving both conversations. A response that is genuinely still running gets only the explicit choices to stop
+  and switch or keep both working, replacing the internal writer-overlap warning.
+- Provider titles and list previews remain the visible conversation names. The final no-title fallback is now a
+  compact unique `Chat` handle, and the rename action on a provider-owned saved row now stores the chosen name and
+  returns the row to a cold state instead of failing because it was not already supervised.
+
 ## [0.1.16] - 2026-08-24
 
 ### Changed

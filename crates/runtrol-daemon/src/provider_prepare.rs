@@ -95,6 +95,7 @@ pub(crate) async fn prepared_driver(
             .save()
             .map_err(|error| ProviderPreparationError::new(error.to_string()))?;
     }
+    crate::runtime_inventory::invalidate_provider_inventory(composed).await;
 
     let checked = checked_flags(provider, entry, probed.flags)?;
 

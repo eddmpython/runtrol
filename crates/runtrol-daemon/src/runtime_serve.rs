@@ -105,7 +105,7 @@ pub(crate) async fn serve_connection(
             .parse::<RuntimeMethod>()
             .is_ok_and(method_needs_provider_refresh);
         if refresh_providers {
-            refresh_provider_inventory(&providers, &composed);
+            schedule_provider_inventory_refresh(providers.clone(), Arc::clone(&composed));
         }
         let catalogue = Arc::clone(&sessions.borrow_and_update());
         let provider_catalogue = Arc::clone(&providers.borrow());
@@ -126,7 +126,7 @@ pub(crate) async fn serve_connection(
         )
         .await;
         if refresh_providers {
-            refresh_provider_inventory(&providers, &composed);
+            schedule_provider_inventory_refresh(providers.clone(), Arc::clone(&composed));
         }
         if send_response(&mut connection, &answered.response)
             .await
@@ -2990,15 +2990,30 @@ async fn relay_watch(
     }
 }
 
-fn refresh_provider_inventory(providers: &watch::Sender<Arc<ProviderList>>, composed: &Composed) {
-    let next = Arc::new(crate::runtime_inventory::providers(composed));
-    providers.send_if_modified(|current| {
-        if current.as_ref() == next.as_ref() {
-            return false;
+#[expect(
+    clippy::print_stderr,
+    reason = "a detached inventory refresh has no waiting request to answer; stderr is the daemon's existing operational failure channel"
+)]
+fn schedule_provider_inventory_refresh(
+    providers: watch::Sender<Arc<ProviderList>>,
+    composed: Arc<Composed>,
+) {
+    drop(tokio::spawn(async move {
+        match crate::runtime_inventory::providers_in_background(composed).await {
+            Ok(Some(next)) => {
+                let next = Arc::new(next);
+                providers.send_if_modified(|current| {
+                    if current.as_ref() == next.as_ref() {
+                        return false;
+                    }
+                    *current = next;
+                    true
+                });
+            }
+            Ok(None) => {}
+            Err(error) => eprintln!("{error}"),
         }
-        *current = next;
-        true
-    });
+    }));
 }
 
 const fn method_needs_provider_refresh(method: RuntimeMethod) -> bool {

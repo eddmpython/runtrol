@@ -1,5 +1,10 @@
 //! Public inventory adapters over the registry and the single managed-session catalogue.
 
+use std::ffi::OsString;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::{Duration, Instant, SystemTime};
+
 use runtrol_core::{BinFacts, ProbeCache, SessionManager, locate};
 use runtrol_provider::{AbsPath, NativeSessionId, ProviderId as CoreProviderId};
 use runtrol_runtime_protocol::{
@@ -11,6 +16,14 @@ use runtrol_security::ProjectRootIdentity;
 use crate::Composed;
 use crate::runtime_auth::AuthorizedIntegration;
 use crate::runtime_control::public_waiting;
+
+/// Coalesce one burst of identical provider list requests.
+///
+/// Runtime brackets provider operations with inventory publication, and Studio refreshes may be queued together.
+/// A local installation cannot complete meaningfully inside this interval. With the official catalogue present, a
+/// foreground restamp measured 314 to 320 ms on Windows, so list reads schedule it off their response path. Probe
+/// writes bypass the floor through explicit invalidation.
+const PROVIDER_INVENTORY_RECHECK_FLOOR: Duration = Duration::from_secs(1);
 
 /// Safe reason a public session snapshot could not be authorized.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -37,6 +50,134 @@ pub(crate) struct RuntimeSessionCatalogue {
     sessions: Vec<RuntimeSessionRecord>,
     unreadable: usize,
     available: bool,
+}
+
+/// One bounded provider snapshot and the local filesystem facts that make it current.
+pub(crate) struct ProviderInventoryCache {
+    current: Option<CachedProviderInventory>,
+    revision: u64,
+    background_revision: Option<u64>,
+}
+
+impl Default for ProviderInventoryCache {
+    fn default() -> Self {
+        Self {
+            current: None,
+            revision: 1,
+            background_revision: None,
+        }
+    }
+}
+
+struct CachedProviderInventory {
+    checked_at: Instant,
+    stamp: ProviderInventoryStamp,
+    resolved_programs: Vec<PathBuf>,
+    list: ProviderList,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct ProviderInventoryStamp {
+    path: Option<OsString>,
+    path_ext: Option<OsString>,
+    files: Vec<PathFingerprint>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct PathFingerprint {
+    path: PathBuf,
+    facts: Option<PathFacts>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct PathFacts {
+    directory: bool,
+    bytes: u64,
+    modified: Option<SystemTime>,
+}
+
+impl ProviderInventoryCache {
+    fn begin_background_refresh(&mut self) -> Option<u64> {
+        if self.background_revision.is_some()
+            || self.current.as_ref().is_some_and(|current| {
+                current.checked_at.elapsed() < PROVIDER_INVENTORY_RECHECK_FLOOR
+            })
+        {
+            return None;
+        }
+        self.background_revision = Some(self.revision);
+        Some(self.revision)
+    }
+
+    fn finish_background_refresh(&mut self, revision: u64) -> bool {
+        if self.background_revision == Some(revision) {
+            self.background_revision = None;
+        }
+        self.revision == revision
+    }
+
+    fn invalidate(&mut self) {
+        self.revision = self.revision.wrapping_add(1).max(1);
+        self.current = None;
+    }
+}
+
+impl PathFingerprint {
+    #[expect(
+        clippy::result_map_or_into_option,
+        reason = "the workspace forbids Result::ok because silent errors are unsafe generally; this fingerprint deliberately records an unreadable timestamp as absent"
+    )]
+    fn read(path: PathBuf) -> Self {
+        let facts = match std::fs::metadata(&path) {
+            Ok(metadata) => Some(PathFacts {
+                directory: metadata.is_dir(),
+                bytes: metadata.len(),
+                // An unsupported timestamp is an explicit part of the fingerprint. File presence and size still
+                // participate, and the directory fingerprint covers entry creation and removal.
+                modified: metadata.modified().map_or(None, Some),
+            }),
+            // Missing and unreadable are the same safe cache state: resolution cannot use either. If it becomes
+            // readable, the next fingerprint changes to `Some` and invalidates the snapshot.
+            Err(_) => None,
+        };
+        Self { path, facts }
+    }
+}
+
+impl ProviderInventoryStamp {
+    fn read(composed: &Composed, resolved_programs: &[PathBuf]) -> Self {
+        let path = std::env::var_os("PATH");
+        let mut watched: std::collections::BTreeSet<PathBuf> = path
+            .as_deref()
+            .into_iter()
+            .flat_map(std::env::split_paths)
+            .collect();
+        watched.insert(
+            composed
+                .home
+                .paths()
+                .probe_cache()
+                .as_std_path()
+                .to_path_buf(),
+        );
+        watched.extend(resolved_programs.iter().cloned());
+        for provider in composed.registry.all() {
+            for candidate in &provider.manifest.bin.names {
+                let candidate = Path::new(candidate.as_ref());
+                if candidate.is_absolute() {
+                    watched.insert(candidate.to_path_buf());
+                    if let Some(parent) = candidate.parent() {
+                        watched.insert(parent.to_path_buf());
+                    }
+                }
+            }
+        }
+        Self {
+            path,
+            path_ext: std::env::var_os("PATHEXT"),
+            files: watched.into_iter().map(PathFingerprint::read).collect(),
+        }
+    }
 }
 
 /// Project the supervisor's account gauges into the public usage list.
@@ -66,38 +207,120 @@ pub(crate) fn provider_usage(
 }
 
 /// Build the fast provider inventory without starting any provider process.
+#[expect(
+    clippy::result_map_or_into_option,
+    reason = "the workspace forbids Result::ok generally; try-lock contention deliberately selects an uncached bounded projection instead of blocking the executor"
+)]
 pub(crate) fn providers(composed: &Composed) -> ProviderList {
-    let cache = ProbeCache::open(composed.home.paths().probe_cache());
+    // This projection is synchronous and is called from both async and non-async paths. A non-blocking Tokio lock
+    // reuses the cache when uncontended without blocking an executor thread. A simultaneous caller computes its own
+    // bounded snapshot instead of waiting while another thread walks the filesystem.
+    let mut inventory_cache = composed.provider_inventory.try_lock().map_or(None, Some);
+    if let Some(cache) = inventory_cache.as_mut()
+        && let Some(current) = cache.current.as_mut()
+    {
+        if current.checked_at.elapsed() < PROVIDER_INVENTORY_RECHECK_FLOOR {
+            return current.list.clone();
+        }
+        let stamp = ProviderInventoryStamp::read(composed, current.resolved_programs.as_slice());
+        if current.stamp == stamp {
+            current.checked_at = Instant::now();
+            return current.list.clone();
+        }
+    }
+
+    let built = build_provider_inventory(composed);
+    let list = built.list.clone();
+    if let Some(cache) = inventory_cache.as_mut() {
+        cache.current = Some(built);
+    }
+    list
+}
+
+/// Recheck the executable search surface away from the request that asked to refresh.
+///
+/// The current snapshot is already complete enough to answer a list read. One bounded task restamps the local
+/// filesystem, and the provider watch receives a changed snapshot when an installation appeared or disappeared.
+/// Revision binding prevents a probe-cache invalidation from being overwritten by an older scan.
+pub(crate) async fn providers_in_background(
+    composed: Arc<Composed>,
+) -> Result<Option<ProviderList>, String> {
+    let revision = {
+        let mut cache = composed.provider_inventory.lock().await;
+        let Some(revision) = cache.begin_background_refresh() else {
+            return Ok(None);
+        };
+        revision
+    };
+    let building = Arc::clone(&composed);
+    let built = match tokio::task::spawn_blocking(move || build_provider_inventory(&building)).await
+    {
+        Ok(built) => built,
+        Err(error) => {
+            composed
+                .provider_inventory
+                .lock()
+                .await
+                .finish_background_refresh(revision);
+            return Err(format!(
+                "provider inventory background task did not complete: {error}"
+            ));
+        }
+    };
+    let list = built.list.clone();
+    let mut cache = composed.provider_inventory.lock().await;
+    if !cache.finish_background_refresh(revision) {
+        return Ok(None);
+    }
+    cache.current = Some(built);
+    Ok(Some(list))
+}
+
+fn build_provider_inventory(composed: &Composed) -> CachedProviderInventory {
+    let probe_cache = ProbeCache::open(composed.home.paths().probe_cache());
     let registered: Vec<&runtrol_core::registry::Provider> = composed.registry.all().collect();
     // Resolved concurrently because each entry walks the operator's search path for its own executable and
     // stats what it finds, and that cost is per provider rather than shared. Done in sequence it meant every
     // supported CLI added delay to the moment the window becomes usable, which is the one wait a person feels
     // on every single launch. Threads rather than tasks because this is blocking filesystem work and the
     // function is called from places that are not async.
-    let observations: Vec<InstallationObservation> = std::thread::scope(|scope| {
-        let resolving: Vec<_> = registered
-            .iter()
-            .map(|provider| scope.spawn(|| installation(provider, &cache)))
-            .collect();
-        resolving
-            .into_iter()
-            .map(|handle| {
-                handle.join().unwrap_or_else(|_| InstallationObservation {
-                    // A panic while resolving one provider must not lose the other three. Reported as
-                    // unavailable rather than missing: something went wrong here, and claiming the CLI is
-                    // absent would send the operator to install what they may already have.
-                    state: InstallationState::Unavailable,
-                    version: None,
-                    why: Some("resolving this provider's executable did not complete".to_owned()),
+    let installations: Vec<(InstallationObservation, Option<PathBuf>)> =
+        std::thread::scope(|scope| {
+            let resolving: Vec<_> = registered
+                .iter()
+                .map(|provider| scope.spawn(|| installation(provider, &probe_cache)))
+                .collect();
+            resolving
+                .into_iter()
+                .map(|handle| {
+                    handle.join().unwrap_or_else(|_| {
+                        (
+                            InstallationObservation {
+                                // A panic while resolving one provider must not lose the other three. Reported as
+                                // unavailable rather than missing: something went wrong here, and claiming the CLI is
+                                // absent would send the operator to install what they may already have.
+                                state: InstallationState::Unavailable,
+                                version: None,
+                                why: Some(
+                                    "resolving this provider's executable did not complete"
+                                        .to_owned(),
+                                ),
+                            },
+                            None,
+                        )
+                    })
                 })
-            })
-            .collect()
-    });
-    ProviderList {
+                .collect()
+        });
+    let resolved_programs = installations
+        .iter()
+        .filter_map(|(_, path)| path.clone())
+        .collect::<Vec<_>>();
+    let list = ProviderList {
         providers: registered
             .into_iter()
-            .zip(observations)
-            .map(|(provider, installation)| ProviderDescriptor {
+            .zip(installations)
+            .map(|(provider, (installation, _))| ProviderDescriptor {
                 provider_id: ProviderId::new(provider.id().as_str()),
                 display_name: provider.manifest.display_name.to_string(),
                 icon: provider.manifest.icon.as_ref().map(ToString::to_string),
@@ -112,7 +335,18 @@ pub(crate) fn providers(composed: &Composed) -> ProviderList {
                     .collect(),
             })
             .collect(),
+    };
+    CachedProviderInventory {
+        checked_at: Instant::now(),
+        stamp: ProviderInventoryStamp::read(composed, &resolved_programs),
+        resolved_programs,
+        list,
     }
+}
+
+/// Force the next provider projection to observe a probe-cache write immediately.
+pub(crate) async fn invalidate_provider_inventory(composed: &Composed) {
+    composed.provider_inventory.lock().await.invalidate();
 }
 
 /// This service's own help commands, assembled into lines a person can read and run.
@@ -148,29 +382,41 @@ fn help(provider: &runtrol_core::registry::Provider) -> Option<ProviderHelp> {
 fn installation(
     provider: &runtrol_core::registry::Provider,
     cache: &ProbeCache,
-) -> InstallationObservation {
+) -> (InstallationObservation, Option<PathBuf>) {
     if !provider.is_usable() {
-        return InstallationObservation {
-            state: InstallationState::Unavailable,
-            version: None,
-            why: Some("this Runtime build has no driver for the declared provider kind".to_owned()),
-        };
+        return (
+            InstallationObservation {
+                state: InstallationState::Unavailable,
+                version: None,
+                why: Some(
+                    "this Runtime build has no driver for the declared provider kind".to_owned(),
+                ),
+            },
+            None,
+        );
     }
     let Ok(program) = locate(&provider.manifest) else {
-        return InstallationObservation {
-            state: InstallationState::Missing,
-            version: None,
-            why: Some("no registered executable candidate is installed".to_owned()),
-        };
+        return (
+            InstallationObservation {
+                state: InstallationState::Missing,
+                version: None,
+                why: Some("no registered executable candidate is installed".to_owned()),
+            },
+            None,
+        );
     };
+    let resolved = Some(program.path().as_std_path().to_path_buf());
     let Ok(facts) = BinFacts::of_program(&program) else {
-        return InstallationObservation {
-            state: InstallationState::Unavailable,
-            version: None,
-            why: Some("the installed executable identity could not be verified".to_owned()),
-        };
+        return (
+            InstallationObservation {
+                state: InstallationState::Unavailable,
+                version: None,
+                why: Some("the installed executable identity could not be verified".to_owned()),
+            },
+            resolved,
+        );
     };
-    match cache.get(provider.id(), &facts) {
+    let observation = match cache.get(provider.id(), &facts) {
         Some(entry) => InstallationObservation {
             state: InstallationState::Usable,
             version: Some(entry.version.clone()),
@@ -181,7 +427,8 @@ fn installation(
             version: None,
             why: Some("the installed executable has not completed a verified probe".to_owned()),
         },
-    }
+    };
+    (observation, resolved)
 }
 
 /// Read the one session owner into an immutable public projection.
@@ -460,6 +707,29 @@ mod tests {
     use runtrol_store::{IntegrationKey, IntegrationRootRow};
 
     use super::*;
+
+    #[test]
+    fn a_background_provider_scan_cannot_overwrite_a_direct_invalidation() {
+        let mut cache = ProviderInventoryCache::default();
+        let first = cache
+            .begin_background_refresh()
+            .expect("an empty cache starts one background scan");
+        assert!(
+            cache.begin_background_refresh().is_none(),
+            "a second list read coalesces behind the same scan"
+        );
+        cache.invalidate();
+        assert!(
+            !cache.finish_background_refresh(first),
+            "a probe write makes the older filesystem answer stale"
+        );
+        assert_ne!(
+            cache
+                .begin_background_refresh()
+                .expect("the invalidated cache may scan again"),
+            first
+        );
+    }
 
     #[test]
     fn the_local_surface_sees_the_machine_even_when_an_enrollment_root_was_replaced() {

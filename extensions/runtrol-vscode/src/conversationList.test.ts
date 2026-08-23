@@ -93,6 +93,20 @@ test("one list holds supervised sessions and provider-owned chats alike", () => 
   assert.equal(rows[1]?.serviceName, "Codex");
 });
 
+test("a provider placeholder never becomes a wall of Untitled rows", () => {
+  const rows = conversations(
+    [],
+    PROVIDERS,
+    [
+      nativeChat({ nativeSessionId: "first-8d4a", title: "Untitled" }),
+      nativeChat({ nativeSessionId: "second-8980", title: " untitled " }),
+    ],
+    null,
+  );
+
+  assert.deepEqual(new Set(rows.map((row) => row.title)), new Set(["Chat 8D4A", "Chat 8980"]));
+});
+
 test("a Core-owned worktree stays under the project the person selected", () => {
   const worktree = below(ROOT, ".runtrol-worktrees", "chat-01234567");
   const rows = conversations(
@@ -108,7 +122,7 @@ test("a Core-owned worktree stays under the project the person selected", () => 
 
   assert.equal(rows[0]?.workspace, worktree, "actions keep the exact provider working directory");
   assert.equal(rows[0]?.homeWorkspace, ALPHA, "presentation keeps the selected project");
-  assert.equal(rows[0]?.title, "Untitled · S1", "a project name is never repeated as a chat title");
+  assert.equal(rows[0]?.title, "Chat S1", "a project name is never repeated as a chat title");
   assert.equal(grouped[0]?.rows[0]?.session?.sessionId, "s1");
 });
 
@@ -448,7 +462,7 @@ test("a conversation nobody named still reads as something", () => {
   );
   assert.equal(rows.length, 2);
   for (const row of rows) {
-    assert.ok(row.title.startsWith("Untitled · "), `${row.title} names nothing`);
+    assert.ok(row.title.startsWith("Chat "), `${row.title} names nothing`);
   }
   assert.notEqual(rows[0]?.title, rows[1]?.title, "two nameless conversations are still told apart");
 });
@@ -739,7 +753,7 @@ test("a conversation nobody named still reads as something", () => {
     null,
   );
   for (const row of rows) {
-    assert.ok(row.title.startsWith("Untitled · "), `${row.title} names nothing`);
+    assert.ok(row.title.startsWith("Chat "), `${row.title} names nothing`);
   }
   assert.notEqual(rows[0]?.title, rows[1]?.title, "two nameless conversations are still told apart");
 });

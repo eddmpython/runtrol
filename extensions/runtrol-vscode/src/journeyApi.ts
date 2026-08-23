@@ -67,6 +67,19 @@ export type JourneyApi = {
   /// Open the newest stored conversation of a service that has a title (a reopened conversation with history),
   /// returning its session id, or null when the service lists none.
   openStoredWithTitle(providerId: string): Promise<string | null>;
+  /// The focused sidebar eye pass: open two titled provider-owned chats in one workspace in sequence.
+  ///
+  /// The second selection deliberately overlaps the first idle provider process. Production selection must cool the
+  /// first and switch without an internal writer warning. Returns null when this machine has no honest pair to prove.
+  switchStoredPair(providerId: string): Promise<{
+    first: string;
+    second: string;
+    workspace: string;
+    firstLifecycle: SessionLine["lifecycle"];
+    secondLifecycle: SessionLine["lifecycle"];
+  } | null>;
+  /// Visible titles exactly as the sidebar projection holds them, for the focused no-Untitled eye assertion.
+  conversationTitles(): readonly string[];
   /// How many provider-owned conversations the services have listed so far.
   nativeChatCount(): number;
   /// The eye pass: whether a provider-owned conversation with this native identity is currently listed.
@@ -248,6 +261,54 @@ export function journeyApi(
       }
       return null;
     }),
+    switchStoredPair: (providerId) => afterReady(async () => {
+      const candidates = state.conversations.filter(
+        (candidate) => candidate.providerId === providerId
+          && candidate.canOpen
+          && !candidate.open
+          && !candidate.projectless
+          && candidate.session === null
+          && candidate.native !== null
+          && candidate.native.title !== null,
+      );
+      const byWorkspace = new Map<string, typeof candidates>();
+      for (const candidate of candidates) {
+        const grouped = byWorkspace.get(candidate.workspace) ?? [];
+        grouped.push(candidate);
+        byWorkspace.set(candidate.workspace, grouped);
+      }
+      for (const [workspace, rows] of byWorkspace) {
+        if (rows.length < 2 || workspaceCollisions(workspace, state.sessions).length > 0) continue;
+        const firstRow = rows[0];
+        const secondRow = rows[1];
+        if (!firstRow || !secondRow) continue;
+        try {
+          await within(controller.select(firstRow), 30_000);
+          const first = state.sessions.find(
+            (session) => session.nativeSessionId === firstRow.native?.nativeSessionId,
+          );
+          if (!first || first.lifecycle !== "hotIdle") continue;
+          await within(controller.select(secondRow), 30_000);
+          const currentFirst = state.sessions.find((session) => session.sessionId === first.sessionId);
+          const second = state.sessions.find(
+            (session) => session.nativeSessionId === secondRow.native?.nativeSessionId,
+          );
+          if (!currentFirst || !second) continue;
+          return {
+            first: currentFirst.sessionId,
+            second: second.sessionId,
+            workspace,
+            firstLifecycle: currentFirst.lifecycle,
+            secondLifecycle: second.lifecycle,
+          };
+        } catch {
+          // A historical provider row may no longer be resumable. The eye pass needs one real honest pair and walks
+          // the bounded workspace groups rather than treating an unrelated stale row as the product verdict.
+        }
+      }
+      return null;
+    }),
+    conversationTitles: () => state.conversations.map((conversation) => conversation.title),
     nativeChatCount: () => state.nativeChats.length,
     nativeChatListed: (providerId, nativeSessionId) => state.nativeChats.some(
       (chat) => chat.providerId === providerId && chat.nativeSessionId === nativeSessionId,

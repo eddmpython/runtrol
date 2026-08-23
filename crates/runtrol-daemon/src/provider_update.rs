@@ -281,8 +281,12 @@ async fn verify_provider(composed: &Composed, provider: ProviderId) -> Result<()
     )
     .await
     .map_err(|error| error.to_string())?;
-    let _writing = composed.probe_cache_writing.lock().await;
-    cache.save().map_err(|error| error.to_string())
+    {
+        let _writing = composed.probe_cache_writing.lock().await;
+        cache.save().map_err(|error| error.to_string())?;
+    }
+    crate::runtime_inventory::invalidate_provider_inventory(composed).await;
+    Ok(())
 }
 
 async fn run_install(npm: &Program, argv: &[String], composed: &Composed) -> Result<(), String> {

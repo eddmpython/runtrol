@@ -319,6 +319,13 @@ pub struct Composed {
     /// Held for milliseconds around each save, never across a probe. Lives here because the cache file is
     /// this home's, and every saver already holds a `Composed`.
     pub(crate) probe_cache_writing: tokio::sync::Mutex<()>,
+    /// Fast structural provider inventory keyed to the local executable search surface.
+    ///
+    /// Provider list requests arrive in pairs around an operation and explicit Studio refreshes may arrive in a
+    /// burst. Rewalking every search directory for every absent catalogue service made identical reads hundreds of
+    /// milliseconds apart. The cache contains only public provider descriptors and filesystem identity facts; a
+    /// changed search directory, probe cache, or previously resolved executable invalidates it.
+    pub(crate) provider_inventory: Mutex<crate::runtime_inventory::ProviderInventoryCache>,
     /// Latest model catalogue per provider, keyed to the exact binary it was read from.
     ///
     /// A short-TTL memoization, never a store (see `provider_prepare::MODEL_CATALOGUE_TTL`).
@@ -412,6 +419,9 @@ impl Composed {
             registry,
             device_authority: DeviceAuthority::new(granted, paired_devices),
             probe_cache_writing: tokio::sync::Mutex::new(()),
+            provider_inventory: Mutex::new(
+                crate::runtime_inventory::ProviderInventoryCache::default(),
+            ),
             model_catalogues: tokio::sync::Mutex::new(std::collections::BTreeMap::new()),
             pc_identity: machine_identity.noise,
             relay_seed: machine_identity.relay,
@@ -474,6 +484,9 @@ impl Composed {
             registry,
             device_authority: DeviceAuthority::new(granted, paired_devices),
             probe_cache_writing: tokio::sync::Mutex::new(()),
+            provider_inventory: Mutex::new(
+                crate::runtime_inventory::ProviderInventoryCache::default(),
+            ),
             model_catalogues: tokio::sync::Mutex::new(std::collections::BTreeMap::new()),
             pc_identity: machine_identity.noise,
             relay_seed: machine_identity.relay,

@@ -387,8 +387,7 @@ function supervised(
     serviceName: providerDisplayName(session.providerId, providers),
     serviceIcon: providerIcon(session.providerId, providers),
     title: session.label?.trim()
-      || native?.title?.trim()
-      || untitled(session.nativeSessionId || session.sessionId),
+      || providerTitle(native?.title, session.nativeSessionId || session.sessionId),
     homeWorkspace,
     workspace: session.workspace,
     folder: projectless ? "" : workspaceName(homeWorkspace),
@@ -419,8 +418,7 @@ function providerOwned(
     providerId: chat.providerId,
     serviceName: providerDisplayName(chat.providerId, providers),
     serviceIcon: providerIcon(chat.providerId, providers),
-    title: chat.title?.trim()
-      || untitled(chat.nativeSessionId),
+    title: providerTitle(chat.title, chat.nativeSessionId),
     homeWorkspace: chat.cwd,
     workspace: chat.cwd,
     folder: projectless ? "" : workspaceName(chat.cwd),
@@ -520,9 +518,15 @@ function shortened(identity: string): string {
   return (compact.slice(-4) || identity.slice(-4)).toUpperCase();
 }
 
-/// What to call a conversation that the service did not name.
-function untitled(identity: string): string {
-  return `Untitled · ${shortened(identity)}`;
+/// A compact, unique handle when the service has not supplied a human title yet.
+function unnamed(identity: string): string {
+  return `Chat ${shortened(identity)}`;
+}
+
+/// A provider's generic placeholder is the absence of a human title, not a title worth repeating on every row.
+function providerTitle(title: string | null | undefined, identity: string): string {
+  const value = title?.trim();
+  return value && value.toLocaleLowerCase("en-US") !== "untitled" ? value : unnamed(identity);
 }
 
 /// The muted second line: current state and the service's timestamp, with no repeated provider or project name.

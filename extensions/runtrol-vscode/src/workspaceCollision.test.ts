@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import type { SessionLine } from "./runtimeTypes";
-import { workspaceCollisions } from "./workspaceCollision";
+import { workingCollisions, workspaceCollisions } from "./workspaceCollision";
 
 function session(workspace: string, hot = true, id = workspace): SessionLine {
   return {
@@ -50,4 +50,14 @@ test("Windows casing and separators cannot create a second workspace identity", 
 
 test("detached sessions are choices, not active writer collisions", () => {
   assert.deepEqual(workspaceCollisions("/work/repo", [session("/work/repo", false)], "linux"), []);
+});
+
+test("a conversation switch distinguishes idle processes from active turns", () => {
+  const idle = { ...session("/work/repo", true, "idle"), lifecycle: "hotIdle" as const };
+  const working = session("/work/repo", true, "working");
+  const collisions = workspaceCollisions("/work/repo", [idle, working], "linux");
+  assert.deepEqual(
+    workingCollisions(collisions).map(({ session: value }) => value.sessionId),
+    ["working"],
+  );
 });

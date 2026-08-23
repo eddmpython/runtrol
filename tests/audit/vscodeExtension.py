@@ -157,6 +157,8 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
     )
     if not schedule_entry or not cancel_schedule_entry:
         found.append("a reviewed Mission and its pending schedule must expose schedule and exact cancel actions")
+    if "runtrol.discoverServices" not in command_ids or "onCommand:runtrol.discoverServices" not in activations:
+        found.append("the fixed sidebar service catalogue must have one activatable discovery command")
 
     all_source = "\n".join(sources.values())
     forbidden = {
@@ -167,6 +169,8 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
         "scheduleRefresh": "session-list requery loop",
         "appendFile(": "filesystem write surface",
         "see the (i)": "sidebar coverage hidden behind an information action",
+        "Untitled ·": "repeated non-name conversation fallback",
+        "Resume anyway": "internal writer-collision copy on conversation switching",
     }
     for token, meaning in forbidden.items():
         if token in all_source:
@@ -248,6 +252,7 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
             'executeCommand("runtrol.usage.focus")',
             '"runtrol.scheduleMission"',
             '"runtrol.cancelMissionSchedule"',
+            '"runtrol.discoverServices"',
         ],
         "providerHealth.ts": [
             "the installed executable has not completed a verified probe",
@@ -263,6 +268,7 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
         "conversationList.ts": [
             "if (folderRows.length === 0) continue",
             "conversationStatus(row)",
+            "return `Chat ${shortened(identity)}`",
             'return "Running"',
             'return "Stopped"',
             'return "Cannot reopen"',
@@ -298,6 +304,9 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
             "private gauges:",
             "usageRowsEqual(this.rows, next)",
             '"Usage refresh failed. Showing the last report."',
+            "ServiceCatalogueItem",
+            'command: "runtrol.discoverServices"',
+            "this.installable.length",
         ],
         "usageDisplay.ts": [
             'provider.installation.state !== "missing"',
@@ -305,6 +314,8 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
             'detail: "Checking"',
             'detail: "Unavailable · Fix"',
             'detail: `Disconnected · ${usageDetail(gauge, nowMs)}`',
+            "export function installableProviders",
+            'provider.installation.state === "missing" && Boolean(provider.help?.install)',
         ],
         "serializedWatch.ts": [
             "private active: AbortController",
@@ -321,6 +332,10 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
             "awaitsVerification(",
             "reconnect",
             "workspaceCollisions",
+            "conversationSwitchDecision",
+            "this.runtime.cool(",
+            '"Stop and switch"',
+            '"Keep both working"',
             '"Start here anyway"',
         ],
         "mission/autoFlight.ts": [
@@ -442,6 +457,7 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
             "withRuntimeLocator",
             "providerSnapshot",
             "sessionSnapshot",
+            "async cool(",
             "watchSessions",
             "watchSessionIndexWithReconnect",
         ],
@@ -508,6 +524,7 @@ def selftest() -> int:
         "activationEvents": [
             "onCommand:runtrol.scheduleMission",
             "onCommand:runtrol.cancelMissionSchedule",
+            "onCommand:runtrol.discoverServices",
         ],
         "contributes": {
             "viewsContainers": {"activitybar": []},
@@ -536,6 +553,7 @@ def selftest() -> int:
             "commands": [
                 {"command": "runtrol.scheduleMission"},
                 {"command": "runtrol.cancelMissionSchedule"},
+                {"command": "runtrol.discoverServices"},
             ],
             "menus": {
                 "view/title": [
@@ -610,7 +628,7 @@ def selftest() -> int:
             "afterReady selfApproveIntegration(client, pendingId, signature) "
             'initializationStage = "runtime:bootstrap" missionController.startAutoFlights() '
             'executeCommand("runtrol.usage.focus") '
-            '"runtrol.scheduleMission" "runtrol.cancelMissionSchedule"'
+            '"runtrol.scheduleMission" "runtrol.cancelMissionSchedule" "runtrol.discoverServices"'
         ),
         "providerHealth.ts": (
             "the installed executable has not completed a verified probe "
@@ -622,6 +640,7 @@ def selftest() -> int:
         ),
         "conversationList.ts": (
             'if (folderRows.length === 0) continue conversationStatus(row) '
+            'return `Chat ${shortened(identity)}` '
             'return "Running" return "Stopped" return "Cannot reopen" '
             'row.live ? "now" : "time unknown"'
         ),
@@ -636,13 +655,16 @@ def selftest() -> int:
         "usageTree.ts": (
             'this.accessibilityInformation `${row.name}, ${row.detail}` '
             'command: "runtrol.fixService" "runtrol.usageProblem" fixes available '
-            'private gauges: "Usage refresh failed. Showing the last report."'
+            'private gauges: "Usage refresh failed. Showing the last report." '
+            'ServiceCatalogueItem command: "runtrol.discoverServices" this.installable.length'
             ' usageRowsEqual(this.rows, next)'
         ),
         "usageDisplay.ts": (
             'provider.installation.state !== "missing" detail: "No report yet" '
             'detail: "Checking" detail: "Unavailable · Fix" '
-            'detail: `Disconnected · ${usageDetail(gauge, nowMs)}`'
+            'detail: `Disconnected · ${usageDetail(gauge, nowMs)}` '
+            'export function installableProviders '
+            'provider.installation.state === "missing" && Boolean(provider.help?.install)'
         ),
         "serializedWatch.ts": (
             "private active: AbortController; const previous = this.tail; "
@@ -652,7 +674,8 @@ def selftest() -> int:
             'private indexAbort; '
             'this.runtime.inventory(); this.startSessionIndexWatch(); this.startProviderVerification( '
             'this.runtime.verifyProvider( awaitsVerification( '
-            'reconnect workspaceCollisions '
+            'reconnect workspaceCollisions conversationSwitchDecision this.runtime.cool( '
+            '"Stop and switch" "Keep both working" '
             '"Start here anyway"'
         ),
         "mission/autoFlight.ts": (
@@ -709,7 +732,7 @@ def selftest() -> int:
         "core/client.ts": "commandConnection commandTail",
         "runtimeClient.ts": (
             "RuntimeLocator.system( RUNTIME_LOCATOR_SETTLE_MS isAbsolute(runtimeExecutable) withRuntimeLocator "
-            "providerSnapshot sessionSnapshot watchSessions "
+            "providerSnapshot sessionSnapshot async cool( watchSessions "
             "watchSessionIndexWithReconnect"
         ),
         "core/locator.ts": '["endpoint"] executable: "runtrol" runtimeExecutable',

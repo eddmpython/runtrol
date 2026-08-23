@@ -32,6 +32,35 @@ The help commands are the one entry whose declaration needs defending, since the
 
 These strings are the only manifest text that reaches an operator's shell, and a manifest may come from the operator's own provider directory rather than from the product. So the loader refuses any character a shell could read as a separator, by whitelist rather than by blacklist. Runtime assembles the finished command line, because only Runtime knows which candidate executable resolved; a client that joined arguments to a name would be a second place deciding what runs, wrong on exactly the machine where the second candidate was the installed one. No surface may execute one: they are offered to a person, who reads the line and decides.
 
+## Official service catalogue
+
+The built-in service catalogue combines the measured handwritten manifests with a generated snapshot of the official
+ACP Registry. `crates/runtrol-drivers/tooling/sync-acp-registry.mjs` is the maintainer-only synchronizer. It accepts a
+bounded registry document, rejects redirects and malformed records, resolves exact npm package metadata only to learn
+the installed executable names, and emits `generated_acp_registry.rs`. The snapshot records its source digest, total
+agent count, safe adapter count, and skipped count. CI rejects a missing bound, a generated downloader, update
+authority, or any registry URL in runtime source.
+
+Runtime never contacts the ACP Registry or a package registry. It never invokes `npx`, `uvx`, an installer, or an
+update command. Generated manifests name only local executable candidates. When one is already on the operator's
+`PATH`, the ordinary provider-neutral resolver discovers it and the generic ACP driver serves it. When it is absent,
+Studio can show the exact declared install line and place that line in a terminal only after the operator selects the
+service. The command remains unexecuted.
+
+This separates three concepts that must not be conflated:
+
+- an ACP coding agent is a provider Runtrol can supervise directly;
+- a model API such as DeepSeek or GLM is selected and authenticated inside a compatible installed coding agent;
+- a local model runtime such as Ollama is likewise configured in that coding agent, not given to Runtrol as a model
+  key or transcript source.
+
+The current snapshot safely expresses 30 official registry agents as local adapters and skips six whose environment
+or distribution semantics cannot be represented honestly. Three official entries use richer measured handwritten
+manifests: two with the same identifiers, plus the official Grok launch whose executable and ACP arguments are already
+represented by the measured Grok manifest. A generated test copies a real executable under the GLM adapter's declared name,
+launches an isolated child with that directory on `PATH`, and proves the shipping resolver discovers it. Another test
+requires every built-in sidebar display name to be distinct, including direct and ACP transports.
+
 ## Driver registry
 
 Driver kinds live in one explicit table. Each entry either constructs a provider-neutral driver or gives a visible reason that the build cannot serve that kind. There is no distributed registration and no provider-name branch in the core.
@@ -75,6 +104,9 @@ The active gates establish separate claims:
 - `claudeApprovalSmoke` runs an installed Claude Code process through the production stream-json driver against a loopback Messages endpoint. The real CLI emits its hidden `can_use_tool` request, consumes an explicit `rejectOnce` answer through the normal daemon boundary, makes the follow-up model request, declares `end_turn`, and leaves the denied target file absent. The model endpoint is deterministic and mock; the provider process and approval wire are real.
 - `uninstallLeavesNoTrace` stores fixture state outside `RUNTROL_HOME`, removes the runtrol home, resumes directly through the provider executable while runtrol is absent, then loads the same native session after reinstallation.
 - `agentSurfaceDrift` compares the schema-provider methods and stream-json provider flags that can be probed without an account. Scheduled hosted CI installs current CLIs and requires each built-in probe strategy to run.
+- `acpRegistry` verifies the generated official snapshot, coverage arithmetic, local-only executable candidates,
+  bounded maintainer fetch, absent runtime registry access, and absent update authority. Driver tests prove one
+  generated adapter resolves from an isolated local `PATH` and all visible service names are distinct.
 - The generic ACP, external ACP, Claude approval, and uninstall journeys run on Windows, macOS, and Linux.
 
 Real account turns remain operator evidence because hosted CI receives no provider credential. The Claude approval gate proves the installed CLI wire against a mock model, not account-backed model behavior, and the North Star tier remains `mock`.

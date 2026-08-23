@@ -57,7 +57,12 @@ import {
   START_DEFAULTS_KEY,
   type StartDefault,
 } from "./startDefaults";
-import { workspaceCollisions, workspaceIdentity, type WorkspaceCollision } from "./workspaceCollision";
+import {
+  workingCollisions,
+  workspaceCollisions,
+  workspaceIdentity,
+  type WorkspaceCollision,
+} from "./workspaceCollision";
 
 const NATIVE_ADOPTION_REFRESH_MS = 4 * 60_000;
 /// Existing conversations are discovered as soon as the surface is idle enough to ask.
@@ -487,10 +492,12 @@ export class Controller implements vscode.Disposable {
       session = target;
     }
     if (!session.hot) {
+      const access = await this.conversationSwitchDecision(session.workspace);
+      if (!access) return;
       this.state.select(session.sessionId);
       const opening = await this.panels.open(session, !reveal);
       opening.view.status("Opening the saved chat...", "info");
-      session = await this.resumeSession(session);
+      session = await this.resumeSession(session, access);
     }
     const stored = this.persistSelection(session.sessionId);
     this.state.select(session.sessionId);
@@ -511,7 +518,7 @@ export class Controller implements vscode.Disposable {
   /// Open a conversation with the access the operator decided, on the public Runtime. A shared open is the
   /// public Runtime's one presence-gated open (a second writer in a working tree somebody is already writing
   /// in); the Runtime client confirms the person's own choice at the machine and retries, so from here both
-  /// accesses are one call (measured 2026-08-21: every "Start here anyway", "Resume anyway" and scratch-folder
+  /// accesses are one call (measured 2026-08-21: every "Start here anyway", concurrent switch and scratch-folder
   /// path used to send shared with no confirmation, and the refusal was misread as a sign-in problem).
   private async openWithAccess(
     open:
@@ -525,11 +532,11 @@ export class Controller implements vscode.Disposable {
     return opened;
   }
 
-  private async resumeSession(session: SessionLine): Promise<SessionLine> {
+  private async resumeSession(session: SessionLine, access: WorkspaceAccess): Promise<SessionLine> {
     if (!session.nativeSessionId) {
       throw new Error("that cold session has no provider-owned conversation identifier to resume");
     }
-    const opened = await this.runtime.resume(runtimeAction(session), "exclusive");
+    const opened = await this.runtime.resume(runtimeAction(session), access);
     const watched = this.state.sessions.find((candidate) => (
       candidate.sessionId === opened.sessionId
       && candidate.hot
@@ -565,26 +572,8 @@ export class Controller implements vscode.Disposable {
     if (current.resume !== "available" || !current.adoptionToken) {
       throw new Error("that existing chat cannot currently be resumed by its provider");
     }
-    let access: WorkspaceAccess = "exclusive";
-    const collisions = workspaceCollisions(current.cwd, this.state.sessions);
-    if (collisions.length > 0) {
-      const action = await vscode.window.showWarningMessage(
-        `${path.basename(current.cwd)} overlaps ${collisions.length} running chat${
-          collisions.length === 1 ? "" : "s"
-        }.`,
-        {
-          modal: true,
-          detail: collisionDetail(collisions),
-        },
-        "Focus existing",
-        "Resume anyway",
-      );
-      if (action === "Focus existing") {
-        return chooseCollision(collisions);
-      }
-      if (action !== "Resume anyway") return null;
-      access = "shared";
-    }
+    const access = await this.conversationSwitchDecision(current.cwd);
+    if (!access) return null;
     const openedId = (await this.openWithAccess({ kind: "adopt", native: current }, access)).sessionId;
     await this.refresh();
     const adopted = this.state.sessions.find((session) => session.sessionId === openedId);
@@ -592,6 +581,43 @@ export class Controller implements vscode.Disposable {
       throw new Error("the resumed existing chat is absent from the current session index");
     }
     return adopted;
+  }
+
+  /// A click on another saved chat is a switch, not a request to add another writer.
+  ///
+  /// Idle provider processes are cooled without a question and their conversation pointers remain. A turn that
+  /// is genuinely producing output is the only case that asks: stop it and switch, deliberately run both, or
+  /// cancel. This keeps the common one-click path quiet while never interrupting active work implicitly.
+  private async conversationSwitchDecision(workspace: string): Promise<WorkspaceAccess | null> {
+    const collisions = workspaceCollisions(workspace, this.state.sessions);
+    if (collisions.length === 0) return "exclusive";
+    const working = workingCollisions(collisions);
+    if (working.length === 0) {
+      for (const { session } of collisions) {
+        await this.runtime.cool(runtimeAction(session), false);
+      }
+      await this.refresh();
+      return "exclusive";
+    }
+    const project = path.basename(workspace) || workspace;
+    const action = await vscode.window.showWarningMessage(
+      `${working.length === 1 ? "Another chat is" : `${working.length} chats are`} still working in ${project}.`,
+      {
+        modal: true,
+        detail: working.length === 1
+          ? "Stop its current response and switch, or keep both chats working in the same files."
+          : "Stop their current responses and switch, or keep all chats working in the same files.",
+      },
+      "Stop and switch",
+      "Keep both working",
+    );
+    if (action === "Keep both working") return "shared";
+    if (action !== "Stop and switch") return null;
+    for (const { session } of collisions) {
+      await this.runtime.cool(runtimeAction(session), session.lifecycle === "hotRunning");
+    }
+    await this.refresh();
+    return "exclusive";
   }
 
   /// New chat, the way the chat apps people already use begin one: a tab with the composer ready and
@@ -1615,10 +1641,12 @@ export class Controller implements vscode.Disposable {
   async placeConversation(place: Place, value?: ConversationItem | SessionLine): Promise<void> {
     let session = await this.sessionToPlace(value);
     if (!session.hot) {
+      const access = await this.conversationSwitchDecision(session.workspace);
+      if (!access) return;
       this.state.select(session.sessionId);
       const opening = await this.panels.openIn(session, place, true);
       opening.view.status("Opening the saved chat...", "info");
-      session = await this.resumeSession(session);
+      session = await this.resumeSession(session, access);
     }
     this.state.select(session.sessionId);
     await this.panels.openIn(session, place);
@@ -1670,28 +1698,43 @@ export class Controller implements vscode.Disposable {
   }
 
   async nameSession(value?: ConversationItem | SessionLine): Promise<void> {
-    const session = this.sessionOf(value);
-    const label = await vscode.window.showInputBox({
-      title: `Rename ${sessionTitle(session)}`,
-      prompt: "Use a short name for this chat. Leave it empty to restore the automatic name.",
-      value: session.label ?? "",
-      placeHolder: sessionTitle({ ...session, label: null }),
-      ignoreFocusOut: true,
-      validateInput: validateSessionLabel,
-    });
-    if (label === undefined) {
-      return;
+    let session: SessionLine;
+    let openedOnlyToName = false;
+    if (value instanceof ConversationItem && !value.conversation.session) {
+      const adopted = await this.adoptNativeChat(requireNative(value.conversation));
+      if (!adopted) return;
+      session = adopted;
+      openedOnlyToName = true;
+    } else {
+      session = this.sessionOf(value);
     }
-    const normalized = label.trim() || null;
-    const { response } = await this.client.once({
-      ask: "rename",
-      with: { session: session.sessionId, label: normalized },
-    });
-    requireDone(response, "rename");
-    await this.refresh();
-    const renamed = this.state.sessions.find((candidate) => candidate.sessionId === session.sessionId);
-    if (renamed) {
-      this.panels.updateSession(renamed);
+    try {
+      const label = await vscode.window.showInputBox({
+        title: `Rename ${sessionTitle(session)}`,
+        prompt: "Use a short name for this chat. Leave it empty to restore the service's name.",
+        value: session.label ?? "",
+        placeHolder: sessionTitle({ ...session, label: null }),
+        ignoreFocusOut: true,
+        validateInput: validateSessionLabel,
+      });
+      if (label === undefined) return;
+      const normalized = label.trim() || null;
+      const { response } = await this.client.once({
+        ask: "rename",
+        with: { session: session.sessionId, label: normalized },
+      });
+      requireDone(response, "rename");
+      await this.refresh();
+      const renamed = this.state.sessions.find((candidate) => candidate.sessionId === session.sessionId);
+      if (renamed) this.panels.updateSession(renamed);
+    } finally {
+      if (openedOnlyToName) {
+        const current = this.state.sessions.find((candidate) => candidate.sessionId === session.sessionId);
+        if (current?.lifecycle === "hotIdle") {
+          await this.runtime.cool(runtimeAction(current), false);
+          await this.refresh();
+        }
+      }
     }
   }
 

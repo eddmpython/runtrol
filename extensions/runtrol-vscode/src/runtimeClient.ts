@@ -148,11 +148,12 @@ export class StudioRuntimeClient implements vscode.Disposable {
   }
 
   async inventory(): Promise<RuntimeInventory> {
-    const providers = this.providerSnapshot;
     const sessions = this.sessionSnapshot;
-    if (providers && sessions) return { providers, sessions };
     return this.read(async (runtime) => {
-      const nextProviders = this.providerSnapshot ?? await runtime.providers().list();
+      // A refresh is also the operator's zero-configuration service discovery trigger. Runtime restamps its local
+      // PATH surface and normally answers from the structural provider cache; a newly installed executable changes
+      // that stamp and enters the same provider watch without Studio knowing any provider name.
+      const nextProviders = await runtime.providers().list();
       const nextSessions = this.sessionSnapshot ?? await runtime.sessions().list();
       if (this.providerWatch) this.providerSnapshot = nextProviders;
       if (this.sessionWatch) this.sessionSnapshot = nextSessions;
@@ -273,7 +274,7 @@ export class StudioRuntimeClient implements vscode.Disposable {
   /// One public open, sent again once after the person's own shared-writer choice is confirmed at the machine.
   ///
   /// The public Runtime grants a second writer in a working tree only after a local action. For the Studio that
-  /// action is the click that chose "shared" (Start here anyway, Resume anyway, asking several services at
+  /// action is the click that chose "shared" (Start here anyway, keeping both chats working, asking services at
   /// once), so the confirmation is made on the person's behalf and the same request, same mutation identity, is
   /// sent again. An exclusive open that says presenceRequired is something else (a service asking to be signed
   /// in) and is left to the caller.
@@ -390,6 +391,43 @@ export class StudioRuntimeClient implements vscode.Disposable {
         leaseId: lease.leaseId,
         leaseGeneration: lease.leaseGeneration,
       });
+    });
+  }
+
+  /// Stop holding one provider process while keeping Runtrol's durable pointer to its conversation.
+  ///
+  /// This is the lifecycle operation a conversation switch needs. `close` goes one step further and forgets
+  /// the pointer, which made it impossible to switch away from an idle chat without either leaving two writers
+  /// alive or making the old chat disappear from Runtrol.
+  async cool(session: RuntimeSessionAction, interruptRunning: boolean): Promise<void> {
+    await this.mutate(async (runtime) => {
+      let current = await runtime.sessions().get(session.sessionId);
+      if (current.lifecycle === "hotRunning") {
+        if (!interruptRunning) {
+          throw new Error("the running turn must be interrupted before this session can cool");
+        }
+        const lease = await this.ensureControl(runtime, runtimeAction(current));
+        await runtime.sessions().interrupt({
+          requestId: newMutationRequestId(),
+          sessionId: current.sessionId,
+          leaseId: lease.leaseId,
+          leaseGeneration: lease.leaseGeneration,
+        });
+        current = await waitForIdleSession(runtime, current.sessionId);
+      }
+      if (current.lifecycle === "cold") return;
+      if (current.lifecycle !== "hotIdle") {
+        throw new Error(`the session cannot cool from Runtime lifecycle ${current.lifecycle}`);
+      }
+      const lease = await this.ensureControl(runtime, runtimeAction(current));
+      await runtime.sessions().cool({
+        requestId: newMutationRequestId(),
+        sessionId: current.sessionId,
+        expectedSessionGeneration: current.sessionGeneration,
+        leaseId: lease.leaseId,
+        leaseGeneration: lease.leaseGeneration,
+      });
+      await this.forgetControl(current.sessionId);
     });
   }
 

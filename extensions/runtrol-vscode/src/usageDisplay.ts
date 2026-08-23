@@ -30,6 +30,13 @@ export function usageRowsEqual(left: readonly UsageRow[], right: readonly UsageR
   return JSON.stringify(left) === JSON.stringify(right);
 }
 
+/// Registry-backed coding services that are not installed and publish one exact operator-run install command.
+export function installableProviders(providers: readonly ProviderLine[]): ProviderLine[] {
+  return providers
+    .filter((provider) => provider.installation.state === "missing" && Boolean(provider.help?.install))
+    .sort((left, right) => left.displayName.localeCompare(right.displayName, "en"));
+}
+
 /// The strip's rows. Every installed CLI is present, including one still being checked or one that needs a fix.
 /// Missing CLIs stay absent. A last report whose provider disappeared remains as explicitly disconnected so a
 /// known limit never silently becomes a healthy-looking omission.

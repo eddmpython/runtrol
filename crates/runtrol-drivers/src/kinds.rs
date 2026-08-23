@@ -27,18 +27,8 @@ use runtrol_provider::{ModelAliases, Provider, ProviderId, SessionCatalogue};
 use crate::acp::AcpProvider;
 use crate::claude::ClaudeProvider;
 use crate::codex::CodexProvider;
-
-/// The manifests compiled into this binary.
-///
-/// Text rather than parsed values, because the loader owns parsing and there is exactly one parser. A built-in that
-/// went in already parsed would be a second reading of the schema, and two readings drift.
-pub const MANIFESTS: &[&str] = &[
-    include_str!("../manifests/claude.toml"),
-    include_str!("../manifests/codex.toml"),
-    include_str!("../manifests/cline.toml"),
-    include_str!("../manifests/opencode.toml"),
-    include_str!("../manifests/grok.toml"),
-];
+#[cfg(test)]
+use crate::generated_acp_registry::MANIFESTS;
 
 /// Builds a driver for one kind.
 ///
@@ -202,6 +192,8 @@ pub fn lookup(kind: &str) -> Option<&'static DriverKind> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+
     use runtrol_provider::Manifest;
 
     use super::*;
@@ -235,6 +227,116 @@ mod tests {
                 manifest.id
             );
         }
+    }
+
+    #[test]
+    fn official_registry_adapters_are_local_executables_never_downloaders() {
+        assert_eq!(
+            MANIFESTS.len(),
+            5 + crate::ACP_REGISTRY_ADAPTER_COUNT,
+            "five measured adapters precede the generated catalogue"
+        );
+        assert_eq!(
+            crate::ACP_REGISTRY_AGENT_COUNT,
+            crate::ACP_REGISTRY_ADAPTER_COUNT
+                + crate::ACP_REGISTRY_SKIPPED_COUNT
+                + crate::ACP_REGISTRY_REPLACED_COUNT,
+            "official entries replaced by richer measured manifests stay in the coverage arithmetic"
+        );
+        assert_eq!(crate::ACP_REGISTRY_SCHEMA, "1.0.0");
+        assert_eq!(crate::ACP_REGISTRY_SHA256.len(), 64);
+        for text in MANIFESTS.iter().skip(5) {
+            let manifest: Manifest = toml::from_str(text).expect("generated manifest parses");
+            assert_eq!(manifest.kind.as_str(), "acp");
+            assert!(
+                manifest.update.is_none(),
+                "catalogue data cannot claim update authority"
+            );
+            assert!(
+                manifest
+                    .bin
+                    .names
+                    .iter()
+                    .all(|name| name.as_ref() != "npx" && name.as_ref() != "uvx"),
+                "Runtime may resolve only a CLI already on the operator's PATH"
+            );
+        }
+    }
+
+    #[test]
+    fn every_built_in_has_a_distinct_name_in_the_sidebar() {
+        let mut names = BTreeSet::new();
+        for text in MANIFESTS {
+            let manifest: Manifest = toml::from_str(text).expect("built-in manifest parses");
+            assert!(
+                names.insert(manifest.display_name.to_string()),
+                "{} repeats the sidebar name {:?}",
+                manifest.id,
+                manifest.display_name
+            );
+        }
+    }
+
+    #[test]
+    fn official_registry_adapter_is_discovered_from_the_local_path() {
+        const CHILD_MARKER: &str = "RUNTROL_ACP_DISCOVERY_FIXTURE";
+        const TEST_NAME: &str =
+            "kinds::tests::official_registry_adapter_is_discovered_from_the_local_path";
+
+        let manifest: Manifest = MANIFESTS
+            .iter()
+            .skip(5)
+            .map(|text| toml::from_str(text).expect("generated manifest parses"))
+            .find(|manifest: &Manifest| manifest.id.as_str() == "glm-acp-agent")
+            .expect("the official snapshot carries the GLM adapter");
+        if let Some(expected) = std::env::var_os(CHILD_MARKER) {
+            let resolved = runtrol_core::locate(&manifest).expect("the generated adapter resolves");
+            assert_eq!(
+                std::fs::canonicalize(resolved.path().as_std_path()).expect("resolved path exists"),
+                std::fs::canonicalize(expected).expect("fixture path exists"),
+                "the generated manifest found the locally installed executable"
+            );
+            return;
+        }
+
+        let test_binary = std::env::current_exe().expect("current test binary");
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock follows the epoch")
+            .as_nanos();
+        let directory = std::env::temp_dir().join(format!(
+            "runtrol-acp-discovery-{}-{unique}",
+            std::process::id()
+        ));
+        std::fs::create_dir(&directory).expect("fixture directory");
+        let executable = directory.join(if cfg!(windows) {
+            "glm-acp-agent.exe"
+        } else {
+            "glm-acp-agent"
+        });
+        std::fs::copy(&test_binary, &executable).expect("fixture executable");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            let mut permissions = std::fs::metadata(&executable)
+                .expect("fixture metadata")
+                .permissions();
+            permissions.set_mode(0o755);
+            std::fs::set_permissions(&executable, permissions).expect("fixture is executable");
+        }
+        let mut search_paths = vec![directory.clone()];
+        if let Some(current) = std::env::var_os("PATH") {
+            search_paths.extend(std::env::split_paths(&current));
+        }
+        let search_path = std::env::join_paths(search_paths).expect("fixture search path");
+        let status = std::process::Command::new(&test_binary)
+            .args(["--exact", TEST_NAME, "--nocapture"])
+            .env("PATH", search_path)
+            .env(CHILD_MARKER, &executable)
+            .status()
+            .expect("child test starts");
+        std::fs::remove_dir_all(&directory).expect("fixture cleanup");
+        assert!(status.success(), "generated adapter discovery child failed");
     }
 
     #[test]

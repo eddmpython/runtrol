@@ -73,6 +73,7 @@
     "onCommand:runtrol.restartExtensionHost",
     "onCommand:runtrol.checkProviderUpdates",
     "onCommand:runtrol.fixService",
+    "onCommand:runtrol.discoverServices",
     "onCommand:runtrol.remoteConnectionStatus",
     "onCommand:runtrol.pairPhone",
     "onCommand:runtrol.reviewPhonePairings",
@@ -207,6 +208,11 @@
         "command": "runtrol.fixService",
         "title": "Runtrol: Fix Coding Service...",
         "icon": "$(wrench)"
+      },
+      {
+        "command": "runtrol.discoverServices",
+        "title": "Runtrol: Add Coding Service...",
+        "icon": "$(extensions)"
       },
       {
         "command": "runtrol.newConfiguredConversationInProject",

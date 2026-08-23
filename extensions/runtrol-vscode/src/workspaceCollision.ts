@@ -9,6 +9,13 @@ export type WorkspaceCollision = {
   relation: WorkspaceRelation;
 };
 
+/// The collisions that cannot be made safe by quietly cooling an idle provider process.
+export function workingCollisions(
+  collisions: readonly WorkspaceCollision[],
+): WorkspaceCollision[] {
+  return collisions.filter(({ session }) => session.lifecycle === "hotRunning");
+}
+
 export function workspaceCollisions(
   candidate: string,
   sessions: readonly SessionLine[],

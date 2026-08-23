@@ -35,6 +35,7 @@ sha2 = { workspace = true }
 [dev-dependencies]
 toml = { workspace = true, features = ["std", "parse", "serde"] }
 tokio = { workspace = true, features = ["rt", "macros", "io-util", "sync"] }
+runtrol-core = { workspace = true }
 
 [lints]
 workspace = true
