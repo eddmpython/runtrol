@@ -71,3 +71,52 @@ test("every connected CLI stays visible before it reports usage", () => {
     ["Codex", "No report yet"],
   ]);
 });
+
+test("the fixed area includes checking and broken installed CLIs but omits missing ones", () => {
+  const providers = [
+    ...PROVIDERS.slice(0, 1),
+    {
+      providerId: "codex",
+      displayName: "Codex",
+      icon: "openai",
+      installation: {
+        state: "unavailable",
+        why: "the installed executable has not completed a verified probe",
+      },
+    },
+    {
+      providerId: "grok",
+      displayName: "Grok",
+      icon: "sparkle",
+      installation: { state: "unavailable", why: "the installed CLI exited during its probe" },
+    },
+    {
+      providerId: "cline",
+      displayName: "Cline",
+      icon: "robot",
+      installation: { state: "missing" },
+    },
+  ] as unknown as ProviderLine[];
+
+  const rows = usageRows([], providers, NOW);
+  assert.deepEqual(rows.map((row) => [row.name, row.detail, row.state]), [
+    ["Claude Code", "No report yet", "available"],
+    ["Codex", "Checking", "checking"],
+    ["Grok", "Unavailable · Fix", "unavailable"],
+  ]);
+  assert.equal(rows[2]?.provider?.providerId, "grok");
+  assert.match(rows[2]?.tooltip ?? "", /Press Enter/);
+});
+
+test("a last report never disguises a disconnected CLI as available", () => {
+  const missing = [{
+    providerId: "codex",
+    displayName: "Codex",
+    installation: { state: "missing" },
+  }] as unknown as ProviderLine[];
+  const rows = usageRows([gauge({ primary: { usedPercent: 48 } })], missing, NOW);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0]?.detail, "Disconnected · 48%");
+  assert.equal(rows[0]?.state, "disconnected");
+  assert.equal(rows[0]?.provider, null);
+});

@@ -86,8 +86,10 @@ the original daemon and provider processes instead of making a versioned extensi
   row-state vocabulary. Provider and project names are not repeated in a visual conversation detail line. Every row
   also has a time. A live row without a provider timestamp says `now`; a stopped row says `time unknown` rather than
   silently omitting the fact.
-- Every usable CLI has a row in the fixed `CLI Usage` area at the bottom of the same sidebar. The area is expanded by
-  default. A CLI without a report says `No report yet`; it is never omitted and never shown as within limits.
+- Every installed CLI has a row in the fixed `CLI Status & Usage` area at the bottom of the same sidebar. The area is
+  expanded by default. `Checking`, `Unavailable · Fix`, current usage, a blocking limit, and `No report yet` are
+  mutually honest states. A CLI without a report is never omitted and never shown as within limits. A disconnected
+  last report says so instead of looking current.
 - A conversation is deleted from its row. A Runtime-supervised conversation is closed and forgotten here (the
   provider keeps its own record). A provider-owned stored conversation is deleted through the provider's own surface
   (`sessions/deleteNative`: Codex `thread/delete`, Cline `history delete`) after a modal question naming the service;
@@ -137,14 +139,18 @@ the original daemon and provider processes instead of making a versioned extensi
   running agents is ambient; a count of agents that stopped for this person is a request.
 - New Conversation, Switch Conversation, Show Open Conversation, and Open Next Waiting each have a keyboard chord,
   so the entry point never requires the mouse.
+- The Conversations title bar keeps only New Conversation, Create Project, and Switch Conversation visible. Waiting,
+  current-conversation, layout, refresh, service, device, access, and recovery commands remain in the overflow and
+  Command Palette. The title and the list do not lose reading space to a row of rarely used toolbar icons.
 - Every visible provider mark has an equivalent spoken provider name. Tree rows announce their one state and time
   once. Composer chip and slash-command listboxes expose expansion and the active option to assistive technology;
   Escape closes a chip menu and returns focus to the chip that opened it.
-- A coding service that is not installed produces no row. Only an installed service that still cannot run appears, and
-  only once its capability probe has finished. That problem row says `Unavailable · Fix` and Enter opens the same
-  provider-owned remedies as its inline action. An empty tree distinguishes a usable CLI with no conversations from a
-  machine with no usable CLI, and gives the correct next action in each case. A newly discovered executable says it is
-  being checked until its verified probe completes; it is never briefly reported as missing.
+- A coding service that is not installed produces no row. Every installed service appears in the fixed status and usage
+  area. One that still cannot run says `Unavailable · Fix` there, and Enter opens the same provider-owned remedies as
+  its inline action. The Conversations tree remains only projects and conversations. An empty tree distinguishes a
+  usable CLI with no conversations from a machine with no usable CLI, and gives the correct next action in each case.
+  A newly discovered executable says `Checking` in the fixed area until its verified probe completes; it is never
+  briefly reported as missing or made invisible by another usable CLI.
 - Each conversation opens in its own editor tab with a bounded renderer and composer, exactly as a file does: ten or
   twenty tabs are arranged, split and sized by VS Code's own editor groups, and the focused tab is the selected
   conversation. Prompts and interrupts travel only to the tab that sent them. Tabs survive a window reload by their

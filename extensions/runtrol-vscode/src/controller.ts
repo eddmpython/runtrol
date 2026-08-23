@@ -1306,7 +1306,7 @@ export class Controller implements vscode.Disposable {
   /// Offer a struggling service's own remedies from its row, before any conversation has failed.
   ///
   /// The same vocabulary the start-failure dialog uses (`troubleOf` + `offersFor`), reachable from the
-  /// sidebar's problem row so a person does not have to attempt a conversation just to be told how to fix
+  /// sidebar's fixed CLI status row so a person does not have to attempt a conversation just to be told how to fix
   /// the service. The chosen line lands in their terminal unexecuted, exactly like every other offer.
   async fixService(provider: ProviderLine): Promise<void> {
     const trouble = troubleOf(undefined, provider);

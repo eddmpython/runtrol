@@ -30,6 +30,7 @@ import { MissionController } from "./mission/controller";
 import { MissionTree } from "./mission/tree";
 import { isProjectless, projectlessRoot } from "./projectlessWorkspace";
 import { ProjectStore } from "./projects";
+import { isBroken } from "./providerHealth";
 import { managePhones, pairPhone, reviewPhonePairings } from "./pairingAdministration";
 import type { RemoteConnection } from "./protocol";
 import { SelectionStore } from "./selectionStore";
@@ -38,9 +39,9 @@ import { providerDisplayName, sessionTitle, workspaceName } from "./sessionDispl
 import { RuntimeState } from "./state";
 import { StudioRuntimeClient } from "./runtimeClient";
 import { workspaceCovers, workspaceIdentity } from "./workspaceCollision";
-import { UsageTree } from "./usageTree";
+import { UsageItem, UsageTree } from "./usageTree";
 import { WorkspaceRootFollowing } from "./workspaceRoots";
-import { ConversationItem, ConversationsTree, ProjectItem, ServiceProblemItem } from "./trees";
+import { ConversationItem, ConversationsTree, ProjectItem } from "./trees";
 
 declare const RUNTROL_INCLUDE_TEST_JOURNEY: boolean;
 
@@ -533,10 +534,37 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
     ),
     vscode.commands.registerCommand(
       "runtrol.fixService",
-      // From the problem row, so nobody has to attempt a conversation just to be told the remedy.
+      // From the fixed CLI row or the Command Palette, so nobody has to attempt a conversation just to learn
+      // the remedy. Palette invocation carries no tree item, so it must select rather than silently do nothing.
       (item: unknown) => run(async () => {
-        if (!(item instanceof ServiceProblemItem)) return;
-        await afterReady(() => controller.fixService(item.provider));
+        await afterReady(async () => {
+          let provider = item instanceof UsageItem ? item.provider : null;
+          if (!provider) {
+            const broken = state.providers.filter(isBroken);
+            if (broken.length === 0) {
+              void vscode.window.showInformationMessage("All installed coding services are available.");
+              return;
+            }
+            if (broken.length === 1) {
+              provider = broken[0] ?? null;
+            } else {
+              const picked = await vscode.window.showQuickPick(
+                broken.map((candidate) => ({
+                  label: candidate.displayName,
+                  description: "Unavailable",
+                  detail: candidate.installation.why ?? undefined,
+                  provider: candidate,
+                })),
+                {
+                  title: "Fix coding service",
+                  placeHolder: "Choose the service that needs attention",
+                },
+              );
+              provider = picked?.provider ?? null;
+            }
+          }
+          if (provider) await controller.fixService(provider);
+        });
       }),
     ),
     vscode.commands.registerCommand(

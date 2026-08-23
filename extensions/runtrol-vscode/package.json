@@ -166,7 +166,7 @@
         },
         {
           "id": "runtrol.usage",
-          "name": "CLI Usage",
+          "name": "CLI Status & Usage",
           "visibility": "visible"
         }
       ],
@@ -688,17 +688,17 @@
         {
           "command": "runtrol.openNextWaiting",
           "when": "view == runtrol.sessions",
-          "group": "navigation@2"
+          "group": "1_attention@1"
         },
         {
           "command": "runtrol.openConversation",
           "when": "view == runtrol.sessions",
-          "group": "navigation@3"
+          "group": "1_attention@2"
         },
         {
           "command": "runtrol.switchSession",
           "when": "view == runtrol.sessions",
-          "group": "navigation@4"
+          "group": "navigation@2"
         },
         {
           "command": "runtrol.startConfiguredSession",
@@ -778,19 +778,19 @@
         {
           "command": "runtrol.arrangeConversationGrid",
           "when": "view == runtrol.sessions",
-          "group": "navigation@5"
+          "group": "2_layout@1"
         },
         {
           "command": "runtrol.explainListing",
           "when": "view == runtrol.sessions && runtrol.listingIncomplete",
-          "group": "navigation@6"
+          "group": "3_info@1"
         }
       ],
       "view/item/context": [
         {
           "command": "runtrol.fixService",
           "group": "inline@1",
-          "when": "view == runtrol.sessions && viewItem == runtrol.serviceProblem"
+          "when": "view == runtrol.usage && viewItem == runtrol.usageProblem"
         },
         {
           "command": "runtrol.newConversationInProject",

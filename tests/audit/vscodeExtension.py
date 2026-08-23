@@ -49,8 +49,12 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
         ),
         None,
     ) if isinstance(runtrol_views, list) else None
-    if not isinstance(usage_view, dict) or usage_view.get("visibility") != "visible":
-        found.append("every connected CLI's usage must be expanded at the bottom of the Runtrol sidebar")
+    if (
+        not isinstance(usage_view, dict)
+        or usage_view.get("visibility") != "visible"
+        or usage_view.get("name") != "CLI Status & Usage"
+    ):
+        found.append("every installed CLI's status and usage must be expanded at the bottom of the Runtrol sidebar")
     welcome_entries = contributes.get("viewsWelcome") if isinstance(contributes, dict) else None
     welcomes = welcome_entries if isinstance(welcome_entries, list) else []
     has_ready_welcome = any(
@@ -77,8 +81,26 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
     if not has_ready_welcome or not has_missing_welcome or not has_verifying_welcome:
         found.append("the empty sidebar must distinguish usable, verifying, and absent coding-agent CLIs")
     menus = contributes.get("menus") if isinstance(contributes, dict) else None
+    title_entries = menus.get("view/title") if isinstance(menus, dict) else None
+    title_commands = {
+        entry.get("command")
+        for entry in title_entries
+        if isinstance(entry, dict)
+        and "view == runtrol.sessions" in str(entry.get("when", ""))
+        and str(entry.get("group", "")).startswith("navigation")
+    } if isinstance(title_entries, list) else set()
+    if title_commands != {"runtrol.startSession", "runtrol.createProject", "runtrol.switchSession"}:
+        found.append("the Conversations title bar must keep exactly its three frequent actions visible")
     item_context = menus.get("view/item/context") if isinstance(menus, dict) else None
     winner_entries = item_context if isinstance(item_context, list) else []
+    usage_problem_entry = any(
+        isinstance(entry, dict)
+        and entry.get("command") == "runtrol.fixService"
+        and entry.get("when") == "view == runtrol.usage && viewItem == runtrol.usageProblem"
+        for entry in winner_entries
+    )
+    if not usage_problem_entry:
+        found.append("an unavailable installed CLI must expose its fix in the fixed status and usage area")
     winner_task_when = (
         "view == runtrol.missions && viewItem =~ "
         "/^runtrol\\.missionTask\\.passed(\\.session)?\\.chooseOne\\.integrating$/"
@@ -253,12 +275,10 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
         ],
         "trees.ts": [
             "conversation.serviceName",
-            'command: "runtrol.fixService"',
             'this.state.discoveryNotice',
             '"runtrol.hasUsableProvider"',
             '"runtrol.isVerifyingProvider"',
             "awaitsVerification",
-            "fixes available",
         ],
         "webview/main.ts": [
             "MAX_VISIBLE_ITEMS",
@@ -272,10 +292,18 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
         "usageTree.ts": [
             "this.accessibilityInformation",
             "`${row.name}, ${row.detail}`",
+            'command: "runtrol.fixService"',
+            '"runtrol.usageProblem"',
+            "fixes available",
+            "private gauges:",
+            '"Usage refresh failed. Showing the last report."',
         ],
         "usageDisplay.ts": [
-            "providers.filter(isUsable)",
+            'provider.installation.state !== "missing"',
             'detail: "No report yet"',
+            'detail: "Checking"',
+            'detail: "Unavailable · Fix"',
+            'detail: `Disconnected · ${usageDetail(gauge, nowMs)}`',
         ],
         "serializedWatch.ts": [
             "private active: AbortController",
@@ -484,7 +512,7 @@ def selftest() -> int:
             "viewsContainers": {"activitybar": []},
             "views": {
                 "runtrol": [
-                    {"id": "runtrol.usage", "name": "CLI Usage", "visibility": "visible"}
+                    {"id": "runtrol.usage", "name": "CLI Status & Usage", "visibility": "visible"}
                 ]
             },
             "viewsWelcome": [
@@ -509,7 +537,28 @@ def selftest() -> int:
                 {"command": "runtrol.cancelMissionSchedule"},
             ],
             "menus": {
+                "view/title": [
+                    {
+                        "command": "runtrol.startSession",
+                        "when": "view == runtrol.sessions",
+                        "group": "navigation@0",
+                    },
+                    {
+                        "command": "runtrol.createProject",
+                        "when": "view == runtrol.sessions",
+                        "group": "navigation@1",
+                    },
+                    {
+                        "command": "runtrol.switchSession",
+                        "when": "view == runtrol.sessions",
+                        "group": "navigation@2",
+                    },
+                ],
                 "view/item/context": [
+                    {
+                        "command": "runtrol.fixService",
+                        "when": "view == runtrol.usage && viewItem == runtrol.usageProblem",
+                    },
                     {
                         "command": "runtrol.reviewMissionLanding",
                         "when": "view == runtrol.missions && viewItem == runtrol.mission.integrating.chooseOne",
@@ -580,11 +629,19 @@ def selftest() -> int:
             'names(unavailable, "unavailable for")'
         ),
         "trees.ts": (
-            'conversation.serviceName command: "runtrol.fixService" this.state.discoveryNotice '
-            '"runtrol.hasUsableProvider" "runtrol.isVerifyingProvider" awaitsVerification fixes available'
+            'conversation.serviceName this.state.discoveryNotice '
+            '"runtrol.hasUsableProvider" "runtrol.isVerifyingProvider" awaitsVerification'
         ),
-        "usageTree.ts": 'this.accessibilityInformation `${row.name}, ${row.detail}`',
-        "usageDisplay.ts": 'providers.filter(isUsable) detail: "No report yet"',
+        "usageTree.ts": (
+            'this.accessibilityInformation `${row.name}, ${row.detail}` '
+            'command: "runtrol.fixService" "runtrol.usageProblem" fixes available '
+            'private gauges: "Usage refresh failed. Showing the last report."'
+        ),
+        "usageDisplay.ts": (
+            'provider.installation.state !== "missing" detail: "No report yet" '
+            'detail: "Checking" detail: "Unavailable · Fix" '
+            'detail: `Disconnected · ${usageDetail(gauge, nowMs)}`'
+        ),
         "serializedWatch.ts": (
             "private active: AbortController; const previous = this.tail; "
             "const current = previous.then; this.active?.abort()"
@@ -679,6 +736,18 @@ def selftest() -> int:
 
     hidden_usage = json.loads(json.dumps(package))
     hidden_usage["contributes"]["views"]["runtrol"][0]["visibility"] = "collapsed"
+    missing_usage_fix = json.loads(json.dumps(package))
+    missing_usage_fix["contributes"]["menus"]["view/item/context"] = [
+        entry
+        for entry in missing_usage_fix["contributes"]["menus"]["view/item/context"]
+        if entry.get("command") != "runtrol.fixService"
+    ]
+    cluttered_toolbar = json.loads(json.dumps(package))
+    cluttered_toolbar["contributes"]["menus"]["view/title"].append({
+        "command": "runtrol.arrangeConversationGrid",
+        "when": "view == runtrol.sessions",
+        "group": "navigation@3",
+    })
     merged_welcomes = json.loads(json.dumps(package))
     merged_welcomes["contributes"]["viewsWelcome"] = [
         {
@@ -689,6 +758,8 @@ def selftest() -> int:
     mutations = [
         ({**package, "dependencies": {"some-runtime": "1"}}, sources),
         (hidden_usage, sources),
+        (missing_usage_fix, sources),
+        (cluttered_toolbar, sources),
         (merged_welcomes, sources),
         ({**package, "activationEvents": []}, sources),
         ({**package, "contributes": {"viewsContainers": {"activitybar": []}}}, sources),
@@ -717,8 +788,9 @@ def selftest() -> int:
             },
         ),
         (package, {**sources, "usageTree.ts": sources["usageTree.ts"].replace("accessibilityInformation", "")}),
+        (package, {**sources, "usageTree.ts": sources["usageTree.ts"].replace("Usage refresh failed", "")}),
         (package, {**sources, "stateRows.ts": sources["stateRows.ts"].replace("discoveryNotice", "")}),
-        (package, {**sources, "trees.ts": sources["trees.ts"].replace('command: "runtrol.fixService"', "")}),
+        (package, {**sources, "usageTree.ts": sources["usageTree.ts"].replace('command: "runtrol.fixService"', "")}),
         (package, {**sources, "trees.ts": sources["trees.ts"] + " view.description"}),
         (
             package,

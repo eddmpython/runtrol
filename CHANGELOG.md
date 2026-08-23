@@ -10,6 +10,14 @@ and refactoring that no user can observe do not belong here.
 
 ## [Unreleased]
 
+### Fixed
+
+- The fixed sidebar area now shows every installed coding-agent CLI's operational state and usage together. A service
+  being checked remains visible, an unavailable service exposes its own fix action there, a failed refresh admits that
+  the retained report is old, and the Conversations tree contains only projects and actual conversations.
+- The Conversations title bar now keeps only New Conversation, Create Project, and Switch Conversation visible, so
+  the title and list retain their reading width while less frequent actions remain in the overflow and Command Palette.
+
 ## [0.1.14] - 2026-08-23
 
 ### Fixed

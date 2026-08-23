@@ -1,6 +1,8 @@
 import type { ProviderLine, ProviderUsageGauge, ProviderUsageWindow } from "./runtimeTypes";
-import { isUsable } from "./providerHealth";
+import { awaitsVerification, isBroken } from "./providerHealth";
 import { providerDisplayName, providerIcon } from "./sessionDisplay";
+
+export type UsageState = "available" | "checking" | "unavailable" | "disconnected";
 
 /// One line of the usage strip, ready to draw.
 export type UsageRow = {
@@ -14,19 +16,26 @@ export type UsageRow = {
   readonly detail: string;
   /// Whether a limit is blocking right now, which decides the row's colour.
   readonly reached: boolean;
+  /// The service's operational state. Usage is not allowed to hide a service that cannot currently run.
+  readonly state: UsageState;
+  /// The provider record carried by an actionable unavailable row.
+  readonly provider: ProviderLine | null;
   /// The whole position for the hover, sentence by sentence.
   readonly tooltip: string;
 };
 
-/// The strip's rows. Every usable CLI is present even before its first report, followed by any gauge whose
-/// provider has disappeared from the latest inventory so a last known limit does not vanish silently.
+/// The strip's rows. Every installed CLI is present, including one still being checked or one that needs a fix.
+/// Missing CLIs stay absent. A last report whose provider disappeared remains as explicitly disconnected so a
+/// known limit never silently becomes a healthy-looking omission.
 export function usageRows(
   gauges: readonly ProviderUsageGauge[],
   providers: readonly ProviderLine[],
   nowMs: number,
 ): UsageRow[] {
   const byProvider = new Map(gauges.map((gauge) => [gauge.providerId, gauge]));
-  const providerIds = providers.filter(isUsable).map((provider) => provider.providerId);
+  const installed = providers.filter((provider) => provider.installation.state !== "missing");
+  const providerIds = installed.map((provider) => provider.providerId);
+  const providersById = new Map(installed.map((provider) => [provider.providerId, provider]));
   const seen = new Set(providerIds);
   for (const gauge of gauges) {
     if (seen.has(gauge.providerId)) continue;
@@ -35,7 +44,45 @@ export function usageRows(
   }
   return providerIds.map((providerId) => {
     const gauge = byProvider.get(providerId);
+    const provider = providersById.get(providerId) ?? null;
     const name = providerDisplayName(providerId, providers);
+    if (provider && awaitsVerification(provider)) {
+      return {
+        key: `usage:${encodeURIComponent(providerId)}`,
+        name,
+        icon: providerIcon(providerId, providers),
+        detail: "Checking",
+        reached: false,
+        state: "checking",
+        provider,
+        tooltip: `${name}: checking the installed CLI`,
+      };
+    }
+    if (provider && isBroken(provider)) {
+      const why = provider.installation.why ?? `${name} cannot currently start a conversation.`;
+      return {
+        key: `usage:${encodeURIComponent(providerId)}`,
+        name,
+        icon: providerIcon(providerId, providers),
+        detail: "Unavailable · Fix",
+        reached: false,
+        state: "unavailable",
+        provider,
+        tooltip: `${why}\n\nPress Enter for this service's fixes.`,
+      };
+    }
+    if (!provider && gauge) {
+      return {
+        key: `usage:${encodeURIComponent(providerId)}`,
+        name,
+        icon: providerIcon(providerId, providers),
+        detail: `Disconnected · ${usageDetail(gauge, nowMs)}`,
+        reached: gauge.reached,
+        state: "disconnected",
+        provider: null,
+        tooltip: `${name}: disconnected; this is the last report\n${usageTooltip(name, gauge, nowMs)}`,
+      };
+    }
     if (!gauge) {
       return {
         key: `usage:${encodeURIComponent(providerId)}`,
@@ -43,6 +90,8 @@ export function usageRows(
         icon: providerIcon(providerId, providers),
         detail: "No report yet",
         reached: false,
+        state: "available",
+        provider,
         tooltip: `${name}: no usage report yet`,
       };
     }
@@ -52,6 +101,8 @@ export function usageRows(
       icon: providerIcon(providerId, providers),
       detail: usageDetail(gauge, nowMs),
       reached: gauge.reached,
+      state: "available",
+      provider,
       tooltip: usageTooltip(name, gauge, nowMs),
     };
   });

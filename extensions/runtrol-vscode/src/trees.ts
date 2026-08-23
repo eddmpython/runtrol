@@ -11,8 +11,7 @@ import {
 } from "./conversationList";
 import { ConversationDecorations, conversationUri } from "./conversationDecorations";
 import type { ProjectRecord } from "./projects";
-import { awaitsVerification, isBroken, isUsable } from "./providerHealth";
-import type { ProviderLine } from "./runtimeTypes";
+import { awaitsVerification, isUsable } from "./providerHealth";
 import { RuntimeState } from "./state";
 
 /// One conversation, as one row.
@@ -39,33 +38,6 @@ export class ConversationItem extends vscode.TreeItem {
       // The icon carries the service visually, so its name belongs here for readers that cannot see the icon.
       // The description already contains state and time; repeating a second state word makes the row harder to scan.
       label: `${conversation.title}, ${conversation.serviceName}, ${this.description}`,
-    };
-  }
-}
-
-/// The one row that is not a conversation, shown only when something is actually wrong.
-///
-/// A coding service that is simply not installed is not a problem and gets no row. Discovery decides what exists,
-/// and a list of things the reader does not have is not a list they asked for.
-export class ServiceProblemItem extends vscode.TreeItem {
-  constructor(readonly provider: ProviderLine) {
-    super(`${provider.displayName} needs attention`, vscode.TreeItemCollapsibleState.None);
-    this.id = `runtrol.problem.${encodeURIComponent(provider.providerId)}`;
-    this.description = "Unavailable · Fix";
-    const why = provider.installation.why ?? `${provider.displayName} cannot currently start a conversation.`;
-    this.tooltip = `${why}\n\nPress Enter for this service's fixes.`;
-    this.contextValue = "runtrol.serviceProblem";
-    this.iconPath = new vscode.ThemeIcon(
-      "warning",
-      new vscode.ThemeColor("problemsWarningIcon.foreground"),
-    );
-    this.command = {
-      command: "runtrol.fixService",
-      title: "Fix coding service",
-      arguments: [this],
-    };
-    this.accessibilityInformation = {
-      label: `${provider.displayName}, unavailable, fixes available`,
     };
   }
 }
@@ -116,7 +88,7 @@ function projectContextValue(group: ProjectGroup): string {
   return `runtrol.project.${group.kind}${group.current ? ".current" : ""}`;
 }
 
-export type ChatTreeItem = ConversationItem | ServiceProblemItem | ProjectItem;
+export type ChatTreeItem = ConversationItem | ProjectItem;
 
 /// Where the tree learns which projects the operator has created, without owning their storage.
 export type ProjectsPort = {
@@ -435,15 +407,12 @@ export class ConversationsTree implements vscode.TreeDataProvider<ChatTreeItem>,
     const groups = projects(records, rows, this.openWorkspaces());
     // Beneath the headings, not under one. A conversation started with no project is still a conversation.
     const unfiled = loose(rows).map((row) => new ConversationItem(row, nowMs));
-    const problems = this.state.providers
-      .filter(isBroken)
-      .map((provider) => new ServiceProblemItem(provider));
     const parents = new Map<string, ProjectItem>();
     const grouped = new Map<string, readonly Conversation[]>();
 
     if (groups.length === 0 && unfiled.length === 0) {
       // No conversations at all, filed or otherwise. The welcome content covers that case.
-      this.items = [...problems];
+      this.items = [];
       this.flat = [];
       this.parents = parents;
       this.grouped = grouped;
@@ -461,7 +430,7 @@ export class ConversationsTree implements vscode.TreeDataProvider<ChatTreeItem>,
         parents.set(row.key, heading);
       }
     }
-    this.items = [...headings, ...unfiled, ...problems];
+    this.items = [...headings, ...unfiled];
     // The loose rows are top-level items, so revealing one resolves against these exact objects.
     this.flat = unfiled;
     this.parents = parents;
