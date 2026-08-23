@@ -1018,7 +1018,7 @@ async fn get_provider_capabilities(
     let discovered = tokio::time::timeout(
         Duration::from_millis(crate::serve::MODEL_PREPARATION_BUDGET_MS),
         async {
-            let _lane = discovering.lane(provider_id).lock_owned().await;
+            let _lane = discovering.lane(provider_id).await.lock_owned().await;
             crate::provider_prepare::driver(composed, provider_id).await
         },
     )
@@ -1126,7 +1126,7 @@ async fn list_models(
     let discovered = tokio::time::timeout(
         Duration::from_millis(crate::serve::MODEL_PREPARATION_BUDGET_MS),
         async {
-            let _lane = discovering.lane(provider_id).lock_owned().await;
+            let _lane = discovering.lane(provider_id).await.lock_owned().await;
             let prepared = crate::provider_prepare::prepared_driver(composed, provider_id)
                 .await
                 .map_err(|_| ())?;
@@ -1225,7 +1225,7 @@ async fn list_native_sessions(
             // folder's conversations arrived after 13~17 s serialized, ~1.2 s not). Concurrency of the listing
             // children is bounded by the semaphore below instead.
             let prepared = {
-                let _lane = discovering.lane(provider).lock_owned().await;
+                let _lane = discovering.lane(provider).await.lock_owned().await;
                 crate::provider_prepare::prepared_driver(composed, provider)
                     .await
                     .map_err(|_| NativeDiscoveryFailure::Provider)?
@@ -1791,7 +1791,7 @@ async fn delete_native_session(
     let prepared = tokio::time::timeout(
         Duration::from_millis(crate::serve::MODEL_PREPARATION_BUDGET_MS),
         async {
-            let _lane = discovering.lane(provider).lock_owned().await;
+            let _lane = discovering.lane(provider).await.lock_owned().await;
             crate::provider_prepare::driver(composed, provider).await
         },
     )
@@ -2298,7 +2298,7 @@ async fn perform_runtime_open(
         None => return control_failure(id, RuntimeControlFailure::outcome_unknown()),
     };
     let prepared = {
-        let _lane = discovering.lane(provider).lock_owned().await;
+        let _lane = discovering.lane(provider).await.lock_owned().await;
         crate::provider_prepare::prepared_driver(composed, provider).await
     };
     let Ok(prepared) = prepared else {

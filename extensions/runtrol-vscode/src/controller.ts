@@ -459,9 +459,18 @@ export class Controller implements vscode.Disposable {
     reveal: boolean,
     afterApplied: () => void = () => undefined,
   ): Promise<void> {
+    const target = this.resolve(value);
+    const session = "key" in target ? target.session : target;
+    if (session?.hot) {
+      // A running conversation already has a Runtime identity and a bound provider. Native catalogue discovery
+      // cannot change that selection, so aborting and restarting every provider listing here only competes with
+      // the Webview and event-watch handshake the person is waiting for. Keep that background work intact.
+      await this.applySelection(target, reveal, afterApplied);
+      return;
+    }
     const pausedDiscoveries = this.beginForegroundAction();
     try {
-      await this.applySelection(value, reveal, afterApplied);
+      await this.applySelection(target, reveal, afterApplied);
     } finally {
       this.endForegroundAction(pausedDiscoveries);
     }

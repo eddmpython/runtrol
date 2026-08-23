@@ -63,7 +63,7 @@ pub(crate) async fn inspect_all(
         // One lane at a time, taken as the loop reaches each provider: the hourly inspection never
         // blocks a person's preparation of every other provider, and never probes one concurrently
         // with them either.
-        let _lane = discovering.lane(provider.id()).lock_owned().await;
+        let _lane = discovering.lane(provider.id()).await.lock_owned().await;
         let line = match &npm {
             Ok(npm) => inspect_one(composed, npm, provider.id()).await,
             Err(error) => unavailable(

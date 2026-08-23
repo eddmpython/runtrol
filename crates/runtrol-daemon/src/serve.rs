@@ -112,7 +112,8 @@ pub(crate) const NATIVE_LISTING_SLOTS: usize = 4;
 /// 2026-08-19, the conversations of a folder just opened into a live window took 13~17 seconds to arrive, and
 /// ~1.2 seconds once the queueing was out of the way.
 pub(crate) struct DiscoveryGates {
-    lanes: BTreeMap<ProviderId, Arc<tokio::sync::Mutex<()>>>,
+    known: Box<[ProviderId]>,
+    lanes: tokio::sync::Mutex<BTreeMap<ProviderId, std::sync::Weak<tokio::sync::Mutex<()>>>>,
     /// The one lane for identities outside the registry, so an unknown provider still has exactly one.
     unknown: Arc<tokio::sync::Mutex<()>>,
     pub(crate) listing: tokio::sync::Semaphore,
@@ -120,22 +121,31 @@ pub(crate) struct DiscoveryGates {
 
 impl DiscoveryGates {
     pub(crate) fn new(registry: &runtrol_core::registry::ProviderRegistry) -> Self {
+        let mut known = registry
+            .all()
+            .map(runtrol_core::registry::Provider::id)
+            .collect::<Vec<_>>();
+        known.sort_unstable();
         Self {
-            lanes: registry
-                .all()
-                .map(|provider| (provider.id(), Arc::new(tokio::sync::Mutex::new(()))))
-                .collect(),
+            known: known.into_boxed_slice(),
+            lanes: tokio::sync::Mutex::new(BTreeMap::new()),
             unknown: Arc::new(tokio::sync::Mutex::new(())),
             listing: tokio::sync::Semaphore::new(NATIVE_LISTING_SLOTS),
         }
     }
 
     /// This provider's preparation lane.
-    pub(crate) fn lane(&self, provider: ProviderId) -> Arc<tokio::sync::Mutex<()>> {
-        self.lanes
-            .get(&provider)
-            .cloned()
-            .unwrap_or_else(|| Arc::clone(&self.unknown))
+    pub(crate) async fn lane(&self, provider: ProviderId) -> Arc<tokio::sync::Mutex<()>> {
+        if self.known.binary_search(&provider).is_err() {
+            return Arc::clone(&self.unknown);
+        }
+        let mut lanes = self.lanes.lock().await;
+        if let Some(lane) = lanes.get(&provider).and_then(std::sync::Weak::upgrade) {
+            return lane;
+        }
+        let lane = Arc::new(tokio::sync::Mutex::new(()));
+        lanes.insert(provider, Arc::downgrade(&lane));
+        lane
     }
 }
 
@@ -167,7 +177,7 @@ async fn prewarm_providers(composed: Arc<Composed>, discovering: Arc<DiscoveryGa
                 // warm-up changes nothing the next real request cannot do itself.
                 return;
             };
-            let _lane = discovering.lane(provider).lock_owned().await;
+            let _lane = discovering.lane(provider).await.lock_owned().await;
             // ok: an absent or refusing CLI is a normal first answer here, not a condition to act on. The
             // next real request for this provider reports the same outcome to the person who asked for it,
             // through the path that owns that conversation.
@@ -515,7 +525,7 @@ async fn automatic_provider_updates(
                 }
             }
 
-            let _gate = discovering.lane(provider).lock_owned().await;
+            let _gate = discovering.lane(provider).await.lock_owned().await;
             let (answered, hearing) = oneshot::channel();
             if reserving
                 .send(ReservationAsked::ReserveProviderUpdate { provider, answered })
@@ -1985,7 +1995,7 @@ async fn converse_inner(
         // here: the inspection takes each provider's lane itself as it reaches it.
         let mut preparation_gate = Vec::new();
         for provider in preparation_providers(&request, &composed.registry) {
-            preparation_gate.push(discovering.lane(provider).lock_owned().await);
+            preparation_gate.push(discovering.lane(provider).await.lock_owned().await);
         }
         let reserved_session = reservation
             .as_ref()
@@ -2560,24 +2570,28 @@ mod tests {
         let composed = crate::Composed::for_tests(home, runtrol_drivers::builtin())
             .expect("a fresh home composes");
         let gates = DiscoveryGates::new(&composed.registry);
+        assert!(
+            gates.lanes.lock().await.is_empty(),
+            "provider lanes stay allocation-free until preparation actually starts"
+        );
 
         let claude = runtrol_provider::ProviderId::parse("claude").expect("a builtin provider");
         let codex = runtrol_provider::ProviderId::parse("codex").expect("a builtin provider");
-        let held = gates.lane(claude).lock_owned().await;
+        let held = gates.lane(claude).await.lock_owned().await;
         assert!(
-            gates.lane(codex).try_lock_owned().is_ok(),
+            gates.lane(codex).await.try_lock_owned().is_ok(),
             "another provider's preparation must not queue behind this one"
         );
         assert!(
-            gates.lane(claude).try_lock_owned().is_err(),
+            gates.lane(claude).await.try_lock_owned().is_err(),
             "the same provider's second preparation must wait for the first"
         );
         drop(held);
 
         let unknown = runtrol_provider::ProviderId::parse("nobody-ships-this").expect("parses");
-        let held_unknown = gates.lane(unknown).lock_owned().await;
+        let held_unknown = gates.lane(unknown).await.lock_owned().await;
         assert!(
-            gates.lane(unknown).try_lock_owned().is_err(),
+            gates.lane(unknown).await.try_lock_owned().is_err(),
             "identities outside the registry still share exactly one lane"
         );
         drop(held_unknown);

@@ -323,6 +323,15 @@ def warmIdleDaemon(binary: Path, environment: dict[str, str], workspace: Path) -
     time.sleep(0.25)
 
 
+def finishBackgroundPreparation(binary: Path, environment: dict[str, str]) -> None:
+    """Serialize with startup preparation without opening or cooling a provider process."""
+    acp.command(binary, environment, ["models", acp.PROVIDER])
+    # The public request takes the same provider lane as automatic startup preparation. If it reached the lane first,
+    # give the already-scheduled background task one bounded turn to consume the prepared-driver memo and exit. This
+    # keeps fixed startup code pages in the baseline instead of misclassifying a readiness race as session storage.
+    time.sleep(0.25)
+
+
 def exerciseHotSet(binary: Path, fixture: Path) -> Evidence:
     """Measure the exact eight-session hot admission ceiling without conversation payloads."""
     with tempfile.TemporaryDirectory(prefix="runtrol-hot-set-memory-") as raw_home:
@@ -336,6 +345,11 @@ def exerciseHotSet(binary: Path, fixture: Path) -> Evidence:
             warm_workspace.mkdir()
             if sys.platform.startswith("linux"):
                 warmIdleDaemon(binary, environment, warm_workspace)
+            elif sys.platform == "win32":
+                # Closing a warm-up session calls EmptyWorkingSet on Windows, making the baseline artificially colder
+                # than the first real session. A models request synchronizes the same preparation lane without that
+                # cleanup boundary, so this measurement isolates the eight sessions it claims to measure.
+                finishBackgroundPreparation(binary, environment)
             baseline = sample(daemon.pid, 0.5)
             peak = baseline
             for index in range(HOT_SESSIONS):

@@ -446,10 +446,6 @@ jobs:
         run: python -X utf8 tests/audit/resilienceFaultInjection.py
       - name: 독립 ACP 구현 설치
         run: npm install --global --allow-scripts=opencode-ai opencode-ai@1.2.27
-      # Every provider compiled into the build has to exist here, or the model-detection gate refuses a run it
-      # cannot make complete. Adding a built-in manifest without adding its CLI is what made that gate red.
-      - name: 두 번째 독립 ACP 구현 설치
-        run: npm install --global --allow-scripts=cline cline@3.0.55
       - name: 독립 ACP 구현 게이트 자체 검증
         run: python -X utf8 tests/audit/externalAcpSmoke.py --selftest
       - name: 독립 설치 ACP 구현의 두 턴과 native load
@@ -488,6 +484,10 @@ jobs:
             echo "$HOME/.grok/bin" >> "$GITHUB_PATH"
           fi
           "$HOME/.grok/bin/grok" --version
+      # Install this immediately before the complete model probe. A later global npm install has occasionally
+      # removed an earlier global shim on hosted macOS even though npm reported both steps as successful.
+      - name: 실물 Cline 고정 판본 설치
+        run: npm install --global --allow-scripts=cline cline@3.0.55
       - name: 고정 판본 credential-free 모델 fixture 준비
         env:
           CODEX_HOME: ${{ runner.temp }}/runtrol-pinned-model-detection-codex

@@ -72,7 +72,9 @@ impl ReplayRing {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            entries: VecDeque::with_capacity(RING_FRAMES),
+            // Most idle sessions hold only their attach frame. Grow with actual reconnect evidence instead of
+            // reserving the complete 64-frame ceiling for every hot process before there is anything to replay.
+            entries: VecDeque::new(),
             bytes: 0,
         }
     }

@@ -58,9 +58,10 @@ pub const MAX_LINE: usize = 16 * 1024 * 1024;
 
 /// How much of the child's output the reader holds between lines.
 ///
-/// Constant, whatever the lines turn out to be. Chosen against the measured distribution: it holds the 99th
-/// percentile line whole, and anything larger is a transient allocation rather than a permanent one.
-pub const READ_BUFFER: usize = 64 * 1024;
+/// Constant, whatever the lines turn out to be. Thirty-two KiB keeps nearly all ordinary protocol frames in one
+/// read while leaving the measured long tail as a transient line allocation rather than charging every hot session
+/// for it. The line bound remains independent at sixteen MiB, so this changes read batching rather than acceptance.
+pub const READ_BUFFER: usize = 32 * 1024;
 
 /// A line could not be read.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
