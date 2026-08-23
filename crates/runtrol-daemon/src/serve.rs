@@ -139,7 +139,7 @@ impl DiscoveryGates {
     }
 }
 
-/// Meet every usable provider once, in the background, the moment the daemon is up.
+/// Meet every installed and usable provider once, in the background, the moment the daemon is up.
 ///
 /// A cold first meeting costs one CLI start of waiting (measured 2026-08-20: ~1.5 s for the Node-based
 /// CLIs, with the probe's two questions already asked concurrently), and without this the person pays it
@@ -153,11 +153,9 @@ async fn prewarm_providers(composed: Arc<Composed>, discovering: Arc<DiscoveryGa
     // first request arrives, making that request slower than the cold it hides. A racing real request
     // still wins overall: it queues on its provider's lane and rides the same preparation.
     let gentle = Arc::new(tokio::sync::Semaphore::new(2));
-    let providers: Vec<ProviderId> = composed
-        .registry
-        .usable()
-        .map(runtrol_core::registry::Provider::id)
-        .collect();
+    let providers = providers_to_prewarm(&composed.registry, |manifest| {
+        runtrol_core::locate(manifest).is_ok()
+    });
     let mut meetings = JoinSet::new();
     for provider in providers {
         let composed = Arc::clone(&composed);
@@ -182,6 +180,22 @@ async fn prewarm_providers(composed: Arc<Composed>, discovering: Arc<DiscoveryGa
     // warm-up exists to keep ready, so real session cleanup remains its release boundary there.
     #[cfg(not(windows))]
     runtrol_childproc::footprint::release_unused_memory();
+}
+
+/// Select only services with an executable on this machine for startup preparation.
+///
+/// The registry also carries installable catalogue entries so the sidebar can offer them. A known driver does not
+/// make an absent program worth probing: creating preparation tasks for every catalogue entry made a no-client
+/// daemon retain their startup allocations and delayed allocator relief beyond the idle-memory measurement.
+fn providers_to_prewarm(
+    registry: &runtrol_core::registry::ProviderRegistry,
+    mut installed: impl FnMut(&runtrol_provider::Manifest) -> bool,
+) -> Vec<ProviderId> {
+    registry
+        .usable()
+        .filter(|provider| installed(&provider.manifest))
+        .map(runtrol_core::registry::Provider::id)
+        .collect()
 }
 
 /// Delay before the first automatic provider update check, outside activation and idle measurement windows.
@@ -2568,6 +2582,26 @@ mod tests {
         );
         drop(held_unknown);
 
+        drop(composed);
+        std::fs::remove_dir_all(&scratch).expect("remove the scratch home");
+    }
+
+    #[test]
+    fn startup_preparation_excludes_catalogue_entries_without_an_executable() {
+        let scratch =
+            std::env::temp_dir().join(format!("runtrol-prewarm-selection-{}", std::process::id()));
+        if scratch.exists() {
+            std::fs::remove_dir_all(&scratch).expect("clear the previous run");
+        }
+        std::fs::create_dir(&scratch).expect("create the scratch home");
+        let home = scratch.to_str().expect("UTF-8 scratch path");
+        let composed = crate::Composed::for_tests(home, runtrol_drivers::builtin())
+            .expect("a fresh home composes");
+        let chosen = runtrol_provider::ProviderId::parse("codex").expect("a builtin provider");
+
+        let selected = providers_to_prewarm(&composed.registry, |manifest| manifest.id == chosen);
+
+        assert_eq!(selected, vec![chosen]);
         drop(composed);
         std::fs::remove_dir_all(&scratch).expect("remove the scratch home");
     }

@@ -25,6 +25,8 @@ and refactoring that no user can observe do not belong here.
 
 ### Fixed
 
+- Startup preparation now meets only coding services whose executable is installed. Missing entries from the service
+  catalogue remain discoverable in the sidebar without creating background probe tasks or extending idle memory use.
 - Clicking another saved chat in the same project now cools an idle provider process and switches immediately while
   preserving both conversations. A response that is genuinely still running gets only the explicit choices to stop
   and switch or keep both working, replacing the internal writer-overlap warning.
