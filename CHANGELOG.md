@@ -10,6 +10,20 @@ and refactoring that no user can observe do not belong here.
 
 ## [Unreleased]
 
+## [0.1.14] - 2026-08-23
+
+### Fixed
+
+- The machine-wide Conversations view no longer carries the current folder as a title qualifier. Every project remains
+  a top-level sibling, and incomplete provider history is identified by service directly above the list instead of
+  hiding that fact behind an information action.
+- Every conversation row now contains an explicit state and time, including `Cannot reopen`, live `now`, and stopped
+  `time unknown` states. A broken installed service exposes its provider-owned fix action directly from the row, while
+  empty states distinguish a usable CLI, an executable still being checked, and a machine with no usable CLI.
+- Screen readers now receive the provider represented by each conversation icon and the complete CLI usage row without
+  duplicate state announcements. Composer choice lists expose expansion and active-option state, and Escape restores
+  focus to the chip that opened a menu.
+
 ## [0.1.13] - 2026-08-23
 
 ### Fixed
