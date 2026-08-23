@@ -10,6 +10,8 @@ and refactoring that no user can observe do not belong here.
 
 ## [Unreleased]
 
+## [0.1.16] - 2026-08-24
+
 ### Changed
 
 - Rapid conversation switching no longer redraws the CLI status and usage tree when its visible and actionable state
