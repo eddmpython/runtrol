@@ -82,6 +82,53 @@ function documentation(node) {
   return `/** ${node.description.replaceAll("*/", "* /")} */\n`;
 }
 
+// The complete schema is a public documentation artifact. The SDK validator needs only the keywords it executes.
+// Keeping those two representations separate avoids allocating descriptions, root catalogue aliases, release
+// metadata, and other documentation on every Runtime client activation without weakening one wire check.
+const validationKeywords = new Set([
+  "$ref",
+  "additionalProperties",
+  "anyOf",
+  "const",
+  "enum",
+  "format",
+  "items",
+  "maximum",
+  "minimum",
+  "oneOf",
+  "properties",
+  "required",
+  "type",
+]);
+
+function compactValidationNode(node) {
+  if (Array.isArray(node)) return node.map(compactValidationNode);
+  if (!node || typeof node !== "object") return node;
+  return Object.fromEntries(
+    Object.entries(node)
+      .filter(([key]) => validationKeywords.has(key))
+      .map(([key, value]) => {
+        if (key === "properties") {
+          return [
+            key,
+            Object.fromEntries(
+              Object.entries(value).map(([name, child]) => [name, compactValidationNode(child)]),
+            ),
+          ];
+        }
+        return [key, compactValidationNode(value)];
+      }),
+  );
+}
+
+function compactValidationSchema(sourceDefinitions) {
+  return {
+    $defs: Object.fromEntries(
+      Object.entries(sourceDefinitions).map(([name, node]) => [name, compactValidationNode(node)]),
+    ),
+  };
+}
+
 const declarations = Object.entries(definitions).map(([name, node]) => {
   const docs = documentation(node);
   const plainObject = node && typeof node === "object" && !Array.isArray(node)
@@ -104,8 +151,9 @@ const generated = `// Generated from crates/runtrol-runtime-protocol/schema/runt
   + `export const FINALIZED_REVISIONS = ${JSON.stringify(revisions)} as const;\n`
   + `export const PUBLIC_LIMITS = ${JSON.stringify(limits, null, 2)} as const;\n\n`
   + `${declarations.join("\n\n")}\n`;
-const generatedSchemaText = "// Generated from crates/runtrol-runtime-protocol/schema/runtime.schema.json. Do not edit.\n\n"
-  + `export const PUBLIC_SCHEMA = ${JSON.stringify(schema)} as const;\n`;
+const validationSchema = compactValidationSchema(definitions);
+const generatedSchemaText = "// Generated validation projection. The complete public schema remains in schema/runtime.schema.json. Do not edit.\n\n"
+  + `export const VALIDATION_SCHEMA = ${JSON.stringify(validationSchema)} as const;\n`;
 
 async function compare(path, expected, label) {
   let actual;

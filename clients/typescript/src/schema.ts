@@ -1,7 +1,7 @@
 import { RuntimeProtocolError } from "./errors.js";
-import { PUBLIC_SCHEMA } from "./generated/schema.js";
+import { VALIDATION_SCHEMA } from "./generated/schema.js";
 
-const rootSchema = PUBLIC_SCHEMA as JsonSchema;
+const rootSchema = VALIDATION_SCHEMA as JsonSchema;
 
 type JsonSchema = boolean | {
   readonly $defs?: Readonly<Record<string, JsonSchema>>;
