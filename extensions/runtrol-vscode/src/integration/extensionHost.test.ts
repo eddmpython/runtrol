@@ -229,12 +229,12 @@ async function measureRestore(expected: string): Promise<{
   const view = (async () => {
     await within(
       vscode.commands.executeCommand("workbench.view.extension.runtrol"),
-      5_000,
+      EXTENSION_INITIALIZATION_HANG_TIMEOUT_MS,
       "opening the Runtrol view after reload",
     );
     await within(
       vscode.commands.executeCommand("runtrol.openConversation"),
-      5_000,
+      EXTENSION_INITIALIZATION_HANG_TIMEOUT_MS,
       "focusing the Runtrol Webview after reload",
     );
     await requireConversationEditor();

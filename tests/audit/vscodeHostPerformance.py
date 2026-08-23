@@ -59,6 +59,12 @@ preflight run exhausted the old guard before producing metrics. Three immediate 
 and the gate passed at 289.0 ms. This guard detects a stuck measurement; the unchanged field ratchets still
 decide whether a completed measurement is fast enough. Full preflight runs this gate pair before heat-producing
 gates so the ratchet measures the product rather than accumulated suite load.
+
+The reload surface hang guard moved from 5 to the existing 15 second initialization boundary on 2026-08-24.
+A hosted Windows trial completed the full first measurement, then scheduler pressure delayed only the second
+trial's Webview focus past five seconds. The short phase guard aborted the entire three-trial measurement before
+the unchanged reloadRestoreMs ratchet could distinguish that outlier. The longer guard still detects a stuck
+surface while allowing every completed trial to reach the ratchet that owns the performance decision.
 """
 
 from __future__ import annotations
