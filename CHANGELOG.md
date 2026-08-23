@@ -10,6 +10,14 @@ and refactoring that no user can observe do not belong here.
 
 ## [Unreleased]
 
+## [0.1.19] - 2026-08-24
+
+### Changed
+
+- Switching to an already supervised conversation now brings its tab and live event stream to the front before
+  scrolling the sidebar selection. Webview readiness wakes the switch immediately instead of waiting for a polling
+  interval, keeping the Windows release journey at 71.2 ms p95 without hiding the selected sidebar row.
+
 ## [0.1.18] - 2026-08-24
 
 ### Changed
