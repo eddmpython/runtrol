@@ -10,6 +10,18 @@ and refactoring that no user can observe do not belong here.
 
 ## [Unreleased]
 
+## [0.1.13] - 2026-08-23
+
+### Fixed
+
+- The Conversations sidebar now keeps every conversation-bearing folder as a top-level project sibling and omits
+  an empty open folder, so another repository can no longer appear nested beneath the current workspace.
+- Codex conversations without an explicit name now use the provider's own list preview as their visible title instead
+  of repeating the project folder and an identifier. Conversation rows contain only the provider icon, title, exact
+  running state, and time.
+- CLI Usage is expanded at the bottom of the Runtrol sidebar and lists every connected usable CLI immediately, including
+  an explicit `No report yet` state before a provider has supplied a usage gauge.
+
 ## [0.1.12] - 2026-08-23
 
 ### Changed
