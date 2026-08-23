@@ -46,8 +46,9 @@ charged to the daemon's RSS budget.
 |---|---:|---:|---:|
 | Idle debug RSS | 20 MiB | 20 MiB | 48 MiB |
 | Live debug RSS hard ceiling | 48 MiB | 48 MiB | 64 MiB |
+| Eight hot idle sessions, peak increase from baseline | 5 MiB | 5 MiB | 5 MiB |
 | One hot session plus four watchers, peak increase from baseline | 10 MiB | 10 MiB | 10 MiB |
-| Residual increase after the live journey | 4 MiB | 5 MiB | 4 MiB |
+| Residual increase after each live journey | 4 MiB | 6 MiB | 4 MiB |
 | Idle process CPU during a 10 second window | 100 ms | 100 ms | 100 ms |
 
 The Linux ceiling records the higher hosted debug measurement. The macOS residual allowance records measured
@@ -56,7 +57,9 @@ space-efficient policy. Its central supervised-command boundary restores the ope
 environment and removes private restart markers from every provider session and probe child. These numbers are
 regression ceilings, not estimates of object sizes.
 
-The live journey admits one 900 KiB provider event and delivers it completely to four real watchers. A separate
+The first live journey holds eight independent provider sessions hot and idle at once, proving the full admission
+set rather than extrapolating from one session. The payload journey admits one 900 KiB provider event and delivers
+it completely to four real watchers. A separate
 journey opens and closes three consecutive sessions whose provider emits a 15 MiB event. Each event is below the
 framing parser's input limit but above the live event limit, so every watcher receives an explicit lag boundary and
 the payload is not placed on the live wire.

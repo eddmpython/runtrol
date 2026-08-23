@@ -49,6 +49,11 @@ the old budget without the day's code. The final tree produced 201.4, 436.1, and
 best trial than HEAD. The new ceiling clears the unchanged worst by a fifth while the three-trial minimum
 continues to reject a repeatable product regression beyond the observed band.
 
+The drain-then-destroy streaming cancellation contract on 2026-08-23 removed that shift rather than widening around
+it. Three complete Windows trials produced 85.8, 83.5, and 89.5 ms with all 40 watch-and-paint switches complete, so
+the ratchet returned from 310 to 175 ms. This retains nearly twice the measured worst for hosted platform variance
+while refusing the earlier 220 to 256 ms band as a regression.
+
 The session-management hang guard moved from 20 to 30 seconds on 2026-08-22 after one cumulative full
 preflight run exhausted the old guard before producing metrics. Three immediate isolated trials all finished,
 and the gate passed at 289.0 ms. This guard detects a stuck measurement; the unchanged field ratchets still

@@ -292,7 +292,7 @@ GATES: dict[str, tuple[str, list[str]]] = {
         [*PY, f"{HOOKS}/liveMemoryBudget.py", "--selftest"],
     ),
     "liveMemoryBudget": (
-        "hot 세션과 구독자 4개 RSS 상한",
+        "8개 hot 세션과 구독자 4개 RSS 상한",
         [*PY, f"{HOOKS}/liveMemoryBudget.py"],
     ),
     "idleFootprintRatchetSelftest": (

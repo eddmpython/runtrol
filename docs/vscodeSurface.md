@@ -192,7 +192,12 @@ the original daemon and provider processes instead of making a versioned extensi
   error category and what discovery already knows: not signed in, not installed, or installed and failing. The exact
   command is placed in the operator's terminal unexecuted. Runtrol never runs it. Fetching and executing on somebody's
   behalf is refused, and an install button that installs is that refusal reversed under a friendlier label.
-- A hidden conversation pauses its watch at the last delivered cursor. Reopening waits for the new Webview document to become ready before replay continues.
+- A hidden conversation pauses its watch at the last delivered cursor. Its dedicated SDK transport drains written
+  bytes and destroys the unread side immediately, so rapid switching cannot strand a named-pipe slot. Reopening waits
+  for the new Webview document to become ready before bounded replay continues.
+- Conversation and sidebar activity watch handshakes share one foreground-priority gate. Only connection and
+  subscription setup is serialized; acknowledged streams remain concurrent, and retired promise cleanup is not on
+  the visible switch path.
 - An operator name is stored as bounded session metadata. Without one, the provider's own catalogue title is used
   when supplied and is refreshed after a native identity appears and after each turn settles. The project and
   runtime-discovered provider remain the fallback, and a short stable suffix appears only when titles collide.

@@ -1,8 +1,9 @@
-"""Gate: one hot session and four live watchers stay inside the daemon memory ceiling.
+"""Gate: the full hot set and one streamed session stay inside the daemon memory ceiling.
 
-The gate uses the external ACP fixture through a manifest, starts the real daemon, opens four real watch
-connections, and emits both an admitted 900 KiB provider event and three consecutive rejected 15 MiB events just
-below the parser's 16 MiB input bound. Every admitted watcher
+The gate uses the external ACP fixture through a manifest, starts the real daemon, first holds the complete eight
+hot-session admission set, then opens four real watch connections on an isolated daemon and emits both an admitted
+900 KiB provider event and three consecutive rejected 15 MiB events just below the parser's 16 MiB input bound.
+Every admitted watcher
 must receive the complete payload, every rejected watcher must receive an explicit lag boundary, and RSS is sampled
 from outside the daemon through the operating system. The provider child and watch clients are deliberately excluded
 from the daemon's budget.
@@ -34,6 +35,7 @@ MIB = 1024 * 1024
 # gets enough transient room for the 16 MiB provider input contract without weakening the 48 MiB ceiling elsewhere.
 HARD_CEILING = (64 if sys.platform.startswith("linux") else 48) * MIB
 HOT_INCREMENT = 10 * MIB
+HOT_SET_INCREMENT = 5 * MIB
 # Repeated hosted macOS journeys retained 5.02 to 5.30 MiB after every watch task and payload owner had exited. The
 # 6 MiB ceiling leaves less than one measured mebibyte for allocator variation without weakening the 4 MiB ratchet
 # elsewhere. The separate 10 MiB hot increment and 48 MiB hard ceiling remain unchanged.
@@ -43,6 +45,7 @@ RESIDUAL_WINDOW_SECONDS = 0.25
 REPLY_BYTES = 900 * 1024
 REJECTED_REPLY_BYTES = 15 * MIB
 WATCHERS = 4
+HOT_SESSIONS = 8
 
 
 class Failed(Exception):
@@ -75,6 +78,14 @@ def problems(evidence: Evidence, enforce_hot_increment: bool = True) -> list[str
         found.append(
             f"released watch memory leaves more than {RESIDUAL_INCREMENT // MIB} MiB resident"
         )
+    return found
+
+
+def hotSetProblems(evidence: Evidence) -> list[str]:
+    """Return defects in the complete hot-session admission set."""
+    found = problems(evidence, enforce_hot_increment=False)
+    if evidence.peak - evidence.baseline > HOT_SET_INCREMENT:
+        found.append("eight hot idle sessions add more than 5 MiB")
     return found
 
 
@@ -113,6 +124,13 @@ def selftest() -> int:
         if not problems(evidence):
             print(f"[liveMemoryBudget --selftest] FAIL. {name} escaped.", file=sys.stderr)
             return 2
+    hot_set_green = Evidence(baseline=12 * MIB, peak=15 * MIB, residual=13 * MIB)
+    if hotSetProblems(hot_set_green):
+        print("[liveMemoryBudget --selftest] FAIL. green hot-set fixture was rejected.", file=sys.stderr)
+        return 2
+    if not hotSetProblems(replace(hot_set_green, peak=hot_set_green.baseline + HOT_SET_INCREMENT + 1)):
+        print("[liveMemoryBudget --selftest] FAIL. hot-set growth escaped.", file=sys.stderr)
+        return 2
     admitted = [b"x" * REPLY_BYTES for _ in range(WATCHERS)]
     rejected = [b"watch lagged  reconnect after cursor" for _ in range(WATCHERS)]
     if watchProblems(admitted, REPLY_BYTES, admitted=True):
@@ -305,6 +323,65 @@ def warmIdleDaemon(binary: Path, environment: dict[str, str], workspace: Path) -
     time.sleep(0.25)
 
 
+def exerciseHotSet(binary: Path, fixture: Path) -> Evidence:
+    """Measure the exact eight-session hot admission ceiling without conversation payloads."""
+    with tempfile.TemporaryDirectory(prefix="runtrol-hot-set-memory-") as raw_home:
+        home = Path(raw_home)
+        manifest(home, fixture, REPLY_BYTES)
+        environment = acp.environment(home, fixture)
+        daemon = acp.startDaemon(binary, environment, home)
+        sessions: list[str] = []
+        try:
+            warm_workspace = home / "warm-workspace"
+            warm_workspace.mkdir()
+            if sys.platform.startswith("linux"):
+                warmIdleDaemon(binary, environment, warm_workspace)
+            baseline = sample(daemon.pid, 0.5)
+            peak = baseline
+            for index in range(HOT_SESSIONS):
+                workspace = home / f"workspace-{index + 1}"
+                workspace.mkdir()
+                session = acp.command(binary, environment, ["start", acp.PROVIDER, str(workspace)])
+                if acp.SESSION_RE.fullmatch(session) is None:
+                    raise Failed(f"hot-set start returned no session identifier: {session!r}")
+                sessions.append(session)
+                peak = max(peak, sample(daemon.pid, 0.1))
+
+            listing = acp.command(binary, environment, ["list"])
+            for session in sessions:
+                row = next((line for line in listing.splitlines() if line.startswith(session)), "")
+                if "  idle  " not in row:
+                    raise Failed(f"the eight-session set did not keep {session} hot and idle: {row!r}")
+            peak = max(peak, sample(daemon.pid, 0.5))
+            for session in reversed(sessions):
+                acp.command(binary, environment, ["close", session, "--now"])
+            sessions.clear()
+            time.sleep(0.25)
+            residual = settledResidual(daemon.pid, baseline)
+            evidence = Evidence(baseline=baseline, peak=peak, residual=residual)
+            found = hotSetProblems(evidence)
+            if found:
+                raise Failed(
+                    "; ".join(found)
+                    + f" (baseline={baseline}, peak={peak}, residual={residual})"
+                )
+            return evidence
+        except (Failed, acp.Failed, OSError, subprocess.SubprocessError) as error:
+            if daemon.poll() is not None:
+                stdout, stderr = daemon.communicate(timeout=2.0)
+                detail = (stderr or stdout or "daemon exited without diagnostics").strip()
+                raise Failed(f"{error}; daemon exited: {detail}") from error
+            raise
+        finally:
+            for session in reversed(sessions):
+                try:
+                    acp.command(binary, environment, ["close", session, "--now"])
+                except (acp.Failed, OSError, subprocess.SubprocessError):
+                    # ok: the isolated daemon is stopped next, which reaps every remaining gate-owned session.
+                    pass
+            acp.stopDaemon(daemon)
+
+
 def exerciseCase(
     binary: Path, fixture: Path, reply_bytes: int, admitted: bool
 ) -> Evidence:
@@ -408,12 +485,13 @@ def exerciseCase(
             acp.stopDaemon(daemon)
 
 
-def exercise() -> tuple[Evidence, Evidence]:
-    """Measure admitted delivery and rejected oversize handling in isolated daemons."""
+def exercise() -> tuple[Evidence, Evidence, Evidence]:
+    """Measure the hot set, admitted delivery, and rejected oversize handling in isolated daemons."""
     binary, fixture = acp.build()
+    hot_set = exerciseHotSet(binary, fixture)
     admitted = exerciseCase(binary, fixture, REPLY_BYTES, admitted=True)
     rejected = exerciseCase(binary, fixture, REJECTED_REPLY_BYTES, admitted=False)
-    return admitted, rejected
+    return hot_set, admitted, rejected
 
 
 def main(argv: list[str]) -> int:
@@ -421,12 +499,14 @@ def main(argv: list[str]) -> int:
     if "--selftest" in argv:
         return selftest()
     try:
-        admitted, rejected = exercise()
+        hot_set, admitted, rejected = exercise()
     except (Failed, acp.Failed, OSError, subprocess.SubprocessError) as error:
         print(f"[liveMemoryBudget] FAIL. {error}", file=sys.stderr)
         return 2
     print(
         "[liveMemoryBudget] OK. "
+        f"eight-hot baseline {hot_set.baseline / MIB:.1f} MiB, peak {hot_set.peak / MIB:.1f} MiB, "
+        f"residual {hot_set.residual / MIB:.1f} MiB; "
         f"admitted baseline {admitted.baseline / MIB:.1f} MiB, peak {admitted.peak / MIB:.1f} MiB, "
         f"residual {admitted.residual / MIB:.1f} MiB; "
         f"rejected baseline {rejected.baseline / MIB:.1f} MiB, peak {rejected.peak / MIB:.1f} MiB, "

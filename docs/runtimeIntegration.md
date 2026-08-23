@@ -65,6 +65,16 @@ Read-only watcher helpers reconnect provider, session-index, and event subscript
 last cursor the consumer explicitly accepted. They never retry input, approval, interrupt, lifecycle, or lease
 mutations and never reacquire control silently.
 
+Each watcher owns a dedicated streaming transport. Closing one drains bytes already handed to the operating system,
+delivers an orderly end to Runtime, and destroys the unread client side without waiting for another server frame.
+Cancellation therefore wakes a pending receive immediately and cannot strand local pipe capacity during rapid view
+switching. Ordinary request-response clients keep their graceful close path.
+
+The TypeScript package ships the complete JSON Schema as its public documentation artifact. Its runtime validator is
+generated from the same definitions with documentation-only fields removed and is capped at 40 KiB by tests. The
+projection retains every definition, property name, reference, closed-object rule, union, format, and numeric bound
+that the validator executes.
+
 ## Failure recipes
 
 | Failure | Consumer action |
