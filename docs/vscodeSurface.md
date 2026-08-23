@@ -411,7 +411,7 @@ new-conversation composer through the public command, exercises upgrade and roll
 uploads the package. Hosted extension gates use that same exact tested version unless an operator explicitly supplies
 another version. It creates a tagged GitHub Release only after all six jobs pass.
 
-The current public release is [Runtrol Studio 0.1.10](https://github.com/eddmpython/runtrol/releases/tag/vscode-v0.1.10).
+The current public release is [Runtrol Studio 0.1.11](https://github.com/eddmpython/runtrol/releases/tag/vscode-v0.1.11).
 All six native packages are published under one
 [Marketplace listing](https://marketplace.visualstudio.com/items?itemName=runtrol.runtrol-studio). Stable VS Code
 1.132.1 downloads the exact public package into an isolated profile on each native release runner, activates with no
