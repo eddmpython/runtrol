@@ -10,6 +10,8 @@ and refactoring that no user can observe do not belong here.
 
 ## [Unreleased]
 
+## [0.1.15] - 2026-08-23
+
 ### Fixed
 
 - The fixed sidebar area now shows every installed coding-agent CLI's operational state and usage together. A service
