@@ -10,6 +10,16 @@ and refactoring that no user can observe do not belong here.
 
 ## [Unreleased]
 
+## [0.1.18] - 2026-08-24
+
+### Changed
+
+- Switching between already supervised chats no longer pauses and restarts coding-service discovery, keeping the hot
+  path focused on the selected conversation while background inventory work continues independently.
+- Startup now allocates preparation lanes only for coding services that are actually being prepared. Hot ACP readers
+  use a smaller fixed read buffer, and reconnect rings grow with real events instead of reserving their full ceiling,
+  reducing fixed memory without weakening service serialization, line acceptance, or replay bounds.
+
 ## [0.1.17] - 2026-08-24
 
 ### Added
