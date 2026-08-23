@@ -1049,6 +1049,9 @@ def exercise(claude: str) -> None:
         with RunningModel(target) as model:
             env = environment(root, home, config, model, claude)
             cli_probed = probeClaude(claude, env)
+            # Every process owned by this journey starts after this instant. If one of its observed
+            # identifiers later belongs to an older process, the operating system reused the number.
+            began = time.time()
             daemon = startDaemon(binary, env, home)
             watcher: subprocess.Popen[str] | None = None
             reader: threading.Thread | None = None
@@ -1210,7 +1213,12 @@ def exercise(claude: str) -> None:
                 if reader is not None:
                     reader.join(timeout=2.0)
                 process.stopDaemon(daemon)
-                survivors = waitGone(provider_pids)
+                survivors = waitGone(provider_pids, started_after=began)
+                if survivors:
+                    print(
+                        f"[claudeApprovalSmoke] survivors: {describe(survivors)}",
+                        file=sys.stderr,
+                    )
                 cleanup_complete = (
                     closed
                     and daemon.poll() is not None
