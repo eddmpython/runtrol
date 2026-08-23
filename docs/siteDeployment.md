@@ -30,7 +30,7 @@ The job order is test, build, configure, upload, then deploy into the `github-pa
 
 ## Release links
 
-The primary extension install location is the public [Visual Studio Marketplace listing](https://marketplace.visualstudio.com/items?itemName=runtrol.runtrol-studio). Version 0.1.12 is available for all six supported Windows, macOS, and Linux architecture targets. The static English page exposes a working install action without requiring JavaScript.
+The primary extension install location is the public [Visual Studio Marketplace listing](https://marketplace.visualstudio.com/items?itemName=runtrol.runtrol-studio). Version 0.1.13 is available for all six supported Windows, macOS, and Linux architecture targets. The static English page exposes a working install action without requiring JavaScript.
 
 The browser requests the latest `eddmpython/runtrol` GitHub Release and enables the manual button only when at least one `.vsix` asset exists. Runtime platform and architecture hints select the matching native package. When the browser cannot identify a supported target, the button opens the tagged release so the user can choose explicitly. The page never invents a version or links to a build artifact that does not exist.
 
