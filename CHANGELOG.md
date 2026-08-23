@@ -10,6 +10,14 @@ and refactoring that no user can observe do not belong here.
 
 ## [Unreleased]
 
+## [0.1.11] - 2026-08-23
+
+### Fixed
+
+- Conversation rows and open tabs now adopt each coding service's own title when a native identity appears or a
+  turn finishes. Provider catalogue refreshes are coalesced per service, operator names remain primary, and runtrol
+  still never reads conversation content to invent a title.
+
 ## [0.1.10] - 2026-08-22
 
 ### Added
