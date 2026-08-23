@@ -4,7 +4,7 @@
 
 [한국어](README.md) | [English](README_EN.md) | 中文 | [日本語](README_JA.md)
 
-> 状态：**内核和主要 VS Code 扩展已经实现，`Runtrol Studio 0.1.9` 已面向六个原生目标公开发布。** 实时会话索引、真实 Extension Host 和每秒 3,000 帧 Webview 性能门槛、已安装真实 CLI 的完整操作旅程、全新 Marketplace 安装，以及保留活动会话的 VSIX 升级与回滚都已验证。独立桌面 GUI 代码和执行路径已经删除，VS Code 扩展是唯一 PC 界面。公共 Runtime 协议、Rust 和 TypeScript SDK、外部打包消费门槛，以及六目标签名 standalone Runtime 发布流程也已经实现。已确认 provider 渠道的自动更新也具备进程互斥与精确回滚。[Marketplace 扩展](https://marketplace.visualstudio.com/items?itemName=runtrol.runtrol-studio)、[GitHub Pages 站点](https://eddmpython.github.io/runtrol/)、基于中继的手机 PWA、无正文 Web Push 和 Mission 监督界面都已实现。对话标题栏的芯片可以在对话中切换应答模型和 permission mode，选择通过该 CLI 自身的切换界面中继，芯片只显示服务实际回答的值(已安装真实 Claude Code 的旅程门禁通过 CLI 自身的公告验证切换与恢复)。对话列表的项目标题由操作者亲手创建，文件夹不会自动变成标题。已配对设备的权限被限定在批准的 workspace root 内：会话索引、所有会话命令和 Mission 读取都要通过同一个 live root 验证，撤销 root 立即生效。provider 准备按 provider 分车道并行，五个 cold 首次探测从串行 18.1 秒降到 8.7 秒，新打开文件夹的既有对话无需刷新即可到达。每个对话都以独立编辑器标签页打开，多个对话可以同时显示并分屏，输入与中断都指向该标签页的对话。扩展更新后仍在运行的旧内核会在机器空闲时自动滚动到新构建，更新无需重启即可真正生效。活动门禁会让已发布的 PWA 模块通过 production daemon 驱动已安装的真实 CLI，验证会话、批准和远程断线恢复旅程。在项目标题上点击一次即可启用 Agent Tools，让已安装的编码代理通过七个受项目根限制的公共 Runtime 工具委派工作；禁用时会移除 provider 注册、Runtime 权限和受保护的本地凭据。iOS 真机安装与 Web Push 运行确认仍是未经验证的贡献者 operator evidence，不计入当前完成范围和评分。
+> 状态：**内核和主要 VS Code 扩展已经实现，`Runtrol Studio 0.1.10` 已面向六个原生目标公开发布。** 实时会话索引、真实 Extension Host 和每秒 3,000 帧 Webview 性能门槛、已安装真实 CLI 的完整操作旅程、全新 Marketplace 安装，以及保留活动会话的 VSIX 升级与回滚都已验证。独立桌面 GUI 代码和执行路径已经删除，VS Code 扩展是唯一 PC 界面。公共 Runtime 协议、Rust 和 TypeScript SDK、外部打包消费门槛，以及六目标签名 standalone Runtime 发布流程也已经实现。已确认 provider 渠道的自动更新也具备进程互斥与精确回滚。[Marketplace 扩展](https://marketplace.visualstudio.com/items?itemName=runtrol.runtrol-studio)、[GitHub Pages 站点](https://eddmpython.github.io/runtrol/)、基于中继的手机 PWA、无正文 Web Push 和 Mission 监督界面都已实现。对话标题栏的芯片可以在对话中切换应答模型和 permission mode，选择通过该 CLI 自身的切换界面中继，芯片只显示服务实际回答的值(已安装真实 Claude Code 的旅程门禁通过 CLI 自身的公告验证切换与恢复)。对话列表的项目标题由操作者亲手创建，文件夹不会自动变成标题。已配对设备的权限被限定在批准的 workspace root 内：会话索引、所有会话命令和 Mission 读取都要通过同一个 live root 验证，撤销 root 立即生效。provider 准备按 provider 分车道并行，五个 cold 首次探测从串行 18.1 秒降到 8.7 秒，新打开文件夹的既有对话无需刷新即可到达。每个对话都以独立编辑器标签页打开，多个对话可以同时显示并分屏，输入与中断都指向该标签页的对话。扩展更新后仍在运行的旧内核会在机器空闲时自动滚动到新构建，更新无需重启即可真正生效。活动门禁会让已发布的 PWA 模块通过 production daemon 驱动已安装的真实 CLI，验证会话、批准和远程断线恢复旅程。在项目标题上点击一次即可启用 Agent Tools，让已安装的编码代理通过七个受项目根限制的公共 Runtime 工具委派工作；禁用时会移除 provider 注册、Runtime 权限和受保护的本地凭据。iOS 真机安装与 Web Push 运行确认仍是未经验证的贡献者 operator evidence，不计入当前完成范围和评分。
 > Fleet Compare 可将同一条已审查指令一次发送到 2 至 4 个隔离 worktree 与 provider 会话，在 VS Code 网格和原生 diff 中比较结果，并只用一个选中的通过 Receipt 完成最终验证。真实双 CLI 门禁与实际 Extension Host 目视检查已经验证该流程。
 > 普通 Mission 现在只需一次 `Continue Reviewed Mission` 操作，就会启动当前安全波次，用固定 Gate 封存已完成 Task，准备下一 DAG 波次，并发送精确的已审查指令。真实 CLI 与 Extension Host 的两阶段旅程已经验证该流程。
 > `Continue Ready Missions` 可一次审查最多八个精确 Mission 摘要，并同时推进多个项目当前安全的波次。真实 Extension Host 用一次操作启动了两个独立 Git 项目，并在下一次操作中将两者都推进到 `integrating`。
@@ -144,7 +144,7 @@ active subscription 与 Code-hot workspace 始终有界。streaming 与后台工
 | **PC（Windows、macOS、Linux）** | 从 [VS Code Marketplace 安装 `Runtrol Studio`](https://marketplace.visualstudio.com/items?itemName=runtrol.runtrol-studio)。支持 x64 与 ARM64，不会分发独立桌面应用 |
 | **移动端** | [永久 GitHub Pages 地址上的手机 PWA](https://eddmpython.github.io/runtrol/app/)。先使用 VS Code 中的一次性二维码配对 |
 
-公开版本 `0.1.9` 与六个平台 VSIX 也可从 [GitHub Releases](https://github.com/eddmpython/runtrol/releases/tag/vscode-v0.1.9) 获取。
+公开版本 `0.1.10` 与六个平台 VSIX 也可从 [GitHub Releases](https://github.com/eddmpython/runtrol/releases/tag/vscode-v0.1.10) 获取。
 VS Code 会自动更新从 Marketplace 安装的扩展。如果旧版本是直接通过 VSIX 安装的，请从 Marketplace 重新安装一次，因为 VS Code 会关闭手动 VSIX 安装的自动更新。
 
 ## 让代理使用 Runtrol
@@ -194,7 +194,7 @@ Rust 不是目的，而是上表中三个轴的手段。
 |---|---|---|
 | `crates/` | 产品内核（Rust）。守护进程、供应商适配器与传输。不存在独立 GUI crate | 已实现 |
 | [`clients/typescript/`](clients/typescript/) | 面向外部产品的公共 Runtime TypeScript SDK | 已验证打包消费 |
-| [`extensions/runtrol-vscode/`](extensions/runtrol-vscode/) | 唯一 PC 界面 `Runtrol Studio` | 30 会话发布负载已验证，0.1.9 已公开 |
+| [`extensions/runtrol-vscode/`](extensions/runtrol-vscode/) | 唯一 PC 界面 `Runtrol Studio` | 30 会话发布负载已验证，0.1.10 已公开 |
 | [`pwa/`](pwa/) | 移动端 PWA | 已实现中继连接、会话控制、批准以及 `Needs you` 与 Mission Flight Signals 精确直达 |
 | [`site/`](site/) | [无依赖 GitHub Pages 落地页](https://eddmpython.github.io/runtrol/) | 已上线 |
 | [`assets/brand/`](assets/brand/) | 标志。SVG 为正本，favicon、图标与社交卡片皆由其派生 | |
