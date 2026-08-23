@@ -16,6 +16,7 @@ import { SerializedWatch } from "./serializedWatch";
 import type { RuntimeState } from "./state";
 import type { SessionLine, WatchCursor } from "./runtimeTypes";
 import { MAX_ATTACHMENTS, type ViewAction } from "./viewActions";
+import { refreshProviderTitleBindings } from "./nativeTitleRefresh";
 
 /// One image waiting to ride with the next message. Page memory and this object only: never written anywhere.
 export type Attachment = {
@@ -260,6 +261,15 @@ export class ConversationPanels implements vscode.Disposable {
   /// Fan a session's fresh metadata out to its tab, if one is open.
   updateSession(session: SessionLine): void {
     this.bindings.get(session.sessionId)?.updateSession(session);
+  }
+
+  /// Re-read the title for every open conversation owned by one provider.
+  ///
+  /// Session metadata did not change when a provider's native catalogue learned a title, so the ordinary index
+  /// fan-out above has nothing to send. Reusing the current session refreshes only presentation and does not touch
+  /// the event watch or its cursor.
+  refreshTitles(providerId: string): void {
+    refreshProviderTitleBindings(this.bindings.values(), providerId);
   }
 
   /// Every open binding, for whole-surface operations (reconnect pauses, machine-wide refresh).

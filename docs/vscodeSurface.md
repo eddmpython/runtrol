@@ -193,7 +193,9 @@ the original daemon and provider processes instead of making a versioned extensi
   command is placed in the operator's terminal unexecuted. Runtrol never runs it. Fetching and executing on somebody's
   behalf is refused, and an install button that installs is that refusal reversed under a friendlier label.
 - A hidden conversation pauses its watch at the last delivered cursor. Reopening waits for the new Webview document to become ready before replay continues.
-- An operator name is stored as bounded session metadata. Without one, the visible title is the workspace name plus the runtime-discovered provider name. A short stable suffix appears only when titles collide.
+- An operator name is stored as bounded session metadata. Without one, the provider's own catalogue title is used
+  when supplied and is refreshed after a native identity appears and after each turn settles. The project and
+  runtime-discovered provider remain the fallback, and a short stable suffix appears only when titles collide.
 - The selected session remains first. One fuzzy switcher searches project, provider, state, and workspace metadata.
 - Session-index subscribers receive one current snapshot and then only list-visible changes.
 - Selecting a cold session gives immediate feedback, resumes through its provider-native identity, and follows its

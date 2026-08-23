@@ -36,10 +36,11 @@ The landing uses one source object for the repository and latest-release endpoin
 
 The session TreeView and QuickPick own navigation for every logical session. Selecting a row opens one reusable
 conversation tab in the editor area. Only the selected session owns the full watch and Webview renderer. A custom
-operator name is primary when present. Otherwise the title combines the workspace name and runtime-discovered
-provider display name, adding a short stable discriminator only when two visible titles collide. Stable selected-first
-ordering, fuzzy metadata search, workspace following, hot process bounds, and cold provider-native resume are release
-contracts, not styling preferences.
+operator name is primary when present. Otherwise Studio uses the provider's own catalogue title when it publishes
+one, refreshing that metadata after a native identity appears and after each turn settles. A project and provider
+fallback remains when the provider supplies no title, and a short stable discriminator separates collisions. Stable
+selected-first ordering, fuzzy metadata search, workspace following, hot process bounds, and cold provider-native
+resume are release contracts, not styling preferences.
 
 Webview code must use the VS Code state and message boundary already covered by extension gates. It must not introduce a second transcript store or provider-specific product branch.
 

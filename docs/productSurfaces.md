@@ -35,7 +35,9 @@ The standalone desktop implementation and its execution path have been removed. 
 - At most eight logical sessions may own a hot provider process.
 - Exactly one selected session owns the full stream and active renderer.
 - Selecting a session opens one reusable conversation tab in the editor area instead of compressing the conversation into the sidebar.
-- Session names use the operator's saved name when present and a project plus discovered-provider fallback otherwise. Conversation content is never read to invent a title.
+- Session names use the operator's saved name when present, then the provider's own catalogue title, then a project
+  plus discovered-provider fallback. Studio refreshes provider title metadata when a native identity appears and
+  when a turn settles. Conversation content is never read to invent a title.
 - Search covers project, provider metadata, state, and workspace path without reading conversation content.
 - Selecting a cold row updates the UI immediately, resumes through the provider-native session identity, and follows the bound workspace.
 - Installed providers, versions, models, flags, capabilities, and session paths are discovered at runtime.

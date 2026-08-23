@@ -50,6 +50,7 @@ import { StudioRuntimeClient } from "./runtimeClient";
 import { sessionStateLabel } from "./runtimeProjection";
 import type { ModelOption } from "./sessionConfiguration";
 import { modelOptions, reasoningOptions, RECENT_SERVICE_KEY } from "./sessionConfiguration";
+import { nativeTitleRefreshProviders } from "./nativeTitleRefresh";
 import {
   readStartDefaults,
   rememberStartDefault,
@@ -68,6 +69,8 @@ const NATIVE_DISCOVERY_IDLE_MS = 150;
 type NativeDiscovery = {
   abort: AbortController;
   pending: Promise<void>;
+  force: boolean;
+  queuedForce: Promise<void> | null;
 };
 
 /// Every way a caller can name the conversation it wants opened.
@@ -85,7 +88,7 @@ export class Controller implements vscode.Disposable {
   private readonly seenWarnings = new Set<string>();
   private readonly verifyingProviders = new Set<string>();
   private readonly nativeDiscoveries = new Map<string, NativeDiscovery>();
-  private readonly deferredNativeProviders = new Set<string>();
+  private readonly deferredNativeProviders = new Map<string, boolean>();
   /// The one terminal help commands are offered in, reused so repeated attempts do not stack up.
   private helpTerminal: vscode.Terminal | null = null;
   private nativeDiscoveryRestart: NodeJS.Timeout | null = null;
@@ -249,12 +252,12 @@ export class Controller implements vscode.Disposable {
       .map((provider) => this.loadNativeChats(provider.providerId, true)));
   }
 
-  discoverNativeChats(providerId: string): void {
+  discoverNativeChats(providerId: string, force = false): void {
     if (this.nativeDiscoveryPauseDepth > 0 || this.nativeDiscoveryRestart) {
-      this.deferredNativeProviders.add(providerId);
+      this.deferNativeDiscovery(providerId, force);
       return;
     }
-    void this.loadNativeChats(providerId, false);
+    void this.loadNativeChats(providerId, force);
   }
 
   async checkProviderUpdates(): Promise<void> {
@@ -1913,6 +1916,7 @@ export class Controller implements vscode.Disposable {
     warnings: readonly string[],
     providers: readonly ProviderLine[],
   ): void {
+    const titleProviders = nativeTitleRefreshProviders(this.state.sessions, sessions);
     const previousSelected = this.state.selected;
     const selected = previousSelected?.sessionId ?? null;
     this.state.replace(sessions, providers);
@@ -1938,6 +1942,8 @@ export class Controller implements vscode.Disposable {
         this.say(warning, "warning");
       }
     }
+    for (const providerId of titleProviders) this.deferNativeDiscovery(providerId, true);
+    if (titleProviders.length > 0) this.scheduleNativeDiscoveries();
     if (selected && !this.state.selected) {
       void this.clearPersistedSelection().catch((error: unknown) => {
         this.say(
@@ -1986,7 +1992,16 @@ export class Controller implements vscode.Disposable {
 
   private loadNativeChats(providerId: string, force: boolean): Promise<void> {
     const active = this.nativeDiscoveries.get(providerId);
-    if (active) return active.pending;
+    if (active) {
+      if (!force || active.force) return active.pending;
+      if (active.queuedForce) return active.queuedForce;
+      const generation = this.nativeDiscoveryGeneration;
+      active.queuedForce = active.pending.then(() => {
+        if (this.disposed || generation !== this.nativeDiscoveryGeneration) return;
+        return this.loadNativeChats(providerId, true);
+      });
+      return active.queuedForce;
+    }
     if (!force && this.state.nativeCatalogue(providerId)) return Promise.resolve();
     const provider = this.state.providers.find((candidate) => candidate.providerId === providerId);
     if (!provider || !isUsable(provider)) return Promise.resolve();
@@ -1995,6 +2010,7 @@ export class Controller implements vscode.Disposable {
     const pending = this.runtime.nativeChats(providerId, abort.signal).then((catalogue) => {
       if (!this.disposed && generation === this.nativeDiscoveryGeneration && this.providerUsable(providerId)) {
         this.state.setNativeCatalogue(catalogue);
+        this.panels.refreshTitles(providerId);
       }
     }).catch((error: unknown) => {
       if (
@@ -2004,48 +2020,52 @@ export class Controller implements vscode.Disposable {
         && this.providerUsable(providerId)
       ) {
         this.state.setNativeCatalogue(nativeCatalogueFailure(providerId, error));
+        this.panels.refreshTitles(providerId);
       }
     }).finally(() => {
       if (this.nativeDiscoveries.get(providerId)?.pending === pending) {
         this.nativeDiscoveries.delete(providerId);
       }
     });
-    this.nativeDiscoveries.set(providerId, { abort, pending });
+    this.nativeDiscoveries.set(providerId, { abort, pending, force, queuedForce: null });
     return pending;
   }
 
-  private cancelNativeDiscoveries(): string[] {
+  private cancelNativeDiscoveries(): Map<string, boolean> {
     this.nativeDiscoveryGeneration += 1;
     if (this.nativeDiscoveryRestart) {
       clearTimeout(this.nativeDiscoveryRestart);
       this.nativeDiscoveryRestart = null;
     }
-    const providerIds = new Set([
-      ...this.nativeDiscoveries.keys(),
-      ...this.deferredNativeProviders,
-    ]);
+    const providers = new Map(this.deferredNativeProviders);
+    for (const [providerId, discovery] of this.nativeDiscoveries) {
+      providers.set(
+        providerId,
+        (providers.get(providerId) ?? false) || discovery.force || discovery.queuedForce !== null,
+      );
+    }
     this.deferredNativeProviders.clear();
     for (const discovery of this.nativeDiscoveries.values()) {
       discovery.abort.abort(new Error("foreground chat action has priority"));
     }
     this.nativeDiscoveries.clear();
-    return [...providerIds];
+    return providers;
   }
 
-  private beginForegroundAction(): string[] {
+  private beginForegroundAction(): Map<string, boolean> {
     this.nativeDiscoveryPauseDepth += 1;
     return this.cancelNativeDiscoveries();
   }
 
-  private endForegroundAction(providerIds: readonly string[]): void {
-    for (const providerId of providerIds) this.deferredNativeProviders.add(providerId);
+  private endForegroundAction(providers: ReadonlyMap<string, boolean>): void {
+    for (const [providerId, force] of providers) this.deferNativeDiscovery(providerId, force);
     this.nativeDiscoveryPauseDepth = Math.max(0, this.nativeDiscoveryPauseDepth - 1);
     this.scheduleNativeDiscoveries();
   }
 
   private startExistingChatDiscovery(): void {
     for (const provider of this.state.providers.filter(isUsable)) {
-      this.deferredNativeProviders.add(provider.providerId);
+      this.deferNativeDiscovery(provider.providerId, false);
     }
     this.flushNativeDiscoveries();
   }
@@ -2073,9 +2093,16 @@ export class Controller implements vscode.Disposable {
     if (this.disposed || this.nativeDiscoveryPauseDepth > 0) {
       return;
     }
-    const providerIds = [...this.deferredNativeProviders];
+    const providers = [...this.deferredNativeProviders];
     this.deferredNativeProviders.clear();
-    for (const providerId of providerIds) this.discoverNativeChats(providerId);
+    for (const [providerId, force] of providers) this.discoverNativeChats(providerId, force);
+  }
+
+  private deferNativeDiscovery(providerId: string, force: boolean): void {
+    this.deferredNativeProviders.set(
+      providerId,
+      (this.deferredNativeProviders.get(providerId) ?? false) || force,
+    );
   }
 
   private providerUsable(providerId: string): boolean {
