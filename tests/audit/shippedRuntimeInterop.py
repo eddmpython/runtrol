@@ -186,7 +186,11 @@ def fetchShippedCore(version: str, into: Path) -> Path:
 GREETING_SCRIPT = """
 import { RuntimeConnector, RuntimeLocator } from "CLIENT_ENTRY";
 
-const state = await RuntimeLocator.system().inspect();
+const runtimeExecutable = process.env.RUNTROL_SHIPPED_CORE;
+if (!runtimeExecutable) {
+  throw new Error("the exact shipped Runtime verifier was not provided");
+}
+const state = await RuntimeLocator.system({ runtimeExecutable }).inspect();
 if (state.state !== "running") {
   // The daemon started but its locator is not readable from here, which is a fault in this gate's
   // isolation rather than a fact about the product: say so instead of blaming the protocol.
@@ -301,10 +305,12 @@ def greet(core: Path, home: Path, scratch: Path) -> Evidence:
         script = scratch / "greet.mjs"
         entry = (CLIENT / "dist" / "src" / "index.js").resolve().as_uri()
         script.write_text(GREETING_SCRIPT.replace("CLIENT_ENTRY", entry), encoding="utf-8")
+        greeting_env = dict(env)
+        greeting_env["RUNTROL_SHIPPED_CORE"] = str(core.resolve())
         spoken = subprocess.run(
             [nodeProgram(), str(script)],
             cwd=ROOT,
-            env=env,
+            env=greeting_env,
             capture_output=True,
             text=True,
             timeout=TIMEOUT_S,
