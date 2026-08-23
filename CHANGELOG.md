@@ -10,6 +10,8 @@ and refactoring that no user can observe do not belong here.
 
 ## [Unreleased]
 
+## [0.1.17] - 2026-08-24
+
 ### Added
 
 - The fixed sidebar service area now exposes an `Add coding services` row backed by a generated snapshot of the
