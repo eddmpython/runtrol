@@ -410,12 +410,15 @@ def exerciseCase(
         watchers: list[subprocess.Popen[str]] = []
         outputPaths: list[Path] = []
         try:
-            # Hosted Linux daemon readiness deliberately precedes asynchronous provider preparation. Serializing one
-            # empty session through that provider lane makes baseline timing deterministic without loosening any
-            # memory ceiling. Windows EmptyWorkingSet intentionally makes a just-closed process colder than idle, and
-            # macOS already has its allocator-specific residual contract, so neither uses this Linux baseline step.
+            # Daemon readiness deliberately precedes asynchronous provider preparation. Serialize with that lane so
+            # fixed startup code pages are present in the baseline instead of being charged to the first session.
+            # Linux uses an empty session because its cleanup can return allocator pages. Windows EmptyWorkingSet
+            # makes that path artificially colder, so it uses the non-mutating model query just like the hot-set case.
+            # macOS already has its allocator-specific residual contract and needs neither workaround.
             if sys.platform.startswith("linux"):
                 warmIdleDaemon(binary, environment, workspace)
+            elif sys.platform == "win32":
+                finishBackgroundPreparation(binary, environment)
             baseline = sample(daemon.pid, 0.5)
             peak = baseline
             cases = 1 if admitted else 3

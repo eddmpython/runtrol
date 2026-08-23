@@ -82,6 +82,7 @@ export class ConversationView implements vscode.Disposable {
   private readonly renderWaiters = new Set<RenderWaiter>();
   private renderedGeneration = 0;
   private visibleReady = false;
+  private readonly visibleWaiters = new Set<() => void>();
   private showQueue: Promise<void> = Promise.resolve();
   /// The popover the page is showing for a chip, and who is waiting for its answer. One at a time: a new
   /// question closes the old one with no answer.
@@ -179,6 +180,7 @@ export class ConversationView implements vscode.Disposable {
         }
         const becameReady = !this.visibleReady;
         this.visibleReady = true;
+        this.wakeVisibleWaiters();
         if (ready === "startup" || becameReady) {
           this.reset(this.selected, this.draft);
           this.visibility(true);
@@ -205,6 +207,7 @@ export class ConversationView implements vscode.Disposable {
         return;
       }
       this.visibleReady = false;
+      this.wakeVisibleWaiters();
       this.visibility(false);
       this.closeMenu();
       this.rejectMeasurements(new RetryableMeasurementError(
@@ -216,6 +219,7 @@ export class ConversationView implements vscode.Disposable {
         this.dropSurfaceGuards();
         this.surface = null;
         this.visibleReady = false;
+        this.wakeVisibleWaiters();
         this.visibility(false);
         this.pendingFrames = [];
         this.rejectMeasurements(new Error("the Runtrol Webview closed during measurement"));
@@ -455,7 +459,7 @@ export class ConversationView implements vscode.Disposable {
         nextProbeAt = Date.now() + 250;
         void surface.webview.postMessage({ type: "readyProbe" });
       }
-      await delay(25);
+      await this.waitForVisibleChange(25);
     }
     if (this.surface !== surface) {
       throw new Error("the Runtrol Webview closed before becoming ready");
@@ -464,6 +468,26 @@ export class ConversationView implements vscode.Disposable {
       `the visible Runtrol Webview was not ready within ${VISIBLE_READY_TIMEOUT_MS} ms `
       + `(place ${surface.place}, visible ${surface.visible}, ready ${this.visibleReady})`,
     );
+  }
+
+  /// Ready is a Webview message, so let that message wake `show` immediately. The short timer remains only
+  /// as a liveness probe for a message that never arrives; making every healthy switch wait for its next
+  /// polling boundary added up to 25 ms to the interaction for no product benefit.
+  private waitForVisibleChange(milliseconds: number): Promise<void> {
+    return new Promise((resolve) => {
+      let timer: NodeJS.Timeout;
+      const done = () => {
+        clearTimeout(timer);
+        this.visibleWaiters.delete(done);
+        resolve();
+      };
+      timer = setTimeout(done, milliseconds);
+      this.visibleWaiters.add(done);
+    });
+  }
+
+  private wakeVisibleWaiters(): void {
+    for (const waiter of [...this.visibleWaiters]) waiter();
   }
 
   private schedulePosts(): void {
@@ -569,6 +593,7 @@ export class ConversationView implements vscode.Disposable {
     this.surface?.dispose();
     this.surface = null;
     this.visibleReady = false;
+    this.wakeVisibleWaiters();
     this.pendingFrames = [];
     this.rejectMeasurements(new Error("the Runtrol conversation panel was disposed"));
     this.rejectRenderWaiters(new Error("the Runtrol conversation panel was disposed"));

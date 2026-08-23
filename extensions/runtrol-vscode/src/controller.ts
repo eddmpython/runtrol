@@ -509,12 +509,16 @@ export class Controller implements vscode.Disposable {
       session = await this.resumeSession(session, access);
     }
     const stored = this.persistSelection(session.sessionId);
-    this.state.select(session.sessionId);
     // Deliberately no window-follow here. Selecting a conversation opens ITS tab beside whatever is
     // already open and NOTHING else moves (memory/uxContract.md): moving VS Code to the project is the
     // heading's explicit button. The tab's binding owns its watch and its replay-on-rebirth, so nothing
     // here pauses or resets anybody else's conversation.
     const binding = await this.panels.open(session, !reveal);
+    // Showing the tab makes its ready callback select this session. Keep this fallback after the visible
+    // document is ready: selecting first asks VS Code to scroll and repaint the sidebar while it is also
+    // activating and rebuilding the Webview, which makes the interaction slower without changing a pixel.
+    // Preserve-focus callers do not necessarily produce a focus event, so they still need the fallback.
+    this.state.select(session.sessionId);
     void stored.catch((error: unknown) => {
       binding.view.status(
         `Cannot remember the selected session: ${error instanceof Error ? error.message : String(error)}`,
