@@ -316,8 +316,8 @@ async function measureFollow(target: string, resultPath: string): Promise<Record
 }
 
 /// The opt-in screenshot moment: stand the panel up the way the operator described it and hold still while the
-/// harness photographs the window. The picture then has one created project holding the first folder's
-/// conversation, the second folder's conversation loose beneath the headings, and the usage strip at the bottom.
+/// harness photographs the window. The picture then has project siblings, named conversations, and the usage
+/// rows at the bottom of the same tree without opening another view.
 ///
 /// Does nothing unless RUNTROL_VSCODE_CAPTURE names an output file, so the gate's timed runs never pay for it.
 async function eyePass(api: ExtensionApi, projectFolder: string, resultPath: string): Promise<void> {
@@ -345,11 +345,6 @@ async function eyePass(api: ExtensionApi, projectFolder: string, resultPath: str
     vscode.commands.executeCommand("workbench.view.extension.runtrol"),
     5_000,
     "opening the Runtrol view for the eye pass",
-  );
-  await within(
-    vscode.commands.executeCommand("runtrol.usage.focus"),
-    5_000,
-    "revealing the usage strip for the eye pass",
   );
   // One breath for the tree to paint the new heading before the photograph.
   await new Promise((resolve) => setTimeout(resolve, 1_500));

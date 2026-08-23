@@ -73,13 +73,14 @@ struct ThreadPage {
     next_cursor: Option<Box<str>>,
 }
 
-/// Only the structural fields allowed to cross the native catalogue seam.
+/// Identity, placement, time, and the provider's own two human-facing list labels.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ListedThread {
     id: Box<str>,
     cwd: Box<str>,
     name: Option<Box<str>>,
+    preview: Option<Box<str>>,
     updated_at: i64,
 }
 
@@ -389,7 +390,18 @@ fn read_native_session(
         &listed.cwd,
         MAX_NATIVE_PATH_BYTES,
     )?;
-    if let Some(title) = listed.name.as_deref() {
+    let title = listed
+        .name
+        .filter(|name| !name.trim().is_empty())
+        .or_else(|| {
+            listed.preview.and_then(|preview| {
+                preview
+                    .lines()
+                    .find(|line| !line.trim().is_empty())
+                    .map(|line| line.trim().into())
+            })
+        });
+    if let Some(title) = title.as_deref() {
         bounded_native(provider, "session title", title, MAX_NATIVE_TITLE_BYTES)?;
     }
     let updated = u64::try_from(listed.updated_at)
@@ -415,7 +427,7 @@ fn read_native_session(
         native,
         cwd: listed.cwd,
         additional_directories: Vec::new(),
-        title: listed.name,
+        title,
         updated_at: Some(updated.into()),
         resume: NativeResumeCapability::Available,
     })
@@ -575,6 +587,7 @@ mod tests {
                 "/work".into()
             },
             name: Some("Provider title".into()),
+            preview: Some("Provider preview".into()),
             updated_at: 1_786_579_200,
         }
     }
@@ -632,14 +645,29 @@ mod tests {
     }
 
     #[test]
-    fn native_page_decoder_drops_preview_and_turns() {
+    fn native_page_decoder_keeps_the_provider_preview_and_drops_turns() {
         let page: ThreadPage = serde_json::from_str(&format!(
             r#"{{"data":[{{"id":"0199c0de-1234-7000-8000-abcdef012345","cwd":"{}","name":"Provider title","updatedAt":1786579200,"preview":"conversation content","turns":[{{"items":[]}}]}}],"nextCursor":null}}"#,
             if cfg!(windows) { r"C:\\work" } else { "/work" }
         ))
         .expect("structural fields decode");
         assert_eq!(page.data.len(), 1);
+        assert_eq!(
+            page.data
+                .first()
+                .and_then(|thread| thread.preview.as_deref()),
+            Some("conversation content")
+        );
         assert!(page.next_cursor.is_none());
+    }
+
+    #[test]
+    fn a_provider_preview_names_a_thread_without_an_explicit_name() {
+        let mut listed = listed_thread();
+        listed.name = None;
+        listed.preview = Some("Actual conversation name\nsecond line".into());
+        let session = read_native_session(a_provider_id(), listed).expect("bounded");
+        assert_eq!(session.title.as_deref(), Some("Actual conversation name"));
     }
 
     #[test]

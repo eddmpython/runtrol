@@ -13,27 +13,17 @@ import { ConversationDecorations, conversationUri } from "./conversationDecorati
 import type { ProjectRecord } from "./projects";
 import { isBroken } from "./providerHealth";
 import type { ProviderLine } from "./runtimeTypes";
+import { workspaceName } from "./sessionDisplay";
 import { RuntimeState } from "./state";
 
 /// One conversation, as one row.
 ///
-/// There is no second kind of row. A coding service is a fact about a conversation, not a container for one, so it
-/// appears in the muted detail line rather than as a node the reader has to open first.
+/// The provider icon identifies the service. The label and muted detail stay reserved for title, state, and time.
 export class ConversationItem extends vscode.TreeItem {
   constructor(readonly conversation: Conversation, nowMs: number, grouped = false) {
     super(conversation.title, vscode.TreeItemCollapsibleState.None);
     this.id = conversation.key;
-    // A conversation that stopped for the reader says so first. The service and the folder are what distinguish
-    // rows from each other; this is what distinguishes one row from every other thing they could be doing.
-    const detail = conversationDetail(conversation, nowMs, grouped);
-    // What the reader needs to know without opening it, first: that it wants them, that its service wants a
-    // sign-in, or (while it runs) the tool the service says is running, in the service's own word.
-    const lead = conversation.signInNeeded
-      ? "Sign in needed"
-      : conversation.activity === "needsYou"
-        ? "Needs you"
-        : conversation.tool;
-    this.description = lead ? `${lead} · ${detail}` : detail;
+    this.description = conversationDetail(conversation, nowMs, grouped);
     this.contextValue = contextValue(conversation);
     this.iconPath = icon(conversation);
     // What the badge attaches to. A scheme of its own so the row does not also collect whatever git and the
@@ -209,6 +199,7 @@ export class ConversationsTree implements vscode.TreeDataProvider<ChatTreeItem>,
   private readonly subscription: vscode.Disposable;
   private readonly projectSubscription: { dispose(): void };
   private readonly agentToolsSubscription: { dispose(): void } | null;
+  private readonly workspaceSubscription: vscode.Disposable;
   private items: ChatTreeItem[] | undefined;
   /// The heading each conversation belongs under, by conversation key. Empty while the list is flat.
   private parents: Map<string, ProjectItem> | undefined;
@@ -247,6 +238,11 @@ export class ConversationsTree implements vscode.TreeDataProvider<ChatTreeItem>,
       this.forgetItems();
       this.changedEmitter.fire(undefined);
     }) ?? null;
+    this.workspaceSubscription = vscode.workspace.onDidChangeWorkspaceFolders(() => {
+      this.forgetItems();
+      this.changedEmitter.fire(undefined);
+      this.updateWindowDescription();
+    });
     this.subscription = state.onDidChange((change) => {
       if (change === "selection") {
         // Selection changes which row is scrolled to, not what any row says. No `ConversationItem` reads
@@ -265,6 +261,7 @@ export class ConversationsTree implements vscode.TreeDataProvider<ChatTreeItem>,
       this.changedEmitter.fire(undefined);
       this.updateBadge();
       this.updateDiscoveryNotice();
+      this.updateWindowDescription();
     });
   }
 
@@ -272,6 +269,7 @@ export class ConversationsTree implements vscode.TreeDataProvider<ChatTreeItem>,
     this.view = view;
     this.updateBadge();
     this.updateDiscoveryNotice();
+    this.updateWindowDescription();
     this.revealOpenConversation();
   }
 
@@ -318,6 +316,7 @@ export class ConversationsTree implements vscode.TreeDataProvider<ChatTreeItem>,
     this.subscription.dispose();
     this.projectSubscription.dispose();
     this.agentToolsSubscription?.dispose();
+    this.workspaceSubscription.dispose();
     this.decorations.dispose();
     this.changedEmitter.dispose();
   }
@@ -478,5 +477,16 @@ export class ConversationsTree implements vscode.TreeDataProvider<ChatTreeItem>,
   /// The folders this window is open on, which is what makes one project the reader's current one.
   private openWorkspaces(): string[] {
     return (vscode.workspace.workspaceFolders ?? []).map((folder) => folder.uri.fsPath);
+  }
+
+  private updateWindowDescription(): void {
+    const view = this.view;
+    if (!view) return;
+    const names = this.openWorkspaces().map((folder) => workspaceName(folder) || folder);
+    if (names.length === 0) {
+      view.description = undefined;
+      return;
+    }
+    view.description = names.length === 1 ? names[0] : `${names[0]} +${names.length - 1}`;
   }
 }

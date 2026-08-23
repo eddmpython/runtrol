@@ -38,9 +38,9 @@ import { providerDisplayName, sessionTitle, workspaceName } from "./sessionDispl
 import { RuntimeState } from "./state";
 import { StudioRuntimeClient } from "./runtimeClient";
 import { workspaceCovers, workspaceIdentity } from "./workspaceCollision";
+import { UsageTree } from "./usageTree";
 import { WorkspaceRootFollowing } from "./workspaceRoots";
 import { ConversationItem, ConversationsTree, ProjectItem, ServiceProblemItem } from "./trees";
-import { UsageTree } from "./usageTree";
 
 declare const RUNTROL_INCLUDE_TEST_JOURNEY: boolean;
 
@@ -237,9 +237,9 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
     conversation,
     missions,
     conversations,
+    usage,
     vscode.window.registerTreeDataProvider("runtrol.missions", missions),
     vscode.window.registerFileDecorationProvider(conversations.decorations),
-    usage,
     vscode.workspace.registerTextDocumentContentProvider("runtrol-mission", missionController.documentProvider()),
     vscode.commands.registerCommand(
       "runtrol.refresh",
@@ -747,13 +747,27 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
     treeDataProvider: usage,
   });
   usage.bindView(usageView);
+  let revealingUsage = false;
+  const ensureUsageVisible = async (): Promise<void> => {
+    if (usageView.visible || revealingUsage || !conversationsView.visible) return;
+    revealingUsage = true;
+    try {
+      await vscode.commands.executeCommand("runtrol.usage.focus");
+      await vscode.commands.executeCommand("runtrol.sessions.focus");
+    } finally {
+      revealingUsage = false;
+    }
+  };
   context.subscriptions.push(
     usageView,
-    // The strip follows the session list's own changes, which is when a gauge is most likely to have moved.
+    conversationsView.onDidChangeVisibility((event) => {
+      if (event.visible) void ensureUsageVisible();
+    }),
     state.onDidChange((change) => {
       if (change === "rows") usage.sessionsChanged();
     }),
   );
+  if (conversationsView.visible) void ensureUsageVisible();
   const revealEntryConversation = (): void => {
     void run(() => afterReady(() => controller.revealConversationOnEntry()));
   };

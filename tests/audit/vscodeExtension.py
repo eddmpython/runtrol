@@ -39,6 +39,18 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
         found.append("the manifest contributes a secondary side bar container below the VS Code 1.106 engine floor")
     if '"activitybar"' not in contribution_text:
         found.append("the extension has no Activity Bar control surface")
+    views = contributes.get("views") if isinstance(contributes, dict) else None
+    runtrol_views = views.get("runtrol") if isinstance(views, dict) else None
+    usage_view = next(
+        (
+            entry
+            for entry in runtrol_views
+            if isinstance(entry, dict) and entry.get("id") == "runtrol.usage"
+        ),
+        None,
+    ) if isinstance(runtrol_views, list) else None
+    if not isinstance(usage_view, dict) or usage_view.get("visibility") != "visible":
+        found.append("every connected CLI's usage must be expanded at the bottom of the Runtrol sidebar")
     menus = contributes.get("menus") if isinstance(contributes, dict) else None
     item_context = menus.get("view/item/context") if isinstance(menus, dict) else None
     winner_entries = item_context if isinstance(item_context, list) else []
@@ -183,6 +195,7 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
             "selfApproveIntegration(client, pendingId, signature)",
             'initializationStage = "runtime:bootstrap"',
             "missionController.startAutoFlights()",
+            'executeCommand("runtrol.usage.focus")',
             '"runtrol.scheduleMission"',
             '"runtrol.cancelMissionSchedule"',
         ],
@@ -196,6 +209,16 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
             "private readonly watch = new SerializedWatch()",
             "this.watch.pause()",
             "this.watch.dispose()",
+        ],
+        "conversationList.ts": [
+            "if (folderRows.length === 0) continue",
+            "conversationStatus(row)",
+            'return "Running"',
+            'return "Stopped"',
+        ],
+        "usageDisplay.ts": [
+            "providers.filter(isUsable)",
+            'detail: "No report yet"',
         ],
         "serializedWatch.ts": [
             "private active: AbortController",
@@ -400,6 +423,11 @@ def selftest() -> int:
         ],
         "contributes": {
             "viewsContainers": {"activitybar": []},
+            "views": {
+                "runtrol": [
+                    {"id": "runtrol.usage", "name": "CLI Usage", "visibility": "visible"}
+                ]
+            },
             "commands": [
                 {"command": "runtrol.scheduleMission"},
                 {"command": "runtrol.cancelMissionSchedule"},
@@ -450,6 +478,7 @@ def selftest() -> int:
         "extension.ts": (
             "afterReady selfApproveIntegration(client, pendingId, signature) "
             'initializationStage = "runtime:bootstrap" missionController.startAutoFlights() '
+            'executeCommand("runtrol.usage.focus") '
             '"runtrol.scheduleMission" "runtrol.cancelMissionSchedule"'
         ),
         "providerHealth.ts": (
@@ -460,6 +489,11 @@ def selftest() -> int:
             'import { SerializedWatch } from "./serializedWatch"; '
             "private readonly watch = new SerializedWatch(); this.watch.pause(); this.watch.dispose()"
         ),
+        "conversationList.ts": (
+            'if (folderRows.length === 0) continue conversationStatus(row) '
+            'return "Running" return "Stopped"'
+        ),
+        "usageDisplay.ts": 'providers.filter(isUsable) detail: "No report yet"',
         "serializedWatch.ts": (
             "private active: AbortController; const previous = this.tail; "
             "const current = previous.then; this.active?.abort()"
@@ -552,8 +586,11 @@ def selftest() -> int:
         print("[vscodeExtension --selftest] FAIL. the green fixture was rejected.", file=sys.stderr)
         return 2
 
+    hidden_usage = json.loads(json.dumps(package))
+    hidden_usage["contributes"]["views"]["runtrol"][0]["visibility"] = "collapsed"
     mutations = [
         ({**package, "dependencies": {"some-runtime": "1"}}, sources),
+        (hidden_usage, sources),
         ({**package, "activationEvents": []}, sources),
         ({**package, "contributes": {"viewsContainers": {"activitybar": []}}}, sources),
         ({"engines": {"vscode": "^1.100.0"}, "contributes": {"viewsContainers": {"activitybar": [], "secondarySidebar": []}}}, sources),

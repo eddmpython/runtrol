@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   attentionCount,
   conversationDetail,
+  conversationStatus,
   conversations,
   elapsed,
   loose,
@@ -107,7 +108,7 @@ test("a Core-owned worktree stays under the project the person selected", () => 
 
   assert.equal(rows[0]?.workspace, worktree, "actions keep the exact provider working directory");
   assert.equal(rows[0]?.homeWorkspace, ALPHA, "presentation keeps the selected project");
-  assert.equal(rows[0]?.title, "alpha");
+  assert.equal(rows[0]?.title, "Untitled · S1", "a project name is never repeated as a chat title");
   assert.equal(grouped[0]?.rows[0]?.session?.sessionId, "s1");
 });
 
@@ -201,14 +202,14 @@ test("rows a person could not tell apart get an identity", () => {
   assert.equal(new Set(rows.map((row) => row.title)).size, 2);
 });
 
-test("the detail line drops a folder that only repeats the title", () => {
+test("a conversation line contains state without repeating its provider or project", () => {
   const [plain] = conversations([session({ sessionId: "s1" })], PROVIDERS, [], null);
   const [named] = conversations([session({ sessionId: "s2", label: "Nightly sweep" })], PROVIDERS, [], null);
 
   assert.ok(plain);
   assert.ok(named);
-  assert.equal(conversationDetail(plain, NOW), "Claude Code");
-  assert.equal(conversationDetail(named, NOW), "alpha · Claude Code");
+  assert.equal(conversationDetail(plain, NOW), "Stopped");
+  assert.equal(conversationDetail(named, NOW), "Stopped");
 });
 
 test("elapsed time reads the way a chat list writes it", () => {
@@ -619,11 +620,29 @@ test("a created project standing on the open folder draws the one heading", () =
   assert.equal(groups[0]?.key.startsWith("project:"), true, "creation is the more deliberate act");
 });
 
-test("a grouped row does not repeat the folder its heading already names", () => {
+test("every conversation row has one exact operational state", () => {
+  const [base] = conversations([session({ sessionId: "state" })], PROVIDERS, [], null);
+  assert.ok(base);
+  assert.equal(conversationStatus({ ...base, activity: "working" }), "Running");
+  assert.equal(conversationStatus({ ...base, activity: "ready" }), "Ready");
+  assert.equal(conversationStatus({ ...base, activity: "saved" }), "Stopped");
+  assert.equal(conversationStatus({ ...base, activity: "needsYou" }), "Needs you");
+  assert.equal(conversationStatus({ ...base, activity: "attention" }), "Error");
+  assert.equal(conversationStatus({ ...base, activity: "waitingOnQuota" }), "Limit");
+  assert.equal(conversationStatus({ ...base, signInNeeded: true }), "Sign in needed");
+});
+
+test("an open folder with no conversations is not a parent-looking project row", () => {
+  const rows = conversations([session({ sessionId: "elsewhere", workspace: BETA })], PROVIDERS, [], null);
+  const groups = projects([], rows, [ALPHA]);
+  assert.deepEqual(groups.map((group) => group.name), ["beta"]);
+});
+
+test("a conversation row never repeats the folder its heading already names", () => {
   const rows = conversations(spread([ALPHA]), PROVIDERS, [], null);
   const row = rows[0];
   assert.ok(row);
-  assert.ok(conversationDetail(row, Date.now()).includes(row.folder));
+  assert.ok(!conversationDetail(row, Date.now()).includes(row.folder));
   assert.ok(!conversationDetail(row, Date.now(), true).includes(row.folder));
 });
 
@@ -636,7 +655,7 @@ test("an empty heading says what the list holds, never what the folder holds", (
   assert.equal(groups.length, 1);
   assert.equal(groups[0]?.rows.length, 0);
   assert.ok(groups[0]);
-  assert.equal(projectDetail(groups[0]), "nothing listed");
+  assert.equal(projectDetail(groups[0]), "empty");
 });
 
 test("a conversation in a subfolder files under the project that covers it", () => {
@@ -802,7 +821,7 @@ test("a heading counts what is waiting inside it without moving because of it", 
   assert.ok(alpha);
   assert.equal(alpha.attention, 1);
   assert.equal(alpha.live, 2);
-  assert.ok(projectDetail(alpha).startsWith("1 waiting"));
+  assert.ok(projectDetail(alpha).startsWith("1 need you · 2 running"));
 });
 
 test("a heading with nothing waiting says only what it holds", () => {
@@ -810,7 +829,7 @@ test("a heading with nothing waiting says only what it holds", () => {
   const beta = projects([record(ALPHA), record(BETA)], rows, []).find((group) => group.name === "beta");
   assert.ok(beta);
   assert.equal(beta.attention, 0);
-  assert.ok(projectDetail(beta).endsWith("conversations"));
+  assert.match(projectDetail(beta), /^\d+$/u);
 });
 
 test("the same folder reached two ways files into one project", () => {

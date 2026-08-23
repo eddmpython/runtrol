@@ -18,9 +18,7 @@ export function conversationChoices(
 ): ConversationChoice[] {
   return rows.map((conversation) => ({
     label: `${glyph(conversation)} ${conversation.title}`,
-    description: conversation.activity === "needsYou"
-      ? `Needs you · ${conversationDetail(conversation, nowMs)}`
-      : conversationDetail(conversation, nowMs),
+    description: conversationDetail(conversation, nowMs),
     detail: conversation.workspace,
     picked: conversation.open,
     conversation,

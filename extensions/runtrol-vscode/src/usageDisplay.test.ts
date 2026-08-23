@@ -7,8 +7,8 @@ import { usageDetail, usageRows } from "./usageDisplay";
 const NOW = Date.parse("2026-08-18T12:00:00Z");
 
 const PROVIDERS = [
-  { providerId: "claude", displayName: "Claude Code", icon: "claude" },
-  { providerId: "codex", displayName: "Codex", icon: "openai" },
+  { providerId: "claude", displayName: "Claude Code", icon: "claude", installation: { state: "usable" } },
+  { providerId: "codex", displayName: "Codex", icon: "openai", installation: { state: "usable" } },
 ] as unknown as ProviderLine[];
 
 function gauge(overrides: Partial<ProviderUsageGauge>): ProviderUsageGauge {
@@ -57,15 +57,17 @@ test("rows carry the service's declared mark and name", () => {
     PROVIDERS,
     NOW,
   );
-  assert.equal(rows.length, 1);
+  assert.equal(rows.length, 2);
   const row = rows[0];
   assert.equal(row?.name, "Claude Code");
   assert.equal(row?.icon, "claude");
   assert.ok(row?.tooltip.includes("Reported"), "the hover says how old the report is");
 });
 
-test("an account nobody has heard from is absent, not green", () => {
-  // The strip lists reports, and the view's empty text says "no report yet" in words. Listing every installed
-  // provider with an invented "ok" would be the strip lying exactly when it knows least.
-  assert.deepEqual(usageRows([], PROVIDERS, NOW), []);
+test("every connected CLI stays visible before it reports usage", () => {
+  const rows = usageRows([], PROVIDERS, NOW);
+  assert.deepEqual(rows.map((row) => [row.name, row.detail]), [
+    ["Claude Code", "No report yet"],
+    ["Codex", "No report yet"],
+  ]);
 });

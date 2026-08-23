@@ -1,4 +1,5 @@
 import type { ProviderLine, ProviderUsageGauge, ProviderUsageWindow } from "./runtimeTypes";
+import { isUsable } from "./providerHealth";
 import { providerDisplayName, providerIcon } from "./sessionDisplay";
 
 /// One line of the usage strip, ready to draw.
@@ -17,21 +18,38 @@ export type UsageRow = {
   readonly tooltip: string;
 };
 
-/// The strip's rows, in the order the Runtime reported them.
-///
-/// Only providers that have reported appear. An account that has said nothing since the Runtime started is not
-/// a green light and not a red one; it is absent, and the view's empty text says so in words.
+/// The strip's rows. Every usable CLI is present even before its first report, followed by any gauge whose
+/// provider has disappeared from the latest inventory so a last known limit does not vanish silently.
 export function usageRows(
   gauges: readonly ProviderUsageGauge[],
   providers: readonly ProviderLine[],
   nowMs: number,
 ): UsageRow[] {
-  return gauges.map((gauge) => {
-    const name = providerDisplayName(gauge.providerId, providers);
+  const byProvider = new Map(gauges.map((gauge) => [gauge.providerId, gauge]));
+  const providerIds = providers.filter(isUsable).map((provider) => provider.providerId);
+  const seen = new Set(providerIds);
+  for (const gauge of gauges) {
+    if (seen.has(gauge.providerId)) continue;
+    seen.add(gauge.providerId);
+    providerIds.push(gauge.providerId);
+  }
+  return providerIds.map((providerId) => {
+    const gauge = byProvider.get(providerId);
+    const name = providerDisplayName(providerId, providers);
+    if (!gauge) {
+      return {
+        key: `usage:${encodeURIComponent(providerId)}`,
+        name,
+        icon: providerIcon(providerId, providers),
+        detail: "No report yet",
+        reached: false,
+        tooltip: `${name}: no usage report yet`,
+      };
+    }
     return {
-      key: `usage:${encodeURIComponent(gauge.providerId)}`,
+      key: `usage:${encodeURIComponent(providerId)}`,
       name,
-      icon: providerIcon(gauge.providerId, providers),
+      icon: providerIcon(providerId, providers),
       detail: usageDetail(gauge, nowMs),
       reached: gauge.reached,
       tooltip: usageTooltip(name, gauge, nowMs),

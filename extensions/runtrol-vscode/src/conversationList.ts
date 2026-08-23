@@ -195,14 +195,20 @@ export function projects(
     const represented = records.some((record) =>
       workspaceCovers(record.workspace, folder) || workspaceCovers(folder, record.workspace));
     if (represented) continue;
+    const folderRows = rows.filter((row) =>
+      !unfiled(row) && !projectOf(records, row) && openFolderOf(openWorkspaces, row) === identity);
+    // The current folder is already named by the VS Code window. Drawing it as an empty project row makes
+    // every machine-wide project that follows look nested beneath it, even though the rows are siblings.
+    // An open folder becomes a heading when it has a conversation to contain; an explicitly created project
+    // still remains visible while empty through the record path above.
+    if (folderRows.length === 0) continue;
     groups.push(group(
       `folder:${encodeURIComponent(identity)}`,
       workspaceName(folder) || folder,
       folder,
       "open",
       true,
-      rows.filter((row) =>
-        !unfiled(row) && !projectOf(records, row) && openFolderOf(openWorkspaces, row) === identity),
+      folderRows,
     ));
   }
   // Every other folder a conversation names, exactly as the service spelled it. Grouped by identity so one
@@ -344,17 +350,12 @@ function latestActivity(rows: readonly Conversation[]): number | null {
 
 /// The muted line beside a project heading.
 export function projectDetail(group: ProjectGroup): string {
-  // "nothing listed" rather than "no conversations yet". The heading knows what reached this list,
-  // not what exists in that folder: a service that only enumerates its running sessions, or a
-  // folder outside the approved roots, both arrive here as zero rows. Claiming the folder is empty
-  // would be a statement the extension cannot support, and the reader would stop looking. The view
-  // message above the tree carries the reason in the service's own words.
   const parts: string[] = [];
   if (group.qualifier) parts.push(`in ${group.qualifier}`);
-  if (group.rows.length === 0) return [...parts, "nothing listed"].join(" · ");
-  if (group.attention > 0) parts.push(`${group.attention} waiting`);
-  if (group.live > 0) parts.push(`${group.live} live`);
-  parts.push(group.rows.length === 1 ? "1 conversation" : `${group.rows.length} conversations`);
+  if (group.rows.length === 0) return [...parts, "empty"].join(" · ");
+  if (group.attention > 0) parts.push(`${group.attention} need you`);
+  if (group.live > 0) parts.push(`${group.live} running`);
+  parts.push(String(group.rows.length));
   return parts.join(" · ");
 }
 
@@ -385,11 +386,8 @@ function supervised(
     providerId: session.providerId,
     serviceName: providerDisplayName(session.providerId, providers),
     serviceIcon: providerIcon(session.providerId, providers),
-    // A projectless conversation never borrows the scratch folder's name: that name is an implementation
-    // detail, and a row called "no-project" would read as a folder the person forgot about.
     title: session.label?.trim()
       || native?.title?.trim()
-      || (projectless ? "" : workspaceName(homeWorkspace))
       || untitled(session.nativeSessionId || session.sessionId),
     homeWorkspace,
     workspace: session.workspace,
@@ -422,7 +420,6 @@ function providerOwned(
     serviceName: providerDisplayName(chat.providerId, providers),
     serviceIcon: providerIcon(chat.providerId, providers),
     title: chat.title?.trim()
-      || (projectless ? "" : workspaceName(chat.cwd))
       || untitled(chat.nativeSessionId),
     homeWorkspace: chat.cwd,
     workspace: chat.cwd,
@@ -523,24 +520,36 @@ function shortened(identity: string): string {
   return (compact.slice(-4) || identity.slice(-4)).toUpperCase();
 }
 
-/// What to call a conversation that nobody named.
-///
-/// The service supplied no title and there is no folder to borrow a name from, which is what a conversation
-/// started outside any project looks like. Composing a name out of what was said would mean reading the
-/// conversation. The identifier is what the service did give, and it is what tells two of these apart.
+/// What to call a conversation that the service did not name.
 function untitled(identity: string): string {
   return `Untitled · ${shortened(identity)}`;
 }
 
-/// The muted second line: only the facts that separate this row from its neighbours.
-export function conversationDetail(row: Conversation, nowMs: number, grouped = false): string {
+/// The muted second line: current state and the service's timestamp, with no repeated provider or project name.
+export function conversationDetail(row: Conversation, nowMs: number, _grouped = false): string {
   return [
-    // Under a heading the folder is the heading, and repeating it on every row is the wall of text the
-    // grouping exists to remove.
-    grouped || row.folder === row.title ? null : row.folder,
-    row.serviceName,
+    conversationStatus(row),
     elapsed(row.updatedAtMs, nowMs),
   ].filter((part): part is string => Boolean(part)).join(" · ");
+}
+
+/// The smallest complete state vocabulary for a conversation row.
+export function conversationStatus(row: Conversation): string {
+  if (row.signInNeeded) return "Sign in needed";
+  switch (row.activity) {
+    case "needsYou":
+      return "Needs you";
+    case "attention":
+      return "Error";
+    case "working":
+      return "Running";
+    case "waitingOnQuota":
+      return "Limit";
+    case "ready":
+      return "Ready";
+    case "saved":
+      return "Stopped";
+  }
 }
 
 /// Terse elapsed time, in the spelling a chat list uses.

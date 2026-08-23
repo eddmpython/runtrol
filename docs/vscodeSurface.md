@@ -59,25 +59,31 @@ the original daemon and provider processes instead of making a versioned extensi
 - Fifteen sessions are the daily-use baseline and 30 sessions are the release load.
 - At most eight sessions own hot provider processes.
 - Exactly one selected session owns the full watch and Webview renderer.
-- The sidebar is the one Paseo-style list of this machine: every project, every conversation of every installed
-  coding service, the way the Codex and Claude desktop sidebars read. It lists conversations, never coding services. A
-  service is a fact printed on a row, never a parent node the reader opens first, and there is no separate inventory
-  view.
+- The sidebar is the one list of this machine: every project and every conversation of every installed coding
+  service. A service is the row icon, never repeated text and never a parent node. The row contains only the actual
+  conversation name, one operational state, and the service timestamp.
 - Every folder a coding service holds conversations in is a project heading, with its conversations beneath it. A
-  heading is created by the operator, or is the folder this window has open, or is discovered because a conversation
-  names it (created > open > discovered, one heading per place). A discovered heading exists exactly as long as a
-  conversation names it, so no heading is ever empty. Two folders with the same name are told apart by their parent.
+  heading is created by the operator, or is the folder this window has open and has a conversation, or is discovered
+  because a conversation names it (created > open > discovered, one heading per place). An empty open folder is not a
+  tree row because it makes all machine-wide siblings look nested beneath it. An explicitly created project may remain
+  while empty. Two folders with the same name are told apart by their parent.
   Grouping by coding service would sort by an implementation detail, since one repository driven by two CLIs is one
   piece of work.
 - Conversations are listed machine-wide, in one question per service, from the service's own surface: a listing
   protocol method, a listing command, or (for a CLI that publishes neither, Claude Code) the names in the CLI's own
-  store, read as identity, folder, the CLI's own title and last write, never a message. When a list is not everything
+  store. A structured human-facing `name`, `title`, or `preview` may cross directly into the visible row without
+  persistence or semantic parsing. When a list is not everything
   the sidebar says so in one line above the list, and the services' own reasons sit behind an (i) in the view's
   title. A conversation started without a project runs in
   the extension's own scratch folder and is listed beneath the headings as a loose row, with no folder name and no
   collision question.
-- The project this window is open on is first and open. Any project holding a conversation that stopped for the operator
-  is open too, so no heading can hide the thing that wants them. Everything else is closed.
+- The project this window is open on is first and open when it has conversations. Any project holding a conversation
+  that stopped for the operator is open too, so no heading can hide the thing that wants them. Everything else is closed.
+- Project summaries contain only attention, running, and total counts. They never repeat the word `conversation`.
+- `Running`, `Ready`, `Stopped`, `Needs you`, `Error`, `Limit`, and `Sign in needed` are the complete row-state
+  vocabulary. Provider and project names are not repeated in a conversation detail line.
+- Every usable CLI has a row in the fixed `CLI Usage` area at the bottom of the same sidebar. The area is expanded by
+  default. A CLI without a report says `No report yet`; it is never omitted and never shown as within limits.
 - A conversation is deleted from its row. A Runtime-supervised conversation is closed and forgotten here (the
   provider keeps its own record). A provider-owned stored conversation is deleted through the provider's own surface
   (`sessions/deleteNative`: Codex `thread/delete`, Cline `history delete`) after a modal question naming the service;
@@ -198,9 +204,10 @@ the original daemon and provider processes instead of making a versioned extensi
 - Conversation and sidebar activity watch handshakes share one foreground-priority gate. Only connection and
   subscription setup is serialized; acknowledged streams remain concurrent, and retired promise cleanup is not on
   the visible switch path.
-- An operator name is stored as bounded session metadata. Without one, the provider's own catalogue title is used
-  when supplied and is refreshed after a native identity appears and after each turn settles. The project and
-  runtime-discovered provider remain the fallback, and a short stable suffix appears only when titles collide.
+- An operator name is stored as bounded session metadata. Without one, the provider's own catalogue title or
+  structured display preview is used and refreshed after a native identity appears and after each turn settles. A
+  project or provider name is never a conversation-title fallback. `Untitled` with a short stable identity is the
+  final fallback, and a short stable suffix appears only when actual titles collide.
 - The selected session remains first. One fuzzy switcher searches project, provider, state, and workspace metadata.
 - Session-index subscribers receive one current snapshot and then only list-visible changes.
 - Selecting a cold session gives immediate feedback, resumes through its provider-native identity, and follows its

@@ -166,8 +166,8 @@
         },
         {
           "id": "runtrol.usage",
-          "name": "Usage",
-          "visibility": "collapsed"
+          "name": "CLI Usage",
+          "visibility": "visible"
         }
       ],
       "runtrolPanel": [
@@ -1001,7 +1001,7 @@
       },
       {
         "view": "runtrol.usage",
-        "contents": "No account has reported its limits yet. Usage appears here after a conversation's first turn."
+        "contents": "No connected CLI."
       }
     ],
     "configuration": {
