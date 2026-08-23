@@ -99,7 +99,9 @@ test("connection retry uses bounded backoff only for transient transport failure
   const runtime = await connector.connectWithRetry(
     validatedLocator(instanceId, "fixture", "0.1.1"),
     { name: "fixture", version: "1.0.0" },
-    { initialDelayMs: 1, maximumDelayMs: 2, deadlineMs: 100 },
+    // The attempt count below owns this behavior assertion. The deadline is only a hang guard, so it must not
+    // turn a saturated hosted runner into a product timeout before the third immediate fixture attempt.
+    { initialDelayMs: 1, maximumDelayMs: 2, deadlineMs: 1_000 },
   );
   assert.equal(attempts, 3);
   runtime.close();

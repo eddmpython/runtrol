@@ -805,23 +805,13 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
 
         const resumeStarted = performance.now();
         progress("cold-select");
-        await performanceDeadline(
-          controller.select(cold.sessionId),
-          10_000,
-          "cold session selection",
-        );
+        // The extension-host integration owns the whole measurement hang guard. Per-phase timers here would
+        // abort a valid trial on a saturated runner before the three-trial performance ratchet can score it.
+        await controller.select(cold.sessionId);
         progress("cold-watch-and-render");
         await Promise.all([
-          performanceDeadline(
-            controller.selectedWatchReady(),
-            10_000,
-            "cold session event watch",
-          ),
-          performanceDeadline(
-            conversation.focused()?.settled() ?? Promise.resolve(),
-            10_000,
-            "cold session Webview render",
-          ),
+          controller.selectedWatchReady(),
+          conversation.focused()?.settled() ?? Promise.resolve(),
         ]);
         const coldResumeMs = performance.now() - resumeStarted;
         const resumed = state.selected;
@@ -1023,26 +1013,6 @@ async function chooseAgentToolsProject(): Promise<string | null> {
   );
   return picked?.workspace ?? null;
 }
-
-function performanceDeadline<T>(pending: Promise<T>, timeoutMs: number, label: string): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    const timeout = setTimeout(
-      () => reject(new Error(`${label} exceeded ${timeoutMs} ms`)),
-      timeoutMs,
-    );
-    pending.then(
-      (value) => {
-        clearTimeout(timeout);
-        resolve(value);
-      },
-      (error: unknown) => {
-        clearTimeout(timeout);
-        reject(error);
-      },
-    );
-  });
-}
-
 
 export function deactivate(): void {}
 
