@@ -35,6 +35,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import zipfile
 from dataclasses import dataclass, replace
@@ -103,7 +104,24 @@ def selftest() -> int:
         if not rejected:
             print(f"[shippedRuntimeInterop:selftest] FAIL: defect {index} escaped.", file=sys.stderr)
             return 2
-    print(f"[shippedRuntimeInterop:selftest] OK. all {len(defects)} evidence mutations made the gate red.")
+    with tempfile.TemporaryDirectory(prefix="runtrolShippedReadiness") as raw:
+        locator = Path(raw) / "runtime.locator.json"
+
+        def publishLater() -> None:
+            time.sleep(0.05)
+            locator.write_text("{}", encoding="utf-8")
+
+        publisher = threading.Thread(target=publishLater)
+        publisher.start()
+        appeared = waitForLocator(locator, timeout=0.5)
+        publisher.join()
+        if not appeared:
+            print("[shippedRuntimeInterop:selftest] FAIL: delayed locator readiness escaped.", file=sys.stderr)
+            return 2
+    print(
+        f"[shippedRuntimeInterop:selftest] OK. all {len(defects)} evidence mutations made the gate red "
+        "and delayed locator readiness converged."
+    )
     return 0
 
 
@@ -192,6 +210,24 @@ client.close();
 """
 
 
+def waitForLocator(locator: Path, timeout: float = 10.0) -> bool:
+    """Wait only for locator publication, leaving every content and security verdict to the SDK."""
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            locator.lstat()
+            return True
+        except FileNotFoundError:
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(0.05)
+            continue
+        except OSError:
+            # It exists but cannot be inspected here. The public SDK must report the exact unsafe
+            # or IO verdict instead of this readiness helper turning it into absence.
+            return True
+
+
 def greet(core: Path, home: Path, scratch: Path) -> Evidence:
     """Start one shipped Core and complete this build's own initialize against it."""
     # Both ends must meet at one file. The daemon writes its locator inside RUNTROL_HOME, and the
@@ -256,6 +292,12 @@ def greet(core: Path, home: Path, scratch: Path) -> Evidence:
         # targets and by the hello corpus, which runs everywhere.
         raise Unusable(f"the shipped {core.name} could not run in this gate's environment: {detail}")
     try:
+        # `runtrol endpoint` returns once the private command socket answers. The public Runtime
+        # listener publishes its separate locator immediately afterwards, so a cold hosted runner
+        # can observe the small interval between those two readiness boundaries. Wait only for the
+        # directory entry. The SDK below still performs the first and only content, ownership,
+        # permissions, confinement, and schema validation.
+        waitForLocator(runtime_home / "runtime.locator.json")
         script = scratch / "greet.mjs"
         entry = (CLIENT / "dist" / "src" / "index.js").resolve().as_uri()
         script.write_text(GREETING_SCRIPT.replace("CLIENT_ENTRY", entry), encoding="utf-8")
