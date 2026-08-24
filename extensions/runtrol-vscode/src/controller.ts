@@ -1812,7 +1812,13 @@ export class Controller implements vscode.Disposable {
       if (row.session) await this.close(row.session);
       return;
     }
+    const title = row.title;
+    const serviceName = row.serviceName;
     await this.deleteNativeWithoutAsking(row);
+    // The row simply disappears otherwise, which is the same thing a misclick looks like. Naming what left and
+    // whose list it left says which of the two just happened. It claims nothing about getting it back, because
+    // that is each service's own business and not the same answer for all of them.
+    void vscode.window.showInformationMessage(`Deleted ${title} from ${serviceName}.`);
   }
 
   /// The deletion itself, after the question (or, for the headless journey, instead of it): the provider
