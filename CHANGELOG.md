@@ -18,15 +18,35 @@ and refactoring that no user can observe do not belong here.
   of erasing anything Runtrol moves the conversation out of Claude's own store into a `runtrol-deleted` folder
   beside it: it leaves the sidebar and Claude's resume list at once, yet can be carried back by hand. The action
   is offered only at the machine, never from a paired phone.
-- Agent Usage is now one line per service: the service icon and its usage, nothing else. The running cost and the
-  account percentage sit beside the icon as the CLI reports them, and the service name and status move to the
-  hover, so the strip stays down to a glyph and a number.
+- Agent Usage is now one line per service: the service icon and its usage, nothing else. A service that reports
+  how much of a window it has used gets a real bar per window with the same figure beside it; one that reports
+  only a running spend, or only when its window resets, shows that instead. No service ever gets an empty bar for
+  a number it did not send. The service name and status move to the hover, so the strip stays a mark and a
+  reading.
+- Code an agent writes back is now coloured in the conversation, the way an editor colours it: comments,
+  strings, numbers, keywords, types and called names, following the light or dark theme. A language Runtrol has
+  no grammar for still gets its strings and comments.
+- The conversation now reads nested lists, tables, and quoted lines the way they were written. A list indented
+  under an entry stays under it, a table keeps its columns, and a quoted line is set off instead of showing its
+  markers.
+
+### Fixed
+
+- Every reported spend was being rejected before it could be shown, because the reader that checks incoming
+  Runtime data accepted only whole numbers and a spend has decimals. Costs now appear.
+- A pinned conversation now leads the whole panel, above the project headings. It previously sorted only within
+  its own section, which for a conversation with no project meant below everything.
+- When Agent Usage cannot refresh, it now says why instead of only that it failed.
 
 ### Changed
 
-- Cline, OpenCode, and Grok now show their own service icon wherever a service is drawn, instead of the same
-  generic placeholder they shared before. Every listed service carries its own mark rather than falling back to
-  one.
+- Every service now carries its own product mark: Claude Code, Codex, Cline, OpenCode, and Grok, taken from
+  each vendor's own site rather than from the editor's icon font. Claude Code and OpenCode use vector marks, so
+  they stay sharp at any size, and the OpenAI mark, which is white, flips to the dark badge the vendor itself
+  uses on a light background instead of disappearing into it.
+- Renaming a conversation is now instant and local. It no longer reopens a stored conversation and waits for its
+  CLI in order to change a name; the name Runtrol shows is Runtrol's own, is remembered per machine, and never
+  rewrites anything the coding service owns. Clearing the name restores the service's own title.
 - A conversation named from its first prompt now passes over a leading slash command (such as `/model` or
   `/clear`), so its name is the first thing you actually asked rather than the control line you happened to type
   first. A conversation that only ever ran commands keeps its first command rather than going nameless.
