@@ -119,8 +119,17 @@ test("a table keeps its header and its rows", () => {
 });
 
 test("pipes are only a table when the line under the header is the rule", () => {
-  const blocks = parseMarkdown("run a | b | c\nand then more");
-  assert.deepEqual(blocks.map((block) => block.kind), ["paragraph"], "a sentence with pipes stays a sentence");
+  // Lines that are already shaped like table rows, so the rule beneath the first is the only difference.
+  const withoutRule = parseMarkdown("| name | count |\n| alpha | 1 |");
+  assert.deepEqual(
+    withoutRule.map((block) => block.kind),
+    ["paragraph"],
+    "rows with no rule under the header stay a paragraph",
+  );
+  const withRule = parseMarkdown("| name | count |\n| --- | --- |\n| alpha | 1 |");
+  assert.deepEqual(withRule.map((block) => block.kind), ["table"], "the same rows with the rule are a table");
+  const sentence = parseMarkdown("run a | b | c\nand then more");
+  assert.deepEqual(sentence.map((block) => block.kind), ["paragraph"], "a sentence with pipes stays a sentence");
 });
 
 test("a quoted run becomes one quote", () => {

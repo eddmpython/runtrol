@@ -66,8 +66,13 @@ test("a language with no grammar still finds its strings and notes, and claims n
 
 test("a number is a number only where one can begin", () => {
   assert.deepEqual(kindsOf(highlight("ts", "const a1 = 0xff + 2;"), "number"), ["0xff", "2"]);
-  // `a1` is one name, so its digit never becomes a number of its own.
-  assert.deepEqual(kindsOf(highlight("ts", "a1"), "number"), []);
+  // A name that carries digits stays one whole name: no number is cut out of it, and the name is still there.
+  const tokens = highlight("ts", "const a1 = 2;");
+  assert.deepEqual(kindsOf(tokens, "number"), ["2"], "only the standalone digit is a number");
+  assert.ok(
+    tokens.some((token) => token.kind === "plain" && token.text.includes("a1")),
+    "the name keeps its digit rather than being split around it",
+  );
 });
 
 test("an unterminated string stops at the line, so the rest of the block keeps its colours", () => {
