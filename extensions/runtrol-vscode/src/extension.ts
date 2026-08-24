@@ -1023,9 +1023,16 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
       }
       : undefined,
     journey: RUNTROL_INCLUDE_TEST_JOURNEY
-      ? journeyApi(controller, missionController, state, conversation, afterReady, context.extensionMode, (sessionId) => (
-        conversations.revealSession(sessionId)
-      ))
+      ? journeyApi(
+        controller,
+        missionController,
+        state,
+        conversation,
+        afterReady,
+        context.extensionMode,
+        (sessionId) => conversations.revealSession(sessionId),
+        (key) => conversations.revealConversation(key),
+      )
       : undefined,
   };
 }

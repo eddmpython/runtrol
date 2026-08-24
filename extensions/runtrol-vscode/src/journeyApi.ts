@@ -92,6 +92,12 @@ export type JourneyApi = {
   /// The eye pass: pin or unpin a listed conversation, the same local ordering choice the row's pin button
   /// sets, so a pinned conversation sorts to the top of its list.
   pinListed(providerId: string, nativeSessionId: string): Promise<void>;
+  /// The eye pass: give a listed conversation a local nickname, the same instant rename the row's pencil sets,
+  /// so the row then shows the operator's name instead of the service's own.
+  nameListed(providerId: string, nativeSessionId: string, label: string): Promise<void>;
+  /// The eye pass: select a listed conversation's row so its inline actions (rename, pin, delete) show for a
+  /// photograph, whether or not it has a running session.
+  revealConversation(providerId: string, nativeSessionId: string): Promise<void>;
   /// The eye pass: ask the services for their lists again and wait for the answers.
   refreshChats(): Promise<void>;
   /// Wait until one session reports a lifecycle, or fail at the deadline.
@@ -130,6 +136,7 @@ export function journeyApi(
   afterReady: <T>(action: () => Promise<T>) => Promise<T>,
   extensionMode: vscode.ExtensionMode,
   revealRow: (sessionId: string) => Promise<void> = async () => {},
+  revealByKey: (key: string) => Promise<void> = async () => {},
 ): JourneyApi | undefined {
   if (
     extensionMode !== vscode.ExtensionMode.Test
@@ -337,6 +344,22 @@ export function journeyApi(
       );
       if (!row) throw new Error("that conversation is not listed");
       await controller.togglePin(row);
+    }),
+    nameListed: (providerId, nativeSessionId, label) => afterReady(async () => {
+      const row = state.conversations.find(
+        (candidate) => candidate.providerId === providerId
+          && candidate.native?.nativeSessionId === nativeSessionId,
+      );
+      if (!row) throw new Error("that conversation is not listed");
+      await controller.renameConversation(row, label);
+    }),
+    revealConversation: (providerId, nativeSessionId) => afterReady(async () => {
+      const row = state.conversations.find(
+        (candidate) => candidate.providerId === providerId
+          && candidate.native?.nativeSessionId === nativeSessionId,
+      );
+      if (!row) throw new Error("that conversation is not listed");
+      await revealByKey(row.key);
     }),
     refreshChats: () => afterReady(() => controller.refreshChats()),
     registerMissionGate: (gateId, program, arguments_) => afterReady(

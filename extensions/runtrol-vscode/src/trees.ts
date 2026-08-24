@@ -377,6 +377,17 @@ export class ConversationsTree implements vscode.TreeDataProvider<ChatTreeItem>,
     await view.reveal(row, { select: true, focus: true });
   }
 
+  /// Select one conversation's row by its conversation key, so a stored conversation with no running session
+  /// can be brought forward and show its inline actions (rename, pin, delete) the same way a live row does.
+  async revealConversation(key: string): Promise<void> {
+    const view = this.view;
+    if (!view) return;
+    this.ensureItems();
+    const row = this.rowFor(key);
+    if (!row) return;
+    await view.reveal(row, { select: true, focus: true });
+  }
+
   private revealOpenConversation(): void {
     const view = this.view;
     if (!view || !view.visible) return;
