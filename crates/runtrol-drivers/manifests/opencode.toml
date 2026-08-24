@@ -7,9 +7,9 @@
 schema = 1
 id = "opencode"
 display_name = "OpenCode"
-# Named, not shipped. The editor's icon font has no mark for this service, so a terminal stands in for this coding
-# CLI; no vendor artwork is distributed.
-icon = "terminal"
+# Names the service's own brand icon, kept in assets/brand/provider-icons and generated into the resources at
+# build time. It identifies the service in the list.
+icon = "opencode"
 kind = "acp"
 
 [bin]

@@ -21,10 +21,11 @@ body {
 }
 
 .usage-row {
-  display: grid;
+  display: flex;
+  align-items: center;
+  gap: 8px;
   width: 100%;
-  gap: 5px;
-  padding: 6px 7px 7px;
+  padding: 5px 7px;
   border: 1px solid transparent;
   border-radius: 4px;
   color: inherit;
@@ -48,110 +49,37 @@ button.usage-row:focus-visible,
   outline-offset: -1px;
 }
 
-.usage-header {
-  display: grid;
-  grid-template-columns: 20px minmax(0, 1fr) auto;
-  align-items: center;
-  min-width: 0;
-  gap: 6px;
-}
-
 .provider-icon {
+  flex: none;
   width: 16px;
   height: 16px;
-  justify-self: center;
   object-fit: contain;
 }
 
-.provider-name {
+.usage-value {
   overflow: hidden;
-  font-weight: 600;
+  font-variant-numeric: tabular-nums;
   text-overflow: ellipsis;
   white-space: nowrap;
+  color: var(--vscode-foreground);
 }
 
-.provider-status,
-.meter-meta,
+.usage-row.unavailable .usage-value {
+  color: var(--vscode-notificationsWarningIcon-foreground, var(--vscode-charts-orange));
+}
+
+.usage-row.limit-reached .usage-value {
+  color: var(--vscode-errorForeground);
+}
+
+.usage-row.disconnected {
+  opacity: 0.7;
+}
+
 .empty,
 .error {
   color: var(--vscode-descriptionForeground);
   font-size: 11px;
-}
-
-.usage-row.unavailable .provider-status {
-  color: var(--vscode-notificationsWarningIcon-foreground, var(--vscode-charts-orange));
-}
-
-.usage-row.limit-reached .provider-status {
-  color: var(--vscode-errorForeground);
-}
-
-.meter {
-  display: grid;
-  gap: 3px;
-  padding-left: 26px;
-}
-
-.meter-meta {
-  display: flex;
-  justify-content: space-between;
-  gap: 8px;
-}
-
-.meter-meta > :last-child {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.usage-cost {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding-left: 6px;
-}
-
-.usage-cost .cost-icon {
-  width: 14px;
-  height: 14px;
-  object-fit: contain;
-}
-
-.usage-cost .cost-value {
-  font-variant-numeric: tabular-nums;
-  color: var(--vscode-foreground);
-}
-
-.usage-row.limit-reached .usage-cost .cost-value {
-  color: var(--vscode-errorForeground);
-}
-
-progress {
-  width: 100%;
-  height: 6px;
-  overflow: hidden;
-  border: 1px solid var(--vscode-widget-border, transparent);
-  border-radius: 999px;
-  appearance: none;
-  background: var(--vscode-input-background, transparent);
-}
-
-progress::-webkit-progress-bar {
-  border-radius: 999px;
-  background: var(--vscode-input-background, transparent);
-}
-
-progress::-webkit-progress-value {
-  border-radius: 999px;
-  background: var(--vscode-progressBar-background, var(--vscode-charts-blue));
-}
-
-.usage-row.limit-reached progress::-webkit-progress-value {
-  background: var(--vscode-errorForeground);
-}
-
-.usage-row.disconnected progress {
-  opacity: 0.55;
 }
 
 .discover {

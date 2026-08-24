@@ -40,58 +40,33 @@ function usageRow(row: UsageRow): HTMLElement {
   const item = document.createElement(row.state === "unavailable" ? "button" : "section");
   item.className = `usage-row ${row.state}${row.reached ? " limit-reached" : ""}`;
   item.title = row.tooltip;
-  item.setAttribute("aria-label", `${row.name}, ${row.detail}`);
+  const value = usageValue(row);
+  // The service name and its state live in the hover, not on the row. The glyph says whose usage this is; the
+  // text beside it is the usage itself and nothing else.
+  item.setAttribute("aria-label", value ? `${row.name}, ${value}` : row.name);
   if (item instanceof HTMLButtonElement) {
     item.type = "button";
     item.addEventListener("click", () => vscode.postMessage({ type: "fix", providerId: row.providerId }));
   }
-
-  const header = document.createElement("span");
-  header.className = "usage-header";
   const icon = providerGlyph(row.icon, "provider-icon");
   icon.setAttribute("aria-hidden", "true");
-  const name = document.createElement("span");
-  name.className = "provider-name";
-  name.textContent = row.name;
-  const status = document.createElement("span");
-  status.className = "provider-status";
-  status.textContent = compactStatus(row);
-  header.append(icon, name, status);
-  item.append(header);
-
-  for (const meter of row.meters) {
-    const block = document.createElement("span");
-    block.className = "meter";
-    const meta = document.createElement("span");
-    meta.className = "meter-meta";
-    const label = document.createElement("span");
-    label.textContent = meter.label;
-    const detail = document.createElement("span");
-    detail.textContent = meter.detail;
-    meta.append(label, detail);
-    const progress = document.createElement("progress");
-    progress.max = 100;
-    progress.value = meter.percent;
-    progress.setAttribute("aria-label", `${row.name}, ${meter.label}, ${meter.detail}`);
-    block.append(meta, progress);
-    item.append(block);
-  }
-
-  if (row.cost) {
-    // The service glyph is the only marker on this line, so cost sits at a fixed row height whatever the
-    // service. Repeating the service name here is what made rows jump; the icon already says whose it is.
-    const cost = document.createElement("span");
-    cost.className = "usage-cost";
-    const glyph = providerGlyph(row.icon, "cost-icon");
-    glyph.setAttribute("aria-hidden", "true");
-    const value = document.createElement("span");
-    value.className = "cost-value";
-    value.textContent = row.cost;
-    cost.append(glyph, value);
-    cost.setAttribute("aria-label", `${row.name}, spend ${row.cost}`);
-    item.append(cost);
-  }
+  const text = document.createElement("span");
+  text.className = "usage-value";
+  text.textContent = value;
+  item.append(icon, text);
   return item;
+}
+
+/// The one thing beside the glyph: the service's own usage. Cost and the account percentage when reported, the
+/// fix affordance when the service cannot run, and nothing at all when there is no usage to show yet.
+function usageValue(row: UsageRow): string {
+  if (row.state === "unavailable") return "Fix";
+  if (row.state === "checking") return "";
+  const parts: string[] = [];
+  if (row.cost) parts.push(row.cost);
+  const percentMeter = row.meters.find((meter) => Number.isFinite(meter.percent));
+  if (percentMeter) parts.push(`${percentMeter.percent}%`);
+  return parts.join(" · ");
 }
 
 /// Provider manifests already restrict icon names. Recheck at the Webview boundary because the name still comes
@@ -117,13 +92,6 @@ function providerGlyph(declared: string, className: string): HTMLImageElement {
     { once: true },
   );
   return image;
-}
-
-function compactStatus(row: UsageRow): string {
-  if (row.state === "unavailable") return "Fix";
-  if (row.state === "disconnected") return "Last report";
-  if (row.reached) return "Limit reached";
-  return row.meters.length > 0 ? "" : row.detail;
 }
 
 function usageSnapshot(value: unknown): UsageViewSnapshot | null {

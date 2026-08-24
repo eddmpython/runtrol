@@ -1,4 +1,4 @@
-import { cp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { build } from "esbuild";
@@ -109,11 +109,20 @@ async function buildProviderIcons() {
   }
 
   await Promise.all([...names].map(async (name) => {
+    const target = path.join(providerIcons, `${name}.svg`);
+    // A repo-owned brand icon wins for a service the editor's icon font carries no mark for. Present means use
+    // it; absent (stat rejects) means this name has no override and the editor glyph is rendered instead.
+    const brand = path.join(repositoryRoot, "assets", "brand", "provider-icons", `${name}.svg`);
+    const hasBrand = await stat(brand).then(() => true, () => false);
+    if (hasBrand) {
+      await cp(brand, target);
+      return;
+    }
     const glyph = symbols.get(name) ?? fallback;
     const svg = `<?xml version="1.0" encoding="utf-8"?>\n`
       + `<svg xmlns="http://www.w3.org/2000/svg" ${glyph.attributes}>\n`
       + "<style>:root{color:#424242}@media(prefers-color-scheme:dark){:root{color:#c5c5c5}}</style>\n"
       + `${glyph.body}\n</svg>\n`;
-    await writeFile(path.join(providerIcons, `${name}.svg`), svg, "utf8");
+    await writeFile(target, svg, "utf8");
   }));
 }

@@ -18,16 +18,15 @@ and refactoring that no user can observe do not belong here.
   of erasing anything Runtrol moves the conversation out of Claude's own store into a `runtrol-deleted` folder
   beside it: it leaves the sidebar and Claude's resume list at once, yet can be carried back by hand. The action
   is offered only at the machine, never from a paired phone.
-- Agent Usage now shows each service's running cost on its own line, marked by the service icon alone and updated
-  as the CLI reports it at the end of every turn. The service name is not repeated on that line, so rows keep a
-  steady height. Services that report only account limits are unchanged, and a service that reports no cost shows
-  no cost line.
+- Agent Usage is now one line per service: the service icon and its usage, nothing else. The running cost and the
+  account percentage sit beside the icon as the CLI reports them, and the service name and status move to the
+  hover, so the strip stays down to a glyph and a number.
 
 ### Changed
 
-- Cline, OpenCode, and Grok now carry a fitting glyph wherever a service is drawn (a robot, a terminal, and a
-  rocket) instead of the same generic placeholder they shared before. Agent Usage in particular now draws each
-  service's own glyph rather than falling every service back to one mark.
+- Cline, OpenCode, and Grok now show their own service icon wherever a service is drawn, instead of the same
+  generic placeholder they shared before. Every listed service carries its own mark rather than falling back to
+  one.
 - A conversation named from its first prompt now passes over a leading slash command (such as `/model` or
   `/clear`), so its name is the first thing you actually asked rather than the control line you happened to type
   first. A conversation that only ever ran commands keeps its first command rather than going nameless.

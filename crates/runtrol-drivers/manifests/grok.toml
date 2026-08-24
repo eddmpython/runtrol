@@ -10,9 +10,9 @@ schema = 1
 id = "grok"
 display_name = "Grok"
 kind = "acp"
-# Named, not shipped. The editor's icon font has no mark for this service, so a rocket stands in for it; no vendor
-# artwork is distributed.
-icon = "rocket"
+# Names the service's own brand icon, kept in assets/brand/provider-icons and generated into the resources at
+# build time. It identifies the service in the list.
+icon = "grok"
 
 [bin]
 # Bare names, tried in this order. Measured on this machine: the installer places a native executable at
