@@ -29,6 +29,8 @@ and refactoring that no user can observe do not belong here.
 - A conversation named from its first prompt now passes over a leading slash command (such as `/model` or
   `/clear`), so its name is the first thing you actually asked rather than the control line you happened to type
   first. A conversation that only ever ran commands keeps its first command rather than going nameless.
+- Rename is now an inline pencil on every conversation row, not only a buried right-click action, so a
+  conversation can be given a name without hunting through a menu.
 
 ## [0.1.21] - 2026-08-24
 

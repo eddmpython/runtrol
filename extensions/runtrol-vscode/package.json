@@ -855,6 +855,11 @@
           "group": "1_manage@1"
         },
         {
+          "command": "runtrol.renameSession",
+          "when": "view == runtrol.sessions && viewItem =~ /^runtrol\\.conversation/",
+          "group": "inline@2"
+        },
+        {
           "command": "runtrol.openWorkspace",
           "when": "view == runtrol.sessions && viewItem =~ /^runtrol\\.conversation/",
           "group": "2_window@1"
@@ -867,7 +872,7 @@
         {
           "command": "runtrol.deleteConversation",
           "when": "view == runtrol.sessions && viewItem =~ /\\.delete/",
-          "group": "inline@1"
+          "group": "inline@3"
         },
         {
           "command": "runtrol.closeSession",
