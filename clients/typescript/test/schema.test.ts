@@ -39,3 +39,28 @@ test("approval digests reject values outside the unsigned byte range", () => {
     RuntimeProtocolError,
   );
 });
+
+function usage(amount: number): object {
+  return {
+    providers: [{
+      providerId: "claude",
+      reached: false,
+      atMs: 1_700_000_000_000,
+      cost: { amount, currency: "USD" },
+    }],
+  };
+}
+
+test("a reported cost keeps its fraction, which is how money is written", () => {
+  // Measured: one Claude turn reported 0.4306 USD. Reading a real number as an unsigned integer rejected every
+  // cost a service ever sent, and the panel showed a schema violation where the amount belonged.
+  assert.deepEqual(validatePublic("ProviderUsageList", usage(0.4306)), usage(0.4306));
+  assert.deepEqual(validatePublic("ProviderUsageList", usage(0)), usage(0));
+  assert.deepEqual(validatePublic("ProviderUsageList", usage(1234.5)), usage(1234.5));
+});
+
+test("a cost that is not a finite number is refused", () => {
+  for (const amount of [Number.NaN, Number.POSITIVE_INFINITY]) {
+    assert.throws(() => validatePublic("ProviderUsageList", usage(amount)), RuntimeProtocolError);
+  }
+});

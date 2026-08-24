@@ -102,6 +102,9 @@ function matchesType(value: unknown, type: string): boolean {
     case "array": return Array.isArray(value);
     case "boolean": return typeof value === "boolean";
     case "integer": return Number.isSafeInteger(value);
+    // A JSON number with a fraction. The public schema had only integers until a provider reported money, and
+    // a type this validator does not know is refused, which is how every cost report came to be rejected.
+    case "number": return typeof value === "number" && Number.isFinite(value);
     case "null": return value === null;
     case "object": return isJsonObject(value);
     case "string": return typeof value === "string";
@@ -110,6 +113,9 @@ function matchesType(value: unknown, type: string): boolean {
 }
 
 function matchesNumberFormat(value: number, format: string): boolean {
+  // A real number: any finite value, sign and fraction included. A money amount is written this way, and
+  // reading one as an unsigned integer is what rejected every cost report the services sent.
+  if (format === "double" || format === "float") return Number.isFinite(value);
   if (!Number.isSafeInteger(value) || value < 0) return false;
   if (format === "uint8") return value <= 0xff;
   if (format === "uint16") return value <= 0xffff;
