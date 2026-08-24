@@ -211,6 +211,28 @@ let queued: readonly string[] = [];
 /// An @-mention picker is open in the host; further @ keystrokes wait until it answers.
 let mentionPending = false;
 
+prompt.addEventListener("paste", (event) => {
+  const images = [...(event.clipboardData?.items ?? [])]
+    .filter((item) => item.kind === "file" && item.type.startsWith("image/"))
+    .slice(0, 8);
+  if (images.length === 0) return;
+  event.preventDefault();
+  for (const [index, item] of images.entries()) {
+    const file = item.getAsFile();
+    if (!file) continue;
+    void imageAsBase64(file).then((base64Data) => {
+      vscode.postMessage({
+        type: "pasteImage",
+        name: file.name || `pasted-image-${index + 1}.${imageExtension(file.type)}`,
+        mediaType: file.type,
+        base64Data,
+      });
+    }).catch(() => {
+      setStatus("The pasted image could not be read.", "warning");
+    });
+  }
+});
+
 window.addEventListener("message", ({ data }: MessageEvent<Incoming>) => {
   if (data.type === "reset") {
     // The tab's identity, persisted where VS Code keeps webview state, so a restored tab knows which
@@ -656,8 +678,8 @@ function paintFacts(): void {
   setChip(branchChip, place?.branch ?? "");
   projectChip.title = place?.projectPath ?? "Project";
   setChip(serviceChip, draft ? draft.service : facts.service);
-  setChip(modelChip, draft ? draft.model : modelLine(facts, requested.model));
-  setChip(effortChip, draft ? draft.effort : chipText(facts.effort, requested.effort));
+  setChip(modelChip, draft ? draft.model : modelLine(facts, requested.model) || "Model");
+  setChip(effortChip, draft ? draft.effort : chipText(facts.effort, requested.effort) || "Effort");
   setChip(modeChip, draft ? draft.mode : chipText(facts.mode, requested.mode));
   const spent = usageLine(usage, Date.now());
   usageChip.textContent = spent;
@@ -937,6 +959,34 @@ function paintCommands(): void {
   commandMenu.hidden = false;
   prompt.setAttribute("aria-expanded", "true");
   prompt.setAttribute("aria-activedescendant", `runtrol-command-option-${highlighted}`);
+}
+
+function imageAsBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.addEventListener("load", () => {
+      const value = reader.result;
+      if (typeof value !== "string") {
+        reject(new Error("the clipboard image had no data URL"));
+        return;
+      }
+      const comma = value.indexOf(",");
+      if (comma < 0) {
+        reject(new Error("the clipboard image data URL was malformed"));
+        return;
+      }
+      resolve(value.slice(comma + 1));
+    }, { once: true });
+    reader.addEventListener("error", () => reject(reader.error ?? new Error("clipboard read failed")), { once: true });
+    reader.readAsDataURL(file);
+  });
+}
+
+function imageExtension(mediaType: string): string {
+  if (mediaType === "image/jpeg") return "jpg";
+  if (mediaType === "image/gif") return "gif";
+  if (mediaType === "image/webp") return "webp";
+  return "png";
 }
 
 function closeCommands(): void {

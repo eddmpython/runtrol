@@ -121,6 +121,9 @@ impl Provider for ClaudeProvider {
             native_session_delete: ProviderCapability::unsupported(
                 "Claude Code publishes no command or protocol method for its stored conversations",
             ),
+            native_session_archive: ProviderCapability::unsupported(
+                "Claude Code publishes no command or protocol method for archiving its stored conversations",
+            ),
         }
     }
 

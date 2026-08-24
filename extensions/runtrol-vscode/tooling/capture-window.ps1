@@ -7,7 +7,8 @@
 # that work for GPU-composited windows like editors.
 param(
     [Parameter(Mandatory = $true)][string]$TitleMatch,
-    [Parameter(Mandatory = $true)][string]$OutPath
+    [Parameter(Mandatory = $true)][string]$OutPath,
+    [string]$CommandLineMatch = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -22,7 +23,32 @@ public class RuntrolCaptureWin32 {
 }
 "@
 
-$window = Get-Process | Where-Object { $_.MainWindowTitle -like "*$TitleMatch*" } | Select-Object -First 1
+$allowedProcessIds = $null
+if ($CommandLineMatch) {
+    $allProcesses = @(Get-CimInstance Win32_Process)
+    $allowed = [Collections.Generic.HashSet[int]]::new()
+    foreach ($process in $allProcesses) {
+        if ($process.CommandLine -and $process.CommandLine.IndexOf($CommandLineMatch, [StringComparison]::OrdinalIgnoreCase) -ge 0) {
+            $allowed.Add([int]$process.ProcessId) | Out-Null
+        }
+    }
+    for ($depth = 0; $depth -lt 8; $depth += 1) {
+        $before = $allowed.Count
+        foreach ($process in $allProcesses) {
+            if (-not $allowed.Contains([int]$process.ProcessId)) { continue }
+            $parent = $allProcesses | Where-Object { $_.ProcessId -eq $process.ParentProcessId } | Select-Object -First 1
+            if ($parent -and $parent.Name -eq "Code.exe") {
+                $allowed.Add([int]$parent.ProcessId) | Out-Null
+            }
+        }
+        if ($allowed.Count -eq $before) { break }
+    }
+    $allowedProcessIds = @($allowed)
+}
+$window = Get-Process | Where-Object {
+    $_.MainWindowTitle -like "*$TitleMatch*" -and
+    ($null -eq $allowedProcessIds -or $allowedProcessIds -contains $_.Id)
+} | Select-Object -First 1
 if (-not $window) {
     Write-Error "no window has a title matching '$TitleMatch'"
     exit 2

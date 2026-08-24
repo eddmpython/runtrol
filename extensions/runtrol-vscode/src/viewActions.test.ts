@@ -24,6 +24,12 @@ test("accepts exactly the actions the dispatcher handles", () => {
   assert.ok(isViewAction({ type: "pickProject" }));
   assert.ok(isViewAction({ type: "pickService" }));
   assert.ok(isViewAction({ type: "attach" }));
+  assert.ok(isViewAction({
+    type: "pasteImage",
+    name: "pasted-image.png",
+    mediaType: "image/png",
+    base64Data: "aGVsbG8=",
+  }));
   assert.ok(isViewAction({ type: "removeAttachment", index: 0 }));
   assert.ok(isViewAction({ type: "mentionFile" }));
 });
@@ -51,6 +57,18 @@ test("refuses malformed payloads for known action names", () => {
   assert.equal(isViewAction({ type: "removeAttachment", index: -1 }), false);
   assert.equal(isViewAction({ type: "removeAttachment", index: 8 }), false, "bounded by the image limit");
   assert.equal(isViewAction({ type: "removeAttachment", index: "0" }), false);
+  assert.equal(isViewAction({
+    type: "pasteImage",
+    name: "pasted.svg",
+    mediaType: "image/svg+xml",
+    base64Data: "PHN2Zz4=",
+  }), false, "active image formats never cross the Webview boundary");
+  assert.equal(isViewAction({
+    type: "pasteImage",
+    name: "broken.png",
+    mediaType: "image/png",
+    base64Data: "not base64",
+  }), false);
   assert.equal(isViewAction(null), false);
   assert.equal(isViewAction([]), false);
   assert.equal(isViewAction("interrupt"), false);

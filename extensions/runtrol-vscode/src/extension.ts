@@ -167,6 +167,8 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
           : controller.pickDraftService(binding)));
       } else if (message.type === "attach") {
         void run(() => afterReady(() => controller.attach(binding)));
+      } else if (message.type === "pasteImage") {
+        controller.addPastedAttachment(binding, message);
       } else if (message.type === "removeAttachment") {
         controller.removeAttachment(binding, message.index);
       } else if (message.type === "mentionFile") {
@@ -708,9 +710,16 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
       { webviewOptions: { retainContextWhenHidden: false } },
     ),
     vscode.commands.registerCommand(
+      "runtrol.archiveConversation",
+      (item: unknown) => run(async () => {
+        if (!(item instanceof ConversationItem)) return;
+        await afterReady(() => controller.archiveConversation(item));
+      }),
+    ),
+    vscode.commands.registerCommand(
       "runtrol.deleteConversation",
-      // From the row's X on conversations only the provider holds. Guarded, because a command invoked with
-      // the wrong thing must refuse rather than delete something surprising.
+      // From the row's X. Guarded, because a command invoked with the wrong thing must refuse rather than
+      // delete something surprising.
       (item: unknown) => run(async () => {
         if (!(item instanceof ConversationItem)) return;
         await afterReady(() => controller.deleteConversation(item));
@@ -960,7 +969,7 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
       : undefined,
     // The harness's way to stand a created project up without driving the folder-picker dialog. Same code path
     // as the command, minus the picking.
-    seedProject: MEASURED_HOST
+    seedProject: MEASURED_HOST || RUNTROL_INCLUDE_TEST_JOURNEY
       ? async (folder) => {
         await projectStore.create(folder);
       }

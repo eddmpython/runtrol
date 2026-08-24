@@ -3,11 +3,9 @@ import type { ProviderCapabilities } from "./runtimeTypes";
 
 /// What "delete" means for one row, decided before anything is asked or done.
 ///
-/// Two different acts hide under one word, and the surface must never guess which. A conversation Runtrol
-/// supervises is closed and forgotten here (the pointer is Runtrol's, the history stays the provider's). A
-/// conversation only the provider holds is deleted by the provider, through its own surface, and only where
-/// that surface exists: a service that publishes no way to delete what it stored is told apart up front, in
-/// its own words, instead of after a click that could not have worked.
+/// A provider-owned conversation is deleted by the provider even while Runtrol supervises it. The controller
+/// closes that supervised pointer first. A session without a provider-owned identity only has its local
+/// pointer forgotten.
 export type ConversationDeletion =
   | { readonly kind: "forgetSupervised" }
   | { readonly kind: "deleteNative"; readonly serviceName: string }
@@ -17,7 +15,10 @@ export function conversationDeletion(
   row: Conversation,
   capabilities: ProviderCapabilities | null,
 ): ConversationDeletion {
-  if (row.session) return { kind: "forgetSupervised" };
+  if (!row.native && row.session) return { kind: "forgetSupervised" };
+  if (!row.native) {
+    return { kind: "unsupported", why: `${row.title} has no provider-owned conversation to delete.` };
+  }
   const capability = capabilities?.nativeSessionDelete;
   if (!capability) {
     return {
@@ -41,7 +42,8 @@ export function conversationDeletion(
 export function deletionQuestion(row: Conversation): { message: string; detail: string; button: string } {
   return {
     message: `Delete "${row.title}" from ${row.serviceName}?`,
-    detail: `${row.serviceName} removes it from its own history. Runtrol keeps no copy to restore it from.`,
+    detail: `${row.session ? "Runtrol stops supervising it first. " : ""}`
+      + `${row.serviceName} removes it from its own history. Runtrol keeps no copy to restore it from.`,
     button: `Delete from ${row.serviceName}`,
   };
 }

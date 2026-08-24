@@ -101,11 +101,11 @@ export function usageRows(
         key: `usage:${encodeURIComponent(providerId)}`,
         name,
         icon: providerIcon(providerId, providers),
-        detail: "No report yet",
+        detail: "Ready",
         reached: false,
         state: "available",
         provider,
-        tooltip: `${name}: no usage report yet`,
+        tooltip: `${name}: ready. Usage appears here when the CLI reports an account limit.`,
       };
     }
     return {

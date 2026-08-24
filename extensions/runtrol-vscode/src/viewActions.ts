@@ -5,6 +5,8 @@
 // `isViewAction`: the page runs remote-rendered conversation content, so an action name that the
 // dispatcher does not explicitly handle must be dropped, never defaulted into another action.
 
+import { PUBLIC_LIMITS } from "@runtrol/runtime-client";
+
 import { type DeclaredDiff, isDeclaredDiff } from "./webview/toolDiff";
 
 export type ViewAction =
@@ -16,6 +18,7 @@ export type ViewAction =
   | { type: "pickProject" }
   | { type: "pickService" }
   | { type: "attach" }
+  | { type: "pasteImage"; name: string; mediaType: string; base64Data: string }
   | { type: "removeAttachment"; index: number }
   | { type: "mentionFile" }
   | { type: "openDiff"; diff: DeclaredDiff }
@@ -77,6 +80,19 @@ export function isViewAction(value: unknown): value is ViewAction {
     const index = (value as { index?: unknown }).index;
     return Number.isInteger(index) && (index as number) >= 0 && (index as number) < MAX_ATTACHMENTS;
   }
+  if (type === "pasteImage") {
+    const candidate = value as { name?: unknown; mediaType?: unknown; base64Data?: unknown };
+    return typeof candidate.name === "string"
+      && candidate.name.length > 0
+      && candidate.name.length <= 255
+      && typeof candidate.mediaType === "string"
+      && IMAGE_MEDIA_TYPES.has(candidate.mediaType)
+      && typeof candidate.base64Data === "string"
+      && candidate.base64Data.length > 0
+      && candidate.base64Data.length <= PUBLIC_LIMITS.maxAttachmentBase64Bytes
+      && candidate.base64Data.length % 4 === 0
+      && BASE64.test(candidate.base64Data);
+  }
   if (type === "openDiff") {
     return isDeclaredDiff((value as { diff?: unknown }).diff);
   }
@@ -95,3 +111,6 @@ export function isViewAction(value: unknown): value is ViewAction {
     || type === "mentionFile"
     || type === "interrupt";
 }
+
+const IMAGE_MEDIA_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
+const BASE64 = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u;

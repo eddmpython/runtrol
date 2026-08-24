@@ -91,6 +91,23 @@ pub struct DeleteNativeSessionParams {
     pub workspace: String,
 }
 
+/// Archive one provider-native conversation through the provider's own surface.
+///
+/// Runtime relays the opaque identity and stores nothing. A conversation Runtime currently supervises
+/// must be forgotten before the provider-owned conversation can be archived.
+#[derive(Clone, Debug, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ArchiveNativeSessionParams {
+    /// Caller-minted mutation identity.
+    pub request_id: MutationRequestId,
+    /// Opaque provider identity returned with the native catalogue entry.
+    pub provider_id: ProviderId,
+    /// Provider-owned opaque session identity returned unchanged.
+    pub native_session_id: String,
+    /// Exact canonical workspace returned with the native catalogue entry.
+    pub workspace: String,
+}
+
 /// Heat one existing Runtime-managed cold session.
 #[derive(Clone, Debug, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

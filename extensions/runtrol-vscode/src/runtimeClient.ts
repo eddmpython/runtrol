@@ -739,6 +739,18 @@ export class StudioRuntimeClient implements vscode.Disposable {
     });
   }
 
+  /// Ask the provider that owns a stored conversation to archive it through Runtime's relay.
+  async archiveNative(native: NativeChatLine): Promise<void> {
+    await this.mutate(async (runtime) => {
+      await runtime.sessions().archiveNative({
+        requestId: newMutationRequestId(),
+        providerId: native.providerId,
+        nativeSessionId: native.nativeSessionId,
+        workspace: native.cwd,
+      });
+    });
+  }
+
   private async ensureControl(
     runtime: RuntimeClient,
     session: RuntimeSessionAction,

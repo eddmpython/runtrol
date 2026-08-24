@@ -879,9 +879,9 @@ button:disabled {
 #send:not([hidden]),
 #interrupt:not([hidden]) {
   display: grid;
-  width: 2rem;
-  min-height: 2rem;
-  height: 2rem;
+  width: 1.75rem;
+  min-height: 1.75rem;
+  height: 1.75rem;
   padding: 0;
   place-items: center;
   border-radius: 999px;
@@ -890,13 +890,14 @@ button:disabled {
 }
 
 #send {
-  color: #fff8f5;
+  color: var(--vscode-editor-background);
   border-color: transparent;
-  background: var(--runtrol-accent);
+  background: var(--vscode-foreground);
 }
 
 #send:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--runtrol-accent) 85%, #000);
+  background: var(--vscode-foreground);
+  opacity: 0.85;
 }
 
 /*

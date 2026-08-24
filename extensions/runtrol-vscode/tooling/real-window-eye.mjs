@@ -8,9 +8,10 @@
 //
 // Usage: node tooling/real-window-eye.mjs
 //   RUNTROL_EYE_FOLDER   the repository to open and converse in (default: this repository)
-//   RUNTROL_EYE_PROVIDER the provider to start the conversation with (default: claude)
+//   RUNTROL_EYE_PROVIDER the provider to start the conversation with (default: codex)
 //   RUNTROL_EYE_OUT      where the PNGs land (default: %TEMP%/runtrol-eye)
 //   RUNTROL_TEST_CORE    the runtrol executable (default: target/debug/runtrol[.exe])
+//   RUNTROL_EYE_DRAFT_ONLY=1 photographs the current-folder draft without starting a provider turn
 //   RUNTROL_EYE_SHELL_ONLY=1 runs only the project-switch and keyboard-back proof, with no provider turn
 import { spawn, spawnSync } from "node:child_process";
 import { cp, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
@@ -38,7 +39,7 @@ const core = process.env.RUNTROL_TEST_CORE
 await stat(core);
 const folder = path.resolve(process.env.RUNTROL_EYE_FOLDER || repositoryRoot);
 await stat(folder);
-const providerId = process.env.RUNTROL_EYE_PROVIDER || "claude";
+const providerId = process.env.RUNTROL_EYE_PROVIDER || "codex";
 const eyeEntry = process.env.RUNTROL_EYE_ENTRY || "realWindowEye";
 const outDir = path.resolve(process.env.RUNTROL_EYE_OUT || path.join(os.tmpdir(), "runtrol-eye"));
 await mkdir(outDir, { recursive: true });
@@ -171,6 +172,7 @@ try {
     RUNTROL_EYE_NODE: process.execPath,
     ...(process.env.RUNTROL_EYE_PROMPT ? { RUNTROL_EYE_PROMPT: process.env.RUNTROL_EYE_PROMPT } : {}),
     ...(process.env.RUNTROL_EYE_TABS ? { RUNTROL_EYE_TABS: process.env.RUNTROL_EYE_TABS } : {}),
+    ...(process.env.RUNTROL_EYE_DRAFT_ONLY ? { RUNTROL_EYE_DRAFT_ONLY: process.env.RUNTROL_EYE_DRAFT_ONLY } : {}),
   };
 
   const runEyeWindow = async (extraEnvironment = {}) => Promise.all([
@@ -271,9 +273,42 @@ async function backProof(environment) {
   const otherName = path.basename(other);
   // Only this harness's own development-host window is ever matched, pressed or photographed: the operator's
   // own VS Code is open on this very repository, and a bare folder name would find it first.
-  const hereTitle = `Development Host] ${hereName}`;
-  const otherTitle = `Development Host] ${otherName}`;
+  const hereTitle = hereName;
+  const otherTitle = otherName;
   const { executable } = await acquireVSCode(path.join(os.tmpdir(), "runtrol-vscode-test-cache"));
+  // Put one deliberate project into this disposable profile through the extension's own ProjectStore. The proof
+  // must not depend on whether the operator happens to have provider history in the second folder today.
+  const seedEntry = path.join(temporary, "backProofSeed.cjs");
+  await writeFile(seedEntry, `
+const vscode = require("vscode");
+const delay = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
+async function run() {
+  const extension = vscode.extensions.getExtension(process.env.RUNTROL_TEST_EXTENSION_ID);
+  if (!extension) throw new Error("the extension under test is not installed");
+  await vscode.commands.executeCommand("workbench.view.extension.runtrol");
+  while (!extension.isActive) await delay(25);
+  await extension.exports.ready;
+  if (typeof extension.exports.seedProject !== "function") throw new Error("the project seed surface is unavailable");
+  await extension.exports.seedProject(process.env.RUNTROL_EYE_BACK_FOLDER);
+}
+module.exports = { run };
+`, "utf8");
+  await runTests({
+    cachePath: path.join(os.tmpdir(), "runtrol-vscode-test-cache"),
+    extensionDevelopmentPath: extensionUnderTestRoot,
+    extensionTestsPath: seedEntry,
+    extensionTestsEnv: { ...environment, RUNTROL_EYE_BACK_FOLDER: other },
+    launchArgs: [
+      workspaceFile,
+      ...isolatedLaunchArguments,
+      "--disable-extensions",
+      "--disable-workspace-trust",
+      `--user-data-dir=${userData}`,
+      `--extensions-dir=${extensions}`,
+    ],
+    version: process.env.RUNTROL_TEST_VSCODE_VERSION || TESTED_VSCODE_VERSION,
+    vscodeExecutablePath: process.env.RUNTROL_TEST_VSCODE_EXECUTABLE || undefined,
+  });
   const child = spawn(
     executable,
     [
@@ -294,48 +329,47 @@ async function backProof(environment) {
   );
   const seen = { opened: false, switched: false, returned: false, returnedBy: null };
   try {
-    seen.opened = await waitForTitle(hereTitle, 90_000);
+    seen.opened = await waitForTitle(hereTitle, 90_000, userData);
     if (!seen.opened) return { ...seen, failure: "the window on this repository never appeared" };
     // The extension activates on the first command; the list it offers is read after ready. A breath for both.
     await delay(15_000);
     // Anything modal that still came up (an onboarding the flags do not cover) closes on Escape; a bare
     // Escape on the editor does nothing.
-    press(hereTitle, "{ESC}");
+    press(hereTitle, "{ESC}", userData);
     await delay(1_000);
     // The switch goes through the command palette, which opens whatever has focus (a fresh window focuses its
     // chat input, where a chord is that input's); the back step is the key itself, the palette only as the
     // recorded fallback so the result says which worked.
-    press(hereTitle, "^+p");
+    press(hereTitle, "^+p", userData);
     await delay(1_500);
-    press(hereTitle, "Runtrol: Switch Window to Project{ENTER}");
-    // The picker reads the project list after the extension is ready. A machine with hundreds of real stored
-    // conversations can spend more than eight seconds refreshing them before the command runs, so typing before the
-    // picker exists sends the project name into the editor and leaves the later picker untouched. This delay is a
-    // bounded shell-evidence allowance, not product waiting: the production command itself remains event-driven.
-    await delay(30_000);
-    capture(hereTitle, path.join(outDir, "switchPicker.png"));
-    press(hereTitle, `${otherName}{ENTER}`);
-    seen.switched = await waitForTitle(otherTitle, 60_000);
-    if (!seen.switched) capture(hereTitle, path.join(outDir, "switchFailed.png"));
+    press(hereTitle, "Runtrol: Switch Window to Project{ENTER}", userData);
+    // Filter the already seeded project and capture the actual picker before accepting it.
+    await delay(1_500);
+    press(hereTitle, otherName, userData);
+    await delay(2_000);
+    capture(hereTitle, path.join(outDir, "switchPicker.png"), userData);
+    press(hereTitle, "{ENTER}", userData);
+    seen.switched = await waitForTitle(otherTitle, 60_000, userData);
+    if (!seen.switched) capture(hereTitle, path.join(outDir, "switchFailed.png"), userData);
     if (seen.switched) {
       await delay(1_500);
-      capture(otherTitle, path.join(outDir, "switched.png"));
+      capture(otherTitle, path.join(outDir, "switched.png"), userData);
       await delay(12_000);
-      press(otherTitle, "{ESC}");
+      press(otherTitle, "{ESC}", userData);
       await delay(500);
-      press(otherTitle, "^k^b");
-      seen.returned = await waitForTitle(hereTitle, 30_000);
+      press(otherTitle, "^k^b", userData);
+      seen.returned = await waitForTitle(hereTitle, 30_000, userData);
       seen.returnedBy = seen.returned ? "key" : null;
       if (!seen.returned) {
-        press(otherTitle, "^+p");
+        press(otherTitle, "^+p", userData);
         await delay(1_500);
-        press(otherTitle, "Runtrol: Back to Previous Project{ENTER}");
-        seen.returned = await waitForTitle(hereTitle, 30_000);
+        press(otherTitle, "Runtrol: Back to Previous Project{ENTER}", userData);
+        seen.returned = await waitForTitle(hereTitle, 30_000, userData);
         seen.returnedBy = seen.returned ? "palette" : null;
       }
       if (seen.returned) {
         await delay(1_500);
-        capture(hereTitle, path.join(outDir, "returned.png"));
+        capture(hereTitle, path.join(outDir, "returned.png"), userData);
       }
     }
     return seen;
@@ -348,7 +382,7 @@ async function backProof(environment) {
   }
 }
 
-function press(titleMatch, keys) {
+function press(titleMatch, keys, commandLineMatch = "") {
   const pressed = spawnSync(
     "powershell.exe",
     [
@@ -356,13 +390,17 @@ function press(titleMatch, keys) {
       "-File", path.join(extensionRoot, "tooling", "press-keys.ps1"),
       "-TitleMatch", titleMatch,
       "-Keys", keys,
+      "-CommandLineMatch", commandLineMatch,
     ],
     { encoding: "utf8", timeout: 30_000, windowsHide: true },
   );
   process.stdout.write(`${pressed.stdout}${pressed.stderr}`.trim() + "\n");
+  if (pressed.status !== 0) {
+    throw new Error(`typing ${JSON.stringify(keys)} into ${JSON.stringify(titleMatch)} failed`);
+  }
 }
 
-function capture(titleMatch, outPath) {
+function capture(titleMatch, outPath, commandLineMatch = "") {
   const shot = spawnSync(
     "powershell.exe",
     [
@@ -370,21 +408,27 @@ function capture(titleMatch, outPath) {
       "-File", path.join(extensionRoot, "tooling", "capture-window.ps1"),
       "-TitleMatch", titleMatch,
       "-OutPath", outPath,
+      "-CommandLineMatch", commandLineMatch,
     ],
     { encoding: "utf8", timeout: 30_000, windowsHide: true },
   );
   process.stdout.write(`${shot.stdout}${shot.stderr}`.trim() + "\n");
+  if (shot.status !== 0) {
+    throw new Error(`capturing ${JSON.stringify(titleMatch)} to ${JSON.stringify(outPath)} failed`);
+  }
 }
 
 /// Whether a window whose title contains the text appears within the deadline.
-async function waitForTitle(titleMatch, deadlineMs) {
+async function waitForTitle(titleMatch, deadlineMs, commandLineMatch = "") {
   const deadline = Date.now() + deadlineMs;
   while (Date.now() < deadline) {
     const found = spawnSync(
       "powershell.exe",
       [
-        "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command",
-        `(Get-Process | Where-Object { $_.MainWindowTitle -like "*${titleMatch}*" } | Select-Object -First 1).MainWindowTitle`,
+        "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+        "-File", path.join(extensionRoot, "tooling", "find-window.ps1"),
+        "-TitleMatch", titleMatch,
+        "-CommandLineMatch", commandLineMatch,
       ],
       { encoding: "utf8", timeout: 15_000, windowsHide: true },
     );
@@ -414,6 +458,7 @@ async function photograph() {
             "-File", path.join(extensionRoot, "tooling", "capture-window.ps1"),
             "-TitleMatch", titleMatch,
             "-OutPath", outPath,
+            "-CommandLineMatch", userData,
           ],
           { encoding: "utf8", timeout: 30_000, windowsHide: true },
         );
@@ -422,12 +467,12 @@ async function photograph() {
         }
         process.stdout.write(`captured ${pose} -> ${outPath} ${JSON.stringify(progress)}\n`);
         if (eyeEntry === "missionRecoveryEye" && pose === "recoveryCancellation") {
-          press(titleMatch, "{ESC}");
+          press(titleMatch, "{ESC}", userData);
         }
         if (eyeEntry === "missionRecoveryEye" && pose === "recoveryConfirmation") {
           // This is the real focused Quick Pick. Press its selected recovery action from outside the Extension Host,
           // the same input boundary the screenshot captured, rather than calling a test-only product method.
-          press(titleMatch, "{ENTER}");
+          press(titleMatch, "{ENTER}", userData);
         }
         await writeFile(`${resultPath}.captured.${pose}`, "1", "utf8");
       }

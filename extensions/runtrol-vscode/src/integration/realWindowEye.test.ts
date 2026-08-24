@@ -37,6 +37,7 @@ type JourneyApi = {
   answerFromRow(session: string, how: "allow" | "decline"): Promise<void>;
   revealRow(session: string): Promise<void>;
   nativeChatCount(): number;
+  canDeleteNative(providerId: string): boolean;
   nativeChatListed(providerId: string, nativeSessionId: string): boolean;
   deleteNativeListed(providerId: string, nativeSessionId: string): Promise<void>;
   refreshChats(): Promise<void>;
@@ -90,12 +91,19 @@ async function eyePass(resultPath: string): Promise<void> {
     90_000,
     `the installed provider ${providerId} to verify`,
   );
+  await within(journey.refreshChats(), 90_000, `refreshing stored conversations for ${providerId}`);
   // The machine's stored conversations arrive one service at a time. A bounded wait for the first of them,
   // then a breath for the rest; a machine with none would still photograph honestly (empty headings are
   // never invented, so the panel would simply be short).
   currentStage = "waiting-for-catalogues";
   await waitFor(() => journey.nativeChatCount() > 0, 90_000, "the first stored conversations").catch(() => undefined);
   await delay(6_000);
+  await waitFor(
+    () => journey.canDeleteNative(providerId),
+    60_000,
+    `a provider-owned cleanup surface for ${providerId}`,
+  );
+  const createdSessions = new Set<string>();
 
   // The editor's own furniture out of the picture: the built-in chat sidebar the isolated profile opens, and
   // the "extensions are disabled" toast the development host shows. Neither is this product.
@@ -107,6 +115,14 @@ async function eyePass(resultPath: string): Promise<void> {
   await journey.openDraft(folder, providerId);
   await delay(1_500);
   await capture(resultPath, "draft", { nativeChats: journey.nativeChatCount() });
+  if (process.env.RUNTROL_EYE_DRAFT_ONLY === "1") {
+    await writeFile(
+      resultPath,
+      JSON.stringify({ stage: "complete", focused: "draft", vscode: vscode.version }),
+      "utf8",
+    );
+    return;
+  }
 
   // Pose 1b: the model chip's choices, open in the composer where the chip is (not a palette at the top of
   // the window). The service chip's choices the same way afterwards, then both closed.
@@ -125,6 +141,7 @@ async function eyePass(resultPath: string): Promise<void> {
   // answered by the installed provider, tools and all.
   currentStage = "sending-draft";
   const session = await within(journey.sendFocusedDraft(promptText), 90_000, "sending the draft's first message");
+  createdSessions.add(session);
   await journey.verifySelected(session);
   currentStage = "answering";
   await journey.waitForLifecycle(session, "hotRunning", 30_000).catch(() => undefined);
@@ -149,10 +166,13 @@ async function eyePass(resultPath: string): Promise<void> {
   // sent once; two tabs start, the grid lines them up. Skipped when only one service is usable.
   currentStage = "fan-out";
   const second = journey.providers().find(
-    (provider) => provider.providerId !== providerId && provider.installation.state === "usable",
+    (provider) => provider.providerId !== providerId
+      && provider.installation.state === "usable"
+      && journey.canDeleteNative(provider.providerId),
   );
   let fanOut: Record<string, unknown> = { skipped: "one usable service" };
   if (second) {
+    const beforeFanOut = new Set(journey.sessions().map((line) => line.sessionId));
     await journey.openDraft(folder, providerId);
     await delay(800);
     await journey.alsoAsk(second.providerId);
@@ -166,6 +186,9 @@ async function eyePass(resultPath: string): Promise<void> {
       failure = error instanceof Error ? error.message : String(error);
     }
     await delay(4_000);
+    for (const line of journey.sessions()) {
+      if (!beforeFanOut.has(line.sessionId)) createdSessions.add(line.sessionId);
+    }
     const started = journey.sessions().filter((line) => line.hot).length;
     // Named sendFailure, not failure: the photographer reads a top-level "failure" as the pass having failed.
     await capture(resultPath, "fanOut", { first, also: second.providerId, hot: started, sendFailure: failure });
@@ -255,12 +278,32 @@ async function eyePass(resultPath: string): Promise<void> {
   // provider's own surface from the sidebar's row, and the provider's list no longer names it. Real CLI,
   // real store, a conversation nobody will miss. Skipped when no installed provider can delete.
   currentStage = "deleting";
-  const deletion = await deletionProof(journey, providerIdForDeletion(journey.providers()), resultPath);
+  const deletion = await deletionProof(
+    journey,
+    providerIdForDeletion(journey, journey.providers()),
+    resultPath,
+  );
 
-  // Leave nothing running: every session this window opened closes, in the isolated Runtime.
+  // Leave nothing running or stored: every new provider conversation is captured before its Runtime pointer
+  // closes, then removed through the provider's own published deletion surface.
   currentStage = "closing";
+  const createdNative = journey.sessions()
+    .filter((line) => createdSessions.has(line.sessionId) && line.nativeSessionId)
+    .map((line) => ({ providerId: line.providerId, nativeSessionId: line.nativeSessionId as string }));
   for (const line of journey.sessions()) {
     await journey.close(line.sessionId, true).catch(() => undefined);
+  }
+  await within(journey.refreshChats(), 90_000, "listing conversations before eye cleanup");
+  for (const created of createdNative) {
+    if (!journey.nativeChatListed(created.providerId, created.nativeSessionId)) continue;
+    await within(
+      journey.deleteNativeListed(created.providerId, created.nativeSessionId),
+      90_000,
+      `deleting eye conversation ${created.nativeSessionId}`,
+    );
+    if (journey.nativeChatListed(created.providerId, created.nativeSessionId)) {
+      throw new Error(`eye conversation ${created.nativeSessionId} remained in provider history`);
+    }
   }
   await writeFile(
     resultPath,
@@ -276,17 +319,20 @@ async function eyePass(resultPath: string): Promise<void> {
       fanOut,
       rowTool,
       deletion,
+      cleanedProviderConversations: createdNative.length,
     }),
     "utf8",
   );
 }
 
-/// The provider the deletion proof uses: Codex when it is installed and usable (its `thread/delete` is the
-/// surface measured), otherwise none.
-function providerIdForDeletion(providers: readonly ProviderLine[]): string | null {
-  return providers.some((provider) => provider.providerId === "codex" && provider.installation.state === "usable")
-    ? "codex"
-    : null;
+/// The first usable provider whose current Runtime capability report exposes native deletion.
+function providerIdForDeletion(
+  journey: JourneyApi,
+  providers: readonly ProviderLine[],
+): string | null {
+  return providers.find((provider) => (
+    provider.installation.state === "usable" && journey.canDeleteNative(provider.providerId)
+  ))?.providerId ?? null;
 }
 
 async function deletionProof(

@@ -3,13 +3,13 @@
 use schemars::{JsonSchema, schema_for};
 
 use crate::{
-    AcquireControlParams, AdoptNativeSessionParams, ControlLease, ControlLeaseParams,
-    CoolSessionParams, DeleteNativeSessionParams, EnrollmentDecision, EnrollmentReceipt,
-    ForgetSessionParams, GetProviderCapabilitiesParams, GetSessionParams, InitializeParams,
-    InitializeResult, IntegrationGrant, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse,
-    LaggedNotification, ListModelsParams, ListNativeSessionsParams, ListPendingApprovalsParams,
-    ManagedSessionList, NativeSessionCatalogue, PendingApprovalList, ProviderList,
-    ProviderUsageList, ProviderWatchEndedNotification, ProvidersChangedNotification,
+    AcquireControlParams, AdoptNativeSessionParams, ArchiveNativeSessionParams, ControlLease,
+    ControlLeaseParams, CoolSessionParams, DeleteNativeSessionParams, EnrollmentDecision,
+    EnrollmentReceipt, ForgetSessionParams, GetProviderCapabilitiesParams, GetSessionParams,
+    InitializeParams, InitializeResult, IntegrationGrant, JsonRpcNotification, JsonRpcRequest,
+    JsonRpcResponse, LaggedNotification, ListModelsParams, ListNativeSessionsParams,
+    ListPendingApprovalsParams, ManagedSessionList, NativeSessionCatalogue, PendingApprovalList,
+    ProviderList, ProviderUsageList, ProviderWatchEndedNotification, ProvidersChangedNotification,
     RequestEnrollmentParams, RespondApprovalParams, ResumeSessionParams,
     RotateIntegrationKeyParams, RuntimeEventNotification, RuntimeLocatorRecord, RuntimeMethod,
     RuntimeModelCatalog, RuntimeProviderCapabilities, ServerChallenge, SessionDescriptor,
@@ -64,6 +64,7 @@ struct PublicProtocolSchema {
     cool_session: CoolSessionParams,
     forget_session: ForgetSessionParams,
     delete_native_session: DeleteNativeSessionParams,
+    archive_native_session: ArchiveNativeSessionParams,
     submit_input: SubmitInputParams,
     submit_blocks: SubmitBlocksParams,
     set_model: SetModelParams,

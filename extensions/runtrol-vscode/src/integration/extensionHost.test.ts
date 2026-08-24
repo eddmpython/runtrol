@@ -449,7 +449,7 @@ async function requireConversationEditor(): Promise<void> {
       ?? refreshed.find(isConversationEditor)
       ?? tab;
   }
-  if (!tab.label.startsWith("Runtrol")) {
+  if (!tab.label.trim() || tab.label.startsWith("Runtrol")) {
     throw new Error(`the conversation editor has an unreadable label: ${tab.label}`);
   }
 }

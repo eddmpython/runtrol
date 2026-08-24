@@ -102,6 +102,11 @@ pub struct RuntimeProviderCapabilities {
     /// answers, never guessed at. A surface offers the act only where this says it exists.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub native_session_delete: Option<ProviderCapabilityObservation>,
+    /// A stored provider-native conversation can be archived through the provider's own surface.
+    ///
+    /// Optional for lockstep-additive compatibility with older Runtime versions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_session_archive: Option<ProviderCapabilityObservation>,
 }
 
 #[cfg(test)]

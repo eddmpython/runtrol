@@ -34,7 +34,9 @@ use crate::command::{AgentCommand, CloseMode, OpenIntent, Produced};
 use crate::error::ProviderError;
 use crate::event::ApprovalRequest;
 use crate::id::{ApprovalId, ProviderId, SessionId};
-use crate::native_catalogue::{NativeSessionCatalogue, NativeSessionDeletion, NativeSessionQuery};
+use crate::native_catalogue::{
+    NativeSessionArchival, NativeSessionCatalogue, NativeSessionDeletion, NativeSessionQuery,
+};
 
 /// One coding CLI, as runtrol talks to it.
 ///
@@ -126,6 +128,22 @@ pub trait Provider: Send + Sync + 'static {
             provider: self.id(),
             what: "deleting a provider-native conversation".to_owned(),
             why: "this driver reports no provider surface for deleting a stored conversation",
+        })
+    }
+
+    /// Archive one provider-native conversation through the provider's own surface.
+    ///
+    /// # Errors
+    ///
+    /// [`ProviderError::Unsupported`] by default; otherwise whatever the provider's own surface answered.
+    async fn archive_native_session(
+        &self,
+        _archival: NativeSessionArchival,
+    ) -> Result<(), ProviderError> {
+        Err(ProviderError::Unsupported {
+            provider: self.id(),
+            what: "archiving a provider-native conversation".to_owned(),
+            why: "this driver reports no provider surface for archiving a stored conversation",
         })
     }
 

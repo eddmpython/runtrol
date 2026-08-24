@@ -2,10 +2,10 @@
 
 use base64ct::{Base64UrlUnpadded, Encoding as _};
 use runtrol_runtime_protocol::{
-    AcquireControlParams, AdoptNativeSessionParams, AppScope, CHALLENGE_LIFETIME_MS,
-    ClientCapabilities, ClientInfo, ControlLease, ControlLeaseParams, CoolSessionParams,
-    DeleteNativeSessionParams, EnrollmentDecision, EnrollmentManifest, EnrollmentReceipt,
-    ErrorResponse, EventCursor, FINALIZED_REVISIONS, ForgetSessionParams,
+    AcquireControlParams, AdoptNativeSessionParams, AppScope, ArchiveNativeSessionParams,
+    CHALLENGE_LIFETIME_MS, ClientCapabilities, ClientInfo, ControlLease, ControlLeaseParams,
+    CoolSessionParams, DeleteNativeSessionParams, EnrollmentDecision, EnrollmentManifest,
+    EnrollmentReceipt, ErrorResponse, EventCursor, FINALIZED_REVISIONS, ForgetSessionParams,
     GetProviderCapabilitiesParams, GetSessionParams, InitializeParams, InitializeResult,
     IntegrationAuthentication, IntegrationGrant, JsonRpcId, JsonRpcNotification, JsonRpcRequest,
     JsonRpcResponse, LaggedNotification, ListModelsParams, ListNativeSessionsParams,
@@ -1338,6 +1338,26 @@ impl SessionClient<'_> {
         Ok(())
     }
 
+    /// Archive one provider-native conversation through the provider's own surface.
+    ///
+    /// # Errors
+    ///
+    /// Public client and Runtime failures, including the provider's own refusal.
+    pub async fn archive_native(
+        &mut self,
+        params: &ArchiveNativeSessionParams,
+    ) -> Result<(), ClientError> {
+        let _: EmptyResult = self
+            .runtime
+            .call_mutation(
+                RuntimeMethod::SessionsArchiveNative,
+                &params.request_id,
+                params,
+            )
+            .await?;
+        Ok(())
+    }
+
     /// Convert this connection into one bounded event subscription after the acknowledgement.
     ///
     /// The returned borrow prevents another request from sharing the dedicated stream connection.
@@ -1678,6 +1698,7 @@ async fn receive_session_notification(
         | RuntimeMethod::SessionsCool
         | RuntimeMethod::SessionsForget
         | RuntimeMethod::SessionsDeleteNative
+        | RuntimeMethod::SessionsArchiveNative
         | RuntimeMethod::ApprovalsListPending
         | RuntimeMethod::ApprovalsRespond
         | RuntimeMethod::SessionsIndexChanged

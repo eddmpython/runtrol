@@ -8,19 +8,19 @@ use runtrol_core::{ApprovalAuthority, WorkspaceClaim};
 use runtrol_ipc::transport::Connection;
 use runtrol_provider::{CloseMode, Disposition, OpenIntent, WorkspaceAccess};
 use runtrol_runtime_protocol::{
-    AcquireControlParams, AdoptNativeSessionParams, AppScope, ControlLeaseParams,
-    CoolSessionParams, DeleteNativeSessionParams, ErrorResponse, FINALIZED_REVISIONS,
-    ForgetSessionParams, GetProviderCapabilitiesParams, GetSessionParams, InitializeParams,
-    InitializeResult, JsonRpcId, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse,
-    LaggedNotification, ListModelsParams, ListNativeSessionsParams, ListPendingApprovalsParams,
-    MAX_MODEL_SELECTION_BYTES, MAX_NATIVE_ADOPTION_TOKEN_BYTES, MAX_NATIVE_PUBLIC_CURSOR_BYTES,
-    MAX_PAGE_ITEMS, MAX_REVISION_OFFERS, ProtocolRevision, ProviderCapabilityAvailability,
-    ProviderCapabilityObservation, ProviderCapabilityProvenance, ProviderList, ProviderUsageList,
-    ProviderWatchEndReason, ProviderWatchEndedNotification, ProvidersChangedNotification,
-    RequestEnrollmentParams, RespondApprovalParams, ResumeSessionParams,
-    RotateIntegrationKeyParams, RuntimeCapabilities, RuntimeError, RuntimeErrorKind,
-    RuntimeInstance, RuntimeLimits, RuntimeMethod, RuntimeModelCatalog, RuntimeModelChoice,
-    RuntimeProviderCapabilities, RuntimeReasoningChoice, RuntimeSessionId,
+    AcquireControlParams, AdoptNativeSessionParams, AppScope, ArchiveNativeSessionParams,
+    ControlLeaseParams, CoolSessionParams, DeleteNativeSessionParams, ErrorResponse,
+    FINALIZED_REVISIONS, ForgetSessionParams, GetProviderCapabilitiesParams, GetSessionParams,
+    InitializeParams, InitializeResult, JsonRpcId, JsonRpcNotification, JsonRpcRequest,
+    JsonRpcResponse, LaggedNotification, ListModelsParams, ListNativeSessionsParams,
+    ListPendingApprovalsParams, MAX_MODEL_SELECTION_BYTES, MAX_NATIVE_ADOPTION_TOKEN_BYTES,
+    MAX_NATIVE_PUBLIC_CURSOR_BYTES, MAX_PAGE_ITEMS, MAX_REVISION_OFFERS, ProtocolRevision,
+    ProviderCapabilityAvailability, ProviderCapabilityObservation, ProviderCapabilityProvenance,
+    ProviderList, ProviderUsageList, ProviderWatchEndReason, ProviderWatchEndedNotification,
+    ProvidersChangedNotification, RequestEnrollmentParams, RespondApprovalParams,
+    ResumeSessionParams, RotateIntegrationKeyParams, RuntimeCapabilities, RuntimeError,
+    RuntimeErrorKind, RuntimeInstance, RuntimeLimits, RuntimeMethod, RuntimeModelCatalog,
+    RuntimeModelChoice, RuntimeProviderCapabilities, RuntimeReasoningChoice, RuntimeSessionId,
     SessionIndexChangedNotification, SessionIndexEndReason, SessionIndexEndedNotification,
     SessionWorkspaceAccess, SetModeParams, SetModelParams, StartSessionParams, SubmitBlocksParams,
     SubmitInputParams, SuccessResponse, WatchEnrollmentParams, WatchEventsParams,
@@ -519,8 +519,9 @@ async fn dispatch_public(
             RuntimeMethod::SessionsForget => {
                 forget_session(state, composed, sessions, asking, returning, id, params).await
             }
-            RuntimeMethod::SessionsDeleteNative => {
-                delete_native_session(state, composed, discovering, sessions, id, params).await
+            RuntimeMethod::SessionsDeleteNative | RuntimeMethod::SessionsArchiveNative => {
+                mutate_native_session(state, composed, discovering, sessions, method, id, params)
+                    .await
             }
             RuntimeMethod::Initialized
             | RuntimeMethod::Challenge
@@ -569,9 +570,9 @@ fn required_scope(method: RuntimeMethod) -> Option<AppScope> {
         RuntimeMethod::SessionsInterrupt | RuntimeMethod::SessionsCool => {
             Some(AppScope::SessionStop)
         }
-        RuntimeMethod::SessionsForget | RuntimeMethod::SessionsDeleteNative => {
-            Some(AppScope::SessionDelete)
-        }
+        RuntimeMethod::SessionsForget
+        | RuntimeMethod::SessionsDeleteNative
+        | RuntimeMethod::SessionsArchiveNative => Some(AppScope::SessionDelete),
         RuntimeMethod::ApprovalsRespond
         | RuntimeMethod::SessionsRenewControl
         | RuntimeMethod::SessionsReleaseControl
@@ -1066,6 +1067,7 @@ fn provider_capabilities(
         set_model: Some(provider_capability(capabilities.set_model)),
         set_reasoning_effort: Some(provider_capability(capabilities.set_reasoning_effort)),
         native_session_delete: Some(provider_capability(capabilities.native_session_delete)),
+        native_session_archive: Some(provider_capability(capabilities.native_session_archive)),
     }
 }
 
@@ -1734,26 +1736,81 @@ async fn forget_session(
     }
 }
 
-/// Delete one provider-native conversation through the provider's own surface.
+#[derive(Clone, Copy)]
+enum NativeSessionMutation {
+    Delete,
+    Archive,
+}
+
+impl NativeSessionMutation {
+    fn from_method(method: RuntimeMethod) -> Option<Self> {
+        match method {
+            RuntimeMethod::SessionsDeleteNative => Some(Self::Delete),
+            RuntimeMethod::SessionsArchiveNative => Some(Self::Archive),
+            _ => None,
+        }
+    }
+
+    fn timeout_message(self) -> &'static str {
+        match self {
+            Self::Delete => "the provider did not answer the deletion within its bounded deadline",
+            Self::Archive => "the provider did not answer the archival within its bounded deadline",
+        }
+    }
+}
+
+struct NativeSessionMutationParams {
+    provider_id: runtrol_runtime_protocol::ProviderId,
+    native_session_id: String,
+    workspace: String,
+}
+
+fn parse_native_session_mutation(
+    method: RuntimeMethod,
+    params: serde_json::Value,
+) -> Result<(NativeSessionMutation, NativeSessionMutationParams), &'static str> {
+    let Some(mutation) = NativeSessionMutation::from_method(method) else {
+        return Err("native session mutation method is invalid");
+    };
+    let parsed = match mutation {
+        NativeSessionMutation::Delete => {
+            let value = serde_json::from_value::<DeleteNativeSessionParams>(params)
+                .map_err(|_| "native session deletion parameters are invalid")?;
+            NativeSessionMutationParams {
+                provider_id: value.provider_id,
+                native_session_id: value.native_session_id,
+                workspace: value.workspace,
+            }
+        }
+        NativeSessionMutation::Archive => {
+            let value = serde_json::from_value::<ArchiveNativeSessionParams>(params)
+                .map_err(|_| "native session archival parameters are invalid")?;
+            NativeSessionMutationParams {
+                provider_id: value.provider_id,
+                native_session_id: value.native_session_id,
+                workspace: value.workspace,
+            }
+        }
+    };
+    Ok((mutation, parsed))
+}
+
+/// Mutate one provider-native conversation through the provider's own surface.
 ///
-/// The same authority the forget path needs (`session.delete`), on the owner-only local wire. Runtime
-/// verifies the folder still exists and that it does not itself supervise the conversation (a supervised
-/// pointer is forgotten first, through `sessions/forget`), then hands the request to the driver, which
-/// asks the CLI that owns the conversation. Runtime deletes nothing itself: it holds no copy to delete.
-async fn delete_native_session(
+/// Runtime verifies the folder and refuses while it supervises the conversation, then asks the CLI
+/// that owns it. Runtime changes no provider store itself and retains no transcript copy.
+async fn mutate_native_session(
     state: &mut PublicState,
     composed: &Composed,
     discovering: &crate::serve::DiscoveryGates,
     sessions: &RuntimeSessionCatalogue,
+    method: RuntimeMethod,
     id: JsonRpcId,
     params: serde_json::Value,
 ) -> Answer {
-    let Ok(params) = serde_json::from_value::<DeleteNativeSessionParams>(params) else {
-        return Answer::plain(
-            id,
-            RuntimeErrorKind::InvalidRequest,
-            "native session deletion parameters are invalid",
-        );
+    let (mutation, params) = match parse_native_session_mutation(method, params) {
+        Ok(parsed) => parsed,
+        Err(message) => return Answer::plain(id, RuntimeErrorKind::InvalidRequest, message),
     };
     let authority = match authorized(state, &composed.store, Some(AppScope::SessionDelete)) {
         Ok(authority) => authority.clone(),
@@ -1813,22 +1870,38 @@ async fn delete_native_session(
             );
         }
     };
-    let deleted = tokio::time::timeout(
+    let mutated = tokio::time::timeout(
         Duration::from_millis(crate::serve::MODEL_PREPARATION_BUDGET_MS),
-        driver.delete_native_session(runtrol_provider::NativeSessionDeletion {
-            native,
-            cwd: workspace,
-        }),
+        async {
+            match mutation {
+                NativeSessionMutation::Delete => {
+                    driver
+                        .delete_native_session(runtrol_provider::NativeSessionDeletion {
+                            native,
+                            cwd: workspace,
+                        })
+                        .await
+                }
+                NativeSessionMutation::Archive => {
+                    driver
+                        .archive_native_session(runtrol_provider::NativeSessionArchival {
+                            native,
+                            cwd: workspace,
+                        })
+                        .await
+                }
+            }
+        },
     )
     .await;
-    match deleted {
+    match mutated {
         Ok(Ok(())) => Answer::success(id, &serde_json::json!({})),
         // The provider's own answer, by kind: unsupported stays unsupported, a refusal stays a refusal.
         Ok(Err(error)) => control_failure(id, crate::runtime_control::provider_failure(&error)),
         Err(_) => Answer::plain(
             id,
             RuntimeErrorKind::RuntimeUnavailable,
-            "the provider did not answer the deletion within its bounded deadline",
+            mutation.timeout_message(),
         ),
     }
 }
@@ -2781,6 +2854,7 @@ fn parse_session_operation(
         | RuntimeMethod::SessionsResume
         | RuntimeMethod::SessionsForget
         | RuntimeMethod::SessionsDeleteNative
+        | RuntimeMethod::SessionsArchiveNative
         | RuntimeMethod::SessionsEvent
         | RuntimeMethod::SessionsLagged
         | RuntimeMethod::SessionsIndexChanged
@@ -3450,6 +3524,44 @@ const fn platform_name() -> &'static str {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn native_archive_has_the_same_authority_and_exact_payload_boundary_as_delete() {
+        let params = ArchiveNativeSessionParams {
+            request_id: runtrol_runtime_protocol::MutationRequestId::now(),
+            provider_id: runtrol_runtime_protocol::ProviderId::new("codex"),
+            native_session_id: "thread-1".to_owned(),
+            workspace: "C:\\work\\alpha".to_owned(),
+        };
+        let (mutation, parsed) = parse_native_session_mutation(
+            RuntimeMethod::SessionsArchiveNative,
+            serde_json::to_value(params).expect("archive parameters serialize"),
+        )
+        .expect("archive parameters stay inside their public DTO");
+        assert!(matches!(mutation, NativeSessionMutation::Archive));
+        assert_eq!(parsed.native_session_id, "thread-1");
+        assert_eq!(
+            required_scope(RuntimeMethod::SessionsArchiveNative),
+            Some(AppScope::SessionDelete),
+        );
+    }
+
+    #[test]
+    fn archive_capability_is_projected_without_guessing() {
+        let provider_id = runtrol_runtime_protocol::ProviderId::new("provider-a");
+        let projected = provider_capabilities(
+            provider_id.clone(),
+            runtrol_provider::ProviderCapabilities::unknown(),
+        );
+        assert_eq!(projected.provider_id, provider_id);
+        assert!(matches!(
+            projected.native_session_archive,
+            Some(ProviderCapabilityObservation {
+                availability: ProviderCapabilityAvailability::Unknown,
+                ..
+            })
+        ));
+    }
 
     #[test]
     fn a_mode_travels_only_within_the_provider_vocabulary() {

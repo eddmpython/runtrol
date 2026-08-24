@@ -3,7 +3,13 @@ import test from "node:test";
 
 import { conversationDeletion, deletionQuestion } from "./conversationDeletion";
 import type { Conversation } from "./conversationList";
-import type { ProviderCapabilities, SessionLine } from "./runtimeTypes";
+import type { NativeChatLine, ProviderCapabilities, SessionLine } from "./runtimeTypes";
+
+const native = {
+  providerId: "codex",
+  nativeSessionId: "n1",
+  cwd: "C:\\work\\alpha",
+} as NativeChatLine;
 
 function row(overrides: Partial<Conversation> = {}): Conversation {
   return {
@@ -23,7 +29,7 @@ function row(overrides: Partial<Conversation> = {}): Conversation {
     live: false,
     open: false,
     session: null,
-    native: null,
+    native,
     canOpen: true,
     blocked: null,
     ...overrides,
@@ -47,13 +53,17 @@ function capabilities(
   } as ProviderCapabilities;
 }
 
-test("a supervised conversation is forgotten here, whatever the provider can do", () => {
+test("a supervised provider-owned conversation is still deleted by the provider", () => {
   const session = { sessionId: "s1" } as SessionLine;
-  assert.deepEqual(conversationDeletion(row({ session }), null), { kind: "forgetSupervised" });
   assert.deepEqual(
-    conversationDeletion(row({ session }), capabilities({ availability: "unsupported", why: "no surface" })),
-    { kind: "forgetSupervised" },
+    conversationDeletion(row({ session }), capabilities({ availability: "available" })),
+    { kind: "deleteNative", serviceName: "Codex" },
   );
+});
+
+test("a supervised conversation without a provider identity only forgets its pointer", () => {
+  const session = { sessionId: "s1" } as SessionLine;
+  assert.deepEqual(conversationDeletion(row({ session, native: null }), null), { kind: "forgetSupervised" });
 });
 
 test("a provider-owned conversation is deleted by the provider only where it says it can", () => {

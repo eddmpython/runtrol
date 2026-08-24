@@ -88,7 +88,7 @@ async function verifyInstalledPackage(resultPath: string): Promise<void> {
   if (activeConversationEditor() !== draft) {
     throw new Error("the new Runtrol conversation draft is not the active editor tab");
   }
-  if (draft.label !== "Runtrol: New chat") {
+  if (draft.label !== "New chat") {
     throw new Error(`the installed new-conversation tab is titled ${draft.label}`);
   }
   const eyeDelay = packageEyeDelay();

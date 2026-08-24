@@ -10,6 +10,30 @@ and refactoring that no user can observe do not belong here.
 
 ## [Unreleased]
 
+### Added
+
+- Conversation rows now expose provider-native archive beside delete when the installed CLI reports that capability.
+  A supervised conversation is closed first, then the same confirmed action reaches the provider-owned record.
+- Images pasted from the clipboard into the composer are attached to the next message with the same type, count, and
+  size bounds as images chosen from disk.
+
+### Changed
+
+- The folder open in this VS Code window is now the first project heading and is available without project
+  registration. It expands as soon as it has conversations. Other projects and conversations retain provider
+  recency order.
+- Conversation rows now show only the coding-service icon and the actual conversation title. The icon itself spins
+  while that conversation is working; elapsed time and textual state labels no longer occupy the row. Incomplete
+  history diagnostics also moved out of the permanent list header.
+- One-off provider working directories no longer become project headings. Their conversations remain visible as
+  ordinary rows, preventing temporary task and eye-test folder names from filling the sidebar.
+- The real-window eye pass now requires a provider-owned cleanup surface and deletes every conversation it creates,
+  preventing visual validation from adding test history to the operator's coding CLI.
+- Conversation tabs use the actual conversation title without a `Runtrol` prefix. The extension containers are named
+  simply `Runtrol`, live model and effort controls remain visible before the provider announces current values, and
+  the send button now uses the compact VS Code foreground treatment.
+- Installed CLIs that have not emitted numeric usage now read `Ready`; actual limits replace that state when reported.
+
 ## [0.1.19] - 2026-08-24
 
 ### Changed

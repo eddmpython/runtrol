@@ -66,8 +66,8 @@ pub use manifest::{
 pub use native_catalogue::{
     MAX_NATIVE_ADDITIONAL_DIRECTORIES, MAX_NATIVE_CURSOR_BYTES, MAX_NATIVE_SESSION_ITEMS,
     MAX_NATIVE_TIMESTAMP_BYTES, MAX_NATIVE_TITLE_BYTES, NativeCatalogueCoverage,
-    NativeCatalogueSource, NativeResumeCapability, NativeSessionCatalogue, NativeSessionDeletion,
-    NativeSessionEntry, NativeSessionQuery,
+    NativeCatalogueSource, NativeResumeCapability, NativeSessionArchival, NativeSessionCatalogue,
+    NativeSessionDeletion, NativeSessionEntry, NativeSessionQuery,
 };
 pub use path::{AbsPath, PathError, WorkspaceAccess};
 pub use time::WallMs;

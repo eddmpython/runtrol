@@ -165,6 +165,18 @@ pub struct NativeSessionDeletion {
     pub cwd: AbsPath,
 }
 
+/// One provider-native conversation to archive through the provider's own surface.
+///
+/// Archiving changes only provider-owned history visibility. Runtime stores no copy and never moves the
+/// provider's files itself. The folder travels for CLIs whose history commands are scoped by working directory.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NativeSessionArchival {
+    /// The provider's own name for the conversation.
+    pub native: NativeSessionId,
+    /// Where the conversation ran.
+    pub cwd: AbsPath,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

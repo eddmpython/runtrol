@@ -85,7 +85,7 @@ def evidenceProblems(evidence: dict[str, Any], expectedTarget: str) -> list[str]
         found.append("the clean profile used a manually configured Core path")
     if evidence.get("draftOpened") is not True:
         found.append("the public new-conversation command did not open a draft")
-    if evidence.get("draftTitle") != "Runtrol: New chat":
+    if evidence.get("draftTitle") != "New chat":
         found.append("the opened draft did not have the shipped new-chat title")
     if evidence.get("draftClosed") is not True:
         found.append("the exact new-conversation draft did not close")
@@ -144,7 +144,7 @@ def selftest() -> int:
         "managedCore": str(temporary / "runtrol-cross-platform-selftest" / "user-data" / executable),
         "configuredCore": "",
         "draftOpened": True,
-        "draftTitle": "Runtrol: New chat",
+        "draftTitle": "New chat",
         "draftClosed": True,
     }
     if evidenceProblems(valid, target):
@@ -161,7 +161,7 @@ def selftest() -> int:
         ("target", "unsupported-x64"),
         ("configuredCore", str(temporary / executable)),
         ("draftOpened", False),
-        ("draftTitle", "Runtrol Chat"),
+        ("draftTitle", "Conversation"),
         ("draftClosed", False),
         ("bundledCore", str(temporary / executable)),
         ("managedCore", str(extension / executable)),

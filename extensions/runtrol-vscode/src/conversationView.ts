@@ -600,8 +600,8 @@ export class ConversationView implements vscode.Disposable {
   }
 
   private panelTitle(session: SessionLine | null): string {
-    if (session) return `Runtrol: ${this.titleOf(session)}`;
-    return this.draft ? "Runtrol: New chat" : "Runtrol Chat";
+    if (session) return this.titleOf(session);
+    return this.draft ? "New chat" : "Conversation";
   }
 
   private html(webview: vscode.Webview): string {
@@ -615,7 +615,7 @@ export class ConversationView implements vscode.Disposable {
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource}; script-src 'nonce-${nonce}';">
   <link rel="stylesheet" href="${style}">
-  <title>Runtrol chat</title>
+  <title>Conversation</title>
 </head>
 <body class="no-chat">
   <div id="status" role="status"></div>

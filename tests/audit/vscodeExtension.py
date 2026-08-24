@@ -266,13 +266,13 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
             "this.watch.dispose()",
         ],
         "conversationList.ts": [
-            "if (folderRows.length === 0) continue",
-            "conversationStatus(row)",
+            "const folderRows = rows.filter",
+            '"open",',
+            "if (left.current !== right.current) return left.current ? -1 : 1;",
+            "export function conversationDetail",
+            'return "";',
             "return `Chat ${shortened(identity)}`",
-            'return "Running"',
-            'return "Stopped"',
             'return "Cannot reopen"',
-            'row.live ? "now" : "time unknown"',
         ],
         "stateRows.ts": [
             "export function discoveryNotice",
@@ -281,7 +281,11 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
         ],
         "trees.ts": [
             "conversation.serviceName",
-            'this.state.discoveryNotice',
+            "this.description = conversationDetail(conversation, nowMs, grouped)",
+            'new vscode.ThemeIcon(`${conversation.serviceIcon}~spin`)',
+            "this.revealCurrentProject()",
+            "this.state.incompleteDiscovery",
+            "view.message = undefined",
             '"runtrol.hasUsableProvider"',
             '"runtrol.isVerifyingProvider"',
             "awaitsVerification",
@@ -310,7 +314,7 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
         ],
         "usageDisplay.ts": [
             'provider.installation.state !== "missing"',
-            'detail: "No report yet"',
+            'detail: "Ready"',
             'detail: "Checking"',
             'detail: "Unavailable · Fix"',
             'detail: `Disconnected · ${usageDetail(gauge, nowMs)}`',
@@ -639,17 +643,19 @@ def selftest() -> int:
             "private readonly watch = new SerializedWatch(); this.watch.pause(); this.watch.dispose()"
         ),
         "conversationList.ts": (
-            'if (folderRows.length === 0) continue conversationStatus(row) '
-            'return `Chat ${shortened(identity)}` '
-            'return "Running" return "Stopped" return "Cannot reopen" '
-            'row.live ? "now" : "time unknown"'
+            'const folderRows = rows.filter "open", '
+            'if (left.current !== right.current) return left.current ? -1 : 1; '
+            'export function conversationDetail return ""; '
+            'return `Chat ${shortened(identity)}` return "Cannot reopen"'
         ),
         "stateRows.ts": (
             'export function discoveryNotice names(partial, "partial for") '
             'names(unavailable, "unavailable for")'
         ),
         "trees.ts": (
-            'conversation.serviceName this.state.discoveryNotice '
+            'conversation.serviceName this.description = conversationDetail(conversation, nowMs, grouped) '
+            'new vscode.ThemeIcon(`${conversation.serviceIcon}~spin`) this.revealCurrentProject() '
+            'this.state.incompleteDiscovery view.message = undefined '
             '"runtrol.hasUsableProvider" "runtrol.isVerifyingProvider" awaitsVerification'
         ),
         "usageTree.ts": (
@@ -660,7 +666,7 @@ def selftest() -> int:
             ' usageRowsEqual(this.rows, next)'
         ),
         "usageDisplay.ts": (
-            'provider.installation.state !== "missing" detail: "No report yet" '
+            'provider.installation.state !== "missing" detail: "Ready" '
             'detail: "Checking" detail: "Unavailable · Fix" '
             'detail: `Disconnected · ${usageDetail(gauge, nowMs)}` '
             'export function installableProviders '
@@ -823,6 +829,22 @@ def selftest() -> int:
             {
                 **sources,
                 "conversationList.ts": sources["conversationList.ts"].replace('return "Cannot reopen"', ""),
+            },
+        ),
+        (
+            package,
+            {
+                **sources,
+                "conversationList.ts": sources["conversationList.ts"].replace('return "";', ""),
+            },
+        ),
+        (
+            package,
+            {
+                **sources,
+                "trees.ts": sources["trees.ts"].replace(
+                    'new vscode.ThemeIcon(`${conversation.serviceIcon}~spin`)', ""
+                ),
             },
         ),
         (package, {**sources, "controller.ts": sources["controller.ts"].replace("workspaceCollisions", "")}),

@@ -135,6 +135,35 @@
         }
       ]
     },
+    "ArchiveNativeSessionParams": {
+      "additionalProperties": false,
+      "description": "Archive one provider-native conversation through the provider's own surface.\n\nRuntime relays the opaque identity and stores nothing. A conversation Runtime currently supervises\nmust be forgotten before the provider-owned conversation can be archived.",
+      "properties": {
+        "nativeSessionId": {
+          "description": "Provider-owned opaque session identity returned unchanged.",
+          "type": "string"
+        },
+        "providerId": {
+          "$ref": "#/$defs/ProviderId",
+          "description": "Opaque provider identity returned with the native catalogue entry."
+        },
+        "requestId": {
+          "$ref": "#/$defs/MutationRequestId",
+          "description": "Caller-minted mutation identity."
+        },
+        "workspace": {
+          "description": "Exact canonical workspace returned with the native catalogue entry.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "requestId",
+        "providerId",
+        "nativeSessionId",
+        "workspace"
+      ],
+      "type": "object"
+    },
     "CapabilityFreshness": {
       "description": "Freshness of a capability map relative to the installed binary identity.",
       "oneOf": [
@@ -2597,6 +2626,11 @@
           "type": "string"
         },
         {
+          "const": "sessions/archiveNative",
+          "description": "Archive one provider-native conversation through the provider's own surface.",
+          "type": "string"
+        },
+        {
           "const": "approvals/listPending",
           "description": "Read pending structured provider approvals for one controlled session.",
           "type": "string"
@@ -2846,6 +2880,17 @@
         "interrupt": {
           "$ref": "#/$defs/ProviderCapabilityObservation",
           "description": "A running turn can receive an interrupt request."
+        },
+        "nativeSessionArchive": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProviderCapabilityObservation"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "A stored provider-native conversation can be archived through the provider's own surface.\n\nOptional for lockstep-additive compatibility with older Runtime versions."
         },
         "nativeSessionCatalogue": {
           "$ref": "#/$defs/ProviderCapabilityObservation",
@@ -3511,6 +3556,9 @@
     "adopt_native_session": {
       "$ref": "#/$defs/AdoptNativeSessionParams"
     },
+    "archive_native_session": {
+      "$ref": "#/$defs/ArchiveNativeSessionParams"
+    },
     "challenge": {
       "$ref": "#/$defs/ServerChallenge"
     },
@@ -3704,6 +3752,7 @@
     "cool_session",
     "forget_session",
     "delete_native_session",
+    "archive_native_session",
     "submit_input",
     "submit_blocks",
     "set_model",

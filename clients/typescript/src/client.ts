@@ -4,6 +4,7 @@ import type {
   AcquireControlParams,
   AdoptNativeSessionParams,
   AppScope,
+  ArchiveNativeSessionParams,
   ClientCapabilities,
   ClientInfo,
   ControlLease,
@@ -657,6 +658,11 @@ export class SessionClient {
    * and stores nothing; a provider without such a surface refuses as `capabilityUnavailable`. */
   public async deleteNative(params: DeleteNativeSessionParams): Promise<void> {
     requireEmpty(await callMutation(this.runtime, "sessions/deleteNative", params, undefined));
+  }
+
+  /** Archive one provider-native conversation through the provider's own surface. */
+  public async archiveNative(params: ArchiveNativeSessionParams): Promise<void> {
+    requireEmpty(await callMutation(this.runtime, "sessions/archiveNative", params, undefined));
   }
 
   public async watchEvents(params: WatchEventsParams): Promise<EventSubscription> {

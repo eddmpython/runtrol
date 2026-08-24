@@ -64,63 +64,64 @@ the original daemon and provider processes instead of making a versioned extensi
 - Exactly one selected session owns the full watch and Webview renderer.
 - The sidebar is the one list of this machine: every project and every conversation of every installed coding
   service. A service is the row icon, never repeated text and never a parent node. The row contains only the actual
-  conversation name, one operational state, and the service timestamp.
-- Every folder a coding service holds conversations in is a project heading, with its conversations beneath it. A
-  heading is created by the operator, or is the folder this window has open and has a conversation, or is discovered
-  because a conversation names it (created > open > discovered, one heading per place). An empty open folder is not a
-  tree row because it makes all machine-wide siblings look nested beneath it. An explicitly created project may remain
-  while empty. Two folders with the same name are told apart by their parent.
+  conversation name beside that icon. While a turn is working, the same service icon spins. A quiet row has no
+  status label, badge, or elapsed-time label.
+- A created project, this window's open folder, or a discovered folder with multiple conversations is a project
+  heading, with its conversations beneath it. A one-off provider working directory remains a plain conversation
+  instead of becoming a false project. A heading is created by the operator, or is the folder this window has open
+  without registration, or is discovered because multiple conversations name it (created > open > discovered,
+  one heading per place). The open folder is present even before its first conversation, so starting work there never
+  requires adding a project. An explicitly created project may also remain while empty. Two folders with the same
+  name are told apart by their parent.
   Grouping by coding service would sort by an implementation detail, since one repository driven by two CLIs is one
   piece of work.
 - Conversations are listed machine-wide, in one question per service, from the service's own surface: a listing
   protocol method, a listing command, or (for a CLI that publishes neither, Claude Code) the names in the CLI's own
   store. A structured human-facing `name`, `title`, or `preview` may cross directly into the visible row without
-  persistence or semantic parsing. When a list is not everything, the sidebar names every affected service and says
-  whether its history is partial or unavailable directly above the list. The information action contains only the
-  longer driver diagnosis, never a core fact hidden from the list. A conversation started without a project runs in
+  persistence or semantic parsing. When a list is not everything, the sidebar information action explains the
+  affected services without placing a permanent status sentence above every conversation. A conversation started without a project runs in
   the extension's own scratch folder and is listed beneath the headings as a loose row, with no folder name and no
   collision question.
-- The project this window is open on is first and open when it has conversations. Any project holding a conversation
-  that stopped for the operator is open too, so no heading can hide the thing that wants them. Everything else is
-  closed. The machine-wide view title has no current-folder qualifier that could make the other projects look nested
-  under the window's folder; the first heading and its open-folder mark already identify the current project.
-- Project summaries contain only attention, running, and total counts. They never repeat the word `conversation`.
-- `Running`, `Ready`, `Stopped`, `Cannot reopen`, `Needs you`, `Error`, `Limit`, and `Sign in needed` are the complete
-  row-state vocabulary. Provider and project names are not repeated in a visual conversation detail line. Every row
-  also has a time. A live row without a provider timestamp says `now`; a stopped row says `time unknown` rather than
-  silently omitting the fact.
+- The project this window has open is always first and expands as soon as it has conversations. Other projects remain
+  ordered by their most recently updated conversation. Turn state never participates in ordering. The machine-wide
+  view title has no current-folder qualifier that could make the other projects look nested under the window's folder;
+  the first heading and its open-folder icon already identify the current project.
+- Project summaries contain only a compact total count and an optional disambiguating qualifier. They never expose
+  running, stopped, or attention state as heading text.
+- Conversation rows have no textual state detail. A working conversation is shown by its spinning service icon; when
+  it is not working, the icon is still. Provider, project, elapsed time, `Running`, `Ready`, and `Stopped` are not
+  repeated beside the title. A conversation that cannot be reopened keeps the same disabled icon and one exceptional
+  blocked mark because clicking it cannot perform the ordinary row action.
 - Every installed CLI has a row in the fixed `CLI Status & Usage` area at the bottom of the same sidebar. The area is
-  expanded by default. `Checking`, `Unavailable · Fix`, current usage, a blocking limit, and `No report yet` are
-  mutually honest states. A CLI without a report is never omitted and never shown as within limits. A disconnected
+  expanded by default. `Checking`, `Unavailable · Fix`, `Ready`, current usage, and a blocking limit are mutually
+  honest states. `Ready` means the CLI is usable while no numeric account limit has been reported. A disconnected
   last report says so instead of looking current.
 - The same fixed area ends with one `Add coding services` row when the generated official catalogue contains services
   that are not installed. Its count is visible without expanding another view. Selecting it opens a searchable list
   of missing services and their exact install lines. Selecting a service places the line in a terminal unexecuted;
   Studio never downloads, installs, signs in, or starts a service implicitly. Installed catalogue services disappear
   from that picker and appear as ordinary CLI status and usage rows through the same Runtime inventory.
-- A conversation is deleted from its row. A Runtime-supervised conversation is closed and forgotten here (the
-  provider keeps its own record). A provider-owned stored conversation is deleted through the provider's own surface
-  (`sessions/deleteNative`: Codex `thread/delete`, Cline `history delete`) after a modal question naming the service;
-  a provider that publishes no such surface says so, in its own words, and nothing is attempted. Runtrol never removes
-  a provider's files itself.
+- Provider-owned archive and delete actions sit together on every row whose discovered capability supports them.
+  Either action first closes a Runtime-supervised pointer when necessary, then asks the provider's own surface to
+  mutate its stored conversation. `sessions/deleteNative` relays Codex `thread/delete` and Cline `history delete`;
+  `sessions/archiveNative` relays Codex `thread/archive`. A session without a provider-owned identity only forgets its
+  local pointer. Runtrol never removes or edits a provider's files itself.
 - Moving this window to a project is a button on its heading (and the live conversation's project chip), never a side
   effect of opening a conversation. Opening is the file-click grammar: the conversation's tab opens here, the window
   stays where it is, and the CLI runs in the conversation's own folder regardless.
-- Heading order ignores what is running inside it, for the same reason row order does. Waiting counts are printed in the
-  heading; position reflects where the reader left it.
+- Heading order ignores what is running inside it, for the same reason row order does. The current folder remains
+  first; position among other projects reflects provider recency.
 - A heading's rows are built when that heading is first drawn, never before. Thirty projects means twenty-nine closed
   headings whose rows nobody is going to look at, and the tree provider answers parent queries from a map rather than
   from built items so revealing a row never depends on having built the rest.
 - A Runtime-supervised session and the provider-owned chat it came from are one row. Row identity is the conversation,
   so opening a saved chat updates that row in place instead of removing one and inserting another.
-- Live conversations lead, then whatever the coding service touched most recently. Turn state never participates in the
-  order, so no row moves because an agent started or finished thinking.
-- A running row also says what the service is doing, in the service's own word (the tool it reports as running,
-  read from the same event the page draws the call from; never inferred from content), and a row whose service asked
-  for a sign-in says "Sign in needed" with the service's own sign-in command one key away (placed in the terminal,
-  never run). A row that stopped for a question carries the service's own first allow and decline options inline and
-  every option under "Answer the Question...", so it is answered without opening the tab. One light watch per
-  running session keeps these words current (the hot ceiling bounds how many); nothing but the reduced word is kept.
+- Every conversation is ordered by the most recent provider timestamp. Live state never overrides recency and turn
+  state never participates, so a row moves only when its conversation timestamp changes.
+- A row whose service asked a question carries the service's own first allow and decline options inline and every
+  option under "Answer the Question...", so it is answered without opening the tab. Sign-in and provider-owned
+  remedies stay available as actions without adding permanent state text to every conversation. One light watch per
+  running session keeps the icon and actions current; the hot ceiling bounds how many.
 - The window moves between projects from the keyboard: "Switch Window to Project..." (`Ctrl+K Ctrl+Shift+P`) and
   back with `Ctrl+K Ctrl+B`, the same window replaced each time; the previous project is one string in global state.
 - A new chat's service chip and the `Also Ask Another Service` command add another installed service without a
@@ -132,12 +133,11 @@ the original daemon and provider processes instead of making a versioned extensi
   ready, bound, dirty-preserved, and released ownership. Studio rebinds a uniquely matching live Runtime session
   after a restart, removes only abandoned clean worktrees, and shows the exact path of any dirty worktree it preserves.
   No branch, merge, commit, prompt, reply, provider flag, or transcript enters that record.
-- Every row carries one of six states, and the same glyph means the same thing in the sidebar and in the switcher:
-  needs you, needs attention, working, waiting on a limit, ready, saved. The point of the vocabulary is that a list of
-  running agents can be read without opening any of them.
-- A conversation whose turn stopped for a person reads `Needs you` before anything else on the row, and the view
-  carries a count badge so a blocked agent stays visible from another view entirely. An account limit is a separate
-  state and never counts toward that badge, because nobody can answer it.
+- Every conversation retains one internal operational state for actions, navigation, accessibility, and the view
+  badge. Only active work changes the visible service icon by spinning it. The row does not print the state name.
+- A conversation whose turn stopped for a person contributes to the view count badge and the next-waiting command, so
+  it stays reachable without adding a permanent label to every quiet row. An account limit is a separate state and
+  never counts toward that badge, because nobody can answer it.
 - One command opens the next conversation that stopped for the operator, and pressing it again walks the rest
   rather than returning to the same one. A conversation waiting on an account limit is never a destination, because
   nobody can answer it. This is the orchestration primitive: supervising several agents never requires reading a
@@ -150,8 +150,9 @@ the original daemon and provider processes instead of making a versioned extensi
 - The Conversations title bar keeps only New Conversation, Create Project, and Switch Conversation visible. Waiting,
   current-conversation, layout, refresh, service, device, access, and recovery commands remain in the overflow and
   Command Palette. The title and the list do not lose reading space to a row of rarely used toolbar icons.
-- Every visible provider mark has an equivalent spoken provider name. Tree rows announce their one state and time
-  once. Composer chip and slash-command listboxes expose expansion and the active option to assistive technology;
+- Every visible provider mark has an equivalent spoken provider name. Tree rows announce their internal state to
+  assistive technology without placing provider or state text in the visible row. Composer chip and slash-command
+  listboxes expose expansion and the active option to assistive technology;
   Escape closes a chip menu and returns focus to the chip that opened it.
 - A coding service that is not installed produces no row. Every installed service appears in the fixed status and usage
   area. One that still cannot run says `Unavailable · Fix` there, and Enter opens the same provider-owned remedies as
@@ -475,6 +476,7 @@ specified in [automatic updates](automaticUpdates.md).
 | `vscodeHostPerformance` | real 30-session Extension Host and Webview responsiveness on three operating systems |
 | `vscodeRealProviderJourney` | installed provider discovery and a complete real CLI control journey |
 | `node tooling/real-window-eye.mjs` | the eye pass: an isolated VS Code window and an isolated Runtime with the real installed CLIs, real folders and real conversations, photographed in the draft, conversation, tabs, reopened, grid, places, diff and diff-editor poses, with a real throwaway deletion; the pictures are the judgement. `RUNTROL_EYE_ENTRY=placeProbe` runs the focused place probe and `RUNTROL_EYE_ENTRY=agentToolsEye` runs the zero-model-turn Agent Tools enable and revoke proof in isolated provider homes |
+| `RUNTROL_EYE_DRAFT_ONLY=1 node tooling/real-window-eye.mjs` | focused current-folder sidebar and composer photograph plus the same real project-switch and keyboard-back proof, with no provider turn |
 | `RUNTROL_EYE_ENTRY=missionFlightDeckEye node tooling/real-window-eye.mjs` | at 1456 by 906, two isolated Git projects and reviewed Missions start together through one flight, reach integration together through the next flight, review existing and new files in native Receipt Landing multi-diffs, select the public product action, reject five drift or local-boundary failures plus one passing Gate mutation, retain retry state, apply exact bytes, and complete both Missions. Review, confirmation, first-completed/second-waiting, and next-review screenshots are inspected directly |
 | `RUNTROL_EYE_ENTRY=missionAutoFlightEye node tooling/real-window-eye.mjs` | one reviewed two-wave dependency Mission is armed once, starts two real provider sessions, verifies two fixed Gates, reaches `integrating` with zero operator continuation actions, removes its own authority, and is photographed before arm, while armed, and after arrival |
 | `RUNTROL_EYE_ENTRY=fleetEye node tooling/real-window-eye.mjs` | two real CLI attempts reach passing Receipts, native diffs compare their distinct output, `attempt-2` opens as the only winner Receipt, an `attempt-1` apply request is rejected, the public primary action writes exactly `attempt 2`, and the Mission reaches `completed` with its selected Task and Receipt visible. Comparison, winner review, confirmation, and completed screenshots are inspected directly at 1456 by 906 |

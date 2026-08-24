@@ -126,6 +126,7 @@
     "onCommand:runtrol.quarantineCapability",
     "onCommand:runtrol.rollbackCapability",
     "onCommand:runtrol.archiveCapability",
+    "onCommand:runtrol.archiveConversation",
     "onCommand:runtrol.deleteConversation",
     "onCommand:runtrol.enableAgentTools",
     "onCommand:runtrol.disableAgentTools"
@@ -142,14 +143,14 @@
       "panel": [
         {
           "id": "runtrolPanel",
-          "title": "Runtrol Chat",
+          "title": "Runtrol",
           "icon": "resources/symbol.svg"
         }
       ],
       "secondarySidebar": [
         {
           "id": "runtrolSide",
-          "title": "Runtrol Chat",
+          "title": "Runtrol",
           "icon": "resources/symbol.svg"
         }
       ]
@@ -307,6 +308,11 @@
         "command": "runtrol.closeSession",
         "title": "Runtrol: Close Conversation",
         "icon": "$(close)"
+      },
+      {
+        "command": "runtrol.archiveConversation",
+        "title": "Runtrol: Archive Conversation",
+        "icon": "$(archive)"
       },
       {
         "command": "runtrol.deleteConversation",
@@ -650,6 +656,10 @@
           "when": "false"
         },
         {
+          "command": "runtrol.archiveConversation",
+          "when": "false"
+        },
+        {
           "command": "runtrol.deleteConversation",
           "when": "false"
         },
@@ -846,21 +856,26 @@
         {
           "command": "runtrol.renameSession",
           "when": "view == runtrol.sessions && viewItem =~ /^runtrol\\.conversation/",
-          "group": "inline@1"
+          "group": "1_manage@1"
         },
         {
           "command": "runtrol.openWorkspace",
           "when": "view == runtrol.sessions && viewItem =~ /^runtrol\\.conversation/",
+          "group": "2_window@1"
+        },
+        {
+          "command": "runtrol.archiveConversation",
+          "when": "view == runtrol.sessions && viewItem =~ /\\.archive/",
+          "group": "inline@1"
+        },
+        {
+          "command": "runtrol.deleteConversation",
+          "when": "view == runtrol.sessions && viewItem =~ /\\.delete/",
           "group": "inline@2"
         },
         {
           "command": "runtrol.closeSession",
           "when": "view == runtrol.sessions && viewItem =~ /^runtrol\\.conversation\\.live/",
-          "group": "inline@3"
-        },
-        {
-          "command": "runtrol.deleteConversation",
-          "when": "view == runtrol.sessions && (viewItem == runtrol.conversation.saved || viewItem == runtrol.conversation.blocked)",
           "group": "inline@3"
         },
         {

@@ -130,7 +130,7 @@ async function requireConversationEditor(): Promise<void> {
       { cause: error },
     );
   }
-  if (!tab || !tab.label.startsWith("Runtrol")) {
+  if (!tab || !tab.label.trim() || tab.label.startsWith("Runtrol")) {
     throw new Error("the selected conversation is not an identifiable editor Webview tab");
   }
 }

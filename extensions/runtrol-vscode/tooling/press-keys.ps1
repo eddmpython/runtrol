@@ -6,7 +6,8 @@
 # verified to be the foreground window first: keys that land in somebody else's window are worse than no keys.
 param(
     [Parameter(Mandatory = $true)][string]$TitleMatch,
-    [Parameter(Mandatory = $true)][string]$Keys
+    [Parameter(Mandatory = $true)][string]$Keys,
+    [string]$CommandLineMatch = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -25,7 +26,32 @@ public class RuntrolPressWin32 {
 }
 "@
 
-$window = Get-Process | Where-Object { $_.MainWindowTitle -like "*$TitleMatch*" } | Select-Object -First 1
+$allowedProcessIds = $null
+if ($CommandLineMatch) {
+    $allProcesses = @(Get-CimInstance Win32_Process)
+    $allowed = [Collections.Generic.HashSet[int]]::new()
+    foreach ($process in $allProcesses) {
+        if ($process.CommandLine -and $process.CommandLine.IndexOf($CommandLineMatch, [StringComparison]::OrdinalIgnoreCase) -ge 0) {
+            $allowed.Add([int]$process.ProcessId) | Out-Null
+        }
+    }
+    for ($depth = 0; $depth -lt 8; $depth += 1) {
+        $before = $allowed.Count
+        foreach ($process in $allProcesses) {
+            if (-not $allowed.Contains([int]$process.ProcessId)) { continue }
+            $parent = $allProcesses | Where-Object { $_.ProcessId -eq $process.ParentProcessId } | Select-Object -First 1
+            if ($parent -and $parent.Name -eq "Code.exe") {
+                $allowed.Add([int]$parent.ProcessId) | Out-Null
+            }
+        }
+        if ($allowed.Count -eq $before) { break }
+    }
+    $allowedProcessIds = @($allowed)
+}
+$window = Get-Process | Where-Object {
+    $_.MainWindowTitle -like "*$TitleMatch*" -and
+    ($null -eq $allowedProcessIds -or $allowedProcessIds -contains $_.Id)
+} | Select-Object -First 1
 if (-not $window) {
     Write-Error "no window has a title matching '$TitleMatch'"
     exit 2
@@ -40,10 +66,13 @@ $focused = $false
 for ($attempt = 0; $attempt -lt 3 -and -not $focused; $attempt += 1) {
     $foreground = [RuntrolPressWin32]::GetForegroundWindow()
     $foregroundThread = [RuntrolPressWin32]::GetWindowThreadProcessId($foreground, [IntPtr]::Zero)
+    $targetThread = [RuntrolPressWin32]::GetWindowThreadProcessId($handle, [IntPtr]::Zero)
     $ownThread = [RuntrolPressWin32]::GetCurrentThreadId()
     [RuntrolPressWin32]::AttachThreadInput($ownThread, $foregroundThread, $true) | Out-Null
+    [RuntrolPressWin32]::AttachThreadInput($ownThread, $targetThread, $true) | Out-Null
     [RuntrolPressWin32]::BringWindowToTop($handle) | Out-Null
     [RuntrolPressWin32]::SetForegroundWindow($handle) | Out-Null
+    [RuntrolPressWin32]::AttachThreadInput($ownThread, $targetThread, $false) | Out-Null
     [RuntrolPressWin32]::AttachThreadInput($ownThread, $foregroundThread, $false) | Out-Null
     Start-Sleep -Milliseconds 500
     $focused = ([RuntrolPressWin32]::GetForegroundWindow() -eq $handle)

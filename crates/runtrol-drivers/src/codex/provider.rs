@@ -215,9 +215,9 @@ impl Provider for CodexProvider {
             // and subsequent turns, so both switches ride the next turn.
             set_model: protocol(),
             set_reasoning_effort: protocol(),
-            // Its own generated schema carries `thread/delete` (and `thread/archive`); delete is the act
-            // the operator named, and it is the CLI's own.
+            // Its own generated schema carries both methods and their exact threadId parameter.
             native_session_delete: protocol(),
+            native_session_archive: protocol(),
         }
     }
 
@@ -230,6 +230,20 @@ impl Provider for CodexProvider {
             "thread/delete",
             &serde_json::json!({ "threadId": deletion.native.as_str() }),
             "deleting a native session",
+        )
+        .await
+        .map(|_answer| ())
+    }
+
+    async fn archive_native_session(
+        &self,
+        archival: runtrol_provider::NativeSessionArchival,
+    ) -> Result<(), ProviderError> {
+        let conn = self.connection().await?;
+        conn.call(
+            "thread/archive",
+            &serde_json::json!({ "threadId": archival.native.as_str() }),
+            "archiving a native session",
         )
         .await
         .map(|_answer| ())

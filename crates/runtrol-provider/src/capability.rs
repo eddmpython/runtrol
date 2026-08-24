@@ -96,6 +96,8 @@ pub struct ProviderCapabilities {
     /// delete what it stored (claude) is told apart from one that does (codex `thread/delete`, cline
     /// `history delete`) before anybody clicks.
     pub native_session_delete: ProviderCapability,
+    /// A stored provider-native conversation can be archived through the provider's own surface.
+    pub native_session_archive: ProviderCapability,
 }
 
 impl ProviderCapabilities {
@@ -114,6 +116,7 @@ impl ProviderCapabilities {
             set_model: missing(),
             set_reasoning_effort: missing(),
             native_session_delete: missing(),
+            native_session_archive: missing(),
         }
     }
 }

@@ -24,6 +24,7 @@ import type {
 import type {
   NativeChatCatalogue,
   NativeChatLine,
+  ProviderCapabilities,
   ProviderLine,
   ModelCatalog,
   SessionLine,
@@ -32,6 +33,7 @@ import type {
 import type { Conversation } from "./conversationList";
 import { attentionCount, nextNeedingYou, projects } from "./conversationList";
 import { conversationDeletion, deletionQuestion } from "./conversationDeletion";
+import { archivalQuestion, conversationArchival } from "./conversationArchival";
 import { conversationChoices } from "./conversationPicker";
 import { awaitsVerification, isUsable } from "./providerHealth";
 import type { HelpOffer, ServiceTrouble } from "./serviceHelp";
@@ -93,6 +95,7 @@ export class Controller implements vscode.Disposable {
   private readonly seenWarnings = new Set<string>();
   private readonly verifyingProviders = new Set<string>();
   private readonly nativeDiscoveries = new Map<string, NativeDiscovery>();
+  private readonly capabilityDiscoveries = new Map<string, Promise<void>>();
   private readonly deferredNativeProviders = new Map<string, boolean>();
   /// The one terminal help commands are offered in, reused so repeated attempts do not stack up.
   private helpTerminal: vscode.Terminal | null = null;
@@ -125,7 +128,7 @@ export class Controller implements vscode.Disposable {
       () => this.refreshIsolatedWorkspaces(),
     );
     this.status = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 20);
-    this.status.name = "Runtrol chats";
+    this.status.name = "Runtrol";
     this.status.command = "runtrol.switchSession";
     this.status.show();
     context.subscriptions.push(
@@ -178,6 +181,7 @@ export class Controller implements vscode.Disposable {
       inventory.sessions.sessions,
     ));
     this.startProviderVerification(inventory.providers.providers);
+    this.startExistingChatDiscovery();
   }
 
   private async refreshIsolatedWorkspaces(): Promise<void> {
@@ -252,9 +256,11 @@ export class Controller implements vscode.Disposable {
 
   async refreshChats(): Promise<void> {
     await this.refresh();
-    await Promise.all(this.state.providers
-      .filter(isUsable)
-      .map((provider) => this.loadNativeChats(provider.providerId, true)));
+    const providers = this.state.providers.filter(isUsable);
+    await Promise.all(providers.flatMap((provider) => [
+      this.loadNativeChats(provider.providerId, true),
+      this.loadProviderCapabilities(provider.providerId),
+    ]));
   }
 
   discoverNativeChats(providerId: string, force = false): void {
@@ -1086,6 +1092,14 @@ export class Controller implements vscode.Disposable {
     binding.removeAttachment(index);
   }
 
+  /// Add one image pasted in the composer. The Webview has already applied the public byte bound and MIME
+  /// allowlist; the binding applies the shared image-count bound and owns the bytes until the next send.
+  addPastedAttachment(binding: ConversationBinding, attachment: Attachment): void {
+    if (!binding.addAttachment(attachment)) {
+      this.say(`A message carries at most ${PUBLIC_LIMITS.maxInputImages} images.`, "warning", binding.session);
+    }
+  }
+
   /// A live conversation's project chip: where it runs, and the one explicit way to move the window there.
   async pickProjectForLive(binding: ConversationBinding): Promise<void> {
     const session = binding.session;
@@ -1458,7 +1472,7 @@ export class Controller implements vscode.Disposable {
   async switchWindowTo(workspace: string): Promise<void> {
     const current = currentWindowTarget();
     if (current) await this.context.globalState.update(PREVIOUS_PROJECT_KEY, current);
-    await vscode.commands.executeCommand("vscode.openFolder", vscode.Uri.file(workspace), { forceNewWindow: false });
+    await vscode.commands.executeCommand("vscode.openFolder", vscode.Uri.file(workspace), { forceReuseWindow: true });
   }
 
   /// Move this window to one of the machine's projects from the keyboard (`Ctrl+K Ctrl+Shift+P`): every
@@ -1599,7 +1613,7 @@ export class Controller implements vscode.Disposable {
       return;
     }
     if (current) await this.context.globalState.update(PREVIOUS_PROJECT_KEY, current);
-    await vscode.commands.executeCommand("vscode.openFolder", vscode.Uri.parse(previous), { forceNewWindow: false });
+    await vscode.commands.executeCommand("vscode.openFolder", vscode.Uri.parse(previous), { forceReuseWindow: true });
   }
 
   /// The service's own sign-in line, placed in the operator's terminal from the row that says it is needed.
@@ -1761,27 +1775,19 @@ export class Controller implements vscode.Disposable {
     );
   }
 
-  /// Delete a conversation from the row's X.
-  ///
-  /// Two acts under one word, decided before anything is asked: a supervised conversation is closed and
-  /// forgotten here (the existing close flow, Runtrol's pointer); a provider-owned one is deleted by the
-  /// provider through its own surface, after a modal question naming the service, and only where the
-  /// provider says it can. A provider that cannot says why, in its own words, and nothing is attempted.
+  /// Delete a conversation from its sidebar action.
   async deleteConversation(value: ConversationItem | Conversation): Promise<void> {
     const row = value instanceof ConversationItem ? value.conversation : value;
-    if (row.session) {
-      await this.close(row.session);
-      return;
-    }
-    const native = row.native;
-    if (!native) throw new Error(`${row.title} has nothing left to delete`);
-    const capabilities = await this.runtime.capabilities(row.providerId).catch(() => null);
+    const capabilities = await this.capabilitiesFor(row.providerId);
     const decision = conversationDeletion(row, capabilities);
     if (decision.kind === "unsupported") {
       void vscode.window.showInformationMessage(decision.why);
       return;
     }
-    if (decision.kind !== "deleteNative") return;
+    if (decision.kind === "forgetSupervised") {
+      if (row.session) await this.close(row.session);
+      return;
+    }
     const question = deletionQuestion(row);
     const choice = await vscode.window.showWarningMessage(
       question.message,
@@ -1798,7 +1804,39 @@ export class Controller implements vscode.Disposable {
   async deleteNativeWithoutAsking(row: Conversation): Promise<void> {
     const native = row.native;
     if (!native) throw new Error(`${row.title} has nothing left to delete`);
+    if (row.session && this.state.sessions.some((session) => session.sessionId === row.session?.sessionId)) {
+      await this.closeResolvedSession(row.session, row.session.lifecycle === "hotRunning");
+    }
     await this.runtime.deleteNative(native);
+    await this.loadNativeChats(row.providerId, true);
+  }
+
+  /// Archive a provider-owned conversation after one explicit confirmation.
+  async archiveConversation(value: ConversationItem | Conversation): Promise<void> {
+    const row = value instanceof ConversationItem ? value.conversation : value;
+    const capabilities = await this.capabilitiesFor(row.providerId);
+    const decision = conversationArchival(row, capabilities);
+    if (decision.kind === "unsupported") {
+      void vscode.window.showInformationMessage(decision.why);
+      return;
+    }
+    const question = archivalQuestion(row);
+    const choice = await vscode.window.showWarningMessage(
+      question.message,
+      { modal: true, detail: question.detail },
+      question.button,
+    );
+    if (choice !== question.button) return;
+    await this.archiveNativeWithoutAsking(row);
+  }
+
+  async archiveNativeWithoutAsking(row: Conversation): Promise<void> {
+    const native = row.native;
+    if (!native) throw new Error(`${row.title} has nothing left to archive`);
+    if (row.session && this.state.sessions.some((session) => session.sessionId === row.session?.sessionId)) {
+      await this.closeResolvedSession(row.session, row.session.lifecycle === "hotRunning");
+    }
+    await this.runtime.archiveNative(native);
     await this.loadNativeChats(row.providerId, true);
   }
 
@@ -2058,9 +2096,17 @@ export class Controller implements vscode.Disposable {
       });
       return active.queuedForce;
     }
-    if (!force && this.state.nativeCatalogue(providerId)) return Promise.resolve();
     const provider = this.state.providers.find((candidate) => candidate.providerId === providerId);
     if (!provider || !isUsable(provider)) return Promise.resolve();
+    void this.loadProviderCapabilities(providerId).catch((error: unknown) => {
+      if (!this.disposed) {
+        this.say(
+          `Cannot load conversation actions for ${provider.displayName}: ${error instanceof Error ? error.message : String(error)}`,
+          "warning",
+        );
+      }
+    });
+    if (!force && this.state.nativeCatalogue(providerId)) return Promise.resolve();
     const generation = this.nativeDiscoveryGeneration;
     const abort = new AbortController();
     const pending = this.runtime.nativeChats(providerId, abort.signal).then((catalogue) => {
@@ -2084,6 +2130,29 @@ export class Controller implements vscode.Disposable {
       }
     });
     this.nativeDiscoveries.set(providerId, { abort, pending, force, queuedForce: null });
+    return pending;
+  }
+
+  private capabilitiesFor(providerId: string): Promise<ProviderCapabilities | null> {
+    const current = this.state.providerCapabilities(providerId);
+    if (current) return Promise.resolve(current);
+    return this.loadProviderCapabilities(providerId).then(() => this.state.providerCapabilities(providerId));
+  }
+
+  private loadProviderCapabilities(providerId: string): Promise<void> {
+    if (this.state.providerCapabilities(providerId)) return Promise.resolve();
+    const active = this.capabilityDiscoveries.get(providerId);
+    if (active) return active;
+    const pending = this.runtime.capabilities(providerId).then((capabilities) => {
+      if (!this.disposed && this.state.providers.some((provider) => provider.providerId === providerId)) {
+        this.state.setProviderCapabilities(capabilities);
+      }
+    }).finally(() => {
+      if (this.capabilityDiscoveries.get(providerId) === pending) {
+        this.capabilityDiscoveries.delete(providerId);
+      }
+    });
+    this.capabilityDiscoveries.set(providerId, pending);
     return pending;
   }
 
@@ -2266,26 +2335,32 @@ export class Controller implements vscode.Disposable {
       );
       return;
     }
-    if (!currentModel) {
-      this.say(
-        `${providerDisplayName(session.providerId, this.state.providers)} has not announced which model is answering, so the effort has nothing to attach to; its own settings stay in control.`,
-        "info",
-      );
-      return;
-    }
     const catalogue = await this.runtime.models(session.providerId);
-    const model = modelOptions(catalogue).find((option) => option.id === currentModel)?.model ?? null;
+    let selectedModel = currentModel;
+    let model = modelOptions(catalogue).find((option) => option.id === currentModel)?.model ?? null;
+    if (!selectedModel) {
+      const pickedModel = await this.pickFrom(
+        binding,
+        "effort",
+        "Choose the model for this effort",
+        "This conversation has not announced its current model",
+        modelOptions(catalogue),
+      );
+      if (!pickedModel) return;
+      selectedModel = pickedModel.id;
+      model = pickedModel.model;
+    }
     const efforts = reasoningOptions(catalogue, model);
     if (efforts.length === 0) {
       this.say(
-        `${providerDisplayName(session.providerId, this.state.providers)} reports no reasoning efforts for ${currentModel}; its own settings stay in control.`,
+        `${providerDisplayName(session.providerId, this.state.providers)} reports no reasoning efforts for ${selectedModel}; its own settings stay in control.`,
         "info",
       );
       return;
     }
     const picked = await this.pickReasoningEffort(catalogue, model, "Switch reasoning effort", null, binding);
     if (picked === undefined) return;
-    await this.runtime.setModel(runtimeAction(session), currentModel, picked ?? undefined);
+    await this.runtime.setModel(runtimeAction(session), selectedModel, picked ?? undefined);
     this.viewOf(this.state.selected)?.switchRequested("effort", picked ?? "default");
   }
 

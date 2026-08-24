@@ -145,16 +145,16 @@ export type ProjectGroup = {
 export type ProjectKind = "created" | "open" | "discovered";
 
 /// Conversations gathered under this machine's projects: the ones the operator created, the folders this
-/// window has open, and every other folder a coding service reports conversations in.
+/// window has open, and established folders that hold more than one provider conversation.
 ///
 /// **The panel shows the whole machine's projects** (operator contract, `memory/uxContract.md`, restated
-/// 2026-08-20 against the Paseo, Codex and Claude sidebars: folder = project heading, conversations beneath
-/// it). A folder a coding service ran in is a project the person worked on, and the CLI's own listing is the
-/// authority on which folder a conversation belongs to (thin principle: the service files it, runtrol shows
-/// it). So a folder holding conversations is a heading whether or not anybody created or opened it here.
-/// What is still never invented is a heading with nothing in it: a discovered folder exists only while a
-/// conversation names it, so a machine with no conversations shows no wall of empty folder names (the
-/// 2026-08-19 regression was thirty empty auto-headings, and this rule keeps that impossible).
+/// 2026-08-20 against the Paseo, Codex and Claude sidebars: established folder = project heading, conversations
+/// beneath it). The CLI's own listing is the authority on which folder a conversation belongs to. A one-off
+/// working directory is not enough evidence that the person created a project: test and task runners commonly
+/// use one temporary directory per conversation, and promoting each one creates the false project wall.
+/// What is still never invented is an empty discovered heading: a discovered folder exists only while enough
+/// conversations name it. The one intentional empty heading is the folder open in this window, because it is the
+/// immediate place to start and must not require project registration.
 ///
 /// One heading per place. A created project wins over an open folder covering the same conversation, and
 /// either wins over a discovered folder, because creation and opening are the more deliberate acts and one row
@@ -171,7 +171,7 @@ export function projects(
 ): ProjectGroup[] {
   const filed = new Map<string, Conversation[]>(records.map((record) => [record.key, []]));
   for (const row of rows) {
-    if (unfiled(row)) continue;
+    if (intrinsicallyLoose(row)) continue;
     const home = projectOf(records, row);
     if (home) filed.get(home.key)?.push(row);
   }
@@ -196,12 +196,11 @@ export function projects(
       workspaceCovers(record.workspace, folder) || workspaceCovers(folder, record.workspace));
     if (represented) continue;
     const folderRows = rows.filter((row) =>
-      !unfiled(row) && !projectOf(records, row) && openFolderOf(openWorkspaces, row) === identity);
-    // The current folder is already named by the VS Code window. Drawing it as an empty project row makes
-    // every machine-wide project that follows look nested beneath it, even though the rows are siblings.
-    // An open folder becomes a heading when it has a conversation to contain; an explicitly created project
-    // still remains visible while empty through the record path above.
-    if (folderRows.length === 0) continue;
+      !intrinsicallyLoose(row)
+      && !projectOf(records, row)
+      && openFolderOf(openWorkspaces, row) === identity);
+    // The folder in this window is the person's immediate context, not a project they must register first. Keep
+    // it visible even before its first conversation so opening Runtrol here always starts with the work at hand.
     groups.push(group(
       `folder:${encodeURIComponent(identity)}`,
       workspaceName(folder) || folder,
@@ -215,13 +214,20 @@ export function projects(
   // folder reached by two casings is one heading; the first spelling seen is the one shown.
   const discovered = new Map<string, { workspace: string; rows: Conversation[] }>();
   for (const row of rows) {
-    if (unfiled(row) || projectOf(records, row) || openFolderOf(openWorkspaces, row) !== null) continue;
+    if (
+      intrinsicallyLoose(row)
+      || projectOf(records, row)
+      || openFolderOf(openWorkspaces, row) !== null
+    ) continue;
     const identity = workspaceIdentity(row.homeWorkspace);
     const place = discovered.get(identity) ?? { workspace: row.homeWorkspace, rows: [] };
     place.rows.push(row);
     discovered.set(identity, place);
   }
   for (const [identity, place] of discovered) {
+    // A single provider record only proves a working directory, not a user-created project. Keep that
+    // conversation as a plain row until a second conversation establishes the folder as a useful group.
+    if (place.rows.length < 2) continue;
     groups.push(group(
       `discovered:${encodeURIComponent(identity)}`,
       workspaceName(place.workspace) || place.workspace,
@@ -231,7 +237,7 @@ export function projects(
       place.rows,
     ));
   }
-  return qualified(groups).sort(byNearestToTheReader);
+  return qualified(groups).sort(byMostRecentProject);
 }
 
 /// Headings that share a name get their parent folder's name beside it.
@@ -273,7 +279,7 @@ function group(
 }
 
 /// Whether a conversation has no project to file under: it runs in the scratch folder, or names no folder.
-function unfiled(row: Conversation): boolean {
+function intrinsicallyLoose(row: Conversation): boolean {
   return row.projectless || !row.homeWorkspace.trim();
 }
 
@@ -308,25 +314,35 @@ function projectOf(records: readonly ProjectRecord[], row: Conversation): Projec
 
 /// The conversations that belong to no project, in the order the rows already have.
 ///
-/// Exactly the ones started without a project (they run in the scratch folder) and the ones a service reported
-/// with no folder at all. They sit at the top level beneath the project headings, not inside one. An earlier
+/// These include chats started without a project, chats whose service reported no folder, and chats in a one-off
+/// discovered working directory. They sit at the top level beneath the project headings, not inside one. An earlier
 /// version filed them under a heading called "No project", which turns an absence into a category and reads as
 /// a folder the person forgot about. The chat apps people already use do not do that: a project is a place you
 /// can put a conversation, and a conversation you did not put anywhere is simply a conversation.
 ///
 /// Below the headings rather than above them, because a project is a place somebody chose and a loose
-/// conversation is one they did not. Every conversation with a real folder is under a heading (`projects`), so
-/// together the two functions split the list with nothing falling through and nothing drawn twice.
-export function loose(rows: readonly Conversation[]): Conversation[] {
-  return rows.filter(unfiled);
+/// conversation is one they did not. Together `projects` and this function split the list with nothing falling
+/// through and nothing drawn twice.
+export function loose(
+  rows: readonly Conversation[],
+  records?: readonly ProjectRecord[],
+  openWorkspaces?: readonly string[],
+): Conversation[] {
+  // Compatibility for projections that only ask the intrinsic question. The sidebar passes the complete
+  // grouping context below, which is what also promotes one-off working directories to plain rows.
+  if (!records || !openWorkspaces) return rows.filter(intrinsicallyLoose);
+  const grouped = new Set(
+    projects(records, rows, openWorkspaces).flatMap((heading) => heading.rows.map((row) => row.key)),
+  );
+  return rows.filter((row) => !grouped.has(row.key));
 }
 
-/// This window's project first, then whatever was touched most recently.
+/// The current window's project first, then the other projects by most recent conversation.
 ///
 /// Deliberately blind to whether anything inside is running or waiting. Sorting on that would move a whole
-/// heading, and everything under it, every time an agent started or finished a turn. The count in the
-/// heading says who wants attention; the position says where the reader left it.
-function byNearestToTheReader(left: ProjectGroup, right: ProjectGroup): number {
+/// heading, and everything under it, every time an agent started or finished a turn. The current folder is stable
+/// at the top because it is the work the person opened this VS Code window to do.
+function byMostRecentProject(left: ProjectGroup, right: ProjectGroup): number {
   if (left.current !== right.current) return left.current ? -1 : 1;
   const leftAt = latestActivity(left.rows);
   const rightAt = latestActivity(right.rows);
@@ -352,10 +368,7 @@ function latestActivity(rows: readonly Conversation[]): number | null {
 export function projectDetail(group: ProjectGroup): string {
   const parts: string[] = [];
   if (group.qualifier) parts.push(`in ${group.qualifier}`);
-  if (group.rows.length === 0) return [...parts, "empty"].join(" · ");
-  if (group.attention > 0) parts.push(`${group.attention} need you`);
-  if (group.live > 0) parts.push(`${group.live} running`);
-  parts.push(String(group.rows.length));
+  if (group.rows.length > 0) parts.push(String(group.rows.length));
   return parts.join(" · ");
 }
 
@@ -477,12 +490,12 @@ export function nextNeedingYou(
   return waiting.find((row) => rows.indexOf(row) > openAt) ?? waiting[0] ?? null;
 }
 
-/// Live conversations first, then whatever the coding service touched most recently.
+/// Whatever the coding service touched most recently first.
 ///
 /// Turn state deliberately does not participate. Sorting on it would move rows under the pointer every time an
-/// agent started or finished thinking, and a list that rearranges itself while being read is not a list.
+/// agent started or finished thinking, and it also put an old live process above a conversation touched moments
+/// ago. A conversation list is chronological; state remains visible without rewriting that order.
 function byMostRecentlyActive(left: Conversation, right: Conversation): number {
-  if (left.live !== right.live) return left.live ? -1 : 1;
   if (left.updatedAtMs !== right.updatedAtMs) {
     if (left.updatedAtMs === null) return 1;
     if (right.updatedAtMs === null) return -1;
@@ -529,13 +542,12 @@ function providerTitle(title: string | null | undefined, identity: string): stri
   return value && value.toLocaleLowerCase("en-US") !== "untitled" ? value : unnamed(identity);
 }
 
-/// The muted second line: current state and the service's timestamp, with no repeated provider or project name.
-export function conversationDetail(row: Conversation, nowMs: number, _grouped = false): string {
-  const when = elapsed(row.updatedAtMs, nowMs) ?? (row.live ? "now" : "time unknown");
-  return [
-    conversationStatus(row),
-    when,
-  ].join(" · ");
+/// Conversation rows have no muted text.
+///
+/// The provider glyph identifies the coding service and spins while it runs. The title names the conversation.
+/// Dates, service names and state words would only repeat those two visual facts.
+export function conversationDetail(_row: Conversation, _nowMs: number, _grouped = false): string {
+  return "";
 }
 
 /// The smallest complete state vocabulary for a conversation row.

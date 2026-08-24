@@ -12,17 +12,23 @@ import {
 import { ConversationDecorations, conversationUri } from "./conversationDecorations";
 import type { ProjectRecord } from "./projects";
 import { awaitsVerification, isUsable } from "./providerHealth";
+import type { ProviderCapabilities } from "./runtimeTypes";
 import { RuntimeState } from "./state";
 
 /// One conversation, as one row.
 ///
-/// The provider icon identifies the service. The label and muted detail stay reserved for title, state, and time.
+/// The conversation title is the only text. Its coding-service glyph spins while it runs.
 export class ConversationItem extends vscode.TreeItem {
-  constructor(readonly conversation: Conversation, nowMs: number, grouped = false) {
+  constructor(
+    readonly conversation: Conversation,
+    nowMs: number,
+    grouped = false,
+    capabilities: ProviderCapabilities | null = null,
+  ) {
     super(conversation.title, vscode.TreeItemCollapsibleState.None);
     this.id = conversation.key;
     this.description = conversationDetail(conversation, nowMs, grouped);
-    this.contextValue = contextValue(conversation);
+    this.contextValue = contextValue(conversation, capabilities);
     this.iconPath = icon(conversation);
     // What the badge attaches to. A scheme of its own so the row does not also collect whatever git and the
     // problems view have to say about the folder it happens to sit in.
@@ -35,9 +41,8 @@ export class ConversationItem extends vscode.TreeItem {
       };
     }
     this.accessibilityInformation = {
-      // The icon carries the service visually, so its name belongs here for readers that cannot see the icon.
-      // The description already contains state and time; repeating a second state word makes the row harder to scan.
-      label: `${conversation.title}, ${conversation.serviceName}, ${this.description}`,
+      // The visible row keeps state out of its text, but readers still receive it through this label.
+      label: `${conversation.title}, ${conversation.serviceName}, ${spokenActivity(conversation)}`,
     };
   }
 }
@@ -45,9 +50,9 @@ export class ConversationItem extends vscode.TreeItem {
 /// One project heading: a folder the operator created a project on, has open in this window, or that a coding
 /// service reports conversations in. The conversations beneath it are the rows.
 ///
-/// The panel shows the whole machine's projects (memory/uxContract.md): every folder that holds a conversation
-/// is a heading, the way the Codex and Claude sidebars draw them. What is still never drawn is an empty folder
-/// nobody created: a discovered heading lives exactly as long as a conversation names that folder.
+/// The panel shows the whole machine's established projects (memory/uxContract.md). A one-off working directory
+/// remains a plain conversation rather than becoming a project heading. The current open folder is the one empty
+/// heading allowed without registration, because it is where the person opened Runtrol to work.
 export class ProjectItem extends vscode.TreeItem {
   constructor(readonly group: ProjectGroup, agentToolsEnabled = false) {
     super(
@@ -64,13 +69,14 @@ export class ProjectItem extends vscode.TreeItem {
     );
     this.id = group.key;
     const detail = projectDetail(group);
-    this.description = agentToolsEnabled ? `${detail} · Agent Tools` : detail;
+    this.description = [detail, agentToolsEnabled ? "Agent Tools" : ""].filter(Boolean).join(" · ");
     // What the heading offers depends on why it exists and whether it is this window. The move button draws
     // only on headings that are not this window: opening the folder you are already in is not a move, and the
     // contract (memory/uxContract.md) wants moving to be the one explicit act. Rename and remove belong to
     // created projects; a discovered or open folder offers "make this a project" instead.
     this.contextValue = projectContextValue(group);
-    this.resourceUri = vscode.Uri.file(group.workspace);
+    // Keep the real folder in the tooltip and command payload, but do not expose it as the tree resource. VS Code's
+    // Git decorations would otherwise append an unrelated dirty-file badge to the project heading.
     this.tooltip = agentToolsEnabled
       ? `${group.workspace}\nAgent Tools enabled for this project`
       : group.workspace;
@@ -78,7 +84,7 @@ export class ProjectItem extends vscode.TreeItem {
       ? new vscode.ThemeIcon("folder", new vscode.ThemeColor("notificationsWarningIcon.foreground"))
       : new vscode.ThemeIcon(group.current ? "folder-opened" : "folder");
     this.accessibilityInformation = {
-      label: `${group.name}${group.current ? ", this window's project" : ""}, ${this.description}`,
+      label: `${group.name}${group.current ? ", this window's project" : ""}${this.description ? `, ${this.description}` : ""}`,
     };
   }
 }
@@ -102,35 +108,15 @@ export type AgentToolsPort = {
 };
 
 /*
- * The glyph says which coding service, and its colour says how that conversation is going.
- *
- * The glyph carries the service because that is the fact a two character badge cannot carry: two of the four
- * services this drives begin with the same letter, and a shape is read without being read. The state moves to the
- * badge, which can say it in one character, and to the colour here.
- *
- * The state's colour is repeated rather than replaced by the badge's. A reader who has learned that orange means
- * working has learned it in both places, and on a row where the editor overrides one of them the other still says
- * it.
+ * The provider glyph always identifies the coding service. While work is actually running, the same glyph spins.
  */
 function icon(conversation: Conversation): vscode.ThemeIcon {
-  const glyph = conversation.serviceIcon;
   if (!conversation.canOpen) {
-    return new vscode.ThemeIcon(glyph, new vscode.ThemeColor("disabledForeground"));
+    return new vscode.ThemeIcon(conversation.serviceIcon, new vscode.ThemeColor("disabledForeground"));
   }
-  switch (conversation.activity) {
-    case "needsYou":
-      return new vscode.ThemeIcon(glyph, new vscode.ThemeColor("notificationsWarningIcon.foreground"));
-    case "attention":
-      return new vscode.ThemeIcon(glyph, new vscode.ThemeColor("problemsErrorIcon.foreground"));
-    case "working":
-      return new vscode.ThemeIcon(glyph, new vscode.ThemeColor("charts.orange"));
-    case "waitingOnQuota":
-      return new vscode.ThemeIcon(glyph, new vscode.ThemeColor("descriptionForeground"));
-    case "ready":
-      return new vscode.ThemeIcon(glyph, new vscode.ThemeColor("charts.green"));
-    case "saved":
-      return new vscode.ThemeIcon(glyph);
-  }
+  return conversation.activity === "working"
+    ? new vscode.ThemeIcon(`${conversation.serviceIcon}~spin`)
+    : new vscode.ThemeIcon(conversation.serviceIcon);
 }
 
 function spokenActivity(conversation: Conversation): string {
@@ -151,14 +137,21 @@ function spokenActivity(conversation: Conversation): string {
   }
 }
 
-function contextValue(conversation: Conversation): string {
-  if (!conversation.canOpen) return "runtrol.conversation.blocked";
-  if (!conversation.session) return "runtrol.conversation.saved";
+function contextValue(
+  conversation: Conversation,
+  capabilities: ProviderCapabilities | null,
+): string {
+  const mutationSuffix = conversation.native
+    ? (capabilities?.nativeSessionArchive?.availability === "available" ? ".archive" : "")
+      + (capabilities?.nativeSessionDelete?.availability === "available" ? ".delete" : "")
+    : "";
+  if (!conversation.canOpen) return `runtrol.conversation.blocked${mutationSuffix}`;
+  if (!conversation.session) return `runtrol.conversation.saved${mutationSuffix}`;
   // Suffixes the row's inline actions key on: a pending question gets allow and decline, a sign-in need gets
   // the service's own sign-in line. Menus match these by prefix, so the base value stays stable.
   const suffix = (conversation.activity === "needsYou" ? ".needsYou" : "")
     + (conversation.signInNeeded ? ".signIn" : "");
-  return `runtrol.conversation.live${suffix}`;
+  return `runtrol.conversation.live${suffix}${mutationSuffix}`;
 }
 
 function tooltip(conversation: Conversation): vscode.MarkdownString {
@@ -195,18 +188,19 @@ export class ConversationsTree implements vscode.TreeDataProvider<ChatTreeItem>,
   private grouped: Map<string, readonly Conversation[]> | undefined;
   /// The top-level conversation rows: the loose ones sitting beside the headings.
   private flat: ConversationItem[] | undefined;
-  /// The badge on each row, which is the second thing a row says.
+  /// The exceptional badge for a row that cannot perform the ordinary open action.
   ///
   /// Owned here because it is fed from the same rows the tree draws, and a second place computing which
   /// conversations exist would be a second answer to that question.
   readonly decorations = new ConversationDecorations();
   private view: vscode.TreeView<ChatTreeItem> | null = null;
   private badged: number | null = null;
-  /// The notice currently on screen, so an unchanged one is not written again.
-  private noticed: string | null | undefined = undefined;
+  /// Whether the provider-owned listing explanation action is currently relevant.
+  private listingIncomplete: boolean | null = null;
   private usableProvider: boolean | null = null;
   private verifyingProvider: boolean | null = null;
   private revealed: string | null = null;
+  private revealedCurrentProject: string | null = null;
 
   constructor(
     private readonly state: RuntimeState,
@@ -223,8 +217,10 @@ export class ConversationsTree implements vscode.TreeDataProvider<ChatTreeItem>,
       this.changedEmitter.fire(undefined);
     }) ?? null;
     this.workspaceSubscription = vscode.workspace.onDidChangeWorkspaceFolders(() => {
+      this.revealedCurrentProject = null;
       this.forgetItems();
       this.changedEmitter.fire(undefined);
+      this.revealCurrentProject();
     });
     this.subscription = state.onDidChange((change) => {
       if (change === "selection") {
@@ -245,6 +241,7 @@ export class ConversationsTree implements vscode.TreeDataProvider<ChatTreeItem>,
       this.updateBadge();
       this.updateDiscoveryNotice();
       this.updateWelcomeContext();
+      this.revealCurrentProject();
     });
   }
 
@@ -253,6 +250,7 @@ export class ConversationsTree implements vscode.TreeDataProvider<ChatTreeItem>,
     this.updateBadge();
     this.updateDiscoveryNotice();
     this.updateWelcomeContext();
+    this.revealCurrentProject();
     this.revealOpenConversation();
   }
 
@@ -329,12 +327,13 @@ export class ConversationsTree implements vscode.TreeDataProvider<ChatTreeItem>,
   private updateDiscoveryNotice(): void {
     const view = this.view;
     if (!view) return;
-    const notice = this.state.discoveryNotice;
-    if (notice === this.noticed) return;
-    this.noticed = notice;
-    // The essential coverage fact is on screen. The title action retains only the longer driver diagnosis.
-    view.message = notice ?? undefined;
-    void vscode.commands.executeCommand("setContext", "runtrol.listingIncomplete", notice !== null);
+    const incomplete = this.state.incompleteDiscovery !== null;
+    if (incomplete === this.listingIncomplete) return;
+    this.listingIncomplete = incomplete;
+    // Coverage diagnostics stay behind the title's information action. A permanent sentence above every
+    // conversation made provider internals the first thing a reader saw and displaced the list itself.
+    view.message = undefined;
+    void vscode.commands.executeCommand("setContext", "runtrol.listingIncomplete", incomplete);
   }
 
   /// Distinguish a healthy first run from a machine with no usable coding service.
@@ -404,9 +403,15 @@ export class ConversationsTree implements vscode.TreeDataProvider<ChatTreeItem>,
     // Before anything is built, so a row drawn in this pass already has its badge.
     this.decorations.update(rows);
     const records = this.projectRecords.all();
-    const groups = projects(records, rows, this.openWorkspaces());
+    const openWorkspaces = this.openWorkspaces();
+    const groups = projects(records, rows, openWorkspaces);
     // Beneath the headings, not under one. A conversation started with no project is still a conversation.
-    const unfiled = loose(rows).map((row) => new ConversationItem(row, nowMs));
+    const unfiled = loose(rows, records, openWorkspaces).map((row) => new ConversationItem(
+      row,
+      nowMs,
+      false,
+      this.state.providerCapabilities(row.providerId),
+    ));
     const parents = new Map<string, ProjectItem>();
     const grouped = new Map<string, readonly Conversation[]>();
 
@@ -443,7 +448,12 @@ export class ConversationsTree implements vscode.TreeDataProvider<ChatTreeItem>,
     if (already) return already;
     const nowMs = this.now();
     const under = (this.grouped?.get(key) ?? []).map(
-      (row) => new ConversationItem(row, nowMs, true),
+      (row) => new ConversationItem(
+        row,
+        nowMs,
+        true,
+        this.state.providerCapabilities(row.providerId),
+      ),
     );
     this.built.set(key, under);
     return under;
@@ -469,6 +479,24 @@ export class ConversationsTree implements vscode.TreeDataProvider<ChatTreeItem>,
   /// The folders this window is open on, which is what makes one project the reader's current one.
   private openWorkspaces(): string[] {
     return (vscode.workspace.workspaceFolders ?? []).map((folder) => folder.uri.fsPath);
+  }
+
+  /// Expand this window's project once its conversations arrive.
+  ///
+  /// The current folder is first even before discovery finishes. VS Code remembers the initial empty row as
+  /// collapsed when its children arrive later, so an explicit one-time reveal keeps the work at hand visible
+  /// without reopening it after the person deliberately collapses it.
+  private revealCurrentProject(): void {
+    const view = this.view;
+    if (!view || !view.visible) return;
+    this.ensureItems();
+    const current = this.items?.find(
+      (item): item is ProjectItem => item instanceof ProjectItem && item.group.current && item.group.rows.length > 0,
+    );
+    if (!current || current.group.key === this.revealedCurrentProject) return;
+    view.reveal(current, { expand: true, select: false, focus: false }).then(() => {
+      this.revealedCurrentProject = current.group.key;
+    }, () => undefined);
   }
 
 }

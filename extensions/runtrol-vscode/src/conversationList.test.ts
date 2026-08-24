@@ -191,7 +191,7 @@ test("a chat the service cannot reopen says so instead of failing on click", () 
   assert.ok(blocked);
   assert.equal(blocked.canOpen, false);
   assert.ok(blocked.blocked);
-  assert.equal(conversationDetail(blocked, NOW), "Cannot reopen · time unknown");
+  assert.equal(conversationDetail(blocked, NOW), "");
 });
 
 test("a stuck session asks for attention without leaving its place", () => {
@@ -219,14 +219,14 @@ test("rows a person could not tell apart get an identity", () => {
   assert.equal(new Set(rows.map((row) => row.title)).size, 2);
 });
 
-test("a conversation line contains state without repeating its provider or project", () => {
+test("a conversation line has no detail beside its agent icon and title", () => {
   const [plain] = conversations([session({ sessionId: "s1" })], PROVIDERS, [], null);
   const [named] = conversations([session({ sessionId: "s2", label: "Nightly sweep" })], PROVIDERS, [], null);
 
   assert.ok(plain);
   assert.ok(named);
-  assert.equal(conversationDetail(plain, NOW), "Stopped · time unknown");
-  assert.equal(conversationDetail(named, NOW), "Stopped · time unknown");
+  assert.equal(conversationDetail(plain, NOW), "");
+  assert.equal(conversationDetail(named, NOW), "");
 });
 
 test("elapsed time reads the way a chat list writes it", () => {
@@ -495,12 +495,9 @@ test("a folder that is only whitespace files nowhere", () => {
   assert.equal(loose(rows).length, 1);
 });
 
-test("every folder a conversation names is a heading, and the open one comes first", () => {
-  // The operator's contract (memory/uxContract.md, 2026-08-20): the panel shows the whole machine's
-  // projects, folder = heading, conversations beneath it, the way the Codex and Claude sidebars draw them.
-  // The CLI's own listing says which folder a conversation belongs to, so a folder holding conversations is
-  // a heading whether or not anybody created or opened it here. The open folder is this window's project
-  // and leads; nothing with a real folder is left loose.
+test("every established conversation folder is a heading", () => {
+  // Repeated provider use establishes a useful group without turning every one-off task directory into a
+  // project. The folder open in this window remains explicit even before that threshold.
   const rows = conversations(spread([ALPHA, BETA, GAMMA]), PROVIDERS, [], null);
   const groups = projects([], rows, [ALPHA]);
   assert.equal(groups.length, 3, "three folders, three headings");
@@ -517,11 +514,14 @@ test("every folder a conversation names is a heading, and the open one comes fir
   assert.equal(projects([], [], []).length, 0, "with no conversations, no discovered headings: no empty walls");
 });
 
-test("a discovered folder never appears empty: it lives exactly as long as a conversation names it", () => {
-  // The 2026-08-19 regression was thirty empty auto-headings. A discovered heading is derived from the rows,
-  // so a folder that stops holding conversations stops being a heading in the same breath.
-  const before = conversations(spread([BETA], 1), PROVIDERS, [], null);
+test("a discovered project needs repeated use and disappears with its conversations", () => {
+  // One provider record proves only a working directory. Repeated use makes the folder a useful heading,
+  // and the heading remains derived from the rows rather than stored as a project the person never created.
+  const before = conversations(spread([BETA], 2), PROVIDERS, [], null);
   assert.equal(projects([], before, []).length, 1);
+  const oneOff = conversations(spread([BETA], 1), PROVIDERS, [], null);
+  assert.equal(projects([], oneOff, []).length, 0);
+  assert.equal(loose(oneOff, [], []).length, 1);
   assert.equal(projects([], [], []).length, 0);
 });
 
@@ -581,7 +581,12 @@ test("two folders with one name are told apart by their parent, without renaming
   const first = below(ROOT, "2026-08-19", "new-chat");
   const second = below(ROOT, "2026-08-20", "new-chat");
   const rows = conversations(
-    [session({ sessionId: "a", workspace: first }), session({ sessionId: "b", workspace: second })],
+    [
+      session({ sessionId: "a1", workspace: first }),
+      session({ sessionId: "a2", workspace: first }),
+      session({ sessionId: "b1", workspace: second }),
+      session({ sessionId: "b2", workspace: second }),
+    ],
     PROVIDERS,
     [],
     null,
@@ -594,7 +599,7 @@ test("two folders with one name are told apart by their parent, without renaming
     assert.ok(projectDetail(group).startsWith(`in ${group.qualifier}`));
   }
   const lone = projects([], conversations([session({ sessionId: "a", workspace: first })], PROVIDERS, [], null), []);
-  assert.equal(lone[0]?.qualifier, null, "a name nobody else has needs no qualifier");
+  assert.equal(lone.length, 0, "a one-off working directory is not promoted to a project");
 });
 
 test("a conversation started with no project is loose beneath the headings, never a heading of its own", () => {
@@ -620,14 +625,15 @@ test("a conversation started with no project is loose beneath the headings, neve
     assert.ok(!conversationDetail(row, NOW).includes("no-project"));
   }
   const groups = projects([], rows, []);
-  assert.deepEqual(groups.map((group) => group.name), ["alpha"], "only the real folder is a heading");
-  assert.equal(loose(rows).length, 2, "the projectless conversations are the loose rows");
+  assert.deepEqual(groups.map((group) => group.name), [], "a one-off working directory is not a project");
+  assert.equal(loose(rows, [], []).length, 3, "all one-off conversations are plain rows");
 });
 
 test("without a scratch folder nothing is projectless", () => {
   const rows = conversations([session({ sessionId: "s", workspace: SCRATCH })], PROVIDERS, [], null, null);
   assert.equal(rows[0]?.projectless, false);
-  assert.equal(projects([], rows, []).length, 1, "then it is simply a folder, and folders are headings");
+  assert.equal(projects([], rows, []).length, 0, "one folder observation does not invent a project");
+  assert.equal(loose(rows, [], []).length, 1);
 });
 
 test("a created project standing on the open folder draws the one heading", () => {
@@ -658,13 +664,24 @@ test("a live conversation without a provider timestamp still says when it is act
     null,
   );
   assert.ok(row);
-  assert.equal(conversationDetail(row, NOW), "Running · now");
+  assert.equal(conversationDetail(row, NOW), "");
 });
 
-test("an open folder with no conversations is not a parent-looking project row", () => {
+test("conversation row detail stays empty for every operational state", () => {
+  const [base] = conversations([session({ sessionId: "date-only" })], PROVIDERS, [], null);
+  assert.ok(base);
+  for (const activity of ["needsYou", "attention", "working", "waitingOnQuota", "ready", "saved"] as const) {
+    assert.equal(conversationDetail({ ...base, activity }, NOW), "");
+  }
+});
+
+test("the current folder is available before its first conversation without project registration", () => {
   const rows = conversations([session({ sessionId: "elsewhere", workspace: BETA })], PROVIDERS, [], null);
   const groups = projects([], rows, [ALPHA]);
-  assert.deepEqual(groups.map((group) => group.name), ["beta"]);
+  assert.deepEqual(groups.map((group) => group.name), ["alpha"]);
+  assert.equal(groups[0]?.current, true);
+  assert.equal(groups[0]?.rows.length, 0);
+  assert.equal(loose(rows, [], [ALPHA]).length, 1);
 });
 
 test("a conversation row never repeats the folder its heading already names", () => {
@@ -684,7 +701,7 @@ test("an empty heading says what the list holds, never what the folder holds", (
   assert.equal(groups.length, 1);
   assert.equal(groups[0]?.rows.length, 0);
   assert.ok(groups[0]);
-  assert.equal(projectDetail(groups[0]), "empty");
+  assert.equal(projectDetail(groups[0]), "");
 });
 
 test("a conversation in a subfolder files under the project that covers it", () => {
@@ -801,8 +818,7 @@ test("each created project gets a heading and every conversation lands under exa
   assert.equal(new Set(held).size, rows.length, "and none is duplicated");
 });
 
-test("this window's project comes first however recently the others were touched", () => {
-  // The reader is already in this project. Anything else at the top makes them scroll to where they are.
+test("the current project comes first even when another project has the newest conversation", () => {
   const rows = conversations(
     spread([ALPHA, BETA]),
     PROVIDERS,
@@ -812,6 +828,17 @@ test("this window's project comes first however recently the others were touched
   const groups = projects([record(ALPHA), record(BETA)], rows, [ALPHA]);
   assert.equal(groups[0]?.name, "alpha");
   assert.equal(groups[0]?.current, true);
+});
+
+test("non-current projects remain ordered by their newest conversation", () => {
+  const rows = conversations(
+    spread([ALPHA, BETA, GAMMA]),
+    PROVIDERS,
+    [nativeChat({ nativeSessionId: "newest", cwd: GAMMA, updatedAt: "2026-08-17T11:59:00Z" })],
+    null,
+  );
+  const groups = projects([record(ALPHA), record(BETA), record(GAMMA)], rows, [ALPHA]);
+  assert.deepEqual(groups.map((group) => group.name).slice(0, 2), ["alpha", "gamma"]);
 });
 
 test("heading order does not move when an agent starts or finishes a turn", () => {
@@ -833,7 +860,7 @@ test("heading order does not move when an agent starts or finishes a turn", () =
   assert.deepEqual(order("hotIdle"), order("hotRunning"));
 });
 
-test("a heading counts what is waiting inside it without moving because of it", () => {
+test("a heading keeps internal state out of its compact count", () => {
   const lines = spread([ALPHA, BETA]);
   const rows = conversations(
     lines.map((line, index) =>
@@ -850,7 +877,7 @@ test("a heading counts what is waiting inside it without moving because of it", 
   assert.ok(alpha);
   assert.equal(alpha.attention, 1);
   assert.equal(alpha.live, 2);
-  assert.ok(projectDetail(alpha).startsWith("1 need you · 2 running"));
+  assert.equal(projectDetail(alpha), "3");
 });
 
 test("a heading with nothing waiting says only what it holds", () => {

@@ -87,7 +87,7 @@ def contractProblems(
     for token in (
         'executeCommand("runtrol.startSession")',
         "tabsBeforeCommand",
-        'draft.label !== "Runtrol: New chat"',
+        'draft.label !== "New chat"',
         "draftOpened: true",
         "draftClosed",
     ):
@@ -113,7 +113,7 @@ def fixture() -> tuple[dict[str, Any], dict[str, object], str, str, str]:
     targets = {name: dict(contract) for name, contract in EXPECTED_TARGETS.items()}
     verifier = (
         'executeCommand("runtrol.startSession") tabsBeforeCommand '
-        'draft.label !== "Runtrol: New chat" draftOpened: true draftClosed'
+        'draft.label !== "New chat" draftOpened: true draftClosed'
     )
     gates = """
   crossPlatform:

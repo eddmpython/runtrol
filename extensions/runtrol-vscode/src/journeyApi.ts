@@ -82,6 +82,8 @@ export type JourneyApi = {
   conversationTitles(): readonly string[];
   /// How many provider-owned conversations the services have listed so far.
   nativeChatCount(): number;
+  /// Whether Runtime discovery reports a provider-owned deletion surface for cleanup.
+  canDeleteNative(providerId: string): boolean;
   /// The eye pass: whether a provider-owned conversation with this native identity is currently listed.
   nativeChatListed(providerId: string, nativeSessionId: string): boolean;
   /// The eye pass: delete a provider-owned conversation through the provider, without the modal question
@@ -310,6 +312,9 @@ export function journeyApi(
     }),
     conversationTitles: () => state.conversations.map((conversation) => conversation.title),
     nativeChatCount: () => state.nativeChats.length,
+    canDeleteNative: (providerId) => (
+      state.providerCapabilities(providerId)?.nativeSessionDelete?.availability === "available"
+    ),
     nativeChatListed: (providerId, nativeSessionId) => state.nativeChats.some(
       (chat) => chat.providerId === providerId && chat.nativeSessionId === nativeSessionId,
     ),

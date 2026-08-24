@@ -67,8 +67,8 @@ test("rows carry the service's declared mark and name", () => {
 test("every connected CLI stays visible before it reports usage", () => {
   const rows = usageRows([], PROVIDERS, NOW);
   assert.deepEqual(rows.map((row) => [row.name, row.detail]), [
-    ["Claude Code", "No report yet"],
-    ["Codex", "No report yet"],
+    ["Claude Code", "Ready"],
+    ["Codex", "Ready"],
   ]);
 });
 
@@ -100,7 +100,7 @@ test("the fixed area includes checking and broken installed CLIs but omits missi
 
   const rows = usageRows([], providers, NOW);
   assert.deepEqual(rows.map((row) => [row.name, row.detail, row.state]), [
-    ["Claude Code", "No report yet", "available"],
+    ["Claude Code", "Ready", "available"],
     ["Codex", "Checking", "checking"],
     ["Grok", "Unavailable · Fix", "unavailable"],
   ]);

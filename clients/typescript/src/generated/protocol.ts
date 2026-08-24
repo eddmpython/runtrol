@@ -32,6 +32,12 @@ export interface AdoptNativeSessionParams { readonly access: SessionWorkspaceAcc
 /** Public integration authority, separate from remote device scopes. */
 export type AppScope = "provider.read" | "model.read" | "session.list" | "session.native.discover" | "session.output.read" | "session.start" | "session.resume" | "session.input.write" | "session.stop" | "approval.respond.low" | "approval.respond.high" | "session.delete";
 
+/** Archive one provider-native conversation through the provider's own surface.
+
+Runtime relays the opaque identity and stores nothing. A conversation Runtime currently supervises
+must be forgotten before the provider-owned conversation can be archived. */
+export interface ArchiveNativeSessionParams { readonly nativeSessionId: string; readonly providerId: ProviderId; readonly requestId: MutationRequestId; readonly workspace: string; }
+
 /** Freshness of a capability map relative to the installed binary identity. */
 export type CapabilityFreshness = "current" | "stale";
 
@@ -281,7 +287,7 @@ export interface RuntimeLimits { readonly challengeLifetimeMs: number; readonly 
 export interface RuntimeLocatorRecord { readonly endpoint: string; readonly endpointKind: RuntimeEndpointKind; readonly instanceId: string; readonly processId: number; readonly runtimeVersion: string; readonly schema: number; }
 
 /** A public Runtime method implemented by the initial read-only boundary. */
-export type RuntimeMethod = "runtime/initialize" | "runtime/initialized" | "runtime/challenge" | "integrations/requestEnrollment" | "integrations/watchEnrollment" | "integrations/getGrant" | "integrations/rotateKey" | "providers/usage" | "providers/list" | "providers/watch" | "providers/getCapabilities" | "providers/listModels" | "providers/listNativeSessions" | "sessions/list" | "sessions/watchIndex" | "sessions/get" | "sessions/start" | "sessions/adoptNative" | "sessions/resume" | "sessions/acquireControl" | "sessions/renewControl" | "sessions/releaseControl" | "sessions/submitInput" | "sessions/submitBlocks" | "sessions/setModel" | "sessions/setMode" | "sessions/watchEvents" | "sessions/interrupt" | "sessions/cool" | "sessions/forget" | "sessions/deleteNative" | "approvals/listPending" | "approvals/respond" | "sessions/indexChanged" | "sessions/indexEnded" | "providers/changed" | "providers/watchEnded" | "sessions/event" | "sessions/lagged" | "runtime/panicStop";
+export type RuntimeMethod = "runtime/initialize" | "runtime/initialized" | "runtime/challenge" | "integrations/requestEnrollment" | "integrations/watchEnrollment" | "integrations/getGrant" | "integrations/rotateKey" | "providers/usage" | "providers/list" | "providers/watch" | "providers/getCapabilities" | "providers/listModels" | "providers/listNativeSessions" | "sessions/list" | "sessions/watchIndex" | "sessions/get" | "sessions/start" | "sessions/adoptNative" | "sessions/resume" | "sessions/acquireControl" | "sessions/renewControl" | "sessions/releaseControl" | "sessions/submitInput" | "sessions/submitBlocks" | "sessions/setModel" | "sessions/setMode" | "sessions/watchEvents" | "sessions/interrupt" | "sessions/cool" | "sessions/forget" | "sessions/deleteNative" | "sessions/archiveNative" | "approvals/listPending" | "approvals/respond" | "sessions/indexChanged" | "sessions/indexEnded" | "providers/changed" | "providers/watchEnded" | "sessions/event" | "sessions/lagged" | "runtime/panicStop";
 
 /** The current model information Runtime can truthfully expose. */
 export type RuntimeModelCatalog = { readonly coverage: "known"; readonly models: ReadonlyArray<RuntimeModelChoice>; } | { readonly aliases: ReadonlyArray<string>; readonly coverage: "aliases"; readonly reasoningEfforts: ReadonlyArray<RuntimeReasoningChoice>; readonly why: string; } | { readonly aliases: ReadonlyArray<string>; readonly coverage: "partial"; readonly models: ReadonlyArray<RuntimeModelChoice>; readonly reasoningEfforts: ReadonlyArray<RuntimeReasoningChoice>; readonly why: string; } | { readonly coverage: "unknown"; readonly why: string; } | { readonly coverage: "unsupported"; readonly why: string; };
@@ -290,7 +296,7 @@ export type RuntimeModelCatalog = { readonly coverage: "known"; readonly models:
 export interface RuntimeModelChoice { readonly description: string; readonly displayName: string; readonly id: string; readonly isDefault: boolean; readonly reasoningEfforts: ReadonlyArray<RuntimeReasoningChoice>; }
 
 /** Structural lifecycle and event capabilities for one exact provider installation. */
-export interface RuntimeProviderCapabilities { readonly approvals: ProviderCapabilityObservation; readonly cooling: ProviderCapabilityObservation; readonly freshSession: ProviderCapabilityObservation; readonly freshness: CapabilityFreshness; readonly interrupt: ProviderCapabilityObservation; readonly nativeSessionCatalogue: ProviderCapabilityObservation; readonly nativeSessionDelete?: ProviderCapabilityObservation | null; readonly providerId: ProviderId; readonly resume: ProviderCapabilityObservation; readonly setModel?: ProviderCapabilityObservation | null; readonly setReasoningEffort?: ProviderCapabilityObservation | null; readonly structuredEvents: ProviderCapabilityObservation; }
+export interface RuntimeProviderCapabilities { readonly approvals: ProviderCapabilityObservation; readonly cooling: ProviderCapabilityObservation; readonly freshSession: ProviderCapabilityObservation; readonly freshness: CapabilityFreshness; readonly interrupt: ProviderCapabilityObservation; readonly nativeSessionArchive?: ProviderCapabilityObservation | null; readonly nativeSessionCatalogue: ProviderCapabilityObservation; readonly nativeSessionDelete?: ProviderCapabilityObservation | null; readonly providerId: ProviderId; readonly resume: ProviderCapabilityObservation; readonly setModel?: ProviderCapabilityObservation | null; readonly setReasoningEffort?: ProviderCapabilityObservation | null; readonly structuredEvents: ProviderCapabilityObservation; }
 
 /** One opaque reasoning-effort option reported by a provider. */
 export interface RuntimeReasoningChoice { readonly description: string; readonly id: string; }

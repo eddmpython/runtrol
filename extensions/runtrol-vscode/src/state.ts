@@ -4,6 +4,7 @@ import { conversations, type Conversation } from "./conversationList";
 import type {
   NativeChatCatalogue,
   NativeChatLine,
+  ProviderCapabilities,
   ProviderLine,
   SessionLine,
   WatchCursor,
@@ -21,6 +22,7 @@ export class RuntimeState implements vscode.Disposable {
   private sessionRows: readonly SessionLine[] = [];
   private providerRows: readonly ProviderLine[] = [];
   private readonly nativeCatalogues = new Map<string, NativeChatCatalogue>();
+  private readonly capabilityRows = new Map<string, ProviderCapabilities>();
   /// What each running conversation is doing, from the activity watch; absent means nothing known.
   private readonly activities = new Map<string, SessionActivity>();
   private isolatedWorkspaceHomes: ReadonlyMap<string, string> = new Map();
@@ -48,6 +50,10 @@ export class RuntimeState implements vscode.Disposable {
 
   nativeCatalogue(providerId: string): NativeChatCatalogue | null {
     return this.nativeCatalogues.get(providerId) ?? null;
+  }
+
+  providerCapabilities(providerId: string): ProviderCapabilities | null {
+    return this.capabilityRows.get(providerId) ?? null;
   }
 
   /// Why this list is not everything, in each service's own words, or null when it is everything.
@@ -111,7 +117,8 @@ export class RuntimeState implements vscode.Disposable {
   }
 
   replace(sessions: readonly SessionLine[], providers: readonly ProviderLine[]): void {
-    if (sessionRowsEqual(this.sessionRows, sessions) && providerRowsEqual(this.providerRows, providers)) {
+    const providersChanged = !providerRowsEqual(this.providerRows, providers);
+    if (sessionRowsEqual(this.sessionRows, sessions) && !providersChanged) {
       return;
     }
     this.sessionRows = sessions;
@@ -120,6 +127,9 @@ export class RuntimeState implements vscode.Disposable {
     const providerIds = new Set(providers.map((provider) => provider.providerId));
     for (const providerId of this.nativeCatalogues.keys()) {
       if (!providerIds.has(providerId)) this.nativeCatalogues.delete(providerId);
+    }
+    for (const providerId of this.capabilityRows.keys()) {
+      if (!providerIds.has(providerId)) this.capabilityRows.delete(providerId);
     }
     if (this.selectedId && !sessions.some((session) => session.sessionId === this.selectedId)) {
       this.selectedId = null;
@@ -146,6 +156,11 @@ export class RuntimeState implements vscode.Disposable {
     this.changedEmitter.fire("rows");
   }
 
+  setProviderCapabilities(capabilities: ProviderCapabilities): void {
+    this.capabilityRows.set(capabilities.providerId, capabilities);
+    this.changedEmitter.fire("rows");
+  }
+
   setIsolatedWorkspaces(workspaces: readonly IsolatedWorkspaceLine[]): void {
     const next = new Map(workspaces.map((workspace) => [
       workspaceIdentity(workspace.workspace),
@@ -163,8 +178,9 @@ export class RuntimeState implements vscode.Disposable {
   }
 
   clearNativeCatalogues(): void {
-    if (this.nativeCatalogues.size === 0) return;
+    if (this.nativeCatalogues.size === 0 && this.capabilityRows.size === 0) return;
     this.nativeCatalogues.clear();
+    this.capabilityRows.clear();
     this.conversationRows = null;
     this.changedEmitter.fire("rows");
   }
@@ -189,6 +205,7 @@ export class RuntimeState implements vscode.Disposable {
     this.cursors.clear();
     this.activities.clear();
     this.nativeCatalogues.clear();
+    this.capabilityRows.clear();
     this.changedEmitter.dispose();
   }
 }

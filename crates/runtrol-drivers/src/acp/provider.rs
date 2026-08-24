@@ -157,6 +157,9 @@ impl Provider for AcpProvider {
             } else {
                 ProviderCapability::available(ProviderCapabilitySource::OfficialCli)
             },
+            native_session_archive: ProviderCapability::unsupported(
+                "the Agent Client Protocol publishes no conversation archive method",
+            ),
         }
     }
 
