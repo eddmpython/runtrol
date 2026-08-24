@@ -56,12 +56,66 @@ button.usage-row:focus-visible,
   object-fit: contain;
 }
 
+/* One grid for the whole service: the bar takes the room, the digits and any spend line up beside it. Every
+   window of one service shares these columns, so two bars end at the same place. */
+.usage-body {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: 4px 6px;
+  align-items: center;
+  flex: 1;
+  min-width: 0;
+}
+
 .usage-value {
+  grid-column: 1 / -1;
   overflow: hidden;
   font-variant-numeric: tabular-nums;
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--vscode-foreground);
+}
+
+.usage-body progress {
+  /* A replaced element keeps its own intrinsic width inside a grid cell, so the bar is told to fill its
+     column. Without this it stops short and the digits sit far away from the reading they belong to. */
+  width: 100%;
+  min-width: 0;
+  height: 6px;
+  appearance: none;
+  border: 0;
+  border-radius: 3px;
+  /* The track is the quiet half. Only the filled part carries the reading. */
+  background: rgb(128 128 128 / 25%);
+}
+
+.usage-body progress::-webkit-progress-bar {
+  border-radius: 3px;
+  background: rgb(128 128 128 / 25%);
+}
+
+.usage-body progress::-webkit-progress-value {
+  border-radius: 3px;
+  background: var(--vscode-progressBar-background, var(--vscode-charts-blue));
+}
+
+.usage-percent {
+  min-width: 34px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  color: var(--vscode-foreground);
+}
+
+.usage-cost {
+  overflow: hidden;
+  font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--vscode-descriptionForeground);
+}
+
+.usage-row.limit-reached .usage-body progress::-webkit-progress-value {
+  background: var(--vscode-errorForeground);
 }
 
 .usage-row.unavailable .usage-value {

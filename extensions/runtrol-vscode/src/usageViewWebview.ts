@@ -1,6 +1,6 @@
 import "./usageView.css";
 
-import type { UsageRow } from "./usageDisplay";
+import type { UsageMeter, UsageRow } from "./usageDisplay";
 import type { UsageViewSnapshot } from "./usageViewMessage";
 
 type VsCodeApi = {
@@ -40,33 +40,59 @@ function usageRow(row: UsageRow): HTMLElement {
   const item = document.createElement(row.state === "unavailable" ? "button" : "section");
   item.className = `usage-row ${row.state}${row.reached ? " limit-reached" : ""}`;
   item.title = row.tooltip;
-  const value = usageValue(row);
-  // The service name and its state live in the hover, not on the row. The glyph says whose usage this is; the
-  // text beside it is the usage itself and nothing else.
-  item.setAttribute("aria-label", value ? `${row.name}, ${value}` : row.name);
+  // The service name and its state live in the hover, not on the row. The glyph says whose usage this is; what
+  // sits beside it is that service's own usage and nothing else.
+  item.setAttribute("aria-label", `${row.name}, ${row.detail}`);
   if (item instanceof HTMLButtonElement) {
     item.type = "button";
     item.addEventListener("click", () => vscode.postMessage({ type: "fix", providerId: row.providerId }));
   }
   const icon = providerGlyph(row.icon, "provider-icon");
   icon.setAttribute("aria-hidden", "true");
-  const text = document.createElement("span");
-  text.className = "usage-value";
-  text.textContent = value;
-  item.append(icon, text);
+  const body = document.createElement("div");
+  body.className = "usage-body";
+  body.append(...usageBody(row));
+  item.append(icon, body);
   return item;
 }
 
-/// The one thing beside the glyph: the service's own usage. Cost and the account percentage when reported, the
-/// fix affordance when the service cannot run, and nothing at all when there is no usage to show yet.
-function usageValue(row: UsageRow): string {
-  if (row.state === "unavailable") return "Fix";
-  if (row.state === "checking") return "";
-  const parts: string[] = [];
-  if (row.cost) parts.push(row.cost);
-  const percentMeter = row.meters.find((meter) => Number.isFinite(meter.percent));
-  if (percentMeter) parts.push(`${percentMeter.percent}%`);
-  return parts.join(" · ");
+/// What the service itself reported, drawn the way that service reports it.
+///
+/// A service that states how much of a window it has used gets a real bar per window, because that is a
+/// proportion and a bar is how a proportion is read. One that states only a running spend, or only when its
+/// window resets, gets that sentence instead: an empty bar beside a service that never sent a percentage would
+/// be an invention, and this panel only ever shows a number some service actually said.
+function usageBody(row: UsageRow): HTMLElement[] {
+  if (row.state === "unavailable") return [textLine("Fix")];
+  if (row.state === "checking") return [textLine("")];
+  if (row.meters.length === 0) return [textLine(row.cost ?? row.detail)];
+  // The cells go straight into the body's own grid rather than into a box per window, so every bar of a service
+  // that reported two windows ends at the same place instead of being shortened by the spend beside the first.
+  return row.meters.flatMap((meter, index) => meterCells(meter, index === 0 ? row.cost : null));
+}
+
+/// One reported window, as three cells: the proportion as a bar, the same proportion as digits, and the spend
+/// when the service also reported one.
+function meterCells(meter: UsageMeter, cost: string | null): HTMLElement[] {
+  const bar = document.createElement("progress");
+  bar.max = 100;
+  bar.value = meter.percent;
+  // The window this bar is of, and its reset, spoken rather than crowded onto the row.
+  bar.title = `${meter.label}: ${meter.detail}`;
+  const percent = document.createElement("span");
+  percent.className = "usage-percent";
+  percent.textContent = `${meter.percent}%`;
+  const spend = document.createElement("span");
+  spend.className = "usage-cost";
+  spend.textContent = cost ?? "";
+  return [bar, percent, spend];
+}
+
+function textLine(value: string): HTMLElement {
+  const text = document.createElement("span");
+  text.className = "usage-value";
+  text.textContent = value;
+  return text;
 }
 
 /// Provider manifests already restrict icon names. Recheck at the Webview boundary because the name still comes
