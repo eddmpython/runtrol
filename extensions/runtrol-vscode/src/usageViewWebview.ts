@@ -77,8 +77,10 @@ function meterCells(meter: UsageMeter, cost: string | null): HTMLElement[] {
   const bar = document.createElement("progress");
   bar.max = 100;
   bar.value = meter.percent;
-  // The window this bar is of, and its reset, spoken rather than crowded onto the row.
+  // The window this bar is of, and its reset, spoken rather than crowded onto the row. A bar with no name is
+  // just a number to a reader who cannot see which window it belongs to.
   bar.title = `${meter.label}: ${meter.detail}`;
+  bar.setAttribute("aria-label", `${meter.label}: ${meter.detail}`);
   const percent = document.createElement("span");
   percent.className = "usage-percent";
   percent.textContent = `${meter.percent}%`;

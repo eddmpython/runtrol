@@ -127,11 +127,14 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
         found.append("the Conversations title bar must keep exactly its three frequent actions visible")
     item_context = menus.get("view/item/context") if isinstance(menus, dict) else None
     winner_entries = item_context if isinstance(item_context, list) else []
+    # The guard is the contract: deletion is offered only where the provider reported a deletion surface, and it
+    # is offered on the row itself. Which inline slot it takes is a matter of button order, and pinning that here
+    # would make adding a neighbouring action look like a broken invariant.
     delete_entry = any(
         isinstance(entry, dict)
         and entry.get("command") == "runtrol.deleteConversation"
         and entry.get("when") == "view == runtrol.sessions && viewItem =~ /\\.delete/"
-        and entry.get("group") == "inline@1"
+        and str(entry.get("group", "")).startswith("inline")
         for entry in winner_entries
     )
     if not delete_entry:
@@ -407,28 +410,28 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
             "implements vscode.WebviewViewProvider",
             "private gauges:",
             "usageRowsEqual(this.rows, next)",
-            '"Usage refresh failed. Showing the last report."',
+            "Usage refresh failed: ${why}. Showing the last report.",
             "usageViewAction(message)",
             "isBroken(provider)",
             "this.installableCount",
             "this.postSnapshot()",
             "enableScripts: true",
-            'font-src ${webview.cspSource}',
-            '"codicon.css"',
+            "img-src ${webview.cspSource}",
+            'data-icon-base="${iconBase}"',
+            '"resources", "provider-icons"',
         ],
         "usageViewWebview.ts": [
             'document.createElement("progress")',
-            "progress.max = 100",
-            "progress.value = meter.percent",
-            'progress.setAttribute("aria-label"',
+            "bar.max = 100",
+            "bar.value = meter.percent",
+            'bar.setAttribute("aria-label"',
             'vscode.postMessage({ type: "fix"',
             'vscode.postMessage({ type: "discover"',
             "usage.replaceChildren",
             ".textContent =",
-            "icon.classList.add(`codicon-${iconName(row.icon)}`)",
             'return /^[a-z0-9-]{1,64}$/u.test(value) ? value : "sparkle"',
-            'getComputedStyle(icon, "::before").content',
-            'icon.className = "provider-icon codicon codicon-sparkle"',
+            "image.src = `${iconBase}/${iconName(declared)}.svg`",
+            "const fallback = `${iconBase}/sparkle.svg`",
         ],
         "usageViewMessage.ts": [
             "export function usageViewAction",
@@ -840,19 +843,19 @@ def selftest() -> int:
         ),
         "usageView.ts": (
             "implements vscode.WebviewViewProvider private gauges: "
-            '"Usage refresh failed. Showing the last report." '
+            '"Usage refresh failed: ${why}. Showing the last report." '
             "usageRowsEqual(this.rows, next) usageViewAction(message) isBroken(provider) "
             'this.installableCount this.postSnapshot() enableScripts: true '
-            'font-src ${webview.cspSource} "codicon.css"'
+            'img-src ${webview.cspSource} data-icon-base="${iconBase}" '
+            '"resources", "provider-icons"'
         ),
         "usageViewWebview.ts": (
-            'document.createElement("progress") progress.max = 100 progress.value = meter.percent '
-            'progress.setAttribute("aria-label" vscode.postMessage({ type: "fix" '
+            'document.createElement("progress") bar.max = 100 bar.value = meter.percent '
+            'bar.setAttribute("aria-label" vscode.postMessage({ type: "fix" '
             'vscode.postMessage({ type: "discover" usage.replaceChildren .textContent = '
-            'icon.classList.add(`codicon-${iconName(row.icon)}`) '
             'return /^[a-z0-9-]{1,64}$/u.test(value) ? value : "sparkle" '
-            'getComputedStyle(icon, "::before").content '
-            'icon.className = "provider-icon codicon codicon-sparkle"'
+            'image.src = `${iconBase}/${iconName(declared)}.svg` '
+            'const fallback = `${iconBase}/sparkle.svg`'
         ),
         "usageViewMessage.ts": (
             "export function usageViewAction record.providerId.length <= 256"
@@ -1035,10 +1038,14 @@ def selftest() -> int:
             },
         ),
         (package, {**sources, "usageViewWebview.ts": sources["usageViewWebview.ts"].replace('document.createElement("progress")', "")}),
-        (package, {**sources, "usageViewWebview.ts": sources["usageViewWebview.ts"].replace("icon.classList.add", "")}),
-        (package, {**sources, "usageViewWebview.ts": sources["usageViewWebview.ts"].replace("getComputedStyle", "")}),
+        (package, {**sources, "usageViewWebview.ts": sources["usageViewWebview.ts"].replace("image.src", "")}),
+        (package, {**sources, "usageViewWebview.ts": sources["usageViewWebview.ts"].replace("const fallback", "")}),
+        (package, {**sources, "usageViewWebview.ts": sources["usageViewWebview.ts"].replace("bar.max = 100", "")}),
+        (package, {**sources, "usageViewWebview.ts": sources["usageViewWebview.ts"].replace("bar.value = meter.percent", "")}),
+        (package, {**sources, "usageViewWebview.ts": sources["usageViewWebview.ts"].replace('bar.setAttribute("aria-label"', "")}),
         (package, {**sources, "usageViewWebview.ts": sources["usageViewWebview.ts"] + " providerMark"}),
-        (package, {**sources, "usageView.ts": sources["usageView.ts"].replace("font-src", "")}),
+        (package, {**sources, "usageView.ts": sources["usageView.ts"].replace("img-src", "")}),
+        (package, {**sources, "usageView.ts": sources["usageView.ts"].replace("data-icon-base", "")}),
         (package, {**sources, "usageView.ts": sources["usageView.ts"].replace("Usage refresh failed", "")}),
         (package, {**sources, "usageView.ts": sources["usageView.ts"].replace("usageRowsEqual(this.rows, next)", "false")}),
         (package, {**sources, "stateRows.ts": sources["stateRows.ts"].replace("discoveryNotice", "")}),
