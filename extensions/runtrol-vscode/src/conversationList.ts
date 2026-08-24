@@ -106,7 +106,7 @@ export function conversations(
     if (claimed.has(key) || chat.alreadyManagedAs) continue;
     rows.push(providerOwned(chat, key, providers, projectlessRoot));
   }
-  return rows.sort(byMostRecentlyActive).map(disambiguated(rows));
+  return rows.sort(byMostRecentlyActive);
 }
 
 /// Every conversation that belongs to one created project, under one heading.
@@ -506,40 +506,11 @@ function byMostRecentlyActive(left: Conversation, right: Conversation): number {
     || compare(left.key, right.key);
 }
 
-/// Two conversations that read identically are two rows a person cannot tell apart.
-function disambiguated(rows: readonly Conversation[]): (row: Conversation) => Conversation {
-  const seen = new Map<string, number>();
-  for (const row of rows) {
-    const name = `${row.title}\0${row.serviceName}\0${row.folder}`;
-    seen.set(name, (seen.get(name) ?? 0) + 1);
-  }
-  return (row) => {
-    const name = `${row.title}\0${row.serviceName}\0${row.folder}`;
-    return (seen.get(name) ?? 0) > 1
-      ? { ...row, title: `${row.title} · ${shortIdentity(row)}` }
-      : row;
-  };
-}
-
-function shortIdentity(row: Conversation): string {
-  return shortened(row.native?.nativeSessionId || row.session?.sessionId || row.key);
-}
-
-/// The last four usable characters of an identifier, which is what tells two otherwise identical rows apart.
-function shortened(identity: string): string {
-  const compact = identity.replaceAll(/[^A-Za-z0-9]/gu, "");
-  return (compact.slice(-4) || identity.slice(-4)).toUpperCase();
-}
-
-/// A compact, unique handle when the service has not supplied a human title yet.
-function unnamed(identity: string): string {
-  return `Chat ${shortened(identity)}`;
-}
-
-/// A provider's generic placeholder is the absence of a human title, not a title worth repeating on every row.
-function providerTitle(title: string | null | undefined, identity: string): string {
+/// A provider's generic placeholder is the absence of a human title. Internal session identifiers are never
+/// conversation names and must not leak into the sidebar as labels such as `Chat 8980`.
+function providerTitle(title: string | null | undefined, _identity: string): string {
   const value = title?.trim();
-  return value && value.toLocaleLowerCase("en-US") !== "untitled" ? value : unnamed(identity);
+  return value && value.toLocaleLowerCase("en-US") !== "untitled" ? value : "Unnamed conversation";
 }
 
 /// Conversation rows have no muted text.

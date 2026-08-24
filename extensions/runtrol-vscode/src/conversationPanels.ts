@@ -83,6 +83,7 @@ export class ConversationPanels implements vscode.Disposable {
     private readonly action: (binding: ConversationBinding, message: ViewAction) => void,
     private readonly titleOf: (session: SessionLine) => string,
     private readonly providerOf: (session: SessionLine) => string,
+    private readonly iconOf: (providerId: string | null) => string,
     /// Told whenever a panel gains focus, with its session (null for a draft); the tree highlight and
     /// every selected-conversation command follow the focused tab.
     private readonly focusChanged: (session: SessionLine | null) => void,
@@ -244,7 +245,7 @@ export class ConversationPanels implements vscode.Disposable {
   }
 
   private restoredTab(panel: vscode.WebviewPanel): ConversationSurface {
-    return tabSurface(panel, vscode.Uri.joinPath(this.extensionUri, "resources", "symbol.svg"));
+    return tabSurface(panel);
   }
 
   /// A draft's conversation started: the same tab is now that session's tab.
@@ -290,6 +291,7 @@ export class ConversationPanels implements vscode.Disposable {
       (message) => this.action(binding, message),
       this.titleOf,
       this.providerOf,
+      this.iconOf,
       this.contextOf,
       (visible) => {
         if (visible) {
@@ -346,6 +348,7 @@ export class ConversationBinding implements vscode.Disposable {
     action: (message: ViewAction) => void,
     titleOf: (session: SessionLine) => string,
     providerOf: (session: SessionLine) => string,
+    iconOf: (providerId: string | null) => string,
     private readonly contextOf: (session: SessionLine) => Promise<ConversationContext>,
     private readonly visibility: (visible: boolean) => void,
     private readonly closed: () => void,
@@ -373,6 +376,7 @@ export class ConversationBinding implements vscode.Disposable {
         }
       },
       providerOf,
+      iconOf,
     );
     this.view.reset(session, this.currentDraft);
   }

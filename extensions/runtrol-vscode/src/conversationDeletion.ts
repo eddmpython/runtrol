@@ -36,14 +36,3 @@ export function conversationDeletion(
   }
   return { kind: "deleteNative", serviceName: row.serviceName };
 }
-
-/// The question asked before a provider deletes a conversation. Modal, because the act is the provider's
-/// and final; worded with the service's name, because it is the service's history that changes.
-export function deletionQuestion(row: Conversation): { message: string; detail: string; button: string } {
-  return {
-    message: `Delete "${row.title}" from ${row.serviceName}?`,
-    detail: `${row.session ? "Runtrol stops supervising it first. " : ""}`
-      + `${row.serviceName} removes it from its own history. Runtrol keeps no copy to restore it from.`,
-    button: `Delete from ${row.serviceName}`,
-  };
-}

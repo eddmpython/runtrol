@@ -2,7 +2,6 @@ import * as vscode from "vscode";
 
 import {
   attentionCount,
-  conversationDetail,
   loose,
   projectDetail,
   projects,
@@ -21,13 +20,12 @@ import { RuntimeState } from "./state";
 export class ConversationItem extends vscode.TreeItem {
   constructor(
     readonly conversation: Conversation,
-    nowMs: number,
-    grouped = false,
     capabilities: ProviderCapabilities | null = null,
   ) {
     super(conversation.title, vscode.TreeItemCollapsibleState.None);
     this.id = conversation.key;
-    this.description = conversationDetail(conversation, nowMs, grouped);
+    // The row is one coding-service glyph and one human title. State and age never become a second label.
+    this.description = undefined;
     this.contextValue = contextValue(conversation, capabilities);
     this.iconPath = icon(conversation);
     // What the badge attaches to. A scheme of its own so the row does not also collect whatever git and the
@@ -206,7 +204,6 @@ export class ConversationsTree implements vscode.TreeDataProvider<ChatTreeItem>,
     private readonly state: RuntimeState,
     private readonly projectRecords: ProjectsPort,
     private readonly agentTools: AgentToolsPort | null = null,
-    private readonly now: () => number = () => Date.now(),
   ) {
     this.projectSubscription = projectRecords.onDidChange(() => {
       this.forgetItems();
@@ -398,7 +395,6 @@ export class ConversationsTree implements vscode.TreeDataProvider<ChatTreeItem>,
 
   private ensureItems(): void {
     if (this.items) return;
-    const nowMs = this.now();
     const rows = this.state.conversations;
     // Before anything is built, so a row drawn in this pass already has its badge.
     this.decorations.update(rows);
@@ -408,8 +404,6 @@ export class ConversationsTree implements vscode.TreeDataProvider<ChatTreeItem>,
     // Beneath the headings, not under one. A conversation started with no project is still a conversation.
     const unfiled = loose(rows, records, openWorkspaces).map((row) => new ConversationItem(
       row,
-      nowMs,
-      false,
       this.state.providerCapabilities(row.providerId),
     ));
     const parents = new Map<string, ProjectItem>();
@@ -446,12 +440,9 @@ export class ConversationsTree implements vscode.TreeDataProvider<ChatTreeItem>,
   private rowsUnder(key: string): ConversationItem[] {
     const already = this.built.get(key);
     if (already) return already;
-    const nowMs = this.now();
     const under = (this.grouped?.get(key) ?? []).map(
       (row) => new ConversationItem(
         row,
-        nowMs,
-        true,
         this.state.providerCapabilities(row.providerId),
       ),
     );

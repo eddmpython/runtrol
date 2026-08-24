@@ -8,6 +8,7 @@ import type { ProviderLine, SessionLine } from "../runtimeTypes";
 type SidebarJourney = {
   providers(): readonly ProviderLine[];
   sessions(): readonly SessionLine[];
+  refreshChats(): Promise<void>;
   nativeChatCount(): number;
   conversationTitles(): readonly string[];
   switchStoredPair(providerId: string): Promise<{
@@ -60,6 +61,7 @@ async function eyePass(resultPath: string): Promise<void> {
     90_000,
     `the installed provider ${providerId}`,
   );
+  await within(journey.refreshChats(), 90_000, "refreshing stored conversations");
   await waitFor(() => journey.nativeChatCount() >= 2, 90_000, "two stored conversations");
   await delay(4_000);
   await vscode.commands.executeCommand("workbench.action.closeAuxiliaryBar").then(undefined, () => undefined);
@@ -69,7 +71,15 @@ async function eyePass(resultPath: string): Promise<void> {
   if (untitled.length > 0) {
     throw new Error(`the sidebar still exposes Untitled rows: ${untitled.slice(0, 5).join(" | ")}`);
   }
-  await capture(resultPath, "sidebar", { conversations: titles.length, untitled: untitled.length });
+  const internalHandles = titles.filter((title) => /^Chat [A-Z0-9]{1,8}$/u.test(title));
+  if (internalHandles.length > 0) {
+    throw new Error(`the sidebar exposes internal chat handles: ${internalHandles.slice(0, 5).join(" | ")}`);
+  }
+  await capture(resultPath, "sidebar", {
+    conversations: titles.length,
+    untitled: untitled.length,
+    internalHandles: internalHandles.length,
+  });
 
   currentStage = "switching-saved-chats";
   const switched = await within(journey.switchStoredPair(providerId), 120_000, "switching two saved chats");

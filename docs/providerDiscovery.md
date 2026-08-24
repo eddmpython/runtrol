@@ -4,7 +4,11 @@
 
 runtrol discovers facts from the installed CLI at the moment a product action needs them. Daemon startup reads manifests and storage only. It does not start every provider process before showing the first session list.
 
-Discovery owns executable resolution, binary identity, reported version, consumed flags, runtime capabilities, model choices, and surface drift. It never reads or stores a transcript. Installation, replacement, update probes, session-boundary exclusion, and rollback are specified in [automatic updates](automaticUpdates.md).
+Discovery owns executable resolution, binary identity, reported version, consumed flags, runtime capabilities, model
+choices, and surface drift. It never stores a transcript or interprets conversation content. A provider-specific native
+catalogue adapter may make bounded read-only metadata scans when the installed CLI publishes no listing command or
+protocol. Installation, replacement, update probes, session-boundary exclusion, and rollback are specified in
+[automatic updates](automaticUpdates.md).
 
 ## Discovery ladder
 
@@ -59,7 +63,10 @@ The Provider SPI default is entirely unknown. An older or third-party driver the
 
 ## Session paths
 
-runtrol does not discover or calculate provider transcript paths. It carries the provider's native session identifier and uses the provider's official protocol or resume surface. This keeps session storage provider-owned and avoids turning a private directory layout into a runtime dependency.
+Active session routing does not calculate a transcript path. It carries the provider's native session identifier and
+uses the provider's official protocol or resume surface. A CLI with no listing surface may have a provider-specific,
+read-only store adapter for its native catalogue. That exception is bounded to catalogue metadata and structured
+provider labels, and does not make Runtime the owner of the files.
 
 ## Drift and manifest validation
 

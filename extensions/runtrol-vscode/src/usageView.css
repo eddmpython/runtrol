@@ -56,17 +56,12 @@ button.usage-row:focus-visible,
   gap: 6px;
 }
 
-.provider-mark {
+.provider-icon {
   display: grid;
   place-items: center;
   width: 18px;
   height: 18px;
-  border: 1px solid var(--vscode-widget-border, var(--vscode-descriptionForeground));
-  border-radius: 50%;
   color: var(--vscode-icon-foreground, var(--vscode-foreground));
-  font-size: 10px;
-  font-weight: 600;
-  line-height: 1;
 }
 
 .provider-name {

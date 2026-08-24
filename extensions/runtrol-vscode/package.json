@@ -144,14 +144,14 @@
         {
           "id": "runtrolPanel",
           "title": "Chat",
-          "icon": "resources/symbol.svg"
+          "icon": "resources/provider-icons/sparkle.svg"
         }
       ],
       "secondarySidebar": [
         {
           "id": "runtrolSide",
           "title": "Chat",
-          "icon": "resources/symbol.svg"
+          "icon": "resources/provider-icons/sparkle.svg"
         }
       ]
     },
@@ -178,7 +178,7 @@
           "id": "runtrol.conversationPanel",
           "name": "Chat",
           "type": "webview",
-          "icon": "resources/symbol.svg"
+          "icon": "resources/provider-icons/sparkle.svg"
         }
       ],
       "runtrolSide": [
@@ -186,7 +186,7 @@
           "id": "runtrol.conversationSide",
           "name": "Chat",
           "type": "webview",
-          "icon": "resources/symbol.svg"
+          "icon": "resources/provider-icons/sparkle.svg"
         }
       ]
     },
@@ -317,8 +317,8 @@
       },
       {
         "command": "runtrol.deleteConversation",
-        "title": "Runtrol: Delete Conversation",
-        "icon": "$(trash)"
+        "title": "Delete Conversation",
+        "icon": "$(close)"
       },
       {
         "command": "runtrol.fanOutInstruction",
@@ -862,17 +862,17 @@
         {
           "command": "runtrol.archiveConversation",
           "when": "view == runtrol.sessions && viewItem =~ /\\.archive/",
-          "group": "inline@1"
+          "group": "1_manage@2"
         },
         {
           "command": "runtrol.deleteConversation",
           "when": "view == runtrol.sessions && viewItem =~ /\\.delete/",
-          "group": "inline@2"
+          "group": "inline@1"
         },
         {
           "command": "runtrol.closeSession",
           "when": "view == runtrol.sessions && viewItem =~ /^runtrol\\.conversation\\.live/",
-          "group": "inline@3"
+          "group": "1_manage@3"
         },
         {
           "command": "runtrol.armMissionAutoFlight",
@@ -1064,6 +1064,7 @@
     "@types/node": "^24.0.0",
     "@types/qrcode": "^1.5.5",
     "@types/vscode": "~1.106.0",
+    "@vscode/codicons": "0.0.46-24",
     "@vscode/test-electron": "3.1.0",
     "@vscode/vsce": "3.9.3-5",
     "esbuild": "^0.25.0",

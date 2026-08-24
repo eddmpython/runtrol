@@ -38,16 +38,21 @@ The standalone desktop implementation and its execution path have been removed. 
   the sidebar. Several conversations can remain open and use VS Code's editor groups.
 - A conversation row contains only the coding-service icon and its actual conversation title. The icon spins only
   while that conversation is working. Session names use the operator's saved name when present, then the provider's
-  own catalogue title, then a compact unique `Chat` handle. Studio refreshes provider title metadata when a native
-  identity appears and when a turn settles. Project and provider names are not title fallbacks, and conversation
-  content is never read to invent a title.
+  own catalogue title or structured display preview. Studio refreshes provider title metadata when a native identity
+  appears and when a turn settles. Project names, provider names, and shortened internal identities are not title
+  fallbacks. A provider record with no human-facing title says `Unnamed conversation`, and conversation content is
+  never read to invent a title.
 - The fixed `Agent Usage` area at the bottom of the sidebar keeps every installed service visible. Numeric account
-  windows use bounded progress bars with exact percentages, and compact display-name marks keep similarly named
-  services distinct; a service with no numeric report says `Ready` without
-  inventing a zero value.
+  windows use bounded progress bars with exact percentages. Each service is identified by its declared icon and full
+  name rather than invented initials; a service with no numeric report says `Ready` without inventing a zero value.
+- A conversation row has a single inline `X` only when that provider reports native deletion. The click targets that
+  row immediately without prior selection or confirmation. Archive and close stay in the context menu, and a provider
+  with no native deletion surface gets no fake delete control.
 - New chats use a neutral greeting. The composer identifies project, branch, coding service, model, effort, and access
   mode. Its context visibly labels `Project`, `Branch`, and `Agent`, and its message field names the selected service so
   the destination remains explicit even when a project name matches the product name.
+- Every conversation tab is identified by the current coding-service icon and actual conversation title. The product
+  symbol remains an extension-entry landmark and is never presented as the AI speaking in a conversation.
 - Search covers project, provider metadata, state, and workspace path without reading conversation content.
 - Selecting a cold row updates the UI immediately, resumes through the provider-native session identity, and follows the bound workspace.
 - Installed providers, versions, models, flags, capabilities, and session paths are discovered at runtime.

@@ -148,13 +148,15 @@ export class UsageView implements vscode.WebviewViewProvider, vscode.Disposable 
   private html(webview: vscode.Webview): string {
     const script = webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, "dist", "usageView.js"));
     const style = webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, "dist", "usageView.css"));
+    const icons = webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, "dist", "codicon.css"));
     const nonce = webviewNonce();
     return `<!doctype html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource}; script-src 'nonce-${nonce}';">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource}; font-src ${webview.cspSource}; script-src 'nonce-${nonce}';">
+  <link rel="stylesheet" href="${icons}">
   <link rel="stylesheet" href="${style}">
   <title>Agent usage</title>
 </head>

@@ -41,6 +41,7 @@ export interface ConversationSurface {
   /// The editor column a tab sits in; null for a view.
   readonly viewColumn: vscode.ViewColumn | null;
   title: string;
+  iconPath: vscode.Uri | undefined;
   /// Bring the surface on screen. A tab may be asked to move to a column while it does.
   reveal(preserveFocus: boolean, column?: vscode.ViewColumn): void;
   onDidChangeVisibility(listener: () => void): vscode.Disposable;
@@ -50,8 +51,7 @@ export interface ConversationSurface {
 }
 
 /// An editor tab as a surface.
-export function tabSurface(panel: vscode.WebviewPanel, iconPath: vscode.Uri): ConversationSurface {
-  panel.iconPath = iconPath;
+export function tabSurface(panel: vscode.WebviewPanel): ConversationSurface {
   return {
     place: "tab",
     get webview() {
@@ -71,6 +71,12 @@ export function tabSurface(panel: vscode.WebviewPanel, iconPath: vscode.Uri): Co
     },
     set title(value: string) {
       panel.title = value;
+    },
+    get iconPath() {
+      return panel.iconPath instanceof vscode.Uri ? panel.iconPath : undefined;
+    },
+    set iconPath(value: vscode.Uri | undefined) {
+      panel.iconPath = value;
     },
     reveal(preserveFocus, column) {
       panel.reveal(column ?? panel.viewColumn ?? vscode.ViewColumn.Active, preserveFocus);
@@ -117,6 +123,13 @@ export function viewSurface(
     },
     set title(value: string) {
       if (!detached) view.title = value;
+    },
+    get iconPath() {
+      return undefined;
+    },
+    set iconPath(_value: vscode.Uri | undefined) {
+      // Workbench view icons are static contributions. Their neutral coding-service glyph is declared in the
+      // extension manifest; individual editor tabs receive the current provider's glyph here.
     },
     reveal(preserveFocus) {
       if (!detached) view.show(preserveFocus);

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { conversationDeletion, deletionQuestion } from "./conversationDeletion";
+import { conversationDeletion } from "./conversationDeletion";
 import type { Conversation } from "./conversationList";
 import type { NativeChatLine, ProviderCapabilities, SessionLine } from "./runtimeTypes";
 
@@ -83,11 +83,4 @@ test("a provider that publishes no deletion is told apart up front, in its own w
   const unknown = conversationDeletion(row(), capabilities(undefined));
   assert.equal(unknown.kind, "unsupported");
   assert.equal(conversationDeletion(row(), null).kind, "unsupported", "no answer from the Runtime is no permission");
-});
-
-test("the question names the conversation and the service, and promises no undo", () => {
-  const question = deletionQuestion(row());
-  assert.equal(question.message, 'Delete "Refactor the parser" from Codex?');
-  assert.ok(question.detail.includes("no copy"));
-  assert.equal(question.button, "Delete from Codex");
 });

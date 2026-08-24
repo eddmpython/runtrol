@@ -10,6 +10,18 @@ and refactoring that no user can observe do not belong here.
 
 ## [Unreleased]
 
+### Changed
+
+- Conversation tabs now use the active coding service's icon beside the actual conversation title. The Runtrol mark
+  remains an extension-entry landmark and is no longer presented as the AI inside a chat.
+- Conversation rows now expose one direct inline `X` only when the provider reports native deletion. It acts on that
+  row without prior selection or confirmation; archive and close remain in the context menu, and unsupported services
+  show no misleading delete action.
+- Internal fallback names such as `Chat 8980` are no longer exposed. Provider titles and structured display previews
+  remain authoritative, while a genuinely titleless provider record is labelled `Unnamed conversation`.
+- Agent Usage now identifies services with their declared icons and full names instead of invented initials. Exact
+  provider-reported percentages remain visible as progress bars.
+
 ## [0.1.20] - 2026-08-24
 
 ### Added

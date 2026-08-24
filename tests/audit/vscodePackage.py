@@ -144,6 +144,9 @@ def sourceProblems(
     vsceVersion = dependencies.get("@vscode/vsce") if isinstance(dependencies, dict) else None
     if not isinstance(vsceVersion, str) or not re.fullmatch(r"\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?", vsceVersion):
         found.append("the Marketplace publisher CLI is not pinned to one exact version")
+    codiconsVersion = dependencies.get("@vscode/codicons") if isinstance(dependencies, dict) else None
+    if not isinstance(codiconsVersion, str) or not re.fullmatch(r"\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?", codiconsVersion):
+        found.append("the provider glyph font is not pinned to one exact version")
     scripts = package.get("scripts")
     if not isinstance(scripts, dict) or scripts.get("package:native") != "node tooling/package.mjs":
         found.append("package:native is not the release packaging entry point")
@@ -176,6 +179,16 @@ def sourceProblems(
     for name in ("LICENSE", "NOTICE"):
         if f'path.join(repositoryRoot, "{name}")' not in buildScript:
             found.append(f"build.mjs does not copy the repository {name} into package resources")
+    for token in (
+        'path.join(codicons, "LICENSE")',
+        'path.join(codicons, "dist", "codicon.css")',
+        'path.join(codicons, "dist", "codicon.ttf")',
+        'path.join(codicons, "dist", "codicon.svg")',
+        'path.join(repositoryRoot, "crates", "runtrol-drivers", "manifests")',
+        'path.join(providerIcons, `${name}.svg`)',
+    ):
+        if token not in buildScript:
+            found.append(f"build.mjs does not package the pinned provider glyph asset {token}")
     requiredWorkflowTokens = (
         "push:",
         "extensions/runtrol-vscode/release-policy.json",
@@ -336,23 +349,32 @@ def listingProblems(package: dict[str, object], readme: str) -> list[str]:
 def expectedEntries(target: str) -> set[str]:
     """Return the complete platform archive allowlist."""
     executable = "runtrol.exe" if target.startswith("win32-") else "runtrol"
+    provider_icons = {"sparkle"}
+    manifests = ROOT / "crates" / "runtrol-drivers" / "manifests"
+    for manifest in manifests.glob("*.toml"):
+        match = re.search(r'^icon\s*=\s*"([a-z0-9-]{1,64})"\s*$', manifest.read_text(encoding="utf-8"), re.MULTILINE)
+        if match:
+            provider_icons.add(match.group(1))
     return {
         "[Content_Types].xml",
         "extension.vsixmanifest",
         "extension/package.json",
         "extension/readme.md",
+        "extension/dist/codicon.css",
+        "extension/dist/codicon.ttf",
         "extension/dist/extension.js",
         "extension/dist/pairingQrVendor.js",
         "extension/dist/usageView.css",
         "extension/dist/usageView.js",
         "extension/dist/webview.css",
         "extension/dist/webview.js",
+        "extension/resources/CODICONS_LICENSE.txt",
         "extension/resources/LICENSE.txt",
         "extension/resources/NOTICE.txt",
         "extension/resources/icon.png",
         "extension/resources/symbol.svg",
         f"extension/resources/core/{executable}",
-    }
+    } | {f"extension/resources/provider-icons/{icon}.svg" for icon in provider_icons}
 
 
 def archiveProblems(
@@ -540,7 +562,10 @@ def selftest() -> int:
             },
         },
         "scripts": {"package:native": "node tooling/package.mjs"},
-        "devDependencies": {"@vscode/vsce": "3.9.3-5"},
+        "devDependencies": {
+            "@vscode/codicons": "0.0.46-24",
+            "@vscode/vsce": "3.9.3-5",
+        },
     }
     listingReadme = """
     # Runtrol Studio for VS Code
@@ -575,14 +600,24 @@ def selftest() -> int:
     packageScript = (
         "packageManifest.version JSON.stringify(packageManifest release-targets.json target !== nativeTarget \"--no-dependencies\" "
         "path.resolve(repositoryRoot, process.env.RUNTROL_CORE_BINARY) "
+        "path.resolve(repositoryRoot, process.env.RUNTROL_PACKAGE_OUTPUT_DIR) "
         "mkdtemp(path.join(os.tmpdir(), \"runtrol-vsix-\")) "
-        "cp(source, path.join(stagedCore, targetContract.executable)) await rm(staging"
+        "cp(source, path.join(stagedCore, targetContract.executable)) "
+        "cp(path.join(extensionRoot, \"resources/provider-icons\"), stagedProviderIcons, { recursive: true }) "
+        "cp(path.join(extensionRoot, \"resources/CODICONS_LICENSE.txt\"), "
+        "path.join(stagedResources, \"CODICONS_LICENSE.txt\")) await rm(staging"
     )
     extensionManifestScript = (
         'sourceManifest.version !== "0.0.0" version: extensionReleasePolicy.version '
         "release-policy.json previousExtensionReleaseTag"
     )
-    buildScript = 'path.join(repositoryRoot, "LICENSE") path.join(repositoryRoot, "NOTICE")'
+    buildScript = (
+        'path.join(repositoryRoot, "LICENSE") path.join(repositoryRoot, "NOTICE") '
+        'path.join(codicons, "LICENSE") path.join(codicons, "dist", "codicon.css") '
+        'path.join(codicons, "dist", "codicon.ttf") path.join(codicons, "dist", "codicon.svg") '
+        'path.join(repositoryRoot, "crates", "runtrol-drivers", "manifests") '
+        'path.join(providerIcons, `${name}.svg`)'
+    )
     releaseWorkflow = """
     push:
     extensions/runtrol-vscode/release-policy.json
@@ -660,7 +695,13 @@ def selftest() -> int:
         return 2
     brokenSource = dict(sourcePackage)
     brokenSource["version"] = "0.1.0"
-    floatingPublisher = {**sourcePackage, "devDependencies": {"@vscode/vsce": "^3.9.3"}}
+    floatingPublisher = {
+        **sourcePackage,
+        "devDependencies": {
+            "@vscode/codicons": "0.0.46-24",
+            "@vscode/vsce": "^3.9.3",
+        },
+    }
     wrongRunnerTargets = {name: dict(contract) for name, contract in targets.items()}
     wrongRunnerTargets["win32-arm64"]["runner"] = "windows-2025"
     targetMutations = (

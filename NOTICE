@@ -35,6 +35,16 @@ of service. runtrol never holds, forwards, or logs the credentials those
 programs use.
 
 --------------------------------------------------------------------------------
+Visual Studio Code Codicons
+--------------------------------------------------------------------------------
+
+The VS Code extension includes the Visual Studio Code Codicons font from
+https://github.com/microsoft/vscode-codicons, copyright Microsoft Corporation.
+The Codicons package is licensed under Creative Commons Attribution 4.0
+International. The complete license text is distributed as
+resources/CODICONS_LICENSE.txt in the extension package.
+
+--------------------------------------------------------------------------------
 Third-party data license
 --------------------------------------------------------------------------------
 

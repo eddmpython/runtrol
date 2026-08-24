@@ -1,5 +1,6 @@
 import * as vscode from "vscode";
 
+import { conversationIcon } from "./conversationIcon";
 import { type ConversationSurface, type Place, tabSurface } from "./conversationSurface";
 import type { DraftChips, DraftState } from "./draft";
 import type { SessionLine } from "./runtimeTypes";
@@ -96,6 +97,7 @@ export class ConversationView implements vscode.Disposable {
     private readonly titleOf: (session: SessionLine) => string = sessionTitle,
     private readonly visibility: (visible: boolean) => void = () => {},
     private readonly providerOf: (session: SessionLine) => string = (session) => providerDisplayName(session.providerId),
+    private readonly iconOf: (providerId: string | null) => string = () => "sparkle",
   ) {}
 
   get isOpen(): boolean {
@@ -157,7 +159,7 @@ export class ConversationView implements vscode.Disposable {
         retainContextWhenHidden: false,
       },
     );
-    const surface = tabSurface(panel, vscode.Uri.joinPath(this.extensionUri, "resources", "symbol.svg"));
+    const surface = tabSurface(panel);
     this.attach(surface);
     return surface;
   }
@@ -170,6 +172,7 @@ export class ConversationView implements vscode.Disposable {
     this.surface = surface;
     this.visibleReady = false;
     surface.title = this.panelTitle(this.selected);
+    surface.iconPath = this.panelIcon(this.selected);
     const guards = this.surfaceGuards;
     guards.push(surface.webview.onDidReceiveMessage((message: unknown) => {
       const ready = webviewReadyKind(message);
@@ -244,6 +247,7 @@ export class ConversationView implements vscode.Disposable {
     this.draft = session ? null : draft;
     if (this.surface) {
       this.surface.title = this.panelTitle(session);
+      this.surface.iconPath = this.panelIcon(session);
     }
     this.generation += 1;
     this.pendingFrames = [];
@@ -265,6 +269,7 @@ export class ConversationView implements vscode.Disposable {
   updateDraft(chips: DraftChips, state: DraftState): void {
     if (this.selected) return;
     this.draft = { chips, state };
+    if (this.surface) this.surface.iconPath = this.panelIcon(null);
     void this.surface?.webview.postMessage({ type: "draft", draft: chips, draftState: state });
   }
 
@@ -282,6 +287,7 @@ export class ConversationView implements vscode.Disposable {
     this.selected = session;
     if (this.surface) {
       this.surface.title = this.panelTitle(session);
+      this.surface.iconPath = this.panelIcon(session);
     }
     void this.surface?.webview.postMessage({
       type: "session",
@@ -603,6 +609,11 @@ export class ConversationView implements vscode.Disposable {
   private panelTitle(session: SessionLine | null): string {
     if (session) return this.titleOf(session);
     return this.draft ? "New chat" : "Chat";
+  }
+
+  private panelIcon(session: SessionLine | null): vscode.Uri {
+    const providerId = session?.providerId ?? this.draft?.state.providerId ?? null;
+    return conversationIcon(this.extensionUri, this.iconOf(providerId));
   }
 
   private html(webview: vscode.Webview): string {

@@ -33,7 +33,7 @@ path, and upgrades reconnect to the same daemon and provider processes after the
 
 ## Quick start
 
-1. Open **Chats**.
+1. Open **Conversations** from the Runtrol Activity Bar entry.
 2. Select **New chat** beside an available service.
 3. Choose a local workspace, then a model and reasoning effort reported by that installed CLI. Provider default leaves
    the CLI's own choice unchanged.
@@ -41,6 +41,11 @@ path, and upgrades reconnect to the same daemon and provider processes after the
 
 Selecting an existing chat opens the same conversation tab and follows its exact workspace. Use **Rename Chat** for a
 short label, and **Runtrol: Switch Chat** for fast project, service, state, and path search.
+
+Each conversation row is only the coding-service icon and conversation title. The icon spins while that conversation
+is working. A single inline `X` appears only when the installed provider reports native deletion; it deletes that row
+directly. Archive and close remain in the context menu. Conversation tabs use the current coding-service icon and
+title, not the Runtrol product symbol.
 
 The conversation header keeps the active model, reasoning effort, provider mode, context use, provider-reported cost,
 and available account-limit windows together. Missing provider telemetry is shown as unavailable instead of estimated.

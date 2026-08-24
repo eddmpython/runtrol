@@ -127,6 +127,29 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
         found.append("the Conversations title bar must keep exactly its three frequent actions visible")
     item_context = menus.get("view/item/context") if isinstance(menus, dict) else None
     winner_entries = item_context if isinstance(item_context, list) else []
+    delete_entry = any(
+        isinstance(entry, dict)
+        and entry.get("command") == "runtrol.deleteConversation"
+        and entry.get("when") == "view == runtrol.sessions && viewItem =~ /\\.delete/"
+        and entry.get("group") == "inline@1"
+        for entry in winner_entries
+    )
+    if not delete_entry:
+        found.append("conversation deletion must appear only on rows whose provider reports deletion available")
+    conversation_inline = [
+        entry.get("command")
+        for entry in winner_entries
+        if isinstance(entry, dict)
+        and entry.get("command") in {
+            "runtrol.archiveConversation",
+            "runtrol.closeSession",
+            "runtrol.deleteConversation",
+        }
+        and str(entry.get("group", "")).startswith("inline")
+        and "view == runtrol.sessions" in str(entry.get("when", ""))
+    ]
+    if conversation_inline != ["runtrol.deleteConversation"]:
+        found.append("a conversation row must expose one inline X for real deletion and no other buttons")
     winner_task_when = (
         "view == runtrol.missions && viewItem =~ "
         "/^runtrol\\.missionTask\\.passed(\\.session)?\\.chooseOne\\.integrating$/"
@@ -169,6 +192,19 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
     activations = set(activation_events) if isinstance(activation_events, list) else set()
     if not {f"onCommand:{command}" for command in schedule_commands}.issubset(activations):
         found.append("Mission schedule and exact cancel commands must both activate the extension")
+    delete_command = next(
+        (
+            entry for entry in command_entries
+            if isinstance(entry, dict) and entry.get("command") == "runtrol.deleteConversation"
+        ),
+        None,
+    ) if isinstance(command_entries, list) else None
+    if (
+        not isinstance(delete_command, dict)
+        or delete_command.get("title") != "Delete Conversation"
+        or delete_command.get("icon") != "$(close)"
+    ):
+        found.append("the row's single deletion action must be an unbranded X")
     schedule_entry = any(
         isinstance(entry, dict)
         and entry.get("command") == "runtrol.scheduleMission"
@@ -250,6 +286,32 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
         found.append("the chat page must not place the product brand above the conversation")
     if "Runtrol sidebar" in sources.get("conversationSurface.ts", ""):
         found.append("an empty chat place must name the Conversations sidebar, not repeat the product brand")
+    if "conversationDetail" in sources.get("trees.ts", ""):
+        found.append("a conversation tree row must not derive or display state, age, service, or project detail")
+    if "providerMark" in sources.get("usageDisplay.ts", "") or "providerMark" in sources.get("usageViewWebview.ts", ""):
+        found.append("Agent Usage must render the provider's declared glyph instead of invented text initials")
+    if "resources/symbol.svg" in "".join(
+        sources.get(name, "") for name in ("conversationView.ts", "conversationPanels.ts", "conversationSurface.ts")
+    ):
+        found.append("an individual conversation surface must never use the product symbol as its speaker icon")
+    if "`Chat ${" in sources.get("conversationList.ts", ""):
+        found.append("a conversation title must never expose a shortened internal session identifier")
+
+    contributes = package.get("contributes")
+    views_containers = contributes.get("viewsContainers") if isinstance(contributes, dict) else None
+    views = contributes.get("views") if isinstance(contributes, dict) else None
+    neutral_icon = "resources/provider-icons/sparkle.svg"
+    for container_kind, container_id in (("panel", "runtrolPanel"), ("secondarySidebar", "runtrolSide")):
+        entries = views_containers.get(container_kind) if isinstance(views_containers, dict) else None
+        entry = next((item for item in entries or [] if isinstance(item, dict) and item.get("id") == container_id), None)
+        if not isinstance(entry, dict) or entry.get("icon") != neutral_icon:
+            found.append("shared chat containers must use a neutral coding-service glyph, never the product symbol")
+    for container_id in ("runtrolPanel", "runtrolSide"):
+        entries = views.get(container_id) if isinstance(views, dict) else None
+        if not isinstance(entries, list) or any(
+            not isinstance(entry, dict) or entry.get("icon") != neutral_icon for entry in entries
+        ):
+            found.append("shared chat views must use a neutral coding-service glyph, never the product symbol")
 
     required = {
         "core/framing.ts": [
@@ -273,6 +335,14 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
             'aria-haspopup="listbox"',
             'aria-controls="commands"',
             'aria-expanded="false"',
+            "surface.iconPath = this.panelIcon",
+            "conversationIcon(this.extensionUri, this.iconOf(providerId))",
+        ],
+        "conversationIcon.ts": [
+            'vscode.Uri.joinPath(extensionUri, "resources", "provider-icons", `${icon}.svg`)',
+            'const icon = /^[a-z0-9-]{1,64}$/u.test(declared) ? declared : "sparkle"',
+            "existsSync(candidate.fsPath)",
+            'vscode.Uri.joinPath(extensionUri, "resources", "provider-icons", "sparkle.svg")',
         ],
         "extension.ts": [
             "afterReady",
@@ -301,7 +371,7 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
             "if (left.current !== right.current) return left.current ? -1 : 1;",
             "export function conversationDetail",
             'return "";',
-            "return `Chat ${shortened(identity)}`",
+            '"Unnamed conversation"',
             'return "Cannot reopen"',
         ],
         "stateRows.ts": [
@@ -311,7 +381,8 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
         ],
         "trees.ts": [
             "conversation.serviceName",
-            "this.description = conversationDetail(conversation, nowMs, grouped)",
+            "this.description = undefined",
+            'capabilities?.nativeSessionDelete?.availability === "available"',
             'new vscode.ThemeIcon(`${conversation.serviceIcon}~spin`)',
             "this.revealCurrentProject()",
             "this.state.incompleteDiscovery",
@@ -342,6 +413,8 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
             "this.installableCount",
             "this.postSnapshot()",
             "enableScripts: true",
+            'font-src ${webview.cspSource}',
+            '"codicon.css"',
         ],
         "usageViewWebview.ts": [
             'document.createElement("progress")',
@@ -352,6 +425,10 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
             'vscode.postMessage({ type: "discover"',
             "usage.replaceChildren",
             ".textContent =",
+            "icon.classList.add(`codicon-${iconName(row.icon)}`)",
+            'return /^[a-z0-9-]{1,64}$/u.test(value) ? value : "sparkle"',
+            'getComputedStyle(icon, "::before").content',
+            'icon.className = "provider-icon codicon codicon-sparkle"',
         ],
         "usageViewMessage.ts": [
             "export function usageViewAction",
@@ -371,6 +448,7 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
             "export function usageMeters",
             "Math.max(0, Math.min(100",
             "export function installableProviders",
+            "icon: providerIcon(providerId, providers)",
             'provider.installation.state === "missing" && Boolean(provider.help?.install)',
         ],
         "serializedWatch.ts": [
@@ -585,8 +663,16 @@ def selftest() -> int:
         "contributes": {
             "viewsContainers": {
                 "activitybar": [],
-                "panel": [{"id": "runtrolPanel", "title": "Chat"}],
-                "secondarySidebar": [{"id": "runtrolSide", "title": "Chat"}],
+                "panel": [{
+                    "id": "runtrolPanel",
+                    "title": "Chat",
+                    "icon": "resources/provider-icons/sparkle.svg",
+                }],
+                "secondarySidebar": [{
+                    "id": "runtrolSide",
+                    "title": "Chat",
+                    "icon": "resources/provider-icons/sparkle.svg",
+                }],
             },
             "views": {
                 "runtrol": [
@@ -598,10 +684,20 @@ def selftest() -> int:
                     }
                 ],
                 "runtrolPanel": [
-                    {"id": "runtrol.conversationPanel", "name": "Chat", "type": "webview"}
+                    {
+                        "id": "runtrol.conversationPanel",
+                        "name": "Chat",
+                        "type": "webview",
+                        "icon": "resources/provider-icons/sparkle.svg",
+                    }
                 ],
                 "runtrolSide": [
-                    {"id": "runtrol.conversationSide", "name": "Chat", "type": "webview"}
+                    {
+                        "id": "runtrol.conversationSide",
+                        "name": "Chat",
+                        "type": "webview",
+                        "icon": "resources/provider-icons/sparkle.svg",
+                    }
                 ],
             },
             "viewsWelcome": [
@@ -625,6 +721,11 @@ def selftest() -> int:
                 {"command": "runtrol.scheduleMission"},
                 {"command": "runtrol.cancelMissionSchedule"},
                 {"command": "runtrol.discoverServices"},
+                {
+                    "command": "runtrol.deleteConversation",
+                    "title": "Delete Conversation",
+                    "icon": "$(close)",
+                },
             ],
             "menus": {
                 "view/title": [
@@ -671,6 +772,11 @@ def selftest() -> int:
                         "command": "runtrol.cancelMissionSchedule",
                         "when": "view == runtrol.missions && viewItem =~ /schedulePending/",
                     },
+                    {
+                        "command": "runtrol.deleteConversation",
+                        "when": "view == runtrol.sessions && viewItem =~ /\\.delete/",
+                        "group": "inline@1",
+                    },
                 ]
             },
         },
@@ -690,7 +796,15 @@ def selftest() -> int:
             "webviewReady createWebviewPanel focusSurface conversationTabIsActive "
             "onDidChangeTabs onDidChangeTabGroups MEASUREMENT_ATTEMPTS withinMeasurementStage "
             'waitForVisibleWebview retainContextWhenHidden: false aria-haspopup="listbox" '
-            'aria-controls="commands" aria-expanded="false"'
+            'aria-controls="commands" aria-expanded="false" '
+            "surface.iconPath = this.panelIcon "
+            "conversationIcon(this.extensionUri, this.iconOf(providerId))"
+        ),
+        "conversationIcon.ts": (
+            'vscode.Uri.joinPath(extensionUri, "resources", "provider-icons", `${icon}.svg`) '
+            'const icon = /^[a-z0-9-]{1,64}$/u.test(declared) ? declared : "sparkle" '
+            'existsSync(candidate.fsPath) '
+            'vscode.Uri.joinPath(extensionUri, "resources", "provider-icons", "sparkle.svg")'
         ),
         "extension.ts": (
             "afterReady selfApproveIntegration(client, pendingId, signature) "
@@ -711,14 +825,15 @@ def selftest() -> int:
             'const folderRows = rows.filter "open", '
             'if (left.current !== right.current) return left.current ? -1 : 1; '
             'export function conversationDetail return ""; '
-            'return `Chat ${shortened(identity)}` return "Cannot reopen"'
+            '"Unnamed conversation" return "Cannot reopen"'
         ),
         "stateRows.ts": (
             'export function discoveryNotice names(partial, "partial for") '
             'names(unavailable, "unavailable for")'
         ),
         "trees.ts": (
-            'conversation.serviceName this.description = conversationDetail(conversation, nowMs, grouped) '
+            'conversation.serviceName this.description = undefined '
+            'capabilities?.nativeSessionDelete?.availability === "available" '
             'new vscode.ThemeIcon(`${conversation.serviceIcon}~spin`) this.revealCurrentProject() '
             'this.state.incompleteDiscovery view.message = undefined '
             '"runtrol.hasUsableProvider" "runtrol.isVerifyingProvider" awaitsVerification'
@@ -727,12 +842,17 @@ def selftest() -> int:
             "implements vscode.WebviewViewProvider private gauges: "
             '"Usage refresh failed. Showing the last report." '
             "usageRowsEqual(this.rows, next) usageViewAction(message) isBroken(provider) "
-            "this.installableCount this.postSnapshot() enableScripts: true"
+            'this.installableCount this.postSnapshot() enableScripts: true '
+            'font-src ${webview.cspSource} "codicon.css"'
         ),
         "usageViewWebview.ts": (
             'document.createElement("progress") progress.max = 100 progress.value = meter.percent '
             'progress.setAttribute("aria-label" vscode.postMessage({ type: "fix" '
-            'vscode.postMessage({ type: "discover" usage.replaceChildren .textContent ='
+            'vscode.postMessage({ type: "discover" usage.replaceChildren .textContent = '
+            'icon.classList.add(`codicon-${iconName(row.icon)}`) '
+            'return /^[a-z0-9-]{1,64}$/u.test(value) ? value : "sparkle" '
+            'getComputedStyle(icon, "::before").content '
+            'icon.className = "provider-icon codicon codicon-sparkle"'
         ),
         "usageViewMessage.ts": (
             "export function usageViewAction record.providerId.length <= 256"
@@ -746,7 +866,7 @@ def selftest() -> int:
             'detail: "Checking" detail: "Unavailable · Fix" '
             'detail: `Disconnected · ${usageDetail(gauge, nowMs)}` '
             "export function usageMeters Math.max(0, Math.min(100 "
-            'export function installableProviders '
+            'export function installableProviders icon: providerIcon(providerId, providers) '
             'provider.installation.state === "missing" && Boolean(provider.help?.install)'
         ),
         "serializedWatch.ts": (
@@ -863,6 +983,16 @@ def selftest() -> int:
             "contents": "No coding-agent CLI was found. (command:runtrol.refresh)",
         }
     ]
+    broad_delete = json.loads(json.dumps(package))
+    for entry in broad_delete["contributes"]["menus"]["view/item/context"]:
+        if entry.get("command") == "runtrol.deleteConversation":
+            entry["when"] = "view == runtrol.sessions"
+    cluttered_conversation = json.loads(json.dumps(package))
+    cluttered_conversation["contributes"]["menus"]["view/item/context"].append({
+        "command": "runtrol.closeSession",
+        "when": "view == runtrol.sessions && viewItem =~ /^runtrol\\.conversation\\.live/",
+        "group": "inline@2",
+    })
     mutations = [
         ({**package, "dependencies": {"some-runtime": "1"}}, sources),
         (hidden_usage, sources),
@@ -871,6 +1001,8 @@ def selftest() -> int:
         (branded_chat_container, sources),
         (cluttered_toolbar, sources),
         (merged_welcomes, sources),
+        (broad_delete, sources),
+        (cluttered_conversation, sources),
         ({**package, "activationEvents": []}, sources),
         ({**package, "contributes": {"viewsContainers": {"activitybar": []}}}, sources),
         ({"engines": {"vscode": "^1.100.0"}, "contributes": {"viewsContainers": {"activitybar": [], "secondarySidebar": []}}}, sources),
@@ -890,6 +1022,9 @@ def selftest() -> int:
             },
         ),
         (package, {**sources, "conversationView.ts": "webviewReady"}),
+        (package, {**sources, "conversationView.ts": sources["conversationView.ts"] + " resources/symbol.svg"}),
+        (package, {**sources, "conversationIcon.ts": sources["conversationIcon.ts"].replace("provider-icons", "brand")}),
+        (package, {**sources, "conversationList.ts": sources["conversationList.ts"] + " `Chat ${identity}`"}),
         (
             package,
             {
@@ -900,11 +1035,26 @@ def selftest() -> int:
             },
         ),
         (package, {**sources, "usageViewWebview.ts": sources["usageViewWebview.ts"].replace('document.createElement("progress")', "")}),
+        (package, {**sources, "usageViewWebview.ts": sources["usageViewWebview.ts"].replace("icon.classList.add", "")}),
+        (package, {**sources, "usageViewWebview.ts": sources["usageViewWebview.ts"].replace("getComputedStyle", "")}),
+        (package, {**sources, "usageViewWebview.ts": sources["usageViewWebview.ts"] + " providerMark"}),
+        (package, {**sources, "usageView.ts": sources["usageView.ts"].replace("font-src", "")}),
         (package, {**sources, "usageView.ts": sources["usageView.ts"].replace("Usage refresh failed", "")}),
         (package, {**sources, "usageView.ts": sources["usageView.ts"].replace("usageRowsEqual(this.rows, next)", "false")}),
         (package, {**sources, "stateRows.ts": sources["stateRows.ts"].replace("discoveryNotice", "")}),
         (package, {**sources, "usageViewMessage.ts": sources["usageViewMessage.ts"].replace("record.providerId.length <= 256", "true")}),
         (package, {**sources, "trees.ts": sources["trees.ts"] + " view.description"}),
+        (package, {**sources, "trees.ts": sources["trees.ts"] + " conversationDetail"}),
+        (package, {**sources, "trees.ts": sources["trees.ts"].replace("this.description = undefined", "")}),
+        (
+            package,
+            {
+                **sources,
+                "trees.ts": sources["trees.ts"].replace(
+                    'capabilities?.nativeSessionDelete?.availability === "available"', ""
+                ),
+            },
+        ),
         (
             package,
             {

@@ -35,7 +35,7 @@ import { managePhones, pairPhone, reviewPhonePairings } from "./pairingAdministr
 import type { RemoteConnection } from "./protocol";
 import { SelectionStore } from "./selectionStore";
 import { ServiceTroubleReported } from "./serviceHelp";
-import { providerDisplayName, sessionTitle, workspaceName } from "./sessionDisplay";
+import { providerDisplayName, providerIcon, sessionTitle, workspaceName } from "./sessionDisplay";
 import { RuntimeState } from "./state";
 import { StudioRuntimeClient } from "./runtimeClient";
 import { workspaceCovers, workspaceIdentity } from "./workspaceCollision";
@@ -186,6 +186,7 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
     },
     (session) => state.conversationOf(session.sessionId)?.title ?? sessionTitle(session),
     (session) => providerDisplayName(session.providerId, state.providers),
+    (providerId) => providerId ? providerIcon(providerId, state.providers) : "sparkle",
     (session) => {
       // The focused tab is the selection: the tree highlight and every command that says "the current
       // conversation" follow whichever conversation tab the reader is actually in. A draft selects nothing.

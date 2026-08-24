@@ -32,7 +32,7 @@ import type {
 } from "./runtimeTypes";
 import type { Conversation } from "./conversationList";
 import { attentionCount, nextNeedingYou, projects } from "./conversationList";
-import { conversationDeletion, deletionQuestion } from "./conversationDeletion";
+import { conversationDeletion } from "./conversationDeletion";
 import { archivalQuestion, conversationArchival } from "./conversationArchival";
 import { conversationChoices } from "./conversationPicker";
 import { awaitsVerification, isUsable } from "./providerHealth";
@@ -1788,13 +1788,6 @@ export class Controller implements vscode.Disposable {
       if (row.session) await this.close(row.session);
       return;
     }
-    const question = deletionQuestion(row);
-    const choice = await vscode.window.showWarningMessage(
-      question.message,
-      { modal: true, detail: question.detail },
-      question.button,
-    );
-    if (choice !== question.button) return;
     await this.deleteNativeWithoutAsking(row);
   }
 

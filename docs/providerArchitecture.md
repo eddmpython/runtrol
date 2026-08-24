@@ -2,7 +2,12 @@
 
 ## Boundary
 
-runtrol supervises provider CLI processes and transports their live structured events. It does not own conversations, credentials, model catalogues, or provider session storage. The provider CLI remains the sole owner of its durable transcript and native resume surface. runtrol never discovers, derives, or reads a provider transcript path.
+runtrol supervises provider CLI processes and transports their live structured events. It does not own conversations,
+credentials, model catalogues, or provider session storage. The provider CLI remains the sole owner of its durable
+transcript and native resume surface. When a CLI publishes no catalogue command or protocol, its driver may make a
+bounded read of that CLI's own storage to obtain native identity, workspace, timestamps, explicit title records, and
+structured human-facing previews. It does not interpret message content to invent a title, rewrite provider records,
+or store a conversation copy.
 
 The public boundary has three parts:
 

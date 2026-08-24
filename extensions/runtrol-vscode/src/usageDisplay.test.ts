@@ -4,7 +4,6 @@ import test from "node:test";
 import type { ProviderLine, ProviderUsageGauge } from "./runtimeTypes";
 import {
   installableProviders,
-  providerMark,
   usageDetail,
   usageMeters,
   usageRows,
@@ -86,13 +85,6 @@ test("rows carry the service's declared mark and name", () => {
   assert.equal(row?.icon, "claude");
   assert.deepEqual(row?.meters, []);
   assert.ok(row?.tooltip.includes("Reported"), "the hover says how old the report is");
-});
-
-test("compact usage marks distinguish the installed services without a provider table", () => {
-  assert.equal(providerMark("Claude Code"), "CC");
-  assert.equal(providerMark("Codex"), "CO");
-  assert.equal(providerMark("Cline"), "CL");
-  assert.equal(providerMark(""), "?");
 });
 
 test("every connected CLI stays visible before it reports usage", () => {

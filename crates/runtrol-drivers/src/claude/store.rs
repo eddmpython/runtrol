@@ -13,12 +13,14 @@
 //! - the **identity**, which is the file name (the CLI resumes by it);
 //! - the **folder**, which is the `cwd` field the CLI writes on every message record (the directory slug is
 //!   lossy: `_`, `.`, `:` and the separators all become `-`, so it cannot be inverted);
-//! - the **title**, which is the CLI's own `aiTitle` record when it has written one, relayed unchanged;
+//! - the **title**, which is the CLI's own `aiTitle` record when it has written one, otherwise the first
+//!   structured `display` preview its prompt-history surface associates with the same session identity;
 //! - the **time**, which is the file's modification time, the CLI's own last write.
 //!
-//! No message is decoded. The folder and the title are found as bare JSON keys by a rolling scan over the
-//! file: a key spelled with unescaped quotes can only occur at a structural position, never inside a string,
-//! so a message quoting `"cwd"` cannot be mistaken for the record's own. Measured on 266 stored conversations:
+//! No transcript message is decoded to invent a title. The folder and explicit title are found as bare JSON keys
+//! by a rolling scan over the conversation file. A key spelled with unescaped quotes can only occur at a
+//! structural position, never inside a string, so a message quoting `"cwd"` cannot be mistaken for the record's
+//! own. Measured on 266 stored conversations:
 //! the first `cwd` sat within 220 KiB of the start in 264 of them, one sat at 1.08 MB behind a pasted first
 //! message, and one file (a renamed, never-used conversation) has no message and so no folder at all. The scan
 //! holds one window in memory however long the file is, stops as soon as the folder and the title are known,
@@ -26,13 +28,15 @@
 //!
 //! # What this is not
 //!
-//! Not a transcript reader, not a copy, not a search. The file is opened read-only, its head is scanned for two
-//! keys, and nothing of it is kept. The thin principle names this store as the conversation's one home; this
-//! module only learns the names on its doors.
+//! Not a transcript copy and not a search. Conversation files are opened read-only, their heads are scanned for
+//! two structural keys, and nothing is retained. The separate prompt-history file is also provider-owned and is
+//! streamed only for its bounded `sessionId` and `display` fields. The thin principle names this store as the
+//! conversation's one home; this module only learns the names on its doors.
 
 use std::cmp::Reverse;
+use std::collections::HashMap;
 use std::fs::{self, File};
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
@@ -48,6 +52,10 @@ use crate::claude::home::{HomeProblem, config_directory};
 
 /// Where the CLI keeps one directory per folder it has run in.
 const PROJECTS_DIRECTORY: &str = "projects";
+
+/// The CLI's structured prompt-history list. Its `display` field is the same human-facing preview the CLI owns;
+/// it is used only when a conversation has no explicit `aiTitle` record.
+const HISTORY_FILE: &str = "history.jsonl";
 
 /// The extension of a stored conversation. Everything else in a project directory is the CLI's own business.
 const CONVERSATION_EXTENSION: &str = "jsonl";
@@ -71,6 +79,10 @@ const MAX_VALUE_BYTES: usize = 8 * 1024;
 /// How many stored conversations are indexed at most. Far above any store measured, and a ceiling on the
 /// memory one listing may hold rather than a quota anyone is expected to meet.
 const MAX_INDEXED: usize = 10_000;
+
+/// Prompt history can contain several entries for one conversation. This ceiling is well beyond the measured
+/// store while keeping a corrupt or hostile provider file from building an unbounded catalogue map.
+const MAX_HISTORY_ROWS: usize = 100_000;
 
 /// The record field that names the folder a conversation ran in, as the CLI spells it.
 const FOLDER_KEY: &[u8] = b"\"cwd\":\"";
@@ -151,12 +163,22 @@ impl ClaudeStore {
             }
         };
         let indexed = index(provider, projects)?;
+        let display_titles = projects
+            .parent()
+            .map(|config| history_titles(&config.join(HISTORY_FILE)))
+            .unwrap_or_default();
         let after = query
             .cursor
             .as_deref()
             .map(|cursor| Position::decode(provider, cursor))
             .transpose()?;
-        Ok(page(&indexed, after.as_ref(), query, resumable))
+        Ok(page(
+            &indexed,
+            &display_titles,
+            after.as_ref(),
+            query,
+            resumable,
+        ))
     }
 }
 
@@ -423,6 +445,7 @@ impl Position {
 /// Fill one page from the index, opening only the files the page needs.
 fn page(
     index: &Index,
+    display_titles: &HashMap<String, String>,
     after: Option<&Position>,
     query: &NativeSessionQuery,
     resumable: bool,
@@ -458,7 +481,10 @@ fn page(
             cwd: cwd.into(),
             // One folder per conversation is what the record names. Claiming more would be inventing authority.
             additional_directories: Vec::new(),
-            title: head.title.map(Into::into),
+            title: head
+                .title
+                .or_else(|| display_titles.get(indexed.native.as_str()).cloned())
+                .map(Into::into),
             // Milliseconds since the epoch, as the CLI's own roster spells a time; the surface reads the digits.
             updated_at: Some(indexed.modified_ms.to_string().into()),
             resume: if resumable {
@@ -499,6 +525,50 @@ fn page(
         sessions,
         next_cursor,
     }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct HistoryEntry {
+    session_id: Option<String>,
+    display: Option<String>,
+}
+
+/// Read the provider's own human-facing prompt previews and keep the first one for each conversation.
+///
+/// This is not a transcript scan. `history.jsonl` is the CLI's structured prompt-history surface, and serde
+/// streams past fields such as pasted content without retaining them. The map lives for one catalogue call and
+/// is dropped after its labels are attached to the returned page.
+fn history_titles(path: &Path) -> HashMap<String, String> {
+    let Ok(file) = File::open(path) else {
+        return HashMap::new();
+    };
+    let entries =
+        serde_json::Deserializer::from_reader(BufReader::new(file)).into_iter::<HistoryEntry>();
+    let mut titles = HashMap::new();
+    for entry in entries.take(MAX_HISTORY_ROWS) {
+        let Ok(entry) = entry else {
+            break;
+        };
+        let (Some(session_id), Some(display)) = (entry.session_id, entry.display) else {
+            continue;
+        };
+        if titles.contains_key(&session_id) || NativeSessionId::new(&session_id).is_err() {
+            continue;
+        }
+        let Some(line) = display.lines().find(|line| !line.trim().is_empty()) else {
+            continue;
+        };
+        let line = line.trim();
+        if line.chars().any(char::is_control) {
+            continue;
+        }
+        let title = bounded(line);
+        if !title.is_empty() {
+            titles.insert(session_id, title);
+        }
+    }
+    titles
 }
 
 /// What the head of one stored conversation names.
@@ -655,6 +725,20 @@ mod tests {
                 .expect("the modification time is set");
             path
         }
+
+        fn history(&self, lines: &[String]) -> PathBuf {
+            let path = self.0.join(HISTORY_FILE);
+            let mut file = OpenOptions::new()
+                .create(true)
+                .write(true)
+                .truncate(true)
+                .open(&path)
+                .expect("the prompt history is created");
+            for line in lines {
+                writeln!(file, "{line}").expect("a prompt history row is written");
+            }
+            path
+        }
     }
 
     impl Drop for Scratch {
@@ -677,6 +761,38 @@ mod tests {
             r#"{{"type":"ai-title","aiTitle":{title},"sessionId":"s"}}"#,
             title = serde_json::to_string(title).expect("title encodes"),
         )
+    }
+
+    fn history_record(session: Option<&str>, display: &str) -> String {
+        serde_json::json!({
+            "display": display,
+            "pastedContents": { "ignored": "provider-owned content is not retained" },
+            "sessionId": session,
+            "timestamp": 1,
+        })
+        .to_string()
+    }
+
+    #[test]
+    fn structured_prompt_history_names_a_conversation_without_an_explicit_title() {
+        let scratch = Scratch::new("history-title");
+        let path = scratch.history(&[
+            history_record(None, "not attached to a conversation"),
+            history_record(Some(ALPHA), "  First provider display\nmore detail  "),
+            history_record(
+                Some(ALPHA),
+                "a later prompt does not rename the conversation",
+            ),
+            history_record(Some(""), "invalid identity"),
+        ]);
+
+        let titles = history_titles(&path);
+
+        assert_eq!(titles.len(), 1);
+        assert_eq!(
+            titles.get(ALPHA).map(String::as_str),
+            Some("First provider display")
+        );
     }
 
     fn query(root: Option<&str>, cursor: Option<&str>) -> NativeSessionQuery {

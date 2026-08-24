@@ -93,7 +93,7 @@ test("one list holds supervised sessions and provider-owned chats alike", () => 
   assert.equal(rows[1]?.serviceName, "Codex");
 });
 
-test("a provider placeholder never becomes a wall of Untitled rows", () => {
+test("a provider placeholder never exposes an internal session identifier", () => {
   const rows = conversations(
     [],
     PROVIDERS,
@@ -104,7 +104,7 @@ test("a provider placeholder never becomes a wall of Untitled rows", () => {
     null,
   );
 
-  assert.deepEqual(new Set(rows.map((row) => row.title)), new Set(["Chat 8D4A", "Chat 8980"]));
+  assert.deepEqual(new Set(rows.map((row) => row.title)), new Set(["Unnamed conversation"]));
 });
 
 test("a Core-owned worktree stays under the project the person selected", () => {
@@ -122,7 +122,7 @@ test("a Core-owned worktree stays under the project the person selected", () => 
 
   assert.equal(rows[0]?.workspace, worktree, "actions keep the exact provider working directory");
   assert.equal(rows[0]?.homeWorkspace, ALPHA, "presentation keeps the selected project");
-  assert.equal(rows[0]?.title, "Chat S1", "a project name is never repeated as a chat title");
+  assert.equal(rows[0]?.title, "Unnamed conversation", "a project name is never repeated as a chat title");
   assert.equal(grouped[0]?.rows[0]?.session?.sessionId, "s1");
 });
 
@@ -205,7 +205,7 @@ test("a stuck session asks for attention without leaving its place", () => {
   assert.equal(rows[0]?.activity, "attention");
 });
 
-test("rows a person could not tell apart get an identity", () => {
+test("duplicate missing titles do not leak session identities", () => {
   const rows = conversations(
     [
       session({ sessionId: "s1", workspace: ALPHA }),
@@ -216,7 +216,7 @@ test("rows a person could not tell apart get an identity", () => {
     null,
   );
 
-  assert.equal(new Set(rows.map((row) => row.title)).size, 2);
+  assert.deepEqual(new Set(rows.map((row) => row.title)), new Set(["Unnamed conversation"]));
 });
 
 test("a conversation line has no detail beside its agent icon and title", () => {
@@ -461,10 +461,7 @@ test("a conversation nobody named still reads as something", () => {
     null,
   );
   assert.equal(rows.length, 2);
-  for (const row of rows) {
-    assert.ok(row.title.startsWith("Chat "), `${row.title} names nothing`);
-  }
-  assert.notEqual(rows[0]?.title, rows[1]?.title, "two nameless conversations are still told apart");
+  for (const row of rows) assert.equal(row.title, "Unnamed conversation");
 });
 
 
@@ -769,10 +766,7 @@ test("a conversation nobody named still reads as something", () => {
     [],
     null,
   );
-  for (const row of rows) {
-    assert.ok(row.title.startsWith("Chat "), `${row.title} names nothing`);
-  }
-  assert.notEqual(rows[0]?.title, rows[1]?.title, "two nameless conversations are still told apart");
+  for (const row of rows) assert.equal(row.title, "Unnamed conversation");
 });
 
 test("a created project shows its heading however short the list is", () => {

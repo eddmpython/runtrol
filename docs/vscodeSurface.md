@@ -93,10 +93,10 @@ the original daemon and provider processes instead of making a versioned extensi
   repeated beside the title. A conversation that cannot be reopened keeps the same disabled icon and one exceptional
   blocked mark because clicking it cannot perform the ordinary row action.
 - Every installed CLI has a row in the fixed `Agent Usage` area at the bottom of the same sidebar. The area is
-  expanded by default. A compact display-name mark distinguishes similarly named services there without a provider
-  table (`CC` for Claude Code and `CO` for Codex). `Checking`, `Unavailable · Fix`, `Ready`, current usage, and a
-  blocking limit are mutually honest states. Every provider-reported numeric account window is a real progress bar,
-  bounded from zero to 100,
+  expanded by default. Each row uses the coding service's declared icon and full display name, with a neutral
+  coding-service glyph only when the pinned editor icon set does not contain that declaration. Invented initials are
+  not service identities. `Checking`, `Unavailable · Fix`, `Ready`, current usage, and a blocking limit are mutually
+  honest states. Every provider-reported numeric account window is a real progress bar, bounded from zero to 100,
   with its window, exact percentage, and reset time beside it. Primary and secondary windows remain separate. A
   missing percentage never becomes an invented empty bar. `Ready` means the CLI is usable while no numeric account
   limit has been reported. A disconnected last report says so instead of looking current, and a reached limit uses
@@ -106,11 +106,12 @@ the original daemon and provider processes instead of making a versioned extensi
   of missing services and their exact install lines. Selecting a service places the line in a terminal unexecuted;
   Studio never downloads, installs, signs in, or starts a service implicitly. Installed catalogue services disappear
   from that picker and appear as ordinary CLI status and usage rows through the same Runtime inventory.
-- Provider-owned archive and delete actions sit together on every row whose discovered capability supports them.
-  Either action first closes a Runtime-supervised pointer when necessary, then asks the provider's own surface to
-  mutate its stored conversation. `sessions/deleteNative` relays Codex `thread/delete` and Cline `history delete`;
-  `sessions/archiveNative` relays Codex `thread/archive`. A session without a provider-owned identity only forgets its
-  local pointer. Runtrol never removes or edits a provider's files itself.
+- A row exposes one inline `X` only when the provider reports native deletion. It acts on that row directly, without
+  requiring prior selection or a second confirmation. Archive and close remain in the context menu instead of adding
+  more inline buttons. Deletion first closes a Runtime-supervised pointer when necessary, then asks the provider's own
+  surface to mutate its stored conversation. `sessions/deleteNative` relays Codex `thread/delete` and Cline
+  `history delete`; `sessions/archiveNative` relays Codex `thread/archive`. A provider such as Claude Code that
+  publishes no native deletion method gets no misleading `X`. Runtrol never removes or edits provider files itself.
 - Moving this window to a project is a button on its heading (and the live conversation's project chip), never a side
   effect of opening a conversation. Opening is the file-click grammar: the conversation's tab opens here, the window
   stays where it is, and the CLI runs in the conversation's own folder regardless.
@@ -168,7 +169,9 @@ the original daemon and provider processes instead of making a versioned extensi
 - Each conversation opens in its own editor tab with a bounded renderer and composer, exactly as a file does: ten or
   twenty tabs are arranged, split and sized by VS Code's own editor groups, and the focused tab is the selected
   conversation. Prompts and interrupts travel only to the tab that sent them. Tabs survive a window reload by their
-  session identity, and a tab whose session no longer exists is closed rather than guessed at.
+  session identity, and a tab whose session no longer exists is closed rather than guessed at. An individual tab uses
+  that conversation's current coding-service icon and actual conversation title. The product symbol is not an AI
+  identity and never appears on a conversation tab.
 - A conversation can live in any of the window's own places: an editor tab (the default), the bottom panel beside
   the terminals, or the secondary side bar beside the code. The two non-tab surfaces are both named `Chat`, so their
   view and container labels state their purpose without repeating the product name inside the conversation. Each
@@ -241,9 +244,11 @@ the original daemon and provider processes instead of making a versioned extensi
   the visible switch path.
 - An operator name is stored as bounded session metadata. Without one, the provider's own catalogue title or
   structured display preview is used and refreshed after a native identity appears and after each turn settles. A
-  project or provider name is never a conversation-title fallback. `Chat` with a short stable identity is the final
-  fallback, and a short stable suffix appears only when actual titles collide. Renaming a provider-owned saved row
-  adopts it only long enough to store the operator label and immediately cools the provider process again.
+  project, provider, or shortened session identity is never a conversation-title fallback. When the provider supplies
+  no human-facing title at all, the row says `Unnamed conversation` rather than exposing an internal `Chat 8980`
+  handle. Duplicate provider titles remain duplicate visible titles because an implementation identifier is not a
+  user-facing disambiguator. Renaming a provider-owned saved row adopts it only long enough to store the operator
+  label and immediately cools the provider process again.
 - The selected session remains first. One fuzzy switcher searches project, provider, state, and workspace metadata.
 - Session-index subscribers receive one current snapshot and then only list-visible changes.
 - Selecting a cold session gives immediate feedback, resumes through its provider-native identity, and follows its

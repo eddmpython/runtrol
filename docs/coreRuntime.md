@@ -9,9 +9,12 @@ This document records the implemented runtime contract. Provider registration an
 
 ## Thin boundary
 
-runtrol does not discover, derive, read, index, or persist provider transcript paths. It does not reconstruct missed
-conversation from provider files. Drivers normalize only the fields required for supervision, routing, consent,
-health, usage, and continuity. Everything else stays opaque.
+runtrol does not own, rewrite, index, or persist provider transcripts. Active routing uses provider-native identities
+and official protocol or resume surfaces. A provider driver may make a bounded read-only scan of its provider-owned
+store when the CLI exposes no catalogue surface, limited to native identity, workspace, timestamps, explicit title
+records, and structured human-facing previews. It does not interpret prompts or replies to invent labels or keep a
+conversation copy. Drivers otherwise normalize only the fields required for supervision, routing, consent, health,
+usage, and continuity.
 
 The ordinary redb database contains runtrol metadata only: runtrol and provider-native session identifiers, lifecycle
 data, operator labels and pins, and local authorization metadata. A separate Mission ledger contains Mission, Task,

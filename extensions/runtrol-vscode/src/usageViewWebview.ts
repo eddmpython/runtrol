@@ -1,6 +1,6 @@
 import "./usageView.css";
 
-import { providerMark, type UsageRow } from "./usageDisplay";
+import type { UsageRow } from "./usageDisplay";
 import type { UsageViewSnapshot } from "./usageViewMessage";
 
 type VsCodeApi = {
@@ -25,6 +25,7 @@ vscode.postMessage({ type: "ready" });
 
 function render(snapshot: UsageViewSnapshot): void {
   usage.replaceChildren(...snapshot.rows.map(usageRow));
+  replaceMissingProviderIcons();
   empty.hidden = snapshot.rows.length > 0 || snapshot.installableCount > 0;
   error.textContent = snapshot.error ?? "";
   error.hidden = snapshot.error === null;
@@ -46,17 +47,17 @@ function usageRow(row: UsageRow): HTMLElement {
 
   const header = document.createElement("span");
   header.className = "usage-header";
-  const mark = document.createElement("span");
-  mark.className = "provider-mark";
-  mark.setAttribute("aria-hidden", "true");
-  mark.textContent = providerMark(row.name);
+  const icon = document.createElement("span");
+  icon.className = "provider-icon codicon";
+  icon.classList.add(`codicon-${iconName(row.icon)}`);
+  icon.setAttribute("aria-hidden", "true");
   const name = document.createElement("span");
   name.className = "provider-name";
   name.textContent = row.name;
   const status = document.createElement("span");
   status.className = "provider-status";
   status.textContent = compactStatus(row);
-  header.append(mark, name, status);
+  header.append(icon, name, status);
   item.append(header);
 
   for (const meter of row.meters) {
@@ -77,6 +78,21 @@ function usageRow(row: UsageRow): HTMLElement {
     item.append(block);
   }
   return item;
+}
+
+/// Provider manifests already restrict icon names. Recheck at the Webview boundary because a class name still
+/// comes from a message, and fall back to the editor's neutral coding-service glyph instead of drawing text.
+function iconName(value: string): string {
+  return /^[a-z0-9-]{1,64}$/u.test(value) ? value : "sparkle";
+}
+
+function replaceMissingProviderIcons(): void {
+  for (const icon of usage.querySelectorAll<HTMLElement>(".provider-icon")) {
+    const content = getComputedStyle(icon, "::before").content;
+    if (!content || content === "none" || content === "normal" || content === '""') {
+      icon.className = "provider-icon codicon codicon-sparkle";
+    }
+  }
 }
 
 function compactStatus(row: UsageRow): string {

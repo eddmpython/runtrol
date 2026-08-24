@@ -44,20 +44,6 @@ export function usageRowsEqual(left: readonly UsageRow[], right: readonly UsageR
   return JSON.stringify(left) === JSON.stringify(right);
 }
 
-/// A compact text mark for the account meter Webview, which cannot reuse a TreeItem's editor glyph.
-///
-/// The mark comes from the discovered display name rather than a provider table. Two-word services use their
-/// initials; a one-word service uses its first two characters. This keeps similarly named services such as
-/// Claude Code and Codex visually distinct without making provider support part of this extension's source.
-export function providerMark(name: string): string {
-  const words = name.match(/[\p{L}\p{N}]+/gu) ?? [];
-  if (words.length >= 2) {
-    return words.slice(0, 2).map((word) => Array.from(word)[0] ?? "").join("").toLocaleUpperCase();
-  }
-  const characters = Array.from(words[0] ?? "");
-  return characters.slice(0, 2).join("").toLocaleUpperCase() || "?";
-}
-
 /// Registry-backed coding services that are not installed and publish one exact operator-run install command.
 export function installableProviders(providers: readonly ProviderLine[]): ProviderLine[] {
   return providers
