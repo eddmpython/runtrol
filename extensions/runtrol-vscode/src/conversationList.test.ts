@@ -163,6 +163,50 @@ test("a pinned conversation leads the list even when another was touched more re
   assert.equal(rows.find((row) => row.title === "Newer")?.pinned, false, "the other stays unpinned");
 });
 
+test("a local nickname replaces the service's own name, and only for that conversation", () => {
+  const rows = conversations(
+    [session({ sessionId: "s2", providerId: "codex", nativeSessionId: "n2", workspace: BETA, label: "Service label" })],
+    PROVIDERS,
+    [
+      nativeChat({ nativeSessionId: "n1", title: "Refactor the parser" }),
+      nativeChat({ nativeSessionId: "n2", title: "Newer", updatedAt: "2026-08-17T12:00:00Z" }),
+    ],
+    null,
+    null,
+    new Map(),
+    new Map(),
+    new Set(),
+    new Map([["chat:codex:n1", "My renamed chat"]]),
+  );
+
+  assert.equal(
+    rows.find((row) => row.key === "chat:codex:n1")?.title,
+    "My renamed chat",
+    "the stored chat shows the local nickname, not the service title",
+  );
+  assert.equal(
+    rows.find((row) => row.key === "chat:codex:n2")?.title,
+    "Service label",
+    "a conversation with no nickname keeps the name it already had",
+  );
+});
+
+test("a local nickname wins even over a supervised session's own label", () => {
+  const [row] = conversations(
+    [session({ sessionId: "s1", providerId: "codex", nativeSessionId: "n1", workspace: BETA, label: "Service label" })],
+    PROVIDERS,
+    [nativeChat({ nativeSessionId: "n1", title: "Stored title" })],
+    null,
+    null,
+    new Map(),
+    new Map(),
+    new Set(),
+    new Map([["chat:codex:n1", "My nickname"]]),
+  );
+
+  assert.equal(row?.title, "My nickname", "the operator's nickname names the row, even over the session label");
+});
+
 test("opening a saved chat keeps the same row identity", () => {
   const before = conversations([], PROVIDERS, [nativeChat({ nativeSessionId: "n1" })], null);
   const after = conversations(

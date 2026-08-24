@@ -19,7 +19,6 @@ import type { ProjectRecord } from "./projects";
 import type {
   IsolatedWorkspaceLine,
   ProviderUpdateLine,
-  Response,
 } from "./protocol";
 import type {
   NativeChatCatalogue,
@@ -139,11 +138,29 @@ export class Controller implements vscode.Disposable {
       }),
     );
     this.state.setPinnedKeys(this.pinnedFromStorage());
+    this.state.setRenamedTitles(this.renamedFromStorage());
   }
 
   /// The pinned set as this machine last remembered it.
   private pinnedFromStorage(): Set<string> {
     return new Set(this.context.globalState.get<string[]>(PINNED_CONVERSATIONS_KEY) ?? []);
+  }
+
+  /// The local nicknames this machine last remembered, one per conversation key. A nickname is Runtrol's own
+  /// label for a conversation, never written back to the coding service: the service keeps owning its content,
+  /// which is why renaming is instant and never has to wake the conversation up to change a stored name.
+  private renamedFromStorage(): Map<string, string> {
+    return new Map(Object.entries(
+      this.context.globalState.get<Record<string, string>>(RENAMED_CONVERSATIONS_KEY) ?? {},
+    ));
+  }
+
+  /// The conversation a sidebar action names, from the row it came from, the session it points at, or the
+  /// selected one when a command was invoked with nothing in hand.
+  private conversationFor(value?: ConversationItem | SessionLine): Conversation | null {
+    if (value instanceof ConversationItem) return value.conversation;
+    const sessionId = value?.sessionId ?? this.state.selected?.sessionId;
+    return sessionId ? this.state.conversationOf(sessionId) : null;
   }
 
   /// Pin or unpin one conversation, remember it for next time, and repaint so it moves at once.
@@ -1744,44 +1761,32 @@ export class Controller implements vscode.Disposable {
   }
 
   async nameSession(value?: ConversationItem | SessionLine): Promise<void> {
-    let session: SessionLine;
-    let openedOnlyToName = false;
-    if (value instanceof ConversationItem && !value.conversation.session) {
-      const adopted = await this.adoptNativeChat(requireNative(value.conversation));
-      if (!adopted) return;
-      session = adopted;
-      openedOnlyToName = true;
+    const row = this.conversationFor(value);
+    if (!row) return;
+    const chosen = await vscode.window.showInputBox({
+      title: `Rename ${row.title}`,
+      prompt: "Use a short name for this chat. Leave it empty to restore the service's name.",
+      value: this.renamedFromStorage().get(row.key) ?? "",
+      ignoreFocusOut: true,
+      validateInput: validateSessionLabel,
+    });
+    if (chosen === undefined) return;
+    await this.renameConversation(row, chosen);
+  }
+
+  /// Set or clear a conversation's local nickname by key, then repaint so the new name shows at once. An empty
+  /// name restores the coding service's own title. The nickname is keyed on the conversation, not the running
+  /// session, so it survives the conversation being opened, closed and reopened.
+  async renameConversation(row: Conversation, label: string): Promise<void> {
+    const names = this.renamedFromStorage();
+    const normalized = label.trim();
+    if (normalized) {
+      names.set(row.key, normalized);
     } else {
-      session = this.sessionOf(value);
+      names.delete(row.key);
     }
-    try {
-      const label = await vscode.window.showInputBox({
-        title: `Rename ${sessionTitle(session)}`,
-        prompt: "Use a short name for this chat. Leave it empty to restore the service's name.",
-        value: session.label ?? "",
-        placeHolder: sessionTitle({ ...session, label: null }),
-        ignoreFocusOut: true,
-        validateInput: validateSessionLabel,
-      });
-      if (label === undefined) return;
-      const normalized = label.trim() || null;
-      const { response } = await this.client.once({
-        ask: "rename",
-        with: { session: session.sessionId, label: normalized },
-      });
-      requireDone(response, "rename");
-      await this.refresh();
-      const renamed = this.state.sessions.find((candidate) => candidate.sessionId === session.sessionId);
-      if (renamed) this.panels.updateSession(renamed);
-    } finally {
-      if (openedOnlyToName) {
-        const current = this.state.sessions.find((candidate) => candidate.sessionId === session.sessionId);
-        if (current?.lifecycle === "hotIdle") {
-          await this.runtime.cool(runtimeAction(current), false);
-          await this.refresh();
-        }
-      }
-    }
+    await this.context.globalState.update(RENAMED_CONVERSATIONS_KEY, Object.fromEntries(names));
+    this.state.setRenamedTitles(names);
   }
 
   async answerApproval(approval: string, option: number, subjectDigest: number[], from?: SessionLine): Promise<void> {
@@ -2687,6 +2692,7 @@ const MAX_KNOWN_PROJECTS = 200;
 /// Where global state remembers which conversations the operator pinned to the top. Keyed by conversation key,
 /// so a pin survives a saved chat becoming a live session and back.
 const PINNED_CONVERSATIONS_KEY = "runtrol.pinnedConversations";
+const RENAMED_CONVERSATIONS_KEY = "runtrol.conversationNames";
 
 /// What this window is open on, as a string `vscode.openFolder` takes back: the workspace file when there is
 /// one, else the first folder; null for an empty window.
@@ -2740,15 +2746,6 @@ function runtimeAction(session: SessionLine) {
     generation: session.sessionGeneration,
     workspace: session.workspace,
   };
-}
-
-function requireDone(response: Response, operation: string): void {
-  if (response.say === "failed") {
-    throw new Error(response.with.message);
-  }
-  if (response.say !== "done") {
-    throw new Error(`the daemon answered ${operation} with ${response.say}`);
-  }
 }
 
 function validateSessionLabel(value: string): string | null {

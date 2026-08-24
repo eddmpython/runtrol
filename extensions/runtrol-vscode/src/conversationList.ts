@@ -80,6 +80,7 @@ export function conversations(
   activities: ReadonlyMap<string, SessionActivity> = new Map(),
   isolatedWorkspaceHomes: ReadonlyMap<string, string> = new Map(),
   pinnedKeys: ReadonlySet<string> = new Set(),
+  renamedTitles: ReadonlyMap<string, string> = new Map(),
 ): Conversation[] {
   const nativeByKey = new Map<string, NativeChatLine>();
   for (const chat of nativeChats) {
@@ -103,13 +104,14 @@ export function conversations(
       activities.get(session.sessionId) ?? NO_ACTIVITY,
       isolatedWorkspaceHomes,
       pinnedKeys.has(key),
+      renamedTitles.get(key),
     ));
   }
   for (const [key, chat] of nativeByKey) {
     // A chat the daemon already supervises is the same conversation, not a second one. The service half only
     // contributes its title and timestamp, which the supervised row above has already taken.
     if (claimed.has(key) || chat.alreadyManagedAs) continue;
-    rows.push(providerOwned(chat, key, providers, projectlessRoot, pinnedKeys.has(key)));
+    rows.push(providerOwned(chat, key, providers, projectlessRoot, pinnedKeys.has(key), renamedTitles.get(key)));
   }
   // Pinned rows first, each group then in its own recency order. Pinning is a placement choice, so it sorts
   // ahead of recency rather than pretending the conversation was just touched.
@@ -399,6 +401,7 @@ function supervised(
   activity: SessionActivity,
   isolatedWorkspaceHomes: ReadonlyMap<string, string>,
   pinned: boolean,
+  name: string | undefined,
 ): Conversation {
   const homeWorkspace = isolatedWorkspaceHomes.get(workspaceIdentity(session.workspace)) ?? session.workspace;
   const projectless = isProjectless(homeWorkspace, projectlessRoot);
@@ -407,8 +410,9 @@ function supervised(
     providerId: session.providerId,
     serviceName: providerDisplayName(session.providerId, providers),
     serviceIcon: providerIcon(session.providerId, providers),
-    title: session.label?.trim()
-      || providerTitle(native?.title, session.nativeSessionId || session.sessionId),
+    title: name
+      ?? (session.label?.trim()
+        || providerTitle(native?.title, session.nativeSessionId || session.sessionId)),
     homeWorkspace,
     workspace: session.workspace,
     folder: projectless ? "" : workspaceName(homeWorkspace),
@@ -433,6 +437,7 @@ function providerOwned(
   providers: readonly ProviderLine[],
   projectlessRoot: string | null,
   pinned: boolean,
+  name: string | undefined,
 ): Conversation {
   const resumable = chat.resume === "available" && Boolean(chat.adoptionToken);
   const projectless = isProjectless(chat.cwd, projectlessRoot);
@@ -441,7 +446,7 @@ function providerOwned(
     providerId: chat.providerId,
     serviceName: providerDisplayName(chat.providerId, providers),
     serviceIcon: providerIcon(chat.providerId, providers),
-    title: providerTitle(chat.title, chat.nativeSessionId),
+    title: name ?? providerTitle(chat.title, chat.nativeSessionId),
     homeWorkspace: chat.cwd,
     workspace: chat.cwd,
     folder: projectless ? "" : workspaceName(chat.cwd),
