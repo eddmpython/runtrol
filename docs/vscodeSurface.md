@@ -93,8 +93,10 @@ the original daemon and provider processes instead of making a versioned extensi
   repeated beside the title. A conversation that cannot be reopened keeps the same disabled icon and one exceptional
   blocked mark because clicking it cannot perform the ordinary row action.
 - Every installed CLI has a row in the fixed `Agent Usage` area at the bottom of the same sidebar. The area is
-  expanded by default. `Checking`, `Unavailable · Fix`, `Ready`, current usage, and a blocking limit are mutually
-  honest states. Every provider-reported numeric account window is a real progress bar, bounded from zero to 100,
+  expanded by default. A compact display-name mark distinguishes similarly named services there without a provider
+  table (`CC` for Claude Code and `CO` for Codex). `Checking`, `Unavailable · Fix`, `Ready`, current usage, and a
+  blocking limit are mutually honest states. Every provider-reported numeric account window is a real progress bar,
+  bounded from zero to 100,
   with its window, exact percentage, and reset time beside it. Primary and secondary windows remain separate. A
   missing percentage never becomes an invented empty bar. `Ready` means the CLI is usable while no numeric account
   limit has been reported. A disconnected last report says so instead of looking current, and a reached limit uses
@@ -169,9 +171,10 @@ the original daemon and provider processes instead of making a versioned extensi
   session identity, and a tab whose session no longer exists is closed rather than guessed at.
 - A conversation can live in any of the window's own places: an editor tab (the default), the bottom panel beside
   the terminals, or the secondary side bar beside the code. The two non-tab surfaces are both named `Chat`, so their
-  purpose remains clear without repeating the product name inside the conversation. Each place is a VS Code surface;
-  Runtrol adds no pane system of its own. A conversation is in one place at a time and watched once; moving it is a row command ("Open
-  Conversation in Panel / in Side Bar / as Tab"), and the conversation a place showed before a reload comes back to
+  view and container labels state their purpose without repeating the product name inside the conversation. Each
+  place is a VS Code surface; Runtrol adds no pane system of its own. A conversation is in one place at a time and
+  watched once; moving it is a row command ("Open Conversation in Panel / in Side Bar / as Tab"), and the conversation
+  a place showed before a reload comes back to
   it. One command ("Arrange Conversations in a Grid", `Ctrl+K Ctrl+G`) spreads the open conversation tabs over
   editor groups as square as they come (two by two, three by two, three by three; nine is the editor's column
   bound and the command says when tabs were left in place). VS Code draws, sizes and lets the operator drag them.
@@ -187,7 +190,8 @@ the original daemon and provider processes instead of making a versioned extensi
   first message, and that message starts the conversation in the same tab with exactly those choices. The `+` on a
   project heading opens the same draft with the folder already answered; the defaults are this window's folder, the
   service used last, and the project's last explicit choices. The greeting does not repeat the project or product
-  name because the project chip is the authoritative location context. A draft survives a window reload with its choices.
+  name because the composer labels its authoritative destination as `Project`, `Branch`, and `Agent`. The project hover
+  gives the full path. A draft survives a window reload with its choices.
 - The composer is the one standard card rather than an invention: a context row (project, branch, service), the
   message, and a bar with attach and access mode on the left and model, reasoning effort and send on the right. Images
   travel once as `sessions/submitBlocks` content and are never stored. There is no microphone, because no installed

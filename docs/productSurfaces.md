@@ -42,10 +42,12 @@ The standalone desktop implementation and its execution path have been removed. 
   identity appears and when a turn settles. Project and provider names are not title fallbacks, and conversation
   content is never read to invent a title.
 - The fixed `Agent Usage` area at the bottom of the sidebar keeps every installed service visible. Numeric account
-  windows use bounded progress bars with exact percentages; a service with no numeric report says `Ready` without
+  windows use bounded progress bars with exact percentages, and compact display-name marks keep similarly named
+  services distinct; a service with no numeric report says `Ready` without
   inventing a zero value.
 - New chats use a neutral greeting. The composer identifies project, branch, coding service, model, effort, and access
-  mode, and its message field names the selected service so the destination remains explicit.
+  mode. Its context visibly labels `Project`, `Branch`, and `Agent`, and its message field names the selected service so
+  the destination remains explicit even when a project name matches the product name.
 - Search covers project, provider metadata, state, and workspace path without reading conversation content.
 - Selecting a cold row updates the UI immediately, resumes through the provider-native session identity, and follows the bound workspace.
 - Installed providers, versions, models, flags, capabilities, and session paths are discovered at runtime.

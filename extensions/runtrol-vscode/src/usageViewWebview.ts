@@ -1,6 +1,6 @@
 import "./usageView.css";
 
-import type { UsageRow } from "./usageDisplay";
+import { providerMark, type UsageRow } from "./usageDisplay";
 import type { UsageViewSnapshot } from "./usageViewMessage";
 
 type VsCodeApi = {
@@ -49,7 +49,7 @@ function usageRow(row: UsageRow): HTMLElement {
   const mark = document.createElement("span");
   mark.className = "provider-mark";
   mark.setAttribute("aria-hidden", "true");
-  mark.textContent = providerInitial(row.name);
+  mark.textContent = providerMark(row.name);
   const name = document.createElement("span");
   name.className = "provider-name";
   name.textContent = row.name;
@@ -84,10 +84,6 @@ function compactStatus(row: UsageRow): string {
   if (row.state === "disconnected") return "Last report";
   if (row.reached) return "Limit reached";
   return row.meters.length > 0 ? "" : row.detail;
-}
-
-function providerInitial(name: string): string {
-  return Array.from(name.trim())[0]?.toLocaleUpperCase() ?? "·";
 }
 
 function usageSnapshot(value: unknown): UsageViewSnapshot | null {

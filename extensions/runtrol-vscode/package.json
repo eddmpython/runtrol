@@ -143,14 +143,14 @@
       "panel": [
         {
           "id": "runtrolPanel",
-          "title": "Runtrol",
+          "title": "Chat",
           "icon": "resources/symbol.svg"
         }
       ],
       "secondarySidebar": [
         {
           "id": "runtrolSide",
-          "title": "Runtrol",
+          "title": "Chat",
           "icon": "resources/symbol.svg"
         }
       ]

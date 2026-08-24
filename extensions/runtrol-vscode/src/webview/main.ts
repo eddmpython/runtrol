@@ -1,4 +1,5 @@
 import "./webview.css";
+import { composerContextLabel } from "./composerContext";
 import {
   coalesceChunks,
   number,
@@ -680,10 +681,15 @@ function paintQueued(): void {
 /// change it, and a chip with nothing true to say stays hidden rather than guessing.
 function paintFacts(): void {
   const place = draft ?? context;
-  setChip(projectChip, place?.project ?? "");
-  setChip(branchChip, place?.branch ?? "");
-  projectChip.title = place?.projectPath ?? "Project";
-  setChip(serviceChip, draft ? draft.service : facts.service);
+  const project = place?.project ?? "";
+  const branch = place?.branch ?? "";
+  const agent = draft ? draft.service : facts.service;
+  setChip(projectChip, composerContextLabel("Project", project));
+  setChip(branchChip, composerContextLabel("Branch", branch));
+  setChip(serviceChip, composerContextLabel("Agent", agent));
+  projectChip.title = place?.projectPath ? `Project path: ${place.projectPath}` : "Project";
+  branchChip.title = branch ? `Git branch: ${branch}` : "";
+  serviceChip.title = agent ? `Coding agent: ${agent}` : "Coding agent";
   setChip(modelChip, draft ? draft.model : modelLine(facts, requested.model) || "Model");
   setChip(effortChip, draft ? draft.effort : chipText(facts.effort, requested.effort) || "Effort");
   setChip(modeChip, draft ? draft.mode : chipText(facts.mode, requested.mode));

@@ -699,7 +699,7 @@ body.no-chat #composer {
   border-color: var(--vscode-focusBorder);
 }
 
-/* Where it runs: project, branch, service. Small, muted, read before typing. */
+/* Where it runs: explicitly labelled project, branch, and agent. Small, muted, read before typing. */
 .composer-context {
   display: flex;
   flex-wrap: wrap;
@@ -749,12 +749,6 @@ body.no-chat #composer {
 #project-chip {
   color: var(--vscode-foreground);
   font-weight: 500;
-}
-
-#branch-chip:not([hidden])::before {
-  margin-right: 0.25rem;
-  opacity: 0.7;
-  content: "branch";
 }
 
 /* The plus. A circle, like the one every chat composer has in that corner. */

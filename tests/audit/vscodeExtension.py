@@ -40,6 +40,7 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
     if '"activitybar"' not in contribution_text:
         found.append("the extension has no Activity Bar control surface")
     views = contributes.get("views") if isinstance(contributes, dict) else None
+    view_containers = contributes.get("viewsContainers") if isinstance(contributes, dict) else None
     runtrol_views = views.get("runtrol") if isinstance(views, dict) else None
     usage_view = next(
         (
@@ -73,6 +74,21 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
         ) if isinstance(entries, list) else None
         if not isinstance(chat_view, dict) or chat_view.get("name") != "Chat":
             found.append("the panel and secondary side bar must be named Chat without a product prefix")
+    for area, container_id in (
+        ("panel", "runtrolPanel"),
+        ("secondarySidebar", "runtrolSide"),
+    ):
+        entries = view_containers.get(area) if isinstance(view_containers, dict) else None
+        chat_container = next(
+            (
+                entry
+                for entry in entries
+                if isinstance(entry, dict) and entry.get("id") == container_id
+            ),
+            None,
+        ) if isinstance(entries, list) else None
+        if not isinstance(chat_container, dict) or chat_container.get("title") != "Chat":
+            found.append("the panel and secondary side bar containers must be named Chat without a product prefix")
     welcome_entries = contributes.get("viewsWelcome") if isinstance(contributes, dict) else None
     welcomes = welcome_entries if isinstance(welcome_entries, list) else []
     has_ready_welcome = any(
@@ -567,7 +583,11 @@ def selftest() -> int:
             "onCommand:runtrol.discoverServices",
         ],
         "contributes": {
-            "viewsContainers": {"activitybar": []},
+            "viewsContainers": {
+                "activitybar": [],
+                "panel": [{"id": "runtrolPanel", "title": "Chat"}],
+                "secondarySidebar": [{"id": "runtrolSide", "title": "Chat"}],
+            },
             "views": {
                 "runtrol": [
                     {
@@ -828,6 +848,8 @@ def selftest() -> int:
     non_progress_usage["contributes"]["views"]["runtrol"][0].pop("type")
     branded_chat = json.loads(json.dumps(package))
     branded_chat["contributes"]["views"]["runtrolPanel"][0]["name"] = "Runtrol Chat"
+    branded_chat_container = json.loads(json.dumps(package))
+    branded_chat_container["contributes"]["viewsContainers"]["panel"][0]["title"] = "Runtrol"
     cluttered_toolbar = json.loads(json.dumps(package))
     cluttered_toolbar["contributes"]["menus"]["view/title"].append({
         "command": "runtrol.arrangeConversationGrid",
@@ -846,6 +868,7 @@ def selftest() -> int:
         (hidden_usage, sources),
         (non_progress_usage, sources),
         (branded_chat, sources),
+        (branded_chat_container, sources),
         (cluttered_toolbar, sources),
         (merged_welcomes, sources),
         ({**package, "activationEvents": []}, sources),
