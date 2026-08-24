@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { hasMarkdownTrigger, parseMarkdown } from "./markdown";
+import { hasMarkdownTrigger, parseMarkdown, type Block, type ListBlock } from "./markdown";
 
 test("the trigger is absent from ordinary streamed text", () => {
   assert.equal(hasMarkdownTrigger("frame 12\nframe 13\n"), false);
@@ -145,5 +145,53 @@ test("what the renderer is asked to read is what the trigger admits", () => {
   }
   for (const sample of ["plain words", "a-b c", "3.5 apples"]) {
     assert.equal(hasMarkdownTrigger(sample), false, `${sample} stays on the plain path`);
+  }
+});
+
+/// Every entry the descriptor tree holds, in order, however deep it sits.
+function everyItem(blocks: readonly Block[]): string[] {
+  const out: string[] = [];
+  const walk = (list: ListBlock): void => {
+    for (const item of list.items) {
+      out.push(item.inlines.map((span) => span.text).join(""));
+      if (item.list) walk(item.list);
+    }
+  };
+  for (const block of blocks) if (block.kind === "list") walk(block);
+  return out;
+}
+
+test("a list keeps every entry when the indentation steps back to a depth nobody opened", () => {
+  // Measured cases: an entry already carrying a deeper list used to have that list replaced, and everything
+  // written under it disappeared from the conversation.
+  const mixed = parseMarkdown("- Setup\n    - install deps\n  - configure\n- Run");
+  assert.deepEqual(everyItem(mixed), ["Setup", "install deps", "configure", "Run"]);
+
+  const deeper = parseMarkdown("- a\n    - b\n        - c\n  - d\n- e");
+  assert.deepEqual(everyItem(deeper), ["a", "b", "c", "d", "e"]);
+
+  const ragged = parseMarkdown(" - a\n      - b\n   - c\n    - d\n  - e");
+  assert.deepEqual(everyItem(ragged), ["a", "b", "c", "d", "e"]);
+});
+
+test("no arrangement of indents loses an entry", () => {
+  // Every entry written must be an entry read back, whatever the indents do between them.
+  const depths = [0, 2, 4, 6];
+  for (let seed = 0; seed < 4096; seed += 1) {
+    const lines: string[] = [];
+    const expected: string[] = [];
+    let value = seed;
+    for (let index = 0; index < 6; index += 1) {
+      const depth = depths[value % depths.length] ?? 0;
+      value = Math.floor(value / depths.length);
+      const label = `i${index}`;
+      lines.push(`${" ".repeat(depth)}- ${label}`);
+      expected.push(label);
+    }
+    assert.deepEqual(
+      everyItem(parseMarkdown(lines.join("\n"))),
+      expected,
+      `these indents lost an entry:\n${lines.join("\n")}`,
+    );
   }
 });

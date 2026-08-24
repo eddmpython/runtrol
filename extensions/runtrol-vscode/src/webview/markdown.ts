@@ -176,9 +176,12 @@ function addListItem(
     frames.push({ indent, block: { kind: "list", ordered, items: [] } });
   } else if (indent > top.indent) {
     const parent = top.block.items[top.block.items.length - 1];
-    const block: ListBlock = { kind: "list", ordered, items: [] };
     // Indented under nothing is still an entry of the list above it rather than a lost line.
     if (parent) {
+      // The entry may already carry a list, written at some deeper indent before a step back landed here.
+      // Continuing that one keeps everything already written under this entry; starting a fresh one in its
+      // place would drop all of it, and a reader would never see those lines of the reply.
+      const block: ListBlock = parent.list ?? { kind: "list", ordered, items: [] };
       parent.list = block;
       frames.push({ indent, block });
     }
