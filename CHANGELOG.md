@@ -10,6 +10,8 @@ and refactoring that no user can observe do not belong here.
 
 ## [Unreleased]
 
+## [0.1.20] - 2026-08-24
+
 ### Added
 
 - Conversation rows now expose provider-native archive beside delete when the installed CLI reports that capability.
@@ -34,10 +36,11 @@ and refactoring that no user can observe do not belong here.
   the send button now uses the compact VS Code foreground treatment.
 - The fixed sidebar area is named `Agent Usage`. Every provider-reported numeric account window now has a bounded
   progress bar with its exact percentage and reset time, while a missing percentage remains `Ready` instead of
-  implying zero usage.
+  implying zero usage. Compact name marks distinguish similarly named coding services instead of showing the same
+  one-letter mark for both.
 - Empty chats use a neutral greeting instead of repeating the project or product name. The project stays visible in
-  the composer context, the message field names its selected coding service, and the panel and secondary sidebar
-  conversation surfaces are both named `Chat`.
+  the composer context as an explicitly labelled `Project`, beside labelled `Branch` and `Agent` targets. The message
+  field names its selected coding service, and every generic panel, secondary-sidebar, and document title is `Chat`.
 
 ## [0.1.19] - 2026-08-24
 
