@@ -41,7 +41,7 @@ export async function reviewRuntimeRequests(client: CoreClient): Promise<void> {
     })),
   ];
   if (requests.length === 0) {
-    await vscode.window.showInformationMessage("Runtrol: No Runtime request is waiting for review.");
+    await vscode.window.showInformationMessage("No Runtime request is waiting for review.");
     return;
   }
   const selected = await vscode.window.showQuickPick(
@@ -69,7 +69,7 @@ export async function reviewRuntimeRequests(client: CoreClient): Promise<void> {
       with: { confirmation_id: selected.request.confirmation_id },
     });
     expectDone(decided, "Runtime integration key rotation confirmation");
-    await vscode.window.showInformationMessage("Runtrol: The integration key rotation was confirmed.");
+    await vscode.window.showInformationMessage("The integration key rotation was confirmed.");
     return;
   }
   if (selected.requestKind === "sharedOpen") {
@@ -86,7 +86,7 @@ export async function reviewRuntimeRequests(client: CoreClient): Promise<void> {
       with: { confirmation_id: selected.request.confirmation_id },
     });
     expectDone(decided, "Runtime shared open confirmation");
-    await vscode.window.showInformationMessage("Runtrol: The shared-writer session open was confirmed.");
+    await vscode.window.showInformationMessage("The shared-writer session open was confirmed.");
     return;
   }
   const confirmed = await vscode.window.showWarningMessage(
@@ -102,7 +102,7 @@ export async function reviewRuntimeRequests(client: CoreClient): Promise<void> {
     with: { confirmation_id: selected.request.confirmation_id },
   });
   expectDone(decided, "Runtime session forget confirmation");
-  await vscode.window.showInformationMessage("Runtrol: The Runtime metadata removal request was confirmed.");
+  await vscode.window.showInformationMessage("The Runtime metadata removal request was confirmed.");
 }
 
 /// Confirm the Studio's own shared-writer open: the person chose it here, so the Runtime's queued question is
@@ -156,7 +156,7 @@ export async function reviewIntegrationEnrollments(client: CoreClient): Promise<
     throw new Error(`the daemon answered integration enrollment listing with ${response.say}`);
   }
   if (response.with.length === 0) {
-    await vscode.window.showInformationMessage("Runtrol: No integration enrollment is waiting for review.");
+    await vscode.window.showInformationMessage("No integration enrollment is waiting for review.");
     return;
   }
   const selected = await vscode.window.showQuickPick(
@@ -207,7 +207,7 @@ export async function manageIntegrations(client: CoreClient): Promise<boolean> {
   }
   const active = response.with.filter((integration) => !integration.revoked);
   if (active.length === 0) {
-    await vscode.window.showInformationMessage("Runtrol: No active Runtime integration is enrolled.");
+    await vscode.window.showInformationMessage("No active Runtime integration is enrolled.");
     return false;
   }
   const selected = await pickIntegration(active);
@@ -246,7 +246,7 @@ export async function manageIntegrations(client: CoreClient): Promise<boolean> {
     with: { integration_id: selected.integration_id },
   });
   expectDone(revoked, "integration revocation");
-  await vscode.window.showInformationMessage(`Runtrol: Revoked ${selected.label}.`);
+  await vscode.window.showInformationMessage(`Revoked ${selected.label}.`);
   return true;
 }
 
@@ -268,7 +268,7 @@ async function changeIntegrationGrant(
   );
   if (!scopes) return false;
   if (scopes.length === 0) {
-    await vscode.window.showWarningMessage("Runtrol: At least one integration permission is required.");
+    await vscode.window.showWarningMessage("At least one integration permission is required.");
     return false;
   }
 
@@ -314,7 +314,7 @@ async function changeIntegrationGrant(
   const selectedScopes = scopes.map(({ label }) => label);
   if (selectedScopes.some(scopeNeedsRoot) && roots.length === 0) {
     await vscode.window.showWarningMessage(
-      "Runtrol: Session and approval permissions require at least one project root.",
+      "Session and approval permissions require at least one project root.",
     );
     return false;
   }
@@ -334,7 +334,7 @@ async function changeIntegrationGrant(
     },
   });
   expectDone(changed, "integration authority replacement");
-  await vscode.window.showInformationMessage(`Runtrol: Updated ${integration.label}'s Runtime authority.`);
+  await vscode.window.showInformationMessage(`Updated ${integration.label}'s Runtime authority.`);
   return true;
 }
 
@@ -361,7 +361,7 @@ async function decideEnrollment(
       with: { pending_id: enrollment.pending_id },
     });
     expectDone(denied, "integration denial");
-    await vscode.window.showInformationMessage(`Runtrol: Denied ${enrollment.client_name}.`);
+    await vscode.window.showInformationMessage(`Denied ${enrollment.client_name}.`);
     return "denied";
   }
   if (action !== "Review and Approve") {
@@ -409,7 +409,7 @@ async function decideEnrollment(
     throw new Error(`the daemon answered completed integration approval with ${approved.say}`);
   }
   await vscode.window.showInformationMessage(
-    `Runtrol: Approved ${enrollment.client_name} as ${approved.with.integration_id}.`,
+    `Approved ${enrollment.client_name} as ${approved.with.integration_id}.`,
   );
   return "approved";
 }
@@ -432,7 +432,7 @@ async function pickSubset(
     return undefined;
   }
   if (chosen.length === 0) {
-    await vscode.window.showWarningMessage(`Runtrol: ${emptyMessage}.`);
+    await vscode.window.showWarningMessage(`${emptyMessage}.`);
     return undefined;
   }
   return chosen.map(({ label }) => label);

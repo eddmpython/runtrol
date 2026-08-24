@@ -34,7 +34,7 @@ export async function pairPhone(client: CoreClient): Promise<void> {
 export async function reviewPhonePairings(client: CoreClient): Promise<void> {
   const proposals = expect(await client.once({ ask: "pairingProposals" }), "pairingProposals");
   if (proposals.length === 0) {
-    await vscode.window.showInformationMessage("Runtrol: no phone is waiting for approval.");
+    await vscode.window.showInformationMessage("no phone is waiting for approval.");
     return;
   }
   const selected = await vscode.window.showQuickPick(
@@ -52,7 +52,7 @@ export async function reviewPhonePairings(client: CoreClient): Promise<void> {
 export async function managePhones(client: CoreClient): Promise<void> {
   const devices = expect(await client.once({ ask: "devices" }), "devices");
   if (devices.length === 0) {
-    await vscode.window.showInformationMessage("Runtrol: no phones are paired.");
+    await vscode.window.showInformationMessage("no phones are paired.");
     return;
   }
   const selected = await vscode.window.showQuickPick(
@@ -84,7 +84,7 @@ async function waitForProposal(
       await delay(POLL_INTERVAL_MS);
     }
     if (!disposed) {
-      await vscode.window.showWarningMessage("Runtrol: the pairing QR expired. Start pairing again.");
+      await vscode.window.showWarningMessage("the pairing QR expired. Start pairing again.");
     }
     return undefined;
   } finally {
@@ -142,7 +142,7 @@ async function approveProposal(client: CoreClient, proposal: PairingProposalLine
     with: { challenge_id: challenge.challenge_id, answer },
   });
   expect(finished, "done");
-  await vscode.window.showInformationMessage(`Runtrol: ${proposal.name} is paired with ${picked.length} permissions.`);
+  await vscode.window.showInformationMessage(`${proposal.name} is paired with ${picked.length} permissions.`);
 }
 
 async function showDevice(client: CoreClient, device: DeviceLine): Promise<void> {
@@ -170,7 +170,7 @@ async function showDevice(client: CoreClient, device: DeviceLine): Promise<void>
     await client.once({ ask: "deviceRevoke", with: { device_id: device.device_id } }),
     "done",
   );
-  await vscode.window.showInformationMessage(`Runtrol: ${device.name} was revoked.`);
+  await vscode.window.showInformationMessage(`${device.name} was revoked.`);
 }
 
 async function changeAuthority(client: CoreClient, device: DeviceLine): Promise<void> {
@@ -257,7 +257,7 @@ async function changeAuthority(client: CoreClient, device: DeviceLine): Promise<
     }),
     "done",
   );
-  await vscode.window.showInformationMessage(`Runtrol: ${device.name} authority was replaced.`);
+  await vscode.window.showInformationMessage(`${device.name} authority was replaced.`);
 }
 
 function deviceDetail(device: DeviceLine): string {

@@ -195,101 +195,121 @@
     "commands": [
       {
         "command": "runtrol.refresh",
-        "title": "Runtrol: Refresh Conversations",
-        "icon": "$(refresh)"
+        "title": "Refresh Conversations",
+        "icon": "$(refresh)",
+        "category": "Runtrol"
       },
       {
         "command": "runtrol.restartExtensionHost",
-        "title": "Runtrol: Restart Extension Host",
-        "icon": "$(debug-restart)"
+        "title": "Restart Extension Host",
+        "icon": "$(debug-restart)",
+        "category": "Runtrol"
       },
       {
         "command": "runtrol.checkProviderUpdates",
-        "title": "Runtrol: Check Provider Updates",
-        "icon": "$(cloud-download)"
+        "title": "Check Provider Updates",
+        "icon": "$(cloud-download)",
+        "category": "Runtrol"
       },
       {
         "command": "runtrol.fixService",
-        "title": "Runtrol: Fix Coding Service...",
-        "icon": "$(wrench)"
+        "title": "Fix Coding Service...",
+        "icon": "$(wrench)",
+        "category": "Runtrol"
       },
       {
         "command": "runtrol.discoverServices",
-        "title": "Runtrol: Add Coding Service...",
-        "icon": "$(extensions)"
+        "title": "Add Coding Service...",
+        "icon": "$(extensions)",
+        "category": "Runtrol"
       },
       {
         "command": "runtrol.newConfiguredConversationInProject",
-        "title": "New Conversation with Service, Model and Effort..."
+        "title": "New Conversation with Service, Model and Effort...",
+        "category": "Runtrol"
       },
       {
         "command": "runtrol.remoteConnectionStatus",
-        "title": "Runtrol: Remote Connection Status",
-        "icon": "$(remote)"
+        "title": "Remote Connection Status",
+        "icon": "$(remote)",
+        "category": "Runtrol"
       },
       {
         "command": "runtrol.pairPhone",
-        "title": "Runtrol: Pair a Phone",
-        "icon": "$(device-mobile)"
+        "title": "Pair a Phone",
+        "icon": "$(device-mobile)",
+        "category": "Runtrol"
       },
       {
         "command": "runtrol.reviewPhonePairings",
-        "title": "Runtrol: Review Phone Pairing Requests",
-        "icon": "$(pass-filled)"
+        "title": "Review Phone Pairing Requests",
+        "icon": "$(pass-filled)",
+        "category": "Runtrol"
       },
       {
         "command": "runtrol.managePhones",
-        "title": "Runtrol: Manage Paired Phones",
-        "icon": "$(key)"
+        "title": "Manage Paired Phones",
+        "icon": "$(key)",
+        "category": "Runtrol"
       },
       {
         "command": "runtrol.reviewIntegrations",
-        "title": "Runtrol: Review Integration Requests",
-        "icon": "$(shield)"
+        "title": "Review Integration Requests",
+        "icon": "$(shield)",
+        "category": "Runtrol"
       },
       {
         "command": "runtrol.manageIntegrations",
-        "title": "Runtrol: Manage Runtime Integrations",
-        "icon": "$(key)"
+        "title": "Manage Runtime Integrations",
+        "icon": "$(key)",
+        "category": "Runtrol"
       },
       {
         "command": "runtrol.reviewRuntimeRequests",
-        "title": "Runtrol: Review Runtime Requests",
-        "icon": "$(checklist)"
+        "title": "Review Runtime Requests",
+        "icon": "$(checklist)",
+        "category": "Runtrol"
       },
       {
         "command": "runtrol.openNextWaiting",
-        "title": "Runtrol: Open Next Waiting Conversation",
-        "icon": "$(bell-dot)"
+        "title": "Open Next Waiting Conversation",
+        "icon": "$(bell-dot)",
+        "category": "Runtrol"
       },
       {
         "command": "runtrol.switchSession",
-        "title": "Runtrol: Switch Conversation",
-        "icon": "$(search)"
+        "title": "Switch Conversation",
+        "icon": "$(search)",
+        "category": "Runtrol"
       },
       {
         "command": "runtrol.startSession",
-        "title": "Runtrol: New Conversation",
-        "icon": "$(add)"
+        "title": "New Conversation",
+        "icon": "$(add)",
+        "category": "Runtrol"
       },
       {
         "command": "runtrol.alsoAsk",
-        "title": "Runtrol: Also Ask Another Service",
-        "icon": "$(split-horizontal)"
+        "title": "Also Ask Another Service",
+        "icon": "$(split-horizontal)",
+        "category": "Runtrol"
       },
       {
         "command": "runtrol.selectSession",
-        "title": "Runtrol: Open Conversation"
+        "title": "Open Conversation",
+        "category": "Runtrol"
       },
       {
         "command": "runtrol.openConversation",
-        "title": "Runtrol: Show Open Conversation",
-        "icon": "$(comment-discussion)"
+        "title": "Show Open Conversation",
+        "icon": "$(comment-discussion)",
+        "category": "Runtrol"
       },
       {
         "command": "runtrol.renameSession",
-        "title": "Runtrol: Rename Conversation",
-        "icon": "$(edit)"
+        "title": "Rename Conversation",
+        "icon": "$(edit)",
+        "category": "Runtrol"
       },
       {
         "command": "runtrol.openProjectWorkspace",
@@ -299,221 +319,265 @@
       },
       {
         "command": "runtrol.openWorkspace",
-        "title": "Runtrol: Open Conversation Project",
-        "icon": "$(folder-opened)"
+        "title": "Open Conversation Project",
+        "icon": "$(folder-opened)",
+        "category": "Runtrol"
       },
       {
         "command": "runtrol.interrupt",
-        "title": "Runtrol: Interrupt Turn",
-        "icon": "$(debug-stop)"
+        "title": "Interrupt Turn",
+        "icon": "$(debug-stop)",
+        "category": "Runtrol"
       },
       {
         "command": "runtrol.closeSession",
-        "title": "Runtrol: Close Conversation",
-        "icon": "$(close)"
+        "title": "Close Conversation",
+        "icon": "$(close)",
+        "category": "Runtrol"
       },
       {
         "command": "runtrol.archiveConversation",
-        "title": "Runtrol: Archive Conversation",
-        "icon": "$(archive)"
+        "title": "Archive Conversation",
+        "icon": "$(archive)",
+        "category": "Runtrol"
       },
       {
         "command": "runtrol.deleteConversation",
         "title": "Delete Conversation",
-        "icon": "$(close)"
+        "icon": "$(close)",
+        "category": "Runtrol"
       },
       {
         "command": "runtrol.pinConversation",
         "title": "Pin Conversation",
-        "icon": "$(pin)"
+        "icon": "$(pin)",
+        "category": "Runtrol"
       },
       {
         "command": "runtrol.unpinConversation",
         "title": "Unpin Conversation",
-        "icon": "$(pinned)"
+        "icon": "$(pinned)",
+        "category": "Runtrol"
       },
       {
         "command": "runtrol.fanOutInstruction",
-        "title": "Runtrol: Try One Instruction Several Ways...",
-        "icon": "$(type-hierarchy)"
+        "title": "Try One Instruction Several Ways...",
+        "icon": "$(type-hierarchy)",
+        "category": "Runtrol"
       },
       {
         "command": "runtrol.validateMission",
-        "title": "Runtrol: Validate Mission",
-        "icon": "$(new-file)"
+        "title": "Validate Mission",
+        "icon": "$(new-file)",
+        "category": "Runtrol"
       },
       {
         "command": "runtrol.registerMissionGate",
-        "title": "Runtrol: Register Mission Gate",
-        "icon": "$(tools)"
+        "title": "Register Mission Gate",
+        "icon": "$(tools)",
+        "category": "Runtrol"
       },
       {
         "command": "runtrol.openMission",
-        "title": "Runtrol: Open Mission"
+        "title": "Open Mission",
+        "category": "Runtrol"
       },
       {
         "command": "runtrol.startMission",
-        "title": "Runtrol: Start Reviewed Mission",
-        "icon": "$(play)"
+        "title": "Start Reviewed Mission",
+        "icon": "$(play)",
+        "category": "Runtrol"
       },
       {
         "command": "runtrol.scheduleMission",
-        "title": "Runtrol: Schedule Reviewed Mission...",
-        "icon": "$(calendar)"
+        "title": "Schedule Reviewed Mission...",
+        "icon": "$(calendar)",
+        "category": "Runtrol"
       },
       {
         "command": "runtrol.cancelMissionSchedule",
-        "title": "Runtrol: Cancel Mission Schedule",
-        "icon": "$(trash)"
+        "title": "Cancel Mission Schedule",
+        "icon": "$(trash)",
+        "category": "Runtrol"
       },
       {
         "command": "runtrol.continueMission",
-        "title": "Runtrol: Continue Reviewed Mission",
-        "icon": "$(run-all)"
+        "title": "Continue Reviewed Mission",
+        "icon": "$(run-all)",
+        "category": "Runtrol"
       },
       {
         "command": "runtrol.armMissionAutoFlight",
-        "title": "Runtrol: Arm Mission Auto Flight",
-        "icon": "$(rocket)"
+        "title": "Arm Mission Auto Flight",
+        "icon": "$(rocket)",
+        "category": "Runtrol"
       },
       {
         "command": "runtrol.disarmMissionAutoFlight",
-        "title": "Runtrol: Disarm Mission Auto Flight",
-        "icon": "$(debug-stop)"
+        "title": "Disarm Mission Auto Flight",
+        "icon": "$(debug-stop)",
+        "category": "Runtrol"
       },
       {
         "command": "runtrol.continueReadyMissions",
-        "title": "Runtrol: Continue Ready Missions",
-        "icon": "$(run-all)"
+        "title": "Continue Ready Missions",
+        "icon": "$(run-all)",
+        "category": "Runtrol"
       },
       {
         "command": "runtrol.reviewMissionLanding",
-        "title": "Runtrol: Review and Apply Mission Landing",
-        "icon": "$(diff-multiple)"
+        "title": "Review and Apply Mission Landing",
+        "icon": "$(diff-multiple)",
+        "category": "Runtrol"
       },
       {
         "command": "runtrol.launchFleet",
-        "title": "Runtrol: Run All Reviewed Attempts",
-        "icon": "$(run-all)"
+        "title": "Run All Reviewed Attempts",
+        "icon": "$(run-all)",
+        "category": "Runtrol"
       },
       {
         "command": "runtrol.prepareMissionTask",
-        "title": "Runtrol: Prepare Mission Task",
-        "icon": "$(vm-running)"
+        "title": "Prepare Mission Task",
+        "icon": "$(vm-running)",
+        "category": "Runtrol"
       },
       {
         "command": "runtrol.sendTaskInstruction",
-        "title": "Runtrol: Send Task Instruction",
-        "icon": "$(send)"
+        "title": "Send Task Instruction",
+        "icon": "$(send)",
+        "category": "Runtrol"
       },
       {
         "command": "runtrol.verifyMissionTask",
-        "title": "Runtrol: Verify Mission Task",
-        "icon": "$(beaker)"
+        "title": "Verify Mission Task",
+        "icon": "$(beaker)",
+        "category": "Runtrol"
       },
       {
         "command": "runtrol.retryMissionTask",
-        "title": "Runtrol: Retry Mission Task",
-        "icon": "$(redo)"
+        "title": "Retry Mission Task",
+        "icon": "$(redo)",
+        "category": "Runtrol"
       },
       {
         "command": "runtrol.recoverInterruptedMission",
-        "title": "Runtrol: Recover Interrupted Mission",
-        "icon": "$(debug-restart)"
+        "title": "Recover Interrupted Mission",
+        "icon": "$(debug-restart)",
+        "category": "Runtrol"
       },
       {
         "command": "runtrol.pauseMission",
-        "title": "Runtrol: Pause Mission",
-        "icon": "$(debug-pause)"
+        "title": "Pause Mission",
+        "icon": "$(debug-pause)",
+        "category": "Runtrol"
       },
       {
         "command": "runtrol.resumeMission",
-        "title": "Runtrol: Resume Mission Safely",
-        "icon": "$(debug-continue)"
+        "title": "Resume Mission Safely",
+        "icon": "$(debug-continue)",
+        "category": "Runtrol"
       },
       {
         "command": "runtrol.cancelMission",
-        "title": "Runtrol: Cancel Mission",
-        "icon": "$(debug-stop)"
+        "title": "Cancel Mission",
+        "icon": "$(debug-stop)",
+        "category": "Runtrol"
       },
       {
         "command": "runtrol.completeMissionIntegration",
-        "title": "Runtrol: Verify and Complete Mission Integration",
-        "icon": "$(verified-filled)"
+        "title": "Verify and Complete Mission Integration",
+        "icon": "$(verified-filled)",
+        "category": "Runtrol"
       },
       {
         "command": "runtrol.compareMissionResults",
-        "title": "Runtrol: Compare Passing Results",
-        "icon": "$(compare-changes)"
+        "title": "Compare Passing Results",
+        "icon": "$(compare-changes)",
+        "category": "Runtrol"
       },
       {
         "command": "runtrol.archiveMission",
-        "title": "Runtrol: Archive Mission",
-        "icon": "$(archive)"
+        "title": "Archive Mission",
+        "icon": "$(archive)",
+        "category": "Runtrol"
       },
       {
         "command": "runtrol.openTaskSession",
-        "title": "Runtrol: Open Task Session",
-        "icon": "$(comment-discussion)"
+        "title": "Open Task Session",
+        "icon": "$(comment-discussion)",
+        "category": "Runtrol"
       },
       {
         "command": "runtrol.proposeCapability",
-        "title": "Runtrol: Propose Project Capability",
-        "icon": "$(new-folder)"
+        "title": "Propose Project Capability",
+        "icon": "$(new-folder)",
+        "category": "Runtrol"
       },
       {
         "command": "runtrol.capabilityInbox",
-        "title": "Runtrol: Open Capability Candidate Inbox",
-        "icon": "$(inbox)"
+        "title": "Open Capability Candidate Inbox",
+        "icon": "$(inbox)",
+        "category": "Runtrol"
       },
       {
         "command": "runtrol.verifyCapability",
-        "title": "Runtrol: Verify Capability Candidate",
-        "icon": "$(beaker)"
+        "title": "Verify Capability Candidate",
+        "icon": "$(beaker)",
+        "category": "Runtrol"
       },
       {
         "command": "runtrol.approveCapability",
-        "title": "Runtrol: Approve Exact Capability Digest",
-        "icon": "$(verified-filled)"
+        "title": "Approve Exact Capability Digest",
+        "icon": "$(verified-filled)",
+        "category": "Runtrol"
       },
       {
         "command": "runtrol.rejectCapability",
-        "title": "Runtrol: Reject Capability Candidate",
-        "icon": "$(close)"
+        "title": "Reject Capability Candidate",
+        "icon": "$(close)",
+        "category": "Runtrol"
       },
       {
         "command": "runtrol.quarantineCapability",
-        "title": "Runtrol: Quarantine Capability",
-        "icon": "$(shield)"
+        "title": "Quarantine Capability",
+        "icon": "$(shield)",
+        "category": "Runtrol"
       },
       {
         "command": "runtrol.rollbackCapability",
-        "title": "Runtrol: Roll Back Capability",
-        "icon": "$(history)"
+        "title": "Roll Back Capability",
+        "icon": "$(history)",
+        "category": "Runtrol"
       },
       {
         "command": "runtrol.archiveCapability",
-        "title": "Runtrol: Archive Capability",
-        "icon": "$(archive)"
+        "title": "Archive Capability",
+        "icon": "$(archive)",
+        "category": "Runtrol"
       },
       {
         "command": "runtrol.startConfiguredSession",
-        "title": "Runtrol: New Conversation with Service, Model and Effort...",
-        "icon": "$(settings-gear)"
+        "title": "New Conversation with Service, Model and Effort...",
+        "icon": "$(settings-gear)",
+        "category": "Runtrol"
       },
       {
         "command": "runtrol.newConversationInProject",
-        "title": "Runtrol: New Conversation in Project",
-        "icon": "$(add)"
+        "title": "New Conversation in Project",
+        "icon": "$(add)",
+        "category": "Runtrol"
       },
       {
         "command": "runtrol.createProject",
-        "title": "Runtrol: Create Project",
-        "icon": "$(new-folder)"
+        "title": "Create Project",
+        "icon": "$(new-folder)",
+        "category": "Runtrol"
       },
       {
         "command": "runtrol.createProjectHere",
-        "title": "Make This Folder a Project"
+        "title": "Make This Folder a Project",
+        "category": "Runtrol"
       },
       {
         "command": "runtrol.enableAgentTools",
@@ -529,41 +593,49 @@
       },
       {
         "command": "runtrol.renameProject",
-        "title": "Runtrol: Rename Project"
+        "title": "Rename Project",
+        "category": "Runtrol"
       },
       {
         "command": "runtrol.removeProject",
-        "title": "Runtrol: Remove Project"
+        "title": "Remove Project",
+        "category": "Runtrol"
       },
       {
         "command": "runtrol.openConversationInPanel",
-        "title": "Runtrol: Open Conversation in Panel",
-        "icon": "$(layout-panel)"
+        "title": "Open Conversation in Panel",
+        "icon": "$(layout-panel)",
+        "category": "Runtrol"
       },
       {
         "command": "runtrol.openConversationInSideBar",
-        "title": "Runtrol: Open Conversation in Side Bar",
-        "icon": "$(layout-sidebar-right)"
+        "title": "Open Conversation in Side Bar",
+        "icon": "$(layout-sidebar-right)",
+        "category": "Runtrol"
       },
       {
         "command": "runtrol.openConversationInTab",
-        "title": "Runtrol: Open Conversation as Tab",
-        "icon": "$(window)"
+        "title": "Open Conversation as Tab",
+        "icon": "$(window)",
+        "category": "Runtrol"
       },
       {
         "command": "runtrol.arrangeConversationGrid",
-        "title": "Runtrol: Arrange Conversations in a Grid",
-        "icon": "$(layout)"
+        "title": "Arrange Conversations in a Grid",
+        "icon": "$(layout)",
+        "category": "Runtrol"
       },
       {
         "command": "runtrol.explainListing",
-        "title": "Runtrol: Why Are Some Chats Not Listed?",
-        "icon": "$(info)"
+        "title": "Why Are Some Chats Not Listed?",
+        "icon": "$(info)",
+        "category": "Runtrol"
       },
       {
         "command": "runtrol.returnToPreviousProject",
-        "title": "Runtrol: Back to Previous Project",
-        "icon": "$(arrow-left)"
+        "title": "Back to Previous Project",
+        "icon": "$(arrow-left)",
+        "category": "Runtrol"
       },
       {
         "command": "runtrol.signInFromRow",
@@ -591,8 +663,9 @@
       },
       {
         "command": "runtrol.switchProject",
-        "title": "Runtrol: Switch Window to Project...",
-        "icon": "$(folder-opened)"
+        "title": "Switch Window to Project...",
+        "icon": "$(folder-opened)",
+        "category": "Runtrol"
       }
     ],
     "keybindings": [
