@@ -14,6 +14,7 @@ const native = {
 function row(overrides: Partial<Conversation> = {}): Conversation {
   return {
     key: "chat:codex:n1",
+    legacyKey: null,
     providerId: "codex",
     serviceName: "Codex",
     serviceIcon: "sparkle",

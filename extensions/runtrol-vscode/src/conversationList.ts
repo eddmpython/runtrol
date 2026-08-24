@@ -30,6 +30,13 @@ export type Conversation = {
   /// Keyed on the conversation itself rather than on whichever record currently describes it, so opening a saved
   /// chat updates a row in place instead of removing one and inserting another somewhere else.
   readonly key: string;
+  /// The key this row carried before its service announced its own identity for the conversation, when that
+  /// moment has already passed.
+  ///
+  /// A conversation is keyed by the service's identity once it exists, and by the local session until then, so
+  /// the key changes on the first turn. Anything remembered against a row (a pin, a nickname) was written under
+  /// whichever key was current, and would be orphaned by that change without this.
+  readonly legacyKey: string | null;
   readonly providerId: string;
   readonly serviceName: string;
   /// The glyph that stands for that service, which is what tells two rows apart without reading them.
@@ -90,9 +97,11 @@ export function conversations(
   const rows: Conversation[] = [];
   const claimed = new Set<string>();
   for (const session of sessions) {
+    const sessionKey = `session:${encodeURIComponent(session.sessionId)}`;
     const key = session.nativeSessionId
       ? conversationKey(session.providerId, session.nativeSessionId)
-      : `session:${encodeURIComponent(session.sessionId)}`;
+      : sessionKey;
+    const legacyKey = key === sessionKey ? null : sessionKey;
     claimed.add(key);
     rows.push(supervised(
       session,
@@ -103,8 +112,9 @@ export function conversations(
       projectlessRoot,
       activities.get(session.sessionId) ?? NO_ACTIVITY,
       isolatedWorkspaceHomes,
-      pinnedKeys.has(key),
-      renamedTitles.get(key),
+      pinnedKeys.has(key) || (legacyKey !== null && pinnedKeys.has(legacyKey)),
+      renamedTitles.get(key) ?? (legacyKey === null ? undefined : renamedTitles.get(legacyKey)),
+      legacyKey,
     ));
   }
   for (const [key, chat] of nativeByKey) {
@@ -402,11 +412,13 @@ function supervised(
   isolatedWorkspaceHomes: ReadonlyMap<string, string>,
   pinned: boolean,
   name: string | undefined,
+  legacyKey: string | null,
 ): Conversation {
   const homeWorkspace = isolatedWorkspaceHomes.get(workspaceIdentity(session.workspace)) ?? session.workspace;
   const projectless = isProjectless(homeWorkspace, projectlessRoot);
   return {
     key,
+    legacyKey,
     providerId: session.providerId,
     serviceName: providerDisplayName(session.providerId, providers),
     serviceIcon: providerIcon(session.providerId, providers),
@@ -443,6 +455,8 @@ function providerOwned(
   const projectless = isProjectless(chat.cwd, projectlessRoot);
   return {
     key,
+    // A conversation the service already named has always been keyed by that name.
+    legacyKey: null,
     providerId: chat.providerId,
     serviceName: providerDisplayName(chat.providerId, providers),
     serviceIcon: providerIcon(chat.providerId, providers),

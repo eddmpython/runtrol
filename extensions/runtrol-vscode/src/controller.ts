@@ -167,9 +167,10 @@ export class Controller implements vscode.Disposable {
   async togglePin(value: ConversationItem | Conversation): Promise<void> {
     const row = value instanceof ConversationItem ? value.conversation : value;
     const pinned = this.pinnedFromStorage();
-    if (pinned.has(row.key)) {
-      pinned.delete(row.key);
-    } else {
+    // A conversation pinned before its service announced its own identity was remembered under the key it had
+    // then. Both are cleared together, so unpinning actually unpins and no orphan is left to outlive the row.
+    const wasPinned = pinned.delete(row.key) || (row.legacyKey !== null && pinned.delete(row.legacyKey));
+    if (!wasPinned) {
       pinned.add(row.key);
     }
     await this.context.globalState.update(PINNED_CONVERSATIONS_KEY, [...pinned]);
@@ -1780,6 +1781,9 @@ export class Controller implements vscode.Disposable {
   async renameConversation(row: Conversation, label: string): Promise<void> {
     const names = this.renamedFromStorage();
     const normalized = label.trim();
+    // The name is written under the key the row carries now, and the one it carried before its service named
+    // the conversation is dropped either way, so a cleared name cannot come back from the older entry.
+    if (row.legacyKey !== null) names.delete(row.legacyKey);
     if (normalized) {
       names.set(row.key, normalized);
     } else {

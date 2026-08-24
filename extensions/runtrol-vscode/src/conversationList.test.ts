@@ -967,3 +967,31 @@ test("the same folder reached two ways files into one project", () => {
   assert.equal(groups[0]?.rows.length, 1, "casing did not push the conversation out of its project");
   assert.equal(loose(rows).length, 0);
 });
+
+test("a pin and a nickname survive the moment the service names the conversation", () => {
+  // Chosen from the row before the first reply lands, so they are remembered against the session's own key.
+  const early = conversations([session({ sessionId: "s1", providerId: "claude", workspace: BETA })], PROVIDERS, [], null);
+  const earlyKey = early[0]?.key;
+  assert.equal(earlyKey, "session:s1", "a conversation with no service identity yet is keyed by its session");
+
+  const pinnedKeys = new Set([earlyKey ?? ""]);
+  const names = new Map([[earlyKey ?? "", "My chat"]]);
+
+  // The first turn arrives and the service announces the identity it knows the conversation by.
+  const [later] = conversations(
+    [session({ sessionId: "s1", providerId: "claude", nativeSessionId: "n1", workspace: BETA })],
+    PROVIDERS,
+    [nativeChat({ nativeSessionId: "n1", title: "Service title" })],
+    null,
+    null,
+    new Map(),
+    new Map(),
+    pinnedKeys,
+    names,
+  );
+
+  assert.equal(later?.key, "chat:claude:n1", "the row is now keyed by the service's own identity");
+  assert.equal(later?.legacyKey, "session:s1", "and it still knows the key it was remembered under");
+  assert.equal(later?.pinned, true, "the pin chosen before that moment is still a pin");
+  assert.equal(later?.title, "My chat", "and the chosen name is still the name");
+});
