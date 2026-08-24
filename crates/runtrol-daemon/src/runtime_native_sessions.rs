@@ -921,7 +921,7 @@ mod tests {
     fn the_machine_scope_shows_a_conversation_whose_folder_was_never_approved() {
         // The row whose folder was never approved is exactly the row the operator could not see
         // before, and showing it is the whole point: every conversation on this machine in one
-        // list, reachable before any window is moved (`memory/uxContract.md`). This surface is the
+        // list, reachable before any window is moved (`docs/vscodeSurface.md`). This surface is the
         // owner-only local endpoint, which the managed session index already opened for the same
         // reason; the phone speaks a different wire that carries no native discovery at all.
         let fixture = CatalogueFixture::make("machine");

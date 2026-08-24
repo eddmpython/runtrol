@@ -553,7 +553,7 @@ export class Controller implements vscode.Disposable {
     }
     const stored = this.persistSelection(session.sessionId);
     // Deliberately no window-follow here. Selecting a conversation opens ITS tab beside whatever is
-    // already open and NOTHING else moves (memory/uxContract.md): moving VS Code to the project is the
+    // already open and NOTHING else moves (`docs/vscodeSurface.md`): moving VS Code to the project is the
     // heading's explicit button. The tab's binding owns its watch and its replay-on-rebirth, so nothing
     // here pauses or resets anybody else's conversation.
     const binding = await this.panels.open(session, !reveal);

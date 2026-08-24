@@ -46,8 +46,7 @@ authors = ["eddmpython"]
 # **이 표는 선언 시점이 아니라 첫 사용 시점에 자란다.** 미리 박아둔 항목은 CLAUDE.md 가 금지한
 # "나중에 쓸" 그 자체이고, `cargo shear` 가 (셋 중 유일하게 이 표를 보므로) 곧바로 red 를 낸다.
 # 새 항목은 그것을 쓰는 crate 를 추가하는 커밋에서 함께 들어온다. 그러면 버전 한 줄마다
-# 리뷰 가능한 이유가 동행한다. 오늘 라이브 인덱스에 대해 해소를 확인한 판본 목록은
-# `.claude/discussion/r2/crateTopology.md` 0 절에 남아 있다.
+# 리뷰 가능한 이유가 동행한다. 여기 오르는 판본은 라이브 인덱스에 대해 해소를 확인한 것만 적는다.
 [workspace.dependencies]
 # Shared event payloads are reference-counted across watchers. See docs/coreRuntime.md.
 bytes = "1.12.1"

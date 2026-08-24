@@ -48,8 +48,8 @@ export type GridResult = {
 /// How long a workbench view may take to resolve after it is asked to show.
 const VIEW_RESOLVE_TIMEOUT_MS = 5_000;
 
-/// One conversation tab per session, with the file-click grammar the operator dictated
-/// (memory/uxContract.md): clicking a conversation opens ITS tab beside whatever is already open, exactly
+/// One conversation tab per session, with the file-click grammar the product promises
+/// (`docs/vscodeSurface.md`): clicking a conversation opens ITS tab beside whatever is already open, exactly
 /// like clicking a file, and the tabs split, move, and close under the editor's own rules.
 ///
 /// A tab may also hold a draft: a conversation that has not started, with its project, service, model,

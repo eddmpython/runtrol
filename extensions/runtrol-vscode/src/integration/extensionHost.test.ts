@@ -300,7 +300,7 @@ async function measureFollow(target: string, resultPath: string): Promise<Record
   }
   const followArrivalMs = await api.waitForConversationIn(target, 30_000);
   currentStage = "cross-project-open";
-  // The operator's exact pain, held as a gate (memory/uxContract.md): a conversation whose folder this
+  // The operator's exact pain, held as a gate (`docs/vscodeSurface.md`): a conversation whose folder this
   // window has NOT opened must select and open as a conversation tab right here, without moving the window.
   if (!api.openCrossProjectConversation) {
     throw new Error("the performance-only cross-project opener is unavailable");

@@ -521,7 +521,7 @@ impl RuntimeSessionCatalogue {
 
     /// Every managed session on the machine, for a caller that already passed the scope wall.
     ///
-    /// Deliberately not root-bounded (operator contract, 2026-08-20, `memory/uxContract.md`): the Runtime
+    /// Deliberately not root-bounded (the folderless rule in `docs/runtimeProtocol.md`): the Runtime
     /// endpoint is owner-only local, and a local process already holds machine-wide authority through the
     /// admin wire, so bounding this second local wire by enrollment roots protected nothing while it broke
     /// the product's one promise: every conversation on the machine in one list, controllable before any
@@ -674,7 +674,7 @@ pub(crate) fn authorized_roots(
 
 /// Resolve any exact current workspace on the machine.
 ///
-/// Machine-wide for the same reason session reads are (`memory/uxContract.md`): the local surface starts
+/// Machine-wide for the same reason session reads are (`docs/runtimeProtocol.md`): the local surface starts
 /// and resumes conversations wherever they live, without moving the window there first. The path still has
 /// to exist and canonicalize, so a session cannot be aimed at a name that resolves elsewhere later.
 pub(crate) fn authorized_workspace(
@@ -799,7 +799,7 @@ mod tests {
         let retired = base.join("retired");
         std::fs::rename(&project_path, &retired).expect("retire approved directory");
         std::fs::create_dir(&project_path).expect("replace directory at same path");
-        // The operator contract (memory/uxContract.md): the owner-only local wire is machine-wide, so
+        // The folderless rule (`docs/runtimeProtocol.md`): the owner-only local wire is machine-wide, so
         // enrollment-root drift never hides a managed session here. Root identity keeps mattering exactly
         // where it is security: the phone wire, whose own tests pin that a replaced directory disappears.
         assert_eq!(

@@ -70,6 +70,16 @@ NOT_ONE_PATH = re.compile(r"[*?\[\]{}<>$]")
 # of one names an artifact that no clone has and no rename can break.
 GENERATED = frozenset({"target", "dist", "build", "node_modules"})
 
+# The two layers that live on an operator's disk and never in a clone: local rules and harness
+# (`.claude/`) and the operator's own notes (`memory/`). `.gitignore` keeps both out, so a tracked file
+# citing a file under either one sends every reader but its author to nothing. These are added to the
+# roots a citation may start at, which is what makes them checkable at all: git tracks neither, so
+# neither would otherwise look like a path from the repository root.
+#
+# `mainPlan/` is the third such layer and is deliberately not here. It gets the stricter check below,
+# which forbids naming the folder at all, because an initiative is deleted the moment it finishes.
+UNTRACKED_LAYERS = frozenset({".claude", "memory"})
+
 # The provisional layer. A tracked file citing this is the failure, so the pattern is matched against
 # text rather than only against link targets: prose that names the folder dangles just as hard.
 PROVISIONAL = "mainPlan/"
@@ -225,7 +235,7 @@ def audit() -> list[str]:
     """Every finding, in a stable order."""
     tracked = frozenset(trackedFiles())
     tails = trackedTails(tracked)
-    tops = frozenset(entry.split("/", 1)[0] for entry in tracked)
+    tops = frozenset(entry.split("/", 1)[0] for entry in tracked) | UNTRACKED_LAYERS
     found: list[str] = []
     for name in sorted(tracked):
         if Path(name).suffix.lower() not in READ_SUFFIXES:
@@ -370,6 +380,13 @@ def selftest() -> int:
             "a path not rooted in a tracked directory is not claiming to start at the root",
             citedPaths(citedTops, citedTails, "shelf/README.md", "from `schema/runtime.schema.json`"),
             False,
+        ),
+        (
+            "a layer git does not track is still a root a citation may start at",
+            citedPaths(
+                citedTops | frozenset({".shed"}), citedTails, "shelf/README.md", "see `.shed/notes.md`"
+            ),
+            True,
         ),
         (
             "citing the initiative layer fails",

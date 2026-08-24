@@ -166,9 +166,9 @@ export type ProjectKind = "created" | "open" | "discovered";
 /// Conversations gathered under this machine's projects: the ones the operator created, the folders this
 /// window has open, and established folders that hold more than one provider conversation.
 ///
-/// **The panel shows the whole machine's projects** (operator contract, `memory/uxContract.md`, restated
-/// 2026-08-20 against the Paseo, Codex and Claude sidebars: established folder = project heading, conversations
-/// beneath it). The CLI's own listing is the authority on which folder a conversation belongs to. A one-off
+/// **The panel shows the whole machine's projects** (`docs/vscodeSurface.md`, measured against the Paseo,
+/// Codex and Claude sidebars: established folder = project heading, conversations beneath it).
+/// The CLI's own listing is the authority on which folder a conversation belongs to. A one-off
 /// working directory is not enough evidence that the person created a project: test and task runners commonly
 /// use one temporary directory per conversation, and promoting each one creates the false project wall.
 /// What is still never invented is an empty discovered heading: a discovered folder exists only while enough

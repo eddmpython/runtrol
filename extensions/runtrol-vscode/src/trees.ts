@@ -51,7 +51,7 @@ export class ConversationItem extends vscode.TreeItem {
 /// One project heading: a folder the operator created a project on, has open in this window, or that a coding
 /// service reports conversations in. The conversations beneath it are the rows.
 ///
-/// The panel shows the whole machine's established projects (memory/uxContract.md). A one-off working directory
+/// The panel shows the whole machine's established projects (`docs/vscodeSurface.md`). A one-off working directory
 /// remains a plain conversation rather than becoming a project heading. The current open folder is the one empty
 /// heading allowed without registration, because it is where the person opened Runtrol to work.
 export class ProjectItem extends vscode.TreeItem {
@@ -73,7 +73,7 @@ export class ProjectItem extends vscode.TreeItem {
     this.description = [detail, agentToolsEnabled ? "Agent Tools" : ""].filter(Boolean).join(" · ");
     // What the heading offers depends on why it exists and whether it is this window. The move button draws
     // only on headings that are not this window: opening the folder you are already in is not a move, and the
-    // contract (memory/uxContract.md) wants moving to be the one explicit act. Rename and remove belong to
+    // contract (`docs/vscodeSurface.md`) wants moving to be the one explicit act. Rename and remove belong to
     // created projects; a discovered or open folder offers "make this a project" instead.
     this.contextValue = projectContextValue(group);
     // Keep the real folder in the tooltip and command payload, but do not expose it as the tree resource. VS Code's

@@ -1003,7 +1003,7 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
       : undefined,
     openCrossProjectConversation: MEASURED_HOST
       ? async () => {
-        // The contract in memory/uxContract.md, provable: a conversation whose folder this window never
+        // The contract in `docs/vscodeSurface.md`, provable: a conversation whose folder this window never
         // opened selects and opens as a tab right here. Managed rows only, because native rows still ride
         // the enrollment roots until discovery goes machine-wide.
         const open = (vscode.workspace.workspaceFolders ?? []).map((folder) => folder.uri.fsPath);

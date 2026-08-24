@@ -1198,7 +1198,7 @@ async fn list_native_sessions(
     // there is nothing to authorize against: the Runtime endpoint is owner-only local, the phone
     // speaks a different wire that has no native-discovery request at all, and the managed session
     // index already made exactly this move for exactly this reason (`runtime_inventory::authorized`,
-    // operator contract in `memory/uxContract.md`). What remains bounded is what the caller is
+    // folderless rule in `docs/runtimeProtocol.md`). What remains bounded is what the caller is
     // shown: every returned row is re-checked below before it reaches anyone.
     let selected_root = match params.root.as_deref() {
         Some(requested) => match crate::runtime_inventory::authorized_root(&authority, requested) {
