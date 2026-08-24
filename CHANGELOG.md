@@ -32,7 +32,12 @@ and refactoring that no user can observe do not belong here.
 - Conversation tabs use the actual conversation title without a `Runtrol` prefix. The extension containers are named
   simply `Runtrol`, live model and effort controls remain visible before the provider announces current values, and
   the send button now uses the compact VS Code foreground treatment.
-- Installed CLIs that have not emitted numeric usage now read `Ready`; actual limits replace that state when reported.
+- The fixed sidebar area is named `Agent Usage`. Every provider-reported numeric account window now has a bounded
+  progress bar with its exact percentage and reset time, while a missing percentage remains `Ready` instead of
+  implying zero usage.
+- Empty chats use a neutral greeting instead of repeating the project or product name. The project stays visible in
+  the composer context, the message field names its selected coding service, and the panel and secondary sidebar
+  conversation surfaces are both named `Chat`.
 
 ## [0.1.19] - 2026-08-24
 

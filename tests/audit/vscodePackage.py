@@ -343,6 +343,8 @@ def expectedEntries(target: str) -> set[str]:
         "extension/readme.md",
         "extension/dist/extension.js",
         "extension/dist/pairingQrVendor.js",
+        "extension/dist/usageView.css",
+        "extension/dist/usageView.js",
         "extension/dist/webview.css",
         "extension/dist/webview.js",
         "extension/resources/LICENSE.txt",

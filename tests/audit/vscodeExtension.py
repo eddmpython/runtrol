@@ -52,9 +52,27 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
     if (
         not isinstance(usage_view, dict)
         or usage_view.get("visibility") != "visible"
-        or usage_view.get("name") != "CLI Status & Usage"
+        or usage_view.get("name") != "Agent Usage"
+        or usage_view.get("type") != "webview"
     ):
-        found.append("every installed CLI's status and usage must be expanded at the bottom of the Runtrol sidebar")
+        found.append(
+            "every installed CLI's status and progress bars must be expanded at the bottom of the Runtrol sidebar"
+        )
+    for container, view_id in (
+        ("runtrolPanel", "runtrol.conversationPanel"),
+        ("runtrolSide", "runtrol.conversationSide"),
+    ):
+        entries = views.get(container) if isinstance(views, dict) else None
+        chat_view = next(
+            (
+                entry
+                for entry in entries
+                if isinstance(entry, dict) and entry.get("id") == view_id
+            ),
+            None,
+        ) if isinstance(entries, list) else None
+        if not isinstance(chat_view, dict) or chat_view.get("name") != "Chat":
+            found.append("the panel and secondary side bar must be named Chat without a product prefix")
     welcome_entries = contributes.get("viewsWelcome") if isinstance(contributes, dict) else None
     welcomes = welcome_entries if isinstance(welcome_entries, list) else []
     has_ready_welcome = any(
@@ -93,14 +111,6 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
         found.append("the Conversations title bar must keep exactly its three frequent actions visible")
     item_context = menus.get("view/item/context") if isinstance(menus, dict) else None
     winner_entries = item_context if isinstance(item_context, list) else []
-    usage_problem_entry = any(
-        isinstance(entry, dict)
-        and entry.get("command") == "runtrol.fixService"
-        and entry.get("when") == "view == runtrol.usage && viewItem == runtrol.usageProblem"
-        for entry in winner_entries
-    )
-    if not usage_problem_entry:
-        found.append("an unavailable installed CLI must expose its fix in the fixed status and usage area")
     winner_task_when = (
         "view == runtrol.missions && viewItem =~ "
         "/^runtrol\\.missionTask\\.passed(\\.session)?\\.chooseOne\\.integrating$/"
@@ -220,6 +230,10 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
     ):
         if token in runtime_source:
             found.append(f"runtimeClient.ts repeats system locator validation through `{token}`")
+    if 'mark.textContent = "R"' in sources.get("webview/main.ts", ""):
+        found.append("the chat page must not place the product brand above the conversation")
+    if "Runtrol sidebar" in sources.get("conversationSurface.ts", ""):
+        found.append("an empty chat place must name the Conversations sidebar, not repeat the product brand")
 
     required = {
         "core/framing.ts": [
@@ -298,19 +312,39 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
             'setAttribute("aria-expanded"',
             'removeAttribute("aria-activedescendant")',
             "(item ? prompt : chip)?.focus()",
+            "paintDraftPrompt()",
+            '"Choose a coding service above"',
+            "`Message ${draft.service}`",
         ],
-        "usageTree.ts": [
-            "this.accessibilityInformation",
-            "`${row.name}, ${row.detail}`",
-            'command: "runtrol.fixService"',
-            '"runtrol.usageProblem"',
-            "fixes available",
+        "usageView.ts": [
+            "implements vscode.WebviewViewProvider",
             "private gauges:",
             "usageRowsEqual(this.rows, next)",
             '"Usage refresh failed. Showing the last report."',
-            "ServiceCatalogueItem",
-            'command: "runtrol.discoverServices"',
-            "this.installable.length",
+            "usageViewAction(message)",
+            "isBroken(provider)",
+            "this.installableCount",
+            "this.postSnapshot()",
+            "enableScripts: true",
+        ],
+        "usageViewWebview.ts": [
+            'document.createElement("progress")',
+            "progress.max = 100",
+            "progress.value = meter.percent",
+            'progress.setAttribute("aria-label"',
+            'vscode.postMessage({ type: "fix"',
+            'vscode.postMessage({ type: "discover"',
+            "usage.replaceChildren",
+            ".textContent =",
+        ],
+        "usageViewMessage.ts": [
+            "export function usageViewAction",
+            "record.providerId.length <= 256",
+        ],
+        "usageView.css": [
+            "progress::-webkit-progress-value",
+            ".usage-row.limit-reached",
+            "var(--vscode-progressBar-background",
         ],
         "usageDisplay.ts": [
             'provider.installation.state !== "missing"',
@@ -318,6 +352,8 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
             'detail: "Checking"',
             'detail: "Unavailable · Fix"',
             'detail: `Disconnected · ${usageDetail(gauge, nowMs)}`',
+            "export function usageMeters",
+            "Math.max(0, Math.min(100",
             "export function installableProviders",
             'provider.installation.state === "missing" && Boolean(provider.help?.install)',
         ],
@@ -534,8 +570,19 @@ def selftest() -> int:
             "viewsContainers": {"activitybar": []},
             "views": {
                 "runtrol": [
-                    {"id": "runtrol.usage", "name": "CLI Status & Usage", "visibility": "visible"}
-                ]
+                    {
+                        "id": "runtrol.usage",
+                        "name": "Agent Usage",
+                        "type": "webview",
+                        "visibility": "visible",
+                    }
+                ],
+                "runtrolPanel": [
+                    {"id": "runtrol.conversationPanel", "name": "Chat", "type": "webview"}
+                ],
+                "runtrolSide": [
+                    {"id": "runtrol.conversationSide", "name": "Chat", "type": "webview"}
+                ],
             },
             "viewsWelcome": [
                 {
@@ -579,10 +626,6 @@ def selftest() -> int:
                 ],
                 "view/item/context": [
                     {
-                        "command": "runtrol.fixService",
-                        "when": "view == runtrol.usage && viewItem == runtrol.usageProblem",
-                    },
-                    {
                         "command": "runtrol.reviewMissionLanding",
                         "when": "view == runtrol.missions && viewItem == runtrol.mission.integrating.chooseOne",
                     },
@@ -620,7 +663,8 @@ def selftest() -> int:
         "webview/main.ts": (
             'MAX_VISIBLE_ITEMS MAX_VISIBLE_CHARACTERS MAX_BATCH '
             'setAttribute("aria-activedescendant" setAttribute("aria-expanded" '
-            'removeAttribute("aria-activedescendant") (item ? prompt : chip)?.focus()'
+            'removeAttribute("aria-activedescendant") (item ? prompt : chip)?.focus() '
+            'paintDraftPrompt() "Choose a coding service above" `Message ${draft.service}`'
         ),
         "conversationView.ts": (
             "webviewReady createWebviewPanel focusSurface conversationTabIsActive "
@@ -642,6 +686,7 @@ def selftest() -> int:
             'import { SerializedWatch } from "./serializedWatch"; '
             "private readonly watch = new SerializedWatch(); this.watch.pause(); this.watch.dispose()"
         ),
+        "conversationSurface.ts": "Conversations sidebar",
         "conversationList.ts": (
             'const folderRows = rows.filter "open", '
             'if (left.current !== right.current) return left.current ? -1 : 1; '
@@ -658,17 +703,29 @@ def selftest() -> int:
             'this.state.incompleteDiscovery view.message = undefined '
             '"runtrol.hasUsableProvider" "runtrol.isVerifyingProvider" awaitsVerification'
         ),
-        "usageTree.ts": (
-            'this.accessibilityInformation `${row.name}, ${row.detail}` '
-            'command: "runtrol.fixService" "runtrol.usageProblem" fixes available '
-            'private gauges: "Usage refresh failed. Showing the last report." '
-            'ServiceCatalogueItem command: "runtrol.discoverServices" this.installable.length'
-            ' usageRowsEqual(this.rows, next)'
+        "usageView.ts": (
+            "implements vscode.WebviewViewProvider private gauges: "
+            '"Usage refresh failed. Showing the last report." '
+            "usageRowsEqual(this.rows, next) usageViewAction(message) isBroken(provider) "
+            "this.installableCount this.postSnapshot() enableScripts: true"
+        ),
+        "usageViewWebview.ts": (
+            'document.createElement("progress") progress.max = 100 progress.value = meter.percent '
+            'progress.setAttribute("aria-label" vscode.postMessage({ type: "fix" '
+            'vscode.postMessage({ type: "discover" usage.replaceChildren .textContent ='
+        ),
+        "usageViewMessage.ts": (
+            "export function usageViewAction record.providerId.length <= 256"
+        ),
+        "usageView.css": (
+            "progress::-webkit-progress-value .usage-row.limit-reached "
+            "var(--vscode-progressBar-background"
         ),
         "usageDisplay.ts": (
             'provider.installation.state !== "missing" detail: "Ready" '
             'detail: "Checking" detail: "Unavailable · Fix" '
             'detail: `Disconnected · ${usageDetail(gauge, nowMs)}` '
+            "export function usageMeters Math.max(0, Math.min(100 "
             'export function installableProviders '
             'provider.installation.state === "missing" && Boolean(provider.help?.install)'
         ),
@@ -767,12 +824,10 @@ def selftest() -> int:
 
     hidden_usage = json.loads(json.dumps(package))
     hidden_usage["contributes"]["views"]["runtrol"][0]["visibility"] = "collapsed"
-    missing_usage_fix = json.loads(json.dumps(package))
-    missing_usage_fix["contributes"]["menus"]["view/item/context"] = [
-        entry
-        for entry in missing_usage_fix["contributes"]["menus"]["view/item/context"]
-        if entry.get("command") != "runtrol.fixService"
-    ]
+    non_progress_usage = json.loads(json.dumps(package))
+    non_progress_usage["contributes"]["views"]["runtrol"][0].pop("type")
+    branded_chat = json.loads(json.dumps(package))
+    branded_chat["contributes"]["views"]["runtrolPanel"][0]["name"] = "Runtrol Chat"
     cluttered_toolbar = json.loads(json.dumps(package))
     cluttered_toolbar["contributes"]["menus"]["view/title"].append({
         "command": "runtrol.arrangeConversationGrid",
@@ -789,13 +844,16 @@ def selftest() -> int:
     mutations = [
         ({**package, "dependencies": {"some-runtime": "1"}}, sources),
         (hidden_usage, sources),
-        (missing_usage_fix, sources),
+        (non_progress_usage, sources),
+        (branded_chat, sources),
         (cluttered_toolbar, sources),
         (merged_welcomes, sources),
         ({**package, "activationEvents": []}, sources),
         ({**package, "contributes": {"viewsContainers": {"activitybar": []}}}, sources),
         ({"engines": {"vscode": "^1.100.0"}, "contributes": {"viewsContainers": {"activitybar": [], "secondarySidebar": []}}}, sources),
         (package, {**sources, "webview/main.ts": "localStorage MAX_VISIBLE_ITEMS"}),
+        (package, {**sources, "webview/main.ts": sources["webview/main.ts"] + ' mark.textContent = "R"'}),
+        (package, {**sources, "conversationSurface.ts": sources["conversationSurface.ts"] + " Runtrol sidebar"}),
         (package, {**sources, "controller.ts": "setInterval("}),
         (package, {**sources, "mission/controller.ts": sources["mission/controller.ts"] + " setTimeout("}),
         (package, {**sources, "core/framing.ts": "MAX_FRAME_BYTES"}),
@@ -818,11 +876,11 @@ def selftest() -> int:
                 ),
             },
         ),
-        (package, {**sources, "usageTree.ts": sources["usageTree.ts"].replace("accessibilityInformation", "")}),
-        (package, {**sources, "usageTree.ts": sources["usageTree.ts"].replace("Usage refresh failed", "")}),
-        (package, {**sources, "usageTree.ts": sources["usageTree.ts"].replace("usageRowsEqual(this.rows, next)", "false")}),
+        (package, {**sources, "usageViewWebview.ts": sources["usageViewWebview.ts"].replace('document.createElement("progress")', "")}),
+        (package, {**sources, "usageView.ts": sources["usageView.ts"].replace("Usage refresh failed", "")}),
+        (package, {**sources, "usageView.ts": sources["usageView.ts"].replace("usageRowsEqual(this.rows, next)", "false")}),
         (package, {**sources, "stateRows.ts": sources["stateRows.ts"].replace("discoveryNotice", "")}),
-        (package, {**sources, "usageTree.ts": sources["usageTree.ts"].replace('command: "runtrol.fixService"', "")}),
+        (package, {**sources, "usageViewMessage.ts": sources["usageViewMessage.ts"].replace("record.providerId.length <= 256", "true")}),
         (package, {**sources, "trees.ts": sources["trees.ts"] + " view.description"}),
         (
             package,
@@ -1007,8 +1065,11 @@ def run() -> int:
     package = json.loads(package_path.read_text(encoding="utf-8"))
     sources = {
         path.relative_to(EXTENSION / "src").as_posix(): path.read_text(encoding="utf-8")
-        for path in (EXTENSION / "src").rglob("*.ts")
-        if not path.name.endswith(".test.ts") and path.name != "styles.d.ts"
+        for path in (EXTENSION / "src").rglob("*")
+        if path.is_file()
+        and path.suffix in {".ts", ".css"}
+        and not path.name.endswith(".test.ts")
+        and path.name != "styles.d.ts"
     }
     failures = sourceViolations(package, sources)
     if failures:
@@ -1078,7 +1139,14 @@ def run() -> int:
     # A dependency slipping in still trips it.
     bundles = [
         EXTENSION / "dist" / name
-        for name in ("extension.js", "pairingQrVendor.js", "webview.js", "webview.css")
+        for name in (
+            "extension.js",
+            "pairingQrVendor.js",
+            "webview.js",
+            "webview.css",
+            "usageView.js",
+            "usageView.css",
+        )
     ]
     for bundle in bundles:
         if not bundle.is_file() or bundle.stat().st_size > 400 * 1024:
@@ -1086,6 +1154,10 @@ def run() -> int:
     qr_bundle = EXTENSION / "dist" / "pairingQrVendor.js"
     if qr_bundle.is_file() and qr_bundle.stat().st_size > 32 * 1024:
         failures.append(f"{qr_bundle.relative_to(ROOT)} exceeds its pairing-only 32 KiB budget")
+    for name in ("usageView.js", "usageView.css"):
+        usage_bundle = EXTENSION / "dist" / name
+        if usage_bundle.is_file() and usage_bundle.stat().st_size > 16 * 1024:
+            failures.append(f"{usage_bundle.relative_to(ROOT)} exceeds its fixed usage-view 16 KiB budget")
     extension_bundle = EXTENSION / "dist" / "extension.js"
     if extension_bundle.is_file() and "RUNTROL_VSCODE_REAL_PROVIDER_JOURNEY" in extension_bundle.read_text(
         encoding="utf-8"

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import type { ProviderLine, ProviderUsageGauge } from "./runtimeTypes";
-import { installableProviders, usageDetail, usageRows, usageRowsEqual } from "./usageDisplay";
+import { installableProviders, usageDetail, usageMeters, usageRows, usageRowsEqual } from "./usageDisplay";
 
 const NOW = Date.parse("2026-08-18T12:00:00Z");
 
@@ -26,6 +26,22 @@ test("a provider that reports a percentage shows it, in its own number", () => {
     NOW,
   );
   assert.equal(detail, "87% · resets in 23m");
+});
+
+test("reported account windows become bounded progress meters", () => {
+  const meters = usageMeters(gauge({
+    primary: { usedPercent: 87, resetsAtMs: NOW + 23 * 60_000, windowMinutes: 300 },
+    secondary: { usedPercent: 142, resetsAtMs: NOW + 2 * 86_400_000, windowMinutes: 10_080 },
+  }), NOW);
+  assert.deepEqual(meters, [
+    { key: "primary", label: "5h", percent: 87, detail: "87% used, resets in 23m" },
+    { key: "secondary", label: "7d", percent: 100, detail: "100% used, resets in 2d" },
+  ]);
+});
+
+test("a reset without a reported percentage does not invent an empty progress bar", () => {
+  assert.deepEqual(usageMeters(gauge({ primary: { resetsAtMs: NOW + 60_000 } }), NOW), []);
+  assert.deepEqual(usageMeters(gauge({ primary: { usedPercent: Number.NaN } }), NOW), []);
 });
 
 test("a provider that reports only a reset still has something true to say", () => {
@@ -61,6 +77,7 @@ test("rows carry the service's declared mark and name", () => {
   const row = rows[0];
   assert.equal(row?.name, "Claude Code");
   assert.equal(row?.icon, "claude");
+  assert.deepEqual(row?.meters, []);
   assert.ok(row?.tooltip.includes("Reported"), "the hover says how old the report is");
 });
 
@@ -104,7 +121,7 @@ test("the fixed area includes checking and broken installed CLIs but omits missi
     ["Codex", "Checking", "checking"],
     ["Grok", "Unavailable · Fix", "unavailable"],
   ]);
-  assert.equal(rows[2]?.provider?.providerId, "grok");
+  assert.equal(rows[2]?.providerId, "grok");
   assert.match(rows[2]?.tooltip ?? "", /Press Enter/);
 });
 
@@ -118,22 +135,23 @@ test("a last report never disguises a disconnected CLI as available", () => {
   assert.equal(rows.length, 1);
   assert.equal(rows[0]?.detail, "Disconnected · 48%");
   assert.equal(rows[0]?.state, "disconnected");
-  assert.equal(rows[0]?.provider, null);
+  assert.equal(rows[0]?.providerId, "codex");
+  assert.equal(rows[0]?.meters[0]?.percent, 48);
 });
 
-test("equivalent status snapshots do not demand another tree render", () => {
+test("equivalent status snapshots do not demand another view render", () => {
   const rows = usageRows([gauge({ primary: { usedPercent: 48 } })], PROVIDERS, NOW);
   assert.equal(usageRowsEqual(rows, structuredClone(rows)), true);
 });
 
-test("a visible or actionable status change demands another tree render", () => {
+test("a visible or actionable status change demands another view render", () => {
   const rows = usageRows([], PROVIDERS, NOW);
   assert.equal(usageRowsEqual(rows, rows.map((row, index) => (
     index === 0 ? { ...row, detail: "Checking" } : row
   ))), false);
   assert.equal(usageRowsEqual(rows, rows.map((row, index) => (
     index === 0
-      ? { ...row, provider: { ...row.provider, providerId: "replacement" } as ProviderLine }
+      ? { ...row, providerId: "replacement" }
       : row
   ))), false);
 });

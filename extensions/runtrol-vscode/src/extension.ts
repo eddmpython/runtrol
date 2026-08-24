@@ -39,8 +39,8 @@ import { providerDisplayName, sessionTitle, workspaceName } from "./sessionDispl
 import { RuntimeState } from "./state";
 import { StudioRuntimeClient } from "./runtimeClient";
 import { workspaceCovers, workspaceIdentity } from "./workspaceCollision";
-import { UsageItem, UsageTree } from "./usageTree";
 import { installableProviders } from "./usageDisplay";
+import { UsageView } from "./usageView";
 import { WorkspaceRootFollowing } from "./workspaceRoots";
 import { ConversationItem, ConversationsTree, ProjectItem } from "./trees";
 
@@ -226,10 +226,15 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
   const candidateController = new CandidateController(client);
   const missions = new MissionTree(missionController);
   const conversations = new ConversationsTree(state, projectStore, agentTools);
-  const usage = new UsageTree({
+  const usage = new UsageView(context.extensionUri, {
     usage: () => runtime.providersUsage(),
     providers: () => state.providers,
     now: () => Date.now(),
+    fix: (provider) => afterReady(() => controller.fixService(provider)),
+    discover: async () => {
+      await vscode.commands.executeCommand("runtrol.discoverServices");
+    },
+    dispatch: (action) => void run(action),
   });
 
   context.subscriptions.push(
@@ -537,34 +542,29 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
     ),
     vscode.commands.registerCommand(
       "runtrol.fixService",
-      // From the fixed CLI row or the Command Palette, so nobody has to attempt a conversation just to learn
-      // the remedy. Palette invocation carries no tree item, so it must select rather than silently do nothing.
-      (item: unknown) => run(async () => {
+      // From the Command Palette. The fixed usage surface routes its already visible service directly.
+      () => run(async () => {
         await afterReady(async () => {
-          let provider = item instanceof UsageItem ? item.provider : null;
-          if (!provider) {
-            const broken = state.providers.filter(isBroken);
-            if (broken.length === 0) {
-              void vscode.window.showInformationMessage("All installed coding services are available.");
-              return;
-            }
-            if (broken.length === 1) {
-              provider = broken[0] ?? null;
-            } else {
-              const picked = await vscode.window.showQuickPick(
-                broken.map((candidate) => ({
-                  label: candidate.displayName,
-                  description: "Unavailable",
-                  detail: candidate.installation.why ?? undefined,
-                  provider: candidate,
-                })),
-                {
-                  title: "Fix coding service",
-                  placeHolder: "Choose the service that needs attention",
-                },
-              );
-              provider = picked?.provider ?? null;
-            }
+          const broken = state.providers.filter(isBroken);
+          if (broken.length === 0) {
+            void vscode.window.showInformationMessage("All installed coding services are available.");
+            return;
+          }
+          let provider = broken.at(0) ?? null;
+          if (broken.length > 1) {
+            const picked = await vscode.window.showQuickPick(
+              broken.map((candidate) => ({
+                label: candidate.displayName,
+                description: "Unavailable",
+                detail: candidate.installation.why ?? undefined,
+                provider: candidate,
+              })),
+              {
+                title: "Fix coding service",
+                placeHolder: "Choose the service that needs attention",
+              },
+            );
+            provider = picked?.provider ?? null;
           }
           if (provider) await controller.fixService(provider);
         });
@@ -804,13 +804,12 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
     treeDataProvider: conversations,
   });
   conversations.bindView(conversationsView);
-  const usageView = vscode.window.createTreeView("runtrol.usage", {
-    treeDataProvider: usage,
+  const usageRegistration = vscode.window.registerWebviewViewProvider("runtrol.usage", usage, {
+    webviewOptions: { retainContextWhenHidden: false },
   });
-  usage.bindView(usageView);
   let revealingUsage = false;
   const ensureUsageVisible = async (): Promise<void> => {
-    if (usageView.visible || revealingUsage || !conversationsView.visible) return;
+    if (usage.visible || revealingUsage || !conversationsView.visible) return;
     revealingUsage = true;
     try {
       await vscode.commands.executeCommand("runtrol.usage.focus");
@@ -820,7 +819,7 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
     }
   };
   context.subscriptions.push(
-    usageView,
+    usageRegistration,
     conversationsView.onDidChangeVisibility((event) => {
       if (event.visible) void ensureUsageVisible();
     }),

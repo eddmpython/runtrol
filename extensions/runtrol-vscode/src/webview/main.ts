@@ -35,7 +35,7 @@ import {
   type UsageFacts,
 } from "./statusLine";
 import { limitTelemetry, usageTelemetry } from "./telemetry";
-import { draftGreeting, type DraftChips } from "../draft";
+import { draftGreeting, NO_SERVICE_LABEL, type DraftChips } from "../draft";
 import { sessionTitle } from "../sessionDisplay";
 import type { SessionLine as Session } from "../runtimeTypes";
 
@@ -254,6 +254,7 @@ window.addEventListener("message", ({ data }: MessageEvent<Incoming>) => {
     draft = data.draft;
     paintFacts();
     paintGreeting();
+    paintDraftPrompt();
     return;
   }
   if (data.type === "context") {
@@ -605,10 +606,15 @@ function renderSession(session: Session | null, displayTitle: string | null, pro
   interrupt.hidden = !canInterrupt;
   // Images ride with a message, so they can be added whenever one can be written.
   attach.disabled = !canSend && !canInterrupt;
-  prompt.setAttribute("aria-label", session ? `Message ${currentProvider}` : "Message");
+  prompt.setAttribute(
+    "aria-label",
+    session ? `Message ${currentProvider}` : draft ? `Message ${draft.service}` : "Message",
+  );
   prompt.placeholder = !session
     ? draft
-      ? "Ask anything"
+      ? draft.service === NO_SERVICE_LABEL
+        ? "Choose a coding service above"
+        : `Message ${draft.service}`
       : "Message"
     : canSend
       ? `Message ${currentProvider}`
@@ -699,6 +705,14 @@ function paintGreeting(): void {
   if (heading) heading.textContent = draftGreeting(draft);
 }
 
+function paintDraftPrompt(): void {
+  if (!draft || selected) return;
+  prompt.setAttribute("aria-label", `Message ${draft.service}`);
+  prompt.placeholder = draft.service === NO_SERVICE_LABEL
+    ? "Choose a coding service above"
+    : `Message ${draft.service}`;
+}
+
 /// The images waiting to ride with the next message, each with its own remove.
 function paintAttachments(items: readonly AttachmentLabel[]): void {
   if (items.length === 0) {
@@ -729,9 +743,6 @@ function renderEmptyState(session: Session | null): void {
   const empty = document.createElement("section");
   empty.dataset.placeholder = "true";
   empty.dataset.characters = "0";
-  const mark = document.createElement("div");
-  mark.className = "empty-mark";
-  mark.textContent = "R";
   const heading = document.createElement("h1");
   const detail = document.createElement("p");
   if (!session && draft) {
@@ -740,7 +751,7 @@ function renderEmptyState(session: Session | null): void {
     empty.className = "empty-state empty-hero empty-draft";
     heading.textContent = draftGreeting(draft);
     detail.textContent = "";
-    empty.append(mark, heading);
+    empty.append(heading);
     conversation.append(empty);
     return;
   }
@@ -748,7 +759,7 @@ function renderEmptyState(session: Session | null): void {
   empty.className = `empty-state empty-${emptyCopy.tone}`;
   heading.textContent = emptyCopy.heading;
   detail.textContent = emptyCopy.detail;
-  empty.append(mark, heading, detail);
+  empty.append(heading, detail);
   conversation.append(empty);
 }
 

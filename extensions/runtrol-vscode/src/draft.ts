@@ -67,11 +67,10 @@ export function draftChips(
   };
 }
 
-/// The greeting above an empty draft, in the words the chat apps use.
-export function draftGreeting(chips: Pick<DraftChips, "project" | "projectPath">): string {
-  return chips.projectPath === null
-    ? "What can I help with?"
-    : `What should we build in ${chips.project}?`;
+/// The greeting above an empty draft. Project context stays in the composer chip instead of being repeated as
+/// product copy in the conversation itself.
+export function draftGreeting(_chips: Pick<DraftChips, "project" | "projectPath">): string {
+  return "What can I help with?";
 }
 
 /// Read a draft back out of webview state, keeping only a record that still makes sense.

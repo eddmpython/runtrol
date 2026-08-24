@@ -57,8 +57,8 @@ test("a branch is never shown for a conversation with no project", () => {
   assert.equal(draftChips(bare, "Codex", "main").branch, null);
 });
 
-test("the greeting names the project, or asks the general question without one", () => {
-  assert.equal(draftGreeting({ project: "alpha", projectPath: ALPHA }), "What should we build in alpha?");
+test("the greeting stays conversational while the composer identifies the project", () => {
+  assert.equal(draftGreeting({ project: "alpha", projectPath: ALPHA }), "What can I help with?");
   assert.equal(draftGreeting({ project: NO_PROJECT_LABEL, projectPath: null }), "What can I help with?");
 });
 

@@ -4,22 +4,36 @@ import { providerDisplayName, providerIcon } from "./sessionDisplay";
 
 export type UsageState = "available" | "checking" | "unavailable" | "disconnected";
 
+/// One provider-reported account window that can be drawn without inventing a denominator.
+export type UsageMeter = {
+  /// Stable identity within one provider row.
+  readonly key: "primary" | "secondary";
+  /// The provider's window duration when known, otherwise its structural position.
+  readonly label: string;
+  /// A bounded value suitable for the HTML progressbar contract.
+  readonly percent: number;
+  /// The complete spoken value, including the reset when one exists.
+  readonly detail: string;
+};
+
 /// One line of the usage strip, ready to draw.
 export type UsageRow = {
-  /// Stable tree identity.
+  /// Stable view identity.
   readonly key: string;
   /// The service's name, which is the row's label.
   readonly name: string;
   /// The editor glyph that stands for the service.
   readonly icon: string;
-  /// The muted line beside the name.
+  /// The compact operational or usage summary.
   readonly detail: string;
+  /// Every numeric account window the provider reported. No percentage means no empty bar.
+  readonly meters: readonly UsageMeter[];
   /// Whether a limit is blocking right now, which decides the row's colour.
   readonly reached: boolean;
   /// The service's operational state. Usage is not allowed to hide a service that cannot currently run.
   readonly state: UsageState;
-  /// The provider record carried by an actionable unavailable row.
-  readonly provider: ProviderLine | null;
+  /// The runtime identity used to validate an actionable unavailable row against the live provider snapshot.
+  readonly providerId: string;
   /// The whole position for the hover, sentence by sentence.
   readonly tooltip: string;
 };
@@ -65,9 +79,10 @@ export function usageRows(
         name,
         icon: providerIcon(providerId, providers),
         detail: "Checking",
+        meters: [],
         reached: false,
         state: "checking",
-        provider,
+        providerId,
         tooltip: `${name}: checking the installed CLI`,
       };
     }
@@ -78,9 +93,10 @@ export function usageRows(
         name,
         icon: providerIcon(providerId, providers),
         detail: "Unavailable · Fix",
+        meters: [],
         reached: false,
         state: "unavailable",
-        provider,
+        providerId,
         tooltip: `${why}\n\nPress Enter for this service's fixes.`,
       };
     }
@@ -90,9 +106,10 @@ export function usageRows(
         name,
         icon: providerIcon(providerId, providers),
         detail: `Disconnected · ${usageDetail(gauge, nowMs)}`,
+        meters: usageMeters(gauge, nowMs),
         reached: gauge.reached,
         state: "disconnected",
-        provider: null,
+        providerId,
         tooltip: `${name}: disconnected; this is the last report\n${usageTooltip(name, gauge, nowMs)}`,
       };
     }
@@ -102,9 +119,10 @@ export function usageRows(
         name,
         icon: providerIcon(providerId, providers),
         detail: "Ready",
+        meters: [],
         reached: false,
         state: "available",
-        provider,
+        providerId,
         tooltip: `${name}: ready. Usage appears here when the CLI reports an account limit.`,
       };
     }
@@ -113,12 +131,40 @@ export function usageRows(
       name,
       icon: providerIcon(providerId, providers),
       detail: usageDetail(gauge, nowMs),
+      meters: usageMeters(gauge, nowMs),
       reached: gauge.reached,
       state: "available",
-      provider,
+      providerId,
       tooltip: usageTooltip(name, gauge, nowMs),
     };
   });
+}
+
+/// Numeric account windows become real progress bars. A reset-only report remains useful text but never becomes
+/// a deceptive empty bar, since the provider did not say how much of that window was used.
+export function usageMeters(gauge: ProviderUsageGauge, nowMs: number): UsageMeter[] {
+  return ([
+    ["primary", gauge.primary, "Current"],
+    ["secondary", gauge.secondary, "Longer"],
+  ] as const).flatMap(([key, window, fallback]) => {
+    if (!window || typeof window.usedPercent !== "number" || !Number.isFinite(window.usedPercent)) return [];
+    const percent = Math.max(0, Math.min(100, Math.round(window.usedPercent)));
+    const resets = resetsIn(window, nowMs);
+    return [{
+      key,
+      label: usageWindowLabel(window.windowMinutes, fallback),
+      percent,
+      detail: `${percent}% used${resets ? `, ${resets}` : ""}`,
+    }];
+  });
+}
+
+function usageWindowLabel(minutes: number | null | undefined, fallback: string): string {
+  if (typeof minutes !== "number" || !Number.isFinite(minutes) || minutes <= 0) return fallback;
+  if (minutes < 60) return `${minutes}m`;
+  if (minutes < 2_880 && minutes % 60 === 0) return `${minutes / 60}h`;
+  if (minutes % 1_440 === 0) return `${minutes / 1_440}d`;
+  return `${minutes}m`;
 }
 
 /// The muted line: the account's position in the provider's own numbers, nothing invented.

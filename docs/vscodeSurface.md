@@ -92,10 +92,13 @@ the original daemon and provider processes instead of making a versioned extensi
   it is not working, the icon is still. Provider, project, elapsed time, `Running`, `Ready`, and `Stopped` are not
   repeated beside the title. A conversation that cannot be reopened keeps the same disabled icon and one exceptional
   blocked mark because clicking it cannot perform the ordinary row action.
-- Every installed CLI has a row in the fixed `CLI Status & Usage` area at the bottom of the same sidebar. The area is
+- Every installed CLI has a row in the fixed `Agent Usage` area at the bottom of the same sidebar. The area is
   expanded by default. `Checking`, `Unavailable · Fix`, `Ready`, current usage, and a blocking limit are mutually
-  honest states. `Ready` means the CLI is usable while no numeric account limit has been reported. A disconnected
-  last report says so instead of looking current.
+  honest states. Every provider-reported numeric account window is a real progress bar, bounded from zero to 100,
+  with its window, exact percentage, and reset time beside it. Primary and secondary windows remain separate. A
+  missing percentage never becomes an invented empty bar. `Ready` means the CLI is usable while no numeric account
+  limit has been reported. A disconnected last report says so instead of looking current, and a reached limit uses
+  the error colour rather than looking like ordinary capacity.
 - The same fixed area ends with one `Add coding services` row when the generated official catalogue contains services
   that are not installed. Its count is visible without expanding another view. Selecting it opens a searchable list
   of missing services and their exact install lines. Selecting a service places the line in a terminal unexecuted;
@@ -165,8 +168,9 @@ the original daemon and provider processes instead of making a versioned extensi
   conversation. Prompts and interrupts travel only to the tab that sent them. Tabs survive a window reload by their
   session identity, and a tab whose session no longer exists is closed rather than guessed at.
 - A conversation can live in any of the window's own places: an editor tab (the default), the bottom panel beside
-  the terminals, or the secondary side bar beside the code. Each place is a VS Code surface; Runtrol adds no pane
-  system of its own. A conversation is in one place at a time and watched once; moving it is a row command ("Open
+  the terminals, or the secondary side bar beside the code. The two non-tab surfaces are both named `Chat`, so their
+  purpose remains clear without repeating the product name inside the conversation. Each place is a VS Code surface;
+  Runtrol adds no pane system of its own. A conversation is in one place at a time and watched once; moving it is a row command ("Open
   Conversation in Panel / in Side Bar / as Tab"), and the conversation a place showed before a reload comes back to
   it. One command ("Arrange Conversations in a Grid", `Ctrl+K Ctrl+G`) spreads the open conversation tabs over
   editor groups as square as they come (two by two, three by two, three by three; nine is the editor's column
@@ -178,15 +182,17 @@ the original daemon and provider processes instead of making a versioned extensi
 - When the Conversations view becomes visible and no conversation tab exists, Studio opens that selected in-progress
   chat without blocking ready. A restored editor tab is reused as VS Code left it.
 - Existing provider-owned chats start loading as soon as the first inventory is ready, instead of waiting for a later idle window.
-- New chat opens as a draft tab: a greeting, the composer, and chips for the project, the git branch, the coding
+- New chat opens as a draft tab: one neutral greeting, the composer, and chips for the project, the git branch, the coding
   service, the model, the reasoning effort and the access mode. Each chip is its own picker, nothing runs until the
   first message, and that message starts the conversation in the same tab with exactly those choices. The `+` on a
   project heading opens the same draft with the folder already answered; the defaults are this window's folder, the
-  service used last, and the project's last explicit choices. A draft survives a window reload with its choices.
+  service used last, and the project's last explicit choices. The greeting does not repeat the project or product
+  name because the project chip is the authoritative location context. A draft survives a window reload with its choices.
 - The composer is the one standard card rather than an invention: a context row (project, branch, service), the
   message, and a bar with attach and access mode on the left and model, reasoning effort and send on the right. Images
   travel once as `sessions/submitBlocks` content and are never stored. There is no microphone, because no installed
-  CLI takes audio.
+  CLI takes audio. The message field names the selected coding service and tells the operator to choose one when
+  none is selected, so the destination is clear before Enter can send.
 - The conversation editor carries no session panel. The service, the model the service says is answering, the
   requested reasoning effort, context use, provider-reported cost, and the tightest account-limit window appear as
   chips beneath the composer, and the permission mode has a chip of its own. Missing provider telemetry remains
@@ -475,7 +481,7 @@ specified in [automatic updates](automaticUpdates.md).
 | `vscodeExtension` | thin extension boundary, TypeScript, framing, storage, queue, renderer, and bundle limits |
 | `vscodeHostPerformance` | real 30-session Extension Host and Webview responsiveness on three operating systems |
 | `vscodeRealProviderJourney` | installed provider discovery and a complete real CLI control journey |
-| `node tooling/real-window-eye.mjs` | the eye pass: an isolated VS Code window and an isolated Runtime with the real installed CLIs, real folders and real conversations, photographed in the draft, conversation, tabs, reopened, grid, places, diff and diff-editor poses, with a real throwaway deletion; the pictures are the judgement. `RUNTROL_EYE_ENTRY=placeProbe` runs the focused place probe and `RUNTROL_EYE_ENTRY=agentToolsEye` runs the zero-model-turn Agent Tools enable and revoke proof in isolated provider homes |
+| `node tooling/real-window-eye.mjs` | the eye pass: an isolated VS Code window and an isolated Runtime with the real installed CLIs, real folders and real conversations, photographed in the draft, working row, Agent Usage bars, conversation, tabs, reopened, grid, places, diff and diff-editor poses, with a real throwaway deletion; the pictures are the judgement. `RUNTROL_EYE_ENTRY=placeProbe` runs the focused place probe and `RUNTROL_EYE_ENTRY=agentToolsEye` runs the zero-model-turn Agent Tools enable and revoke proof in isolated provider homes |
 | `RUNTROL_EYE_DRAFT_ONLY=1 node tooling/real-window-eye.mjs` | focused current-folder sidebar and composer photograph plus the same real project-switch and keyboard-back proof, with no provider turn |
 | `RUNTROL_EYE_ENTRY=missionFlightDeckEye node tooling/real-window-eye.mjs` | at 1456 by 906, two isolated Git projects and reviewed Missions start together through one flight, reach integration together through the next flight, review existing and new files in native Receipt Landing multi-diffs, select the public product action, reject five drift or local-boundary failures plus one passing Gate mutation, retain retry state, apply exact bytes, and complete both Missions. Review, confirmation, first-completed/second-waiting, and next-review screenshots are inspected directly |
 | `RUNTROL_EYE_ENTRY=missionAutoFlightEye node tooling/real-window-eye.mjs` | one reviewed two-wave dependency Mission is armed once, starts two real provider sessions, verifies two fixed Gates, reaches `integrating` with zero operator continuation actions, removes its own authority, and is photographed before arm, while armed, and after arrival |

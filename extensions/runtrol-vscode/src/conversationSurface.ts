@@ -167,7 +167,7 @@ export function emptyPlaceHtml(place: Exclude<Place, "tab">): string {
   </style>
 </head>
 <body>
-  <p>No conversation here yet. Right-click a conversation in the Runtrol sidebar and open it in the ${where}.</p>
+  <p>No chat here yet. Right-click a chat in the Conversations sidebar and open it in the ${where}.</p>
 </body>
 </html>`;
 }

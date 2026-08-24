@@ -168,14 +168,15 @@
         },
         {
           "id": "runtrol.usage",
-          "name": "CLI Status & Usage",
+          "name": "Agent Usage",
+          "type": "webview",
           "visibility": "visible"
         }
       ],
       "runtrolPanel": [
         {
           "id": "runtrol.conversationPanel",
-          "name": "Conversation",
+          "name": "Chat",
           "type": "webview",
           "icon": "resources/symbol.svg"
         }
@@ -183,7 +184,7 @@
       "runtrolSide": [
         {
           "id": "runtrol.conversationSide",
-          "name": "Conversation",
+          "name": "Chat",
           "type": "webview",
           "icon": "resources/symbol.svg"
         }
@@ -803,11 +804,6 @@
         }
       ],
       "view/item/context": [
-        {
-          "command": "runtrol.fixService",
-          "group": "inline@1",
-          "when": "view == runtrol.usage && viewItem == runtrol.usageProblem"
-        },
         {
           "command": "runtrol.newConversationInProject",
           "group": "inline@1",

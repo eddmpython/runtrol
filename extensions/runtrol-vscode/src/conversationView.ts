@@ -6,6 +6,7 @@ import type { SessionLine } from "./runtimeTypes";
 import { providerDisplayName, sessionTitle } from "./sessionDisplay";
 import { type MenuAnchor, type MenuItem, MAX_MENU_ITEMS, isViewAction, type ViewAction } from "./viewActions";
 import { webviewReadyKind } from "./webviewReady";
+import { webviewNonce } from "./webviewNonce";
 
 export type WebviewPerformance = {
   baselineFrameP95Ms: number;
@@ -607,7 +608,7 @@ export class ConversationView implements vscode.Disposable {
   private html(webview: vscode.Webview): string {
     const script = webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, "dist", "webview.js"));
     const style = webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, "dist", "webview.css"));
-    const nonce = nonceValue();
+    const nonce = webviewNonce();
     return `<!doctype html>
 <html lang="en">
 <head>
@@ -797,13 +798,4 @@ function performanceMetrics(value: unknown): WebviewPerformance | null {
 
 function delay(milliseconds: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
-}
-
-function nonceValue(): string {
-  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-  let value = "";
-  for (let index = 0; index < 32; index += 1) {
-    value += alphabet.charAt(Math.floor(Math.random() * alphabet.length));
-  }
-  return value;
 }
