@@ -89,6 +89,9 @@ export type JourneyApi = {
   /// The eye pass: delete a provider-owned conversation through the provider, without the modal question
   /// (a headless window cannot answer one). The same relay and the same refresh the row's button uses.
   deleteNativeListed(providerId: string, nativeSessionId: string): Promise<void>;
+  /// The eye pass: pin or unpin a listed conversation, the same local ordering choice the row's pin button
+  /// sets, so a pinned conversation sorts to the top of its list.
+  pinListed(providerId: string, nativeSessionId: string): Promise<void>;
   /// The eye pass: ask the services for their lists again and wait for the answers.
   refreshChats(): Promise<void>;
   /// Wait until one session reports a lifecycle, or fail at the deadline.
@@ -326,6 +329,14 @@ export function journeyApi(
       );
       if (!row?.native) throw new Error("that provider-owned conversation is not listed");
       await controller.deleteNativeWithoutAsking(row);
+    }),
+    pinListed: (providerId, nativeSessionId) => afterReady(async () => {
+      const row = state.conversations.find(
+        (candidate) => candidate.providerId === providerId
+          && candidate.native?.nativeSessionId === nativeSessionId,
+      );
+      if (!row) throw new Error("that conversation is not listed");
+      await controller.togglePin(row);
     }),
     refreshChats: () => afterReady(() => controller.refreshChats()),
     registerMissionGate: (gateId, program, arguments_) => afterReady(
