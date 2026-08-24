@@ -12,7 +12,8 @@ and refactoring that no user can observe do not belong here.
 
 ### Added
 
-- Conversations can now be pinned to the top of the sidebar with an inline pin, and unpinned the same way. The
+- Conversations can now be pinned with an inline pin, and unpinned the same way. A pinned conversation leads the
+  whole panel, above the project headings, and is drawn there instead of under its project rather than twice. The
   choice is remembered per machine and only reorders the list; it never touches the conversation itself.
 - Claude Code conversations can now be deleted from the sidebar. Claude publishes no delete command, so instead
   of erasing anything Runtrol moves the conversation out of Claude's own store into a `runtrol-deleted` folder
@@ -32,11 +33,9 @@ and refactoring that no user can observe do not belong here.
 
 ### Fixed
 
-- Every reported spend was being rejected before it could be shown, because the reader that checks incoming
-  Runtime data accepted only whole numbers and a spend has decimals. Costs now appear.
-- A pinned conversation now leads the whole panel, above the project headings. It previously sorted only within
-  its own section, which for a conversation with no project meant below everything.
 - When Agent Usage cannot refresh, it now says why instead of only that it failed.
+- Deleting a conversation from its row now says what was deleted and whose list it left, instead of the row
+  simply disappearing, which looked the same as a misclick.
 
 ### Changed
 
