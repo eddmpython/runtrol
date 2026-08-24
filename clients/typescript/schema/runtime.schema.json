@@ -1491,6 +1491,26 @@
       ],
       "type": "object"
     },
+    "ProviderUsageCost": {
+      "additionalProperties": false,
+      "description": "Money a provider reported spending, exactly as it stated it.",
+      "properties": {
+        "amount": {
+          "description": "How much.",
+          "format": "double",
+          "type": "number"
+        },
+        "currency": {
+          "description": "The currency as the provider wrote it, never converted.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "amount",
+        "currency"
+      ],
+      "type": "object"
+    },
     "ProviderUsageGauge": {
       "additionalProperties": false,
       "description": "One provider's most recent limit report.",
@@ -1500,6 +1520,17 @@
           "format": "uint64",
           "minimum": 0,
           "type": "integer"
+        },
+        "cost": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProviderUsageCost"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The latest running spend the provider stated, when it states one.\n\nAbsent for a provider that reports only limits. The newest report wins, so this is the most recent\nturn's cost as the provider gave it, never a total runtrol summed."
         },
         "primary": {
           "anyOf": [

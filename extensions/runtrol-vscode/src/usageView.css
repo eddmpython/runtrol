@@ -105,6 +105,31 @@ button.usage-row:focus-visible,
   white-space: nowrap;
 }
 
+.usage-cost {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-left: 6px;
+}
+
+.usage-cost .cost-icon {
+  display: grid;
+  place-items: center;
+  width: 14px;
+  height: 14px;
+  font-size: 13px;
+  color: var(--vscode-icon-foreground, var(--vscode-foreground));
+}
+
+.usage-cost .cost-value {
+  font-variant-numeric: tabular-nums;
+  color: var(--vscode-foreground);
+}
+
+.usage-row.limit-reached .usage-cost .cost-value {
+  color: var(--vscode-errorForeground);
+}
+
 progress {
   width: 100%;
   height: 6px;

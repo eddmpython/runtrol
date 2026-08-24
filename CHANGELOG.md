@@ -10,6 +10,13 @@ and refactoring that no user can observe do not belong here.
 
 ## [Unreleased]
 
+### Added
+
+- Agent Usage now shows each service's running cost on its own line, marked by the service icon alone and updated
+  as the CLI reports it at the end of every turn. The service name is not repeated on that line, so rows keep a
+  steady height. Services that report only account limits are unchanged, and a service that reports no cost shows
+  no cost line.
+
 ## [0.1.21] - 2026-08-24
 
 ### Changed

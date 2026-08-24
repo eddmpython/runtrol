@@ -155,7 +155,7 @@ pub struct ProviderList {
 /// under session-output authority, and this list answers under provider authority. A gauge absent from the list
 /// means that provider has not reported since the Runtime started, which is different from a limit not existing,
 /// and a surface says "no report yet" rather than inventing a green light.
-#[derive(Clone, Debug, Default, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, JsonSchema, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ProviderUsageList {
     /// Latest reports in provider order, one per provider that has reported.
@@ -163,7 +163,7 @@ pub struct ProviderUsageList {
 }
 
 /// One provider's most recent limit report.
-#[derive(Clone, Debug, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, JsonSchema, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ProviderUsageGauge {
     /// Opaque selection value.
@@ -176,8 +176,24 @@ pub struct ProviderUsageGauge {
     /// The longer window, when the provider reports one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub secondary: Option<ProviderUsageWindow>,
+    /// The latest running spend the provider stated, when it states one.
+    ///
+    /// Absent for a provider that reports only limits. The newest report wins, so this is the most recent
+    /// turn's cost as the provider gave it, never a total runtrol summed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cost: Option<ProviderUsageCost>,
     /// When the report arrived, in unix milliseconds, which is how a surface says how stale it is.
     pub at_ms: u64,
+}
+
+/// Money a provider reported spending, exactly as it stated it.
+#[derive(Clone, Debug, PartialEq, JsonSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProviderUsageCost {
+    /// How much.
+    pub amount: f64,
+    /// The currency as the provider wrote it, never converted.
+    pub currency: String,
 }
 
 /// One rate limit window, as far as the provider described it.

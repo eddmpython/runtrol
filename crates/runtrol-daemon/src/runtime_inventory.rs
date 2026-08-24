@@ -200,6 +200,13 @@ pub(crate) fn provider_usage(
                 reached: gauge.reached,
                 primary: gauge.primary.map(window),
                 secondary: gauge.secondary.map(window),
+                cost: gauge
+                    .cost
+                    .as_ref()
+                    .map(|cost| runtrol_runtime_protocol::ProviderUsageCost {
+                        amount: cost.amount,
+                        currency: cost.currency.to_string(),
+                    }),
                 at_ms: gauge.at.as_millis(),
             })
             .collect(),

@@ -38,9 +38,10 @@ use async_trait::async_trait;
 use runtrol_childproc::contain::{ChildGuard, TrackedChild, TrackedCommand};
 use runtrol_childproc::{Containment, Program, SpawnError};
 use runtrol_provider::{
-    Agent, AgentCommand, ApprovalId, ApprovalRequest, Chunk, CloseMode, ContentBlock, Declarant,
-    Disposition, EventBody, Level, MessageId, Notice, NoticeCode, Opaque, OpenIntent, Produced,
-    ProviderError, ProviderId, SessionId, StopReason, TurnEvent, TurnId, WallMs, WithdrawnReason,
+    Agent, AgentCommand, ApprovalId, ApprovalRequest, Chunk, CloseMode, ContentBlock, Cost,
+    Declarant, Disposition, EventBody, Level, MessageId, Notice, NoticeCode, Opaque, OpenIntent,
+    Produced, ProviderError, ProviderId, SessionId, StopReason, TurnEvent, TurnId, Usage, WallMs,
+    WithdrawnReason,
 };
 use tokio::io::AsyncWriteExt as _;
 use tokio::process::ChildStdin;
@@ -344,10 +345,32 @@ impl ClaudeAgent {
     }
 
     /// The provider's own word that the turn ended, which is the only thing that means the outcome is known.
+    ///
+    /// The terminal frame is also where this CLI states the running cost and its token breakdown. That is
+    /// emitted as the one usage frame every provider shares (codex and acp already send it), so a surface reads
+    /// spend the same way for all of them. Queued ahead of the end, and off the same source line, so the number
+    /// is recorded while this is still the current turn and the end stays the last word.
     fn ended(&mut self, ended: &map::Ended) -> Produced {
         self.streaming_message = None;
         let turn = self.running.take().unwrap_or_else(|| self.mint_turn());
         self.src_end = self.src_end.saturating_add(1);
+        if let Some(amount) = ended.cost {
+            self.announced.push_back(Produced {
+                src_end: self.src_end,
+                body: EventBody::UsageUpdate(Box::new(Usage {
+                    // This CLI states money, not a context-window figure, on this frame. A used/size gauge would
+                    // have to be invented, so it is left unsaid rather than guessed.
+                    used: None,
+                    size: None,
+                    // The field is `total_cost_usd`; the provider names the unit, runtrol does not convert it.
+                    cost: Some(Cost {
+                        amount,
+                        currency: "USD".into(),
+                    }),
+                    detail: ended.usage_detail.clone(),
+                })),
+            });
+        }
         Produced {
             src_end: self.src_end,
             body: EventBody::Turn(TurnEvent::Ended {

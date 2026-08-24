@@ -165,10 +165,18 @@ pub struct Ended {
     pub stop: StopReason,
     /// The provider reported a failure.
     pub failed: bool,
-    /// The whole terminal frame, unread.
+    /// The running cost the terminal frame reported, in USD (the frame states the unit in the field name).
     ///
-    /// Carries the cost, the usage, the timings and the permission denials. runtrol reads none of them here; a
-    /// subscriber that wants them has them.
+    /// The CLI's own single stated figure, read as it is. `None` when the frame carried none, and never a
+    /// number runtrol arrived at by arithmetic.
+    pub cost: Option<f64>,
+    /// The CLI's own token breakdown from the terminal frame, verbatim, for a subscriber that wants the tokens.
+    ///
+    /// Its own bytes, not a shape runtrol invented. `null` when the frame carried none.
+    pub usage_detail: Opaque,
+    /// The whole terminal frame, unread beyond the cost and the usage above.
+    ///
+    /// Carries the timings and the permission denials too; a subscriber that wants them has them.
     pub payload: Opaque,
 }
 
@@ -208,6 +216,13 @@ struct Envelope<'line> {
     /// On the terminal frame: why it stopped.
     #[serde(default)]
     stop_reason: Option<&'line str>,
+    /// On the terminal frame: the running cost in USD, as the CLI states it.
+    #[serde(default)]
+    total_cost_usd: Option<f64>,
+    /// On the terminal frame: the CLI's own token breakdown. Presence and bytes only; the numbers inside stay
+    /// the vendor's words and travel verbatim rather than being lifted into typed fields.
+    #[serde(default, borrow)]
+    usage: Option<&'line RawValue>,
     /// On the startup frame: what it can do.
     #[serde(default)]
     capabilities: Option<Vec<&'line str>>,
@@ -549,6 +564,13 @@ fn ended(line: &Bytes, envelope: &Envelope<'_>) -> Ended {
     Ended {
         stop,
         failed,
+        cost: envelope.total_cost_usd,
+        // The usage object's own bytes, sliced out of the line without a copy. A slice that somehow does not
+        // point inside the line answers as nothing rather than guessing, the same rule `whole_line` follows.
+        usage_detail: envelope
+            .usage
+            .and_then(|usage| Opaque::borrowed_from(line, usage.get()))
+            .unwrap_or_else(Opaque::none),
         payload: whole_line(line),
     }
 }
@@ -927,6 +949,38 @@ mod tests {
                 assert_eq!(ended.stop, StopReason::EndTurn);
                 assert!(!ended.failed);
                 assert!(ended.stop.is_success());
+            }
+            other => panic!("expected an ending, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn the_ending_frame_carries_the_cost_and_the_usage_verbatim() {
+        // This CLI states its running cost and its token breakdown on the ending frame. The cost is read as the
+        // one number it is (compared with a tolerance, never bit-for-bit), and the usage object rides along as
+        // the vendor's own bytes so a surface can show spend without runtrol summing anything.
+        match read(&recorded_terminal()).expect("readable") {
+            Frame::Ended(ended) => {
+                let cost = ended.cost.expect("the frame stated a cost");
+                assert!((cost - 0.091_776_5).abs() < 1e-9, "cost was {cost}");
+                assert!(
+                    ended.usage_detail.as_str().contains("input_tokens"),
+                    "the vendor usage object travels verbatim: {}",
+                    ended.usage_detail.as_str()
+                );
+            }
+            other => panic!("expected an ending, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn an_ending_without_a_cost_stays_none_rather_than_becoming_a_zero() {
+        // A frame that stated no cost must not read as a cost of zero: zero reads as "free", and inventing one is
+        // exactly the quiet wrongness the usage line exists to avoid.
+        match read(&terminal_saying("success", None, false)).expect("readable") {
+            Frame::Ended(ended) => {
+                assert!(ended.cost.is_none(), "no cost stated means no cost shown");
+                assert_eq!(ended.usage_detail.as_str(), "null");
             }
             other => panic!("expected an ending, got {other:?}"),
         }

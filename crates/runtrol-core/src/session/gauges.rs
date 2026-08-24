@@ -22,10 +22,14 @@
 
 use std::collections::BTreeMap;
 
-use runtrol_provider::{ProviderId, RateLimit, WallMs, Window};
+use runtrol_provider::{Cost, ProviderId, RateLimit, WallMs, Window};
 
-/// One provider's most recent limit report, and when it arrived.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// One provider's most recent account report, and when it arrived.
+///
+/// Two kinds of report land on the same entry: a rate-limit window and a running cost. They arrive on
+/// different frames, so each is remembered without clearing the other, and one provider row can carry both,
+/// only a limit, or only a cost. Not `Copy`: a cost carries the provider's own currency string.
+#[derive(Debug, Clone, PartialEq)]
 pub struct ProviderGauge {
     /// Whose account.
     pub provider: ProviderId,
@@ -35,8 +39,27 @@ pub struct ProviderGauge {
     pub primary: Option<Window>,
     /// The longer window, when the provider reports one.
     pub secondary: Option<Window>,
-    /// When the report arrived, which is how a surface says how stale it is.
+    /// The latest running cost the provider stated, in its own currency, when it states one.
+    ///
+    /// The newest report wins, the same rule the windows follow: this answers "the most recent turn's spend",
+    /// never a sum runtrol computed across sessions.
+    pub cost: Option<Cost>,
+    /// When the newest of these reports arrived, which is how a surface says how stale it is.
     pub at: WallMs,
+}
+
+impl ProviderGauge {
+    /// A provider seen for the first time, before either kind of report has filled anything in.
+    fn blank(provider: ProviderId, at: WallMs) -> Self {
+        Self {
+            provider,
+            reached: false,
+            primary: None,
+            secondary: None,
+            cost: None,
+            at,
+        }
+    }
 }
 
 /// The latest limit report seen from each provider.
@@ -54,24 +77,34 @@ impl AccountGauges {
         }
     }
 
-    /// Remember one report. The newest always wins, because the gauge answers "now", never "ever".
+    /// Remember one limit report. The newest always wins, because the gauge answers "now", never "ever". A cost
+    /// already remembered for this provider is left in place: the two reports arrive apart and neither erases the
+    /// other.
     pub fn record(&mut self, provider: ProviderId, limit: &RateLimit, at: WallMs) {
-        self.latest.insert(
-            provider,
-            ProviderGauge {
-                provider,
-                reached: limit.reached,
-                primary: limit.primary,
-                secondary: limit.secondary,
-                at,
-            },
-        );
+        let gauge = self
+            .latest
+            .entry(provider)
+            .or_insert_with(|| ProviderGauge::blank(provider, at));
+        gauge.reached = limit.reached;
+        gauge.primary = limit.primary;
+        gauge.secondary = limit.secondary;
+        gauge.at = at;
+    }
+
+    /// Remember one running-cost report, the same way, leaving any limit windows in place.
+    pub fn record_usage(&mut self, provider: ProviderId, cost: Cost, at: WallMs) {
+        let gauge = self
+            .latest
+            .entry(provider)
+            .or_insert_with(|| ProviderGauge::blank(provider, at));
+        gauge.cost = Some(cost);
+        gauge.at = at;
     }
 
     /// Every provider's latest report, in provider order.
     #[must_use]
     pub fn snapshot(&self) -> Vec<ProviderGauge> {
-        self.latest.values().copied().collect()
+        self.latest.values().cloned().collect()
     }
 }
 
@@ -148,6 +181,46 @@ mod tests {
             snapshot
                 .iter()
                 .any(|gauge| gauge.provider == provider("codex") && gauge.reached)
+        );
+    }
+
+    #[test]
+    fn a_cost_report_and_a_limit_report_share_one_provider_row() {
+        // The two arrive on different frames. Recording one must not erase the other, or a provider that reports
+        // both would flap between showing its limit and showing its spend.
+        let mut gauges = AccountGauges::default();
+        gauges.record(
+            provider("claude"),
+            &report(true, Some(42)),
+            WallMs::from_millis(1),
+        );
+        gauges.record_usage(
+            provider("claude"),
+            Cost {
+                amount: 0.5,
+                currency: "USD".into(),
+            },
+            WallMs::from_millis(2),
+        );
+        let snapshot = gauges.snapshot();
+        assert_eq!(snapshot.len(), 1);
+        let gauge = snapshot.first().expect("one provider");
+        assert!(gauge.reached, "the limit survived the cost report");
+        assert_eq!(
+            gauge.primary.and_then(|window| window.used_percent),
+            Some(42)
+        );
+        let cost = gauge.cost.as_ref().expect("the cost was recorded");
+        assert!(
+            (cost.amount - 0.5).abs() < 1e-9,
+            "amount was {}",
+            cost.amount
+        );
+        assert_eq!(&*cost.currency, "USD");
+        assert_eq!(
+            gauge.at,
+            WallMs::from_millis(2),
+            "the newer report set the staleness clock"
         );
     }
 

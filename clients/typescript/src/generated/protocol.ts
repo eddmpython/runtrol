@@ -208,8 +208,11 @@ export type ProviderId = string;
 /** A bounded provider inventory snapshot. */
 export interface ProviderList { readonly providers: ReadonlyArray<ProviderDescriptor>; }
 
+/** Money a provider reported spending, exactly as it stated it. */
+export interface ProviderUsageCost { readonly amount: number; readonly currency: string; }
+
 /** One provider's most recent limit report. */
-export interface ProviderUsageGauge { readonly atMs: number; readonly primary?: ProviderUsageWindow | null; readonly providerId: ProviderId; readonly reached: boolean; readonly secondary?: ProviderUsageWindow | null; }
+export interface ProviderUsageGauge { readonly atMs: number; readonly cost?: ProviderUsageCost | null; readonly primary?: ProviderUsageWindow | null; readonly providerId: ProviderId; readonly reached: boolean; readonly secondary?: ProviderUsageWindow | null; }
 
 /** Where each account stands against its limits, by each provider's own latest report.
 

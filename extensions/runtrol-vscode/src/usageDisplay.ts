@@ -28,6 +28,9 @@ export type UsageRow = {
   readonly detail: string;
   /// Every numeric account window the provider reported. No percentage means no empty bar.
   readonly meters: readonly UsageMeter[];
+  /// The provider's own running spend, formatted for one glance, or null when it reported none. Drawn on its
+  /// own line marked by the service glyph, never by repeating the service name.
+  readonly cost: string | null;
   /// Whether a limit is blocking right now, which decides the row's colour.
   readonly reached: boolean;
   /// The service's operational state. Usage is not allowed to hide a service that cannot currently run.
@@ -83,6 +86,7 @@ export function usageRows(
         reached: false,
         state: "checking",
         providerId,
+        cost: null,
         tooltip: `${name}: checking the installed CLI`,
       };
     }
@@ -97,6 +101,7 @@ export function usageRows(
         reached: false,
         state: "unavailable",
         providerId,
+        cost: null,
         tooltip: `${why}\n\nPress Enter for this service's fixes.`,
       };
     }
@@ -110,6 +115,7 @@ export function usageRows(
         reached: gauge.reached,
         state: "disconnected",
         providerId,
+        cost: usageCost(gauge),
         tooltip: `${name}: disconnected; this is the last report\n${usageTooltip(name, gauge, nowMs)}`,
       };
     }
@@ -123,6 +129,7 @@ export function usageRows(
         reached: false,
         state: "available",
         providerId,
+        cost: null,
         tooltip: `${name}: ready. Usage appears here when the CLI reports an account limit.`,
       };
     }
@@ -135,6 +142,7 @@ export function usageRows(
       reached: gauge.reached,
       state: "available",
       providerId,
+      cost: usageCost(gauge),
       tooltip: usageTooltip(name, gauge, nowMs),
     };
   });
@@ -157,6 +165,20 @@ export function usageMeters(gauge: ProviderUsageGauge, nowMs: number): UsageMete
       detail: `${percent}% used${resets ? `, ${resets}` : ""}`,
     }];
   });
+}
+
+/// The account's running spend as the provider stated it, formatted for one glance.
+///
+/// The provider's own number and currency, never converted and never summed across sessions: this is the newest
+/// report's figure. A currency the surface has no symbol for is shown with its code so nothing is misread.
+export function usageCost(gauge: ProviderUsageGauge): string | null {
+  const cost = gauge.cost;
+  if (!cost || typeof cost.amount !== "number" || !Number.isFinite(cost.amount)) return null;
+  if (cost.currency === "USD") {
+    if (cost.amount > 0 && cost.amount < 0.01) return "<$0.01";
+    return `$${cost.amount.toFixed(2)}`;
+  }
+  return `${cost.amount.toFixed(2)} ${cost.currency}`;
 }
 
 function usageWindowLabel(minutes: number | null | undefined, fallback: string): string {

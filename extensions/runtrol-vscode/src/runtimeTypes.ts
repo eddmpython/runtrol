@@ -3,6 +3,7 @@ export type {
   EventCursor as WatchCursor,
   NativeSessionDescriptor,
   ProviderDescriptor as ProviderLine,
+  ProviderUsageCost,
   ProviderUsageGauge,
   ProviderUsageList,
   ProviderUsageWindow,

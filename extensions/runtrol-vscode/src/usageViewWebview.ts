@@ -77,6 +77,23 @@ function usageRow(row: UsageRow): HTMLElement {
     block.append(meta, progress);
     item.append(block);
   }
+
+  if (row.cost) {
+    // The service glyph is the only marker on this line, so cost sits at a fixed row height whatever the
+    // service. Repeating the service name here is what made rows jump; the icon already says whose it is.
+    const cost = document.createElement("span");
+    cost.className = "usage-cost";
+    const glyph = document.createElement("span");
+    glyph.className = "cost-icon codicon";
+    glyph.classList.add(`codicon-${iconName(row.icon)}`);
+    glyph.setAttribute("aria-hidden", "true");
+    const value = document.createElement("span");
+    value.className = "cost-value";
+    value.textContent = row.cost;
+    cost.append(glyph, value);
+    cost.setAttribute("aria-label", `${row.name}, spend ${row.cost}`);
+    item.append(cost);
+  }
   return item;
 }
 
@@ -87,10 +104,11 @@ function iconName(value: string): string {
 }
 
 function replaceMissingProviderIcons(): void {
-  for (const icon of usage.querySelectorAll<HTMLElement>(".provider-icon")) {
+  for (const icon of usage.querySelectorAll<HTMLElement>(".provider-icon, .cost-icon")) {
     const content = getComputedStyle(icon, "::before").content;
     if (!content || content === "none" || content === "normal" || content === '""') {
-      icon.className = "provider-icon codicon codicon-sparkle";
+      const marker = icon.classList.contains("cost-icon") ? "cost-icon" : "provider-icon";
+      icon.className = `${marker} codicon codicon-sparkle`;
     }
   }
 }

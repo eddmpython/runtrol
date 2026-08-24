@@ -1025,6 +1025,13 @@ impl SessionManager {
                     EventBody::RateLimitUpdate(limit) => Some((**limit).clone()),
                     _ => None,
                 };
+                // The running cost rides the same shared usage frame, and it is account accounting rather than
+                // conversation content, so it is remembered here beside the limit. Only when the provider stated
+                // a number: a usage frame without a cost leaves the gauge untouched rather than inventing a row.
+                let usage_cost = match &produced.body {
+                    EventBody::UsageUpdate(usage) => usage.cost.clone(),
+                    _ => None,
+                };
                 let provider = live.identity.provider();
                 let lifecycle_before = live.state.lifecycle().clone();
                 let stuck_before = live.state.looks_stuck();
@@ -1062,6 +1069,10 @@ impl SessionManager {
                 };
                 if let (Some(limit), Some(event)) = (limit_report, applied.published.as_ref()) {
                     self.gauges.record(provider, &limit, event.event.at);
+                    applied.gauges_changed = true;
+                }
+                if let (Some(cost), Some(event)) = (usage_cost, applied.published.as_ref()) {
+                    self.gauges.record_usage(provider, cost, event.event.at);
                     applied.gauges_changed = true;
                 }
                 applied
