@@ -128,6 +128,8 @@
     "onCommand:runtrol.archiveCapability",
     "onCommand:runtrol.archiveConversation",
     "onCommand:runtrol.deleteConversation",
+    "onCommand:runtrol.pinConversation",
+    "onCommand:runtrol.unpinConversation",
     "onCommand:runtrol.enableAgentTools",
     "onCommand:runtrol.disableAgentTools"
   ],
@@ -319,6 +321,16 @@
         "command": "runtrol.deleteConversation",
         "title": "Delete Conversation",
         "icon": "$(close)"
+      },
+      {
+        "command": "runtrol.pinConversation",
+        "title": "Pin Conversation",
+        "icon": "$(pin)"
+      },
+      {
+        "command": "runtrol.unpinConversation",
+        "title": "Unpin Conversation",
+        "icon": "$(pinned)"
       },
       {
         "command": "runtrol.fanOutInstruction",
@@ -665,6 +677,14 @@
           "when": "false"
         },
         {
+          "command": "runtrol.pinConversation",
+          "when": "false"
+        },
+        {
+          "command": "runtrol.unpinConversation",
+          "when": "false"
+        },
+        {
           "command": "runtrol.signInFromRow",
           "when": "false"
         },
@@ -873,6 +893,16 @@
           "command": "runtrol.deleteConversation",
           "when": "view == runtrol.sessions && viewItem =~ /\\.delete/",
           "group": "inline@3"
+        },
+        {
+          "command": "runtrol.pinConversation",
+          "when": "view == runtrol.sessions && viewItem =~ /\\.pinnable/",
+          "group": "inline@1"
+        },
+        {
+          "command": "runtrol.unpinConversation",
+          "when": "view == runtrol.sessions && viewItem =~ /\\.pinned/",
+          "group": "inline@1"
         },
         {
           "command": "runtrol.closeSession",

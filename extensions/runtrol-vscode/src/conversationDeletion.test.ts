@@ -28,6 +28,7 @@ function row(overrides: Partial<Conversation> = {}): Conversation {
     signInNeeded: false,
     live: false,
     open: false,
+    pinned: false,
     session: null,
     native,
     canOpen: true,

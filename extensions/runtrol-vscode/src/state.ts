@@ -28,6 +28,9 @@ export class RuntimeState implements vscode.Disposable {
   private isolatedWorkspaceHomes: ReadonlyMap<string, string> = new Map();
   private selectedId: string | null = null;
   private conversationRows: readonly Conversation[] | null = null;
+  /// Conversation keys the operator pinned, in whatever order the machine remembered them. A placement choice
+  /// the sidebar reads; it never reaches the daemon or the provider.
+  private pinnedKeys: ReadonlySet<string> = new Set();
 
   readonly onDidChange = this.changedEmitter.event;
 
@@ -85,8 +88,16 @@ export class RuntimeState implements vscode.Disposable {
       this.projectlessRoot,
       this.activities,
       this.isolatedWorkspaceHomes,
+      this.pinnedKeys,
     );
     return this.conversationRows;
+  }
+
+  /// Remember which conversations are pinned, then repaint so the order changes at once.
+  setPinnedKeys(keys: ReadonlySet<string>): void {
+    this.pinnedKeys = keys;
+    this.conversationRows = null;
+    this.changedEmitter.fire("rows");
   }
 
   /// What a conversation is doing right now, as the activity watch last reduced it.

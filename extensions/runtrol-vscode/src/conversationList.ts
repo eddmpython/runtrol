@@ -57,6 +57,9 @@ export type Conversation = {
   /// Whether a provider process is currently supervising it.
   readonly live: boolean;
   readonly open: boolean;
+  /// Whether the operator pinned this conversation to keep it at the top of its list. A local ordering choice,
+  /// remembered per machine; it never changes the conversation itself.
+  readonly pinned: boolean;
   readonly session: SessionLine | null;
   readonly native: NativeChatLine | null;
   readonly canOpen: boolean;
@@ -76,6 +79,7 @@ export function conversations(
   projectlessRoot: string | null = null,
   activities: ReadonlyMap<string, SessionActivity> = new Map(),
   isolatedWorkspaceHomes: ReadonlyMap<string, string> = new Map(),
+  pinnedKeys: ReadonlySet<string> = new Set(),
 ): Conversation[] {
   const nativeByKey = new Map<string, NativeChatLine>();
   for (const chat of nativeChats) {
@@ -98,15 +102,18 @@ export function conversations(
       projectlessRoot,
       activities.get(session.sessionId) ?? NO_ACTIVITY,
       isolatedWorkspaceHomes,
+      pinnedKeys.has(key),
     ));
   }
   for (const [key, chat] of nativeByKey) {
     // A chat the daemon already supervises is the same conversation, not a second one. The service half only
     // contributes its title and timestamp, which the supervised row above has already taken.
     if (claimed.has(key) || chat.alreadyManagedAs) continue;
-    rows.push(providerOwned(chat, key, providers, projectlessRoot));
+    rows.push(providerOwned(chat, key, providers, projectlessRoot, pinnedKeys.has(key)));
   }
-  return rows.sort(byMostRecentlyActive);
+  // Pinned rows first, each group then in its own recency order. Pinning is a placement choice, so it sorts
+  // ahead of recency rather than pretending the conversation was just touched.
+  return rows.sort((left, right) => Number(right.pinned) - Number(left.pinned) || byMostRecentlyActive(left, right));
 }
 
 /// Every conversation that belongs to one created project, under one heading.
@@ -391,6 +398,7 @@ function supervised(
   projectlessRoot: string | null,
   activity: SessionActivity,
   isolatedWorkspaceHomes: ReadonlyMap<string, string>,
+  pinned: boolean,
 ): Conversation {
   const homeWorkspace = isolatedWorkspaceHomes.get(workspaceIdentity(session.workspace)) ?? session.workspace;
   const projectless = isProjectless(homeWorkspace, projectlessRoot);
@@ -411,6 +419,7 @@ function supervised(
     signInNeeded: activity.signInNeeded,
     live: session.hot,
     open: session.sessionId === selectedSessionId,
+    pinned,
     session,
     native,
     canOpen: true,
@@ -423,6 +432,7 @@ function providerOwned(
   key: string,
   providers: readonly ProviderLine[],
   projectlessRoot: string | null,
+  pinned: boolean,
 ): Conversation {
   const resumable = chat.resume === "available" && Boolean(chat.adoptionToken);
   const projectless = isProjectless(chat.cwd, projectlessRoot);
@@ -442,6 +452,7 @@ function providerOwned(
     signInNeeded: false,
     live: false,
     open: false,
+    pinned,
     session: null,
     native: chat,
     canOpen: resumable,

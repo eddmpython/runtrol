@@ -12,6 +12,8 @@ and refactoring that no user can observe do not belong here.
 
 ### Added
 
+- Conversations can now be pinned to the top of the sidebar with an inline pin, and unpinned the same way. The
+  choice is remembered per machine and only reorders the list; it never touches the conversation itself.
 - Claude Code conversations can now be deleted from the sidebar. Claude publishes no delete command, so instead
   of erasing anything Runtrol moves the conversation out of Claude's own store into a `runtrol-deleted` folder
   beside it: it leaves the sidebar and Claude's resume list at once, yet can be carried back by hand. The action

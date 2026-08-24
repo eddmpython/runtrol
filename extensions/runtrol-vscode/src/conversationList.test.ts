@@ -140,6 +140,29 @@ test("a supervised session and the chat it came from are one row, not two", () =
   assert.equal(rows[0]?.updatedAtMs, Date.parse("2026-08-17T11:30:00Z"), "and its timestamp");
 });
 
+test("a pinned conversation leads the list even when another was touched more recently", () => {
+  const rows = conversations(
+    [
+      session({ sessionId: "s1", providerId: "codex", nativeSessionId: "n1", workspace: BETA }),
+      session({ sessionId: "s2", providerId: "codex", nativeSessionId: "n2", workspace: BETA }),
+    ],
+    PROVIDERS,
+    [
+      nativeChat({ nativeSessionId: "n1", title: "Older", updatedAt: "2026-08-17T10:00:00Z" }),
+      nativeChat({ nativeSessionId: "n2", title: "Newer", updatedAt: "2026-08-17T12:00:00Z" }),
+    ],
+    null,
+    null,
+    new Map(),
+    new Map(),
+    new Set(["chat:codex:n1"]),
+  );
+
+  assert.equal(rows[0]?.title, "Older", "the pinned conversation is first though it is the older one");
+  assert.equal(rows[0]?.pinned, true, "and it is marked pinned");
+  assert.equal(rows.find((row) => row.title === "Newer")?.pinned, false, "the other stays unpinned");
+});
+
 test("opening a saved chat keeps the same row identity", () => {
   const before = conversations([], PROVIDERS, [nativeChat({ nativeSessionId: "n1" })], null);
   const after = conversations(

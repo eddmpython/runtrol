@@ -138,6 +138,25 @@ export class Controller implements vscode.Disposable {
         if (change === "rows") void this.rememberKnownProjects();
       }),
     );
+    this.state.setPinnedKeys(this.pinnedFromStorage());
+  }
+
+  /// The pinned set as this machine last remembered it.
+  private pinnedFromStorage(): Set<string> {
+    return new Set(this.context.globalState.get<string[]>(PINNED_CONVERSATIONS_KEY) ?? []);
+  }
+
+  /// Pin or unpin one conversation, remember it for next time, and repaint so it moves at once.
+  async togglePin(value: ConversationItem | Conversation): Promise<void> {
+    const row = value instanceof ConversationItem ? value.conversation : value;
+    const pinned = this.pinnedFromStorage();
+    if (pinned.has(row.key)) {
+      pinned.delete(row.key);
+    } else {
+      pinned.add(row.key);
+    }
+    await this.context.globalState.update(PINNED_CONVERSATIONS_KEY, [...pinned]);
+    this.state.setPinnedKeys(pinned);
   }
 
   async initialize(): Promise<void> {
@@ -2665,6 +2684,9 @@ const PREVIOUS_PROJECT_KEY = "runtrol.previousProject";
 /// Where global state remembers the project folders any window has listed, for the keyboard switch.
 const KNOWN_PROJECTS_KEY = "runtrol.knownProjects";
 const MAX_KNOWN_PROJECTS = 200;
+/// Where global state remembers which conversations the operator pinned to the top. Keyed by conversation key,
+/// so a pin survives a saved chat becoming a live session and back.
+const PINNED_CONVERSATIONS_KEY = "runtrol.pinnedConversations";
 
 /// What this window is open on, as a string `vscode.openFolder` takes back: the workspace file when there is
 /// one, else the first folder; null for an empty window.

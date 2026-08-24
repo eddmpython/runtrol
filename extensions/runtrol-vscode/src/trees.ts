@@ -143,13 +143,15 @@ function contextValue(
     ? (capabilities?.nativeSessionArchive?.availability === "available" ? ".archive" : "")
       + (capabilities?.nativeSessionDelete?.availability === "available" ? ".delete" : "")
     : "";
-  if (!conversation.canOpen) return `runtrol.conversation.blocked${mutationSuffix}`;
-  if (!conversation.session) return `runtrol.conversation.saved${mutationSuffix}`;
+  // Every conversation can be pinned; the token says which of pin and unpin the row's inline button offers.
+  const pinState = conversation.pinned ? ".pinned" : ".pinnable";
+  if (!conversation.canOpen) return `runtrol.conversation.blocked${mutationSuffix}${pinState}`;
+  if (!conversation.session) return `runtrol.conversation.saved${mutationSuffix}${pinState}`;
   // Suffixes the row's inline actions key on: a pending question gets allow and decline, a sign-in need gets
   // the service's own sign-in line. Menus match these by prefix, so the base value stays stable.
   const suffix = (conversation.activity === "needsYou" ? ".needsYou" : "")
     + (conversation.signInNeeded ? ".signIn" : "");
-  return `runtrol.conversation.live${suffix}${mutationSuffix}`;
+  return `runtrol.conversation.live${suffix}${mutationSuffix}${pinState}`;
 }
 
 function tooltip(conversation: Conversation): vscode.MarkdownString {
