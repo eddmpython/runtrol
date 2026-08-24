@@ -10,6 +10,7 @@ import {
   type UnknownRecord,
 } from "./presentation";
 import { conversationEmptyCopy, sendShortcutHint } from "./conversationCopy";
+import { highlight } from "./highlight";
 import { hasMarkdownTrigger, parseMarkdown, type Block, type Inline } from "./markdown";
 import { insertMention, mentionTriggered } from "./mention";
 import { planEntriesOf, planGlyph } from "./plan";
@@ -1249,6 +1250,18 @@ function repaintMarkdown(item: HTMLElement, raw: string): void {
   item.replaceChildren(...nodes);
 }
 
+/// The code of one fence as coloured runs. Every leaf is still a text node, so the block reads exactly as it
+/// was written and only its colour is added; the copy button reads the same characters back out.
+function codeNodes(language: string, text: string): Node[] {
+  return highlight(language, text).map((token) => {
+    if (token.kind === "plain") return document.createTextNode(token.text);
+    const run = document.createElement("span");
+    run.className = `tok-${token.kind}`;
+    run.textContent = token.text;
+    return run;
+  });
+}
+
 function blockNode(block: Block): Node {
   if (block.kind === "codeBlock") {
     const wrap = document.createElement("div");
@@ -1260,7 +1273,7 @@ function blockNode(block: Block): Node {
     copy.title = "Copy code";
     const pre = document.createElement("pre");
     const code = document.createElement("code");
-    code.textContent = block.text;
+    code.append(...codeNodes(block.language, block.text));
     pre.append(code);
     copy.addEventListener("click", () => {
       // Failure is silent by design: the button is a convenience over selectable text that is

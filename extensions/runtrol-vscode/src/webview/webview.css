@@ -261,6 +261,34 @@ body {
   font-size: 0.88em;
 }
 
+/* The reader's landmarks in a block of code. Chart colours are used because they are the palette every theme
+   is required to define, so these follow a light theme and a dark one without this file naming a colour. A
+   language the highlighter has no words for still gets its strings and notes, and nothing else is claimed. */
+.md-code .tok-comment {
+  color: var(--vscode-descriptionForeground);
+  font-style: italic;
+}
+
+.md-code .tok-string {
+  color: var(--vscode-charts-orange);
+}
+
+.md-code .tok-number {
+  color: var(--vscode-charts-green);
+}
+
+.md-code .tok-keyword {
+  color: var(--vscode-charts-blue);
+}
+
+.md-code .tok-type {
+  color: var(--vscode-charts-purple);
+}
+
+.md-code .tok-function {
+  color: var(--vscode-charts-yellow);
+}
+
 /* Visible on hover only: the button is a convenience, not part of the code. */
 .code-copy {
   position: absolute;
