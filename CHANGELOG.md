@@ -10,6 +10,26 @@ and refactoring that no user can observe do not belong here.
 
 ## [Unreleased]
 
+### Changed
+
+- Menus no longer say "Runtrol:" in front of every action. Inside Runtrol's own views the context is already
+  known, so a row now reads "Rename Conversation" rather than "Runtrol: Rename Conversation". The Command
+  Palette keeps the prefix, where it is what finds the commands among every extension's.
+- The composer's context row no longer labels its chips. The project chip shows the project's name, the branch
+  chip the branch, and the service chip the service's own mark beside its name, instead of "Project:",
+  "Branch:" and "Agent:" in front of each.
+- Model and reasoning effort are now one control, the way the ChatGPT and Claude composers do it: one chip
+  reading "model · effort", and one menu with the models first and the current model's efforts under their own
+  caption. Choosing a model no longer opens a second popover asking for the effort; the current effort is kept
+  when the new model reports it. The menu marks what is answering right now and hangs from the chip itself
+  instead of floating over the conversation.
+- Choosing a coding service now shows each service's own mark beside its name, with a check on the one this
+  conversation uses.
+- The Runtrol update no longer waits for a fully idle machine. A replaced Core now takes over as soon as no
+  agent is mid-turn: idle sessions close with the old Core and reopen from their own saved state, exactly as
+  the manual restart always did. On a machine where agents run around the clock, the previous rule meant an
+  update that never arrived, which is why new sidebar features could stay invisible for days.
+
 ## [0.1.22] - 2026-08-25
 
 ### Added
