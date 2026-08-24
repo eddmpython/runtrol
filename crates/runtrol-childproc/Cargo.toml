@@ -51,7 +51,7 @@ libc = { workspace = true }
 # table sets `unsafe_code = "forbid"`, which cannot be relaxed from inside the crate that inherits it
 # (measured: cargo hard-errors on mixing inheritance with an override). So the table is written out here with
 # `deny` instead of `forbid`, and every `unsafe` block carries a safety argument. Which crates do this is
-# pinned by `tests/audit/workspaceLints.rs`.
+# pinned by `tests/audit/workspaceLints.py`.
 [lints.rust]
 unsafe_code = "deny"
 let_underscore_drop = "deny"

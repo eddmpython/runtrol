@@ -273,7 +273,7 @@ Two contracts keep the conversation window from growing a branch per place or pe
 - **A service is one driver.** The Runtime's provider trait and manifest are the whole of what a coding service
   contributes; the window reads the provider-neutral event vocabulary (messages, tool calls, approvals, turns,
   notices, usage) and the provider's own words inside it. A new service reaches every place, the sidebar, the
-  chips and the diff editor without a line in the extension (the isolation gate `tests/audit/providerIsolation.rs`
+  chips and the diff editor without a line in the extension (the isolation gate `tests/audit/providerIsolation.py`
   guards the Runtime half; the extension has no provider branch to guard).
 
 ## Module boundaries

@@ -146,7 +146,7 @@ runtrol-cli = { path = "crates/runtrol-cli" }
 # **주의 (실측)**: `[lints] workspace = true` 와 per-crate 재정의는 공존할 수 없다
 # (cargo 가 "cannot override `workspace.lints` in `lints`" 로 hard error).
 # 그래서 재정의가 필요한 crate 는 자기 표를 통째로 쓴다. 어느 crate 가 그러는지는
-# `tests/audit/workspaceLints.rs` 가 고정한다.
+# `tests/audit/workspaceLints.py` 가 고정한다.
 [workspace.lints.rust]
 # 검토된 플랫폼 FFI crate 만 "deny" 로 완화한다. 자식 프로세스 격리, Windows DPAPI, 소유자 전용 로컬
 # IPC 와 공개 Runtime 로케이터 검증 경계가 해당한다.
