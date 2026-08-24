@@ -59,6 +59,14 @@ MAY_MUTATE_DISK = {
     "public Runtime schema from its Rust DTO source of truth",
     "crates/runtrol-security/src/root_identity.rs": "opens an approved directory read-only for its "
     "kernel-issued Windows file identity and never writes provider or workspace data",
+    # The one reviewed write into a provider's own store, and the only entry here that is not runtrol data.
+    # Claude Code publishes no delete command (measured 2.1.241), so a conversation the operator removes from
+    # the list is moved into `runtrol-deleted`, a sibling of `projects` that no listing walks: nothing is
+    # erased, only the exact conversation chosen is touched, and the surface is reachable only under the delete
+    # scope granted at the machine. It is a file of its own so that this approval covers eighty lines that do
+    # nothing else, rather than the fifteen-hundred-line reader beside it.
+    "crates/runtrol-drivers/src/claude/trash.rs": "moves one operator-chosen Claude conversation out of "
+    "the CLI's own listing into a reversible sibling directory, and writes nothing else",
 }
 MAY_MUTATE_PREFIXES = {
     "crates/runtrol-store/src/": "the database crate owns runtrol's session pointer store",

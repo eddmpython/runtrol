@@ -49,6 +49,7 @@ use runtrol_provider::{
 
 use crate::catalogue::{bounded, under};
 use crate::claude::home::{HomeProblem, config_directory};
+use crate::claude::trash;
 
 /// Where the CLI keeps one directory per folder it has run in.
 const PROJECTS_DIRECTORY: &str = "projects";
@@ -232,19 +233,8 @@ impl ClaudeStore {
         let Some(file) = conversation_path(projects, native) else {
             return Ok(());
         };
-        let trash = trash_directory(projects);
-        std::fs::create_dir_all(&trash)?;
-        let folder = file.parent().map(Path::to_path_buf);
-        move_out(&file, &trash)?;
-        // The CLI keeps a subagent's side transcripts in a directory named for the conversation, beside its
-        // file; it leaves the store with the conversation it belongs to.
-        if let Some(folder) = folder {
-            let sidecar = folder.join(native);
-            if sidecar.is_dir() {
-                move_out(&sidecar, &trash)?;
-            }
-        }
-        Ok(())
+        // The move itself lives in `trash`, which is the driver's only writer of this store.
+        trash::discard(projects, &file, native)
     }
 }
 
@@ -266,35 +256,6 @@ fn conversation_path(projects: &Path, native: &str) -> Option<PathBuf> {
         .flatten()
         .map(|entry| entry.path().join(&file_name))
         .find(|candidate| candidate.is_file())
-}
-
-/// Where a deleted conversation is kept: `runtrol-deleted`, a sibling of `projects`.
-///
-/// A sibling, not a child, so a moved conversation leaves every listing at once (the listing only ever walks
-/// `projects`). Named plainly so an operator can find and restore it by hand.
-fn trash_directory(projects: &Path) -> PathBuf {
-    projects
-        .parent()
-        .unwrap_or(projects)
-        .join("runtrol-deleted")
-}
-
-/// Move one path into the trash, replacing any earlier deletion of the same name.
-///
-/// The trash is a bin, not an archive: the newest deletion of a given identifier is the one kept, so a
-/// same-named remnant from a previous deletion is cleared first. The trash sits on the same volume as the
-/// store, so the move is a rename rather than a copy.
-fn move_out(source: &Path, trash: &Path) -> std::io::Result<()> {
-    let Some(name) = source.file_name() else {
-        return Ok(());
-    };
-    let destination = trash.join(name);
-    if destination.is_dir() {
-        fs::remove_dir_all(&destination)?;
-    } else if destination.exists() {
-        fs::remove_file(&destination)?;
-    }
-    fs::rename(source, &destination)
 }
 
 /// Read the bounded tail of the file and keep the message records in it, oldest first.
