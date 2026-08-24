@@ -39,7 +39,8 @@ const core = process.env.RUNTROL_TEST_CORE
 await stat(core);
 const folder = path.resolve(process.env.RUNTROL_EYE_FOLDER || repositoryRoot);
 await stat(folder);
-const providerId = process.env.RUNTROL_EYE_PROVIDER || "codex";
+const providerId = process.env.RUNTROL_EYE_PROVIDER
+  || (process.env.RUNTROL_EYE_ENTRY === "conversationManagementEye" ? "claude" : "codex");
 const eyeEntry = process.env.RUNTROL_EYE_ENTRY || "realWindowEye";
 const outDir = path.resolve(process.env.RUNTROL_EYE_OUT || path.join(os.tmpdir(), "runtrol-eye"));
 await mkdir(outDir, { recursive: true });
@@ -95,6 +96,12 @@ if (eyeEntry === "agentToolsEye") {
   environment.CLAUDE_CONFIG_DIR = path.join(temporary, "claude");
   environment.CODEX_HOME = path.join(temporary, "codex");
 }
+if (eyeEntry === "conversationManagementEye") {
+  // A throwaway Claude conversation this pass starts is what it names, pins and deletes, so it reads the
+  // operator's real Claude store (its own conversation among them) and never touches one the operator would
+  // miss. Codex is pointed at an empty home so the picture stays a Claude one.
+  environment.CODEX_HOME = path.join(temporary, "codex");
+}
 
 let daemon = null;
 let daemonStderr = "";
@@ -125,6 +132,9 @@ try {
       mkdir(environment.CLAUDE_CONFIG_DIR, { recursive: true }),
       mkdir(environment.CODEX_HOME, { recursive: true }),
     ]);
+  }
+  if (eyeEntry === "conversationManagementEye") {
+    await mkdir(environment.CODEX_HOME, { recursive: true });
   }
   await writeFile(workspaceFile, JSON.stringify({ folders: [{ path: eyeFolder }] }), "utf8");
   await writeFile(
