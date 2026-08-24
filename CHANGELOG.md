@@ -10,6 +10,8 @@ and refactoring that no user can observe do not belong here.
 
 ## [Unreleased]
 
+## [0.1.21] - 2026-08-24
+
 ### Changed
 
 - Conversation tabs now use the active coding service's icon beside the actual conversation title. The Runtrol mark
