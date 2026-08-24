@@ -96,11 +96,21 @@ async function eyePass(resultPath: string): Promise<void> {
   try {
     const session = await within(journey.start(providerId, scratch), 60_000, "starting the throwaway conversation");
     await journey.verifySelected(session);
-    await journey.prompt("Reply with exactly: ok");
+    // A reply with a fenced block in it, so the picture also shows what an agent's code looks like in the tab.
+    // Nothing is written to disk, so the service has no reason to ask permission for anything.
+    await journey.prompt(
+      "Reply with only a TypeScript code block (no words before or after) containing exactly these three lines: "
+      + "// greet once\\nconst name = \"runtrol\";\\nconsole.log(`hi ${name}`);",
+    );
     await journey.waitForLifecycle(session, "hotRunning", 30_000).catch(() => undefined);
     await within(journey.waitForLifecycle(session, "hotIdle", 240_000), 240_000, "the reply to finish");
     const native = journey.sessions().find((line) => line.sessionId === session)?.nativeSessionId ?? null;
     if (!native) throw new Error("the throwaway conversation announced no native identity to manage");
+
+    // Pose: the conversation itself. The reply's code is coloured the way an editor colours it, and the panel
+    // beside it shows each service by its own mark and its own reported usage.
+    await settle();
+    await capture(resultPath, "conversation", { session });
 
     currentStage = "listing-conversations";
     await within(journey.refreshChats(), 90_000, "refreshing stored conversations");
