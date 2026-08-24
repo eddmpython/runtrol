@@ -386,7 +386,11 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
             "conversation.serviceName",
             "this.description = undefined",
             'capabilities?.nativeSessionDelete?.availability === "available"',
-            'new vscode.ThemeIcon(`${conversation.serviceIcon}~spin`)',
+            # Identity comes from the shipped mark, which exists for every service the build knows, rather
+            # than from the editor's icon font, which carries a glyph for some services and none for others.
+            # Motion while running is the editor's own spinner, because only its glyphs can spin.
+            "conversationIcon(extensionUri, conversation.serviceIcon)",
+            'new vscode.ThemeIcon("sync~spin")',
             "this.revealCurrentProject()",
             "this.state.incompleteDiscovery",
             "view.message = undefined",
@@ -836,8 +840,9 @@ def selftest() -> int:
         ),
         "trees.ts": (
             'conversation.serviceName this.description = undefined '
+            'conversationIcon(extensionUri, conversation.serviceIcon) new vscode.ThemeIcon("sync~spin") '
             'capabilities?.nativeSessionDelete?.availability === "available" '
-            'new vscode.ThemeIcon(`${conversation.serviceIcon}~spin`) this.revealCurrentProject() '
+            'this.revealCurrentProject() '
             'this.state.incompleteDiscovery view.message = undefined '
             '"runtrol.hasUsableProvider" "runtrol.isVerifyingProvider" awaitsVerification'
         ),
@@ -1050,6 +1055,8 @@ def selftest() -> int:
         (package, {**sources, "usageView.ts": sources["usageView.ts"].replace("usageRowsEqual(this.rows, next)", "false")}),
         (package, {**sources, "stateRows.ts": sources["stateRows.ts"].replace("discoveryNotice", "")}),
         (package, {**sources, "usageViewMessage.ts": sources["usageViewMessage.ts"].replace("record.providerId.length <= 256", "true")}),
+        (package, {**sources, "trees.ts": sources["trees.ts"].replace("conversationIcon(extensionUri, conversation.serviceIcon)", "")}),
+        (package, {**sources, "trees.ts": sources["trees.ts"].replace('new vscode.ThemeIcon("sync~spin")', "")}),
         (package, {**sources, "trees.ts": sources["trees.ts"] + " view.description"}),
         (package, {**sources, "trees.ts": sources["trees.ts"] + " conversationDetail"}),
         (package, {**sources, "trees.ts": sources["trees.ts"].replace("this.description = undefined", "")}),
@@ -1074,15 +1081,6 @@ def selftest() -> int:
             {
                 **sources,
                 "conversationList.ts": sources["conversationList.ts"].replace('return "";', ""),
-            },
-        ),
-        (
-            package,
-            {
-                **sources,
-                "trees.ts": sources["trees.ts"].replace(
-                    'new vscode.ThemeIcon(`${conversation.serviceIcon}~spin`)', ""
-                ),
             },
         ),
         (package, {**sources, "controller.ts": sources["controller.ts"].replace("workspaceCollisions", "")}),
