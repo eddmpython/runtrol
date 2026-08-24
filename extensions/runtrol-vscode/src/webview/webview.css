@@ -263,6 +263,11 @@ body {
   border: 1px solid var(--vscode-editorWidget-border, var(--vscode-widget-border, transparent));
   text-align: left;
   vertical-align: top;
+  /* A message breaks anywhere so a long identifier cannot widen the conversation. A cell must not: breaking
+     mid-word lets a column shrink to one character, and a table that can always shrink never overflows, so it
+     would squeeze into a column of letters instead of scrolling inside its own message. */
+  overflow-wrap: normal;
+  white-space: normal;
 }
 
 .message .md-table th {
