@@ -11,7 +11,7 @@ import {
 } from "./presentation";
 import { conversationEmptyCopy, sendShortcutHint } from "./conversationCopy";
 import { highlight } from "./highlight";
-import { hasMarkdownTrigger, parseMarkdown, type Block, type Inline } from "./markdown";
+import { hasMarkdownTrigger, parseMarkdown, type Block, type Inline, type ListBlock } from "./markdown";
 import { insertMention, mentionTriggered } from "./mention";
 import { planEntriesOf, planGlyph } from "./plan";
 import { cancelQueued, pushQueued, queuedLabel, takeQueued } from "./queue";
@@ -1250,6 +1250,19 @@ function repaintMarkdown(item: HTMLElement, raw: string): void {
   item.replaceChildren(...nodes);
 }
 
+/// One list, with any list written under an entry drawn inside that entry.
+function listNode(block: ListBlock): HTMLElement {
+  const list = document.createElement(block.ordered ? "ol" : "ul");
+  list.className = "md-list";
+  for (const item of block.items) {
+    const row = document.createElement("li");
+    row.append(...inlineNodes(item.inlines));
+    if (item.list) row.append(listNode(item.list));
+    list.append(row);
+  }
+  return list;
+}
+
 /// The code of one fence as coloured runs. Every leaf is still a text node, so the block reads exactly as it
 /// was written and only its colour is added; the copy button reads the same characters back out.
 function codeNodes(language: string, text: string): Node[] {
@@ -1290,15 +1303,36 @@ function blockNode(block: Block): Node {
     heading.append(...inlineNodes(block.inlines));
     return heading;
   }
-  if (block.kind === "list") {
-    const list = document.createElement(block.ordered ? "ol" : "ul");
-    list.className = "md-list";
-    for (const item of block.items) {
-      const row = document.createElement("li");
-      row.append(...inlineNodes(item));
-      list.append(row);
+  if (block.kind === "list") return listNode(block);
+  if (block.kind === "quote") {
+    const quote = document.createElement("blockquote");
+    quote.className = "md-quote";
+    quote.append(...inlineNodes(block.inlines));
+    return quote;
+  }
+  if (block.kind === "table") {
+    const table = document.createElement("table");
+    table.className = "md-table";
+    const head = document.createElement("thead");
+    const headRow = document.createElement("tr");
+    for (const cell of block.head) {
+      const th = document.createElement("th");
+      th.append(...inlineNodes(cell));
+      headRow.append(th);
     }
-    return list;
+    head.append(headRow);
+    const body = document.createElement("tbody");
+    for (const row of block.rows) {
+      const line = document.createElement("tr");
+      for (const cell of row) {
+        const td = document.createElement("td");
+        td.append(...inlineNodes(cell));
+        line.append(td);
+      }
+      body.append(line);
+    }
+    table.append(head, body);
+    return table;
   }
   const paragraph = document.createElement("p");
   paragraph.className = "md-paragraph";

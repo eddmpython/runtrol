@@ -232,6 +232,44 @@ body {
   margin: 0.1rem 0;
 }
 
+/* A list written under an entry sits closer than a list of its own would, so the indent reads as one thought
+   continued rather than as a new block. */
+.message .md-list .md-list {
+  margin: 0.1rem 0 0.15rem;
+  padding-left: 1.1rem;
+}
+
+.message .md-quote {
+  margin: 0.35rem 0 0.55rem;
+  padding-left: 0.7rem;
+  border-left: 2px solid var(--vscode-editorWidget-border, var(--vscode-widget-border, currentColor));
+  color: var(--vscode-descriptionForeground);
+  white-space: normal;
+}
+
+/* A table keeps its columns and scrolls inside its own message rather than widening the conversation. */
+.message .md-table {
+  display: block;
+  max-width: 100%;
+  margin: 0.35rem 0 0.55rem;
+  overflow-x: auto;
+  border-collapse: collapse;
+  white-space: normal;
+}
+
+.message .md-table th,
+.message .md-table td {
+  padding: 0.25rem 0.6rem;
+  border: 1px solid var(--vscode-editorWidget-border, var(--vscode-widget-border, transparent));
+  text-align: left;
+  vertical-align: top;
+}
+
+.message .md-table th {
+  background: var(--vscode-textCodeBlock-background, var(--vscode-editorWidget-background));
+  font-weight: 600;
+}
+
 .message code {
   padding: 0.05rem 0.3rem;
   border-radius: 0.25rem;

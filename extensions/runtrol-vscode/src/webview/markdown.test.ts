@@ -40,9 +40,12 @@ test("headings, lists, and paragraphs split where a person expects", () => {
     {
       kind: "list",
       ordered: false,
-      items: [[{ kind: "text", text: "first" }], [{ kind: "text", text: "second" }]],
+      items: [
+        { inlines: [{ kind: "text", text: "first" }], list: null },
+        { inlines: [{ kind: "text", text: "second" }], list: null },
+      ],
     },
-    { kind: "list", ordered: true, items: [[{ kind: "text", text: "then" }]] },
+    { kind: "list", ordered: true, items: [{ inlines: [{ kind: "text", text: "then" }], list: null }] },
     { kind: "paragraph", inlines: [{ kind: "text", text: "text line one\ntext line two" }] },
   ]);
 });
@@ -79,4 +82,59 @@ test("a line starting with emphasis is not a bullet", () => {
   const [block] = parseMarkdown("*emphasis* leads this line");
   assert.ok(block?.kind === "paragraph");
   assert.deepEqual(block.inlines[0], { kind: "em", text: "emphasis" });
+});
+
+test("a list written under an entry stays under it", () => {
+  const [list] = parseMarkdown("- outer one\n  - inner a\n  - inner b\n- outer two");
+  assert.ok(list?.kind === "list");
+  assert.deepEqual(list.items.map((item) => item.inlines), [
+    [{ kind: "text", text: "outer one" }],
+    [{ kind: "text", text: "outer two" }],
+  ], "only the outer entries are entries of the outer list");
+  assert.deepEqual(list.items[0]?.list?.items.map((item) => item.inlines), [
+    [{ kind: "text", text: "inner a" }],
+    [{ kind: "text", text: "inner b" }],
+  ], "the indented pair belongs to the entry above them");
+  assert.equal(list.items[1]?.list, null, "the entry with nothing under it carries no list");
+});
+
+test("a numbered list indented under a bullet keeps both kinds", () => {
+  const [list] = parseMarkdown("- step\n  1. first\n  2. second");
+  assert.ok(list?.kind === "list");
+  assert.equal(list.ordered, false, "the outer list is the bullet one");
+  assert.equal(list.items[0]?.list?.ordered, true, "the list under it is the numbered one");
+});
+
+test("a table keeps its header and its rows", () => {
+  const [table] = parseMarkdown("| name | count |\n| --- | ---: |\n| alpha | 1 |\n| beta | 2 |");
+  assert.ok(table?.kind === "table");
+  assert.deepEqual(table.head, [
+    [{ kind: "text", text: "name" }],
+    [{ kind: "text", text: "count" }],
+  ]);
+  assert.deepEqual(table.rows.map((row) => row.map((cell) => cell.map((span) => span.text).join(""))), [
+    ["alpha", "1"],
+    ["beta", "2"],
+  ]);
+});
+
+test("pipes are only a table when the line under the header is the rule", () => {
+  const blocks = parseMarkdown("run a | b | c\nand then more");
+  assert.deepEqual(blocks.map((block) => block.kind), ["paragraph"], "a sentence with pipes stays a sentence");
+});
+
+test("a quoted run becomes one quote", () => {
+  const blocks = parseMarkdown("> first line\n> second line\n\nafter");
+  assert.ok(blocks[0]?.kind === "quote");
+  assert.deepEqual(blocks[0].inlines, [{ kind: "text", text: "first line\nsecond line" }]);
+  assert.equal(blocks[1]?.kind, "paragraph", "the text after the quote is its own paragraph");
+});
+
+test("what the renderer is asked to read is what the trigger admits", () => {
+  for (const sample of ["- a", "  - a", "1. a", "> a", "| a | b |", "**a**", "`a`", "# a"]) {
+    assert.equal(hasMarkdownTrigger(sample), true, `${sample} reaches the markdown path`);
+  }
+  for (const sample of ["plain words", "a-b c", "3.5 apples"]) {
+    assert.equal(hasMarkdownTrigger(sample), false, `${sample} stays on the plain path`);
+  }
 });
