@@ -46,7 +46,10 @@ export async function ensureCurrentCore(
     retired = await ask(client, { ask: "retire" });
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
-    return detail.includes("live process")
+    // Both refusal dialects: "mid-turn" is the current daemon's (it retires past idle processes and
+    // waits only for running turns to end), "live process" the older build's that waited for an
+    // idle machine. Either way the same daemon will accept once its own condition passes.
+    return detail.includes("mid-turn") || detail.includes("live process")
       ? { state: "busy", detail }
       : { state: "legacy", detail };
   }

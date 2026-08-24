@@ -62,7 +62,18 @@ test("an older daemon retires and the successor's greeting proves the installed 
   assert.ok(client.resets >= 1, "the connection to the retiring daemon is dropped");
 });
 
-test("a daemon with live conversations answers busy, not legacy", async () => {
+test("a daemon refusing mid-turn answers busy, not legacy", async () => {
+  const client = fakeClient({
+    digests: ["old-digest"],
+    retire: () => {
+      throw new Error("2 conversation(s) are mid-turn; retire applies when their turns end");
+    },
+  });
+  const outcome = await ensureCurrentCore(client, async () => "d".repeat(64));
+  assert.equal(outcome.state, "busy");
+});
+
+test("an older daemon's live-process refusal still reads as busy", async () => {
   const client = fakeClient({
     digests: ["old-digest"],
     retire: () => {

@@ -2083,6 +2083,9 @@ async fn converse_inner(
             // The retirement stands whether or not the answer could be written: the caller asked
             // this build to stop serving, and a caller that vanished first changes nothing about
             // that. Exit code 0 because retiring on request is this process working as designed.
+            // Idle agent processes end with this exit (containment holds every descendant) and
+            // resume from their providers' own stores under the successor; the dispatcher has
+            // already refused if any conversation was mid-turn.
             Reply::Retiring => {
                 // ok: the answer is best-effort on a process that is about to exist no more; the
                 // caller detects the exit itself by respawning and greeting the successor.

@@ -193,8 +193,9 @@ pub fn understand(words: &[String], here: &str) -> Result<Request, Misunderstood
 
         "panic" => Ok(Request::StopEverything),
 
-        // Ask an idle daemon to exit so the replaced-on-disk binary serves the next request. The
-        // daemon refuses while any conversation still has a live process.
+        // Ask the daemon to exit so the replaced-on-disk binary serves the next request. The daemon
+        // refuses only while a conversation is mid-turn; idle agent processes end with it and
+        // resume from their providers' own stores under the successor.
         "retire" => Ok(Request::Retire),
 
         "consult" => consult_of(rest),

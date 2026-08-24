@@ -25,8 +25,8 @@
 use runtrol_core::registry::KindStatus;
 use runtrol_core::session::SessionError;
 use runtrol_core::{
-    ClosingReservation, OpenReservation, SessionManager, SessionState, SessionView, TakenAgent,
-    Waiting,
+    ClosingReservation, Lifecycle, OpenReservation, SessionManager, SessionState, SessionView,
+    TakenAgent, Waiting,
 };
 use runtrol_ipc::wire::{
     MissionFlightSignalLine, MissionFlightSignalPage, ProviderLine, RemoteConnection,
@@ -56,13 +56,14 @@ pub(crate) enum Reply {
     Watching(Box<SessionView>),
     /// The caller is now watching the current session index.
     WatchingSessions,
-    /// The idle daemon retires: answer done, then this process exits.
+    /// The daemon retires: answer done, then this process exits.
     ///
     /// A separate shape because only the connection loop knows when the answer has actually been
     /// written, and exiting before that would make the caller report failure for a retirement that
-    /// worked. Accepted exclusively with zero live agent processes, so there is nothing to drain:
-    /// durable state is written atomically at each mutation, and the successor daemon is started
-    /// by the caller exactly the way any daemon is started.
+    /// worked. Accepted whenever no conversation is mid-turn, so there is nothing to drain: durable
+    /// state is written atomically at each mutation, idle agent processes end with this process
+    /// (containment holds every descendant) and resume from their providers' own stores, and the
+    /// successor daemon is started by the caller exactly the way any daemon is started.
     Retiring,
     /// The session is closed, and its process is still being stopped.
     ///
@@ -1921,13 +1922,16 @@ pub(crate) fn answer_prepared(
         },
 
         Request::Retire => {
-            let hot = sessions
-                .live_sessions()
-                .filter(|live| live.tier.has_a_process())
-                .count();
-            if hot > 0 {
+            // Only observable work blocks retirement. An idle process does not: containment ends it
+            // with this process (children die with runtrol), the conversation itself lives in the
+            // provider's own store, and the successor daemon resumes it from that store on demand.
+            // This is exactly what the operator-confirmed restart has always promised; waiting for a
+            // machine with zero live processes waited forever on any machine where agents are
+            // standing infrastructure, which is the machine this product is for.
+            let moving = retire_blockers(sessions.live_sessions().map(|live| live.state));
+            if moving > 0 {
                 return Reply::One(refuse(&format!(
-                    "{hot} conversation(s) still have a live process; retire waits for an idle machine"
+                    "{moving} conversation(s) are mid-turn; retire applies when their turns end"
                 )));
             }
             Reply::Retiring
@@ -2182,6 +2186,21 @@ fn bound(
     } else {
         Err(mismatched(prepared))
     }
+}
+
+/// How many live sessions retirement would interrupt: a turn is running, or a driver is still
+/// attaching and its first turn may already be in flight. An idle session is not one of them,
+/// however alive its process is: nothing observable is happening, and the conversation reopens
+/// from the provider's own store under the successor daemon.
+fn retire_blockers<'sessions>(states: impl Iterator<Item = &'sessions SessionState>) -> usize {
+    states
+        .filter(|state| {
+            matches!(
+                state.lifecycle(),
+                Lifecycle::Busy { .. } | Lifecycle::Starting
+            )
+        })
+        .count()
 }
 
 fn mismatched(prepared: Prepared) -> Reply {
@@ -3719,27 +3738,25 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn retire_answers_retiring_only_on_an_idle_machine() {
+    async fn retire_proceeds_past_idle_processes_and_refuses_only_mid_turn() {
         let (composed, path) = composed_for("retire-idle-only");
         let mut sessions = SessionManager::new();
         let session = SessionId::now();
         attach_and_store(&composed, &mut sessions, session, &path);
 
+        // An attached-and-idle process no longer blocks: waiting for zero live processes waited
+        // forever on a machine where agents are standing infrastructure. The exit decision goes to
+        // the connection loop, which is the only layer that knows when the answer has been written.
         let mut conversation = Conversation::at_the_machine();
         greet(&mut conversation, &composed, &mut sessions).await;
         match answer(&mut conversation, &composed, &mut sessions, Request::Retire).await {
-            Reply::One(Response::Failed(failure)) => {
-                assert!(
-                    failure.message.contains("live process"),
-                    "the refusal names why: {}",
-                    failure.message
-                );
-            }
-            other => panic!("expected the hot refusal, got {}", shape(&other)),
+            Reply::Retiring => {}
+            other => panic!(
+                "expected the retirement past an idle process, got {}",
+                shape(&other)
+            ),
         }
 
-        // With no live process anywhere, the exit decision goes to the connection loop, which is
-        // the only layer that knows when the answer has actually been written.
         let mut idle = SessionManager::new();
         let mut fresh = Conversation::at_the_machine();
         greet(&mut fresh, &composed, &mut idle).await;
@@ -3748,6 +3765,34 @@ mod tests {
             other => panic!("expected the retirement, got {}", shape(&other)),
         }
         clean(composed, &path);
+    }
+
+    /// The refusal itself, over the exact lifecycle vocabulary: a running turn or a driver still
+    /// attaching blocks, an idle or detached session never does.
+    #[test]
+    fn retire_blockers_counts_only_sessions_mid_motion() {
+        use runtrol_core::Observed;
+        use runtrol_provider::TurnId;
+        let now = WallMs::now();
+        let detached = SessionState::new(now);
+        let mut starting = SessionState::new(now);
+        drop(starting.observe(Observed::Attaching, now));
+        let mut idle = SessionState::new(now);
+        drop(idle.observe(Observed::Attaching, now));
+        drop(idle.observe(Observed::Attached, now));
+        let mut busy = SessionState::new(now);
+        drop(busy.observe(Observed::Attaching, now));
+        drop(busy.observe(Observed::Attached, now));
+        drop(busy.observe(
+            Observed::TurnStarted {
+                turn: TurnId { epoch: 0, index: 0 },
+            },
+            now,
+        ));
+        assert_eq!(retire_blockers([&detached, &idle].into_iter()), 0);
+        assert_eq!(retire_blockers([&starting, &idle, &busy].into_iter()), 2);
+        assert_eq!(retire_blockers([&busy].into_iter()), 1);
+        assert_eq!(retire_blockers([].into_iter()), 0);
     }
 
     /// Agree a wire format, so the rest of a test can ask for something.

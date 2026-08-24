@@ -32,7 +32,7 @@ export async function superviseCoreCurrency(client: CoreClient, locator: CoreLoc
     return;
   }
   void vscode.window.showInformationMessage(
-    "The updated Runtrol Core applies automatically once running conversations finish.",
+    "The Runtrol update applies automatically when the agents working right now finish their turns.",
   );
   void retryUntilIdle(client, locator);
 }
