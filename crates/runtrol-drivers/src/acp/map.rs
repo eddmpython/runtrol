@@ -13,6 +13,10 @@ use serde::Deserialize;
 use serde_json::value::RawValue;
 
 const MAX_TAG_BYTES: usize = 128;
+
+/// A currency is a code or a short symbol. Bounded because this string is lifted from a provider frame and then
+/// held in the gauge for as long as the daemon runs, and an unbounded held string is not a memory contract.
+const MAX_CURRENCY_BYTES: usize = 32;
 const MAX_ROUTING_TEXT_BYTES: usize = 256;
 
 /// An ACP update could not be routed safely.
@@ -217,14 +221,16 @@ fn usage(raw: &RawValue, parent: &Bytes) -> Result<EventBody, MapError> {
     let cost = fields
         .cost
         .map(|cost| {
-            serde_json::from_str::<CostFields<'_>>(cost.get())
-                .map(|cost| Cost {
-                    amount: cost.amount,
-                    currency: cost.currency.into(),
-                })
-                .map_err(|_| MapError::Missing {
+            let cost = serde_json::from_str::<CostFields<'_>>(cost.get()).map_err(|_| {
+                MapError::Missing {
                     field: "usage cost",
-                })
+                }
+            })?;
+            check_text(cost.currency, MAX_CURRENCY_BYTES, "usage cost currency")?;
+            Ok(Cost {
+                amount: cost.amount,
+                currency: cost.currency.into(),
+            })
         })
         .transpose()?;
     Ok(EventBody::UsageUpdate(Box::new(Usage {

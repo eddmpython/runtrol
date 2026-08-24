@@ -201,7 +201,12 @@ export function usageDetail(gauge: ProviderUsageGauge, nowMs: number): string {
   if (typeof percent === "number") parts.push(`${percent}%`);
   const resets = resetsIn(window, nowMs);
   if (resets) parts.push(resets);
-  if (parts.length === 0) parts.push("within limits");
+  if (parts.length === 0) {
+    // "Within limits" is a claim about a limit, so it is only made for a service that described one. A service
+    // that reported nothing but a spend gets said as exactly that, rather than being credited with room it
+    // never mentioned having.
+    parts.push(window ? "within limits" : "no limit reported");
+  }
   return parts.join(" · ");
 }
 

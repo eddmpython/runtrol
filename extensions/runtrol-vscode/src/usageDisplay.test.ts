@@ -65,8 +65,8 @@ test("a blocking limit is the first thing the line says", () => {
   assert.ok(detail.startsWith("limit reached"), detail);
 });
 
-test("no window at all is said as within limits, never as silence", () => {
-  assert.equal(usageDetail(gauge({}), NOW), "within limits");
+test("a service that described no limit is said as that, never as silence and never as room it did not claim", () => {
+  assert.equal(usageDetail(gauge({}), NOW), "no limit reported");
 });
 
 test("a reset already in the past is not offered as a wait", () => {
