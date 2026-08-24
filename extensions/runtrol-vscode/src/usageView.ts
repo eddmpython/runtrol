@@ -96,9 +96,11 @@ export class UsageView implements vscode.WebviewViewProvider, vscode.Disposable 
   private async refreshQuietly(): Promise<void> {
     try {
       await this.refresh();
-    } catch {
-      // Previous reports remain visible, but the failure must not look like a successful current snapshot.
-      this.setError("Usage refresh failed. Showing the last report.");
+    } catch (error) {
+      // Previous reports remain visible, but the failure must not look like a successful current snapshot, and
+      // it must say what went wrong: an unexplained red line in the panel is a dead end for the reader.
+      const why = error instanceof Error ? error.message : String(error);
+      this.setError(`Usage refresh failed: ${why}. Showing the last report.`);
     }
   }
 

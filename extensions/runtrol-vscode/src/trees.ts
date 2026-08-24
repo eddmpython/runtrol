@@ -413,6 +413,14 @@ export class ConversationsTree implements vscode.TreeDataProvider<ChatTreeItem>,
     this.decorations.update(rows);
     const records = this.projectRecords.all();
     const openWorkspaces = this.openWorkspaces();
+    // Pinned conversations lead the whole panel, above every heading. Pinning says "keep this where I can see
+    // it", and a pinned row that sorts only within its own section is below thirty headings, which is not what
+    // the person asked for. They keep their heading too, so the project still counts and lists them.
+    const pinnedRows = rows.filter((row) => row.pinned);
+    const pinned = pinnedRows.map((row) => new ConversationItem(
+      row,
+      this.state.providerCapabilities(row.providerId),
+    ));
     const groups = projects(records, rows, openWorkspaces);
     // Beneath the headings, not under one. A conversation started with no project is still a conversation.
     const unfiled = loose(rows, records, openWorkspaces).map((row) => new ConversationItem(
@@ -422,7 +430,7 @@ export class ConversationsTree implements vscode.TreeDataProvider<ChatTreeItem>,
     const parents = new Map<string, ProjectItem>();
     const grouped = new Map<string, readonly Conversation[]>();
 
-    if (groups.length === 0 && unfiled.length === 0) {
+    if (groups.length === 0 && unfiled.length === 0 && pinned.length === 0) {
       // No conversations at all, filed or otherwise. The welcome content covers that case.
       this.items = [];
       this.flat = [];
@@ -431,6 +439,7 @@ export class ConversationsTree implements vscode.TreeDataProvider<ChatTreeItem>,
       return;
     }
 
+    const pinnedKeys = new Set(pinnedRows.map((row) => row.key));
     const headings: ProjectItem[] = [];
     for (const group of groups) {
       const heading = new ProjectItem(group, this.agentTools?.enabled(group.workspace) ?? false);
@@ -439,12 +448,17 @@ export class ConversationsTree implements vscode.TreeDataProvider<ChatTreeItem>,
       // The parent map is the cheap half and reveal needs it immediately, so it is built now. The rows
       // themselves wait until something asks to draw them.
       for (const row of group.rows) {
+        // A pinned row's own top-level item is the one reveal must resolve against, so its heading does not
+        // claim it as a parent; it is still listed beneath that heading as well.
+        if (pinnedKeys.has(row.key)) continue;
         parents.set(row.key, heading);
       }
     }
-    this.items = [...headings, ...unfiled];
-    // The loose rows are top-level items, so revealing one resolves against these exact objects.
-    this.flat = unfiled;
+    // A pinned row that has no project is already at the top, so it is not repeated among the loose rows.
+    const looseUnpinned = unfiled.filter((item) => !pinnedKeys.has(item.conversation.key));
+    this.items = [...pinned, ...headings, ...looseUnpinned];
+    // The top-level rows are these exact objects, so revealing one resolves against them.
+    this.flat = [...pinned, ...looseUnpinned];
     this.parents = parents;
     this.grouped = grouped;
   }

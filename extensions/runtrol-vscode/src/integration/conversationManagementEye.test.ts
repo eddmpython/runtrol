@@ -69,6 +69,11 @@ async function eyePass(resultPath: string): Promise<void> {
   const journey = api.journey;
   if (!journey) throw new Error("the journey API is unavailable");
 
+  currentStage = "waiting-for-services-to-arrive";
+  // The services arrive as one inventory once the Runtime answers, and each is probed after that. Waiting for
+  // the list itself first keeps a slow start from being reported as "this service is not installed".
+  await waitFor(() => journey.providers().length > 0, 120_000, "the Runtime's service inventory");
+
   currentStage = "waiting-for-service";
   await waitFor(
     () => journey.providers().some((provider) => (
