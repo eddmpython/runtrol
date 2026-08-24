@@ -84,9 +84,11 @@ mod tests {
 
     #[test]
     fn the_trash_sits_beside_the_store_rather_than_inside_it() {
-        let projects = Path::new("/home/someone/.claude/projects");
+        // A stand-in root, not the CLI's own path: where the store lives is discovered from the environment,
+        // and writing that path here would be the driver claiming to know it.
+        let projects = Path::new("/somewhere/config/projects");
         let trash = trash_directory(projects);
-        assert_eq!(trash, Path::new("/home/someone/.claude/runtrol-deleted"));
+        assert_eq!(trash, Path::new("/somewhere/config/runtrol-deleted"));
         assert!(
             !trash.starts_with(projects),
             "a trash inside projects would still be walked by the listing"
