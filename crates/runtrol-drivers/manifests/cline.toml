@@ -6,6 +6,9 @@
 schema = 1
 id = "cline"
 display_name = "Cline"
+# Named, not shipped. The editor's icon font has no mark for this service, so a robot stands in for this coding
+# agent; no vendor artwork is distributed.
+icon = "robot"
 kind = "acp"
 
 [bin]

@@ -10,9 +10,9 @@ schema = 1
 id = "grok"
 display_name = "Grok"
 kind = "acp"
-# The editor's own icon font carries this service's vendor mark. Named rather than shipped: the artwork stays the
-# vendor's and this repository distributes none of it.
-icon = "xai"
+# Named, not shipped. The editor's icon font has no mark for this service, so a rocket stands in for it; no vendor
+# artwork is distributed.
+icon = "rocket"
 
 [bin]
 # Bare names, tried in this order. Measured on this machine: the installer places a native executable at

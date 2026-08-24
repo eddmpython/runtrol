@@ -41,7 +41,10 @@ export class UsageView implements vscode.WebviewViewProvider, vscode.Disposable 
     this.view = view;
     view.webview.options = {
       enableScripts: true,
-      localResourceRoots: [vscode.Uri.joinPath(this.extensionUri, "dist")],
+      localResourceRoots: [
+        vscode.Uri.joinPath(this.extensionUri, "dist"),
+        vscode.Uri.joinPath(this.extensionUri, "resources", "provider-icons"),
+      ],
     };
     view.webview.html = this.html(view.webview);
     this.viewSubscriptions.push(
@@ -148,20 +151,24 @@ export class UsageView implements vscode.WebviewViewProvider, vscode.Disposable 
   private html(webview: vscode.Webview): string {
     const script = webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, "dist", "usageView.js"));
     const style = webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, "dist", "usageView.css"));
-    const icons = webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, "dist", "codicon.css"));
+    // The service glyphs are the same theme-aware SVGs the conversation surfaces use, addressed as a folder so
+    // the Webview builds one `<img>` per row from the manifest's declared name. Provider-neutral: no icon table
+    // reaches this file, only a base the row name is appended to.
+    const iconBase = webview.asWebviewUri(
+      vscode.Uri.joinPath(this.extensionUri, "resources", "provider-icons"),
+    );
     const nonce = webviewNonce();
     return `<!doctype html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource}; font-src ${webview.cspSource}; script-src 'nonce-${nonce}';">
-  <link rel="stylesheet" href="${icons}">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource}; img-src ${webview.cspSource}; script-src 'nonce-${nonce}';">
   <link rel="stylesheet" href="${style}">
   <title>Agent usage</title>
 </head>
 <body>
-  <main id="usage" aria-live="polite"></main>
+  <main id="usage" aria-live="polite" data-icon-base="${iconBase}"></main>
   <p id="empty" class="empty" hidden>No connected CLI.</p>
   <p id="error" class="error" role="status" hidden></p>
   <button id="discover" class="discover" type="button" hidden></button>

@@ -11,6 +11,8 @@ declare function acquireVsCodeApi(): VsCodeApi;
 
 const vscode = acquireVsCodeApi();
 const usage = element<HTMLElement>("usage");
+/// The folder the service SVGs live in, handed in by the host so no icon path is built here.
+const iconBase = usage.dataset.iconBase ?? "";
 const empty = element<HTMLParagraphElement>("empty");
 const error = element<HTMLParagraphElement>("error");
 const discover = element<HTMLButtonElement>("discover");
@@ -25,7 +27,6 @@ vscode.postMessage({ type: "ready" });
 
 function render(snapshot: UsageViewSnapshot): void {
   usage.replaceChildren(...snapshot.rows.map(usageRow));
-  replaceMissingProviderIcons();
   empty.hidden = snapshot.rows.length > 0 || snapshot.installableCount > 0;
   error.textContent = snapshot.error ?? "";
   error.hidden = snapshot.error === null;
@@ -47,9 +48,7 @@ function usageRow(row: UsageRow): HTMLElement {
 
   const header = document.createElement("span");
   header.className = "usage-header";
-  const icon = document.createElement("span");
-  icon.className = "provider-icon codicon";
-  icon.classList.add(`codicon-${iconName(row.icon)}`);
+  const icon = providerGlyph(row.icon, "provider-icon");
   icon.setAttribute("aria-hidden", "true");
   const name = document.createElement("span");
   name.className = "provider-name";
@@ -83,9 +82,7 @@ function usageRow(row: UsageRow): HTMLElement {
     // service. Repeating the service name here is what made rows jump; the icon already says whose it is.
     const cost = document.createElement("span");
     cost.className = "usage-cost";
-    const glyph = document.createElement("span");
-    glyph.className = "cost-icon codicon";
-    glyph.classList.add(`codicon-${iconName(row.icon)}`);
+    const glyph = providerGlyph(row.icon, "cost-icon");
     glyph.setAttribute("aria-hidden", "true");
     const value = document.createElement("span");
     value.className = "cost-value";
@@ -97,20 +94,29 @@ function usageRow(row: UsageRow): HTMLElement {
   return item;
 }
 
-/// Provider manifests already restrict icon names. Recheck at the Webview boundary because a class name still
-/// comes from a message, and fall back to the editor's neutral coding-service glyph instead of drawing text.
+/// Provider manifests already restrict icon names. Recheck at the Webview boundary because the name still comes
+/// from a message and is about to be put in a URL, and fall back to the neutral coding-service name.
 function iconName(value: string): string {
   return /^[a-z0-9-]{1,64}$/u.test(value) ? value : "sparkle";
 }
 
-function replaceMissingProviderIcons(): void {
-  for (const icon of usage.querySelectorAll<HTMLElement>(".provider-icon, .cost-icon")) {
-    const content = getComputedStyle(icon, "::before").content;
-    if (!content || content === "none" || content === "normal" || content === '""') {
-      const marker = icon.classList.contains("cost-icon") ? "cost-icon" : "provider-icon";
-      icon.className = `${marker} codicon codicon-sparkle`;
-    }
-  }
+/// One service glyph as an `<img>` to the theme-aware SVG the host's icon folder carries. A name that names no
+/// bundled SVG loads nothing and swaps once to the neutral coding-service mark, so a row never shows a broken
+/// image and never a wrong service's glyph.
+function providerGlyph(declared: string, className: string): HTMLImageElement {
+  const image = document.createElement("img");
+  image.className = className;
+  image.alt = "";
+  const fallback = `${iconBase}/sparkle.svg`;
+  image.src = `${iconBase}/${iconName(declared)}.svg`;
+  image.addEventListener(
+    "error",
+    () => {
+      image.src = fallback;
+    },
+    { once: true },
+  );
+  return image;
 }
 
 function compactStatus(row: UsageRow): string {

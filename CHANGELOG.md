@@ -17,6 +17,12 @@ and refactoring that no user can observe do not belong here.
   steady height. Services that report only account limits are unchanged, and a service that reports no cost shows
   no cost line.
 
+### Changed
+
+- Cline, OpenCode, and Grok now carry a fitting glyph wherever a service is drawn (a robot, a terminal, and a
+  rocket) instead of the same generic placeholder they shared before. Agent Usage in particular now draws each
+  service's own glyph rather than falling every service back to one mark.
+
 ## [0.1.21] - 2026-08-24
 
 ### Changed

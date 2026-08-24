@@ -7,6 +7,9 @@
 schema = 1
 id = "opencode"
 display_name = "OpenCode"
+# Named, not shipped. The editor's icon font has no mark for this service, so a terminal stands in for this coding
+# CLI; no vendor artwork is distributed.
+icon = "terminal"
 kind = "acp"
 
 [bin]
