@@ -10,6 +10,8 @@ and refactoring that no user can observe do not belong here.
 
 ## [Unreleased]
 
+## [0.1.22] - 2026-08-25
+
 ### Added
 
 - Conversations can now be pinned with an inline pin, and unpinned the same way. A pinned conversation leads the
