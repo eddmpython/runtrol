@@ -98,6 +98,12 @@ export type JourneyApi = {
   /// The eye pass: select a listed conversation's row so its inline actions (rename, pin, delete) show for a
   /// photograph, whether or not it has a running session.
   revealConversation(providerId: string, nativeSessionId: string): Promise<void>;
+  /// The eye pass: a listed conversation that belongs to a folder, which is the one a heading files. Pinning
+  /// one of these is the case that lifts a row out from under a heading, so the pass needs to name one.
+  filedConversation(providerId: string): { nativeSessionId: string; title: string } | null;
+  /// The eye pass: every identity the sidebar tree currently holds, so the pass can assert no conversation is
+  /// drawn in two places at once.
+  treeItemIds(): readonly string[];
   /// The eye pass: ask the services for their lists again and wait for the answers.
   refreshChats(): Promise<void>;
   /// Wait until one session reports a lifecycle, or fail at the deadline.
@@ -137,6 +143,7 @@ export function journeyApi(
   extensionMode: vscode.ExtensionMode,
   revealRow: (sessionId: string) => Promise<void> = async () => {},
   revealByKey: (key: string) => Promise<void> = async () => {},
+  treeItemIds: () => string[] = () => [],
 ): JourneyApi | undefined {
   if (
     extensionMode !== vscode.ExtensionMode.Test
@@ -361,6 +368,18 @@ export function journeyApi(
       if (!row) throw new Error("that conversation is not listed");
       await revealByKey(row.key);
     }),
+    filedConversation: (providerId) => {
+      const row = state.conversations.find(
+        (candidate) => candidate.providerId === providerId
+          && !candidate.projectless
+          && !candidate.pinned
+          && candidate.native !== null,
+      );
+      return row?.native
+        ? { nativeSessionId: row.native.nativeSessionId, title: row.title }
+        : null;
+    },
+    treeItemIds: () => treeItemIds(),
     refreshChats: () => afterReady(() => controller.refreshChats()),
     registerMissionGate: (gateId, program, arguments_) => afterReady(
       () => missions.registerGateForJourney(gateId, program, arguments_),

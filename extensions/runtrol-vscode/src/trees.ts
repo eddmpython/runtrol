@@ -1,5 +1,7 @@
 import * as vscode from "vscode";
 
+import { conversationIcon } from "./conversationIcon";
+
 import {
   attentionCount,
   loose,
@@ -21,13 +23,14 @@ export class ConversationItem extends vscode.TreeItem {
   constructor(
     readonly conversation: Conversation,
     capabilities: ProviderCapabilities | null = null,
+    extensionUri: vscode.Uri | null = null,
   ) {
     super(conversation.title, vscode.TreeItemCollapsibleState.None);
     this.id = conversation.key;
     // The row is one coding-service glyph and one human title. State and age never become a second label.
     this.description = undefined;
     this.contextValue = contextValue(conversation, capabilities);
-    this.iconPath = icon(conversation);
+    this.iconPath = icon(conversation, extensionUri);
     // What the badge attaches to. A scheme of its own so the row does not also collect whatever git and the
     // problems view have to say about the folder it happens to sit in.
     this.resourceUri = conversationUri(conversation.key);
@@ -108,13 +111,22 @@ export type AgentToolsPort = {
 /*
  * The provider glyph always identifies the coding service. While work is actually running, the same glyph spins.
  */
-function icon(conversation: Conversation): vscode.ThemeIcon {
-  if (!conversation.canOpen) {
-    return new vscode.ThemeIcon(conversation.serviceIcon, new vscode.ThemeColor("disabledForeground"));
+/// The row's service glyph.
+///
+/// The same shipped SVG the conversation tab and the usage strip draw, rather than a name looked up in the
+/// editor's icon font. The font carries a mark for some services and none for others, so a font lookup left a
+/// blank where Cline, OpenCode and Grok should be; the shipped folder has a mark for every service the build
+/// knows, because the build writes one per manifest.
+///
+/// While a conversation is running the row shows motion instead, because only the editor's own glyphs can spin.
+function icon(conversation: Conversation, extensionUri: vscode.Uri | null): vscode.ThemeIcon | vscode.Uri {
+  if (conversation.activity === "working") {
+    return new vscode.ThemeIcon("sync~spin");
   }
-  return conversation.activity === "working"
-    ? new vscode.ThemeIcon(`${conversation.serviceIcon}~spin`)
-    : new vscode.ThemeIcon(conversation.serviceIcon);
+  if (!extensionUri) {
+    return new vscode.ThemeIcon(conversation.serviceIcon);
+  }
+  return conversationIcon(extensionUri, conversation.serviceIcon);
 }
 
 function spokenActivity(conversation: Conversation): string {
@@ -206,6 +218,7 @@ export class ConversationsTree implements vscode.TreeDataProvider<ChatTreeItem>,
     private readonly state: RuntimeState,
     private readonly projectRecords: ProjectsPort,
     private readonly agentTools: AgentToolsPort | null = null,
+    private readonly extensionUri: vscode.Uri | null = null,
   ) {
     this.projectSubscription = projectRecords.onDidChange(() => {
       this.forgetItems();
@@ -377,6 +390,25 @@ export class ConversationsTree implements vscode.TreeDataProvider<ChatTreeItem>,
     await view.reveal(row, { select: true, focus: true });
   }
 
+  /// Every identity this tree currently holds, at the top level and beneath each heading.
+  ///
+  /// A tree refuses two items that carry the same identity, and a conversation drawn in two places would carry
+  /// one identity twice. Building the whole panel and reading its identities back is how the harness asserts
+  /// that lifting a pinned conversation to the top never leaves a copy of it under its project.
+  treeItemIdsForJourney(): string[] {
+    this.ensureItems();
+    const ids: string[] = [];
+    for (const item of this.items ?? []) {
+      if (typeof item.id === "string") ids.push(item.id);
+      if (item instanceof ProjectItem) {
+        for (const row of this.rowsUnder(item.group.key)) {
+          if (typeof row.id === "string") ids.push(row.id);
+        }
+      }
+    }
+    return ids;
+  }
+
   /// Select one conversation's row by its conversation key, so a stored conversation with no running session
   /// can be brought forward and show its inline actions (rename, pin, delete) the same way a live row does.
   async revealConversation(key: string): Promise<void> {
@@ -420,12 +452,14 @@ export class ConversationsTree implements vscode.TreeDataProvider<ChatTreeItem>,
     const pinned = pinnedRows.map((row) => new ConversationItem(
       row,
       this.state.providerCapabilities(row.providerId),
+      this.extensionUri,
     ));
     const groups = projects(records, rows, openWorkspaces);
     // Beneath the headings, not under one. A conversation started with no project is still a conversation.
     const unfiled = loose(rows, records, openWorkspaces).map((row) => new ConversationItem(
       row,
       this.state.providerCapabilities(row.providerId),
+      this.extensionUri,
     ));
     const parents = new Map<string, ProjectItem>();
     const grouped = new Map<string, readonly Conversation[]>();
@@ -444,12 +478,15 @@ export class ConversationsTree implements vscode.TreeDataProvider<ChatTreeItem>,
     for (const group of groups) {
       const heading = new ProjectItem(group, this.agentTools?.enabled(group.workspace) ?? false);
       headings.push(heading);
-      grouped.set(group.key, group.rows);
+      // A pinned conversation is lifted to the top of the panel, so its heading does not draw it a second time.
+      // Two items for one conversation would carry the same identity, which a tree refuses, and would show the
+      // same conversation twice to the reader. The heading still counts it, because it still belongs to that
+      // project; it is only drawn somewhere else.
+      grouped.set(group.key, group.rows.filter((row) => !pinnedKeys.has(row.key)));
       // The parent map is the cheap half and reveal needs it immediately, so it is built now. The rows
       // themselves wait until something asks to draw them.
       for (const row of group.rows) {
-        // A pinned row's own top-level item is the one reveal must resolve against, so its heading does not
-        // claim it as a parent; it is still listed beneath that heading as well.
+        // A pinned row is a top-level item, so it has no parent to resolve against.
         if (pinnedKeys.has(row.key)) continue;
         parents.set(row.key, heading);
       }
@@ -471,6 +508,7 @@ export class ConversationsTree implements vscode.TreeDataProvider<ChatTreeItem>,
       (row) => new ConversationItem(
         row,
         this.state.providerCapabilities(row.providerId),
+        this.extensionUri,
       ),
     );
     this.built.set(key, under);

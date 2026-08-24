@@ -226,7 +226,7 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
   const missionController = new MissionController(client, controller, state, context, diffDocuments);
   const candidateController = new CandidateController(client);
   const missions = new MissionTree(missionController);
-  const conversations = new ConversationsTree(state, projectStore, agentTools);
+  const conversations = new ConversationsTree(state, projectStore, agentTools, context.extensionUri);
   const usage = new UsageView(context.extensionUri, {
     usage: () => runtime.providersUsage(),
     providers: () => state.providers,
@@ -1032,6 +1032,7 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
         context.extensionMode,
         (sessionId) => conversations.revealSession(sessionId),
         (key) => conversations.revealConversation(key),
+        () => conversations.treeItemIdsForJourney(),
       )
       : undefined,
   };

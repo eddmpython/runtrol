@@ -29,6 +29,8 @@ type ConversationJourney = {
   nativeChatListed(providerId: string, nativeSessionId: string): boolean;
   canDeleteNative(providerId: string): boolean;
   revealConversation(providerId: string, nativeSessionId: string): Promise<void>;
+  filedConversation(providerId: string): { nativeSessionId: string; title: string } | null;
+  treeItemIds(): readonly string[];
   nameListed(providerId: string, nativeSessionId: string, label: string): Promise<void>;
   pinListed(providerId: string, nativeSessionId: string): Promise<void>;
   deleteNativeListed(providerId: string, nativeSessionId: string): Promise<void>;
@@ -157,6 +159,24 @@ async function eyePass(resultPath: string): Promise<void> {
     await journey.revealConversation(providerId, native);
     await settle();
     await capture(resultPath, "pinned", { pinned: RENAMED });
+
+    // Pinning a conversation that a heading files is the case that lifts a row out from under that heading.
+    // A conversation drawn both at the top and under its project would carry one identity twice, which a tree
+    // refuses, so the whole panel is built and its identities are read back.
+    currentStage = "pinning-filed";
+    const filed = journey.filedConversation(providerId);
+    if (!filed) throw new Error("no conversation belongs to a project, so the lifted-row case cannot be proven");
+    await within(journey.pinListed(providerId, filed.nativeSessionId), 30_000, "pinning a filed conversation");
+    await within(journey.refreshChats(), 90_000, "listing after the second pin");
+    await journey.revealConversation(providerId, filed.nativeSessionId);
+    const ids = journey.treeItemIds();
+    const duplicated = ids.filter((id, index) => ids.indexOf(id) !== index);
+    if (duplicated.length > 0) {
+      throw new Error(`the sidebar draws ${duplicated.length} row(s) twice: ${[...new Set(duplicated)].slice(0, 3).join(" | ")}`);
+    }
+    // Left as it was found: the pin is this machine's own ordering choice, not something to leave behind.
+    await within(journey.pinListed(providerId, filed.nativeSessionId), 30_000, "unpinning the filed conversation");
+    await within(journey.refreshChats(), 60_000, "listing after the unpin");
 
     // Pose 5: delete. The conversation is handed back to the service (closed and forgotten here), then deleted
     // through the service's own store from its row, and the list no longer names it (a fact the store answers).
