@@ -17,7 +17,11 @@ test("accepts exactly the actions the dispatcher handles", () => {
     option: 0,
     subjectDigest: [0, 255],
   }));
-  assert.ok(isViewAction({ type: "switchModel", available: ["sonnet"] }));
+  assert.ok(isViewAction({ type: "switchModel", available: ["sonnet"], model: "sonnet", effort: "high" }));
+  assert.ok(
+    isViewAction({ type: "switchModel", available: [], model: "", effort: "" }),
+    "a conversation that has announced nothing still opens the menu",
+  );
   assert.ok(isViewAction({ type: "switchMode", available: ["plan"] }));
   assert.ok(isViewAction({ type: "switchEffort", model: "gpt-5" }));
   assert.ok(isViewAction({ type: "switchEffort", model: "" }), "an unknown model is refused later, honestly");
@@ -47,7 +51,20 @@ test("refuses malformed payloads for known action names", () => {
   assert.equal(isViewAction({ type: "prompt" }), false);
   assert.equal(isViewAction({ type: "answerApproval", approval: "a", option: "0", subjectDigest: [] }), false);
   assert.equal(isViewAction({ type: "answerApproval", approval: "a", option: 0, subjectDigest: [256] }), false);
-  assert.equal(isViewAction({ type: "switchModel", available: [""] }), false);
+  assert.equal(isViewAction({ type: "switchModel", available: [""], model: "", effort: "" }), false);
+  assert.equal(
+    isViewAction({ type: "switchModel", available: ["sonnet"] }),
+    false,
+    "the answering model and effort must be said, even as empty",
+  );
+  assert.equal(
+    isViewAction({ type: "switchModel", available: ["sonnet"], model: "m".repeat(201), effort: "" }),
+    false,
+  );
+  assert.equal(
+    isViewAction({ type: "switchModel", available: ["sonnet"], model: "", effort: "e".repeat(201) }),
+    false,
+  );
   assert.equal(isViewAction({ type: "switchEffort", model: "m".repeat(201) }), false);
   assert.equal(isViewAction({ type: "switchEffort" }), false);
   assert.equal(

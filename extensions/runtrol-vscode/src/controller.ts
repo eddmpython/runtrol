@@ -400,7 +400,7 @@ export class Controller implements vscode.Disposable {
     if (!next) {
       // A transient line rather than a dialog. Being told nothing needs you should not itself need dismissing.
       this.context.subscriptions.push(
-        vscode.window.setStatusBarMessage("Runtrol: nothing is waiting for you.", 3_000),
+        vscode.window.setStatusBarMessage("Nothing is waiting for you.", 3_000),
       );
       return;
     }
@@ -811,12 +811,21 @@ export class Controller implements vscode.Disposable {
     const usable = this.state.providers.filter(isUsable);
     if (usable.length === 0) throw new Error("no installed coding-agent CLI is currently usable");
     const recent = this.context.globalState.get<string>(RECENT_SERVICE_KEY);
-    type Choice = { label: string; description?: string; provider: ProviderLine; also: boolean };
+    type Choice = {
+      label: string;
+      description?: string;
+      icon?: string;
+      current?: boolean;
+      provider: ProviderLine;
+      also: boolean;
+    };
     const primary: Choice[] = usable.map((provider) => ({
       label: provider.displayName,
-      description: provider.providerId === draft.state.providerId
-        ? "This tab's service"
-        : provider.providerId === recent ? "Last used" : provider.installation.version ?? "",
+      description: provider.providerId === recent && provider.providerId !== draft.state.providerId
+        ? "Last used"
+        : provider.installation.version ?? "",
+      icon: provider.providerId,
+      current: provider.providerId === draft.state.providerId || undefined,
       provider,
       also: false,
     }));
@@ -827,6 +836,8 @@ export class Controller implements vscode.Disposable {
         description: draft.state.alsoProviderIds.includes(provider.providerId)
           ? "Asked too (choose again to drop)"
           : "The same first message, in its own tab",
+        icon: provider.providerId,
+        current: draft.state.alsoProviderIds.includes(provider.providerId) || undefined,
         provider,
         also: true,
       }));
@@ -857,35 +868,73 @@ export class Controller implements vscode.Disposable {
     });
   }
 
+  /// The draft's model and effort, chosen in the same one menu the live chip opens: models lead
+  /// (the chosen one marked), the chosen model's efforts follow under their own caption.
   async pickDraftModel(binding: ConversationBinding): Promise<void> {
     const draft = binding.draft;
     if (!draft) return;
     const provider = this.requireDraftProvider(draft.state);
     if (!provider) return;
     const catalogue = await this.runtime.models(provider.providerId);
-    const choices = leadWith(modelOptions(catalogue), (choice) => choice.id === draft.state.model, "Chosen");
-    if (choices.length === 0) {
+    const options = modelOptions(catalogue);
+    if (options.length === 0) {
       this.say(`${provider.displayName} reports no selectable models; its own settings stay in control.`, "info");
       return;
+    }
+    type Row = {
+      label: string;
+      description?: string;
+      detail?: string;
+      heading?: boolean;
+      current?: boolean;
+      act?: { kind: "model"; id: string | null } | { kind: "effort"; id: string | null };
+    };
+    const rows: Row[] = [
+      {
+        label: "Provider default",
+        description: "The installed CLI's current model setting",
+        current: draft.state.model === null || undefined,
+        act: { kind: "model" as const, id: null },
+      },
+      ...options.map((option) => ({
+        label: option.label,
+        description: option.description,
+        detail: option.detail,
+        current: option.id === draft.state.model || undefined,
+        act: { kind: "model" as const, id: option.id },
+      })),
+    ];
+    const chosenModel = options.find((option) => option.id === draft.state.model)?.model ?? null;
+    const efforts = reasoningOptions(catalogue, chosenModel);
+    if (efforts.length > 0) {
+      rows.push({ label: "Reasoning effort", heading: true });
+      rows.push({
+        label: "Provider default",
+        description: "The installed CLI's current effort setting",
+        current: draft.state.effort === null || undefined,
+        act: { kind: "effort" as const, id: null },
+      });
+      rows.push(...efforts.map((choice) => ({
+        label: choice.id,
+        description: choice.description || undefined,
+        current: choice.id === draft.state.effort || undefined,
+        act: { kind: "effort" as const, id: choice.id },
+      })));
     }
     const picked = await this.pickFrom(
       binding,
       "model",
-      `${provider.displayName}: model`,
-      "Choose a model reported by the installed CLI",
-      [
-        {
-          label: "Provider default",
-          id: null as string | null,
-          model: null,
-          description: "Use the installed CLI's current model setting",
-        },
-        ...choices,
-      ],
+      `${provider.displayName}: model and effort`,
+      "What this conversation starts with",
+      rows,
     );
-    if (!picked) return;
+    if (!picked?.act) return;
+    if (picked.act.kind === "effort") {
+      await this.amendDraft(binding, { effort: picked.act.id });
+      return;
+    }
     // The effort belongs to a model; a new model starts from that model's default.
-    await this.amendDraft(binding, { model: picked.id, effort: null });
+    await this.amendDraft(binding, { model: picked.act.id, effort: null });
   }
 
   async pickDraftEffort(binding: ConversationBinding): Promise<void> {
@@ -945,7 +994,14 @@ export class Controller implements vscode.Disposable {
   /// Offer choices where the question was asked: in the composer, hanging from the chip that was clicked,
   /// when the conversation's page is on screen; in the command palette otherwise (a command invoked from
   /// the palette, a page not yet ready). One list, two places; the choice itself is the same object either way.
-  private async pickFrom<T extends { label: string; description?: string; detail?: string }>(
+  private async pickFrom<T extends {
+    label: string;
+    description?: string;
+    detail?: string;
+    icon?: string;
+    heading?: boolean;
+    current?: boolean;
+  }>(
     binding: ConversationBinding | undefined,
     anchor: MenuAnchor,
     title: string,
@@ -958,12 +1014,24 @@ export class Controller implements vscode.Disposable {
         label: withoutCodicons(choice.label),
         ...(choice.description ? { description: choice.description } : {}),
         ...(choice.detail ? { detail: choice.detail } : {}),
+        ...(choice.icon ? { icon: choice.icon } : {}),
+        ...(choice.heading ? { heading: true } : {}),
+        ...(choice.current ? { current: true } : {}),
       }));
       const chosen = await binding.view.showMenu(anchor, title, items);
       if (chosen === null) return undefined;
-      return choices[Number(chosen)];
+      const picked = choices[Number(chosen)];
+      // A heading is a caption, never an answer, whatever a hostile page claims was clicked.
+      return picked?.heading ? undefined : picked;
     }
-    return vscode.window.showQuickPick([...choices], { title, placeHolder, matchOnDescription: true, matchOnDetail: true });
+    // The palette path says the same groups with its own vocabulary: a separator.
+    const rows = choices.map((choice) => (choice.heading
+      ? { label: choice.label, kind: vscode.QuickPickItemKind.Separator }
+      : choice));
+    const picked = await vscode.window.showQuickPick(rows, { title, placeHolder, matchOnDescription: true, matchOnDetail: true });
+    return picked && !("kind" in picked && picked.kind === vscode.QuickPickItemKind.Separator)
+      ? (picked as T)
+      : undefined;
   }
 
   private requireDraftProvider(draft: DraftState): ProviderLine | null {
@@ -1185,9 +1253,9 @@ export class Controller implements vscode.Disposable {
       "Choose the service for a new conversation here",
       usable.map((provider) => ({
         label: provider.displayName,
-        description: provider.providerId === session.providerId
-          ? "This conversation's service"
-          : provider.installation.version ?? "",
+        description: provider.installation.version ?? "",
+        icon: provider.providerId,
+        current: provider.providerId === session.providerId || undefined,
         provider,
       })),
     );
@@ -1379,7 +1447,7 @@ export class Controller implements vscode.Disposable {
     if (offers.length === 0) {
       // Nothing declared to offer. Still say what happened in the person's own terms rather than falling
       // through to a protocol string.
-      await vscode.window.showErrorMessage(`Runtrol: ${sentence}`);
+      await vscode.window.showErrorMessage(sentence);
       throw new ServiceTroubleReported(sentence);
     }
     const chosen = await vscode.window.showErrorMessage(
@@ -2270,55 +2338,88 @@ export class Controller implements vscode.Disposable {
   /// provider's own switch surface and displays only what the provider says back; a service with neither an
   /// announced set nor a catalogue keeps model choice in its own settings, and this says so instead of
   /// inventing a picker with nothing true to offer.
-  async switchModel(available: readonly string[], binding?: ConversationBinding): Promise<void> {
+  /// One menu for the model and its reasoning effort, hanging from the one chip that shows both
+  /// (the operator named the ChatGPT and Claude composers as the reference). The models lead, the
+  /// current one marked; the current model's efforts follow under their own caption. Choosing a
+  /// model keeps the current effort when the new model reports it and returns to that model's own
+  /// default otherwise; choosing an effort keeps the model. Never a second popover after the first.
+  async switchModel(
+    available: readonly string[],
+    currentModel: string,
+    currentEffort: string,
+    binding?: ConversationBinding,
+  ): Promise<void> {
     if (binding?.draft) {
       await this.pickDraftModel(binding);
       return;
     }
     const session = binding?.session ?? this.state.selected;
     if (!session) return;
-    let model: string | null = null;
-    let effort: string | null = null;
-    if (available.length > 0) {
-      const picked = await this.pickFrom(
-        binding,
-        "model",
-        "Switch model",
-        "Models this conversation says it can switch to",
-        available.map((id) => ({ label: id })),
+    const catalogue = await this.runtime.models(session.providerId);
+    const options = modelOptions(catalogue);
+    type Row = {
+      label: string;
+      description?: string;
+      detail?: string;
+      heading?: boolean;
+      current?: boolean;
+      act?: { kind: "model"; id: string; model: ModelOption["model"] } | { kind: "effort"; id: string };
+    };
+    // The installed CLI's catalogue when it reports one (names, descriptions, per-model efforts);
+    // the session's own announced switchable set otherwise. Both are the provider's own words.
+    const rows: Row[] = options.length > 0
+      ? options.map((option) => ({
+        label: option.label,
+        description: option.description,
+        detail: option.detail,
+        current: option.id === currentModel || undefined,
+        act: { kind: "model" as const, id: option.id, model: option.model },
+      }))
+      : available.map((id) => ({
+        label: id,
+        current: id === currentModel || undefined,
+        act: { kind: "model" as const, id, model: null },
+      }));
+    if (rows.length === 0) {
+      this.say(
+        `${providerDisplayName(session.providerId, this.state.providers)} reports no switchable models; its own settings stay in control.`,
+        "info",
       );
-      if (!picked) return;
-      model = picked.label;
-    } else {
-      const catalogue = await this.runtime.models(session.providerId);
-      const choices = modelOptions(catalogue);
-      if (choices.length === 0) {
-        this.say(
-          `${providerDisplayName(session.providerId, this.state.providers)} reports no switchable models; its own settings stay in control.`,
-          "info",
-        );
-        return;
-      }
-      const picked = await this.pickFrom(
-        binding,
-        "model",
-        "Switch model",
-        "Choose a model reported by the installed CLI",
-        choices,
-      );
-      if (!picked) return;
-      model = picked.id;
-      const pickedEffort = await this.pickReasoningEffort(
-        catalogue,
-        picked.model,
-        "Switch model: reasoning effort",
-        null,
-        binding,
-      );
-      if (pickedEffort === undefined) return;
-      effort = pickedEffort;
+      return;
     }
-    await this.switchSelectedModel(model, effort ?? undefined);
+    // Efforts ride the same menu, offered only when they can be true: the answering model is known
+    // and the provider has not refused mid-conversation effort switches.
+    const effortCapability = (await this.runtime.capabilities(session.providerId)).setReasoningEffort;
+    const currentOption = options.find((option) => option.id === currentModel) ?? null;
+    const efforts = currentModel && (!effortCapability || effortCapability.availability === "available")
+      ? reasoningOptions(catalogue, currentOption?.model ?? null)
+      : [];
+    if (efforts.length > 0) {
+      rows.push({ label: "Reasoning effort", heading: true });
+      rows.push(...efforts.map((choice) => ({
+        label: choice.id,
+        description: choice.description || undefined,
+        current: choice.id === currentEffort || undefined,
+        act: { kind: "effort" as const, id: choice.id },
+      })));
+    }
+    const picked = await this.pickFrom(
+      binding,
+      "model",
+      "Model and reasoning effort",
+      "What answers this conversation",
+      rows,
+    );
+    if (!picked?.act) return;
+    if (picked.act.kind === "effort") {
+      await this.runtime.setModel(runtimeAction(session), currentModel, picked.act.id);
+      this.viewOf(this.state.selected)?.switchRequested("effort", picked.act.id);
+      return;
+    }
+    const kept = reasoningOptions(catalogue, picked.act.model).some((choice) => choice.id === currentEffort)
+      ? currentEffort
+      : undefined;
+    await this.switchSelectedModel(picked.act.id, kept);
   }
 
   /// The relay itself, shared by the picker above and the journey proof: one path to the provider's own

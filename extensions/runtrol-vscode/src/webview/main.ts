@@ -1,5 +1,4 @@
 import "./webview.css";
-import { composerContextLabel } from "./composerContext";
 import {
   coalesceChunks,
   number,
@@ -37,7 +36,7 @@ import {
   type UsageFacts,
 } from "./statusLine";
 import { limitTelemetry, usageTelemetry } from "./telemetry";
-import { draftGreeting, NO_SERVICE_LABEL, type DraftChips } from "../draft";
+import { DEFAULT_EFFORT_LABEL, draftGreeting, NO_SERVICE_LABEL, type DraftChips } from "../draft";
 import { sessionTitle } from "../sessionDisplay";
 import type { SessionLine as Session } from "../runtimeTypes";
 
@@ -63,12 +62,13 @@ type Incoming =
     session: Session | null;
     title: string | null;
     provider: string | null;
+    serviceIcon: string | null;
     generation: number;
     draft: DraftChips | null;
     draftState: unknown;
   }
-  | { type: "session"; session: Session; title: string; provider: string }
-  | { type: "draft"; draft: DraftChips; draftState: unknown }
+  | { type: "session"; session: Session; title: string; provider: string; serviceIcon: string | null }
+  | { type: "draft"; draft: DraftChips; draftState: unknown; serviceIcon: string | null }
   | { type: "context"; context: ConversationContext }
   | { type: "attachments"; items: AttachmentLabel[] }
   | { type: "frames"; batch: FrameEnvelope[]; gap: boolean }
@@ -84,7 +84,18 @@ type Incoming =
   | { type: "clickChip"; anchor: MenuAnchor };
 
 type MenuAnchor = "project" | "service" | "model" | "effort" | "mode";
-type MenuItem = { id: string; label: string; description?: string; detail?: string };
+type MenuItem = {
+  id: string;
+  label: string;
+  description?: string;
+  detail?: string;
+  /// A Webview URI for the provider mark this row shows, already resolved by the host.
+  icon?: string;
+  /// A group caption between choices; the keys skip it and a click on it chooses nothing.
+  heading?: boolean;
+  /// The row whose value is answering right now, marked the way every model menu marks it.
+  current?: boolean;
+};
 
 type VsCodeApi = {
   setState(state: unknown): void;
@@ -156,19 +167,16 @@ projectChip.addEventListener("click", () => vscode.postMessage({ type: "pickProj
 const branchChip = element<HTMLSpanElement>("branch-chip");
 const serviceChip = element<HTMLButtonElement>("service-chip");
 serviceChip.addEventListener("click", () => vscode.postMessage({ type: "pickService" }));
+// One control for the model and its reasoning effort, the way the Codex and ChatGPT composers do
+// it: the chip reads "model · effort" and its one menu offers both, each part keeping its own
+// confirmed-versus-requested honesty in the text.
 const modelChip = element<HTMLButtonElement>("model-chip");
 modelChip.addEventListener("click", () => {
-  vscode.postMessage({ type: "switchModel", available: switchableModels });
+  vscode.postMessage({ type: "switchModel", available: switchableModels, model: facts.model, effort: facts.effort });
 });
 const modeChip = element<HTMLButtonElement>("mode-chip");
 modeChip.addEventListener("click", () => {
   vscode.postMessage({ type: "switchMode", available: switchableModeIds });
-});
-// Its own chip because the model is a confirmed value and the effort a requested one, and one chip must
-// not mix the two kinds of fact.
-const effortChip = element<HTMLButtonElement>("effort-chip");
-effortChip.addEventListener("click", () => {
-  vscode.postMessage({ type: "switchEffort", model: facts.model });
 });
 const attach = element<HTMLButtonElement>("attach");
 attach.addEventListener("click", () => vscode.postMessage({ type: "attach" }));
@@ -192,6 +200,8 @@ let visibleCharacters = 0;
 let measurement: Measurement | null = null;
 let followsTail = true;
 let currentProvider = "Coding agent";
+/// The service's own mark as a URI this page may load, or null while no provider is chosen.
+let serviceIconUri: string | null = null;
 /// Everything this coding service said it offers. Its own list, in its own words.
 let offeredCommands: SlashCommand[] = [];
 /// The subset currently on screen, which is also what the arrow keys move through.
@@ -242,11 +252,13 @@ window.addEventListener("message", ({ data }: MessageEvent<Incoming>) => {
     vscode.setState(data.session ? { sessionId: data.session.sessionId } : { draft: data.draftState });
     draft = data.session ? null : data.draft;
     context = null;
+    serviceIconUri = data.serviceIcon;
     reset(data.session, data.title, data.provider, data.generation);
     return;
   }
   if (data.type === "session") {
     selected = data.session;
+    serviceIconUri = data.serviceIcon;
     renderSession(data.session, data.title, data.provider);
     return;
   }
@@ -254,6 +266,7 @@ window.addEventListener("message", ({ data }: MessageEvent<Incoming>) => {
     if (selected) return;
     vscode.setState({ draft: data.draftState });
     draft = data.draft;
+    serviceIconUri = data.serviceIcon;
     paintFacts();
     paintGreeting();
     paintDraftPrompt();
@@ -412,13 +425,14 @@ document.addEventListener("keydown", (event) => {
     if (event.key === "ArrowDown" || event.key === "ArrowUp") {
       event.preventDefault();
       const step = event.key === "ArrowDown" ? 1 : -1;
-      openMenu.highlighted = (openMenu.highlighted + step + openMenu.items.length) % openMenu.items.length;
+      openMenu.highlighted = movedMenuHighlight(openMenu.items, openMenu.highlighted, step);
       paintChipMenu();
       return;
     }
     if (event.key === "Enter") {
       event.preventDefault();
-      chooseMenuItem(openMenu.items[openMenu.highlighted] ?? null);
+      const highlighted = openMenu.items[openMenu.highlighted] ?? null;
+      chooseMenuItem(highlighted?.heading ? null : highlighted);
       return;
     }
     if (event.key === "Escape") {
@@ -442,18 +456,19 @@ document.addEventListener("mousedown", (event) => {
 });
 
 function chipOf(anchor: MenuAnchor): HTMLElement | null {
+  // The effort anchor lands on the model chip: model and effort are one control now, and the
+  // journeys that click "effort" reach the same menu a person does.
   const id = anchor === "project" ? "project-chip"
     : anchor === "service" ? "service-chip"
-      : anchor === "model" ? "model-chip"
-        : anchor === "effort" ? "effort-chip"
-          : "mode-chip";
+      : anchor === "model" || anchor === "effort" ? "model-chip"
+        : "mode-chip";
   return document.getElementById(id);
 }
 
-/// Show the choices for a chip, hanging from that chip, highlighted on the first row.
+/// Show the choices for a chip, hanging from that chip, highlighted on the first choosable row.
 function openChipMenu(id: string, anchor: MenuAnchor, title: string, items: MenuItem[]): void {
   if (openMenu) hideChipMenu();
-  openMenu = { id, anchor, items, highlighted: 0 };
+  openMenu = { id, anchor, items, highlighted: firstChoosable(items) };
   chipMenu.setAttribute("aria-label", title);
   chipMenu.dataset.anchor = anchor;
   paintChipMenu();
@@ -461,12 +476,34 @@ function openChipMenu(id: string, anchor: MenuAnchor, title: string, items: Menu
   chip?.setAttribute("aria-expanded", "true");
   const card = chipMenu.parentElement;
   if (chip && card) {
-    // Left edge on the chip, clamped inside the card; the bar's chips are near the right edge.
+    // Attached to the chip itself, the way every composer's model menu hangs from its button: just
+    // above the chip's own row, opening from the chip's near edge (right-aligned for a chip on the
+    // right half of the card), clamped inside the card either way.
     const cardBox = card.getBoundingClientRect();
     const chipBox = chip.getBoundingClientRect();
-    const left = Math.max(0, Math.min(chipBox.left - cardBox.left, cardBox.width - chipMenu.offsetWidth - 8));
+    const width = chipMenu.offsetWidth;
+    const rightward = chipBox.left + chipBox.width / 2 > cardBox.left + cardBox.width / 2;
+    const preferred = rightward ? chipBox.right - cardBox.left - width : chipBox.left - cardBox.left;
+    const left = Math.max(0, Math.min(preferred, cardBox.width - width - 8));
     chipMenu.style.left = `${left}px`;
+    chipMenu.style.bottom = `${Math.max(0, cardBox.bottom - chipBox.top + 6)}px`;
   }
+}
+
+/// The first row the keys may land on: headings are captions, not choices.
+function firstChoosable(items: readonly MenuItem[]): number {
+  const found = items.findIndex((item) => !item.heading);
+  return found === -1 ? 0 : found;
+}
+
+/// The next choosable row in `step` direction, wrapping, never resting on a heading.
+function movedMenuHighlight(items: readonly MenuItem[], from: number, step: number): number {
+  if (items.every((item) => item.heading)) return from;
+  let at = from;
+  do {
+    at = (at + step + items.length) % items.length;
+  } while (items[at]?.heading);
+  return at;
 }
 
 function paintChipMenu(): void {
@@ -478,10 +515,23 @@ function paintChipMenu(): void {
   const menu = openMenu;
   chipMenu.replaceChildren(...menu.items.map((item, index) => {
     const row = document.createElement("li");
+    if (item.heading) {
+      row.className = "menu-heading";
+      row.setAttribute("role", "presentation");
+      row.textContent = item.label;
+      return row;
+    }
     row.id = `runtrol-chip-option-${index}`;
     row.className = index === menu.highlighted ? "command command-active" : "command";
     row.setAttribute("role", "option");
     row.setAttribute("aria-selected", index === menu.highlighted ? "true" : "false");
+    if (item.icon) {
+      const mark = document.createElement("img");
+      mark.className = "menu-mark";
+      mark.src = item.icon;
+      mark.alt = "";
+      row.append(mark);
+    }
     const name = document.createElement("span");
     name.className = "command-name";
     name.textContent = item.label;
@@ -491,6 +541,14 @@ function paintChipMenu(): void {
       description.className = "command-description";
       description.textContent = item.description;
       row.append(description);
+    }
+    if (item.current) {
+      // The value answering right now, said the way every model menu says it.
+      const mark = document.createElement("span");
+      mark.className = "command-current";
+      mark.textContent = "✓";
+      mark.setAttribute("aria-label", "current");
+      row.append(mark);
     }
     if (item.detail) {
       const detail = document.createElement("span");
@@ -523,6 +581,7 @@ function hideChipMenu(): void {
   chipMenu.hidden = true;
   chipMenu.replaceChildren();
   chipMenu.style.left = "";
+  chipMenu.style.bottom = "";
 }
 
 function chooseMenuItem(item: MenuItem | null): void {
@@ -680,19 +739,21 @@ function paintQueued(): void {
 /// A draft paints its choices (each chip is the picker for that choice); a live conversation paints what
 /// the host and the service said. Either way the chip is the place that says the fact and the place to
 /// change it, and a chip with nothing true to say stays hidden rather than guessing.
+///
+/// No chip labels itself: a person reading "runtrol" beside a folder glyph knows it is the project, and
+/// the service's own mark says who answers. Words spent on "Project:" and "Agent:" were words in the way.
 function paintFacts(): void {
   const place = draft ?? context;
   const project = place?.project ?? "";
   const branch = place?.branch ?? "";
   const agent = draft ? draft.service : facts.service;
-  setChip(projectChip, composerContextLabel("Project", project));
-  setChip(branchChip, composerContextLabel("Branch", branch));
-  setChip(serviceChip, composerContextLabel("Agent", agent));
-  projectChip.title = place?.projectPath ? `Project path: ${place.projectPath}` : "Project";
+  setChip(projectChip, project);
+  setChip(branchChip, branch);
+  setServiceChip(agent);
+  projectChip.title = place?.projectPath ? `Project: ${place.projectPath}` : "Project";
   branchChip.title = branch ? `Git branch: ${branch}` : "";
   serviceChip.title = agent ? `Coding agent: ${agent}` : "Coding agent";
-  setChip(modelChip, draft ? draft.model : modelLine(facts, requested.model) || "Model");
-  setChip(effortChip, draft ? draft.effort : chipText(facts.effort, requested.effort) || "Effort");
+  setChip(modelChip, modelEffortText());
   setChip(modeChip, draft ? draft.mode : chipText(facts.mode, requested.mode));
   const spent = usageLine(usage, Date.now());
   usageChip.textContent = spent;
@@ -700,9 +761,38 @@ function paintFacts(): void {
   usageChip.classList.toggle("limit-reached", usage.reached);
 }
 
+/// "model · effort" on the one chip that is also their one menu. Each part keeps its own
+/// confirmed-versus-requested honesty; a part with nothing true to say is simply absent.
+function modelEffortText(): string {
+  if (draft) {
+    const effort = draft.effort === DEFAULT_EFFORT_LABEL ? "" : draft.effort;
+    return [draft.model, effort].filter(Boolean).join(" · ");
+  }
+  const parts = [modelLine(facts, requested.model), chipText(facts.effort, requested.effort)];
+  return parts.filter(Boolean).join(" · ") || "Model";
+}
+
 function setChip(chip: HTMLElement, text: string): void {
   chip.textContent = text;
   chip.hidden = !text;
+}
+
+/// The service chip: the provider's own mark beside its name, never a label in front of it.
+function setServiceChip(agent: string): void {
+  serviceChip.replaceChildren();
+  if (!agent) {
+    serviceChip.hidden = true;
+    return;
+  }
+  if (serviceIconUri) {
+    const mark = document.createElement("img");
+    mark.className = "chip-mark";
+    mark.src = serviceIconUri;
+    mark.alt = "";
+    serviceChip.append(mark);
+  }
+  serviceChip.append(document.createTextNode(agent));
+  serviceChip.hidden = false;
 }
 
 /// The greeting of a draft, redrawn when its project changes (the words name the project).

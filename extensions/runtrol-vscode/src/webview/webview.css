@@ -685,20 +685,66 @@ body.no-chat #composer {
   position: relative;
 }
 
+/* Attached to the chip that opened it: the page sets left and bottom from the chip's own box. */
 .chip-menu {
   position: absolute;
-  bottom: calc(100% - 0.5rem);
+  bottom: 100%;
   left: 0.5rem;
   z-index: 3;
-  min-width: 16rem;
-  max-width: min(28rem, calc(100% - 1rem));
+  min-width: 15rem;
+  max-width: min(22rem, calc(100% - 1rem));
   margin: 0;
 }
 
+/*
+ * Mark, name, description, current: each in its own column so every row in one menu keeps one left
+ * edge whether or not it carries a mark (an empty first track collapses), and the detail line spans.
+ */
 .chip-menu .command {
   display: grid;
-  grid-template-columns: auto 1fr;
+  grid-template-columns: auto auto 1fr auto;
   column-gap: 0.5rem;
+  align-items: center;
+}
+
+/* A provider mark on its row, sized to the text beside it. */
+.menu-mark {
+  grid-column: 1;
+  grid-row: 1;
+  width: 1rem;
+  height: 1rem;
+}
+
+.chip-menu .command .command-name {
+  grid-column: 2;
+  grid-row: 1;
+}
+
+.chip-menu .command .command-description {
+  grid-column: 3;
+  grid-row: 1;
+}
+
+/* The value answering right now. Its own column so it never pushes the text around. */
+.command-current {
+  grid-column: 4;
+  grid-row: 1;
+  color: var(--vscode-charts-green, currentColor);
+}
+
+/* A caption between choices: read, never chosen. */
+.menu-heading {
+  padding: 0.45rem 0.5rem 0.15rem;
+  color: var(--vscode-descriptionForeground);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.menu-heading:not(:first-child) {
+  margin-top: 0.25rem;
+  border-top: 1px solid var(--vscode-editorWidget-border, var(--vscode-widget-border, transparent));
 }
 
 .chip-menu .command-detail {
@@ -799,6 +845,9 @@ body.no-chat #composer {
 
 /* A chip that is also a picker. Same face as a plain chip, plus the affordance of a border on hover. */
 .chip-button {
+  display: inline-flex;
+  gap: 0.3rem;
+  align-items: center;
   padding: 0.15rem 0.5rem;
   border: 1px solid transparent;
   border-radius: 999px;
@@ -808,6 +857,12 @@ body.no-chat #composer {
   font-size: 0.78rem;
   cursor: pointer;
   min-height: 0;
+}
+
+/* The service's own mark on its chip, sized to the text beside it. */
+.chip-mark {
+  width: 0.95rem;
+  height: 0.95rem;
 }
 
 .chip-button:hover:not(:disabled) {

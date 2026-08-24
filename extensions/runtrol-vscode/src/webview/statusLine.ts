@@ -21,12 +21,11 @@ export type UsageFacts = {
 export const NO_FACTS: ConversationFacts = { service: "", model: "", effort: "", mode: "" };
 export const NO_USAGE: UsageFacts = { usage: null, primary: null, secondary: null, reached: false };
 
-/// Which model the service says is answering, for the model chip.
+/// Which model the service says is answering: the first half of the "model · effort" chip.
 ///
-/// The service has its own chip above the composer (it is where the conversation runs, like the project),
-/// and mode and effort each render on their own chip, which is also their own switch. The model was a
-/// confirmed value sharing a chip with a merely-requested one (the effort), and one chip must not mix the
-/// two kinds of fact.
+/// The service has its own chip above the composer (it is where the conversation runs, like the
+/// project). Model and effort share one chip and one menu, the way every chat composer's model
+/// control works; each half keeps its own confirmed-versus-requested honesty through `chipText`.
 export function modelLine(facts: ConversationFacts, requestedModel = ""): string {
   return chipText(facts.model.trim(), requestedModel.trim());
 }

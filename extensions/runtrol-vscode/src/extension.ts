@@ -152,7 +152,7 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
           () => controller.answerApproval(message.approval, message.option, message.subjectDigest, session),
         ));
       } else if (message.type === "switchModel") {
-        void run(() => afterReady(() => controller.switchModel(message.available, binding)));
+        void run(() => afterReady(() => controller.switchModel(message.available, message.model, message.effort, binding)));
       } else if (message.type === "switchMode") {
         void run(() => afterReady(() => controller.switchMode(message.available, binding)));
       } else if (message.type === "switchEffort") {
@@ -1164,7 +1164,7 @@ async function run(action: () => Promise<void>): Promise<void> {
     // underneath that one reads as a second problem, and the bare protocol string is the less useful of
     // the two.
     if (error instanceof ServiceTroubleReported) return;
-    await vscode.window.showErrorMessage(`Runtrol: ${error instanceof Error ? error.message : String(error)}`);
+    await vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
   }
 }
 

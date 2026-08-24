@@ -155,7 +155,11 @@ export class ConversationView implements vscode.Disposable {
       vscode.ViewColumn.Active,
       {
         enableScripts: true,
-        localResourceRoots: [vscode.Uri.joinPath(this.extensionUri, "dist")],
+        localResourceRoots: [
+          vscode.Uri.joinPath(this.extensionUri, "dist"),
+          // The provider marks the service chip and the service menu draw.
+          vscode.Uri.joinPath(this.extensionUri, "resources", "provider-icons"),
+        ],
         retainContextWhenHidden: false,
       },
     );
@@ -258,6 +262,7 @@ export class ConversationView implements vscode.Disposable {
       session,
       title: session ? this.titleOf(session) : null,
       provider: session ? this.providerOf(session) : null,
+      serviceIcon: this.serviceIconUri(session?.providerId ?? this.draft?.state.providerId ?? null),
       generation: this.generation,
       draft: this.draft?.chips ?? null,
       draftState: this.draft?.state ?? null,
@@ -270,7 +275,12 @@ export class ConversationView implements vscode.Disposable {
     if (this.selected) return;
     this.draft = { chips, state };
     if (this.surface) this.surface.iconPath = this.panelIcon(null);
-    void this.surface?.webview.postMessage({ type: "draft", draft: chips, draftState: state });
+    void this.surface?.webview.postMessage({
+      type: "draft",
+      draft: chips,
+      draftState: state,
+      serviceIcon: this.serviceIconUri(state.providerId),
+    });
   }
 
   /// Where a live conversation runs, for the chips above the composer: its folder and branch.
@@ -294,6 +304,7 @@ export class ConversationView implements vscode.Disposable {
       session,
       title: this.titleOf(session),
       provider: this.providerOf(session),
+      serviceIcon: this.serviceIconUri(session.providerId),
     });
   }
 
@@ -342,7 +353,10 @@ export class ConversationView implements vscode.Disposable {
     if (!this.surface || !this.visibleReady) return Promise.resolve(null);
     this.menuSerial += 1;
     const id = `menu-${this.menuSerial}`;
-    const offered = items.slice(0, MAX_MENU_ITEMS);
+    // An item's icon arrives as a provider mark's name; the page needs the URI this webview may load.
+    const offered = items.slice(0, MAX_MENU_ITEMS).map((item) => (
+      item.icon ? { ...item, icon: this.serviceIconUri(item.icon) ?? undefined } : item
+    ));
     return new Promise<string | null>((resolve) => {
       this.pendingMenu = { id, resolve };
       void this.surface?.webview.postMessage({ type: "menu", menu: id, anchor, title, items: offered });
@@ -616,6 +630,16 @@ export class ConversationView implements vscode.Disposable {
     return conversationIcon(this.extensionUri, this.iconOf(providerId));
   }
 
+  /// The service's own mark as a Webview URI, for the service chip and for menu rows.
+  ///
+  /// Null while no provider is chosen (a fresh draft) so the chip shows its words alone rather than a
+  /// placeholder mark pretending a choice was made.
+  private serviceIconUri(providerId: string | null): string | null {
+    const webview = this.surface?.webview;
+    if (!webview || !providerId) return null;
+    return webview.asWebviewUri(conversationIcon(this.extensionUri, this.iconOf(providerId))).toString();
+  }
+
   private html(webview: vscode.Webview): string {
     const script = webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, "dist", "webview.js"));
     const style = webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, "dist", "webview.css"));
@@ -625,7 +649,7 @@ export class ConversationView implements vscode.Disposable {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource}; script-src 'nonce-${nonce}';">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource}; img-src ${webview.cspSource}; script-src 'nonce-${nonce}';">
   <link rel="stylesheet" href="${style}">
   <title>Chat</title>
 </head>
@@ -660,8 +684,7 @@ export class ConversationView implements vscode.Disposable {
         </button>
         <button id="mode-chip" class="chip chip-button" type="button" title="Access mode" aria-haspopup="listbox" aria-controls="chip-menu" aria-expanded="false" hidden></button>
         <span class="composer-spacer"></span>
-        <button id="model-chip" class="chip chip-button" type="button" title="Model" aria-haspopup="listbox" aria-controls="chip-menu" aria-expanded="false" hidden></button>
-        <button id="effort-chip" class="chip chip-button" type="button" title="Reasoning effort" aria-haspopup="listbox" aria-controls="chip-menu" aria-expanded="false" hidden></button>
+        <button id="model-chip" class="chip chip-button" type="button" title="Model and reasoning effort" aria-haspopup="listbox" aria-controls="chip-menu" aria-expanded="false" hidden></button>
         <button id="send" type="submit" aria-label="Send" title="Send" disabled hidden>
           <span aria-hidden="true">&#8593;</span>
         </button>

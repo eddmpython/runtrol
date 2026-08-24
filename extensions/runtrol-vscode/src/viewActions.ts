@@ -12,7 +12,10 @@ import { type DeclaredDiff, isDeclaredDiff } from "./webview/toolDiff";
 export type ViewAction =
   | { type: "prompt"; text: string }
   | { type: "answerApproval"; approval: string; option: number; subjectDigest: number[] }
-  | { type: "switchModel"; available: string[] }
+  // `model` and `effort` are what the page says is answering, so the one menu can offer that
+  // model's efforts beside the models themselves and mark the current pair (one control, the way
+  // the Codex and ChatGPT composers do it).
+  | { type: "switchModel"; available: string[]; model: string; effort: string }
   | { type: "switchMode"; available: string[] }
   | { type: "switchEffort"; model: string }
   | { type: "pickProject" }
@@ -26,11 +29,19 @@ export type ViewAction =
   | { type: "interrupt" };
 
 /// A choice offered in the composer's own popover, where the chip was clicked.
+///
+/// A heading row groups the rows after it (the model menu carries its efforts under one) and is
+/// skipped by the keys; `current` marks the row whose value is answering right now; `icon` names
+/// the provider whose shipped mark the row shows, resolved to a Webview URI by the view that posts
+/// the menu (the page receives the URI in this same field).
 export type MenuItem = {
   readonly id: string;
   readonly label: string;
   readonly description?: string;
   readonly detail?: string;
+  readonly icon?: string;
+  readonly heading?: boolean;
+  readonly current?: boolean;
 };
 
 /// Which chip a popover hangs from.
@@ -72,9 +83,19 @@ export function isViewAction(value: unknown): value is ViewAction {
     const available = (value as { available?: unknown }).available;
     // Bounded like everything else that crosses the webview boundary: the set is display data from the
     // provider's own announcement, and a hostile page must not be able to smuggle bulk through it.
-    return Array.isArray(available)
-      && available.length <= 64
-      && available.every((id) => typeof id === "string" && id.length > 0 && id.length <= 200);
+    if (
+      !Array.isArray(available)
+      || available.length > 64
+      || !available.every((id) => typeof id === "string" && id.length > 0 && id.length <= 200)
+    ) {
+      return false;
+    }
+    if (type === "switchMode") return true;
+    // The answering model and effort, empty when the provider has not announced them. Bounded like
+    // switchEffort's model.
+    const { model, effort } = value as { model?: unknown; effort?: unknown };
+    return typeof model === "string" && model.length <= 200
+      && typeof effort === "string" && effort.length <= 200;
   }
   if (type === "removeAttachment") {
     const index = (value as { index?: unknown }).index;

@@ -158,7 +158,11 @@ export class ConversationPanels implements vscode.Disposable {
       resolveWebviewView: (view) => {
         view.webview.options = {
           enableScripts: true,
-          localResourceRoots: [vscode.Uri.joinPath(this.extensionUri, "dist")],
+          localResourceRoots: [
+            vscode.Uri.joinPath(this.extensionUri, "dist"),
+            // The provider marks the service chip and the service menu draw.
+            vscode.Uri.joinPath(this.extensionUri, "resources", "provider-icons"),
+          ],
         };
         view.webview.html = emptyPlaceHtml(place);
         this.views.set(place, view);
