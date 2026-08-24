@@ -12,6 +12,10 @@ and refactoring that no user can observe do not belong here.
 
 ### Added
 
+- Claude Code conversations can now be deleted from the sidebar. Claude publishes no delete command, so instead
+  of erasing anything Runtrol moves the conversation out of Claude's own store into a `runtrol-deleted` folder
+  beside it: it leaves the sidebar and Claude's resume list at once, yet can be carried back by hand. The action
+  is offered only at the machine, never from a paired phone.
 - Agent Usage now shows each service's running cost on its own line, marked by the service icon alone and updated
   as the CLI reports it at the end of every turn. The service name is not repeated on that line, so rows keep a
   steady height. Services that report only account limits are unchanged, and a service that reports no cost shows

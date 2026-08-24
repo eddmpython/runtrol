@@ -10,9 +10,9 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use runtrol_childproc::{Containment, Program};
 use runtrol_provider::{
-    Agent, Disposition, ModelAliases, ModelCatalog, NativeSessionCatalogue, NativeSessionQuery,
-    OpenIntent, Provider, ProviderCapabilities, ProviderCapability, ProviderCapabilitySource,
-    ProviderError, ProviderId,
+    Agent, Disposition, ModelAliases, ModelCatalog, NativeSessionCatalogue, NativeSessionDeletion,
+    NativeSessionQuery, OpenIntent, Provider, ProviderCapabilities, ProviderCapability,
+    ProviderCapabilitySource, ProviderError, ProviderId,
 };
 
 use crate::claude::agent::ClaudeAgent;
@@ -116,10 +116,12 @@ impl Provider for ClaudeProvider {
                 "the installed CLI refuses a mid-session effort switch; the effort is an open-time \
                  flag, so a new choice applies from the next session",
             ),
-            // The CLI publishes no surface for what it stores: no listing and no deletion. Saying so here
-            // keeps a surface from offering an act that would have to reach into the provider's own files.
-            native_session_delete: ProviderCapability::unsupported(
-                "Claude Code publishes no command or protocol method for its stored conversations",
+            // The CLI publishes no delete command, but the driver already reads this store to name conversations
+            // (the catalogue above); deleting is that same contract carried to its end. The conversation is
+            // moved out of the store, reversibly (into `runtrol-deleted`), under the delete scope the Runtime
+            // grants only from the machine. Said available so the surface offers the act that now exists.
+            native_session_delete: ProviderCapability::available(
+                ProviderCapabilitySource::DriverContract,
             ),
             native_session_archive: ProviderCapability::unsupported(
                 "Claude Code publishes no command or protocol method for archiving its stored conversations",
@@ -152,6 +154,29 @@ impl Provider for ClaudeProvider {
                 doing: "reading the conversations this CLI has stored",
                 detail: join.to_string(),
             })?
+    }
+
+    async fn delete_native_session(
+        &self,
+        deletion: NativeSessionDeletion,
+    ) -> Result<(), ProviderError> {
+        let store = self.store.clone();
+        let provider = self.id;
+        let native = deletion.native.as_str().to_owned();
+        // A directory move on disk: blocking work, kept off the reactor so a slow disk cannot stall every other
+        // provider's answer.
+        tokio::task::spawn_blocking(move || store.delete(&native))
+            .await
+            .map_err(|join| ProviderError::Protocol {
+                provider,
+                doing: "deleting a stored conversation",
+                detail: join.to_string(),
+            })?
+            .map_err(|error| ProviderError::Protocol {
+                provider,
+                doing: "deleting a stored conversation",
+                detail: error.to_string(),
+            })
     }
 
     async fn models(&self) -> Result<ModelCatalog, ProviderError> {

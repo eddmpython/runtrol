@@ -208,6 +208,44 @@ impl ClaudeStore {
             },
         }
     }
+
+    /// Move one stored conversation out of the store, reversibly.
+    ///
+    /// runtrol reads this store to name conversations (the driver contract on the catalogue); deleting is that
+    /// same contract carried to its lifecycle end. The conversation file and its side-transcript directory are
+    /// moved into `runtrol-deleted`, a sibling of `projects` the listing never walks, rather than erased, so the
+    /// act is reversible by hand and the provider's store stays the record of what exists. A name the store no
+    /// longer holds is already in the asked-for state and answers as done. Reachable only under the delete scope
+    /// the Runtime grants from the machine.
+    ///
+    /// # Errors
+    ///
+    /// The underlying filesystem error when the move cannot be made: a file the CLI still holds open, a store
+    /// that could not be located, or a trash that could not be created.
+    pub(super) fn delete(&self, native: &str) -> std::io::Result<()> {
+        let projects = self.projects.as_ref().map_err(|_| {
+            std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "the stored conversation directory could not be located",
+            )
+        })?;
+        let Some(file) = conversation_path(projects, native) else {
+            return Ok(());
+        };
+        let trash = trash_directory(projects);
+        std::fs::create_dir_all(&trash)?;
+        let folder = file.parent().map(Path::to_path_buf);
+        move_out(&file, &trash)?;
+        // The CLI keeps a subagent's side transcripts in a directory named for the conversation, beside its
+        // file; it leaves the store with the conversation it belongs to.
+        if let Some(folder) = folder {
+            let sidecar = folder.join(native);
+            if sidecar.is_dir() {
+                move_out(&sidecar, &trash)?;
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Where the store keeps one conversation: `projects/<any folder slug>/<native>.jsonl`.
@@ -228,6 +266,35 @@ fn conversation_path(projects: &Path, native: &str) -> Option<PathBuf> {
         .flatten()
         .map(|entry| entry.path().join(&file_name))
         .find(|candidate| candidate.is_file())
+}
+
+/// Where a deleted conversation is kept: `runtrol-deleted`, a sibling of `projects`.
+///
+/// A sibling, not a child, so a moved conversation leaves every listing at once (the listing only ever walks
+/// `projects`). Named plainly so an operator can find and restore it by hand.
+fn trash_directory(projects: &Path) -> PathBuf {
+    projects
+        .parent()
+        .unwrap_or(projects)
+        .join("runtrol-deleted")
+}
+
+/// Move one path into the trash, replacing any earlier deletion of the same name.
+///
+/// The trash is a bin, not an archive: the newest deletion of a given identifier is the one kept, so a
+/// same-named remnant from a previous deletion is cleared first. The trash sits on the same volume as the
+/// store, so the move is a rename rather than a copy.
+fn move_out(source: &Path, trash: &Path) -> std::io::Result<()> {
+    let Some(name) = source.file_name() else {
+        return Ok(());
+    };
+    let destination = trash.join(name);
+    if destination.is_dir() {
+        fs::remove_dir_all(&destination)?;
+    } else if destination.exists() {
+        fs::remove_file(&destination)?;
+    }
+    fs::rename(source, &destination)
 }
 
 /// Read the bounded tail of the file and keep the message records in it, oldest first.
@@ -853,6 +920,44 @@ mod tests {
         let titles = history_titles(&path);
 
         assert_eq!(titles.get(BETA).map(String::as_str), Some("/model"));
+    }
+
+    #[test]
+    fn deleting_moves_the_conversation_and_its_sidecar_into_the_reversible_trash() {
+        let scratch = Scratch::new("delete");
+        let projects = scratch.0.join("projects");
+        let folder = projects.join("some-folder");
+        fs::create_dir_all(&folder).expect("the project folder is created");
+        let file = folder.join(format!("{ALPHA}.{CONVERSATION_EXTENSION}"));
+        fs::write(&file, b"{\"type\":\"user\"}\n").expect("the conversation file is written");
+        let sidecar = folder.join(ALPHA);
+        fs::create_dir_all(&sidecar).expect("the sidecar directory is created");
+        fs::write(sidecar.join("agent-1.jsonl"), b"{}\n").expect("a sidecar record is written");
+
+        ClaudeStore::at(projects.clone())
+            .delete(ALPHA)
+            .expect("the conversation is deleted");
+
+        // Gone from the store, so gone from every listing.
+        assert!(!file.exists(), "the conversation file left the store");
+        assert!(!sidecar.exists(), "the sidecar directory left the store");
+        // Kept in the trash, a sibling of projects, so it can be restored by hand.
+        let trash = scratch.0.join("runtrol-deleted");
+        assert!(
+            trash
+                .join(format!("{ALPHA}.{CONVERSATION_EXTENSION}"))
+                .is_file(),
+            "the conversation file is in the trash"
+        );
+        assert!(
+            trash.join(ALPHA).is_dir(),
+            "the sidecar directory is in the trash"
+        );
+
+        // Deleting again, with the conversation already gone, is the asked-for state and succeeds.
+        ClaudeStore::at(projects)
+            .delete(ALPHA)
+            .expect("a second delete of a gone conversation succeeds");
     }
 
     fn query(root: Option<&str>, cursor: Option<&str>) -> NativeSessionQuery {

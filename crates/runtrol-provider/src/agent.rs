@@ -114,8 +114,10 @@ pub trait Provider: Send + Sync + 'static {
     /// Delete one provider-native conversation through the provider's own surface.
     ///
     /// The default refuses: a driver written before this existed has not said its provider can do it, and
-    /// deleting is the one act a surface must never guess at. A driver that can asks its CLI and nothing
-    /// else; runtrol never touches the provider's store itself.
+    /// deleting is the one act a surface must never guess at. A driver that can either asks its CLI's own delete
+    /// command, or, for a store it already reads under its contract, moves the conversation out of that store
+    /// reversibly. It removes the entry the operator asked to remove and interprets no content; the provider's
+    /// store stays the record of what exists.
     ///
     /// # Errors
     ///

@@ -90,11 +90,13 @@ pub struct ProviderCapabilities {
     /// time and refuse to change it afterwards (measured on claude 2.1.235), and a surface that only
     /// learns this from the refusal cannot say "applies from the next session" before the attempt.
     pub set_reasoning_effort: ProviderCapability,
-    /// A stored provider-native conversation can be deleted through the provider's own surface.
+    /// A stored provider-native conversation can be deleted, through the provider's own command or a driver
+    /// contract over the store it already reads.
     ///
-    /// Said up front so a surface offers the act only where it exists: a CLI that publishes no way to
-    /// delete what it stored (claude) is told apart from one that does (codex `thread/delete`, cline
-    /// `history delete`) before anybody clicks.
+    /// Said up front so a surface offers the act only where it exists. Some CLIs publish a delete command
+    /// (codex `thread/delete`, cline `history delete`); for a store a driver already reads to name
+    /// conversations, that same contract removes an entry reversibly (claude). A provider with neither says so
+    /// before anybody clicks.
     pub native_session_delete: ProviderCapability,
     /// A stored provider-native conversation can be archived through the provider's own surface.
     pub native_session_archive: ProviderCapability,
