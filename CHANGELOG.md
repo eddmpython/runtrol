@@ -22,6 +22,9 @@ and refactoring that no user can observe do not belong here.
 - Cline, OpenCode, and Grok now carry a fitting glyph wherever a service is drawn (a robot, a terminal, and a
   rocket) instead of the same generic placeholder they shared before. Agent Usage in particular now draws each
   service's own glyph rather than falling every service back to one mark.
+- A conversation named from its first prompt now passes over a leading slash command (such as `/model` or
+  `/clear`), so its name is the first thing you actually asked rather than the control line you happened to type
+  first. A conversation that only ever ran commands keeps its first command rather than going nameless.
 
 ## [0.1.21] - 2026-08-24
 

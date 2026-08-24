@@ -534,18 +534,24 @@ struct HistoryEntry {
     display: Option<String>,
 }
 
-/// Read the provider's own human-facing prompt previews and keep the first one for each conversation.
+/// Read the provider's own human-facing prompt previews and keep the first one that reads as a request for each
+/// conversation.
 ///
 /// This is not a transcript scan. `history.jsonl` is the CLI's structured prompt-history surface, and serde
 /// streams past fields such as pasted content without retaining them. The map lives for one catalogue call and
-/// is dropped after its labels are attached to the returned page.
+/// is dropped after its labels are attached to the returned page. A leading slash command is passed over so the
+/// name is the first thing the person actually asked for, not the CLI control line they happened to type first.
 fn history_titles(path: &Path) -> HashMap<String, String> {
     let Ok(file) = File::open(path) else {
         return HashMap::new();
     };
     let entries =
         serde_json::Deserializer::from_reader(BufReader::new(file)).into_iter::<HistoryEntry>();
-    let mut titles = HashMap::new();
+    // Per conversation, the first prompt that reads as a request. A leading slash command (`/model`, `/clear`) is
+    // the CLI's own control line rather than something the person said about the work, so a later substantive
+    // prompt is preferred over it; a conversation that only ever ran commands keeps its first command rather than
+    // going nameless. The bool records whether the kept title is still such a command placeholder.
+    let mut titles: HashMap<String, (String, bool)> = HashMap::new();
     for entry in entries.take(MAX_HISTORY_ROWS) {
         let Ok(entry) = entry else {
             break;
@@ -553,7 +559,13 @@ fn history_titles(path: &Path) -> HashMap<String, String> {
         let (Some(session_id), Some(display)) = (entry.session_id, entry.display) else {
             continue;
         };
-        if titles.contains_key(&session_id) || NativeSessionId::new(&session_id).is_err() {
+        if NativeSessionId::new(&session_id).is_err() {
+            continue;
+        }
+        if titles
+            .get(&session_id)
+            .is_some_and(|(_, is_command)| !is_command)
+        {
             continue;
         }
         let Some(line) = display.lines().find(|line| !line.trim().is_empty()) else {
@@ -564,11 +576,24 @@ fn history_titles(path: &Path) -> HashMap<String, String> {
             continue;
         }
         let title = bounded(line);
-        if !title.is_empty() {
-            titles.insert(session_id, title);
+        if title.is_empty() {
+            continue;
+        }
+        let is_command = title.starts_with('/');
+        match titles.get(&session_id) {
+            None => {
+                titles.insert(session_id, (title, is_command));
+            }
+            Some((_, true)) if !is_command => {
+                titles.insert(session_id, (title, false));
+            }
+            _ => {}
         }
     }
     titles
+        .into_iter()
+        .map(|(session_id, (title, _))| (session_id, title))
+        .collect()
 }
 
 /// What the head of one stored conversation names.
@@ -793,6 +818,41 @@ mod tests {
             titles.get(ALPHA).map(String::as_str),
             Some("First provider display")
         );
+    }
+
+    #[test]
+    fn a_leading_slash_command_is_passed_over_for_the_first_real_request() {
+        // The first things typed were `/model` and `/clear`, the CLI's own control lines. A conversation named
+        // `/model` tells the operator nothing, so the first prompt that reads as a request becomes the title.
+        let scratch = Scratch::new("history-title-command");
+        let path = scratch.history(&[
+            history_record(Some(ALPHA), "/model"),
+            history_record(Some(ALPHA), "/clear"),
+            history_record(Some(ALPHA), "wire the usage panel"),
+            history_record(Some(ALPHA), "and the icons too"),
+        ]);
+
+        let titles = history_titles(&path);
+
+        assert_eq!(
+            titles.get(ALPHA).map(String::as_str),
+            Some("wire the usage panel")
+        );
+    }
+
+    #[test]
+    fn a_conversation_that_only_ran_commands_keeps_its_first_command_rather_than_going_nameless() {
+        // Passing over commands must not erase the name entirely: a conversation that only ever ran commands is
+        // still better shown by its first command than by nothing at all.
+        let scratch = Scratch::new("history-title-only-commands");
+        let path = scratch.history(&[
+            history_record(Some(BETA), "/model"),
+            history_record(Some(BETA), "/clear"),
+        ]);
+
+        let titles = history_titles(&path);
+
+        assert_eq!(titles.get(BETA).map(String::as_str), Some("/model"));
     }
 
     fn query(root: Option<&str>, cursor: Option<&str>) -> NativeSessionQuery {
