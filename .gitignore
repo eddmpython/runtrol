@@ -39,6 +39,9 @@ dist/
 extensions/runtrol-vscode/resources/
 extensions/runtrol-vscode/.vscode-test/
 
+# 확장 단위 테스트 번들. tooling/test.mjs 가 매 실행마다 재생성하는 산출물이라 추적하지 않는다.
+extensions/runtrol-vscode/.test-dist/
+
 # Python. 게이트 harness 전용이고 재생성된다.
 .venv/
 __pycache__/

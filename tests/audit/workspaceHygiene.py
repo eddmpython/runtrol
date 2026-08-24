@@ -76,6 +76,8 @@ ALLOWED_ROOT: frozenset[str] = frozenset(
         "deny.toml",
         "crates",
         "target",
+        # 릴리즈 아티팩트 (gitignored). tooling/package.mjs 가 VSIX 를 여기로 낸다. 정본은 GitHub Releases.
+        "release",
         # PWA 와 GitHub Pages 랜딩
         "pwa",
         # Independently deployable, untrusted ciphertext relay.
