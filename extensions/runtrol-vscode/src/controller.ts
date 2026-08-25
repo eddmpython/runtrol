@@ -5,6 +5,7 @@ import { PUBLIC_LIMITS, type PublicInputBlock } from "@runtrol/runtime-client";
 import * as vscode from "vscode";
 
 import type { Attachment, ConversationBinding, ConversationPanels, DraftRecord } from "./conversationPanels";
+import type { TerminalTabs } from "./terminalTabs";
 import { parallelPlacementRequirement, type StartDecision } from "./chatPlacement";
 import { ConversationLauncher } from "./conversationLauncher";
 import type { Place } from "./conversationSurface";
@@ -115,6 +116,8 @@ export class Controller implements vscode.Disposable {
     private readonly selection: SelectionStore,
     /// The projects the operator created, offered first when a draft picks its folder.
     private readonly projectRecords: { all(): readonly ProjectRecord[] },
+    /// The conversation surface: one editor-area terminal tab per conversation, hosted by the Core.
+    private readonly terminals: TerminalTabs,
   ) {
     this.isolatedWorkspaces = new IsolatedWorkspaces(
       client,
@@ -535,14 +538,16 @@ export class Controller implements vscode.Disposable {
     afterApplied: () => void,
   ): Promise<void> {
     const target = this.resolve(value);
-    let session: SessionLine | null;
+    // A conversation row opens the service's own terminal interface in an editor tab. That is the whole
+    // surface (`docs/terminalSurface.md`): no adoption, no structured session, no page of ours.
     if ("key" in target) {
       if (!target.canOpen) throw new Error(target.blocked ?? "that conversation cannot be opened");
-      session = target.session ?? await this.adoptNativeChat(requireNative(target));
-      if (!session) return;
-    } else {
-      session = target;
+      this.terminals.show(target, !reveal);
+      if (target.session) this.state.select(target.session.sessionId);
+      afterApplied();
+      return;
     }
+    let session: SessionLine | null = target;
     if (!session.hot) {
       const access = await this.conversationSwitchDecision(session.workspace);
       if (!access) return;

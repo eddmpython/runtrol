@@ -123,7 +123,7 @@ export type AgentToolsPort = {
 /// knows, because the build writes one per manifest.
 ///
 /// While a conversation is running the row shows motion instead, because only the editor's own glyphs can spin.
-function icon(conversation: Conversation, extensionUri: vscode.Uri | null): vscode.ThemeIcon | vscode.Uri {
+export function icon(conversation: Conversation, extensionUri: vscode.Uri | null): vscode.ThemeIcon | vscode.Uri {
   if (conversation.activity === "working") {
     return new vscode.ThemeIcon("sync~spin");
   }

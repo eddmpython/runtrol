@@ -42,7 +42,8 @@ import { workspaceCovers, workspaceIdentity } from "./workspaceCollision";
 import { installableProviders } from "./usageDisplay";
 import { UsageView } from "./usageView";
 import { WorkspaceRootFollowing } from "./workspaceRoots";
-import { ConversationItem, ConversationsTree, ProjectItem } from "./trees";
+import { TerminalTabs } from "./terminalTabs";
+import { ConversationItem, ConversationsTree, ProjectItem, icon } from "./trees";
 
 declare const RUNTROL_INCLUDE_TEST_JOURNEY: boolean;
 
@@ -214,7 +215,10 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
       void context.workspaceState.update(`runtrol.place.${place}`, sessionId ?? undefined);
     },
   });
-  controller = new Controller(context, client, runtime, state, conversation, selection, projectStore);
+  // The conversation surface: the service's own terminal interface in an editor tab, hosted by the Core.
+  const terminals = new TerminalTabs(locator, (row) => icon(row, context.extensionUri));
+  context.subscriptions.push(terminals);
+  controller = new Controller(context, client, runtime, state, conversation, selection, projectStore, terminals);
   // The window's folders follow into the grant's roots. Enrollment read them once; without this, every folder
   // opened after first activation stayed outside conversation discovery, silently.
   const rootFollowing = new WorkspaceRootFollowing({

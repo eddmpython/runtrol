@@ -241,6 +241,16 @@ export type DeviceLine = {
 
 export type Request =
   | { ask: "hello"; with: { wire: number } }
+  // The terminal view: the provider's own terminal interface on a Core-owned pseudo terminal. After
+  // `terminalOpen` or `terminalAttach` the connection carries `terminalOutput` down and `terminalInput`
+  // and `terminalResize` up until `terminalExited`. Bytes travel as base64 and are never read in between.
+  | {
+      ask: "terminalOpen";
+      with: { provider: string; native: string | null; workspace: string; cols: number; rows: number };
+    }
+  | { ask: "terminalAttach"; with: { terminal: string; cols: number; rows: number } }
+  | { ask: "terminalInput"; with: { bytes: string } }
+  | { ask: "terminalResize"; with: { cols: number; rows: number } }
   | { ask: "providerUpdates" }
   | { ask: "providerUpdate"; with: { provider: string } }
   | { ask: "remoteConnection" }
@@ -422,6 +432,10 @@ export type Response =
   | { say: "isolatedWorkspaceReleased"; with: IsolatedWorkspaceReleaseLine }
   | { say: "missionInstruction"; with: MissionInstruction }
   | { say: "capabilities"; with: CapabilityLine[] }
+  | { say: "terminalOpened"; with: { terminal: string; pid: number } }
+  | { say: "terminalOutput"; with: { bytes: string } }
+  | { say: "terminalLagged"; with: Record<string, never> }
+  | { say: "terminalExited"; with: { code: number } }
   | { say: "done" }
   | { say: "failed"; with: WireError };
 
