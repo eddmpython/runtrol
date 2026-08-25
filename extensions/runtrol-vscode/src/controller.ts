@@ -1572,7 +1572,10 @@ export class Controller implements vscode.Disposable {
   async openConversation(): Promise<void> {
     const selected = this.state.selected;
     if (!selected) return;
-    await this.panels.open(selected);
+    // The selected conversation's terminal tab, brought to the front. A selection with no row yet (the
+    // index is still arriving) has nothing to show, and showing nothing is the honest answer.
+    const row = this.state.conversations.find((candidate) => candidate.session?.sessionId === selected.sessionId);
+    if (row) this.terminals.show(row, false);
   }
 
   /// Move this window to another project, remembering where it was so one key brings it back.

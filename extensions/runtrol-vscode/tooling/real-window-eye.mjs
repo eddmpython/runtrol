@@ -12,6 +12,8 @@
 //   RUNTROL_EYE_OUT      where the PNGs land (default: %TEMP%/runtrol-eye)
 //   RUNTROL_TEST_CORE    the runtrol executable (default: target/debug/runtrol[.exe])
 //   RUNTROL_EYE_DRAFT_ONLY=1 photographs the current-folder draft without starting a provider turn
+//   RUNTROL_EYE_TERMINAL_ONLY=1 opens the first stored conversation as its service's terminal tab and photographs it
+//   RUNTROL_EYE_TERMINAL_SETTLE_MS how long the CLI is given to draw before that photograph (default 10000)
 //   RUNTROL_EYE_SHELL_ONLY=1 runs only the project-switch and keyboard-back proof, with no provider turn
 import { spawn, spawnSync } from "node:child_process";
 import { cp, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
@@ -183,6 +185,8 @@ try {
     ...(process.env.RUNTROL_EYE_PROMPT ? { RUNTROL_EYE_PROMPT: process.env.RUNTROL_EYE_PROMPT } : {}),
     ...(process.env.RUNTROL_EYE_TABS ? { RUNTROL_EYE_TABS: process.env.RUNTROL_EYE_TABS } : {}),
     ...(process.env.RUNTROL_EYE_DRAFT_ONLY ? { RUNTROL_EYE_DRAFT_ONLY: process.env.RUNTROL_EYE_DRAFT_ONLY } : {}),
+    ...(process.env.RUNTROL_EYE_TERMINAL_ONLY ? { RUNTROL_EYE_TERMINAL_ONLY: process.env.RUNTROL_EYE_TERMINAL_ONLY } : {}),
+    ...(process.env.RUNTROL_EYE_TERMINAL_SETTLE_MS ? { RUNTROL_EYE_TERMINAL_SETTLE_MS: process.env.RUNTROL_EYE_TERMINAL_SETTLE_MS } : {}),
   };
 
   const runEyeWindow = async (extraEnvironment = {}) => Promise.all([

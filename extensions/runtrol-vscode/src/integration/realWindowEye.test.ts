@@ -47,6 +47,8 @@ type JourneyApi = {
 type ExtensionApi = {
   readonly ready: Promise<void>;
   readonly journey?: JourneyApi;
+  /// Opens the first stored conversation the tree shows, through the same path a click takes.
+  openFirstConversation?(): Promise<void>;
 };
 
 let currentStage = "starting";
@@ -109,6 +111,23 @@ async function eyePass(resultPath: string): Promise<void> {
   // the "extensions are disabled" toast the development host shows. Neither is this product.
   await vscode.commands.executeCommand("workbench.action.closeAuxiliaryBar").then(undefined, () => undefined);
   await vscode.commands.executeCommand("notifications.clearAll").then(undefined, () => undefined);
+
+  // Pose 0: the conversation surface itself. The first stored conversation opens as the service's own
+  // terminal interface in an editor tab (the Core hosts the CLI on a pseudo terminal); the photograph is
+  // taken once the CLI has had time to draw its screen.
+  if (process.env.RUNTROL_EYE_TERMINAL_ONLY === "1") {
+    currentStage = "terminal";
+    if (!api.openFirstConversation) throw new Error("the conversation opener is unavailable");
+    await within(api.openFirstConversation(), 60_000, "opening the first stored conversation");
+    await delay(Number(process.env.RUNTROL_EYE_TERMINAL_SETTLE_MS || "10000"));
+    await capture(resultPath, "terminal", { nativeChats: journey.nativeChatCount() });
+    await writeFile(
+      resultPath,
+      JSON.stringify({ stage: "complete", focused: "terminal", vscode: vscode.version }),
+      "utf8",
+    );
+    return;
+  }
 
   // Pose 1: a draft on this folder, the panel beside it.
   currentStage = "draft";
