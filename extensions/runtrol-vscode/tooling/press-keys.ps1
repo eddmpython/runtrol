@@ -11,6 +11,10 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+# Kept before dot-sourcing: the shared file's own param() block resets these names in this scope.
+$wantedTitle = $TitleMatch
+$wantedFamily = $CommandLineMatch
+. (Join-Path $PSScriptRoot "find-window.ps1")
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type @"
 using System;
@@ -26,37 +30,12 @@ public class RuntrolPressWin32 {
 }
 "@
 
-$allowedProcessIds = $null
-if ($CommandLineMatch) {
-    $allProcesses = @(Get-CimInstance Win32_Process)
-    $allowed = [Collections.Generic.HashSet[int]]::new()
-    foreach ($process in $allProcesses) {
-        if ($process.CommandLine -and $process.CommandLine.IndexOf($CommandLineMatch, [StringComparison]::OrdinalIgnoreCase) -ge 0) {
-            $allowed.Add([int]$process.ProcessId) | Out-Null
-        }
-    }
-    for ($depth = 0; $depth -lt 8; $depth += 1) {
-        $before = $allowed.Count
-        foreach ($process in $allProcesses) {
-            if (-not $allowed.Contains([int]$process.ProcessId)) { continue }
-            $parent = $allProcesses | Where-Object { $_.ProcessId -eq $process.ParentProcessId } | Select-Object -First 1
-            if ($parent -and $parent.Name -eq "Code.exe") {
-                $allowed.Add([int]$parent.ProcessId) | Out-Null
-            }
-        }
-        if ($allowed.Count -eq $before) { break }
-    }
-    $allowedProcessIds = @($allowed)
-}
-$window = Get-Process | Where-Object {
-    $_.MainWindowTitle -like "*$TitleMatch*" -and
-    ($null -eq $allowedProcessIds -or $allowedProcessIds -contains $_.Id)
-} | Select-Object -First 1
+$window = Find-RuntrolWindow $wantedTitle $wantedFamily
 if (-not $window) {
-    Write-Error "no window has a title matching '$TitleMatch'"
+    Write-Error "no window has a title matching '$wantedTitle'"
     exit 2
 }
-$handle = $window.MainWindowHandle
+$handle = [IntPtr]::new([long]$window.Handle)
 # 9 = SW_RESTORE: a minimised window takes no keys.
 [RuntrolPressWin32]::ShowWindow($handle, 9) | Out-Null
 
@@ -78,8 +57,8 @@ for ($attempt = 0; $attempt -lt 3 -and -not $focused; $attempt += 1) {
     $focused = ([RuntrolPressWin32]::GetForegroundWindow() -eq $handle)
 }
 if (-not $focused) {
-    Write-Error "the window '$($window.MainWindowTitle)' could not be brought to the foreground; nothing was typed"
+    Write-Error "the window '$($window.Title)' could not be brought to the foreground; nothing was typed"
     exit 5
 }
 [System.Windows.Forms.SendKeys]::SendWait($Keys)
-Write-Output "pressed '$Keys' in '$($window.MainWindowTitle)'"
+Write-Output "pressed '$Keys' in '$($window.Title)'"

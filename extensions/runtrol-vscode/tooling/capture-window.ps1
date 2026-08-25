@@ -12,6 +12,10 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+# Kept before dot-sourcing: the shared file's own param() block resets these names in this scope.
+$wantedTitle = $TitleMatch
+$wantedFamily = $CommandLineMatch
+. (Join-Path $PSScriptRoot "find-window.ps1")
 Add-Type -AssemblyName System.Drawing
 Add-Type @"
 using System;
@@ -23,38 +27,14 @@ public class RuntrolCaptureWin32 {
 }
 "@
 
-$allowedProcessIds = $null
-if ($CommandLineMatch) {
-    $allProcesses = @(Get-CimInstance Win32_Process)
-    $allowed = [Collections.Generic.HashSet[int]]::new()
-    foreach ($process in $allProcesses) {
-        if ($process.CommandLine -and $process.CommandLine.IndexOf($CommandLineMatch, [StringComparison]::OrdinalIgnoreCase) -ge 0) {
-            $allowed.Add([int]$process.ProcessId) | Out-Null
-        }
-    }
-    for ($depth = 0; $depth -lt 8; $depth += 1) {
-        $before = $allowed.Count
-        foreach ($process in $allProcesses) {
-            if (-not $allowed.Contains([int]$process.ProcessId)) { continue }
-            $parent = $allProcesses | Where-Object { $_.ProcessId -eq $process.ParentProcessId } | Select-Object -First 1
-            if ($parent -and $parent.Name -eq "Code.exe") {
-                $allowed.Add([int]$parent.ProcessId) | Out-Null
-            }
-        }
-        if ($allowed.Count -eq $before) { break }
-    }
-    $allowedProcessIds = @($allowed)
-}
-$window = Get-Process | Where-Object {
-    $_.MainWindowTitle -like "*$TitleMatch*" -and
-    ($null -eq $allowedProcessIds -or $allowedProcessIds -contains $_.Id)
-} | Select-Object -First 1
+$window = Find-RuntrolWindow $wantedTitle $wantedFamily
 if (-not $window) {
-    Write-Error "no window has a title matching '$TitleMatch'"
+    Write-Error "no window has a title matching '$wantedTitle'"
     exit 2
 }
+$handle = [IntPtr]::new([long]$window.Handle)
 $rect = New-Object RuntrolCaptureWin32+RECT
-[RuntrolCaptureWin32]::GetWindowRect($window.MainWindowHandle, [ref]$rect) | Out-Null
+[RuntrolCaptureWin32]::GetWindowRect($handle, [ref]$rect) | Out-Null
 $width = $rect.Right - $rect.Left
 $height = $rect.Bottom - $rect.Top
 if ($width -le 0 -or $height -le 0) {
@@ -65,7 +45,7 @@ $bitmap = New-Object System.Drawing.Bitmap $width, $height
 $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
 $deviceContext = $graphics.GetHdc()
 # 2 = PW_RENDERFULLCONTENT, which includes GPU-composited content.
-$painted = [RuntrolCaptureWin32]::PrintWindow($window.MainWindowHandle, $deviceContext, 2)
+$painted = [RuntrolCaptureWin32]::PrintWindow($handle, $deviceContext, 2)
 $graphics.ReleaseHdc($deviceContext)
 if (-not $painted) {
     Write-Error "the window refused to render itself"
@@ -74,4 +54,4 @@ if (-not $painted) {
 $bitmap.Save($OutPath, [System.Drawing.Imaging.ImageFormat]::Png)
 $graphics.Dispose()
 $bitmap.Dispose()
-Write-Output "captured '$($window.MainWindowTitle)' to $OutPath"
+Write-Output "captured '$($window.Title)' to $OutPath"

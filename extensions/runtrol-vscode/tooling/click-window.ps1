@@ -7,6 +7,9 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+# Kept before dot-sourcing: the shared file's own param() block resets this name in this scope.
+$wantedTitle = $TitleMatch
+. (Join-Path $PSScriptRoot "find-window.ps1")
 Add-Type @"
 using System;
 using System.Runtime.InteropServices;
@@ -23,17 +26,17 @@ public class RuntrolClickWin32 {
 }
 "@
 
-$window = Get-Process | Where-Object { $_.MainWindowTitle -like "*$TitleMatch*" } | Select-Object -First 1
+$window = Find-RuntrolWindow $wantedTitle ""
 if (-not $window) {
-    Write-Error "no window has a title matching '$TitleMatch'"
+    Write-Error "no window has a title matching '$wantedTitle'"
     exit 2
 }
-$handle = $window.MainWindowHandle
+$handle = [IntPtr]::new([long]$window.Handle)
 [RuntrolClickWin32]::ShowWindow($handle, 9) | Out-Null
 [RuntrolClickWin32]::SetForegroundWindow($handle) | Out-Null
 Start-Sleep -Milliseconds 500
 if ([RuntrolClickWin32]::GetForegroundWindow() -ne $handle) {
-    Write-Error "the window '$($window.MainWindowTitle)' could not be brought to the foreground; nothing was clicked"
+    Write-Error "the window '$($window.Title)' could not be brought to the foreground; nothing was clicked"
     exit 5
 }
 $rect = New-Object RuntrolClickWin32+RECT
@@ -50,4 +53,4 @@ $point.Y = $Y
 # MOUSEEVENTF_LEFTDOWN, then MOUSEEVENTF_LEFTUP.
 [RuntrolClickWin32]::mouse_event(0x0002, 0, 0, 0, [UIntPtr]::Zero)
 [RuntrolClickWin32]::mouse_event(0x0004, 0, 0, 0, [UIntPtr]::Zero)
-Write-Output "clicked client point $X,$Y in '$($window.MainWindowTitle)'"
+Write-Output "clicked client point $X,$Y in '$($window.Title)'"
