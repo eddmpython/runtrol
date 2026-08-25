@@ -149,6 +149,19 @@ pub fn generation_endpoint(home: Option<&str>, executable: &Path) -> Result<Stri
         .to_owned())
 }
 
+/// Where this home's daemon records a panic, for the daemon personality to install its hook before assembly.
+///
+/// # Errors
+///
+/// [`ComposeError::Home`] when runtrol's directory cannot be established.
+pub fn crash_log_path(home: Option<&str>) -> Result<PathBuf, ComposeError> {
+    let home = match home {
+        Some(chosen) => RuntrolHome::open_at(chosen)?,
+        None => RuntrolHome::open()?,
+    };
+    Ok(home.paths().daemon_crash_log().as_std_path().to_owned())
+}
+
 /// Assemble a daemon after asking every earlier generation of this home to hand over the store.
 ///
 /// Composition opens the exclusive store, so the predecessors are asked first and the open is retried while
@@ -168,10 +181,11 @@ pub async fn assemble_superseding(
     loop {
         drain_predecessors(home.paths(), identity.digest()).await;
         match Composed::assemble(None, builtin) {
-            Err(ComposeError::Store(runtrol_store::StoreError::AlreadyOpen { path }))
-                if tokio::time::Instant::now() < deadline =>
-            {
-                drop(path);
+            // Either exclusive file still held by a predecessor means the handover is in flight, not failed.
+            Err(
+                ComposeError::Store(runtrol_store::StoreError::AlreadyOpen { .. })
+                | ComposeError::Ledger(runtrol_ledger::LedgerError::AlreadyOpen),
+            ) if tokio::time::Instant::now() < deadline => {
                 tokio::time::sleep(STORE_HANDOVER_RETRY).await;
             }
             outcome => return outcome,

@@ -43,7 +43,8 @@ mod session_catalogue;
 pub use compose::{ComposeError, Composed};
 pub use crash::record_panics_at;
 pub use generations::{
-    GenerationIdentity, GenerationStatus, assemble_superseding, generation_endpoint, status,
+    GenerationIdentity, GenerationStatus, assemble_superseding, crash_log_path,
+    generation_endpoint, status,
 };
 pub use relay::{RelayIngress, RelayStage, RelayStatus};
 pub use scope::{Needed, WallRefusal, allowed, needed};

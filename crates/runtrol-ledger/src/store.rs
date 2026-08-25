@@ -1,5 +1,7 @@
 //! Separate redb ownership, bounded queries, compaction, and recovery snapshots.
 
+use std::sync::{PoisonError, RwLock, RwLockReadGuard};
+
 use redb::{
     Database, DatabaseError, Durability, ReadableDatabase as _, ReadableTable as _, TableDefinition,
 };
@@ -59,13 +61,59 @@ pub struct ListedMissions {
 }
 
 /// Exclusive owner of the separate Mission ledger file.
+///
+/// The file can be given up before the value is dropped: a daemon generation that is draining hands it to
+/// its successor by [`Ledger::release`], and every later operation answers [`LedgerError::Released`].
 #[derive(Debug)]
 pub struct Ledger {
-    db: Database,
+    /// The engine handle, until this ledger releases the file. Never held across an await.
+    db: RwLock<Option<Database>>,
     path: AbsPath,
 }
 
+/// The engine handle for one synchronous operation.
+struct Engine<'ledger>(RwLockReadGuard<'ledger, Option<Database>>);
+
+impl std::ops::Deref for Engine<'_> {
+    type Target = Database;
+
+    fn deref(&self) -> &Database {
+        // `Ledger::db` returns `Released` instead of building this value when the slot is empty, and the
+        // slot cannot be emptied while this read guard exists.
+        match self.0.as_ref() {
+            Some(database) => database,
+            None => unreachable_engine(),
+        }
+    }
+}
+
+#[cold]
+#[expect(
+    clippy::panic,
+    reason = "an Engine exists only while its read guard proves the slot is occupied; reaching this is a               defect in this file, not a runtime condition"
+)]
+fn unreachable_engine() -> ! {
+    panic!("the ledger engine handle outlived its occupied slot")
+}
+
 impl Ledger {
+    fn db(&self) -> Result<Engine<'_>, LedgerError> {
+        let guard = self.db.read().unwrap_or_else(PoisonError::into_inner);
+        if guard.is_none() {
+            return Err(LedgerError::Released);
+        }
+        Ok(Engine(guard))
+    }
+
+    /// Close the file now, so another process can open it, while this value stays where it is.
+    ///
+    /// How a draining daemon generation hands the ledger to the generation that replaces it. Returns
+    /// whether this call did the releasing.
+    pub fn release(&self) -> bool {
+        let mut guard = self.db.write().unwrap_or_else(PoisonError::into_inner);
+        guard.take().is_some()
+    }
+
     /// Open or create the separate ledger and acquire its exclusive schema lock.
     ///
     /// # Errors
@@ -80,7 +128,7 @@ impl Ledger {
                 other => LedgerError::Engine(other.to_string()),
             })?;
         let ledger = Self {
-            db,
+            db: RwLock::new(Some(db)),
             path: path.clone(),
         };
         ledger.check_schema()?;
@@ -102,7 +150,7 @@ impl Ledger {
         let encoded =
             serde_json::to_vec(snapshot).map_err(|error| LedgerError::Codec(error.to_string()))?;
         let key = snapshot.mission.id.to_string();
-        let mut write = self.db.begin_write().map_err(engine)?;
+        let mut write = self.db()?.begin_write().map_err(engine)?;
         write
             .set_durability(Durability::Immediate)
             .map_err(engine)?;
@@ -120,7 +168,7 @@ impl Ledger {
     /// # Errors
     /// Returns [`LedgerError`] for database damage or malformed stored data.
     pub fn snapshot(&self, mission_id: MissionId) -> Result<Option<LedgerSnapshot>, LedgerError> {
-        let read = self.db.begin_read().map_err(engine)?;
+        let read = self.db()?.begin_read().map_err(engine)?;
         let table = match read.open_table(MISSIONS) {
             Ok(table) => table,
             Err(redb::TableError::TableDoesNotExist(_)) => return Ok(None),
@@ -142,7 +190,7 @@ impl Ledger {
     /// Returns [`LedgerError`] for database damage or malformed stored data.
     pub fn list(&self, limit: usize) -> Result<ListedMissions, LedgerError> {
         let wanted = limit.clamp(1, MAX_QUERY_MISSIONS);
-        let read = self.db.begin_read().map_err(engine)?;
+        let read = self.db()?.begin_read().map_err(engine)?;
         let table = match read.open_table(MISSIONS) {
             Ok(table) => table,
             Err(redb::TableError::TableDoesNotExist(_)) => return Ok(ListedMissions::default()),
@@ -186,7 +234,7 @@ impl Ledger {
     }
 
     fn check_schema(&self) -> Result<(), LedgerError> {
-        let read = self.db.begin_read().map_err(engine)?;
+        let read = self.db()?.begin_read().map_err(engine)?;
         match read.open_table(META) {
             Ok(table) => {
                 let version = table
@@ -203,7 +251,7 @@ impl Ledger {
             Err(error) => return Err(engine(error)),
         }
         drop(read);
-        let mut write = self.db.begin_write().map_err(engine)?;
+        let mut write = self.db()?.begin_write().map_err(engine)?;
         write
             .set_durability(Durability::Immediate)
             .map_err(engine)?;
@@ -227,6 +275,11 @@ pub enum LedgerError {
     /// Another process owns the file lock.
     #[error("mission ledger is already open")]
     AlreadyOpen,
+    /// This process handed the ledger to a successor daemon generation and no longer holds it.
+    #[error(
+        "the mission ledger was handed to the successor Runtrol generation; this generation is draining"
+    )]
+    Released,
     /// Database engine failure.
     #[error("mission ledger engine failed: {0}")]
     Engine(String),
@@ -309,5 +362,23 @@ mod tests {
             Ledger::open(&path).expect_err("second must fail"),
             LedgerError::AlreadyOpen
         );
+    }
+
+    #[test]
+    fn a_released_ledger_admits_a_successor_and_refuses_its_own_reads() {
+        // The daemon generation handover: the draining generation keeps this value while its successor
+        // owns the file. Giving up the file and dropping the value are two different moments.
+        let scratch = Scratch::make("release");
+        let path = scratch.database();
+        let first = Ledger::open(&path).expect("first");
+        assert!(first.release());
+        assert!(!first.release());
+        assert_eq!(
+            first.list(MAX_QUERY_MISSIONS).expect_err("released"),
+            LedgerError::Released
+        );
+        let second = Ledger::open(&path).expect("the successor opens the released ledger");
+        drop(first);
+        drop(second);
     }
 }

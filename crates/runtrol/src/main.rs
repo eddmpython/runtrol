@@ -236,6 +236,16 @@ fn serving() -> impl FnOnce(&tokio::runtime::Runtime) -> ExitCode {
         // The generation endpoint is bound first, so a command that started this daemon connects the moment
         // the pipe exists and waits for assembly rather than timing out. Composing then asks every earlier
         // generation to hand over the store and establishes containment before any child could exist.
+        // A detached daemon's streams go nowhere, so from here on a panic lands in the home's bounded
+        // crash file instead of evaporating with the process. Before assembly, because the handover to
+        // this generation happens inside assembly and a failure there is the one most worth reading.
+        match runtrol_daemon::crash_log_path(None) {
+            Ok(path) => runtrol_daemon::record_panics_at(&path),
+            Err(error) => {
+                report(&format!("runtrol cannot start a daemon: {error}"));
+                return ExitCode::FAILURE;
+            }
+        }
         let served = runtime.block_on(async move {
             let listener = runtrol_ipc::transport::Listener::bind(&address).await?;
             let composed =
@@ -244,11 +254,6 @@ fn serving() -> impl FnOnce(&tokio::runtime::Runtime) -> ExitCode {
                     .map_err(|error| {
                         runtrol_daemon::ServeError::RuntimeBootstrap(error.to_string())
                     })?;
-            // A detached daemon's streams go nowhere, so from here on a panic also lands in the home's
-            // bounded crash file instead of evaporating with the process.
-            runtrol_daemon::record_panics_at(
-                composed.home.paths().daemon_crash_log().as_std_path(),
-            );
             runtrol_daemon::serve(composed, listener).await
         });
 

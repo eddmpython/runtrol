@@ -4246,7 +4246,7 @@ listen = "stdio"
         let (provider_updates, _provider_updates_receiver) =
             watch::channel(Arc::new(crate::runtime_inventory::providers(&composed)));
         let (publishing, watching) = watch::channel(sessions.clone());
-        let (_usage_publishing, usage_watching) =
+        let (usage_publishing, usage_watching) =
             watch::channel(Arc::new(ProviderUsageList::default()));
         let (runtime_asking, runtime_asked) = mpsc::channel(1);
         let (runtime_returning, runtime_returned) = mpsc::unbounded_channel();
@@ -4905,7 +4905,7 @@ listen = "stdio"
                     runtrol_runtime_protocol::ProvidersChangedNotification { .. }
                 )
             ));
-            _usage_publishing.send_replace(Arc::new(ProviderUsageList {
+            usage_publishing.send_replace(Arc::new(ProviderUsageList {
                 providers: vec![runtrol_runtime_protocol::ProviderUsageGauge {
                     provider_id: runtrol_runtime_protocol::ProviderId::new("native-fixture"),
                     reached: false,

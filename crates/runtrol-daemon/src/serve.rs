@@ -1589,11 +1589,19 @@ fn begin_drain(
     composed
         .draining
         .store(true, std::sync::atomic::Ordering::Release);
-    // The successor is retrying its open right now; this is the moment it succeeds.
+    // The successor is retrying its open right now; this is the moment it succeeds. Both exclusive
+    // files go, the session store and the Mission ledger: measured 2026-08-25, releasing only the store
+    // left the successor dying on "mission ledger is already open" after this generation had already
+    // drained and exited, which is exactly the gap generations exist to close.
     let released = composed.store.release();
     debug_assert!(
         released,
         "a drain request reached a store that was already released"
+    );
+    let ledger_released = composed.ledger.release();
+    debug_assert!(
+        ledger_released,
+        "a drain request reached a ledger that was already released"
     );
     for task in background.drain(..) {
         task.abort();
