@@ -26,6 +26,7 @@ import {
   isolatedProfileSettings,
   isolatedRuntimeState,
   terminateExactProcesses,
+  managedCoreImage,
 } from "./isolated-vscode.mjs";
 
 if (process.platform !== "win32") {
@@ -79,14 +80,7 @@ try {
   const installed = await findInstalledExtension(extensions, packageManifest.version);
   bundledCore = path.join(installed, "resources", "core", "runtrol.exe");
   await access(bundledCore);
-  managedCore = path.join(
-    userData,
-    "User",
-    "globalStorage",
-    extensionIdentifier,
-    "core",
-    "runtrol.exe",
-  );
+  managedCore = await managedCoreImage(userData, extensionIdentifier, bundledCore);
 
   vscodeProcess = spawn(
     vscode.executable,

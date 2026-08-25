@@ -8,6 +8,7 @@ import * as vscode from "vscode";
 
 import type { CoreClient } from "./core/client";
 import type { CoreLocator } from "./core/locator";
+import { managedCoreDirectory } from "./core/managedCore";
 import {
   ensureCurrentCore,
   retryWhileTheOldDaemonExits,
@@ -90,7 +91,10 @@ async function offerManualCoreRestart(
   if (picked !== restart) return;
   try {
     const { executable } = await locator.locate();
-    await stopExactExecutable(executable);
+    // The old daemon runs from the previous content-named image in the same managed directory (or the
+    // single-name image an older extension installed there), never from the new file: the directory is
+    // the identity to match, still never the process name.
+    await stopManagedCoreProcesses(managedCoreDirectory(executable));
     await client.reset();
     await retryWhileTheOldDaemonExits(client);
     void vscode.window.showInformationMessage("The Runtrol Core is now on the installed build.");
@@ -102,25 +106,25 @@ async function offerManualCoreRestart(
   }
 }
 
-/// Stop every process running exactly this executable path. Windows-precise; elsewhere the legacy
-/// daemon predates this build's platforms of record and the failure names the manual step.
-function stopExactExecutable(executable: string): Promise<void> {
+/// Stop every process running an image inside this extension's managed Core directory. Windows-precise;
+/// elsewhere the legacy daemon predates this build's platforms of record and the failure names the
+/// manual step.
+function stopManagedCoreProcesses(directory: string): Promise<void> {
   if (process.platform !== "win32") {
     return Promise.reject(new Error(
-      `stop the daemon running ${executable} manually, then run any Runtrol action to start the new one`,
+      `stop the daemon running from ${directory} manually, then run any Runtrol action to start the new one`,
     ));
   }
   // Inside a PowerShell single-quoted literal only the quote itself needs doubling; backslashes
   // are literal characters there, and doubling them would make the path match nothing.
-  const escaped = executable.replaceAll("'", "''");
-  // `-eq` on strings is case-insensitive in PowerShell, which is the intent and not an accident:
-  // measured 2026-08-20, the same daemon was reported as both `C:\...` and `c:\...` depending on
-  // who asked, and VS Code's own fsPath can lower the drive letter. Identity here is the path,
-  // never the process name: `Name='runtrol.exe'` only narrows the scan, and a build somewhere else
-  // on disk (the operator's own, another checkout's) must survive this untouched.
+  const escaped = `${directory.replace(/[\\/]+$/u, "")}\\`.replaceAll("'", "''");
+  // Case-insensitive on purpose: measured 2026-08-20, the same daemon was reported as both `C:\...`
+  // and `c:\...` depending on who asked, and VS Code's own fsPath can lower the drive letter. Identity
+  // here is the directory, never the process name: `Name='runtrol.exe'` only narrows the scan, and a
+  // build somewhere else on disk (the operator's own, another checkout's) must survive this untouched.
   const script =
     `Get-CimInstance Win32_Process -Filter "Name='runtrol.exe'" | ` +
-    `Where-Object { $_.ExecutablePath -eq '${escaped}' } | ` +
+    `Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith('${escaped}', [System.StringComparison]::OrdinalIgnoreCase) } | ` +
     `ForEach-Object { Stop-Process -Id $_.ProcessId -Force -Confirm:$false }`;
   return new Promise((resolve, reject) => {
     execFile(

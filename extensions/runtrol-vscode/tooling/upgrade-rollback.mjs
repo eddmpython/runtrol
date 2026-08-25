@@ -17,6 +17,7 @@ import {
   runInstalledExtensionTest,
   terminateExactProcesses,
   uninstallExtension,
+  managedCoreImage,
 } from "./isolated-vscode.mjs";
 import { descendantPids, normalizedExecutable, processRows } from "./process-identity.mjs";
 
@@ -44,14 +45,10 @@ const runtrolHome = runtimeState.home;
 const workspace = path.join(temporary, "workspace");
 const resultPath = path.join(temporary, "phase-result.json");
 const testEntry = path.join(verifier, "upgradeRollback.test.cjs");
-const managedCore = path.join(
-  userData,
-  "User",
-  "globalStorage",
-  extensionIdentifier,
-  "core",
-  process.platform === "win32" ? "runtrol.exe" : "runtrol",
-);
+// The image of the build under test, content-named, so it moves with every phase; the daemon that
+// keeps serving across phases runs from whichever image started it, in the same managed directory.
+let managedCore = null;
+const managedCoreRoot = path.join(userData, "User", "globalStorage", extensionIdentifier, "core");
 const selectionFile = path.join(
   userData,
   "User",
@@ -74,6 +71,7 @@ try {
   installVSIX(vscode.cli, baselineArchive, userData, extensions);
   const baselineDirectory = await findInstalledExtension(extensions, baselineVersion);
   const baselineBundledCore = bundledCoreAt(baselineDirectory);
+  managedCore = await managedCoreImage(userData, extensionIdentifier, baselineBundledCore);
   await runPhase(vscode.executable, "bootstrap", baselineVersion, null);
   await access(managedCore);
   const baselineDigest = await fileDigest(managedCore);
@@ -99,7 +97,12 @@ try {
     throw new Error("the upgrade reused the baseline extension directory");
   }
   const currentBundledCore = bundledCoreAt(currentDirectory);
+  const baselineImage = managedCore;
+  managedCore = await managedCoreImage(userData, extensionIdentifier, currentBundledCore);
   await runPhase(vscode.executable, "upgrade", currentVersion, session);
+  if (managedCore === baselineImage) {
+    throw new Error("the upgrade did not carry a distinct Core image");
+  }
   const upgradeDigest = await fileDigest(managedCore);
   if (upgradeDigest !== await fileDigest(currentBundledCore) || upgradeDigest === baselineDigest) {
     throw new Error("the upgrade did not atomically install a distinct current Core image");
@@ -110,6 +113,7 @@ try {
   uninstallExtension(vscode.cli, extensionIdentifier, userData, extensions);
   installVSIX(vscode.cli, baselineArchive, userData, extensions);
   const rollbackDirectory = await findInstalledExtension(extensions, baselineVersion);
+  managedCore = baselineImage;
   await runPhase(vscode.executable, "rollback", baselineVersion, session);
   const rollbackDigest = await fileDigest(managedCore);
   if (rollbackDigest !== baselineDigest) {
@@ -287,10 +291,13 @@ function runCore(arguments_) {
 }
 
 async function exactDaemonPid() {
-  const expected = normalizedExecutable(managedCore);
+  // The daemon of this isolated home runs from an image inside its managed directory; which image
+  // depends on the phase that started it, so the directory is the identity.
+  const expectedRoot = normalizedExecutable(managedCoreRoot);
   for (let attempt = 0; attempt < 30; attempt += 1) {
     const matches = processRows().filter((row) =>
-      normalizedExecutable(row.executable) === expected && /(?:^|\s)daemon(?:\s|$)/u.test(row.command)
+      normalizedExecutable(row.executable).startsWith(expectedRoot)
+        && /(?:^|\s)daemon(?:\s|$)/u.test(row.command)
     );
     if (matches.length === 1) {
       return matches[0].pid;

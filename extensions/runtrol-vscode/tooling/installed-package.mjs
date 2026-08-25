@@ -27,6 +27,7 @@ import {
   isolatedRuntimeState,
   runInstalledExtensionTest,
   terminateExactProcesses,
+  managedCoreImage,
 } from "./isolated-vscode.mjs";
 
 const target = `${process.platform}-${process.arch}`;
@@ -113,14 +114,7 @@ try {
     process.platform === "win32" ? "runtrol.exe" : "runtrol",
   );
   await access(bundledCore);
-  managedCore = path.join(
-    userData,
-    "User",
-    "globalStorage",
-    extensionIdentifier,
-    "core",
-    process.platform === "win32" ? "runtrol.exe" : "runtrol",
-  );
+  managedCore = await managedCoreImage(userData, extensionIdentifier, bundledCore);
 
   const environment = {
     ...runtimeState.environment,

@@ -260,6 +260,21 @@ export async function findInstalledExtension(root, expectedVersion) {
   return path.join(root, expected[0].name);
 }
 
+/// Where the extension puts the bundled Core it was given: content-named, never overwritten (the same
+/// rule `src/core/managedCore.ts` follows; the sixteen-digit name is that module's contract).
+export async function managedCoreImage(userData, extensionIdentifier, bundledCore) {
+  const digest = await fileDigest(bundledCore);
+  const stem = `runtrol-${digest.slice(0, 16)}`;
+  return path.join(
+    userData,
+    "User",
+    "globalStorage",
+    extensionIdentifier,
+    "core",
+    process.platform === "win32" ? `${stem}.exe` : stem,
+  );
+}
+
 export async function fileDigest(file) {
   const digest = createHash("sha256");
   for await (const chunk of createReadStream(file)) {

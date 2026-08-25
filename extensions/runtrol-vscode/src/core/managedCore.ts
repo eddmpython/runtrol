@@ -1,18 +1,12 @@
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
-import {
-  chmod,
-  copyFile,
-  link,
-  mkdir,
-  opendir,
-  rename,
-  stat,
-  unlink,
-} from "node:fs/promises";
+import { chmod, copyFile, mkdir, opendir, rename, stat, unlink } from "node:fs/promises";
 import path from "node:path";
 
 const DIGEST_PATTERN = /^[a-f0-9]{64}$/;
+/// How much of the digest names the file. Sixteen hex digits: no two builds collide, and a directory
+/// listing stays readable.
+const NAME_DIGEST_LENGTH = 16;
 
 export type ManagedCore = {
   executable: string;
@@ -20,6 +14,13 @@ export type ManagedCore = {
   replaced: boolean;
 };
 
+/// Put the bundled Core where the daemon runs from, named by its content.
+///
+/// Every build gets its own file (`runtrol-<digest>.exe`), and an existing file is never written over.
+/// Measured 2026-08-25 on Windows: renaming a new image over the one the running daemon was started from
+/// fails with EPERM, so a content-addressed name is the only replacement that cannot fail while a daemon
+/// runs. The daemon started from the previous file keeps it mapped; supersession retires that daemon and
+/// starts the new build from the new file; the previous file is removed once nothing maps it.
 export async function materializeManagedCore(source: string, storageRoot: string): Promise<ManagedCore> {
   const sourceInfo = await stat(source);
   if (!sourceInfo.isFile()) {
@@ -27,17 +28,18 @@ export async function materializeManagedCore(source: string, storageRoot: string
   }
   const sourceDigest = await fileDigest(source);
   const managedRoot = path.join(storageRoot, "core");
-  const executable = path.join(managedRoot, process.platform === "win32" ? "runtrol.exe" : "runtrol");
+  const executable = path.join(managedRoot, imageName(sourceDigest));
   await mkdir(managedRoot, { recursive: true });
 
-  const currentDigest = await optionalFileDigest(executable);
-  if (currentDigest === sourceDigest) {
-    await removeInactiveImages(managedRoot, path.basename(executable));
+  const others = await otherImages(managedRoot, executable);
+  if (await optionalFileDigest(executable) === sourceDigest) {
+    await removeInactiveImages(others);
     return { executable, digest: sourceDigest, replaced: false };
   }
 
-  const incoming = `${executable}.incoming-${process.pid}-${randomUUID()}`;
-  let preserved: string | null = null;
+  // Copied beside its final name and moved into place whole, so a reader never sees a half-written image
+  // under the name a daemon would be started from.
+  const incoming = `${executable}.incoming-${process.pid}`;
   try {
     await copyFile(source, incoming);
     if (process.platform !== "win32") {
@@ -46,54 +48,53 @@ export async function materializeManagedCore(source: string, storageRoot: string
     if (await fileDigest(incoming) !== sourceDigest) {
       throw new Error("the managed Core copy differs from the bundled Core");
     }
-
-    if (currentDigest) {
-      preserved = `${executable}.inuse-${currentDigest}`;
-      await preserveCurrentImage(executable, preserved, currentDigest);
-    }
     await rename(incoming, executable);
     if (await fileDigest(executable) !== sourceDigest) {
-      throw new Error("the managed Core differs after atomic replacement");
+      throw new Error("the managed Core differs after placement");
     }
   } finally {
     await removeIfPresent(incoming);
   }
-
-  await removeInactiveImages(managedRoot, path.basename(executable));
-  return { executable, digest: sourceDigest, replaced: currentDigest !== null };
+  await removeInactiveImages(others);
+  return { executable, digest: sourceDigest, replaced: others.length > 0 };
 }
 
-async function preserveCurrentImage(executable: string, preserved: string, digest: string): Promise<void> {
-  try {
-    await link(executable, preserved);
-  } catch (error) {
-    if (errorCode(error) !== "EEXIST") {
-      throw error;
-    }
-    if (await optionalFileDigest(preserved) !== digest) {
-      throw new Error(`the preserved Core image has unexpected contents: ${preserved}`);
-    }
-  }
+/// The directory every managed Core image lives in; the one identity a restart may match processes by.
+export function managedCoreDirectory(executable: string): string {
+  return path.dirname(executable);
 }
 
-async function removeInactiveImages(root: string, executableName: string): Promise<void> {
-  const prefix = `${executableName}.inuse-`;
+function imageName(digest: string): string {
+  const stem = `runtrol-${digest.slice(0, NAME_DIGEST_LENGTH)}`;
+  return process.platform === "win32" ? `${stem}.exe` : stem;
+}
+
+/// Every managed image other than `current`: previous builds, and the single-name image older
+/// extensions installed as `runtrol.exe` before images were named by content.
+async function otherImages(root: string, current: string): Promise<string[]> {
+  const found: string[] = [];
   const directory = await opendir(root);
   for await (const entry of directory) {
-    if (!entry.isFile() || !entry.name.startsWith(prefix)) {
-      continue;
-    }
-    const digest = entry.name.slice(prefix.length);
-    if (!DIGEST_PATTERN.test(digest)) {
-      continue;
-    }
+    if (!entry.isFile()) continue;
+    const full = path.join(root, entry.name);
+    if (full === current) continue;
+    const legacy = /^runtrol(\.exe)?(\.inuse-[a-f0-9]{64})?$/u.test(entry.name) || entry.name.includes(".incoming-");
+    const content = /^runtrol-[a-f0-9]{16}(\.exe)?$/u.test(entry.name);
+    if (legacy || content) found.push(full);
+  }
+  return found;
+}
+
+/// Remove previous images. Windows refuses to unlink an image while its daemon is alive; that image is
+/// left for a later activation, after supersession has retired the daemon that maps it.
+async function removeInactiveImages(images: readonly string[]): Promise<void> {
+  for (const image of images) {
     try {
-      await unlink(path.join(root, entry.name));
+      await unlink(image);
     } catch (error) {
-      if (!isMappedImageError(error)) {
+      if (!isMappedImageError(error) && errorCode(error) !== "ENOENT") {
         throw error;
       }
-      // Windows refuses to unlink the preserved image while its daemon is alive. A later activation retries cleanup.
     }
   }
 }
@@ -128,7 +129,11 @@ async function fileDigest(file: string): Promise<string> {
   for await (const chunk of createReadStream(file)) {
     digest.update(chunk as Buffer);
   }
-  return digest.digest("hex");
+  const hex = digest.digest("hex");
+  if (!DIGEST_PATTERN.test(hex)) {
+    throw new Error("the Core digest did not render as sha256 hex");
+  }
+  return hex;
 }
 
 function errorCode(error: unknown): string | undefined {
