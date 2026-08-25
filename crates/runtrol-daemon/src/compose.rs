@@ -328,9 +328,10 @@ pub struct Composed {
     pub(crate) provider_inventory: Mutex<crate::runtime_inventory::ProviderInventoryCache>,
     /// The latest account report per provider, from each service's own status surface.
     ///
-    /// Written by the account probe supervisor, read by every provider and usage projection. A std mutex
-    /// because the projections are synchronous and hold it for microseconds.
-    pub(crate) account_reports: std::sync::Mutex<crate::account_probe::AccountReports>,
+    /// Written by the account probe supervisor, read by every provider and usage projection. The
+    /// synchronous projections take it with `try_lock` and read nothing when the probe holds it, which
+    /// lasts microseconds; the next projection sees the reports.
+    pub(crate) account_reports: tokio::sync::Mutex<crate::account_probe::AccountReports>,
     /// Latest model catalogue per provider, keyed to the exact binary it was read from.
     ///
     /// A short-TTL memoization, never a store (see `provider_prepare::MODEL_CATALOGUE_TTL`).
@@ -424,7 +425,9 @@ impl Composed {
             registry,
             device_authority: DeviceAuthority::new(granted, paired_devices),
             probe_cache_writing: tokio::sync::Mutex::new(()),
-            account_reports: std::sync::Mutex::new(crate::account_probe::AccountReports::default()),
+            account_reports: tokio::sync::Mutex::new(
+                crate::account_probe::AccountReports::default(),
+            ),
             provider_inventory: Mutex::new(
                 crate::runtime_inventory::ProviderInventoryCache::default(),
             ),
@@ -490,7 +493,9 @@ impl Composed {
             registry,
             device_authority: DeviceAuthority::new(granted, paired_devices),
             probe_cache_writing: tokio::sync::Mutex::new(()),
-            account_reports: std::sync::Mutex::new(crate::account_probe::AccountReports::default()),
+            account_reports: tokio::sync::Mutex::new(
+                crate::account_probe::AccountReports::default(),
+            ),
             provider_inventory: Mutex::new(
                 crate::runtime_inventory::ProviderInventoryCache::default(),
             ),

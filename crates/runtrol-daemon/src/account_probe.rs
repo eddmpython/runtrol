@@ -132,10 +132,7 @@ pub(crate) async fn round(
             continue;
         };
         let now = WallMs::now();
-        let mut reports = composed
-            .account_reports
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut reports = composed.account_reports.lock().await;
         let same = reports.get(id).is_some_and(|known| known.report == report);
         reports.record(id, report, now);
         changed |= !same;

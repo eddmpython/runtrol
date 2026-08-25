@@ -193,11 +193,11 @@ pub(crate) fn merge_probed_usage(
     current: &runtrol_runtime_protocol::ProviderUsageList,
     composed: &Composed,
 ) -> runtrol_runtime_protocol::ProviderUsageList {
-    let probed = composed
-        .account_reports
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .probed_gauges();
+    let probed = match composed.account_reports.try_lock() {
+        Ok(reports) => reports.probed_gauges(),
+        // The probe is writing a report this instant; the publish it triggers next reads them all.
+        Err(_) => Vec::new(),
+    };
     let probed = provider_usage(&probed);
     let mut merged = current.clone();
     for gauge in probed.providers {
@@ -368,10 +368,13 @@ fn build_provider_inventory(composed: &Composed) -> CachedProviderInventory {
         .iter()
         .filter_map(|(_, path)| path.clone())
         .collect::<Vec<_>>();
-    let accounts = composed
-        .account_reports
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    // Contended only while the probe writes a fresh report, for microseconds; this projection then
+    // reads no account and the next one, after the publish that write triggers, reads them all.
+    let held = composed.account_reports.try_lock();
+    let accounts: Option<&crate::account_probe::AccountReports> = match &held {
+        Ok(reports) => Some(reports),
+        Err(_) => None,
+    };
     let list = ProviderList {
         providers: registered
             .into_iter()
@@ -389,7 +392,7 @@ fn build_provider_inventory(composed: &Composed) -> CachedProviderInventory {
                     .iter()
                     .map(ToString::to_string)
                     .collect(),
-                account: accounts.descriptor(provider.id()),
+                account: accounts.and_then(|reports| reports.descriptor(provider.id())),
             })
             .collect(),
     };

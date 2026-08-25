@@ -596,6 +596,27 @@ fn catalogue_too_large(provider: ProviderId, what: &'static str) -> ProviderErro
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn a_named_account_is_signed_in_whatever_requires_openai_auth_says() {
+        let chatgpt: AccountAnswer = serde_json::from_str(
+            r#"{"account":{"type":"chatgpt","email":"x@y","planType":"plus"},"requiresOpenaiAuth":true}"#,
+        )
+        .expect("the CLI's own answer shape");
+        let report = account_report(chatgpt);
+        assert!(matches!(
+            report.status,
+            runtrol_provider::AccountStatus::SignedIn
+        ));
+        assert_eq!(report.plan.as_deref(), Some("plus"));
+        assert_eq!(report.method.as_deref(), Some("chatgpt"));
+        let nobody: AccountAnswer =
+            serde_json::from_str(r#"{"account":null,"requiresOpenaiAuth":true}"#).expect("shape");
+        assert!(matches!(
+            account_report(nobody).status,
+            runtrol_provider::AccountStatus::SignedOut
+        ));
+    }
     use runtrol_childproc::resolve;
 
     use super::*;
@@ -787,8 +808,6 @@ mod tests {
 struct AccountAnswer {
     #[serde(default)]
     account: Option<AccountKind>,
-    #[serde(default)]
-    requires_openai_auth: bool,
 }
 
 /// `Account`: one of the sign-in kinds this CLI names.
@@ -833,17 +852,19 @@ struct LimitWindowAnswer {
     resets_at: Option<i64>,
 }
 
+/// Signed in exactly when the CLI names an account. `requiresOpenaiAuth` is not a sign-in verdict: measured
+/// 2026-08-25 on 0.149.1, an installation signed in with `chatgpt` answers `true` there (that account kind
+/// is the vendor's own auth), and reading it as "still needs auth" showed a working account as signed out.
 fn account_report(answer: AccountAnswer) -> runtrol_provider::AccountReport {
     use runtrol_provider::{AccountReport, AccountStatus, account_token};
     match answer.account {
-        // The CLI names an account, and requiresOpenaiAuth says whether it still works.
-        Some(account) if !answer.requires_openai_auth => AccountReport {
+        Some(account) => AccountReport {
             status: AccountStatus::SignedIn,
             plan: account_token(account.plan_type.as_deref()),
             method: account_token(Some(&account.kind)),
             limits: None,
         },
-        _ => AccountReport {
+        None => AccountReport {
             status: AccountStatus::SignedOut,
             plan: None,
             method: None,
