@@ -1041,7 +1041,7 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
         await projectStore.create(folder);
       }
       : undefined,
-    openFirstConversation: MEASURED_HOST
+    openFirstConversation: MEASURED_HOST || RUNTROL_INCLUDE_TEST_JOURNEY
       ? async () => {
         // The eye pass photographs a real conversation, so it opens the first one the tree would show,
         // through the same selection path a click takes.

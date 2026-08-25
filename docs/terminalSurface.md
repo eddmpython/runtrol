@@ -43,8 +43,9 @@ Private wire (`runtrol-ipc`): `terminalOpen { provider, native, workspace, cols,
 { bytes }` and `terminalResize { cols, rows }`. Opening a conversation whose terminal is already open joins
 it rather than starting a second process.
 
-Scope: opening needs `session.start` and passes the same provider and workspace boundary a session start
-does; joining and typing need `session.inputWrite`; a resize needs `session.outputRead`. Nothing here is
+Scope: opening a fresh conversation needs `session.start`, opening a stored one needs `session.resume`,
+and both pass the same provider and workspace boundary a session start does; joining and typing need
+`session.inputWrite`; a resize needs `session.outputRead`. Nothing here is
 reachable with a listing scope alone.
 
 ## Lifetime

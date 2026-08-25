@@ -172,15 +172,19 @@ pub fn needed(request: &Request) -> Needed {
             workspace_access: WorkspaceAccess::Shared,
             ..
         } => Needed::AtTheMachine(LocalScope::WorkspaceShare),
-        // Opening a terminal starts a provider process in a folder, which is what starting a session is.
+        // Opening a terminal on a fresh conversation starts a provider process in a folder, which is what
+        // starting a session is; opening one on a stored conversation is what resuming is.
         Request::Start {
             workspace_access: WorkspaceAccess::Exclusive,
             ..
         }
-        | Request::TerminalOpen { .. } => Needed::Scope(DeviceScope::SessionStart),
+        | Request::TerminalOpen { native: None, .. } => Needed::Scope(DeviceScope::SessionStart),
         Request::Resume {
             workspace_access: WorkspaceAccess::Exclusive,
             ..
+        }
+        | Request::TerminalOpen {
+            native: Some(_), ..
         } => Needed::Scope(DeviceScope::SessionResume),
         // Joining an open terminal is reading its screen and typing into it; typing is the stronger of the
         // two, so a read-only grant cannot join and then type.
