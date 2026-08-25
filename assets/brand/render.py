@@ -86,17 +86,23 @@ def symbol_svg(accent: str, ink: str, comment: str | None = None) -> str:
     return "\n".join(lines) + "\n"
 
 
+TILE_RADIUS = 0.2
+TILE_MARK = 0.75
+
+
 def favicon_svg() -> str:
+    """Graphite tile with the coral and white mark: the same face on a light or a dark tab strip."""
+    size = 100.0
+    inset = size * (1 - TILE_MARK) / 2
     return "\n".join(
         [
             '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100" height="100" role="img" aria-label="runtrol">',
             "  <title>runtrol</title>",
-            "  <!-- hinted for 16 to 32px. the brand geometry is in symbol.svg. the ink follows the tab strip theme -->",
-            "  <style>",
-            f"    .ink {{ stroke: {GRAPHITE_HEX}; }}",
-            f"    @media (prefers-color-scheme: dark) {{ .ink {{ stroke: {WHITE_HEX}; }} }}",
-            "  </style>",
-            mark_group(HINTED, CORAL_HEX, GRAPHITE_HEX),
+            "  <!-- hinted for 16 to 32px. the brand geometry is in symbol.svg. the tile keeps the white arms visible on a light tab strip -->",
+            f'  <rect width="100" height="100" rx="{size * TILE_RADIUS:g}" fill="{GRAPHITE_HEX}"/>',
+            f'  <g transform="translate({inset:g} {inset:g}) scale({TILE_MARK:g})">',
+            mark_group(HINTED, CORAL_HEX, WHITE_HEX, indent="    "),
+            "  </g>",
             "</svg>",
         ]
     ) + "\n"
@@ -353,6 +359,27 @@ def draw_lockup(canvas: Canvas, size: float, dx: float, dy: float, accent, ink, 
     fill_even_odd(canvas, flatten_path(wordmark_path(), scale, dx + WORDMARK_X * scale, dy + WORDMARK_Y * scale), text)
 
 
+def draw_tile(size: int, geometry, mark: float, radius: float) -> "Canvas":
+    """Graphite tile with rounded corners, transparent outside the corners, mark centred at `mark` of the size."""
+    canvas = Canvas(size, size, None)
+    corner = size * radius
+    step = 1.0 / SUPERSAMPLE
+    for y in range(size):
+        for x in range(size):
+            inside = 0
+            for sy in range(SUPERSAMPLE):
+                for sx in range(SUPERSAMPLE):
+                    px, py = x + (sx + 0.5) * step, y + (sy + 0.5) * step
+                    qx = max(corner - px, px - (size - corner), 0.0)
+                    qy = max(corner - py, py - (size - corner), 0.0)
+                    if math.hypot(qx, qy) <= corner:
+                        inside += 1
+            canvas.blend(x, y, GRAPHITE, inside / (SUPERSAMPLE * SUPERSAMPLE))
+    inset = size * (1 - mark) / 2
+    draw_mark(canvas, geometry, size * mark, inset, inset, CORAL, WHITE)
+    return canvas
+
+
 def ico(pngs: list[tuple[int, bytes]]) -> bytes:
     header = struct.pack("<HHH", 0, 1, len(pngs))
     offset = 6 + 16 * len(pngs)
@@ -388,20 +415,13 @@ def main() -> None:
     write("lockup-dark.svg", lockup_svg(CORAL_HEX, WHITE_HEX, WHITE_HEX))
 
     print("brand rasters")
-    hinted = {}
-    for size in (16, 32, 48):
-        canvas = Canvas(size, size, None)
-        draw_mark(canvas, HINTED, size, 0, 0, CORAL, GRAPHITE)
-        hinted[size] = canvas.png()
+    hinted = {size: draw_tile(size, HINTED, TILE_MARK, TILE_RADIUS).png() for size in (16, 32, 48)}
     write("icon-16.png", hinted[16])
     write("icon-32.png", hinted[32])
     write("favicon.ico", ico([(16, hinted[16]), (32, hinted[32]), (48, hinted[48])]))
 
     for size in (192, 512):
-        canvas = Canvas(size, size, GRAPHITE)
-        inset = size * 0.18
-        draw_mark(canvas, MARK, size - 2 * inset, inset, inset, CORAL, WHITE)
-        write(f"icon-{size}.png", canvas.png())
+        write(f"icon-{size}.png", draw_tile(size, MARK, 0.64, 0.0).png())
 
     canvas = Canvas(180, 180, GRAPHITE)
     draw_mark(canvas, MARK, 180 * 0.64, 180 * 0.18, 180 * 0.18, CORAL, WHITE)
