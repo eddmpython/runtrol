@@ -1,5 +1,5 @@
-import { record, string } from "./webview/presentation";
-import { toolActivityLine, toolActivityOf } from "./webview/toolActivity";
+import { record, string } from "./events/presentation";
+import { toolActivityLine, toolActivityOf } from "./events/toolActivity";
 
 /// What a running conversation is doing right now, read from the provider's own events and shown on its
 /// sidebar row so the reader knows without opening it.

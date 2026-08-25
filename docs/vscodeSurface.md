@@ -49,9 +49,8 @@ probe in the background. A successful probe refreshes the Runtime snapshot autom
 unavailable and produces a visible warning without blocking unrelated sessions.
 Core discovery and protected identity loading begin together. Studio then validates the public locator. On Windows
 the exact selected Core executable reuses the Rust client's native owner and DACL checks, and the TypeScript SDK
-compares the validated fields with the file it opens. Unix keeps the SDK's direct owner and mode checks. Opening the
-conversation waits only until both the panel and VS Code's editor-tab model report that exact tab active; Webview
-readiness then starts the selected-session stream without blocking the command response.
+compares the validated fields with the file it opens. Unix keeps the SDK's direct owner and mode checks. Opening a
+conversation shows its terminal tab and returns; the tab's own connection to the Core carries the screen from then on.
 
 The bundled Core is copied by streaming digest into one stable extension-global path. A hard link preserves the mapped
 image before atomic replacement. Extension Host reloads, official VSIX upgrades, and rollbacks therefore reconnect to
@@ -61,7 +60,7 @@ the original daemon and provider processes instead of making a versioned extensi
 
 - Fifteen sessions are the daily-use baseline and 30 sessions are the release load.
 - At most eight sessions own hot provider processes.
-- Exactly one selected session owns the full watch and Webview renderer.
+- The selected session is one identity in memory; a conversation's screen belongs to its terminal tab.
 - The sidebar is the one list of this machine: every project and every conversation of every installed coding
   service. A service is the row icon, never repeated text and never a parent node. The row contains only the actual
   conversation name beside that icon. While a turn is working, the same service icon spins. A quiet row has no
@@ -167,82 +166,26 @@ the original daemon and provider processes instead of making a versioned extensi
   usable CLI with no conversations from a machine with no usable CLI, and gives the correct next action in each case.
   A newly discovered executable says `Checking` in the fixed area until its verified probe completes; it is never
   briefly reported as missing or made invisible by another usable CLI.
-- Each conversation opens in its own editor tab with a bounded renderer and composer, exactly as a file does: ten or
-  twenty tabs are arranged, split and sized by VS Code's own editor groups, and the focused tab is the selected
-  conversation. Prompts and interrupts travel only to the tab that sent them. Tabs survive a window reload by their
-  session identity, and a tab whose session no longer exists is closed rather than guessed at. An individual tab uses
-  that conversation's current coding-service icon and actual conversation title. The product symbol is not an AI
-  identity and never appears on a conversation tab.
-- A conversation can live in any of the window's own places: an editor tab (the default), the bottom panel beside
-  the terminals, or the secondary side bar beside the code. The two non-tab surfaces are both named `Chat`, so their
-  view and container labels state their purpose without repeating the product name inside the conversation. Each
-  place is a VS Code surface; Runtrol adds no pane system of its own. A conversation is in one place at a time and
-  watched once; moving it is a row command ("Open Conversation in Panel / in Side Bar / as Tab"), and the conversation
-  a place showed before a reload comes back to
-  it. One command ("Arrange Conversations in a Grid", `Ctrl+K Ctrl+G`) spreads the open conversation tabs over
-  editor groups as square as they come (two by two, three by two, three by three; nine is the editor's column
-  bound and the command says when tabs were left in place). VS Code draws, sizes and lets the operator drag them.
-- A change a coding service declares (an ACP diff block, a Codex unified change) is named in the tab with an
-  "Open diff" button and opened in VS Code's own diff editor: two read-only virtual documents for before and after,
-  or a read-only `.diff` document for a unified patch. The page draws and colours no diff; the texts are held in
-  memory only, bounded, and never written to disk.
+- A conversation opens as the coding service's own terminal interface in an editor tab
+  (`docs/terminalSurface.md`). The Core hosts the CLI on a pseudo terminal it owns and this window's tab is one
+  viewer of it; a phone is another. The tab uses that conversation's current service icon and its actual title,
+  and the product symbol never appears on one. Ten or twenty tabs are arranged, split and sized by VS Code's own
+  editor groups, and one command ("Arrange Conversations in a Grid") moves each open conversation tab to a group
+  of its own. Closing a tab detaches the viewer; the conversation continues in the Core until its service exits.
+- Everything the service offers is offered by the service, in its terminal: its composer, its `/model` and
+  permission commands, its approvals, its history on resume. Runtrol authors, rewrites and reads no line of it.
+  A change the service declares is shown the way the service shows it.
 - When the Conversations view becomes visible and no conversation tab exists, Studio opens that selected in-progress
   chat without blocking ready. A restored editor tab is reused as VS Code left it.
 - Existing provider-owned chats start loading as soon as the first inventory is ready, instead of waiting for a later idle window.
-- New chat opens as a draft tab: one neutral greeting, the composer, and chips for the project, the git branch, the coding
-  service, the model, the reasoning effort and the access mode. Each chip is its own picker, nothing runs until the
-  first message, and that message starts the conversation in the same tab with exactly those choices. The `+` on a
-  project heading opens the same draft with the folder already answered; the defaults are this window's folder, the
-  service used last, and the project's last explicit choices. The greeting does not repeat the project or product
-  name because the composer labels its authoritative destination as `Project`, `Branch`, and `Agent`. The project hover
-  gives the full path. A draft survives a window reload with its choices.
-- The composer is the one standard card rather than an invention: a context row (project, branch, service), the
-  message, and a bar with attach and access mode on the left and model, reasoning effort and send on the right. Images
-  travel once as `sessions/submitBlocks` content and are never stored. There is no microphone, because no installed
-  CLI takes audio. The message field names the selected coding service and tells the operator to choose one when
-  none is selected, so the destination is clear before Enter can send.
-- The conversation editor carries no session panel. The service, the model the service says is answering, the
-  requested reasoning effort, context use, provider-reported cost, and the tightest account-limit window appear as
-  chips beneath the composer, and the permission mode has a chip of its own. Missing provider telemetry remains
-  visibly absent and is never estimated, and an untouched quota window says nothing.
-- The conversation shows what the provider gives and nothing else: streamed replies named by the provider's own
-  message identity, tool calls and results under the provider's own tool names, approvals as the provider asked them,
-  and on resume whatever history the provider's own resume surface hands over (Codex replays its recent turns; Claude
-  Code's stream prints none, and the tab is the quiet empty state rather than a reconstruction). Runtrol authors no
-  line of it.
-- A conversation the Runtime released to keep the running set small (eight hot processes) reads as paused in its tab,
-  in one sentence, and watches itself again as soon as the session is hot; it is not an error and it is not retried
-  in red.
-- Enter sends and Shift+Enter writes a new line.
-- A message opening with `/` offers the commands the attached coding service announced, with that service's own
-  descriptions. Only a leading slash opens the menu, since a slash inside a sentence belongs to a path. Choosing fills
-  the composer and sends nothing: some of these commands take an argument, and sending on selection would make those
-  unusable and the rest premature. Only the announced name and description are read; a command's argument schema stays
-  the service's business, because the value of passing a slash command through untouched is that the service decides
-  what it means.
-- Every choice the composer offers (project, service, model, reasoning effort, access mode) is answered in the
-  composer: the chip's popover opens where the chip is, keyboard and mouse both work, and a click elsewhere
-  dismisses it. No picker appears at the top of the window for a chip; the command palette keeps the same
-  choices for commands invoked from the palette. The slash menu is the same kind of popover.
-- Changing the model or the permission mode mid conversation is the chip that displays it. The pick travels
-  `sessions/setModel` or `sessions/setMode` to the service's own switch surface (a control channel, the next turn's
-  own override field, or the protocol's announced call, whichever that CLI actually has), and the chip then shows
-  what the service says back, never what was merely requested. The choices are the session's own announced set or
-  the service's measured vocabulary; modes that remove safety prompts are not offered and are refused for every
-  caller. The service's own `/model` style commands remain available through the slash menu and stay authoritative:
-  a switch made there surfaces through the same announcement events the chips read.
-- The command list belongs to one conversation and is dropped on switching. A previous service's commands offered to
-  the next one is worse than none, because it looks authoritative.
+- New Conversation asks one question, which service (skipped when one is usable), and opens that service's
+  terminal in this window's folder, or in the scratch folder when the window has none. The `+` on a project
+  heading does the same with the folder already answered. The service creates the conversation on its first
+  turn, and the sidebar lists it once the service's own store does.
 - A coding service that cannot start a conversation is answered with that service's own remedy, chosen by the public
   error category and what discovery already knows: not signed in, not installed, or installed and failing. The exact
   command is placed in the operator's terminal unexecuted. Runtrol never runs it. Fetching and executing on somebody's
   behalf is refused, and an install button that installs is that refusal reversed under a friendlier label.
-- A hidden conversation pauses its watch at the last delivered cursor. Its dedicated SDK transport drains written
-  bytes and destroys the unread side immediately, so rapid switching cannot strand a named-pipe slot. Reopening waits
-  for the new Webview document to become ready before bounded replay continues.
-- Conversation and sidebar activity watch handshakes share one foreground-priority gate. Only connection and
-  subscription setup is serialized; acknowledged streams remain concurrent, and retired promise cleanup is not on
-  the visible switch path.
 - An operator name is stored as bounded session metadata. Without one, the provider's own catalogue title or
   structured display preview is used and refreshed after a native identity appears and after each turn settles. A
   project, provider, or shortened session identity is never a conversation-title fallback. When the provider supplies
@@ -260,22 +203,18 @@ the original daemon and provider processes instead of making a versioned extensi
 - Core-owned project and working-tree identity prevents concurrent writers in equal, ancestor, or descendant paths.
   Linked worktrees remain independent, and only an explicit user action permits shared access.
 
-## Surface and driver contracts (what a new place or a new service has to implement, and nothing else)
+## Surface and driver contracts (what a new viewer or a new service has to implement, and nothing else)
 
-Two contracts keep the conversation window from growing a branch per place or per service.
+Two contracts keep the conversation surface from growing a branch per viewer or per service.
 
-- **A place is one binding surface.** `ConversationSurface` (`conversationSurface.ts`) is all the page, the
-  bindings and the controller know about where a conversation is shown: a webview to post to, `visible` to pause
-  the watch by, a title, `reveal`, and two lifetime events (visibility changed, disposed). An editor tab and a
-  workbench view both implement it; adding a place (a new view, an editor in another column) is one implementation
-  and two lines of `package.json`, with no change to the page, the watch, the chips or the controller. The
-  per-place state the workbench does not keep (which conversation a view showed) is the binding layer's, stored
-  as a session identity only.
-- **A service is one driver.** The Runtime's provider trait and manifest are the whole of what a coding service
-  contributes; the window reads the provider-neutral event vocabulary (messages, tool calls, approvals, turns,
-  notices, usage) and the provider's own words inside it. A new service reaches every place, the sidebar, the
-  chips and the diff editor without a line in the extension (the isolation gate `tests/audit/providerIsolation.py`
-  guards the Runtime half; the extension has no provider branch to guard).
+- **A viewer is one terminal connection.** `terminalTabs.ts` is all this window knows about showing a
+  conversation: open or join the Core's hosted terminal on one private-wire connection, write its bytes to a
+  VS Code terminal, send the keys and resizes back. A phone implements the same connection with xterm.js. Adding
+  a viewer is one implementation of that connection and nothing else.
+- **A service is one manifest.** The Runtime's provider trait and manifest are the whole of what a coding service
+  contributes; its `[tui]` section names how its terminal interface opens and resumes. A new service reaches the
+  tab, the phone and the sidebar without a line in the extension (the isolation gate
+  `tests/audit/providerIsolation.py` guards the Runtime half; the extension has no provider branch to guard).
 
 ## Module boundaries
 
@@ -287,17 +226,14 @@ Two contracts keep the conversation window from growing a branch per place or pe
 | `protocol.ts` | TypeScript projection of the Rust wire | provider-specific fields |
 | `runtimeClient.ts` | approved public Runtime identity, validated-locator lifetime, inventory, lifecycle, and streams | provider credentials or conversation storage |
 | `agentTools.ts` | exact Core enable, disable, and list commands plus in-memory project badge state | provider configuration, integration secrets, or Runtime grant policy |
-| `chatPlacement.ts` | the provider-neutral decision between shared, exclusive, and isolated first-message placement | Git commands, provider names, or durable ownership |
 | `isolatedWorkspace.ts` | exact Core isolation requests and the exact generated Runtime root grant and revocation | Git execution, broad root removal, prompt content, or provider policy |
 | `pairingQr.ts`, `pairingQrVendor.ts` | pairing-time loading of the bounded QR encoder sibling bundle | activation-time encoder cost or pairing authority |
 | `state.ts` | provider, session, cursor, and selection metadata in memory | conversation frames |
 | `selectionStore.ts` | one bounded selected-session identifier | prompts, replies, or provider state |
 | `controller.ts` | user actions, one watch lifetime, workspace binding | transcript discovery or agent loops |
-| `conversationSurface.ts` | the place contract: tab and workbench-view surfaces, the empty-place page | conversation state, watches, or any place-specific rendering |
-| `conversationView.ts` | one conversation page on one surface, CSP, and Extension Host to Webview transport | retained conversation state or a second live renderer |
-| `conversationPanels.ts` | one binding per conversation (surface + watch), the two workbench places, the grid | provider branches or conversation content |
+| `terminalTabs.ts` | one editor-area terminal tab per conversation over one private-wire terminal connection | reading, storing or rewriting a byte of the conversation |
+| `events/` | the sidebar's words for provider events (activity, tool names, declared changes) | rendering a conversation |
 | `diffDocuments.ts` | declared changes as read-only virtual documents for VS Code's diff editor | files on disk or a transcript of changes |
-| `webview/` | bounded active rendering and input | durable storage or background sessions |
 | `mission/controller.ts`, `mission/schedule.ts`, `mission/autoFlight.ts`, `mission/momentum.ts`, `mission/recovery.ts`, `mission/waveRunner.ts`, and `mission/tree.ts` | Mission review, exact durable schedule review, bounded local Auto Flight authority, safe-wave continuation, exact interrupted-Mission recovery, the shared provider-neutral wave runner, reviewed fleet launch, Task rows, native Artifact comparison, and one native editor document | provider input without confirmed local authority, transcript inference, schedule timers, polling, or optimistic completion |
 | `mission/landing/` | deterministic ordinary queue and explicit Fleet winner selection, Receipt-evidence-bound native review, fixed-allocation reads, exact atomic Artifact replacement, drift and link defenses, and verified rollback | semantic merge, conflict resolution, staging, commits, provider knowledge, or conversation content |
 | `capability/controller.ts` | candidate inbox, native diff review, and exact local trust actions | capability text injection or user-wide trust |
@@ -433,15 +369,10 @@ every trial. The shared ratchet currently caps:
 | Loaded animation frame p95 | 40 ms |
 | Load overrun above the runner's native cadence | 8 ms |
 | Input and scroll p95 | 50 ms |
-| Renderer backlog | 1,024 frames |
 | Hot-session switch p95 | 175 ms |
 | Cold provider-native resume | 3,500 ms |
 | Full workspace reload restoration | 2,500 ms |
 | Second-folder conversation arrival | 15,000 ms |
-
-The Webview carries 15,000 raw frames over five seconds and must drop zero raw frames while animation, input, scroll,
-DOM, visible characters, queue growth, and memory remain bounded. Its measurement protocol bounds startup and result
-acknowledgements separately and retries one transient Webview document reload within the outer gate timeout.
 
 ## Distribution
 
@@ -462,8 +393,8 @@ Each VSIX contains exactly one matching native Core, the production bundles, can
 license. Source, tooling, development dependencies, performance budgets, and target metadata are excluded.
 
 The release workflow builds on every native runner, compares the packaged Core bytes with the built binary, installs
-the VSIX into a clean VS Code 1.132.1 profile, activates through the bundled Core, opens Runtrol, opens and closes a
-new-conversation composer through the public command, exercises upgrade and rollback with an active session, and
+the VSIX into a clean VS Code 1.132.1 profile, activates through the bundled Core, opens Runtrol, opens the
+New Conversation service picker through the public command and dismisses it, exercises upgrade and rollback with an active session, and
 uploads the package. Hosted extension gates use that same exact tested version unless an operator explicitly supplies
 another version. It creates a tagged GitHub Release only after all six jobs pass.
 
@@ -472,7 +403,7 @@ All six native packages are published under one
 [Marketplace listing](https://marketplace.visualstudio.com/items?itemName=runtrol.runtrol-studio). Stable VS Code
 1.132.1 downloads the exact public package into an isolated profile on each native release runner, activates with no
 configured Core path, materializes the bundled Core, refreshes through it, opens the contributed Runtrol view, and
-opens then closes the same new-conversation composer. Exact verifier processes and temporary profiles are removed
+opens then dismisses the same New Conversation service picker. Exact verifier processes and temporary profiles are removed
 afterward.
 
 Advancing `release-policy.json` by one patch on `main` starts the release automatically. GitHub Actions holds one
@@ -489,26 +420,25 @@ specified in [automatic updates](automaticUpdates.md).
 | Gate or command | Contract |
 |---|---|
 | `vscodeExtension` | thin extension boundary, TypeScript, framing, storage, queue, renderer, and bundle limits |
-| `vscodeHostPerformance` | real 30-session Extension Host and Webview responsiveness on three operating systems |
+| `vscodeHostPerformance` | real 30-session Extension Host responsiveness on three operating systems |
 | `vscodeRealProviderJourney` | installed provider discovery and a complete real CLI control journey |
-| `node tooling/real-window-eye.mjs` | the eye pass: an isolated VS Code window and an isolated Runtime with the real installed CLIs, real folders and real conversations, photographed in the draft, working row, Agent Usage bars, conversation, tabs, reopened, grid, places, diff and diff-editor poses, with a real throwaway deletion; the pictures are the judgement. `RUNTROL_EYE_ENTRY=placeProbe` runs the focused place probe and `RUNTROL_EYE_ENTRY=agentToolsEye` runs the zero-model-turn Agent Tools enable and revoke proof in isolated provider homes |
-| `RUNTROL_EYE_DRAFT_ONLY=1 node tooling/real-window-eye.mjs` | focused current-folder sidebar and composer photograph plus the same real project-switch and keyboard-back proof, with no provider turn |
+| `node tooling/real-window-eye.mjs` | the eye pass: an isolated VS Code window and an isolated Runtime with the real installed CLIs, real folders and real conversations, photographed in the terminal, tabs, reopened and answered poses, with a real throwaway deletion; the pictures are the judgement. `RUNTROL_EYE_TERMINAL_ONLY=1` photographs the terminal pose alone and `RUNTROL_EYE_ENTRY=agentToolsEye` runs the zero-model-turn Agent Tools enable and revoke proof in isolated provider homes |
+| `RUNTROL_EYE_TERMINAL_ONLY=1 node tooling/real-window-eye.mjs` | focused photograph of the first stored conversation opened as its service's terminal tab, plus the same real project-switch and keyboard-back proof, with no provider turn |
 | `RUNTROL_EYE_ENTRY=missionFlightDeckEye node tooling/real-window-eye.mjs` | at 1456 by 906, two isolated Git projects and reviewed Missions start together through one flight, reach integration together through the next flight, review existing and new files in native Receipt Landing multi-diffs, select the public product action, reject five drift or local-boundary failures plus one passing Gate mutation, retain retry state, apply exact bytes, and complete both Missions. Review, confirmation, first-completed/second-waiting, and next-review screenshots are inspected directly |
 | `RUNTROL_EYE_ENTRY=missionAutoFlightEye node tooling/real-window-eye.mjs` | one reviewed two-wave dependency Mission is armed once, starts two real provider sessions, verifies two fixed Gates, reaches `integrating` with zero operator continuation actions, removes its own authority, and is photographed before arm, while armed, and after arrival |
 | `RUNTROL_EYE_ENTRY=fleetEye node tooling/real-window-eye.mjs` | two real CLI attempts reach passing Receipts, native diffs compare their distinct output, `attempt-2` opens as the only winner Receipt, an `attempt-1` apply request is rejected, the public primary action writes exactly `attempt 2`, and the Mission reaches `completed` with its selected Task and Receipt visible. Comparison, winner review, confirmation, and completed screenshots are inspected directly at 1456 by 906 |
 | `RUNTROL_EYE_ENTRY=missionRecoveryEye node tooling/real-window-eye.mjs` | one real provider Mission is photographed in flight, its exact Core process is terminated and replaced over the same isolated home, the Mission and Task are photographed blocked, Esc proves the focused recovery confirmation performs no mutation, Enter starts a distinct fresh Runtime session, and the running recovery is photographed at the declared viewport |
-| `RUNTROL_EYE_ENTRY=safeParallelChatEye node tooling/real-window-eye.mjs` | one draft starts real Claude Code and Codex sessions in distinct Core-owned linked worktrees, proves the same Git store and base commit, keeps the base checkout unchanged, force-restarts Core, recovers exact ownership, and removes only the exact clean worktrees and Runtime roots |
 | `node tooling/installed-safe-parallel-eye.mjs <exact-vsix>` | installs one exact VSIX in an isolated real VS Code profile, proves the bundled and managed Core digests match, then uses only the public new-chat and Also Ask commands to start two installed services in distinct worktrees and verify exact cleanup at 1456 by 908 |
 | `agentToolsSmoke` | real installed provider CLIs, official MCP registration, modern and legacy discovery, fixed tool catalogue, root isolation, Runtime reads, complete revocation, and post-revocation default deny with zero model turns |
 | `missionGrowthContracts` | Mission state, exact Send, evidence, integration, capability trust, local scope, tamper, and rollback |
 | `missionLiveJourney` | two installed provider CLIs complete five reviewed Tasks and an explicit reuse, tamper, and rollback journey through production IPC |
 | `vscodePackage` | six-target SSOT, exact archive contents, Core bytes, workflow integrity, and listing metadata |
 | `crossPlatformContract` | one public command, automatic Core default, and unconditional first-run step across the shared six-target package contract |
-| `crossPlatformMatrix` | exact VSIX installation, bundled Core discovery, Runtrol opening, new-conversation draft, and exact close on native Windows, macOS, and Linux |
+| `crossPlatformMatrix` | exact VSIX installation, bundled Core discovery, Runtrol opening, the New Conversation picker, and exact close on native Windows, macOS, and Linux |
 | `vscodeUpgradeRollback` | active-session continuity across official VSIX upgrade and rollback |
 | `channelVerdict` | confirmed provider package ownership and closed update arguments |
 | `cliUpdateRehearsal` | failed provider target and exact verified rollback transaction |
-| `node tooling/installed-package.mjs --marketplace` | public Marketplace download, isolated activation, bundled Core, refresh, view opening, and new-conversation draft opening and close |
+| `node tooling/installed-package.mjs --marketplace` | public Marketplace download, isolated activation, bundled Core, refresh, view opening, and the New Conversation picker opening and close |
 
 ## Inspection tool: eyes and arms on a running window
 

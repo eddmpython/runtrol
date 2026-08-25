@@ -20,18 +20,6 @@ type ExtensionApi = {
   readonly ready: Promise<void>;
   readonly initializationStage?: string;
   refresh(): Promise<void>;
-  measureWebview?(framesPerSecond?: number, durationMs?: number): Promise<{
-    baselineFrameP95Ms: number;
-    frameP95Ms: number;
-    frameOverrunP95Ms: number;
-    inputP95Ms: number;
-    scrollP95Ms: number;
-    maxPendingFrames: number;
-    producedFrames: number;
-    droppedFrames: number;
-    visibleCharacters: number;
-    visibleItems: number;
-  }>;
   measureSessionManagement?(
     sessionIds: readonly string[],
     progress?: (stage: string) => void,
@@ -147,30 +135,6 @@ async function measure(resultPath: string): Promise<Record<string, number | stri
     refreshSamples.push(performance.now() - started);
   }
 
-  currentStage = "webview-load";
-  if (!api.measureWebview) {
-    throw new Error("the performance-only Webview measurement API is unavailable");
-  }
-  const framesPerSecond = numericEnvironment("RUNTROL_VSCODE_PERFORMANCE_RATE", 3_000);
-  const durationMs = numericEnvironment("RUNTROL_VSCODE_PERFORMANCE_DURATION", 5_000);
-  const webview = await within(
-    api.measureWebview(framesPerSecond, durationMs),
-    30_000,
-    "Webview burst measurement",
-  );
-  const expectedFrames = Math.ceil(framesPerSecond * durationMs / 1_000);
-  if (webview.producedFrames < expectedFrames) {
-    throw new Error(`Webview load produced only ${webview.producedFrames} frames`);
-  }
-  if (webview.droppedFrames !== 0) {
-    throw new Error(`Webview transport dropped ${webview.droppedFrames} raw frames`);
-  }
-  if (webview.visibleItems > 400 || webview.visibleCharacters > 256 * 1024) {
-    throw new Error(
-      `Webview bounds escaped at ${webview.visibleItems} items and ${webview.visibleCharacters} characters`,
-    );
-  }
-
   currentStage = "session-switch";
   if (!api.measureSessionManagement) {
     throw new Error("the performance-only hot-session measurement API is unavailable");
@@ -189,13 +153,6 @@ async function measure(resultPath: string): Promise<Record<string, number | stri
     openViewMs,
     refreshP95Ms: percentile(refreshSamples, 0.95),
     rssGrowthBytes: Math.max(0, process.memoryUsage().rss - rssBefore),
-    webviewFrameP95Ms: webview.frameP95Ms,
-    webviewBaselineFrameP95Ms: webview.baselineFrameP95Ms,
-    webviewFrameOverrunP95Ms: webview.frameOverrunP95Ms,
-    webviewInputP95Ms: webview.inputP95Ms,
-    webviewScrollP95Ms: webview.scrollP95Ms,
-    webviewPendingFrames: webview.maxPendingFrames,
-    webviewDroppedFrames: webview.droppedFrames,
     sessionCount: switched.sessionCount,
     hotSessionCount: switched.hotSessionCount,
     coldResumeMs: switched.coldResumeMs,

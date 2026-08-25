@@ -4,15 +4,8 @@ import path from "node:path";
 import { PUBLIC_LIMITS, type PublicInputBlock } from "@runtrol/runtime-client";
 import * as vscode from "vscode";
 
-import type { Attachment, ConversationBinding, ConversationPanels, DraftRecord } from "./conversationPanels";
 import type { TerminalTabs } from "./terminalTabs";
-import { parallelPlacementRequirement, type StartDecision } from "./chatPlacement";
-import { ConversationLauncher } from "./conversationLauncher";
-import type { Place } from "./conversationSurface";
-import type { MenuAnchor, MenuItem } from "./viewActions";
-import type { ConversationView } from "./conversationView";
 import { CoreClient } from "./core/client";
-import { draftChips, newDraftId, NO_PROJECT_LABEL, type DraftState } from "./draft";
 import { readGitBranch } from "./gitBranch";
 import { IsolatedWorkspaces } from "./isolatedWorkspace";
 import { isProjectless } from "./projectlessWorkspace";
@@ -34,7 +27,6 @@ import type { Conversation } from "./conversationList";
 import { attentionCount, nextNeedingYou, projects } from "./conversationList";
 import { conversationDeletion } from "./conversationDeletion";
 import { archivalQuestion, conversationArchival } from "./conversationArchival";
-import { conversationChoices } from "./conversationPicker";
 import { awaitsVerification, isUsable } from "./providerHealth";
 import type { HelpOffer, ServiceTrouble } from "./serviceHelp";
 import {
@@ -105,14 +97,12 @@ export class Controller implements vscode.Disposable {
   /// One provider probe at a time. Each spawns a CLI, so the queue is what keeps activation answerable.
   private verificationTail: Promise<void> = Promise.resolve();
   private readonly isolatedWorkspaces: IsolatedWorkspaces;
-  private readonly conversationLauncher: ConversationLauncher;
 
   constructor(
     private readonly context: vscode.ExtensionContext,
     private readonly client: CoreClient,
     private readonly runtime: StudioRuntimeClient,
     private readonly state: RuntimeState,
-    private readonly panels: ConversationPanels,
     private readonly selection: SelectionStore,
     /// The projects the operator created, offered first when a draft picks its folder.
     private readonly projectRecords: { all(): readonly ProjectRecord[] },
@@ -123,11 +113,6 @@ export class Controller implements vscode.Disposable {
       client,
       () => runtime.integrationId(),
       () => runtime.reset(),
-    );
-    this.conversationLauncher = new ConversationLauncher(
-      runtime,
-      this.isolatedWorkspaces,
-      () => this.refreshIsolatedWorkspaces(),
     );
     this.status = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 20);
     this.status.name = "Runtrol";
@@ -413,7 +398,12 @@ export class Controller implements vscode.Disposable {
   async switchSession(): Promise<void> {
     const rows = this.state.conversations;
     const picked = await vscode.window.showQuickPick(
-      conversationChoices(rows, Date.now()),
+      rows.map((conversation) => ({
+        label: conversation.title,
+        description: conversation.serviceName,
+        detail: conversation.projectless ? undefined : conversation.folder,
+        conversation,
+      })),
       {
         title: `Conversations (${rows.length})`,
         placeHolder: "Type a project, service, or title",
@@ -439,10 +429,6 @@ export class Controller implements vscode.Disposable {
     // root stay invisible until someone happens to press refresh, which is the silent-forever failure again.
     this.startExistingChatDiscovery();
     void this.startSessionIndexWatch();
-    // Every open tab re-arms against the fresh connection; each binding replays its own window.
-    for (const binding of this.panels.all()) {
-      binding.rewatch();
-    }
   }
 
   select(
@@ -482,22 +468,6 @@ export class Controller implements vscode.Disposable {
       );
     });
     return ready;
-  }
-
-  /// The acting tab's view: the explicit session first, the focused tab as the fallback for commands
-  /// that arrive without one (the palette, the tree).
-  private viewOf(session: SessionLine | null): ConversationView | null {
-    if (session) {
-      const bound = this.panels.bindingFor(session.sessionId);
-      if (bound) return bound.view;
-    }
-    return this.panels.focused()?.view ?? null;
-  }
-
-  /// Ambient words with no better home go to the focused tab, and nowhere when none is open, which is
-  /// also what the singleton did with its panel closed.
-  private say(message: string, kind: "info" | "warning" | "error" = "info", session: SessionLine | null = null): void {
-    this.viewOf(session)?.status(message, kind);
   }
 
   private async selectNow(
@@ -547,618 +517,90 @@ export class Controller implements vscode.Disposable {
       afterApplied();
       return;
     }
-    let session: SessionLine | null = target;
-    if (!session.hot) {
-      const access = await this.conversationSwitchDecision(session.workspace);
-      if (!access) return;
-      this.state.select(session.sessionId);
-      const opening = await this.panels.open(session, !reveal);
-      opening.view.status("Opening the saved chat...", "info");
-      session = await this.resumeSession(session, access);
-    }
+    // A session named directly (a Mission task, a restored selection): its row's terminal, when the row is
+    // listed. Deliberately no window-follow here: selecting a conversation opens ITS tab beside whatever is
+    // already open and NOTHING else moves (`docs/vscodeSurface.md`).
+    const session: SessionLine = target;
+    const row = this.state.conversations.find((candidate) => candidate.session?.sessionId === session.sessionId);
+    if (row?.canOpen) this.terminals.show(row, !reveal);
     const stored = this.persistSelection(session.sessionId);
-    // Deliberately no window-follow here. Selecting a conversation opens ITS tab beside whatever is
-    // already open and NOTHING else moves (`docs/vscodeSurface.md`): moving VS Code to the project is the
-    // heading's explicit button. The tab's binding owns its watch and its replay-on-rebirth, so nothing
-    // here pauses or resets anybody else's conversation.
-    const binding = await this.panels.open(session, !reveal);
-    // Showing the tab makes its ready callback select this session. Keep this fallback after the visible
-    // document is ready: selecting first asks VS Code to scroll and repaint the sidebar while it is also
-    // activating and rebuilding the Webview, which makes the interaction slower without changing a pixel.
-    // Preserve-focus callers do not necessarily produce a focus event, so they still need the fallback.
     this.state.select(session.sessionId);
     void stored.catch((error: unknown) => {
-      binding.view.status(
-        `Cannot remember the selected session: ${error instanceof Error ? error.message : String(error)}`,
-        "warning",
-      );
+      this.say(`Cannot remember the selected session: ${error instanceof Error ? error.message : String(error)}`, "warning");
     });
     afterApplied();
   }
 
-  /// Open a conversation with the access the operator decided, on the public Runtime. A shared open is the
-  /// public Runtime's one presence-gated open (a second writer in a working tree somebody is already writing
-  /// in); the Runtime client confirms the person's own choice at the machine and retries, so from here both
-  /// accesses are one call (measured 2026-08-21: every "Start here anyway", concurrent switch and scratch-folder
-  /// path used to send shared with no confirmation, and the refusal was misread as a sign-in problem).
-  private async openWithAccess(
-    open:
-      | { kind: "start"; providerId: string; workspace: string; model: string | null; effort: string | null; permission: string | null }
-      | { kind: "adopt"; native: NativeChatLine },
-    access: WorkspaceAccess,
-  ): Promise<SessionLine> {
-    const opened = open.kind === "start"
-      ? await this.runtime.start(open.providerId, open.workspace, access, open.model, open.effort, open.permission)
-      : await this.runtime.adoptNative(open.native, access);
-    return opened;
+  /// A word to the person about what just happened. Information goes to the status bar for a moment;
+  /// anything worse is a notification, because it may need an answer.
+  private say(message: string, kind: "info" | "warning" | "error" = "info"): void {
+    if (kind === "info") {
+      vscode.window.setStatusBarMessage(message, 4_000);
+    } else if (kind === "warning") {
+      void vscode.window.showWarningMessage(message);
+    } else {
+      void vscode.window.showErrorMessage(message);
+    }
   }
 
-  private async resumeSession(session: SessionLine, access: WorkspaceAccess): Promise<SessionLine> {
-    if (!session.nativeSessionId) {
-      throw new Error("that cold session has no provider-owned conversation identifier to resume");
-    }
-    const opened = await this.runtime.resume(runtimeAction(session), access);
-    const watched = this.state.sessions.find((candidate) => (
-      candidate.sessionId === opened.sessionId
-      && candidate.hot
-      && candidate.sessionGeneration === opened.sessionGeneration
-    ));
-    if (watched) return watched;
+  /// Text into a Mission task's session on the public Runtime. Missions speak the structured protocol; the
+  /// terminal surface is for people.
+  async submitResolvedInput(sessionId: string, text: string): Promise<void> {
     await this.refresh();
-    const resumed = this.state.sessions.find((candidate) => candidate.sessionId === opened.sessionId);
-    if (!resumed) {
-      throw new Error("the resumed session is absent from the current session index");
+    const session = this.state.sessions.find((candidate) => candidate.sessionId === sessionId);
+    if (!session) {
+      throw new Error("the Mission session is no longer listed by Runtime");
     }
-    return resumed;
+    await this.runtime.submitInput(runtimeAction(session), text);
   }
 
-  private async adoptNativeChat(native: NativeChatLine): Promise<SessionLine | null> {
-    let catalogue = this.state.nativeCatalogue(native.providerId);
-    if (!catalogue || Date.now() - catalogue.loadedAtMs >= NATIVE_ADOPTION_REFRESH_MS) {
-      await this.loadNativeChats(native.providerId, true);
-      catalogue = this.state.nativeCatalogue(native.providerId);
-    }
-    const current = catalogue?.chats.find(
-      (chat) => chat.nativeSessionId === native.nativeSessionId,
+  /// A structured session's model, set on the public Runtime (Missions and the journey; a person uses the
+  /// service's own `/model` in the terminal).
+  async setSelectedModel(session: SessionLine, model: string): Promise<void> {
+    await this.runtime.setModel(runtimeAction(session), model);
+  }
+
+  /// A structured session's mode, likewise.
+  async setSelectedMode(session: SessionLine, mode: string): Promise<void> {
+    await this.runtime.setMode(runtimeAction(session), mode);
+  }
+
+  /// Spread the open conversation tabs over a grid of editor groups; one command, one screen of agents.
+  async arrangeConversationGrid(): Promise<void> {
+    const arranged = await this.terminals.arrangeGrid();
+    vscode.window.setStatusBarMessage(
+      arranged === 0
+        ? "Open a conversation or two first; the grid arranges the conversation tabs that are open."
+        : `${arranged} conversations arranged in a grid.`,
+      4_000,
     );
-    if (!current) {
-      throw new Error(catalogue?.warning ?? "that existing chat is no longer listed by its provider");
-    }
-    const managed = this.state.sessions.find((session) => (
-      session.sessionId === current.alreadyManagedAs
-      || (session.providerId === current.providerId
-        && session.nativeSessionId === current.nativeSessionId)
-    ));
-    if (managed) return managed;
-    if (current.resume !== "available" || !current.adoptionToken) {
-      throw new Error("that existing chat cannot currently be resumed by its provider");
-    }
-    const access = await this.conversationSwitchDecision(current.cwd);
-    if (!access) return null;
-    const openedId = (await this.openWithAccess({ kind: "adopt", native: current }, access)).sessionId;
-    await this.refresh();
-    const adopted = this.state.sessions.find((session) => session.sessionId === openedId);
-    if (!adopted) {
-      throw new Error("the resumed existing chat is absent from the current session index");
-    }
-    return adopted;
   }
 
-  /// A click on another saved chat is a switch, not a request to add another writer.
-  ///
-  /// Idle provider processes are cooled without a question and their conversation pointers remain. A turn that
-  /// is genuinely producing output is the only case that asks: stop it and switch, deliberately run both, or
-  /// cancel. This keeps the common one-click path quiet while never interrupting active work implicitly.
-  private async conversationSwitchDecision(workspace: string): Promise<WorkspaceAccess | null> {
-    const collisions = workspaceCollisions(workspace, this.state.sessions);
-    if (collisions.length === 0) return "exclusive";
-    const working = workingCollisions(collisions);
-    if (working.length === 0) {
-      for (const { session } of collisions) {
-        await this.runtime.cool(runtimeAction(session), false);
-      }
-      await this.refresh();
-      return "exclusive";
-    }
-    const project = path.basename(workspace) || workspace;
-    const action = await vscode.window.showWarningMessage(
-      `${working.length === 1 ? "Another chat is" : `${working.length} chats are`} still working in ${project}.`,
-      {
-        modal: true,
-        detail: working.length === 1
-          ? "Stop its current response and switch, or keep both chats working in the same files."
-          : "Stop their current responses and switch, or keep all chats working in the same files.",
-      },
-      "Stop and switch",
-      "Keep both working",
-    );
-    if (action === "Keep both working") return "shared";
-    if (action !== "Stop and switch") return null;
-    for (const { session } of collisions) {
-      await this.runtime.cool(runtimeAction(session), session.lifecycle === "hotRunning");
-    }
-    await this.refresh();
-    return "exclusive";
-  }
-
-  /// New chat, the way the chat apps people already use begin one: a tab with the composer ready and
-  /// the chips set (this window's folder, or no project when the window has none; the service used last),
-  /// and nothing running until the first message. A process per click was the old shape, and a person who
-  /// changes their mind had already paid for a CLI start.
+  /// New conversation: pick the service, and its own terminal interface opens in this window's folder (or
+  /// the scratch folder when the window has none). The service creates the conversation on its first turn,
+  /// with its own composer, model picker and permission prompts; nothing of ours stands in front of it.
   async startSession(): Promise<void> {
-    await this.openDraft({ workspace: vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? null });
+    const workspace = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? await this.ensureProjectlessRoot();
+    await this.startSessionInWorkspace(workspace);
   }
 
-  /// New chat inside one project, from its heading: the same draft tab with the folder already answered.
+  /// New conversation inside one project, from its heading: the folder question already answered.
   async startSessionInWorkspace(workspace: string): Promise<void> {
-    await this.openDraft({ workspace });
-  }
-
-  /// Open a draft tab: project, service, model, effort and mode chips, and a composer whose first message
-  /// starts the conversation with exactly those choices.
-  ///
-  /// Defaults cost no question: the service is the one used last (or the only usable one), and the
-  /// model, effort and mode are what this project's last explicit start chose, or the installed CLI's own
-  /// settings. Every one of them is one click away on its chip.
-  async openDraft(seed: { workspace: string | null; providerId?: string | null }): Promise<ConversationBinding> {
-    const provider = seed.providerId
-      ? this.state.providers.find((candidate) => candidate.providerId === seed.providerId) ?? null
-      : this.preferredService();
-    const remembered = seed.workspace === null ? null : this.startDefaultOf(seed.workspace);
-    const recall = provider && remembered?.providerId === provider.providerId ? remembered : null;
-    const draft: DraftState = {
-      id: newDraftId(),
-      workspace: seed.workspace,
-      providerId: provider?.providerId ?? null,
-      alsoProviderIds: [],
-      model: recall?.model ?? null,
-      effort: recall?.effort ?? null,
-      permission: recall?.permission ?? null,
-    };
-    const binding = await this.panels.openDraft(this.draftRecord(draft, null));
-    void this.refreshDraftBranch(binding, draft);
-    return binding;
-  }
-
-  /// Reopen a restored draft tab with the choices it stamped.
-  async restoreDraft(panel: vscode.WebviewPanel, draft: DraftState): Promise<void> {
-    const binding = await this.panels.adoptDraft(panel, this.draftRecord(draft, null));
-    void this.refreshDraftBranch(binding, draft);
-  }
-
-  private draftRecord(draft: DraftState, branch: string | null): DraftRecord {
-    const provider = this.state.providers.find((candidate) => candidate.providerId === draft.providerId);
-    return { state: draft, chips: draftChips(draft, provider?.displayName ?? null, branch) };
-  }
-
-  /// The branch is read off the folder's own repository after the tab is up, never before it.
-  private async refreshDraftBranch(binding: ConversationBinding, draft: DraftState): Promise<void> {
-    if (draft.workspace === null) return;
-    const branch = await readGitBranch(draft.workspace);
-    if (
-      branch !== null
-      && binding.draft?.state.id === draft.id
-      && binding.draft.state.workspace === draft.workspace
-    ) {
-      binding.updateDraft(this.draftRecord(binding.draft.state, branch));
+    const usable = this.state.providers.filter((provider) => isUsable(provider));
+    if (usable.length === 0) {
+      throw new Error("no coding service is installed and signed in; add one from the Agent Usage view");
     }
-  }
-
-  private async amendDraft(binding: ConversationBinding, change: Partial<DraftState>): Promise<void> {
-    const current = binding.draft;
-    if (!current) return;
-    const next: DraftState = { ...current.state, ...change };
-    const branch = next.workspace === current.state.workspace ? current.chips.branch : null;
-    binding.updateDraft(this.draftRecord(next, branch));
-    if (next.workspace !== current.state.workspace) await this.refreshDraftBranch(binding, next);
-  }
-
-  /// Where the draft runs: no project, this window's folders, created projects, every folder the
-  /// sidebar lists, or any folder on the machine.
-  async pickDraftProject(binding: ConversationBinding): Promise<void> {
-    const draft = binding.draft;
-    if (!draft) return;
-    const seen = new Set<string>();
-    const choices: Array<vscode.QuickPickItem & { workspace: string | null; browse?: true }> = [
-      {
-        label: `$(comment) ${NO_PROJECT_LABEL}`,
-        description: "A conversation about nothing in particular",
-        workspace: null,
-      },
-    ];
-    const add = (workspace: string, description: string): void => {
-      const identity = workspaceIdentity(workspace);
-      if (seen.has(identity)) return;
-      seen.add(identity);
-      choices.push({
-        label: `$(folder) ${workspaceName(workspace) || workspace}`,
-        description,
-        detail: workspace,
-        workspace,
-      });
-    };
-    for (const folder of vscode.workspace.workspaceFolders ?? []) add(folder.uri.fsPath, "Open in this window");
-    for (const record of this.projectRecords.all()) add(record.workspace, record.name);
-    for (const row of this.state.conversations) {
-      if (!row.projectless && row.homeWorkspace.trim()) add(row.homeWorkspace, row.serviceName);
-    }
-    choices.push({ label: "$(folder-opened) Browse for a folder...", workspace: null, browse: true });
-    const picked = await this.pickFrom(
-      binding,
-      "project",
-      "Project for this conversation",
-      "Where the coding service runs",
-      choices,
-    );
+    const recent = this.context.globalState.get<string>(RECENT_SERVICE_KEY) ?? null;
+    const ordered = [...usable].sort((left, right) => Number(right.providerId === recent) - Number(left.providerId === recent));
+    const picked = usable.length === 1
+      ? ordered[0]
+      : await vscode.window.showQuickPick(
+        ordered.map((provider) => ({ label: provider.displayName, description: provider.providerId, provider })),
+        { title: "Start a conversation with", placeHolder: "The service's own terminal opens in the project" },
+      ).then((choice) => choice?.provider);
     if (!picked) return;
-    if (picked.browse) {
-      const chosen = await vscode.window.showOpenDialog({
-        title: "Project for this conversation",
-        canSelectFolders: true,
-        canSelectFiles: false,
-        canSelectMany: false,
-      });
-      const folder = chosen?.[0]?.fsPath;
-      if (!folder) return;
-      await this.amendDraft(binding, { workspace: folder });
-      return;
-    }
-    await this.amendDraft(binding, { workspace: picked.workspace });
-  }
-
-  /// Which coding service answers this draft. Every usable one is offered, the last used leading, and beneath
-  /// them "Also ask <service>": the same first message goes to that service too, in its own tab (one prompt,
-  /// N agents, the grid one key away). Choosing an "also" toggles it; choosing a service makes it the one
-  /// this tab becomes.
-  async pickDraftService(binding: ConversationBinding): Promise<void> {
-    const draft = binding.draft;
-    if (!draft) return;
-    const usable = this.state.providers.filter(isUsable);
-    if (usable.length === 0) throw new Error("no installed coding-agent CLI is currently usable");
-    const recent = this.context.globalState.get<string>(RECENT_SERVICE_KEY);
-    type Choice = {
-      label: string;
-      description?: string;
-      icon?: string;
-      current?: boolean;
-      provider: ProviderLine;
-      also: boolean;
-    };
-    const primary: Choice[] = usable.map((provider) => ({
-      label: provider.displayName,
-      description: provider.providerId === recent && provider.providerId !== draft.state.providerId
-        ? "Last used"
-        : provider.installation.version ?? "",
-      icon: provider.providerId,
-      current: provider.providerId === draft.state.providerId || undefined,
-      provider,
-      also: false,
-    }));
-    const others: Choice[] = usable
-      .filter((provider) => provider.providerId !== draft.state.providerId)
-      .map((provider) => ({
-        label: `Also ask ${provider.displayName}`,
-        description: draft.state.alsoProviderIds.includes(provider.providerId)
-          ? "Asked too (choose again to drop)"
-          : "The same first message, in its own tab",
-        icon: provider.providerId,
-        current: draft.state.alsoProviderIds.includes(provider.providerId) || undefined,
-        provider,
-        also: true,
-      }));
-    const picked = await this.pickFrom(
-      binding,
-      "service",
-      "Coding service for this conversation",
-      "Choose a coding service",
-      [...primary, ...(draft.state.providerId ? others : [])],
-    );
-    if (!picked) return;
-    if (picked.also) {
-      const id = picked.provider.providerId;
-      const current = draft.state.alsoProviderIds;
-      await this.amendDraft(binding, {
-        alsoProviderIds: current.includes(id) ? current.filter((other) => other !== id) : [...current, id],
-      });
-      return;
-    }
-    // A model or effort chosen for one service means nothing to another; they revert to the new service's
-    // own defaults, and the chips say so. The "also" set drops the service that became primary.
-    await this.amendDraft(binding, {
-      providerId: picked.provider.providerId,
-      alsoProviderIds: draft.state.alsoProviderIds.filter((other) => other !== picked.provider.providerId),
-      model: null,
-      effort: null,
-      permission: null,
-    });
-  }
-
-  /// The draft's model and effort, chosen in the same one menu the live chip opens: models lead
-  /// (the chosen one marked), the chosen model's efforts follow under their own caption.
-  async pickDraftModel(binding: ConversationBinding): Promise<void> {
-    const draft = binding.draft;
-    if (!draft) return;
-    const provider = this.requireDraftProvider(draft.state);
-    if (!provider) return;
-    const catalogue = await this.runtime.models(provider.providerId);
-    const options = modelOptions(catalogue);
-    if (options.length === 0) {
-      this.say(`${provider.displayName} reports no selectable models; its own settings stay in control.`, "info");
-      return;
-    }
-    type Row = {
-      label: string;
-      description?: string;
-      detail?: string;
-      heading?: boolean;
-      current?: boolean;
-      act?: { kind: "model"; id: string | null } | { kind: "effort"; id: string | null };
-    };
-    const rows: Row[] = [
-      {
-        label: "Provider default",
-        description: "The installed CLI's current model setting",
-        current: draft.state.model === null || undefined,
-        act: { kind: "model" as const, id: null },
-      },
-      ...options.map((option) => ({
-        label: option.label,
-        description: option.description,
-        detail: option.detail,
-        current: option.id === draft.state.model || undefined,
-        act: { kind: "model" as const, id: option.id },
-      })),
-    ];
-    const chosenModel = options.find((option) => option.id === draft.state.model)?.model ?? null;
-    const efforts = reasoningOptions(catalogue, chosenModel);
-    if (efforts.length > 0) {
-      rows.push({ label: "Reasoning effort", heading: true });
-      rows.push({
-        label: "Provider default",
-        description: "The installed CLI's current effort setting",
-        current: draft.state.effort === null || undefined,
-        act: { kind: "effort" as const, id: null },
-      });
-      rows.push(...efforts.map((choice) => ({
-        label: choice.id,
-        description: choice.description || undefined,
-        current: choice.id === draft.state.effort || undefined,
-        act: { kind: "effort" as const, id: choice.id },
-      })));
-    }
-    const picked = await this.pickFrom(
-      binding,
-      "model",
-      `${provider.displayName}: model and effort`,
-      "What this conversation starts with",
-      rows,
-    );
-    if (!picked?.act) return;
-    if (picked.act.kind === "effort") {
-      await this.amendDraft(binding, { effort: picked.act.id });
-      return;
-    }
-    // The effort belongs to a model; a new model starts from that model's default.
-    await this.amendDraft(binding, { model: picked.act.id, effort: null });
-  }
-
-  async pickDraftEffort(binding: ConversationBinding): Promise<void> {
-    const draft = binding.draft;
-    if (!draft) return;
-    const provider = this.requireDraftProvider(draft.state);
-    if (!provider) return;
-    const catalogue = await this.runtime.models(provider.providerId);
-    const model = modelOptions(catalogue).find((option) => option.id === draft.state.model)?.model ?? null;
-    if (reasoningOptions(catalogue, model).length === 0) {
-      this.say(`${provider.displayName} reports no reasoning efforts here; its own settings stay in control.`, "info");
-      return;
-    }
-    const picked = await this.pickReasoningEffort(
-      catalogue,
-      model,
-      `${provider.displayName}: reasoning effort`,
-      draft.state.effort,
-      binding,
-    );
-    if (picked === undefined) return;
-    await this.amendDraft(binding, { effort: picked });
-  }
-
-  async pickDraftMode(binding: ConversationBinding): Promise<void> {
-    const draft = binding.draft;
-    if (!draft) return;
-    const provider = this.requireDraftProvider(draft.state);
-    if (!provider) return;
-    const modes = provider.switchableModes ?? [];
-    if (modes.length === 0) {
-      this.say(`${provider.displayName} declares no switchable modes; its own surface stays in control.`, "info");
-      return;
-    }
-    const picked = await this.pickFrom(
-      binding,
-      "mode",
-      `${provider.displayName}: access mode`,
-      "The mode this conversation starts in",
-      [
-        {
-          label: "Provider default",
-          id: null as string | null,
-          description: "Use the installed CLI's current permission mode",
-        },
-        ...leadWith(
-          modes.map((id) => ({ label: id, id: id as string | null, description: "" })),
-          (choice) => choice.id === draft.state.permission,
-          "Chosen",
-        ),
-      ],
-    );
-    if (!picked) return;
-    await this.amendDraft(binding, { permission: picked.id });
-  }
-
-  /// Offer choices where the question was asked: in the composer, hanging from the chip that was clicked,
-  /// when the conversation's page is on screen; in the command palette otherwise (a command invoked from
-  /// the palette, a page not yet ready). One list, two places; the choice itself is the same object either way.
-  private async pickFrom<T extends {
-    label: string;
-    description?: string;
-    detail?: string;
-    icon?: string;
-    heading?: boolean;
-    current?: boolean;
-  }>(
-    binding: ConversationBinding | undefined,
-    anchor: MenuAnchor,
-    title: string,
-    placeHolder: string,
-    choices: readonly T[],
-  ): Promise<T | undefined> {
-    if (binding?.view.isVisible) {
-      const items: MenuItem[] = choices.map((choice, index) => ({
-        id: String(index),
-        label: withoutCodicons(choice.label),
-        ...(choice.description ? { description: choice.description } : {}),
-        ...(choice.detail ? { detail: choice.detail } : {}),
-        ...(choice.icon ? { icon: choice.icon } : {}),
-        ...(choice.heading ? { heading: true } : {}),
-        ...(choice.current ? { current: true } : {}),
-      }));
-      const chosen = await binding.view.showMenu(anchor, title, items);
-      if (chosen === null) return undefined;
-      const picked = choices[Number(chosen)];
-      // A heading is a caption, never an answer, whatever a hostile page claims was clicked.
-      return picked?.heading ? undefined : picked;
-    }
-    // The palette path says the same groups with its own vocabulary: a separator.
-    const rows = choices.map((choice) => (choice.heading
-      ? { label: choice.label, kind: vscode.QuickPickItemKind.Separator }
-      : choice));
-    const picked = await vscode.window.showQuickPick(rows, { title, placeHolder, matchOnDescription: true, matchOnDetail: true });
-    return picked && !("kind" in picked && picked.kind === vscode.QuickPickItemKind.Separator)
-      ? (picked as T)
-      : undefined;
-  }
-
-  private requireDraftProvider(draft: DraftState): ProviderLine | null {
-    const provider = this.state.providers.find((candidate) => candidate.providerId === draft.providerId);
-    if (!provider) {
-      this.say("Choose a coding service first.", "info");
-      return null;
-    }
-    return provider;
-  }
-
-  /// The first message of a draft: start the conversation with the draft's choices, make this tab its
-  /// tab, and send the words. A conversation with no project runs in the scratch folder.
-  async sendDraft(
-    binding: ConversationBinding,
-    text: string,
-    parallelPlacement?: "isolated" | "shared",
-  ): Promise<void> {
-    const draft = binding.draft;
-    if (!draft) return;
-    const provider = this.requireDraftProvider(draft.state);
-    if (!provider) return;
-    if (!isUsable(provider)) {
-      await this.reportServiceTrouble(provider, troubleOf(undefined, provider));
-    }
-    const workspace = draft.state.workspace ?? await this.ensureProjectlessRoot();
-    const also = draft.state.alsoProviderIds
-      .map((id) => this.state.providers.find((candidate) => candidate.providerId === id) ?? null)
-      .filter((candidate): candidate is ProviderLine => candidate !== null && isUsable(candidate));
-    const placement = parallelPlacementRequirement(
-      also.length,
-      isProjectless(workspace, this.state.projectlessRoot),
-    );
-    const decided = placement === "single"
-      ? await this.startDecision(workspace, "keep")
-      : placement === "sharedOnly"
-        ? "shared"
-        : parallelPlacement ?? await this.parallelStartDecision(workspace, also.length + 1);
-    if (decided === null || decided === "another") return;
-    await this.rememberService(provider.providerId);
-    if (draft.state.model !== null || draft.state.effort !== null || draft.state.permission !== null) {
-      await this.rememberStartDefault(workspace, {
-        providerId: provider.providerId,
-        model: draft.state.model,
-        effort: draft.state.effort,
-        permission: draft.state.permission,
-      });
-    }
-    const pausedDiscoveries = this.beginForegroundAction();
-    try {
-      if (decided === "isolated") {
-        binding.view.status(`Preparing separate workspaces for ${also.length + 1} services...`, "info");
-      }
-      const openedId = await this.conversationLauncher.openFresh(
-        {
-          providerId: provider.providerId,
-          model: draft.state.model,
-          reasoningEffort: draft.state.effort,
-          permission: draft.state.permission,
-        },
-        workspace,
-        decided,
-      );
-      await this.refresh();
-      const session = this.state.sessions.find((candidate) => candidate.sessionId === openedId);
-      if (!session) throw new Error("the started conversation is absent from the current session index");
-      this.panels.becomeSession(binding, session);
-      this.state.select(session.sessionId);
-      void this.persistSelection(session.sessionId).catch((error: unknown) => {
-        binding.view.status(
-          `Cannot remember the selected session: ${error instanceof Error ? error.message : String(error)}`,
-          "warning",
-        );
-      });
-      await this.send(binding, session, text);
-      if (also.length > 0) await this.askOthersToo(also, workspace, decided, text, binding);
-    } catch (error) {
-      if (error instanceof ServiceTroubleReported) throw error;
-      const trouble = troubleOf(errorKindOf(error), provider);
-      if (trouble === "unknown" && errorKindOf(error) === undefined) throw error;
-      await this.reportServiceTrouble(provider, trouble);
-    } finally {
-      this.endForegroundAction(pausedDiscoveries);
-    }
-  }
-
-  /// The same first message to each further service, each in its own tab beside the first, then the grid.
-  /// One service refusing (a folder it will not write in, a sign-in it needs) is said on the first tab and
-  /// does not stop the others.
-  private async askOthersToo(
-    also: readonly ProviderLine[],
-    workspace: string,
-    decision: StartDecision,
-    text: string,
-    from: ConversationBinding,
-  ): Promise<void> {
-    for (const provider of also) {
-      try {
-        const openedId = await this.conversationLauncher.openFresh(
-          {
-            providerId: provider.providerId,
-            model: null,
-            reasoningEffort: null,
-            permission: null,
-          },
-          workspace,
-          decision,
-        );
-        await this.refresh();
-        const session = this.state.sessions.find((candidate) => candidate.sessionId === openedId);
-        if (!session) throw new Error("the started conversation is absent from the current session index");
-        const binding = await this.panels.open(session, true);
-        await this.runtime.submitInput(runtimeAction(session), text);
-        binding.view.status("", "info");
-      } catch (error) {
-        from.view.status(
-          `${provider.displayName} could not be asked too: ${error instanceof Error ? error.message : String(error)}`,
-          "warning",
-        );
-      }
-    }
-    await this.panels.arrangeGrid();
+    await this.context.globalState.update(RECENT_SERVICE_KEY, picked.providerId);
+    this.terminals.showFresh(picked.providerId, workspace, workspaceName(workspace) || workspace);
   }
 
   /// The scratch folder, created on first use. One `mkdir` of an empty directory; nothing is written in it
@@ -1168,224 +610,6 @@ export class Controller implements vscode.Disposable {
     if (!root) throw new Error("this window has no folder for conversations without a project");
     await mkdir(root, { recursive: true });
     return root;
-  }
-
-  /// Add images to the next message of this tab. Read once into memory, sent once, never stored.
-  async attach(binding: ConversationBinding): Promise<void> {
-    const picked = await vscode.window.showOpenDialog({
-      title: "Add images to the message",
-      canSelectFiles: true,
-      canSelectFolders: false,
-      canSelectMany: true,
-      filters: { Images: ["png", "jpg", "jpeg", "gif", "webp"] },
-    });
-    for (const file of picked ?? []) {
-      const bytes = await vscode.workspace.fs.readFile(file);
-      const base64Data = Buffer.from(bytes).toString("base64");
-      if (base64Data.length > PUBLIC_LIMITS.maxAttachmentBase64Bytes) {
-        this.say(`${path.basename(file.fsPath)} is larger than a message can carry.`, "warning", binding.session);
-        continue;
-      }
-      const attachment: Attachment = {
-        name: path.basename(file.fsPath),
-        mediaType: imageMediaType(file.fsPath),
-        base64Data,
-      };
-      if (!binding.addAttachment(attachment)) {
-        this.say(`A message carries at most ${PUBLIC_LIMITS.maxInputImages} images.`, "warning", binding.session);
-        return;
-      }
-    }
-  }
-
-  removeAttachment(binding: ConversationBinding, index: number): void {
-    binding.removeAttachment(index);
-  }
-
-  /// Add one image pasted in the composer. The Webview has already applied the public byte bound and MIME
-  /// allowlist; the binding applies the shared image-count bound and owns the bytes until the next send.
-  addPastedAttachment(binding: ConversationBinding, attachment: Attachment): void {
-    if (!binding.addAttachment(attachment)) {
-      this.say(`A message carries at most ${PUBLIC_LIMITS.maxInputImages} images.`, "warning", binding.session);
-    }
-  }
-
-  /// A live conversation's project chip: where it runs, and the one explicit way to move the window there.
-  async pickProjectForLive(binding: ConversationBinding): Promise<void> {
-    const session = binding.session;
-    if (!session) return;
-    const projectless = isProjectless(session.workspace, this.state.projectlessRoot);
-    const choices: Array<vscode.QuickPickItem & { act: "window" | "draft" }> = [];
-    if (!projectless && !workspaceIsOpen(session.workspace)) {
-      choices.push({
-        label: "$(link-external) Open this project as the window",
-        detail: session.workspace,
-        act: "window",
-      });
-    }
-    choices.push({
-      label: projectless ? "$(add) New conversation with no project" : "$(add) New conversation in this project",
-      detail: projectless ? undefined : session.workspace,
-      act: "draft",
-    });
-    const picked = await this.pickFrom(
-      binding,
-      "project",
-      projectless ? NO_PROJECT_LABEL : workspaceName(session.workspace),
-      projectless ? "This conversation runs with no project" : session.workspace,
-      choices,
-    );
-    if (!picked) return;
-    if (picked.act === "window") {
-      await this.switchWindowTo(session.workspace);
-      return;
-    }
-    await this.openDraft({ workspace: projectless ? null : session.workspace, providerId: session.providerId });
-  }
-
-  /// A live conversation's service chip: the service cannot change mid-conversation (it is that CLI's own
-  /// session), so the chip offers the honest next thing: the same project, another service, a new tab.
-  async pickServiceForLive(binding: ConversationBinding): Promise<void> {
-    const session = binding.session;
-    if (!session) return;
-    const usable = this.state.providers.filter(isUsable);
-    if (usable.length === 0) return;
-    const projectless = isProjectless(session.workspace, this.state.projectlessRoot);
-    const picked = await this.pickFrom(
-      binding,
-      "service",
-      `New conversation ${projectless ? "with no project" : `in ${workspaceName(session.workspace)}`}`,
-      "Choose the service for a new conversation here",
-      usable.map((provider) => ({
-        label: provider.displayName,
-        description: provider.installation.version ?? "",
-        icon: provider.providerId,
-        current: provider.providerId === session.providerId || undefined,
-        provider,
-      })),
-    );
-    if (!picked) return;
-    await this.openDraft({
-      workspace: projectless ? null : session.workspace,
-      providerId: picked.provider.providerId,
-    });
-  }
-
-  /// Send the words, and any waiting images, of one tab to its session.
-  private async send(binding: ConversationBinding, session: SessionLine, text: string): Promise<void> {
-    const attachments = binding.takeAttachments();
-    if (attachments.length === 0) {
-      await this.runtime.submitInput(runtimeAction(session), text);
-      return;
-    }
-    const blocks: PublicInputBlock[] = [
-      ...(text.trim() ? [{ type: "text" as const, text }] : []),
-      ...attachments.map((attachment) => ({
-        type: "image" as const,
-        mediaType: attachment.mediaType,
-        base64Data: attachment.base64Data,
-      })),
-    ];
-    await this.runtime.submitBlocks(runtimeAction(session), blocks);
-  }
-
-  /// Which coding service, asked only when there is a choice to make (or always, from a chip that IS the
-  /// question).
-  private async chooseService(always = false, binding?: ConversationBinding): Promise<ProviderLine | null> {
-    const usable = this.state.providers.filter(isUsable);
-    if (usable.length === 0) {
-      throw new Error("no installed coding-agent CLI is currently usable");
-    }
-    const recent = this.context.globalState.get<string>(RECENT_SERVICE_KEY);
-    const picked = usable.length === 1 && !always ? { provider: usable[0] } : await this.pickFrom(
-      binding,
-      "service",
-      "New conversation",
-      "Choose a coding service",
-      usable.map((provider) => ({
-        label: provider.displayName,
-        description: provider.providerId === recent ? "Last used" : provider.installation.version ?? "",
-        provider,
-      })),
-    );
-    return picked?.provider ?? null;
-  }
-
-  /// The deliberate path: name the service, the model and the effort explicitly.
-  ///
-  /// Automatic is the default, not the ceiling. Someone who came here specifically to run a different model gets
-  /// every choice the installed CLI actually reports, and nobody else is asked.
-  async startConfiguredSession(): Promise<void> {
-    const provider = await this.chooseService();
-    if (!provider) return;
-    const selectedWorkspace = await this.chooseStartWorkspace();
-    if (!selectedWorkspace) return;
-    await this.finishConfiguredStart(provider, selectedWorkspace.workspace, selectedWorkspace.access);
-  }
-
-  /// The deliberate path from a project heading: the folder is already answered, the rest is asked.
-  async startConfiguredSessionInWorkspace(workspace: string): Promise<void> {
-    const provider = await this.chooseService();
-    if (!provider) return;
-    const decided = await this.startDecision(workspace, "keep");
-    if (decided === null || decided === "another") return;
-    await this.finishConfiguredStart(provider, workspace, decided);
-  }
-
-  private async finishConfiguredStart(
-    provider: ProviderLine,
-    workspace: string,
-    access: StartDecision,
-  ): Promise<void> {
-    const configuration = await this.chooseStartConfiguration(provider, workspace);
-    if (!configuration) return;
-    await this.rememberService(provider.providerId);
-    // Remembered to pre-highlight this project's next configured start, never to skip a question.
-    await this.rememberStartDefault(workspace, {
-      providerId: provider.providerId,
-      model: configuration.model,
-      effort: configuration.reasoningEffort,
-      permission: configuration.permission,
-    });
-    await this.startResolvedSession(
-      provider.providerId,
-      workspace,
-      configuration.model,
-      configuration.reasoningEffort,
-      access,
-      true,
-      configuration.permission,
-    );
-  }
-
-  private startDefaultOf(workspace: string): StartDefault | null {
-    const defaults = readStartDefaults(this.context.globalState.get(START_DEFAULTS_KEY));
-    return defaults[workspaceIdentity(workspace)] ?? null;
-  }
-
-  private async rememberStartDefault(
-    workspace: string,
-    choice: Omit<StartDefault, "atMs">,
-  ): Promise<void> {
-    const defaults = readStartDefaults(this.context.globalState.get(START_DEFAULTS_KEY));
-    await this.context.globalState.update(
-      START_DEFAULTS_KEY,
-      rememberStartDefault(defaults, workspaceIdentity(workspace), choice, Date.now()),
-    );
-  }
-
-  /// The coding service a new conversation should use when nobody said otherwise.
-  ///
-  /// The one used last, because that is what a person means by "again". Falling back to the only usable service,
-  /// then to the first, keeps the very first run from asking a question with one possible answer.
-  private preferredService(): ProviderLine | null {
-    const usable = this.state.providers.filter(isUsable);
-    const recent = this.context.globalState.get<string>(RECENT_SERVICE_KEY);
-    return usable.find((provider) => provider.providerId === recent) ?? usable[0] ?? null;
-  }
-
-  private async rememberService(providerId: string): Promise<void> {
-    await this.context.globalState.update(RECENT_SERVICE_KEY, providerId);
   }
 
   async startResolvedSession(
@@ -1409,16 +633,16 @@ export class Controller implements vscode.Disposable {
     }
     const pausedDiscoveries = this.beginForegroundAction();
     try {
-      const openedId = await this.conversationLauncher.openFresh(
-        {
-          providerId: provider.providerId,
-          model,
-          reasoningEffort,
-          permission,
-        },
+      // A structured session on the public Runtime, the shape Missions and the journey speak. The
+      // conversation surface for people is the terminal tab; this path is for the machinery.
+      const openedId = (await this.runtime.start(
+        provider.providerId,
         workspace,
         access,
-      );
+        model,
+        reasoningEffort,
+        permission,
+      )).sessionId;
       await this.refresh();
       await this.select(openedId);
       return openedId;
@@ -1492,37 +716,6 @@ export class Controller implements vscode.Disposable {
     this.offerInTerminal(picked.offer);
   }
 
-  /// Offer the workspace's files for an @-mention and insert the chosen path as plain text.
-  ///
-  /// The path is text and nothing more: what an @path means stays the coding service's business,
-  /// exactly like a slash command's argument. The picker lives here because only the Extension Host
-  /// may list files; the page only reports that an @ was typed.
-  async insertFileMention(from?: SessionLine): Promise<void> {
-    const session = this.state.selected;
-    const base = session && workspaceIsOpen(session.workspace)
-      ? session.workspace
-      : vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? null;
-    const files = await vscode.workspace.findFiles(
-      "**/*",
-      "**/{node_modules,.git,target,dist,out,.venv,__pycache__}/**",
-      2_000,
-    );
-    if (files.length === 0) {
-      this.viewOf(from ?? null)?.insertComposerText(null);
-      this.say("No workspace files are available to mention.", "info", from ?? null);
-      return;
-    }
-    const picked = await vscode.window.showQuickPick(
-      files
-        .map((file) => ({
-          label: (base ? path.relative(base, file.fsPath) : file.fsPath).replaceAll("\\", "/"),
-        }))
-        .sort((left, right) => left.label.length - right.label.length || left.label.localeCompare(right.label)),
-      { title: "Mention a file", placeHolder: "The chosen path is inserted as plain text" },
-    );
-    this.viewOf(from ?? null)?.insertComposerText(picked ? `${picked.label} ` : null);
-  }
-
   /// Type a coding service's own command into the operator's terminal and stop there.
   ///
   /// `false` is the whole point of this method: the line is placed, not run. Runtrol fetching and executing
@@ -1536,32 +729,6 @@ export class Controller implements vscode.Disposable {
     this.helpTerminal ??= vscode.window.createTerminal({ name: "Runtrol: coding service" });
     this.helpTerminal.show(true);
     this.helpTerminal.sendText(offer.command, false);
-  }
-
-  async prompt(text?: string, from?: SessionLine, binding?: ConversationBinding): Promise<void> {
-    const session = from ?? this.requireSelected();
-    const written = text ?? await vscode.window.showInputBox({
-      title: `Prompt ${path.basename(session.workspace)}`,
-      prompt: "The text is sent unchanged to the provider CLI.",
-      ignoreFocusOut: true,
-    });
-    if (!written?.trim() && (binding?.attachments.length ?? 0) === 0) {
-      return;
-    }
-    if (binding) {
-      await this.send(binding, session, written ?? "");
-      return;
-    }
-    await this.runtime.submitInput(runtimeAction(session), written ?? "");
-  }
-
-  async submitResolvedInput(sessionId: string, text: string): Promise<void> {
-    await this.refresh();
-    const session = this.state.sessions.find((candidate) => candidate.sessionId === sessionId);
-    if (!session) {
-      throw new Error("the Mission session is no longer listed by Runtime");
-    }
-    await this.runtime.submitInput(runtimeAction(session), text);
   }
 
   async interrupt(from?: SessionLine): Promise<void> {
@@ -1652,41 +819,6 @@ export class Controller implements vscode.Disposable {
   /// The remembered project folders, for the harness.
   knownProjectsForJourney(): readonly string[] {
     return this.context.globalState.get<string[]>(KNOWN_PROJECTS_KEY) ?? [];
-  }
-
-  /// Add one more installed service to the focused draft from the Command Palette. This is the keyboard path to
-  /// the service chip's "Also ask" choice, so fan-out needs no pointer choreography and keeps one first message.
-  async alsoAskFocusedDraft(): Promise<void> {
-    const binding = this.panels.focused();
-    const draft = binding?.draft;
-    if (!binding || !draft) {
-      this.say("Open a new conversation draft before adding another service.", "info");
-      return;
-    }
-    const choices = this.state.providers.filter((provider) => (
-      isUsable(provider)
-      && provider.providerId !== draft.state.providerId
-      && !draft.state.alsoProviderIds.includes(provider.providerId)
-    ));
-    if (choices.length === 0) {
-      this.say("No other installed coding service is available for this draft.", "info");
-      return;
-    }
-    const picked = await vscode.window.showQuickPick(
-      choices.map((provider) => ({
-        label: provider.displayName,
-        description: provider.installation.version ?? undefined,
-        provider,
-      })),
-      {
-        title: "Also ask another service",
-        placeHolder: "The same first message opens in a separate workspace",
-      },
-    );
-    if (!picked) return;
-    await this.amendDraft(binding, {
-      alsoProviderIds: [...draft.state.alsoProviderIds, picked.provider.providerId],
-    });
   }
 
   async isolatedWorkspaceEvidenceForJourney(): Promise<{
@@ -1783,65 +915,9 @@ export class Controller implements vscode.Disposable {
     await this.refresh();
   }
 
-  /// Show a conversation in one of the window's places: a tab, the bottom panel, the secondary side bar.
-  /// From a row (opening or adopting it first, exactly as a click would), or the selected conversation.
-  async placeConversation(place: Place, value?: ConversationItem | SessionLine): Promise<void> {
-    let session = await this.sessionToPlace(value);
-    if (!session.hot) {
-      const access = await this.conversationSwitchDecision(session.workspace);
-      if (!access) return;
-      this.state.select(session.sessionId);
-      const opening = await this.panels.openIn(session, place, true);
-      opening.view.status("Opening the saved chat...", "info");
-      session = await this.resumeSession(session, access);
-    }
-    this.state.select(session.sessionId);
-    await this.panels.openIn(session, place);
-  }
-
-  /// "Also ask", for the journey and the eye pass: the same amendment the service chip's menu makes.
-  async alsoAskForJourney(binding: ConversationBinding, providerId: string): Promise<void> {
-    const draft = binding.draft;
-    if (!draft || draft.state.alsoProviderIds.includes(providerId)) return;
-    await this.amendDraft(binding, { alsoProviderIds: [...draft.state.alsoProviderIds, providerId] });
-  }
-
   /// What the back key would return to, for the harness.
   previousProjectForJourney(): string | null {
     return this.context.globalState.get<string>(PREVIOUS_PROJECT_KEY) ?? null;
-  }
-
-  /// The grid, for the journey and the eye pass: the numbers rather than the sentence.
-  arrangeGridForJourney(): Promise<{ arranged: number; leftInPlace: number }> {
-    return this.panels.arrangeGrid();
-  }
-
-  /// Spread the open conversation tabs over a grid of editor groups; one command, one screen of agents.
-  async arrangeConversationGrid(): Promise<void> {
-    const result = await this.panels.arrangeGrid();
-    const sentence = result.arranged === 0
-      ? "Open a conversation or two first; the grid arranges the conversation tabs that are open."
-      : result.leftInPlace === 0
-        ? `${result.arranged} conversations arranged in a grid.`
-        : `${result.arranged} conversations arranged in a grid; ${result.leftInPlace} left where they were (nine is the most the editor addresses by column).`;
-    vscode.window.setStatusBarMessage(sentence, 4_000);
-  }
-
-  private async sessionToPlace(value?: ConversationItem | SessionLine): Promise<SessionLine> {
-    if (!value) return this.requireSelected();
-    if (!(value instanceof ConversationItem)) return value;
-    const row = value.conversation;
-    if (row.session) return row.session;
-    if (!row.canOpen) throw new Error(row.blocked ?? "that conversation cannot be opened");
-    const adopted = await this.adoptNativeChat(requireNative(row));
-    if (!adopted) throw new Error(`${row.title} could not be opened`);
-    return adopted;
-  }
-
-  async revealConversationOnEntry(): Promise<void> {
-    const selected = this.state.selected;
-    if (!selected || this.panels.focused()) return;
-    await this.panels.open(selected, true);
   }
 
   async nameSession(value?: ConversationItem | SessionLine): Promise<void> {
@@ -1998,7 +1074,6 @@ export class Controller implements vscode.Disposable {
     if (!session) {
       throw new Error("that session is no longer listed");
     }
-    this.panels.bindingFor(session.sessionId)?.dispose();
     await this.runtime.close(runtimeAction(session), interruptRunning);
     try {
       const released = await this.isolatedWorkspaces.release(
@@ -2044,12 +1119,6 @@ export class Controller implements vscode.Disposable {
     this.cancelNativeDiscoveries();
     this.client.dispose();
     this.runtime.dispose();
-  }
-
-  selectedWatchReady(): Promise<void> {
-    const selected = this.state.selected;
-    const binding = selected ? this.panels.bindingFor(selected.sessionId) : this.panels.focused();
-    return binding?.settled() ?? Promise.resolve();
   }
 
   selectionPersisted(): Promise<void> {
@@ -2145,19 +1214,6 @@ export class Controller implements vscode.Disposable {
     const currentSelected = this.state.selected;
     void currentSelected;
     void previousSelected;
-    // Every open tab receives its own row's fresh metadata; a row that vanished closes its tab, because
-    // a tab for a session the daemon no longer lists is a view of nothing.
-    for (const binding of this.panels.all()) {
-      const shown = binding.session;
-      // A draft has no session to vanish; it lives until it starts or its tab closes.
-      if (!shown) continue;
-      const row = sessions.find((candidate) => candidate.sessionId === shown.sessionId);
-      if (row) {
-        binding.updateSession(row);
-      } else {
-        binding.dispose();
-      }
-    }
     for (const warning of warnings) {
       if (!this.seenWarnings.has(warning)) {
         this.seenWarnings.add(warning);
@@ -2240,7 +1296,6 @@ export class Controller implements vscode.Disposable {
     const pending = this.runtime.nativeChats(providerId, abort.signal).then((catalogue) => {
       if (!this.disposed && generation === this.nativeDiscoveryGeneration && this.providerUsable(providerId)) {
         this.state.setNativeCatalogue(catalogue);
-        this.panels.refreshTitles(providerId);
       }
     }).catch((error: unknown) => {
       if (
@@ -2250,7 +1305,6 @@ export class Controller implements vscode.Disposable {
         && this.providerUsable(providerId)
       ) {
         this.state.setNativeCatalogue(nativeCatalogueFailure(providerId, error));
-        this.panels.refreshTitles(providerId);
       }
     }).finally(() => {
       if (this.nativeDiscoveries.get(providerId)?.pending === pending) {
@@ -2364,402 +1418,6 @@ export class Controller implements vscode.Disposable {
     );
   }
 
-  /// Switch the answering model of the open conversation, from the conversation's own header.
-  ///
-  /// The choices are the session's own announced set when the provider gave one (some announce it per
-  /// session), and the installed CLI's reported catalogue otherwise. Runtrol relays the pick through the
-  /// provider's own switch surface and displays only what the provider says back; a service with neither an
-  /// announced set nor a catalogue keeps model choice in its own settings, and this says so instead of
-  /// inventing a picker with nothing true to offer.
-  /// One menu for the model and its reasoning effort, hanging from the one chip that shows both
-  /// (the operator named the ChatGPT and Claude composers as the reference). The models lead, the
-  /// current one marked; the current model's efforts follow under their own caption. Choosing a
-  /// model keeps the current effort when the new model reports it and returns to that model's own
-  /// default otherwise; choosing an effort keeps the model. Never a second popover after the first.
-  async switchModel(
-    available: readonly string[],
-    currentModel: string,
-    currentEffort: string,
-    binding?: ConversationBinding,
-  ): Promise<void> {
-    if (binding?.draft) {
-      await this.pickDraftModel(binding);
-      return;
-    }
-    const session = binding?.session ?? this.state.selected;
-    if (!session) return;
-    const catalogue = await this.runtime.models(session.providerId);
-    const options = modelOptions(catalogue);
-    type Row = {
-      label: string;
-      description?: string;
-      detail?: string;
-      heading?: boolean;
-      current?: boolean;
-      act?: { kind: "model"; id: string; model: ModelOption["model"] } | { kind: "effort"; id: string };
-    };
-    // The installed CLI's catalogue when it reports one (names, descriptions, per-model efforts);
-    // the session's own announced switchable set otherwise. Both are the provider's own words.
-    const rows: Row[] = options.length > 0
-      ? options.map((option) => ({
-        label: option.label,
-        description: option.description,
-        detail: option.detail,
-        current: option.id === currentModel || undefined,
-        act: { kind: "model" as const, id: option.id, model: option.model },
-      }))
-      : available.map((id) => ({
-        label: id,
-        current: id === currentModel || undefined,
-        act: { kind: "model" as const, id, model: null },
-      }));
-    if (rows.length === 0) {
-      this.say(
-        `${providerDisplayName(session.providerId, this.state.providers)} reports no switchable models; its own settings stay in control.`,
-        "info",
-      );
-      return;
-    }
-    // Efforts ride the same menu, offered only when they can be true: the answering model is known
-    // and the provider has not refused mid-conversation effort switches.
-    const effortCapability = (await this.runtime.capabilities(session.providerId)).setReasoningEffort;
-    const currentOption = options.find((option) => option.id === currentModel) ?? null;
-    const efforts = currentModel && (!effortCapability || effortCapability.availability === "available")
-      ? reasoningOptions(catalogue, currentOption?.model ?? null)
-      : [];
-    if (efforts.length > 0) {
-      rows.push({ label: "Reasoning effort", heading: true });
-      rows.push(...efforts.map((choice) => ({
-        label: choice.id,
-        description: choice.description || undefined,
-        current: choice.id === currentEffort || undefined,
-        act: { kind: "effort" as const, id: choice.id },
-      })));
-    }
-    const picked = await this.pickFrom(
-      binding,
-      "model",
-      "Model and reasoning effort",
-      "What answers this conversation",
-      rows,
-    );
-    if (!picked?.act) return;
-    if (picked.act.kind === "effort") {
-      await this.runtime.setModel(runtimeAction(session), currentModel, picked.act.id);
-      this.viewOf(this.state.selected)?.switchRequested("effort", picked.act.id);
-      return;
-    }
-    const kept = reasoningOptions(catalogue, picked.act.model).some((choice) => choice.id === currentEffort)
-      ? currentEffort
-      : undefined;
-    await this.switchSelectedModel(picked.act.id, kept);
-  }
-
-  /// The relay itself, shared by the picker above and the journey proof: one path to the provider's own
-  /// switch surface, so the two can never drift.
-  async switchSelectedModel(model: string, reasoningEffort?: string): Promise<void> {
-    const session = this.state.selected;
-    if (!session) {
-      throw new Error("no conversation is selected");
-    }
-    await this.runtime.setModel(runtimeAction(session), model, reasoningEffort);
-    // Sent, not confirmed: the chip shows the request as a suffix until the provider's own
-    // announcement replaces it (or the turn ends without one).
-    this.viewOf(this.state.selected)?.switchRequested("model", model);
-    if (reasoningEffort !== undefined) {
-      this.viewOf(this.state.selected)?.switchRequested("effort", reasoningEffort);
-    }
-  }
-
-  /// Switch only the reasoning effort, keeping the model the provider says is answering.
-  ///
-  /// `sessions/setModel` is the one switch surface and it requires the model, so the page reports
-  /// which one is currently answering. A conversation whose provider never announced an answering
-  /// model has nothing true to attach an effort to, and this says so instead of guessing one.
-  async switchEffort(currentModel: string, binding?: ConversationBinding): Promise<void> {
-    if (binding?.draft) {
-      await this.pickDraftEffort(binding);
-      return;
-    }
-    const session = binding?.session ?? this.state.selected;
-    if (!session) return;
-    // The provider's own word on whether a mid-session effort switch exists, read before the
-    // attempt so a service that cannot do it says "from the next conversation" instead of failing.
-    const capability = (await this.runtime.capabilities(session.providerId)).setReasoningEffort;
-    if (capability && capability.availability !== "available") {
-      const name = providerDisplayName(session.providerId, this.state.providers);
-      this.say(
-        `${name} cannot switch the reasoning effort mid-conversation`
-        + `${capability.why ? ` (${capability.why})` : ""}. `
-        + 'Start one with "New Conversation with Service, Model and Effort..." instead.',
-        "info",
-      );
-      return;
-    }
-    const catalogue = await this.runtime.models(session.providerId);
-    let selectedModel = currentModel;
-    let model = modelOptions(catalogue).find((option) => option.id === currentModel)?.model ?? null;
-    if (!selectedModel) {
-      const pickedModel = await this.pickFrom(
-        binding,
-        "effort",
-        "Choose the model for this effort",
-        "This conversation has not announced its current model",
-        modelOptions(catalogue),
-      );
-      if (!pickedModel) return;
-      selectedModel = pickedModel.id;
-      model = pickedModel.model;
-    }
-    const efforts = reasoningOptions(catalogue, model);
-    if (efforts.length === 0) {
-      this.say(
-        `${providerDisplayName(session.providerId, this.state.providers)} reports no reasoning efforts for ${selectedModel}; its own settings stay in control.`,
-        "info",
-      );
-      return;
-    }
-    const picked = await this.pickReasoningEffort(catalogue, model, "Switch reasoning effort", null, binding);
-    if (picked === undefined) return;
-    await this.runtime.setModel(runtimeAction(session), selectedModel, picked ?? undefined);
-    this.viewOf(this.state.selected)?.switchRequested("effort", picked ?? "default");
-  }
-
-  /// Switch the governing permission mode of the open conversation, from its own header chip.
-  ///
-  /// The choices are the session's own announced set when the protocol gave one, and the service's
-  /// manifest-declared switchable set otherwise (the same boundary the daemon enforces, so nothing offered
-  /// here can be refused there as out of vocabulary). A service with neither keeps mode in its own surface,
-  /// and this says so instead of inventing a picker with nothing true to offer.
-  async switchMode(available: readonly string[], binding?: ConversationBinding): Promise<void> {
-    if (binding?.draft) {
-      await this.pickDraftMode(binding);
-      return;
-    }
-    const session = binding?.session ?? this.state.selected;
-    if (!session) return;
-    const provider = this.state.providers.find(
-      (candidate) => candidate.providerId === session.providerId,
-    );
-    const choices = available.length > 0 ? available : (provider?.switchableModes ?? []);
-    if (choices.length === 0) {
-      this.say(
-        `${providerDisplayName(session.providerId, this.state.providers)} announces no switchable modes; its own surface stays in control.`,
-        "info",
-      );
-      return;
-    }
-    const picked = await this.pickFrom(
-      binding,
-      "mode",
-      "Switch mode",
-      "Modes this service accepts a switch to",
-      choices.map((id) => ({ label: id })),
-    );
-    if (!picked) return;
-    await this.switchSelectedMode(picked.label);
-  }
-
-  /// The relay itself, shared by the picker above and the journey proof: one path to the provider's own
-  /// switch surface, so the two can never drift.
-  async switchSelectedMode(mode: string): Promise<void> {
-    const session = this.state.selected;
-    if (!session) {
-      throw new Error("no conversation is selected");
-    }
-    await this.runtime.setMode(runtimeAction(session), mode);
-    this.viewOf(this.state.selected)?.switchRequested("mode", mode);
-  }
-
-  /// One effort picker for every path that asks: `undefined` is a cancel, `null` is the provider's default.
-  private async pickReasoningEffort(
-    catalogue: ModelCatalog,
-    model: ModelOption["model"],
-    title: string,
-    preferred: string | null = null,
-    binding?: ConversationBinding,
-  ): Promise<string | null | undefined> {
-    const efforts = reasoningOptions(catalogue, model);
-    if (efforts.length === 0) return null;
-    const effortChoices = leadWith(
-      efforts.map((choice) => ({
-        label: choice.id,
-        id: choice.id as string | null,
-        description: choice.description || "Reported by the installed CLI",
-      })),
-      (choice) => choice.id === preferred && preferred !== null,
-      "Last used here",
-    );
-    const picked = await this.pickFrom(
-      binding,
-      "effort",
-      title,
-      "Choose an effort reported for this model",
-      [
-        {
-          label: "Provider default",
-          id: null as string | null,
-          description: "Use the installed CLI's current effort setting",
-        },
-        ...effortChoices,
-      ],
-    );
-    return picked ? picked.id : undefined;
-  }
-
-  private async chooseStartConfiguration(
-    provider: ProviderLine,
-    workspace: string,
-  ): Promise<StartConfiguration | null> {
-    const catalogue = await this.runtime.models(provider.providerId);
-    // What this project's last configured start chose, used only to lead each list: the question is
-    // still asked, so the installed CLI's own settings stay the only automatic authority.
-    const remembered = this.startDefaultOf(workspace);
-    const recall = remembered?.providerId === provider.providerId ? remembered : null;
-    const choices = leadWith(
-      modelOptions(catalogue),
-      (choice) => choice.id === recall?.model,
-      "Last used here",
-    );
-    // A question with one possible answer is not a choice. When the installed CLI reports no selectable
-    // catalogue, the only available answer is whatever that CLI already uses, and a picker saying so costs a
-    // keystroke to convey nothing. Effort is still asked about below when this CLI reports any, because that
-    // can be offered without a model catalogue.
-    const selectedModel:
-      | { readonly id: string | null; readonly model: ModelOption["model"] }
-      | undefined =
-      choices.length === 0
-        ? { id: null, model: null }
-        : await vscode.window.showQuickPick(
-          [
-            {
-              label: "Provider default",
-              id: null,
-              model: null,
-              description: "Use the installed CLI's current model setting",
-            },
-            ...choices,
-          ],
-          {
-            title: `New chat with ${provider.displayName}: model`,
-            placeHolder: "Choose a model reported by the installed CLI",
-          },
-        );
-    if (!selectedModel) return null;
-
-    const selectedEffort = await this.pickReasoningEffort(
-      catalogue,
-      selectedModel.model,
-      `New chat with ${provider.displayName}: reasoning effort`,
-      recall?.effort ?? null,
-    );
-    if (selectedEffort === undefined) return null;
-
-    // The starting permission mode, offered from the same switchable vocabulary the daemon enforces
-    // (so nothing offered here can be refused there), and only when this service declares one. The
-    // modes that remove safety prompts are absent from that vocabulary by construction.
-    const modes = provider.switchableModes ?? [];
-    let permission: string | null = null;
-    if (modes.length > 0) {
-      const modeChoices = leadWith(
-        modes.map((id) => ({ label: id, id: id as string | null, description: "" })),
-        (choice) => choice.id === recall?.permission,
-        "Last used here",
-      );
-      const pickedMode = await vscode.window.showQuickPick(
-        [
-          {
-            label: "Provider default",
-            id: null as string | null,
-            description: "Use the installed CLI's current permission mode",
-          },
-          ...modeChoices,
-        ],
-        {
-          title: `New chat with ${provider.displayName}: permission mode`,
-          placeHolder: "Choose the mode this conversation starts in",
-        },
-      );
-      if (!pickedMode) return null;
-      permission = pickedMode.id;
-    }
-    return { model: selectedModel.id, reasoningEffort: selectedEffort, permission };
-  }
-
-  private async chooseStartWorkspace(): Promise<StartWorkspace | null> {
-    let workspace = await chooseWorkspace();
-    while (workspace) {
-      const decided = await this.startDecision(workspace, "offer");
-      if (decided === "another") {
-        workspace = await chooseAlternateWorkspace(workspace, this.state.sessions);
-        continue;
-      }
-      return decided === null ? null : { workspace, access: decided };
-    }
-    return null;
-  }
-
-  /// How a start in this folder proceeds when other chats are already writing there.
-  ///
-  /// One dialog for every start path, so the writer-collision vocabulary cannot drift between them. The paths
-  /// differ in exactly one way: a start whose folder was chosen in the dialog may choose another, and a start
-  /// from a project heading has already said which folder, so offering another would contradict the click.
-  private async startDecision(
-    workspace: string,
-    alternatives: "offer" | "keep",
-  ): Promise<StartDecision | "another" | null> {
-    const collisions = workspaceCollisions(workspace, this.state.sessions);
-    if (collisions.length === 0) return "exclusive";
-    // Two agents answering unrelated questions in the scratch folder are not two agents editing one
-    // repository; the writer question is noise there, and a conversation with no project never asks it.
-    if (isProjectless(workspace, this.state.projectlessRoot)) return "shared";
-    const buttons = alternatives === "offer"
-      ? ["Start isolated", "Focus existing", "Choose another", "Start here anyway"]
-      : ["Start isolated", "Focus existing", "Start here anyway"];
-    const action = await vscode.window.showWarningMessage(
-      `${path.basename(workspace)} overlaps ${collisions.length} running chat${
-        collisions.length === 1 ? "" : "s"
-      }.`,
-      {
-        modal: true,
-        detail: `${collisionDetail(collisions)}\n\nStart isolated creates a clean linked checkout automatically.`,
-      },
-      ...buttons,
-    );
-    if (action === "Start isolated") return "isolated";
-    if (action === "Start here anyway") return "shared";
-    if (action === "Focus existing") {
-      const existing = await chooseCollision(collisions);
-      if (existing) {
-        await this.select(existing);
-      }
-      return null;
-    }
-    return action === "Choose another" ? "another" : null;
-  }
-
-  /// A parallel team introduces its own writer collision even when no earlier chat is open. Runtrol describes
-  /// both consequences and executes only the placement the person explicitly chooses.
-  private async parallelStartDecision(
-    workspace: string,
-    services: number,
-  ): Promise<"isolated" | "shared" | null> {
-    const action = await vscode.window.showWarningMessage(
-      `Choose where ${services} coding services work in ${path.basename(workspace)}.`,
-      {
-        modal: true,
-        detail: "Separate worktrees creates and owns one clean linked checkout per service. "
-          + "Share current checkout lets every service write the selected folder, where their edits can collide. "
-          + "Runtrol does not choose either placement for you.",
-      },
-      "Separate worktrees",
-      "Share current checkout",
-    );
-    if (action === "Separate worktrees") return "isolated";
-    if (action === "Share current checkout") return "shared";
-    return null;
-  }
-
   private requireSelected(): SessionLine {
     const selected = this.state.selected;
     if (!selected) {
@@ -2812,6 +1470,9 @@ export class Controller implements vscode.Disposable {
   }
 }
 
+
+/// Whether a started session must own its working tree alone, or may share it with another writer.
+type StartDecision = "exclusive" | "shared";
 
 type StartWorkspace = {
   workspace: string;

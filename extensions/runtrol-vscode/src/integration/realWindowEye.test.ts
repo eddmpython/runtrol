@@ -24,15 +24,8 @@ type JourneyApi = {
   select(session: string): Promise<void>;
   answerApproval(approval: string, option: number, subjectDigest: number[]): Promise<void>;
   verifySelected(session: string): Promise<void>;
-  openDraft(workspace: string | null, providerId?: string): Promise<void>;
-  sendFocusedDraft(text: string): Promise<string>;
   openListed(limit: number): Promise<{ opened: number; refused: string[] }>;
-  placeConversation(session: string, place: "tab" | "panel" | "sideBar"): Promise<void>;
-  arrangeGrid(): Promise<{ arranged: number; leftInPlace: number }>;
   openStoredWithTitle(providerId: string): Promise<string | null>;
-  openLatestDiff(): Promise<void>;
-  clickChip(anchor: "project" | "service" | "model" | "effort" | "mode"): Promise<void>;
-  alsoAsk(providerId: string): Promise<void>;
   rowTool(session: string): string | null;
   answerFromRow(session: string, how: "allow" | "decline"): Promise<void>;
   revealRow(session: string): Promise<void>;
@@ -74,8 +67,6 @@ export async function run(): Promise<void> {
 async function eyePass(resultPath: string): Promise<void> {
   const folder = requiredEnvironment("RUNTROL_EYE_FOLDER");
   const providerId = requiredEnvironment("RUNTROL_EYE_PROVIDER");
-  const promptText = process.env.RUNTROL_EYE_PROMPT
-    || "Reply in one short line: name this folder and count the entries at its root. Use your tools to look.";
   const tabsWanted = Number(process.env.RUNTROL_EYE_TABS || "10");
 
   currentStage = "activating";
@@ -112,15 +103,15 @@ async function eyePass(resultPath: string): Promise<void> {
   await vscode.commands.executeCommand("workbench.action.closeAuxiliaryBar").then(undefined, () => undefined);
   await vscode.commands.executeCommand("notifications.clearAll").then(undefined, () => undefined);
 
-  // Pose 0: the conversation surface itself. The first stored conversation opens as the service's own
+  // Pose 1: the conversation surface itself. The first stored conversation opens as the service's own
   // terminal interface in an editor tab (the Core hosts the CLI on a pseudo terminal); the photograph is
   // taken once the CLI has had time to draw its screen.
+  currentStage = "terminal";
+  if (!api.openFirstConversation) throw new Error("the conversation opener is unavailable");
+  await within(api.openFirstConversation(), 60_000, "opening the first stored conversation");
+  await delay(Number(process.env.RUNTROL_EYE_TERMINAL_SETTLE_MS || "10000"));
+  await capture(resultPath, "terminal", { nativeChats: journey.nativeChatCount() });
   if (process.env.RUNTROL_EYE_TERMINAL_ONLY === "1") {
-    currentStage = "terminal";
-    if (!api.openFirstConversation) throw new Error("the conversation opener is unavailable");
-    await within(api.openFirstConversation(), 60_000, "opening the first stored conversation");
-    await delay(Number(process.env.RUNTROL_EYE_TERMINAL_SETTLE_MS || "10000"));
-    await capture(resultPath, "terminal", { nativeChats: journey.nativeChatCount() });
     await writeFile(
       resultPath,
       JSON.stringify({ stage: "complete", focused: "terminal", vscode: vscode.version }),
@@ -129,118 +120,17 @@ async function eyePass(resultPath: string): Promise<void> {
     return;
   }
 
-  // Pose 1: a draft on this folder, the panel beside it.
-  currentStage = "draft";
-  await journey.openDraft(folder, providerId);
-  await delay(1_500);
-  await capture(resultPath, "draft", { nativeChats: journey.nativeChatCount() });
-  if (process.env.RUNTROL_EYE_DRAFT_ONLY === "1") {
-    await writeFile(
-      resultPath,
-      JSON.stringify({ stage: "complete", focused: "draft", vscode: vscode.version }),
-      "utf8",
-    );
-    return;
-  }
-
-  // Pose 1b: the model chip's choices, open in the composer where the chip is (not a palette at the top of
-  // the window). The service chip's choices the same way afterwards, then both closed.
-  currentStage = "menu";
-  await journey.clickChip("model");
-  await delay(1_500);
-  await capture(resultPath, "menu", { anchor: "model" });
-  await vscode.commands.executeCommand("workbench.action.focusActiveEditorGroup").then(undefined, () => undefined);
-  await journey.clickChip("service");
-  await delay(1_200);
-  await capture(resultPath, "menuService", { anchor: "service" });
-  await journey.clickChip("service");
-  await delay(600);
-
-  // Pose 2: the draft's first message starts a real conversation in this repository, in the same tab,
-  // answered by the installed provider, tools and all.
-  currentStage = "sending-draft";
-  const session = await within(journey.sendFocusedDraft(promptText), 90_000, "sending the draft's first message");
-  createdSessions.add(session);
-  await journey.verifySelected(session);
-  currentStage = "answering";
-  await journey.waitForLifecycle(session, "hotRunning", 30_000).catch(() => undefined);
-  // Pose 2a: the row names the tool the service says is running, while it runs, in the service's own word.
-  // Bounded wait: a fast answer may finish before any tool is named, and that is recorded, not forced.
-  const toolDeadline = Date.now() + 40_000;
-  let rowTool: string | null = null;
-  while (Date.now() < toolDeadline) {
-    rowTool = journey.rowTool(session);
-    if (rowTool) break;
-    await delay(200);
-  }
-  if (rowTool) {
-    await journey.revealRow(session);
-    await capture(resultPath, "activity", { session, rowTool });
-  }
-  await journey.waitForLifecycle(session, "hotIdle", 240_000);
-  await delay(1_200);
-  await capture(resultPath, "conversation", { session });
-
-  // Pose 2b: one prompt to two services. A draft on the same folder with a second service added ("also ask"),
-  // sent once; two tabs start, the grid lines them up. Skipped when only one service is usable.
-  currentStage = "fan-out";
-  const second = journey.providers().find(
-    (provider) => provider.providerId !== providerId
-      && provider.installation.state === "usable"
-      && journey.canDeleteNative(provider.providerId),
-  );
-  let fanOut: Record<string, unknown> = { skipped: "one usable service" };
-  if (second) {
-    const beforeFanOut = new Set(journey.sessions().map((line) => line.sessionId));
-    await journey.openDraft(folder, providerId);
-    await delay(800);
-    await journey.alsoAsk(second.providerId);
-    await delay(600);
-    await capture(resultPath, "fanOutDraft", { also: second.providerId });
-    let first: string | null = null;
-    let failure: string | null = null;
-    try {
-      first = await within(journey.sendFocusedDraft("Reply with exactly: ok"), 180_000, "sending the fan-out draft");
-    } catch (error) {
-      failure = error instanceof Error ? error.message : String(error);
-    }
-    await delay(4_000);
-    for (const line of journey.sessions()) {
-      if (!beforeFanOut.has(line.sessionId)) createdSessions.add(line.sessionId);
-    }
-    const started = journey.sessions().filter((line) => line.hot).length;
-    // Named sendFailure, not failure: the photographer reads a top-level "failure" as the pass having failed.
-    await capture(resultPath, "fanOut", { first, also: second.providerId, hot: started, sendFailure: failure });
-    fanOut = { first, also: second.providerId, hot: started, sendFailure: failure };
-    for (const line of journey.sessions()) {
-      if (line.sessionId !== session) {
-        await journey.waitForLifecycle(line.sessionId, "hotIdle", 120_000).catch(() => undefined);
-      }
-    }
-  }
-
-  // Pose 3: many conversation tabs, the editor's own groups doing the arranging.
+  // Pose 2: many conversation tabs, each a service's own screen, spread over the editor's groups by the one
+  // grid command. The editor does the splitting and sizing; the pass only asks.
   currentStage = "opening-tabs";
   const listed = await journey.openListed(Math.max(0, tabsWanted - 1));
-  await delay(1_000);
+  await delay(4_000);
   await vscode.commands.executeCommand("notifications.clearAll").then(undefined, () => undefined);
-  // More groups, so the picture shows the editor splitting and sizing them itself: only when there are
-  // tabs to move, and always with a conversation tab focused so an empty group is never created.
   const conversationTabs = (): vscode.Tab[] => vscode.window.tabGroups.all
     .flatMap((group) => group.tabs)
-    .filter((tab) => tab.input instanceof vscode.TabInputWebview);
-  if (conversationTabs().length >= 3) {
-    await vscode.commands.executeCommand("workbench.action.focusFirstEditorGroup");
-    await vscode.commands.executeCommand("workbench.action.moveEditorToNextGroup");
-    await vscode.commands.executeCommand("workbench.action.focusFirstEditorGroup");
-    await vscode.commands.executeCommand("workbench.action.moveEditorToNextGroup");
-    if (conversationTabs().length >= 5) {
-      await vscode.commands.executeCommand("workbench.action.focusSecondEditorGroup");
-      await vscode.commands.executeCommand("workbench.action.moveEditorToNextGroup");
-    }
-    await vscode.commands.executeCommand("workbench.action.evenEditorWidths");
-  }
-  await delay(2_000);
+    .filter((tab) => tab.input instanceof vscode.TabInputTerminal);
+  await vscode.commands.executeCommand("runtrol.arrangeConversationGrid").then(undefined, () => undefined);
+  await delay(3_000);
   const tabs = conversationTabs().length;
   await capture(resultPath, "tabs", {
     opened: listed.opened + 1,
@@ -249,43 +139,13 @@ async function eyePass(resultPath: string): Promise<void> {
     groups: vscode.window.tabGroups.all.length,
   });
 
-  // Pose 4: a stored conversation of the provider, reopened from the sidebar: its history shows, the way the
-  // provider's own resume draws it (Codex from its resume answer, Claude Code from its own store).
+  // Pose 3: a stored conversation of the provider, reopened from the sidebar: its history shows the way the
+  // service's own resume draws it, in its own terminal.
   currentStage = "reopening";
   await vscode.commands.executeCommand("workbench.action.editorLayoutSingle").then(undefined, () => undefined);
   const reopened = await within(journey.openStoredWithTitle(providerId), 60_000, "reopening a stored conversation");
-  await delay(2_500);
+  await delay(6_000);
   await capture(resultPath, "reopened", { reopened });
-
-  // Pose 5: the grid. One command spreads the open conversation tabs over editor groups; VS Code arranges.
-  currentStage = "grid";
-  const grid = await journey.arrangeGrid();
-  await delay(2_000);
-  await capture(resultPath, "grid", grid);
-
-  // Pose 6: the places. The conversation this pass started goes to the bottom panel; another to the secondary
-  // side bar; the tabs stay where they are. One conversation, one place, one watch each.
-  // Hot sessions only, in two different folders: a conversation the hot ceiling cooled would have to be
-  // heated again to be placed, and two conversations of one folder cannot both write there (the Runtime's
-  // working-tree contract), so the pass picks what can move right now.
-  currentStage = "placing";
-  const placing: Record<string, string> = {};
-  const hot = journey.sessions().filter((line) => line.hot);
-  const forPanel = hot.find((line) => line.sessionId === reopened) ?? hot.find((line) => line.sessionId === session) ?? hot[0] ?? null;
-  const panelSession = forPanel?.sessionId ?? null;
-  if (panelSession) {
-    await journey.placeConversation(panelSession, "panel").catch((error: unknown) => {
-      placing.panel = error instanceof Error ? error.message : String(error);
-    });
-  }
-  const sideSession = hot.find((line) => line.sessionId !== panelSession && line.workspace !== forPanel?.workspace)?.sessionId ?? null;
-  if (sideSession) {
-    await journey.placeConversation(sideSession, "sideBar").catch((error: unknown) => {
-      placing.sideBar = error instanceof Error ? error.message : String(error);
-    });
-  }
-  await delay(2_500);
-  await capture(resultPath, "places", { panel: panelSession, sideBar: sideSession, failures: placing });
 
   // Pose 7: a throwaway conversation of a provider that can delete is started in a scratch folder and asked
   // to write a file, so the service declares a change: the tab names it with an "Open diff" button, and the
@@ -333,10 +193,6 @@ async function eyePass(resultPath: string): Promise<void> {
       opened: listed.opened,
       refused: listed.refused,
       reopened,
-      grid,
-      places: { panel: panelSession, sideBar: sideSession, failures: placing },
-      fanOut,
-      rowTool,
       deletion,
       cleanedProviderConversations: createdNative.length,
     }),
@@ -407,10 +263,7 @@ async function deletionProof(
     await vscode.commands.executeCommand("workbench.action.editorLayoutSingle").then(undefined, () => undefined);
     await journey.select(session);
     await delay(1_500);
-    await capture(resultPath, "diff", { session, approvalsAnswered, approvalsUnanswerable });
-    await journey.openLatestDiff();
-    await delay(2_500);
-    await capture(resultPath, "diffEditor", { session });
+    await capture(resultPath, "answered", { session, approvalsAnswered, approvalsUnanswerable });
     // Handed back to the provider: closed and forgotten here, so the row is the provider's alone.
     await within(journey.close(session, true), 60_000, "forgetting the throwaway conversation");
     await within(journey.refreshChats(), 90_000, "listing after the close");

@@ -1,6 +1,5 @@
 import * as vscode from "vscode";
 
-import type { ConversationPanels } from "./conversationPanels";
 import { Controller } from "./controller";
 import type { MissionController } from "./mission/controller";
 import type { IsolatedWorkspaceLine, MissionSnapshot } from "./protocol";
@@ -28,26 +27,11 @@ export type JourneyApi = {
   openWorkspace(session: string): Promise<void>;
   close(session: string, now?: boolean): Promise<void>;
   verifySelected(session: string): Promise<void>;
-  /// The eye pass: a draft tab on a folder (or on no project at all), with a service preselected.
-  openDraft(workspace: string | null, providerId?: string): Promise<void>;
-  /// The eye pass: send the focused draft's first message, which starts its conversation in the same tab.
-  /// Returns the session the tab became.
-  sendFocusedDraft(text: string, parallelPlacement?: "isolated" | "shared"): Promise<string>;
   /// The eye pass: open up to `limit` listed conversations as tabs, in list order, skipping any that refuse
   /// and any whose folder already has a live writer (so no collision question can block a headless run).
   /// Returns how many opened, and why each refusal refused (the harness prints them: a refusal is a fact
   /// about the product, not noise).
   openListed(limit: number): Promise<{ opened: number; refused: string[] }>;
-  /// Show a session in one of the window's places: "tab", "panel" (bottom) or "sideBar" (secondary).
-  placeConversation(session: string, place: "tab" | "panel" | "sideBar"): Promise<void>;
-  /// Spread the open conversation tabs over an editor grid; how many were arranged.
-  arrangeGrid(): Promise<{ arranged: number; leftInPlace: number }>;
-  /// Open the newest declared change of the focused conversation in the diff editor.
-  openLatestDiff(): Promise<void>;
-  /// Click a chip of the focused conversation's composer, as a person would; its choices open in the page.
-  clickChip(anchor: "project" | "service" | "model" | "effort" | "mode"): Promise<void>;
-  /// Add a service to the focused draft's "also ask" set, as choosing it in the service chip's menu would.
-  alsoAsk(providerId: string): Promise<void>;
   /// The sidebar row's activity word for a session (the provider's running tool), or null.
   rowTool(session: string): string | null;
   /// The sidebar row's state for a session ("needsYou", "working", ...), or null when it has no row.
@@ -141,7 +125,6 @@ export function journeyApi(
   controller: Controller,
   missions: MissionController,
   state: RuntimeState,
-  conversation: ConversationPanels,
   afterReady: <T>(action: () => Promise<T>) => Promise<T>,
   extensionMode: vscode.ExtensionMode,
   revealRow: (sessionId: string) => Promise<void> = async () => {},
@@ -161,9 +144,23 @@ export function journeyApi(
       () => controller.startResolvedSession(provider, workspace, model, reasoningEffort, "exclusive", false, permission),
     ),
     select: (session) => afterReady(() => controller.select(session)),
-    prompt: (text) => afterReady(() => controller.prompt(text)),
-    switchModel: (model) => afterReady(() => controller.switchSelectedModel(model)),
-    switchMode: (mode) => afterReady(() => controller.switchSelectedMode(mode)),
+    // Structured-session tools for the journey and Missions: text and settings go to the public Runtime
+    // session directly; the terminal tab is the surface for people, not for this harness.
+    prompt: (text) => afterReady(async () => {
+      const selected = state.selected;
+      if (!selected) throw new Error("no session is selected");
+      await controller.submitResolvedInput(selected.sessionId, text);
+    }),
+    switchModel: (model) => afterReady(async () => {
+      const selected = state.selected;
+      if (!selected) throw new Error("no session is selected");
+      await controller.setSelectedModel(selected, model);
+    }),
+    switchMode: (mode) => afterReady(async () => {
+      const selected = state.selected;
+      if (!selected) throw new Error("no session is selected");
+      await controller.setSelectedMode(selected, mode);
+    }),
     answerApproval: (approval, option, subjectDigest) => afterReady(
       () => controller.answerApproval(approval, option, subjectDigest),
     ),
@@ -181,19 +178,6 @@ export function journeyApi(
       if (state.selected?.sessionId !== session) {
         throw new Error(`selected ${state.selected?.sessionId ?? "no session"}, expected ${session}`);
       }
-      await controller.selectedWatchReady();
-      await conversation.bindingFor(session)?.settled();
-    }),
-    openDraft: (workspace, providerId) => afterReady(async () => {
-      await controller.openDraft({ workspace, providerId: providerId ?? null });
-    }),
-    sendFocusedDraft: (text, parallelPlacement) => afterReady(async () => {
-      const binding = conversation.focused();
-      if (!binding?.draft) throw new Error("no draft tab is focused");
-      await controller.sendDraft(binding, text, parallelPlacement);
-      const session = binding.session;
-      if (!session) throw new Error("the draft did not become a session");
-      return session.sessionId;
     }),
     openListed: (limit) => afterReady(async () => {
       let opened = 0;
@@ -201,7 +185,6 @@ export function journeyApi(
       for (const row of state.conversations) {
         if (opened >= limit) break;
         if (!row.canOpen || row.open || row.projectless) continue;
-        if (row.session && conversation.bindingFor(row.session.sessionId)) continue;
         if (!row.session && workspaceCollisions(row.workspace, state.sessions).length > 0) continue;
         try {
           await within(controller.select(row), 30_000);
@@ -214,18 +197,6 @@ export function journeyApi(
       }
       return { opened, refused };
     }),
-    placeConversation: (session, place) => afterReady(async () => {
-      const line = state.sessions.find((candidate) => candidate.sessionId === session);
-      if (!line) throw new Error("that session is not listed");
-      await controller.placeConversation(place, line);
-      await conversation.bindingFor(session)?.settled();
-    }),
-    arrangeGrid: () => afterReady(() => controller.arrangeGridForJourney()),
-    alsoAsk: (providerId) => afterReady(async () => {
-      const binding = conversation.focused();
-      if (!binding?.draft) throw new Error("no draft tab is focused");
-      await controller.alsoAskForJourney(binding, providerId);
-    }),
     rowTool: (session) => state.conversationOf(session)?.tool ?? null,
     rowActivity: (session) => state.conversationOf(session)?.activity ?? null,
     answerFromRow: (session, how) => afterReady(async () => {
@@ -237,16 +208,6 @@ export function journeyApi(
     revealRow: (session) => afterReady(() => revealRow(session)),
     knownProjects: () => controller.knownProjectsForJourney(),
     isolationEvidence: () => afterReady(() => controller.isolatedWorkspaceEvidenceForJourney()),
-    clickChip: (anchor) => afterReady(async () => {
-      const binding = conversation.focused();
-      if (!binding) throw new Error("no conversation tab is focused");
-      binding.view.clickChip(anchor);
-    }),
-    openLatestDiff: () => afterReady(async () => {
-      const binding = conversation.focused();
-      if (!binding) throw new Error("no conversation tab is focused");
-      binding.view.openLatestDiff();
-    }),
     openStoredWithTitle: (providerId) => afterReady(async () => {
       const rows = state.conversations.filter(
         (candidate) => candidate.providerId === providerId

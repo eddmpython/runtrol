@@ -84,9 +84,6 @@
     "onCommand:runtrol.openNextWaiting",
     "onCommand:runtrol.switchSession",
     "onCommand:runtrol.startSession",
-    "onCommand:runtrol.alsoAsk",
-    "onCommand:runtrol.startConfiguredSession",
-    "onCommand:runtrol.newConfiguredConversationInProject",
     "onCommand:runtrol.selectSession",
     "onCommand:runtrol.openConversation",
     "onCommand:runtrol.renameSession",
@@ -141,20 +138,6 @@
           "title": "Runtrol",
           "icon": "resources/symbol.svg"
         }
-      ],
-      "panel": [
-        {
-          "id": "runtrolPanel",
-          "title": "Chat",
-          "icon": "resources/provider-icons/sparkle.svg"
-        }
-      ],
-      "secondarySidebar": [
-        {
-          "id": "runtrolSide",
-          "title": "Chat",
-          "icon": "resources/provider-icons/sparkle.svg"
-        }
       ]
     },
     "views": {
@@ -173,22 +156,6 @@
           "name": "Agent Usage",
           "type": "webview",
           "visibility": "visible"
-        }
-      ],
-      "runtrolPanel": [
-        {
-          "id": "runtrol.conversationPanel",
-          "name": "Chat",
-          "type": "webview",
-          "icon": "resources/provider-icons/sparkle.svg"
-        }
-      ],
-      "runtrolSide": [
-        {
-          "id": "runtrol.conversationSide",
-          "name": "Chat",
-          "type": "webview",
-          "icon": "resources/provider-icons/sparkle.svg"
         }
       ]
     },
@@ -221,11 +188,6 @@
         "command": "runtrol.discoverServices",
         "title": "Add Coding Service...",
         "icon": "$(extensions)",
-        "category": "Runtrol"
-      },
-      {
-        "command": "runtrol.newConfiguredConversationInProject",
-        "title": "New Conversation with Service, Model and Effort...",
         "category": "Runtrol"
       },
       {
@@ -286,12 +248,6 @@
         "command": "runtrol.startSession",
         "title": "New Conversation",
         "icon": "$(add)",
-        "category": "Runtrol"
-      },
-      {
-        "command": "runtrol.alsoAsk",
-        "title": "Also Ask Another Service",
-        "icon": "$(split-horizontal)",
         "category": "Runtrol"
       },
       {
@@ -557,12 +513,6 @@
         "category": "Runtrol"
       },
       {
-        "command": "runtrol.startConfiguredSession",
-        "title": "New Conversation with Service, Model and Effort...",
-        "icon": "$(settings-gear)",
-        "category": "Runtrol"
-      },
-      {
         "command": "runtrol.newConversationInProject",
         "title": "New Conversation in Project",
         "icon": "$(add)",
@@ -617,30 +567,6 @@
       {
         "command": "runtrol.removeProject",
         "title": "Remove Project",
-        "category": "Runtrol"
-      },
-      {
-        "command": "runtrol.openConversationInPanel",
-        "title": "Open Conversation in Panel",
-        "icon": "$(layout-panel)",
-        "category": "Runtrol"
-      },
-      {
-        "command": "runtrol.openConversationInSideBar",
-        "title": "Open Conversation in Side Bar",
-        "icon": "$(layout-sidebar-right)",
-        "category": "Runtrol"
-      },
-      {
-        "command": "runtrol.openConversationInTab",
-        "title": "Open Conversation as Tab",
-        "icon": "$(window)",
-        "category": "Runtrol"
-      },
-      {
-        "command": "runtrol.arrangeConversationGrid",
-        "title": "Arrange Conversations in a Grid",
-        "icon": "$(layout)",
         "category": "Runtrol"
       },
       {
@@ -718,11 +644,6 @@
         "when": "!editorTextFocus && !terminalFocus"
       },
       {
-        "command": "runtrol.arrangeConversationGrid",
-        "key": "ctrl+k ctrl+g",
-        "mac": "cmd+k cmd+g"
-      },
-      {
         "command": "runtrol.returnToPreviousProject",
         "key": "ctrl+k ctrl+b",
         "mac": "cmd+k cmd+b"
@@ -741,10 +662,6 @@
         },
         {
           "command": "runtrol.newConversationInProject",
-          "when": "false"
-        },
-        {
-          "command": "runtrol.newConfiguredConversationInProject",
           "when": "false"
         },
         {
@@ -834,11 +751,6 @@
           "group": "navigation@2"
         },
         {
-          "command": "runtrol.startConfiguredSession",
-          "when": "view == runtrol.sessions",
-          "group": "1_new@1"
-        },
-        {
           "command": "runtrol.refresh",
           "when": "view == runtrol.sessions",
           "group": "1_new@2"
@@ -909,11 +821,6 @@
           "group": "navigation@6"
         },
         {
-          "command": "runtrol.arrangeConversationGrid",
-          "when": "view == runtrol.sessions",
-          "group": "2_layout@1"
-        },
-        {
           "command": "runtrol.explainListing",
           "when": "view == runtrol.sessions && runtrol.listingIncomplete",
           "group": "3_info@1"
@@ -934,11 +841,6 @@
           "command": "runtrol.openProjectWorkspace",
           "group": "inline@2",
           "when": "view == runtrol.sessions && viewItem =~ /^runtrol\\.project\\.(created|open)(\\.pinnable|\\.pinned)?$/"
-        },
-        {
-          "command": "runtrol.newConfiguredConversationInProject",
-          "group": "1_manage@0",
-          "when": "view == runtrol.sessions && viewItem =~ /^runtrol\\.project/"
         },
         {
           "command": "runtrol.pinProject",
@@ -1114,21 +1016,6 @@
           "command": "runtrol.completeMissionIntegration",
           "when": "view == runtrol.missions && viewItem =~ /^runtrol\\.missionTask\\.passed(\\.session)?\\.chooseOne\\.integrating$/",
           "group": "inline@2"
-        },
-        {
-          "command": "runtrol.openConversationInTab",
-          "group": "2_place@0",
-          "when": "view == runtrol.sessions && viewItem =~ /^runtrol\\.conversation/"
-        },
-        {
-          "command": "runtrol.openConversationInPanel",
-          "group": "2_place@1",
-          "when": "view == runtrol.sessions && viewItem =~ /^runtrol\\.conversation/"
-        },
-        {
-          "command": "runtrol.openConversationInSideBar",
-          "group": "2_place@2",
-          "when": "view == runtrol.sessions && viewItem =~ /^runtrol\\.conversation/"
         },
         {
           "command": "runtrol.allowFromRow",

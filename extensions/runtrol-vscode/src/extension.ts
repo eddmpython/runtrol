@@ -5,17 +5,13 @@ import * as vscode from "vscode";
 import { AgentToolsController, type AgentToolsAction } from "./agentTools";
 import { CandidateController } from "./capability/controller";
 import { conversations as conversationRows } from "./conversationList";
-import { ConversationPanels } from "./conversationPanels";
-import { PANEL_VIEW_ID, SIDE_BAR_VIEW_ID } from "./conversationSurface";
 import { ActivityWatcher } from "./activityWatch";
 import { WatchLifecycleGate } from "./watchLifecycleGate";
 import { DiffDocuments } from "./diffDocuments";
-import { ConversationView, type WebviewPerformance } from "./conversationView";
 import { Controller } from "./controller";
 import { CoreClient } from "./core/client";
 import { CoreLocator } from "./core/locator";
 import { superviseCoreCurrency } from "./coreCurrencySurface";
-import { NO_PROJECT_LABEL, readDraftState } from "./draft";
 import { readGitBranch } from "./gitBranch";
 import {
   confirmRuntimeForget,
@@ -42,6 +38,7 @@ import { workspaceCovers, workspaceIdentity } from "./workspaceCollision";
 import { installableProviders } from "./usageDisplay";
 import { UsageView } from "./usageView";
 import { WorkspaceRootFollowing } from "./workspaceRoots";
+import { conversationIcon } from "./conversationIcon";
 import { TerminalTabs } from "./terminalTabs";
 import { ConversationItem, ConversationsTree, ProjectItem, icon } from "./trees";
 
@@ -51,7 +48,6 @@ export type RuntrolExtensionApi = {
   readonly ready: Promise<void>;
   readonly initializationStage?: string;
   refresh(): Promise<void>;
-  measureWebview?(framesPerSecond?: number, durationMs?: number): Promise<WebviewPerformance>;
   measureSessionManagement?(
     sessionIds: readonly string[],
     progress?: (stage: string) => void,
@@ -135,90 +131,14 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
   context.subscriptions.push(
     vscode.workspace.registerTextDocumentContentProvider(DiffDocuments.scheme, diffDocuments),
   );
-  const conversation = new ConversationPanels(
-    context.extensionUri,
-    runtime,
-    state,
-    watchLifecycle,
-    (binding, message) => {
-      // Every action names the tab it came from. A draft tab has no session: its first message starts one,
-      // and its chips pick what that start will use; a live tab's chips switch the running session.
-      const session = binding.session;
-      if (message.type === "prompt") {
-        void run(() => afterReady(() => session
-          ? controller.prompt(message.text, session, binding)
-          : controller.sendDraft(binding, message.text)));
-      } else if (message.type === "answerApproval") {
-        if (!session) return;
-        void run(() => afterReady(
-          () => controller.answerApproval(message.approval, message.option, message.subjectDigest, session),
-        ));
-      } else if (message.type === "switchModel") {
-        void run(() => afterReady(() => controller.switchModel(message.available, message.model, message.effort, binding)));
-      } else if (message.type === "switchMode") {
-        void run(() => afterReady(() => controller.switchMode(message.available, binding)));
-      } else if (message.type === "switchEffort") {
-        void run(() => afterReady(() => controller.switchEffort(message.model, binding)));
-      } else if (message.type === "pickProject") {
-        void run(() => afterReady(() => session
-          ? controller.pickProjectForLive(binding)
-          : controller.pickDraftProject(binding)));
-      } else if (message.type === "pickService") {
-        void run(() => afterReady(() => session
-          ? controller.pickServiceForLive(binding)
-          : controller.pickDraftService(binding)));
-      } else if (message.type === "attach") {
-        void run(() => afterReady(() => controller.attach(binding)));
-      } else if (message.type === "pasteImage") {
-        controller.addPastedAttachment(binding, message);
-      } else if (message.type === "removeAttachment") {
-        controller.removeAttachment(binding, message.index);
-      } else if (message.type === "mentionFile") {
-        void run(() => afterReady(() => controller.insertFileMention(session ?? undefined)));
-      } else if (message.type === "openDiff") {
-        // A change the service declared, opened where VS Code shows changes. No session needed: the
-        // change's text came with the frame and goes straight to the editor.
-        void run(() => diffDocuments.open(message.diff));
-      } else if (message.type === "interrupt") {
-        // Interrupt is dispatched by its own name, never as a fallback: an action this validator
-        // accepts but no branch handles must do nothing, not stop a running agent.
-        if (!session) return;
-        void run(() => afterReady(() => controller.interrupt(session)));
-      }
-    },
-    (session) => state.conversationOf(session.sessionId)?.title ?? sessionTitle(session),
-    (session) => providerDisplayName(session.providerId, state.providers),
-    (providerId) => providerId ? providerIcon(providerId, state.providers) : "sparkle",
-    (session) => {
-      // The focused tab is the selection: the tree highlight and every command that says "the current
-      // conversation" follow whichever conversation tab the reader is actually in. A draft selects nothing.
-      state.select(session?.sessionId ?? null);
-    },
-    async (session) => {
-      // Where the conversation runs, for the chips: the folder's name and branch, or "No project" for the
-      // scratch folder, whose path is an implementation detail nobody should read.
-      const home = state.conversationOf(session.sessionId)?.homeWorkspace ?? session.workspace;
-      const projectless = isProjectless(home, state.projectlessRoot);
-      return {
-        project: projectless ? NO_PROJECT_LABEL : workspaceName(home) || home,
-        projectPath: projectless ? null : session.workspace,
-        branch: projectless ? null : await readGitBranch(session.workspace),
-      };
-    },
-  );
-  conversation.rememberPlaces({
-    read: (place) => {
-      const value = context.workspaceState.get<unknown>(`runtrol.place.${place}`);
-      return typeof value === "string" ? value : null;
-    },
-    write: (place, sessionId) => {
-      void context.workspaceState.update(`runtrol.place.${place}`, sessionId ?? undefined);
-    },
-  });
   // The conversation surface: the service's own terminal interface in an editor tab, hosted by the Core.
-  const terminals = new TerminalTabs(locator, (row) => icon(row, context.extensionUri));
+  const terminals = new TerminalTabs(
+    locator,
+    (row) => icon(row, context.extensionUri),
+    (providerId) => conversationIcon(context.extensionUri, providerIcon(providerId, state.providers)),
+  );
   context.subscriptions.push(terminals);
-  controller = new Controller(context, client, runtime, state, conversation, selection, projectStore, terminals);
+  controller = new Controller(context, client, runtime, state, selection, projectStore, terminals);
   // The window's folders follow into the grant's roots. Enrollment read them once; without this, every folder
   // opened after first activation stayed outside conversation discovery, silently.
   const rootFollowing = new WorkspaceRootFollowing({
@@ -250,7 +170,6 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
     missionController,
     candidateController,
     agentTools,
-    conversation,
     missions,
     conversations,
     usage,
@@ -452,29 +371,12 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
       () => run(() => afterReady(() => controller.startSession())),
     ),
     vscode.commands.registerCommand(
-      "runtrol.alsoAsk",
-      () => run(() => afterReady(() => controller.alsoAskFocusedDraft())),
-    ),
-    vscode.commands.registerCommand(
-      "runtrol.startConfiguredSession",
-      () => run(() => afterReady(() => controller.startConfiguredSession())),
-    ),
-    vscode.commands.registerCommand(
       "runtrol.newConversationInProject",
       (item: unknown) => run(() => afterReady(async () => {
         // Inline on the project heading only, so the argument is always the heading. Guarded anyway, because a
         // command invoked with the wrong thing must refuse rather than start a session somewhere surprising.
         if (!(item instanceof ProjectItem)) return;
         await controller.startSessionInWorkspace(item.group.workspace);
-      })),
-    ),
-    vscode.commands.registerCommand(
-      "runtrol.newConfiguredConversationInProject",
-      // The deliberate flow, one right-click away from the heading it starts in. The folder question is
-      // already answered by the heading; service, model, effort, and mode are still asked.
-      (item: unknown) => run(() => afterReady(async () => {
-        if (!(item instanceof ProjectItem)) return;
-        await controller.startConfiguredSessionInWorkspace(item.group.workspace);
       })),
     ),
     vscode.commands.registerCommand(
@@ -719,50 +621,6 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
       },
     ),
     vscode.commands.registerCommand(
-      "runtrol.openConversationInPanel",
-      (item?: unknown) => run(() => afterReady(
-        () => controller.placeConversation("panel", item instanceof ConversationItem ? item : undefined),
-      )),
-    ),
-    vscode.commands.registerCommand(
-      "runtrol.openConversationInSideBar",
-      (item?: unknown) => run(() => afterReady(
-        () => controller.placeConversation("sideBar", item instanceof ConversationItem ? item : undefined),
-      )),
-    ),
-    vscode.commands.registerCommand(
-      "runtrol.openConversationInTab",
-      (item?: unknown) => run(() => afterReady(
-        () => controller.placeConversation("tab", item instanceof ConversationItem ? item : undefined),
-      )),
-    ),
-    vscode.commands.registerCommand(
-      "runtrol.arrangeConversationGrid",
-      () => run(() => afterReady(() => controller.arrangeConversationGrid())),
-    ),
-    // The two workbench places a conversation can live in besides a tab. Resolved by VS Code when first
-    // shown; a conversation placed there before a reload comes back once the session list is ready.
-    vscode.window.registerWebviewViewProvider(
-      PANEL_VIEW_ID,
-      conversation.viewProvider("panel", (place, sessionId) => {
-        void run(() => afterReady(async () => {
-          const session = state.sessions.find((candidate) => candidate.sessionId === sessionId) ?? null;
-          if (session) await controller.placeConversation(place, session);
-        }));
-      }),
-      { webviewOptions: { retainContextWhenHidden: false } },
-    ),
-    vscode.window.registerWebviewViewProvider(
-      SIDE_BAR_VIEW_ID,
-      conversation.viewProvider("sideBar", (place, sessionId) => {
-        void run(() => afterReady(async () => {
-          const session = state.sessions.find((candidate) => candidate.sessionId === sessionId) ?? null;
-          if (session) await controller.placeConversation(place, session);
-        }));
-      }),
-      { webviewOptions: { retainContextWhenHidden: false } },
-    ),
-    vscode.commands.registerCommand(
       "runtrol.archiveConversation",
       (item: unknown) => run(async () => {
         if (!(item instanceof ConversationItem)) return;
@@ -843,29 +701,6 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
     },
   );
   context.subscriptions.push(
-    vscode.window.registerWebviewPanelSerializer(ConversationView.viewType, {
-      deserializeWebviewPanel: async (panel, webviewState: unknown) => {
-        // The restored tab names its own session, or the draft it was showing (stamped into webview state on
-        // every reset). Rebinding waits for the list; a tab whose session no longer exists closes rather than
-        // showing a guess, and a draft comes back with the choices it had.
-        const stamped = (webviewState ?? {}) as { sessionId?: unknown; draft?: unknown };
-        const draft = readDraftState(stamped.draft);
-        await afterReady(async () => {
-          if (draft) {
-            await controller.restoreDraft(panel, draft);
-            return;
-          }
-          const session = typeof stamped.sessionId === "string"
-            ? state.sessions.find((candidate) => candidate.sessionId === stamped.sessionId) ?? null
-            : null;
-          if (!session) {
-            panel.dispose();
-            return;
-          }
-          await conversation.adopt(panel, session);
-        });
-      },
-    }),
   );
   const conversationsView = vscode.window.createTreeView("runtrol.sessions", {
     treeDataProvider: conversations,
@@ -896,17 +731,10 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
     }),
   );
   if (conversationsView.visible) void ensureUsageVisible();
-  const revealEntryConversation = (): void => {
-    void run(() => afterReady(() => controller.revealConversationOnEntry()));
-  };
   if (conversationsView.visible) {
-    revealEntryConversation();
   }
   context.subscriptions.push(
     conversationsView,
-    conversationsView.onDidChangeVisibility((event) => {
-      if (event.visible) revealEntryConversation();
-    }),
   );
   void run(() => lifecycle);
   void run(() => missionLifecycle);
@@ -929,13 +757,6 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
       return MEASURED_HOST ? initializationStage : undefined;
     },
     refresh: () => afterReady(() => controller.refresh()),
-    measureWebview: MEASURED_HOST
-      ? (framesPerSecond, durationMs) => afterReady(async () => {
-        const focused = conversation.focused();
-        if (!focused) throw new Error("no conversation tab is open to measure");
-        return focused.view.measurePerformance(framesPerSecond, durationMs);
-      })
-      : undefined,
     measureSessionManagement: MEASURED_HOST
       ? (sessionIds, progress = () => {}) => afterReady(async () => {
         const expected = new Set(sessionIds);
@@ -954,10 +775,6 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
         // abort a valid trial on a saturated runner before the three-trial performance ratchet can score it.
         await controller.select(cold.sessionId);
         progress("cold-watch-and-render");
-        await Promise.all([
-          controller.selectedWatchReady(),
-          conversation.focused()?.settled() ?? Promise.resolve(),
-        ]);
         const coldResumeMs = performance.now() - resumeStarted;
         const resumed = state.selected;
         if (
@@ -981,8 +798,6 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
             const started = performance.now();
             progress(`round-${round + 1}-session-${index + 1}-select`);
             await controller.select(session.sessionId);
-            progress(`round-${round + 1}-session-${index + 1}-watch`);
-            await controller.selectedWatchReady();
             samples.push(performance.now() - started);
           }
         }
@@ -1005,7 +820,6 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
         if (state.selected?.sessionId !== sessionId) {
           throw new Error(`restored ${state.selected?.sessionId ?? "no session"}, expected ${sessionId}`);
         }
-        await within(controller.selectedWatchReady(), 10_000, "selected-session watch handshake");
       })
       : undefined,
     // The two follow probes exist for the live root-following proof: a real window opens a second folder and the
@@ -1080,7 +894,6 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
         controller,
         missionController,
         state,
-        conversation,
         afterReady,
         context.extensionMode,
         (sessionId) => conversations.revealSession(sessionId),

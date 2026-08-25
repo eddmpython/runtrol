@@ -22,6 +22,8 @@ export class TerminalTabs implements vscode.Disposable {
     private readonly locator: CoreLocator,
     /// The glyph for a conversation's service, drawn on the tab so two services' tabs tell apart at a glance.
     private readonly iconFor: (conversation: Conversation) => vscode.ThemeIcon | vscode.Uri,
+    /// The same glyph by service id, for a fresh conversation that has no row yet.
+    private readonly iconForProvider: (providerId: string) => vscode.ThemeIcon | vscode.Uri,
   ) {
     this.closing = vscode.window.onDidCloseTerminal((terminal) => {
       for (const [key, open] of this.open) {
@@ -52,6 +54,36 @@ export class TerminalTabs implements vscode.Disposable {
     this.open.set(conversation.key, terminal);
     terminal.show(preserveFocus);
     return terminal;
+  }
+
+  /// Start a fresh conversation with a service in a folder: the service's terminal interface opens with no
+  /// conversation to reopen, and the service creates one. The tab is named for the folder until the
+  /// service's own listing gives the conversation a title (the sidebar shows it once the store does).
+  showFresh(providerId: string, workspace: string, name: string): vscode.Terminal {
+    const pty = new CoreTerminal(this.locator, { provider: providerId, native: null, workspace });
+    const terminal = vscode.window.createTerminal({
+      name,
+      iconPath: this.iconForProvider(providerId),
+      pty,
+      location: vscode.TerminalLocation.Editor,
+      isTransient: true,
+    });
+    terminal.show(false);
+    return terminal;
+  }
+
+  /// Spread the open conversation tabs over editor groups: each tab after the first moves to a group of
+  /// its own, and four or more become the editor's two-by-two grid. Returns how many tabs were arranged.
+  async arrangeGrid(): Promise<number> {
+    const open = [...this.open.values()];
+    if (open.length < 2) return 0;
+    await vscode.commands.executeCommand("workbench.action.editorLayoutSingle");
+    for (const [index, terminal] of open.entries()) {
+      terminal.show(false);
+      if (index > 0) await vscode.commands.executeCommand("workbench.action.moveEditorToNewGroup");
+    }
+    if (open.length >= 4) await vscode.commands.executeCommand("workbench.action.editorLayoutTwoByTwoGrid");
+    return open.length;
   }
 
   dispose(): void {

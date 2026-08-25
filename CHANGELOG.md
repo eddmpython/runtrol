@@ -48,6 +48,11 @@ and refactoring that no user can observe do not belong here.
   can be pinned to the top, renamed, and removed; removing takes the heading off the list and never touches
   the folder. Conversations in a folder nobody added stay plain top-level rows, never indented.
 
+- The chat page of ours is gone: no composer, no chips, no bottom-panel or side-bar chat places, no grid of
+  pages. The conversation is the service's own terminal in an editor tab (above), and everything those
+  chips did (model, mode, effort, project, service) is the service's own command in that terminal. New
+  Conversation now asks only which service, and opens that service's terminal in the project.
+
 ### Fixed
 
 - Deleting a conversation now removes the row the moment it is clicked; the service's own deletion and its

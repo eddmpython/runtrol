@@ -59,36 +59,6 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
         found.append(
             "every installed CLI's status and progress bars must be expanded at the bottom of the Runtrol sidebar"
         )
-    for container, view_id in (
-        ("runtrolPanel", "runtrol.conversationPanel"),
-        ("runtrolSide", "runtrol.conversationSide"),
-    ):
-        entries = views.get(container) if isinstance(views, dict) else None
-        chat_view = next(
-            (
-                entry
-                for entry in entries
-                if isinstance(entry, dict) and entry.get("id") == view_id
-            ),
-            None,
-        ) if isinstance(entries, list) else None
-        if not isinstance(chat_view, dict) or chat_view.get("name") != "Chat":
-            found.append("the panel and secondary side bar must be named Chat without a product prefix")
-    for area, container_id in (
-        ("panel", "runtrolPanel"),
-        ("secondarySidebar", "runtrolSide"),
-    ):
-        entries = view_containers.get(area) if isinstance(view_containers, dict) else None
-        chat_container = next(
-            (
-                entry
-                for entry in entries
-                if isinstance(entry, dict) and entry.get("id") == container_id
-            ),
-            None,
-        ) if isinstance(entries, list) else None
-        if not isinstance(chat_container, dict) or chat_container.get("title") != "Chat":
-            found.append("the panel and secondary side bar containers must be named Chat without a product prefix")
     welcome_entries = contributes.get("viewsWelcome") if isinstance(contributes, dict) else None
     welcomes = welcome_entries if isinstance(welcome_entries, list) else []
     has_ready_welcome = any(
@@ -287,36 +257,25 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
     ):
         if token in runtime_source:
             found.append(f"runtimeClient.ts repeats system locator validation through `{token}`")
-    if 'mark.textContent = "R"' in sources.get("webview/main.ts", ""):
-        found.append("the chat page must not place the product brand above the conversation")
-    if "Runtrol sidebar" in sources.get("conversationSurface.ts", ""):
-        found.append("an empty chat place must name the Conversations sidebar, not repeat the product brand")
     if "conversationDetail" in sources.get("trees.ts", ""):
         found.append("a conversation tree row must not derive or display state, age, service, or project detail")
     if "providerMark" in sources.get("usageDisplay.ts", "") or "providerMark" in sources.get("usageViewWebview.ts", ""):
         found.append("Agent Usage must render the provider's declared glyph instead of invented text initials")
-    if "resources/symbol.svg" in "".join(
-        sources.get(name, "") for name in ("conversationView.ts", "conversationPanels.ts", "conversationSurface.ts")
-    ):
-        found.append("an individual conversation surface must never use the product symbol as its speaker icon")
     if "`Chat ${" in sources.get("conversationList.ts", ""):
         found.append("a conversation title must never expose a shortened internal session identifier")
 
     contributes = package.get("contributes")
     views_containers = contributes.get("viewsContainers") if isinstance(contributes, dict) else None
     views = contributes.get("views") if isinstance(contributes, dict) else None
-    neutral_icon = "resources/provider-icons/sparkle.svg"
-    for container_kind, container_id in (("panel", "runtrolPanel"), ("secondarySidebar", "runtrolSide")):
-        entries = views_containers.get(container_kind) if isinstance(views_containers, dict) else None
-        entry = next((item for item in entries or [] if isinstance(item, dict) and item.get("id") == container_id), None)
-        if not isinstance(entry, dict) or entry.get("icon") != neutral_icon:
-            found.append("shared chat containers must use a neutral coding-service glyph, never the product symbol")
-    for container_id in ("runtrolPanel", "runtrolSide"):
-        entries = views.get(container_id) if isinstance(views, dict) else None
-        if not isinstance(entries, list) or any(
-            not isinstance(entry, dict) or entry.get("icon") != neutral_icon for entry in entries
-        ):
-            found.append("shared chat views must use a neutral coding-service glyph, never the product symbol")
+    # The conversation surface is the service's own terminal in an editor tab (docs/terminalSurface.md). A
+    # chat container or webview view of ours would be that surface growing back.
+    for container_kind in ("panel", "secondarySidebar"):
+        if isinstance(views_containers, dict) and views_containers.get(container_kind):
+            found.append(f"no chat container may be contributed to the {container_kind}; the conversation is a terminal tab")
+    for view_group, entries in (views.items() if isinstance(views, dict) else []):
+        for entry in entries if isinstance(entries, list) else []:
+            if isinstance(entry, dict) and entry.get("type") == "webview" and entry.get("id") != "runtrol.usage":
+                found.append(f"{view_group} contributes a webview view {entry.get('id')}; only Agent Usage is a webview")
 
     required = {
         "core/framing.ts": [
@@ -326,24 +285,7 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
             "setImmediate",
             "this.socket.end()",
         ],
-        "conversationView.ts": [
-            "webviewReady",
-            "createWebviewPanel",
-            "focusSurface",
-            "conversationTabIsActive",
-            "onDidChangeTabs",
-            "onDidChangeTabGroups",
-            "MEASUREMENT_ATTEMPTS",
-            "withinMeasurementStage",
-            "waitForVisibleWebview",
-            "retainContextWhenHidden: false",
-            'aria-haspopup="listbox"',
-            'aria-controls="commands"',
-            'aria-expanded="false"',
-            "surface.iconPath = this.panelIcon",
-            "conversationIcon(this.extensionUri, this.iconOf(providerId))",
-        ],
-        "conversationIcon.ts": [
+                "conversationIcon.ts": [
             'vscode.Uri.joinPath(extensionUri, "resources", "provider-icons", `${icon}.svg`)',
             'const icon = /^[a-z0-9-]{1,64}$/u.test(declared) ? declared : "sparkle"',
             "existsSync(candidate.fsPath)",
@@ -364,13 +306,7 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
             "export function awaitsVerification",
             "export function isBroken",
         ],
-        "conversationPanels.ts": [
-            'import { SerializedWatch } from "./serializedWatch"',
-            "private readonly watch = new SerializedWatch()",
-            "this.watch.pause()",
-            "this.watch.dispose()",
-        ],
-        "conversationList.ts": [
+                "conversationList.ts": [
             "const folderRows = rows.filter",
             '"open",',
             "if (left.current !== right.current) return left.current ? -1 : 1;",
@@ -400,19 +336,7 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
             '"runtrol.isVerifyingProvider"',
             "awaitsVerification",
         ],
-        "webview/main.ts": [
-            "MAX_VISIBLE_ITEMS",
-            "MAX_VISIBLE_CHARACTERS",
-            "MAX_BATCH",
-            'setAttribute("aria-activedescendant"',
-            'setAttribute("aria-expanded"',
-            'removeAttribute("aria-activedescendant")',
-            "(item ? prompt : chip)?.focus()",
-            "paintDraftPrompt()",
-            '"Choose a coding service above"',
-            "`Message ${draft.service}`",
-        ],
-        "usageView.ts": [
+                "usageView.ts": [
             "implements vscode.WebviewViewProvider",
             "private gauges:",
             "usageRowsEqual(this.rows, next)",
@@ -475,11 +399,6 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
             "awaitsVerification(",
             "reconnect",
             "workspaceCollisions",
-            "conversationSwitchDecision",
-            "this.runtime.cool(",
-            '"Stop and switch"',
-            '"Keep both working"',
-            '"Start here anyway"',
         ],
         "mission/autoFlight.ts": [
             "MAX_AUTO_FLIGHTS",
@@ -697,16 +616,6 @@ def selftest() -> int:
         "contributes": {
             "viewsContainers": {
                 "activitybar": [],
-                "panel": [{
-                    "id": "runtrolPanel",
-                    "title": "Chat",
-                    "icon": "resources/provider-icons/sparkle.svg",
-                }],
-                "secondarySidebar": [{
-                    "id": "runtrolSide",
-                    "title": "Chat",
-                    "icon": "resources/provider-icons/sparkle.svg",
-                }],
             },
             "views": {
                 "runtrol": [
@@ -715,22 +624,6 @@ def selftest() -> int:
                         "name": "Agent Usage",
                         "type": "webview",
                         "visibility": "visible",
-                    }
-                ],
-                "runtrolPanel": [
-                    {
-                        "id": "runtrol.conversationPanel",
-                        "name": "Chat",
-                        "type": "webview",
-                        "icon": "resources/provider-icons/sparkle.svg",
-                    }
-                ],
-                "runtrolSide": [
-                    {
-                        "id": "runtrol.conversationSide",
-                        "name": "Chat",
-                        "type": "webview",
-                        "icon": "resources/provider-icons/sparkle.svg",
                     }
                 ],
             },
@@ -820,20 +713,6 @@ def selftest() -> int:
             "MAX_FRAME_BYTES MAX_QUEUED_FRAMES MAX_QUEUED_BYTES setImmediate "
             "this.socket.end()"
         ),
-        "webview/main.ts": (
-            'MAX_VISIBLE_ITEMS MAX_VISIBLE_CHARACTERS MAX_BATCH '
-            'setAttribute("aria-activedescendant" setAttribute("aria-expanded" '
-            'removeAttribute("aria-activedescendant") (item ? prompt : chip)?.focus() '
-            'paintDraftPrompt() "Choose a coding service above" `Message ${draft.service}`'
-        ),
-        "conversationView.ts": (
-            "webviewReady createWebviewPanel focusSurface conversationTabIsActive "
-            "onDidChangeTabs onDidChangeTabGroups MEASUREMENT_ATTEMPTS withinMeasurementStage "
-            'waitForVisibleWebview retainContextWhenHidden: false aria-haspopup="listbox" '
-            'aria-controls="commands" aria-expanded="false" '
-            "surface.iconPath = this.panelIcon "
-            "conversationIcon(this.extensionUri, this.iconOf(providerId))"
-        ),
         "conversationIcon.ts": (
             'vscode.Uri.joinPath(extensionUri, "resources", "provider-icons", `${icon}.svg`) '
             'const icon = /^[a-z0-9-]{1,64}$/u.test(declared) ? declared : "sparkle" '
@@ -850,11 +729,6 @@ def selftest() -> int:
             "the installed executable has not completed a verified probe "
             "export function awaitsVerification export function isBroken"
         ),
-        "conversationPanels.ts": (
-            'import { SerializedWatch } from "./serializedWatch"; '
-            "private readonly watch = new SerializedWatch(); this.watch.pause(); this.watch.dispose()"
-        ),
-        "conversationSurface.ts": "Conversations sidebar",
         "conversationList.ts": (
             'const folderRows = rows.filter "open", '
             'if (left.current !== right.current) return left.current ? -1 : 1; '
@@ -912,8 +786,8 @@ def selftest() -> int:
             'private indexAbort; '
             'this.runtime.inventory(); this.startSessionIndexWatch(); this.startProviderVerification( '
             'this.runtime.verifyProvider( awaitsVerification( '
-            'reconnect workspaceCollisions conversationSwitchDecision this.runtime.cool( '
-            '"Stop and switch" "Keep both working" '
+            'reconnect workspaceCollisions '
+            ''
             '"Start here anyway"'
         ),
         "mission/autoFlight.ts": (
@@ -1001,10 +875,11 @@ def selftest() -> int:
     hidden_usage["contributes"]["views"]["runtrol"][0]["visibility"] = "collapsed"
     non_progress_usage = json.loads(json.dumps(package))
     non_progress_usage["contributes"]["views"]["runtrol"][0].pop("type")
-    branded_chat = json.loads(json.dumps(package))
-    branded_chat["contributes"]["views"]["runtrolPanel"][0]["name"] = "Runtrol Chat"
-    branded_chat_container = json.loads(json.dumps(package))
-    branded_chat_container["contributes"]["viewsContainers"]["panel"][0]["title"] = "Runtrol"
+    # The chat surface growing back: a container in the panel, or a second webview view of ours.
+    chat_container = json.loads(json.dumps(package))
+    chat_container["contributes"]["viewsContainers"]["panel"] = [{"id": "runtrolPanel", "title": "Chat"}]
+    chat_webview = json.loads(json.dumps(package))
+    chat_webview["contributes"]["views"]["runtrol"].append({"id": "runtrol.conversation", "name": "Chat", "type": "webview"})
     cluttered_toolbar = json.loads(json.dumps(package))
     cluttered_toolbar["contributes"]["menus"]["view/title"].append({
         "command": "runtrol.arrangeConversationGrid",
@@ -1032,18 +907,14 @@ def selftest() -> int:
         ({**package, "dependencies": {"some-runtime": "1"}}, sources),
         (hidden_usage, sources),
         (non_progress_usage, sources),
-        (branded_chat, sources),
-        (branded_chat_container, sources),
+        (chat_container, sources),
+        (chat_webview, sources),
         (cluttered_toolbar, sources),
         (merged_welcomes, sources),
         (broad_delete, sources),
-        (cluttered_conversation, sources),
         ({**package, "activationEvents": []}, sources),
         ({**package, "contributes": {"viewsContainers": {"activitybar": []}}}, sources),
         ({"engines": {"vscode": "^1.100.0"}, "contributes": {"viewsContainers": {"activitybar": [], "secondarySidebar": []}}}, sources),
-        (package, {**sources, "webview/main.ts": "localStorage MAX_VISIBLE_ITEMS"}),
-        (package, {**sources, "webview/main.ts": sources["webview/main.ts"] + ' mark.textContent = "R"'}),
-        (package, {**sources, "conversationSurface.ts": sources["conversationSurface.ts"] + " Runtrol sidebar"}),
         (package, {**sources, "controller.ts": "setInterval("}),
         (package, {**sources, "mission/controller.ts": sources["mission/controller.ts"] + " setTimeout("}),
         (package, {**sources, "core/framing.ts": "MAX_FRAME_BYTES"}),
@@ -1056,19 +927,8 @@ def selftest() -> int:
                 ),
             },
         ),
-        (package, {**sources, "conversationView.ts": "webviewReady"}),
-        (package, {**sources, "conversationView.ts": sources["conversationView.ts"] + " resources/symbol.svg"}),
         (package, {**sources, "conversationIcon.ts": sources["conversationIcon.ts"].replace("provider-icons", "brand")}),
         (package, {**sources, "conversationList.ts": sources["conversationList.ts"] + " `Chat ${identity}`"}),
-        (
-            package,
-            {
-                **sources,
-                "webview/main.ts": sources["webview/main.ts"].replace(
-                    'setAttribute("aria-activedescendant"', ""
-                ),
-            },
-        ),
         (package, {**sources, "usageViewWebview.ts": sources["usageViewWebview.ts"].replace('document.createElement("progress")', "")}),
         (package, {**sources, "usageViewWebview.ts": sources["usageViewWebview.ts"].replace("image.src", "")}),
         (package, {**sources, "usageViewWebview.ts": sources["usageViewWebview.ts"].replace("const fallback", "")}),
@@ -1351,8 +1211,6 @@ def run() -> int:
         for name in (
             "extension.js",
             "pairingQrVendor.js",
-            "webview.js",
-            "webview.css",
             "usageView.js",
             "usageView.css",
         )

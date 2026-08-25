@@ -65,7 +65,6 @@ const mutatingProjectEntries = new Set([
   "missionMomentumEye",
   "missionRecoveryEye",
   "missionScheduleEye",
-  "safeParallelChatEye",
 ]);
 // Focused Mission eyes build and commit their own fixture repository. Their default must live inside this harness's
 // owned temporary root, while an explicitly requested folder remains exact and ordinary read-only eyes keep the
@@ -476,7 +475,7 @@ async function photograph() {
 
 /// One focused fault pose kills only this harness's exact Runtime child and starts its successor over the same home.
 async function restartRuntimeWhenRequested() {
-  if (!new Set(["missionRecoveryEye", "safeParallelChatEye"]).has(eyeEntry)) return;
+  if (eyeEntry !== "missionRecoveryEye") return;
   const deadline = Date.now() + 10 * 60_000;
   while (Date.now() < deadline) {
     const progress = await readFile(resultPath, "utf8").then((text) => JSON.parse(text)).catch(() => null);

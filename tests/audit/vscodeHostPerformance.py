@@ -3,7 +3,7 @@
 The measurement launches an isolated profile on the exact tested VS Code version, the production extension bundle,
 and a tracked Core daemon. At least three isolated trials measure ready activation, opening the contributed view,
 session refresh p95, Extension Host RSS growth, 30 managed external ACP sessions with at most eight hot, a real
-cold-session resume, selected-watch plus Webview-paint switching, and exact selection restoration after VS Code
+cold-session resume, selected-session switching, and exact selection restoration after VS Code
 restarts in another workspace. A green result stops at three. A red timing result may use up to three additional
 isolated trials, without changing a threshold, so one continuously noisy allocation does not decide the release.
 
@@ -70,7 +70,7 @@ gates so the ratchet measures the product rather than accumulated suite load.
 
 The reload surface hang guard moved from 5 to the existing 15 second initialization boundary on 2026-08-24.
 A hosted Windows trial completed the full first measurement, then scheduler pressure delayed only the second
-trial's Webview focus past five seconds. The short phase guard aborted the entire three-trial measurement before
+trial's conversation focus past five seconds. The short phase guard aborted the entire three-trial measurement before
 the unchanged reloadRestoreMs ratchet could distinguish that outlier. The longer guard still detects a stuck
 surface while allowing every completed trial to reach the ratchet that owns the performance decision.
 """
@@ -95,11 +95,6 @@ FIELDS = (
     "openViewMs",
     "refreshP95Ms",
     "rssGrowthBytes",
-    "webviewFrameP95Ms",
-    "webviewFrameOverrunP95Ms",
-    "webviewInputP95Ms",
-    "webviewScrollP95Ms",
-    "webviewPendingFrames",
     "coldResumeMs",
     "sessionSwitchP95Ms",
     "reloadRestoreMs",
@@ -107,7 +102,6 @@ FIELDS = (
 )
 EXPECTED_HOT_SESSIONS = 8
 EXPECTED_MANAGED_SESSIONS = 30
-EXPECTED_DROPPED_FRAMES = 0
 MIN_MEASUREMENT_TRIALS = 3
 MAX_MEASUREMENT_TRIALS = 6
 INITIALIZATION_TIMEOUT_DECLARATION = "const EXTENSION_INITIALIZATION_HANG_TIMEOUT_MS = 15_000;"
@@ -147,11 +141,6 @@ def problems(metrics: dict[str, Any], budget: dict[str, float]) -> list[str]:
         found.append(
             f"sessionCount {metrics.get('sessionCount')!r} is not {EXPECTED_MANAGED_SESSIONS}"
         )
-    if metrics.get("webviewDroppedFrames") != EXPECTED_DROPPED_FRAMES:
-        found.append(
-            f"webviewDroppedFrames {metrics.get('webviewDroppedFrames')!r} is not "
-            f"{EXPECTED_DROPPED_FRAMES}"
-        )
     return found
 
 
@@ -177,7 +166,6 @@ def bestMeasurements(measurements: list[dict[str, Any]]) -> dict[str, Any]:
     exact = {
         "hotSessionCount": EXPECTED_HOT_SESSIONS,
         "sessionCount": EXPECTED_MANAGED_SESSIONS,
-        "webviewDroppedFrames": EXPECTED_DROPPED_FRAMES,
     }
     for name, expected in exact.items():
         values = [measurement.get(name) for measurement in measurements]
@@ -210,7 +198,6 @@ def selftest() -> int:
         **budget,
         "hotSessionCount": EXPECTED_HOT_SESSIONS,
         "sessionCount": EXPECTED_MANAGED_SESSIONS,
-        "webviewDroppedFrames": EXPECTED_DROPPED_FRAMES,
     }
     if problems(green, budget):
         print("[vscodeHostPerformance --selftest] FAIL. exact budgets were rejected.", file=sys.stderr)
@@ -243,11 +230,6 @@ def selftest() -> int:
     )
     if problems(wrong_managed, budget) != [expected_managed_problem]:
         print("[vscodeHostPerformance --selftest] FAIL. a missing managed session escaped.", file=sys.stderr)
-        return 2
-    dropped = dict(green)
-    dropped["webviewDroppedFrames"] = 1
-    if problems(dropped, budget) != ["webviewDroppedFrames 1 is not 0"]:
-        print("[vscodeHostPerformance --selftest] FAIL. a dropped frame escaped.", file=sys.stderr)
         return 2
     # Two slow trials out of three are the runner being busy, and the code demonstrably did the work in budget on
     # the third. Measured shape from this repository's own CI, where one macOS commit produced 2201, 3237 and 805
@@ -458,10 +440,6 @@ def run() -> int:
         "[vscodeHostPerformance] OK. "
         f"activation {metrics['activationMs']:.1f} ms, view {metrics['openViewMs']:.1f} ms, "
         f"refresh p95 {metrics['refreshP95Ms']:.1f} ms, RSS growth {metrics['rssGrowthBytes']:.0f} bytes, "
-        f"Webview frame {metrics['webviewFrameP95Ms']:.1f} ms "
-        f"(baseline {metrics['webviewBaselineFrameP95Ms']:.1f}, overrun {metrics['webviewFrameOverrunP95Ms']:.1f}), "
-        f"input {metrics['webviewInputP95Ms']:.1f} ms, "
-        f"scroll {metrics['webviewScrollP95Ms']:.1f} ms, pending {metrics['webviewPendingFrames']:.0f}, "
         f"{metrics['sessionCount']:.0f} managed, {metrics['hotSessionCount']:.0f} hot, "
         f"cold resume {metrics['coldResumeMs']:.1f} ms, "
         f"hot-session switch p95 {metrics['sessionSwitchP95Ms']:.1f} ms, "

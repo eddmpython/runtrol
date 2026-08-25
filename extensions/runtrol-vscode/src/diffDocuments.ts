@@ -1,6 +1,6 @@
 import * as vscode from "vscode";
 
-import type { DeclaredDiff } from "./webview/toolDiff";
+import type { DeclaredDiff } from "./events/toolDiff";
 
 /// The most review sides held for the editor at once: one 1,024-Artifact Mission Landing, two sides.
 /// The shared text ceiling below also prevents declared changes from becoming another transcript store.

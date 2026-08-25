@@ -21,9 +21,10 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[2]
 VOCABULARY = ROOT / "crates" / "runtrol-provider" / "src" / "event" / "mod.rs"
 PRESENTATION = ROOT / "assets" / "event-presentation.json"
+# The conversation surface is the service's own terminal, so the extension presents provider events only
+# in the sidebar (activity, approvals): one file carries that vocabulary now.
 VSCODE = (
-    ROOT / "extensions" / "runtrol-vscode" / "src" / "webview" / "main.ts",
-    ROOT / "extensions" / "runtrol-vscode" / "src" / "webview" / "presentation.ts",
+    ROOT / "extensions" / "runtrol-vscode" / "src" / "events" / "presentation.ts",
 )
 
 WIRE_NAME_ARM = re.compile(r'Self::\w+[^=]*=>\s*"([A-Za-z][A-Za-z0-9]*)"')
