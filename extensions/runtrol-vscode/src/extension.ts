@@ -232,6 +232,7 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
     providers: () => state.providers,
     now: () => Date.now(),
     fix: (provider) => afterReady(() => controller.fixService(provider)),
+    signIn: (provider) => afterReady(async () => controller.signInProvider(provider)),
     discover: async () => {
       await vscode.commands.executeCommand("runtrol.discoverServices");
     },

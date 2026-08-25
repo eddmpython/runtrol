@@ -27,6 +27,7 @@ export class UsageView implements vscode.WebviewViewProvider, vscode.Disposable 
       providers: () => readonly ProviderLine[];
       now: () => number;
       fix: (provider: ProviderLine) => Promise<void>;
+      signIn: (provider: ProviderLine) => Promise<void>;
       discover: () => Promise<void>;
       dispatch: (action: () => Promise<void>) => void;
     },
@@ -140,7 +141,13 @@ export class UsageView implements vscode.WebviewViewProvider, vscode.Disposable 
       return;
     }
     const provider = this.ports.providers().find((candidate) => candidate.providerId === action.providerId);
-    if (!provider || !isBroken(provider)) return;
+    if (!provider) return;
+    if (action.type === "signIn") {
+      if (provider.account?.status !== "signedOut") return;
+      this.ports.dispatch(() => this.ports.signIn(provider));
+      return;
+    }
+    if (!isBroken(provider)) return;
     this.ports.dispatch(() => this.ports.fix(provider));
   }
 

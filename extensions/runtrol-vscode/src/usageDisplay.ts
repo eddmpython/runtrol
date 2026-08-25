@@ -2,7 +2,8 @@ import type { ProviderLine, ProviderUsageGauge, ProviderUsageWindow } from "./ru
 import { awaitsVerification, isBroken } from "./providerHealth";
 import { providerDisplayName, providerIcon } from "./sessionDisplay";
 
-export type UsageState = "available" | "checking" | "unavailable" | "disconnected";
+/// `signedOut` is its own state because it has its own action (sign in), the way `unavailable` has "fix".
+export type UsageState = "available" | "checking" | "unavailable" | "disconnected" | "signedOut";
 
 /// One provider-reported account window that can be drawn without inventing a denominator.
 export type UsageMeter = {
@@ -119,33 +120,75 @@ export function usageRows(
         tooltip: `${name}: disconnected; this is the last report\n${usageTooltip(name, gauge, nowMs)}`,
       };
     }
+    const account = provider?.account ?? null;
+    if (account?.status === "signedOut") {
+      return {
+        key: `usage:${encodeURIComponent(providerId)}`,
+        name,
+        icon: providerIcon(providerId, providers),
+        detail: "Not signed in · Sign in",
+        meters: [],
+        reached: false,
+        state: "signedOut",
+        providerId,
+        cost: null,
+        tooltip: `${name} says nobody is signed in.\n\nPress Enter to sign in with this service's own command.`,
+      };
+    }
+    const plan = accountLine(account);
     if (!gauge) {
       return {
         key: `usage:${encodeURIComponent(providerId)}`,
         name,
         icon: providerIcon(providerId, providers),
-        detail: "Ready",
+        detail: plan ?? accountAbsence(name, account),
         meters: [],
         reached: false,
         state: "available",
         providerId,
         cost: null,
-        tooltip: `${name}: ready. Usage appears here when the CLI reports an account limit.`,
+        tooltip: plan
+          ? `${name}: ${plan}. ${accountAbsence(name, account)}`
+          : `${name}: ${accountAbsence(name, account)}`,
       };
     }
     return {
       key: `usage:${encodeURIComponent(providerId)}`,
       name,
       icon: providerIcon(providerId, providers),
-      detail: usageDetail(gauge, nowMs),
+      detail: plan ? `${plan} · ${usageDetail(gauge, nowMs)}` : usageDetail(gauge, nowMs),
       meters: usageMeters(gauge, nowMs),
       reached: gauge.reached,
       state: "available",
       providerId,
       cost: usageCost(gauge),
-      tooltip: usageTooltip(name, gauge, nowMs),
+      tooltip: plan ? `${name}: ${plan}\n${usageTooltip(name, gauge, nowMs)}` : usageTooltip(name, gauge, nowMs),
     };
   });
+}
+
+/// The plan and sign-in method the service named, in its own tokens, or null when it named none.
+///
+/// "max plan" rather than a marketing name: the service said `max`, and that is the whole claim.
+export function accountLine(account: ProviderLine["account"] | null | undefined): string | null {
+  if (!account || account.status !== "signedIn") return null;
+  const parts: string[] = [];
+  if (account.plan) parts.push(`${account.plan} plan`);
+  if (account.method && account.method !== account.plan) parts.push(`via ${account.method}`);
+  return parts.length > 0 ? parts.join(" ") : "Signed in";
+}
+
+/// What to say when no usage number exists, in terms of what was actually asked.
+///
+/// Never "Ready": that claimed a state nobody had checked. Before the first check the line says so; a
+/// service without a status surface is named as that; a signed-in service that reported no limit yet says
+/// when one will show.
+export function accountAbsence(name: string, account: ProviderLine["account"] | null | undefined): string {
+  if (!account) return "Not checked yet";
+  if (account.status === "unpublished") {
+    return `${name} publishes no usage or sign-in status`;
+  }
+  return "No limit reported yet";
 }
 
 /// Numeric account windows become real progress bars. A reset-only report remains useful text but never becomes

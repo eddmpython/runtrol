@@ -37,7 +37,8 @@ function render(snapshot: UsageViewSnapshot): void {
 }
 
 function usageRow(row: UsageRow): HTMLElement {
-  const item = document.createElement(row.state === "unavailable" ? "button" : "section");
+  const actionable = row.state === "unavailable" || row.state === "signedOut";
+  const item = document.createElement(actionable ? "button" : "section");
   item.className = `usage-row ${row.state}${row.reached ? " limit-reached" : ""}`;
   item.title = row.tooltip;
   // The service name and its state live in the hover, not on the row. The glyph says whose usage this is; what
@@ -45,7 +46,8 @@ function usageRow(row: UsageRow): HTMLElement {
   item.setAttribute("aria-label", `${row.name}, ${row.detail}`);
   if (item instanceof HTMLButtonElement) {
     item.type = "button";
-    item.addEventListener("click", () => vscode.postMessage({ type: "fix", providerId: row.providerId }));
+    const type = row.state === "signedOut" ? "signIn" : "fix";
+    item.addEventListener("click", () => vscode.postMessage({ type, providerId: row.providerId }));
   }
   const icon = providerGlyph(row.icon, "provider-icon");
   icon.setAttribute("aria-hidden", "true");
@@ -64,6 +66,7 @@ function usageRow(row: UsageRow): HTMLElement {
 /// be an invention, and this panel only ever shows a number some service actually said.
 function usageBody(row: UsageRow): HTMLElement[] {
   if (row.state === "unavailable") return [textLine("Fix")];
+  if (row.state === "signedOut") return [textLine("Not signed in · Sign in")];
   if (row.state === "checking") return [textLine("")];
   if (row.meters.length === 0) return [textLine(row.cost ?? row.detail)];
   // The cells go straight into the body's own grid rather than into a box per window, so every bar of a service

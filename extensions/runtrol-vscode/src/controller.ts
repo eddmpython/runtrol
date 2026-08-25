@@ -1725,12 +1725,19 @@ export class Controller implements vscode.Disposable {
   async signInFromRow(value?: ConversationItem | SessionLine): Promise<void> {
     const session = this.sessionOf(value);
     const provider = this.state.providers.find((candidate) => candidate.providerId === session.providerId) ?? null;
-    const signIn = provider ? offersFor(provider, "needsSigningIn").find((offer) => offer.command === provider.help?.signIn) ?? null : null;
-    if (!provider || !signIn) {
-      this.say(
-        `${providerDisplayName(session.providerId, this.state.providers)} declares no sign-in command; sign in at its own surface.`,
-        "info",
-      );
+    if (!provider) {
+      this.say(`${providerDisplayName(session.providerId, this.state.providers)} is not listed.`, "info");
+      return;
+    }
+    this.signInProvider(provider);
+  }
+
+  /// The service's own sign-in command, typed into a terminal and left there: Runtrol never runs a login
+  /// itself and never holds what one produces. Reachable from a conversation row and from the usage strip.
+  signInProvider(provider: ProviderLine): void {
+    const signIn = offersFor(provider, "needsSigningIn").find((offer) => offer.command === provider.help?.signIn) ?? null;
+    if (!signIn) {
+      this.say(`${provider.displayName} declares no sign-in command; sign in at its own surface.`, "info");
       return;
     }
     this.offerInTerminal(signIn);

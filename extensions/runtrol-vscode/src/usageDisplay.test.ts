@@ -89,9 +89,10 @@ test("rows carry the service's declared mark and name", () => {
 
 test("every connected CLI stays visible before it reports usage", () => {
   const rows = usageRows([], PROVIDERS, NOW);
+  // Nobody has asked the service anything yet, and the line says exactly that instead of "Ready".
   assert.deepEqual(rows.map((row) => [row.name, row.detail]), [
-    ["Claude Code", "Ready"],
-    ["Codex", "Ready"],
+    ["Claude Code", "Not checked yet"],
+    ["Codex", "Not checked yet"],
   ]);
 });
 
@@ -123,7 +124,7 @@ test("the fixed area includes checking and broken installed CLIs but omits missi
 
   const rows = usageRows([], providers, NOW);
   assert.deepEqual(rows.map((row) => [row.name, row.detail, row.state]), [
-    ["Claude Code", "Ready", "available"],
+    ["Claude Code", "Not checked yet", "available"],
     ["Codex", "Checking", "checking"],
     ["Grok", "Unavailable · Fix", "unavailable"],
   ]);
@@ -181,4 +182,23 @@ test("the service catalogue offers only missing CLIs with an exact install line"
     installableProviders(providers).map((provider) => provider.providerId),
     ["available-later"],
   );
+});
+
+test("the account line says what the service said: signed out is an action, a plan is a word, no surface is named", () => {
+  const providers = [
+    { providerId: "claude", displayName: "Claude Code", icon: "claude", installation: { state: "usable" },
+      account: { status: "signedIn", plan: "max", method: "claude.ai", checkedAtMs: NOW } },
+    { providerId: "codex", displayName: "Codex", icon: "openai", installation: { state: "usable" },
+      account: { status: "signedOut", checkedAtMs: NOW } },
+    { providerId: "grok", displayName: "Grok", icon: "grok", installation: { state: "usable" },
+      account: { status: "unpublished", why: "no status command", checkedAtMs: NOW } },
+  ] as unknown as ProviderLine[];
+  const rows = usageRows([gauge({ providerId: "claude", primary: { usedPercent: 40 } })], providers, NOW);
+  assert.deepEqual(rows.map((row) => [row.name, row.detail, row.state]), [
+    ["Claude Code", "max plan via claude.ai · 40%", "available"],
+    ["Codex", "Not signed in · Sign in", "signedOut"],
+    ["Grok", "Grok publishes no usage or sign-in status", "available"],
+  ]);
+  assert.equal(rows[0]?.meters.length, 1, "a reported window is still a bar");
+  assert.match(rows[1]?.tooltip ?? "", /Press Enter to sign in/);
 });
