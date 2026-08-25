@@ -158,9 +158,10 @@ code {
   font-size: 13px;
   color: var(--ink);
   background: transparent;
-  border: 1px solid var(--line-strong);
+  border: 0;
   border-radius: 8px;
-  padding: 5px 8px;
+  padding: 5px 4px;
+  cursor: pointer;
 }
 
 .icon-button {
@@ -168,10 +169,10 @@ code {
   place-items: center;
   width: 34px;
   height: 34px;
-  border: 1px solid var(--line-strong);
+  border: 0;
   border-radius: 8px;
   background: transparent;
-  color: var(--ink);
+  color: var(--ink-soft);
   cursor: pointer;
 }
 
@@ -234,10 +235,7 @@ html[data-theme="dark"] .theme-moon {
 /* Channel row: GitHub, support, YouTube, Threads. Same set and order as the author's other sites. */
 .channels {
   display: inline-flex;
-  gap: 4px;
-  margin-left: 6px;
-  padding-left: 10px;
-  border-left: 1px solid var(--line);
+  gap: 2px;
 }
 
 .channels a {
@@ -266,10 +264,89 @@ html[data-theme="dark"] .theme-moon {
 
 /* Hero */
 .hero {
+  position: relative;
   max-width: 1120px;
   margin: 0 auto;
   padding: 88px 24px 40px;
   text-align: center;
+}
+
+/* Entrance: eyebrow, title, lede, actions, and the Studio window rise in sequence on load. */
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(18px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes settle {
+  from {
+    opacity: 0;
+    transform: perspective(1400px) translateY(56px) rotateX(9deg) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: perspective(1400px) none;
+  }
+}
+
+@keyframes breathe {
+  0%,
+  100% {
+    opacity: 0.55;
+    transform: translate(-50%, 0) scale(1);
+  }
+  50% {
+    opacity: 0.85;
+    transform: translate(-50%, 0) scale(1.06);
+  }
+}
+
+.hero .eyebrow,
+.hero h1,
+.hero .hero-lede,
+.hero .hero-actions,
+.hero .release-note {
+  animation: rise 0.9s var(--ease) both;
+}
+
+.hero h1 {
+  animation-delay: 0.08s;
+}
+
+.hero .hero-lede {
+  animation-delay: 0.18s;
+}
+
+.hero .hero-actions {
+  animation-delay: 0.28s;
+}
+
+.hero .release-note {
+  animation-delay: 0.36s;
+}
+
+.hero-glow {
+  position: absolute;
+  left: 50%;
+  top: 420px;
+  width: min(1100px, 100vw);
+  height: 720px;
+  transform: translate(-50%, 0);
+  background: radial-gradient(closest-side, rgba(245, 101, 101, 0.28), rgba(245, 101, 101, 0.08) 55%, transparent 75%);
+  filter: blur(30px);
+  pointer-events: none;
+  animation: breathe 9s ease-in-out infinite;
+  z-index: 0;
+}
+
+.hero > :not(.hero-glow) {
+  position: relative;
+  z-index: 1;
 }
 
 .eyebrow {
@@ -336,6 +413,74 @@ h1 {
   font-size: 12.5px;
   display: flex;
   flex-direction: column;
+  animation: settle 1.1s var(--ease) 0.4s both;
+}
+
+/* The demo cursor: moved by scene.js through --x/--y, clicks with a short press. */
+.cursor {
+  position: absolute;
+  left: 0;
+  top: 0;
+  z-index: 3;
+  opacity: 0;
+  transform: translate(var(--x, 60%), var(--y, 60%));
+  transition: transform 0.55s cubic-bezier(0.3, 0.9, 0.3, 1), opacity 0.3s var(--ease);
+  filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.5));
+  pointer-events: none;
+}
+
+.cursor.is-on {
+  opacity: 1;
+}
+
+.cursor.is-pressed svg {
+  transform: scale(0.82);
+}
+
+.cursor svg {
+  display: block;
+  transform-origin: 22% 12%;
+  transition: transform 0.12s var(--ease);
+}
+
+.cursor::after {
+  content: "";
+  position: absolute;
+  left: -8px;
+  top: -8px;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 2px solid var(--accent);
+  opacity: 0;
+  transform: scale(0.4);
+}
+
+.cursor.is-pressed::after {
+  animation: ripple 0.5s var(--ease) both;
+}
+
+@keyframes ripple {
+  from {
+    opacity: 0.9;
+    transform: scale(0.4);
+  }
+  to {
+    opacity: 0;
+    transform: scale(1.8);
+  }
+}
+
+/* Streaming: agent text is revealed by scene.js; the caret blinks at the end while it types. */
+.msg.agent.is-streaming::after {
+  content: "";
+  display: inline-block;
+  width: 2px;
+  height: 0.9em;
+  margin-left: 2px;
+  vertical-align: -0.1em;
+  background: var(--accent);
+  animation: blink 0.8s steps(1) infinite;
 }
 
 .studio-titlebar {
@@ -880,37 +1025,6 @@ h1 {
   animation: none;
 }
 
-/* Proof strip */
-.proof-strip {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 12px;
-  max-width: 1040px;
-  margin: 28px auto 0;
-  padding: 0;
-  list-style: none;
-}
-
-.proof-strip li {
-  padding: 16px 12px;
-  border-radius: var(--radius);
-  border: 1px solid var(--line);
-  background: var(--bg-raised);
-}
-
-.proof-strip strong {
-  display: block;
-  font-size: 30px;
-  font-weight: 800;
-  letter-spacing: -0.03em;
-  color: var(--accent);
-}
-
-.proof-strip span {
-  font-size: 13px;
-  color: var(--ink-soft);
-}
-
 /* Sections */
 .ruled-section {
   max-width: 1040px;
@@ -1246,7 +1360,6 @@ html[data-theme="dark"] .phone-frame {
     display: none;
   }
 
-  .proof-strip,
   .feature-grid,
   .principle-grid,
   .install-steps {
@@ -1268,7 +1381,18 @@ html[data-theme="dark"] .phone-frame {
     scroll-behavior: auto;
   }
 
-  .studio [data-scene] {
+  .studio [data-scene],
+  .cursor {
     transition: none;
+  }
+
+  .hero .eyebrow,
+  .hero h1,
+  .hero .hero-lede,
+  .hero .hero-actions,
+  .hero .release-note,
+  .studio,
+  .hero-glow {
+    animation: none;
   }
 }

@@ -21,7 +21,8 @@ function validateHtml(candidate) {
   assert.match(candidate, /<html lang="en"/u, "English must remain the static default");
   assert.match(candidate, /One VS Code sidebar\./u, "the North Star must work without JavaScript");
   assert.match(candidate, /id="install"/u, "installation instructions must be statically available");
-  assert.match(candidate, /<strong>30<\/strong>/u, "the 30-session contract must be visible");
+  assert.match(candidate, /30 conversations/u, "the 30-session contract must be visible");
+  assert.match(candidate, /id="scene-cursor"/u, "the hero scene must carry its cursor");
   assert.match(
     candidate,
     /https:\/\/marketplace\.visualstudio\.com\/items\?itemName=runtrol\.runtrol-studio/u,

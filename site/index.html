@@ -81,13 +81,14 @@
 
     <main id="main">
       <section class="hero" id="top" aria-labelledby="hero-title">
+        <div class="hero-glow" aria-hidden="true"></div>
         <p class="eyebrow">
           <i data-icon="zap" data-size="14"></i>
           <span data-i18n="heroEyebrow">Open source. Thin by design. Inside VS Code.</span>
         </p>
         <h1 id="hero-title" data-i18n="heroTitle">Every coding agent.<br>One VS Code sidebar.</h1>
         <p class="hero-lede" data-i18n="heroLede">
-          runtrol supervises the coding-agent CLIs already installed on your machine. Every project, every conversation,
+          runtrol supervises the coding-agent CLIs already installed on your machine. Every project, 30 conversations at once,
           who is running, and how much quota is left, in one sidebar, with no extra window and no second copy of your chats.
         </p>
         <div class="hero-actions" aria-label="Primary actions">
@@ -232,18 +233,15 @@
             </div>
           </div>
 
+          <div class="cursor" id="scene-cursor" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M5.5 3.2 19 11.4l-6.3 1.4-3.4 5.7z" fill="#fff" stroke="#0b0d0f" stroke-width="1.6" stroke-linejoin="round"/></svg>
+          </div>
           <div class="phone-toast" data-scene="toast" aria-hidden="true">
             <i data-icon="smartphone" data-size="16"></i>
             <span><strong data-i18n="needsYou">Needs you: 1</strong><small data-i18n="needsYouBody">Migrate config loader is waiting for approval</small></span>
           </div>
         </div>
 
-        <ul class="proof-strip" aria-label="Product constraints">
-          <li><strong>1</strong><span data-i18n="proofWindow">VS Code window</span></li>
-          <li><strong>30</strong><span data-i18n="proofSessions">conversations under one release gate</span></li>
-          <li><strong>0</strong><span data-i18n="proofCopies">transcript copies</span></li>
-          <li><strong>0</strong><span data-i18n="proofKeys">model API keys held</span></li>
-        </ul>
       </section>
 
       <section class="features ruled-section" aria-labelledby="features-title">
