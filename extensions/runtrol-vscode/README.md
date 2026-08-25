@@ -2,6 +2,8 @@
 
 Manage every local coding-agent CLI chat, model, workspace, and session from one fast VS Code window.
 
+Product site: [eddmpython.github.io/runtrol](https://eddmpython.github.io/runtrol/). Source: [github.com/eddmpython/runtrol](https://github.com/eddmpython/runtrol).
+
 Runtrol Studio discovers supported CLIs already installed on your computer, keeps provider-owned sessions available,
 and follows the exact workspace or worktree bound to the selected chat. It does not replace the provider CLI or keep
 a second conversation copy.

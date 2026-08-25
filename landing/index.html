@@ -1,0 +1,341 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#F56565">
+    <meta name="color-scheme" content="light dark">
+    <meta
+      name="description"
+      content="Run every repository, session, and installed coding-agent CLI from one VS Code window."
+    >
+    <meta property="og:type" content="website">
+    <meta property="og:title" content="runtrol | Every coding agent, one VS Code sidebar">
+    <meta
+      property="og:description"
+      content="A thin, provider-neutral supervisor for coding-agent CLI sessions in VS Code and on your phone."
+    >
+    <meta property="og:url" content="https://eddmpython.github.io/runtrol/">
+    <meta property="og:image" content="https://eddmpython.github.io/runtrol/assets/brand/social-card-dark.png">
+    <meta name="twitter:card" content="summary_large_image">
+    <link rel="canonical" href="https://eddmpython.github.io/runtrol/">
+    <link rel="icon" href="assets/brand/favicon.svg" type="image/svg+xml">
+    <link rel="icon" href="assets/brand/favicon.ico" sizes="48x48">
+    <link rel="apple-touch-icon" href="assets/brand/apple-touch-icon.png">
+    <link rel="stylesheet" href="styles.css">
+    <script src="app.js" type="module"></script>
+    <title>runtrol | Every coding agent, one VS Code sidebar</title>
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+
+    <header class="site-header">
+      <a class="brand" href="#top" aria-label="runtrol home">
+        <svg class="mark" viewBox="0 0 100 100" width="28" height="28" aria-hidden="true" fill="none" stroke-width="14">
+          <path class="mark-accent" d="M39.5 0V19.5A20 20 0 0 1 19.5 39.5H0"/>
+          <path class="mark-ink" d="M60.5 0V19.5A20 20 0 0 0 80.5 39.5H100"/>
+          <path class="mark-ink" d="M39.5 100V80.5A20 20 0 0 0 19.5 60.5H0"/>
+          <path class="mark-accent" d="M60.5 100V80.5A20 20 0 0 1 80.5 60.5H100"/>
+        </svg>
+        <span class="brand-name">runtrol</span>
+      </a>
+
+      <nav class="main-nav" aria-label="Primary navigation">
+        <a href="#sidebar" data-i18n="navSidebar">Sidebar</a>
+        <a href="#install" data-i18n="navInstall">Install</a>
+        <a href="#phone" data-i18n="navPhone">Phone</a>
+        <a href="#thin" data-i18n="navThin">Principles</a>
+      </nav>
+
+      <div class="header-tools">
+        <label class="language-control">
+          <i data-icon="languages" data-size="16"></i>
+          <span class="sr-only">Language</span>
+          <select id="language" aria-label="Language">
+            <option value="en">EN</option>
+            <option value="ko">KO</option>
+            <option value="zh">ZH</option>
+            <option value="ja">JA</option>
+          </select>
+        </label>
+        <button class="icon-button" id="theme-toggle" type="button" aria-label="Switch color theme">
+          <span class="theme-sun"><i data-icon="sun" data-size="18"></i></span>
+          <span class="theme-moon"><i data-icon="moon" data-size="18"></i></span>
+        </button>
+        <a class="button button-ghost" href="https://github.com/eddmpython/runtrol" rel="noreferrer">GitHub</a>
+      </div>
+    </header>
+
+    <main id="main">
+      <section class="hero" id="top" aria-labelledby="hero-title">
+        <p class="eyebrow">
+          <i data-icon="zap" data-size="14"></i>
+          <span data-i18n="heroEyebrow">Open source. Thin by design. Inside VS Code.</span>
+        </p>
+        <h1 id="hero-title" data-i18n="heroTitle">Every coding agent.<br>One VS Code sidebar.</h1>
+        <p class="hero-lede" data-i18n="heroLede">
+          runtrol supervises the coding-agent CLIs already installed on your machine. Every project, every conversation,
+          who is running, and how much quota is left, in one sidebar, with no extra window and no second copy of your chats.
+        </p>
+        <div class="hero-actions" aria-label="Primary actions">
+          <a
+            class="button button-primary"
+            href="https://marketplace.visualstudio.com/items?itemName=runtrol.runtrol-studio"
+            rel="noreferrer"
+          ><span data-i18n="installMarketplace">Install from Marketplace</span><i data-icon="arrow-right" data-size="18"></i></a>
+          <a class="button button-secondary" href="https://github.com/eddmpython/runtrol" rel="noreferrer">
+            <i data-icon="git-branch" data-size="18"></i><span data-i18n="viewSource">View source</span>
+          </a>
+        </div>
+        <p class="release-note" id="release-status" aria-live="polite" data-i18n="releaseChecking">
+          Checking GitHub Releases for a VSIX.
+        </p>
+
+        <div class="studio" id="sidebar" aria-label="Runtrol Studio sidebar and conversations, animated preview">
+          <div class="studio-titlebar">
+            <span class="traffic" aria-hidden="true"><i></i><i></i><i></i></span>
+            <span class="studio-title">atlas <span class="dim">/ Visual Studio Code</span></span>
+            <span class="studio-clock" id="studio-clock" aria-hidden="true">14:02</span>
+          </div>
+          <div class="studio-body">
+            <div class="activity-bar" aria-hidden="true">
+              <span class="activity-item"><i data-icon="folder" data-size="20"></i></span>
+              <span class="activity-item"><i data-icon="git-branch" data-size="20"></i></span>
+              <span class="activity-item is-active">
+                <svg viewBox="0 0 100 100" width="22" height="22" fill="none" stroke-width="14">
+                  <path class="mark-accent" d="M39.5 0V19.5A20 20 0 0 1 19.5 39.5H0"/>
+                  <path class="mark-ink" d="M60.5 0V19.5A20 20 0 0 0 80.5 39.5H100"/>
+                  <path class="mark-ink" d="M39.5 100V80.5A20 20 0 0 0 19.5 60.5H0"/>
+                  <path class="mark-accent" d="M60.5 100V80.5A20 20 0 0 1 80.5 60.5H100"/>
+                </svg>
+              </span>
+              <span class="activity-item"><i data-icon="smartphone" data-size="20"></i></span>
+            </div>
+
+            <aside class="side" aria-label="Runtrol sidebar preview">
+              <div class="side-head">
+                <span>RUNTROL</span>
+                <span class="side-head-tools"><i data-icon="refresh-cw" data-size="13"></i><i data-icon="panel-left" data-size="13"></i></span>
+              </div>
+
+              <div class="tree">
+                <div class="tree-heading" data-scene="p1">
+                  <i data-icon="folder" data-size="14"></i><span>atlas</span><small data-i18n="currentFolder">current folder</small>
+                </div>
+                <button class="row" type="button" data-scene="r1" data-conv="a">
+                  <span class="agent-mark" data-provider="claude"><i data-icon="square-terminal" data-size="14"></i></span>
+                  <span class="row-title">Fix flaky auth test</span>
+                  <span class="row-time">now</span>
+                </button>
+                <button class="row" type="button" data-scene="r2" data-conv="b">
+                  <span class="agent-mark" data-provider="codex"><i data-icon="terminal" data-size="14"></i></span>
+                  <span class="row-title">Migrate config loader to TOML</span>
+                  <span class="row-time">3m</span>
+                </button>
+                <button class="row" type="button" data-scene="r3">
+                  <span class="agent-mark" data-provider="claude"><i data-icon="square-terminal" data-size="14"></i></span>
+                  <span class="row-title">Write release notes 0.2</span>
+                  <span class="row-time">1h</span>
+                </button>
+
+                <div class="tree-heading" data-scene="p2">
+                  <i data-icon="folder" data-size="14"></i><span>north</span>
+                </div>
+                <button class="row" type="button" data-scene="r4">
+                  <span class="agent-mark" data-provider="codex"><i data-icon="terminal" data-size="14"></i></span>
+                  <span class="row-title">Profile cold start on Linux</span>
+                  <span class="row-time">2d</span>
+                </button>
+
+                <div class="tree-heading" data-scene="p3">
+                  <i data-icon="folder" data-size="14"></i><span>relay</span>
+                </div>
+                <button class="row" type="button" data-scene="r5">
+                  <span class="agent-mark" data-provider="claude"><i data-icon="square-terminal" data-size="14"></i></span>
+                  <span class="row-title">Rotate pairing keys</span>
+                  <span class="row-time">5d</span>
+                </button>
+              </div>
+
+              <div class="usage" data-scene="usage">
+                <div class="usage-head"><i data-icon="gauge" data-size="13"></i><span data-i18n="usage">Usage</span></div>
+                <div class="usage-row">
+                  <span class="usage-name">Claude Code</span>
+                  <span class="meter"><b id="meter-claude" style="--v: 58"></b></span>
+                  <span class="usage-value" id="usage-claude">58%</span>
+                  <span class="usage-reset"><i data-icon="timer" data-size="11"></i> 2h 10m</span>
+                </div>
+                <div class="usage-row">
+                  <span class="usage-name">Codex</span>
+                  <span class="meter"><b id="meter-codex" style="--v: 31"></b></span>
+                  <span class="usage-value" id="usage-codex">31%</span>
+                  <span class="usage-reset"><i data-icon="timer" data-size="11"></i> 4h 40m</span>
+                </div>
+              </div>
+            </aside>
+
+            <div class="editor">
+              <div class="tabs" aria-hidden="true">
+                <span class="tab" data-scene="tab-a"><i data-icon="message-square" data-size="12"></i>Fix flaky auth test</span>
+                <span class="tab" data-scene="tab-b"><i data-icon="message-square" data-size="12"></i>Migrate config loader</span>
+              </div>
+              <div class="panes">
+                <article class="chat" data-scene="chat-a" aria-label="Conversation A">
+                  <header class="chat-head">
+                    <span class="chip"><i data-icon="cpu" data-size="11"></i>opus</span>
+                    <span class="chip"><i data-icon="shield-check" data-size="11"></i>ask</span>
+                    <span class="chat-state" data-state="idle"></span>
+                  </header>
+                  <div class="msgs">
+                    <p class="msg user" data-scene="a-u1">Find why <code>auth_refresh</code> is flaky in CI and fix it.</p>
+                    <p class="msg typing" data-scene="a-typing"><i></i><i></i><i></i></p>
+                    <p class="msg agent" data-scene="a-a1">The test awaits a token with a 2 s timeout while the mock clock advances only 1.5 s.</p>
+                    <p class="msg agent" data-scene="a-a2">Patched <code>tests/auth.rs</code> to advance the clock past expiry. 14 tests pass.</p>
+                    <p class="msg done" data-scene="a-done"><i data-icon="check" data-size="13"></i><span data-i18n="turnDone">Turn finished</span></p>
+                  </div>
+                  <footer class="composer"><span data-i18n="composer">Message</span><i data-icon="play" data-size="12"></i></footer>
+                </article>
+
+                <article class="chat" data-scene="chat-b" aria-label="Conversation B">
+                  <header class="chat-head">
+                    <span class="chip"><i data-icon="cpu" data-size="11"></i>gpt-5-codex</span>
+                    <span class="chip"><i data-icon="shield-check" data-size="11"></i>ask</span>
+                    <span class="chat-state" data-state="idle"></span>
+                  </header>
+                  <div class="msgs">
+                    <p class="msg user" data-scene="b-u1">Move config loading from JSON to TOML. Keep the old file readable.</p>
+                    <p class="msg typing" data-scene="b-typing"><i></i><i></i><i></i></p>
+                    <p class="msg agent" data-scene="b-a1">Adding <code>toml</code> and a fallback reader for <code>config.json</code>.</p>
+                    <p class="msg approval" data-scene="b-approve">
+                      <i data-icon="bell-ring" data-size="13"></i>
+                      <span data-i18n="approvalAsk">Allow: write Cargo.toml</span>
+                      <b data-scene="b-allow" data-i18n="allow">Allow</b>
+                    </p>
+                    <p class="msg agent" data-scene="b-a2">Dependency added. Both formats load in the same test.</p>
+                  </div>
+                  <footer class="composer"><span data-i18n="composer">Message</span><i data-icon="play" data-size="12"></i></footer>
+                </article>
+              </div>
+            </div>
+          </div>
+
+          <div class="phone-toast" data-scene="toast" aria-hidden="true">
+            <i data-icon="smartphone" data-size="16"></i>
+            <span><strong data-i18n="needsYou">Needs you: 1</strong><small data-i18n="needsYouBody">Migrate config loader is waiting for approval</small></span>
+          </div>
+        </div>
+
+        <ul class="proof-strip" aria-label="Product constraints">
+          <li><strong>1</strong><span data-i18n="proofWindow">VS Code window</span></li>
+          <li><strong>30</strong><span data-i18n="proofSessions">conversations under one release gate</span></li>
+          <li><strong>0</strong><span data-i18n="proofCopies">transcript copies</span></li>
+          <li><strong>0</strong><span data-i18n="proofKeys">model API keys held</span></li>
+        </ul>
+      </section>
+
+      <section class="features ruled-section" aria-labelledby="features-title">
+        <div class="section-intro">
+          <h2 id="features-title" data-i18n="featuresTitle">Everything in the sidebar. Nothing hidden behind a tab.</h2>
+          <p data-i18n="featuresIntro">
+            The release rule is strict: every connected CLI, every top-level project, the real conversation title, who is running,
+            and how much quota is left must be readable from one screen without a click.
+          </p>
+        </div>
+        <div class="feature-grid">
+          <article><i data-icon="panel-left"></i><h3 data-i18n="f1Title">One tree, every project</h3><p data-i18n="f1Body">The current folder is the first heading. Folders you keep returning to become projects on their own.</p></article>
+          <article><i data-icon="activity"></i><h3 data-i18n="f2Title">Icons that spin while work runs</h3><p data-i18n="f2Body">Each row shows the agent and the real conversation title. The icon itself rotates while that turn is running.</p></article>
+          <article><i data-icon="gauge"></i><h3 data-i18n="f3Title">Quota you can see</h3><p data-i18n="f3Body">Per-CLI usage and reset time stay in view, read from the provider itself, never estimated.</p></article>
+          <article><i data-icon="split"></i><h3 data-i18n="f4Title">Chats as editor tabs</h3><p data-i18n="f4Body">Each conversation opens as its own tab. Split them like files. Typing and interrupting go to that tab.</p></article>
+          <article><i data-icon="layers"></i><h3 data-i18n="f5Title">Ask several CLIs at once</h3><p data-i18n="f5Body">Send the same first message to Claude Code and Codex in separate linked worktrees, then compare in native diff.</p></article>
+          <article><i data-icon="refresh-cw"></i><h3 data-i18n="f6Title">Updates without a restart</h3><p data-i18n="f6Body">After an extension update the old Core rolls to the new build the moment the machine is idle.</p></article>
+        </div>
+      </section>
+
+      <section class="install-section ruled-section" id="install" aria-labelledby="install-title">
+        <div class="section-intro">
+          <h2 id="install-title" data-i18n="installTitle">Install once. runtrol finds the CLIs.</h2>
+          <p data-i18n="installIntro">
+            There is no separate desktop app. Runtrol Studio lives where the work already happens and discovers installed CLIs,
+            their versions, models, and flags at runtime.
+          </p>
+        </div>
+        <ol class="install-steps">
+          <li><span class="step-number">1</span><div><strong data-i18n="stepOneTitle">Install Runtrol Studio</strong><p data-i18n="stepOneBody">From the Visual Studio Marketplace, or search <code>@id:runtrol.runtrol-studio</code> in VS Code.</p></div></li>
+          <li><span class="step-number">2</span><div><strong data-i18n="stepTwoTitle">Open the runtrol icon</strong><p data-i18n="stepTwoBody">The sidebar opens inside your current VS Code window with the current folder already listed.</p></div></li>
+          <li><span class="step-number">3</span><div><strong data-i18n="stepThreeTitle">Keep your CLIs as they are</strong><p data-i18n="stepThreeBody">Each CLI stays installed and signed in through its own official flow. runtrol never touches its credentials.</p></div></li>
+          <li><span class="step-number">4</span><div><strong data-i18n="stepFourTitle">Pick a conversation and go</strong><p data-i18n="stepFourBody">Cold sessions resume through the provider's own identity. The workspace follows what you selected.</p></div></li>
+        </ol>
+        <div class="download-row">
+          <div>
+            <span class="download-label" data-i18n="primaryInstall">PRIMARY INSTALL</span>
+            <strong>Visual Studio Marketplace</strong>
+            <small data-i18n="primaryInstallState">Public for six native targets, updated through VS Code.</small>
+          </div>
+          <a class="button button-secondary" href="https://marketplace.visualstudio.com/items?itemName=runtrol.runtrol-studio" rel="noreferrer" data-i18n="openMarketplace">Open Marketplace</a>
+        </div>
+        <div class="download-row">
+          <div>
+            <span class="download-label" data-i18n="manualInstall">MANUAL FALLBACK</span>
+            <strong>VSIX from GitHub Releases</strong>
+            <small id="vsix-description" data-i18n="vsixUnavailable">No public VSIX is available yet.</small>
+          </div>
+          <a class="button button-secondary is-disabled" id="vsix-download" href="#install" aria-disabled="true" data-i18n="checkReleases">Check Releases</a>
+        </div>
+      </section>
+
+      <section class="phone-section ruled-section" id="phone" aria-labelledby="phone-title">
+        <div class="phone-copy">
+          <h2 id="phone-title" data-i18n="phoneTitle">Pair once. The PC keeps owning the session.</h2>
+          <p data-i18n="phoneBody">
+            The phone app is live at this permanent HTTPS origin. It pairs from a one-use QR in VS Code and reconnects through an
+            end-to-end encrypted relay. Notifications carry no conversation content and open the exact session that needs you.
+          </p>
+          <p class="phone-status"><i data-icon="radio" data-size="16"></i><span data-i18n="phoneProgress">Secure phone app available</span></p>
+          <a class="button button-primary" href="app/"><span data-i18n="phoneOpen">Open phone app</span><i data-icon="arrow-right" data-size="18"></i></a>
+        </div>
+        <div class="phone-frame" aria-hidden="true">
+          <div class="phone-screen">
+            <div class="phone-head"><span>runtrol</span><span class="phone-online">PC online</span></div>
+            <div class="phone-needs"><i data-icon="bell-ring" data-size="14"></i><span>Needs you: 1</span></div>
+            <div class="phone-session is-current"><span><strong>Migrate config loader</strong><small>waiting for approval</small></span><b>open</b></div>
+            <div class="phone-session"><span><strong>Fix flaky auth test</strong><small>finished</small></span><b>resume</b></div>
+            <div class="phone-session"><span><strong>Profile cold start</strong><small>2d</small></span><b>resume</b></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="principles-section ruled-section" id="thin" aria-labelledby="principles-title">
+        <div class="section-intro">
+          <h2 id="principles-title" data-i18n="principlesTitle">The supervisor stays out of the conversation.</h2>
+        </div>
+        <div class="principle-grid">
+          <article><i data-icon="eye-off"></i><h3 data-i18n="p1Title">Provider-owned history</h3><p data-i18n="p1Body">runtrol transports process events. It never keeps a second transcript or rewrites meaning.</p></article>
+          <article><i data-icon="cpu"></i><h3 data-i18n="p2Title">Runtime discovery</h3><p data-i18n="p2Body">Providers, versions, models, flags, and session paths come from the installed CLI, not from a hardcoded list.</p></article>
+          <article><i data-icon="key-round"></i><h3 data-i18n="p3Title">Remote default deny</h3><p data-i18n="p3Body">Phone control is scoped, paired, and encrypted. Model credentials never cross runtrol.</p></article>
+        </div>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <div class="footer-brand">
+        <svg class="mark" viewBox="0 0 100 100" width="22" height="22" aria-hidden="true" fill="none" stroke-width="14">
+          <path class="mark-accent" d="M39.5 0V19.5A20 20 0 0 1 19.5 39.5H0"/>
+          <path class="mark-ink" d="M60.5 0V19.5A20 20 0 0 0 80.5 39.5H100"/>
+          <path class="mark-ink" d="M39.5 100V80.5A20 20 0 0 0 19.5 60.5H0"/>
+          <path class="mark-accent" d="M60.5 100V80.5A20 20 0 0 1 80.5 60.5H100"/>
+        </svg>
+        <span>runtrol</span>
+        <p data-i18n="footerText">Open source. Built around the sessions and tools you already own.</p>
+      </div>
+      <div class="footer-links">
+        <a href="https://github.com/eddmpython/runtrol" rel="noreferrer">GitHub</a>
+        <a href="https://marketplace.visualstudio.com/items?itemName=runtrol.runtrol-studio" rel="noreferrer">Marketplace</a>
+        <a href="https://github.com/eddmpython/runtrol/blob/main/LICENSE" rel="noreferrer">AGPL-3.0-only</a>
+        <a href="https://github.com/eddmpython/runtrol/blob/main/SECURITY.md" rel="noreferrer">Security</a>
+        <a href="https://www.youtube.com/@eddmpython" rel="noreferrer">YouTube</a>
+        <a href="https://www.threads.com/@eddmpython" rel="noreferrer">Threads</a>
+        <a href="https://lucide.dev" rel="noreferrer">Icons: Lucide (ISC)</a>
+      </div>
+    </footer>
+  </body>
+</html>
