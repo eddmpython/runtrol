@@ -171,7 +171,9 @@ function terminalFixture() {
 /// The sessions browser with the usage strip the Core pushes: the same markup `renderUsage` builds, three
 /// services, one bar each (icon-and-progress is the whole display).
 function usageFixture() {
-  return `(() => {
+  return `(async () => {
+    // The app's own unpaired render lands a moment after load; posing before it would be undone by it.
+    await new Promise((resolve) => setTimeout(resolve, 1500));
     const byId = (id) => document.getElementById(id);
     byId("setup").hidden = true;
     byId("sessions-view").hidden = false;

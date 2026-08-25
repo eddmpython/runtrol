@@ -67,6 +67,8 @@ const notifications = element("notifications");
 const nextAttention = element("next-attention");
 /// The open terminal view: the xterm instance, its fit addon, and the Core channel it rides.
 let terminalView = null;
+/// Bumped whenever the session index watch must restart; a stale loop sees a new value and ends.
+let indexWatchGeneration = 0;
 
 await boot();
 
@@ -396,7 +398,6 @@ function formatTokens(tokens) {
   return `${tokens} tokens`;
 }
 
-let indexWatchGeneration = 0;
 
 /// Keep the rows and the usage strip current from the PC's own push: one index watch on its own
 /// connection, replaced whenever the surface reconnects, never a clock.

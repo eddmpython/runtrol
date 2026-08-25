@@ -1,4 +1,4 @@
-const CACHE_NAME = "runtrol-phone-v6";
+const CACHE_NAME = "runtrol-phone-v7";
 const APP_SHELL = [
   "./",
   "index.html",
