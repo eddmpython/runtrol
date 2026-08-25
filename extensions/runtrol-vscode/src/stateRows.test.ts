@@ -113,17 +113,17 @@ test("the visible coverage notice names every affected service without hiding th
     [
       catalogue("claude", { kind: "partial", source: "officialCli", why: "running sessions only" }),
       catalogue("codex", { kind: "complete", source: "officialCli" }),
-      catalogue("cline", { kind: "partial", source: "providerStore", why: "recent history only" }),
+      catalogue("acp-fixture", { kind: "partial", source: "providerStore", why: "recent history only" }),
       catalogue("grok", { kind: "unsupported", why: "no enumerable surface" }),
     ],
     [
       provider("claude", "Claude Code"),
       provider("codex", "Codex"),
-      provider("cline", "Cline"),
+      provider("acp-fixture", "ACP Fixture"),
       provider("grok", "Grok"),
     ],
   );
-  assert.equal(notice, "History: partial for Claude Code, Cline; unavailable for Grok.");
+  assert.equal(notice, "History: partial for ACP Fixture, Claude Code; unavailable for Grok.");
 });
 
 test("complete history needs no coverage notice", () => {

@@ -491,10 +491,6 @@ jobs:
             echo "$HOME/.grok/bin" >> "$GITHUB_PATH"
           fi
           "$HOME/.grok/bin/grok" --version
-      # Install this immediately before the complete model probe. A later global npm install has occasionally
-      # removed an earlier global shim on hosted macOS even though npm reported both steps as successful.
-      - name: 실물 Cline 고정 판본 설치
-        run: npm install --global --allow-scripts=cline cline@3.0.55
       - name: 고정 판본 credential-free 모델 fixture 준비
         env:
           CODEX_HOME: ${{ runner.temp }}/runtrol-pinned-model-detection-codex
@@ -578,7 +574,7 @@ jobs:
             echo "$HOME/.grok/bin" >> "$GITHUB_PATH"
           fi
       - name: Install latest provider CLIs without credentials
-        run: npm install --global --allow-scripts=@anthropic-ai/claude-code --allow-scripts=opencode-ai --allow-scripts=cline @anthropic-ai/claude-code @openai/codex opencode-ai cline
+        run: npm install --global --allow-scripts=@anthropic-ai/claude-code @anthropic-ai/claude-code @openai/codex
       - name: Seed provider-owned model cache fixture
         env:
           CODEX_HOME: ${{ runner.temp }}/runtrol-model-detection-codex

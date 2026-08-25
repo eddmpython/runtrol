@@ -115,7 +115,7 @@ test("the fixed area includes checking and broken installed CLIs but omits missi
       installation: { state: "unavailable", why: "the installed CLI exited during its probe" },
     },
     {
-      providerId: "cline",
+      providerId: "acp-fixture",
       displayName: "Cline",
       icon: "robot",
       installation: { state: "missing" },

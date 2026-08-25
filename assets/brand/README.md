@@ -104,8 +104,6 @@ an SVG is refused by `tests/audit/vscodeExtension.py` (it blurs at sidebar sizes
 |---|---|---|---|
 | `claude.svg` | Anthropic's Claude mark | vendor site | trademark of Anthropic |
 | `openai.svg` | OpenAI's 2025 symbol | Wikimedia Commons `OpenAI logo 2025 (symbol).svg`, derived from OpenAI's own logo file | public domain as simple geometry; trademark of OpenAI |
-| `cline.svg` | Cline's mark | `cline/cline` repository, `apps/vscode/assets/icons/icon.svg` | Apache-2.0; trademark of Cline |
-| `opencode.svg` | OpenCode's mark | vendor site | trademark of its owner |
 | `grok.svg` | Grok's mark since February 2025 (the xAI strokes) | https://x.ai/, geometry as Wikimedia Commons `XAI-Logo.svg` | public domain as simple geometry; trademark of xAI |
 
 The 2023 Grok mark (a slashed circle) was retired by the vendor in February 2025; the sidebar carried it

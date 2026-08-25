@@ -71,3 +71,32 @@ hint = "npm"
 sign_in = ["auth", "login"]
 diagnose = ["doctor"]
 install = "npm install --global @anthropic-ai/claude-code"
+
+[tui]
+# This CLI's own terminal interface, measured 2.1.243 on a real ConPTY (2026-08-25): bare `claude` opens a new
+# conversation, `claude --resume <session id>` reopens one. It queries the terminal at start (XTVERSION,
+# DECRQM 2026) and waits for answers, so the surface hosting it answers like xterm. It enables its own mouse
+# reporting; the surface's common translation covers it, so that reporting is switched off here.
+resume = ["--resume"]
+mouse = true
+
+[tui.env]
+TERM = "xterm-256color"
+COLORTERM = "truecolor"
+CLAUDE_CODE_DISABLE_MOUSE = "1"
+CLAUDE_CODE_ALT_SCREEN_FULL_REPAINT = "1"
+CLAUDE_CODE_SCROLL_SPEED = "3"
+
+[store]
+# Where the CLI resumes from: `<config>/projects/<folder slug>/<session id>.jsonl`, one file per conversation
+# (measured 2.1.238). No listing or deletion command is published; the driver reads names off the store's doors.
+location = [".claude/projects"]
+format = "jsonl-per-session"
+
+[account]
+# `claude auth status --json`, measured 2.1.242: `loggedIn`, `authMethod`, `subscriptionType`.
+status = ["auth", "status", "--json"]
+
+[events]
+# Turn boundaries come from the stream-json transport the driver already reads.
+source = "stream-json"

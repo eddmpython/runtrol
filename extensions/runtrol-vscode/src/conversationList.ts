@@ -587,7 +587,7 @@ export function elapsed(atMs: number | null, nowMs: number): string | null {
 /// A timestamp a coding service reported, in whichever way that service reports one.
 ///
 /// The protocol asks a driver for the provider's own representation rather than a house format, so more than one
-/// arrives here: the Agent Client Protocol and cline print ISO 8601, Claude Code prints milliseconds since the
+/// arrives here: Agent Client Protocol CLIs print ISO 8601, Claude Code prints milliseconds since the
 /// epoch, and Codex prints seconds since the epoch (measured in the real window, 2026-08-20: read as
 /// milliseconds, every Codex row said "2952w"). Reading only the first spelling left every row from the second
 /// with no time at all, which pushed it below every dated row and stripped the elapsed part of its subtitle.

@@ -28,7 +28,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
         resolve(&fixture)?,
         Arc::new(Containment::without_any()),
         runtrol_provider::ModelAliases::default(),
-        runtrol_provider::SessionCatalogue {
+        runtrol_provider::StoreSpec {
+            location: Vec::new(),
+            format: None,
             list: listing,
             // Left unset so the probe exercises the path a CLI takes when this build does not know how to bound
             // its listing, which is the case that must never report a complete answer.

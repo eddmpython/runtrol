@@ -103,7 +103,9 @@ fn provider_of(
             resolve(binary)?,
             contained_by,
             runtrol_provider::ModelAliases::default(),
-            runtrol_provider::SessionCatalogue {
+            runtrol_provider::StoreSpec {
+                location: Vec::new(),
+                format: None,
                 list: Vec::new(),
                 limit_flag: None,
                 delete: delete_command,
@@ -122,6 +124,7 @@ fn provider_of(
             resolve(binary)?,
             contained_by,
             runtrol_provider::ModelAliases::default(),
+            None,
             ["--resume".into()].into_iter().collect(),
             std::collections::BTreeMap::new(),
         )),

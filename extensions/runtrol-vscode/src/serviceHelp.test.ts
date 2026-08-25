@@ -63,11 +63,11 @@ test("only the commands a service actually declared are offered", () => {
   // somewhere that cannot help them.
   const partial = provider({
     displayName: "OpenCode",
-    providerId: "opencode",
-    help: { signIn: "opencode auth", install: "npm install --global opencode-ai" },
+    providerId: "acp-fixture",
+    help: { signIn: "acp-fixture auth", install: "npm install --global acp-fixture" },
   });
   const commands = offersFor(partial, "unknown").map((offer) => offer.command);
-  assert.deepEqual(commands, ["opencode auth", "npm install --global opencode-ai"]);
+  assert.deepEqual(commands, ["acp-fixture auth", "npm install --global acp-fixture"]);
 });
 
 test("every offer names the service so two services never read identically", () => {

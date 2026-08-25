@@ -63,9 +63,9 @@ pub use id::{
     ToolCallId, TurnId,
 };
 pub use manifest::{
-    BinSpec, FallbackSpec, FlagProbe, HelpCommands, Kind, MANIFEST_SCHEMA, Manifest, ManifestError,
-    ModelAliases, ProbeSpec, SecretPaths, SessionCatalogue, TransportSpec, UpdateHint, UpdateSpec,
-    VersionParse, VersionProbe,
+    AccountSpec, BinSpec, EventsSpec, FallbackSpec, FlagProbe, HelpCommands, Kind, MANIFEST_SCHEMA,
+    Manifest, ManifestError, ModelAliases, ProbeSpec, SecretPaths, StoreSpec, TransportSpec,
+    TuiSpec, UpdateHint, UpdateSpec, VersionParse, VersionProbe,
 };
 pub use native_catalogue::{
     MAX_NATIVE_ADDITIONAL_DIRECTORIES, MAX_NATIVE_CURSOR_BYTES, MAX_NATIVE_SESSION_ITEMS,

@@ -139,6 +139,17 @@ pub enum ManifestError {
         why: &'static str,
     },
 
+    /// A declared token (a store format, an event source, an environment name) is not a bare token.
+    #[error("{what} {token:?} {why}")]
+    Token {
+        /// Which field.
+        what: &'static str,
+        /// The token as written.
+        token: String,
+        /// Why it was refused.
+        why: &'static str,
+    },
+
     /// An identifier in the file is not one runtrol accepts.
     #[error(transparent)]
     Id(#[from] IdError),
@@ -299,9 +310,23 @@ pub struct Manifest {
     /// This CLI's own commands for getting itself working.
     #[serde(default)]
     pub help: HelpCommands,
-    /// This CLI's own command for listing the conversations it already owns.
+    /// Where this CLI keeps the conversations it owns, and its own commands over them.
     #[serde(default)]
-    pub sessions: SessionCatalogue,
+    pub store: StoreSpec,
+    /// How to run this CLI's own terminal interface for one conversation.
+    ///
+    /// The conversation surface streams the CLI's own TUI, so this is what a surface needs and nothing
+    /// more: the arguments for a new conversation, the arguments that reopen one by identity, and the
+    /// environment the TUI expects. Absent means this provider offers no terminal surface (a bare protocol
+    /// adapter), and the surface says so rather than guessing a command line.
+    #[serde(default)]
+    pub tui: Option<TuiSpec>,
+    /// How to ask this CLI where the operator's account stands, outside any turn.
+    #[serde(default)]
+    pub account: Option<AccountSpec>,
+    /// Where this provider's turn boundaries and activity come from.
+    #[serde(default)]
+    pub events: Option<EventsSpec>,
 }
 
 impl Manifest {
@@ -347,7 +372,16 @@ impl Manifest {
         self.modes.validate()?;
         self.secrets.validate()?;
         self.help.validate()?;
-        self.sessions.validate()?;
+        self.store.validate()?;
+        if let Some(tui) = &self.tui {
+            tui.validate()?;
+        }
+        if let Some(account) = &self.account {
+            account.validate()?;
+        }
+        if let Some(events) = &self.events {
+            events.validate()?;
+        }
         Ok(())
     }
 }
@@ -625,7 +659,18 @@ impl HelpCommands {
 /// driver reads identity, working directory, title and timestamp, and a test asserts that nothing else survives.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-pub struct SessionCatalogue {
+pub struct StoreSpec {
+    /// Directories under the operator's home where this CLI keeps its conversations, `/` separated.
+    ///
+    /// Declared for the same reason the login directory is: a CLI does not report where it stores what it
+    /// resumes from. Named so a surface can say where a conversation lives. Empty means the CLI publishes
+    /// no file store this build knows of.
+    #[serde(default)]
+    pub location: Vec<Box<str>>,
+    /// How that store is laid out, as a bare token a driver recognises (`jsonl-per-session`,
+    /// `rollout-jsonl`, `cli-history`, `protocol`). Absent means the layout is the driver's business.
+    #[serde(default)]
+    pub format: Option<Box<str>>,
     /// Arguments to the CLI's own session listing command, when it has one.
     ///
     /// Empty means it has none, and the driver reports the absence rather than approximating a list.
@@ -655,9 +700,13 @@ pub struct SessionCatalogue {
     pub delete: Vec<Box<str>>,
 }
 
-impl SessionCatalogue {
+impl StoreSpec {
     /// Refuse anything a shell or an argument parser could read as something else.
     fn validate(&self) -> Result<(), ManifestError> {
+        SecretPaths::validate_under_home(&self.location)?;
+        if let Some(format) = &self.format {
+            refuse_unless_token("store.format", format)?;
+        }
         for argument in &self.list {
             HelpCommands::refuse_unless_one_word(argument)?;
         }
@@ -700,7 +749,12 @@ impl SecretPaths {
     /// operator's home, which is a manifest deciding what the wall protects rather than declaring where its own
     /// login lives.
     fn validate(&self) -> Result<(), ManifestError> {
-        for entry in &self.under_home {
+        Self::validate_under_home(&self.under_home)
+    }
+
+    /// The same rule for every list of home-relative directories a manifest may declare.
+    fn validate_under_home(entries: &[Box<str>]) -> Result<(), ManifestError> {
+        for entry in entries {
             let refuse = |why: &'static str| ManifestError::SecretPath {
                 path: entry.to_string(),
                 why,
@@ -721,7 +775,138 @@ impl SecretPaths {
     }
 }
 
-/// How to learn this provider's models, when its protocol cannot say.
+/// A bare token: lowercase letters, digits and `-`, bounded. What every declared classification is.
+fn refuse_unless_token(what: &'static str, token: &str) -> Result<(), ManifestError> {
+    let refuse = |why: &'static str| ManifestError::Token {
+        what,
+        token: token.to_string(),
+        why,
+    };
+    if token.is_empty() {
+        return Err(refuse("is empty"));
+    }
+    if token.len() > MAX_ICON_NAME {
+        return Err(refuse("is longer than any token this build knows"));
+    }
+    if !token.chars().all(|character| {
+        character.is_ascii_lowercase() || character.is_ascii_digit() || character == '-'
+    }) {
+        return Err(refuse("must be lowercase letters, digits and '-'"));
+    }
+    Ok(())
+}
+
+/// How to run this CLI's own terminal interface for one conversation.
+///
+/// # Why this is declared and not discovered
+///
+/// A CLI's help text names its resume flag, but reading help to learn a flag is the approximation the driver
+/// contract refuses, and getting it wrong here opens the wrong conversation in front of a person. Measured on
+/// each shipped CLI and written down: that is what a manifest is for.
+///
+/// # What a surface does with it
+///
+/// It runs the program with `new` for a fresh conversation, or with `resume` followed by the conversation's own
+/// identifier to reopen one, under `env`, inside a pseudo-terminal it owns, and streams that terminal to the
+/// person. Nothing here interprets what the TUI draws.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct TuiSpec {
+    /// Arguments that open a fresh conversation in the CLI's own terminal interface. Empty means bare.
+    #[serde(default)]
+    pub new: Vec<Box<str>>,
+    /// Arguments that reopen one conversation; its own identifier is appended last. Empty means the CLI
+    /// publishes no way to reopen by identity from the command line.
+    #[serde(default)]
+    pub resume: Vec<Box<str>>,
+    /// Environment the TUI expects, name to value, applied on top of the operator's own.
+    #[serde(default)]
+    pub env: std::collections::BTreeMap<Box<str>, Box<str>>,
+    /// Whether this TUI enables terminal mouse reporting on its own (measured). Informational: the surface's
+    /// own mouse translation covers every CLI the same way regardless.
+    #[serde(default)]
+    pub mouse: bool,
+}
+
+impl TuiSpec {
+    fn validate(&self) -> Result<(), ManifestError> {
+        for argument in self.new.iter().chain(&self.resume) {
+            HelpCommands::refuse_unless_one_word(argument)?;
+        }
+        for (name, value) in &self.env {
+            let refuse = |why: &'static str| ManifestError::Token {
+                what: "tui.env",
+                token: name.to_string(),
+                why,
+            };
+            if name.is_empty()
+                || !name.chars().all(|character| {
+                    character.is_ascii_uppercase() || character.is_ascii_digit() || character == '_'
+                })
+            {
+                return Err(refuse("must be an uppercase environment variable name"));
+            }
+            if value.chars().any(char::is_control) {
+                return Err(refuse("has a value with a control character"));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// How to ask this CLI where the operator's account stands, outside any turn.
+///
+/// Either a command on the CLI's own executable that prints its status, or the name of the protocol surface
+/// the driver already speaks (`app-server`, `acp`) that publishes account methods. One of the two, so a
+/// manifest cannot claim both and a driver cannot guess which to trust.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct AccountSpec {
+    /// Arguments to the CLI's own status command, whose output the driver reads.
+    #[serde(default)]
+    pub status: Vec<Box<str>>,
+    /// The protocol surface that publishes the account, when the driver reads it there instead.
+    #[serde(default)]
+    pub protocol: Option<Box<str>>,
+}
+
+impl AccountSpec {
+    fn validate(&self) -> Result<(), ManifestError> {
+        for argument in &self.status {
+            HelpCommands::refuse_unless_one_word(argument)?;
+        }
+        if let Some(protocol) = &self.protocol {
+            refuse_unless_token("account.protocol", protocol)?;
+        }
+        if !self.status.is_empty() && self.protocol.is_some() {
+            return Err(ManifestError::Token {
+                what: "account",
+                token: "status and protocol".to_owned(),
+                why: "declares both a status command and a protocol surface; one is the truth",
+            });
+        }
+        Ok(())
+    }
+}
+
+/// Where this provider's turn boundaries and activity signals come from.
+///
+/// A token naming the surface the driver already reads (`stream-json`, `app-server`, `acp`), declared so a
+/// surface that streams the TUI still knows where the sidebar's working and needs-you states are read from.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct EventsSpec {
+    /// The structured surface turn boundaries are read from.
+    pub source: Box<str>,
+}
+
+impl EventsSpec {
+    fn validate(&self) -> Result<(), ManifestError> {
+        refuse_unless_token("events.source", &self.source)
+    }
+}
+
+/// How to learn this providers models, when its protocol cannot say.
 ///
 /// Two ways, and neither one is a model list written into the manifest.
 ///

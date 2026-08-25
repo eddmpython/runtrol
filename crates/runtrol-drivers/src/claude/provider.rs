@@ -41,6 +41,8 @@ pub struct ClaudeProvider {
     available_flags: BTreeSet<Box<str>>,
     /// Optional bound flags not confirmed by the parser and what their absence means.
     unavailable_flags: BTreeMap<Box<str>, &'static str>,
+    /// The CLI's own status command, from the manifest's `[account]`; none means the surface is unpublished.
+    account_status: Option<Vec<Box<str>>>,
 }
 
 impl ClaudeProvider {
@@ -53,6 +55,7 @@ impl ClaudeProvider {
         program: Program,
         contained_by: Arc<Containment>,
         models: ModelAliases,
+        account: Option<runtrol_provider::AccountSpec>,
         available_flags: BTreeSet<Box<str>>,
         unavailable_flags: BTreeMap<Box<str>, &'static str>,
     ) -> Self {
@@ -64,6 +67,7 @@ impl ClaudeProvider {
             store: ClaudeStore::from_environment(),
             available_flags,
             unavailable_flags,
+            account_status: account.map(|account| account.status),
         }
     }
 
@@ -183,7 +187,16 @@ impl Provider for ClaudeProvider {
     /// (`loggedIn`, `authMethod`, `subscriptionType`). Limits are not asked here: this CLI reports them
     /// only on a turn, and that report fills the same gauge.
     async fn account(&self) -> Result<runtrol_provider::AccountReport, ProviderError> {
-        let args = ["auth".to_owned(), "status".to_owned(), "--json".to_owned()];
+        // The command is the manifest's `[account] status`, so the surface this driver reads is declared
+        // beside every other reachable fact about the CLI rather than spelled here a second time.
+        let args: Vec<String> = match &self.account_status {
+            Some(status) if !status.is_empty() => status.iter().map(ToString::to_string).collect(),
+            _ => {
+                return Ok(runtrol_provider::AccountReport::unpublished(
+                    "this provider's manifest declares no account status command",
+                ));
+            }
+        };
         let output = runtrol_childproc::capture(
             &self.program,
             &args,
@@ -327,6 +340,7 @@ mod tests {
             a_resolved_program(),
             Arc::new(Containment::without_any()),
             ModelAliases::default(),
+            None,
             all_flags(),
             BTreeMap::new(),
         );
@@ -343,6 +357,7 @@ mod tests {
             a_resolved_program(),
             Arc::new(Containment::without_any()),
             ModelAliases::default(),
+            None,
             all_flags(),
             BTreeMap::new(),
         ));
@@ -359,6 +374,7 @@ mod tests {
                 list: Vec::new(),
                 aliases: vec!["fast".into(), "deep".into()],
             },
+            None,
             all_flags(),
             BTreeMap::new(),
         );
@@ -388,6 +404,7 @@ mod tests {
             a_resolved_program(),
             Arc::new(Containment::without_any()),
             ModelAliases::default(),
+            None,
             all_flags(),
             BTreeMap::new(),
         );

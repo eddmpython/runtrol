@@ -48,7 +48,7 @@ function record(workspace: string, name?: string): ProjectRecord {
 const PROVIDERS: ProviderLine[] = [
   { providerId: "claude", displayName: "Claude Code", installation: { state: "usable", version: "2.1.0" } },
   { providerId: "codex", displayName: "Codex", installation: { state: "usable", version: "0.9.0" } },
-  { providerId: "opencode", displayName: "OpenCode", installation: { state: "usable", version: "1.2.27" } },
+  { providerId: "acp-fixture", displayName: "ACP Fixture", installation: { state: "usable", version: "1.2.27" } },
 ];
 
 function session(overrides: Partial<SessionLine> & Pick<SessionLine, "sessionId">): SessionLine {
@@ -482,7 +482,7 @@ test("a conversation key is legal as a tree element id", () => {
   const rows = conversations(
     [session({ sessionId: "s1", providerId: "codex", nativeSessionId: "ses_1/2 3", workspace: below(ROOT, "a") })],
     PROVIDERS,
-    [nativeChat({ nativeSessionId: "n 1", providerId: "opencode", cwd: below(ROOT, "b") })],
+    [nativeChat({ nativeSessionId: "n 1", providerId: "acp-fixture", cwd: below(ROOT, "b") })],
     null,
   );
 
@@ -621,7 +621,7 @@ test("one folder reached by two spellings is one discovered heading", () => {
 const SCRATCH = below(ROOT, "storage", "no-project");
 
 test("a timestamp in seconds, milliseconds or ISO 8601 lands on the same instant", () => {
-  // Codex prints seconds, Claude Code prints milliseconds, ACP and cline print ISO 8601. Measured in the real
+  // Codex prints seconds, Claude Code prints milliseconds, ACP CLIs print ISO 8601. Measured in the real
   // window: seconds read as milliseconds put every Codex row 56 years in the past ("2952w").
   const at = Date.parse("2026-08-20T10:00:00Z");
   const rows = conversations(
@@ -630,7 +630,7 @@ test("a timestamp in seconds, milliseconds or ISO 8601 lands on the same instant
     [
       nativeChat({ nativeSessionId: "seconds", providerId: "codex", updatedAt: String(at / 1000) }),
       nativeChat({ nativeSessionId: "millis", providerId: "claude", updatedAt: String(at) }),
-      nativeChat({ nativeSessionId: "iso", providerId: "opencode", updatedAt: "2026-08-20T10:00:00Z" }),
+      nativeChat({ nativeSessionId: "iso", providerId: "acp-fixture", updatedAt: "2026-08-20T10:00:00Z" }),
     ],
     null,
   );

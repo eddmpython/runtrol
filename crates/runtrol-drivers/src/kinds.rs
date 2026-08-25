@@ -22,7 +22,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use runtrol_childproc::{Containment, Program};
-use runtrol_provider::{ModelAliases, Provider, ProviderId, SessionCatalogue};
+use runtrol_provider::{AccountSpec, ModelAliases, Provider, ProviderId, StoreSpec};
 
 use crate::acp::AcpProvider;
 use crate::claude::ClaudeProvider;
@@ -88,8 +88,10 @@ pub struct DriverContext {
     pub provider: ProviderId,
     /// How to learn this provider's models, when its protocol cannot say.
     pub models: ModelAliases,
-    /// This CLI's own command for listing the conversations it owns, when it has one.
-    pub sessions: SessionCatalogue,
+    /// Where this CLI keeps its conversations and its own commands over them.
+    pub store: StoreSpec,
+    /// How to ask this CLI where the account stands, when its manifest declares a status command.
+    pub account: Option<AccountSpec>,
     /// The program to run, already resolved and with its launchers unwrapped.
     pub program: Program,
     /// Arguments the manifest declares for opening the structured transport.
@@ -158,6 +160,7 @@ fn make_claude(context: &DriverContext) -> Box<dyn Provider> {
         context.program.clone(),
         Arc::clone(&context.contained_by),
         context.models.clone(),
+        context.account.clone(),
         context.available_flags.clone(),
         context.unavailable_flags.clone(),
     ))
@@ -179,7 +182,7 @@ fn make_acp(context: &DriverContext) -> Box<dyn Provider> {
         context.program.clone(),
         Arc::clone(&context.contained_by),
         context.models.clone(),
-        context.sessions.clone(),
+        context.store.clone(),
         context.transport_argv.clone(),
     ))
 }
@@ -233,8 +236,8 @@ mod tests {
     fn official_registry_adapters_are_local_executables_never_downloaders() {
         assert_eq!(
             MANIFESTS.len(),
-            5 + crate::ACP_REGISTRY_ADAPTER_COUNT,
-            "five measured adapters precede the generated catalogue"
+            3 + crate::ACP_REGISTRY_ADAPTER_COUNT,
+            "three measured providers precede the generated catalogue"
         );
         assert_eq!(
             crate::ACP_REGISTRY_AGENT_COUNT,
@@ -245,7 +248,7 @@ mod tests {
         );
         assert_eq!(crate::ACP_REGISTRY_SCHEMA, "1.0.0");
         assert_eq!(crate::ACP_REGISTRY_SHA256.len(), 64);
-        for text in MANIFESTS.iter().skip(5) {
+        for text in MANIFESTS.iter().skip(3) {
             let manifest: Manifest = toml::from_str(text).expect("generated manifest parses");
             assert_eq!(manifest.kind.as_str(), "acp");
             assert!(
@@ -259,6 +262,45 @@ mod tests {
                     .iter()
                     .all(|name| name.as_ref() != "npx" && name.as_ref() != "uvx"),
                 "Runtime may resolve only a CLI already on the operator's PATH"
+            );
+        }
+    }
+
+    #[test]
+    fn every_shipped_provider_declares_its_terminal_store_account_and_event_surfaces() {
+        // The explicit provider boundary: a representative service is attached through its manifest's four
+        // surfaces and nothing else. A handwritten manifest missing one would be a provider the conversation
+        // surface cannot open or the sidebar cannot read, shipped anyway.
+        for text in MANIFESTS.iter().take(3) {
+            let manifest: Manifest = toml::from_str(text).expect("shipped manifest parses");
+            let tui = manifest
+                .tui
+                .as_ref()
+                .unwrap_or_else(|| panic!("{} declares no [tui] surface", manifest.id));
+            assert!(
+                !tui.resume.is_empty(),
+                "{} cannot reopen a conversation by identity",
+                manifest.id
+            );
+            assert!(
+                tui.env.contains_key("TERM"),
+                "{} names no terminal type for its TUI",
+                manifest.id
+            );
+            assert!(
+                !manifest.store.location.is_empty() && manifest.store.format.is_some(),
+                "{} declares no [store]",
+                manifest.id
+            );
+            assert!(
+                manifest.account.is_some(),
+                "{} declares no [account]",
+                manifest.id
+            );
+            assert!(
+                manifest.events.is_some(),
+                "{} declares no [events]",
+                manifest.id
             );
         }
     }

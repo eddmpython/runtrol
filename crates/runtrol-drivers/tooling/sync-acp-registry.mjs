@@ -9,10 +9,11 @@ const REGISTRY_URL = "https://cdn.agentclientprotocol.com/registry/v1/latest/reg
 const REGISTRY_SCHEMA = "1.0.0";
 const MAX_REGISTRY_BYTES = 4 * 1024 * 1024;
 const MAX_AGENTS = 256;
-const HANDWRITTEN = ["claude", "codex", "cline", "opencode", "grok"];
+const HANDWRITTEN = ["claude", "codex", "grok"];
+// Registry agents this product deliberately does not ship as providers. Runtrol ships the representative
+// services (Claude, Codex, Grok, Gemini); these count as skipped, never as adapters.
+const DELIBERATELY_ABSENT = new Set(["cline", "opencode"]);
 const OFFICIAL_REPLACEMENTS = new Map([
-  ["cline", "cline"],
-  ["opencode", "opencode"],
   ["grok-build", "grok"],
 ]);
 const OUTPUT = fileURLToPath(new URL("../src/generated_acp_registry.rs", import.meta.url));
@@ -166,6 +167,10 @@ async function main() {
     if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(id) || seen.has(id)) fail(`agent id ${id} is invalid or repeated`);
     seen.add(id);
     if (OFFICIAL_REPLACEMENTS.has(id)) continue;
+    if (DELIBERATELY_ABSENT.has(id)) {
+      skipped.push(id);
+      continue;
+    }
     const agent = { ...raw, id, name: plain(raw.name, `${id} name`, 160) };
     const selected = await launch(agent);
     if (!selected) {

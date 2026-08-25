@@ -10,16 +10,15 @@ pub const ACP_REGISTRY_AGENT_COUNT: usize = 39;
 /// Snapshot agents safely expressible as local executable ACP manifests.
 pub const ACP_REGISTRY_ADAPTER_COUNT: usize = 30;
 /// Official entries served by richer handwritten manifests, including equivalent launch identities.
-pub const ACP_REGISTRY_REPLACED_COUNT: usize = 3;
-/// Snapshot agents skipped because their launch requires unsupported environment or distribution semantics.
-pub const ACP_REGISTRY_SKIPPED_COUNT: usize = 6;
+pub const ACP_REGISTRY_REPLACED_COUNT: usize = 1;
+/// Snapshot agents skipped: launch semantics this build cannot express, plus the two this product deliberately
+/// does not ship as providers (cline, opencode). Runtrol ships the representative services only.
+pub const ACP_REGISTRY_SKIPPED_COUNT: usize = 8;
 
 /// Handwritten providers followed by generated official ACP Registry adapters.
 pub const MANIFESTS: &[&str] = &[
     include_str!("../manifests/claude.toml"),
     include_str!("../manifests/codex.toml"),
-    include_str!("../manifests/cline.toml"),
-    include_str!("../manifests/opencode.toml"),
     include_str!("../manifests/grok.toml"),
     r#"# Generated from the official ACP Registry 1.0.0. Do not edit by hand.
 schema = 1

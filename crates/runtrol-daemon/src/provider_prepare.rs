@@ -106,7 +106,8 @@ pub(crate) async fn prepared_driver(
         driver: make(&DriverContext {
             provider: id,
             models: declared.manifest.models.clone(),
-            sessions: declared.manifest.sessions.clone(),
+            store: declared.manifest.store.clone(),
+            account: declared.manifest.account.clone(),
             program,
             transport_argv: declared.manifest.transport.argv.clone(),
             available_flags: checked.available,

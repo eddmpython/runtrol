@@ -8,7 +8,7 @@ use runtrol_childproc::{Containment, Program, capture};
 use runtrol_provider::{
     Agent, MAX_MODEL_CHOICES, ModelAliases, ModelCatalog, ModelChoice, NativeSessionCatalogue,
     NativeSessionDeletion, NativeSessionQuery, OpenIntent, Provider, ProviderCapabilities,
-    ProviderCapability, ProviderCapabilitySource, ProviderError, ProviderId, SessionCatalogue,
+    ProviderCapability, ProviderCapabilitySource, ProviderError, ProviderId, StoreSpec,
 };
 
 use crate::acp::agent::AcpAgent;
@@ -20,7 +20,7 @@ pub struct AcpProvider {
     program: Program,
     contained_by: Arc<Containment>,
     models: ModelAliases,
-    sessions: SessionCatalogue,
+    sessions: StoreSpec,
     transport_argv: Vec<Box<str>>,
 }
 
@@ -98,7 +98,7 @@ impl AcpProvider {
         program: Program,
         contained_by: Arc<Containment>,
         models: ModelAliases,
-        sessions: SessionCatalogue,
+        sessions: StoreSpec,
         transport_argv: Vec<Box<str>>,
     ) -> Self {
         Self {
@@ -280,7 +280,7 @@ mod tests {
             program(),
             Arc::new(Containment::without_any()),
             ModelAliases::default(),
-            SessionCatalogue::default(),
+            StoreSpec::default(),
             vec!["serve".into(), "--stdio".into()],
         );
         assert_eq!(provider.id().as_str(), "example-acp");
@@ -300,7 +300,7 @@ mod tests {
                 list: Vec::new(),
                 aliases: vec!["fast".into(), "deep".into()],
             },
-            SessionCatalogue::default(),
+            StoreSpec::default(),
             Vec::new(),
         );
         let ModelCatalog::Aliases { aliases, .. } =

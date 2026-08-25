@@ -60,8 +60,6 @@ def violations(generator: str, generated: str, runtime_sources: str) -> list[str
     for token in (
         'include_str!("../manifests/claude.toml")',
         'include_str!("../manifests/codex.toml")',
-        'include_str!("../manifests/cline.toml")',
-        'include_str!("../manifests/opencode.toml")',
         'include_str!("../manifests/grok.toml")',
         'id = "glm-acp-agent"',
         'id = "qwen-code"',
@@ -71,6 +69,9 @@ def violations(generator: str, generated: str, runtime_sources: str) -> list[str
             found.append(f"generated adapter set lost `{token}`")
     if 'names = ["npx"' in generated or 'names = ["uvx"' in generated:
         found.append("a generated provider can invoke a downloader instead of an installed CLI")
+    for absent in ('id = "cline"', 'id = "opencode"'):
+        if absent in generated:
+            found.append(f"the generated adapter set carries a provider this product does not ship: {absent}")
     if 'id = "grok-build"' in generated:
         found.append("the official Grok launch duplicates the richer handwritten Grok provider")
     if "[update]" in generated:

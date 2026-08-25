@@ -62,3 +62,26 @@ diagnose = ["doctor"]
 # extra reasoningEffort field, and `session/set_config_option` exists structurally while the session
 # announces no config options and its value schema is private. So the announced efforts are not
 # lifted into an event: offering a switch nothing can perform would be a lie in a picker.
+
+[tui]
+# This CLI's own terminal interface ("Grok Build TUI"), measured 1.0.5 on a real ConPTY (2026-08-25): bare
+# `grok` opens a new conversation, `grok --resume <session id or title>` reopens one (`-c` continues the
+# last). It enables the alternate screen and no mouse reporting; the surface's common translation covers it.
+resume = ["--resume"]
+
+[tui.env]
+TERM = "xterm-256color"
+COLORTERM = "truecolor"
+
+[store]
+# Its conversations are enumerated over the ACP protocol (`session/list`), the surface the driver already
+# speaks; the CLI keeps its own state under its home directory.
+location = [".grok"]
+format = "protocol"
+
+[account]
+# No status command is published; sign-in state is learned over the ACP handshake.
+protocol = "acp"
+
+[events]
+source = "acp"

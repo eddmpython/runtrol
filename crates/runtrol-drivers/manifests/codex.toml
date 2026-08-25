@@ -69,3 +69,27 @@ install = "npm install --global @openai/codex"
 # command catalogue announcement. The only "slash" in the schema is /tmp path handling, and
 # `skills/list` is a different concept (skill packages, not composer commands). So this provider's
 # composer offers no slash menu, and that absence is the CLI's, not a gap here.
+
+[tui]
+# This CLI's own terminal interface, measured 0.149.1 on a real ConPTY (2026-08-25): bare `codex` opens a new
+# conversation and draws its welcome at once, `codex resume <thread id>` reopens one. It enables no mouse
+# reporting of its own; the surface's common translation covers it.
+resume = ["resume"]
+
+[tui.env]
+TERM = "xterm-256color"
+COLORTERM = "truecolor"
+
+[store]
+# Where the CLI keeps its threads: `~/.codex/sessions/<year>/<month>/<day>/rollout-*.jsonl` beside a
+# `session_index.jsonl` (measured 0.149.1). Listing and deletion go through the app-server protocol
+# (`thread/list`, `thread/delete`), which the driver already speaks.
+location = [".codex/sessions"]
+format = "rollout-jsonl"
+
+[account]
+# `account/read`, `account/rateLimits/read` and `account/usage/read` on the app-server protocol.
+protocol = "app-server"
+
+[events]
+source = "app-server"
