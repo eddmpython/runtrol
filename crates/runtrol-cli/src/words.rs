@@ -17,7 +17,7 @@ use runtrol_provider::{ApprovalId, OptionId, SessionId, StreamId, WatchCursor, W
 pub enum Misunderstood {
     /// Nothing was typed.
     #[error(
-        "no command. try: list, models, start, resume, say, answer, stop, watch, close, consult, panic, retire"
+        "no command. try: list, models, start, resume, say, answer, stop, watch, close, consult, panic"
     )]
     Nothing,
 
@@ -26,7 +26,7 @@ pub enum Misunderstood {
     /// Names what was typed, because the operator's next move is to correct it and a message that does not repeat it
     /// makes them guess what runtrol thought they said.
     #[error(
-        "no command called {typed:?}. try: list, models, start, resume, say, answer, stop, watch, close, consult, panic, retire"
+        "no command called {typed:?}. try: list, models, start, resume, say, answer, stop, watch, close, consult, panic"
     )]
     NoSuchCommand {
         /// What they typed.
@@ -192,11 +192,6 @@ pub fn understand(words: &[String], here: &str) -> Result<Request, Misunderstood
         }),
 
         "panic" => Ok(Request::StopEverything),
-
-        // Ask the daemon to exit so the replaced-on-disk binary serves the next request. The daemon
-        // refuses only while a conversation is mid-turn; idle agent processes end with it and
-        // resume from their providers' own stores under the successor.
-        "retire" => Ok(Request::Retire),
 
         "consult" => consult_of(rest),
 

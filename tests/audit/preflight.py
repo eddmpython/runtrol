@@ -279,6 +279,14 @@ GATES: dict[str, tuple[str, list[str]]] = {
         "활성 세션을 보존하는 VSIX 갱신과 롤백",
         [*PY, f"{HOOKS}/vscodeUpgradeRollback.py"],
     ),
+    "daemonCurrencySelftest": (
+        "설치된 빌드가 곧 서빙하는 데몬 세대인지 판정하는 게이트 자체 검증",
+        [*PY, f"{HOOKS}/daemonCurrency.py", "--selftest"],
+    ),
+    "daemonCurrency": (
+        "격리 프로필에 VSIX 설치·활성화 뒤 서빙하는 데몬 세대 = 번들 Core digest",
+        [*PY, f"{HOOKS}/daemonCurrency.py"],
+    ),
     "shippedRuntimeInteropSelftest": (
         "출하된 Runtime 상호운용 게이트 자체 검증",
         [*PY, f"{HOOKS}/shippedRuntimeInterop.py", "--selftest"],

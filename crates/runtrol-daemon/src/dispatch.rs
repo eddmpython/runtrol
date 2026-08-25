@@ -56,15 +56,12 @@ pub(crate) enum Reply {
     Watching(Box<SessionView>),
     /// The caller is now watching the current session index.
     WatchingSessions,
-    /// The daemon retires: answer done, then this process exits.
+    /// A successor generation asked this daemon to drain.
     ///
-    /// A separate shape because only the connection loop knows when the answer has actually been
-    /// written, and exiting before that would make the caller report failure for a retirement that
-    /// worked. Accepted whenever no conversation is mid-turn, so there is nothing to drain: durable
-    /// state is written atomically at each mutation, idle agent processes end with this process
-    /// (containment holds every descendant) and resume from their providers' own stores, and the
-    /// successor daemon is started by the caller exactly the way any daemon is started.
-    Retiring,
+    /// A separate shape because the session owner acts on it, not the connection: it releases the
+    /// durable store so the successor can open it, stops taking new conversations, and ends this
+    /// process once no turn is running. The connection only writes the acknowledgement.
+    Draining,
     /// The session is closed, and its process is still being stopped.
     ///
     /// A separate shape because stopping is a wait, and the answer is not known until it is over. Handing the wait out
@@ -1921,21 +1918,11 @@ pub(crate) fn answer_prepared(
             Err(error) => Reply::One(refuse(&error.to_string())),
         },
 
-        Request::Retire => {
-            // Only observable work blocks retirement. An idle process does not: containment ends it
-            // with this process (children die with runtrol), the conversation itself lives in the
-            // provider's own store, and the successor daemon resumes it from that store on demand.
-            // This is exactly what the operator-confirmed restart has always promised; waiting for a
-            // machine with zero live processes waited forever on any machine where agents are
-            // standing infrastructure, which is the machine this product is for.
-            let moving = retire_blockers(sessions.live_sessions().map(|live| live.state));
-            if moving > 0 {
-                return Reply::One(refuse(&format!(
-                    "{moving} conversation(s) are mid-turn; retire applies when their turns end"
-                )));
-            }
-            Reply::Retiring
-        }
+        // Never refused: the successor is already listening, and what it needs is the store. The
+        // owner loop releases it and decides when this process ends (once no turn is running); an
+        // idle process does not keep a generation alive, because the conversation lives in the
+        // provider's own store and the successor resumes it from there on demand.
+        Request::Drain => Reply::Draining,
 
         // The exchange already happened in the connection task. What is verified here is the binding: the
         // answer must be the one computed for this exact request, the rule every prepared result follows.
@@ -2188,11 +2175,13 @@ fn bound(
     }
 }
 
-/// How many live sessions retirement would interrupt: a turn is running, or a driver is still
-/// attaching and its first turn may already be in flight. An idle session is not one of them,
-/// however alive its process is: nothing observable is happening, and the conversation reopens
-/// from the provider's own store under the successor daemon.
-fn retire_blockers<'sessions>(states: impl Iterator<Item = &'sessions SessionState>) -> usize {
+/// How many live sessions ending this generation would interrupt: a turn is running, or a driver
+/// is still attaching and its first turn may already be in flight. An idle session is not one of
+/// them, however alive its process is: nothing observable is happening, and the conversation
+/// reopens from the provider's own store under the successor generation.
+pub(crate) fn live_turns<'sessions>(
+    states: impl Iterator<Item = &'sessions SessionState>,
+) -> usize {
     states
         .filter(|state| {
             matches!(
@@ -3738,21 +3727,20 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn retire_proceeds_past_idle_processes_and_refuses_only_mid_turn() {
-        let (composed, path) = composed_for("retire-idle-only");
+    async fn drain_is_never_refused_whatever_the_sessions_are_doing() {
+        let (composed, path) = composed_for("drain-never-refused");
         let mut sessions = SessionManager::new();
         let session = SessionId::now();
         attach_and_store(&composed, &mut sessions, session, &path);
 
-        // An attached-and-idle process no longer blocks: waiting for zero live processes waited
-        // forever on a machine where agents are standing infrastructure. The exit decision goes to
-        // the connection loop, which is the only layer that knows when the answer has been written.
+        // The successor is already listening and needs the store; whether a turn is running only
+        // decides when this process ends, and that decision belongs to the owner loop.
         let mut conversation = Conversation::at_the_machine();
         greet(&mut conversation, &composed, &mut sessions).await;
-        match answer(&mut conversation, &composed, &mut sessions, Request::Retire).await {
-            Reply::Retiring => {}
+        match answer(&mut conversation, &composed, &mut sessions, Request::Drain).await {
+            Reply::Draining => {}
             other => panic!(
-                "expected the retirement past an idle process, got {}",
+                "expected the drain past a live process, got {}",
                 shape(&other)
             ),
         }
@@ -3760,17 +3748,17 @@ mod tests {
         let mut idle = SessionManager::new();
         let mut fresh = Conversation::at_the_machine();
         greet(&mut fresh, &composed, &mut idle).await;
-        match answer(&mut fresh, &composed, &mut idle, Request::Retire).await {
-            Reply::Retiring => {}
-            other => panic!("expected the retirement, got {}", shape(&other)),
+        match answer(&mut fresh, &composed, &mut idle, Request::Drain).await {
+            Reply::Draining => {}
+            other => panic!("expected the drain, got {}", shape(&other)),
         }
         clean(composed, &path);
     }
 
-    /// The refusal itself, over the exact lifecycle vocabulary: a running turn or a driver still
-    /// attaching blocks, an idle or detached session never does.
+    /// What keeps a draining generation alive, over the exact lifecycle vocabulary: a running turn
+    /// or a driver still attaching counts, an idle or detached session never does.
     #[test]
-    fn retire_blockers_counts_only_sessions_mid_motion() {
+    fn live_turns_counts_only_sessions_mid_motion() {
         use runtrol_core::Observed;
         use runtrol_provider::TurnId;
         let now = WallMs::now();
@@ -3789,10 +3777,10 @@ mod tests {
             },
             now,
         ));
-        assert_eq!(retire_blockers([&detached, &idle].into_iter()), 0);
-        assert_eq!(retire_blockers([&starting, &idle, &busy].into_iter()), 2);
-        assert_eq!(retire_blockers([&busy].into_iter()), 1);
-        assert_eq!(retire_blockers([].into_iter()), 0);
+        assert_eq!(live_turns([&detached, &idle].into_iter()), 0);
+        assert_eq!(live_turns([&starting, &idle, &busy].into_iter()), 2);
+        assert_eq!(live_turns([&busy].into_iter()), 1);
+        assert_eq!(live_turns([].into_iter()), 0);
     }
 
     /// Agree a wire format, so the rest of a test can ask for something.
@@ -3818,7 +3806,7 @@ mod tests {
         match reply {
             Reply::One(response) => format!("{response:?}"),
             Reply::Watching(_) | Reply::WatchingSessions => "a subscription".to_owned(),
-            Reply::Retiring => "a retirement".to_owned(),
+            Reply::Draining => "a drain".to_owned(),
             Reply::Stopping { how, .. } => format!("a process still stopping, {how:?}"),
             Reply::Cleaning { agents, .. } => format!("{} processes still stopping", agents.len()),
             Reply::Sending { .. } => "a provider command in flight".to_owned(),

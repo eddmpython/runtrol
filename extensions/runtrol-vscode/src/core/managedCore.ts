@@ -19,8 +19,8 @@ export type ManagedCore = {
 /// Every build gets its own file (`runtrol-<digest>.exe`), and an existing file is never written over.
 /// Measured 2026-08-25 on Windows: renaming a new image over the one the running daemon was started from
 /// fails with EPERM, so a content-addressed name is the only replacement that cannot fail while a daemon
-/// runs. The daemon started from the previous file keeps it mapped; supersession retires that daemon and
-/// starts the new build from the new file; the previous file is removed once nothing maps it.
+/// runs. The daemon started from the previous file keeps it mapped as its own generation; the new build starts
+/// beside it from the new file and the old generation drains; the previous file is removed once nothing maps it.
 export async function materializeManagedCore(source: string, storageRoot: string): Promise<ManagedCore> {
   const sourceInfo = await stat(source);
   if (!sourceInfo.isFile()) {
@@ -160,7 +160,7 @@ async function otherImages(root: string, current: string): Promise<string[]> {
 }
 
 /// Remove previous images. Windows refuses to unlink an image while its daemon is alive; that image is
-/// left for a later activation, after supersession has retired the daemon that maps it.
+/// left for a later activation, after the generation that maps it has drained and exited.
 async function removeInactiveImages(images: readonly string[]): Promise<void> {
   for (const image of images) {
     try {

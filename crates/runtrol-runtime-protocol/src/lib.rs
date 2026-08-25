@@ -44,7 +44,9 @@ pub use inventory::{
     WaitingOn, WatchProvidersParams, WatchProvidersResult, WatchSessionIndexParams,
     WatchSessionIndexResult,
 };
-pub use locator::{RUNTIME_LOCATOR_SCHEMA, RuntimeEndpointKind, RuntimeLocatorRecord};
+pub use locator::{
+    RUNTIME_LOCATOR_SCHEMA, RuntimeEndpointKind, RuntimeGeneration, RuntimeLocatorRecord,
+};
 pub use method::RuntimeMethod;
 pub use models::{
     ListModelsParams, RuntimeModelCatalog, RuntimeModelChoice, RuntimeReasoningChoice,

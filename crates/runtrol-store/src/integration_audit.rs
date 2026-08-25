@@ -85,7 +85,7 @@ impl Store {
         }
         let encoded = encode(row)?;
         let write = self
-            .db()
+            .db()?
             .begin_write()
             .map_err(|error| engine("starting a public Runtime audit write", error))?;
         {
@@ -157,7 +157,7 @@ impl Store {
     /// Damaged rows or engine failure. Authority audit corruption is never silently omitted.
     pub fn list_integration_audit(&self) -> Result<Vec<IntegrationAuditRow>, StoreError> {
         let read = self
-            .db()
+            .db()?
             .begin_read()
             .map_err(|error| engine("starting a public Runtime audit read", error))?;
         let table = match read.open_table(INTEGRATION_AUDIT) {
@@ -183,7 +183,7 @@ impl Store {
     /// Engine failure.
     pub fn purge_integration_audit(&self) -> Result<usize, StoreError> {
         let write = self
-            .db()
+            .db()?
             .begin_write()
             .map_err(|error| engine("starting a public Runtime audit purge", error))?;
         let removed = {

@@ -10,8 +10,8 @@ type LocatedCore = {
   executable: string;
   endpoint: string;
   // SHA-256 of the managed Core this extension installed, when that is the executable in use.
-  // Null for an operator-configured corePath or a PATH fallback: supersession only acts on a
-  // binary this extension owns, never on somebody else's build.
+  // Null for an operator-configured corePath or a PATH fallback: currency is only checked against a
+  // binary this extension owns, never against somebody else's build.
   managedDigest: string | null;
 };
 

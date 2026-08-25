@@ -289,14 +289,17 @@ export type RuntimeErrorKind = "runtimeNotInstalled" | "runtimeUnavailable" | "p
 /** One provider-neutral normalized event notification. */
 export interface RuntimeEventNotification { readonly event: unknown; readonly eventRevision: ProtocolRevision; readonly nextExpected: EventCursor; readonly sessionId: RuntimeSessionId; readonly subscriptionId: string; }
 
+/** One running daemon build and where it listens. */
+export interface RuntimeGeneration { readonly controlEndpoint: string; readonly digest: string; readonly draining: boolean; readonly endpoint: string; readonly endpointKind: RuntimeEndpointKind; readonly liveSessions: number; readonly processId: number; readonly runtimeVersion: string; readonly startedAtMs: number; }
+
 /** Public Runtime instance facts used to reject a stale or replaced locator. */
 export interface RuntimeInstance { readonly buildDigest?: string | null; readonly instanceId: string; readonly platform: string; readonly version: string; }
 
 /** Numeric public bounds advertised during initialization. */
 export interface RuntimeLimits { readonly challengeLifetimeMs: number; readonly controlLeaseLifetimeMs: number; readonly enrollmentLifetimeMs: number; readonly idempotencyWindowMs: number; readonly maxAttachmentBase64Bytes?: number; readonly maxFrameBytes: number; readonly maxIdempotencyRecords: number; readonly maxInputBlocks?: number; readonly maxInputBytes: number; readonly maxInputImages?: number; readonly maxModelSelectionBytes: number; readonly maxNativeAdoptionTokenBytes: number; readonly maxNativePublicCursorBytes: number; readonly maxPageItems: number; readonly maxPendingEnrollments: number; readonly maxReasoningSelectionBytes: number; readonly maxRevisionOffers: number; readonly maxSubscriptions: number; readonly nativeCursorLifetimeMs: number; }
 
-/** Operational bootstrap data published only after the public endpoint is ready. */
-export interface RuntimeLocatorRecord { readonly endpoint: string; readonly endpointKind: RuntimeEndpointKind; readonly instanceId: string; readonly processId: number; readonly runtimeVersion: string; readonly schema: number; }
+/** Operational bootstrap data published only after each generation's public endpoint is ready. */
+export interface RuntimeLocatorRecord { readonly generations: ReadonlyArray<RuntimeGeneration>; readonly instanceId: string; readonly schema: number; }
 
 /** A public Runtime method implemented by the initial read-only boundary. */
 export type RuntimeMethod = "runtime/initialize" | "runtime/initialized" | "runtime/challenge" | "integrations/requestEnrollment" | "integrations/watchEnrollment" | "integrations/getGrant" | "integrations/rotateKey" | "providers/usage" | "providers/list" | "providers/watch" | "providers/getCapabilities" | "providers/listModels" | "providers/listNativeSessions" | "sessions/list" | "sessions/watchIndex" | "sessions/get" | "sessions/start" | "sessions/adoptNative" | "sessions/resume" | "sessions/acquireControl" | "sessions/renewControl" | "sessions/releaseControl" | "sessions/submitInput" | "sessions/submitBlocks" | "sessions/setModel" | "sessions/setMode" | "sessions/watchEvents" | "sessions/interrupt" | "sessions/cool" | "sessions/forget" | "sessions/deleteNative" | "sessions/archiveNative" | "approvals/listPending" | "approvals/respond" | "sessions/indexChanged" | "sessions/indexEnded" | "providers/changed" | "providers/watchEnded" | "sessions/event" | "sessions/lagged" | "runtime/panicStop";

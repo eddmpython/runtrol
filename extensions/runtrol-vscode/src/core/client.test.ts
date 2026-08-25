@@ -54,12 +54,18 @@ test("a read-only command reconnects once when the Core closes before greeting",
       server.once("error", reject);
       server.listen(endpoint, resolve);
     });
+    let relocated = 0;
     const client = new CoreClient({
       locate: async () => ({ executable: "runtrol", endpoint }),
-    } as CoreLocator);
+      invalidate: () => {
+        relocated += 1;
+      },
+    } as unknown as CoreLocator);
     const { response } = await client.read({ ask: "missionList" });
     assert.equal(response.say, "missions");
     assert.equal(connections, 2);
+    // The lost connection told the locator to look again: the generation behind an endpoint may be gone.
+    assert.equal(relocated, 1);
     client.dispose();
   } finally {
     for (const socket of sockets) socket.destroy();

@@ -47,6 +47,15 @@ pub enum ComposeError {
     #[error(transparent)]
     Home(#[from] HomeError),
 
+    /// This executable could not measure its own image, so it has no generation identity to serve under.
+    #[error("cannot measure the runtrol executable {path}: {detail}")]
+    Identity {
+        /// The executable that was measured.
+        path: String,
+        /// What the platform said.
+        detail: String,
+    },
+
     /// The session-pointer store could not be opened or trusted.
     #[error(transparent)]
     Store(#[from] runtrol_store::StoreError),
@@ -362,6 +371,12 @@ pub struct Composed {
     /// Kept because building a driver is deferred: it needs a resolved program, which needs a probe, which happens when
     /// something asks rather than at boot.
     pub kinds: &'static [DriverKind],
+    /// Whether a newer generation has taken over new work from this daemon.
+    ///
+    /// Set once by the session owner when a successor asks this daemon to drain, read by every connection
+    /// before it would start a provider process: a draining generation finishes what is running and opens
+    /// nothing new.
+    pub(crate) draining: std::sync::atomic::AtomicBool,
 }
 
 struct LoadedMachineIdentity {
@@ -437,6 +452,7 @@ impl Composed {
             push_identity: machine_identity.push,
             relay_control: crate::relay::RelayControl::new(),
             kinds: builtin.kinds,
+            draining: std::sync::atomic::AtomicBool::new(false),
         })
     }
 
@@ -505,6 +521,7 @@ impl Composed {
             push_identity: machine_identity.push,
             relay_control: crate::relay::RelayControl::new(),
             kinds: builtin.kinds,
+            draining: std::sync::atomic::AtomicBool::new(false),
         })
     }
 

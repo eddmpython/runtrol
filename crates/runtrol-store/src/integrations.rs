@@ -163,7 +163,7 @@ impl Store {
     /// Engine or closed codec failure.
     pub fn get_enrollment(&self, key: EnrollmentKey) -> Result<Option<EnrollmentRow>, StoreError> {
         let read = self
-            .db()
+            .db()?
             .begin_read()
             .map_err(|error| engine("starting an integration enrollment read", error))?;
         let table = match read.open_table(ENROLLMENTS) {
@@ -186,7 +186,7 @@ impl Store {
     /// Engine or closed codec failure.
     pub fn list_enrollments(&self) -> Result<Vec<(EnrollmentKey, EnrollmentRow)>, StoreError> {
         let read = self
-            .db()
+            .db()?
             .begin_read()
             .map_err(|error| engine("starting an integration enrollment scan", error))?;
         let table = match read.open_table(ENROLLMENTS) {
@@ -354,7 +354,7 @@ impl Store {
         key: IntegrationKey,
     ) -> Result<Option<IntegrationRow>, StoreError> {
         let read = self
-            .db()
+            .db()?
             .begin_read()
             .map_err(|error| engine("starting an integration grant read", error))?;
         let table = match read.open_table(INTEGRATIONS) {
@@ -377,7 +377,7 @@ impl Store {
     /// Engine or closed codec failure.
     pub fn list_integrations(&self) -> Result<Vec<(IntegrationKey, IntegrationRow)>, StoreError> {
         let read = self
-            .db()
+            .db()?
             .begin_read()
             .map_err(|error| engine("starting an integration grant scan", error))?;
         let table = match read.open_table(INTEGRATIONS) {

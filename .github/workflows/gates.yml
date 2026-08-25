@@ -401,6 +401,13 @@ jobs:
         env:
           TMPDIR: ${{ matrix.os == 'macos-latest' && '/tmp' || runner.temp }}
         run: python -X utf8 tests/audit/vscodeUpgradeRollback.py
+      # 업데이트한 뒤 서빙하는 데몬이 그 빌드인지를 강제한다. 08-23 데몬이 이틀간 교체되지 않은 뒤 생긴 게이트다.
+      - name: 데몬 세대 currency 게이트 자체 검증
+        run: python -X utf8 tests/audit/daemonCurrency.py --selftest
+      - name: 설치된 VSIX 가 활성화한 데몬 세대는 번들 Core 다
+        env:
+          TMPDIR: ${{ matrix.os == 'macos-latest' && '/tmp' || runner.temp }}
+        run: python -X utf8 tests/audit/daemonCurrency.py
       - name: 출하된 Runtime 상호운용 게이트 자체 검증
         run: python -X utf8 tests/audit/shippedRuntimeInterop.py --selftest
       - name: 이 빌드의 클라이언트가 실제 출하된 Runtime 들과 hello 를 끝낸다

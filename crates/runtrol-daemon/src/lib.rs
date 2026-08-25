@@ -20,6 +20,7 @@ pub mod compose;
 mod consult;
 mod crash;
 pub mod dispatch;
+pub mod generations;
 mod growth;
 mod integration_admin;
 mod isolated_workspace;
@@ -33,7 +34,6 @@ mod runtime_audit;
 mod runtime_auth;
 mod runtime_control;
 mod runtime_inventory;
-mod runtime_locator;
 mod runtime_native_sessions;
 mod runtime_serve;
 pub mod scope;
@@ -42,29 +42,15 @@ mod session_catalogue;
 
 pub use compose::{ComposeError, Composed};
 pub use crash::record_panics_at;
+pub use generations::{
+    GenerationIdentity, GenerationStatus, assemble_superseding, generation_endpoint, status,
+};
 pub use relay::{RelayIngress, RelayStage, RelayStatus};
 pub use scope::{Needed, WallRefusal, allowed, needed};
 pub use serve::{
     MAX_BLOCKING_PROVIDER_OPERATIONS, MODEL_PREPARATION_BUDGET_MS, PhoneIngress, PhoneIngressError,
     ServeError, serve, serve_with_phone, serve_with_relay,
 };
-
-/// Where a daemon for this home listens.
-///
-/// Asked for rather than worked out, so that the two ends of the local connection cannot derive it differently. The
-/// daemon decides where it listens; everything else asks. Establishing containment is not part of answering this,
-/// which is what lets a command surface ask without becoming something that owns child processes.
-///
-/// # Errors
-///
-/// [`ComposeError::Home`] when runtrol's directory cannot be established.
-pub fn endpoint(home: Option<&str>) -> Result<String, ComposeError> {
-    let home = match home {
-        Some(chosen) => runtrol_core::RuntrolHome::open_at(chosen)?,
-        None => runtrol_core::RuntrolHome::open()?,
-    };
-    Ok(home.paths().endpoint().address().to_owned())
-}
 
 /// One place for tests in this crate to take the process-wide console before claiming it.
 ///

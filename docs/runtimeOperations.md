@@ -38,18 +38,20 @@ start or download Runtime.
 
 ## Locator states and repair
 
-The public locator is `runtime.locator.json` below the Runtime state directory. Its normal states are:
+The public locator is `runtime.locator.json` below the Runtime state directory. It lists every daemon generation
+serving the home; `runtrol status` prints that list and whether each generation still answers. Its normal states are:
 
 | State | Action |
 |---|---|
 | Missing | Install Runtime or run an explicit installed Runtime command |
-| Valid and running | Connect through the SDK and complete instance proof |
-| Stale after a verified crash | Stop all Runtrol processes, verify owner and install record, then remove only the stale locator |
+| One current generation | Connect through the SDK and complete instance proof |
+| Two generations, one draining | An update is taking over; the draining one finishes its running turns and exits by itself |
+| An entry that no longer answers | Left by a crash; the next generation to start removes it |
 | Unsafe owner or permissions | Refuse SDK connection and repair locally before replacement |
 | Incompatible revision | Install a signed compatible Runtime or roll back the consumer SDK |
 
-Never copy a locator between machines or users. Never edit its endpoint or instance ID. The next verified Runtime start
-publishes a new atomic locator.
+Never copy a locator between machines or users. Never edit an endpoint or the instance ID. Each generation writes
+only its own entry, atomically, under the home's lock.
 
 ## Integration administration
 
@@ -71,9 +73,11 @@ Install a newer attested archive with the same script. The installer writes a ve
 switches the per-user launcher. Previous versioned executables remain available for rollback. A running daemon keeps
 using its current verified bytes until it stops, so launcher replacement does not mutate a live process.
 
-Before changing the active daemon, finish the current turn or explicitly interrupt and cool affected sessions in VS
-Code. `runtrol panic` stops every supervised provider process and the daemon. Use it only after reviewing active work.
-The provider-owned conversation remains with the provider, but an active turn is interrupted.
+Nothing has to be finished before the new build serves. The first command run from it starts a new generation
+beside the running daemon; the running daemon hands over the store, stops taking new conversations, keeps serving
+the turns already running, and exits by itself when none is left. `runtrol status` shows both while both live.
+`runtrol panic` still stops every supervised provider process and the daemon at once; use it only after reviewing
+active work, because an active turn is interrupted.
 
 Rollback by running the installer from the earlier attested target archive. Verify that its protocol revision
 inventory overlaps every installed consumer and that its `rollbackSafeStoreSchema` accepts the current state. Release

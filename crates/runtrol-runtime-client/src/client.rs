@@ -2512,6 +2512,8 @@ mod tests {
             instance_id: "rtm_0123456789abcdef0123456789abcdef".to_owned(),
             endpoint: "fixture".to_owned(),
             runtime_version: "0.1.1".to_owned(),
+            digest: "0".repeat(64),
+            draining: false,
         };
         let mut challenge = ServerChallenge {
             instance_id: locator.instance_id.clone(),

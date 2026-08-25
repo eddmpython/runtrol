@@ -17,6 +17,16 @@ pub enum StoreError {
         path: AbsPath,
     },
 
+    /// This process handed the database to a successor daemon generation and no longer holds it.
+    ///
+    /// Not damage and not a lock conflict: a draining generation keeps answering its live conversations
+    /// while the generation that replaced it owns every durable pointer from here on.
+    #[error("{path} was handed to the successor Runtrol generation; this generation is draining")]
+    Released {
+        /// The database file.
+        path: AbsPath,
+    },
+
     /// The database file could not be opened.
     #[error("cannot open {path}: {source}")]
     Open {
@@ -124,6 +134,7 @@ impl StoreError {
     ///
     /// Every schema refusal, a lock conflict, and damaged authorization need a person. A decode failure of one
     /// session row does not: the rest of that list is still readable, which is why only the device codec is here.
+    /// A released store does not either: the successor generation already owns the file and answers for it.
     #[must_use]
     pub const fn needs_the_operator(&self) -> bool {
         matches!(

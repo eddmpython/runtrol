@@ -14,7 +14,7 @@ import { ConversationView, type WebviewPerformance } from "./conversationView";
 import { Controller } from "./controller";
 import { CoreClient } from "./core/client";
 import { CoreLocator } from "./core/locator";
-import { superviseCoreCurrency } from "./coreSupersessionSurface";
+import { superviseCoreCurrency } from "./coreCurrencySurface";
 import { NO_PROJECT_LABEL, readDraftState } from "./draft";
 import { readGitBranch } from "./gitBranch";
 import {
@@ -89,6 +89,7 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
   const runtime = new StudioRuntimeClient(
     context,
     () => locator.runtimeExecutable(),
+    () => locator.managedDigest(),
     (pendingId, signature) => selfApproveIntegration(client, pendingId, signature),
     (confirmationId, sessionId) => confirmRuntimeForget(client, confirmationId, sessionId),
     (confirmationId, workspace) => confirmRuntimeSharedOpen(client, confirmationId, workspace),
@@ -765,8 +766,8 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
       void run(() => afterReady(() => rootFollowing.follow()));
     }),
   );
-  // Before the Runtime integration speaks: rolling an older daemon forward here is what lets
-  // everything past the hello assume the daemon and this extension are the same build.
+  // Before the Runtime integration speaks: proving the daemon that answered is the installed generation
+  // is what lets everything past the hello assume the daemon and this extension are the same build.
   const runtimeInitialization = superviseCoreCurrency(client, locator).then(() => runtime.initialize());
   const controllerInitialization = runtimeInitialization.then(async () => {
     initializationStage = "controller";

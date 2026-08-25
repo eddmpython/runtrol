@@ -89,10 +89,13 @@ impl Store {
     ///
     /// [`StoreError::Engine`] when the read fails, [`StoreError::Codec`] when the stored row is malformed.
     pub fn get_session(&self, session: SessionId) -> Result<Option<SessionRow>, StoreError> {
-        let read = self.db().begin_read().map_err(|error| StoreError::Engine {
-            doing: "starting a read",
-            source: Box::new(error.into()),
-        })?;
+        let read = self
+            .db()?
+            .begin_read()
+            .map_err(|error| StoreError::Engine {
+                doing: "starting a read",
+                source: Box::new(error.into()),
+            })?;
         let table = match read.open_table(SESSIONS) {
             Ok(table) => table,
             // Nothing has been written yet. An empty list is the answer, not an error.
@@ -147,10 +150,13 @@ impl Store {
     ///
     /// [`StoreError::Engine`] when the scan itself fails.
     pub fn list_sessions(&self) -> Result<ListedSessions, StoreError> {
-        let read = self.db().begin_read().map_err(|error| StoreError::Engine {
-            doing: "starting a read",
-            source: Box::new(error.into()),
-        })?;
+        let read = self
+            .db()?
+            .begin_read()
+            .map_err(|error| StoreError::Engine {
+                doing: "starting a read",
+                source: Box::new(error.into()),
+            })?;
         let table = match read.open_table(SESSIONS) {
             Ok(table) => table,
             Err(redb::TableError::TableDoesNotExist(_)) => return Ok(ListedSessions::default()),
@@ -193,10 +199,13 @@ impl Store {
         provider: ProviderId,
         native: &NativeSessionId,
     ) -> Result<Option<SessionId>, StoreError> {
-        let read = self.db().begin_read().map_err(|error| StoreError::Engine {
-            doing: "starting a read",
-            source: Box::new(error.into()),
-        })?;
+        let read = self
+            .db()?
+            .begin_read()
+            .map_err(|error| StoreError::Engine {
+                doing: "starting a read",
+                source: Box::new(error.into()),
+            })?;
         let table = match read.open_table(NATIVE_INDEX) {
             Ok(table) => table,
             Err(redb::TableError::TableDoesNotExist(_)) => return Ok(None),
@@ -292,7 +301,7 @@ impl Store {
     /// [`StoreError::Engine`] when the write fails.
     pub fn put_cursor(&self, session: SessionId, cursor: Cursor) -> Result<(), StoreError> {
         let mut write = self
-            .db()
+            .db()?
             .begin_write()
             .map_err(|error| StoreError::Engine {
                 doing: "starting a cursor write",
@@ -330,10 +339,13 @@ impl Store {
     ///
     /// [`StoreError::Engine`] when the read fails.
     pub fn get_cursor(&self, session: SessionId) -> Result<Option<Cursor>, StoreError> {
-        let read = self.db().begin_read().map_err(|error| StoreError::Engine {
-            doing: "starting a read",
-            source: Box::new(error.into()),
-        })?;
+        let read = self
+            .db()?
+            .begin_read()
+            .map_err(|error| StoreError::Engine {
+                doing: "starting a read",
+                source: Box::new(error.into()),
+            })?;
         let table = match read.open_table(CURSORS) {
             Ok(table) => table,
             Err(redb::TableError::TableDoesNotExist(_)) => return Ok(None),
@@ -362,7 +374,7 @@ impl Store {
         doing: &'static str,
     ) -> Result<redb::WriteTransaction, StoreError> {
         let mut write = self
-            .db()
+            .db()?
             .begin_write()
             .map_err(|error| StoreError::Engine {
                 doing,

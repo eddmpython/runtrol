@@ -759,21 +759,36 @@ async fn serve_surfaces(
 ) -> Result<(), ServeError> {
     let composed = Arc::new(composed);
     let runtime_instance =
-        crate::runtime_locator::load_or_create_instance(composed.home.paths().runtime_instance())
+        crate::generations::load_or_create_instance(composed.home.paths().runtime_instance())
             .map_err(|error| ServeError::RuntimeBootstrap(error.to_string()))?;
+    // This daemon is one generation: its public endpoint carries its own build digest, so a newer
+    // build binds beside it rather than against it, and the locator lists both while both live.
+    let identity = crate::generations::GenerationIdentity::of_this_executable()
+        .map_err(|error| ServeError::RuntimeBootstrap(error.to_string()))?;
     let runtime_address = composed
         .home
         .paths()
-        .runtime_endpoint()
+        .generation_runtime_endpoint(identity.tag())
+        .map_err(|error| ServeError::RuntimeBootstrap(error.to_string()))?
         .address()
         .to_owned();
     let mut runtime_listener = Listener::bind_owner_only(&runtime_address).await?;
-    let _runtime_locator = crate::runtime_locator::PublishedLocator::publish(
-        composed.home.paths().runtime_locator(),
+    let control_address = listener.address().to_owned();
+    let mut generation = crate::generations::PublishedGeneration::publish(
+        composed.home.paths(),
         &runtime_instance,
+        &identity,
         &runtime_address,
+        listener.address(),
     )
+    .await
     .map_err(|error| ServeError::RuntimeBootstrap(error.to_string()))?;
+    // Flipped once, by a successor's drain request, and never back. From then on the store belongs to
+    // the successor, nothing new is opened here, and this loop ends when no turn is running.
+    let mut draining = false;
+    // Everything a draining generation stops doing: warming providers, updating them, probing accounts,
+    // scheduling missions, and holding the relay, all of which the successor now does for this home.
+    let mut background: Vec<tokio::task::AbortHandle> = Vec::new();
     // Both owner queues preserve the 64-request admission contract without preallocating 64 copies of their large
     // request envelopes while no client exists. Each active caller owns exactly one envelope allocation.
     let (asking, mut asked) = mpsc::channel::<Box<Asked>>(ASKED_QUEUE);
@@ -827,7 +842,7 @@ async fn serve_surfaces(
                 composed.device_authority.clone(),
                 composed.pairing_admin.clone(),
             );
-            connections.spawn(supervisor);
+            background.push(connections.spawn(supervisor));
             Some(hub)
         }
         None => match (&composed.pc_identity, &composed.relay_seed) {
@@ -839,23 +854,23 @@ async fn serve_surfaces(
                     composed.device_authority.clone(),
                     composed.pairing_admin.clone(),
                 );
-                connections.spawn(supervisor);
+                background.push(connections.spawn(supervisor));
                 Some(hub)
             }
             _ => None,
         },
     };
     let (upgrading, mut upgrades) = mpsc::channel::<NoiseUpgrade>(PHONE_UPGRADE_QUEUE);
-    connections.spawn(prewarm_providers(
+    background.push(connections.spawn(prewarm_providers(
         Arc::clone(&composed),
         Arc::clone(&discovering),
-    ));
-    connections.spawn(automatic_provider_updates(
+    )));
+    background.push(connections.spawn(automatic_provider_updates(
         Arc::clone(&composed),
         Arc::clone(&discovering),
         reserving.clone(),
         noticing_updates,
-    ));
+    )));
     let (local_failed, mut local_failures) = mpsc::unbounded_channel();
     {
         let asking = asking.clone();
@@ -895,16 +910,16 @@ async fn serve_surfaces(
             while clients.join_next().await.is_some() {}
         });
     }
-    connections.spawn(crate::account_probe::supervise(
+    background.push(connections.spawn(crate::account_probe::supervise(
         Arc::clone(&composed),
         runtime_providers.clone(),
         account_gauges.clone(),
-    ));
-    connections.spawn(crate::mission_schedule::supervise(
+    )));
+    background.push(connections.spawn(crate::mission_schedule::supervise(
         Arc::clone(&composed),
-        composed.home.paths().endpoint().address().to_owned(),
+        control_address,
         Arc::clone(&mission_schedule_wake),
-    ));
+    )));
     let (runtime_failed, mut runtime_failures) = mpsc::unbounded_channel();
     {
         let runtime_instance = runtime_instance.clone();
@@ -1107,6 +1122,11 @@ async fn serve_surfaces(
                     prepared,
                     reservation,
                 );
+                if matches!(reply, Reply::Draining) && !draining {
+                    draining = true;
+                    begin_drain(&composed, &mut background, &mut relay_hub);
+                    generation.update(live_turns_of(&sessions), true);
+                }
                 let wakes_for_new_signal = wakes_for_new_mission_flight_signal(mission_flight_signal, &reply);
                 let wakes_mission_schedule = mission_schedule_mutation
                     && matches!(&reply, Reply::One(Response::Mission(_)));
@@ -1127,12 +1147,16 @@ async fn serve_surfaces(
                         &sessions,
                         &provider_update_notices,
                     );
+                    generation.update(live_turns_of(&sessions), draining);
                 }
                 if wakes_for_new_signal {
                     schedule_push_wakes(&mut connections, &composed, &push_wake_active);
                 }
                 if wakes_mission_schedule {
                     mission_schedule_wake.notify_one();
+                }
+                if draining && live_turns_of(&sessions) == 0 {
+                    break Ok(());
                 }
             }
 
@@ -1146,12 +1170,23 @@ async fn serve_surfaces(
                     &request,
                     crate::runtime_control::RuntimeControlRequest::Watch { .. }
                 );
-                let reply = runtime_control.answer(
-                    &composed.store,
-                    &mut sessions,
-                    integration,
-                    request,
-                );
+                let reply = if draining
+                    && matches!(&request, crate::runtime_control::RuntimeControlRequest::PrepareOpen(_))
+                {
+                    crate::runtime_control::RuntimeControlReply::Failed(
+                        crate::runtime_control::RuntimeControlFailure::new(
+                            runtrol_runtime_protocol::RuntimeErrorKind::RuntimeUnavailable,
+                            DRAINING_REFUSAL,
+                        ),
+                    )
+                } else {
+                    runtime_control.answer(
+                        &composed.store,
+                        &mut sessions,
+                        integration,
+                        request,
+                    )
+                };
                 if let Err(reply) = answered.send(reply) {
                     match reply {
                         crate::runtime_control::RuntimeControlReply::Sending {
@@ -1412,7 +1447,10 @@ async fn serve_surfaces(
                 });
                 if let Some(published) = published {
                     let should_wake = published.event.body.deserves_a_notification();
+                    // A draining generation persists nothing: the store belongs to its successor now,
+                    // and the provider's own transcript is where this conversation reopens from.
                     if index_changed
+                        && !draining
                         && let runtrol_provider::EventBody::ApprovalRequested(request) = &published.event.body
                     {
                         let target = {
@@ -1438,17 +1476,19 @@ async fn serve_surfaces(
                             }
                         }
                     }
-                    if let Err(error) = crate::dispatch::persist_live(&composed, &sessions, session) {
-                        break Err(error.into());
-                    }
-                    if let Err(error) = composed.store.put_cursor(
-                        session,
-                        runtrol_store::Cursor {
-                            src_end: published.event.src_end,
-                            seq: published.event.seq,
-                        },
-                    ) {
-                        break Err(error.into());
+                    if !draining {
+                        if let Err(error) = crate::dispatch::persist_live(&composed, &sessions, session) {
+                            break Err(error.into());
+                        }
+                        if let Err(error) = composed.store.put_cursor(
+                            session,
+                            runtrol_store::Cursor {
+                                src_end: published.event.src_end,
+                                seq: published.event.seq,
+                            },
+                        ) {
+                            break Err(error.into());
+                        }
                     }
                     if should_wake {
                         schedule_push_wakes(&mut connections, &composed, &push_wake_active);
@@ -1468,6 +1508,10 @@ async fn serve_surfaces(
                         &sessions,
                         &provider_update_notices,
                     );
+                    generation.update(live_turns_of(&sessions), draining);
+                    if draining && live_turns_of(&sessions) == 0 {
+                        break Ok(());
+                    }
                 }
                 if gauges_changed {
                     // Its own channel rather than a session-index rebuild: a limit report arrives with ordinary
@@ -1508,7 +1552,45 @@ async fn serve_surfaces(
 
     connections.abort_all();
     while connections.join_next().await.is_some() {}
+    // Removed before the process ends, so nothing reads an entry for a daemon that is gone.
+    drop(generation);
     outcome
+}
+
+/// What a draining generation tells anything that would open a new conversation here.
+const DRAINING_REFUSAL: &str =
+    "this Runtrol Core generation is draining; the newer generation takes new conversations";
+
+/// Hand this home to the successor: the store first, then everything only one generation should do.
+///
+/// The connections stay: watchers of running turns keep their streams, and the successor's liveness probe
+/// still gets an answer on the control endpoint until this process ends.
+fn begin_drain(
+    composed: &Composed,
+    background: &mut Vec<tokio::task::AbortHandle>,
+    relay_hub: &mut Option<crate::relay::RelayHub>,
+) {
+    composed
+        .draining
+        .store(true, std::sync::atomic::Ordering::Release);
+    // The successor is retrying its open right now; this is the moment it succeeds.
+    let released = composed.store.release();
+    debug_assert!(
+        released,
+        "a drain request reached a store that was already released"
+    );
+    for task in background.drain(..) {
+        task.abort();
+    }
+    *relay_hub = None;
+}
+
+/// How many turns are running here: what keeps a draining generation alive, and what `runtrol status` shows.
+fn live_turns_of(sessions: &SessionManager) -> u32 {
+    u32::try_from(crate::dispatch::live_turns(
+        sessions.live_sessions().map(|live| live.state),
+    ))
+    .unwrap_or(u32::MAX)
 }
 
 fn schedule_push_wakes(
@@ -1699,7 +1781,7 @@ fn abandon_reply(
             drop(cancelling.send(ReservationAsked::ReleaseProviderUpdate(reservation)));
             false
         }
-        Reply::One(_) | Reply::Watching(_) | Reply::WatchingSessions | Reply::Retiring => false,
+        Reply::One(_) | Reply::Watching(_) | Reply::WatchingSessions | Reply::Draining => false,
     }
 }
 
@@ -1858,6 +1940,20 @@ async fn converse_inner(
             &composed.device_authority,
         ) {
             if write(&mut connection, &refuse(&refusal.to_string()))
+                .await
+                .is_err()
+            {
+                return;
+            }
+            continue;
+        }
+
+        // Refused before a slot is reserved or a provider process started: a draining generation opens
+        // nothing new, and the successor is already listening for exactly this request.
+        if matches!(request, Request::Start { .. } | Request::Resume { .. })
+            && composed.draining.load(std::sync::atomic::Ordering::Acquire)
+        {
+            if write(&mut connection, &refuse(DRAINING_REFUSAL))
                 .await
                 .is_err()
             {
@@ -2090,17 +2186,16 @@ async fn converse_inner(
                 }
             }
 
-            // The retirement stands whether or not the answer could be written: the caller asked
-            // this build to stop serving, and a caller that vanished first changes nothing about
-            // that. Exit code 0 because retiring on request is this process working as designed.
-            // Idle agent processes end with this exit (containment holds every descendant) and
-            // resume from their providers' own stores under the successor; the dispatcher has
-            // already refused if any conversation was mid-turn.
-            Reply::Retiring => {
-                // ok: the answer is best-effort on a process that is about to exist no more; the
-                // caller detects the exit itself by respawning and greeting the successor.
-                drop(write(&mut connection, &Response::Done).await);
-                std::process::exit(0);
+            // The drain already happened in the owner: the store is released and nothing new opens.
+            // This connection only acknowledges; the successor detects the handover by opening the
+            // store, so a caller that vanished first changes nothing.
+            Reply::Draining => {
+                if write(&mut connection, &crate::generations::drained())
+                    .await
+                    .is_err()
+                {
+                    return;
+                }
             }
 
             // This connection is a view of a session from here on. It stops when the session's stream ends or when

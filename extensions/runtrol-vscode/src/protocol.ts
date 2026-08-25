@@ -366,10 +366,7 @@ export type Request =
         workspace: string;
       };
     }
-  | { ask: "rename"; with: { session: string; label: string | null } }
-  // Ask an idle daemon to exit so the replaced-on-disk binary serves the next request. Daemons
-  // older than 2026-08-20 refuse this by name, which is the legacy detection.
-  | { ask: "retire" };
+  | { ask: "rename"; with: { session: string; label: string | null } };
 
 export type Response =
   | {
@@ -379,8 +376,8 @@ export type Response =
         providers: PrivateProviderLine[];
         device: { scopes: string[]; roots: string[]; providers: string[] } | null;
         push_public_key: string | null;
-        // SHA-256 of the daemon's own executable, for supersession. Absent on daemons older than
-        // 2026-08-20, and absence means exactly that: an older daemon.
+        // SHA-256 of the daemon's own executable: its generation. Compared with the installed Core
+        // to prove the daemon that answered is this build. Absent only on daemons older than 2026-08-20.
         build_digest?: string | null;
       };
     }

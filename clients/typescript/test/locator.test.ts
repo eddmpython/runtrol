@@ -18,25 +18,63 @@ test("a native locator verifier must be one exact absolute executable", () => {
   );
 });
 
-test("an owner-only locator produces one validated local endpoint", async () => {
+test("an owner-only locator lists generations and the newest one that is not draining is chosen", async () => {
   const scratch = await mkdtemp(join(tmpdir(), "runtrol-ts-locator-"));
   const path = join(scratch, "runtime.locator.json");
-  const endpoint = process.platform === "win32"
-    ? "\\\\.\\pipe\\runtrol-runtime-fixture"
-    : join(scratch, "runtrol-runtime.sock");
+  const endpointOf = (tag: string) => process.platform === "win32"
+    ? `\\\\.\\pipe\\runtrol-runtime-fixture-${tag}`
+    : join(scratch, `runtrol-runtime-${tag}.sock`);
+  const generation = (byte: string, startedAtMs: number, draining: boolean) => ({
+    digest: byte.repeat(64),
+    endpointKind: process.platform === "win32" ? "namedPipe" : "unixSocket",
+    endpoint: endpointOf(byte.repeat(16)),
+    controlEndpoint: `control-${byte}`,
+    runtimeVersion: "0.1.1",
+    processId: process.pid,
+    startedAtMs,
+    liveSessions: 0,
+    draining,
+  });
   try {
     await writeFile(path, JSON.stringify({
-      schema: 1,
+      schema: 2,
       instanceId: `rtm_${"4".repeat(32)}`,
-      endpointKind: process.platform === "win32" ? "namedPipe" : "unixSocket",
-      endpoint,
-      runtimeVersion: "0.1.1",
-      processId: process.pid,
+      generations: [generation("a", 1, false), generation("b", 2, false), generation("c", 3, true)],
     }));
     await makeOwnerOnly(path);
     const state = await runtimeLocatorAt(path).inspect();
     assert.equal(state.state, "running");
-    if (state.state === "running") assert.equal(state.locator.endpoint, endpoint);
+    if (state.state === "running") {
+      assert.equal(state.locator.endpoint, endpointOf("b".repeat(16)), "the draining newest is skipped");
+      assert.equal(state.locator.digest, "b".repeat(64));
+    }
+    const preferred = await runtimeLocatorAt(path, "a".repeat(64)).inspect();
+    assert.equal(preferred.state, "running");
+    if (preferred.state === "running") assert.equal(preferred.locator.digest, "a".repeat(64));
+    const all = await runtimeLocatorAt(path).inspectAll();
+    assert.equal(all.length, 3);
+  } finally {
+    await rm(scratch, { recursive: true, force: true });
+  }
+});
+
+test("a locator from before generations is malformed rather than misread", async () => {
+  const scratch = await mkdtemp(join(tmpdir(), "runtrol-ts-locator-legacy-"));
+  const path = join(scratch, "runtime.locator.json");
+  try {
+    await writeFile(path, JSON.stringify({
+      schema: 1,
+      instanceId: `rtm_${"4".repeat(32)}`,
+      endpointKind: "namedPipe",
+      endpoint: "\\\\.\\pipe\\runtrol-runtime-fixture",
+      runtimeVersion: "0.1.1",
+      processId: process.pid,
+    }));
+    await makeOwnerOnly(path);
+    await assert.rejects(
+      () => runtimeLocatorAt(path).inspect(),
+      (error: unknown) => error instanceof RuntimeLocatorError && error.code === "malformed",
+    );
   } finally {
     await rm(scratch, { recursive: true, force: true });
   }

@@ -32,7 +32,7 @@ use std::io;
 
 use runtrol_provider::{AbsPath, PathError};
 
-pub use layout::{AgentToolSlot, Endpoint, Layout};
+pub use layout::{AgentToolSlot, Endpoint, GENERATION_TAG_LENGTH, Layout};
 pub use os::Ignored;
 use os::Unusable;
 
@@ -90,6 +90,13 @@ pub enum HomeError {
         segment: &'static str,
         /// Why it was refused.
         source: PathError,
+    },
+
+    /// A daemon generation tag is not the sixteen lowercase hex digits an endpoint name is built from.
+    #[error("{tag:?} is not a daemon generation tag (sixteen lowercase hex digits)")]
+    Generation {
+        /// What was given.
+        tag: String,
     },
 
     /// The socket path would not fit the kernel's address field.

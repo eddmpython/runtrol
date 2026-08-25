@@ -26,7 +26,7 @@ pub use events::{
     CursorRegression, Delivery, FanOut, Published, Reach, ReplayRing, Sequencer, SessionHub,
     SessionView, SubscriberId, Subscription, WatchItem, WatchStart,
 };
-pub use home::{AgentToolSlot, Endpoint, HomeError, Layout, RuntrolHome};
+pub use home::{AgentToolSlot, Endpoint, GENERATION_TAG_LENGTH, HomeError, Layout, RuntrolHome};
 pub use probe::{
     BinFacts, Flags, LeadingArgFacts, LeadingFileFacts, ProbeCache, ProbeError, locate,
     locate_named, probe, probe_program,

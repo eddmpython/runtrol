@@ -35,8 +35,10 @@ installed the Runtime rolls an older daemon forward before using it. See `docs/c
 ## Local transport and locator
 
 Runtime publishes an owner-readable `runtime.locator.json` only after its public endpoint is ready. The locator names
-an opaque endpoint, Runtime instance ID, product version, start time, and process ID. It is bootstrap data, not
-authority.
+the Runtime instance ID and every daemon generation currently serving the home: for each, the executable digest, an
+opaque public endpoint, the private control endpoint, product version, process ID, start time, running turns, and
+whether it is draining. A consumer connects to the generation running the build it installed when that is listed and
+not draining, otherwise to the newest generation that is not draining. It is bootstrap data, not authority.
 
 The Rust and TypeScript SDKs derive the platform state directory, cap the locator at 8 KiB, reject links and malformed
 records, verify owner-only permissions, and validate the endpoint kind. Windows uses an owner-only named pipe. macOS

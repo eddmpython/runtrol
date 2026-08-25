@@ -1,18 +1,27 @@
 //! Platform-standard Runtime locator discovery and bounded validation.
+//!
+//! One locator lists every daemon generation of the home. Inspecting it chooses one: the generation running the
+//! executable digest the consumer prefers when it names one, otherwise the newest generation that is not
+//! draining. A consumer that installed a Runtime build prefers that build, so it never talks past the hello to a
+//! generation older than itself.
 
 use std::path::{Path, PathBuf};
 
-use runtrol_runtime_protocol::{RUNTIME_LOCATOR_SCHEMA, RuntimeEndpointKind, RuntimeLocatorRecord};
+use runtrol_runtime_protocol::{
+    RUNTIME_LOCATOR_SCHEMA, RuntimeEndpointKind, RuntimeGeneration, RuntimeLocatorRecord,
+};
 
 const LOCATOR_FILE: &str = "runtime.locator.json";
 const RUNTIME_FOLDER: &str = "runtrol";
-const MAX_LOCATOR_BYTES: u64 = 8 * 1024;
+const MAX_LOCATOR_BYTES: u64 = 16 * 1024;
 const MAX_ENDPOINT_BYTES: usize = 1024;
+const MAX_GENERATIONS: usize = 16;
 
 /// A validated Runtime locator ready for connection and instance proof.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RuntimeLocator {
     path: PathBuf,
+    prefer_digest: Option<String>,
     #[cfg(test)]
     fixture: Option<ValidatedLocator>,
 }
@@ -29,9 +38,20 @@ impl RuntimeLocator {
     pub fn system() -> Result<Self, LocatorError> {
         Ok(Self {
             path: system_state_root()?.join(RUNTIME_FOLDER).join(LOCATOR_FILE),
+            prefer_digest: None,
             #[cfg(test)]
             fixture: None,
         })
+    }
+
+    /// Prefer the generation running one exact executable digest, when it is listed and not draining.
+    ///
+    /// A consumer that installed a Runtime build names that build here; with no such generation listed, or none
+    /// named, inspection falls back to the newest generation that is not draining.
+    #[must_use]
+    pub fn preferring(mut self, digest: impl Into<String>) -> Self {
+        self.prefer_digest = Some(digest.into());
+        self
     }
 
     /// Read and validate the current locator without starting or downloading Runtime.
@@ -44,10 +64,50 @@ impl RuntimeLocator {
         if let Some(locator) = &self.fixture {
             return Ok(LocatorState::Running(locator.clone()));
         }
+        let Some(record) = self.read()? else {
+            return Ok(LocatorState::NotInstalled);
+        };
+        let chosen = self
+            .prefer_digest
+            .as_deref()
+            .and_then(|digest| {
+                record
+                    .generations
+                    .iter()
+                    .find(|generation| generation.digest == digest && !generation.draining)
+            })
+            .or_else(|| record.current());
+        let Some(chosen) = chosen else {
+            return Ok(LocatorState::NotInstalled);
+        };
+        Ok(LocatorState::Running(validated(&record, chosen)))
+    }
+
+    /// Every listed generation, validated, oldest start first. Empty when nothing is installed.
+    ///
+    /// # Errors
+    ///
+    /// A typed unsafe, malformed, or I/O state.
+    pub fn inspect_all(&self) -> Result<Vec<ValidatedLocator>, LocatorError> {
+        #[cfg(test)]
+        if let Some(locator) = &self.fixture {
+            return Ok(vec![locator.clone()]);
+        }
+        let Some(record) = self.read()? else {
+            return Ok(Vec::new());
+        };
+        Ok(record
+            .generations
+            .iter()
+            .map(|generation| validated(&record, generation))
+            .collect())
+    }
+
+    fn read(&self) -> Result<Option<RuntimeLocatorRecord>, LocatorError> {
         let metadata = match std::fs::symlink_metadata(&self.path) {
             Ok(metadata) => metadata,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                return Ok(LocatorState::NotInstalled);
+                return Ok(None);
             }
             Err(error) => {
                 return Err(LocatorError::Io(io_detail(
@@ -77,11 +137,7 @@ impl RuntimeLocator {
         let record: RuntimeLocatorRecord = serde_json::from_slice(&bytes)
             .map_err(|error| LocatorError::Malformed(error.to_string()))?;
         validate_record(&record, &self.path)?;
-        Ok(LocatorState::Running(ValidatedLocator {
-            instance_id: record.instance_id,
-            endpoint: record.endpoint,
-            runtime_version: record.runtime_version,
-        }))
+        Ok(Some(record))
     }
 
     /// Construct a locator at an isolated path for contract and packed-artifact tests.
@@ -90,6 +146,7 @@ impl RuntimeLocator {
     pub fn for_testing(path: impl Into<PathBuf>) -> Self {
         Self {
             path: path.into(),
+            prefer_digest: None,
             #[cfg(test)]
             fixture: None,
         }
@@ -103,30 +160,45 @@ impl RuntimeLocator {
     ) -> Self {
         Self {
             path: PathBuf::new(),
+            prefer_digest: None,
             fixture: Some(ValidatedLocator {
                 instance_id: instance_id.into(),
                 endpoint: endpoint.into(),
                 runtime_version: runtime_version.into(),
+                digest: "0".repeat(64),
+                draining: false,
             }),
         }
+    }
+}
+
+fn validated(record: &RuntimeLocatorRecord, generation: &RuntimeGeneration) -> ValidatedLocator {
+    ValidatedLocator {
+        instance_id: record.instance_id.clone(),
+        endpoint: generation.endpoint.clone(),
+        runtime_version: generation.runtime_version.clone(),
+        digest: generation.digest.clone(),
+        draining: generation.draining,
     }
 }
 
 /// Observable locator state. Missing Runtime is a product state, not an I/O failure.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LocatorState {
-    /// No locator exists at the platform-standard location.
+    /// No locator exists at the platform-standard location, or it lists no generation to connect to.
     NotInstalled,
     /// A bounded locator names a running candidate. Initialization still proves the instance.
     Running(ValidatedLocator),
 }
 
-/// Operational bootstrap fields after closed-schema and platform validation.
+/// Operational bootstrap fields of one chosen generation after closed-schema and platform validation.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ValidatedLocator {
     pub(crate) instance_id: String,
     pub(crate) endpoint: String,
     pub(crate) runtime_version: String,
+    pub(crate) digest: String,
+    pub(crate) draining: bool,
 }
 
 impl ValidatedLocator {
@@ -147,6 +219,18 @@ impl ValidatedLocator {
     pub fn runtime_version(&self) -> &str {
         &self.runtime_version
     }
+
+    /// SHA-256 of the daemon executable behind this endpoint: the generation.
+    #[must_use]
+    pub fn digest(&self) -> &str {
+        &self.digest
+    }
+
+    /// Whether a newer generation has taken over new work from this one.
+    #[must_use]
+    pub const fn draining(&self) -> bool {
+        self.draining
+    }
 }
 
 fn validate_record(record: &RuntimeLocatorRecord, locator_path: &Path) -> Result<(), LocatorError> {
@@ -161,20 +245,48 @@ fn validate_record(record: &RuntimeLocatorRecord, locator_path: &Path) -> Result
             "Runtime instance identity is empty or oversized".to_owned(),
         ));
     }
-    if record.runtime_version.is_empty() || record.runtime_version.len() > 128 {
+    if record.generations.len() > MAX_GENERATIONS {
+        return Err(LocatorError::Malformed(format!(
+            "the Runtime locator lists {} generations and the limit is {MAX_GENERATIONS}",
+            record.generations.len()
+        )));
+    }
+    for generation in &record.generations {
+        validate_generation(generation, locator_path)?;
+    }
+    Ok(())
+}
+
+fn validate_generation(
+    generation: &RuntimeGeneration,
+    locator_path: &Path,
+) -> Result<(), LocatorError> {
+    if generation.runtime_version.is_empty() || generation.runtime_version.len() > 128 {
         return Err(LocatorError::Malformed(
             "Runtime version is empty or oversized".to_owned(),
         ));
     }
-    if record.process_id == 0
-        || record.endpoint.is_empty()
-        || record.endpoint.len() > MAX_ENDPOINT_BYTES
+    if generation.digest.len() != 64
+        || !generation
+            .digest
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(LocatorError::Malformed(
+            "Runtime generation digest is not lowercase SHA-256 hex".to_owned(),
+        ));
+    }
+    if generation.process_id == 0
+        || generation.endpoint.is_empty()
+        || generation.endpoint.len() > MAX_ENDPOINT_BYTES
+        || generation.control_endpoint.is_empty()
+        || generation.control_endpoint.len() > MAX_ENDPOINT_BYTES
     {
         return Err(LocatorError::Malformed(
             "Runtime process or endpoint is invalid".to_owned(),
         ));
     }
-    validate_endpoint(record.endpoint_kind, &record.endpoint, locator_path)
+    validate_endpoint(generation.endpoint_kind, &generation.endpoint, locator_path)
 }
 
 #[cfg(windows)]
@@ -208,15 +320,29 @@ fn validate_endpoint(
     let expected_parent = locator_path.parent().ok_or_else(|| {
         LocatorError::Unsafe("the Runtime locator has no owning state directory".to_owned())
     })?;
+    let socket_name = endpoint.file_name().and_then(std::ffi::OsStr::to_str);
     if !endpoint.is_absolute()
         || endpoint.parent() != Some(expected_parent)
-        || endpoint.file_name().and_then(std::ffi::OsStr::to_str) != Some("runtrol-runtime.sock")
+        || !socket_name.is_some_and(is_generation_socket_name)
     {
         return Err(LocatorError::Unsafe(
             "the Runtime socket escaped its owner-only state directory".to_owned(),
         ));
     }
     Ok(())
+}
+
+/// `runtrol-runtime-<sixteen lowercase hex digits>.sock`: one generation's public socket.
+#[cfg(unix)]
+fn is_generation_socket_name(name: &str) -> bool {
+    name.strip_prefix("runtrol-runtime-")
+        .and_then(|rest| rest.strip_suffix(".sock"))
+        .is_some_and(|tag| {
+            tag.len() == 16
+                && tag
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        })
 }
 
 #[cfg(unix)]
@@ -555,6 +681,7 @@ mod tests {
         let scratch = Scratch::make("missing");
         let locator = RuntimeLocator::for_testing(scratch.0.join(LOCATOR_FILE));
         assert_eq!(locator.inspect(), Ok(LocatorState::NotInstalled));
+        assert_eq!(locator.inspect_all(), Ok(Vec::new()));
     }
 
     #[test]
@@ -569,7 +696,7 @@ mod tests {
 
         std::fs::write(
             &path,
-            r#"{"schema":1,"instanceId":"rtm_x","endpointKind":"namedPipe","endpoint":"x","runtimeVersion":"1","processId":1,"authority":"self"}"#,
+            r#"{"schema":2,"instanceId":"rtm_x","generations":[],"authority":"self"}"#,
         )
         .expect("write unknown field");
         assert!(
@@ -579,5 +706,47 @@ mod tests {
             .is_err()
         );
         assert!(locator.inspect().is_err());
+    }
+
+    fn generation(digest: u8, started_at_ms: u64, draining: bool) -> RuntimeGeneration {
+        RuntimeGeneration {
+            digest: format!("{digest:02x}").repeat(32),
+            endpoint_kind: if cfg!(windows) {
+                RuntimeEndpointKind::NamedPipe
+            } else {
+                RuntimeEndpointKind::UnixSocket
+            },
+            endpoint: format!("endpoint-{digest:02x}"),
+            control_endpoint: format!("control-{digest:02x}"),
+            runtime_version: "0.1.1".to_owned(),
+            process_id: u32::from(digest),
+            started_at_ms,
+            live_sessions: 0,
+            draining,
+        }
+    }
+
+    #[test]
+    fn the_newest_generation_that_is_not_draining_is_chosen_unless_a_digest_is_preferred() {
+        let record = RuntimeLocatorRecord {
+            schema: RUNTIME_LOCATOR_SCHEMA,
+            instance_id: "rtm_0123456789abcdef0123456789abcdef".to_owned(),
+            generations: vec![
+                generation(0xaa, 1, false),
+                generation(0xbb, 2, false),
+                generation(0xcc, 3, true),
+            ],
+        };
+        assert_eq!(
+            record.current().map(|generation| generation.process_id),
+            Some(0xbb),
+            "the draining newest is skipped"
+        );
+        let chosen = validated(
+            &record,
+            record.with_digest(&"aa".repeat(32)).expect("listed"),
+        );
+        assert_eq!(chosen.digest(), "aa".repeat(32));
+        assert!(!chosen.draining());
     }
 }

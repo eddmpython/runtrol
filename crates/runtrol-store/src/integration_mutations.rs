@@ -53,7 +53,7 @@ impl Store {
         key: IntegrationMutationKey,
     ) -> Result<Option<IntegrationMutationRow>, StoreError> {
         let read = self
-            .db()
+            .db()?
             .begin_read()
             .map_err(|error| engine("starting a Runtime mutation read", error))?;
         let table = match read.open_table(INTEGRATION_MUTATIONS) {

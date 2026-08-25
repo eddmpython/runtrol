@@ -29,8 +29,16 @@ and refactoring that no user can observe do not belong here.
   other conversation.
 - Installing a Runtrol update while its Core was running failed with "EPERM: operation not permitted, rename
   ... runtrol.exe" on Windows. Each build's Core now lives under its own content-named file and no file is
-  ever written over, so the update lands while the old Core keeps serving and takes over when that Core
-  retires.
+  ever written over.
+- A Runtrol update no longer waits for the machine to go idle, and never again sits unapplied for days behind a
+  Core that kept refusing to stop. The new Core starts beside the running one as its own generation, takes over
+  the moment the old one hands over its store (milliseconds, whatever the agents are doing), and the old Core
+  finishes only the turns already running and then exits by itself. Nothing is killed and nothing is asked.
+- "Runtime reconnect deadline expired" after an update is gone with it: there is no moment any more where the
+  old Core is down and the new one is not yet up.
+- `runtrol status` lists every Core generation serving this machine: build, process, running turns, whether it is
+  draining, and whether it still answers. The "Restart the Runtrol Core" button and the `retire` command are
+  removed; a Core built before generations is drained once by the first newer Core to start and needs no button.
 
 ### Changed
 

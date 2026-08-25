@@ -173,6 +173,8 @@ test("hostile Runtime results are rejected by the generated public schema", () =
       instanceId,
       "fixture",
       "0.1.1",
+      "0".repeat(64),
+      false,
     ),
     /not validated by this SDK/,
   );

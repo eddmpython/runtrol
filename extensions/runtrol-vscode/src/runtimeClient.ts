@@ -98,12 +98,16 @@ export class StudioRuntimeClient implements vscode.Disposable {
   private providerSnapshot: ProviderList | null = null;
   private sessionSnapshot: ManagedSessionList | null = null;
   private runtimeExecutable: string | null = null;
+  private preferDigest: string | null = null;
   private providerWatch: symbol | null = null;
   private sessionWatch: symbol | null = null;
 
   constructor(
     private readonly context: vscode.ExtensionContext,
     private readonly locateRuntimeExecutable: () => Promise<string>,
+    /// The digest of the Core this extension installed, so the locator chooses that generation. Null when the
+    /// operator runs their own corePath, in which case the newest generation that is not draining is chosen.
+    private readonly installedCoreDigest: () => Promise<string | null>,
     private readonly selfApprove: (pendingId: string, signature: string) => Promise<boolean>,
     private readonly confirmForget: (
       confirmationId: string,
@@ -119,11 +123,13 @@ export class StudioRuntimeClient implements vscode.Disposable {
 
   async initialize(): Promise<void> {
     this.reportInitialization("bootstrap");
-    const [stored, runtimeExecutable] = await Promise.all([
+    const [stored, runtimeExecutable, preferDigest] = await Promise.all([
       this.loadOrCreateIdentity(),
       this.locateRuntimeExecutable(),
+      this.installedCoreDigest(),
     ]);
     this.runtimeExecutable = runtimeExecutable;
+    this.preferDigest = preferDigest;
     await this.withRuntimeLocator(async () => undefined);
     this.reportInitialization("integration");
     try {
@@ -860,7 +866,7 @@ export class StudioRuntimeClient implements vscode.Disposable {
   }
 
   private withRuntimeLocator<T>(operation: (locator: ValidatedLocator) => Promise<T>): Promise<T> {
-    const pending = this.locator ??= inspectRuntimeLocator(this.runtimeExecutable);
+    const pending = this.locator ??= inspectRuntimeLocator(this.runtimeExecutable, this.preferDigest);
     return pending.then(operation).catch((error: unknown) => {
       if (this.locator === pending) this.locator = null;
       throw error;
@@ -1035,16 +1041,24 @@ function nativeCatalogueFailure(providerId: string, warning: string): NativeChat
   };
 }
 
-async function inspectRuntimeLocator(runtimeExecutable: string | null): Promise<ValidatedLocator> {
-  const locator = RuntimeLocator.system(
-    process.platform === "win32" && runtimeExecutable && isAbsolute(runtimeExecutable)
+async function inspectRuntimeLocator(
+  runtimeExecutable: string | null,
+  preferDigest: string | null,
+): Promise<ValidatedLocator> {
+  const locator = RuntimeLocator.system({
+    ...(process.platform === "win32" && runtimeExecutable && isAbsolute(runtimeExecutable)
       ? { runtimeExecutable }
-      : {},
-  );
+      : {}),
+    ...(preferDigest ? { preferDigest } : {}),
+  });
   const deadline = Date.now() + RUNTIME_LOCATOR_SETTLE_MS;
   while (true) {
     const inspected = await locator.inspect();
-    if (inspected.state === "running") return inspected.locator;
+    // The installed generation is what this window started through `runtrol endpoint`; a locator that lists
+    // only other generations is still settling, so it is read again rather than accepted.
+    if (inspected.state === "running" && (!preferDigest || inspected.locator.digest === preferDigest)) {
+      return inspected.locator;
+    }
     if (Date.now() >= deadline) {
       throw new Error("Runtrol Runtime is not installed");
     }

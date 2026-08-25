@@ -210,10 +210,13 @@ impl Store {
     ///
     /// [`StoreError::Engine`] when the read fails, or [`StoreError::DeviceCodec`] when the row is malformed.
     pub fn get_device(&self, device: DeviceKey) -> Result<Option<DeviceRow>, StoreError> {
-        let read = self.db().begin_read().map_err(|error| StoreError::Engine {
-            doing: "starting a device authorization read",
-            source: Box::new(error.into()),
-        })?;
+        let read = self
+            .db()?
+            .begin_read()
+            .map_err(|error| StoreError::Engine {
+                doing: "starting a device authorization read",
+                source: Box::new(error.into()),
+            })?;
         let table = match read.open_table(DEVICES) {
             Ok(table) => table,
             Err(redb::TableError::TableDoesNotExist(_)) => return Ok(None),
@@ -240,10 +243,13 @@ impl Store {
     ///
     /// [`StoreError::Engine`] when the scan itself fails.
     pub fn list_devices(&self) -> Result<ListedDevices, StoreError> {
-        let read = self.db().begin_read().map_err(|error| StoreError::Engine {
-            doing: "starting a device authorization scan",
-            source: Box::new(error.into()),
-        })?;
+        let read = self
+            .db()?
+            .begin_read()
+            .map_err(|error| StoreError::Engine {
+                doing: "starting a device authorization scan",
+                source: Box::new(error.into()),
+            })?;
         let table = match read.open_table(DEVICES) {
             Ok(table) => table,
             Err(redb::TableError::TableDoesNotExist(_)) => return Ok(ListedDevices::default()),

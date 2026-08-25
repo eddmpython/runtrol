@@ -110,6 +110,9 @@ export class CoreClient {
   private dropCommandConnection(): void {
     const connected = this.commandConnection;
     this.commandConnection = null;
+    // A lost connection may mean the generation behind the cached endpoint has gone. The next connect
+    // re-runs `runtrol endpoint`, which starts the installed generation again when nothing listens.
+    this.locator.invalidate();
     void connected?.then(
       (value) => value.transport.close(),
       () => undefined,

@@ -5,6 +5,8 @@
 //! takes an exclusive lock, measured on all three platforms, so a second opener is not something to work
 //! around and [`StoreError::AlreadyOpen`] is a first-class outcome rather than a surprise.
 
+use std::sync::{PoisonError, RwLock, RwLockReadGuard};
+
 use redb::{Database, DatabaseError, Durability, ReadableDatabase as _};
 use runtrol_provider::AbsPath;
 
@@ -26,13 +28,44 @@ const WRITTEN_BY: &str = env!("CARGO_PKG_VERSION");
 
 /// An open runtrol database.
 ///
-/// Holding it is holding the exclusive lock, so exactly one process has one at a time.
+/// Holding it is holding the exclusive lock, so exactly one process has one at a time. The lock can be given
+/// up before the value is dropped: a daemon generation that is draining hands the file to its successor by
+/// [`Store::release`], and from then on every operation answers [`StoreError::Released`].
 #[derive(Debug)]
 pub struct Store {
-    /// The engine's handle.
-    db: Database,
+    /// The engine's handle, until this Store releases the file to a successor.
+    ///
+    /// A blocking reader-writer lock, never held across an await: every table operation takes it for the
+    /// length of one synchronous engine call, and the one writer (`release`) waits for those to finish.
+    db: RwLock<Option<Database>>,
     /// Where the file is, kept for error messages that have to name it.
     path: AbsPath,
+}
+
+/// The engine handle for one synchronous operation.
+pub(crate) struct Engine<'store>(RwLockReadGuard<'store, Option<Database>>);
+
+impl std::ops::Deref for Engine<'_> {
+    type Target = Database;
+
+    fn deref(&self) -> &Database {
+        // The constructor in `Store::db` returns `Released` instead of building this value when the slot
+        // is empty, and the slot cannot be emptied while this read guard exists.
+        match self.0.as_ref() {
+            Some(database) => database,
+            None => unreachable_engine(),
+        }
+    }
+}
+
+#[cold]
+#[expect(
+    clippy::panic,
+    reason = "an Engine exists only while its read guard proves the slot is occupied; reaching this is a \
+              defect in this file, not a runtime condition"
+)]
+fn unreachable_engine() -> ! {
+    panic!("the store engine handle outlived its occupied slot")
 }
 
 impl Store {
@@ -61,7 +94,7 @@ impl Store {
             })?;
 
         let store = Self {
-            db,
+            db: RwLock::new(Some(db)),
             path: path.clone(),
         };
         store.check_version()?;
@@ -69,8 +102,37 @@ impl Store {
     }
 
     /// The engine handle, for the tables in this crate.
-    pub(crate) const fn db(&self) -> &Database {
-        &self.db
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::Released`] once this Store has handed the file to a successor.
+    pub(crate) fn db(&self) -> Result<Engine<'_>, StoreError> {
+        let guard = self.db.read().unwrap_or_else(PoisonError::into_inner);
+        if guard.is_none() {
+            return Err(StoreError::Released {
+                path: self.path.clone(),
+            });
+        }
+        Ok(Engine(guard))
+    }
+
+    /// Close the file now, so another process can open it, while this value stays where it is.
+    ///
+    /// This is how a draining daemon generation hands the database to the generation that replaces it
+    /// without either process exiting first. Every later operation on this Store answers
+    /// [`StoreError::Released`]. Returns whether this call did the releasing.
+    pub fn release(&self) -> bool {
+        let mut guard = self.db.write().unwrap_or_else(PoisonError::into_inner);
+        guard.take().is_some()
+    }
+
+    /// Whether [`Store::release`] has already happened.
+    #[must_use]
+    pub fn is_released(&self) -> bool {
+        self.db
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .is_none()
     }
 
     /// Where the file is.
@@ -106,10 +168,13 @@ impl Store {
 
     /// The version byte in the file, or `None` when the file is new.
     fn read_version(&self) -> Result<Option<u8>, StoreError> {
-        let read = self.db.begin_read().map_err(|error| StoreError::Engine {
-            doing: "starting a read to check the schema version",
-            source: Box::new(error.into()),
-        })?;
+        let read = self
+            .db()?
+            .begin_read()
+            .map_err(|error| StoreError::Engine {
+                doing: "starting a read to check the schema version",
+                source: Box::new(error.into()),
+            })?;
 
         let table = match read.open_table(META) {
             Ok(table) => table,
@@ -147,10 +212,13 @@ impl Store {
 
     /// Write this build's version and name into a fresh file.
     fn write_version(&self) -> Result<(), StoreError> {
-        let mut write = self.db.begin_write().map_err(|error| StoreError::Engine {
-            doing: "starting a write to record the schema version",
-            source: Box::new(error.into()),
-        })?;
+        let mut write = self
+            .db()?
+            .begin_write()
+            .map_err(|error| StoreError::Engine {
+                doing: "starting a write to record the schema version",
+                source: Box::new(error.into()),
+            })?;
         // The version byte is the one value that must survive a power cut. Everything downstream reads it to
         // decide whether the file can be trusted at all.
         write
@@ -356,6 +424,33 @@ mod tests {
             .needs_the_operator(),
             "damaged authority must stop remote startup"
         );
+    }
+
+    #[test]
+    fn a_released_store_hands_the_file_to_a_second_opener_and_refuses_its_own_reads() {
+        // The daemon generation model: the draining generation stays alive for its live conversations
+        // while its successor owns every durable pointer. That is only possible if giving up the file
+        // and dropping the value are two different moments.
+        let scratch = Scratch::make("release");
+        let first = Store::open(&scratch.db_path()).expect("first open");
+        assert!(!first.is_released());
+        assert!(first.release(), "the first release does the releasing");
+        assert!(!first.release(), "a second release has nothing left to do");
+        assert!(first.is_released());
+        assert!(matches!(
+            first.read_version(),
+            Err(StoreError::Released { .. })
+        ));
+        let second =
+            Store::open(&scratch.db_path()).expect("the successor opens the released file");
+        assert!(
+            second
+                .read_version()
+                .expect("the successor reads")
+                .is_some()
+        );
+        drop(first);
+        drop(second);
     }
 
     #[test]

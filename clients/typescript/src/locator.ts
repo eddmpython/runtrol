@@ -4,13 +4,15 @@ import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join } from "node:path";
 import { promisify } from "node:util";
 
-import type { RuntimeLocatorRecord } from "./generated/protocol.js";
+import type { RuntimeGeneration, RuntimeLocatorRecord } from "./generated/protocol.js";
 import { RuntimeLocatorError } from "./errors.js";
 import { validatePublic } from "./schema.js";
 
-const MAX_LOCATOR_BYTES = 8 * 1024;
+const MAX_LOCATOR_BYTES = 16 * 1024;
 const MAX_ENDPOINT_BYTES = 1024;
+const MAX_GENERATIONS = 16;
 const MAX_SECURITY_OUTPUT_BYTES = 16 * 1024;
+const LOCATOR_SCHEMA = 2;
 const runtimeLocatorToken = Symbol("Runtime locator path");
 const executeFile = promisify(execFile);
 
@@ -21,6 +23,11 @@ export type LocatorState =
 export type RuntimeLocatorOptions = {
   /** Exact Runtime executable used for native Windows owner and DACL validation. It is never PATH-resolved. */
   readonly runtimeExecutable?: string;
+  /**
+   * SHA-256 of the Runtime build this consumer installed. The generation running exactly that build is chosen
+   * when it is listed and not draining; otherwise the newest generation that is not draining.
+   */
+  readonly preferDigest?: string;
 };
 
 const validatedLocatorToken = Symbol("validated Runtime locator");
@@ -33,6 +40,8 @@ export class ValidatedLocator {
     public readonly instanceId: string,
     public readonly endpoint: string,
     public readonly runtimeVersion: string,
+    public readonly digest: string,
+    public readonly draining: boolean,
   ) {
     if (token !== validatedLocatorToken) {
       throw new RuntimeLocatorError("unsafe", "Runtime locator was not validated by this SDK");
@@ -51,6 +60,7 @@ export class RuntimeLocator {
     token: typeof runtimeLocatorToken,
     public readonly path: string,
     private readonly runtimeExecutable?: string,
+    private readonly preferDigest?: string,
   ) {
     if (token !== runtimeLocatorToken) {
       throw new RuntimeLocatorError("unsafe", "Runtime locator path was not derived by this SDK");
@@ -65,15 +75,59 @@ export class RuntimeLocator {
       runtimeLocatorToken,
       join(systemStateRoot(), "runtrol", "runtime.locator.json"),
       options.runtimeExecutable,
+      options.preferDigest,
     );
   }
 
+  /** The chosen generation, or not installed when nothing is listed to connect to. */
   public async inspect(): Promise<LocatorState> {
+    const read = await this.read();
+    if (!read) return { state: "notInstalled" };
+    const chosen = chooseGeneration(read.record, this.preferDigest);
+    if (!chosen) return { state: "notInstalled" };
+    if (read.verified && (
+      read.verified.instanceId !== read.record.instanceId
+      || read.verified.endpoint !== chosen.endpoint
+      || read.verified.runtimeVersion !== chosen.runtimeVersion
+      || read.verified.digest !== chosen.digest
+    )) {
+      throw new RuntimeLocatorError("unsafe", "Runtime locator changed after native validation");
+    }
+    return { state: "running", locator: validated(read.record, chosen) };
+  }
+
+  /** Every listed generation, oldest start first. Empty when nothing is installed. */
+  public async inspectAll(): Promise<ReadonlyArray<ValidatedLocator>> {
+    const read = await this.read();
+    if (!read) return [];
+    return read.record.generations.map((generation) => validated(read.record, generation));
+  }
+
+  async #readRecord(): Promise<RuntimeLocatorRecord> {
+    let decoded: unknown;
+    try {
+      decoded = JSON.parse(await readFile(this.path, "utf8"));
+    } catch (error) {
+      throw new RuntimeLocatorError("malformed", `Runtime locator is not valid JSON: ${String(error)}`);
+    }
+    let record: RuntimeLocatorRecord;
+    try {
+      record = validatePublic<RuntimeLocatorRecord>("RuntimeLocatorRecord", decoded);
+    } catch (error) {
+      // A locator of another shape (one written before generations, or by a later build) is a locator
+      // this SDK cannot choose from, and that is a malformed locator rather than a protocol failure.
+      throw new RuntimeLocatorError("malformed", `Runtime locator is not the shape this SDK reads: ${String(error)}`);
+    }
+    validateLocatorRecord(record, this.path);
+    return record;
+  }
+
+  private async read(): Promise<{ record: RuntimeLocatorRecord; verified: NativeLocatorObservation | null } | null> {
     let metadata;
     try {
       metadata = await lstat(this.path);
     } catch (error) {
-      if (isNodeError(error) && error.code === "ENOENT") return { state: "notInstalled" };
+      if (isNodeError(error) && error.code === "ENOENT") return null;
       throw new RuntimeLocatorError("io", `could not inspect Runtime locator: ${String(error)}`);
     }
     if (!metadata.isFile() || metadata.isSymbolicLink()) {
@@ -89,66 +143,60 @@ export class RuntimeLocator {
       if (typeof process.getuid === "function" && metadata.uid !== process.getuid()) {
         throw new RuntimeLocatorError("unsafe", "Runtime locator is not owned by the current user");
       }
-    } else {
-      let verified: NativeLocatorObservation | null = null;
-      if (this.runtimeExecutable) {
-        try {
-          verified = await validateWindowsSecurityWithRuntime(this.runtimeExecutable);
-        } catch {
-          await validateWindowsSecurity(this.path);
-        }
-      } else {
+      return { record: await this.#readRecord(), verified: null };
+    }
+    let verified: NativeLocatorObservation | null = null;
+    if (this.runtimeExecutable) {
+      try {
+        verified = await validateWindowsSecurityWithRuntime(this.runtimeExecutable, this.preferDigest);
+      } catch {
         await validateWindowsSecurity(this.path);
       }
-      let decoded: unknown;
-      try {
-        decoded = JSON.parse(await readFile(this.path, "utf8"));
-      } catch (error) {
-        throw new RuntimeLocatorError("malformed", `Runtime locator is not valid JSON: ${String(error)}`);
-      }
-      const record = validatePublic<RuntimeLocatorRecord>("RuntimeLocatorRecord", decoded);
-      validateLocatorRecord(record, this.path);
-      if (verified && (
-        verified.instanceId !== record.instanceId
-        || verified.endpoint !== record.endpoint
-        || verified.runtimeVersion !== record.runtimeVersion
-      )) {
-        throw new RuntimeLocatorError("unsafe", "Runtime locator changed after native validation");
-      }
-      return {
-        state: "running",
-        locator: new ValidatedLocator(
-          validatedLocatorToken,
-          record.instanceId,
-          record.endpoint,
-          record.runtimeVersion,
-        ),
-      };
+    } else {
+      await validateWindowsSecurity(this.path);
     }
-    let decoded: unknown;
-    try {
-      decoded = JSON.parse(await readFile(this.path, "utf8"));
-    } catch (error) {
-      throw new RuntimeLocatorError("malformed", `Runtime locator is not valid JSON: ${String(error)}`);
-    }
-    const record = validatePublic<RuntimeLocatorRecord>("RuntimeLocatorRecord", decoded);
-    validateLocatorRecord(record, this.path);
-    return {
-      state: "running",
-      locator: new ValidatedLocator(
-        validatedLocatorToken,
-        record.instanceId,
-        record.endpoint,
-        record.runtimeVersion,
-      ),
-    };
+    return { record: await this.#readRecord(), verified };
   }
+}
+
+/** The generation running the preferred digest when listed and not draining, else the newest not draining. */
+function chooseGeneration(
+  record: RuntimeLocatorRecord,
+  preferDigest: string | undefined,
+): RuntimeGeneration | null {
+  const preferred = preferDigest
+    ? record.generations.find((generation) => generation.digest === preferDigest && !generation.draining)
+    : undefined;
+  if (preferred) return preferred;
+  let newest: RuntimeGeneration | null = null;
+  for (const generation of record.generations) {
+    if (generation.draining) continue;
+    if (!newest
+      || generation.startedAtMs > newest.startedAtMs
+      || (generation.startedAtMs === newest.startedAtMs && generation.processId > newest.processId)) {
+      newest = generation;
+    }
+  }
+  return newest;
+}
+
+function validated(record: RuntimeLocatorRecord, generation: RuntimeGeneration): ValidatedLocator {
+  return new ValidatedLocator(
+    validatedLocatorToken,
+    record.instanceId,
+    generation.endpoint,
+    generation.runtimeVersion,
+    generation.digest,
+    generation.draining,
+  );
 }
 
 type NativeLocatorObservation = {
   readonly endpoint: string;
   readonly instanceId: string;
   readonly runtimeVersion: string;
+  readonly digest: string;
+  readonly draining: boolean;
 };
 
 interface WindowsSecurityObservation {
@@ -214,12 +262,15 @@ async function validateWindowsSecurity(path: string): Promise<void> {
 
 async function validateWindowsSecurityWithRuntime(
   executable: string,
+  preferDigest: string | undefined,
 ): Promise<NativeLocatorObservation> {
+  const arguments_ = ["runtime-locator"];
+  if (preferDigest) arguments_.push("--prefer", preferDigest);
   let decoded: unknown;
   try {
     const result = await executeFile(
       executable,
-      ["runtime-locator"],
+      arguments_,
       { encoding: "utf8", maxBuffer: MAX_SECURITY_OUTPUT_BYTES, timeout: 5_000, windowsHide: true },
     );
     decoded = JSON.parse(result.stdout);
@@ -230,43 +281,59 @@ async function validateWindowsSecurityWithRuntime(
     throw new RuntimeLocatorError("unsafe", "native Runtime locator verification returned no record");
   }
   const record = decoded as Partial<NativeLocatorObservation>;
-  if (Object.keys(record).sort().join(",") !== "endpoint,instanceId,runtimeVersion"
+  if (Object.keys(record).sort().join(",") !== "digest,draining,endpoint,instanceId,runtimeVersion"
     || typeof record.endpoint !== "string"
     || typeof record.instanceId !== "string"
-    || typeof record.runtimeVersion !== "string") {
+    || typeof record.runtimeVersion !== "string"
+    || typeof record.digest !== "string"
+    || typeof record.draining !== "boolean") {
     throw new RuntimeLocatorError("unsafe", "native Runtime locator verification returned a malformed record");
   }
   return record as NativeLocatorObservation;
 }
 
-export function runtimeLocatorAtForTesting(path: string): RuntimeLocator {
+export function runtimeLocatorAtForTesting(path: string, preferDigest?: string): RuntimeLocator {
   if (!isAbsolute(path)) throw new RuntimeLocatorError("environment", "locator path is not absolute");
-  return new RuntimeLocator(runtimeLocatorToken, path);
+  return new RuntimeLocator(runtimeLocatorToken, path, undefined, preferDigest);
 }
 
 export function validatedLocatorForTesting(
   instanceId: string,
   endpoint: string,
   runtimeVersion: string,
+  digest: string = "0".repeat(64),
+  draining: boolean = false,
 ): ValidatedLocator {
-  return new ValidatedLocator(validatedLocatorToken, instanceId, endpoint, runtimeVersion);
+  return new ValidatedLocator(validatedLocatorToken, instanceId, endpoint, runtimeVersion, digest, draining);
 }
 
 function validateLocatorRecord(record: RuntimeLocatorRecord, locatorPath: string): void {
-  if (record.schema !== 1 || record.processId === 0
+  if (record.schema !== LOCATOR_SCHEMA
     || record.instanceId.length === 0 || record.instanceId.length > 128
-    || record.runtimeVersion.length === 0 || record.runtimeVersion.length > 128
-    || record.endpoint.length === 0 || Buffer.byteLength(record.endpoint) > MAX_ENDPOINT_BYTES) {
+    || record.generations.length > MAX_GENERATIONS) {
     throw new RuntimeLocatorError("malformed", "Runtime locator has invalid bounded fields");
   }
+  for (const generation of record.generations) {
+    validateGeneration(generation, locatorPath);
+  }
+}
+
+function validateGeneration(generation: RuntimeGeneration, locatorPath: string): void {
+  if (generation.processId === 0
+    || !/^[0-9a-f]{64}$/u.test(generation.digest)
+    || generation.runtimeVersion.length === 0 || generation.runtimeVersion.length > 128
+    || generation.endpoint.length === 0 || Buffer.byteLength(generation.endpoint) > MAX_ENDPOINT_BYTES
+    || generation.controlEndpoint.length === 0 || Buffer.byteLength(generation.controlEndpoint) > MAX_ENDPOINT_BYTES) {
+    throw new RuntimeLocatorError("malformed", "Runtime locator generation has invalid bounded fields");
+  }
   if (process.platform === "win32") {
-    if (record.endpointKind !== "namedPipe"
-      || !record.endpoint.startsWith("\\\\.\\pipe\\runtrol-runtime-")) {
+    if (generation.endpointKind !== "namedPipe"
+      || !generation.endpoint.startsWith("\\\\.\\pipe\\runtrol-runtime-")) {
       throw new RuntimeLocatorError("unsafe", "Runtime locator does not name its dedicated local pipe");
     }
-  } else if (record.endpointKind !== "unixSocket" || !isAbsolute(record.endpoint)
-    || dirname(record.endpoint) !== dirname(locatorPath)
-    || basename(record.endpoint) !== "runtrol-runtime.sock") {
+  } else if (generation.endpointKind !== "unixSocket" || !isAbsolute(generation.endpoint)
+    || dirname(generation.endpoint) !== dirname(locatorPath)
+    || !/^runtrol-runtime-[0-9a-f]{16}\.sock$/u.test(basename(generation.endpoint))) {
     throw new RuntimeLocatorError(
       "unsafe",
       "Runtime socket escaped its owner-only state directory",

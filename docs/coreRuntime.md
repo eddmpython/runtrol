@@ -150,29 +150,36 @@ numeric process or group identifier. It revalidates the keeper PID, kernel start
 for non-zombie members to disappear, and refuses an ambiguous live group. No process-name or environment scan is
 used. Windows provides the corresponding kernel-owned cleanup through the job object.
 
-## Rolling a running Runtime onto an installed build
+## Generations: a running Runtime and the build that replaces it
 
-Installing an update replaces the Runtime binary on disk, but a daemon that is already running keeps serving from the
-image it started with. Until 0.1.9 nothing ever ended that state, so a Runtime change reached a machine only when its
-daemon happened to exit, and a client that assumed otherwise broke against it.
+A daemon is one generation of the Runtime: one build, identified by the SHA-256 of its executable. Every endpoint it
+binds carries the first sixteen digits of that digest (`runtrol-<home>-<generation>` for private control,
+`runtrol-runtime-<home>-<generation>` for the public Runtime), and every command run from an executable connects to
+the endpoint named by that executable's own digest, starting that build when nothing listens there. Two builds
+therefore never contend for a name, and a client never talks past the hello to a build other than its own.
 
-The daemon measures its own executable once at boot and announces that digest in both greetings. A manager that
-installed the binary compares the announced digest with the file it installed. Only that manager acts, and only on
-the executable it owns: an operator-configured Runtime path or one found on `PATH` is never rolled, because replacing
-somebody else's build is not an update.
+The home's `runtime.locator.json` lists every generation currently serving (digest, both endpoints, version, process
+id, start time, running turns, draining flag). Each daemon writes only its own entry, under the home's advisory lock,
+and removes it at exit; an entry whose process no longer answers is dropped by the next generation that publishes.
+`runtrol status` prints the list and probes each entry.
 
-On a difference, the manager sends `retire` on the private wire. The daemon refuses while any conversation still has
-a live process, naming how many, so retirement can never take a working agent with it; the manager retries when the
-machine goes idle. With nothing running, the answer is written first and the process then exits, because a
-retirement that worked must not be reported as a failure. There is nothing to drain: durable state is written
-atomically at each mutation, and the successor starts the way any daemon starts, on the next request.
+Installing an update writes a new content-named executable and no file is ever written over. The new generation
+starts beside the running one and sends `drain` on the older generation's private endpoint. Drain is never refused:
+the older daemon releases the durable store at once (the newer one is retrying its open and succeeds the moment the
+file is free), stops taking new conversations, marks itself draining, and keeps serving the turns already running.
+It exits by itself once no turn is running; idle processes end with it and reopen from the provider's own store under
+the successor. Nothing is killed, nothing waits for an idle machine, and there is no gap between one daemon leaving
+and the next arriving.
 
-`retire` is permanently local. It carries `LocalScope::RuntimeRetire`, which no grant can hold, because choosing
-which binary answers every later request is executable authority in the same sense as installing a provider.
+`drain` is permanently local. It carries `LocalScope::RuntimeDrain`, which no grant can hold, because choosing which
+binary answers every later request is executable authority in the same sense as installing a provider.
 
-A daemon old enough not to know the request refuses it by name. That case cannot be resolved silently, since the
-manager cannot ask such a daemon what it is running, so the person at the machine is offered one explicit restart
-that stops exactly the executable the manager installed, matched by path and never by process name.
+A daemon built before generations listens on the bare home endpoint and publishes a locator of the earlier shape. A
+starting generation recognises that shape, asks that daemon to retire on the bare endpoint, and keeps asking until it
+exits; that path exists only for the one transition and carries nothing else.
+
+The release gate `daemonCurrency` installs the exact VSIX into an isolated profile and requires that, within a bounded
+time after activation, the newest generation listed for that profile's home is the build the VSIX bundles.
 
 ## Storage boundary
 

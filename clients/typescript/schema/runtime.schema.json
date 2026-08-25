@@ -2352,6 +2352,66 @@
       ],
       "type": "object"
     },
+    "RuntimeGeneration": {
+      "additionalProperties": false,
+      "description": "One running daemon build and where it listens.",
+      "properties": {
+        "controlEndpoint": {
+          "description": "Exact local private control endpoint of this generation, for the executable's own command surface.",
+          "type": "string"
+        },
+        "digest": {
+          "description": "SHA-256 of the daemon executable, lowercase hex. The generation's identity.",
+          "type": "string"
+        },
+        "draining": {
+          "description": "Whether a newer generation has taken over new work from this one.",
+          "type": "boolean"
+        },
+        "endpoint": {
+          "description": "Exact local public Runtime endpoint of this generation.",
+          "type": "string"
+        },
+        "endpointKind": {
+          "$ref": "#/$defs/RuntimeEndpointKind",
+          "description": "Platform-local transport kind of both endpoints."
+        },
+        "liveSessions": {
+          "description": "Conversations this generation still has mid-turn. A draining generation exits when this reaches zero.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "processId": {
+          "description": "Generation process identifier, used only for stale-state diagnostics.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "runtimeVersion": {
+          "description": "Runtime product version of this generation.",
+          "type": "string"
+        },
+        "startedAtMs": {
+          "description": "When this generation published itself, Unix milliseconds. The newest is the one new work goes to.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "digest",
+        "endpointKind",
+        "endpoint",
+        "controlEndpoint",
+        "runtimeVersion",
+        "processId",
+        "startedAtMs",
+        "liveSessions",
+        "draining"
+      ],
+      "type": "object"
+    },
     "RuntimeInstance": {
       "description": "Public Runtime instance facts used to reject a stale or replaced locator.",
       "properties": {
@@ -2530,28 +2590,17 @@
     },
     "RuntimeLocatorRecord": {
       "additionalProperties": false,
-      "description": "Operational bootstrap data published only after the public endpoint is ready.",
+      "description": "Operational bootstrap data published only after each generation's public endpoint is ready.",
       "properties": {
-        "endpoint": {
-          "description": "Exact local endpoint selected by Runtime.",
-          "type": "string"
-        },
-        "endpointKind": {
-          "$ref": "#/$defs/RuntimeEndpointKind",
-          "description": "Platform-local transport kind."
+        "generations": {
+          "description": "Every daemon generation currently serving this home, oldest start first.",
+          "items": {
+            "$ref": "#/$defs/RuntimeGeneration"
+          },
+          "type": "array"
         },
         "instanceId": {
-          "description": "Durable installed Runtime identity.",
-          "type": "string"
-        },
-        "processId": {
-          "description": "Runtime process identifier used only for stale-state diagnostics.",
-          "format": "uint32",
-          "minimum": 0,
-          "type": "integer"
-        },
-        "runtimeVersion": {
-          "description": "Runtime product version.",
+          "description": "Durable installed Runtime identity, shared by every generation of one home.",
           "type": "string"
         },
         "schema": {
@@ -2564,10 +2613,7 @@
       "required": [
         "schema",
         "instanceId",
-        "endpointKind",
-        "endpoint",
-        "runtimeVersion",
-        "processId"
+        "generations"
       ],
       "type": "object"
     },

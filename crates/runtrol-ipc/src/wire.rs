@@ -600,12 +600,12 @@ pub enum Request {
     /// is the safe direction.
     StopEverything,
 
-    /// Ask an idle daemon to exit so the replaced-on-disk binary serves the next request.
+    /// A newer daemon generation has started beside this one: hand it the durable store and finish.
     ///
-    /// Refused while any conversation still has a live process: retiring must never take an agent with it. The
-    /// caller that installed the new binary starts the successor the same way it starts any daemon, so the answer
-    /// to "done" is a respawn, not a wait.
-    Retire,
+    /// Never refused. The daemon releases the database at once so the successor can open it, stops taking new
+    /// conversations, keeps serving the turns already running, and exits by itself once none is left. The
+    /// successor sends this from its own startup; nothing a person types carries it.
+    Drain,
 
     /// Every cross-consult direction this build knows, with its current wired state.
     ///
@@ -657,11 +657,10 @@ pub enum Response {
         device: Option<Box<DeviceAuthorityLine>>,
         /// Stable VAPID application-server key on authenticated paired-device connections.
         push_public_key: Option<Box<str>>,
-        /// SHA-256 of the executable this daemon is running, when it could measure itself.
+        /// SHA-256 of the executable this daemon is running: its generation.
         ///
-        /// Added 2026-08-20 for supersession: the manager that installed the binary compares this
-        /// with the file on disk and retires an older daemon. Absent on older daemons, and absence
-        /// means exactly that: an older daemon.
+        /// Added 2026-08-20. A client compares this with the build it installed to know whether it
+        /// is talking to its own generation. Absent only on daemons older than that date.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         build_digest: Option<Box<str>>,
     },

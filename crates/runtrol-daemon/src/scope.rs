@@ -190,7 +190,7 @@ pub fn needed(request: &Request) -> Needed {
         // the only runtrol list entry is irreversible here and therefore needs the separate delete authority.
         Request::Close { .. } => Needed::Scope(DeviceScope::SessionDelete),
 
-        Request::Retire => Needed::AtTheMachine(LocalScope::RuntimeRetire),
+        Request::Drain => Needed::AtTheMachine(LocalScope::RuntimeDrain),
 
         Request::StopEverything => Needed::Anyone(
             "the security posture requires the panic button to work from anywhere with no permission, and the \
@@ -417,7 +417,7 @@ mod tests {
                 now: false,
             },
             Request::StopEverything,
-            Request::Retire,
+            Request::Drain,
             Request::Consult,
             Request::ConsultWire {
                 from: "claude".into(),
@@ -675,7 +675,7 @@ mod tests {
             device: DeviceId::now(),
         };
         assert!(matches!(
-            allowed(&phone, &Request::Retire, &ledger),
+            allowed(&phone, &Request::Drain, &ledger),
             Err(WallRefusal::NeverRemote { .. })
         ));
     }

@@ -28,8 +28,10 @@ enum Personality {
     Daemon,
     /// Ensure the daemon is reachable and print its exact local endpoint.
     Endpoint,
-    /// Inspect and print the native-client-validated public Runtime locator.
-    RuntimeLocator,
+    /// Inspect and print the native-client-validated public Runtime locator, preferring one generation digest.
+    RuntimeLocator(Option<String>),
+    /// Print every daemon generation of this home and whether each still answers.
+    Status { json: bool },
     /// Serve the permission-bounded Agent Tools MCP protocol on stdio.
     AgentToolsMcp,
     /// Enable or inspect Agent Tools locally.
@@ -45,6 +47,9 @@ const ENDPOINT_ARGUMENT: &str = "endpoint";
 
 /// The exact bootstrap probe used by packaged Node.js surfaces that already selected this executable.
 const RUNTIME_LOCATOR_ARGUMENT: &str = "runtime-locator";
+
+/// The word that lists every daemon generation of this home. Starts nothing.
+const STATUS_ARGUMENT: &str = "status";
 
 /// Blocking pipe operations admitted by the daemon at one time on Windows.
 ///
@@ -92,7 +97,8 @@ fn main() -> ExitCode {
     match choose(&words) {
         Personality::Daemon => run(serving()),
         Personality::Endpoint => run(endpointing()),
-        Personality::RuntimeLocator => runtime_locating(),
+        Personality::RuntimeLocator(prefer) => runtime_locating(prefer.as_deref()),
+        Personality::Status { json } => run(status_reporting(json)),
         Personality::AgentToolsMcp => run(agent_tools_serving()),
         Personality::AgentToolsCommand(words) => run(agent_tools_commanding(&words)),
         Personality::Command(words) => run(commanding(&words)),
@@ -107,14 +113,22 @@ fn main() -> ExitCode {
 fn choose(words: &[String]) -> Personality {
     match words.first().map(String::as_str) {
         None => Personality::Usage(
-            "runtrol <command>. try: endpoint, runtime-locator, tools, list, start, resume, say, answer, stop, watch, close, consult, panic"
+            "runtrol <command>. try: endpoint, status, runtime-locator, tools, list, start, resume, say, answer, stop, watch, close, consult, panic"
                 .to_owned(),
         ),
         // Spelled as a subcommand rather than inferred from how the program was invoked. Inferring it from the
         // executable's own name would mean a renamed file behaving differently, which is a surprise nobody asked for.
         Some(word) if word == runtrol_cli::DAEMON_ARGUMENT => Personality::Daemon,
         Some(word) if word == ENDPOINT_ARGUMENT => Personality::Endpoint,
-        Some(word) if word == RUNTIME_LOCATOR_ARGUMENT => Personality::RuntimeLocator,
+        Some(word) if word == RUNTIME_LOCATOR_ARGUMENT => Personality::RuntimeLocator(
+            match words.get(1..) {
+                Some([flag, digest]) if flag == "--prefer" => Some(digest.clone()),
+                _ => None,
+            },
+        ),
+        Some(word) if word == STATUS_ARGUMENT => Personality::Status {
+            json: words.get(1).is_some_and(|flag| flag == "--json"),
+        },
         Some("mcp") => Personality::AgentToolsMcp,
         Some("tools") => Personality::AgentToolsCommand(words.get(1..).unwrap_or_default().to_vec()),
         Some(_) => Personality::Command(words.to_vec()),
@@ -135,21 +149,8 @@ fn agent_tools_serving() -> impl FnOnce(&tokio::runtime::Runtime) -> ExitCode {
 /// Run one local Agent Tools administration command.
 fn agent_tools_commanding(words: &[String]) -> impl FnOnce(&tokio::runtime::Runtime) -> ExitCode {
     move |runtime| {
-        let endpoint = match runtrol_daemon::endpoint(None) {
-            Ok(endpoint) => endpoint,
-            Err(error) => {
-                report(&format!(
-                    "cannot tell where runtrol keeps its files: {error}"
-                ));
-                return ExitCode::FAILURE;
-            }
-        };
-        let executable = match std::env::current_exe() {
-            Ok(executable) => executable,
-            Err(error) => {
-                report(&format!("cannot tell where runtrol itself is: {error}"));
-                return ExitCode::FAILURE;
-            }
+        let Some((executable, endpoint)) = own_generation() else {
+            return ExitCode::FAILURE;
         };
         let context = runtrol_agent_tools::CommandContext {
             endpoint,
@@ -195,32 +196,66 @@ fn supervisor_runtime() -> std::io::Result<tokio::runtime::Runtime> {
         .build()
 }
 
-/// Be the daemon.
+/// This executable and the control endpoint of the generation it serves under.
+///
+/// Both ends of the local connection derive the address from the same executable bytes and the same home, which
+/// is what lets a command reach exactly the build it is, and start that build when nothing listens there.
+fn own_generation() -> Option<(std::path::PathBuf, String)> {
+    let executable = match std::env::current_exe() {
+        Ok(executable) => executable,
+        Err(error) => {
+            report(&format!("cannot tell where runtrol itself is: {error}"));
+            return None;
+        }
+    };
+    match runtrol_daemon::generation_endpoint(None, &executable) {
+        Ok(endpoint) => Some((executable, endpoint)),
+        Err(error) => {
+            report(&format!(
+                "cannot tell where this runtrol generation listens: {error}"
+            ));
+            None
+        }
+    }
+}
+
+/// Be the daemon: one generation, beside whatever generation was serving before.
 fn serving() -> impl FnOnce(&tokio::runtime::Runtime) -> ExitCode {
     |runtime| {
-        // Composing establishes containment before any child could exist, so it happens before anything is served.
-        let composed = match runtrol_daemon::Composed::assemble(None, runtrol_drivers::builtin()) {
-            Ok(composed) => composed,
+        let Some((_executable, address)) = own_generation() else {
+            return ExitCode::FAILURE;
+        };
+        let identity = match runtrol_daemon::GenerationIdentity::of_this_executable() {
+            Ok(identity) => identity,
             Err(error) => {
                 report(&format!("runtrol cannot start a daemon: {error}"));
                 return ExitCode::FAILURE;
             }
         };
-        // A detached daemon's streams go nowhere, so from here on a panic also lands in the home's
-        // bounded crash file instead of evaporating with the process.
-        runtrol_daemon::record_panics_at(composed.home.paths().daemon_crash_log().as_std_path());
-        let address = composed.home.paths().endpoint().address().to_owned();
 
-        // The endpoint and the serving are both on the runtime, because an endpoint has to be created there.
+        // The generation endpoint is bound first, so a command that started this daemon connects the moment
+        // the pipe exists and waits for assembly rather than timing out. Composing then asks every earlier
+        // generation to hand over the store and establishes containment before any child could exist.
         let served = runtime.block_on(async move {
             let listener = runtrol_ipc::transport::Listener::bind(&address).await?;
+            let composed =
+                runtrol_daemon::assemble_superseding(runtrol_drivers::builtin(), &identity)
+                    .await
+                    .map_err(|error| {
+                        runtrol_daemon::ServeError::RuntimeBootstrap(error.to_string())
+                    })?;
+            // A detached daemon's streams go nowhere, so from here on a panic also lands in the home's
+            // bounded crash file instead of evaporating with the process.
+            runtrol_daemon::record_panics_at(
+                composed.home.paths().daemon_crash_log().as_std_path(),
+            );
             runtrol_daemon::serve(composed, listener).await
         });
 
         match served {
             Ok(()) => ExitCode::SUCCESS,
-            // The ordinary reason for failing to listen is that another daemon is already serving this home, which is
-            // not a failure of anything: the command that started this one reaches that one instead.
+            // The ordinary reason for failing to listen is that this exact generation is already serving this
+            // home, which is not a failure of anything: the command that started this one reaches that one instead.
             Err(error) => {
                 report(&format!("runtrol stopped serving: {error}"));
                 ExitCode::FAILURE
@@ -229,27 +264,15 @@ fn serving() -> impl FnOnce(&tokio::runtime::Runtime) -> ExitCode {
     }
 }
 
-/// Ensure one daemon exists and report the exact address its local IPC clients must use.
+/// Ensure this executable's generation is serving and report the exact address its local IPC clients must use.
 ///
-/// The endpoint stays owned by `RuntrolHome`. A native surface asks this executable once instead of reimplementing
-/// platform home selection, canonicalization, Windows fingerprinting, or Unix socket length rules.
+/// The endpoint stays owned by `RuntrolHome` and the generation by the executable's bytes. A native surface asks
+/// this executable once instead of reimplementing platform home selection, canonicalization, Windows
+/// fingerprinting, Unix socket length rules, or the digest.
 fn endpointing() -> impl FnOnce(&tokio::runtime::Runtime) -> ExitCode {
     |runtime| {
-        let address = match runtrol_daemon::endpoint(None) {
-            Ok(address) => address,
-            Err(error) => {
-                report(&format!(
-                    "cannot tell where runtrol keeps its files: {error}"
-                ));
-                return ExitCode::FAILURE;
-            }
-        };
-        let executable = match std::env::current_exe() {
-            Ok(executable) => executable,
-            Err(error) => {
-                report(&format!("cannot tell where runtrol itself is: {error}"));
-                return ExitCode::FAILURE;
-            }
+        let Some((executable, address)) = own_generation() else {
+            return ExitCode::FAILURE;
         };
 
         match runtime.block_on(runtrol_cli::reach(&address, &executable)) {
@@ -267,11 +290,18 @@ fn endpointing() -> impl FnOnce(&tokio::runtime::Runtime) -> ExitCode {
 }
 
 /// Report the public locator only after the native client has validated its file type, bounds, ownership, DACL or
-/// Unix mode, closed record, and endpoint confinement.
-fn runtime_locating() -> ExitCode {
+/// Unix mode, closed record, and endpoint confinement. The chosen generation is the preferred digest when it is
+/// listed and not draining, otherwise the newest that is not draining.
+fn runtime_locating(prefer: Option<&str>) -> ExitCode {
     use runtrol_runtime_client::{LocatorState, RuntimeLocator};
 
-    let locator = match RuntimeLocator::system().and_then(|candidate| candidate.inspect()) {
+    let locator = match RuntimeLocator::system()
+        .map(|candidate| match prefer {
+            Some(digest) => candidate.preferring(digest),
+            None => candidate,
+        })
+        .and_then(|candidate| candidate.inspect())
+    {
         Ok(LocatorState::Running(locator)) => locator,
         Ok(LocatorState::NotInstalled) => {
             report("the Runtrol Runtime locator is not installed");
@@ -288,9 +318,61 @@ fn runtime_locating() -> ExitCode {
         "instanceId": locator.instance_id(),
         "endpoint": locator.endpoint(),
         "runtimeVersion": locator.runtime_version(),
+        "digest": locator.digest(),
+        "draining": locator.draining(),
     });
     say(&encoded.to_string());
     ExitCode::SUCCESS
+}
+
+/// Print every daemon generation of this home: which build, which process, how many turns still run there,
+/// whether it is draining, and whether it answers right now. Starts nothing.
+fn status_reporting(json: bool) -> impl FnOnce(&tokio::runtime::Runtime) -> ExitCode {
+    move |runtime| {
+        let generations = match runtime.block_on(runtrol_daemon::status(None)) {
+            Ok(generations) => generations,
+            Err(error) => {
+                report(&format!("cannot read the runtrol generations: {error}"));
+                return ExitCode::FAILURE;
+            }
+        };
+        if json {
+            match serde_json::to_string(&generations) {
+                Ok(encoded) => say(&encoded),
+                Err(error) => {
+                    report(&format!("cannot encode the runtrol generations: {error}"));
+                    return ExitCode::FAILURE;
+                }
+            }
+            return ExitCode::SUCCESS;
+        }
+        if generations.is_empty() {
+            say("no runtrol generation is serving this home");
+            return ExitCode::SUCCESS;
+        }
+        for status in generations {
+            let generation = &status.generation;
+            say(&format!(
+                "{}  pid {}  v{}  started {}  live turns {}  {}  {}",
+                generation.digest.get(..16).unwrap_or(&generation.digest),
+                generation.process_id,
+                generation.runtime_version,
+                generation.started_at_ms,
+                generation.live_sessions,
+                if generation.draining {
+                    "draining"
+                } else {
+                    "current"
+                },
+                if status.answering {
+                    "answering"
+                } else {
+                    "not answering"
+                },
+            ));
+        }
+        ExitCode::SUCCESS
+    }
 }
 
 /// Be a command.
@@ -312,26 +394,11 @@ fn commanding(words: &[String]) -> impl FnOnce(&tokio::runtime::Runtime) -> Exit
             }
         };
 
-        // Where a daemon for this home listens. Asked for rather than worked out, so the two ends cannot derive it
-        // differently.
-        let address = match runtrol_daemon::endpoint(None) {
-            Ok(address) => address,
-            Err(error) => {
-                report(&format!(
-                    "cannot tell where runtrol keeps its files: {error}"
-                ));
-                return ExitCode::FAILURE;
-            }
-        };
-
-        // The program a daemon is started from, when there is none. This one, named rather than inferred inside the
-        // command surface: a library that ran "whatever process this is" would run the test runner inside a test.
-        let executable = match std::env::current_exe() {
-            Ok(executable) => executable,
-            Err(error) => {
-                report(&format!("cannot tell where runtrol itself is: {error}"));
-                return ExitCode::FAILURE;
-            }
+        // Where this executable's generation listens, and the program a daemon is started from when there is
+        // none. Named rather than inferred inside the command surface: a library that ran "whatever process this
+        // is" would run the test runner inside a test.
+        let Some((executable, address)) = own_generation() else {
+            return ExitCode::FAILURE;
         };
 
         match runtime.block_on(runtrol_cli::ask(&address, &executable, request, say)) {
@@ -440,7 +507,19 @@ mod tests {
     fn runtime_locator_validation_is_not_sent_as_a_product_request() {
         assert!(matches!(
             choose(&typed(RUNTIME_LOCATOR_ARGUMENT)),
-            Personality::RuntimeLocator
+            Personality::RuntimeLocator(None)
+        ));
+        match choose(&typed("runtime-locator --prefer abc")) {
+            Personality::RuntimeLocator(Some(digest)) => assert_eq!(digest, "abc"),
+            _ => panic!("expected the preferred digest to be read"),
+        }
+        assert!(matches!(
+            choose(&typed("status --json")),
+            Personality::Status { json: true }
+        ));
+        assert!(matches!(
+            choose(&typed("status")),
+            Personality::Status { json: false }
         ));
     }
 

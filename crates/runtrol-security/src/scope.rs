@@ -326,12 +326,12 @@ pub enum LocalScope {
     CapabilityRollback,
     /// Archive one capability version.
     CapabilityArchive,
-    /// Ask an idle daemon to exit so the replaced-on-disk Runtime binary serves the next request.
+    /// Hand the durable store to a newer daemon generation and finish once no turn is running.
     ///
     /// Which binary answers every later request is executable authority, exactly like installing a
-    /// provider, so no grant can carry it to a device. The manager that installed the binary calls
-    /// this from the machine after the hello names an older build.
-    RuntimeRetire,
+    /// provider, so no grant can carry it to a device. The successor generation sends this from the
+    /// machine as it starts.
+    RuntimeDrain,
 }
 
 impl LocalScope {
@@ -360,7 +360,7 @@ impl LocalScope {
         Self::CapabilityPromote,
         Self::CapabilityRollback,
         Self::CapabilityArchive,
-        Self::RuntimeRetire,
+        Self::RuntimeDrain,
     ];
 
     /// A stable name, for messages and for the audit record.
@@ -388,7 +388,7 @@ impl LocalScope {
             Self::CapabilityPromote => "capability.promote",
             Self::CapabilityRollback => "capability.rollback",
             Self::CapabilityArchive => "capability.archive",
-            Self::RuntimeRetire => "runtime.retire",
+            Self::RuntimeDrain => "runtime.drain",
         }
     }
 }

@@ -146,20 +146,43 @@ try {
     );
   }
   await access(managedCore);
+  const bundledDigest = await fileDigest(bundledCore);
   if (
     result.bundledCore !== bundledCore
     || result.extensionVersion !== packageManifest.version
-    || await fileDigest(managedCore) !== await fileDigest(bundledCore)
+    || await fileDigest(managedCore) !== bundledDigest
   ) {
     throw new Error(`installed package returned an inconsistent result: ${JSON.stringify(result)}`);
   }
-  process.stdout.write(`RUNTROL_VSCODE_PACKAGE ${JSON.stringify({ ...result, managedCore })}\n`);
+  // The daemon that serves this profile's home, by the home's own locator: the generation the activation
+  // started must be the build the VSIX bundles, and it must still answer. Read before the daemon is stopped.
+  const generations = readGenerations(managedCore, runtimeState.environment);
+  process.stdout.write(`RUNTROL_VSCODE_PACKAGE ${JSON.stringify({
+    ...result,
+    managedCore,
+    bundledDigest,
+    generations,
+  })}\n`);
 } finally {
   if (managedCore) {
     stopIsolatedDaemon(managedCore, runtrolHome);
   }
   await terminateExactProcesses(temporary, managedCore);
   await rm(temporary, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+}
+
+/// `runtrol status --json` against the isolated home: every generation listed and whether it answers.
+function readGenerations(executable, environment) {
+  const status = spawnSync(executable, ["status", "--json"], {
+    env: environment,
+    encoding: "utf8",
+    timeout: 15_000,
+    windowsHide: true,
+  });
+  if (status.status !== 0 || !status.stdout.trim()) {
+    throw new Error(`runtrol status failed: ${status.stdout}${status.stderr}`);
+  }
+  return JSON.parse(status.stdout.trim());
 }
 
 function stopIsolatedDaemon(executable, home) {

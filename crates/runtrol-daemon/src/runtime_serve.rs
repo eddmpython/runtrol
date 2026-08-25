@@ -4143,26 +4143,8 @@ listen = "stdio"
         let resume_project_identity = runtrol_security::ProjectRootIdentity::read(&resume_project)
             .expect("read session resume project identity")
             .to_bytes();
-        let endpoint = if cfg!(windows) {
-            format!(r"\\.\pipe\runtrol-runtime-public-{}", std::process::id())
-        } else {
-            directory
-                .join("runtrol-runtime.sock")
-                .to_string_lossy()
-                .into_owned()
-        };
         let locator_path = directory.join("runtime.locator.json");
-        let locator_abs = runtrol_provider::AbsPath::new(
-            locator_path.to_str().expect("UTF-8 Runtime test locator"),
-        )
-        .expect("absolute Runtime test locator");
         let instance = "rtm_0123456789abcdef0123456789abcdef";
-        let mut listener = runtrol_ipc::transport::Listener::bind_owner_only(&endpoint)
-            .await
-            .expect("bind owner-only Runtime endpoint");
-        let published =
-            crate::runtime_locator::PublishedLocator::publish(&locator_abs, instance, &endpoint)
-                .expect("publish owner-only locator");
         let composed = Arc::new(
             crate::Composed::for_tests(
                 directory.to_str().expect("UTF-8 Runtime test home"),
@@ -4173,6 +4155,27 @@ listen = "stdio"
             )
             .expect("compose test Runtime"),
         );
+        let identity = crate::generations::GenerationIdentity::of_this_executable()
+            .expect("the test runner measures itself");
+        let endpoint = composed
+            .home
+            .paths()
+            .generation_runtime_endpoint(identity.tag())
+            .expect("generation Runtime endpoint")
+            .address()
+            .to_owned();
+        let mut listener = runtrol_ipc::transport::Listener::bind_owner_only(&endpoint)
+            .await
+            .expect("bind owner-only Runtime endpoint");
+        let published = crate::generations::PublishedGeneration::publish(
+            composed.home.paths(),
+            instance,
+            &identity,
+            &endpoint,
+            "control-endpoint-of-this-test",
+        )
+        .await
+        .expect("publish owner-only locator");
         let fixture_provider =
             runtrol_provider::ProviderId::parse("native-fixture").expect("valid provider");
         let sessions = Arc::new(

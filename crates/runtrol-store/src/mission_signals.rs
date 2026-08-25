@@ -148,7 +148,7 @@ impl Store {
         after: Option<MissionSignalKey>,
     ) -> Result<ListedMissionSignals, StoreError> {
         let read = self
-            .db()
+            .db()?
             .begin_read()
             .map_err(|error| engine("starting a Mission Flight Signal read", error))?;
         let table = match read.open_table(MISSION_SIGNALS) {

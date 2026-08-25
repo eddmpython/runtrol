@@ -82,8 +82,11 @@ const AGENT_TOOLS: &str = "agent-tools";
 /// Where the detached daemon's panic hook records why it died.
 const DAEMON_CRASH_LOG: &str = "daemon-crash.log";
 
-/// Atomic bootstrap record for the separate public Runtime endpoint.
+/// Atomic bootstrap record for the separate public Runtime endpoint: every live daemon generation.
 const RUNTIME_LOCATOR: &str = "runtime.locator.json";
+
+/// The advisory lock generations take around one read-modify-write of the locator. Holds no data.
+const RUNTIME_LOCATOR_LOCK: &str = "runtime.locator.lock";
 
 /// Durable identity of this installed Runtime home, regenerated after full uninstall.
 const RUNTIME_INSTANCE: &str = "runtime-instance.json";
@@ -123,8 +126,10 @@ pub struct Layout {
     agent_tools: AbsPath,
     /// Where the detached daemon's panic hook records why it died.
     daemon_crash_log: AbsPath,
-    /// Where public SDK clients find the running Runtime instance.
+    /// Where public SDK clients find the running Runtime generations.
     runtime_locator: AbsPath,
+    /// The lock generations take around locator updates.
+    runtime_locator_lock: AbsPath,
     /// Durable identity that binds locators and initialization across ordinary restarts.
     runtime_instance: AbsPath,
     /// Where the daemon listens.
@@ -163,6 +168,7 @@ impl Layout {
             agent_tools: entry(AGENT_TOOLS)?,
             daemon_crash_log: entry(DAEMON_CRASH_LOG)?,
             runtime_locator: entry(RUNTIME_LOCATOR)?,
+            runtime_locator_lock: entry(RUNTIME_LOCATOR_LOCK)?,
             runtime_instance: entry(RUNTIME_INSTANCE)?,
             endpoint: Endpoint::of(&root)?,
             runtime_endpoint: Endpoint::runtime_of(&root)?,
@@ -271,6 +277,12 @@ impl Layout {
         &self.runtime_locator
     }
 
+    /// The advisory lock every generation takes around one locator read-modify-write.
+    #[must_use]
+    pub const fn runtime_locator_lock(&self) -> &AbsPath {
+        &self.runtime_locator_lock
+    }
+
     /// Durable identity of this installed Runtime home.
     #[must_use]
     pub const fn runtime_instance(&self) -> &AbsPath {
@@ -287,6 +299,31 @@ impl Layout {
     #[must_use]
     pub const fn runtime_endpoint(&self) -> &Endpoint {
         &self.runtime_endpoint
+    }
+
+    /// Where one daemon generation listens for private control, named by its executable digest.
+    ///
+    /// Generations run side by side while a newer build takes over from an older one, so each needs
+    /// endpoints no other generation can be bound to. The bare [`Layout::endpoint`] stays what a daemon
+    /// built before generations listened on, which is how a newer build still finds and drains it.
+    ///
+    /// # Errors
+    ///
+    /// [`HomeError::Generation`] when the tag is not sixteen lowercase hex digits, and on Unix
+    /// [`HomeError::SocketPathTooLong`] when the socket path would not fit the kernel's field.
+    pub fn generation_endpoint(&self, generation: &str) -> Result<Endpoint, HomeError> {
+        checked_generation(generation)?;
+        Endpoint::generation_of(&self.root, generation)
+    }
+
+    /// Where one daemon generation listens for enrolled public Runtime clients.
+    ///
+    /// # Errors
+    ///
+    /// The same as [`Layout::generation_endpoint`].
+    pub fn generation_runtime_endpoint(&self, generation: &str) -> Result<Endpoint, HomeError> {
+        checked_generation(generation)?;
+        Endpoint::generation_runtime_of(&self.root, generation)
     }
 
     /// The directories that have to exist before anything writes.
@@ -311,6 +348,7 @@ impl Layout {
             &self.agent_tools,
             &self.daemon_crash_log,
             &self.runtime_locator,
+            &self.runtime_locator_lock,
             &self.runtime_instance,
         ]
     }
@@ -341,6 +379,25 @@ impl AgentToolSlot {
     #[must_use]
     pub const fn grant(&self) -> &AbsPath {
         &self.grant
+    }
+}
+
+/// How many hex digits of the executable digest name a generation. The same sixteen the managed Core
+/// image file name carries, so a listing of either reads as the other.
+pub const GENERATION_TAG_LENGTH: usize = 16;
+
+/// A generation tag is exactly sixteen lowercase hex digits; anything else cannot become an endpoint name.
+fn checked_generation(generation: &str) -> Result<(), HomeError> {
+    let well_formed = generation.len() == GENERATION_TAG_LENGTH
+        && generation
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte));
+    if well_formed {
+        Ok(())
+    } else {
+        Err(HomeError::Generation {
+            tag: generation.to_owned(),
+        })
     }
 }
 
@@ -399,10 +456,21 @@ impl Endpoint {
         Self::with_segment(root, RUNTIME_SOCKET)
     }
 
-    fn with_segment(root: &AbsPath, segment: &'static str) -> Result<Self, HomeError> {
-        let path = root
-            .join(segment)
-            .map_err(|source| HomeError::Layout { segment, source })?;
+    /// One generation's private control socket: `runtrol-<generation>.sock`.
+    fn generation_of(root: &AbsPath, generation: &str) -> Result<Self, HomeError> {
+        Self::with_segment(root, &format!("runtrol-{generation}.sock"))
+    }
+
+    /// One generation's public Runtime socket: `runtrol-runtime-<generation>.sock`.
+    fn generation_runtime_of(root: &AbsPath, generation: &str) -> Result<Self, HomeError> {
+        Self::with_segment(root, &format!("runtrol-runtime-{generation}.sock"))
+    }
+
+    fn with_segment(root: &AbsPath, segment: &str) -> Result<Self, HomeError> {
+        let path = root.join(segment).map_err(|source| HomeError::Layout {
+            segment: "socket",
+            source,
+        })?;
 
         // The NUL the kernel stores after the path is part of the field, so the usable length is one
         // less than the capacity.
@@ -457,6 +525,30 @@ impl Endpoint {
         const PREFIX: &str = r"\\.\pipe\runtrol-runtime-";
 
         Ok(Self(format!("{PREFIX}{:016x}", fingerprint(root))))
+    }
+
+    /// One generation's private control pipe: the home pipe name with the generation tag appended.
+    #[expect(
+        clippy::unnecessary_wraps,
+        reason = "one signature for both platforms keeps the cfg out of Layout"
+    )]
+    fn generation_of(root: &AbsPath, generation: &str) -> Result<Self, HomeError> {
+        Ok(Self(format!(
+            r"\\.\pipe\runtrol-{:016x}-{generation}",
+            fingerprint(root)
+        )))
+    }
+
+    /// One generation's public Runtime pipe: the home Runtime pipe name with the generation tag appended.
+    #[expect(
+        clippy::unnecessary_wraps,
+        reason = "one signature for both platforms keeps the cfg out of Layout"
+    )]
+    fn generation_runtime_of(root: &AbsPath, generation: &str) -> Result<Self, HomeError> {
+        Ok(Self(format!(
+            r"\\.\pipe\runtrol-runtime-{:016x}-{generation}",
+            fingerprint(root)
+        )))
     }
 }
 
