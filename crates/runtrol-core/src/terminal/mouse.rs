@@ -220,8 +220,13 @@ fn translate_mouse(report: MouseReport, screen: &Screen, out: &mut Vec<u8>) {
     // A click on a row: move the cursor's row there with arrows. On a list prompt that selects the row;
     // on a plain input it does nothing harmful. Column is deliberately ignored: no shipped CLI moves
     // horizontally by mouse, and typing at a column is not a thing a person expects from a click.
+    //
+    // The row is clamped to the screen first: a report names any number up to 65535, and without the clamp
+    // one click became 196 KB of arrows into the CLI (measured 2026-08-25). The most a click can send is the
+    // screen's height in arrows.
+    let (rows, _) = screen.size();
     let (cursor_row, _) = screen.cursor_position();
-    let target = report.row.saturating_sub(1);
+    let target = report.row.saturating_sub(1).min(rows.saturating_sub(1));
     let (steps, up) = if target < cursor_row {
         (usize::from(cursor_row - target), true)
     } else {
@@ -279,6 +284,19 @@ mod tests {
             b"\x1b[A\x1b[A".to_vec()
         );
         assert!(carry.translate(b"\x1b[<0;4;4m", parser.screen()).is_empty());
+    }
+
+    #[test]
+    fn a_click_past_the_screen_is_clamped_to_its_last_row() {
+        let parser = screen_with_cursor_at(0);
+        let mut carry = InputCarry::default();
+        let out = carry.translate(b"\x1b[<0;1;65535M", parser.screen());
+        assert_eq!(
+            out.len(),
+            23 * 3,
+            "at most the screen's height in arrows: {}",
+            out.len()
+        );
     }
 
     #[test]

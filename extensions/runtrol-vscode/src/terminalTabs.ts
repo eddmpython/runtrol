@@ -110,7 +110,7 @@ class CoreTerminal implements vscode.Pseudoterminal {
   readonly onDidWrite = this.writeEmitter.event;
   readonly onDidClose = this.closeEmitter.event;
   private transport: FrameTransport | null = null;
-  private readonly decoder = new TextDecoder("utf-8");
+  private decoder = new TextDecoder("utf-8");
   private closed = false;
   /// Input typed before the connection is up is kept and sent once it is: a person who starts typing while
   /// the tab opens must not lose the first keys.
@@ -190,7 +190,9 @@ class CoreTerminal implements vscode.Pseudoterminal {
             this.writeEmitter.fire(this.decoder.decode(Buffer.from(response.with.bytes, "base64"), { stream: true }));
             break;
           case "terminalLagged":
-            // The Core re-sends the whole screen next; clear so the redraw lands on a clean page.
+            // The Core re-sends the whole screen next; clear so the redraw lands on a clean page, and start
+            // decoding afresh so a multibyte tail cut off by the lag never bleeds into it.
+            this.decoder = new TextDecoder("utf-8");
             this.writeEmitter.fire("\x1b[2J\x1b[H");
             break;
           case "terminalExited":

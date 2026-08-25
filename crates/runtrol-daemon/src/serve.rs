@@ -2015,7 +2015,13 @@ async fn converse_inner(
             request,
             Request::TerminalOpen { .. } | Request::TerminalAttach { .. }
         ) {
-            crate::terminal_surface::serve(&mut connection, &composed, request).await;
+            crate::terminal_surface::serve(
+                &mut connection,
+                Arc::clone(&composed),
+                conversation.caller().clone(),
+                request,
+            )
+            .await;
             return;
         }
 

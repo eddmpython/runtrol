@@ -36,6 +36,22 @@ const EXIT_POLL: Duration = Duration::from_millis(100);
 /// How long after the exit the terminal is kept so its last frame can drain (measured on Windows: the
 /// console host flushes a beat after the client ends, and releasing on the exit itself loses that frame).
 const EXIT_SETTLE: Duration = Duration::from_millis(250);
+/// The largest screen a viewer may ask for. The screen model costs about 36 bytes a cell (measured), so this
+/// bounds one terminal's screen at roughly 3.5 MiB; a viewer naming 65535 by 65535 would otherwise ask for
+/// 150 GiB and end the daemon. No real viewer is wider than this.
+const MAX_COLS: u16 = 500;
+/// As above, for rows.
+const MAX_ROWS: u16 = 200;
+
+/// A viewer's size, made safe: never zero in either direction (the screen model panics on an empty
+/// screen) and never larger than [`MAX_COLS`] by [`MAX_ROWS`].
+#[must_use]
+pub fn bounded_size(size: PtySize) -> PtySize {
+    PtySize {
+        cols: size.cols.clamp(2, MAX_COLS),
+        rows: size.rows.clamp(1, MAX_ROWS),
+    }
+}
 
 /// Everything a terminal is opened with. The provider's manifest supplies the arguments and environment.
 #[derive(Debug, Clone)]
@@ -135,13 +151,14 @@ impl Terminal {
     pub fn open(launch: &TerminalLaunch<'_>) -> Result<Self, TerminalError> {
         let handle = tokio::runtime::Handle::try_current()
             .map_err(|error| TerminalError::Runtime(error.to_string()))?;
+        let size = bounded_size(launch.size);
         let child = PtyChild::spawn(PtySpawn {
             program: launch.program,
             arguments: &launch.arguments,
             cwd: launch.cwd,
             env: &launch.env,
             env_unset: &launch.env_unset,
-            size: launch.size,
+            size,
         })?;
         let reader = child.reader()?;
         let writer = child.writer()?;
@@ -150,7 +167,7 @@ impl Terminal {
         let shared = Arc::new(Shared {
             child,
             state: Mutex::new(State {
-                screen: vt100::Parser::new(launch.size.rows, launch.size.cols, 0),
+                screen: vt100::Parser::new(size.rows, size.cols, 0),
                 queries: xterm::QueryCarry::default(),
                 mouse: mouse::InputCarry::default(),
             }),
@@ -217,6 +234,7 @@ impl Terminal {
     ///
     /// [`TerminalError::Spawn`] when the platform refuses the size.
     pub async fn resize(&self, size: PtySize) -> Result<(), TerminalError> {
+        let size = bounded_size(size);
         self.shared.child.resize(size)?;
         self.shared
             .state
@@ -231,6 +249,12 @@ impl Terminal {
     #[must_use]
     pub fn exit(&self) -> Option<i32> {
         *self.shared.exited.borrow()
+    }
+
+    /// A watch on the exit, for whoever keeps the table of terminals: it changes exactly once.
+    #[must_use]
+    pub fn exited(&self) -> watch::Receiver<Option<i32>> {
+        self.shared.exited.subscribe()
     }
 
     /// End the CLI now, the way closing its window would.
@@ -326,6 +350,34 @@ mod tests {
 
     /// The platform shell on a hosted terminal: its echo reaches a viewer that attached before it ran, a
     /// viewer that attaches after sees it on the snapshot, and the exit is reported to both.
+    #[test]
+    fn sizes_are_bounded_before_they_reach_the_screen_model() {
+        assert_eq!(
+            bounded_size(PtySize { cols: 0, rows: 0 }),
+            PtySize { cols: 2, rows: 1 }
+        );
+        assert_eq!(
+            bounded_size(PtySize {
+                cols: 65535,
+                rows: 65535
+            }),
+            PtySize {
+                cols: MAX_COLS,
+                rows: MAX_ROWS
+            }
+        );
+        assert_eq!(
+            bounded_size(PtySize {
+                cols: 120,
+                rows: 40
+            }),
+            PtySize {
+                cols: 120,
+                rows: 40
+            }
+        );
+    }
+
     #[tokio::test]
     async fn a_hosted_shell_reaches_early_and_late_viewers() {
         let (shell, arguments) = if cfg!(windows) {

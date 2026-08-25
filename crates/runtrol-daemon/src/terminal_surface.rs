@@ -10,10 +10,12 @@
 //! `resume` arguments, its `env` and `env_unset`. Nothing here knows a provider by name.
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use runtrol_core::terminal::{Attachment, Terminal, TerminalLaunch};
 use runtrol_ipc::{Request, Response, TerminalBytes};
 use runtrol_provider::{AbsPath, ProviderId, TerminalId};
+use runtrol_security::Caller;
 
 use crate::compose::Composed;
 use crate::dispatch::refuse;
@@ -22,23 +24,50 @@ use crate::serve::{SurfaceConnection, write};
 /// Every open terminal, by id and by the conversation it shows.
 #[derive(Default)]
 pub(crate) struct Terminals {
-    by_id: BTreeMap<TerminalId, Terminal>,
+    by_id: BTreeMap<TerminalId, Open>,
     /// Which terminal shows which conversation, so a second open joins the first.
     by_conversation: BTreeMap<(ProviderId, Box<str>), TerminalId>,
 }
 
+/// One open terminal and the folder its CLI runs in.
+struct Open {
+    terminal: Terminal,
+    /// The canonical folder, so a join is judged against the folder the conversation really runs in,
+    /// never against the folder the joining request happened to name.
+    workspace: AbsPath,
+}
+
 impl Terminals {
     fn get(&self, id: TerminalId) -> Option<Terminal> {
-        self.by_id.get(&id).cloned()
+        self.by_id.get(&id).map(|open| open.terminal.clone())
     }
 
-    fn open_for(&self, provider: ProviderId, native: &str) -> Option<(TerminalId, Terminal)> {
+    /// The terminal already showing this conversation, if it runs in `workspace`.
+    fn open_for(
+        &self,
+        provider: ProviderId,
+        native: &str,
+        workspace: &AbsPath,
+    ) -> Option<(TerminalId, Terminal)> {
         let id = *self.by_conversation.get(&(provider, native.into()))?;
-        self.get(id).map(|terminal| (id, terminal))
+        let open = self.by_id.get(&id)?;
+        (open.workspace == *workspace).then(|| (id, open.terminal.clone()))
     }
 
-    fn insert(&mut self, id: TerminalId, key: Option<(ProviderId, Box<str>)>, terminal: Terminal) {
-        self.by_id.insert(id, terminal);
+    fn insert(
+        &mut self,
+        id: TerminalId,
+        key: Option<(ProviderId, Box<str>)>,
+        terminal: Terminal,
+        workspace: AbsPath,
+    ) {
+        self.by_id.insert(
+            id,
+            Open {
+                terminal,
+                workspace,
+            },
+        );
         if let Some(key) = key {
             self.by_conversation.insert(key, id);
         }
@@ -70,10 +99,11 @@ async fn forget(composed: &Composed, id: TerminalId) {
 /// Serve one terminal request on this connection until the view ends.
 ///
 /// Called after the scope wall admitted the request. Everything after the first answer is the view: output
-/// down, input and resizes up.
+/// down, input and resizes up, each inbound request judged by the same wall before it acts.
 pub(crate) async fn serve(
     connection: &mut SurfaceConnection,
-    composed: &Composed,
+    composed: Arc<Composed>,
+    caller: Caller,
     request: Request,
 ) {
     let opened = match request {
@@ -85,7 +115,7 @@ pub(crate) async fn serve(
             rows,
         } => {
             open(
-                composed,
+                &composed,
                 &provider,
                 native.as_deref(),
                 &workspace,
@@ -98,7 +128,7 @@ pub(crate) async fn serve(
             terminal,
             cols,
             rows,
-        } => attach(composed, terminal, cols, rows).await,
+        } => attach(&composed, terminal, cols, rows).await,
         _ => Err("not a terminal request".to_owned()),
     };
     let (id, terminal, attachment) = match opened {
@@ -115,11 +145,29 @@ pub(crate) async fn serve(
     if write(connection, &opened).await.is_err() {
         return;
     }
-    relay(connection, composed, id, &terminal, attachment).await;
+    relay(connection, &composed, &caller, id, &terminal, attachment).await;
+}
+
+/// Drop the terminal from the table the moment its CLI ends, viewer or no viewer. Without this a
+/// conversation whose viewer left first stayed in the table forever, kept the draining rule from ever
+/// reaching zero, and answered the next open with an already-ended terminal (measured 2026-08-25).
+fn forget_on_exit(composed: Arc<Composed>, id: TerminalId, terminal: &Terminal) {
+    let mut exited = terminal.exited();
+    tokio::spawn(async move {
+        loop {
+            if exited.borrow().is_some() {
+                break;
+            }
+            if exited.changed().await.is_err() {
+                break;
+            }
+        }
+        forget(&composed, id).await;
+    });
 }
 
 async fn open(
-    composed: &Composed,
+    composed: &Arc<Composed>,
     provider: &str,
     native: Option<&str>,
     workspace: &str,
@@ -128,8 +176,11 @@ async fn open(
 ) -> Result<(TerminalId, Terminal, Attachment), String> {
     let id = ProviderId::parse(provider)
         .map_err(|_| format!("{provider:?} is not a provider name runtrol accepts"))?;
+    let cwd = AbsPath::canonicalize(workspace)
+        .map_err(|error| format!("the workspace {workspace:?} cannot be used: {error}"))?;
     if let Some(native) = native
-        && let Some((existing, terminal)) = composed.terminals.lock().await.open_for(id, native)
+        && let Some((existing, terminal)) =
+            composed.terminals.lock().await.open_for(id, native, &cwd)
     {
         let attachment = terminal.attach().await;
         return Ok((existing, terminal, attachment));
@@ -158,8 +209,6 @@ async fn open(
         }
         None => tui.new.iter().map(ToString::to_string).collect(),
     };
-    let cwd = AbsPath::canonicalize(workspace)
-        .map_err(|error| format!("the workspace {workspace:?} cannot be used: {error}"))?;
     let mut cache = runtrol_core::ProbeCache::open(composed.home.paths().probe_cache());
     let (program, _probed) =
         runtrol_core::probe_program(&declared.manifest, &[], &mut cache, &composed.containment)
@@ -182,12 +231,13 @@ async fn open(
     let key = native.map(|native| (id, Box::<str>::from(native)));
     let open = {
         let mut terminals = composed.terminals.lock().await;
-        terminals.insert(terminal_id, key, terminal.clone());
+        terminals.insert(terminal_id, key, terminal.clone(), cwd);
         terminals.len()
     };
     composed
         .open_terminals
         .store(open, std::sync::atomic::Ordering::Release);
+    forget_on_exit(Arc::clone(composed), terminal_id, &terminal);
     let attachment = terminal.attach().await;
     Ok((terminal_id, terminal, attachment))
 }
@@ -218,6 +268,7 @@ async fn attach(
 async fn relay(
     connection: &mut SurfaceConnection,
     composed: &Composed,
+    caller: &Caller,
     id: TerminalId,
     terminal: &Terminal,
     mut attachment: Attachment,
@@ -274,26 +325,39 @@ async fn relay(
             }
             inbound = connection.recv() => {
                 let Ok(Some(frame)) = inbound else { return };
-                match serde_json::from_slice::<Request>(&frame) {
-                    Ok(Request::TerminalInput { bytes }) => {
+                let request = match serde_json::from_slice::<Request>(&frame) {
+                    Ok(request) => request,
+                    Err(error) => {
+                        drop(write(connection, &refuse(&error.to_string())).await);
+                        return;
+                    }
+                };
+                // The wall, on every inbound request of the view: a grant that may read a screen is not a
+                // grant that may type into it, and the first request's admission says nothing about these.
+                if let Err(refusal) = crate::scope::allowed_with_authority(
+                    caller,
+                    &request,
+                    &composed.device_authority,
+                ) {
+                    drop(write(connection, &refuse(&refusal.to_string())).await);
+                    return;
+                }
+                match request {
+                    Request::TerminalInput { bytes } => {
                         if let Err(error) = terminal.input(bytes.as_ref()).await {
                             drop(write(connection, &refuse(&error.to_string())).await);
                             return;
                         }
                     }
-                    Ok(Request::TerminalResize { cols, rows }) => {
+                    Request::TerminalResize { cols, rows } => {
                         if let Err(error) = terminal.resize(runtrol_childproc::PtySize { cols, rows }).await {
                             drop(write(connection, &refuse(&error.to_string())).await);
                             return;
                         }
                     }
                     // A view carries terminal traffic only; anything else ends it, said out loud.
-                    Ok(_) => {
+                    _ => {
                         drop(write(connection, &refuse("this connection is a terminal view")).await);
-                        return;
-                    }
-                    Err(error) => {
-                        drop(write(connection, &refuse(&error.to_string())).await);
                         return;
                     }
                 }
