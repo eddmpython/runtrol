@@ -32,11 +32,14 @@ tokio = { workspace = true, features = ["rt", "macros"] }
 # children die" a kernel guarantee rather than a best effort; the console handles are what a started daemon
 # must not be given a copy of.
 [target.'cfg(windows)'.dependencies]
+# `Win32_System_Pipes` and the pseudo console calls in `Win32_System_Console` are what the terminal host
+# in `pty` is built on: ConPTY is reached through a pipe pair and a process attribute, nothing else.
 windows-sys = { workspace = true, features = [
     "Win32_Foundation",
     "Win32_Security",
     "Win32_System_Console",
     "Win32_System_JobObjects",
+    "Win32_System_Pipes",
     "Win32_System_ProcessStatus",
     "Win32_System_Threading",
 ] }

@@ -95,6 +95,15 @@ pub enum SpawnError {
         detail: String,
     },
 
+    /// A pseudo terminal could not be made, or the child could not be attached to it.
+    #[error("cannot host a terminal while {doing}: {detail}")]
+    Pty {
+        /// The step that failed.
+        doing: &'static str,
+        /// The platform's own words.
+        detail: String,
+    },
+
     /// This process's own handles could not be kept from travelling to what it starts.
     ///
     /// Reported rather than swallowed. What it prevents is a shell that waits forever with nothing to show

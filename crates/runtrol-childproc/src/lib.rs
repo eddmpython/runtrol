@@ -42,6 +42,7 @@ pub mod contain;
 pub mod error;
 pub mod footprint;
 pub mod handoff;
+pub mod pty;
 pub mod resolve;
 pub mod run;
 
@@ -53,5 +54,6 @@ pub use contain::{ChildGuard, Containment, Strength, TrackedCommand};
 pub use error::SpawnError;
 pub use footprint::resident_bytes;
 pub use handoff::keep_handles_to_ourselves;
+pub use pty::{PtyChild, PtySize, PtySpawn};
 pub use resolve::{LauncherKept, Program, ProgramKind, resolve};
 pub use run::{MAX_OUTPUT_BYTES, Output, capture, capture_in, capture_with_input};
