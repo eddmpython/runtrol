@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { conversationDeletion } from "./conversationDeletion";
+import { canDelete, conversationDeletion } from "./conversationDeletion";
 import type { Conversation } from "./conversationList";
 import type { NativeChatLine, ProviderCapabilities, SessionLine } from "./runtimeTypes";
 
@@ -85,4 +85,16 @@ test("a provider that publishes no deletion is told apart up front, in its own w
   const unknown = conversationDeletion(row(), capabilities(undefined));
   assert.equal(unknown.kind, "unsupported");
   assert.equal(conversationDeletion(row(), null).kind, "unsupported", "no answer from the Runtime is no permission");
+});
+
+test("canDelete is the one truth the row affordance and the click share", () => {
+  // An orphan pointer: runtrol supervises it, but the service no longer lists it. Deletable (forget the
+  // pointer), and the row must therefore carry the delete affordance. This is the case that regressed.
+  const session = { sessionId: "s1", lifecycle: "hotIdle" } as SessionLine;
+  assert.equal(canDelete(row({ session, native: null }), null), true);
+  // A provider-owned conversation is deletable only where the service says it can be.
+  assert.equal(canDelete(row(), capabilities({ availability: "available" })), true);
+  assert.equal(canDelete(row(), capabilities({ availability: "unsupported", why: "no method" })), false);
+  // A saved row with neither a native identity nor a supervised pointer has nothing to delete.
+  assert.equal(canDelete(row({ native: null, session: null }), null), false);
 });

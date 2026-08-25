@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 
 import { conversationIcon } from "./conversationIcon";
+import { canDelete } from "./conversationDeletion";
 
 import {
   attentionCount,
@@ -151,10 +152,13 @@ function contextValue(
   conversation: Conversation,
   capabilities: ProviderCapabilities | null,
 ): string {
-  const mutationSuffix = conversation.native
-    ? (capabilities?.nativeSessionArchive?.availability === "available" ? ".archive" : "")
-      + (capabilities?.nativeSessionDelete?.availability === "available" ? ".delete" : "")
-    : "";
+  // Archive stays a native-only action; delete asks the one shared truth, so an orphan pointer (supervised,
+  // no native identity) gets its delete button too. Measured 2026-08-25: two such rows sat undeletable
+  // because the affordance keyed on a native identity they did not have while the click would have forgotten
+  // them.
+  const mutationSuffix = (conversation.native
+    && capabilities?.nativeSessionArchive?.availability === "available" ? ".archive" : "")
+    + (canDelete(conversation, capabilities) ? ".delete" : "");
   // Every conversation can be pinned; the token says which of pin and unpin the row's inline button offers.
   const pinState = conversation.pinned ? ".pinned" : ".pinnable";
   if (!conversation.canOpen) return `runtrol.conversation.blocked${mutationSuffix}${pinState}`;
