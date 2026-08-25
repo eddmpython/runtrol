@@ -336,11 +336,15 @@ impl PublishedGeneration {
         record.instance_id = instance_id.to_owned();
         let mut kept = Vec::with_capacity(record.generations.len() + 1);
         for generation in record.generations {
-            // An entry with this process id and this digest is a stale record of a reused pid; anything
-            // else stays exactly as long as something answers on its control endpoint.
+            // An entry with this process id and this digest is a stale record of a reused pid.
             let stale_self =
                 generation.process_id == process_id && generation.digest == published.digest;
-            if stale_self || !answers(&generation.control_endpoint).await {
+            // An entry on the control endpoint this daemon just bound is a dead predecessor: the endpoint is
+            // exclusive, so this daemon could only bind it because whoever held it before is gone. Its own
+            // answer on that shared address would otherwise keep the dead entry alive forever (measured
+            // 2026-08-25: a same-digest restart left two entries, one a dead pid, in `runtrol status`).
+            let my_endpoint = generation.control_endpoint == published.control_endpoint;
+            if stale_self || my_endpoint || !answers(&generation.control_endpoint).await {
                 continue;
             }
             kept.push(generation);
@@ -847,6 +851,58 @@ mod tests {
         assert_eq!(
             record.generations.first().map(|g| g.digest.as_str()),
             Some(identity(0x22).digest())
+        );
+        drop(live);
+    }
+
+    #[tokio::test]
+    async fn a_same_digest_restart_replaces_the_dead_entry_on_its_own_endpoint() {
+        // A daemon dies and a fresh one of the same build binds the same (exclusive) endpoint. The dead
+        // entry shares that endpoint, so an answer probe there hits the live successor; only the
+        // owns-this-endpoint rule can drop it, and `runtrol status` must show one generation, not two.
+        let scratch = Scratch::make("same-digest-restart");
+        let layout = scratch.layout();
+        let control = if cfg!(windows) {
+            r"\\.\pipe\runtrol-generations-test-shared".to_owned()
+        } else {
+            scratch.0.join("shared.sock").to_string_lossy().into_owned()
+        };
+        let dead = RuntimeLocatorRecord {
+            schema: RUNTIME_LOCATOR_SCHEMA,
+            instance_id: INSTANCE.to_owned(),
+            generations: vec![RuntimeGeneration {
+                digest: identity(0x33).digest().to_owned(),
+                endpoint_kind: endpoint_kind(),
+                endpoint: "public-shared".to_owned(),
+                control_endpoint: control.clone(),
+                runtime_version: "0.0.0".to_owned(),
+                process_id: 1,
+                started_at_ms: 1,
+                live_sessions: 0,
+                draining: false,
+            }],
+        };
+        write_locator(layout.runtime_locator().as_std_path(), &dead).expect("seed the dead entry");
+        let live = PublishedGeneration::publish(
+            &layout,
+            INSTANCE,
+            &identity(0x33),
+            "public-shared",
+            &control,
+        )
+        .await
+        .expect("publish");
+        let record = current_record(layout.runtime_locator().as_std_path())
+            .expect("read")
+            .expect("present");
+        assert_eq!(
+            record.generations.len(),
+            1,
+            "the dead predecessor on this daemon's own endpoint is gone"
+        );
+        assert_eq!(
+            record.generations.first().map(|g| g.process_id),
+            Some(std::process::id())
         );
         drop(live);
     }
