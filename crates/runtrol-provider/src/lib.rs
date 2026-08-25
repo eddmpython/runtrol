@@ -24,6 +24,7 @@
 //! said a turn ends on one frame and the CLI ends it on another, which is exactly the kind of thing only running
 //! it tells you.
 
+pub mod account;
 pub mod agent;
 pub mod capability;
 pub mod catalog;
@@ -36,6 +37,9 @@ pub mod native_catalogue;
 pub mod path;
 pub mod time;
 
+pub use account::{
+    AccountLimits, AccountReport, AccountStatus, MAX_ACCOUNT_TOKEN_BYTES, account_token,
+};
 pub use agent::{Agent, Provider};
 pub use capability::{
     ProviderCapabilities, ProviderCapability, ProviderCapabilitySource, ProviderCapabilityState,

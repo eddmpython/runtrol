@@ -28,6 +28,7 @@
 
 use async_trait::async_trait;
 
+use crate::account::AccountReport;
 use crate::capability::ProviderCapabilities;
 use crate::catalog::ModelCatalog;
 use crate::command::{AgentCommand, CloseMode, OpenIntent, Produced};
@@ -72,6 +73,25 @@ pub trait Provider: Send + Sync + 'static {
     async fn models(&self) -> Result<ModelCatalog, ProviderError> {
         Ok(ModelCatalog::unsupported(
             "this driver does not provide model discovery",
+        ))
+    }
+
+    /// Where the operator's account with this service stands, by the service's own status surface.
+    ///
+    /// The default says the driver publishes no such surface. It never reads credential files, help text
+    /// or transcripts to approximate an answer: a signed-in guess that is wrong sends a person to a
+    /// conversation that fails, and a signed-out guess hides a service that works.
+    ///
+    /// # Errors
+    ///
+    /// Any [`ProviderError`] produced while asking the service's own status surface.
+    ///
+    /// # Cancellation
+    ///
+    /// As for [`Self::models`]: dropping the future must begin cleanup of everything it started.
+    async fn account(&self) -> Result<AccountReport, ProviderError> {
+        Ok(AccountReport::unpublished(
+            "this driver publishes no account status surface",
         ))
     }
 

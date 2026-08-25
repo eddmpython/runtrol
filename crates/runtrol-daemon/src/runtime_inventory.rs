@@ -184,6 +184,51 @@ impl ProviderInventoryStamp {
 ///
 /// Structured fields only. The verbatim payload never reaches this list: it rides the session event stream under
 /// session-output authority, and this list answers under provider authority.
+/// The usage list with the windows the account probe read on request merged in.
+///
+/// A turn's report and a probe's report fill the same gauge. The newer of the two wins per service, so a
+/// window read a minute ago never hides the one a turn reported just now, and a service that has had no
+/// turn since the daemon started still shows where its account stands.
+pub(crate) fn merge_probed_usage(
+    current: &runtrol_runtime_protocol::ProviderUsageList,
+    composed: &Composed,
+) -> runtrol_runtime_protocol::ProviderUsageList {
+    let probed = composed
+        .account_reports
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .probed_gauges();
+    let probed = provider_usage(&probed);
+    let mut merged = current.clone();
+    for gauge in probed.providers {
+        match merged
+            .providers
+            .iter_mut()
+            .find(|known| known.provider_id == gauge.provider_id)
+        {
+            Some(known) if known.at_ms >= gauge.at_ms => {
+                // The turn's report is newer; a probe only fills windows the turn left empty.
+                if known.primary.is_none() {
+                    known.primary = gauge.primary;
+                }
+                if known.secondary.is_none() {
+                    known.secondary = gauge.secondary;
+                }
+            }
+            Some(known) => {
+                let cost = known.cost.take();
+                *known = gauge;
+                known.cost = cost;
+            }
+            None => merged.providers.push(gauge),
+        }
+    }
+    merged
+        .providers
+        .sort_by(|left, right| left.provider_id.as_str().cmp(right.provider_id.as_str()));
+    merged
+}
+
 pub(crate) fn provider_usage(
     gauges: &[runtrol_core::ProviderGauge],
 ) -> runtrol_runtime_protocol::ProviderUsageList {
@@ -323,6 +368,10 @@ fn build_provider_inventory(composed: &Composed) -> CachedProviderInventory {
         .iter()
         .filter_map(|(_, path)| path.clone())
         .collect::<Vec<_>>();
+    let accounts = composed
+        .account_reports
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let list = ProviderList {
         providers: registered
             .into_iter()
@@ -340,6 +389,7 @@ fn build_provider_inventory(composed: &Composed) -> CachedProviderInventory {
                     .iter()
                     .map(ToString::to_string)
                     .collect(),
+                account: accounts.descriptor(provider.id()),
             })
             .collect(),
     };

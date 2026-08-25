@@ -249,6 +249,47 @@ impl Provider for CodexProvider {
         .map(|_answer| ())
     }
 
+    /// `account/read` and `account/rateLimits/read`, both in this CLI's own generated schema: sign-in,
+    /// plan and the two limit windows, without a turn. Measured 2026-08-25 on 0.149.1.
+    async fn account(&self) -> Result<runtrol_provider::AccountReport, ProviderError> {
+        let conn = self.connection().await?;
+        let account = conn
+            .call(
+                "account/read",
+                &serde_json::json!({ "refreshToken": false }),
+                "reading the account",
+            )
+            .await?;
+        let account: AccountAnswer =
+            serde_json::from_slice(&account).map_err(|error| ProviderError::Protocol {
+                provider: self.id,
+                doing: "reading the account",
+                detail: error.to_string(),
+            })?;
+        let mut report = account_report(account);
+        if matches!(report.status, runtrol_provider::AccountStatus::SignedIn) {
+            let limits = conn
+                .call(
+                    "account/rateLimits/read",
+                    &serde_json::json!({}),
+                    "reading the account limits",
+                )
+                .await?;
+            let limits: LimitsAnswer =
+                serde_json::from_slice(&limits).map_err(|error| ProviderError::Protocol {
+                    provider: self.id,
+                    doing: "reading the account limits",
+                    detail: error.to_string(),
+                })?;
+            report.limits = Some(account_limits(&limits.rate_limits));
+            if report.plan.is_none() {
+                report.plan =
+                    runtrol_provider::account_token(limits.rate_limits.plan_type.as_deref());
+            }
+        }
+        Ok(report)
+    }
+
     async fn models(&self) -> Result<ModelCatalog, ProviderError> {
         let conn = self.connection().await?;
         let mut cursor: Option<Box<str>> = None;
@@ -737,5 +778,110 @@ mod tests {
             }
             Ok(_) => panic!("a program that is not the CLI must not open a session"),
         }
+    }
+}
+
+/// `GetAccountResponse`, the fields this build reads.
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AccountAnswer {
+    #[serde(default)]
+    account: Option<AccountKind>,
+    #[serde(default)]
+    requires_openai_auth: bool,
+}
+
+/// `Account`: one of the sign-in kinds this CLI names.
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AccountKind {
+    #[serde(rename = "type")]
+    kind: String,
+    #[serde(default)]
+    plan_type: Option<String>,
+}
+
+/// `GetAccountRateLimitsResponse`, the fields this build reads.
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LimitsAnswer {
+    rate_limits: LimitsSnapshot,
+}
+
+/// `RateLimitSnapshot`, the fields this build reads.
+#[derive(Default, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LimitsSnapshot {
+    #[serde(default)]
+    primary: Option<LimitWindowAnswer>,
+    #[serde(default)]
+    secondary: Option<LimitWindowAnswer>,
+    #[serde(default)]
+    rate_limit_reached_type: Option<String>,
+    #[serde(default)]
+    plan_type: Option<String>,
+}
+
+/// `RateLimitWindow`, the fields this build reads.
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LimitWindowAnswer {
+    used_percent: i64,
+    #[serde(default)]
+    window_duration_mins: Option<i64>,
+    #[serde(default)]
+    resets_at: Option<i64>,
+}
+
+fn account_report(answer: AccountAnswer) -> runtrol_provider::AccountReport {
+    use runtrol_provider::{AccountReport, AccountStatus, account_token};
+    match answer.account {
+        // The CLI names an account, and requiresOpenaiAuth says whether it still works.
+        Some(account) if !answer.requires_openai_auth => AccountReport {
+            status: AccountStatus::SignedIn,
+            plan: account_token(account.plan_type.as_deref()),
+            method: account_token(Some(&account.kind)),
+            limits: None,
+        },
+        _ => AccountReport {
+            status: AccountStatus::SignedOut,
+            plan: None,
+            method: None,
+            limits: None,
+        },
+    }
+}
+
+fn account_limits(snapshot: &LimitsSnapshot) -> runtrol_provider::AccountLimits {
+    runtrol_provider::AccountLimits {
+        primary: snapshot.primary.as_ref().map(account_window),
+        secondary: snapshot.secondary.as_ref().map(account_window),
+        reached: snapshot.rate_limit_reached_type.is_some(),
+    }
+}
+
+/// The read answer documents `resetsAt` as unix seconds (`int64`), unlike the turn frame this build leaves
+/// unread; a value that does not fit is reported as absent rather than as a wrong century.
+fn account_window(window: &LimitWindowAnswer) -> runtrol_provider::Window {
+    runtrol_provider::Window {
+        used_percent: Some(
+            u8::try_from(window.used_percent.clamp(0, i64::from(u8::MAX))).unwrap_or(u8::MAX),
+        ),
+        resets_at: window.resets_at.and_then(|seconds| {
+            // A negative reset time is not a time; absent beats a wrong one.
+            let Ok(seconds) = u64::try_from(seconds) else {
+                return None;
+            };
+            Some(runtrol_provider::WallMs::from_millis(
+                seconds.saturating_mul(1000),
+            ))
+        }),
+        window_minutes: window.window_duration_mins.and_then(|minutes| {
+            // A length that does not fit is reported as absent rather than clamped into a real number.
+            let Ok(minutes) = u32::try_from(minutes) else {
+                return None;
+            };
+            Some(minutes)
+        }),
     }
 }

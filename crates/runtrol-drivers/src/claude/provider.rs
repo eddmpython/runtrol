@@ -179,6 +179,32 @@ impl Provider for ClaudeProvider {
             })
     }
 
+    /// `claude auth status --json`: this CLI's own answer to "who is signed in", measured on 2.1.242
+    /// (`loggedIn`, `authMethod`, `subscriptionType`). Limits are not asked here: this CLI reports them
+    /// only on a turn, and that report fills the same gauge.
+    async fn account(&self) -> Result<runtrol_provider::AccountReport, ProviderError> {
+        let args = ["auth".to_owned(), "status".to_owned(), "--json".to_owned()];
+        let output = runtrol_childproc::capture(
+            &self.program,
+            &args,
+            ACCOUNT_STATUS_DEADLINE,
+            &self.contained_by,
+        )
+        .await
+        .map_err(|error| ProviderError::Protocol {
+            provider: self.id,
+            doing: "asking the CLI who is signed in",
+            detail: error.to_string(),
+        })?;
+        account_report(&String::from_utf8_lossy(&output.stdout)).ok_or_else(|| {
+            ProviderError::Protocol {
+                provider: self.id,
+                doing: "asking the CLI who is signed in",
+                detail: "the status answer carried no readable loggedIn field".to_owned(),
+            }
+        })
+    }
+
     async fn models(&self) -> Result<ModelCatalog, ProviderError> {
         let found = self.models.discover();
         let reasoning_efforts = if self.available_flags.contains("--effort") {
@@ -230,6 +256,40 @@ impl Provider for ClaudeProvider {
         )?;
         Ok(Box::new(agent))
     }
+}
+
+/// How long the status command may take. It reads a local file and prints; a signed-out CLI answers as fast.
+const ACCOUNT_STATUS_DEADLINE: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// `auth status --json`, the fields this build reads.
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AuthStatus {
+    logged_in: bool,
+    #[serde(default)]
+    auth_method: Option<String>,
+    #[serde(default)]
+    subscription_type: Option<String>,
+}
+
+/// The report, or nothing when the answer is not this CLI's status object.
+fn account_report(answer: &str) -> Option<runtrol_provider::AccountReport> {
+    use runtrol_provider::{AccountReport, AccountStatus, account_token};
+    // Anything that is not this CLI's status object (help text, a stack trace) is "no report", which the
+    // caller names as a protocol error with the answer's shape; the parse error itself adds nothing.
+    let Ok(status) = serde_json::from_str::<AuthStatus>(answer.trim()) else {
+        return None;
+    };
+    Some(AccountReport {
+        status: if status.logged_in {
+            AccountStatus::SignedIn
+        } else {
+            AccountStatus::SignedOut
+        },
+        plan: account_token(status.subscription_type.as_deref()),
+        method: account_token(status.auth_method.as_deref()),
+        limits: None,
+    })
 }
 
 #[cfg(test)]
@@ -350,5 +410,26 @@ mod tests {
             .close(runtrol_provider::CloseMode::Kill)
             .await
             .expect("stopping it works");
+    }
+
+    #[test]
+    fn the_status_answer_reads_as_a_report_and_anything_else_as_nothing() {
+        let signed_in = account_report(
+            r#"{"loggedIn":true,"authMethod":"claude.ai","apiProvider":"firstParty","email":"x@y","subscriptionType":"max"}"#,
+        )
+        .expect("a status object");
+        assert!(matches!(
+            signed_in.status,
+            runtrol_provider::AccountStatus::SignedIn
+        ));
+        assert_eq!(signed_in.plan.as_deref(), Some("max"));
+        assert_eq!(signed_in.method.as_deref(), Some("claude.ai"));
+        let signed_out = account_report(r#"{"loggedIn":false}"#).expect("a status object");
+        assert!(matches!(
+            signed_out.status,
+            runtrol_provider::AccountStatus::SignedOut
+        ));
+        assert!(signed_out.plan.is_none());
+        assert!(account_report("Usage: claude auth status").is_none());
     }
 }

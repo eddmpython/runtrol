@@ -172,6 +172,15 @@ export type PendingEnrollmentId = string;
 /** A finalized public Runtime contract date. */
 export type ProtocolRevision = string;
 
+/** One service's account report, structured fields only.
+
+Limit windows a service reports on request (outside any turn) do not travel here: they land in the
+usage list beside the windows a turn reports, so a surface reads one gauge per service. */
+export interface ProviderAccount { readonly checkedAtMs: number; readonly method?: string | null; readonly plan?: string | null; readonly status: ProviderAccountStatus; readonly why?: string | null; }
+
+/** Whether the operator is signed in to one service, by that service's own word. */
+export type ProviderAccountStatus = "signedIn" | "signedOut" | "unpublished";
+
 /** Whether one structural provider operation is usable in the observed installation. */
 export type ProviderCapabilityAvailability = "available" | "unsupported" | "unknown";
 
@@ -182,7 +191,7 @@ export interface ProviderCapabilityObservation { readonly availability: Provider
 export type ProviderCapabilityProvenance = "officialProtocol" | "officialCli" | "driverContract";
 
 /** One provider in the fast inventory. */
-export interface ProviderDescriptor { readonly displayName: string; readonly help?: ProviderHelp | null; readonly icon?: string | null; readonly installation: InstallationObservation; readonly providerId: ProviderId; readonly switchableModes?: ReadonlyArray<string>; }
+export interface ProviderDescriptor { readonly account?: ProviderAccount | null; readonly displayName: string; readonly help?: ProviderHelp | null; readonly icon?: string | null; readonly installation: InstallationObservation; readonly providerId: ProviderId; readonly switchableModes?: ReadonlyArray<string>; }
 
 /** A coding service's own commands for making itself usable, ready to show a person.
 

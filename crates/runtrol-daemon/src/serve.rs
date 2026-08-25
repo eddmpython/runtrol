@@ -806,9 +806,11 @@ async fn serve_surfaces(
         watch::channel(Arc::new(runtrol_runtime_protocol::ProviderList {
             providers: Vec::new(),
         }));
-    let (account_gauges, _initial_account_gauges_receiver) = watch::channel(Arc::new(
-        crate::runtime_inventory::provider_usage(&sessions.account_gauges()),
-    ));
+    let (account_gauges, _initial_account_gauges_receiver) =
+        watch::channel(Arc::new(crate::runtime_inventory::merge_probed_usage(
+            &crate::runtime_inventory::provider_usage(&sessions.account_gauges()),
+            &composed,
+        )));
     let discovering = Arc::new(DiscoveryGates::new(&composed.registry));
     let mut connections = JoinSet::new();
     let push_wake_active = Arc::new(AtomicBool::new(false));
@@ -893,6 +895,11 @@ async fn serve_surfaces(
             while clients.join_next().await.is_some() {}
         });
     }
+    connections.spawn(crate::account_probe::supervise(
+        Arc::clone(&composed),
+        runtime_providers.clone(),
+        account_gauges.clone(),
+    ));
     connections.spawn(crate::mission_schedule::supervise(
         Arc::clone(&composed),
         composed.home.paths().endpoint().address().to_owned(),
@@ -1465,9 +1472,12 @@ async fn serve_surfaces(
                 if gauges_changed {
                     // Its own channel rather than a session-index rebuild: a limit report arrives with ordinary
                     // turn traffic, and the index flag exists precisely to keep traffic from rebuilding lists.
-                    account_gauges.send_replace(Arc::new(crate::runtime_inventory::provider_usage(
-                        &sessions.account_gauges(),
-                    )));
+                    account_gauges.send_replace(Arc::new(
+                        crate::runtime_inventory::merge_probed_usage(
+                            &crate::runtime_inventory::provider_usage(&sessions.account_gauges()),
+                            &composed,
+                        ),
+                    ));
                 }
             }
 

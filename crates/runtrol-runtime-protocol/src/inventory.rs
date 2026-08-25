@@ -139,6 +139,47 @@ pub struct ProviderDescriptor {
     /// is presentation, never authority.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub switchable_modes: Vec<String>,
+    /// Where the operator's account with this service stands, by the service's own status surface.
+    ///
+    /// Absent until Runtime has asked the service once; a surface then says "not checked yet" rather than
+    /// inventing a green light. Present for every installed service afterwards, including one whose
+    /// service publishes no way to ask, which the report says in so many words.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account: Option<ProviderAccount>,
+}
+
+/// Whether the operator is signed in to one service, by that service's own word.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ProviderAccountStatus {
+    /// The service said the operator is signed in.
+    SignedIn,
+    /// The service said nobody is signed in.
+    SignedOut,
+    /// The service publishes no way to ask.
+    Unpublished,
+}
+
+/// One service's account report, structured fields only.
+///
+/// Limit windows a service reports on request (outside any turn) do not travel here: they land in the
+/// usage list beside the windows a turn reports, so a surface reads one gauge per service.
+#[derive(Clone, Debug, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProviderAccount {
+    /// Signed in, signed out, or nothing to ask.
+    pub status: ProviderAccountStatus,
+    /// The plan token exactly as the service wrote it, when it names one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub plan: Option<String>,
+    /// How the operator is signed in, as the service names it, when it says.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub method: Option<String>,
+    /// Why nothing can be asked, in the service's own terms, for an unpublished status.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub why: Option<String>,
+    /// When the service answered, in unix milliseconds, which is how a surface says how stale it is.
+    pub checked_at_ms: u64,
 }
 
 /// A bounded provider inventory snapshot.

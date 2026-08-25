@@ -1321,6 +1321,68 @@
       "description": "A finalized public Runtime contract date.",
       "type": "string"
     },
+    "ProviderAccount": {
+      "additionalProperties": false,
+      "description": "One service's account report, structured fields only.\n\nLimit windows a service reports on request (outside any turn) do not travel here: they land in the\nusage list beside the windows a turn reports, so a surface reads one gauge per service.",
+      "properties": {
+        "checkedAtMs": {
+          "description": "When the service answered, in unix milliseconds, which is how a surface says how stale it is.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "method": {
+          "description": "How the operator is signed in, as the service names it, when it says.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "plan": {
+          "description": "The plan token exactly as the service wrote it, when it names one.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "$ref": "#/$defs/ProviderAccountStatus",
+          "description": "Signed in, signed out, or nothing to ask."
+        },
+        "why": {
+          "description": "Why nothing can be asked, in the service's own terms, for an unpublished status.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "status",
+        "checkedAtMs"
+      ],
+      "type": "object"
+    },
+    "ProviderAccountStatus": {
+      "description": "Whether the operator is signed in to one service, by that service's own word.",
+      "oneOf": [
+        {
+          "const": "signedIn",
+          "description": "The service said the operator is signed in.",
+          "type": "string"
+        },
+        {
+          "const": "signedOut",
+          "description": "The service said nobody is signed in.",
+          "type": "string"
+        },
+        {
+          "const": "unpublished",
+          "description": "The service publishes no way to ask.",
+          "type": "string"
+        }
+      ]
+    },
     "ProviderCapabilityAvailability": {
       "description": "Whether one structural provider operation is usable in the observed installation.",
       "oneOf": [
@@ -1397,6 +1459,17 @@
       "additionalProperties": false,
       "description": "One provider in the fast inventory.",
       "properties": {
+        "account": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProviderAccount"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Where the operator's account with this service stands, by the service's own status surface.\n\nAbsent until Runtime has asked the service once; a surface then says \"not checked yet\" rather than\ninventing a green light. Present for every installed service afterwards, including one whose\nservice publishes no way to ask, which the report says in so many words."
+        },
         "displayName": {
           "description": "Provider or manifest supplied label for presentation only.",
           "type": "string"

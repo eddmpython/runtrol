@@ -326,6 +326,11 @@ pub struct Composed {
     /// milliseconds apart. The cache contains only public provider descriptors and filesystem identity facts; a
     /// changed search directory, probe cache, or previously resolved executable invalidates it.
     pub(crate) provider_inventory: Mutex<crate::runtime_inventory::ProviderInventoryCache>,
+    /// The latest account report per provider, from each service's own status surface.
+    ///
+    /// Written by the account probe supervisor, read by every provider and usage projection. A std mutex
+    /// because the projections are synchronous and hold it for microseconds.
+    pub(crate) account_reports: std::sync::Mutex<crate::account_probe::AccountReports>,
     /// Latest model catalogue per provider, keyed to the exact binary it was read from.
     ///
     /// A short-TTL memoization, never a store (see `provider_prepare::MODEL_CATALOGUE_TTL`).
@@ -419,6 +424,7 @@ impl Composed {
             registry,
             device_authority: DeviceAuthority::new(granted, paired_devices),
             probe_cache_writing: tokio::sync::Mutex::new(()),
+            account_reports: std::sync::Mutex::new(crate::account_probe::AccountReports::default()),
             provider_inventory: Mutex::new(
                 crate::runtime_inventory::ProviderInventoryCache::default(),
             ),
@@ -484,6 +490,7 @@ impl Composed {
             registry,
             device_authority: DeviceAuthority::new(granted, paired_devices),
             probe_cache_writing: tokio::sync::Mutex::new(()),
+            account_reports: std::sync::Mutex::new(crate::account_probe::AccountReports::default()),
             provider_inventory: Mutex::new(
                 crate::runtime_inventory::ProviderInventoryCache::default(),
             ),
