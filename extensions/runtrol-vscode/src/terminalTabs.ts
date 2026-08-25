@@ -196,7 +196,17 @@ class CoreTerminal implements vscode.Pseudoterminal {
             this.writeEmitter.fire("\x1b[2J\x1b[H");
             break;
           case "terminalExited":
-            this.end(response.with.code);
+            // A clean exit closes the tab like a shell's would. Anything else keeps the tab, with the
+            // service's own last words on it: a resume the service refused (measured: an empty stored
+            // conversation exits at once) must not vanish before the person can read why.
+            if (response.with.code === 0) {
+              this.end(0);
+            } else {
+              this.writeEmitter.fire(`
+[2m[${this.target.provider} ended with code ${response.with.code}][0m
+`);
+              this.detach();
+            }
             return;
           case "failed":
             this.writeEmitter.fire(`\r\n\x1b[31m${response.with.message}\x1b[0m\r\n`);
@@ -231,9 +241,14 @@ class CoreTerminal implements vscode.Pseudoterminal {
 
   private end(code?: number): void {
     if (this.closed) return;
+    this.detach();
+    this.closeEmitter.fire(code);
+  }
+
+  /// Stop carrying the view but leave the tab open, so what the service wrote last stays readable.
+  private detach(): void {
     this.closed = true;
     this.transport?.close();
     this.transport = null;
-    this.closeEmitter.fire(code);
   }
 }
