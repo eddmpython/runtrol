@@ -644,6 +644,23 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
     return found
 
 
+def iconViolations(icons: dict[str, str]) -> list[str]:
+    """Every shipped provider mark is a vector: no embedded raster, no external reference.
+
+    A raster in an SVG wrapper is a bitmap that happens to have an .svg name: it blurs at the sizes the
+    sidebar draws and cannot follow the theme. Measured 2026-08-25: the Grok mark shipped as a PNG in a
+    wrapper, and it was also the wrong (2023) mark.
+    """
+    found: list[str] = []
+    for name, text in sorted(icons.items()):
+        lowered = text.lower()
+        if "<image" in lowered or "data:image" in lowered or "xlink:href" in lowered:
+            found.append(f"provider mark {name} embeds a raster or an external reference; ship a vector")
+        if "<path" not in lowered and "<polygon" not in lowered and "<circle" not in lowered and "<rect" not in lowered:
+            found.append(f"provider mark {name} draws no vector shape")
+    return found
+
+
 def engineAtLeast(package: dict, floor: tuple[int, int]) -> bool:
     """Whether the manifest's VS Code engine range starts at or above `floor` (major, minor)."""
     engines = package.get("engines")
@@ -660,6 +677,14 @@ def engineAtLeast(package: dict, floor: tuple[int, int]) -> bool:
 
 def selftest() -> int:
     """Prove the detector rejects each class of defect."""
+    raster = '<svg xmlns="http://www.w3.org/2000/svg"><image xlink:href="data:image/png;base64,AAAA"/></svg>'
+    vector = '<svg xmlns="http://www.w3.org/2000/svg"><path d="M0 0h1v1z"/></svg>'
+    if not iconViolations({"grok.svg": raster}):
+        print("[vscodeExtension] selftest FAIL. a raster wrapped in an SVG passed as a provider mark.", file=sys.stderr)
+        return 2
+    if iconViolations({"grok.svg": vector}):
+        print("[vscodeExtension] selftest FAIL. a vector provider mark was refused.", file=sys.stderr)
+        return 2
     package = {
         "engines": {"vscode": "^1.106.0"},
         "activationEvents": [
@@ -1249,7 +1274,11 @@ def run() -> int:
         and not path.name.endswith(".test.ts")
         and path.name != "styles.d.ts"
     }
-    failures = sourceViolations(package, sources)
+    icons = {
+        path.name: path.read_text(encoding="utf-8")
+        for path in (ROOT / "assets" / "brand" / "provider-icons").glob("*.svg")
+    }
+    failures = sourceViolations(package, sources) + iconViolations(icons)
     if failures:
         print("[vscodeExtension] FAIL. static contract violations:", file=sys.stderr)
         for failure in failures:

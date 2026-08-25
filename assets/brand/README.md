@@ -94,3 +94,19 @@ SVG 를 인라인으로 넣을 수 있으면 `lockup.svg` 하나면 된다. 글�
 - 마크와 글자 사이 간격을 바꾸지 않는다
 - 그림자·그라디언트·외곽선·글로우를 더하지 않는다
 - 글자를 비슷한 폰트로 다시 짜지 않는다
+
+## Provider marks (`provider-icons/`)
+
+Each coding service's own mark, as a vector, monochrome, following the editor theme. A raster wrapped in
+an SVG is refused by `tests/audit/vscodeExtension.py` (it blurs at sidebar sizes and cannot follow the theme).
+
+| File | What | Source | Licence |
+|---|---|---|---|
+| `claude.svg` | Anthropic's Claude mark | vendor site | trademark of Anthropic |
+| `openai.svg` | OpenAI's 2025 symbol | Wikimedia Commons `OpenAI logo 2025 (symbol).svg`, derived from OpenAI's own logo file | public domain as simple geometry; trademark of OpenAI |
+| `cline.svg` | Cline's mark | `cline/cline` repository, `apps/vscode/assets/icons/icon.svg` | Apache-2.0; trademark of Cline |
+| `opencode.svg` | OpenCode's mark | vendor site | trademark of its owner |
+| `grok.svg` | Grok's mark since February 2025 (the xAI strokes) | https://x.ai/, geometry as Wikimedia Commons `XAI-Logo.svg` | public domain as simple geometry; trademark of xAI |
+
+The 2023 Grok mark (a slashed circle) was retired by the vendor in February 2025; the sidebar carried it
+as a black app tile until 2026-08-25.
