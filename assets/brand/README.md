@@ -21,7 +21,7 @@
 | [symbol.svg](symbol.svg) | 전부 `currentColor` | 단색 마크. 에디터 활동 막대·아이콘 폰트처럼 한 색만 허용되는 자리 |
 | [symbol-light.svg](symbol-light.svg) | 코럴 + 그래파이트 | `<img>` 로 넣는 라이트 배경 |
 | [symbol-dark.svg](symbol-dark.svg) | 코럴 + 화이트 | `<img>` 로 넣는 다크 배경 |
-| [favicon.svg](favicon.svg) | 그래파이트 타일 (모서리 20%) + 코럴·화이트 마크 75% | 브라우저 탭. 탭 스트립이 밝든 어둡든 같은 얼굴이라 흰 팔이 사라지지 않는다. **작은 크기용으로 따로 그린 기하** (아래) |
+| [favicon.svg](favicon.svg) | 배경 없음. 코럴 + 잉크. 잉크는 SVG 안 media query 로 탭 테마를 읽어 밝은 탭에서 그래파이트, 어두운 탭에서 화이트 | 브라우저 탭 (Chrome·Edge·Firefox 는 이 SVG 를 쓴다). **작은 크기용으로 따로 그린 기하** (아래) |
 | [lockup.svg](lockup.svg) | 마크 코럴 + `currentColor`, 글자 `currentColor` | 인라인으로 넣을 수 있으면 이 하나로 테마 둘 다 된다 |
 | [lockup-light.svg](lockup-light.svg) | 코럴 + 그래파이트 | 라이트 배경 |
 | [lockup-dark.svg](lockup-dark.svg) | 코럴 + 화이트 | 다크 배경 |
@@ -31,7 +31,7 @@
 
 | 파일 | 크기 | 무엇 |
 |---|---|---|
-| [favicon.ico](favicon.ico) | 16 · 32 · 48 | `favicon.svg` 와 같은 타일. 모서리 밖은 투명 |
+| [favicon.ico](favicon.ico) | 16 · 32 · 48 | 배경 없음, 코럴 + 그래파이트. 래스터는 테마를 못 읽으므로 밝은 탭 기준이다 (Safari 처럼 SVG 파비콘이 없는 곳만 쓴다) |
 | [icon-16.png](icon-16.png) · [icon-32.png](icon-32.png) | 16 · 32 | 같은 것 |
 | [icon-192.png](icon-192.png) · [icon-512.png](icon-512.png) | 192 · 512 | 그래파이트 정사각 타일 + 코럴·화이트 마크 64%. PWA manifest 와 Marketplace 아이콘. 어느 배경에서도 같은 얼굴이 필요해 불투명이다 |
 | [apple-touch-icon.png](apple-touch-icon.png) | 180 | 같은 타일. iOS 는 투명을 검게 칠하므로 어차피 불투명이어야 한다 |
@@ -55,7 +55,7 @@
 
 ## favicon 이 symbol 과 다른 이유
 
-16px 에서 진짜 기하는 획이 2.24px, 중앙 틈이 1.12px 다. 모든 경계가 픽셀 중간에 떨어져 마크가 회색으로 뭉갠다. 그래서 `favicon.svg` 와 16·32·48px 래스터는 획 12.5, 반지름 18.75, 중심선 37.5 (`render.py` 의 `HINTED`) 로 그린다. 타일 안에서 마크가 75% 이므로 32px 에선 획 3px·틈 3px, 48px 에선 4.5px 로 앉고, 16px 은 1.5px 라 살짝 부드럽지만 타일 덕에 실루엣은 남는다.
+16px 에서 진짜 기하는 획이 2.24px, 중앙 틈이 1.12px 다. 모든 경계가 픽셀 중간에 떨어져 마크가 회색으로 뭉갠다. 그래서 `favicon.svg` 와 16·32·48px 래스터는 획 12.5, 반지름 18.75, 중심선 37.5 (`render.py` 의 `HINTED`) 로 그린다. 이러면 16·32·48px 에서 획이 정확히 2·4·6px, 틈이 2·4·6px, 반지름이 3·6·9px 로 픽셀 격자에 앉는다.
 
 **이 차이는 실수가 아니다.** 33px 이상은 진짜 기하가 알아서 또렷하다.
 

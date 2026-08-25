@@ -298,13 +298,10 @@ function writePreference(key, value) {
   }
 }
 
+// English is the default for everyone; the browser locale is not consulted. Only an explicit pick is remembered.
 function detectLanguage() {
   const stored = readPreference(LANGUAGE_KEY);
-  if (stored && COPY[stored]) {
-    return stored;
-  }
-  const preferred = (navigator.language ?? "en").slice(0, 2).toLowerCase();
-  return COPY[preferred] ? preferred : "en";
+  return stored && COPY[stored] ? stored : "en";
 }
 
 function applyLanguage(language) {

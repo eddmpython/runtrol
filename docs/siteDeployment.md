@@ -98,7 +98,7 @@ Icons are placed as `<i data-icon="name" data-size="16"></i>` and inlined by `ap
 
 The favicon, touch icon, Marketplace icon, and social cards are generated, not drawn. `python -X utf8 assets/brand/render.py` rebuilds every SVG, PNG, and ICO in `assets/brand/` from the geometry table in [`assets/brand/README.md`](../assets/brand/README.md) with no dependencies, and the same inputs produce the same bytes. Change the geometry or a colour in `render.py`, run it, look at the results, and commit the whole folder; a push that touches `assets/brand/**` redeploys the site so the favicon and social card update together.
 
-The mark is two-tone: two arms coral `#F56565`, two arms in the ink of the surface (graphite on light, white on dark). The page inlines the mark so its ink arms follow the theme through `currentColor`. The favicon and the app icons are the same graphite tile with the coral and white mark, so they read the same on a light or a dark tab strip and match the Marketplace listing.
+The mark is two-tone: two arms coral `#F56565`, two arms in the ink of the surface (graphite on light, white on dark). The page inlines the mark so its ink arms follow the theme through `currentColor`. `favicon.svg` is the bare mark and reads the tab strip theme through an embedded media query (graphite ink on a light strip, white on a dark one); the ICO fallback carries graphite ink for browsers without SVG favicons. The app icons are a graphite tile with the coral and white mark.
 
 ## After a deploy
 

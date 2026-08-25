@@ -60,6 +60,7 @@ function validateScript(candidate) {
     assert.match(candidate, new RegExp(`\\b${locale}: \\{`, "u"), `missing locale: ${locale}`);
   }
   assert.match(candidate, /releases\/latest/u, "release discovery must use the latest release API");
+  assert.doesNotMatch(candidate, /navigator\.language/u, "English is the default; the browser locale must not pick the language");
   assert.match(candidate, /selectTargetVsix\(assets, target\)/u, "manual install must select a native target");
   assert.doesNotMatch(candidate, /version\s*[:=]\s*["']\d+\.\d+/u, "the page must not hardcode a release version");
   assert.doesNotMatch(

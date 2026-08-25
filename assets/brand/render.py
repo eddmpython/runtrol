@@ -86,23 +86,18 @@ def symbol_svg(accent: str, ink: str, comment: str | None = None) -> str:
     return "\n".join(lines) + "\n"
 
 
-TILE_RADIUS = 0.2
-TILE_MARK = 0.75
-
-
 def favicon_svg() -> str:
-    """Graphite tile with the coral and white mark: the same face on a light or a dark tab strip."""
-    size = 100.0
-    inset = size * (1 - TILE_MARK) / 2
+    """Mark only, no tile. The ink arms read the tab strip theme: graphite on light, white on dark."""
     return "\n".join(
         [
             '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100" height="100" role="img" aria-label="runtrol">',
             "  <title>runtrol</title>",
-            "  <!-- hinted for 16 to 32px. the brand geometry is in symbol.svg. the tile keeps the white arms visible on a light tab strip -->",
-            f'  <rect width="100" height="100" rx="{size * TILE_RADIUS:g}" fill="{GRAPHITE_HEX}"/>',
-            f'  <g transform="translate({inset:g} {inset:g}) scale({TILE_MARK:g})">',
-            mark_group(HINTED, CORAL_HEX, WHITE_HEX, indent="    "),
-            "  </g>",
+            "  <!-- hinted for 16 to 32px. the brand geometry is in symbol.svg. the ink follows the tab strip theme -->",
+            "  <style>",
+            f"    .ink {{ stroke: {GRAPHITE_HEX}; }}",
+            f"    @media (prefers-color-scheme: dark) {{ .ink {{ stroke: {WHITE_HEX}; }} }}",
+            "  </style>",
+            mark_group(HINTED, CORAL_HEX, GRAPHITE_HEX),
             "</svg>",
         ]
     ) + "\n"
@@ -415,7 +410,11 @@ def main() -> None:
     write("lockup-dark.svg", lockup_svg(CORAL_HEX, WHITE_HEX, WHITE_HEX))
 
     print("brand rasters")
-    hinted = {size: draw_tile(size, HINTED, TILE_MARK, TILE_RADIUS).png() for size in (16, 32, 48)}
+    hinted = {}
+    for size in (16, 32, 48):
+        canvas = Canvas(size, size, None)
+        draw_mark(canvas, HINTED, size, 0, 0, CORAL, GRAPHITE)
+        hinted[size] = canvas.png()
     write("icon-16.png", hinted[16])
     write("icon-32.png", hinted[32])
     write("favicon.ico", ico([(16, hinted[16]), (32, hinted[32]), (48, hinted[48])]))
