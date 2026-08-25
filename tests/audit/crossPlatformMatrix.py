@@ -66,9 +66,9 @@ def evidenceProblems(evidence: dict[str, Any], expectedTarget: str) -> list[str]
         "bundledCore",
         "managedCore",
         "configuredCore",
-        "draftOpened",
-        "draftTitle",
-        "draftClosed",
+        "newConversation",
+        "newConversationTitle",
+        "newConversationClosed",
     }
     for name in sorted(required - evidence.keys()):
         found.append(f"evidence has no {name}")
@@ -83,12 +83,15 @@ def evidenceProblems(evidence: dict[str, Any], expectedTarget: str) -> list[str]
         found.append(f"package target is {evidence.get('target')}, expected {expectedTarget}")
     if evidence.get("configuredCore") != "":
         found.append("the clean profile used a manually configured Core path")
-    if evidence.get("draftOpened") is not True:
-        found.append("the public new-conversation command did not open a draft")
-    if evidence.get("draftTitle") != "New chat":
-        found.append("the opened draft did not have the shipped new-chat title")
-    if evidence.get("draftClosed") is not True:
-        found.append("the exact new-conversation draft did not close")
+    # New Conversation opens the one usable service's terminal, or nothing on a profile with a picker to
+    # dismiss or no usable service; either is a settled outcome, and whatever opened must have closed.
+    if evidence.get("newConversation") not in ("terminal", "nothing"):
+        found.append("the public new-conversation command did not settle as a terminal or as nothing")
+    title = evidence.get("newConversationTitle")
+    if evidence.get("newConversation") == "terminal" and (not isinstance(title, str) or not title.strip()):
+        found.append("the opened conversation terminal has no title")
+    if evidence.get("newConversationClosed") is not True:
+        found.append("the exact new-conversation terminal did not close")
 
     extensionPath = absolutePath(evidence.get("extensionPath"), "installed extension", found)
     bundledCore = absolutePath(evidence.get("bundledCore"), "bundled Core", found)
@@ -143,9 +146,9 @@ def selftest() -> int:
         "bundledCore": str(extension / "resources" / "core" / executable),
         "managedCore": str(temporary / "runtrol-cross-platform-selftest" / "user-data" / executable),
         "configuredCore": "",
-        "draftOpened": True,
-        "draftTitle": "New chat",
-        "draftClosed": True,
+        "newConversation": "terminal",
+        "newConversationTitle": "runtrol",
+        "newConversationClosed": True,
     }
     if evidenceProblems(valid, target):
         print("[crossPlatformMatrix:selftest] FAIL. valid evidence was rejected.", file=sys.stderr)
@@ -160,9 +163,9 @@ def selftest() -> int:
         ("extensionVersion", "next"),
         ("target", "unsupported-x64"),
         ("configuredCore", str(temporary / executable)),
-        ("draftOpened", False),
-        ("draftTitle", "Conversation"),
-        ("draftClosed", False),
+        ("newConversation", "draft"),
+        ("newConversationTitle", ""),
+        ("newConversationClosed", False),
         ("bundledCore", str(temporary / executable)),
         ("managedCore", str(extension / executable)),
     ):

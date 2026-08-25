@@ -1,17 +1,12 @@
 import * as vscode from "vscode";
 
-const CONVERSATION_VIEW_TYPES = new Set([
-  "runtrol.conversation",
-  "mainThreadWebview-runtrol.conversation",
-]);
-
 export function allTabs(): vscode.Tab[] {
   return vscode.window.tabGroups.all.flatMap((group) => group.tabs);
 }
 
+/// A conversation is the service's own terminal in an editor tab (docs/terminalSurface.md).
 export function isConversationEditor(tab: vscode.Tab): boolean {
-  return tab.input instanceof vscode.TabInputWebview
-    && CONVERSATION_VIEW_TYPES.has(tab.input.viewType);
+  return tab.input instanceof vscode.TabInputTerminal;
 }
 
 export function activeConversationEditor(): vscode.Tab | undefined {

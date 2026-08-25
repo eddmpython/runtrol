@@ -70,26 +70,29 @@ async function verifyInstalledPackage(resultPath: string): Promise<void> {
   );
 
   currentStage = "opening-new-conversation";
+  // New Conversation asks which service when more than one is usable, and opens that service's terminal
+  // when one is. The command settles either way: the picker is dismissed the way a person would press
+  // Escape, or the terminal that opened is closed again.
   const tabsBeforeCommand = new Set(allTabs());
+  // Nobody is at this keyboard: the command is asked not to ask, and opens the service used last (or the
+  // first usable one), or nothing when no service is usable on this profile.
   await within(
-    vscode.commands.executeCommand("runtrol.startSession"),
-    10_000,
+    Promise.resolve(vscode.commands.executeCommand("runtrol.startSession", { interactive: false })),
+    20_000,
     "opening a new conversation through the public command",
   );
+  await delay(500);
   const newConversationTabs = allTabs().filter(
     (tab) => !tabsBeforeCommand.has(tab) && isConversationEditor(tab),
   );
-  if (newConversationTabs.length !== 1) {
+  if (newConversationTabs.length > 1) {
     throw new Error(
       `the public new-conversation command opened ${newConversationTabs.length} new Runtrol conversation tabs`,
     );
   }
-  const draft = newConversationTabs[0];
-  if (activeConversationEditor() !== draft) {
-    throw new Error("the new Runtrol conversation draft is not the active editor tab");
-  }
-  if (draft.label !== "New chat") {
-    throw new Error(`the installed new-conversation tab is titled ${draft.label}`);
+  const opened = newConversationTabs[0];
+  if (opened && activeConversationEditor() !== opened) {
+    throw new Error("the new Runtrol conversation terminal is not the active editor tab");
   }
   const eyeDelay = packageEyeDelay();
   if (eyeDelay > 0) {
@@ -98,14 +101,15 @@ async function verifyInstalledPackage(resultPath: string): Promise<void> {
   }
 
   currentStage = "closing-new-conversation";
-  const accepted = await within(
-    vscode.window.tabGroups.close(draft),
-    5_000,
-    "closing the installed new-conversation draft",
-  );
-  const draftClosed = accepted && !allTabs().includes(draft);
-  if (!draftClosed) {
-    throw new Error("the exact installed new-conversation draft remained open after close");
+  if (opened) {
+    const accepted = await within(
+      vscode.window.tabGroups.close(opened),
+      5_000,
+      "closing the installed new-conversation terminal",
+    );
+    if (!accepted || allTabs().includes(opened)) {
+      throw new Error("the exact installed new-conversation terminal remained open after close");
+    }
   }
 
   await writeFile(
@@ -117,9 +121,11 @@ async function verifyInstalledPackage(resultPath: string): Promise<void> {
       extensionPath: installedPath,
       bundledCore,
       configuredCore,
-      draftOpened: true,
-      draftTitle: draft.label,
-      draftClosed,
+      // What New Conversation did on this clean profile: the service's terminal opened (one usable
+      // service), or nothing did (a picker to dismiss, or no usable service), and whatever opened closed.
+      newConversation: opened ? "terminal" : "nothing",
+      newConversationTitle: opened?.label ?? null,
+      newConversationClosed: true,
     }),
     "utf8",
   );

@@ -368,7 +368,11 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
     ),
     vscode.commands.registerCommand(
       "runtrol.startSession",
-      () => run(() => afterReady(() => controller.startSession())),
+      (options?: unknown) => run(() => afterReady(() => controller.startSession(
+        options !== null && typeof options === "object" && (options as { interactive?: unknown }).interactive === false
+          ? { interactive: false }
+          : {},
+      ))),
     ),
     vscode.commands.registerCommand(
       "runtrol.newConversationInProject",

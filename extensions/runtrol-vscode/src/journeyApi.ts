@@ -209,40 +209,19 @@ export function journeyApi(
     knownProjects: () => controller.knownProjectsForJourney(),
     isolationEvidence: () => afterReady(() => controller.isolatedWorkspaceEvidenceForJourney()),
     openStoredWithTitle: (providerId) => afterReady(async () => {
-      const rows = state.conversations.filter(
+      // A stored conversation opens as its service's terminal; there is no managed session to wait for. The
+      // first titled row the tree would show is the one a person would click.
+      const row = state.conversations.find(
         (candidate) => candidate.providerId === providerId
           && candidate.canOpen
           && !candidate.open
           && !candidate.projectless
-          && candidate.session === null
           && candidate.native !== null
-          && candidate.native.title !== null
-          && workspaceCollisions(candidate.workspace, state.sessions).length === 0,
+          && candidate.native.title !== null,
       );
-      const refused: string[] = [];
-      // Real provider stores outlive projects and other applications may still own a conversation. Either fact can
-      // make one perfectly listable row impossible to resume. The eye pass needs one real successful resume, not an
-      // arbitrary claim that the first historical row represents the provider, so it walks the bounded catalogue
-      // candidates until the provider accepts one and reports the sampled refusals if none work.
-      for (const row of rows) {
-        try {
-          await within(controller.select(row), 30_000);
-        } catch (error) {
-          refused.push(`${row.title}: ${error instanceof Error ? error.message : String(error)}`);
-          continue;
-        }
-        const session = state.sessions.find(
-          (candidate) => candidate.nativeSessionId === row.native?.nativeSessionId,
-        );
-        if (session) return session.sessionId;
-        refused.push(`${row.title}: the provider accepted resume but published no managed session`);
-      }
-      if (rows.length > 0) {
-        throw new Error(
-          `none of ${rows.length} titled ${providerId} conversations could be reopened: ${refused.slice(0, 5).join(" | ")}`,
-        );
-      }
-      return null;
+      if (!row) return null;
+      await within(controller.select(row), 30_000);
+      return row.key;
     }),
     switchStoredPair: (providerId) => afterReady(async () => {
       const candidates = state.conversations.filter(

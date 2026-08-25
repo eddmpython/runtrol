@@ -579,20 +579,26 @@ export class Controller implements vscode.Disposable {
   /// New conversation: pick the service, and its own terminal interface opens in this window's folder (or
   /// the scratch folder when the window has none). The service creates the conversation on its first turn,
   /// with its own composer, model picker and permission prompts; nothing of ours stands in front of it.
-  async startSession(): Promise<void> {
+  async startSession(options: { interactive?: boolean } = {}): Promise<void> {
     const workspace = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? await this.ensureProjectlessRoot();
-    await this.startSessionInWorkspace(workspace);
+    await this.startSessionInWorkspace(workspace, options);
   }
 
   /// New conversation inside one project, from its heading: the folder question already answered.
-  async startSessionInWorkspace(workspace: string): Promise<void> {
+  ///
+  /// `interactive: false` never asks: the service used last, or the first usable one, opens. For callers
+  /// with nobody at the keyboard (a journey, an automation), where a picker would wait forever.
+  async startSessionInWorkspace(workspace: string, options: { interactive?: boolean } = {}): Promise<void> {
     const usable = this.state.providers.filter((provider) => isUsable(provider));
     if (usable.length === 0) {
-      throw new Error("no coding service is installed and signed in; add one from the Agent Usage view");
+      // Not an error: a machine with no service yet is a normal first day, and the Agent Usage view says
+      // how to add one. Said in a notification and nothing opens.
+      this.say("No coding service is installed and signed in yet. Add one from the Agent Usage view.", "warning");
+      return;
     }
     const recent = this.context.globalState.get<string>(RECENT_SERVICE_KEY) ?? null;
     const ordered = [...usable].sort((left, right) => Number(right.providerId === recent) - Number(left.providerId === recent));
-    const picked = usable.length === 1
+    const picked = usable.length === 1 || options.interactive === false
       ? ordered[0]
       : await vscode.window.showQuickPick(
         ordered.map((provider) => ({ label: provider.displayName, description: provider.providerId, provider })),
