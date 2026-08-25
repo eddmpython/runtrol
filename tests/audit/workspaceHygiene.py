@@ -80,6 +80,8 @@ ALLOWED_ROOT: frozenset[str] = frozenset(
         "release",
         # PWA 와 GitHub Pages 랜딩
         "pwa",
+        # 제품 소개 랜딩 사이트 (병렬 세션에서 개발 중). site·pwa 와 같은 정식 최상위 배포 대상이다.
+        "landing",
         # Independently deployable, untrusted ciphertext relay.
         "relay",
         "site",
