@@ -1636,7 +1636,7 @@
           "description": "The longer window, when the provider reports one."
         },
         "tokensToday": {
-          "description": "Tokens the account spent today by the provider's own daily count, when it publishes one.\n\nRead on request from the provider's usage surface (Codex `account/usage/read`), never summed by\nRuntime. Absent for a provider that publishes limits only.",
+          "description": "Tokens the account spent today by the provider's own daily count, when it publishes one.\n\nRead on request from the provider's own usage surface (the manifest's account protocol), never summed by\nRuntime. Absent for a provider that publishes limits only.",
           "format": "uint64",
           "minimum": 0,
           "type": [
