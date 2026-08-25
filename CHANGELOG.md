@@ -73,6 +73,10 @@ and refactoring that no user can observe do not belong here.
 - `runtrol status` lists every Core generation serving this machine: build, process, running turns, whether it is
   draining, and whether it still answers. The "Restart the Runtrol Core" button and the `retire` command are
   removed; a Core built before generations is drained once by the first newer Core to start and needs no button.
+- A machine reboot no longer leaves a ghost generation behind. The first Core started after power returns
+  binds the very endpoint its dead predecessor's entry names, so that entry answered the liveness probe and
+  `runtrol status` showed the same build twice. A generation now clears every entry left on the endpoint it
+  just bound: the endpoint is exclusive, so whoever named it before is gone.
 
 ### Changed
 
