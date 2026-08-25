@@ -10,8 +10,36 @@ and refactoring that no user can observe do not belong here.
 
 ## [Unreleased]
 
+### Added
+
+- Agent Usage now says where each account stands before any turn runs. A service that publishes its own
+  status (Claude Code's `auth status`, Codex's account methods) shows whether it is signed in and the plan it
+  names in its own word (`max plan via claude.ai`); Codex's limit windows are read on request and drawn as bars
+  without waiting for a turn. A signed-out service reads "Not signed in · Sign in" and pressing it types that
+  service's own sign-in command into a terminal. A service that publishes no such surface is named as that,
+  never shown as "Ready".
+
+### Fixed
+
+- Deleting a conversation now removes the row the moment it is clicked; the service's own deletion and its
+  answer follow behind, and a refusal puts the row back with the reason. Before, every deletion re-read the
+  service's whole store before the row left.
+- A deleted conversation no longer lingers as a nameless row. Runtrol's own pointer to it is forgotten with
+  the deletion, and a pointer left behind by an earlier version can now be deleted from its row like any
+  other conversation.
+- Installing a Runtrol update while its Core was running failed with "EPERM: operation not permitted, rename
+  ... runtrol.exe" on Windows. Each build's Core now lives under its own content-named file and no file is
+  ever written over, so the update lands while the old Core keeps serving and takes over when that Core
+  retires.
+
 ### Changed
 
+- Every service now carries its vendor's current vector mark: Grok shows the mark xAI adopted in February 2025
+  (the sidebar carried the retired 2023 slashed circle as a black tile), and the OpenAI and Cline marks are
+  vectors rather than bitmaps, so all five stay sharp at any size and follow the editor theme.
+- Opening a window no longer hashes the 15 MB Core twice before the sidebar can draw. The Core is recognised
+  by its file identity from the previous activation, which saves about 120 ms of every start on this
+  machine; a changed file is hashed again.
 - Menus no longer say "Runtrol:" in front of every action. Inside Runtrol's own views the context is already
   known, so a row now reads "Rename Conversation" rather than "Runtrol: Rename Conversation". The Command
   Palette keeps the prefix, where it is what finds the commands among every extension's.
