@@ -245,10 +245,12 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
             found.append(f"Core-owned Mission wake must not be replaced by a timer in {relative}")
 
     writers = [relative for relative, source in sources.items() if "writeFile(" in source]
-    expected_writers = {"selectionStore.ts"}
+    # The selected-session scalar, and the Core installer's digest memory (file identity -> sha256, so an
+    # activation does not hash the Core twice; measured 2026-08-25 at 60 ms per hash).
+    expected_writers = {"selectionStore.ts", "core/managedCore.ts"}
     if set(writers) != expected_writers or len(writers) != len(expected_writers):
         found.append(
-            "direct writeFile calls must stay in selectionStore.ts, found "
+            "direct writeFile calls must stay in selectionStore.ts and core/managedCore.ts, found "
             + (", ".join(writers) if writers else "none")
         )
     handleWriters = [
@@ -429,7 +431,7 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
             "bar.max = 100",
             "bar.value = meter.percent",
             'bar.setAttribute("aria-label"',
-            'vscode.postMessage({ type: "fix"',
+            'vscode.postMessage({ type, providerId: row.providerId })',
             'vscode.postMessage({ type: "discover"',
             "usage.replaceChildren",
             ".textContent =",
@@ -448,7 +450,7 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
         ],
         "usageDisplay.ts": [
             'provider.installation.state !== "missing"',
-            'detail: "Ready"',
+            'detail: "Not signed in · Sign in"',
             'detail: "Checking"',
             'detail: "Unavailable · Fix"',
             'detail: `Disconnected · ${usageDetail(gauge, nowMs)}`',
@@ -606,7 +608,7 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
         "core/managedCore.ts": [
             "createReadStream",
             "copyFile(source, incoming)",
-            "link(executable, preserved)",
+            "imageName(sourceDigest)",
             "rename(incoming, executable)",
             "removeInactiveImages",
         ],
@@ -881,7 +883,7 @@ def selftest() -> int:
         ),
         "usageViewWebview.ts": (
             'document.createElement("progress") bar.max = 100 bar.value = meter.percent '
-            'bar.setAttribute("aria-label" vscode.postMessage({ type: "fix" '
+            'bar.setAttribute("aria-label" vscode.postMessage({ type, providerId: row.providerId }) '
             'vscode.postMessage({ type: "discover" usage.replaceChildren .textContent = '
             'return /^[a-z0-9-]{1,64}$/u.test(value) ? value : "sparkle" '
             'image.src = `${iconBase}/${iconName(declared)}.svg` '
@@ -895,7 +897,7 @@ def selftest() -> int:
             "var(--vscode-progressBar-background"
         ),
         "usageDisplay.ts": (
-            'provider.installation.state !== "missing" detail: "Ready" '
+            'provider.installation.state !== "missing" detail: "Not signed in · Sign in" '
             'detail: "Checking" detail: "Unavailable · Fix" '
             'detail: `Disconnected · ${usageDetail(gauge, nowMs)}` '
             "export function usageMeters Math.max(0, Math.min(100 "
@@ -973,7 +975,7 @@ def selftest() -> int:
         ),
         "core/locator.ts": '["endpoint"] executable: "runtrol" runtimeExecutable',
         "core/managedCore.ts": (
-            "createReadStream copyFile(source, incoming) link(executable, preserved) "
+            "createReadStream copyFile(source, incoming) imageName(sourceDigest) writeFile( "
             "rename(incoming, executable) unlink(file) removeInactiveImages"
         ),
         "selectionStore.ts": (
