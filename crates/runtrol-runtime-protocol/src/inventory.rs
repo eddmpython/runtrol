@@ -225,7 +225,7 @@ pub struct ProviderUsageGauge {
     pub cost: Option<ProviderUsageCost>,
     /// Tokens the account spent today by the provider's own daily count, when it publishes one.
     ///
-    /// Read on request from the provider's usage surface (Codex `account/usage/read`), never summed by
+    /// Read on request from the provider's own usage surface (the manifest's account protocol), never summed by
     /// Runtime. Absent for a provider that publishes limits only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tokens_today: Option<u64>,
