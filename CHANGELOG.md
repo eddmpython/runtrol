@@ -25,6 +25,19 @@ and refactoring that no user can observe do not belong here.
   a ten-minute clock. Codex now also shows today's tokens from its own `account/usage/read` beside its limit
   window. The phone app draws the same icon-plus-progress strip above its sessions, kept current by push.
 
+### Changed
+
+- Runtrol ships the representative services only: Claude Code, Codex and Grok, with Gemini to follow once its
+  CLI can be measured. Cline and OpenCode are no longer shipped as providers or offered in the catalogue. A
+  provider is attached through its manifest's four declared surfaces (terminal, store, account, events) and an
+  icon, and nothing else in the product changes when one is added.
+
+- The Conversations panel no longer invents project headings. A heading exists because you added the folder
+  (Add Project registers an existing folder; New Project Folder creates one first) or because this window is
+  open on it. Adding a folder lists every conversation the services report inside it at once. Added projects
+  can be pinned to the top, renamed, and removed; removing takes the heading off the list and never touches
+  the folder. Conversations in a folder nobody added stay plain top-level rows, never indented.
+
 ### Fixed
 
 - Deleting a conversation now removes the row the moment it is clicked; the service's own deletion and its

@@ -66,13 +66,14 @@ the original daemon and provider processes instead of making a versioned extensi
   service. A service is the row icon, never repeated text and never a parent node. The row contains only the actual
   conversation name beside that icon. While a turn is working, the same service icon spins. A quiet row has no
   status label, badge, or elapsed-time label.
-- A created project, this window's open folder, or a discovered folder with multiple conversations is a project
-  heading, with its conversations beneath it. A one-off provider working directory remains a plain conversation
-  instead of becoming a false project. A heading is created by the operator, or is the folder this window has open
-  without registration, or is discovered because multiple conversations name it (created > open > discovered,
-  one heading per place). The open folder is present even before its first conversation, so starting work there never
-  requires adding a project. An explicitly created project may also remain while empty. Two folders with the same
-  name are told apart by their parent.
+- A project is a decision, never a discovery. A heading is a folder the operator added (an existing folder, or a
+  new folder created on disk in the same step) or the folder this window has open; nothing is ever promoted to a
+  heading because conversations happen to name it. Adding a folder lists every conversation the coding services
+  report inside it at once. A conversation in a folder nobody added is a plain top-level row, never indented.
+  Projects can be pinned (pinned first, in the order they were added), renamed, and removed; removing a project takes the
+  heading off the list and never touches the folder or its conversations (created > open, one heading per place).
+  The open folder is present even before its first conversation, so starting work there never requires adding a
+  project. An added project may remain while empty. Two folders with the same name are told apart by their parent.
   Grouping by coding service would sort by an implementation detail, since one repository driven by two CLIs is one
   piece of work.
 - Conversations are listed machine-wide, in one question per service, from the service's own surface: a listing

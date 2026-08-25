@@ -18,6 +18,8 @@ export type ProjectRecord = {
   readonly name: string;
   /// The folder, first spelling kept.
   readonly workspace: string;
+  /// Whether the person pinned it to the top of the list. A placement choice, never a fact about the folder.
+  readonly pinned: boolean;
 };
 
 /// The slice of a `vscode.Memento` this store needs, named so tests can hand in a plain object.
@@ -59,6 +61,7 @@ export class ProjectStore {
       key,
       name: (name ?? path.basename(workspace)).trim() || path.basename(workspace) || workspace,
       workspace,
+      pinned: false,
     };
     await this.replace([...this.records, record]);
     return record;
@@ -77,8 +80,18 @@ export class ProjectStore {
     await this.replace(next);
   }
 
+  /// Pin or unpin the project on this folder. Pinned projects sit first, in the order they were added.
+  async setPinned(workspace: string, pinned: boolean): Promise<void> {
+    const key = workspaceIdentity(workspace);
+    const next = this.records.map((record) => (
+      record.key === key ? { ...record, pinned } : record
+    ));
+    await this.replace(next);
+  }
+
   /// Remove the project on this folder. Its conversations lose their heading and nothing else: removal files
-  /// nothing, deletes nothing, and creating the project again is one click.
+  /// nothing, deletes nothing, and adding the project again is one click. The folder on disk is never
+  /// touched: removing a project is a list decision, deleting a folder is not one this surface makes.
   async remove(workspace: string): Promise<void> {
     const key = workspaceIdentity(workspace);
     await this.replace(this.records.filter((record) => record.key !== key));
@@ -88,6 +101,7 @@ export class ProjectStore {
     await this.memento.update(STORAGE_KEY, next.map((record) => ({
       name: record.name,
       workspace: record.workspace,
+      pinned: record.pinned,
     })));
     this.records = next;
     for (const listener of this.listeners) listener();
@@ -104,13 +118,13 @@ function readRecords(raw: unknown): ProjectRecord[] {
   const seen = new Set<string>();
   for (const entry of raw) {
     if (!entry || typeof entry !== "object") continue;
-    const { name, workspace } = entry as { name?: unknown; workspace?: unknown };
+    const { name, workspace, pinned } = entry as { name?: unknown; workspace?: unknown; pinned?: unknown };
     if (typeof name !== "string" || typeof workspace !== "string") continue;
     if (!name.trim() || !workspace.trim()) continue;
     const key = workspaceIdentity(workspace);
     if (seen.has(key)) continue;
     seen.add(key);
-    records.push({ key, name, workspace });
+    records.push({ key, name, workspace, pinned: pinned === true });
   }
   return records;
 }

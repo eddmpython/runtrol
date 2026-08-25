@@ -482,7 +482,7 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
           canSelectFiles: false,
           canSelectFolders: true,
           canSelectMany: true,
-          openLabel: "Create Project",
+          openLabel: "Add Project",
           title: "Choose the folder each new project stands on",
           defaultUri: vscode.workspace.workspaceFolders?.[0]?.uri,
         });
@@ -494,11 +494,57 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
     ),
     vscode.commands.registerCommand(
       "runtrol.createProjectHere",
-      // A discovered or open folder promoted to a created project, in one click from its heading. The folder
-      // is already answered by the heading, so no dialog; rename is one right-click away afterwards.
+      // The open folder added as a project, in one click from its heading. The folder is already answered by
+      // the heading, so no dialog; rename is one right-click away afterwards.
       (item: unknown) => run(async () => {
         if (!(item instanceof ProjectItem)) return;
         await projectStore.create(item.group.workspace);
+      }),
+    ),
+    vscode.commands.registerCommand(
+      "runtrol.newProjectFolder",
+      // Something from nothing: a folder that does not exist yet is created on disk and added as a project in
+      // one step. The path is typed rather than picked, because a picker can only choose what already exists.
+      () => run(async () => {
+        // Pre-filled with the open folder's parent, so typing a bare name makes a sibling project (projects are
+        // top-level places, not folders inside each other). A full path pasted over the selection works too.
+        const open = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+        const parent = open ? path.dirname(open) : "";
+        const prefill = parent && !parent.endsWith(path.sep) ? parent + path.sep : parent;
+        const typed = await vscode.window.showInputBox({
+          prompt: "Folder for the new project (created if it does not exist)",
+          value: prefill,
+          valueSelection: [prefill.length, prefill.length],
+          validateInput: (value) => {
+            const folder = value.trim();
+            if (!folder) return null;
+            if (!path.isAbsolute(folder)) return "Type a full path, like the one pre-filled";
+            // A second drive root inside the string means a full Windows path was typed after the pre-fill
+            // instead of over it; mkdir would refuse it with a code (EINVAL, measured), this says it in words.
+            if (/^[A-Za-z]:[\\/]/u.test(folder) && /[\\/][A-Za-z]:[\\/]/u.test(folder)) {
+              return "One path only: select the pre-filled part before typing a full path";
+            }
+            return null;
+          },
+        });
+        if (!typed || !typed.trim()) return;
+        const folder = typed.trim();
+        await vscode.workspace.fs.createDirectory(vscode.Uri.file(folder));
+        await projectStore.create(folder);
+      }),
+    ),
+    vscode.commands.registerCommand(
+      "runtrol.pinProject",
+      (item: unknown) => run(async () => {
+        if (!(item instanceof ProjectItem)) return;
+        await projectStore.setPinned(item.group.workspace, true);
+      }),
+    ),
+    vscode.commands.registerCommand(
+      "runtrol.unpinProject",
+      (item: unknown) => run(async () => {
+        if (!(item instanceof ProjectItem)) return;
+        await projectStore.setPinned(item.group.workspace, false);
       }),
     ),
     vscode.commands.registerCommand(
@@ -527,9 +573,9 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
     ),
     vscode.commands.registerCommand(
       "runtrol.removeProject",
-      // Removal only takes the heading away: conversations stay, and creating the project again is one click.
-      // That reversibility is why there is no confirmation dialog in the way; the toast's Undo covers the
-      // misclick without making everyone else answer a question first.
+      // Removal only takes the heading away: conversations stay, the folder on disk stays, and adding the
+      // project again is one click. That reversibility is why there is no confirmation dialog in the way; the
+      // toast's Undo covers the misclick without making everyone else answer a question first.
       (item: unknown) => run(async () => {
         if (!(item instanceof ProjectItem)) return;
         const { workspace, name } = item.group;

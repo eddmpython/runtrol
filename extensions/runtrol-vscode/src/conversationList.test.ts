@@ -42,6 +42,7 @@ function record(workspace: string, name?: string): ProjectRecord {
     key: workspaceIdentity(workspace),
     name: name ?? workspace.split(/[\\/]/).pop() ?? workspace,
     workspace,
+    pinned: false,
   };
 }
 
@@ -559,37 +560,41 @@ test("a folder that is only whitespace files nowhere", () => {
   assert.equal(loose(rows).length, 1);
 });
 
-test("every established conversation folder is a heading", () => {
-  // Repeated provider use establishes a useful group without turning every one-off task directory into a
-  // project. The folder open in this window remains explicit even before that threshold.
+test("a folder nobody added is never a heading, however many conversations name it", () => {
+  // A project is a decision, never a discovery: the panel used to invent a heading for every folder with enough
+  // conversations, and the operator rejected the wall it produced. The open folder stays explicit; every other
+  // conversation is a plain top-level row until its folder is added.
   const rows = conversations(spread([ALPHA, BETA, GAMMA]), PROVIDERS, [], null);
   const groups = projects([], rows, [ALPHA]);
-  assert.equal(groups.length, 3, "three folders, three headings");
-  assert.equal(groups[0]?.name, "alpha");
+  assert.equal(groups.length, 1, "only the open folder is a heading");
   assert.equal(groups[0]?.kind, "open");
   assert.equal(groups[0]?.current, true, "the open folder is this window's project");
   assert.equal(groups[0]?.rows.length, 2, "its own conversations file under it");
-  for (const other of groups.slice(1)) {
-    assert.equal(other.kind, "discovered", `${other.name} exists because a service reported conversations there`);
-    assert.equal(other.current, false);
-    assert.equal(other.rows.length, 2);
-  }
-  assert.equal(loose(rows).length, 0, "a conversation with a real folder is never loose");
-  assert.equal(projects([], [], []).length, 0, "with no conversations, no discovered headings: no empty walls");
+  assert.equal(loose(rows, [], [ALPHA]).length, 4, "the other folders' conversations stay loose, not indented");
+  assert.equal(projects([], [], []).length, 0, "with nothing added and nothing open, no headings at all");
 });
 
-test("a discovered project needs repeated use and disappears with its conversations", () => {
-  // One provider record proves only a working directory. Repeated use makes the folder a useful heading,
-  // and the heading remains derived from the rows rather than stored as a project the person never created.
-  const before = conversations(spread([BETA], 2), PROVIDERS, [], null);
-  assert.equal(projects([], before, []).length, 1);
-  const oneOff = conversations(spread([BETA], 1), PROVIDERS, [], null);
-  assert.equal(projects([], oneOff, []).length, 0);
-  assert.equal(loose(oneOff, [], []).length, 1);
-  assert.equal(projects([], [], []).length, 0);
+test("adding a folder lists every conversation the services report inside it", () => {
+  const rows = conversations(spread([BETA], 3), PROVIDERS, [], null);
+  assert.equal(projects([], rows, []).length, 0);
+  const groups = projects([record(BETA)], rows, []);
+  assert.equal(groups.length, 1);
+  assert.equal(groups[0]?.kind, "created");
+  assert.equal(groups[0]?.rows.length, 3, "the folder's conversations file under it at once");
+  assert.equal(loose(rows, [record(BETA)], []).length, 0);
 });
 
-test("a created project covering a discovered folder draws the one heading", () => {
+test("pinned projects come first in the order they were added, then the open folder", () => {
+  const rows = conversations(spread([ALPHA, BETA, GAMMA]), PROVIDERS, [], null);
+  const pinnedGamma = { ...record(GAMMA), pinned: true };
+  const pinnedBeta = { ...record(BETA), pinned: true };
+  const groups = projects([record(ALPHA), pinnedGamma, pinnedBeta], rows, [ALPHA]);
+  assert.deepEqual(groups.map((group) => group.name), ["gamma", "beta", "alpha"]);
+  assert.equal(groups[0]?.pinned, true);
+  assert.equal(groups[2]?.current, true);
+});
+
+test("an added project covering a nested conversation folder draws the one heading", () => {
   const rows = conversations(
     [session({ sessionId: "deep", workspace: below(ALPHA, "packages", "core") })],
     PROVIDERS,
@@ -597,25 +602,9 @@ test("a created project covering a discovered folder draws the one heading", () 
     null,
   );
   const groups = projects([record(ALPHA)], rows, []);
-  assert.equal(groups.length, 1, "creation is the more deliberate act and one row never appears twice");
+  assert.equal(groups.length, 1, "adding is the deliberate act and one row never appears twice");
   assert.equal(groups[0]?.kind, "created");
   assert.equal(groups[0]?.rows.length, 1);
-});
-
-test("one folder reached by two spellings is one discovered heading", () => {
-  if (process.platform !== "win32") return;
-  const rows = conversations(
-    [
-      session({ sessionId: "lower", workspace: "c:\work\beta" }),
-      session({ sessionId: "upper", workspace: "C:\WORK\beta" }),
-    ],
-    PROVIDERS,
-    [],
-    null,
-  );
-  const groups = projects([], rows, []);
-  assert.equal(groups.length, 1, "casing does not split one folder into two headings");
-  assert.equal(groups[0]?.rows.length, 2);
 });
 
 const SCRATCH = below(ROOT, "storage", "no-project");
@@ -640,30 +629,26 @@ test("a timestamp in seconds, milliseconds or ISO 8601 lands on the same instant
 });
 
 test("two folders with one name are told apart by their parent, without renaming either", () => {
-  // Measured in the real window: Codex parks projectless chats in dated folders all called new-chat, and two
-  // identical headings read as one project listed twice.
+  // Measured in the real window: two added folders both called new-chat read as one project listed twice
+  // unless their parent tells them apart.
   const first = below(ROOT, "2026-08-19", "new-chat");
   const second = below(ROOT, "2026-08-20", "new-chat");
   const rows = conversations(
     [
       session({ sessionId: "a1", workspace: first }),
-      session({ sessionId: "a2", workspace: first }),
       session({ sessionId: "b1", workspace: second }),
-      session({ sessionId: "b2", workspace: second }),
     ],
     PROVIDERS,
     [],
     null,
   );
-  const groups = projects([], rows, []);
+  const groups = projects([record(first, "new-chat"), record(second, "new-chat")], rows, []);
   assert.equal(groups.length, 2);
   assert.deepEqual(new Set(groups.map((group) => group.qualifier)), new Set(["2026-08-19", "2026-08-20"]));
   for (const group of groups) {
     assert.equal(group.name, "new-chat", "the name stays the folder's own");
     assert.ok(projectDetail(group).startsWith(`in ${group.qualifier}`));
   }
-  const lone = projects([], conversations([session({ sessionId: "a", workspace: first })], PROVIDERS, [], null), []);
-  assert.equal(lone.length, 0, "a one-off working directory is not promoted to a project");
 });
 
 test("a conversation started with no project is loose beneath the headings, never a heading of its own", () => {

@@ -140,11 +140,12 @@ export type ProjectGroup = {
   readonly name: string;
   /// The path, for the hover and for opening it.
   readonly workspace: string;
-  /// Why this heading exists: the operator created it, this window is open on it, or a coding service
-  /// reported conversations in it. The tree offers different actions for each (a created project can be
-  /// renamed and removed; a discovered folder can be made a project), and the rule that one heading is
-  /// drawn per place does not depend on which kind won.
+  /// Why this heading exists: the operator added it, or this window is open on it. The tree offers different
+  /// actions for each (an added project can be renamed, pinned and removed; the open folder can be added), and
+  /// the rule that one heading is drawn per place does not depend on which kind won.
   readonly kind: ProjectKind;
+  /// Whether the person pinned it to the top. Only an added project can be.
+  readonly pinned: boolean;
   /// Whether this VS Code window is open on it.
   readonly current: boolean;
   /// The parent folder's name, set only when another heading has the same name, so two folders called
@@ -161,28 +162,26 @@ export type ProjectGroup = {
   readonly holdsOpen: boolean;
 };
 
-export type ProjectKind = "created" | "open" | "discovered";
+export type ProjectKind = "created" | "open";
 
-/// Conversations gathered under this machine's projects: the ones the operator created, the folders this
-/// window has open, and established folders that hold more than one provider conversation.
+/// Conversations gathered under this machine's projects: the ones the operator added, and the folders this
+/// window has open.
 ///
-/// **The panel shows the whole machine's projects** (`docs/vscodeSurface.md`, measured against the Paseo,
-/// Codex and Claude sidebars: established folder = project heading, conversations beneath it).
-/// The CLI's own listing is the authority on which folder a conversation belongs to. A one-off
-/// working directory is not enough evidence that the person created a project: test and task runners commonly
-/// use one temporary directory per conversation, and promoting each one creates the false project wall.
-/// What is still never invented is an empty discovered heading: a discovered folder exists only while enough
-/// conversations name it. The one intentional empty heading is the folder open in this window, because it is the
-/// immediate place to start and must not require project registration.
+/// A project is a decision, never a discovery (fixed 2026-08-25). The panel used to invent a heading for every
+/// folder that held enough conversations, and the operator rejected the wall of folder names it produced. Now a
+/// heading exists because the person added the folder or opened this window on it, and nothing else. Adding a
+/// folder lists every conversation the coding services report inside it, at once: the CLI's own listing is the
+/// authority on which folder a conversation belongs to, and `projectOf` files each one under the deepest added
+/// project that covers it.
 ///
-/// One heading per place. A created project wins over an open folder covering the same conversation, and
-/// either wins over a discovered folder, because creation and opening are the more deliberate acts and one row
-/// must never appear twice. A conversation inside nested created projects files under the deepest one, which
-/// is the folder a person would call its home. A created project with nothing in it yet is still returned: it
-/// was made a moment ago and a heading that vanished would read as the creation failing.
+/// One heading per place. An added project wins over an open folder covering the same conversation, because
+/// adding is the more deliberate act and one row must never appear twice. An added project with nothing in it
+/// yet is still returned: it was made a moment ago and a heading that vanished would read as the creation
+/// failing. Pinned projects come first, then this window's folder, then the rest by most recent conversation.
 ///
-/// Conversations without a project (the scratch folder, or no folder at all) are deliberately absent here:
-/// they are the plain rows `loose` returns, beneath the headings.
+/// Conversations without a project (no added folder covers them, the scratch folder, or no folder at all) are
+/// deliberately absent here: they are the plain rows `loose` returns, at the top level beneath the headings,
+/// never indented under a heading nobody made.
 export function projects(
   records: readonly ProjectRecord[],
   rows: readonly Conversation[],
@@ -202,6 +201,7 @@ export function projects(
     openWorkspaces.some((folder) =>
       workspaceCovers(record.workspace, folder) || workspaceCovers(folder, record.workspace)),
     filed.get(record.key) ?? [],
+    record.pinned,
   ));
   const seen = new Set<string>();
   for (const folder of openWorkspaces) {
@@ -227,36 +227,10 @@ export function projects(
       "open",
       true,
       folderRows,
-    ));
-  }
-  // Every other folder a conversation names, exactly as the service spelled it. Grouped by identity so one
-  // folder reached by two casings is one heading; the first spelling seen is the one shown.
-  const discovered = new Map<string, { workspace: string; rows: Conversation[] }>();
-  for (const row of rows) {
-    if (
-      intrinsicallyLoose(row)
-      || projectOf(records, row)
-      || openFolderOf(openWorkspaces, row) !== null
-    ) continue;
-    const identity = workspaceIdentity(row.homeWorkspace);
-    const place = discovered.get(identity) ?? { workspace: row.homeWorkspace, rows: [] };
-    place.rows.push(row);
-    discovered.set(identity, place);
-  }
-  for (const [identity, place] of discovered) {
-    // A single provider record only proves a working directory, not a user-created project. Keep that
-    // conversation as a plain row until a second conversation establishes the folder as a useful group.
-    if (place.rows.length < 2) continue;
-    groups.push(group(
-      `discovered:${encodeURIComponent(identity)}`,
-      workspaceName(place.workspace) || place.workspace,
-      place.workspace,
-      "discovered",
       false,
-      place.rows,
     ));
   }
-  return qualified(groups).sort(byMostRecentProject);
+  return qualified(groups).sort(byPinnedThenMostRecent(records));
 }
 
 /// Headings that share a name get their parent folder's name beside it.
@@ -282,6 +256,7 @@ function group(
   kind: ProjectKind,
   current: boolean,
   rows: readonly Conversation[],
+  pinned: boolean,
 ): ProjectGroup {
   return {
     key,
@@ -289,6 +264,7 @@ function group(
     workspace,
     kind,
     current,
+    pinned,
     qualifier: null,
     rows,
     attention: rows.filter(needsYou).length,
@@ -333,8 +309,8 @@ function projectOf(records: readonly ProjectRecord[], row: Conversation): Projec
 
 /// The conversations that belong to no project, in the order the rows already have.
 ///
-/// These include chats started without a project, chats whose service reported no folder, and chats in a one-off
-/// discovered working directory. They sit at the top level beneath the project headings, not inside one. An earlier
+/// These include chats started without a project, chats whose service reported no folder, and chats in a folder
+/// nobody added as a project. They sit at the top level beneath the project headings, not inside one. An earlier
 /// version filed them under a heading called "No project", which turns an absence into a category and reads as
 /// a folder the person forgot about. The chat apps people already use do not do that: a project is a place you
 /// can put a conversation, and a conversation you did not put anywhere is simply a conversation.
@@ -356,11 +332,24 @@ export function loose(
   return rows.filter((row) => !grouped.has(row.key));
 }
 
-/// The current window's project first, then the other projects by most recent conversation.
+/// Pinned projects first in the order they were added, then the current window's project, then the other
+/// projects by most recent conversation.
 ///
 /// Deliberately blind to whether anything inside is running or waiting. Sorting on that would move a whole
-/// heading, and everything under it, every time an agent started or finished a turn. The current folder is stable
-/// at the top because it is the work the person opened this VS Code window to do.
+/// heading, and everything under it, every time an agent started or finished a turn. Pinning is the person's
+/// own placement, so it is stable above everything; the current folder is next because it is the work the
+/// person opened this VS Code window to do.
+function byPinnedThenMostRecent(
+  records: readonly ProjectRecord[],
+): (left: ProjectGroup, right: ProjectGroup) => number {
+  const order = new Map(records.map((record, index) => [`project:${encodeURIComponent(record.key)}`, index]));
+  return (left, right) => {
+    if (left.pinned !== right.pinned) return left.pinned ? -1 : 1;
+    if (left.pinned && right.pinned) return (order.get(left.key) ?? 0) - (order.get(right.key) ?? 0);
+    return byMostRecentProject(left, right);
+  };
+}
+
 function byMostRecentProject(left: ProjectGroup, right: ProjectGroup): number {
   if (left.current !== right.current) return left.current ? -1 : 1;
   const leftAt = latestActivity(left.rows);

@@ -570,13 +570,31 @@
       },
       {
         "command": "runtrol.createProject",
-        "title": "Create Project",
-        "icon": "$(new-folder)",
+        "title": "Add Project",
+        "icon": "$(folder-library)",
         "category": "Runtrol"
       },
       {
         "command": "runtrol.createProjectHere",
-        "title": "Make This Folder a Project",
+        "title": "Add This Folder as a Project",
+        "category": "Runtrol"
+      },
+      {
+        "command": "runtrol.newProjectFolder",
+        "title": "New Project Folder",
+        "icon": "$(new-folder)",
+        "category": "Runtrol"
+      },
+      {
+        "command": "runtrol.pinProject",
+        "title": "Pin Project",
+        "icon": "$(pin)",
+        "category": "Runtrol"
+      },
+      {
+        "command": "runtrol.unpinProject",
+        "title": "Unpin Project",
+        "icon": "$(pinned)",
         "category": "Runtrol"
       },
       {
@@ -796,6 +814,11 @@
           "group": "navigation@1"
         },
         {
+          "command": "runtrol.newProjectFolder",
+          "when": "view == runtrol.sessions",
+          "group": "1_project@1"
+        },
+        {
           "command": "runtrol.openNextWaiting",
           "when": "view == runtrol.sessions",
           "group": "1_attention@1"
@@ -910,7 +933,7 @@
         {
           "command": "runtrol.openProjectWorkspace",
           "group": "inline@2",
-          "when": "view == runtrol.sessions && viewItem =~ /^runtrol\\.project\\.[a-z]+$/"
+          "when": "view == runtrol.sessions && viewItem =~ /^runtrol\\.project\\.(created|open)(\\.pinnable|\\.pinned)?$/"
         },
         {
           "command": "runtrol.newConfiguredConversationInProject",
@@ -918,9 +941,19 @@
           "when": "view == runtrol.sessions && viewItem =~ /^runtrol\\.project/"
         },
         {
+          "command": "runtrol.pinProject",
+          "group": "inline@4",
+          "when": "view == runtrol.sessions && viewItem =~ /^runtrol\\.project\\.created.*\\.pinnable$/"
+        },
+        {
+          "command": "runtrol.unpinProject",
+          "group": "inline@4",
+          "when": "view == runtrol.sessions && viewItem =~ /^runtrol\\.project\\.created.*\\.pinned$/"
+        },
+        {
           "command": "runtrol.createProjectHere",
           "group": "1_manage@1",
-          "when": "view == runtrol.sessions && viewItem =~ /^runtrol\\.project\\.(open|discovered)/"
+          "when": "view == runtrol.sessions && viewItem =~ /^runtrol\\.project\\.open/"
         },
         {
           "command": "runtrol.renameProject",
@@ -940,7 +973,7 @@
         {
           "command": "runtrol.openProjectWorkspace",
           "group": "2_window@1",
-          "when": "view == runtrol.sessions && viewItem =~ /^runtrol\\.project\\.[a-z]+$/"
+          "when": "view == runtrol.sessions && viewItem =~ /^runtrol\\.project\\.(created|open)(\\.pinnable|\\.pinned)?$/"
         },
         {
           "command": "runtrol.renameSession",

@@ -286,39 +286,6 @@ async function backProof(environment) {
   const hereTitle = hereName;
   const otherTitle = otherName;
   const { executable } = await acquireVSCode(path.join(os.tmpdir(), "runtrol-vscode-test-cache"));
-  // Put one deliberate project into this disposable profile through the extension's own ProjectStore. The proof
-  // must not depend on whether the operator happens to have provider history in the second folder today.
-  const seedEntry = path.join(temporary, "backProofSeed.cjs");
-  await writeFile(seedEntry, `
-const vscode = require("vscode");
-const delay = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
-async function run() {
-  const extension = vscode.extensions.getExtension(process.env.RUNTROL_TEST_EXTENSION_ID);
-  if (!extension) throw new Error("the extension under test is not installed");
-  await vscode.commands.executeCommand("workbench.view.extension.runtrol");
-  while (!extension.isActive) await delay(25);
-  await extension.exports.ready;
-  if (typeof extension.exports.seedProject !== "function") throw new Error("the project seed surface is unavailable");
-  await extension.exports.seedProject(process.env.RUNTROL_EYE_BACK_FOLDER);
-}
-module.exports = { run };
-`, "utf8");
-  await runTests({
-    cachePath: path.join(os.tmpdir(), "runtrol-vscode-test-cache"),
-    extensionDevelopmentPath: extensionUnderTestRoot,
-    extensionTestsPath: seedEntry,
-    extensionTestsEnv: { ...environment, RUNTROL_EYE_BACK_FOLDER: other },
-    launchArgs: [
-      workspaceFile,
-      ...isolatedLaunchArguments,
-      "--disable-extensions",
-      "--disable-workspace-trust",
-      `--user-data-dir=${userData}`,
-      `--extensions-dir=${extensions}`,
-    ],
-    version: process.env.RUNTROL_TEST_VSCODE_VERSION || TESTED_VSCODE_VERSION,
-    vscodeExecutablePath: process.env.RUNTROL_TEST_VSCODE_EXECUTABLE || undefined,
-  });
   const child = spawn(
     executable,
     [
@@ -347,6 +314,17 @@ module.exports = { run };
     // Escape on the editor does nothing.
     press(hereTitle, "{ESC}", userData);
     await delay(1_000);
+    // Add the second folder as a project the way a person does: a project is a decision, never a discovery, so
+    // the picker offers nothing this profile has not been told about. "New Project Folder" takes a typed path
+    // and registers an existing folder as it is, which is the one keyboard-only way in.
+    press(hereTitle, "^+p", userData);
+    await delay(1_500);
+    press(hereTitle, "Runtrol: New Project Folder{ENTER}", userData);
+    await delay(1_500);
+    // The box pre-fills the open folder's parent; a full path goes over it, the way a person pastes one.
+    press(hereTitle, `^a${other}{ENTER}`, userData);
+    await delay(2_500);
+    capture(hereTitle, path.join(outDir, "projectAdded.png"), userData);
     // The switch goes through the command palette, which opens whatever has focus (a fresh window focuses its
     // chat input, where a chord is that input's); the back step is the key itself, the palette only as the
     // recorded fallback so the result says which worked.
