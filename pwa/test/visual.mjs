@@ -83,7 +83,7 @@ function commandOptions(arguments_) {
     throw new Error("--url must be a loopback http origin");
   }
   if (!selector || selector.length > 200) throw new Error("--selector is required and bounded");
-  if (fixture !== null && !["mission-flight-list", "mission-flight-detail", "session-terminal"].includes(fixture)) {
+  if (fixture !== null && !["mission-flight-list", "mission-flight-detail", "session-terminal", "session-usage"].includes(fixture)) {
     throw new Error("--fixture is not a supported visual state");
   }
   return { config, url, output, selector, fixture };
@@ -91,6 +91,7 @@ function commandOptions(arguments_) {
 
 function visualFixture(kind) {
   if (kind === "session-terminal") return terminalFixture();
+  if (kind === "session-usage") return usageFixture();
   const showDetail = kind === "mission-flight-detail";
   return `(() => {
     const byId = (id) => document.getElementById(id);
@@ -163,6 +164,32 @@ function terminalFixture() {
     terminal.open(byId("terminal"));
     fit.fit();
     await new Promise((resolve) => terminal.write(${JSON.stringify(screen)}, resolve));
+    return true;
+  })()`;
+}
+
+/// The sessions browser with the usage strip the Core pushes: the same markup `renderUsage` builds, three
+/// services, one bar each (icon-and-progress is the whole display).
+function usageFixture() {
+  return `(() => {
+    const byId = (id) => document.getElementById(id);
+    byId("setup").hidden = true;
+    byId("sessions-view").hidden = false;
+    byId("session-browser").hidden = false;
+    byId("mission-browser").hidden = true;
+    byId("session-detail").hidden = true;
+    byId("mission-detail").hidden = true;
+    byId("connection-status").textContent = "PC online";
+    byId("connection-status").dataset.state = "online";
+    byId("session-count").textContent = "3";
+    const strip = byId("usage-strip");
+    strip.hidden = false;
+    strip.innerHTML = [
+      ["claude", 42, "42%"],
+      ["codex", 69, "69% · 128k today"],
+      ["grok", 0, "no limit reported"],
+    ].map(([name, percent, detail]) => '<div class="usage-row"><span class="usage-name">' + name + '</span><span class="usage-meter"' + (percent ? '' : ' hidden') + '><span style="width:' + percent + '%"></span></span><span class="usage-detail">' + detail + '</span></div>').join("");
+    byId("session-list").innerHTML = '<button class="session-row selected" type="button"><span class="state-dot running"></span><span><strong>Review category 02 curriculum</strong><small>codex</small></span></button><button class="session-row" type="button"><span class="state-dot"></span><span><strong>Sidebar work</strong><small>claude</small></span></button>';
     return true;
   })()`;
 }
