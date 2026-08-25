@@ -84,8 +84,9 @@ connection cannot approve itself.
 | `integrations/getGrant`, `integrations/rotateKey` | The authenticated integration, with local confirmation for rotation |
 | `runtime/panicStop` | Same-user transport admission, no request arguments |
 
-Notifications are `providers/changed`, `providers/watchEnded`, `sessions/indexChanged`, `sessions/indexEnded`,
-`sessions/event`, and `sessions/lagged`. Notification names cannot be invoked as requests.
+Notifications are `providers/changed`, `providers/usageChanged` (the account usage snapshot, sent once when a
+provider subscription starts and again on every change), `providers/watchEnded`, `sessions/indexChanged`,
+`sessions/indexEnded`, `sessions/event`, and `sessions/lagged`. Notification names cannot be invoked as requests.
 
 ### Native discovery scope
 

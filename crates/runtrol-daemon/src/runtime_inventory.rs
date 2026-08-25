@@ -252,6 +252,7 @@ pub(crate) fn provider_usage(
                         amount: cost.amount,
                         currency: cost.currency.to_string(),
                     }),
+                tokens_today: gauge.tokens_today,
                 at_ms: gauge.at.as_millis(),
             })
             .collect(),

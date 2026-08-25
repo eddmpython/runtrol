@@ -62,6 +62,13 @@ export class UsageView implements vscode.WebviewViewProvider, vscode.Disposable 
     if (view.visible) void this.refreshQuietly();
   }
 
+  /// A pushed usage snapshot: drawn at once, with no request in between.
+  usageChanged(gauges: readonly ProviderUsageGauge[]): void {
+    this.gauges = gauges;
+    this.setError(null);
+    this.publish(usageRows(this.gauges, this.ports.providers(), this.ports.now()));
+  }
+
   sessionsChanged(): void {
     // Provider availability is already in memory. Draw that state immediately instead of waiting behind the usage
     // request, while retaining the last explicitly aged gauge until a fresh snapshot arrives.

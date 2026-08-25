@@ -19,6 +19,12 @@ and refactoring that no user can observe do not belong here.
   service's own sign-in command into a terminal. A service that publishes no such surface is named as that,
   never shown as "Ready".
 
+- Agent Usage is live. The Core pushes every account's position the moment a turn or a status read moves it
+  (`providers/usageChanged` on the provider subscription; the phone reads the same lines on its session index
+  watch), and asks each service again within seconds of a conversation opening or a turn ending instead of on
+  a ten-minute clock. Codex now also shows today's tokens from its own `account/usage/read` beside its limit
+  window. The phone app draws the same icon-plus-progress strip above its sessions, kept current by push.
+
 ### Fixed
 
 - Deleting a conversation now removes the row the moment it is clicked; the service's own deletion and its

@@ -123,6 +123,9 @@ pub enum RuntimeMethod {
     /// Final provider inventory subscription reason.
     #[serde(rename = "providers/watchEnded")]
     ProvidersWatchEnded,
+    /// One changed account usage snapshot, on the same provider subscription.
+    #[serde(rename = "providers/usageChanged")]
+    ProvidersUsageChanged,
     /// One normalized event notification.
     #[serde(rename = "sessions/event")]
     SessionsEvent,
@@ -177,6 +180,7 @@ impl RuntimeMethod {
             Self::SessionsIndexEnded => "sessions/indexEnded",
             Self::ProvidersChanged => "providers/changed",
             Self::ProvidersWatchEnded => "providers/watchEnded",
+            Self::ProvidersUsageChanged => "providers/usageChanged",
             Self::SessionsEvent => "sessions/event",
             Self::SessionsLagged => "sessions/lagged",
             Self::PanicStop => "runtime/panicStop",
@@ -233,6 +237,7 @@ impl FromStr for RuntimeMethod {
             "sessions/indexEnded" => Ok(Self::SessionsIndexEnded),
             "providers/changed" => Ok(Self::ProvidersChanged),
             "providers/watchEnded" => Ok(Self::ProvidersWatchEnded),
+            "providers/usageChanged" => Ok(Self::ProvidersUsageChanged),
             "sessions/event" => Ok(Self::SessionsEvent),
             "sessions/lagged" => Ok(Self::SessionsLagged),
             "runtime/panicStop" => Ok(Self::PanicStop),
@@ -290,6 +295,7 @@ mod tests {
             RuntimeMethod::SessionsIndexEnded,
             RuntimeMethod::ProvidersChanged,
             RuntimeMethod::ProvidersWatchEnded,
+            RuntimeMethod::ProvidersUsageChanged,
             RuntimeMethod::SessionsEvent,
             RuntimeMethod::SessionsLagged,
             RuntimeMethod::PanicStop,

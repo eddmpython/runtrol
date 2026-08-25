@@ -44,6 +44,8 @@ pub struct ProviderGauge {
     /// The newest report wins, the same rule the windows follow: this answers "the most recent turn's spend",
     /// never a sum runtrol computed across sessions.
     pub cost: Option<Cost>,
+    /// Tokens the account spent today by the provider's own daily count, when a probe read one.
+    pub tokens_today: Option<u64>,
     /// When the newest of these reports arrived, which is how a surface says how stale it is.
     pub at: WallMs,
 }
@@ -57,6 +59,7 @@ impl ProviderGauge {
             primary: None,
             secondary: None,
             cost: None,
+            tokens_today: None,
             at,
         }
     }

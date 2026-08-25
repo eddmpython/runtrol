@@ -21,8 +21,15 @@ const ACCOUNT_PROBE_DEADLINE: Duration = Duration::from_secs(20);
 /// not idle, so a daemon measured in its first seconds must not be mid-round. It releases its working set at
 /// each round's end, so the steady-state footprint between rounds is unchanged either way.
 const FIRST_ROUND_DELAY: Duration = Duration::from_secs(8);
-/// How often the round repeats. Sign-in changes are rare and a limit window moves slowly.
+/// How often the round repeats with nothing else prompting it: the backstop, not the driver.
+///
+/// The rounds that matter are the ones a session event wakes (a conversation attached, a turn ended), so
+/// a limit moves on the sidebar within seconds of the turn that moved it.
 const ROUND_INTERVAL: Duration = Duration::from_mins(10);
+/// How long a wake waits before its round, so a burst of session events becomes one round.
+const WAKE_SETTLE: Duration = Duration::from_secs(2);
+/// The least time between two rounds however many wakes arrive: a service is asked at most this often.
+const ROUND_FLOOR: Duration = Duration::from_secs(15);
 
 /// One service's latest report and when it arrived.
 #[derive(Clone, Debug, PartialEq)]
@@ -96,6 +103,7 @@ impl AccountReports {
                     primary: limit.primary,
                     secondary: limit.secondary,
                     cost: None,
+                    tokens_today: reported.report.tokens_today,
                     at: reported.at,
                 })
             })
@@ -103,7 +111,8 @@ impl AccountReports {
     }
 }
 
-/// Ask every usable service, at start and on the clock, and republish what changed.
+/// Ask every usable service at start, whenever a session event wakes this, and on a slow backstop clock;
+/// republish what changed.
 pub(crate) async fn supervise(
     composed: Arc<Composed>,
     providers: watch::Sender<Arc<runtrol_runtime_protocol::ProviderList>>,
@@ -112,7 +121,15 @@ pub(crate) async fn supervise(
     tokio::time::sleep(FIRST_ROUND_DELAY).await;
     loop {
         round(&composed, &providers, &usage).await;
-        tokio::time::sleep(ROUND_INTERVAL).await;
+        let floor = tokio::time::sleep(ROUND_FLOOR);
+        tokio::select! {
+            () = tokio::time::sleep(ROUND_INTERVAL) => {}
+            () = composed.account_probe_wake.notified() => {
+                // Coalesce the burst, then honour the floor before asking again.
+                tokio::time::sleep(WAKE_SETTLE).await;
+                floor.await;
+            }
+        }
     }
 }
 

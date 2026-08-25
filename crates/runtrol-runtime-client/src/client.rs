@@ -11,14 +11,15 @@ use runtrol_runtime_protocol::{
     JsonRpcResponse, LaggedNotification, ListModelsParams, ListNativeSessionsParams,
     ListPendingApprovalsParams, ManagedSessionList, MutationRequestId, NativeSessionCatalogue,
     PendingApprovalList, PendingEnrollmentId, ProviderId, ProviderList, ProviderUsageList,
-    ProviderWatchEndedNotification, ProvidersChangedNotification, RequestEnrollmentParams,
-    RespondApprovalParams, ResumeSessionParams, RotateIntegrationKeyParams, RuntimeError,
-    RuntimeErrorKind, RuntimeEventNotification, RuntimeMethod, RuntimeModelCatalog,
-    RuntimeProviderCapabilities, RuntimeSessionId, ServerChallenge, SessionDescriptor,
-    SessionIndexChangedNotification, SessionIndexEndedNotification, SessionOpenResult,
-    SetModeParams, SetModelParams, StartSessionParams, SubmitBlocksParams, SubmitInputParams,
-    SuccessResponse, WatchEnrollmentParams, WatchEventsParams, WatchEventsResult,
-    WatchProvidersParams, WatchProvidersResult, WatchSessionIndexParams, WatchSessionIndexResult,
+    ProviderWatchEndedNotification, ProvidersChangedNotification,
+    ProvidersUsageChangedNotification, RequestEnrollmentParams, RespondApprovalParams,
+    ResumeSessionParams, RotateIntegrationKeyParams, RuntimeError, RuntimeErrorKind,
+    RuntimeEventNotification, RuntimeMethod, RuntimeModelCatalog, RuntimeProviderCapabilities,
+    RuntimeSessionId, ServerChallenge, SessionDescriptor, SessionIndexChangedNotification,
+    SessionIndexEndedNotification, SessionOpenResult, SetModeParams, SetModelParams,
+    StartSessionParams, SubmitBlocksParams, SubmitInputParams, SuccessResponse,
+    WatchEnrollmentParams, WatchEventsParams, WatchEventsResult, WatchProvidersParams,
+    WatchProvidersResult, WatchSessionIndexParams, WatchSessionIndexResult,
     enrollment_signing_payload, initialization_signing_payload, key_rotation_signing_payload,
 };
 use serde::Serialize;
@@ -882,6 +883,8 @@ impl ProviderClient<'_> {
 pub enum ProviderNotification {
     /// The complete provider snapshot changed.
     Changed(ProvidersChangedNotification),
+    /// The complete account usage snapshot changed (sent once right after the subscription starts).
+    UsageChanged(ProvidersUsageChangedNotification),
     /// The subscription ended with a typed authority or Runtime reason.
     Ended(ProviderWatchEndedNotification),
 }
@@ -944,6 +947,20 @@ async fn receive_provider_notification(
             )?;
             Ok(ProviderNotification::Changed(changed))
         }
+        RuntimeMethod::ProvidersUsageChanged => {
+            let changed: ProvidersUsageChangedNotification =
+                serde_json::from_value(notification.params).map_err(|error| {
+                    ClientError::Protocol(format!(
+                        "provider usage notification has the wrong shape: {error}"
+                    ))
+                })?;
+            validate_subscription(
+                subscription_id,
+                &changed.subscription_id,
+                "provider notification target does not match its subscription",
+            )?;
+            Ok(ProviderNotification::UsageChanged(changed))
+        }
         RuntimeMethod::ProvidersWatchEnded => {
             let ended: ProviderWatchEndedNotification = serde_json::from_value(notification.params)
                 .map_err(|error| {
@@ -969,6 +986,8 @@ async fn receive_provider_notification(
 pub enum ReconnectingProviderNotification {
     /// The complete provider snapshot changed.
     Changed(ProvidersChangedNotification),
+    /// The complete account usage snapshot changed.
+    UsageChanged(ProvidersUsageChangedNotification),
     /// Runtime ended the subscription for a typed authority or lifecycle reason.
     Ended(ProviderWatchEndedNotification),
     /// A replacement connection installed a new complete snapshot.
@@ -1028,6 +1047,9 @@ impl ReconnectingProviderSubscription {
         match receive_provider_notification(runtime, &self.subscription_id).await {
             Ok(ProviderNotification::Changed(changed)) => {
                 Ok(ReconnectingProviderNotification::Changed(changed))
+            }
+            Ok(ProviderNotification::UsageChanged(changed)) => {
+                Ok(ReconnectingProviderNotification::UsageChanged(changed))
             }
             Ok(ProviderNotification::Ended(ended)) => {
                 self.runtime = None;
@@ -1705,6 +1727,7 @@ async fn receive_session_notification(
         | RuntimeMethod::SessionsIndexEnded
         | RuntimeMethod::ProvidersChanged
         | RuntimeMethod::ProvidersWatchEnded
+        | RuntimeMethod::ProvidersUsageChanged
         | RuntimeMethod::PanicStop => Err(ClientError::Protocol(
             "the dedicated session stream received a non-event method".to_owned(),
         )),

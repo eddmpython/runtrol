@@ -134,6 +134,35 @@ export class CoreClient {
     return response.with;
   }
 
+  /// Subscribe to the session index: one current listing now, another only when something in it changes.
+  ///
+  /// The listing carries every session this phone may see and every account's usage position, so one
+  /// stream keeps both the rows and the usage strip current without a clock. The channel belongs to the
+  /// watch from here on; open another connection for anything else.
+  async beginSessionWatch() {
+    if (this.busy) throw new Error("one Core channel cannot carry overlapping requests");
+    this.busy = true;
+    await this.channel.send(utf8(JSON.stringify({ ask: "watchSessions" })));
+    const response = parseResponse(await this.channel.receive());
+    if (response.say === "failed") {
+      this.busy = false;
+      throw new CoreFailure(response.with);
+    }
+    if (response.say !== "watchingSessions") {
+      this.busy = false;
+      throw new Error("Core did not acknowledge the session index watch");
+    }
+  }
+
+  /// The next session listing on an installed index watch.
+  async nextSessions() {
+    if (!this.busy) throw new Error("Core session index watch is not active");
+    const response = parseResponse(await this.channel.receive());
+    if (response.say === "failed") throw new CoreFailure(response.with);
+    if (response.say !== "sessions") throw new Error("Core session index watch returned an unexpected response");
+    return response.with;
+  }
+
   async nextWatch() {
     if (!this.busy) throw new Error("Core event watch is not active");
     const response = parseResponse(await this.channel.receive());

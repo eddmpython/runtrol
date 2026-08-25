@@ -223,8 +223,28 @@ pub struct ProviderUsageGauge {
     /// turn's cost as the provider gave it, never a total runtrol summed.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cost: Option<ProviderUsageCost>,
+    /// Tokens the account spent today by the provider's own daily count, when it publishes one.
+    ///
+    /// Read on request from the provider's usage surface (Codex `account/usage/read`), never summed by
+    /// Runtime. Absent for a provider that publishes limits only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tokens_today: Option<u64>,
     /// When the report arrived, in unix milliseconds, which is how a surface says how stale it is.
     pub at_ms: u64,
+}
+
+/// A changed account usage snapshot, delivered on the provider inventory subscription.
+///
+/// Usage moves with every turn and every probe; a subscriber draws it the moment it changes instead of
+/// asking `providers/usage` on a clock. Sent once right after the subscription is installed, so a
+/// subscriber never needs the request at all.
+#[derive(Clone, Debug, PartialEq, JsonSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProvidersUsageChangedNotification {
+    /// Opaque connection-local subscription identity.
+    pub subscription_id: String,
+    /// New complete usage snapshot.
+    pub snapshot: ProviderUsageList,
 }
 
 /// Money a provider reported spending, exactly as it stated it.

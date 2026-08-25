@@ -245,6 +245,7 @@ export function usageDetail(gauge: ProviderUsageGauge, nowMs: number): string {
   if (typeof percent === "number") parts.push(`${percent}%`);
   const resets = resetsIn(window, nowMs);
   if (resets) parts.push(resets);
+  if (typeof gauge.tokensToday === "number") parts.push(`${formatTokens(gauge.tokensToday)} today`);
   if (parts.length === 0) {
     // "Within limits" is a claim about a limit, so it is only made for a service that described one. A service
     // that reported nothing but a spend gets said as exactly that, rather than being credited with room it
@@ -252,6 +253,14 @@ export function usageDetail(gauge: ProviderUsageGauge, nowMs: number): string {
     parts.push(window ? "within limits" : "no limit reported");
   }
   return parts.join(" · ");
+}
+
+/// Today's tokens by the service's own daily count, short enough for the strip.
+export function formatTokens(tokens: number): string {
+  if (tokens >= 1_000_000_000) return `${(tokens / 1_000_000_000).toFixed(1)}B tokens`;
+  if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(1)}M tokens`;
+  if (tokens >= 1_000) return `${Math.round(tokens / 1_000)}k tokens`;
+  return `${tokens} tokens`;
 }
 
 /// When the governing window resets, as a wait a person can plan around.

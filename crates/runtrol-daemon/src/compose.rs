@@ -341,6 +341,9 @@ pub struct Composed {
     /// synchronous projections take it with `try_lock` and read nothing when the probe holds it, which
     /// lasts microseconds; the next projection sees the reports.
     pub(crate) account_reports: tokio::sync::Mutex<crate::account_probe::AccountReports>,
+    /// Rung by the session owner when a conversation attaches or a turn ends, so the account probe asks
+    /// the services again within seconds instead of on its ten-minute backstop.
+    pub(crate) account_probe_wake: tokio::sync::Notify,
     /// Latest model catalogue per provider, keyed to the exact binary it was read from.
     ///
     /// A short-TTL memoization, never a store (see `provider_prepare::MODEL_CATALOGUE_TTL`).
@@ -443,6 +446,7 @@ impl Composed {
             account_reports: tokio::sync::Mutex::new(
                 crate::account_probe::AccountReports::default(),
             ),
+            account_probe_wake: tokio::sync::Notify::new(),
             provider_inventory: Mutex::new(
                 crate::runtime_inventory::ProviderInventoryCache::default(),
             ),
@@ -512,6 +516,7 @@ impl Composed {
             account_reports: tokio::sync::Mutex::new(
                 crate::account_probe::AccountReports::default(),
             ),
+            account_probe_wake: tokio::sync::Notify::new(),
             provider_inventory: Mutex::new(
                 crate::runtime_inventory::ProviderInventoryCache::default(),
             ),

@@ -17,15 +17,15 @@ use runtrol_runtime_protocol::{
     MAX_NATIVE_PUBLIC_CURSOR_BYTES, MAX_PAGE_ITEMS, MAX_REVISION_OFFERS, ProtocolRevision,
     ProviderCapabilityAvailability, ProviderCapabilityObservation, ProviderCapabilityProvenance,
     ProviderList, ProviderUsageList, ProviderWatchEndReason, ProviderWatchEndedNotification,
-    ProvidersChangedNotification, RequestEnrollmentParams, RespondApprovalParams,
-    ResumeSessionParams, RotateIntegrationKeyParams, RuntimeCapabilities, RuntimeError,
-    RuntimeErrorKind, RuntimeInstance, RuntimeLimits, RuntimeMethod, RuntimeModelCatalog,
-    RuntimeModelChoice, RuntimeProviderCapabilities, RuntimeReasoningChoice, RuntimeSessionId,
-    SessionIndexChangedNotification, SessionIndexEndReason, SessionIndexEndedNotification,
-    SessionWorkspaceAccess, SetModeParams, SetModelParams, StartSessionParams, SubmitBlocksParams,
-    SubmitInputParams, SuccessResponse, WatchEnrollmentParams, WatchEventsParams,
-    WatchEventsResult, WatchProvidersParams, WatchProvidersResult, WatchSessionIndexParams,
-    WatchSessionIndexResult, negotiate,
+    ProvidersChangedNotification, ProvidersUsageChangedNotification, RequestEnrollmentParams,
+    RespondApprovalParams, ResumeSessionParams, RotateIntegrationKeyParams, RuntimeCapabilities,
+    RuntimeError, RuntimeErrorKind, RuntimeInstance, RuntimeLimits, RuntimeMethod,
+    RuntimeModelCatalog, RuntimeModelChoice, RuntimeProviderCapabilities, RuntimeReasoningChoice,
+    RuntimeSessionId, SessionIndexChangedNotification, SessionIndexEndReason,
+    SessionIndexEndedNotification, SessionWorkspaceAccess, SetModeParams, SetModelParams,
+    StartSessionParams, SubmitBlocksParams, SubmitInputParams, SuccessResponse,
+    WatchEnrollmentParams, WatchEventsParams, WatchEventsResult, WatchProvidersParams,
+    WatchProvidersResult, WatchSessionIndexParams, WatchSessionIndexResult, negotiate,
 };
 use runtrol_store::IntegrationAuditOutcome;
 use runtrol_store::{EnrollmentKey, IntegrationKeyRotation};
@@ -120,6 +120,7 @@ pub(crate) async fn serve_connection(
             &provider_catalogue,
             &catalogue,
             &usage,
+            &account_gauges,
             &asking,
             &returning,
             request,
@@ -262,6 +263,7 @@ impl Answer {
         id: JsonRpcId,
         result: &WatchProvidersResult,
         updates: watch::Receiver<Arc<ProviderList>>,
+        usage: watch::Receiver<Arc<ProviderUsageList>>,
         authority: AuthorizedIntegration,
     ) -> Self {
         Self {
@@ -271,6 +273,7 @@ impl Answer {
                 subscription_id: result.subscription_id.clone(),
                 last: result.snapshot.clone(),
                 updates,
+                usage,
                 authority,
             }),
         }
@@ -292,6 +295,7 @@ enum Watching {
         subscription_id: String,
         last: ProviderList,
         updates: watch::Receiver<Arc<ProviderList>>,
+        usage: watch::Receiver<Arc<ProviderUsageList>>,
         authority: AuthorizedIntegration,
     },
 }
@@ -310,6 +314,7 @@ async fn answer(
     providers: &ProviderList,
     sessions: &RuntimeSessionCatalogue,
     usage: &ProviderUsageList,
+    usage_updates: &watch::Receiver<Arc<ProviderUsageList>>,
     asking: &mpsc::Sender<Box<RuntimeAsked>>,
     returning: &mpsc::UnboundedSender<RuntimeReturned>,
     request: JsonRpcRequest,
@@ -373,6 +378,7 @@ async fn answer(
         providers,
         sessions,
         usage,
+        usage_updates,
         asking,
         returning,
         method,
@@ -418,6 +424,7 @@ async fn dispatch_public(
     providers: &ProviderList,
     sessions: &RuntimeSessionCatalogue,
     usage: &ProviderUsageList,
+    usage_updates: &watch::Receiver<Arc<ProviderUsageList>>,
     asking: &mpsc::Sender<Box<RuntimeAsked>>,
     returning: &mpsc::UnboundedSender<RuntimeReturned>,
     method: RuntimeMethod,
@@ -457,7 +464,7 @@ async fn dispatch_public(
             RuntimeMethod::ProvidersList => providers_list(state, composed, providers, id, params),
             RuntimeMethod::ProvidersUsage => providers_usage(state, composed, usage, id, params),
             RuntimeMethod::ProvidersWatch => {
-                providers_watch(state, composed, provider_updates, id, params)
+                providers_watch(state, composed, provider_updates, usage_updates, id, params)
             }
             RuntimeMethod::ProvidersGetCapabilities => {
                 get_provider_capabilities(state, composed, discovering, id, params).await
@@ -527,6 +534,7 @@ async fn dispatch_public(
             | RuntimeMethod::Challenge
             | RuntimeMethod::ProvidersChanged
             | RuntimeMethod::ProvidersWatchEnded
+            | RuntimeMethod::ProvidersUsageChanged
             | RuntimeMethod::SessionsEvent
             | RuntimeMethod::SessionsLagged
             | RuntimeMethod::SessionsIndexChanged
@@ -585,6 +593,7 @@ fn required_scope(method: RuntimeMethod) -> Option<AppScope> {
         | RuntimeMethod::IntegrationsRotateKey
         | RuntimeMethod::ProvidersChanged
         | RuntimeMethod::ProvidersWatchEnded
+        | RuntimeMethod::ProvidersUsageChanged
         | RuntimeMethod::SessionsEvent
         | RuntimeMethod::SessionsLagged
         | RuntimeMethod::SessionsIndexChanged
@@ -955,6 +964,7 @@ fn providers_watch(
     state: &mut PublicState,
     composed: &Composed,
     updates: &watch::Sender<Arc<ProviderList>>,
+    usage: &watch::Receiver<Arc<ProviderUsageList>>,
     id: JsonRpcId,
     params: serde_json::Value,
 ) -> Answer {
@@ -988,6 +998,7 @@ fn providers_watch(
             snapshot,
         },
         provider_updates,
+        usage.clone(),
         authority,
     )
 }
@@ -2889,6 +2900,7 @@ fn parse_session_operation(
         | RuntimeMethod::ProvidersWatch
         | RuntimeMethod::ProvidersChanged
         | RuntimeMethod::ProvidersWatchEnded
+        | RuntimeMethod::ProvidersUsageChanged
         | RuntimeMethod::ProvidersGetCapabilities
         | RuntimeMethod::ProvidersListModels
         | RuntimeMethod::ProvidersListNativeSessions
@@ -3095,6 +3107,7 @@ async fn relay_watch(
             subscription_id,
             last,
             updates,
+            usage,
             authority,
         } => {
             relay_providers(
@@ -3103,6 +3116,7 @@ async fn relay_watch(
                 subscription_id,
                 last,
                 updates,
+                usage,
                 authority,
             )
             .await;
@@ -3156,8 +3170,25 @@ async fn relay_providers(
     subscription_id: String,
     mut last: ProviderList,
     mut updates: watch::Receiver<Arc<ProviderList>>,
+    mut usage: watch::Receiver<Arc<ProviderUsageList>>,
     authority: AuthorizedIntegration,
 ) {
+    // The usage a subscriber would otherwise have to ask for: sent first, then on every change, so a
+    // surface draws the account's position the moment a turn or a probe moves it and never polls.
+    let mut last_usage = usage.borrow_and_update().as_ref().clone();
+    if send_notification(
+        connection,
+        RuntimeMethod::ProvidersUsageChanged,
+        &ProvidersUsageChangedNotification {
+            subscription_id: subscription_id.clone(),
+            snapshot: last_usage.clone(),
+        },
+    )
+    .await
+    .is_err()
+    {
+        return;
+    }
     loop {
         let changed = tokio::select! {
             peer = connection.recv() => {
@@ -3165,6 +3196,33 @@ async fn relay_providers(
                 return;
             }
             changed = updates.changed() => changed,
+            usage_changed = usage.changed() => {
+                if usage_changed.is_err() {
+                    send_provider_watch_end(
+                        connection,
+                        subscription_id,
+                        ProviderWatchEndReason::RuntimeUnavailable,
+                    )
+                    .await;
+                    return;
+                }
+                let snapshot = usage.borrow_and_update().as_ref().clone();
+                if snapshot == last_usage {
+                    continue;
+                }
+                last_usage = snapshot.clone();
+                let notification = ProvidersUsageChangedNotification {
+                    subscription_id: subscription_id.clone(),
+                    snapshot,
+                };
+                if send_notification(connection, RuntimeMethod::ProvidersUsageChanged, &notification)
+                    .await
+                    .is_err()
+                {
+                    return;
+                }
+                continue;
+            }
         };
         if changed.is_err() {
             send_provider_watch_end(
@@ -4817,6 +4875,18 @@ listen = "stdio"
                 .await
                 .expect("watch the structural provider inventory");
             assert_eq!(provider_watch.started().snapshot.providers.len(), 1);
+            // The account usage rides the same subscription: once at the start, then on every change,
+            // so a surface never asks `providers/usage` on a clock.
+            let first = tokio::time::timeout(Duration::from_secs(2), provider_watch.next())
+                .await
+                .expect("the initial usage snapshot arrives without polling")
+                .expect("typed usage notification");
+            assert!(matches!(
+                first,
+                runtrol_runtime_client::ProviderNotification::UsageChanged(
+                    runtrol_runtime_protocol::ProvidersUsageChangedNotification { .. }
+                )
+            ));
             let initial_providers = provider_watch.started().snapshot.clone();
             let mut changed_providers = initial_providers.clone();
             changed_providers
@@ -4835,6 +4905,34 @@ listen = "stdio"
                     runtrol_runtime_protocol::ProvidersChangedNotification { .. }
                 )
             ));
+            _usage_publishing.send_replace(Arc::new(ProviderUsageList {
+                providers: vec![runtrol_runtime_protocol::ProviderUsageGauge {
+                    provider_id: runtrol_runtime_protocol::ProviderId::new("native-fixture"),
+                    reached: false,
+                    primary: None,
+                    secondary: None,
+                    cost: None,
+                    tokens_today: Some(1234),
+                    at_ms: 1,
+                }],
+            }));
+            let moved = tokio::time::timeout(Duration::from_secs(2), provider_watch.next())
+                .await
+                .expect("a usage change arrives without polling")
+                .expect("typed usage notification");
+            match moved {
+                runtrol_runtime_client::ProviderNotification::UsageChanged(notification) => {
+                    assert_eq!(
+                        notification
+                            .snapshot
+                            .providers
+                            .first()
+                            .and_then(|g| g.tokens_today),
+                        Some(1234)
+                    );
+                }
+                other => panic!("expected the usage change, got {other:?}"),
+            }
 
             {
                 let mut session_client = watching_client.sessions();

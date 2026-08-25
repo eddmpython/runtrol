@@ -61,6 +61,13 @@ input, select, textarea { width: 100%; padding: 11px 12px; background: var(--car
 .pane-heading h1, .detail-heading h2 { margin: 0; font-size: 20px; }
 .pane-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 7px; }
 .attention { border-color: #8b6b27; background: #302815; color: #f2c14e; font-weight: 800; }
+.usage-strip { display: grid; gap: 6px; padding: 10px 16px; border-bottom: 1px solid var(--line); }
+.usage-row { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 10px; font-size: 12px; }
+.usage-row .usage-name { font-weight: 700; }
+.usage-row .usage-meter { height: 6px; border-radius: 3px; background: var(--line); overflow: hidden; }
+.usage-row .usage-meter > span { display: block; height: 100%; background: var(--accent); }
+.usage-row .usage-meter.reached > span { background: var(--danger); }
+.usage-row .usage-detail { color: var(--muted); font-size: 11px; white-space: nowrap; }
 .session-list, .mission-list { display: grid; }
 .session-row, .mission-row { width: 100%; min-height: 70px; display: grid; grid-template-columns: 12px 1fr auto; align-items: center; gap: 10px; padding: 11px 16px; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; text-align: left; background: transparent; }
 .session-row:hover, .session-row.selected, .mission-row:hover, .mission-row.selected { background: var(--panel-strong); }

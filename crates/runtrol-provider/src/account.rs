@@ -39,6 +39,8 @@ pub struct AccountReport {
     pub method: Option<Box<str>>,
     /// The limit windows the service reports on request, outside any turn, when it has such a surface.
     pub limits: Option<AccountLimits>,
+    /// Tokens spent today by the service's own daily count, when it publishes one.
+    pub tokens_today: Option<u64>,
 }
 
 /// Limit windows read on request. The same two windows a turn reports, without the turn.
@@ -61,6 +63,7 @@ impl AccountReport {
             plan: None,
             method: None,
             limits: None,
+            tokens_today: None,
         }
     }
 

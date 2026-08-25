@@ -51,3 +51,12 @@ test("a generic push carries only a content-free focus intent", () => {
   assert.doesNotMatch(worker, /event\.data/u);
   assert.doesNotMatch(worker, /session(?:Id|_id|:)\s*/u);
 });
+
+test("usage is drawn from the pushed session index, icon and progress, never from a clock", () => {
+  assert.match(html, /id="usage-strip"[^>]*hidden/u);
+  assert.match(app, /state\.usage = Array\.isArray\(listing\.usage\) \? listing\.usage : \[\];/u);
+  assert.match(app, /await client\.beginSessionWatch\(\);/u);
+  assert.match(app, /renderUsage\(\);/u);
+  assert.doesNotMatch(app, /setInterval\(/u);
+  assert.match(styles, /\.usage-row \.usage-meter > span/u);
+});

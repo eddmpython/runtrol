@@ -555,9 +555,14 @@ export class StudioRuntimeClient implements vscode.Disposable {
     });
   }
 
+  /// Follow the provider inventory and, on the same subscription, every account's usage position.
+  ///
+  /// Usage arrives pushed: once when the subscription starts and again whenever a turn or a probe moves it.
+  /// Nothing here polls `providers/usage`.
   async watchProviders(
     snapshot: (providers: ProviderList) => void,
     signal: AbortSignal,
+    usage: (usage: import("@runtrol/runtime-client").ProviderUsageList) => void = () => undefined,
   ): Promise<void> {
     const watch = Symbol("provider watch");
     this.providerWatch = watch;
@@ -580,6 +585,8 @@ export class StudioRuntimeClient implements vscode.Disposable {
               const notification = await subscription.next();
               if (notification.kind === "changed") {
                 publish(notification.changed.snapshot);
+              } else if (notification.kind === "usageChanged") {
+                if (this.providerWatch === watch) usage(notification.usageChanged.snapshot);
               } else if (notification.kind === "reconnected") {
                 publish(notification.started.snapshot);
               } else {

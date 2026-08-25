@@ -1148,6 +1148,8 @@ async fn serve_surfaces(
                         &provider_update_notices,
                     );
                     generation.update(live_turns_of(&sessions), draining);
+                    // A conversation opened or closed: the account probe asks the services again soon.
+                    composed.account_probe_wake.notify_one();
                 }
                 if wakes_for_new_signal {
                     schedule_push_wakes(&mut connections, &composed, &push_wake_active);
@@ -1513,15 +1515,29 @@ async fn serve_surfaces(
                         break Ok(());
                     }
                 }
+                if index_changed {
+                    // A turn ended or a conversation changed state: the account probe asks the services
+                    // again soon, so the limit the turn moved reaches the sidebar without waiting for a clock.
+                    composed.account_probe_wake.notify_one();
+                }
                 if gauges_changed {
-                    // Its own channel rather than a session-index rebuild: a limit report arrives with ordinary
-                    // turn traffic, and the index flag exists precisely to keep traffic from rebuilding lists.
                     account_gauges.send_replace(Arc::new(
                         crate::runtime_inventory::merge_probed_usage(
                             &crate::runtime_inventory::provider_usage(&sessions.account_gauges()),
                             &composed,
                         ),
                     ));
+                    // The private index carries the same usage lines, so the phone's index watch draws
+                    // the account's position from the push that moves its rows.
+                    if !index_changed {
+                        publish_session_index(
+                            &session_index,
+                            &runtime_sessions,
+                            &composed,
+                            &sessions,
+                            &provider_update_notices,
+                        );
+                    }
                 }
             }
 

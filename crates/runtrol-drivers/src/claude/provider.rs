@@ -289,6 +289,7 @@ fn account_report(answer: &str) -> Option<runtrol_provider::AccountReport> {
         plan: account_token(status.subscription_type.as_deref()),
         method: account_token(status.auth_method.as_deref()),
         limits: None,
+        tokens_today: None,
     })
 }
 

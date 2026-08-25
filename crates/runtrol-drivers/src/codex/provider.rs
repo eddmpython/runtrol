@@ -286,6 +286,23 @@ impl Provider for CodexProvider {
                 report.plan =
                     runtrol_provider::account_token(limits.rate_limits.plan_type.as_deref());
             }
+            // `account/usage/read`, measured 2026-08-25 on 0.149.1: `dailyUsageBuckets` of
+            // `{startDate: "YYYY-MM-DD", tokens}`. Today's bucket is the one real-usage number this CLI
+            // publishes beside its limit windows; a day with no bucket yet is zero, not unknown.
+            let usage = conn
+                .call(
+                    "account/usage/read",
+                    &serde_json::json!({}),
+                    "reading the account usage",
+                )
+                .await?;
+            let usage: UsageAnswer =
+                serde_json::from_slice(&usage).map_err(|error| ProviderError::Protocol {
+                    provider: self.id,
+                    doing: "reading the account usage",
+                    detail: error.to_string(),
+                })?;
+            report.tokens_today = Some(tokens_on(&usage.daily_usage_buckets, &today_utc()));
         }
         Ok(report)
     }
@@ -810,6 +827,54 @@ struct AccountAnswer {
     account: Option<AccountKind>,
 }
 
+/// `account/usage/read`: the fields this build reads.
+#[derive(Default, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UsageAnswer {
+    #[serde(default)]
+    daily_usage_buckets: Vec<UsageBucket>,
+}
+
+/// One day of the CLI's own token count.
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UsageBucket {
+    start_date: String,
+    #[serde(default)]
+    tokens: u64,
+}
+
+/// Today's tokens by the CLI's own buckets: the sum of every bucket dated today (one is expected).
+fn tokens_on(buckets: &[UsageBucket], date: &str) -> u64 {
+    buckets
+        .iter()
+        .filter(|bucket| bucket.start_date == date)
+        .fold(0_u64, |total, bucket| total.saturating_add(bucket.tokens))
+}
+
+/// Today as `YYYY-MM-DD` in UTC, the calendar the CLI's buckets are keyed by.
+fn today_utc() -> String {
+    let seconds = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_secs());
+    civil_date(seconds / 86_400)
+}
+
+/// Days since 1970-01-01 to a civil date (Howard Hinnant's algorithm), no calendar crate needed.
+fn civil_date(days: u64) -> String {
+    let z = i64::try_from(days).unwrap_or(i64::MAX / 4) + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let year = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = if month <= 2 { year + 1 } else { year };
+    format!("{year:04}-{month:02}-{day:02}")
+}
+
 /// `Account`: one of the sign-in kinds this CLI names.
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -863,12 +928,14 @@ fn account_report(answer: AccountAnswer) -> runtrol_provider::AccountReport {
             plan: account_token(account.plan_type.as_deref()),
             method: account_token(Some(&account.kind)),
             limits: None,
+            tokens_today: None,
         },
         None => AccountReport {
             status: AccountStatus::SignedOut,
             plan: None,
             method: None,
             limits: None,
+            tokens_today: None,
         },
     }
 }

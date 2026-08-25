@@ -6,6 +6,7 @@ import type {
   NativeChatLine,
   ProviderCapabilities,
   ProviderLine,
+  ProviderUsageGauge,
   SessionLine,
   WatchCursor,
 } from "./runtimeTypes";
@@ -14,13 +15,15 @@ import { discoveryNotice, incompleteDiscovery, providerRowsEqual, sessionRowsEqu
 import type { IsolatedWorkspaceLine } from "./protocol";
 import { workspaceIdentity } from "./workspaceCollision";
 
-export type RuntimeStateChange = "rows" | "selection";
+export type RuntimeStateChange = "rows" | "selection" | "usage";
 
 export class RuntimeState implements vscode.Disposable {
   private readonly changedEmitter = new vscode.EventEmitter<RuntimeStateChange>();
   private readonly cursors = new Map<string, WatchCursor>();
   private sessionRows: readonly SessionLine[] = [];
   private providerRows: readonly ProviderLine[] = [];
+  /// Every account's latest position against its limits, as the Core last pushed it.
+  private usageRows: readonly ProviderUsageGauge[] = [];
   private readonly nativeCatalogues = new Map<string, NativeChatCatalogue>();
   private readonly capabilityRows = new Map<string, ProviderCapabilities>();
   /// What each running conversation is doing, from the activity watch; absent means nothing known.
@@ -46,6 +49,16 @@ export class RuntimeState implements vscode.Disposable {
 
   get providers(): readonly ProviderLine[] {
     return this.providerRows;
+  }
+
+  /// The pushed usage snapshot: what the usage strip draws, never asked for on a clock.
+  get usage(): readonly ProviderUsageGauge[] {
+    return this.usageRows;
+  }
+
+  replaceUsage(usage: readonly ProviderUsageGauge[]): void {
+    this.usageRows = usage;
+    this.changedEmitter.fire("usage");
   }
 
   get nativeChats(): readonly NativeChatLine[] {

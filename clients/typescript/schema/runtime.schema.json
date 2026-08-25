@@ -1634,6 +1634,15 @@
             }
           ],
           "description": "The longer window, when the provider reports one."
+        },
+        "tokensToday": {
+          "description": "Tokens the account spent today by the provider's own daily count, when it publishes one.\n\nRead on request from the provider's usage surface (Codex `account/usage/read`), never summed by\nRuntime. Absent for a provider that publishes limits only.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
         }
       },
       "required": [
@@ -1741,6 +1750,25 @@
         "snapshot": {
           "$ref": "#/$defs/ProviderList",
           "description": "New complete provider snapshot."
+        },
+        "subscriptionId": {
+          "description": "Opaque connection-local subscription identity.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "subscriptionId",
+        "snapshot"
+      ],
+      "type": "object"
+    },
+    "ProvidersUsageChangedNotification": {
+      "additionalProperties": false,
+      "description": "A changed account usage snapshot, delivered on the provider inventory subscription.\n\nUsage moves with every turn and every probe; a subscriber draws it the moment it changes instead of\nasking `providers/usage` on a clock. Sent once right after the subscription is installed, so a\nsubscriber never needs the request at all.",
+      "properties": {
+        "snapshot": {
+          "$ref": "#/$defs/ProviderUsageList",
+          "description": "New complete usage snapshot."
         },
         "subscriptionId": {
           "description": "Opaque connection-local subscription identity.",
@@ -2811,6 +2839,11 @@
           "type": "string"
         },
         {
+          "const": "providers/usageChanged",
+          "description": "One changed account usage snapshot, on the same provider subscription.",
+          "type": "string"
+        },
+        {
           "const": "sessions/event",
           "description": "One normalized event notification.",
           "type": "string"
@@ -3793,6 +3826,9 @@
     "providers_changed": {
       "$ref": "#/$defs/ProvidersChangedNotification"
     },
+    "providers_usage_changed": {
+      "$ref": "#/$defs/ProvidersUsageChangedNotification"
+    },
     "request": {
       "$ref": "#/$defs/JsonRpcRequest"
     },
@@ -3921,6 +3957,7 @@
     "watch_providers",
     "watch_providers_result",
     "providers_changed",
+    "providers_usage_changed",
     "provider_watch_ended"
   ],
   "title": "PublicProtocolSchema",

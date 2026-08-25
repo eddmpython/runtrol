@@ -2312,12 +2312,43 @@ pub(crate) fn list(composed: &Composed, sessions: &SessionManager, caller: &Call
             })
             .collect(),
         warnings: catalogue.warnings,
+        usage: usage_lines(composed, sessions),
     };
     Response::Sessions(sessions_visible_to(
         full,
         caller,
         &composed.device_authority,
     ))
+}
+
+/// Every service's latest account position, the turn reports and the probe reads merged, for the index.
+fn usage_lines(
+    composed: &Composed,
+    sessions: &SessionManager,
+) -> Vec<runtrol_ipc::wire::UsageLine> {
+    let merged = crate::runtime_inventory::merge_probed_usage(
+        &crate::runtime_inventory::provider_usage(&sessions.account_gauges()),
+        composed,
+    );
+    let window = |window: runtrol_runtime_protocol::ProviderUsageWindow| {
+        runtrol_ipc::wire::UsageWindowLine {
+            used_percent: window.used_percent,
+            resets_at_ms: window.resets_at_ms,
+            window_minutes: window.window_minutes,
+        }
+    };
+    merged
+        .providers
+        .into_iter()
+        .map(|gauge| runtrol_ipc::wire::UsageLine {
+            provider: gauge.provider_id.as_str().into(),
+            reached: gauge.reached,
+            primary: gauge.primary.map(window),
+            secondary: gauge.secondary.map(window),
+            tokens_today: gauge.tokens_today,
+            at_ms: gauge.at_ms,
+        })
+        .collect()
 }
 
 const fn private_waiting(waiting: Waiting) -> SessionWaiting {
@@ -2356,6 +2387,8 @@ pub(crate) fn sessions_visible_to(
             })
             .collect(),
         warnings: Vec::new(),
+        // Account position is the operator's own, not a workspace's: the phone that may ask sees it whole.
+        usage: full.usage,
     }
 }
 
@@ -2701,6 +2734,7 @@ mod tests {
         let full = SessionListing {
             sessions: vec![inside.clone(), nested.clone(), elsewhere.clone()],
             warnings: vec!["one damaged row was skipped".into()],
+            usage: Vec::new(),
         };
 
         let machine = sessions_visible_to(
@@ -2743,6 +2777,7 @@ mod tests {
         let full = SessionListing {
             sessions: vec![listing_row(root.as_str())],
             warnings: Vec::new(),
+            usage: Vec::new(),
         };
         let phone =
             sessions_visible_to(full, &Caller::Device { device }, &composed.device_authority);
@@ -2768,6 +2803,7 @@ mod tests {
         let full = SessionListing {
             sessions: vec![listing_row(root.as_str())],
             warnings: Vec::new(),
+            usage: Vec::new(),
         };
         let phone =
             sessions_visible_to(full, &Caller::Device { device }, &composed.device_authority);

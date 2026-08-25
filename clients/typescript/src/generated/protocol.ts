@@ -221,7 +221,7 @@ export interface ProviderList { readonly providers: ReadonlyArray<ProviderDescri
 export interface ProviderUsageCost { readonly amount: number; readonly currency: string; }
 
 /** One provider's most recent limit report. */
-export interface ProviderUsageGauge { readonly atMs: number; readonly cost?: ProviderUsageCost | null; readonly primary?: ProviderUsageWindow | null; readonly providerId: ProviderId; readonly reached: boolean; readonly secondary?: ProviderUsageWindow | null; }
+export interface ProviderUsageGauge { readonly atMs: number; readonly cost?: ProviderUsageCost | null; readonly primary?: ProviderUsageWindow | null; readonly providerId: ProviderId; readonly reached: boolean; readonly secondary?: ProviderUsageWindow | null; readonly tokensToday?: number | null; }
 
 /** Where each account stands against its limits, by each provider's own latest report.
 
@@ -242,6 +242,13 @@ export interface ProviderWatchEndedNotification { readonly reason: ProviderWatch
 
 /** A changed complete provider inventory snapshot. */
 export interface ProvidersChangedNotification { readonly snapshot: ProviderList; readonly subscriptionId: string; }
+
+/** A changed account usage snapshot, delivered on the provider inventory subscription.
+
+Usage moves with every turn and every probe; a subscriber draws it the moment it changes instead of
+asking `providers/usage` on a clock. Sent once right after the subscription is installed, so a
+subscriber never needs the request at all. */
+export interface ProvidersUsageChangedNotification { readonly snapshot: ProviderUsageList; readonly subscriptionId: string; }
 
 /** One typed piece of caller input, transported without rewriting.
 
@@ -302,7 +309,7 @@ export interface RuntimeLimits { readonly challengeLifetimeMs: number; readonly 
 export interface RuntimeLocatorRecord { readonly generations: ReadonlyArray<RuntimeGeneration>; readonly instanceId: string; readonly schema: number; }
 
 /** A public Runtime method implemented by the initial read-only boundary. */
-export type RuntimeMethod = "runtime/initialize" | "runtime/initialized" | "runtime/challenge" | "integrations/requestEnrollment" | "integrations/watchEnrollment" | "integrations/getGrant" | "integrations/rotateKey" | "providers/usage" | "providers/list" | "providers/watch" | "providers/getCapabilities" | "providers/listModels" | "providers/listNativeSessions" | "sessions/list" | "sessions/watchIndex" | "sessions/get" | "sessions/start" | "sessions/adoptNative" | "sessions/resume" | "sessions/acquireControl" | "sessions/renewControl" | "sessions/releaseControl" | "sessions/submitInput" | "sessions/submitBlocks" | "sessions/setModel" | "sessions/setMode" | "sessions/watchEvents" | "sessions/interrupt" | "sessions/cool" | "sessions/forget" | "sessions/deleteNative" | "sessions/archiveNative" | "approvals/listPending" | "approvals/respond" | "sessions/indexChanged" | "sessions/indexEnded" | "providers/changed" | "providers/watchEnded" | "sessions/event" | "sessions/lagged" | "runtime/panicStop";
+export type RuntimeMethod = "runtime/initialize" | "runtime/initialized" | "runtime/challenge" | "integrations/requestEnrollment" | "integrations/watchEnrollment" | "integrations/getGrant" | "integrations/rotateKey" | "providers/usage" | "providers/list" | "providers/watch" | "providers/getCapabilities" | "providers/listModels" | "providers/listNativeSessions" | "sessions/list" | "sessions/watchIndex" | "sessions/get" | "sessions/start" | "sessions/adoptNative" | "sessions/resume" | "sessions/acquireControl" | "sessions/renewControl" | "sessions/releaseControl" | "sessions/submitInput" | "sessions/submitBlocks" | "sessions/setModel" | "sessions/setMode" | "sessions/watchEvents" | "sessions/interrupt" | "sessions/cool" | "sessions/forget" | "sessions/deleteNative" | "sessions/archiveNative" | "approvals/listPending" | "approvals/respond" | "sessions/indexChanged" | "sessions/indexEnded" | "providers/changed" | "providers/watchEnded" | "providers/usageChanged" | "sessions/event" | "sessions/lagged" | "runtime/panicStop";
 
 /** The current model information Runtime can truthfully expose. */
 export type RuntimeModelCatalog = { readonly coverage: "known"; readonly models: ReadonlyArray<RuntimeModelChoice>; } | { readonly aliases: ReadonlyArray<string>; readonly coverage: "aliases"; readonly reasoningEfforts: ReadonlyArray<RuntimeReasoningChoice>; readonly why: string; } | { readonly aliases: ReadonlyArray<string>; readonly coverage: "partial"; readonly models: ReadonlyArray<RuntimeModelChoice>; readonly reasoningEfforts: ReadonlyArray<RuntimeReasoningChoice>; readonly why: string; } | { readonly coverage: "unknown"; readonly why: string; } | { readonly coverage: "unsupported"; readonly why: string; };

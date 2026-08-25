@@ -10,13 +10,14 @@ use crate::{
     JsonRpcResponse, LaggedNotification, ListModelsParams, ListNativeSessionsParams,
     ListPendingApprovalsParams, ManagedSessionList, NativeSessionCatalogue, PendingApprovalList,
     ProviderList, ProviderUsageList, ProviderWatchEndedNotification, ProvidersChangedNotification,
-    RequestEnrollmentParams, RespondApprovalParams, ResumeSessionParams,
-    RotateIntegrationKeyParams, RuntimeEventNotification, RuntimeLocatorRecord, RuntimeMethod,
-    RuntimeModelCatalog, RuntimeProviderCapabilities, ServerChallenge, SessionDescriptor,
-    SessionIndexChangedNotification, SessionIndexEndedNotification, SessionOpenResult,
-    SetModeParams, SetModelParams, StartSessionParams, SubmitBlocksParams, SubmitInputParams,
-    WatchEnrollmentParams, WatchEventsParams, WatchEventsResult, WatchProvidersParams,
-    WatchProvidersResult, WatchSessionIndexParams, WatchSessionIndexResult,
+    ProvidersUsageChangedNotification, RequestEnrollmentParams, RespondApprovalParams,
+    ResumeSessionParams, RotateIntegrationKeyParams, RuntimeEventNotification,
+    RuntimeLocatorRecord, RuntimeMethod, RuntimeModelCatalog, RuntimeProviderCapabilities,
+    ServerChallenge, SessionDescriptor, SessionIndexChangedNotification,
+    SessionIndexEndedNotification, SessionOpenResult, SetModeParams, SetModelParams,
+    StartSessionParams, SubmitBlocksParams, SubmitInputParams, WatchEnrollmentParams,
+    WatchEventsParams, WatchEventsResult, WatchProvidersParams, WatchProvidersResult,
+    WatchSessionIndexParams, WatchSessionIndexResult,
 };
 
 /// Checked schema filename inside this package.
@@ -83,6 +84,7 @@ struct PublicProtocolSchema {
     watch_providers: WatchProvidersParams,
     watch_providers_result: WatchProvidersResult,
     providers_changed: ProvidersChangedNotification,
+    providers_usage_changed: ProvidersUsageChangedNotification,
     provider_watch_ended: ProviderWatchEndedNotification,
 }
 

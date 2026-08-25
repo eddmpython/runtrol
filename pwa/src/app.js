@@ -35,6 +35,7 @@ const state = {
   connection: null,
   pairing: null,
   sessions: [],
+  usage: [],
   missions: [],
   flightSignals: [],
   providers: [],
@@ -55,6 +56,7 @@ const sessionsView = element("sessions-view");
 const sessionBrowser = element("session-browser");
 const missionBrowser = element("mission-browser");
 const sessionList = element("session-list");
+const usageStrip = element("usage-strip");
 const missionList = element("mission-list");
 const sessionDetail = element("session-detail");
 const missionDetail = element("mission-detail");
@@ -240,6 +242,8 @@ async function showPairing() {
 
 function showUnpaired() {
   state.watchGeneration += 1;
+  indexWatchGeneration += 1;
+  state.usage = [];
   state.missions = [];
   state.flightSignals = [];
   state.selectedMission = null;
@@ -285,6 +289,7 @@ async function refreshSessions(requestedSession = null, attentionRequested = fal
       const response = await client.list();
       if (response.say !== "sessions") throw new Error("Core returned no session list");
       state.sessions = response.with.sessions;
+      state.usage = Array.isArray(response.with.usage) ? response.with.usage : [];
       if (attentionRequested && hasScope("mission.read")) {
         const signalResponse = await client.listMissionFlightSignals(state.connection.missionSignalCursor);
         if (signalResponse.say !== "missionFlightSignals") {
@@ -307,7 +312,9 @@ async function refreshSessions(requestedSession = null, attentionRequested = fal
     configureSurfaceTabs();
     await synchronizeNotifications();
     renderSessions();
+    renderUsage();
     renderFlightSignals();
+    followSessionIndex();
     const destination = attentionRequested
       ? missionFlightDestination(state.flightSignals, state.sessions)
       : null;
@@ -374,6 +381,73 @@ async function forgetPushSubscription() {
   }
   state.pushSynchronized = false;
   state.pushPublicKey = null;
+}
+
+/// Every account's position against its limits, icon plus progress, from the index the PC pushes.
+function renderUsage() {
+  usageStrip.replaceChildren();
+  usageStrip.hidden = state.usage.length === 0;
+  for (const line of state.usage) {
+    const row = document.createElement("div");
+    row.className = "usage-row";
+    const window = line.primary ?? line.secondary ?? null;
+    const percent = typeof window?.used_percent === "number" ? Math.max(0, Math.min(100, window.used_percent)) : null;
+    const detail = [];
+    if (line.reached) detail.push("limit reached");
+    if (percent !== null) detail.push(`${percent}%`);
+    if (typeof line.tokens_today === "number") detail.push(`${formatTokens(line.tokens_today)} today`);
+    if (detail.length === 0) detail.push("no limit reported");
+    row.innerHTML = `<span class="usage-name"></span><span class="usage-meter"><span></span></span><span class="usage-detail"></span>`;
+    row.querySelector(".usage-name").textContent = safeVisibleText(line.provider);
+    const meter = row.querySelector(".usage-meter");
+    meter.classList.toggle("reached", line.reached === true);
+    meter.firstElementChild.style.width = `${percent ?? 0}%`;
+    meter.hidden = percent === null;
+    row.querySelector(".usage-detail").textContent = detail.join(" · ");
+    usageStrip.append(row);
+  }
+}
+
+function formatTokens(tokens) {
+  if (tokens >= 1_000_000_000) return `${(tokens / 1_000_000_000).toFixed(1)}B tokens`;
+  if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(1)}M tokens`;
+  if (tokens >= 1_000) return `${Math.round(tokens / 1_000)}k tokens`;
+  return `${tokens} tokens`;
+}
+
+let indexWatchGeneration = 0;
+
+/// Keep the rows and the usage strip current from the PC's own push: one index watch on its own
+/// connection, replaced whenever the surface reconnects, never a clock.
+function followSessionIndex() {
+  indexWatchGeneration += 1;
+  const generation = indexWatchGeneration;
+  (async () => {
+    while (generation === indexWatchGeneration && state.connection) {
+      let client = null;
+      try {
+        client = await CoreClient.connect(state.connection, state.identity);
+        await client.beginSessionWatch();
+        while (generation === indexWatchGeneration) {
+          const listing = await client.nextSessions();
+          if (generation !== indexWatchGeneration) break;
+          state.sessions = listing.sessions;
+          state.usage = Array.isArray(listing.usage) ? listing.usage : [];
+          if (state.selected) {
+            state.selected = state.sessions.find((session) => session.session === state.selected.session) ?? state.selected;
+          }
+          renderSessions();
+          renderUsage();
+        }
+      } catch (error) {
+        if (generation !== indexWatchGeneration) break;
+        setStatus(failureMessage(error, "PC offline"), "offline");
+        await new Promise((resolve) => setTimeout(resolve, 2_000));
+      } finally {
+        client?.close();
+      }
+    }
+  })();
 }
 
 function renderSessions() {

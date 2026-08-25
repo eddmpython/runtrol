@@ -2110,6 +2110,7 @@ export class Controller implements vscode.Disposable {
               );
             },
             watching,
+            (usage) => this.state.replaceUsage(usage.providers),
           ),
         ]).finally(() => connected.abort());
         retryMs = 250;

@@ -842,6 +842,7 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
     }),
     state.onDidChange((change) => {
       if (change === "rows") usage.sessionsChanged();
+      if (change === "usage") usage.usageChanged(state.usage);
     }),
   );
   if (conversationsView.visible) void ensureUsageVisible();

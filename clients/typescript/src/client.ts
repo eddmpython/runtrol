@@ -38,6 +38,7 @@ import type {
   ProviderUsageList,
   ProviderWatchEndedNotification,
   ProvidersChangedNotification,
+  ProvidersUsageChangedNotification,
   RequestEnrollmentParams,
   RespondApprovalParams,
   ResumeSessionParams,
@@ -422,6 +423,7 @@ export class ProviderClient {
 
 export type ProviderNotification =
   | { readonly kind: "changed"; readonly changed: ProvidersChangedNotification }
+  | { readonly kind: "usageChanged"; readonly usageChanged: ProvidersUsageChangedNotification }
   | { readonly kind: "ended"; readonly ended: ProviderWatchEndedNotification };
 
 export type ReconnectingProviderNotification =
@@ -447,6 +449,14 @@ export class ProviderSubscription {
       );
       this.validateTarget(changed.subscriptionId);
       return { kind: "changed", changed };
+    }
+    if (notification.method === "providers/usageChanged") {
+      const usageChanged = validatePublic<ProvidersUsageChangedNotification>(
+        "ProvidersUsageChangedNotification",
+        notification.params,
+      );
+      this.validateTarget(usageChanged.subscriptionId);
+      return { kind: "usageChanged", usageChanged };
     }
     if (notification.method === "providers/watchEnded") {
       const ended = validatePublic<ProviderWatchEndedNotification>(

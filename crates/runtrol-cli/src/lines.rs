@@ -289,6 +289,7 @@ mod tests {
                 looks_stuck: true,
             }],
             warnings: Vec::new(),
+            usage: Vec::new(),
         });
         let lines = render(&response);
         let line = lines.first().expect("one line");
@@ -521,6 +522,7 @@ mod tests {
                 looks_stuck: false,
             }],
             warnings: Vec::new(),
+            usage: Vec::new(),
         });
         let line = render(&response).first().cloned().expect("one line");
         assert!(
@@ -546,6 +548,7 @@ mod tests {
                 looks_stuck: false,
             }],
             warnings: Vec::new(),
+            usage: Vec::new(),
         });
         let line = render(&response).first().cloned().expect("one line");
         let fields: Vec<&str> = line.split_whitespace().collect();
@@ -582,6 +585,7 @@ mod tests {
                 },
             ],
             warnings: Vec::new(),
+            usage: Vec::new(),
         });
         let lines = render(&response);
         assert_eq!(lines.len(), 2);

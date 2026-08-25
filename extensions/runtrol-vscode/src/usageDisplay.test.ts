@@ -202,3 +202,14 @@ test("the account line says what the service said: signed out is an action, a pl
   assert.equal(rows[0]?.meters.length, 1, "a reported window is still a bar");
   assert.match(rows[1]?.tooltip ?? "", /Press Enter to sign in/);
 });
+
+test("a service that publishes its own daily token count shows today's tokens beside the window", () => {
+  const detail = usageDetail(
+    gauge({
+      primary: { usedPercent: 65, resetsAtMs: NOW + 5 * 24 * 60 * 60_000, windowMinutes: 10_080 },
+      tokensToday: 12_345_678,
+    }),
+    NOW,
+  );
+  assert.equal(detail, "65% · resets in 5d · 12.3M tokens today");
+});
