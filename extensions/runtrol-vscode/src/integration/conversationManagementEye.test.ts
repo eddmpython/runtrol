@@ -33,7 +33,7 @@ type ConversationJourney = {
   treeItemIds(): readonly string[];
   nameListed(providerId: string, nativeSessionId: string, label: string): Promise<void>;
   pinListed(providerId: string, nativeSessionId: string): Promise<void>;
-  deleteNativeListed(providerId: string, nativeSessionId: string): Promise<void>;
+  deleteNativeListed(providerId: string, nativeSessionId: string): Promise<number | null>;
 };
 
 type ExtensionApi = {
@@ -41,6 +41,8 @@ type ExtensionApi = {
   readonly journey?: ConversationJourney;
 };
 
+/// How long a deleted row may stay on screen after the click: one frame at 60 Hz.
+const DELETE_ROW_GONE_BUDGET_MS = 16;
 const RENAMED = "Renamed from the sidebar";
 
 let currentStage = "starting";
@@ -186,13 +188,18 @@ async function eyePass(resultPath: string): Promise<void> {
     if (!journey.nativeChatListed(providerId, native)) {
       throw new Error("the throwaway conversation left the list before it was deleted");
     }
-    await within(journey.deleteNativeListed(providerId, native), 60_000, "deleting from the sidebar");
+    const rowGoneMs = await within(journey.deleteNativeListed(providerId, native), 60_000, "deleting from the sidebar");
+    // The row must leave on the click. One frame is the budget a person reads as "immediately"; the
+    // provider's own deletion runs behind it and is proven by the listing below.
+    if (rowGoneMs === null || rowGoneMs > DELETE_ROW_GONE_BUDGET_MS) {
+      throw new Error(`the deleted row stayed listed for ${rowGoneMs ?? "the whole deletion"} ms`);
+    }
     await within(journey.refreshChats(), 90_000, "listing after the delete");
     if (journey.nativeChatListed(providerId, native)) {
       throw new Error("the deleted conversation is still listed");
     }
     await settle();
-    await capture(resultPath, "deleted", { deleted: native, remaining: journey.nativeChatCount() });
+    await capture(resultPath, "deleted", { deleted: native, remaining: journey.nativeChatCount(), rowGoneMs });
 
     await writeResult(resultPath, { stage: "complete", vscode: vscode.version, renamed: RENAMED });
   } finally {

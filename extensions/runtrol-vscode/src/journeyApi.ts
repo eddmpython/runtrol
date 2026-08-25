@@ -88,7 +88,10 @@ export type JourneyApi = {
   nativeChatListed(providerId: string, nativeSessionId: string): boolean;
   /// The eye pass: delete a provider-owned conversation through the provider, without the modal question
   /// (a headless window cannot answer one). The same relay and the same refresh the row's button uses.
-  deleteNativeListed(providerId: string, nativeSessionId: string): Promise<void>;
+  /// Resolves with how many milliseconds the row stayed listed after the deletion was asked (null when it
+  /// was still listed when the provider had answered), which is the number the eye pass reads against its
+  /// budget: the row must leave on the click, not on the provider's answer.
+  deleteNativeListed(providerId: string, nativeSessionId: string): Promise<number | null>;
   /// The eye pass: pin or unpin a listed conversation, the same local ordering choice the row's pin button
   /// sets, so a pinned conversation sorts to the top of its list.
   pinListed(providerId: string, nativeSessionId: string): Promise<void>;
@@ -342,7 +345,17 @@ export function journeyApi(
           && candidate.session === null,
       );
       if (!row?.native) throw new Error("that provider-owned conversation is not listed");
-      await controller.deleteNativeWithoutAsking(row);
+      const listed = () => state.conversations.some(
+        (candidate) => candidate.providerId === providerId
+          && candidate.native?.nativeSessionId === nativeSessionId,
+      );
+      const asked = performance.now();
+      const deletion = controller.deleteNativeWithoutAsking(row);
+      // The row leaves synchronously on the click; this reads the clock right after it, before the
+      // provider has answered anything.
+      const goneMs = listed() ? null : performance.now() - asked;
+      await deletion;
+      return goneMs ?? (listed() ? null : performance.now() - asked);
     }),
     pinListed: (providerId, nativeSessionId) => afterReady(async () => {
       const row = state.conversations.find(

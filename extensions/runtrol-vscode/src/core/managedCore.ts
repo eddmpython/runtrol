@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
-import { chmod, copyFile, mkdir, opendir, rename, stat, unlink } from "node:fs/promises";
+import { chmod, copyFile, mkdir, opendir, readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 const DIGEST_PATTERN = /^[a-f0-9]{64}$/;
@@ -26,13 +26,15 @@ export async function materializeManagedCore(source: string, storageRoot: string
   if (!sourceInfo.isFile()) {
     throw new Error(`the bundled Core is not a file: ${source}`);
   }
-  const sourceDigest = await fileDigest(source);
   const managedRoot = path.join(storageRoot, "core");
-  const executable = path.join(managedRoot, imageName(sourceDigest));
   await mkdir(managedRoot, { recursive: true });
+  const remembered = await readDigests(managedRoot);
+  const sourceDigest = await rememberedDigest(source, sourceInfo, remembered);
+  const executable = path.join(managedRoot, imageName(sourceDigest));
 
   const others = await otherImages(managedRoot, executable);
-  if (await optionalFileDigest(executable) === sourceDigest) {
+  if (await optionalRememberedDigest(executable, remembered) === sourceDigest) {
+    await writeDigests(managedRoot, remembered);
     await removeInactiveImages(others);
     return { executable, digest: sourceDigest, replaced: false };
   }
@@ -49,14 +51,86 @@ export async function materializeManagedCore(source: string, storageRoot: string
       throw new Error("the managed Core copy differs from the bundled Core");
     }
     await rename(incoming, executable);
-    if (await fileDigest(executable) !== sourceDigest) {
+    const placed = await stat(executable);
+    if (await rememberedDigest(executable, placed, remembered, true) !== sourceDigest) {
       throw new Error("the managed Core differs after placement");
     }
   } finally {
     await removeIfPresent(incoming);
   }
+  await writeDigests(managedRoot, remembered);
   await removeInactiveImages(others);
   return { executable, digest: sourceDigest, replaced: others.length > 0 };
+}
+
+/// Digests remembered by file identity (size and modification time), so an activation that finds the
+/// same bundled Core and the same installed image reads two stats instead of hashing thirty megabytes.
+///
+/// Measured 2026-08-25: one sha256 of the 15 MB Core took 60 ms, and every activation did it twice (the
+/// bundled source and the installed image) before the sidebar could draw. A changed file changes its
+/// identity and is hashed again; the hash after a fresh copy is always computed, never remembered.
+type Digests = Record<string, { size: number; mtimeMs: number; digest: string }>;
+
+const DIGESTS_NAME = "digests.json";
+
+async function readDigests(managedRoot: string): Promise<Digests> {
+  try {
+    const parsed: unknown = JSON.parse(await readFile(path.join(managedRoot, DIGESTS_NAME), "utf8"));
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    const digests: Digests = {};
+    for (const [file, entry] of Object.entries(parsed as Record<string, unknown>)) {
+      if (
+        entry && typeof entry === "object"
+        && typeof (entry as { size?: unknown }).size === "number"
+        && typeof (entry as { mtimeMs?: unknown }).mtimeMs === "number"
+        && typeof (entry as { digest?: unknown }).digest === "string"
+        && DIGEST_PATTERN.test((entry as { digest: string }).digest)
+      ) {
+        digests[file] = entry as Digests[string];
+      }
+    }
+    return digests;
+  } catch (error) {
+    if (errorCode(error) === "ENOENT") return {};
+    // A damaged memory is only a memory: everything is hashed again and the file is rewritten.
+    if (error instanceof SyntaxError) return {};
+    throw error;
+  }
+}
+
+async function writeDigests(managedRoot: string, digests: Digests): Promise<void> {
+  await writeFile(path.join(managedRoot, DIGESTS_NAME), JSON.stringify(digests), "utf8");
+}
+
+/// The digest of `file`, remembered under its identity; `fresh` forces a hash (a file just written).
+async function rememberedDigest(
+  file: string,
+  info: { size: number; mtimeMs: number },
+  digests: Digests,
+  fresh = false,
+): Promise<string> {
+  const known = digests[file];
+  if (!fresh && known && known.size === info.size && known.mtimeMs === info.mtimeMs) {
+    return known.digest;
+  }
+  const digest = await fileDigest(file);
+  digests[file] = { size: info.size, mtimeMs: info.mtimeMs, digest };
+  return digest;
+}
+
+async function optionalRememberedDigest(file: string, digests: Digests): Promise<string | null> {
+  try {
+    const info = await stat(file);
+    if (!info.isFile()) {
+      throw new Error(`the managed Core path is not a file: ${file}`);
+    }
+    return await rememberedDigest(file, info, digests);
+  } catch (error) {
+    if (errorCode(error) === "ENOENT") {
+      return null;
+    }
+    throw error;
+  }
 }
 
 /// The directory every managed Core image lives in; the one identity a restart may match processes by.
@@ -106,21 +180,6 @@ async function removeIfPresent(file: string): Promise<void> {
     if (errorCode(error) !== "ENOENT") {
       throw error;
     }
-  }
-}
-
-async function optionalFileDigest(file: string): Promise<string | null> {
-  try {
-    const info = await stat(file);
-    if (!info.isFile()) {
-      throw new Error(`the managed Core path is not a file: ${file}`);
-    }
-    return await fileDigest(file);
-  } catch (error) {
-    if (errorCode(error) === "ENOENT") {
-      return null;
-    }
-    throw error;
   }
 }
 
