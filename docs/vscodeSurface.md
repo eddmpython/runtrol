@@ -509,5 +509,28 @@ specified in [automatic updates](automaticUpdates.md).
 | `cliUpdateRehearsal` | failed provider target and exact verified rollback transaction |
 | `node tooling/installed-package.mjs --marketplace` | public Marketplace download, isolated activation, bundled Core, refresh, view opening, and new-conversation draft opening and close |
 
+## Inspection tool: eyes and arms on a running window
+
+`node tooling/inspect-vscode.mjs` promotes the eye pass's Win32 primitives into a tool any session can call, so
+an AI developing runtrol and an operator (or an AI) supervising the coding agents runtrol runs can look at a real
+VS Code window and act on it. It is a development and supervision tool, not a shipped product surface: it lives in
+`tooling/`, is excluded from the package, and drives real OS windows.
+
+| Command | What it does |
+|---|---|
+| `node tooling/inspect-vscode.mjs list` | print the title of one matching VS Code window, or say none matches |
+| `node tooling/inspect-vscode.mjs capture [--out shot.png]` | photograph the window with `PrintWindow`, occluded or not, without taking focus; the PNG is how a message, toast, or the runtrol sidebar's live agent state is read |
+| `node tooling/inspect-vscode.mjs keys --keys "^k^b"` | bring the window forward and type (SendKeys vocabulary), foreground-verified before a key lands |
+| `node tooling/inspect-vscode.mjs click --x 120 --y 240` | bring the window forward and click one client-relative point |
+
+Targeting is shared by every command: `--title` matches the window title (default `Visual Studio Code`, which every
+VS Code window ends with) and `--command` narrows to one isolated process family by a command-line substring, so a
+capture never photographs the wrong window. `capture` is the safe default: `PrintWindow` renders the window's own
+surface, so it never steals focus from the operator and can watch a window an agent is working in. `keys` and
+`click` must take focus, so they interrupt whoever is at the keyboard; use them deliberately.
+
+The same rule the verifiers follow holds here: the tool reads and photographs, and its only writes are keys and
+clicks into the one window a caller named. It never closes a window, host, daemon, or session.
+
 Every verifier uses an isolated profile marker and terminates only exact owned process identities. It must never close
 unrelated VS Code windows, extension hosts, daemons, or provider sessions.

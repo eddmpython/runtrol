@@ -60,7 +60,18 @@ const result = spawnSync(process.execPath, [
   stdio: "inherit",
 });
 await rm(out, { recursive: true, force: true });
-process.exitCode = result.status ?? 1;
+
+// The tooling's own unit suites (plain .mjs, no bundling), run in a second `node --test` pass so a tool
+// like inspect-vscode is gated by the same `npm test` as the extension. Discovered, never listed.
+const toolingSuites = (await readdir(path.join(extensionRoot, "tooling")))
+  .filter((name) => name.endsWith(".test.mjs"))
+  .sort()
+  .map((name) => path.join(extensionRoot, "tooling", name));
+const toolingResult = toolingSuites.length > 0
+  ? spawnSync(process.execPath, ["--test", ...toolingSuites], { stdio: "inherit" })
+  : { status: 0 };
+
+process.exitCode = (result.status ?? 1) || (toolingResult.status ?? 1);
 
 async function discoverSuites(root) {
   const found = [];
