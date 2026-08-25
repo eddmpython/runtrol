@@ -16,8 +16,11 @@ use crate::Composed;
 
 /// How long one service may take to answer. A status command reads a file; a protocol read is one round trip.
 const ACCOUNT_PROBE_DEADLINE: Duration = Duration::from_secs(20);
-/// How long after start the first round runs: after the window has drawn, before anyone wonders.
-const FIRST_ROUND_DELAY: Duration = Duration::from_secs(2);
+/// How long after start the first round runs. Past the moment the window has drawn, and past the point a
+/// footprint measurement calls a fresh daemon "idle": an account round prepares drivers and momentarily is
+/// not idle, so a daemon measured in its first seconds must not be mid-round. It releases its working set at
+/// each round's end, so the steady-state footprint between rounds is unchanged either way.
+const FIRST_ROUND_DELAY: Duration = Duration::from_secs(8);
 /// How often the round repeats. Sign-in changes are rare and a limit window moves slowly.
 const ROUND_INTERVAL: Duration = Duration::from_mins(10);
 
@@ -137,6 +140,10 @@ pub(crate) async fn round(
         reports.record(id, report, now);
         changed |= !same;
     }
+    // Asking a service means preparing its driver and, for a protocol CLI, a short-lived subprocess; both
+    // are dropped by here, but the allocator keeps their pages as working set. Hand them back so a round on
+    // an otherwise idle daemon leaves the footprint where it found it (the idle memory budget is a contract).
+    runtrol_childproc::footprint::release_unused_memory();
     if !changed {
         return;
     }
