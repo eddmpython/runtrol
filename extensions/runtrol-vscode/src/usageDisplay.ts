@@ -127,11 +127,12 @@ export function usageRows(
         name,
         icon: providerIcon(providerId, providers),
         detail: "Not signed in · Sign in",
-        meters: [],
-        reached: false,
+        // A window a turn reported stays visible: the service's own number outranks its sign-in verdict.
+        meters: gauge ? usageMeters(gauge, nowMs) : [],
+        reached: gauge?.reached ?? false,
         state: "signedOut",
         providerId,
-        cost: null,
+        cost: gauge ? usageCost(gauge) : null,
         tooltip: `${name} says nobody is signed in.\n\nPress Enter to sign in with this service's own command.`,
       };
     }
