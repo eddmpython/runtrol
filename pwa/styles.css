@@ -87,7 +87,12 @@ input, select, textarea { width: 100%; padding: 11px 12px; background: var(--car
 .new-session h2 { margin: 0; font-size: 15px; }
 .new-session p { margin: 0; }
 
-.session-detail { min-width: 0; display: grid; grid-template-rows: auto minmax(280px, 1fr) auto; }
+.session-detail { min-width: 0; display: grid; grid-template-rows: auto minmax(280px, 1fr); }
+/* One pane for the note and the screen, so a hidden note never leaves an empty grid track behind. */
+.terminal-pane { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
+.terminal { flex: 1 1 auto; min-height: 0; min-width: 0; padding: 6px; background: #000; overscroll-behavior: contain; }
+.terminal .xterm { height: 100%; }
+.terminal-note { padding: 10px 18px; color: var(--muted); border-bottom: 1px solid var(--line); }
 .mission-detail { min-width: 0; display: grid; grid-template-rows: auto minmax(280px, 1fr); }
 .path { max-width: 70vw; margin: 6px 0 0; color: var(--muted); font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; font-size: 12px; overflow-wrap: anywhere; }
 .detail-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 7px; }
@@ -125,14 +130,16 @@ footer button { min-height: 36px; font-size: 11px; }
   .session-pane { border-right: 0; }
   .session-detail, .mission-detail { min-height: calc(100vh - 64px); }
   .session-detail:not([hidden]), .mission-detail:not([hidden]) { position: fixed; inset: 0; z-index: 5; background: var(--carbon); padding-top: env(safe-area-inset-top); }
-  .detail-heading { padding-top: 14px; }
+  .detail-heading { padding-top: 14px; flex-wrap: wrap; row-gap: 10px; }
+  /* A phone is too narrow for a title beside its buttons: the title takes the row, the buttons the next one. */
+  .detail-heading > div:first-of-type { flex-basis: 100%; }
+  .detail-heading .detail-actions { justify-content: flex-start; }
+  /* The fixed detail is the screen; a definite height is what lets the terminal row reach the bottom. */
+  .session-detail:not([hidden]) { height: 100dvh; grid-template-rows: auto minmax(0, 1fr); }
   .pane-heading { align-items: center; }
   .pane-actions { max-width: 56%; }
   .back { display: inline-flex; align-items: center; min-height: 34px; padding: 0 9px; color: var(--accent); }
-  .detail-heading > div:first-of-type { flex: 1; }
   .path { max-width: 88vw; }
-  .output { padding: 13px; }
-  .event { max-width: 96%; }
 }
 
 @media (prefers-color-scheme: light) {

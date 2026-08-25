@@ -163,6 +163,50 @@ export class CoreClient {
     return response.with;
   }
 
+  /// Open a conversation's own terminal interface on this channel: the Core hosts the CLI on a pseudo
+  /// terminal, and from here on this channel is the view (output down, keys and resizes up).
+  async beginTerminal(session, cols, rows) {
+    if (this.busy) throw new Error("one Core channel cannot carry overlapping requests");
+    this.busy = true;
+    await this.channel.send(utf8(JSON.stringify({
+      ask: "terminalOpen",
+      with: { provider: session.provider, native: session.native, workspace: session.workspace, cols, rows },
+    })));
+    const response = parseResponse(await this.channel.receive());
+    if (response.say === "failed") {
+      this.busy = false;
+      throw new CoreFailure(response.with);
+    }
+    if (response.say !== "terminalOpened") {
+      this.busy = false;
+      throw new Error("Core did not open the terminal");
+    }
+    return response.with;
+  }
+
+  /// The next answer on an open terminal view: output bytes, a lag notice, or the exit.
+  async nextTerminal() {
+    if (!this.busy) throw new Error("Core terminal view is not active");
+    const response = parseResponse(await this.channel.receive());
+    if (response.say === "failed") throw new CoreFailure(response.with);
+    if (!["terminalOutput", "terminalLagged", "terminalExited"].includes(response.say)) {
+      throw new Error("Core terminal view returned an unexpected response");
+    }
+    return response;
+  }
+
+  /// Keys the person typed, or the viewer's mouse, into the open terminal view.
+  sendTerminalInput(base64) {
+    if (!this.busy) throw new Error("Core terminal view is not active");
+    return this.channel.send(utf8(JSON.stringify({ ask: "terminalInput", with: { bytes: base64 } })));
+  }
+
+  /// The viewer's size changed.
+  sendTerminalResize(cols, rows) {
+    if (!this.busy) throw new Error("Core terminal view is not active");
+    return this.channel.send(utf8(JSON.stringify({ ask: "terminalResize", with: { cols, rows } })));
+  }
+
   async nextWatch() {
     if (!this.busy) throw new Error("Core event watch is not active");
     const response = parseResponse(await this.channel.receive());

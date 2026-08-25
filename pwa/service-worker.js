@@ -1,4 +1,4 @@
-const CACHE_NAME = "runtrol-phone-v5";
+const CACHE_NAME = "runtrol-phone-v6";
 const APP_SHELL = [
   "./",
   "index.html",
@@ -17,6 +17,9 @@ const APP_SHELL = [
   "src/push.js",
   "src/records.js",
   "src/relay.js",
+  "src/vendor/xterm/xterm.mjs",
+  "src/vendor/xterm/xterm.css",
+  "src/vendor/xterm/addon-fit.mjs",
   "assets/event-presentation.json",
   "assets/brand/favicon.svg",
   "assets/brand/lockup-dark.svg",

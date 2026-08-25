@@ -6,12 +6,13 @@
     <meta name="theme-color" content="#101514">
     <meta name="color-scheme" content="dark light">
     <meta name="referrer" content="no-referrer">
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src 'self' https: wss:; img-src 'self'; style-src 'self'; script-src 'self'; worker-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src 'self' https: wss:; img-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; worker-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'">
     <meta name="description" content="A scoped, end-to-end encrypted phone control surface for runtrol.">
     <link rel="manifest" href="manifest.webmanifest">
     <link rel="icon" href="assets/brand/favicon.svg" type="image/svg+xml">
     <link rel="apple-touch-icon" href="assets/brand/apple-touch-icon.png">
     <link rel="stylesheet" href="styles.css">
+    <link rel="stylesheet" href="src/vendor/xterm/xterm.css">
     <script type="module" src="src/app.js"></script>
     <title>runtrol phone</title>
   </head>
@@ -71,17 +72,14 @@
               <p id="selected-workspace" class="path"></p>
             </div>
             <div class="detail-actions">
-              <button id="resume-session" type="button">Resume</button>
               <button id="interrupt" type="button">Interrupt</button>
               <button id="delete-session" type="button">Remove</button>
             </div>
           </div>
-          <div id="output" class="output" aria-live="polite" aria-label="Selected session output"></div>
-          <form id="composer" class="composer">
-            <label class="sr-only" for="prompt">Prompt</label>
-            <textarea id="prompt" rows="2" placeholder="Send unchanged text to the provider CLI"></textarea>
-            <button id="send" class="primary" type="submit">Send</button>
-          </form>
+          <div class="terminal-pane">
+            <div id="terminal-note" class="terminal-note" role="status" hidden></div>
+            <div id="terminal" class="terminal" aria-label="The conversation, as the coding service draws it"></div>
+          </div>
         </section>
 
         <section id="mission-detail" class="mission-detail" hidden>

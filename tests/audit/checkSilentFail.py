@@ -60,7 +60,9 @@ LOOKBACK = 3
 
 SCAN_DIRS = ("crates", "pwa/src", "relay/src", "tests/audit")
 SCAN_SUFFIXES = (".rs", ".ts", ".tsx", ".js", ".mjs", ".py")
-SKIP_PARTS = frozenset({"target", "node_modules", "_attempts", ".git", "dist"})
+# `vendor`: third-party files copied unmodified (pwa/src/vendor, with their own LICENSE). Not our code to
+# rewrite, and a rule about our own error handling has nothing to say about theirs.
+SKIP_PARTS = frozenset({"target", "node_modules", "_attempts", ".git", "dist", "vendor"})
 
 RUST_RULES: tuple[tuple[str, re.Pattern[str], str], ...] = (
     ("letUnderscore", re.compile(r"^\s*let\s+_\s*="), "반환값을 이름 없이 버린다. `Result` 면 실패가 사라진다."),
@@ -321,7 +323,11 @@ def main(argv: list[str]) -> int:
         return selftest()
 
     args = [a for a in argv if not a.startswith("--")]
-    targets = [Path(a) for a in args] if args else defaultTargets()
+    # Named paths get the same skip as the walk: the pre-commit hook names staged files one by one, and a
+    # vendored file staged for the first time must not be judged as ours.
+    targets = (
+        [Path(a) for a in args if not (SKIP_PARTS & set(Path(a).parts))] if args else defaultTargets()
+    )
     if not targets:
         print("[checkSilentFail] 검사 대상 없음 (crates/ · pwa/src/ · tests/audit/ 미생성).")
         return 0

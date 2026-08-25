@@ -1,4 +1,7 @@
 import { openDeviceStore } from "./identityStore.js";
+import { utf8 } from "./bytes.js";
+import { Terminal } from "./vendor/xterm/xterm.mjs";
+import { FitAddon } from "./vendor/xterm/addon-fit.mjs";
 import {
   attentionCount,
   consumeAttentionRequest,
@@ -18,16 +21,8 @@ import {
   readMissionFlightSignals,
 } from "./missionSignals.js";
 import { disablePush, enablePush, pushAvailable, synchronizePush } from "./push.js";
-import {
-  approvalOptions,
-  contentText,
-  eventBody,
-  exactSubject,
-  safeVisibleText,
-} from "./presentation.js";
+import { safeVisibleText } from "./presentation.js";
 
-const MAX_VISIBLE_EVENTS = 400;
-const MAX_VISIBLE_CHARACTERS = 256 * 1024;
 const MAX_VISIBLE_MISSION_TASKS = 200;
 const state = {
   store: null,
@@ -60,9 +55,8 @@ const usageStrip = element("usage-strip");
 const missionList = element("mission-list");
 const sessionDetail = element("session-detail");
 const missionDetail = element("mission-detail");
-const output = element("output");
-const composer = element("composer");
-const prompt = element("prompt");
+const terminalHost = element("terminal");
+const terminalNote = element("terminal-note");
 const refresh = element("refresh");
 const refreshMissions = element("refresh-missions");
 const sessionsTab = element("show-sessions");
@@ -71,7 +65,8 @@ const panic = element("panic");
 const forget = element("forget-device");
 const notifications = element("notifications");
 const nextAttention = element("next-attention");
-let visibleCharacters = 0;
+/// The open terminal view: the xterm instance, its fit addon, and the Core channel it rides.
+let terminalView = null;
 
 await boot();
 
@@ -141,19 +136,10 @@ function bindActions() {
     ));
     renderNotificationState(true, "Notifications are on.");
   }));
-  composer.addEventListener("submit", (event) => {
-    event.preventDefault();
-    const value = prompt.value;
-    if (!state.selected || !value.trim()) return;
-    prompt.value = "";
-    runAction(async () => {
-      await withCore(state.connection, state.identity, (client) => client.prompt(state.selected.session, value));
-      markSessionWaiting(state.selected.session, null);
-      setStatus("Prompt delivered unchanged", "online");
-    });
-  });
+  // Interrupt is the terminal's own word for it: Ctrl+C into the CLI, exactly as a keyboard would send it.
   element("interrupt").addEventListener("click", () => runAction(async () => {
-    await withCore(state.connection, state.identity, (client) => client.interrupt(state.selected.session));
+    if (!terminalView) throw new Error("No conversation is open.");
+    await terminalView.client.sendTerminalInput(base64Of(utf8("\u0003")));
   }));
   element("delete-session").addEventListener("click", () => runAction(async () => {
     if (!confirm("Remove this runtrol session pointer? The provider-owned conversation remains with its CLI.")) return;
@@ -168,11 +154,6 @@ function bindActions() {
   element("back-to-missions").addEventListener("click", () => {
     missionDetail.hidden = true;
   });
-  element("resume-session").addEventListener("click", () => runAction(async () => {
-    if (!state.selected?.native) throw new Error("This session has no provider resume identity.");
-    await withCore(state.connection, state.identity, (client) => client.resume(state.selected));
-    await refreshSessions();
-  }));
   element("new-session").addEventListener("submit", (event) => {
     event.preventDefault();
     runAction(async () => {
@@ -486,18 +467,6 @@ function focusNextAttention() {
   selectSession(next);
 }
 
-function markSessionWaiting(sessionId, waitingOn) {
-  let selected = null;
-  state.sessions = state.sessions.map((session) => {
-    if (session.session !== sessionId) return session;
-    const updated = { ...session, waiting_on: waitingOn };
-    if (state.selected?.session === sessionId) selected = updated;
-    return updated;
-  });
-  if (selected) state.selected = selected;
-  renderSessions();
-}
-
 function configureSurfaceTabs() {
   const missionsAllowed = hasScope("mission.read");
   missionsTab.hidden = !missionsAllowed;
@@ -659,170 +628,116 @@ async function changeMission(request) {
 
 function selectSession(session) {
   state.selected = session;
-  state.cursor = null;
   state.watchGeneration += 1;
-  output.replaceChildren();
-  visibleCharacters = 0;
+  closeTerminalView();
   missionDetail.hidden = true;
   sessionDetail.hidden = false;
   element("selected-title").textContent = safeVisibleText(session.label || workspaceName(session.workspace));
   element("selected-provider").textContent = safeVisibleText(session.provider);
   element("selected-workspace").textContent = safeVisibleText(session.workspace);
-  prompt.disabled = !session.hot || !hasScope("session.input.write");
-  element("send").disabled = prompt.disabled;
-  element("interrupt").disabled = !session.hot || !hasScope("session.stop");
   element("delete-session").disabled = !hasScope("session.delete");
-  element("resume-session").hidden = session.hot;
-  element("resume-session").disabled = !hasScope("session.resume")
-    || !session.native
-    || !state.connection.providers.includes(session.provider)
-    || !isWorkspaceApproved(session.workspace);
   renderSessions();
-  if (session.hot && hasScope("session.output.read")) void watchSession(session, state.watchGeneration);
-  else appendOutput("meta", session.hot ? "This phone cannot read session output." : "Resume this provider-owned session to continue.");
+  // The conversation is the service's own terminal interface, hosted by the Core (`docs/terminalSurface.md`).
+  // Opening a stored conversation is a resume; this phone needs that scope, the service, and the folder.
+  const reason = !session.native
+    ? "This conversation has no identity its service can reopen."
+    : !hasScope("session.resume")
+      ? "This phone may not reopen conversations."
+      : !hasScope("session.input.write")
+        ? "This phone may not type into conversations."
+        : !state.connection.providers.includes(session.provider)
+          ? "This phone is not approved for that service."
+          : !isWorkspaceApproved(session.workspace)
+            ? "This phone is not approved for that folder."
+            : null;
+  element("interrupt").disabled = reason !== null;
+  terminalNote.hidden = reason === null;
+  terminalNote.textContent = reason ?? "";
+  if (reason === null) void openTerminalView(session, state.watchGeneration);
+}
+
+/// Everything the phone needs to show the conversation: xterm draws, the Core hosts, the channel carries.
+async function openTerminalView(session, generation) {
+  const terminal = new Terminal({
+    cursorBlink: true,
+    fontSize: 13,
+    fontFamily: 'ui-monospace, "Cascadia Mono", Consolas, monospace',
+    scrollback: 0,
+    allowProposedApi: false,
+  });
+  const fit = new FitAddon();
+  terminal.loadAddon(fit);
+  terminal.open(terminalHost);
+  fit.fit();
+  let client;
+  try {
+    client = await CoreClient.connect(state.connection, state.identity);
+    if (generation !== state.watchGeneration) {
+      client.close();
+      terminal.dispose();
+      return;
+    }
+    terminalView = { terminal, fit, client };
+    await client.beginTerminal(session, terminal.cols, terminal.rows);
+    terminal.onData((data) => {
+      void client.sendTerminalInput(base64Of(utf8(data))).catch((error) => setStatus(failureMessage(error, "PC offline"), "offline"));
+    });
+    terminal.onResize(({ cols, rows }) => {
+      void client.sendTerminalResize(cols, rows).catch((error) => setStatus(failureMessage(error, "PC offline"), "offline"));
+    });
+    terminalView.resize = () => fit.fit();
+    window.addEventListener("resize", terminalView.resize);
+    terminal.focus();
+    setStatus("PC online", "online");
+    while (generation === state.watchGeneration) {
+      const response = await client.nextTerminal();
+      if (response.say === "terminalOutput") {
+        terminal.write(bytesOfBase64(response.with.bytes));
+      } else if (response.say === "terminalLagged") {
+        // The Core sends the whole screen next; a clean page for it.
+        terminal.reset();
+      } else {
+        terminal.write(`\r\n[the service ended with code ${Number(response.with.code)}]\r\n`);
+        break;
+      }
+    }
+  } catch (error) {
+    if (generation === state.watchGeneration) setStatus(failureMessage(error, "PC offline"), "offline");
+  } finally {
+    if (generation === state.watchGeneration) {
+      client?.close();
+    }
+  }
+}
+
+function closeTerminalView() {
+  const view = terminalView;
+  terminalView = null;
+  if (!view) return;
+  if (view.resize) window.removeEventListener("resize", view.resize);
+  view.client.close();
+  view.terminal.dispose();
+  terminalHost.replaceChildren();
+}
+
+function base64Of(bytes) {
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary);
+}
+
+function bytesOfBase64(text) {
+  const binary = atob(text);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+  return bytes;
 }
 
 function clearSelection() {
   state.selected = null;
   state.watchGeneration += 1;
+  closeTerminalView();
   sessionDetail.hidden = true;
-}
-
-async function watchSession(session, generation) {
-  let delay = 200;
-  while (generation === state.watchGeneration) {
-    let client;
-    try {
-      client = await CoreClient.connect(state.connection, state.identity);
-      const started = await client.beginWatch(session.session, state.cursor);
-      if (started.gap) appendOutput("warning", "Some older output is no longer in the bounded reconnect window.");
-      setStatus("PC online", "online");
-      delay = 200;
-      while (generation === state.watchGeneration) {
-        const response = await client.nextWatch();
-        if (response.say === "lagged") {
-          state.cursor = response.with.next_expected;
-          appendOutput("warning", "Live output fell behind. Reconnecting at the next available event.");
-          break;
-        }
-        state.cursor = response.with.next_expected;
-        presentEvent(response.with.payload, session);
-      }
-    } catch (error) {
-      if (generation === state.watchGeneration) setStatus(failureMessage(error, "PC offline"), "offline");
-    } finally {
-      client?.close();
-    }
-    if (generation !== state.watchGeneration) return;
-    await wait(delay);
-    delay = Math.min(delay * 2, 2_000);
-  }
-}
-
-function presentEvent(payload, session) {
-  const body = eventBody(payload);
-  if (!body) {
-    appendOutput("warning", "An unreadable provider event arrived.");
-    return;
-  }
-  const contract = state.presentation.events?.[body.event];
-  if (contract?.kind === "message") {
-    appendOutput(contract.side, contentText(body));
-  } else if (contract?.kind === "approval") {
-    markSessionWaiting(session.session, "person");
-    appendApproval(body, session);
-  } else if (contract?.kind === "tool") {
-    appendOutput("meta", toolLine(body));
-  } else if (contract?.kind === "status" || contract?.kind === "turn" || contract?.kind === "notice") {
-    appendOutput("meta", safeVisibleText(contract.textKey || body.event));
-  }
-}
-
-// The provider's own classification and label, mirroring the PC surface so one vocabulary is learned once. Only
-// the label is read out of the payload; raw input, raw output and diffs stay untouched because they are the
-// conversation, and a phone is the last place to spill them.
-const TOOL_VERBS = {
-  read: "Read",
-  edit: "Edit",
-  delete: "Delete",
-  move: "Move",
-  search: "Search",
-  execute: "Run",
-  think: "Think",
-  fetch: "Fetch",
-  switchMode: "Switch mode",
-  other: "Tool",
-};
-
-function toolLine(body) {
-  const verb = TOOL_VERBS[body.kind] || "Tool";
-  const title = safeVisibleText(typeof body.payload?.title === "string" ? body.payload.title : "");
-  const head = title ? `${verb} ${title}` : verb;
-  if (body.status === "failed") return `${head} failed`;
-  if (body.status === "cancelled") return `${head} cancelled`;
-  if (body.status === "inProgress") return `${head} running`;
-  return head;
-}
-
-function appendApproval(body, session) {
-  const card = document.createElement("article");
-  card.className = `event approval ${body.risk === "high" ? "high" : ""}`;
-  const title = document.createElement("strong");
-  title.textContent = body.subject_incomplete ? "Approval blocked" : `${safeVisibleText(body.kind)} approval`;
-  const context = document.createElement("dl");
-  context.innerHTML = "<dt>Session</dt><dd></dd><dt>Workspace</dt><dd></dd>";
-  context.children[1].textContent = safeVisibleText(session.label || session.session);
-  context.children[3].textContent = safeVisibleText(session.workspace);
-  const subject = document.createElement("pre");
-  subject.textContent = exactSubject(body.subject);
-  const actions = document.createElement("div");
-  actions.className = "approval-actions";
-  for (const option of approvalOptions(body, state.connection.scopes)) {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.textContent = option.label;
-    button.disabled = option.unavailable !== null;
-    if (option.unavailable) button.title = option.unavailable;
-    button.addEventListener("click", () => runAction(async () => {
-      await withCore(state.connection, state.identity, (client) => client.answerApproval(
-        session.session,
-        body.id,
-        option.id,
-        body.subject_digest,
-      ));
-      markSessionWaiting(session.session, null);
-      for (const choice of actions.querySelectorAll("button")) choice.disabled = true;
-    }));
-    actions.append(button);
-  }
-  card.append(title, context, subject, actions);
-  const characters = card.textContent?.length ?? 0;
-  card.dataset.characters = String(characters);
-  visibleCharacters += characters;
-  output.append(card);
-  trimOutput();
-}
-
-function appendOutput(kind, value) {
-  const text = safeVisibleText(value);
-  if (!text) return;
-  const item = document.createElement("article");
-  item.className = `event ${kind}`;
-  item.textContent = text;
-  item.dataset.characters = String(text.length);
-  visibleCharacters += text.length;
-  output.append(item);
-  trimOutput();
-}
-
-function trimOutput() {
-  while (output.childElementCount > MAX_VISIBLE_EVENTS || visibleCharacters > MAX_VISIBLE_CHARACTERS) {
-    const oldest = output.firstElementChild;
-    if (!oldest) break;
-    visibleCharacters -= Number(oldest.dataset.characters || oldest.textContent?.length || 0);
-    oldest.remove();
-  }
-  output.scrollTop = output.scrollHeight;
 }
 
 function populateProviders() {

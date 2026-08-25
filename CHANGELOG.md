@@ -31,6 +31,10 @@ and refactoring that no user can observe do not belong here.
   wheel notch scrolls, a click on a row selects it). Split, grid and full screen are VS Code's own. See
   `docs/terminalSurface.md`.
 
+- The phone shows the same terminal: a conversation opens as the service's own screen, drawn by xterm.js
+  (vendored, MIT), on the same hosted terminal the PC tab shows, with the same keyboard. Interrupt sends
+  the terminal's own Ctrl+C. The phone's event list and composer are gone with it.
+
 ### Changed
 
 - Runtrol ships the representative services only: Claude Code, Codex and Grok, with Gemini to follow once its

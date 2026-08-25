@@ -77,17 +77,20 @@ function commandOptions(arguments_) {
   const fixture = values.get("fixture") ?? null;
   if (!config || !path.isAbsolute(config)) throw new Error("--config must be an absolute path");
   if (!output || !path.isAbsolute(output)) throw new Error("--output must be an absolute path");
-  if (!url || new URL(url).origin !== "http://127.0.0.1:4173") {
-    throw new Error("--url must use the authorized local PWA origin");
+  // Loopback only; the port is free because another project's preview may hold the usual one (measured
+  // 2026-08-25: a sibling repository's Vite preview on 4173 would otherwise block this pass for no reason).
+  if (!url || new URL(url).hostname !== "127.0.0.1" || new URL(url).protocol !== "http:") {
+    throw new Error("--url must be a loopback http origin");
   }
   if (!selector || selector.length > 200) throw new Error("--selector is required and bounded");
-  if (fixture !== null && !["mission-flight-list", "mission-flight-detail"].includes(fixture)) {
+  if (fixture !== null && !["mission-flight-list", "mission-flight-detail", "session-terminal"].includes(fixture)) {
     throw new Error("--fixture is not a supported visual state");
   }
   return { config, url, output, selector, fixture };
 }
 
 function visualFixture(kind) {
+  if (kind === "session-terminal") return terminalFixture();
   const showDetail = kind === "mission-flight-detail";
   return `(() => {
     const byId = (id) => document.getElementById(id);
@@ -119,6 +122,47 @@ function visualFixture(kind) {
     byId("pause-mission").hidden = true;
     byId("resume-mission").hidden = true;
     byId("cancel-mission").hidden = true;
+    return true;
+  })()`;
+}
+
+/// The conversation as the phone shows it: the service's own screen drawn by the vendored xterm. The bytes
+/// are what Codex 0.149.1 drew on a real pseudo terminal (measured 2026-08-25), so the picture is the real
+/// layout with real terminal output, without a paired PC.
+function terminalFixture() {
+  const screen = [
+    "\x1b[1;36m╭────────────────────────────────────╮\x1b[0m\r\n",
+    "\x1b[1;36m│\x1b[0m \x1b[1m>_ OpenAI Codex (v0.149.1)\x1b[0m           \x1b[1;36m│\x1b[0m\r\n",
+    "\x1b[1;36m│\x1b[0m                                    \x1b[1;36m│\x1b[0m\r\n",
+    "\x1b[1;36m│\x1b[0m model:     gpt-5.6-sol xhigh   fast \x1b[1;36m│\x1b[0m\r\n",
+    "\x1b[1;36m│\x1b[0m directory: ~\\work\\runtrol           \x1b[1;36m│\x1b[0m\r\n",
+    "\x1b[1;36m╰────────────────────────────────────╯\x1b[0m\r\n",
+    "  Tip: See the Codex keymap documentation for supported actions.\r\n",
+    "\r\n\x1b[1m›\x1b[0m Ask Codex to do anything\r\n",
+    "\x1b[2m  gpt-5.6-sol xhigh fast  ~\\work\\runtrol\x1b[0m",
+  ].join("");
+  return `(async () => {
+    const byId = (id) => document.getElementById(id);
+    byId("setup").hidden = true;
+    byId("sessions-view").hidden = false;
+    byId("session-browser").hidden = true;
+    byId("mission-browser").hidden = true;
+    byId("mission-detail").hidden = true;
+    byId("session-detail").hidden = false;
+    byId("connection-status").textContent = "PC online";
+    byId("connection-status").dataset.state = "online";
+    byId("selected-provider").textContent = "codex";
+    byId("selected-title").textContent = "Review category 02 curriculum";
+    byId("selected-workspace").textContent = "C:\\work\\runtrol";
+    byId("terminal-note").hidden = true;
+    const { Terminal } = await import("./src/vendor/xterm/xterm.mjs");
+    const { FitAddon } = await import("./src/vendor/xterm/addon-fit.mjs");
+    const terminal = new Terminal({ cursorBlink: false, fontSize: 13, scrollback: 0 });
+    const fit = new FitAddon();
+    terminal.loadAddon(fit);
+    terminal.open(byId("terminal"));
+    fit.fit();
+    await new Promise((resolve) => terminal.write(${JSON.stringify(screen)}, resolve));
     return true;
   })()`;
 }
