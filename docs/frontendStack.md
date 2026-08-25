@@ -17,7 +17,7 @@ The previous desktop-window frontend was removed when the PC surface became VS C
 All public surfaces must satisfy these rules:
 
 - Reuse canonical files from [`assets/brand/`](../assets/brand/) and never redraw the mark.
-- Use the canonical orange `#FF5A2F`, graphite, ivory, and theme-appropriate wordmark.
+- Use the canonical coral `#F56565`, graphite, white, and the two-tone mark whose ink arms follow the theme.
 - Support light and dark color schemes without adding a glow, gradient, outline, or shadow to the mark.
 - Keep navigation and input usable with a keyboard and expose meaningful accessible names.
 - Respect reduced-motion preferences.

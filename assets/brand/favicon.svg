@@ -1,10 +1,14 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100" height="100" fill="none" role="img" aria-label="runtrol">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100" height="100" role="img" aria-label="runtrol">
   <title>runtrol</title>
-  <!-- hinted for 16 to 32px. the brand geometry is in symbol.svg -->
-  <g stroke="#FF5A2F" stroke-width="12.5">
-    <path d="M37.5 0V18.75A18.75 18.75 0 0 1 18.75 37.5H0"/>
-    <path d="M62.5 0V18.75A18.75 18.75 0 0 0 81.25 37.5H100"/>
-    <path d="M37.5 100V81.25A18.75 18.75 0 0 0 18.75 62.5H0"/>
-    <path d="M62.5 100V81.25A18.75 18.75 0 0 1 81.25 62.5H100"/>
+  <!-- hinted for 16 to 32px. the brand geometry is in symbol.svg. the ink follows the tab strip theme -->
+  <style>
+    .ink { stroke: #0B0D0F; }
+    @media (prefers-color-scheme: dark) { .ink { stroke: #FFFFFF; } }
+  </style>
+  <g fill="none" stroke-width="12.5">
+    <path class="accent" stroke="#F56565" d="M37.5 0V18.75A18.75 18.75 0 0 1 18.75 37.5H0"/>
+    <path class="ink" stroke="#0B0D0F" d="M62.5 0V18.75A18.75 18.75 0 0 0 81.25 37.5H100"/>
+    <path class="ink" stroke="#0B0D0F" d="M37.5 100V81.25A18.75 18.75 0 0 0 18.75 62.5H0"/>
+    <path class="accent" stroke="#F56565" d="M62.5 100V81.25A18.75 18.75 0 0 1 81.25 62.5H100"/>
   </g>
 </svg>

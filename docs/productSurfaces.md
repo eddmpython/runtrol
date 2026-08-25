@@ -68,4 +68,4 @@ The phone action uses `/runtrol/app/` on the same permanent GitHub Pages origin.
 
 ## Visual contract
 
-The canonical assets in [`assets/brand/`](../assets/brand/) are reused without redrawing the mark. Public surfaces use graphite, ivory, and the canonical orange `#FF5A2F`. The landing page combines restrained editorial spacing with a real session-control panel. It does not simulate conversation content.
+The canonical assets in [`assets/brand/`](../assets/brand/) are reused without redrawing the mark. Public surfaces use graphite, white, and the canonical coral `#F56565`; the mark is two-tone, coral plus an ink that follows the theme. The landing page opens with an animated Runtrol Studio window (sidebar tree, conversations as editor tabs, usage, an approval, the phone toast) drawn from fixed sample text, never from a real transcript.

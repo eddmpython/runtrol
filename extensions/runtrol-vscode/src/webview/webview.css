@@ -1,6 +1,6 @@
 :root {
   color-scheme: light dark;
-  --runtrol-accent: #FF5A2F;
+  --runtrol-accent: #F56565;
   /* One reading column, shared by the thread and the composer so nothing is off axis. */
   --runtrol-column: 46rem;
   --runtrol-gutter: max(1rem, calc((100% - var(--runtrol-column)) / 2));

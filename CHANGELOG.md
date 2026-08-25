@@ -34,6 +34,14 @@ and refactoring that no user can observe do not belong here.
 
 ### Changed
 
+- The runtrol mark is now two-tone: two arms coral (`#F56565`) and two arms in the ink of the surface, white on
+  a dark theme and graphite on a light one, so the mark no longer reads as a single orange blob. The accent
+  colour in the sidebar, the phone app, and the public site follows the same coral. The Marketplace icon,
+  favicon, and social cards are regenerated from the same geometry.
+- The public site opens with an animated Runtrol Studio window instead of a static panel: the sidebar tree
+  fills in, two conversations open as editor tabs, the running agent's icon spins, usage ticks, an approval
+  asks for the user, and the phone toast arrives. Icons are Lucide; the header carries the GitHub, support,
+  YouTube, and Threads channels.
 - Every service now carries its vendor's current vector mark: Grok shows the mark xAI adopted in February 2025
   (the sidebar carried the retired 2023 slashed circle as a black tile), and the OpenAI and Cline marks are
   vectors rather than bitmaps, so all five stay sharp at any size and follow the editor theme.

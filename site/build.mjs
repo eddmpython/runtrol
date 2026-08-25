@@ -8,16 +8,8 @@ const outputRoot = join(siteRoot, "dist");
 const brandSource = join(repositoryRoot, "assets", "brand");
 const brandOutput = join(outputRoot, "assets", "brand");
 const phoneOutput = join(outputRoot, "app");
-const sourceFiles = ["index.html", "styles.css", "app.js", "release-assets.mjs"];
-const brandFiles = [
-  "apple-touch-icon.png",
-  "favicon.ico",
-  "favicon.svg",
-  "lockup-dark.svg",
-  "lockup-light.svg",
-  "social-card-dark.png",
-  "symbol-orange.svg",
-];
+const sourceFiles = ["index.html", "styles.css", "app.js", "icons.js", "scene.js", "release-assets.mjs"];
+const brandFiles = ["apple-touch-icon.png", "favicon.ico", "favicon.svg", "social-card-dark.png"];
 
 await rm(outputRoot, { recursive: true, force: true });
 await import("../pwa/build.mjs");
@@ -34,7 +26,7 @@ await writeFile(join(outputRoot, ".nojekyll"), "", "utf8");
 
 const html = await readFile(join(outputRoot, "index.html"), "utf8");
 for (const requiredPath of ["styles.css", "app.js", "app/", ...brandFiles.map((name) => `assets/brand/${name}`)]) {
-  if (!html.includes(requiredPath) && !["symbol-orange.svg", "lockup-dark.svg", "lockup-light.svg"].includes(requiredPath.split("/").at(-1))) {
+  if (!html.includes(requiredPath)) {
     throw new Error(`built page does not reference required asset: ${requiredPath}`);
   }
 }
