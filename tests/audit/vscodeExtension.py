@@ -387,7 +387,7 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
         "trees.ts": [
             "conversation.serviceName",
             "this.description = undefined",
-            'capabilities?.nativeSessionDelete?.availability === "available"',
+            'canDelete(conversation, capabilities)',
             # Identity comes from the shipped mark, which exists for every service the build knows, rather
             # than from the editor's icon font, which carries a glyph for some services and none for others.
             # Motion while running is the editor's own spinner, because only its glyphs can spin.
@@ -868,7 +868,7 @@ def selftest() -> int:
         "trees.ts": (
             'conversation.serviceName this.description = undefined '
             'conversationIcon(extensionUri, conversation.serviceIcon) new vscode.ThemeIcon("sync~spin") '
-            'capabilities?.nativeSessionDelete?.availability === "available" '
+            'canDelete(conversation, capabilities) '
             'this.revealCurrentProject() '
             'this.state.incompleteDiscovery view.message = undefined '
             '"runtrol.hasUsableProvider" "runtrol.isVerifyingProvider" awaitsVerification'
@@ -1092,7 +1092,7 @@ def selftest() -> int:
             {
                 **sources,
                 "trees.ts": sources["trees.ts"].replace(
-                    'capabilities?.nativeSessionDelete?.availability === "available"', ""
+                    'canDelete(conversation, capabilities)', ""
                 ),
             },
         ),
