@@ -1870,6 +1870,8 @@ async fn mutate_native_session(
             );
         }
     };
+    // The asked identity survives the provider's answer: a deletion then forgets Runtrol's pointers to it.
+    let asked = native.clone();
     let mutated = tokio::time::timeout(
         Duration::from_millis(crate::serve::MODEL_PREPARATION_BUDGET_MS),
         async {
@@ -1877,7 +1879,7 @@ async fn mutate_native_session(
                 NativeSessionMutation::Delete => {
                     driver
                         .delete_native_session(runtrol_provider::NativeSessionDeletion {
-                            native,
+                            native: asked,
                             cwd: workspace,
                         })
                         .await
@@ -1885,7 +1887,7 @@ async fn mutate_native_session(
                 NativeSessionMutation::Archive => {
                     driver
                         .archive_native_session(runtrol_provider::NativeSessionArchival {
-                            native,
+                            native: asked,
                             cwd: workspace,
                         })
                         .await
@@ -1895,7 +1897,7 @@ async fn mutate_native_session(
     )
     .await;
     match mutated {
-        Ok(Ok(())) => Answer::success(id, &serde_json::json!({})),
+        Ok(Ok(())) => mutated_answer(id, mutation, composed, provider, &native),
         // The provider's own answer, by kind: unsupported stays unsupported, a refusal stays a refusal.
         Ok(Err(error)) => control_failure(id, crate::runtime_control::provider_failure(&error)),
         Err(_) => Answer::plain(
@@ -1904,6 +1906,50 @@ async fn mutate_native_session(
             mutation.timeout_message(),
         ),
     }
+}
+
+/// The answer after the provider agreed, with Runtrol's own bookkeeping done.
+///
+/// A deleted conversation must not linger as a nameless Runtrol pointer: the pointer names nothing and
+/// the operator can neither open it nor delete it again. Measured 2026-08-25: two such rows sat in the
+/// sidebar after two deletions. An archive keeps its pointers; the conversation still exists.
+fn mutated_answer(
+    id: JsonRpcId,
+    mutation: NativeSessionMutation,
+    composed: &Composed,
+    provider: runtrol_provider::ProviderId,
+    native: &runtrol_provider::NativeSessionId,
+) -> Answer {
+    if !matches!(mutation, NativeSessionMutation::Delete) {
+        return Answer::success(id, &serde_json::json!({}));
+    }
+    if let Err(error) = forget_pointers_of(&composed.store, provider, native) {
+        return Answer::plain(
+            id,
+            RuntimeErrorKind::RuntimeUnavailable,
+            &format!(
+                "the coding service deleted the conversation, but Runtrol could not forget its own pointer to it: {error}"
+            ),
+        );
+    }
+    Answer::success(id, &serde_json::json!({}))
+}
+
+/// Drop every stored session pointer that named this provider conversation. Only pointers without a
+/// live process can be here: a supervised one was refused above before the provider was asked.
+fn forget_pointers_of(
+    store: &runtrol_store::Store,
+    provider: runtrol_provider::ProviderId,
+    native: &runtrol_provider::NativeSessionId,
+) -> Result<usize, runtrol_store::StoreError> {
+    let listed = store.list_sessions()?;
+    let mut forgotten = 0;
+    for (session, row) in listed.sessions {
+        if row.provider == provider && &row.native == native && store.remove_session(session)? {
+            forgotten += 1;
+        }
+    }
+    Ok(forgotten)
 }
 
 /// A presence-confirmation table refusing a request, said in the caller's own terms (`what` is the
@@ -3561,6 +3607,80 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    /// After the provider deletes a conversation, every Runtrol pointer that named it goes too, and
+    /// nothing else does. Measured 2026-08-25 before this: two deleted Claude conversations lingered
+    /// as nameless rows that could be neither opened nor deleted again.
+    #[test]
+    fn deleting_a_native_conversation_forgets_only_its_own_pointers() {
+        let scratch =
+            std::env::temp_dir().join(format!("runtrol-forget-pointer-{}", std::process::id()));
+        if scratch.exists() {
+            std::fs::remove_dir_all(&scratch).expect("clear the previous run");
+        }
+        std::fs::create_dir(&scratch).expect("create the scratch home");
+        let home = scratch.to_str().expect("UTF-8 scratch path");
+        let composed = crate::Composed::for_tests(home, runtrol_drivers::builtin())
+            .expect("a fresh home composes");
+        let cwd =
+            runtrol_provider::AbsPath::canonicalize(home).expect("the scratch home canonicalizes");
+        let claude = runtrol_provider::ProviderId::parse("claude").expect("a builtin provider");
+        let codex = runtrol_provider::ProviderId::parse("codex").expect("a builtin provider");
+        let now = runtrol_provider::WallMs::now();
+        let row = |provider, native: &str| runtrol_store::SessionRow {
+            provider,
+            native: runtrol_provider::NativeSessionId::new(native).expect("a valid native id"),
+            cwd: cwd.clone(),
+            label: None,
+            created_at: now,
+            last_seen_at: now,
+            pinned: false,
+            archived: false,
+            forked_from: None,
+            live: None,
+        };
+        let gone_a = runtrol_provider::SessionId::now();
+        let gone_b = runtrol_provider::SessionId::now();
+        let other_native = runtrol_provider::SessionId::now();
+        let other_provider = runtrol_provider::SessionId::now();
+        composed
+            .store
+            .put_session(gone_a, &row(claude, "deleted-one"))
+            .expect("store");
+        composed
+            .store
+            .put_session(gone_b, &row(claude, "deleted-one"))
+            .expect("store");
+        composed
+            .store
+            .put_session(other_native, &row(claude, "kept-one"))
+            .expect("store");
+        composed
+            .store
+            .put_session(other_provider, &row(codex, "deleted-one"))
+            .expect("store");
+
+        let deleted =
+            runtrol_provider::NativeSessionId::new("deleted-one").expect("a valid native id");
+        let forgotten =
+            forget_pointers_of(&composed.store, claude, &deleted).expect("the store answers");
+        assert_eq!(forgotten, 2, "both pointers to the deleted conversation go");
+        let remaining: Vec<_> = composed
+            .store
+            .list_sessions()
+            .expect("list")
+            .sessions
+            .into_iter()
+            .map(|(id, _)| id)
+            .collect();
+        assert_eq!(remaining, vec![other_native, other_provider]);
+        assert_eq!(
+            forget_pointers_of(&composed.store, claude, &deleted).expect("the store answers"),
+            0,
+            "a second deletion finds nothing to forget"
+        );
+        std::fs::remove_dir_all(&scratch).expect("clean the scratch home");
     }
 
     #[test]

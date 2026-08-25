@@ -176,6 +176,21 @@ export class RuntimeState implements vscode.Disposable {
     this.changedEmitter.fire("rows");
   }
 
+  /// Drop one provider conversation from its catalogue, as the provider's own answer to a deletion says it
+  /// is gone. Returns the catalogue as it was, so a deletion that then fails can put the row back, or null
+  /// when nothing was listed to drop.
+  forgetNativeChat(providerId: string, nativeSessionId: string): NativeChatCatalogue | null {
+    const catalogue = this.nativeCatalogues.get(providerId);
+    if (!catalogue || !catalogue.chats.some((chat) => chat.nativeSessionId === nativeSessionId)) return null;
+    this.nativeCatalogues.set(providerId, {
+      ...catalogue,
+      chats: catalogue.chats.filter((chat) => chat.nativeSessionId !== nativeSessionId),
+    });
+    this.conversationRows = null;
+    this.changedEmitter.fire("rows");
+    return catalogue;
+  }
+
   setProviderCapabilities(capabilities: ProviderCapabilities): void {
     this.capabilityRows.set(capabilities.providerId, capabilities);
     this.changedEmitter.fire("rows");

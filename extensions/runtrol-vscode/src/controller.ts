@@ -1881,7 +1881,16 @@ export class Controller implements vscode.Disposable {
       return;
     }
     if (decision.kind === "forgetSupervised") {
-      if (row.session) await this.close(row.session);
+      if (!row.session) return;
+      // A pointer to a conversation the service no longer lists names nothing: forgetting it is the whole
+      // deletion, and a question about it would be a question about nothing. Only an agent working right
+      // now is worth a word first, because forgetting stops it mid-turn.
+      if (row.session.lifecycle === "hotRunning") {
+        await this.close(row.session);
+        return;
+      }
+      await this.closeResolvedSession(row.session, false);
+      void vscode.window.showInformationMessage(`Deleted ${row.title} from Runtrol.`);
       return;
     }
     const title = row.title;
@@ -1893,17 +1902,25 @@ export class Controller implements vscode.Disposable {
     void vscode.window.showInformationMessage(`Deleted ${title} from ${serviceName}.`);
   }
 
-  /// The deletion itself, after the question (or, for the headless journey, instead of it): the provider
-  /// deletes, then its list is asked again rather than edited, because the list is the provider's word on
-  /// what still exists.
+  /// The deletion itself, after the question (or, for the headless journey, instead of it).
+  ///
+  /// The row leaves the sidebar on the click, before the provider is asked: the wait is the provider's,
+  /// not the person's, and a row that lingered for a full store rescan read as a deletion that had not
+  /// happened (measured 2026-08-25: the rescan re-read every transcript of the service). The provider's
+  /// answer is still the word on what exists: a refusal puts the row back, with the refusal beside it.
   async deleteNativeWithoutAsking(row: Conversation): Promise<void> {
     const native = row.native;
     if (!native) throw new Error(`${row.title} has nothing left to delete`);
     if (row.session && this.state.sessions.some((session) => session.sessionId === row.session?.sessionId)) {
       await this.closeResolvedSession(row.session, row.session.lifecycle === "hotRunning");
     }
-    await this.runtime.deleteNative(native);
-    await this.loadNativeChats(row.providerId, true);
+    const before = this.state.forgetNativeChat(native.providerId, native.nativeSessionId);
+    try {
+      await this.runtime.deleteNative(native);
+    } catch (error) {
+      if (before) this.state.setNativeCatalogue(before);
+      throw error;
+    }
   }
 
   /// Archive a provider-owned conversation after one explicit confirmation.
