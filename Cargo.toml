@@ -50,6 +50,9 @@ authors = ["eddmpython"]
 [workspace.dependencies]
 # Shared event payloads are reference-counted across watchers. See docs/coreRuntime.md.
 bytes = "1.12.1"
+# The screen model behind the terminal surface: what a hosted CLI has drawn, so a late viewer can be handed
+# the current screen and a click can be translated on it. Not a renderer and not a reader of meaning.
+vt100 = "0.15.2"
 
 # 직렬화. serde_json 의 preserve_order 는 절대 켜지 않는다 (워크스페이스 전역 오염).
 serde = { version = "1.0.229", default-features = false }

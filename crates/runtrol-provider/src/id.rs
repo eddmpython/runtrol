@@ -339,6 +339,59 @@ impl<'de> Deserialize<'de> for ProviderId {
     }
 }
 
+/// runtrol's identifier for one hosted terminal: a provider's own terminal interface on a pseudo terminal
+/// the daemon owns, which any number of viewers attach to.
+///
+/// Distinct from [`SessionId`] on purpose. A session is a structured conversation the daemon relays event by
+/// event; a terminal is a screen the daemon carries byte by byte and never reads. Naming them with one type
+/// would let a request about one land on the other.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct TerminalId(Uuid);
+
+impl TerminalId {
+    /// Mint a new terminal id from the current time.
+    #[must_use]
+    pub fn now() -> Self {
+        Self(Uuid::now_v7())
+    }
+}
+
+impl fmt::Display for TerminalId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0.as_hyphenated())
+    }
+}
+
+impl fmt::Debug for TerminalId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "TerminalId({})", self.0.as_hyphenated())
+    }
+}
+
+impl FromStr for TerminalId {
+    type Err = IdError;
+
+    fn from_str(text: &str) -> Result<Self, IdError> {
+        Uuid::parse_str(text).map(Self).map_err(|_| IdError::Shape {
+            what: "terminal id",
+            why: "must be a UUID",
+        })
+    }
+}
+
+impl Serialize for TerminalId {
+    fn serialize<S: Serializer>(&self, ser: S) -> Result<S::Ok, S::Error> {
+        ser.serialize_str(&self.0.as_hyphenated().to_string())
+    }
+}
+
+impl<'de> Deserialize<'de> for TerminalId {
+    fn deserialize<D: Deserializer<'de>>(de: D) -> Result<Self, D::Error> {
+        let text = String::deserialize(de)?;
+        text.parse().map_err(serde::de::Error::custom)
+    }
+}
+
 /// runtrol's identifier for a session.
 ///
 /// UUIDv7, so the 16 bytes sort chronologically. That is not decoration: sessions live in a

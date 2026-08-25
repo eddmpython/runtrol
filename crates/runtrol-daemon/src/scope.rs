@@ -172,19 +172,27 @@ pub fn needed(request: &Request) -> Needed {
             workspace_access: WorkspaceAccess::Shared,
             ..
         } => Needed::AtTheMachine(LocalScope::WorkspaceShare),
+        // Opening a terminal starts a provider process in a folder, which is what starting a session is.
         Request::Start {
             workspace_access: WorkspaceAccess::Exclusive,
             ..
-        } => Needed::Scope(DeviceScope::SessionStart),
+        }
+        | Request::TerminalOpen { .. } => Needed::Scope(DeviceScope::SessionStart),
         Request::Resume {
             workspace_access: WorkspaceAccess::Exclusive,
             ..
         } => Needed::Scope(DeviceScope::SessionResume),
-        Request::Prompt { .. } | Request::Rename { .. } => {
-            Needed::Scope(DeviceScope::SessionInputWrite)
-        }
+        // Joining an open terminal is reading its screen and typing into it; typing is the stronger of the
+        // two, so a read-only grant cannot join and then type.
+        Request::Prompt { .. }
+        | Request::Rename { .. }
+        | Request::TerminalAttach { .. }
+        | Request::TerminalInput { .. } => Needed::Scope(DeviceScope::SessionInputWrite),
         Request::AnswerApproval { .. } => Needed::ApprovalResponse,
-        Request::Watch { .. } => Needed::Scope(DeviceScope::SessionOutputRead),
+        // A resize only changes how the screen is drawn for this viewer: a read.
+        Request::Watch { .. } | Request::TerminalResize { .. } => {
+            Needed::Scope(DeviceScope::SessionOutputRead)
+        }
         Request::Interrupt { .. } => Needed::Scope(DeviceScope::SessionStop),
         // Close also removes runtrol's durable pointer. The provider still owns its conversation, but removing
         // the only runtrol list entry is irreversible here and therefore needs the separate delete authority.
@@ -262,6 +270,11 @@ pub(crate) fn allowed_with_authority(
             ..
         }
         | Request::Resume {
+            provider,
+            workspace,
+            ..
+        }
+        | Request::TerminalOpen {
             provider,
             workspace,
             ..
@@ -415,6 +428,25 @@ mod tests {
             Request::Close {
                 session: SessionId::now(),
                 now: false,
+            },
+            Request::TerminalOpen {
+                provider: "example".into(),
+                native: Some("n".into()),
+                workspace: "/work".into(),
+                cols: 120,
+                rows: 40,
+            },
+            Request::TerminalAttach {
+                terminal: runtrol_provider::TerminalId::now(),
+                cols: 120,
+                rows: 40,
+            },
+            Request::TerminalInput {
+                bytes: runtrol_ipc::TerminalBytes::from(b"ls\r".to_vec()),
+            },
+            Request::TerminalResize {
+                cols: 100,
+                rows: 30,
             },
             Request::StopEverything,
             Request::Drain,

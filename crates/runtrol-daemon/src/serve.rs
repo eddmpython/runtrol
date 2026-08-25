@@ -321,14 +321,14 @@ struct PhonePlane {
     binding: Arc<SessionBinding>,
 }
 
-enum SurfaceConnection {
+pub(crate) enum SurfaceConnection {
     Local(Connection),
     Phone(Box<NoiseWebSocket>),
     Relay(Box<crate::relay::RelaySurface>),
 }
 
 impl SurfaceConnection {
-    async fn recv(&mut self) -> Result<Option<bytes::Bytes>, SurfaceError> {
+    pub(crate) async fn recv(&mut self) -> Result<Option<bytes::Bytes>, SurfaceError> {
         match self {
             Self::Local(connection) => connection.recv().await.map_err(SurfaceError::from),
             Self::Phone(connection) => connection.recv().await.map_err(SurfaceError::from),
@@ -336,7 +336,7 @@ impl SurfaceConnection {
         }
     }
 
-    async fn send(&mut self, payload: &[u8]) -> Result<(), SurfaceError> {
+    pub(crate) async fn send(&mut self, payload: &[u8]) -> Result<(), SurfaceError> {
         match self {
             Self::Local(connection) => connection.send(payload).await.map_err(SurfaceError::from),
             Self::Phone(connection) => connection.send(payload).await.map_err(SurfaceError::from),
@@ -363,7 +363,7 @@ impl SurfaceConnection {
 }
 
 #[derive(Debug, thiserror::Error)]
-enum SurfaceError {
+pub(crate) enum SurfaceError {
     #[error(transparent)]
     Local(#[from] TransportError),
     #[error(transparent)]
@@ -1125,7 +1125,7 @@ async fn serve_surfaces(
                 if matches!(reply, Reply::Draining) && !draining {
                     draining = true;
                     begin_drain(&composed, &mut background, &mut relay_hub);
-                    generation.update(live_turns_of(&sessions), true);
+                    generation.update(live_work_of(&sessions, &composed), true);
                 }
                 let wakes_for_new_signal = wakes_for_new_mission_flight_signal(mission_flight_signal, &reply);
                 let wakes_mission_schedule = mission_schedule_mutation
@@ -1147,7 +1147,7 @@ async fn serve_surfaces(
                         &sessions,
                         &provider_update_notices,
                     );
-                    generation.update(live_turns_of(&sessions), draining);
+                    generation.update(live_work_of(&sessions, &composed), draining);
                     // A conversation opened or closed: the account probe asks the services again soon.
                     composed.account_probe_wake.notify_one();
                 }
@@ -1157,7 +1157,15 @@ async fn serve_surfaces(
                 if wakes_mission_schedule {
                     mission_schedule_wake.notify_one();
                 }
-                if draining && live_turns_of(&sessions) == 0 {
+                if draining && live_work_of(&sessions, &composed) == 0 {
+                    break Ok(());
+                }
+            }
+
+            // A hosted terminal ended. Only a draining owner cares: it may now be free to finish.
+            () = composed.terminal_closed.notified(), if draining => {
+                generation.update(live_work_of(&sessions, &composed), true);
+                if live_work_of(&sessions, &composed) == 0 {
                     break Ok(());
                 }
             }
@@ -1510,8 +1518,8 @@ async fn serve_surfaces(
                         &sessions,
                         &provider_update_notices,
                     );
-                    generation.update(live_turns_of(&sessions), draining);
-                    if draining && live_turns_of(&sessions) == 0 {
+                    generation.update(live_work_of(&sessions, &composed), draining);
+                    if draining && live_work_of(&sessions, &composed) == 0 {
                         break Ok(());
                     }
                 }
@@ -1609,7 +1617,20 @@ fn begin_drain(
     *relay_hub = None;
 }
 
-/// How many turns are running here: what keeps a draining generation alive, and what `runtrol status` shows.
+/// How much work is live here: running turns plus open terminals. What keeps a draining generation alive,
+/// and what `runtrol status` shows. A hosted terminal is a conversation a person is looking at, and a
+/// generation that ended under it would take the screen with it.
+fn live_work_of(sessions: &SessionManager, composed: &Composed) -> u32 {
+    let terminals = u32::try_from(
+        composed
+            .open_terminals
+            .load(std::sync::atomic::Ordering::Acquire),
+    )
+    .unwrap_or(u32::MAX);
+    live_turns_of(sessions).saturating_add(terminals)
+}
+
+/// How many turns are running here.
 fn live_turns_of(sessions: &SessionManager) -> u32 {
     u32::try_from(crate::dispatch::live_turns(
         sessions.live_sessions().map(|live| live.state),
@@ -1974,8 +1995,10 @@ async fn converse_inner(
 
         // Refused before a slot is reserved or a provider process started: a draining generation opens
         // nothing new, and the successor is already listening for exactly this request.
-        if matches!(request, Request::Start { .. } | Request::Resume { .. })
-            && composed.draining.load(std::sync::atomic::Ordering::Acquire)
+        if matches!(
+            request,
+            Request::Start { .. } | Request::Resume { .. } | Request::TerminalOpen { .. }
+        ) && composed.draining.load(std::sync::atomic::Ordering::Acquire)
         {
             if write(&mut connection, &refuse(DRAINING_REFUSAL))
                 .await
@@ -1984,6 +2007,16 @@ async fn converse_inner(
                 return;
             }
             continue;
+        }
+
+        // A terminal view is the connection changing what it is for, like a watch: served in its own
+        // module until the hosted CLI ends or this end goes away, and never back to requests.
+        if matches!(
+            request,
+            Request::TerminalOpen { .. } | Request::TerminalAttach { .. }
+        ) {
+            crate::terminal_surface::serve(&mut connection, &composed, request).await;
+            return;
         }
 
         // The owner has already published the exact current listing as encoded wire bytes. A refresh that queued a
@@ -2625,7 +2658,7 @@ fn build_session_index(
 /// A response that cannot be serialized is a defect in this build rather than something a caller did, so what goes out
 /// instead says exactly that. The alternative is writing nothing, which leaves the caller waiting on a daemon that is
 /// working perfectly well.
-async fn write(
+pub(crate) async fn write(
     connection: &mut SurfaceConnection,
     response: &Response,
 ) -> Result<(), SurfaceError> {

@@ -79,6 +79,10 @@ install = "npm install --global @anthropic-ai/claude-code"
 # reporting; the surface's common translation covers it, so that reporting is switched off here.
 resume = ["--resume"]
 mouse = true
+# Markers this CLI leaves in its own children. A daemon started from inside a Claude Code session inherits
+# them, and the hosted TUI read them as "you are a child session" (measured 2026-08-25: transcript saving
+# switched itself off). Removed so the hosted conversation is a first-class one.
+env_unset = ["CLAUDE_CODE_*", "CLAUDE_*", "CLAUDECODE"]
 
 [tui.env]
 TERM = "xterm-256color"

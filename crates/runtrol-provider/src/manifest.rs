@@ -822,6 +822,13 @@ pub struct TuiSpec {
     /// Environment the TUI expects, name to value, applied on top of the operator's own.
     #[serde(default)]
     pub env: std::collections::BTreeMap<Box<str>, Box<str>>,
+    /// Environment removed before `env` is applied. A name, or a prefix ending in `*`.
+    ///
+    /// For markers the CLI leaves in its own children: a daemon started from inside one of this CLI's
+    /// sessions inherits them, and the hosted TUI would read them as "you are a child of a session" and
+    /// behave as one (measured 2026-08-25: Claude Code switched transcript saving off).
+    #[serde(default)]
+    pub env_unset: Vec<Box<str>>,
     /// Whether this TUI enables terminal mouse reporting on its own (measured). Informational: the surface's
     /// own mouse translation covers every CLI the same way regardless.
     #[serde(default)]
@@ -839,19 +846,33 @@ impl TuiSpec {
                 token: name.to_string(),
                 why,
             };
-            if name.is_empty()
-                || !name.chars().all(|character| {
-                    character.is_ascii_uppercase() || character.is_ascii_digit() || character == '_'
-                })
-            {
+            if !is_environment_name(name) {
                 return Err(refuse("must be an uppercase environment variable name"));
             }
             if value.chars().any(char::is_control) {
                 return Err(refuse("has a value with a control character"));
             }
         }
+        for pattern in &self.env_unset {
+            let name = pattern.strip_suffix('*').unwrap_or(pattern);
+            if !is_environment_name(name) {
+                return Err(ManifestError::Token {
+                    what: "tui.env_unset",
+                    token: pattern.to_string(),
+                    why: "must be an uppercase environment variable name, or such a prefix ending in *",
+                });
+            }
+        }
         Ok(())
     }
+}
+
+/// An uppercase environment variable name: letters, digits and underscores, at least one character.
+fn is_environment_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.chars().all(|character| {
+            character.is_ascii_uppercase() || character.is_ascii_digit() || character == '_'
+        })
 }
 
 /// How to ask this CLI where the operator's account stands, outside any turn.

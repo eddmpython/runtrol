@@ -30,8 +30,8 @@
 //! lives somewhere else.
 
 use runtrol_provider::{
-    ApprovalId, ModelCatalog, Opaque, OptionId, ProviderError, SessionId, WatchCursor, WatchGap,
-    WorkspaceAccess,
+    ApprovalId, ModelCatalog, Opaque, OptionId, ProviderError, SessionId, TerminalId, WatchCursor,
+    WatchGap, WorkspaceAccess,
 };
 use serde::{Deserialize, Serialize};
 
@@ -585,6 +585,51 @@ pub enum Request {
         after: Option<WatchCursor>,
     },
 
+    /// Open a provider's own terminal interface on a conversation, hosted on a daemon-owned pseudo terminal,
+    /// and turn this connection into a view of it.
+    ///
+    /// If that conversation's terminal is already open, this joins it rather than starting a second process.
+    /// From here on the connection carries [`Response::TerminalOutput`] down and [`Request::TerminalInput`] and
+    /// [`Request::TerminalResize`] up, until [`Response::TerminalExited`] or either end goes away.
+    TerminalOpen {
+        /// Which CLI.
+        provider: Box<str>,
+        /// The provider's own name for the conversation to reopen, or none for a fresh one.
+        #[serde(default)]
+        native: Option<Box<str>>,
+        /// Where the CLI works. The CLI reads trust from it, so it is never a temporary folder.
+        workspace: Box<str>,
+        /// This viewer's columns.
+        cols: u16,
+        /// This viewer's rows.
+        rows: u16,
+    },
+
+    /// Join a terminal that is already open (a second viewer, such as a phone), and turn this connection into
+    /// a view of it the same way [`Request::TerminalOpen`] does.
+    TerminalAttach {
+        /// Which terminal.
+        terminal: TerminalId,
+        /// This viewer's columns.
+        cols: u16,
+        /// This viewer's rows.
+        rows: u16,
+    },
+
+    /// Bytes the viewer typed or its mouse reported, on a connection that is a terminal view.
+    TerminalInput {
+        /// The bytes, exactly as the viewer's terminal produced them.
+        bytes: TerminalBytes,
+    },
+
+    /// The viewer's size changed, on a connection that is a terminal view.
+    TerminalResize {
+        /// Columns.
+        cols: u16,
+        /// Rows.
+        rows: u16,
+    },
+
     /// End a session.
     Close {
         /// Which session.
@@ -637,6 +682,59 @@ pub enum Request {
 
     /// Remove this exact runtrol Agent Tools MCP registration through every usable provider CLI.
     AgentToolsUnwire,
+}
+
+/// Bytes on the terminal view, in both directions: what the hosted CLI wrote, or what a viewer typed.
+///
+/// Base64 on the wire because the wire is JSON text and these are arbitrary bytes that must arrive exactly
+/// as produced. Nothing reads them in between.
+#[derive(Clone, PartialEq, Eq, Default)]
+pub struct TerminalBytes(Vec<u8>);
+
+impl TerminalBytes {
+    /// The bytes.
+    #[must_use]
+    pub fn into_inner(self) -> Vec<u8> {
+        self.0
+    }
+}
+
+impl From<Vec<u8>> for TerminalBytes {
+    fn from(bytes: Vec<u8>) -> Self {
+        Self(bytes)
+    }
+}
+
+impl AsRef<[u8]> for TerminalBytes {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+impl std::fmt::Debug for TerminalBytes {
+    /// The length only. Terminal bytes are conversation, and a debug line is not where they go.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "TerminalBytes({} bytes)", self.0.len())
+    }
+}
+
+impl Serialize for TerminalBytes {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use base64ct::Encoding as _;
+        serializer.serialize_str(&base64ct::Base64::encode_string(&self.0))
+    }
+}
+
+impl<'de> Deserialize<'de> for TerminalBytes {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        use base64ct::Encoding as _;
+        let text = String::deserialize(deserializer)?;
+        base64ct::Base64::decode_vec(&text)
+            .map(Self)
+            .map_err(|error| {
+                serde::de::Error::custom(format!("terminal bytes are base64: {error}"))
+            })
+    }
 }
 
 /// What the daemon answers.
@@ -807,6 +905,33 @@ pub enum Response {
     Lagged {
         /// The first dense event the watcher did not receive.
         next_expected: WatchCursor,
+    },
+
+    /// This connection is now a view of a hosted terminal. The current screen follows as the first
+    /// [`Response::TerminalOutput`].
+    TerminalOpened {
+        /// The terminal, for a second viewer to join.
+        terminal: TerminalId,
+        /// The process id of the hosted CLI.
+        pid: u32,
+    },
+
+    /// Bytes the hosted CLI wrote to its terminal, exactly as written.
+    TerminalOutput {
+        /// The bytes.
+        bytes: TerminalBytes,
+    },
+
+    /// This viewer fell behind the terminal's bounded output ring. The current screen follows as the next
+    /// [`Response::TerminalOutput`], and the viewer should clear before drawing it.
+    ///
+    /// An empty struct rather than a unit, so it carries a `with` like every other answer a surface indexes.
+    TerminalLagged {},
+
+    /// The hosted CLI ended. The connection is done after this.
+    TerminalExited {
+        /// Its exit code.
+        code: i32,
     },
 
     /// Every cross-consult direction, each with its current state.
@@ -1667,6 +1792,38 @@ mod tests {
         assert_eq!(
             object.get("ask").and_then(|v| v.as_str()),
             Some("stopEverything")
+        );
+    }
+
+    #[test]
+    fn terminal_bytes_cross_the_wire_exactly_and_the_lagged_answer_carries_a_payload() {
+        // Every byte value, including the ones JSON cannot carry raw, comes back as it went.
+        let bytes: Vec<u8> = (0..=255u8).collect();
+        let encoded = serde_json::to_string(&Response::TerminalOutput {
+            bytes: TerminalBytes::from(bytes.clone()),
+        })
+        .expect("writable");
+        assert!(encoded.starts_with(r#"{"say":"terminalOutput","with":{"bytes":""#));
+        match serde_json::from_str::<Response>(&encoded).expect("readable") {
+            Response::TerminalOutput { bytes: back } => assert_eq!(back.as_ref(), &bytes[..]),
+            other => panic!("expected terminal output, got {other:?}"),
+        }
+        let input = serde_json::to_string(&Request::TerminalInput {
+            bytes: TerminalBytes::from(b"\x1b[<0;4;9M".to_vec()),
+        })
+        .expect("writable");
+        match serde_json::from_str::<Request>(&input).expect("readable") {
+            Request::TerminalInput { bytes } => assert_eq!(bytes.as_ref(), b"\x1b[<0;4;9M"),
+            other => panic!("expected terminal input, got {other:?}"),
+        }
+        // Surfaces index every answer's `with`; a payload-free answer would have none.
+        assert_eq!(
+            serde_json::to_string(&Response::TerminalLagged {}).expect("writable"),
+            r#"{"say":"terminalLagged","with":{}}"#
+        );
+        assert!(
+            !format!("{:?}", TerminalBytes::from(b"secret".to_vec())).contains("secret"),
+            "terminal bytes are conversation and never appear in a debug line"
         );
     }
 

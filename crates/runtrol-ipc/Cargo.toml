@@ -15,6 +15,9 @@ runtrol-provider = { workspace = true }
 # Shared buffers. A payload read off the wire is a slice of what arrived, not a copy of it: every event a watcher sees
 # crosses this crate, and copying each one would put a copy of every message on the path the design keeps copy free.
 bytes = { workspace = true }
+# Terminal bytes ride the JSON wire as base64: the private wire is text, and the hosted CLI's output is
+# arbitrary bytes that must arrive exactly as written.
+base64ct = { workspace = true }
 thiserror = { workspace = true }
 # The request and response vocabulary. JSON because both ends of this connection are runtrol's own processes and a
 # readable wire is worth more here than a compact one: an operator debugging why their command did nothing can look.

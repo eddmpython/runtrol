@@ -60,7 +60,7 @@ pub use event::{
 };
 pub use id::{
     ApprovalId, IdError, MessageId, NativeSessionId, OptionId, ProviderId, SessionId, StreamId,
-    ToolCallId, TurnId,
+    TerminalId, ToolCallId, TurnId,
 };
 pub use manifest::{
     AccountSpec, BinSpec, EventsSpec, FallbackSpec, FlagProbe, HelpCommands, Kind, MANIFEST_SCHEMA,

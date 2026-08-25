@@ -21,6 +21,7 @@ pub mod probe;
 pub mod project;
 pub mod registry;
 pub mod session;
+pub mod terminal;
 
 pub use events::{
     CursorRegression, Delivery, FanOut, Published, Reach, ReplayRing, Sequencer, SessionHub,

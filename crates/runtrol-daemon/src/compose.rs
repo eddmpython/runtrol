@@ -344,6 +344,14 @@ pub struct Composed {
     /// Rung by the session owner when a conversation attaches or a turn ends, so the account probe asks
     /// the services again within seconds instead of on its ten-minute backstop.
     pub(crate) account_probe_wake: tokio::sync::Notify,
+    /// Every hosted terminal (a provider's own terminal interface on a daemon-owned pseudo terminal), by
+    /// id and by the conversation it shows, so a second viewer joins the one that is open.
+    pub(crate) terminals: tokio::sync::Mutex<crate::terminal_surface::Terminals>,
+    /// How many terminals are open, readable without the table's lock: a draining generation stays alive
+    /// while one is, exactly as it does for a running turn.
+    pub(crate) open_terminals: std::sync::atomic::AtomicUsize,
+    /// Rung when a terminal closes, so a draining owner re-checks whether it may end.
+    pub(crate) terminal_closed: tokio::sync::Notify,
     /// Latest model catalogue per provider, keyed to the exact binary it was read from.
     ///
     /// A short-TTL memoization, never a store (see `provider_prepare::MODEL_CATALOGUE_TTL`).
@@ -447,6 +455,9 @@ impl Composed {
                 crate::account_probe::AccountReports::default(),
             ),
             account_probe_wake: tokio::sync::Notify::new(),
+            terminals: tokio::sync::Mutex::new(crate::terminal_surface::Terminals::default()),
+            open_terminals: std::sync::atomic::AtomicUsize::new(0),
+            terminal_closed: tokio::sync::Notify::new(),
             provider_inventory: Mutex::new(
                 crate::runtime_inventory::ProviderInventoryCache::default(),
             ),
@@ -517,6 +528,9 @@ impl Composed {
                 crate::account_probe::AccountReports::default(),
             ),
             account_probe_wake: tokio::sync::Notify::new(),
+            terminals: tokio::sync::Mutex::new(crate::terminal_surface::Terminals::default()),
+            open_terminals: std::sync::atomic::AtomicUsize::new(0),
+            terminal_closed: tokio::sync::Notify::new(),
             provider_inventory: Mutex::new(
                 crate::runtime_inventory::ProviderInventoryCache::default(),
             ),

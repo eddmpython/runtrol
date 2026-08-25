@@ -25,6 +25,12 @@ and refactoring that no user can observe do not belong here.
   a ten-minute clock. Codex now also shows today's tokens from its own `account/usage/read` beside its limit
   window. The phone app draws the same icon-plus-progress strip above its sessions, kept current by push.
 
+- A conversation opens as the coding service's own terminal interface, in an editor-area tab. The Core hosts
+  the CLI on a pseudo terminal it owns, answers the questions the CLI asks its terminal at start, keeps the
+  screen for viewers that attach later, and turns the mouse into keys the same way for every service (a
+  wheel notch scrolls, a click on a row selects it). Split, grid and full screen are VS Code's own. See
+  `docs/terminalSurface.md`.
+
 ### Changed
 
 - Runtrol ships the representative services only: Claude Code, Codex and Grok, with Gemini to follow once its

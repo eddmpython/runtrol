@@ -188,71 +188,102 @@ const fn coord(size: PtySize) -> COORD {
     }
 }
 
-impl Child {
+/// The pseudo console and the two near pipe ends, closed on drop unless taken by a `Child`.
+struct ConsoleHandles {
+    console: HPCON,
+    input_write: HANDLE,
+    output_read: HANDLE,
+}
+
+impl ConsoleHandles {
     #[expect(
         unsafe_code,
-        reason = "creating a pseudo console and a process are kernel calls with no safe wrapper. the safety argument is at each block"
+        reason = "creating a pseudo console is a kernel call with no safe wrapper"
     )]
-    pub(super) fn spawn(spawn: PtySpawn<'_>) -> Result<Self, SpawnError> {
+    fn create(size: PtySize) -> Result<Self, SpawnError> {
         // Input flows from us (write) to the child (read); output from the child (write) to us (read).
         let input = Pipe::create("creating the terminal input pipe")?;
-        let output = Pipe::create("creating the terminal output pipe")?;
-
+        let output = match Pipe::create("creating the terminal output pipe") {
+            Ok(pipe) => pipe,
+            Err(error) => {
+                close(input.read);
+                close(input.write);
+                return Err(error);
+            }
+        };
         let mut console: HPCON = 0;
         // SAFETY: the size is a plain value; the two handles are the far ends of pipes this function just
         // created and still owns; flags 0 asks for the default console; the out-pointer is a live local.
         let created = unsafe {
-            CreatePseudoConsole(
-                coord(spawn.size),
-                input.read,
-                output.write,
-                0,
-                &raw mut console,
-            )
+            CreatePseudoConsole(coord(size), input.read, output.write, 0, &raw mut console)
         };
+        // The console holds its own references to the far ends; keeping ours open would keep the output
+        // pipe from ever reporting end of stream.
+        close(input.read);
+        close(output.write);
         if created < 0 {
-            close(input.read);
             close(input.write);
             close(output.read);
-            close(output.write);
             return Err(SpawnError::Pty {
                 doing: "creating the pseudo console",
                 detail: format!("HRESULT {created:#x}"),
             });
         }
-        // The console holds its own references to the far ends; keeping ours open would keep the output
-        // pipe from ever reporting end of stream.
-        close(input.read);
-        close(output.write);
+        Ok(Self {
+            console,
+            input_write: input.write,
+            output_read: output.read,
+        })
+    }
+}
 
-        // The attribute list is sized by the platform, so the buffer is asked for first with a null list.
-        let mut attribute_size: usize = 0;
+impl Drop for ConsoleHandles {
+    fn drop(&mut self) {
+        if self.console != 0 {
+            close_console(self.console);
+        }
+        close(self.input_write);
+        close(self.output_read);
+    }
+}
+
+/// The process attribute list carrying the pseudo console, deleted on drop.
+struct AttributeList {
+    buffer: Vec<u8>,
+}
+
+impl AttributeList {
+    #[expect(
+        unsafe_code,
+        reason = "process attribute lists are kernel calls with no safe wrapper"
+    )]
+    fn for_console(console: HPCON) -> Result<Self, SpawnError> {
+        // The list is sized by the platform, so the buffer is asked for first with a null list.
+        let mut size: usize = 0;
         // SAFETY: a null list with a count of one is the documented way to ask for the required size; the
         // out-pointer is a live local. The call reports failure for this query by design, so its result is
         // not checked here, only the size it wrote.
         unsafe {
-            InitializeProcThreadAttributeList(core::ptr::null_mut(), 1, 0, &raw mut attribute_size);
+            InitializeProcThreadAttributeList(core::ptr::null_mut(), 1, 0, &raw mut size);
         }
-        let mut attributes: Vec<u8> = vec![0; attribute_size.max(1)];
-        let attribute_list: LPPROC_THREAD_ATTRIBUTE_LIST = attributes.as_mut_ptr().cast();
-        // SAFETY: the buffer is at least the size the platform asked for and lives until after the process
-        // is created; count and flags are as in the query.
-        let initialized = unsafe {
-            InitializeProcThreadAttributeList(attribute_list, 1, 0, &raw mut attribute_size)
+        let mut list = Self {
+            buffer: vec![0; size.max(1)],
         };
+        let initialized =
+            // SAFETY: the buffer is at least the size the platform asked for and lives as long as `list`;
+            // count and flags are as in the query.
+            unsafe { InitializeProcThreadAttributeList(list.as_ptr(), 1, 0, &raw mut size) };
         if initialized == 0 {
-            let error = refused("initializing the process attribute list");
-            close_console(console);
-            close(input.write);
-            close(output.read);
-            return Err(error);
+            // Not initialized, so there is nothing for `Drop` to delete.
+            list.buffer.clear();
+            return Err(refused("initializing the process attribute list"));
         }
         // SAFETY: the list was initialized above; the attribute is the pseudo console one; the value is the
         // console handle itself spelled as the pointer argument with the handle's size, exactly as the
         // platform documents this attribute; the last two arguments are optional and null.
         let updated = unsafe {
             UpdateProcThreadAttribute(
-                attribute_list,
+                list.as_ptr(),
                 0,
                 PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE as usize,
                 core::ptr::with_exposed_provenance::<core::ffi::c_void>(console.cast_unsigned()),
@@ -262,77 +293,113 @@ impl Child {
             )
         };
         if updated == 0 {
-            let error = refused("attaching the pseudo console to the process attributes");
-            // SAFETY: the list was initialized and is deleted exactly once.
-            unsafe { DeleteProcThreadAttributeList(attribute_list) };
-            close_console(console);
-            close(input.write);
-            close(output.read);
-            return Err(error);
+            return Err(refused(
+                "attaching the pseudo console to the process attributes",
+            ));
         }
+        Ok(list)
+    }
 
-        // The standard handles are named and set invalid on purpose (measured 2026-08-25): without this a
-        // console-process parent passes its own standard handle values to the child even with inheritance
-        // off, the child writes to those instead of to the pseudo console, and the console renders nothing
-        // beyond its first frame. Invalid handles make the child take the console's own.
-        let mut startup = STARTUPINFOEXW {
-            StartupInfo: STARTUPINFOW {
-                cb: u32::try_from(size_of::<STARTUPINFOEXW>()).unwrap_or(0),
-                dwFlags: STARTF_USESTDHANDLES,
-                hStdInput: INVALID_HANDLE_VALUE,
-                hStdOutput: INVALID_HANDLE_VALUE,
-                hStdError: INVALID_HANDLE_VALUE,
-                ..Default::default()
-            },
-            lpAttributeList: attribute_list,
-        };
-        let mut process = PROCESS_INFORMATION::default();
-        let mut line = command_line(&spawn);
-        let mut environment = environment_block(&spawn);
-        let cwd = wide(OsStr::new(spawn.cwd.as_str()));
-        // SAFETY: the command line is a mutable, NUL-terminated UTF-16 buffer as the call requires; handle
-        // inheritance is off so the pipe ends stay ours; the flags say the extended startup info and a
-        // UTF-16 environment block are present, and both are live locals; the working directory is
-        // NUL-terminated; the out-pointer is a live local.
-        let started = unsafe {
-            CreateProcessW(
-                core::ptr::null(),
-                line.as_mut_ptr(),
-                core::ptr::null(),
-                core::ptr::null(),
-                0,
-                EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT,
-                environment.as_mut_ptr().cast(),
-                cwd.as_ptr(),
-                &raw mut startup.StartupInfo,
-                &raw mut process,
-            )
-        };
-        // SAFETY: the list was initialized and is deleted exactly once, after the process that used it exists.
-        unsafe { DeleteProcThreadAttributeList(attribute_list) };
-        if started == 0 {
-            let error = refused("starting the program on the pseudo console");
-            close_console(console);
-            close(input.write);
-            close(output.read);
-            return Err(error);
+    fn as_ptr(&mut self) -> LPPROC_THREAD_ATTRIBUTE_LIST {
+        self.buffer.as_mut_ptr().cast()
+    }
+}
+
+impl Drop for AttributeList {
+    #[expect(
+        unsafe_code,
+        reason = "deleting a process attribute list is a kernel call with no safe wrapper"
+    )]
+    fn drop(&mut self) {
+        if self.buffer.is_empty() {
+            return;
         }
+        // SAFETY: the list was initialized in `for_console` and is deleted exactly once, here.
+        unsafe { DeleteProcThreadAttributeList(self.as_ptr()) };
+    }
+}
+
+#[expect(
+    unsafe_code,
+    reason = "creating a process is a kernel call with no safe wrapper"
+)]
+fn start_process(
+    spawn: &PtySpawn<'_>,
+    attributes: &mut AttributeList,
+) -> Result<PROCESS_INFORMATION, SpawnError> {
+    // The standard handles are named and set invalid on purpose (measured 2026-08-25): without this a
+    // console-process parent passes its own standard handle values to the child even with inheritance
+    // off, the child writes to those instead of to the pseudo console, and the console renders nothing
+    // beyond its first frame. Invalid handles make the child take the console's own.
+    let mut startup = STARTUPINFOEXW {
+        StartupInfo: STARTUPINFOW {
+            cb: u32::try_from(size_of::<STARTUPINFOEXW>()).unwrap_or(0),
+            dwFlags: STARTF_USESTDHANDLES,
+            hStdInput: INVALID_HANDLE_VALUE,
+            hStdOutput: INVALID_HANDLE_VALUE,
+            hStdError: INVALID_HANDLE_VALUE,
+            ..Default::default()
+        },
+        lpAttributeList: attributes.as_ptr(),
+    };
+    let mut process = PROCESS_INFORMATION::default();
+    let mut line = command_line(spawn);
+    let mut environment = environment_block(spawn);
+    let cwd = wide(OsStr::new(spawn.cwd.as_str()));
+    // SAFETY: the command line is a mutable, NUL-terminated UTF-16 buffer as the call requires; handle
+    // inheritance is off so the pipe ends stay ours; the flags say the extended startup info and a
+    // UTF-16 environment block are present, and both are live locals; the working directory is
+    // NUL-terminated; the out-pointer is a live local.
+    let started = unsafe {
+        CreateProcessW(
+            core::ptr::null(),
+            line.as_mut_ptr(),
+            core::ptr::null(),
+            core::ptr::null(),
+            0,
+            EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT,
+            environment.as_mut_ptr().cast(),
+            cwd.as_ptr(),
+            &raw mut startup.StartupInfo,
+            &raw mut process,
+        )
+    };
+    if started == 0 {
+        return Err(refused("starting the program on the pseudo console"));
+    }
+    Ok(process)
+}
+
+impl Child {
+    #[expect(
+        unsafe_code,
+        reason = "taking ownership of the pipe ends as files has no safe wrapper"
+    )]
+    pub(super) fn spawn(spawn: PtySpawn<'_>) -> Result<Self, SpawnError> {
+        let mut handles = ConsoleHandles::create(spawn.size)?;
+        let mut attributes = AttributeList::for_console(handles.console)?;
+        let process = start_process(&spawn, &mut attributes)?;
+        drop(attributes);
         close(process.hThread);
-
-        // SAFETY: each handle is a pipe end this function created, owned by nothing else, and handed to
-        // exactly one `File`, which closes it.
-        let (output_file, input_file) = unsafe {
+        // Ownership moves into the `Child`: the console handle out of the guard, the pipe ends into files.
+        let console = std::mem::replace(&mut handles.console, 0);
+        let output_read = std::mem::replace(&mut handles.output_read, INVALID_HANDLE_VALUE);
+        let input_write = std::mem::replace(&mut handles.input_write, INVALID_HANDLE_VALUE);
+        drop(handles);
+        // SAFETY: each handle is a pipe end created for this child, owned by nothing else now that the
+        // guard released it, and handed to exactly one `File`, which closes it.
+        let (output, input) = unsafe {
             (
-                File::from_raw_handle(output.read.cast()),
-                File::from_raw_handle(input.write.cast()),
+                File::from_raw_handle(output_read.cast()),
+                File::from_raw_handle(input_write.cast()),
             )
         };
         Ok(Self {
             console: AtomicIsize::new(console),
             process: process.hProcess,
             pid: process.dwProcessId,
-            output: output_file,
-            input: input_file,
+            output,
+            input,
         })
     }
 

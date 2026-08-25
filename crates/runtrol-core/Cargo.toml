@@ -21,7 +21,14 @@ runtrol-store = { workspace = true }
 thiserror = { workspace = true }
 # `sync` only. The fan-out needs bounded channels and nothing else: no reactor, no timer, no OS thread.
 # "macros" carries tokio::join! for the probe, which asks its two independent questions concurrently.
-tokio = { workspace = true, features = ["sync", "macros"] }
+# `rt` and `time` are for the terminal host: a task that watches the hosted CLI's exit on a clock, and
+# the settle before its terminal is released.
+tokio = { workspace = true, features = ["sync", "macros", "rt", "time"] }
+# Terminal output travels to every attached viewer by reference, like events do.
+bytes = { workspace = true }
+# The hosted CLI's screen, kept so a viewer that attaches late gets the current picture and so a click on a
+# row can be turned into the keys that reach that row.
+vt100 = { workspace = true }
 # Provider manifests. Reading only: runtrol never writes one, so the writer half is left out.
 toml = { workspace = true, features = ["std", "parse", "serde"] }
 # The probe cache. JSON rather than the database, because a cache that cannot be read is simply absent and
