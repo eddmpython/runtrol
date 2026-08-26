@@ -371,6 +371,10 @@ def expectedEntries(target: str) -> set[str]:
         "extension/resources/NOTICE.txt",
         "extension/resources/icon.png",
         "extension/resources/symbol.svg",
+        # Deleting a conversation is the one row action that does not come back, so its control is drawn in
+        # the editor's error colour. A menu icon cannot be tinted through a theme token the way a tree item
+        # can, so the colour is baked into a file the build generates from the pinned glyph set.
+        "extension/resources/action-icons/trash.svg",
         f"extension/resources/core/{executable}",
     } | {f"extension/resources/provider-icons/{icon}.svg" for icon in provider_icons}
 
