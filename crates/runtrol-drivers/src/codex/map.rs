@@ -20,7 +20,7 @@
 use bytes::Bytes;
 use runtrol_provider::{
     Chunk, EventBody, Level, MessageId, Notice, NoticeCode, Opaque, RateLimit, StopReason,
-    ToolCallFrame, ToolCallId, ToolCallStatus, ToolKind, Unmapped, Usage, Window,
+    ToolCallFrame, ToolCallId, ToolCallStatus, ToolKind, Unmapped, Usage,
 };
 use serde::Deserialize;
 use serde_json::value::RawValue;
@@ -149,33 +149,6 @@ struct Item<'line> {
     /// Where an action stands, on the items that are actions.
     #[serde(default)]
     status: Option<&'line str>,
-}
-
-/// The quota fields runtrol decides on.
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct Limits<'line> {
-    /// The shorter window.
-    #[serde(default, borrow)]
-    primary: Option<&'line RawValue>,
-    /// The longer one.
-    #[serde(default, borrow)]
-    secondary: Option<&'line RawValue>,
-    /// Present when a limit has actually been reached, and it names which.
-    #[serde(default, borrow)]
-    rate_limit_reached_type: Option<&'line RawValue>,
-}
-
-/// One quota window.
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct LimitWindow {
-    /// How much of it is used.
-    #[serde(default)]
-    used_percent: Option<i64>,
-    /// How long the window is.
-    #[serde(default)]
-    window_duration_mins: Option<i64>,
 }
 
 /// The context counts runtrol decides on.
@@ -480,40 +453,15 @@ fn usage(body: &Bytes, raw: Option<&RawValue>) -> Usage {
 }
 
 /// Where the account stands against its limits.
+///
+/// The snapshot is read by [`super::limits`], the one module that knows this CLI's limit shape, so the
+/// window a turn reports and the window a probe reads are the same reading rather than two that drift.
 fn limits(body: &Bytes, raw: Option<&RawValue>) -> RateLimit {
-    let snapshot = raw.and_then(read_nested::<Limits<'_>>);
-    RateLimit {
-        primary: snapshot.as_ref().and_then(|snap| window(snap.primary)),
-        secondary: snapshot.as_ref().and_then(|snap| window(snap.secondary)),
-        // The field names which limit was reached and exists only when one was. Its presence is the answer to
-        // the one question the supervisor asks of this frame.
-        reached: snapshot
-            .as_ref()
-            .is_some_and(|snap| snap.rate_limit_reached_type.is_some()),
-        detail: payload(body, raw),
-    }
-}
-
-/// One quota window, when the provider reported a usable one.
-fn window(raw: Option<&RawValue>) -> Option<Window> {
-    let parsed = raw.and_then(read_nested::<LimitWindow>)?;
-    let used = parsed.used_percent?;
-    let minutes = parsed.window_duration_mins.and_then(|minutes| {
-        // A window length that does not fit is reported as absent rather than clamped. A wrong number here
-        // would be rendered as a real one.
-        let Ok(minutes) = u32::try_from(minutes) else {
-            return None;
-        };
-        Some(minutes)
-    });
-    Some(Window {
-        used_percent: Some(u8::try_from(used.clamp(0, i64::from(u8::MAX))).unwrap_or(u8::MAX)),
-        // The schema gives this as a bare integer and does not say whether it counts seconds or milliseconds.
-        // Reading it either way puts a reset time in the wrong century half the time, and the whole snapshot
-        // is in the payload for anyone who knows.
-        resets_at: None,
-        window_minutes: minutes,
-    })
+    let answer = raw
+        .and_then(read_nested::<super::limits::Snapshot>)
+        .map(super::limits::LimitsAnswer::from_snapshot)
+        .unwrap_or_default();
+    RateLimit::new(answer.windows(), answer.reached(), payload(body, raw))
 }
 
 /// The message identifier a frame belongs to, when the provider gave one runtrol can hold.
@@ -833,14 +781,21 @@ mod tests {
         );
         match read("account/rateLimits/updated", Some(&quota)).expect("readable") {
             Frame::Body(EventBody::RateLimitUpdate(limit)) => {
-                let primary = limit.primary.expect("the shorter window was reported");
+                let primary = limit
+                    .windows
+                    .first()
+                    .expect("the shorter window was reported");
                 assert_eq!(primary.used_percent, Some(87));
                 assert_eq!(primary.window_minutes, Some(300));
-                assert!(
-                    primary.resets_at.is_none(),
-                    "the schema does not say what unit that integer is in, and guessing puts the reset in the wrong century"
+                assert_eq!(
+                    primary.resets_at.map(runtrol_provider::WallMs::as_millis),
+                    Some(1_799_999_999_000),
+                    "the request answer for this same type gives unix seconds, so the notification does too"
                 );
-                assert_eq!(limit.secondary.and_then(|w| w.used_percent), Some(12));
+                assert_eq!(
+                    limit.windows.get(1).and_then(|window| window.used_percent),
+                    Some(12)
+                );
                 assert!(!limit.reached, "nothing here says a limit was reached");
             }
             other => panic!("expected a quota gauge, got {other:?}"),

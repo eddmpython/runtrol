@@ -250,7 +250,9 @@ impl Provider for CodexProvider {
     }
 
     /// `account/read` and `account/rateLimits/read`, both in this CLI's own generated schema: sign-in,
-    /// plan and the two limit windows, without a turn. Measured 2026-08-25 on 0.149.1.
+    /// plan and every metered limit window, without a turn. Measured 2026-08-26 on 0.149.1, where the
+    /// answer carried two buckets: the account's own week and a five-hour-plus-week pair scoped to the
+    /// model the CLI calls `GPT-5.3-Codex-Spark`.
     async fn account(&self) -> Result<runtrol_provider::AccountReport, ProviderError> {
         let conn = self.connection().await?;
         let account = conn
@@ -275,16 +277,18 @@ impl Provider for CodexProvider {
                     "reading the account limits",
                 )
                 .await?;
-            let limits: LimitsAnswer =
+            let limits: super::limits::LimitsAnswer =
                 serde_json::from_slice(&limits).map_err(|error| ProviderError::Protocol {
                     provider: self.id,
                     doing: "reading the account limits",
                     detail: error.to_string(),
                 })?;
-            report.limits = Some(account_limits(&limits.rate_limits));
+            report.limits = Some(runtrol_provider::AccountLimits::new(
+                limits.windows(),
+                limits.reached(),
+            ));
             if report.plan.is_none() {
-                report.plan =
-                    runtrol_provider::account_token(limits.rate_limits.plan_type.as_deref());
+                report.plan = limits.plan();
             }
             // `account/usage/read`, measured 2026-08-25 on 0.149.1: `dailyUsageBuckets` of
             // `{startDate: "YYYY-MM-DD", tokens}`. Today's bucket is the one real-usage number this CLI
@@ -885,38 +889,6 @@ struct AccountKind {
     plan_type: Option<String>,
 }
 
-/// `GetAccountRateLimitsResponse`, the fields this build reads.
-#[derive(serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct LimitsAnswer {
-    rate_limits: LimitsSnapshot,
-}
-
-/// `RateLimitSnapshot`, the fields this build reads.
-#[derive(Default, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct LimitsSnapshot {
-    #[serde(default)]
-    primary: Option<LimitWindowAnswer>,
-    #[serde(default)]
-    secondary: Option<LimitWindowAnswer>,
-    #[serde(default)]
-    rate_limit_reached_type: Option<String>,
-    #[serde(default)]
-    plan_type: Option<String>,
-}
-
-/// `RateLimitWindow`, the fields this build reads.
-#[derive(serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct LimitWindowAnswer {
-    used_percent: i64,
-    #[serde(default)]
-    window_duration_mins: Option<i64>,
-    #[serde(default)]
-    resets_at: Option<i64>,
-}
-
 /// Signed in exactly when the CLI names an account. `requiresOpenaiAuth` is not a sign-in verdict: measured
 /// 2026-08-25 on 0.149.1, an installation signed in with `chatgpt` answers `true` there (that account kind
 /// is the vendor's own auth), and reading it as "still needs auth" showed a working account as signed out.
@@ -928,6 +900,7 @@ fn account_report(answer: AccountAnswer) -> runtrol_provider::AccountReport {
             plan: account_token(account.plan_type.as_deref()),
             method: account_token(Some(&account.kind)),
             limits: None,
+            limits_unread: None,
             tokens_today: None,
         },
         None => AccountReport {
@@ -935,41 +908,8 @@ fn account_report(answer: AccountAnswer) -> runtrol_provider::AccountReport {
             plan: None,
             method: None,
             limits: None,
+            limits_unread: None,
             tokens_today: None,
         },
-    }
-}
-
-fn account_limits(snapshot: &LimitsSnapshot) -> runtrol_provider::AccountLimits {
-    runtrol_provider::AccountLimits {
-        primary: snapshot.primary.as_ref().map(account_window),
-        secondary: snapshot.secondary.as_ref().map(account_window),
-        reached: snapshot.rate_limit_reached_type.is_some(),
-    }
-}
-
-/// The read answer documents `resetsAt` as unix seconds (`int64`), unlike the turn frame this build leaves
-/// unread; a value that does not fit is reported as absent rather than as a wrong century.
-fn account_window(window: &LimitWindowAnswer) -> runtrol_provider::Window {
-    runtrol_provider::Window {
-        used_percent: Some(
-            u8::try_from(window.used_percent.clamp(0, i64::from(u8::MAX))).unwrap_or(u8::MAX),
-        ),
-        resets_at: window.resets_at.and_then(|seconds| {
-            // A negative reset time is not a time; absent beats a wrong one.
-            let Ok(seconds) = u64::try_from(seconds) else {
-                return None;
-            };
-            Some(runtrol_provider::WallMs::from_millis(
-                seconds.saturating_mul(1000),
-            ))
-        }),
-        window_minutes: window.window_duration_mins.and_then(|minutes| {
-            // A length that does not fit is reported as absent rather than clamped into a real number.
-            let Ok(minutes) = u32::try_from(minutes) else {
-                return None;
-            };
-            Some(minutes)
-        }),
     }
 }
