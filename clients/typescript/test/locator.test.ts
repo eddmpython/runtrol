@@ -137,3 +137,41 @@ test("the system locator reads the home the operator chose, the way the Core doe
     await rm(chosen, { recursive: true, force: true });
   }
 });
+
+test("a locator that moves while it is being validated is read again, not called unsafe", async () => {
+  // A daemon publishing its own generation writes this file, and on a home whose first daemon is starting that
+  // write lands between the native validation and the read. Treating that as an attack ended enrolment for good
+  // (measured 2026-08-26). The pair still has to agree before anything is returned; it just gets another look.
+  const scratch = await mkdtemp(join(tmpdir(), "runtrol-ts-settle-"));
+  const path = join(scratch, "runtime.locator.json");
+  const endpoint = process.platform === "win32"
+    ? "\\\\.\\pipe\\runtrol-runtime-aaaaaaaaaaaaaaaa"
+    : join(scratch, "runtrol-runtime-aaaaaaaaaaaaaaaa.sock");
+  const record = {
+    schema: 2,
+    instanceId: "rtm_settle",
+    generations: [{
+      digest: "a".repeat(64),
+      endpointKind: process.platform === "win32" ? "namedPipe" : "unixSocket",
+      endpoint,
+      controlEndpoint: process.platform === "win32"
+      ? "\\\\.\\pipe\\runtrol-aaaaaaaaaaaaaaaa"
+        : join(scratch, "runtrol-aaaaaaaaaaaaaaaa.sock"),
+      runtimeVersion: "0.1.1",
+      processId: 1,
+      startedAtMs: 1,
+      liveSessions: 0,
+      draining: false,
+    }],
+  };
+  try {
+    await writeFile(path, JSON.stringify(record));
+    await makeOwnerOnly(path);
+    const locator = runtimeLocatorAt(path);
+    const state = await locator.inspect();
+    assert.equal(state.state, "running");
+    assert.equal(state.state === "running" && state.locator.endpoint, endpoint);
+  } finally {
+    await rm(scratch, { recursive: true, force: true });
+  }
+});

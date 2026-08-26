@@ -81,19 +81,32 @@ export class RuntimeLocator {
 
   /** The chosen generation, or not installed when nothing is listed to connect to. */
   public async inspect(): Promise<LocatorState> {
-    const read = await this.read();
-    if (!read) return { state: "notInstalled" };
-    const chosen = chooseGeneration(read.record, this.preferDigest);
-    if (!chosen) return { state: "notInstalled" };
-    if (read.verified && (
-      read.verified.instanceId !== read.record.instanceId
-      || read.verified.endpoint !== chosen.endpoint
-      || read.verified.runtimeVersion !== chosen.runtimeVersion
-      || read.verified.digest !== chosen.digest
-    )) {
-      throw new RuntimeLocatorError("unsafe", "Runtime locator changed after native validation");
+    // Validate and read again when the two disagree. What that disagreement means is that the file moved between
+    // the two, and a daemon publishing its own generation is the ordinary reason for it: on a home whose first
+    // daemon is starting, that write lands exactly here (measured 2026-08-26, a new home could never finish
+    // enrolling because one such moment ended the attempt for good).
+    //
+    // The safety property is unchanged. Each attempt still validates and then reads, and only a pair that agrees
+    // is accepted, so a swap between the two is still refused. What changes is that a moving file is given a few
+    // more chances to hold still instead of being called an attack.
+    for (let attempt = 0; ; attempt += 1) {
+      const read = await this.read();
+      if (!read) return { state: "notInstalled" };
+      const chosen = chooseGeneration(read.record, this.preferDigest);
+      if (!chosen) return { state: "notInstalled" };
+      if (!read.verified || (
+        read.verified.instanceId === read.record.instanceId
+        && read.verified.endpoint === chosen.endpoint
+        && read.verified.runtimeVersion === chosen.runtimeVersion
+        && read.verified.digest === chosen.digest
+      )) {
+        return { state: "running", locator: validated(read.record, chosen) };
+      }
+      if (attempt >= LOCATOR_SETTLE_ATTEMPTS) {
+        throw new RuntimeLocatorError("unsafe", "Runtime locator changed after native validation");
+      }
+      await new Promise((resolve) => setTimeout(resolve, LOCATOR_SETTLE_DELAY_MS));
     }
-    return { state: "running", locator: validated(read.record, chosen) };
   }
 
   /** Every listed generation, oldest start first. Empty when nothing is installed. */
@@ -340,6 +353,15 @@ function validateGeneration(generation: RuntimeGeneration, locatorPath: string):
     );
   }
 }
+
+/// How many further attempts a locator that moved under validation is given before it is called unsafe.
+///
+/// Three, because the write that causes this is one daemon publishing one generation: it happens once and it is
+/// over in milliseconds. A file that keeps disagreeing after that is not a daemon starting.
+const LOCATOR_SETTLE_ATTEMPTS = 3;
+
+/// How long to wait between those attempts.
+const LOCATOR_SETTLE_DELAY_MS = 60;
 
 /// The environment variable that names the Runtrol home, when the operator set one.
 const HOME_ENVIRONMENT = "RUNTROL_HOME";
