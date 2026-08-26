@@ -735,6 +735,29 @@ export class Controller implements vscode.Disposable {
   /// The same vocabulary the start-failure dialog uses (`troubleOf` + `offersFor`), reachable from the
   /// sidebar's fixed CLI status row so a person does not have to attempt a conversation just to be told how to fix
   /// the service. The chosen line lands in their terminal unexecuted, exactly like every other offer.
+  /// Set one coding service up, from the usage strip's set-up list.
+  ///
+  /// One press, one outcome, decided from what the service itself reported: a service nobody has signed into
+  /// gets its sign-in command, one that is not installed gets its install command, and one that is installed but
+  /// cannot start goes to the fuller repair surface because there its trouble has more than one answer. Both
+  /// commands are placed in a terminal and left unrun, which is the boundary this product has always held.
+  async setUpService(provider: ProviderLine): Promise<void> {
+    if (provider.account?.status === "signedOut") {
+      this.signInProvider(provider);
+      return;
+    }
+    if (provider.installation.state === "missing") {
+      const install = offersFor(provider, "notInstalled").find((offer) => offer.command === provider.help?.install) ?? null;
+      if (!install) {
+        this.say(`${provider.displayName} declares no install command; install it from its own site.`, "info");
+        return;
+      }
+      this.offerInTerminal(install);
+      return;
+    }
+    await this.fixService(provider);
+  }
+
   async fixService(provider: ProviderLine): Promise<void> {
     const trouble = troubleOf(undefined, provider);
     const offers = offersFor(provider, trouble);

@@ -44,7 +44,7 @@ button.usage-row:focus-visible {
 }
 
 button.usage-row:focus-visible,
-.discover:focus-visible {
+button.setup-row:focus-visible {
   outline: 1px solid var(--vscode-focusBorder);
   outline-offset: -1px;
 }
@@ -136,22 +136,42 @@ button.usage-row:focus-visible,
   font-size: 11px;
 }
 
-.discover {
-  width: 100%;
+.setup {
+  display: flex;
+  flex-direction: column;
   margin-top: 4px;
-  padding: 6px 7px;
+  border-top: 1px solid var(--vscode-panel-border, transparent);
+  padding-top: 4px;
+}
+
+.setup-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  padding: 5px 7px;
   border: 0;
   border-radius: 4px;
-  color: var(--vscode-textLink-foreground);
+  color: var(--vscode-foreground);
   background: transparent;
   font: inherit;
   text-align: left;
+}
+
+button.setup-row {
   cursor: pointer;
 }
 
-.discover:hover {
-  color: var(--vscode-textLink-activeForeground);
+button.setup-row:hover {
   background: var(--vscode-list-hoverBackground);
+}
+
+.setup-row.ready {
+  opacity: 0.6;
+}
+
+.setup-name {
+  display: block;
 }
 
 .empty,

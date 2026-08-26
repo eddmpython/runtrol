@@ -1,6 +1,6 @@
 import "./usageView.css";
 
-import type { UsageMeter, UsageRow } from "./usageDisplay";
+import type { SetupRow, UsageMeter, UsageRow } from "./usageDisplay";
 import type { UsageViewSnapshot } from "./usageViewMessage";
 
 type VsCodeApi = {
@@ -15,25 +15,44 @@ const usage = element<HTMLElement>("usage");
 const iconBase = usage.dataset.iconBase ?? "";
 const empty = element<HTMLParagraphElement>("empty");
 const error = element<HTMLParagraphElement>("error");
-const discover = element<HTMLButtonElement>("discover");
+const setup = element<HTMLElement>("setup");
 
 window.addEventListener("message", (event: MessageEvent<unknown>) => {
   const snapshot = usageSnapshot(event.data);
   if (snapshot) render(snapshot);
 });
 
-discover.addEventListener("click", () => vscode.postMessage({ type: "discover" }));
 vscode.postMessage({ type: "ready" });
 
 function render(snapshot: UsageViewSnapshot): void {
   usage.replaceChildren(...snapshot.rows.map(usageRow));
-  empty.hidden = snapshot.rows.length > 0 || snapshot.installableCount > 0;
+  empty.hidden = snapshot.rows.length > 0 || snapshot.setup.length > 0;
   error.textContent = snapshot.error ?? "";
   error.hidden = snapshot.error === null;
-  discover.textContent = snapshot.installableCount === 1
-    ? "Add coding service · 1 available"
-    : `Add coding services · ${snapshot.installableCount} available`;
-  discover.hidden = snapshot.installableCount === 0;
+  setup.replaceChildren(...snapshot.setup.map(setupRow));
+  setup.hidden = snapshot.setup.length === 0;
+}
+
+/// One service in the set-up list: its glyph, its name, and the one thing it still needs.
+function setupRow(row: SetupRow): HTMLElement {
+  const item = document.createElement(row.actionable ? "button" : "section");
+  item.className = `setup-row ${row.state}`;
+  item.title = `${row.name}: ${row.detail}`;
+  item.setAttribute("aria-label", `${row.name}, ${row.detail}`);
+  if (item instanceof HTMLButtonElement) {
+    item.type = "button";
+    item.addEventListener("click", () => vscode.postMessage({ type: "setUp", providerId: row.providerId }));
+  }
+  const icon = providerGlyph(row.icon, "provider-icon");
+  icon.setAttribute("aria-hidden", "true");
+  const body = document.createElement("div");
+  body.className = "usage-body";
+  const name = document.createElement("span");
+  name.className = "setup-name";
+  name.textContent = row.name;
+  body.append(name, textLine(row.detail));
+  item.append(icon, body);
+  return item;
 }
 
 function usageRow(row: UsageRow): HTMLElement {

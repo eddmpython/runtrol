@@ -5,7 +5,12 @@ import { usageViewAction } from "./usageViewMessage";
 
 test("the usage view accepts only its bounded action vocabulary", () => {
   assert.deepEqual(usageViewAction({ type: "ready" }), { type: "ready" });
-  assert.deepEqual(usageViewAction({ type: "discover" }), { type: "discover" });
+  assert.deepEqual(usageViewAction({ type: "setUp", providerId: "grok" }), {
+    type: "setUp",
+    providerId: "grok",
+  });
+  // The old catalogue action is gone, so the document cannot ask for it by name any more.
+  assert.equal(usageViewAction({ type: "discover" }), null);
   assert.deepEqual(usageViewAction({ type: "fix", providerId: "codex" }), {
     type: "fix",
     providerId: "codex",

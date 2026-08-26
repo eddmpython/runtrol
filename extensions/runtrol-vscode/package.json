@@ -73,7 +73,7 @@
     "onCommand:runtrol.restartExtensionHost",
     "onCommand:runtrol.checkProviderUpdates",
     "onCommand:runtrol.fixService",
-    "onCommand:runtrol.discoverServices",
+    "onCommand:runtrol.setUpServices",
     "onCommand:runtrol.remoteConnectionStatus",
     "onCommand:runtrol.pairPhone",
     "onCommand:runtrol.reviewPhonePairings",
@@ -153,9 +153,9 @@
         "category": "Runtrol"
       },
       {
-        "command": "runtrol.discoverServices",
-        "title": "Add Coding Service...",
-        "icon": "$(extensions)",
+        "command": "runtrol.setUpServices",
+        "title": "Set Up Coding Services",
+        "icon": "$(add)",
         "category": "Runtrol"
       },
       {
@@ -268,7 +268,10 @@
       {
         "command": "runtrol.deleteConversation",
         "title": "Delete Conversation",
-        "icon": "$(close)",
+        "icon": {
+          "light": "resources/action-icons/trash.svg",
+          "dark": "resources/action-icons/trash.svg"
+        },
         "category": "Runtrol"
       },
       {
@@ -496,6 +499,11 @@
         }
       ],
       "view/title": [
+        {
+          "command": "runtrol.setUpServices",
+          "when": "view == runtrol.usage",
+          "group": "navigation@0"
+        },
         {
           "command": "runtrol.startSession",
           "when": "view == runtrol.conversations",

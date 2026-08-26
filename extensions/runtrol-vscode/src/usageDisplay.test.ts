@@ -3,7 +3,7 @@ import test from "node:test";
 
 import type { ProviderLine, ProviderUsageGauge } from "./runtimeTypes";
 import {
-  installableProviders,
+  setupRows,
   usageDetail,
   usageMeters,
   usageRows,
@@ -163,24 +163,31 @@ test("a visible or actionable status change demands another view render", () => 
   ))), false);
 });
 
-test("the service catalogue offers only missing CLIs with an exact install line", () => {
+test("the set-up list names every shipped service and what each one still needs", () => {
   const providers = [
-    ...PROVIDERS,
-    {
-      providerId: "available-later",
-      displayName: "Available Later",
-      installation: { state: "missing" },
-      help: { install: "npm install --global available-later@1.0.0" },
-    },
-    {
-      providerId: "manual-only",
-      displayName: "Manual Only",
-      installation: { state: "missing" },
-    },
+    { providerId: "claude", displayName: "Claude Code", icon: "claude", installation: { state: "usable" },
+      account: { status: "signedIn", plan: "max", checkedAtMs: NOW } },
+    { providerId: "codex", displayName: "Codex", icon: "openai", installation: { state: "usable" },
+      account: { status: "signedOut", checkedAtMs: NOW } },
+    { providerId: "grok", displayName: "Grok", icon: "grok", installation: { state: "missing" },
+      help: { install: "npm install --global @vibe-kit/grok-cli" } },
+    { providerId: "manual-only", displayName: "Manual Only", icon: "hubot", installation: { state: "missing" } },
+    { providerId: "sick", displayName: "Sick", icon: "hubot",
+      installation: { state: "unavailable", why: "its executable answered nothing" } },
   ] as unknown as ProviderLine[];
   assert.deepEqual(
-    installableProviders(providers).map((provider) => provider.providerId),
-    ["available-later"],
+    setupRows(providers).map((row) => [row.name, row.state, row.actionable]),
+    [
+      // A service that is ready is still listed, because "which services do I have" is the question this list
+      // is opened with, and it is answered with a row rather than an absence.
+      ["Claude Code", "ready", false],
+      ["Codex", "signedOut", true],
+      ["Grok", "missing", true],
+      // Nothing to press: this build has no command to offer, and a button that reports its own emptiness is
+      // worse than a line that says the state.
+      ["Manual Only", "missing", false],
+      ["Sick", "unavailable", true],
+    ],
   );
 });
 

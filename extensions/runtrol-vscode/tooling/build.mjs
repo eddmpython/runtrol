@@ -8,6 +8,7 @@ const repositoryRoot = fileURLToPath(new URL("../../../", import.meta.url));
 const dist = path.join(extensionRoot, "dist");
 const resources = path.join(extensionRoot, "resources");
 const providerIcons = path.join(resources, "provider-icons");
+const actionIcons = path.join(resources, "action-icons");
 const codicons = path.join(extensionRoot, "node_modules", "@vscode", "codicons");
 const includeTestJourney = process.env.RUNTROL_INCLUDE_TEST_JOURNEY === "1";
 
@@ -96,6 +97,20 @@ async function buildProviderIcons() {
     const icon = /^icon\s*=\s*"([a-z0-9-]{1,64})"\s*$/mu.exec(manifest)?.[1];
     if (icon) names.add(icon);
   }
+
+  // Deleting a conversation is the one row action that does not come back, so its control is drawn in the
+  // editor's own error colour rather than in the foreground grey every other action shares. A menu icon cannot
+  // be tinted through a theme token the way a tree item can, so the colour is baked into the file here, from
+  // the same pinned glyph set the service icons come from.
+  await mkdir(actionIcons, { recursive: true });
+  const trash = symbols.get("trash");
+  if (!trash) throw new Error("the pinned Codicons package has no trash glyph");
+  await writeFile(
+    path.join(actionIcons, "trash.svg"),
+    `<?xml version="1.0" encoding="utf-8"?>\n<svg xmlns="http://www.w3.org/2000/svg" ${trash.attributes}>\n`
+      + `<style>:root{color:#f14c4c}</style>\n${trash.body}\n</svg>\n`,
+    "utf8",
+  );
 
   await Promise.all([...names].map(async (name) => {
     const target = path.join(providerIcons, `${name}.svg`);

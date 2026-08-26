@@ -48,11 +48,59 @@ export function usageRowsEqual(left: readonly UsageRow[], right: readonly UsageR
   return JSON.stringify(left) === JSON.stringify(right);
 }
 
-/// Registry-backed coding services that are not installed and publish one exact operator-run install command.
-export function installableProviders(providers: readonly ProviderLine[]): ProviderLine[] {
-  return providers
-    .filter((provider) => provider.installation.state === "missing" && Boolean(provider.help?.install))
-    .sort((left, right) => left.displayName.localeCompare(right.displayName, "en"));
+/// What one coding service still needs before it can hold a conversation.
+export type SetupState = "ready" | "signedOut" | "missing" | "unavailable";
+
+/// One service in the set-up list, which is every service this build serves rather than a catalogue.
+export type SetupRow = {
+  /// The service's runtime identity, carried back with the action.
+  readonly providerId: string;
+  /// The service's own name.
+  readonly name: string;
+  /// The glyph that stands for it, the same one its usage row uses.
+  readonly icon: string;
+  /// What it needs.
+  readonly state: SetupState;
+  /// The single sentence under the name.
+  readonly detail: string;
+  /// Whether pressing this row does anything.
+  readonly actionable: boolean;
+};
+
+/// Every service this build serves, with what each one still needs.
+///
+/// Every one, not only the absent ones: a set-up list that hides what is already working answers "which services
+/// do I have" with silence, and that is the question someone opens it with. The set is what this build ships,
+/// so it is short by design and nobody is offered a service that was never measured here.
+export function setupRows(providers: readonly ProviderLine[]): SetupRow[] {
+  return providers.map((provider) => {
+    const base = {
+      providerId: provider.providerId,
+      name: provider.displayName,
+      icon: providerIcon(provider.providerId, providers),
+    };
+    if (provider.installation.state === "missing") {
+      const install = provider.help?.install ?? null;
+      return {
+        ...base,
+        state: "missing" as const,
+        detail: install ? "Not installed. Its command goes to your terminal" : "Not installed",
+        actionable: Boolean(install),
+      };
+    }
+    if (isBroken(provider)) {
+      return {
+        ...base,
+        state: "unavailable" as const,
+        detail: provider.installation.why ?? "Installed but cannot start",
+        actionable: true,
+      };
+    }
+    if (provider.account?.status === "signedOut") {
+      return { ...base, state: "signedOut" as const, detail: "Not signed in", actionable: true };
+    }
+    return { ...base, state: "ready" as const, detail: "Ready", actionable: false };
+  });
 }
 
 /// The strip's rows. Every installed CLI is present, including one still being checked or one that needs a fix.

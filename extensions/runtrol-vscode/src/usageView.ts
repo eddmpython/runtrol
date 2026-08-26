@@ -2,7 +2,7 @@ import * as vscode from "vscode";
 
 import { isBroken } from "./providerHealth";
 import type { ProviderLine, ProviderUsageGauge, ProviderUsageList } from "./runtimeTypes";
-import { installableProviders, usageRows, usageRowsEqual, type UsageRow } from "./usageDisplay";
+import { setupRows, usageRows, usageRowsEqual, type SetupRow, type UsageRow } from "./usageDisplay";
 import { usageViewAction, type UsageViewSnapshot } from "./usageViewMessage";
 import { webviewNonce } from "./webviewNonce";
 
@@ -13,7 +13,10 @@ import { webviewNonce } from "./webviewNonce";
 export class UsageView implements vscode.WebviewViewProvider, vscode.Disposable {
   private gauges: readonly ProviderUsageGauge[] = [];
   private rows: UsageRow[] = [];
-  private installableCount = 0;
+  private setup: SetupRow[] = [];
+  /// Whether the set-up list is showing. Held by the host so the title bar's plus can open it, and so a
+  /// redraw does not close it under the reader's hand.
+  private setupOpen = false;
   private error: string | null = null;
   private view: vscode.WebviewView | null = null;
   private viewSubscriptions: vscode.Disposable[] = [];
@@ -28,7 +31,7 @@ export class UsageView implements vscode.WebviewViewProvider, vscode.Disposable 
       now: () => number;
       fix: (provider: ProviderLine) => Promise<void>;
       signIn: (provider: ProviderLine) => Promise<void>;
-      discover: () => Promise<void>;
+      setUp: (provider: ProviderLine) => Promise<void>;
       dispatch: (action: () => Promise<void>) => void;
     },
   ) {}
@@ -112,11 +115,22 @@ export class UsageView implements vscode.WebviewViewProvider, vscode.Disposable 
     }
   }
 
+  /// Open the set-up list, from the section title's plus.
+  ///
+  /// It opens in the panel itself rather than in a picker at the top of the window: the reader pressed a control
+  /// in the sidebar, and sending their eye to the title bar to answer is the interruption this product exists to
+  /// avoid.
+  openSetup(): void {
+    this.setupOpen = true;
+    this.postSnapshot();
+    void this.view?.show?.(true);
+  }
+
   private publish(next: UsageRow[], force = false): void {
-    const installableCount = installableProviders(this.ports.providers()).length;
-    const changed = !usageRowsEqual(this.rows, next) || installableCount !== this.installableCount;
+    const setup = setupRows(this.ports.providers());
+    const changed = !usageRowsEqual(this.rows, next) || JSON.stringify(setup) !== JSON.stringify(this.setup);
     this.rows = next;
-    this.installableCount = installableCount;
+    this.setup = setup;
     if (changed || force) this.postSnapshot();
   }
 
@@ -130,7 +144,7 @@ export class UsageView implements vscode.WebviewViewProvider, vscode.Disposable 
     const message: UsageViewSnapshot = {
       type: "snapshot",
       rows: this.rows,
-      installableCount: this.installableCount,
+      setup: this.setupOpen ? this.setup : [],
       error: this.error,
     };
     void this.view?.webview.postMessage(message);
@@ -143,12 +157,12 @@ export class UsageView implements vscode.WebviewViewProvider, vscode.Disposable 
       this.postSnapshot();
       return;
     }
-    if (action.type === "discover") {
-      if (this.installableCount > 0) this.ports.dispatch(this.ports.discover);
-      return;
-    }
     const provider = this.ports.providers().find((candidate) => candidate.providerId === action.providerId);
     if (!provider) return;
+    if (action.type === "setUp") {
+      this.ports.dispatch(() => this.ports.setUp(provider));
+      return;
+    }
     if (action.type === "signIn") {
       if (provider.account?.status !== "signedOut") return;
       this.ports.dispatch(() => this.ports.signIn(provider));
@@ -187,7 +201,7 @@ export class UsageView implements vscode.WebviewViewProvider, vscode.Disposable 
   <main id="usage" aria-live="polite" data-icon-base="${iconBase}"></main>
   <p id="empty" class="empty" hidden>No connected CLI.</p>
   <p id="error" class="error" role="status" hidden></p>
-  <button id="discover" class="discover" type="button" hidden></button>
+  <section id="setup" class="setup" hidden></section>
   <script nonce="${nonce}" src="${script}"></script>
 </body>
 </html>`;

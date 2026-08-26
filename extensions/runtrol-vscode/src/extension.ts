@@ -32,7 +32,6 @@ import { providerDisplayName, providerIcon, sessionTitle, workspaceName } from "
 import { RuntimeState } from "./state";
 import { StudioRuntimeClient } from "./runtimeClient";
 import { workspaceCovers, workspaceIdentity } from "./workspaceCollision";
-import { installableProviders } from "./usageDisplay";
 import { UsageView } from "./usageView";
 import { WorkspaceRootFollowing } from "./workspaceRoots";
 import { conversationIcon } from "./conversationIcon";
@@ -155,9 +154,7 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
     now: () => Date.now(),
     fix: (provider) => afterReady(() => controller.fixService(provider)),
     signIn: (provider) => afterReady(async () => controller.signInProvider(provider)),
-    discover: async () => {
-      await vscode.commands.executeCommand("runtrol.discoverServices");
-    },
+    setUp: (provider) => afterReady(() => controller.setUpService(provider)),
     dispatch: (action) => void run(action),
   });
 
@@ -376,27 +373,10 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
       }),
     ),
     vscode.commands.registerCommand(
-      "runtrol.discoverServices",
-      () => run(() => afterReady(async () => {
-        const installable = installableProviders(state.providers);
-        if (installable.length === 0) {
-          void vscode.window.showInformationMessage("Every catalogued coding service is already installed or needs a manual installer.");
-          return;
-        }
-        const picked = await vscode.window.showQuickPick(
-          installable.map((provider) => ({
-            label: provider.displayName,
-            description: "Not installed",
-            detail: provider.help?.install ?? undefined,
-            provider,
-          })),
-          {
-            title: "Add coding service",
-            placeHolder: "Choose a service. Its command is placed in the terminal and never run automatically.",
-          },
-        );
-        if (picked) await controller.fixService(picked.provider);
-      })),
+      // The plus on the usage section's title. It opens the list in the panel itself; nothing is asked at the
+      // top of the window, because the reader's eye is already at the bottom of the sidebar.
+      "runtrol.setUpServices",
+      () => usage.openSetup(),
     ),
     vscode.commands.registerCommand(
       "runtrol.selectSession",
