@@ -260,6 +260,7 @@ export class ConversationsTree implements vscode.TreeDataProvider<ChatTreeItem>,
       this.changedEmitter.fire(undefined);
       this.updateBadge();
       this.updateDiscoveryNotice();
+      this.updateCoreNotice();
       this.updateWelcomeContext();
       this.revealCurrentProject();
     });
@@ -269,6 +270,7 @@ export class ConversationsTree implements vscode.TreeDataProvider<ChatTreeItem>,
     this.view = view;
     this.updateBadge();
     this.updateDiscoveryNotice();
+    this.updateCoreNotice();
     this.updateWelcomeContext();
     this.revealCurrentProject();
     this.revealOpenConversation();
@@ -350,10 +352,22 @@ export class ConversationsTree implements vscode.TreeDataProvider<ChatTreeItem>,
     const incomplete = this.state.incompleteDiscovery !== null;
     if (incomplete === this.listingIncomplete) return;
     this.listingIncomplete = incomplete;
-    // Coverage diagnostics stay behind the title's information action. A permanent sentence above every
-    // conversation made provider internals the first thing a reader saw and displaced the list itself.
-    view.message = undefined;
     void vscode.commands.executeCommand("setContext", "runtrol.listingIncomplete", incomplete);
+  }
+
+  /// Say, above the list, when the list cannot be trusted to be everything.
+  ///
+  /// Coverage diagnostics deliberately stay behind the title's information action: a permanent sentence about
+  /// provider internals displaced the list itself. Losing the Core is not a diagnostic. Measured 2026-08-26:
+  /// with the Core unreachable the tree still drew the open folder's heading, so it was never empty, so the
+  /// view's welcome never appeared, and the sidebar showed one silent empty project with no reason given. The
+  /// only place that said anything was the usage strip, in words about our own internals.
+  private updateCoreNotice(): void {
+    const view = this.view;
+    if (!view) return;
+    view.message = this.state.coreReach === "unreachable"
+      ? "Cannot reach the Runtrol Core. Your conversations are still on this machine; this window is trying again."
+      : undefined;
   }
 
   /// Distinguish a healthy first run from a machine with no usable coding service, and both of those from a

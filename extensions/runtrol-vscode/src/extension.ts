@@ -701,6 +701,11 @@ export function activate(context: vscode.ExtensionContext): RuntrolExtensionApi 
       void run(() => rootFollowing.follow());
     },
     (error: unknown) => {
+      // Activation itself failed. If nothing was ever listed the Core never answered, so say that rather than
+      // leaving the sidebar on "Connecting..." for the rest of the window's life: a wait with no end is the
+      // same lie as the wrong sentence it replaced, just quieter. A failure after the first listing is
+      // something else failing, and it must not rewrite a Core that demonstrably answered.
+      if (state.coreReach !== "reached") state.setCoreReach("unreachable");
       settleReady?.(error);
     },
   );
