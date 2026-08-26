@@ -7,14 +7,19 @@ export type UsageState = "available" | "checking" | "unavailable" | "disconnecte
 
 /// One provider-reported account window that can be drawn without inventing a denominator.
 export type UsageMeter = {
-  /// Stable identity within one provider row.
-  readonly key: "primary" | "secondary";
-  /// The provider's window duration when known, otherwise its structural position.
+  /// Stable identity within one provider row: the window's own name, as its service gave it.
+  readonly key: string;
+  /// What this bar is a bar of, in as few characters as name it.
+  ///
+  /// The service's own scope when it scoped the limit to one model, its own label when it named the bucket,
+  /// and the window's length otherwise. A row of three anonymous bars is a row nobody can act on.
   readonly label: string;
   /// A bounded value suitable for the HTML progressbar contract.
   readonly percent: number;
   /// The complete spoken value, including the reset when one exists.
   readonly detail: string;
+  /// The service says this is the window governing right now, which is the one to read first.
+  readonly governing: boolean;
 };
 
 /// One line of the usage strip, ready to draw.
@@ -235,6 +240,9 @@ export function usageAbsenceCause(account: ProviderLine["account"] | null | unde
   if (account.status === "signedOut") return "Not signed in · Sign in";
   // The service was asked and answered that it has no usage surface at all. Nothing arrives later.
   if (account.status === "unpublished") return "No usage published";
+  // Signed in, its limits surface was asked, and the answer did not come back readable. The one absence that
+  // is ours rather than the service's, and the only one where sending somebody to sign in would be a lie.
+  if (account.limitsUnread) return "Usage unreadable";
   // Signed in, and the number rides on the service's own turn events: it exists, it has simply not been
   // said yet in this home. Saying "no usage published" here would be wrong the moment somebody typed.
   return "Usage arrives with the first turn";
@@ -261,26 +269,55 @@ export function accountAbsence(name: string, account: ProviderLine["account"] | 
   if (account.status === "unpublished") {
     return `${name} publishes no usage or sign-in status`;
   }
+  // The service's own sentence about why its limits did not arrive, which is the only thing here that names
+  // something we failed at rather than something to wait for.
+  if (account.limitsUnread) return account.limitsUnread;
   return "No limit reported yet";
 }
 
-/// Numeric account windows become real progress bars. A reset-only report remains useful text but never becomes
-/// a deceptive empty bar, since the provider did not say how much of that window was used.
+/// Numeric account windows become real progress bars, one per window the service described.
+///
+/// One bar per window rather than a summary, because the windows are not versions of each other. Measured on
+/// a real account: the five-hour window read 13%, the whole-account week 95%, and the week scoped to one
+/// model 100%. Only the last one was refusing work, and any single number would have been the wrong one.
+///
+/// A reset-only report remains useful text but never becomes a deceptive empty bar, since the provider did
+/// not say how much of that window was used.
 export function usageMeters(gauge: ProviderUsageGauge, nowMs: number): UsageMeter[] {
-  return ([
-    ["primary", gauge.primary, "Current"],
-    ["secondary", gauge.secondary, "Longer"],
-  ] as const).flatMap(([key, window, fallback]) => {
-    if (!window || typeof window.usedPercent !== "number" || !Number.isFinite(window.usedPercent)) return [];
+  return (gauge.windows ?? []).flatMap((window) => {
+    if (typeof window.usedPercent !== "number" || !Number.isFinite(window.usedPercent)) return [];
     const percent = Math.max(0, Math.min(100, Math.round(window.usedPercent)));
     const resets = resetsIn(window, nowMs);
     return [{
-      key,
-      label: usageWindowLabel(window.windowMinutes, fallback),
+      key: window.id,
+      label: meterLabel(window),
       percent,
       detail: `${percent}% used${resets ? `, ${resets}` : ""}`,
+      governing: window.governing === true,
     }];
   });
+}
+
+/// What one bar is a bar of, in the service's own words.
+///
+/// Never a phrase composed here. A service that scoped a limit to one model named that model, and a service
+/// that named the bucket gave that name; the length is the fallback and also the disambiguator, because one
+/// service meters the same model over both a short window and a long one.
+export function meterLabel(window: ProviderUsageWindow): string {
+  // A bar needs some text beside it even for a window its service named nothing and dated nothing, which is
+  // a shape older builds of one CLI still produce.
+  return windowName(window) ?? "limit";
+}
+
+/// The same name, absent when the service said nothing this could be built from.
+///
+/// Separate from [`meterLabel`] because the muted line reads differently: a bar with no name still needs a
+/// caption, but a line that said "limit 48%" would have put a word there that no service used.
+export function windowName(window: ProviderUsageWindow): string | null {
+  const named = window.scope ?? window.label ?? null;
+  const length = usageWindowLabel(window.windowMinutes, null);
+  if (named && length) return `${named} ${length}`;
+  return named ?? length;
 }
 
 /// The account's running spend as the provider stated it, formatted for one glance.
@@ -297,7 +334,12 @@ export function usageCost(gauge: ProviderUsageGauge): string | null {
   return `${cost.amount.toFixed(2)} ${cost.currency}`;
 }
 
-function usageWindowLabel(minutes: number | null | undefined, fallback: string): string {
+function usageWindowLabel(minutes: number | null | undefined, fallback: null): string | null;
+function usageWindowLabel(minutes: number | null | undefined, fallback: string): string;
+function usageWindowLabel(
+  minutes: number | null | undefined,
+  fallback: string | null,
+): string | null {
   if (typeof minutes !== "number" || !Number.isFinite(minutes) || minutes <= 0) return fallback;
   if (minutes < 60) return `${minutes}m`;
   if (minutes < 2_880 && minutes % 60 === 0) return `${minutes / 60}h`;
@@ -307,14 +349,19 @@ function usageWindowLabel(minutes: number | null | undefined, fallback: string):
 
 /// The muted line: the account's position in the provider's own numbers, nothing invented.
 ///
-/// A provider that reports a percentage shows it. One that reports only when the window resets shows that. One
-/// that reports a blocking limit says so first, because that is the fact the reader acts on.
+/// One line for a service with several windows, so it names the window it is about. The one it is about is
+/// the service's own governing window when it marks one, and otherwise the fullest, because that is the one
+/// about to bite. Reading the shortest window instead showed 13% on an account that was already refusing
+/// work on a window it never mentioned.
 export function usageDetail(gauge: ProviderUsageGauge, nowMs: number): string {
   const parts: string[] = [];
   if (gauge.reached) parts.push("limit reached");
-  const window = gauge.primary ?? gauge.secondary;
+  const window = governingWindow(gauge);
   const percent = window?.usedPercent;
-  if (typeof percent === "number") parts.push(`${percent}%`);
+  if (typeof percent === "number") {
+    const named = window ? windowName(window) : null;
+    parts.push(named ? `${named} ${percent}%` : `${percent}%`);
+  }
   const resets = resetsIn(window, nowMs);
   if (resets) parts.push(resets);
   if (typeof gauge.tokensToday === "number") parts.push(`${formatTokens(gauge.tokensToday)} today`);
@@ -325,6 +372,22 @@ export function usageDetail(gauge: ProviderUsageGauge, nowMs: number): string {
     parts.push(window ? "within limits" : "no limit reported");
   }
   return parts.join(" · ");
+}
+
+/// The one window this row's line is about.
+///
+/// The service's own word first: it marks the window governing right now, and measured, it marks one that is
+/// not the fullest when the two meter different things. Failing that, the fullest, then whatever exists.
+export function governingWindow(gauge: ProviderUsageGauge): ProviderUsageWindow | null {
+  const windows = gauge.windows ?? [];
+  const declared = windows.find((window) => window.governing === true);
+  if (declared) return declared;
+  let fullest: ProviderUsageWindow | null = null;
+  for (const window of windows) {
+    if (typeof window.usedPercent !== "number" || !Number.isFinite(window.usedPercent)) continue;
+    if (!fullest || window.usedPercent > (fullest.usedPercent ?? -1)) fullest = window;
+  }
+  return fullest ?? windows[0] ?? null;
 }
 
 /// Today's tokens by the service's own daily count, short enough for the strip.
@@ -347,20 +410,22 @@ function resetsIn(window: ProviderUsageWindow | null | undefined, nowMs: number)
   return `resets in ${Math.round(hours / 24)}d`;
 }
 
-/// The hover, with both windows when both were reported.
+/// The hover: every window the service described, spelled out.
+///
+/// The row has room for one line and a stack of bars; this is where the rest goes, including the length of
+/// each window and the model a scoped limit applies to.
 function usageTooltip(name: string, gauge: ProviderUsageGauge, nowMs: number): string {
   const lines = [`${name}: ${gauge.reached ? "a limit is blocking right now" : "within limits"}`];
-  for (const [label, window] of [
-    ["Current window", gauge.primary],
-    ["Longer window", gauge.secondary],
-  ] as const) {
-    if (!window) continue;
+  for (const window of gauge.windows ?? []) {
     const pieces: string[] = [];
     if (typeof window.usedPercent === "number") pieces.push(`${window.usedPercent}% used`);
-    if (typeof window.windowMinutes === "number") pieces.push(`${window.windowMinutes} minute window`);
+    if (typeof window.windowMinutes === "number") {
+      pieces.push(`${window.windowMinutes} minute window`);
+    }
     const resets = resetsIn(window, nowMs);
     if (resets) pieces.push(resets);
-    if (pieces.length > 0) lines.push(`${label}: ${pieces.join(", ")}`);
+    if (window.governing === true) pieces.push("governing now");
+    lines.push(pieces.length > 0 ? `${meterLabel(window)}: ${pieces.join(", ")}` : meterLabel(window));
   }
   const age = Math.max(0, Math.round((nowMs - gauge.atMs) / 60_000));
   lines.push(age < 1 ? "Reported just now" : `Reported ${age}m ago`);

@@ -60,8 +60,12 @@ input, select, textarea { width: 100%; padding: 11px 12px; background: var(--car
 .pane-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 7px; }
 .attention { border-color: #8b6b27; background: #302815; color: #f2c14e; font-weight: 800; }
 .usage-strip { display: grid; gap: 6px; padding: 10px 16px; border-bottom: 1px solid var(--line); }
-.usage-row { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 10px; font-size: 12px; }
+.usage-row { display: grid; grid-template-columns: auto 1fr; align-items: center; gap: 4px 10px; font-size: 12px; }
 .usage-row .usage-name { font-weight: 700; }
+/* One row per window the service described, so several bars line up under one service name. */
+.usage-row .usage-meter-row { grid-column: 1 / -1; display: grid; grid-template-columns: minmax(0, auto) minmax(40px, 1fr) auto; align-items: center; gap: 8px; }
+.usage-row .usage-meter-label { max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 11px; }
+.usage-row .usage-meter-percent { color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
 .usage-row .usage-meter { height: 6px; border-radius: 3px; background: var(--line); overflow: hidden; }
 .usage-row .usage-meter > span { display: block; height: 100%; background: var(--accent); }
 .usage-row .usage-meter.reached > span { background: var(--danger); }

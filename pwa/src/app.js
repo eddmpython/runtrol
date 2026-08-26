@@ -298,29 +298,83 @@ async function forgetPushSubscription() {
   state.pushPublicKey = null;
 }
 
-/// Every account's position against its limits, icon plus progress, from the index the PC pushes.
+/// Every account's position against its limits, from the index the PC pushes.
+///
+/// One bar per window the service described, the same set the sidebar draws. A service can meter three
+/// windows at once and only one of them can be the one refusing work, so a single summarised bar would be
+/// the wrong number on the phone exactly when it matters.
 function renderUsage() {
   usageStrip.replaceChildren();
   usageStrip.hidden = state.usage.length === 0;
   for (const line of state.usage) {
     const row = document.createElement("div");
     row.className = "usage-row";
-    const window = line.primary ?? line.secondary ?? null;
-    const percent = typeof window?.used_percent === "number" ? Math.max(0, Math.min(100, window.used_percent)) : null;
+    const windows = Array.isArray(line.windows) ? line.windows : [];
+    const governing = windowGoverning(windows);
     const detail = [];
     if (line.reached) detail.push("limit reached");
-    if (percent !== null) detail.push(`${percent}%`);
+    const percent = windowPercent(governing);
+    if (percent !== null) {
+      const named = windowName(governing);
+      detail.push(named ? `${named} ${percent}%` : `${percent}%`);
+    }
     if (typeof line.tokens_today === "number") detail.push(`${formatTokens(line.tokens_today)} today`);
     if (detail.length === 0) detail.push("no limit reported");
-    row.innerHTML = `<span class="usage-name"></span><span class="usage-meter"><span></span></span><span class="usage-detail"></span>`;
+    row.innerHTML = `<span class="usage-name"></span><span class="usage-detail"></span>`;
     row.querySelector(".usage-name").textContent = safeVisibleText(line.provider);
-    const meter = row.querySelector(".usage-meter");
-    meter.classList.toggle("reached", line.reached === true);
-    meter.firstElementChild.style.width = `${percent ?? 0}%`;
-    meter.hidden = percent === null;
     row.querySelector(".usage-detail").textContent = detail.join(" · ");
+    for (const window of windows) {
+      const drawn = windowPercent(window);
+      if (drawn === null) continue;
+      const meterRow = document.createElement("div");
+      meterRow.className = "usage-meter-row";
+      meterRow.innerHTML = `<span class="usage-meter-label"></span><span class="usage-meter"><span></span></span><span class="usage-meter-percent"></span>`;
+      meterRow.querySelector(".usage-meter-label").textContent = safeVisibleText(
+        windowName(window) ?? "limit",
+      );
+      const meter = meterRow.querySelector(".usage-meter");
+      meter.classList.toggle("reached", line.reached === true);
+      meter.firstElementChild.style.width = `${drawn}%`;
+      meterRow.querySelector(".usage-meter-percent").textContent = `${drawn}%`;
+      row.append(meterRow);
+    }
     usageStrip.append(row);
   }
+}
+
+/// The window this row's line is about: the service's own governing one, then the fullest.
+function windowGoverning(windows) {
+  const declared = windows.find((window) => window.governing === true);
+  if (declared) return declared;
+  let fullest = null;
+  for (const window of windows) {
+    if (typeof window.used_percent !== "number") continue;
+    if (!fullest || window.used_percent > fullest.used_percent) fullest = window;
+  }
+  return fullest ?? windows[0] ?? null;
+}
+
+/// A window's fill, bounded for a bar, or null when the service stated none.
+function windowPercent(window) {
+  const percent = window?.used_percent;
+  if (typeof percent !== "number" || !Number.isFinite(percent)) return null;
+  return Math.max(0, Math.min(100, Math.round(percent)));
+}
+
+/// What a window is of, in the service's own words, or null when it said nothing to build one from.
+function windowName(window) {
+  if (!window) return null;
+  const named = window.scope ?? window.label ?? null;
+  const minutes = window.window_minutes;
+  let length = null;
+  if (typeof minutes === "number" && Number.isFinite(minutes) && minutes > 0) {
+    if (minutes < 60) length = `${minutes}m`;
+    else if (minutes < 2880 && minutes % 60 === 0) length = `${minutes / 60}h`;
+    else if (minutes % 1440 === 0) length = `${minutes / 1440}d`;
+    else length = `${minutes}m`;
+  }
+  if (named && length) return `${named} ${length}`;
+  return named ?? length;
 }
 
 function formatTokens(tokens) {

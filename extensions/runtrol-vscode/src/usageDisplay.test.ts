@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import type { ProviderLine, ProviderUsageGauge } from "./runtimeTypes";
+import type { ProviderLine, ProviderUsageGauge, ProviderUsageWindow } from "./runtimeTypes";
 import {
   setupRows,
   usageDetail,
@@ -26,40 +26,127 @@ function gauge(overrides: Partial<ProviderUsageGauge>): ProviderUsageGauge {
   } as ProviderUsageGauge;
 }
 
-test("a provider that reports a percentage shows it, in its own number", () => {
-  const detail = usageDetail(
-    gauge({ primary: { usedPercent: 87, resetsAtMs: NOW + 23 * 60_000, windowMinutes: 300 } }),
-    NOW,
-  );
-  assert.equal(detail, "87% · resets in 23m");
-});
+/// One window, in the shape the Runtime publishes them.
+function window(
+  id: string,
+  overrides: Partial<ProviderUsageWindow> = {},
+): ProviderUsageWindow {
+  return { id, ...overrides } as ProviderUsageWindow;
+}
 
-test("reported account windows become bounded progress meters", () => {
-  const meters = usageMeters(gauge({
-    primary: { usedPercent: 87, resetsAtMs: NOW + 23 * 60_000, windowMinutes: 300 },
-    secondary: { usedPercent: 142, resetsAtMs: NOW + 2 * 86_400_000, windowMinutes: 10_080 },
-  }), NOW);
-  assert.deepEqual(meters, [
-    { key: "primary", label: "5h", percent: 87, detail: "87% used, resets in 23m" },
-    { key: "secondary", label: "7d", percent: 100, detail: "100% used, resets in 2d" },
+/// The three windows a real Claude account reported on 2026-08-26, as the Runtime published them.
+///
+/// Kept as measured because the shape is the whole point: two of the three were comfortable while the third,
+/// scoped to one model, was the one refusing work.
+const MEASURED_CLAUDE = [
+  window("five_hour", { usedPercent: 13, windowMinutes: 300, resetsAtMs: NOW + 23 * 60_000 }),
+  window("seven_day", { usedPercent: 95, windowMinutes: 10_080, resetsAtMs: NOW + 2 * 86_400_000 }),
+  window("seven_day:Fable", {
+    usedPercent: 100,
+    windowMinutes: 10_080,
+    scope: "Fable",
+    governing: true,
+    resetsAtMs: NOW + 2 * 86_400_000,
+  }),
+];
+
+test("every window a service described becomes its own labelled bar", () => {
+  // The defect this replaced: two slots, so a driver picked two of the three and the one actually blocking
+  // was routinely the one dropped.
+  const meters = usageMeters(gauge({ windows: MEASURED_CLAUDE }), NOW);
+  assert.deepEqual(meters.map((meter) => meter.label), ["5h", "7d", "Fable 7d"]);
+  assert.deepEqual(meters.map((meter) => meter.percent), [13, 95, 100]);
+  assert.deepEqual(meters.map((meter) => meter.key), [
+    "five_hour",
+    "seven_day",
+    "seven_day:Fable",
   ]);
 });
 
+test("a bar is named by what the service scoped it to, never by a phrase composed here", () => {
+  const [spark] = usageMeters(
+    gauge({
+      windows: [window("codex_bengalfox.primary", {
+        usedPercent: 4,
+        windowMinutes: 300,
+        label: "GPT-5.3-Codex-Spark",
+      })],
+    }),
+    NOW,
+  );
+  assert.equal(spark?.label, "GPT-5.3-Codex-Spark 5h");
+});
+
+test("the line names the window the service says is governing, not the shortest one", () => {
+  // Reading the first window showed 13% on an account that was already refusing work on a window the same
+  // report described. The service marks which one binds; that is the one a person acts on.
+  const detail = usageDetail(gauge({ reached: true, windows: MEASURED_CLAUDE }), NOW);
+  assert.ok(detail.startsWith("limit reached"), detail);
+  assert.ok(detail.includes("Fable 7d 100%"), detail);
+});
+
+test("with no window marked governing the fullest one speaks for the row", () => {
+  const detail = usageDetail(
+    gauge({
+      windows: [
+        window("codex_bengalfox.primary", { usedPercent: 0, windowMinutes: 300 }),
+        window("codex.primary", { usedPercent: 30, windowMinutes: 10_080 }),
+      ],
+    }),
+    NOW,
+  );
+  assert.ok(detail.includes("7d 30%"), detail);
+});
+
+test("a provider that reports a percentage shows it, in its own number", () => {
+  const detail = usageDetail(
+    gauge({
+      windows: [window("five_hour", {
+        usedPercent: 87,
+        resetsAtMs: NOW + 23 * 60_000,
+        windowMinutes: 300,
+      })],
+    }),
+    NOW,
+  );
+  assert.equal(detail, "5h 87% · resets in 23m");
+});
+
+test("a percentage past the top of the track is drawn at the top of the track", () => {
+  const meters = usageMeters(
+    gauge({ windows: [window("seven_day", { usedPercent: 142, windowMinutes: 10_080 })] }),
+    NOW,
+  );
+  assert.equal(meters[0]?.percent, 100);
+});
+
 test("a reset without a reported percentage does not invent an empty progress bar", () => {
-  assert.deepEqual(usageMeters(gauge({ primary: { resetsAtMs: NOW + 60_000 } }), NOW), []);
-  assert.deepEqual(usageMeters(gauge({ primary: { usedPercent: Number.NaN } }), NOW), []);
+  assert.deepEqual(
+    usageMeters(gauge({ windows: [window("billing_period", { resetsAtMs: NOW + 60_000 })] }), NOW),
+    [],
+  );
+  assert.deepEqual(
+    usageMeters(gauge({ windows: [window("five_hour", { usedPercent: Number.NaN })] }), NOW),
+    [],
+  );
 });
 
 test("a provider that reports only a reset still has something true to say", () => {
-  // Measured on a real turn: one CLI reports which window governs and when it resets, never how full it is.
-  // Showing nothing for it would read as "no limit exists" about the account most in use.
-  const detail = usageDetail(gauge({ primary: { resetsAtMs: NOW + 2 * 3_600_000 } }), NOW);
+  // Measured: one service publishes its usage period and no percentage for it at all. Showing nothing would
+  // read as "no limit exists" for an account that has one.
+  const detail = usageDetail(
+    gauge({ windows: [window("billing_period", { resetsAtMs: NOW + 2 * 3_600_000 })] }),
+    NOW,
+  );
   assert.equal(detail, "resets in 2h");
 });
 
 test("a blocking limit is the first thing the line says", () => {
   const detail = usageDetail(
-    gauge({ reached: true, primary: { usedPercent: 100, resetsAtMs: NOW + 90 * 60_000 } }),
+    gauge({
+      reached: true,
+      windows: [window("five_hour", { usedPercent: 100, resetsAtMs: NOW + 90 * 60_000 })],
+    }),
     NOW,
   );
   assert.ok(detail.startsWith("limit reached"), detail);
@@ -70,12 +157,26 @@ test("a service that described no limit is said as that, never as silence and ne
 });
 
 test("a reset already in the past is not offered as a wait", () => {
-  assert.equal(usageDetail(gauge({ primary: { resetsAtMs: NOW - 1_000 } }), NOW), "within limits");
+  assert.equal(
+    usageDetail(gauge({ windows: [window("five_hour", { resetsAtMs: NOW - 1_000 })] }), NOW),
+    "within limits",
+  );
+});
+
+test("the hover spells out every window, including the one that is governing", () => {
+  const [row] = usageRows(
+    [gauge({ providerId: "claude", reached: true, windows: MEASURED_CLAUDE })],
+    PROVIDERS,
+    NOW,
+  );
+  assert.ok(row?.tooltip.includes("Fable 7d: 100% used"), row?.tooltip);
+  assert.ok(row?.tooltip.includes("governing now"), row?.tooltip);
+  assert.ok(row?.tooltip.includes("5h: 13% used"), row?.tooltip);
 });
 
 test("rows carry the service's declared mark and name", () => {
   const rows = usageRows(
-    [gauge({ providerId: "claude", primary: { resetsAtMs: NOW + 60_000 } })],
+    [gauge({ providerId: "claude", windows: [window("five_hour", { resetsAtMs: NOW + 60_000 })] })],
     PROVIDERS,
     NOW,
   );
@@ -138,7 +239,7 @@ test("a last report never disguises a disconnected CLI as available", () => {
     displayName: "Codex",
     installation: { state: "missing" },
   }] as unknown as ProviderLine[];
-  const rows = usageRows([gauge({ primary: { usedPercent: 48 } })], missing, NOW);
+  const rows = usageRows([gauge({ windows: [window("five_hour", { usedPercent: 48 })] })], missing, NOW);
   assert.equal(rows.length, 1);
   assert.equal(rows[0]?.detail, "Disconnected · 48%");
   assert.equal(rows[0]?.state, "disconnected");
@@ -147,7 +248,7 @@ test("a last report never disguises a disconnected CLI as available", () => {
 });
 
 test("equivalent status snapshots do not demand another view render", () => {
-  const rows = usageRows([gauge({ primary: { usedPercent: 48 } })], PROVIDERS, NOW);
+  const rows = usageRows([gauge({ windows: [window("five_hour", { usedPercent: 48 })] })], PROVIDERS, NOW);
   assert.equal(usageRowsEqual(rows, structuredClone(rows)), true);
 });
 
@@ -200,7 +301,7 @@ test("the account line says what the service said: signed out is an action, a pl
     { providerId: "grok", displayName: "Grok", icon: "grok", installation: { state: "usable" },
       account: { status: "unpublished", why: "no status command", checkedAtMs: NOW } },
   ] as unknown as ProviderLine[];
-  const rows = usageRows([gauge({ providerId: "claude", primary: { usedPercent: 40 } })], providers, NOW);
+  const rows = usageRows([gauge({ providerId: "claude", windows: [window("five_hour", { usedPercent: 40 })] })], providers, NOW);
   assert.deepEqual(rows.map((row) => [row.name, row.detail, row.state]), [
     // The bar row is the number and nothing else; the plan the service named is in the hover.
     ["Claude Code", "40%", "available"],
@@ -237,10 +338,14 @@ test("a bar-less row names the cause that matches what the service actually said
 test("a service that publishes its own daily token count shows today's tokens beside the window", () => {
   const detail = usageDetail(
     gauge({
-      primary: { usedPercent: 65, resetsAtMs: NOW + 5 * 24 * 60 * 60_000, windowMinutes: 10_080 },
+      windows: [window("codex.primary", {
+        usedPercent: 65,
+        resetsAtMs: NOW + 5 * 24 * 60 * 60_000,
+        windowMinutes: 10_080,
+      })],
       tokensToday: 12_345_678,
     }),
     NOW,
   );
-  assert.equal(detail, "65% · resets in 5d · 12.3M tokens today");
+  assert.equal(detail, "7d 65% · resets in 5d · 12.3M tokens today");
 });

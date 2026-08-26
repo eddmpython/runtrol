@@ -60,11 +60,29 @@ button.setup-row:focus-visible {
    window of one service shares these columns, so two bars end at the same place. */
 .usage-body {
   display: grid;
-  grid-template-columns: 1fr auto auto;
+  /* Three columns per window: what the bar is of, the bar, the digits. The name column takes what it needs
+     and no more, so every bar of a service that reported several windows starts at the same place however
+     long one of the names is. */
+  grid-template-columns: minmax(0, auto) minmax(40px, 1fr) auto;
   gap: 4px 6px;
   align-items: center;
   flex: 1;
   min-width: 0;
+}
+
+.usage-meter-label {
+  /* A vendor can call a model bucket anything, and one of them is nineteen characters. Capped and clipped
+     rather than allowed to squeeze the bar out of the row; the hover carries the whole name. */
+  max-width: 96px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--vscode-descriptionForeground);
+}
+
+/* The window the service says is binding right now reads at full strength; its siblings stay quiet. */
+.usage-meter-label.governing {
+  color: var(--vscode-foreground);
 }
 
 .usage-value {
@@ -107,6 +125,9 @@ button.setup-row:focus-visible {
 }
 
 .usage-cost {
+  /* Its own line under the bars rather than a third column beside the first one, which used to shorten that
+     one bar and make two readings of the same service look like different scales. */
+  grid-column: 1 / -1;
   overflow: hidden;
   font-variant-numeric: tabular-nums;
   text-overflow: ellipsis;

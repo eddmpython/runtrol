@@ -91,28 +91,41 @@ function usageBody(row: UsageRow): HTMLElement[] {
   if (row.state === "signedOut") return [textLine("Not signed in · Sign in")];
   if (row.state === "checking") return [textLine("")];
   if (row.meters.length === 0) return [textLine(row.cost ?? row.detail)];
-  // The cells go straight into the body's own grid rather than into a box per window, so every bar of a service
-  // that reported two windows ends at the same place instead of being shortened by the spend beside the first.
-  return row.meters.flatMap((meter, index) => meterCells(meter, index === 0 ? row.cost : null));
+  // The cells go straight into the body's own grid rather than into a box per window, so every bar of a
+  // service that reported several windows starts and ends at the same place however long the names are.
+  const cells = row.meters.flatMap((meter) => meterCells(meter));
+  if (row.cost) cells.push(costLine(row.cost));
+  return cells;
 }
 
-/// One reported window, as three cells: the proportion as a bar, the same proportion as digits, and the spend
-/// when the service also reported one.
-function meterCells(meter: UsageMeter, cost: string | null): HTMLElement[] {
+/// One reported window, as three cells: what the bar is of, the proportion as a bar, and the same
+/// proportion as digits.
+///
+/// The name is drawn rather than only spoken. A service can report three windows at once and two of them can
+/// be the same length, so a stack of unlabelled bars asks the reader to hover each one to learn which limit
+/// is the full one. The full text stays in the hover for the names too long for a sidebar.
+function meterCells(meter: UsageMeter): HTMLElement[] {
+  const label = document.createElement("span");
+  label.className = `usage-meter-label${meter.governing ? " governing" : ""}`;
+  label.textContent = meter.label;
+  label.title = `${meter.label}: ${meter.detail}`;
   const bar = document.createElement("progress");
   bar.max = 100;
   bar.value = meter.percent;
-  // The window this bar is of, and its reset, spoken rather than crowded onto the row. A bar with no name is
-  // just a number to a reader who cannot see which window it belongs to.
   bar.title = `${meter.label}: ${meter.detail}`;
   bar.setAttribute("aria-label", `${meter.label}: ${meter.detail}`);
   const percent = document.createElement("span");
   percent.className = "usage-percent";
   percent.textContent = `${meter.percent}%`;
+  return [label, bar, percent];
+}
+
+/// The service's own running spend, on its own line under the bars.
+function costLine(cost: string): HTMLElement {
   const spend = document.createElement("span");
   spend.className = "usage-cost";
-  spend.textContent = cost ?? "";
-  return [bar, percent, spend];
+  spend.textContent = cost;
+  return spend;
 }
 
 function textLine(value: string): HTMLElement {
