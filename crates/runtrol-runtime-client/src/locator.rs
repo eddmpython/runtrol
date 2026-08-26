@@ -589,8 +589,8 @@ const HOME_ENVIRONMENT: &str = "RUNTROL_HOME";
 
 /// Where this machine's Runtrol home is, by the same rule the Core itself follows.
 ///
-/// The Core reads `RUNTROL_HOME` first and falls back to the platform's directory
-/// (`crates/runtrol-core/src/home/mod.rs`). This read only the platform directory, so with a home the operator
+/// The Runtime reads `RUNTROL_HOME` first and falls back to the platform's own directory.
+/// This read only the platform directory, so with a home the operator
 /// chose, `runtrol status` answered from that home while `runtrol runtime-locator` answered from the default one,
 /// and a consumer holding both was talking to two Runtimes without being told. Measured 2026-08-26: an extension
 /// in a chosen home could never finish enrolling, because the enrollment it created in one home was invisible to
