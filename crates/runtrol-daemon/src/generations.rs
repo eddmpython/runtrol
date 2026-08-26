@@ -236,6 +236,14 @@ async fn drain_predecessors(paths: &Layout, own_digest: &str) {
 /// machine. The request is sent as it arrived, so the generation that answers applies its own rules to the same
 /// request; nothing is re-signed and no authority is added on the way through. The Runtime endpoint, where a
 /// caller's authority comes from a grant on its own connection, is deliberately not forwarded here.
+/// How long one peer is given to answer before it is treated as not the holder.
+///
+/// Short on purpose. This runs while a caller is waiting for an answer it already has, so the whole point is
+/// that asking elsewhere can only make that answer better, never later. A generation that is actually serving a
+/// session replies to a local pipe in single-digit milliseconds; one that has gone leaves a name nothing is
+/// listening on, and waiting on that would put the caller's answer behind a dead process.
+const PEER_ANSWER_WITHIN: Duration = Duration::from_millis(400);
+
 pub(crate) async fn ask_draining_peer(
     paths: &Layout,
     own_digest: &str,
@@ -254,7 +262,12 @@ pub(crate) async fn ask_draining_peer(
     for generation in draining {
         // ok: a peer that cannot be reached or refuses is simply not the holder, and the caller keeps the
         // refusal it already had. Nothing here changes what this generation knows.
-        if let Some(response) = ask_for_answer(&generation.control_endpoint, request).await
+        let asked = tokio::time::timeout(
+            PEER_ANSWER_WITHIN,
+            ask_for_answer(&generation.control_endpoint, request),
+        )
+        .await;
+        if let Ok(Some(response)) = asked
             && !matches!(response, Response::Failed(_))
         {
             return Some(response);
