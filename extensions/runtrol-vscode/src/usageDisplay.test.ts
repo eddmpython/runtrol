@@ -4,6 +4,7 @@ import test from "node:test";
 import type { ProviderLine, ProviderUsageGauge, ProviderUsageWindow } from "./runtimeTypes";
 import {
   setupRows,
+  shortened,
   usageDetail,
   usageMeters,
   usageRows,
@@ -74,9 +75,17 @@ test("a bar is named by what the service scoped it to, never by a phrase compose
     }),
     NOW,
   );
-  // The length leads because it is what tells this bar from the same model's weekly one, and because a
-  // sidebar clips the tail of a nineteen-character model name.
-  assert.equal(spark?.label, "5h GPT-5.3-Codex-Spark");
+  // The length leads because it is what tells this bar from the same model's weekly one. The name is cut
+  // from the middle rather than the end: `GPT-5.3-Co...` is the half every bucket of that service shares,
+  // and `GPT...Spark` is the vendor's word and the distinguishing word both.
+  assert.equal(spark?.label, "5h GPT…Spark");
+});
+
+test("a short name the service gave is left exactly as it gave it", () => {
+  // Nothing is renamed and nothing is shortened that fits. `Fable` is five characters and stays five.
+  assert.equal(shortened("Fable"), "Fable");
+  assert.equal(shortened("sonnet"), "sonnet");
+  assert.equal(shortened(null), null);
 });
 
 test("the line names the window the service says is governing, not the shortest one", () => {
@@ -202,7 +211,7 @@ test("a service that reported a period and no number leads with its own reason",
       account: {
         status: "signedIn",
         plan: "SuperGrok",
-        limitsUnread: "team-managed",
+        limitsAbsent: { kind: "unmetered", why: "team-managed" },
         checkedAtMs: NOW,
       },
     },
@@ -229,7 +238,11 @@ test("a service that did state a number keeps its number and not the reason", ()
       displayName: "Grok",
       icon: "grok",
       installation: { state: "usable" },
-      account: { status: "signedIn", limitsUnread: "team-managed", checkedAtMs: NOW },
+      account: {
+        status: "signedIn",
+        limitsAbsent: { kind: "unmetered", why: "team-managed" },
+        checkedAtMs: NOW,
+      },
     },
   ] as unknown as ProviderLine[];
   const [row] = usageRows(

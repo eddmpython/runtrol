@@ -240,9 +240,11 @@ export function usageAbsenceCause(account: ProviderLine["account"] | null | unde
   if (account.status === "signedOut") return "Not signed in · Sign in";
   // The service was asked and answered that it has no usage surface at all. Nothing arrives later.
   if (account.status === "unpublished") return "No usage published";
-  // Signed in, its limits surface was asked, and the answer did not come back readable. The one absence that
-  // is ours rather than the service's, and the only one where sending somebody to sign in would be a lie.
-  if (account.limitsUnread) return "Usage unreadable";
+  // Signed in, and the numbers are not here. Two different silences: one is the service answering that this
+  // account is metered somewhere the reader cannot see, and the other is a question that did not come back.
+  // Sending either of them to sign in would be a lie, and they are not the same thing to say.
+  if (account.limitsAbsent?.kind === "unmetered") return account.limitsAbsent.why;
+  if (account.limitsAbsent) return "Usage unreadable";
   // Signed in, and the number rides on the service's own turn events: it exists, it has simply not been
   // said yet in this home. Saying "no usage published" here would be wrong the moment somebody typed.
   return "Usage arrives with the first turn";
@@ -269,9 +271,9 @@ export function accountAbsence(name: string, account: ProviderLine["account"] | 
   if (account.status === "unpublished") {
     return `${name} publishes no usage or sign-in status`;
   }
-  // The service's own sentence about why its limits did not arrive, which is the only thing here that names
-  // something we failed at rather than something to wait for.
-  if (account.limitsUnread) return account.limitsUnread;
+  // The sentence itself, whichever silence it is: the service's own words for an account metered elsewhere,
+  // and ours for a question that did not come back.
+  if (account.limitsAbsent) return account.limitsAbsent.why;
   return "No limit reported yet";
 }
 
@@ -324,8 +326,27 @@ export function meterLabel(window: ProviderUsageWindow): string {
 ///
 /// Separate from [`meterLabel`] because the muted line reads differently: a bar with no name still needs a
 /// caption, but a line that said "limit 48%" would have put a word there that no service used.
+/// The longest a service's own name for something may be before the middle of it is dropped.
+///
+/// A sidebar is narrow and these names are not chosen with one in mind: one service calls a model bucket
+/// `Fable` and another calls one `GPT-5.3-Codex-Spark`.
+const NAME_BUDGET = 12;
+
+/// A name too long for the row, shortened from the middle so the end of it survives.
+///
+/// Cut from the end, `GPT-5.3-Codex-Spark` becomes `GPT-5.3-Co…`, which is the half every one of that
+/// service's buckets shares and none of the half that says which bucket. Cut from the middle it becomes
+/// `GPT…Spark`, the vendor's word and the distinguishing word both. Nothing is renamed: the whole name
+/// is on the row's hover and in the data, and this is only what fits on the row.
+export function shortened(name: string | null): string | null {
+  if (name === null || name.length <= NAME_BUDGET) return name;
+  const head = name.slice(0, 3).replace(/[-_. ]+$/, "");
+  const tail = name.slice(-5).replace(/^[-_. ]+/, "");
+  return head + "…" + tail;
+}
+
 export function windowName(window: ProviderUsageWindow): string | null {
-  const named = window.scope ?? window.label ?? null;
+  const named = shortened(window.scope ?? window.label ?? null);
   const length = usageWindowLabel(window.windowMinutes, null);
   // Length first, because it is the short half and the one that tells two windows of the same model apart.
   // Measured the other way round in a real sidebar: one service meters the same model over five hours and
@@ -407,8 +428,10 @@ export function unmeteredDetail(
 ): string {
   const detail = usageDetail(gauge, nowMs);
   const metered = (gauge.windows ?? []).some((window) => boundedPercent(window.usedPercent) !== null);
-  if (metered || !account?.limitsUnread) return detail;
-  return `${account.limitsUnread} · ${detail}`;
+  // Only the service's own reason leads a line. A failure of ours is a thing to fix, not a caption for a
+  // number the service did give.
+  if (metered || account?.limitsAbsent?.kind !== "unmetered") return detail;
+  return `${account.limitsAbsent.why} · ${detail}`;
 }
 
 /// The one window this row's line is about.

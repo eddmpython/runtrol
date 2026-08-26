@@ -3,6 +3,11 @@
   font-family: var(--vscode-font-family);
   font-size: var(--vscode-font-size);
   color: var(--vscode-foreground);
+  /* A view like this one is an iframe with a ground of its own, and what it paints by default is the
+     editor's background, not the sidebar's. Beside two tree views that use the sidebar's, that read as a
+     black card glued into the panel rather than as part of it. A transparent body is not enough: the
+     element behind it is the one doing the painting. */
+  background: var(--vscode-sideBar-background, transparent);
 }
 
 * {
