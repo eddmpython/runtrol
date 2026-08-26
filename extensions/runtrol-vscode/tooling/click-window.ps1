@@ -36,10 +36,7 @@ if (-not $window) {
     exit 2
 }
 $handle = [IntPtr]::new([long]$window.Handle)
-[RuntrolClickWin32]::ShowWindow($handle, 9) | Out-Null
-[RuntrolClickWin32]::SetForegroundWindow($handle) | Out-Null
-Start-Sleep -Milliseconds 500
-if ([RuntrolClickWin32]::GetForegroundWindow() -ne $handle) {
+if (-not (Set-RuntrolWindowFocus $window.Handle)) {
     Write-Error "the window '$($window.Title)' could not be brought to the foreground; nothing was clicked"
     exit 5
 }

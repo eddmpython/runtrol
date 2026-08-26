@@ -29,6 +29,13 @@ public class RuntrolWindowWin32 {
     [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hWnd);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetWindowText(IntPtr hWnd, StringBuilder text, int capacity);
     [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
+    [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
+    [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+    [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll", EntryPoint = "GetWindowThreadProcessId")] public static extern uint GetWindowThreadProcessIdOnly(IntPtr hWnd, IntPtr lpdwProcessId);
+    [DllImport("user32.dll")] public static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool fAttach);
+    [DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();
+    [DllImport("user32.dll")] public static extern bool BringWindowToTop(IntPtr hWnd);
     public class TopLevelWindow {
         public long Handle { get; set; }
         public string Title { get; set; }
@@ -53,6 +60,32 @@ public class RuntrolWindowWin32 {
 
 # The process ids of one VS Code family: every process whose command line carries the marker (an isolated
 # user-data-dir, typically) and, walking up, the Code.exe parents that own them. $null means "any process".
+# Bring one window to the foreground and say whether it worked.
+#
+# Windows lets a background process take the foreground only while it is attached to the thread that already
+# has it, so this attaches, asks, detaches, and checks. Three tries before giving up. One copy, because a tool
+# that only asks once fails silently and looks like a click that did nothing (measured 2026-08-26).
+function Set-RuntrolWindowFocus([long]$Handle) {
+    $target = [IntPtr]::new($Handle)
+    # 9 = SW_RESTORE: a minimised window takes neither keys nor clicks.
+    [RuntrolWindowWin32]::ShowWindow($target, 9) | Out-Null
+    for ($attempt = 0; $attempt -lt 3; $attempt += 1) {
+        $foreground = [RuntrolWindowWin32]::GetForegroundWindow()
+        $foregroundThread = [RuntrolWindowWin32]::GetWindowThreadProcessIdOnly($foreground, [IntPtr]::Zero)
+        $targetThread = [RuntrolWindowWin32]::GetWindowThreadProcessIdOnly($target, [IntPtr]::Zero)
+        $ownThread = [RuntrolWindowWin32]::GetCurrentThreadId()
+        [RuntrolWindowWin32]::AttachThreadInput($ownThread, $foregroundThread, $true) | Out-Null
+        [RuntrolWindowWin32]::AttachThreadInput($ownThread, $targetThread, $true) | Out-Null
+        [RuntrolWindowWin32]::BringWindowToTop($target) | Out-Null
+        [RuntrolWindowWin32]::SetForegroundWindow($target) | Out-Null
+        [RuntrolWindowWin32]::AttachThreadInput($ownThread, $targetThread, $false) | Out-Null
+        [RuntrolWindowWin32]::AttachThreadInput($ownThread, $foregroundThread, $false) | Out-Null
+        Start-Sleep -Milliseconds 500
+        if ([RuntrolWindowWin32]::GetForegroundWindow() -eq $target) { return $true }
+    }
+    return $false
+}
+
 function Get-RuntrolProcessFamily([string]$CommandLineMatch) {
     if (-not $CommandLineMatch) { return $null }
     $allProcesses = @(Get-CimInstance Win32_Process)
