@@ -135,7 +135,7 @@ function bindActions() {
     runAction(async () => {
       const provider = element("new-provider").value;
       const workspace = element("new-workspace").value;
-      if (!provider || !workspace) throw new Error("Choose an approved provider and workspace.");
+      if (!provider || !workspace) throw new Error("Choose a service and a project.");
       const response = await withCore(state.connection, state.identity, (client) => client.start(provider, workspace));
       if (response.say === "started") await refreshSessions(response.with.session);
     });

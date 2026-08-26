@@ -83,7 +83,7 @@ function commandOptions(arguments_) {
     throw new Error("--url must be a loopback http origin");
   }
   if (!selector || selector.length > 200) throw new Error("--selector is required and bounded");
-  if (fixture !== null && !["mission-flight-list", "mission-flight-detail", "session-terminal", "session-usage"].includes(fixture)) {
+  if (fixture !== null && !["session-list", "session-terminal", "session-usage"].includes(fixture)) {
     throw new Error("--fixture is not a supported visual state");
   }
   return { config, url, output, selector, fixture };
@@ -92,37 +92,17 @@ function commandOptions(arguments_) {
 function visualFixture(kind) {
   if (kind === "session-terminal") return terminalFixture();
   if (kind === "session-usage") return usageFixture();
-  const showDetail = kind === "mission-flight-detail";
+  return sessionListFixture();
+}
+
+/// The list as a paired phone first sees it: the sessions this PC has, and nothing else.
+function sessionListFixture() {
   return `(() => {
     const byId = (id) => document.getElementById(id);
     byId("setup").hidden = true;
     byId("sessions-view").hidden = false;
-    byId("session-browser").hidden = true;
-    byId("mission-browser").hidden = false;
+    byId("session-browser").hidden = false;
     byId("session-detail").hidden = true;
-    byId("mission-detail").hidden = ${showDetail ? "false" : "true"};
-    byId("show-missions").hidden = false;
-    byId("show-sessions").setAttribute("aria-pressed", "false");
-    byId("show-missions").setAttribute("aria-pressed", "true");
-    byId("connection-status").textContent = "PC online";
-    byId("connection-status").dataset.state = "online";
-    byId("mission-count").textContent = "2";
-    byId("mission-signal-count").hidden = false;
-    byId("mission-signal-count").textContent = "1";
-    byId("mission-list").innerHTML = '<button class="mission-row flight-signal selected" type="button"><span class="state-dot integrating"></span><span><strong>Release candidate</strong><small>C:\\\\work\\\\runtrol</small></span><b>LANDED</b></button><button class="mission-row" type="button"><span class="state-dot running"></span><span><strong>Documentation refresh</strong><small>C:\\\\work\\\\docs</small></span><b>2/4</b></button>';
-    byId("selected-mission-state").textContent = "INTEGRATING";
-    byId("selected-mission-title").textContent = "Release candidate";
-    byId("selected-mission-project").textContent = "C:\\\\work\\\\runtrol";
-    byId("mission-flight-signal").hidden = false;
-    byId("mission-flight-signal").textContent = "Receipt Landing ready";
-    byId("mission-progress").textContent = "4 of 4";
-    byId("mission-awaiting").textContent = "0";
-    byId("mission-source").textContent = "missions/release.toml";
-    byId("mission-policy").textContent = "51".repeat(32);
-    byId("mission-tasks").innerHTML = '<article class="mission-task"><h3>verify-package</h3><p>passed  isolatedWorktree  operatorChoice</p><p>instructions/verify-package.md</p><p>3 gates passed, 0 failed</p><p>Receipt rcpt_01</p></article>';
-    byId("pause-mission").hidden = true;
-    byId("resume-mission").hidden = true;
-    byId("cancel-mission").hidden = true;
     return true;
   })()`;
 }
@@ -147,8 +127,6 @@ function terminalFixture() {
     byId("setup").hidden = true;
     byId("sessions-view").hidden = false;
     byId("session-browser").hidden = true;
-    byId("mission-browser").hidden = true;
-    byId("mission-detail").hidden = true;
     byId("session-detail").hidden = false;
     byId("connection-status").textContent = "PC online";
     byId("connection-status").dataset.state = "online";
@@ -178,9 +156,7 @@ function usageFixture() {
     byId("setup").hidden = true;
     byId("sessions-view").hidden = false;
     byId("session-browser").hidden = false;
-    byId("mission-browser").hidden = true;
     byId("session-detail").hidden = true;
-    byId("mission-detail").hidden = true;
     byId("connection-status").textContent = "PC online";
     byId("connection-status").dataset.state = "online";
     byId("session-count").textContent = "3";
