@@ -64,7 +64,11 @@ def contractProblems(
     startCommands = [
         row for row in commands if isinstance(row, dict) and row.get("command") == "runtrol.startSession"
     ] if isinstance(commands, list) else []
-    if len(startCommands) != 1 or startCommands[0].get("title") != "Runtrol: New Conversation":
+    # The palette composes what a person reads from the category and the title, so that is what is checked. The
+    # titles themselves dropped the prefix once the category carried it, and a gate matching the old composed
+    # string went red on a rename that changed nothing anybody sees.
+    started = startCommands[0] if len(startCommands) == 1 else {}
+    if started.get("category") != "Runtrol" or started.get("title") != "New Conversation":
         found.append("the package has no single public Runtrol: New Conversation command")
     keybindings = contributes.get("keybindings")
     startBindings = [
@@ -84,12 +88,14 @@ def contractProblems(
     if not isinstance(corePath, dict) or corePath.get("default") != "":
         found.append("the shipped Core path is not automatic by default")
 
+    # What the installed package has to prove on every desktop: the one public command runs, and a conversation
+    # editor that was not there before is. The earlier draft-and-close dance was a surface this product no longer
+    # has, and naming it here kept the gate red about something that had been deliberately removed.
     for token in (
-        'executeCommand("runtrol.startSession")',
+        'executeCommand("runtrol.startSession"',
         "tabsBeforeCommand",
-        'draft.label !== "New chat"',
-        "draftOpened: true",
-        "draftClosed",
+        "isConversationEditor",
+        "newConversationTitle",
     ):
         if token not in verifier:
             found.append(f"the installed-package verifier is missing {token}")
@@ -100,7 +106,9 @@ def fixture() -> tuple[dict[str, Any], dict[str, object], str, str, str]:
     """Return one minimal valid shared first-run contract for mutation tests."""
     package = {
         "contributes": {
-            "commands": [{"command": "runtrol.startSession", "title": "Runtrol: New Conversation"}],
+            "commands": [
+                {"command": "runtrol.startSession", "title": "New Conversation", "category": "Runtrol"},
+            ],
             "keybindings": [{
                 "command": "runtrol.startSession",
                 "key": "ctrl+k ctrl+n",
@@ -112,8 +120,8 @@ def fixture() -> tuple[dict[str, Any], dict[str, object], str, str, str]:
     }
     targets = {name: dict(contract) for name, contract in EXPECTED_TARGETS.items()}
     verifier = (
-        'executeCommand("runtrol.startSession") tabsBeforeCommand '
-        'draft.label !== "New chat" draftOpened: true draftClosed'
+        'executeCommand("runtrol.startSession", { interactive: false }) tabsBeforeCommand '
+        "isConversationEditor newConversationTitle"
     )
     gates = """
   crossPlatform:
