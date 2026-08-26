@@ -5,6 +5,7 @@
 
 use std::collections::BTreeMap;
 use std::str::FromStr as _;
+use std::sync::Arc;
 
 use hmac::{Hmac, Mac as _};
 use runtrol_core::{
@@ -411,11 +412,22 @@ pub(crate) struct RuntimeControl {
     boot_id: [u8; 16],
     authenticator: Hmac<Sha256>,
     next_lease_generation: u64,
+    native_claims: Arc<crate::native_claims::NativeLiveClaimRegistry>,
 }
 
 impl RuntimeControl {
     /// Mint one boot-local authenticator key and recovery identity.
+    #[cfg(test)]
     pub(crate) fn new() -> Result<Self, RuntimeControlFailure> {
+        Self::with_native_claims(Arc::new(
+            crate::native_claims::NativeLiveClaimRegistry::default(),
+        ))
+    }
+
+    /// Mint authority using the Runtime home's shared cross-surface process claims.
+    pub(crate) fn with_native_claims(
+        native_claims: Arc<crate::native_claims::NativeLiveClaimRegistry>,
+    ) -> Result<Self, RuntimeControlFailure> {
         let mut boot_id = [0_u8; 16];
         let mut authenticator_key = [0_u8; 32];
         getrandom::fill(&mut boot_id).map_err(|_| RuntimeControlFailure::internal())?;
@@ -428,6 +440,7 @@ impl RuntimeControl {
             boot_id,
             authenticator,
             next_lease_generation: 0,
+            native_claims,
         })
     }
 
@@ -701,8 +714,19 @@ impl RuntimeControl {
             Ok(lease_id) => lease_id,
             Err(failure) => return self.deny(store, mutation, failure),
         };
+        let native_claims = Arc::clone(&self.native_claims);
+        let claim = match native_claims.reserve_structured(
+            session,
+            request.provider.as_str(),
+            request.native.as_ref().map(NativeSessionId::as_str),
+            request.workspace.as_str(),
+        ) {
+            Ok(claim) => claim,
+            Err(error) => return self.deny(store, mutation, structured_open_failure(error)),
+        };
         match sessions.reserve_open_for_provider(request.provider, session, request.claim) {
             Ok(reserved) => {
+                claim.commit();
                 let (displaced_agent, displaced_reservation) =
                     reserved.displaced.map_or((None, None), |displaced| {
                         (Some(displaced.agent), Some(displaced.reservation))
@@ -1935,6 +1959,31 @@ fn open_failure(error: &SessionError) -> RuntimeControlFailure {
     }
 }
 
+fn structured_open_failure(
+    error: crate::native_claims::TerminalClaimError,
+) -> RuntimeControlFailure {
+    use crate::native_claims::TerminalClaimError;
+    match error {
+        TerminalClaimError::TerminalAlreadyLive => RuntimeControlFailure::new(
+            RuntimeErrorKind::TerminalAlreadyLive,
+            "the provider-native conversation is already live as a Runtime terminal",
+        ),
+        TerminalClaimError::WorkspaceConflict => RuntimeControlFailure::new(
+            RuntimeErrorKind::TerminalWorkspaceConflict,
+            "the provider-native conversation is already live in another workspace",
+        ),
+        TerminalClaimError::LegacyGenerationBusy => RuntimeControlFailure::new(
+            RuntimeErrorKind::LegacyGenerationBusy,
+            "a pre-public Runtime generation may still own this provider-native conversation",
+        ),
+        TerminalClaimError::StructuredBusy => RuntimeControlFailure::new(
+            RuntimeErrorKind::NativeConversationBusy,
+            "the provider-native conversation is already live as a structured session",
+        ),
+        TerminalClaimError::State => RuntimeControlFailure::internal(),
+    }
+}
+
 /// Why the coding service itself could not open a session.
 ///
 /// Every arm exists because the operator's next move differs. Authenticating a CLI, installing one,
@@ -2162,7 +2211,8 @@ pub(crate) async fn fixture_runtime_owner(
     mut asked: mpsc::Receiver<Box<RuntimeAsked>>,
     mut returned: mpsc::UnboundedReceiver<RuntimeReturned>,
 ) {
-    let mut control = RuntimeControl::new().expect("Runtime control");
+    let mut control = RuntimeControl::with_native_claims(Arc::clone(&composed.native_claims))
+        .expect("Runtime control");
     let mut sessions = SessionManager::new();
     loop {
         tokio::select! {
@@ -2199,6 +2249,7 @@ pub(crate) async fn fixture_runtime_owner(
                         _ => {}
                     }
                 }
+                composed.native_claims.replace_structured(&sessions);
             }
             returned = returned.recv() => {
                 let Some(returned) = returned else {
@@ -2277,6 +2328,7 @@ pub(crate) async fn fixture_runtime_owner(
                         RuntimeControl::abandon_cool(&mut sessions, mutation, reservation);
                     }
                 }
+                composed.native_claims.replace_structured(&sessions);
             }
         }
     }

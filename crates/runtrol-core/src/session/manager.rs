@@ -1568,6 +1568,14 @@ impl SessionManager {
         })
     }
 
+    /// Every session that currently owns or is opening or closing a provider process slot.
+    ///
+    /// The daemon uses these opaque identities to retain cross-surface live claims while slow process work is
+    /// outside the single owner. No provider output or conversation content enters this projection.
+    pub fn process_owner_ids(&self) -> impl Iterator<Item = SessionId> + '_ {
+        self.live.keys().chain(self.opening.keys()).copied()
+    }
+
     /// One live session by its runtrol identifier.
     #[must_use]
     pub fn live_session(&self, session: SessionId) -> Option<LiveSession<'_>> {

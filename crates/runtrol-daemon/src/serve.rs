@@ -416,8 +416,10 @@ enum ReservationAsked {
     Reserve {
         provider: runtrol_provider::ProviderId,
         session: SessionId,
+        native: Option<Box<str>>,
+        workspace: Box<str>,
         claim: WorkspaceClaim,
-        answered: oneshot::Sender<Result<ReservedOpen, SessionError>>,
+        answered: oneshot::Sender<Result<ReservedOpen, OpenReservationFailure>>,
     },
     ReserveProviderUpdate {
         provider: ProviderId,
@@ -426,6 +428,14 @@ enum ReservationAsked {
     CancelOpen(OpenReservation),
     ReleaseClosing(ClosingReservation),
     ReleaseProviderUpdate(ProviderUpdateReservation),
+}
+
+#[derive(Debug, thiserror::Error)]
+enum OpenReservationFailure {
+    #[error(transparent)]
+    Session(#[from] SessionError),
+    #[error(transparent)]
+    Claim(#[from] crate::native_claims::TerminalClaimError),
 }
 
 struct AutomaticUpdateNotice {
@@ -796,8 +806,10 @@ async fn serve_surfaces(
         mpsc::channel::<Box<crate::runtime_control::RuntimeAsked>>(ASKED_QUEUE);
     let (runtime_returning, mut runtime_returned) =
         mpsc::unbounded_channel::<crate::runtime_control::RuntimeReturned>();
-    let mut runtime_control = crate::runtime_control::RuntimeControl::new()
-        .map_err(|error| ServeError::RuntimeBootstrap(error.message.to_owned()))?;
+    let mut runtime_control = crate::runtime_control::RuntimeControl::with_native_claims(
+        Arc::clone(&composed.native_claims),
+    )
+    .map_err(|error| ServeError::RuntimeBootstrap(error.message.to_owned()))?;
     let runtime_native_cursors = Arc::new(
         crate::runtime_native_sessions::NativeCursorCodec::new().map_err(|_| {
             ServeError::RuntimeBootstrap(
@@ -1060,8 +1072,30 @@ async fn serve_surfaces(
             }
 
             Some(reservation) = reservations.recv() => match reservation {
-                ReservationAsked::Reserve { provider, session, claim, answered } => {
-                    let reserved = sessions.reserve_open_for_provider(provider, session, claim);
+                ReservationAsked::Reserve {
+                    provider,
+                    session,
+                    native,
+                    workspace,
+                    claim,
+                    answered,
+                } => {
+                    let reserved = composed
+                        .native_claims
+                        .reserve_structured(
+                            session,
+                            provider.as_str(),
+                            native.as_deref(),
+                            &workspace,
+                        )
+                        .map_err(OpenReservationFailure::from)
+                        .and_then(|native_claim| {
+                            let reserved = sessions
+                                .reserve_open_for_provider(provider, session, claim)
+                                .map_err(OpenReservationFailure::from)?;
+                            native_claim.commit();
+                            Ok(reserved)
+                        });
                     publish_session_index(
                         &session_index,
                         &runtime_sessions,
@@ -1076,6 +1110,7 @@ async fn serve_surfaces(
                             &reserving,
                             abandoned,
                         );
+                        composed.native_claims.replace_structured(&sessions);
                     }
                 }
                 ReservationAsked::ReserveProviderUpdate { provider, answered } => {
@@ -1084,7 +1119,10 @@ async fn serve_surfaces(
                         sessions.release_provider_update(abandoned);
                     }
                 }
-                ReservationAsked::CancelOpen(reservation) => sessions.cancel_open(reservation),
+                ReservationAsked::CancelOpen(reservation) => {
+                    sessions.cancel_open(reservation);
+                    composed.native_claims.replace_structured(&sessions);
+                }
                 ReservationAsked::ReleaseClosing(reservation) => {
                     sessions.release_closing(reservation);
                     runtrol_childproc::footprint::release_unused_memory();
@@ -2044,11 +2082,18 @@ async fn converse_inner(
                 continue;
             };
             let session = SessionId::now();
+            let native = match &request {
+                Request::Resume { native, .. } => Some(native.clone()),
+                _ => None,
+            };
+            let workspace = claim.identity().worktree().as_str().into();
             let (answered, hearing) = oneshot::channel();
             if reserving
                 .send(ReservationAsked::Reserve {
                     provider,
                     session,
+                    native,
+                    workspace,
                     claim,
                     answered,
                 })

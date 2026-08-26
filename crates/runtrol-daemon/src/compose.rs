@@ -302,7 +302,7 @@ pub struct Composed {
     /// Successor-owned grant relay used only after this generation releases the durable store.
     pub(crate) generation_authority: crate::generation_authority::GenerationAuthorityRelay,
     /// Content-free provider-process claims shared across live daemon generations.
-    pub(crate) native_claims: crate::native_claims::NativeLiveClaimRegistry,
+    pub(crate) native_claims: Arc<crate::native_claims::NativeLiveClaimRegistry>,
     /// One-use phone pairing offers and local approval decisions.
     pub(crate) pairing_admin: crate::pairing_admin::PairingAdmin,
     /// The guarantee that children die with this process.
@@ -421,7 +421,7 @@ impl Composed {
             isolated_workspaces: Mutex::new(isolated_workspaces),
             integration_admin: crate::integration_admin::IntegrationAdmin::default(),
             generation_authority: crate::generation_authority::GenerationAuthorityRelay::default(),
-            native_claims: crate::native_claims::NativeLiveClaimRegistry::default(),
+            native_claims: Arc::new(crate::native_claims::NativeLiveClaimRegistry::default()),
             pairing_admin: crate::pairing_admin::PairingAdmin::default(),
             containment,
             registry,
@@ -480,7 +480,7 @@ impl Composed {
             isolated_workspaces: Mutex::new(isolated_workspaces),
             integration_admin: crate::integration_admin::IntegrationAdmin::default(),
             generation_authority: crate::generation_authority::GenerationAuthorityRelay::default(),
-            native_claims: crate::native_claims::NativeLiveClaimRegistry::default(),
+            native_claims: Arc::new(crate::native_claims::NativeLiveClaimRegistry::default()),
             pairing_admin: crate::pairing_admin::PairingAdmin::default(),
             containment: Arc::new(Containment::without_any()),
             registry,

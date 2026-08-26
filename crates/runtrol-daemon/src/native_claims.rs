@@ -8,7 +8,7 @@ use std::sync::RwLock;
 
 use runtrol_core::SessionManager;
 use runtrol_ipc::{GenerationLiveClaimLine, GenerationLiveClaimSurface};
-use runtrol_provider::TerminalId;
+use runtrol_provider::{SessionId, TerminalId};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 pub(crate) enum TerminalClaimError {
@@ -33,6 +33,30 @@ pub(crate) struct TerminalClaimGuard<'registry> {
     registry: &'registry NativeLiveClaimRegistry,
     terminal: TerminalId,
     committed: bool,
+}
+
+pub(crate) struct StructuredClaimGuard<'registry> {
+    registry: &'registry NativeLiveClaimRegistry,
+    session: SessionId,
+    inserted: bool,
+    committed: bool,
+}
+
+impl StructuredClaimGuard<'_> {
+    pub(crate) fn commit(mut self) {
+        self.committed = true;
+    }
+}
+
+impl Drop for StructuredClaimGuard<'_> {
+    fn drop(&mut self) {
+        if self.committed || !self.inserted {
+            return;
+        }
+        if let Ok(mut state) = self.registry.state.write() {
+            state.structured.remove(&self.session);
+        }
+    }
 }
 
 impl TerminalClaimGuard<'_> {
@@ -70,7 +94,7 @@ pub(crate) struct NativeLiveClaimRegistry {
 
 #[derive(Default)]
 struct ClaimState {
-    structured: Vec<GenerationLiveClaimLine>,
+    structured: BTreeMap<SessionId, GenerationLiveClaimLine>,
     pending_terminals: BTreeMap<TerminalId, GenerationLiveClaimLine>,
     terminals: BTreeMap<TerminalId, GenerationLiveClaimLine>,
     remote: BTreeMap<Box<str>, Vec<GenerationLiveClaimLine>>,
@@ -86,6 +110,58 @@ impl Default for NativeLiveClaimRegistry {
 }
 
 impl NativeLiveClaimRegistry {
+    /// Atomically reserve a structured launch against every local and inherited process claim.
+    pub(crate) fn reserve_structured(
+        &self,
+        session: SessionId,
+        provider_id: &str,
+        native_session_id: Option<&str>,
+        workspace: &str,
+    ) -> Result<StructuredClaimGuard<'_>, TerminalClaimError> {
+        let mut state = self.state.write().map_err(|_| TerminalClaimError::State)?;
+        if native_session_id.is_some() && !state.legacy_generations.is_empty() {
+            return Err(TerminalClaimError::LegacyGenerationBusy);
+        }
+        if let Some(existing) = state.structured.get(&session)
+            && same_owner_claim(provider_id, native_session_id, workspace, existing)
+        {
+            return Ok(StructuredClaimGuard {
+                registry: self,
+                session,
+                inserted: false,
+                committed: false,
+            });
+        }
+        for claim in state
+            .structured
+            .values()
+            .chain(state.pending_terminals.values())
+            .chain(state.terminals.values())
+            .chain(state.remote.values().flatten())
+        {
+            if let Some(error) = claim_conflict(provider_id, native_session_id, workspace, claim) {
+                return Err(error);
+            }
+        }
+        state.structured.insert(
+            session,
+            GenerationLiveClaimLine {
+                provider_id: provider_id.into(),
+                native_session_id: native_session_id.map(Into::into),
+                workspace: workspace.into(),
+                surface: GenerationLiveClaimSurface::Structured,
+                owner_id: session.to_string().into_boxed_str(),
+            },
+        );
+        drop(state);
+        Ok(StructuredClaimGuard {
+            registry: self,
+            session,
+            inserted: true,
+            committed: false,
+        })
+    }
+
     /// Atomically reserve a terminal launch against every local and inherited process claim.
     pub(crate) fn reserve_terminal(
         &self,
@@ -107,7 +183,7 @@ impl NativeLiveClaimRegistry {
         }
         for claim in state
             .structured
-            .iter()
+            .values()
             .chain(state.pending_terminals.values())
             .chain(state.terminals.values())
             .chain(state.remote.values().flatten())
@@ -136,18 +212,27 @@ impl NativeLiveClaimRegistry {
 
     /// Replace the structured-process projection after the single session owner changes.
     pub(crate) fn replace_structured(&self, sessions: &SessionManager) {
-        let next = sessions
+        let active: BTreeSet<SessionId> = sessions.process_owner_ids().collect();
+        let live: Vec<(SessionId, GenerationLiveClaimLine)> = sessions
             .live_sessions()
-            .map(|session| GenerationLiveClaimLine {
-                provider_id: session.provider.to_string().into_boxed_str(),
-                native_session_id: session.native.map(Into::into),
-                workspace: session.workspace.as_str().into(),
-                surface: GenerationLiveClaimSurface::Structured,
-                owner_id: session.session.to_string().into_boxed_str(),
+            .map(|session| {
+                (
+                    session.session,
+                    GenerationLiveClaimLine {
+                        provider_id: session.provider.to_string().into_boxed_str(),
+                        native_session_id: session.native.map(Into::into),
+                        workspace: session.workspace.as_str().into(),
+                        surface: GenerationLiveClaimSurface::Structured,
+                        owner_id: session.session.to_string().into_boxed_str(),
+                    },
+                )
             })
             .collect();
         if let Ok(mut state) = self.state.write() {
-            state.structured = next;
+            state
+                .structured
+                .retain(|session, _| active.contains(session));
+            state.structured.extend(live);
         }
     }
 
@@ -197,7 +282,7 @@ impl NativeLiveClaimRegistry {
         };
         state
             .structured
-            .iter()
+            .values()
             .chain(state.terminals.values())
             .chain(
                 state
@@ -209,6 +294,18 @@ impl NativeLiveClaimRegistry {
             .cloned()
             .collect()
     }
+}
+
+fn same_owner_claim(
+    provider_id: &str,
+    native_session_id: Option<&str>,
+    workspace: &str,
+    claim: &GenerationLiveClaimLine,
+) -> bool {
+    claim.surface == GenerationLiveClaimSurface::Structured
+        && claim.provider_id.as_ref() == provider_id
+        && claim.native_session_id.as_deref() == native_session_id
+        && claim.workspace.as_ref() == workspace
 }
 
 fn exact_terminal_join(
@@ -237,8 +334,9 @@ fn claim_conflict(
     if exact_native && claim.workspace.as_ref() != workspace {
         return Some(TerminalClaimError::WorkspaceConflict);
     }
-    let unresolved_collision =
-        claim.native_session_id.is_none() && claim.workspace.as_ref() == workspace;
+    let unresolved_collision = native_session_id.is_some()
+        && claim.native_session_id.is_none()
+        && claim.workspace.as_ref() == workspace;
     let collision = exact_native || unresolved_collision;
     if !collision {
         return None;
@@ -303,6 +401,45 @@ mod tests {
         assert!(matches!(&first, TerminalClaimAdmission::Reserved(_)));
         assert!(matches!(
             registry.reserve_terminal(TerminalId::now(), "example", Some("native"), "/work"),
+            Err(TerminalClaimError::TerminalAlreadyLive)
+        ));
+    }
+
+    #[test]
+    fn unresolved_fresh_work_does_not_block_other_fresh_work() {
+        let registry = NativeLiveClaimRegistry::default();
+        let terminal = registry
+            .reserve_terminal(TerminalId::now(), "example", None, "/work")
+            .expect("fresh terminal claim");
+        let structured = registry
+            .reserve_structured(SessionId::now(), "example", None, "/work")
+            .expect("fresh structured claim");
+        assert!(matches!(terminal, TerminalClaimAdmission::Reserved(_)));
+        structured.commit();
+    }
+
+    #[test]
+    fn committed_structured_and_terminal_claims_exclude_each_other() {
+        let registry = NativeLiveClaimRegistry::default();
+        registry
+            .reserve_structured(SessionId::now(), "example", Some("native"), "/work")
+            .expect("structured claim")
+            .commit();
+        assert!(matches!(
+            registry.reserve_terminal(TerminalId::now(), "example", Some("native"), "/work"),
+            Err(TerminalClaimError::StructuredBusy)
+        ));
+
+        let other = NativeLiveClaimRegistry::default();
+        let TerminalClaimAdmission::Reserved(terminal) = other
+            .reserve_terminal(TerminalId::now(), "example", Some("native"), "/work")
+            .expect("terminal claim")
+        else {
+            panic!("first terminal unexpectedly joined");
+        };
+        terminal.commit().expect("committed terminal claim");
+        assert!(matches!(
+            other.reserve_structured(SessionId::now(), "example", Some("native"), "/work"),
             Err(TerminalClaimError::TerminalAlreadyLive)
         ));
     }
