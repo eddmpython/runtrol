@@ -274,11 +274,43 @@ fn serving() -> impl FnOnce(&tokio::runtime::Runtime) -> ExitCode {
 /// The endpoint stays owned by `RuntrolHome` and the generation by the executable's bytes. A native surface asks
 /// this executable once instead of reimplementing platform home selection, canonicalization, Windows
 /// fingerprinting, Unix socket length rules, or the digest.
+/// The control endpoint a client should use: this build's own generation when it is serving, otherwise the
+/// newest generation that is not draining.
+///
+/// A draining generation refuses new conversations on purpose, and a client that keeps its address never
+/// leaves it: the address is derived from the executable's own bytes, so asking again returns the same
+/// draining generation forever. Measured 2026-08-26 on a window that had been open across an update, where
+/// every new conversation was refused with the daemon's own words about generations.
+///
+/// Preferring this build first is what keeps an update arriving: when this build is not serving yet, nothing
+/// is chosen here and the caller starts it, which makes it the newest.
+fn serving_endpoint(runtime: &tokio::runtime::Runtime, own_address: &str) -> Option<String> {
+    // A locator that cannot be read is not a reason to refuse to connect: the caller falls back to its own
+    // address, which is what this function existed to improve on rather than depend on.
+    let Ok(generations) = runtime.block_on(runtrol_daemon::status(None)) else {
+        return None;
+    };
+    let usable =
+        |status: &runtrol_daemon::GenerationStatus| status.answering && !status.generation.draining;
+    if generations
+        .iter()
+        .any(|status| usable(status) && status.generation.control_endpoint == own_address)
+    {
+        return None;
+    }
+    generations
+        .iter()
+        .filter(|status| usable(status))
+        .max_by_key(|status| status.generation.started_at_ms)
+        .map(|status| status.generation.control_endpoint.clone())
+}
+
 fn endpointing() -> impl FnOnce(&tokio::runtime::Runtime) -> ExitCode {
     |runtime| {
-        let Some((executable, address)) = own_generation() else {
+        let Some((executable, own)) = own_generation() else {
             return ExitCode::FAILURE;
         };
+        let address = serving_endpoint(runtime, &own).unwrap_or(own);
 
         match runtime.block_on(runtrol_cli::reach(&address, &executable)) {
             Ok(connection) => {
