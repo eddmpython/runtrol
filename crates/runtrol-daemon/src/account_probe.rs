@@ -28,28 +28,34 @@ const ACCOUNT_PROBE_DEADLINE: Duration = Duration::from_mins(1);
 /// not idle, so a daemon measured in its first seconds must not be mid-round. It releases its working set at
 /// each round's end, so the steady-state footprint between rounds is unchanged either way.
 const FIRST_ROUND_DELAY: Duration = Duration::from_secs(8);
-/// How often the round repeats with nothing else prompting it: the backstop, not the driver.
+/// How often every service is asked with nothing else prompting it: the backstop, not the driver.
 ///
-/// The rounds that matter are the ones a session event wakes (a conversation attached, a turn ended), so
-/// a limit moves on the sidebar within seconds of the turn that moved it.
+/// The rounds that matter are the ones a service's own terminal prompts, so this is the slow sweep that
+/// catches what happened somewhere else: a turn taken on the operator's phone, a plan changed in a browser,
+/// a limit that reset while nothing was open here.
 const ROUND_INTERVAL: Duration = Duration::from_mins(10);
-/// The backstop while a conversation is open on this machine.
+/// How long a service's terminal has to be quiet before its answer is worth asking for again.
 ///
-/// A conversation held as its CLI's own terminal produces no structured turn boundary to wake on: the CLI
-/// draws to a pseudo terminal and runtrol does not read what it drew, which is the thin principle and not
-/// negotiable. So while somebody is actually working, this clock is the only thing that moves the strip,
-/// and ten minutes of it is long enough to spend a fifth of a five-hour window with the bar standing still.
+/// A conversation held as its CLI's own terminal has no turn boundary anybody can subscribe to. What it has
+/// is a CLI that writes continuously while it works and then stops, so quiet is the boundary. Long enough
+/// that a pause between two frames is not read as an ending, short enough that the strip moves while the
+/// person is still looking at it.
+const TURN_QUIET: Duration = Duration::from_secs(3);
+/// The least time between two questions to one service.
 ///
-/// Not shorter, because a round is real work: measured 2026-08-26 across the three services this build
-/// ships, one round costs about eleven seconds of child process time (six for the CLI that opens a headless
-/// channel, three for the one that starts a protocol agent, two for the one already running a daemon). At
-/// ninety seconds that is an eighth of one core, and it stops the moment the last conversation closes, so
-/// the idle machine keeps the footprint its budget contract fixes.
-const BUSY_INTERVAL: Duration = Duration::from_secs(90);
+/// A question is not free: measured 2026-08-27, asking one of these three costs a child process that peaks
+/// near 470 MiB for eight seconds, because answering means that CLI opening its own channel to its vendor.
+/// Short turns in a row would otherwise pay that every few seconds. Per service rather than overall, so a
+/// slow answer from one never delays another.
+const SERVICE_FLOOR: Duration = Duration::from_secs(30);
+/// How often the loop looks at the terminals.
+///
+/// Cheap on purpose: it reads one atomic per open terminal and starts nothing unless one of them has just
+/// gone quiet. When nothing is open it does not run at all, so an idle daemon keeps the footprint its
+/// budget contract fixes.
+const WATCH_TICK: Duration = Duration::from_secs(2);
 /// How long a wake waits before its round, so a burst of session events becomes one round.
 const WAKE_SETTLE: Duration = Duration::from_secs(2);
-/// The least time between two rounds however many wakes arrive: a service is asked at most this often.
-const ROUND_FLOOR: Duration = Duration::from_secs(15);
 
 /// One service's latest report and when it arrived.
 #[derive(Clone, Debug, PartialEq)]
@@ -135,43 +141,145 @@ impl AccountReports {
     }
 }
 
-/// Ask every usable service at start, whenever a session event wakes this, and on a slow backstop clock;
-/// republish what changed.
+/// Ask each service where its account stands, when that service's answer has changed.
+///
+/// Three things prompt a question, in the order they matter.
+///
+/// **A conversation went quiet.** A conversation held as its CLI's own terminal publishes no turn boundary,
+/// so the boundary is the CLI writing and then stopping. That is the moment the number moved, and asking
+/// then is what makes the strip live rather than a thing that catches up on a clock.
+///
+/// **Something opened or closed.** A conversation starting or ending is a state change worth a question,
+/// and it is what fills the strip in the first seconds after a window opens.
+///
+/// **The slow sweep.** Everything else that can move an account: a turn taken on the operator's phone, a
+/// plan changed in a browser, a window that reset while nothing was open here.
+///
+/// What it deliberately does not do is ask on a fast clock. Measured 2026-08-27, one question to one of
+/// these services costs a child process peaking near 470 MiB for eight seconds, so a ninety-second sweep of
+/// three services spent that on two services nobody had touched. Asking only the service that moved is both
+/// the cheaper answer and the more current one.
 pub(crate) async fn supervise(
     composed: Arc<Composed>,
     providers: watch::Sender<Arc<runtrol_runtime_protocol::ProviderList>>,
     usage: watch::Sender<Arc<runtrol_runtime_protocol::ProviderUsageList>>,
 ) {
     tokio::time::sleep(FIRST_ROUND_DELAY).await;
+    round(&composed, &providers, &usage).await;
+    let mut swept_at = WallMs::now();
+    let mut asked: BTreeMap<ProviderId, WallMs> = BTreeMap::new();
     loop {
-        round(&composed, &providers, &usage).await;
-        let floor = tokio::time::sleep(ROUND_FLOOR);
         tokio::select! {
-            () = tokio::time::sleep(backstop(&composed)) => {}
+            () = tokio::time::sleep(WATCH_TICK) => {}
             () = composed.account_probe_wake.notified() => {
-                // Coalesce the burst, then honour the floor before asking again.
+                // Coalesce the burst a conversation opening or closing makes, then ask about everything:
+                // which service changed is not knowable from that signal, and it is rare.
                 tokio::time::sleep(WAKE_SETTLE).await;
-                floor.await;
+                let now = WallMs::now();
+                let ids = usable(&composed);
+                for id in &ids {
+                    // ok: the previous instant for this service is exactly what is being replaced.
+                    asked.insert(*id, now);
+                }
+                ask_all(&composed, &providers, &usage, ids).await;
+                swept_at = now;
+                continue;
             }
         }
+        let now = WallMs::now();
+        let due = due_now(&composed, &asked, swept_at, now).await;
+        if due.is_empty() {
+            continue;
+        }
+        if due.len() == usable(&composed).len() {
+            swept_at = now;
+        }
+        for id in &due {
+            // ok: the previous instant for this service is exactly what is being replaced.
+            asked.insert(*id, now);
+        }
+        ask_all(&composed, &providers, &usage, due).await;
     }
 }
 
-/// How long to wait before asking again with nobody waking this.
+/// Every service this build can actually ask.
+fn usable(composed: &Composed) -> Vec<ProviderId> {
+    composed
+        .registry
+        .all()
+        .filter(|provider| provider.is_usable())
+        .map(runtrol_core::registry::Provider::id)
+        .collect()
+}
+
+/// One duration as whole milliseconds a wall-clock difference can be compared against.
 ///
-/// Read once per wait rather than watched, because the answer only has to be right for the wait it starts:
-/// a conversation opening also wakes this loop, so a machine that becomes busy is asked at once and does not
-/// have to serve out a ten-minute sleep first.
-fn backstop(composed: &Composed) -> Duration {
+/// These are constants of a few seconds, so the conversion cannot lose anything; it is written as a
+/// checked step anyway because a cast that silently truncates is how a bound of thirty seconds becomes a
+/// bound of no seconds.
+fn millis(span: Duration) -> u64 {
+    u64::try_from(span.as_millis()).unwrap_or(u64::MAX)
+}
+
+/// Whether one service is worth asking again, from when its CLI last wrote and when it was last asked.
+///
+/// The whole decision, kept apart from the table it is made over so it can be stated as cases.
+fn is_due(wrote: Option<WallMs>, asked: Option<WallMs>, now: WallMs) -> bool {
+    // Wrote something, then stopped: that is this surface's turn boundary. A terminal that has never
+    // written has nothing to have finished.
+    let Some(wrote) = wrote else { return false };
+    if wrote.millis_until(now).unwrap_or(0) < millis(TURN_QUIET) {
+        return false;
+    }
+    match asked {
+        // Nothing written since the last answer, so the last answer is still the answer.
+        Some(asked) if asked >= wrote => false,
+        Some(asked) => asked.millis_until(now).unwrap_or(0) >= millis(SERVICE_FLOOR),
+        None => true,
+    }
+}
+
+/// Which services are worth asking right now, and nothing when none are.
+///
+/// The old loop asked every service on one clock. That was wrong twice over: it asked about a service
+/// nobody had touched in an hour, and it did not ask about the one somebody had just finished a turn with
+/// until the clock came round. This asks the service whose CLI just stopped writing, which is the moment
+/// its answer changed, and asks the rest only on the slow sweep.
+async fn due_now(
+    composed: &Composed,
+    asked: &BTreeMap<ProviderId, WallMs>,
+    swept_at: WallMs,
+    now: WallMs,
+) -> Vec<ProviderId> {
+    let usable = || -> Vec<ProviderId> {
+        composed
+            .registry
+            .all()
+            .filter(|provider| provider.is_usable())
+            .map(runtrol_core::registry::Provider::id)
+            .collect()
+    };
+    if swept_at.millis_until(now).unwrap_or(0) >= millis(ROUND_INTERVAL) {
+        return usable();
+    }
     if composed
         .open_terminals
-        .load(std::sync::atomic::Ordering::Relaxed)
-        > 0
+        .load(std::sync::atomic::Ordering::Acquire)
+        == 0
     {
-        BUSY_INTERVAL
-    } else {
-        ROUND_INTERVAL
+        return Vec::new();
     }
+    let wrote = {
+        let terminals = composed.terminals.lock().await;
+        terminals.wrote_at_by_provider()
+    };
+    let usable = usable();
+    wrote
+        .into_iter()
+        .filter(|(provider, _)| usable.contains(provider))
+        .filter(|(provider, wrote)| is_due(*wrote, asked.get(provider).copied(), now))
+        .map(|(provider, _)| provider)
+        .collect()
 }
 
 /// One round over every usable service. A service that does not answer gets an unpublished report
@@ -187,6 +295,19 @@ pub(crate) async fn round(
         .filter(|provider| provider.is_usable())
         .map(runtrol_core::registry::Provider::id)
         .collect();
+    ask_all(composed, providers, usage, ids).await;
+}
+
+/// Ask exactly these services and republish what changed.
+async fn ask_all(
+    composed: &Arc<Composed>,
+    providers: &watch::Sender<Arc<runtrol_runtime_protocol::ProviderList>>,
+    usage: &watch::Sender<Arc<runtrol_runtime_protocol::ProviderUsageList>>,
+    ids: Vec<ProviderId>,
+) {
+    if ids.is_empty() {
+        return;
+    }
 
     // All at once, because the services have nothing to do with each other. Asked one after another a round
     // took as long as the answers added up, and every service behind the slow one had a standing bar for
@@ -249,5 +370,54 @@ async fn ask(composed: &Arc<Composed>, id: ProviderId) -> Option<AccountReport> 
         Err(_) => Some(AccountReport::unpublished(
             "the service did not answer its status surface within the deadline",
         )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// An instant `seconds` before `now`, for a table written the way a person reads it.
+    fn ago(now: WallMs, seconds: u64) -> WallMs {
+        WallMs::from_millis(now.as_millis() - seconds * 1_000)
+    }
+
+    #[test]
+    fn a_terminal_that_wrote_and_went_quiet_is_asked_about() {
+        // The moment the number moved. Before this the strip waited out a clock instead.
+        let now = WallMs::from_millis(1_000_000_000);
+        assert!(is_due(Some(ago(now, 5)), None, now));
+    }
+
+    #[test]
+    fn a_terminal_still_writing_is_not_a_finished_turn() {
+        // Mid-turn the CLI writes continuously. Asking then would spend a question on a number about to
+        // change again, and would do it for every frame it drew.
+        let now = WallMs::from_millis(1_000_000_000);
+        assert!(!is_due(Some(ago(now, 1)), None, now));
+    }
+
+    #[test]
+    fn a_terminal_that_has_written_nothing_has_finished_nothing() {
+        let now = WallMs::from_millis(1_000_000_000);
+        assert!(!is_due(None, None, now));
+    }
+
+    #[test]
+    fn nothing_written_since_the_last_answer_needs_no_new_answer() {
+        // The quiet is the same quiet that was already asked about. Without this the loop would ask every
+        // tick for as long as a finished conversation stayed open.
+        let now = WallMs::from_millis(1_000_000_000);
+        assert!(!is_due(Some(ago(now, 60)), Some(ago(now, 30)), now));
+    }
+
+    #[test]
+    fn two_short_turns_in_a_row_cost_one_question() {
+        // Measured: one question costs a child process peaking near 470 MiB for eight seconds. A person
+        // taking twenty-second turns would otherwise pay that on each one.
+        let now = WallMs::from_millis(1_000_000_000);
+        assert!(!is_due(Some(ago(now, 4)), Some(ago(now, 10)), now));
+        // And once the floor has passed, the newer turn is asked about.
+        assert!(is_due(Some(ago(now, 4)), Some(ago(now, 40)), now));
     }
 }

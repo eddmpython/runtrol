@@ -14,7 +14,7 @@ use std::sync::Arc;
 
 use runtrol_core::terminal::{Attachment, Terminal, TerminalLaunch};
 use runtrol_ipc::{Request, Response, TerminalBytes};
-use runtrol_provider::{AbsPath, ProviderId, TerminalId};
+use runtrol_provider::{AbsPath, ProviderId, TerminalId, WallMs};
 use runtrol_security::Caller;
 
 use crate::compose::Composed;
@@ -29,8 +29,11 @@ pub(crate) struct Terminals {
     by_conversation: BTreeMap<(ProviderId, Box<str>), TerminalId>,
 }
 
-/// One open terminal and the folder its CLI runs in.
+/// One open terminal, whose service it belongs to, and the folder its CLI runs in.
 struct Open {
+    /// Which service is hosted here, so a question about that service's account can be asked when this
+    /// terminal's CLI stops writing. Known even for a conversation the service has not named yet.
+    provider: ProviderId,
     terminal: Terminal,
     /// The canonical folder, so a join is judged against the folder the conversation really runs in,
     /// never against the folder the joining request happened to name.
@@ -57,6 +60,7 @@ impl Terminals {
     fn insert(
         &mut self,
         id: TerminalId,
+        provider: ProviderId,
         key: Option<(ProviderId, Box<str>)>,
         terminal: Terminal,
         workspace: AbsPath,
@@ -64,6 +68,7 @@ impl Terminals {
         self.by_id.insert(
             id,
             Open {
+                provider,
                 terminal,
                 workspace,
             },
@@ -80,6 +85,23 @@ impl Terminals {
 
     fn len(&self) -> usize {
         self.by_id.len()
+    }
+
+    /// For every service with a terminal open, when its CLI last wrote anything.
+    ///
+    /// The one signal a conversation held as a terminal has for "something happened". A service with a
+    /// terminal that has never written is present with no instant, which is what a terminal opened a
+    /// moment ago looks like.
+    pub(crate) fn wrote_at_by_provider(&self) -> BTreeMap<ProviderId, Option<WallMs>> {
+        let mut latest: BTreeMap<ProviderId, Option<WallMs>> = BTreeMap::new();
+        for open in self.by_id.values() {
+            let entry = latest.entry(open.provider).or_default();
+            let wrote = open.terminal.wrote_at();
+            if wrote > *entry {
+                *entry = wrote;
+            }
+        }
+        latest
     }
 }
 
@@ -231,7 +253,7 @@ async fn open(
     let key = native.map(|native| (id, Box::<str>::from(native)));
     let open = {
         let mut terminals = composed.terminals.lock().await;
-        terminals.insert(terminal_id, key, terminal.clone(), cwd);
+        terminals.insert(terminal_id, id, key, terminal.clone(), cwd);
         terminals.len()
     };
     composed

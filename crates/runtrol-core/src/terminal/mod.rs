@@ -14,7 +14,9 @@
 
 use std::io::{Read, Write};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+
+use runtrol_provider::WallMs;
 use std::time::Duration;
 
 use bytes::Bytes;
@@ -112,6 +114,16 @@ struct Shared {
     output: broadcast::Sender<Bytes>,
     exited: watch::Sender<Option<i32>>,
     finished: AtomicBool,
+    /// When this CLI last wrote anything, in unix milliseconds.
+    ///
+    /// **How many bytes, never which bytes.** The screen model reads the chunk because drawing is what it
+    /// is for; this records only that a chunk arrived and when. A conversation held as its CLI's own
+    /// terminal publishes no structured turn boundary, so this is the only honest signal that the CLI did
+    /// something: it is process state, the same kind of fact as "the child is still running".
+    ///
+    /// One relaxed store per chunk. Nothing orders anything against it and a reader that is one chunk
+    /// behind asks again a moment later.
+    wrote_at: AtomicU64,
 }
 
 impl std::fmt::Debug for Shared {
@@ -175,6 +187,7 @@ impl Terminal {
             output,
             exited,
             finished: AtomicBool::new(false),
+            wrote_at: AtomicU64::new(0),
         });
         let (chunks, mut incoming) = mpsc::channel::<Bytes>(RING_CHUNKS);
         std::thread::Builder::new()
@@ -266,6 +279,20 @@ impl Terminal {
         Ok(self.shared.child.kill()?)
     }
 
+    /// When this CLI last wrote anything, or nothing if it has not written yet.
+    ///
+    /// What it is for: a conversation held as a terminal has no turn boundary anybody can subscribe to, so
+    /// "it was writing and then it stopped" is the only signal that a turn ended. Something that wants to
+    /// ask the service a question afterwards asks this rather than a clock, which is the difference
+    /// between asking when the answer changed and asking every ninety seconds in case it did.
+    #[must_use]
+    pub fn wrote_at(&self) -> Option<WallMs> {
+        match self.shared.wrote_at.load(Ordering::Relaxed) {
+            0 => None,
+            millis => Some(WallMs::from_millis(millis)),
+        }
+    }
+
     async fn write(&self, bytes: &[u8]) -> Result<(), TerminalError> {
         let mut writer = self.shared.writer.lock().await;
         writer
@@ -290,6 +317,8 @@ impl Shared {
             // one place that state belongs. ok: nothing downstream waits on this write.
             drop(writer.write_all(&answers).and_then(|()| writer.flush()));
         }
+        self.wrote_at
+            .store(WallMs::now().as_millis(), Ordering::Relaxed);
         // ok: no receiver means no viewer is attached right now; the ring keeps nothing for nobody and the
         // screen model already holds what a later viewer needs.
         drop(self.output.send(chunk));
