@@ -264,9 +264,11 @@ def sourceViolations(package: dict[str, object], sources: dict[str, str]) -> lis
             "export function isBroken",
         ],
                 "conversationList.ts": [
-            "const folderRows = rows.filter",
-            '"open",',
-            "if (left.current !== right.current) return left.current ? -1 : 1;",
+            # The panel is the machine's, not this window's: only added projects are headings, and their
+            # order is the person's rather than whatever ran most recently.
+            "return qualified(records",
+            "byAddedOrder",
+            "if (left.pinned !== right.pinned) return left.pinned ? -1 : 1;",
             "export function conversationDetail",
             'return "";',
             '"Unnamed conversation"',
@@ -580,8 +582,8 @@ def selftest() -> int:
             "export function awaitsVerification export function isBroken"
         ),
         "conversationList.ts": (
-            'const folderRows = rows.filter "open", '
-            'if (left.current !== right.current) return left.current ? -1 : 1; '
+            'return qualified(records byAddedOrder '
+            'if (left.pinned !== right.pinned) return left.pinned ? -1 : 1; '
             'export function conversationDetail return ""; '
             '"Unnamed conversation" return "Cannot reopen"'
         ),
