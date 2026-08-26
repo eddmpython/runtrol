@@ -9,8 +9,6 @@ const APP_SHELL = [
   "src/bytes.js",
   "src/core.js",
   "src/identityStore.js",
-  "src/missions.js",
-  "src/missionSignals.js",
   "src/noise.js",
   "src/pairing.js",
   "src/presentation.js",

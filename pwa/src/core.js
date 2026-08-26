@@ -84,30 +84,6 @@ export class CoreClient {
     return this.exchange({ ask: "pushSubscription", with: { endpoint } });
   }
 
-  listMissions() {
-    return this.exchange({ ask: "missionList" });
-  }
-
-  getMission(mission) {
-    return this.exchange({ ask: "missionGet", with: { mission_id: mission } });
-  }
-
-  listMissionFlightSignals(after = null) {
-    return this.exchange({ ask: "missionFlightSignals", with: { after } });
-  }
-
-  pauseMission(mission) {
-    return this.exchange({ ask: "missionPause", with: { mission_id: mission } });
-  }
-
-  resumeMission(mission) {
-    return this.exchange({ ask: "missionResumeSafe", with: { mission_id: mission } });
-  }
-
-  cancelMission(mission) {
-    return this.exchange({ ask: "missionCancel", with: { mission_id: mission } });
-  }
-
   answerApproval(session, approval, option, subjectDigest) {
     return this.exchange({
       ask: "answerApproval",

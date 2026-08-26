@@ -32,10 +32,6 @@
 
       <section id="sessions-view" class="shell" hidden>
         <nav class="session-pane" aria-label="PC control">
-          <div class="surface-tabs" aria-label="Phone surfaces">
-            <button id="show-sessions" type="button" aria-pressed="true">Sessions</button>
-            <button id="show-missions" type="button" aria-pressed="false" hidden>Missions <span id="mission-signal-count" class="signal-count" hidden>0</span></button>
-          </div>
           <div id="session-browser">
             <div class="pane-heading">
               <div><p class="eyebrow">SESSIONS</p><h1><span id="session-count">0</span> on this PC</h1></div>
@@ -53,13 +49,6 @@
               <p id="new-session-help" class="quiet"></p>
               <button id="start-session" type="submit">Start</button>
             </form>
-          </div>
-          <div id="mission-browser" hidden>
-            <div class="pane-heading">
-              <div><p class="eyebrow">MISSIONS</p><h1><span id="mission-count">0</span> on this PC</h1></div>
-              <button id="refresh-missions" type="button">Refresh</button>
-            </div>
-            <div id="mission-list" class="mission-list"></div>
           </div>
         </nav>
 
@@ -82,31 +71,6 @@
           </div>
         </section>
 
-        <section id="mission-detail" class="mission-detail" hidden>
-          <div class="detail-heading">
-            <button id="back-to-missions" class="back" type="button">Missions</button>
-            <div>
-              <p class="eyebrow" id="selected-mission-state"></p>
-              <h2 id="selected-mission-title"></h2>
-              <p id="selected-mission-project" class="path"></p>
-            </div>
-            <div class="detail-actions">
-              <button id="pause-mission" type="button">Pause</button>
-              <button id="resume-mission" type="button">Resume safely</button>
-              <button id="cancel-mission" type="button">Cancel</button>
-            </div>
-          </div>
-          <div class="mission-content">
-            <div id="mission-flight-signal" class="mission-flight-signal" role="status" hidden></div>
-            <dl class="mission-summary">
-              <dt>Tasks passed</dt><dd id="mission-progress"></dd>
-              <dt>Awaiting PC input</dt><dd id="mission-awaiting"></dd>
-              <dt>Reviewed source</dt><dd id="mission-source"></dd>
-              <dt>Policy digest</dt><dd id="mission-policy"></dd>
-            </dl>
-            <div id="mission-tasks" class="mission-tasks"></div>
-          </div>
-        </section>
       </section>
     </main>
 

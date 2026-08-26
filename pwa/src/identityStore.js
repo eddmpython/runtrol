@@ -101,11 +101,10 @@ export function validateConnection(value) {
     "scopes",
   ];
   const authorityFields = [...legacyFields, "roots", "providers"].sort();
-  const fields = [...authorityFields, "missionSignalCursor"].sort();
   const keys = Object.keys(value).sort();
   const legacy = JSON.stringify(keys) === JSON.stringify(legacyFields);
   const authorityOnly = JSON.stringify(keys) === JSON.stringify(authorityFields);
-  if (!legacy && !authorityOnly && JSON.stringify(keys) !== JSON.stringify(fields)) {
+  if (!legacy && !authorityOnly) {
     throw new Error("stored connection has an unexpected field set");
   }
   for (const field of legacyFields.slice(0, 5)) {
@@ -119,19 +118,10 @@ export function validateConnection(value) {
       throw new Error(`stored connection ${field} are invalid`);
     }
   }
-  if (
-    !legacy
-    && !authorityOnly
-    && value.missionSignalCursor !== null
-    && (typeof value.missionSignalCursor !== "string" || !/^[0-9a-f]{32}$/u.test(value.missionSignalCursor))
-  ) {
-    throw new Error("stored connection Mission Flight Signal cursor is invalid");
-  }
   return Object.freeze({
     ...value,
     scopes: Object.freeze([...value.scopes]),
     roots: Object.freeze([...(value.roots ?? [])]),
     providers: Object.freeze([...(value.providers ?? [])]),
-    missionSignalCursor: value.missionSignalCursor ?? null,
   });
 }

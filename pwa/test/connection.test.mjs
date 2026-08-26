@@ -11,13 +11,6 @@ import {
 import { base64UrlDecode, base64UrlEncode, concat, equalBytes, utf8 } from "../src/bytes.js";
 import { CoreClient, readDeviceAuthority, WIRE_VERSION } from "../src/core.js";
 import { validateConnection } from "../src/identityStore.js";
-import { missionActions, readMissionCatalogue, readMissionSnapshot } from "../src/missions.js";
-import {
-  missionFlightDestination,
-  missionFlightBadge,
-  missionFlightLabel,
-  readMissionFlightSignals,
-} from "../src/missionSignals.js";
 import { consumePairingFragment, parsePairingValue } from "../src/pairing.js";
 import { approvalOptions, exactSubject, safeVisibleText } from "../src/presentation.js";
 import { disablePush, enablePush, synchronizePush } from "../src/push.js";
@@ -117,14 +110,8 @@ test("Core client greets first and keeps every request explicit", async () => {
     { say: "done" },
     { say: "done" },
     {
-      say: "missionFlightSignals",
       with: { signals: [], next_cursor: null, gap: false },
     },
-    { say: "missions", with: [] },
-    { say: "mission", with: { mission: { mission_id: "msn_example" } } },
-    { say: "mission", with: { mission: { mission_id: "msn_example", state: "paused" } } },
-    { say: "mission", with: { mission: { mission_id: "msn_example", state: "running" } } },
-    { say: "mission", with: { mission: { mission_id: "msn_example", state: "cancelled" } } },
   ]);
   const client = new CoreClient(channel);
   const welcome = await client.exchange({ ask: "hello", with: { wire: WIRE_VERSION } });
@@ -132,72 +119,12 @@ test("Core client greets first and keeps every request explicit", async () => {
   await client.list();
   await client.stopEverything();
   await client.setPushSubscription("https://fcm.googleapis.com/fcm/send/capability");
-  await client.listMissionFlightSignals(null);
-  await client.listMissions();
-  await client.getMission("msn_example");
-  await client.pauseMission("msn_example");
-  await client.resumeMission("msn_example");
-  await client.cancelMission("msn_example");
   assert.deepEqual(channel.sent.map((bytes) => JSON.parse(new TextDecoder().decode(bytes))), [
     { ask: "hello", with: { wire: WIRE_VERSION } },
     { ask: "list" },
     { ask: "stopEverything" },
     { ask: "pushSubscription", with: { endpoint: "https://fcm.googleapis.com/fcm/send/capability" } },
-    { ask: "missionFlightSignals", with: { after: null } },
-    { ask: "missionList" },
-    { ask: "missionGet", with: { mission_id: "msn_example" } },
-    { ask: "missionPause", with: { mission_id: "msn_example" } },
-    { ask: "missionResumeSafe", with: { mission_id: "msn_example" } },
-    { ask: "missionCancel", with: { mission_id: "msn_example" } },
   ]);
-});
-
-test("Mission controls expose only current-state actions backed by exact scopes", () => {
-  const every = ["mission.pause", "mission.resumeSafe", "mission.cancel"];
-  assert.deepEqual(missionActions({ state: "running" }, every), {
-    pause: true,
-    resume: false,
-    cancel: true,
-  });
-  assert.deepEqual(missionActions({ state: "blocked" }, ["mission.resumeSafe"]), {
-    pause: false,
-    resume: true,
-    cancel: false,
-  });
-  assert.deepEqual(missionActions({ state: "completed" }, every), {
-    pause: false,
-    resume: false,
-    cancel: false,
-  });
-  const mission = {
-    mission_id: "msn_example",
-    name: "Example",
-    project: "C:\\work",
-    state: "running",
-    passed_tasks: 1,
-    total_tasks: 2,
-    awaiting_input: 1,
-  };
-  assert.equal(readMissionCatalogue([mission])[0].name, "Example");
-  const snapshot = readMissionSnapshot({
-    mission,
-    mission_ref: "mission.toml",
-    policy_sha256: "ab".repeat(32),
-    tasks: [{
-      task_id: "tsk_example",
-      key: "implement",
-      state: "awaitingInput",
-      instruction_ref: "instructions/implement.md",
-      workspace_mode: "isolatedWorktree",
-      provider_selector: "operatorChoice",
-      receipt_id: null,
-      passed_gates: 0,
-      failed_gates: 0,
-    }],
-  });
-  assert.equal(snapshot.tasks[0].state, "awaitingInput");
-  assert.throws(() => readMissionCatalogue([{ ...mission, state: "surprise" }]), /unknown/u);
-  assert.throws(() => readMissionSnapshot({ mission, mission_ref: "mission.toml", policy_sha256: "no", tasks: [] }), /digest/u);
 });
 
 test("push subscription is VAPID-bound and Core receives only the capability endpoint", async () => {
@@ -226,6 +153,8 @@ test("push subscription is VAPID-bound and Core receives only the capability end
 });
 
 test("current Core authority replaces legacy pairing hints without widening", () => {
+  // The same literal the fixture stores, so a backslash cannot drift between the two.
+  const legacyRoot = ["C:\\work"];
   const legacy = validateConnection({
     deviceCredential: "credential",
     pcPublicKey: "pc",
@@ -236,18 +165,13 @@ test("current Core authority replaces legacy pairing hints without widening", ()
   });
   assert.deepEqual(legacy.roots, []);
   assert.deepEqual(legacy.providers, []);
-  assert.equal(legacy.missionSignalCursor, null);
   const current = validateConnection({
     ...legacy,
     roots: ["C:\\work"],
     providers: ["fixture"],
-    missionSignalCursor: "ab".repeat(16),
   });
-  assert.equal(current.missionSignalCursor, "ab".repeat(16));
-  assert.throws(
-    () => validateConnection({ ...current, missionSignalCursor: "not-a-cursor" }),
-    /Signal cursor/u,
-  );
+  assert.deepEqual(current.roots, legacyRoot);
+  assert.deepEqual(current.providers, ["fixture"]);
   const authority = readDeviceAuthority({
     scopes: ["session.list"],
     roots: ["C:\\work"],
@@ -256,56 +180,6 @@ test("current Core authority replaces legacy pairing hints without widening", ()
   assert.deepEqual(authority.scopes, ["session.list"]);
   assert.throws(
     () => readDeviceAuthority({ scopes: ["session.list", "session.list"], roots: [], providers: [] }),
-    /invalid/u,
-  );
-});
-
-test("Mission Flight Signals are bounded and route only current structural destinations", () => {
-  const page = readMissionFlightSignals({
-    signals: [
-      {
-        signal_id: "01".repeat(16),
-        mission_id: "msn_person",
-        mission_sha256: "ab".repeat(32),
-        kind: "person",
-        session_id: "session-person",
-      },
-      {
-        signal_id: "02".repeat(16),
-        mission_id: "msn_landing",
-        mission_sha256: "cd".repeat(32),
-        kind: "landing",
-        session_id: null,
-      },
-    ],
-    next_cursor: "02".repeat(16),
-    gap: false,
-  });
-  assert.equal(missionFlightDestination(page.signals, [
-    { session: "session-person", waiting_on: "person" },
-  ]).missionId, "msn_landing", "the newest current signal wins");
-  assert.equal(missionFlightLabel("landing"), "Receipt Landing ready");
-  assert.equal(missionFlightBadge("landing"), "LANDED");
-  assert.equal(missionFlightDestination(page.signals.slice(0, 1), [
-    { session: "session-person", waiting_on: "person" },
-  ]).surface, "session");
-  assert.equal(missionFlightDestination(page.signals.slice(0, 1), [
-    { session: "session-person", waiting_on: "quota" },
-  ]), null, "quota is never treated as a person wait");
-  assert.throws(
-    () => readMissionFlightSignals({
-      signals: [{ ...page.signals[0], session_id: null }],
-      next_cursor: "01".repeat(16),
-      gap: false,
-    }),
-    /destination/u,
-  );
-  assert.throws(
-    () => readMissionFlightSignals({
-      signals: Array.from({ length: 65 }, () => page.signals[0]),
-      next_cursor: "01".repeat(16),
-      gap: false,
-    }),
     /invalid/u,
   );
 });
