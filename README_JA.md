@@ -9,38 +9,31 @@
 
 **[製品サイト](https://eddmpython.github.io/runtrol/)** · [Marketplace からインストール](https://marketplace.visualstudio.com/items?itemName=runtrol.runtrol-studio) · [スマートフォンアプリ](https://eddmpython.github.io/runtrol/app/)
 
-> ステータス: **コアと主力 VS Code 拡張を実装し、`Runtrol Studio 0.1.22` を六つの native target 向けに公開した。** live session index、実物 Extension Host と秒間 3,000 frame Webview の性能 ratchet、インストール済み実物 CLI の完全な操作 journey、Marketplace からの clean install、active session を維持する VSIX upgrade と rollback を検証済みである。独立したデスクトップ GUI のコードと実行経路は削除され、VS Code 拡張が唯一の PC surface である。公開 Runtime protocol、Rust と TypeScript SDK、外部 packed consumer gate、署名付き六 target standalone Runtime release pipeline も実装した。確認済み provider channel の自動更新には process exclusion と正確な rollback も実装した。[Marketplace 拡張](https://marketplace.visualstudio.com/items?itemName=runtrol.runtrol-studio)、[GitHub Pages サイト](https://eddmpython.github.io/runtrol/)、リレー接続のスマートフォン PWA、本文を持たない Web Push、Mission 監督 surface を実装した。会話ヘッダーのチップから応答モデルと permission mode を会話中に切り替えられ、選択はその CLI 自身の切り替え surface に中継され、チップはサービスが答えた値だけを表示する(インストール済み実物 Claude Code の journey gate が切り替えと復帰を CLI 自身のアナウンスで検証する)。現在の VS Code フォルダーは登録なしで最初のプロジェクト見出しとなり、その他のフォルダーは繰り返し使われた場合だけプロジェクトとしてまとまる。各会話行にはエージェントアイコンと実際の会話名だけを表示し、実行中はそのアイコン自体が回転する。ペアリング済みデバイスの権限は承認された workspace root に限定される: session index、すべての session コマンド、Mission の読み取りが同じ live root 検証を通り、root の取り消しは即時に効く。provider の準備は provider ごとの lane で並列化され、cold の初回 5 件が直列 18.1 秒に対して 8.7 秒で終わり、新しく開いたフォルダーの既存会話はリフレッシュなしで届く。会話はそれぞれ独立したエディタータブで開き、複数の会話を同時に並べて画面分割でき、入力と中断はそのタブの会話に向かう。拡張の更新後も動き続けていた旧 Core は、マシンがアイドルになった瞬間に新しいビルドへ自ら入れ替わり、更新が再起動なしで実際に届く。active gate は shipped PWA module を production daemon とインストール済み実物 CLI に通し、session、approval、remote disconnect recovery journey を検証する。プロジェクト見出しを一度クリックすると Agent Tools が有効になり、インストール済みコーディングエージェントは project root に限定された七つの公開 Runtime tool で作業を委譲できる。無効化すると provider 登録、Runtime 権限、保護されたローカル資格情報が削除される。iOS 実機へのインストールと Web Push の運用確認は未検証の contributor operator evidence として残し、現在の完了範囲とスコアから除外する。以下のスコアの多くが 0 なのは、コードがないからではなく、その軸を断言するゲートがまだない
-> からである。
-> Fleet Compare は同じレビュー済み指示を 2 から 4 個の隔離 worktree と provider session に一括送信し、VS Code の grid と native diff で比較した後、選択した一つの passing Receipt だけで最終検証する。この流れは実物二 CLI gate と実際の Extension Host 目視検査で検証した。
-> 通常の Mission は `Continue Reviewed Mission` 一回で現在安全な wave を開始し、完了した Task を固定 Gate で封印し、次の DAG wave を準備して正確なレビュー済み指示を送る。実物 CLI と Extension Host の二段階 journey で検証した。
-> `Continue Ready Missions` は最大八つの正確な Mission digest を一度にレビューし、複数 project の現在安全な wave をまとめて進める。実物 Extension Host で二つの Git project を一回で開始し、次の一回で両方を `integrating` に進めた。
+> ステータス: **コアと VS Code 拡張 `Runtrol Studio 0.1.22` を六つのネイティブ対象で公開した。**
+> サイドバーは三つの節だけだ。追加したプロジェクトとその会話、プロジェクトに属さない会話、
+> サービスごとの使用量。この三つの外に表面はない。
 >
-> `Review and Apply Mission Landing` は通常 Mission のすべての passing Receipt Artifact を、現在の project と
-> 一つの VS Code native multi-diff で比較する。`Apply, run Gates and complete` 一回で Mission、Receipt、source と
-> target の byte、link、未保存 editor を再確認し、既存 file と新規 file にレビュー済みの正確な byte を適用して
-> Core の固定 Gate を実行する。実物 Extension Host で二つの Git project の四 Artifact を適用し、project と Receipt
-> の drift を拒否して復旧し、最初の完了中も二つ目を待機させたまま次の Landing を開いた。
+> いま人が押して動くもの:
 >
-> Fleet Compare は比較だけで止まらない。一つの passing Task を選ぶと、その Task と Receipt だけを含む native
-> winner multi-diff が開く。公開 apply 操作一回で他の候補を混ぜずに正確な byte を書き、固定 Gate を実行して
-> Core で Mission を完了する。Core は選択した Task と Receipt を永続的な終端証拠として保持するため、応答消失
-> 後の復旧が別の候補を成功と誤認しない。実物 Extension Host journey は異なる二つの実物 CLI 結果から
-> `attempt-2` だけを適用して `completed` に到達し、各目標画面を直接目視検査した。
+> - フォルダを選んでプロジェクトを追加すると、その中の会話がサービスを問わず一度に並ぶ。順序は本人のもので、
+>   一覧はどの窓で開いても同じだ。
+> - 新しい会話は押したその場でサービスを選ぶ。視線が窓の上端へ引っ張られない。
+> - 会話を押すと、その CLI 自身の画面がエディタのタブとして開き、そこに打てば返ってくる。タブは会話の名前を
+>   持ち、プロジェクトの色をまとう。
+> - 固定、名前の変更、削除は行にある。削除はサービス自身の削除表面を呼ぶので本当に消える。
+> - 使用量は、サービスが数値を出すならバーで、出さないなら「なぜ無いか」で答える。
 >
-> `Mission Auto Flight` はレビュー済みの通常 Mission を PC で一度 arm し、各実物 provider turn を
-> lifecycle generation で証明して固定 Gate と Receipt を封印し、次の安全な DAG wave を自動で開始する。
-> person、quota 待ちと pause はそのまま待ち、権限 drift、曖昧な送信、recovery state では即座に解除する。
-> 実物二 wave CLI journey はオペレーターの Continue 0 回で `integrating` 到着と自動権限回収を検証し、
-> 三つの画面状態を直接目視確認した。最終 Receipt Landing と integration は常に明示的な操作として残る。
+> 一覧は窓が現れた時点ですでに描かれている。コアを見つけて繋ぐのに数秒かかるが、その間に見るものが無いのは
+> 失敗なので、前の窓が描いた一覧を保存し、起動の最初の行で戻す。戻した一覧はサービスがディスクに持つものだけで、
+> 何が動いているかは主張しない。
 >
-> スマートフォン通知は会話内容を運ばず、実際にオペレーターを待つ最初の session を開く。`Needs you`
-> の件数と次への移動は person wait だけを含み、account limit は区別する。実物 CLI approval gate が
-> approval 中の表示と回答後の解除を検証する。
+> デーモンは置き換えられるプロセスではなく世代だ。新しいビルドは古いものを殺さず隣に立ち、古い世代は自分の
+> 会話だけを最後まで担ってから自分で去る。その間、サイドバーに一行が残る。
 >
-> Auto Flight の person wait、安全な停止、Receipt Landing も同じ内容なしの通知を使う。認証後、
-> スマートフォンは Core の最大 64 件の構造 signal を読み、現在の root、Mission digest、state が一致する
-> 正確な session または Mission だけを開く。push に Mission ID、instruction、path、output はなく、端末には
-> opaque cursor だけが残る。
+> 携帯の PWA はリレーで対にし、同じ会話を遠隔で開く。携帯からの要求は認証済みでも既定で拒否で、危険な能力は
+> PC の前での操作でのみ有効になる。
+>
+> 以下の点数の多くが 0 なのは、コードが無いからではなく、その軸を断言するゲートがまだ無いからだ。
 
 The security boundary and default-deny settings are documented in [SECURITY.md](SECURITY.md).
 
@@ -204,7 +197,7 @@ Rust は目的ではなく、上の表の三つの軸のための手段である
 | `crates/` | 製品コア（Rust）。デーモン、プロバイダーアダプター、トランスポート。独立 GUI crate は存在しない | 実装済み |
 | [`clients/typescript/`](clients/typescript/) | 外部製品向け公開 Runtime TypeScript SDK | packed consumer 検証済み |
 | [`extensions/runtrol-vscode/`](extensions/runtrol-vscode/) | 唯一の PC surface `Runtrol Studio` | 30 session のリリース負荷を検証、0.1.22 公開済み |
-| [`pwa/`](pwa/) | モバイル PWA | リレー接続、セッション制御、承認、`Needs you` と Mission Flight Signals の正確な focus を実装済み |
+| [`pwa/`](pwa/) | モバイル PWA | リレー接続、セッション制御、承認、`Needs you``Needs you`正確な focus を実装済み |
 | [`site/`](site/) | [依存関係のない GitHub Pages ランディング](https://eddmpython.github.io/runtrol/) | 公開済み |
 | [`assets/brand/`](assets/brand/) | ロゴ。SVG が正本で、favicon・アイコン・ソーシャルカードはそこから派生する | |
 | [`docs/`](docs/README.md) | 運用ドキュメントの正本 | |

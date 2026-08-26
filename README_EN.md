@@ -9,39 +9,32 @@
 
 **[Product site](https://eddmpython.github.io/runtrol/)** · [Install from Marketplace](https://marketplace.visualstudio.com/items?itemName=runtrol.runtrol-studio) · [Phone app](https://eddmpython.github.io/runtrol/app/)
 
-> Status: **the Core and primary VS Code extension are implemented, and `Runtrol Studio 0.1.22` is public for six native targets.** The live session index, real Extension Host and 3,000-frame-per-second Webview performance ratchets, full journey with an installed real CLI, clean Marketplace installation, and session-preserving VSIX upgrade and rollback are verified. The standalone desktop GUI code and execution path have been removed, and the VS Code extension is the only PC surface. The public Runtime protocol, Rust and TypeScript SDKs, external packed-consumer gates, and signed six-target standalone Runtime release pipeline are also implemented. Automatic updates for confirmed provider channels now include process exclusion and exact rollback. Fleet Compare sends one reviewed instruction to two through four isolated worktrees and provider sessions, arranges their native conversations as a VS Code grid, compares passing Artifacts in native diffs, and verifies only one selected passing Receipt. A live two-CLI gate and a real Extension Host eye pass verify that flow. For an ordinary Mission, one `Continue Reviewed Mission` action starts the current safe wave, seals finished Tasks with fixed Gates, prepares the next DAG wave, and sends the exact reviewed instructions. A real installed-CLI and Extension Host journey verifies two successive waves. The [Marketplace extension](https://marketplace.visualstudio.com/items?itemName=runtrol.runtrol-studio), [GitHub Pages site](https://eddmpython.github.io/runtrol/), relay-based phone PWA, bodyless Web Push, and Mission supervision surface are implemented. The answering model and the permission mode switch mid-conversation from their own header chips; each pick is relayed through that CLI's own switch surface and the chip shows only what the service answered (the installed real Claude Code journey gate verifies the switch and the restore through the CLI's own announcements). The current VS Code folder is the first project heading without registration, while other folders become projects only through repeated use. Each conversation row contains only the agent icon and actual title, and that icon spins while work is active. A paired device's authority is bounded by its approved workspace roots: the session index, every session command, and Mission reads all pass the same live-root verification, and revoking a root takes effect immediately. Provider preparation runs in per-provider lanes, so five cold first meetings finish in 8.7 seconds where full serialization costs 18.1, and a newly opened folder's existing conversations arrive without a refresh. Each conversation opens as its own editor tab, so several stay on screen at once, split like files, and typing or interrupting targets the conversation of that tab. After an extension update the still-running older Core rolls itself to the new build the moment the machine is idle, so updates actually arrive without a restart. Active gates now run the shipped PWA modules through the production daemon and an installed real CLI for session, approval, and remote disconnection recovery journeys. One click on a project heading enables Agent Tools, letting installed coding agents delegate through seven root-bound public Runtime tools; disabling removes provider registrations, Runtime authority, and protected local credentials. Physical iOS installation and Web Push operation remain unverified contributor operator evidence and are excluded from the current completion scope and score. Most scores below are 0 because no gate asserts those axes yet, not because there is
-> no code.
+> Status: **the Core and the VS Code extension `Runtrol Studio 0.1.22` are public for six native targets.**
+> The sidebar is three sections: the projects you added with their conversations, the conversations that belong
+> to no project, and each service's usage. There is no surface outside those three.
 >
-> `Continue Ready Missions` reviews up to eight exact Mission digests once and advances the current safe wave across
-> projects. A real Extension Host started two separate Git projects in one action and moved both to `integrating` in
-> the next action.
+> What a person can press today:
 >
-> `Review and Apply Mission Landing` compares every passing Receipt Artifact from an ordinary Mission with the current
-> project in one native VS Code multi-diff. One `Apply, run Gates and complete` action rechecks the Mission, Receipts,
-> source and target bytes, links, and unsaved editors, applies the exact reviewed bytes to existing and new files, then
-> runs fixed Core Gates. A real Extension Host applied four Artifacts across two Git projects, rejected both project
-> and Receipt drift, recovered, kept the second Mission waiting while the first completed, and opened the next Landing.
+> - Add a project by choosing its folder, and every conversation in it arrives at once, whichever service holds
+>   it. The order is yours, and the list is the same in every window.
+> - A new conversation asks which service where you pressed, never at the top of the window.
+> - Pressing a conversation opens that CLI's own screen as an editor tab, and typing there is answered. The tab
+>   carries the conversation's name and its project's colour.
+> - Pin, rename and delete live on the row. Delete calls the service's own deletion, so it really deletes.
+> - Usage draws a bar when the service publishes a number, and says why there is none when it does not.
 >
-> Fleet Compare no longer stops at comparison. Selecting one passing Task opens a native winner multi-diff containing
-> only that Task and Receipt. One public apply action writes the exact bytes without mixing another candidate, runs the
-> fixed Gates, and completes through Core. Core retains the selected Task and Receipt as durable terminal evidence, so
-> response-loss recovery cannot mistake a different candidate for success. A real Extension Host journey applied only
-> `attempt-2` from two distinct real CLI results and reached `completed`, with every target screen inspected directly.
+> The list is already drawn when the window appears. Locating the Core and connecting takes seconds, and nobody
+> should watch them, so the list the last window drew is stored and restored in the first line of activation. A
+> restored list is what the services keep on disk; it never claims what is running.
 >
-> `Mission Auto Flight` arms a reviewed ordinary Mission once on the PC, proves each real provider turn through its
-> lifecycle generation, seals fixed Gates and Receipts, and starts the next safe DAG wave automatically. It waits for
-> person or quota input and pause, and disarms on authority drift, ambiguous delivery, or recovery. A real two-wave
-> CLI journey reached `integrating` with zero operator Continue actions, removed its own authority, and had all three
-> screen states inspected directly. Final Receipt Landing and integration always remain explicit.
+> The daemon is a generation rather than a process that gets replaced. A new build starts beside the old one, and
+> the old generation serves only its own conversations before leaving on its own. A line in the sidebar says so
+> while that lasts.
 >
-> A phone notification now opens the first session that is actually waiting for the operator without carrying
-> conversation content. The `Needs you` count and next action include person waits only and keep account limits
-> separate. The real CLI approval gate verifies entry while pending and removal after the answer.
+> The phone PWA pairs through a relay and opens the same conversations remotely. A request from a phone is denied
+> by default even when authenticated, and the dangerous capabilities turn on only at the machine.
 >
-> Auto Flight person waits, safe stops, and Receipt Landing use the same content-free wake. After authentication, the
-> phone reads at most 64 structural Core signals and opens only the exact session or Mission whose root, Mission
-> digest, and current state still match. Push contains no Mission ID, instruction, path, or output, and the phone
-> retains only an opaque cursor.
+> Most scores below are 0 because no gate asserts those axes yet, not because there is no code.
 
 The security boundary and default-deny settings are documented in [SECURITY.md](SECURITY.md).
 
@@ -207,7 +200,7 @@ If those axes are not nailed down by gates, using Rust means nothing.
 | `crates/` | The product core (Rust). Daemon, provider adapters, and transport. There is no standalone GUI crate | Implemented |
 | [`clients/typescript/`](clients/typescript/) | Public Runtime TypeScript SDK for external products | Packed consumer verified |
 | [`extensions/runtrol-vscode/`](extensions/runtrol-vscode/) | The only PC surface, `Runtrol Studio` | 30-session release load verified, 0.1.22 public |
-| [`pwa/`](pwa/) | Mobile PWA | Relay connection, session control, approval, and exact `Needs you` and Mission Flight Signals focus implemented |
+| [`pwa/`](pwa/) | Mobile PWA | Relay connection, session control, approval, and exact `Needs you` focus implemented |
 | [`site/`](site/) | [Dependency-free GitHub Pages landing](https://eddmpython.github.io/runtrol/) | Live |
 | [`assets/brand/`](assets/brand/) | The logo. SVG is the source; favicons, icons, and social cards derive from it | |
 | [`docs/`](docs/README.md) | Operational documentation, source of truth | |

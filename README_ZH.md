@@ -9,36 +9,26 @@
 
 **[产品站点](https://eddmpython.github.io/runtrol/)** · [从 Marketplace 安装](https://marketplace.visualstudio.com/items?itemName=runtrol.runtrol-studio) · [手机应用](https://eddmpython.github.io/runtrol/app/)
 
-> 状态：**内核和主要 VS Code 扩展已经实现，`Runtrol Studio 0.1.22` 已面向六个原生目标公开发布。** 实时会话索引、真实 Extension Host 和每秒 3,000 帧 Webview 性能门槛、已安装真实 CLI 的完整操作旅程、全新 Marketplace 安装，以及保留活动会话的 VSIX 升级与回滚都已验证。独立桌面 GUI 代码和执行路径已经删除，VS Code 扩展是唯一 PC 界面。公共 Runtime 协议、Rust 和 TypeScript SDK、外部打包消费门槛，以及六目标签名 standalone Runtime 发布流程也已经实现。已确认 provider 渠道的自动更新也具备进程互斥与精确回滚。[Marketplace 扩展](https://marketplace.visualstudio.com/items?itemName=runtrol.runtrol-studio)、[GitHub Pages 站点](https://eddmpython.github.io/runtrol/)、基于中继的手机 PWA、无正文 Web Push 和 Mission 监督界面都已实现。对话标题栏的芯片可以在对话中切换应答模型和 permission mode，选择通过该 CLI 自身的切换界面中继，芯片只显示服务实际回答的值(已安装真实 Claude Code 的旅程门禁通过 CLI 自身的公告验证切换与恢复)。当前 VS Code 文件夹无需注册即可成为第一个项目标题，其他文件夹只有在重复使用时才归为项目。每个对话行只显示代理图标和真实对话名称，运行时图标本身会旋转。已配对设备的权限被限定在批准的 workspace root 内：会话索引、所有会话命令和 Mission 读取都要通过同一个 live root 验证，撤销 root 立即生效。provider 准备按 provider 分车道并行，五个 cold 首次探测从串行 18.1 秒降到 8.7 秒，新打开文件夹的既有对话无需刷新即可到达。每个对话都以独立编辑器标签页打开，多个对话可以同时显示并分屏，输入与中断都指向该标签页的对话。扩展更新后仍在运行的旧内核会在机器空闲时自动滚动到新构建，更新无需重启即可真正生效。活动门禁会让已发布的 PWA 模块通过 production daemon 驱动已安装的真实 CLI，验证会话、批准和远程断线恢复旅程。在项目标题上点击一次即可启用 Agent Tools，让已安装的编码代理通过七个受项目根限制的公共 Runtime 工具委派工作；禁用时会移除 provider 注册、Runtime 权限和受保护的本地凭据。iOS 真机安装与 Web Push 运行确认仍是未经验证的贡献者 operator evidence，不计入当前完成范围和评分。
-> Fleet Compare 可将同一条已审查指令一次发送到 2 至 4 个隔离 worktree 与 provider 会话，在 VS Code 网格和原生 diff 中比较结果，并只用一个选中的通过 Receipt 完成最终验证。真实双 CLI 门禁与实际 Extension Host 目视检查已经验证该流程。
-> 普通 Mission 现在只需一次 `Continue Reviewed Mission` 操作，就会启动当前安全波次，用固定 Gate 封存已完成 Task，准备下一 DAG 波次，并发送精确的已审查指令。真实 CLI 与 Extension Host 的两阶段旅程已经验证该流程。
-> `Continue Ready Missions` 可一次审查最多八个精确 Mission 摘要，并同时推进多个项目当前安全的波次。真实 Extension Host 用一次操作启动了两个独立 Git 项目，并在下一次操作中将两者都推进到 `integrating`。
-> 下面多数分数为 0，不是因为没有代码，而是因为还没有门禁去断言那些轴。
+> 状态：**内核与 VS Code 扩展 `Runtrol Studio 0.1.22` 已面向六个原生目标公开。**
+> 侧边栏只有三节：你添加的项目及其会话、不属于任何项目的会话、各服务的用量。三节之外没有别的表面。
 >
-> `Review and Apply Mission Landing` 会在一个 VS Code 原生多文件 diff 中，将普通 Mission 的所有通过 Receipt
-> Artifact 与当前项目进行比较。一次 `Apply, run Gates and complete` 操作会重新检查 Mission、Receipt、源与
-> 目标字节、链接和未保存编辑器，把已审查的精确字节应用到现有与新文件，再运行 Core 的固定 Gate。真实
-> Extension Host 已在两个 Git 项目中应用四个 Artifact，拒绝项目与 Receipt 漂移并恢复，在第一个完成时保留
-> 第二个等待，随后打开下一个 Landing。
+> 现在按下去就能用的：
 >
-> Fleet Compare 不再止步于比较。选择一个已通过的 Task 后，会打开只包含该 Task 与 Receipt 的原生 winner
-> multi-diff。一次公开应用操作会在不混入其他候选结果的前提下写入精确字节，运行固定 Gate，并通过 Core
-> 完成 Mission。Core 会把选中的 Task 与 Receipt 保留为持久终态证据，因此响应丢失后的恢复不会把其他候选
-> 误判为成功。真实 Extension Host 旅程从两个不同的真实 CLI 结果中只应用了 `attempt-2`，到达
-> `completed`，并直接目视检查了每个目标画面。
+> - 选一个文件夹添加为项目，其中的会话会一次性到齐，不论由哪个服务持有。顺序由你决定，任何窗口打开都一样。
+> - 新建会话就在按下的地方选服务，视线不会被拉到窗口顶部。
+> - 点开会话，那个 CLI 自己的界面会作为编辑器标签打开，直接输入就有回应。标签带着会话名，用项目的颜色。
+> - 置顶、改名、删除都在这一行上。删除调用服务自己的删除表面，所以是真的删掉。
+> - 用量：服务给出数字就画进度条，不给就说明为什么没有。
 >
-> `Mission Auto Flight` 只需在 PC 上为已审查的普通 Mission 授权一次。它通过 lifecycle generation 证明每个
-> 真实 provider turn，封存固定 Gate 与 Receipt，并自动启动下一个安全 DAG 波次。遇到人员、quota 等待或暂停
-> 时会保持等待，遇到权限漂移、模糊传输或恢复状态时会立即解除。真实双波次 CLI 旅程以零次操作者
-> Continue 到达 `integrating`，自动收回权限，并直接目视检查了三个屏幕状态。最终 Receipt Landing 与集成
-> 始终保持显式操作。
+> 窗口出现时列表已经画好了。定位内核并连接需要几秒，不能让人干等，所以上一个窗口画过的列表会被保存，并在激活的
+> 第一行恢复。恢复的列表只是服务留在磁盘上的东西，它从不声称什么正在运行。
 >
-> 手机通知现在不会携带对话内容，并会打开第一个真正等待操作者的会话。`Needs you` 数量与下一项操作
-> 只包含等待人员的状态，并与账户限额等待区分。真实 CLI 批准门禁验证等待时出现、回答后消失。
+> 守护进程是"世代"，不是被替换的进程。新构建不杀旧的，而是并排启动；旧世代只把自己的会话服务到底，然后自行退出。
+> 这期间侧边栏留着一行说明。
 >
-> Auto Flight 的人员等待、安全停止和 Receipt Landing 使用同一种无内容通知。手机通过认证后读取 Core
-> 中最多 64 个结构化信号，只打开 root、Mission digest 与当前状态仍完全匹配的会话或 Mission。推送不含
-> Mission ID、指令、路径或输出，手机只保留一个不透明 cursor。
+> 手机 PWA 通过中继配对，远程打开同样的会话。来自手机的请求即便通过认证也默认拒绝，危险能力只能在电脑前开启。
+>
+> 下面的分数大多为 0，不是因为没有代码，而是因为还没有断言那些维度的门禁。
 
 The security boundary and default-deny settings are documented in [SECURITY.md](SECURITY.md).
 
@@ -200,7 +190,7 @@ Rust 不是目的，而是上表中三个轴的手段。
 | `crates/` | 产品内核（Rust）。守护进程、供应商适配器与传输。不存在独立 GUI crate | 已实现 |
 | [`clients/typescript/`](clients/typescript/) | 面向外部产品的公共 Runtime TypeScript SDK | 已验证打包消费 |
 | [`extensions/runtrol-vscode/`](extensions/runtrol-vscode/) | 唯一 PC 界面 `Runtrol Studio` | 30 会话发布负载已验证，0.1.22 已公开 |
-| [`pwa/`](pwa/) | 移动端 PWA | 已实现中继连接、会话控制、批准以及 `Needs you` 与 Mission Flight Signals 精确直达 |
+| [`pwa/`](pwa/) | 移动端 PWA | 已实现中继连接、会话控制、批准以及 `Needs you``Needs you`精确直达 |
 | [`site/`](site/) | [无依赖 GitHub Pages 落地页](https://eddmpython.github.io/runtrol/) | 已上线 |
 | [`assets/brand/`](assets/brand/) | 标志。SVG 为正本，favicon、图标与社交卡片皆由其派生 | |
 | [`docs/`](docs/README.md) | 运营文档正本 | |

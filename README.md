@@ -9,53 +9,31 @@
 
 **[제품 사이트](https://eddmpython.github.io/runtrol/)** · [Marketplace 설치](https://marketplace.visualstudio.com/items?itemName=runtrol.runtrol-studio) · [휴대폰 앱](https://eddmpython.github.io/runtrol/app/)
 
-> 상태: **코어와 주력 VS Code 확장을 구현했고 `Runtrol Studio 0.1.22`를 6개 네이티브 플랫폼 대상으로 공개했다.** 실시간 세션 인덱스, 실물 Extension Host와 초당 3,000 프레임 Webview 성능 ratchet, 설치된 실물 CLI의 전체 조작 여정, 깨끗한 Marketplace 설치, 활성 세션을 보존하는 VSIX 갱신과 롤백을 검증했다. 독립 데스크톱 GUI 코드와 실행 경로는 제거됐고 PC 표면은 VS Code 확장 하나다. 공개 Runtime 프로토콜, Rust와 TypeScript SDK, 외부 패키지 소비 게이트, 서명된 standalone Runtime 6개 대상 배포 파이프라인도 구현했다. 확증된 provider 채널의 자동 갱신, 배타 실행, 정확한 롤백도 구현했다. 로컬 Mission DAG, 결정적 Receipt, 수동 통합, 프로젝트 Capability의 명시적 재사용과 변조 롤백도 두 설치형 CLI의 헤드리스 여정으로 검증했다. 같은 검토 지시를 2개에서 4개 격리 worktree와 provider 세션에 한 번에 보내고, VS Code 그리드와 native diff로 비교한 뒤 통과 결과 하나만 선택해 최종 검증하는 Fleet Compare도 실물 두 CLI gate와 실제 Extension Host 눈검수로 검증했다. 일반 Mission은 `Continue Reviewed Mission` 한 동작으로 현재 안전한 파동을 시작하고, 완료 Task의 고정 Gate를 봉인하고, 다음 DAG 파동을 준비해 정확한 지시를 보낸다. 실물 CLI와 Extension Host의 2단계 여정이 이를 검증했다. [Marketplace 확장](https://marketplace.visualstudio.com/items?itemName=runtrol.runtrol-studio)과 [GitHub Pages 사이트](https://eddmpython.github.io/runtrol/)가 공개되어 있다. 릴레이 기반 휴대폰 PWA, VS Code 페어링, 세부 권한 편집, 내용 없는 Web Push, Mission 조회와 중단 표면을 구현했다. 대화 헤더의 칩으로 답하는 모델과 permission mode 를 대화 중에 바꾸며, 선택은 각 CLI 자신의 전환 표면으로 중계되고 칩은 서비스가 답한 값만 보여 준다 (설치된 실물 Claude Code 여정 게이트가 전환과 복귀를 CLI 자체 공지로 검증). 현재 VS Code 폴더는 등록 없이 첫 프로젝트 헤딩이 되고, 그 밖의 반복 사용 폴더만 프로젝트로 묶는다. 각 대화 행에는 에이전트 아이콘과 실제 대화명만 표시하며 실행 중에는 아이콘 자체가 회전한다. 페어링된 기기의 권한은 승인한 workspace root 로 한정된다: 세션 목록과 감시, 모든 세션 명령, Mission 조회가 같은 live root 검증을 통과해야 하고 root 회수는 즉시 효력을 갖는다. provider 준비는 provider 별 lane 으로 병렬화되어 cold 첫 만남 5 개가 직렬 18.1초 대신 8.7초에 끝나고, 새로 연 폴더의 기존 대화는 새로고침 없이 도착한다. 대화는 저마다 에디터 탭으로 열려 여러 대화를 동시에 띄우고 화면을 분할하며, 입력과 중단은 그 탭의 대화로 간다. 확장 갱신 뒤에도 돌고 있던 옛 코어가 유휴가 되는 즉시 새 빌드로 스스로 굴려져, 업데이트가 재시작 없이 실제로 도달한다. PWA 모듈이 production 데몬과 실물 CLI를 관통하는 세션, 승인, 원격 단절 복원 여정도 활성 게이트로 검증한다. 프로젝트 헤딩의 클릭 한 번으로 Agent Tools를 켜면 설치된 코딩 에이전트가 공개 Runtime의 루트 제한 7개 도구로 다른 작업을 위임할 수 있고, 끄면 provider 등록, Runtime 권한, 보호된 로컬 자격이 함께 회수된다. iOS 실기기 설치와 Web Push 운영 확인은 미검증 기여자 operator evidence로 남으며 현재 완료 범위와 점수에서 제외한다.
+> 상태: **코어와 VS Code 확장 `Runtrol Studio 0.1.22`를 6개 네이티브 플랫폼으로 공개했다.**
+> 사이드바는 세 절이다. 추가한 프로젝트와 그 대화, 프로젝트 없이 한 대화, 서비스별 사용량.
+> 세 절 밖의 표면은 없다.
+>
+> 지금 사람이 눌러서 되는 것:
+>
+> - 프로젝트를 폴더로 추가하면 그 폴더의 대화가 서비스를 가리지 않고 한 번에 딸려 온다. 순서는 바꿀 수 있고
+>   목록은 어느 창에서 열어도 같다.
+> - 새 대화는 누른 자리에서 서비스를 고른다. 편집기 상단으로 눈이 끌려가지 않는다.
+> - 대화를 누르면 그 CLI 자신의 화면이 편집기 탭으로 열리고 바로 타이핑해서 답이 온다. 탭은 그 대화의 이름을
+>   달고 프로젝트의 색을 쓴다.
+> - 대화 행에서 고정, 이름 변경, 삭제를 한다. 삭제는 서비스 자신의 삭제 표면을 부르므로 실제로 지워진다.
+> - 사용량은 서비스가 숫자를 주면 막대로, 안 주면 왜 없는지로 말한다.
+>
+> 목록은 창이 뜰 때 이미 그려져 있다. 코어를 찾고 붙는 몇 초 동안 볼 것이 없어서는 안 되므로, 지난 창이 그린
+> 목록을 저장해 두고 활성화 첫 줄에서 되살린다. 되살린 목록은 서비스가 디스크에 갖고 있는 것뿐이고 무엇이
+> 돌고 있는지는 주장하지 않는다.
+>
+> 데몬은 교체되는 프로세스가 아니라 세대다. 새 빌드는 옛 데몬을 죽이지 않고 옆에 뜨고, 옛 세대는 자기 대화만
+> 끝까지 서빙한 뒤 스스로 나간다. 그동안 사이드바에 그 사실이 한 줄로 남는다.
+>
+> 휴대폰 PWA 는 릴레이로 짝을 짓고 같은 대화를 원격으로 연다. 폰에서 오는 요청은 인증되어도 기본 거부이고,
+> 위험한 능력은 PC 앞에서의 행동으로만 켠다.
+>
 > 아래 점수 대부분이 0 인 것은 코드가 없어서가 아니라 그 축을 단언하는 게이트가 아직 없어서다.
->
-> `Continue Ready Missions`는 최대 8개의 검토된 일반 Mission을 정확한 digest와 함께 한 번 확인하고,
-> 여러 프로젝트의 현재 안전한 파동을 함께 진행한다. 실제 Extension Host에서 두 Git 프로젝트를 한 동작으로
-> 동시에 시작하고 다음 한 동작으로 둘 다 `integrating`까지 보냈다.
->
-> `Review and Apply Mission Landing`은 일반 Mission의 모든 통과 Receipt Artifact를 현재 프로젝트와 한 개의
-> VS Code native multi-diff에서 검토한다. `Apply, run Gates and complete` 한 동작이 Mission, Receipt, 원본,
-> 대상, 링크, 미저장 편집기를 다시 확인하고 검증된 임시 파일의 원자적 교체로 기존 파일과 새 파일에 정확한
-> 바이트를 적용한다. Core는 고정 Gate 전후의 Artifact를 Receipt와 비교한다. 실제 Extension Host에서 공개
-> 적용 버튼을 선택해 네 Artifact를 적용하고 봉인 후 원본 변조, 대상과 Receipt drift, 미저장 편집기, 링크
-> 교체, Gate의 파일 변경을 각각 거부한 뒤 복구와 재시도 완료까지 확인했다.
->
-> Fleet Compare는 이제 비교에서 멈추지 않는다. 통과 Task 하나를 선택하면 그 Task 이름과 Receipt만 담은 native
-> winner multi-diff가 열리고, 공개 적용 버튼 한 번이 다른 후보를 섞지 않은 채 정확한 바이트를 적용하고 고정 Gate와
-> Core 완료까지 잇는다. Core는 완료 뒤에도 선택한 Task와 Receipt를 영구 증거로 남겨 응답 유실 복구가 다른 후보를
-> 성공으로 오인하지 못한다. 두 실제 CLI의 서로 다른 결과 중 `attempt-2`만 프로젝트에 적용해 `completed`가 되는
-> 실제 Extension Host 여정과 화면을 검증했다.
->
-> `Mission Auto Flight`는 검토된 일반 Mission을 PC에서 한 번 무장하면, 실제 provider 턴의 세대 변화를
-> 증명한 뒤 고정 Gate와 Receipt를 봉인하고 다음 안전한 DAG 파동을 자동으로 시작한다. 사람과 quota 대기,
-> 일시정지는 그대로 기다리고, 권한 변화, 모호한 전송, 복구 상태에서는 즉시 해제된다. 두 파동 실물 CLI
-> 여정이 운영자 `Continue` 0회로 `integrating` 도착과 자동 권한 회수를 검증했고 세 화면을 직접 눈검수했다.
-> 최종 Receipt Landing과 통합은 항상 명시적이다.
->
-> `Schedule Reviewed Mission`은 검토된 Mission, 정책, Task 지시문, workspace mode, runtime에서 발견된
-> provider 배정과 정확한 시작 시각을 Core에 한 번 고정한다. Studio를 닫아도 Core가 예약을 보존하고,
-> 시각이 되면 기존 공개 Mission과 세션 경계만으로 첫 파동을 시작한다. 예약 교체와 취소는 현재 schedule ID를
-> 다시 확인하며, 모호한 Send는 반복하지 않고 attention으로 멈춘다. 실제 VS Code 1.132.1의 첫 Host를 예약
-> 시각 전에 닫고 UI가 없는 구간에 실제 Claude Code 세션이 시작된 뒤, 두 번째 Host가 `started` 상태와 실제
-> 응답에 재접속하는 1456 x 908 여정을 검증했다.
->
-> 일반 채팅의 `Also Ask Another Service`는 같은 첫 메시지를 선택한 각 서비스의 별도 linked worktree에서
-> 시작한다. Core가 깨끗한 Git 프로젝트의 정확한 HEAD를 고정하고 워크트리 생성, 세션 결박, 재시작 복구,
-> clean-only 정리를 소유한다. Studio는 Core가 만든 정확한 root만 Runtime에 승인하고 종료와 함께 회수하며,
-> 변경이 남은 워크트리는 삭제하지 않고 경로를 보여 준다. 정확한 0.1.9 VSIX를 설치한 VS Code 1.132.1에서
-> 공개 새 대화와 `Also Ask` 명령만으로 Claude Code와 Codex를 서로 다른 워크트리에 열고, 원본 checkout
-> 무변경과 정확한 정리를 검증한 1456 x 908 화면을 직접 확인했다.
->
-> 폰 알림은 이제 대화 내용을 싣지 않은 채 실제로 운영자를 기다리는 첫 세션으로 직행한다. `Needs you`
-> 수와 다음 대기 세션 이동은 사람 대기만 포함하고 계정 한도 대기는 구분한다. 실물 CLI 승인 게이트가
-> 승인 중 진입과 답변 뒤 해제를 검증한다.
->
-> Auto Flight의 사람 대기, 안전 중단, Receipt Landing도 같은 내용 없는 알림으로 도착한다. 폰은 인증 후
-> Core의 최대 64개 구조 신호를 읽고 현재 root, Mission digest, 상태가 그대로인 정확한 세션 또는 Mission만
-> 연다. 푸시에는 Mission ID, 지시, 경로, 출력이 없고 폰에는 opaque cursor만 남는다.
 
 보안 경계와 기본 거부 설정은 [SECURITY.md](SECURITY.md)에 정리되어 있다.
 
@@ -219,7 +197,7 @@ Rust 는 목적이 아니라 위 표의 세 축을 위한 수단이다.
 | `crates/` | 제품 코어 (Rust). daemon, provider 어댑터, 전송. 독립 GUI crate는 없다 | 구현됨 |
 | [`clients/typescript/`](clients/typescript/) | 외부 제품용 공개 Runtime TypeScript SDK | packed 소비 검증 |
 | [`extensions/runtrol-vscode/`](extensions/runtrol-vscode/) | 유일한 PC 표면 `Runtrol Studio` | 30개 세션 출시 부하 검증, 0.1.22 공개 |
-| [`pwa/`](pwa/) | 모바일 PWA | 릴레이 연결, 세션 제어, 승인, `Needs you`와 Mission Flight Signals 직행 구현 |
+| [`pwa/`](pwa/) | 모바일 PWA | 릴레이 연결, 대화 제어, 승인, `Needs you` 직행 구현 |
 | [`site/`](site/) | [무의존성 GitHub Pages 랜딩](https://eddmpython.github.io/runtrol/) | 공개됨 |
 | [`assets/brand/`](assets/brand/) | 로고. SVG 가 정본, 파비콘·아이콘·소셜 카드는 파생 | |
 | [`docs/`](docs/README.md) | 운영문서 정본 | |
