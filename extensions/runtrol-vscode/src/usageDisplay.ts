@@ -316,7 +316,10 @@ export function meterLabel(window: ProviderUsageWindow): string {
 export function windowName(window: ProviderUsageWindow): string | null {
   const named = window.scope ?? window.label ?? null;
   const length = usageWindowLabel(window.windowMinutes, null);
-  if (named && length) return `${named} ${length}`;
+  // Length first, because it is the short half and the one that tells two windows of the same model apart.
+  // Measured the other way round in a real sidebar: one service meters the same model over five hours and
+  // over a week, both bars read `GPT-5.3-Codex-...`, and the two lines were indistinguishable.
+  if (named && length) return `${length} ${named}`;
   return named ?? length;
 }
 
@@ -357,10 +360,14 @@ export function usageDetail(gauge: ProviderUsageGauge, nowMs: number): string {
   const parts: string[] = [];
   if (gauge.reached) parts.push("limit reached");
   const window = governingWindow(gauge);
+  const named = window ? windowName(window) : null;
   const percent = window?.usedPercent;
   if (typeof percent === "number") {
-    const named = window ? windowName(window) : null;
     parts.push(named ? `${named} ${percent}%` : `${percent}%`);
+  } else if (named) {
+    // No percentage, so the line names the window itself. Measured: a service that publishes its usage
+    // period and no number for it read as a bare "resets in 4d", which says when without saying what.
+    parts.push(named);
   }
   const resets = resetsIn(window, nowMs);
   if (resets) parts.push(resets);

@@ -54,7 +54,7 @@ test("every window a service described becomes its own labelled bar", () => {
   // The defect this replaced: two slots, so a driver picked two of the three and the one actually blocking
   // was routinely the one dropped.
   const meters = usageMeters(gauge({ windows: MEASURED_CLAUDE }), NOW);
-  assert.deepEqual(meters.map((meter) => meter.label), ["5h", "7d", "Fable 7d"]);
+  assert.deepEqual(meters.map((meter) => meter.label), ["5h", "7d", "7d Fable"]);
   assert.deepEqual(meters.map((meter) => meter.percent), [13, 95, 100]);
   assert.deepEqual(meters.map((meter) => meter.key), [
     "five_hour",
@@ -74,7 +74,9 @@ test("a bar is named by what the service scoped it to, never by a phrase compose
     }),
     NOW,
   );
-  assert.equal(spark?.label, "GPT-5.3-Codex-Spark 5h");
+  // The length leads because it is what tells this bar from the same model's weekly one, and because a
+  // sidebar clips the tail of a nineteen-character model name.
+  assert.equal(spark?.label, "5h GPT-5.3-Codex-Spark");
 });
 
 test("the line names the window the service says is governing, not the shortest one", () => {
@@ -82,7 +84,7 @@ test("the line names the window the service says is governing, not the shortest 
   // report described. The service marks which one binds; that is the one a person acts on.
   const detail = usageDetail(gauge({ reached: true, windows: MEASURED_CLAUDE }), NOW);
   assert.ok(detail.startsWith("limit reached"), detail);
-  assert.ok(detail.includes("Fable 7d 100%"), detail);
+  assert.ok(detail.includes("7d Fable 100%"), detail);
 });
 
 test("with no window marked governing the fullest one speaks for the row", () => {
@@ -169,7 +171,7 @@ test("the hover spells out every window, including the one that is governing", (
     PROVIDERS,
     NOW,
   );
-  assert.ok(row?.tooltip.includes("Fable 7d: 100% used"), row?.tooltip);
+  assert.ok(row?.tooltip.includes("7d Fable: 100% used"), row?.tooltip);
   assert.ok(row?.tooltip.includes("governing now"), row?.tooltip);
   assert.ok(row?.tooltip.includes("5h: 13% used"), row?.tooltip);
 });
