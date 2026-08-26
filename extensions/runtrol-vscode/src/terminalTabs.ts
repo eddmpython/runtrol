@@ -154,7 +154,11 @@ class CoreTerminal implements vscode.Pseudoterminal {
     void this.send({ ask: "terminalResize", with: { cols: dimensions.columns, rows: dimensions.rows } });
   }
 
-  private async connect(cols: number, rows: number): Promise<void> {
+  /// What a draining generation answers when it refuses new work. Matched on the Core's own words because
+  /// that refusal is the one failure a viewer can recover from by itself.
+  private static readonly DRAINING = "generation is draining";
+
+  private async connect(cols: number, rows: number, attempt = 0): Promise<void> {
     const located = await this.locator.locate();
     const transport = await FrameTransport.connect(located.endpoint);
     try {
@@ -168,7 +172,19 @@ class CoreTerminal implements vscode.Pseudoterminal {
       };
       await transport.send(open);
       const opened = readResponse(JSON.parse((await transport.receive()).toString("utf8")));
-      if (opened.say === "failed") throw new Error(opened.with.message);
+      if (opened.say === "failed") {
+        // A generation that has begun draining refuses new conversations on purpose: its successor owns
+        // them now. The address this view holds is simply stale, so it is dropped and asked for again
+        // rather than shown to the person as a failure (measured 2026-08-26: a window that had been open
+        // across an update could not start anything, and said so in our own words about generations).
+        if (opened.with.message.includes(CoreTerminal.DRAINING) && attempt === 0) {
+          transport.close();
+          this.locator.invalidate();
+          await this.connect(cols, rows, attempt + 1);
+          return;
+        }
+        throw new Error(opened.with.message);
+      }
       if (opened.say !== "terminalOpened") throw new Error(`the Core answered ${opened.say} to a terminal open`);
     } catch (error) {
       transport.close();
