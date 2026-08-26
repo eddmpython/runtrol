@@ -35,7 +35,23 @@ MEMORY_GATE = [
 ]
 BUILD_GATE = ["cargo", "build", "-p", "runtrol", "--bin", "runtrol"]
 START_WITHIN = 20.0
-SETTLE_SECONDS = 5.0
+
+# How long to wait for the daemon to finish the work starting costs before the idle sample begins.
+#
+# A fixed pause was wrong, not merely short. A daemon opening a home it has never seen asks every coding service
+# on the machine what it is, and on this machine that ran past five seconds: the sample then measured provider
+# discovery and called it idle, which is a different claim about a different thing (measured 2026-08-26: 125 to
+# 172 ms with a five second pause, and exactly zero once the discovery had finished). So the daemon is watched
+# until it goes quiet by itself, and only then is idle measured. A machine slower than this one waits longer
+# rather than failing a budget it never broke.
+QUIET_SLICE_SECONDS = 2.0
+QUIET_SLICE_BUDGET_SECONDS = 0.010
+# Four, because starting arrives in waves rather than as one push. Profiled 2026-08-26 on a fresh home: 1.7 s of
+# work in the first four seconds, silence, then a second burst of about 150 ms between ten and fourteen seconds,
+# and nothing at all after sixteen. Two quiet slices ended in the gap and sampled the second wave; four require
+# eight seconds of silence, which the gap between waves does not offer.
+QUIET_SLICES_REQUIRED = 4
+SETTLE_CEILING_SECONDS = 90.0
 SAMPLE_SECONDS = 10.0
 MIN_SAMPLE_SECONDS = 9.5
 CPU_BUDGET_SECONDS = 0.100
@@ -217,9 +233,22 @@ def measureCpu() -> tuple[float, float]:
             else:
                 raise Failed("daemon did not open its home within 20 seconds")
 
-            time.sleep(SETTLE_SECONDS)
-            if daemon.poll() is not None:
-                raise Failed(f"daemon exited while settling with code {daemon.returncode}")
+            quiet = 0
+            settle_deadline = time.monotonic() + SETTLE_CEILING_SECONDS
+            while quiet < QUIET_SLICES_REQUIRED:
+                slice_before = cpuSeconds(daemon.pid)
+                time.sleep(QUIET_SLICE_SECONDS)
+                if daemon.poll() is not None:
+                    raise Failed(f"daemon exited while settling with code {daemon.returncode}")
+                if cpuSeconds(daemon.pid) - slice_before <= QUIET_SLICE_BUDGET_SECONDS:
+                    quiet += 1
+                else:
+                    quiet = 0
+                if time.monotonic() >= settle_deadline:
+                    raise Failed(
+                        "the daemon never went quiet: startup work was still running after "
+                        f"{SETTLE_CEILING_SECONDS:.0f} seconds"
+                    )
             cpu_before = cpuSeconds(daemon.pid)
             started = time.monotonic()
             deadline = started + SAMPLE_SECONDS
