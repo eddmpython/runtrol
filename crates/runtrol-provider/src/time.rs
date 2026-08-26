@@ -73,7 +73,11 @@ impl WallMs {
         let year: i64 = number(date.next()?)?;
         let month: u32 = number(date.next()?)?;
         let day: u32 = number(date.next()?)?;
-        if date.next().is_some() || !(1..=12).contains(&month) || !(1..=31).contains(&day) {
+        if date.next().is_some()
+            || !(1..=12).contains(&month)
+            || day < 1
+            || day > days_in(year, month)
+        {
             return None;
         }
 
@@ -94,12 +98,17 @@ impl WallMs {
             return None;
         }
 
-        let days = days_from_civil(year, month, day);
+        // Every step checked, because a year with twenty digits in it is a string a provider can write and
+        // a panic is not a reading. The whole function answers `None` for anything it cannot represent.
+        let days = days_from_civil(year, month, day)?;
         let clock_seconds = i64::try_from(hour * 3_600 + minute * 60 + second);
         let Ok(clock_seconds) = clock_seconds else {
             return None;
         };
-        let seconds = days.checked_mul(86_400)? + clock_seconds - i64::from(offset_minutes) * 60;
+        let seconds = days
+            .checked_mul(86_400)?
+            .checked_add(clock_seconds)?
+            .checked_sub(i64::from(offset_minutes) * 60)?;
         let Ok(seconds) = u64::try_from(seconds) else {
             // Before the epoch. Not a reset time anything in this product is waiting for, and reading it
             // as a huge positive would render as a countdown of tens of thousands of years.
@@ -185,7 +194,7 @@ fn read_millis(fraction: &str) -> Option<u64> {
 ///
 /// The same algorithm a driver already carries for the other direction, kept here so the pair lives with
 /// the type it converts and no second copy has to be trusted.
-fn days_from_civil(year: i64, month: u32, day: u32) -> i64 {
+fn days_from_civil(year: i64, month: u32, day: u32) -> Option<i64> {
     let month = i64::from(month);
     let day = i64::from(day);
     let year = if month <= 2 { year - 1 } else { year };
@@ -193,7 +202,30 @@ fn days_from_civil(year: i64, month: u32, day: u32) -> i64 {
     let year_of_era = year - era * 400;
     let day_of_year = (153 * (if month > 2 { month - 3 } else { month + 9 }) + 2) / 5 + day - 1;
     let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
-    era * 146_097 + day_of_era - 719_468
+    era.checked_mul(146_097)?
+        .checked_add(day_of_era)?
+        .checked_sub(719_468)
+}
+
+/// How many days that month has, so a date nobody has does not become a date somebody does.
+///
+/// Without this `2025-02-29` read as the first of March and `2100-02-29` read as a day in a century that
+/// has no such date. The rule this file states is that what it cannot read is absent, never a guess, and a
+/// day rolled into the next month is the purest kind of guess: it is a real instant that is not the one
+/// the provider wrote.
+fn days_in(year: i64, month: u32) -> u32 {
+    match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if year.rem_euclid(4) == 0
+            && (year.rem_euclid(100) != 0 || year.rem_euclid(400) == 0) =>
+        {
+            29
+        }
+        2 => 28,
+        // Refused earlier by the range check; answering zero keeps this total without a panic path.
+        _ => 0,
+    }
 }
 
 impl fmt::Display for WallMs {
@@ -301,6 +333,44 @@ mod iso8601_tests {
                 % 1_000,
             500
         );
+    }
+
+    #[test]
+    fn a_year_no_clock_can_hold_is_absent_rather_than_a_panic() {
+        // A provider writes the text; this reads it. Both of these overflowed on the way to a number, and
+        // an overflow in a debug build is a panic, which is not a reading of anything.
+        for text in [
+            "25252734927766800-01-01T00:00:00Z",
+            "292277026596-12-04T15:30:08Z",
+            "-9999999999999999999-01-01T00:00:00Z",
+        ] {
+            assert!(
+                WallMs::from_iso8601(text).is_none(),
+                "expected {text} to be refused rather than to overflow"
+            );
+        }
+    }
+
+    #[test]
+    fn a_day_that_month_does_not_have_is_refused_rather_than_rolled_forward() {
+        // Every one of these used to read as a real instant in the following month, which is a guess
+        // wearing a timestamp: 2100 is not a leap year, and February has never had 31 days.
+        for text in [
+            "2025-02-29T00:00:00Z",
+            "2026-02-31T00:00:00Z",
+            "2026-04-31T00:00:00Z",
+            "2100-02-29T00:00:00Z",
+            "2026-01-00T00:00:00Z",
+        ] {
+            assert!(
+                WallMs::from_iso8601(text).is_none(),
+                "expected {text} to be refused rather than rolled into the next month"
+            );
+        }
+        // The leap days that exist still read.
+        for text in ["2024-02-29T00:00:00Z", "2000-02-29T00:00:00Z"] {
+            assert!(WallMs::from_iso8601(text).is_some(), "{text} is a real day");
+        }
     }
 
     #[test]
