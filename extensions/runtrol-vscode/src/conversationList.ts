@@ -193,47 +193,40 @@ export function projects(
     const home = projectOf(records, row);
     if (home) filed.get(home.key)?.push(row);
   }
-  const groups: ProjectGroup[] = records.map((record) => group(
-    `project:${encodeURIComponent(record.key)}`,
-    record.name,
-    record.workspace,
-    "created",
-    openWorkspaces.some((folder) =>
-      workspaceCovers(record.workspace, folder) || workspaceCovers(folder, record.workspace)),
-    filed.get(record.key) ?? [],
-    record.pinned,
-  ));
-  const seen = new Set<string>();
-  for (const folder of openWorkspaces) {
-    if (!folder.trim()) continue;
-    const identity = workspaceIdentity(folder);
-    if (seen.has(identity)) continue;
-    seen.add(identity);
-    // A created project already standing for this place draws the one heading; either direction of cover
-    // counts, so a project inside the open folder or around it never doubles up.
-    const represented = records.some((record) =>
-      workspaceCovers(record.workspace, folder) || workspaceCovers(folder, record.workspace));
-    if (represented) continue;
-    const folderRows = rows.filter((row) =>
-      !intrinsicallyLoose(row)
-      && !projectOf(records, row)
-      && openFolderOf(openWorkspaces, row) === identity);
-    // The folder in this window is the person's immediate context, not a project they must register first. Keep
-    // it visible even before its first conversation so opening Runtrol here always starts with the work at hand.
-    groups.push(group(
-      `folder:${encodeURIComponent(identity)}`,
-      workspaceName(folder) || folder,
-      folder,
-      "open",
-      true,
-      folderRows,
-      false,
-    ));
-  }
-  return qualified(groups).sort(byPinnedThenMostRecent(records));
+  // Only what somebody added. The window's own folder used to become a heading of its own, which made the
+  // same machine look different in every window: open Runtrol here and this folder led the list, open it
+  // there and another did. The panel is the machine's, not this window's (operator, 2026-08-26), so the open
+  // folder is marked as current and nothing more.
+  return qualified(records
+    .map((record) => group(
+      `project:${encodeURIComponent(record.key)}`,
+      record.name,
+      record.workspace,
+      "created",
+      openWorkspaces.some((folder) =>
+        workspaceCovers(record.workspace, folder) || workspaceCovers(folder, record.workspace)),
+      filed.get(record.key) ?? [],
+      record.pinned,
+    )))
+    .sort(byAddedOrder(records));
 }
 
 /// Headings that share a name get their parent folder's name beside it.
+/// Pinned projects first, then the order the person put them in.
+///
+/// Deliberately not "most recently used". A list that reorders itself under the reader is a list they cannot
+/// learn, and the same machine would look different from one hour to the next. The order is theirs to set
+/// (operator, 2026-08-26), so the only thing this does is honour it and lift the pinned ones.
+function byAddedOrder(
+  records: readonly ProjectRecord[],
+): (left: ProjectGroup, right: ProjectGroup) => number {
+  const placed = new Map(records.map((record, index) => [`project:${encodeURIComponent(record.key)}`, index]));
+  return (left, right) => {
+    if (left.pinned !== right.pinned) return left.pinned ? -1 : 1;
+    return (placed.get(left.key) ?? 0) - (placed.get(right.key) ?? 0);
+  };
+}
+
 function qualified(groups: readonly ProjectGroup[]): ProjectGroup[] {
   const counts = new Map<string, number>();
   for (const heading of groups) counts.set(heading.name, (counts.get(heading.name) ?? 0) + 1);

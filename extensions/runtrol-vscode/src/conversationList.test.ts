@@ -560,18 +560,19 @@ test("a folder that is only whitespace files nowhere", () => {
   assert.equal(loose(rows).length, 1);
 });
 
-test("a folder nobody added is never a heading, however many conversations name it", () => {
+test("only an added folder is a heading, so every window shows the same list", () => {
   // A project is a decision, never a discovery: the panel used to invent a heading for every folder with enough
   // conversations, and the operator rejected the wall it produced. The open folder stays explicit; a folder
   // nobody added contributes nothing at all until it is added (operator, 2026-08-26).
   const rows = conversations(spread([ALPHA, BETA, GAMMA]), PROVIDERS, [], null);
-  const groups = projects([], rows, [ALPHA]);
-  assert.equal(groups.length, 1, "only the open folder is a heading");
-  assert.equal(groups[0]?.kind, "open");
-  assert.equal(groups[0]?.current, true, "the open folder is this window's project");
-  assert.equal(groups[0]?.rows.length, 2, "its own conversations file under it");
+  assert.equal(projects([], rows, [ALPHA]).length, 0, "not even the open folder becomes a heading");
+  const added = projects([record(ALPHA)], rows, [ALPHA]);
+  assert.equal(added.length, 1, "adding it is what makes the heading");
+  assert.equal(added[0]?.kind, "created");
+  assert.equal(added[0]?.current, true, "the window standing in it is marked, never invented");
+  assert.equal(added[0]?.rows.length, 2, "its own conversations file under it");
   assert.equal(loose(rows).length, 0, "an unadded folder's conversations are not on screen at all");
-  assert.equal(projects([], [], []).length, 0, "with nothing added and nothing open, no headings at all");
+  assert.equal(projects([], [], []).length, 0, "with nothing added, no headings at all");
 });
 
 test("adding a folder lists every conversation the services report inside it", () => {
@@ -724,12 +725,14 @@ test("conversation row detail stays empty for every operational state", () => {
   }
 });
 
-test("the current folder is available before its first conversation without project registration", () => {
+test("the window's own folder waits to be added like any other", () => {
+  // The panel is the machine's, not this window's: opening Runtrol somewhere must not put that somewhere at
+  // the top of a list everybody else sees differently (operator, 2026-08-26).
   const rows = conversations([session({ sessionId: "elsewhere", workspace: BETA })], PROVIDERS, [], null);
-  const groups = projects([], rows, [ALPHA]);
-  assert.deepEqual(groups.map((group) => group.name), ["alpha"]);
-  assert.equal(groups[0]?.current, true);
-  assert.equal(groups[0]?.rows.length, 0);
+  assert.deepEqual(projects([], rows, [ALPHA]).map((group) => group.name), []);
+  const added = projects([record(ALPHA)], rows, [ALPHA]);
+  assert.deepEqual(added.map((group) => group.name), ["alpha"]);
+  assert.equal(added[0]?.current, true, "still marked as the folder this window stands in");
   assert.equal(loose(rows).length, 0, "the conversation in the unadded folder is not drawn anywhere");
 });
 
@@ -876,15 +879,16 @@ test("the current project comes first even when another project has the newest c
   assert.equal(groups[0]?.current, true);
 });
 
-test("non-current projects remain ordered by their newest conversation", () => {
+test("projects keep the order the person put them in, not the order they were used", () => {
+  // A list that reorders itself under the reader is a list they cannot learn. Activity moves nothing.
   const rows = conversations(
     spread([ALPHA, BETA, GAMMA]),
     PROVIDERS,
     [nativeChat({ nativeSessionId: "newest", cwd: GAMMA, updatedAt: "2026-08-17T11:59:00Z" })],
     null,
   );
-  const groups = projects([record(ALPHA), record(BETA), record(GAMMA)], rows, [ALPHA]);
-  assert.deepEqual(groups.map((group) => group.name).slice(0, 2), ["alpha", "gamma"]);
+  const groups = projects([record(BETA), record(GAMMA), record(ALPHA)], rows, [ALPHA]);
+  assert.deepEqual(groups.map((group) => group.name), ["beta", "gamma", "alpha"]);
 });
 
 test("heading order does not move when an agent starts or finishes a turn", () => {
