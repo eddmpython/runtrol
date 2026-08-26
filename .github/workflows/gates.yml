@@ -202,6 +202,12 @@ jobs:
       - name: 공개 Runtime 프로토콜, 연동, 보안, 운영 문서 대조
         if: needs.detect.outputs.hasWorkspace == 'true'
         run: python -X utf8 tests/audit/runtimeDocumentation.py
+      - name: 홈 규칙 게이트 자체 검증
+        if: needs.detect.outputs.hasWorkspace == 'true'
+        run: python -X utf8 tests/audit/homeIsOneRule.py --selftest
+      - name: 홈을 찾는 모든 길이 RUNTROL_HOME 을 먼저 읽는다
+        if: needs.detect.outputs.hasWorkspace == 'true'
+        run: python -X utf8 tests/audit/homeIsOneRule.py
       - name: VS Code 확장 게이트 자체 검증
         if: needs.detect.outputs.hasWorkspace == 'true'
         run: python -X utf8 tests/audit/vscodeExtension.py --selftest

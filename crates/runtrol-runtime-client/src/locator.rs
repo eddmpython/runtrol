@@ -37,7 +37,7 @@ impl RuntimeLocator {
     /// absolute.
     pub fn system() -> Result<Self, LocatorError> {
         Ok(Self {
-            path: system_state_root()?.join(RUNTIME_FOLDER).join(LOCATOR_FILE),
+            path: runtrol_home()?.join(LOCATOR_FILE),
             prefer_digest: None,
             #[cfg(test)]
             fixture: None,
@@ -581,6 +581,36 @@ mod windows_security {
             return Err(std::io::Error::last_os_error());
         }
         TokenUserBuffer::read(OwnedHandle(token).0)
+    }
+}
+
+/// The environment variable that names the Runtrol home, when the operator set one.
+const HOME_ENVIRONMENT: &str = "RUNTROL_HOME";
+
+/// Where this machine's Runtrol home is, by the same rule the Core itself follows.
+///
+/// The Core reads `RUNTROL_HOME` first and falls back to the platform's directory
+/// (`crates/runtrol-core/src/home/mod.rs`). This read only the platform directory, so with a home the operator
+/// chose, `runtrol status` answered from that home while `runtrol runtime-locator` answered from the default one,
+/// and a consumer holding both was talking to two Runtimes without being told. Measured 2026-08-26: an extension
+/// in a chosen home could never finish enrolling, because the enrollment it created in one home was invisible to
+/// the half that approved it in the other.
+///
+/// An explicit setting is used exactly as given. Falling back would mean reading somewhere other than where the
+/// operator said, which is the one thing an explicit setting must never do.
+fn runtrol_home() -> Result<PathBuf, LocatorError> {
+    match std::env::var_os(HOME_ENVIRONMENT) {
+        Some(value) if !value.is_empty() => {
+            let path = PathBuf::from(value);
+            if !path.is_absolute() {
+                return Err(LocatorError::Environment {
+                    name: HOME_ENVIRONMENT,
+                    why: "is not an absolute path",
+                });
+            }
+            Ok(path)
+        }
+        _ => Ok(system_state_root()?.join(RUNTIME_FOLDER)),
     }
 }
 
