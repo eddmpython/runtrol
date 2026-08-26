@@ -202,12 +202,6 @@ jobs:
       - name: 공개 Runtime 프로토콜, 연동, 보안, 운영 문서 대조
         if: needs.detect.outputs.hasWorkspace == 'true'
         run: python -X utf8 tests/audit/runtimeDocumentation.py
-      - name: 공식 ACP Registry 검출기 자체 검증
-        if: needs.detect.outputs.hasWorkspace == 'true'
-        run: python -X utf8 tests/audit/acpRegistry.py --selftest
-      - name: 공식 에이전트 카탈로그는 로컬 설치본만 자동 연결
-        if: needs.detect.outputs.hasWorkspace == 'true'
-        run: python -X utf8 tests/audit/acpRegistry.py
       - name: VS Code 확장 게이트 자체 검증
         if: needs.detect.outputs.hasWorkspace == 'true'
         run: python -X utf8 tests/audit/vscodeExtension.py --selftest

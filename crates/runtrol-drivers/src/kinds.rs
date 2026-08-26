@@ -28,7 +28,7 @@ use crate::acp::AcpProvider;
 use crate::claude::ClaudeProvider;
 use crate::codex::CodexProvider;
 #[cfg(test)]
-use crate::generated_acp_registry::MANIFESTS;
+use crate::shipped::MANIFESTS;
 
 /// Builds a driver for one kind.
 ///
@@ -233,45 +233,11 @@ mod tests {
     }
 
     #[test]
-    fn official_registry_adapters_are_local_executables_never_downloaders() {
-        assert_eq!(
-            MANIFESTS.len(),
-            3 + crate::ACP_REGISTRY_ADAPTER_COUNT,
-            "three measured providers precede the generated catalogue"
-        );
-        assert_eq!(
-            crate::ACP_REGISTRY_AGENT_COUNT,
-            crate::ACP_REGISTRY_ADAPTER_COUNT
-                + crate::ACP_REGISTRY_SKIPPED_COUNT
-                + crate::ACP_REGISTRY_REPLACED_COUNT,
-            "official entries replaced by richer measured manifests stay in the coverage arithmetic"
-        );
-        assert_eq!(crate::ACP_REGISTRY_SCHEMA, "1.0.0");
-        assert_eq!(crate::ACP_REGISTRY_SHA256.len(), 64);
-        for text in MANIFESTS.iter().skip(3) {
-            let manifest: Manifest = toml::from_str(text).expect("generated manifest parses");
-            assert_eq!(manifest.kind.as_str(), "acp");
-            assert!(
-                manifest.update.is_none(),
-                "catalogue data cannot claim update authority"
-            );
-            assert!(
-                manifest
-                    .bin
-                    .names
-                    .iter()
-                    .all(|name| name.as_ref() != "npx" && name.as_ref() != "uvx"),
-                "Runtime may resolve only a CLI already on the operator's PATH"
-            );
-        }
-    }
-
-    #[test]
     fn every_shipped_provider_declares_its_terminal_store_account_and_event_surfaces() {
-        // The explicit provider boundary: a representative service is attached through its manifest's four
+        // The explicit provider boundary: every service this build ships is attached through its manifest's four
         // surfaces and nothing else. A handwritten manifest missing one would be a provider the conversation
         // surface cannot open or the sidebar cannot read, shipped anyway.
-        for text in MANIFESTS.iter().take(3) {
+        for text in MANIFESTS {
             let manifest: Manifest = toml::from_str(text).expect("shipped manifest parses");
             let tui = manifest
                 .tui
@@ -320,17 +286,25 @@ mod tests {
     }
 
     #[test]
-    fn official_registry_adapter_is_discovered_from_the_local_path() {
+    fn an_acp_manifest_is_discovered_from_the_local_path() {
         const CHILD_MARKER: &str = "RUNTROL_ACP_DISCOVERY_FIXTURE";
-        const TEST_NAME: &str =
-            "kinds::tests::official_registry_adapter_is_discovered_from_the_local_path";
+        const TEST_NAME: &str = "kinds::tests::an_acp_manifest_is_discovered_from_the_local_path";
 
+        // A manifest names bare executables and nothing else, so what this proves is that an ACP service is
+        // found on the operator's own search path. Runtime resolves what is already installed; it has never had
+        // a way to fetch one, and a manifest that named a downloader would be that way.
         let manifest: Manifest = MANIFESTS
             .iter()
-            .skip(5)
-            .map(|text| toml::from_str(text).expect("generated manifest parses"))
-            .find(|manifest: &Manifest| manifest.id.as_str() == "glm-acp-agent")
-            .expect("the official snapshot carries the GLM adapter");
+            .map(|text| toml::from_str(text).expect("shipped manifest parses"))
+            .find(|manifest: &Manifest| manifest.kind.as_str() == "acp")
+            .expect("this build ships an ACP service");
+        let bare = manifest
+            .bin
+            .names
+            .first()
+            .expect("an ACP manifest names its executable")
+            .as_ref()
+            .to_owned();
         if let Some(expected) = std::env::var_os(CHILD_MARKER) {
             let resolved = runtrol_core::locate(&manifest).expect("the generated adapter resolves");
             assert_eq!(
@@ -352,9 +326,9 @@ mod tests {
         ));
         std::fs::create_dir(&directory).expect("fixture directory");
         let executable = directory.join(if cfg!(windows) {
-            "glm-acp-agent.exe"
+            format!("{bare}.exe")
         } else {
-            "glm-acp-agent"
+            bare.clone()
         });
         std::fs::copy(&test_binary, &executable).expect("fixture executable");
         #[cfg(unix)]
@@ -378,7 +352,7 @@ mod tests {
             .status()
             .expect("child test starts");
         std::fs::remove_dir_all(&directory).expect("fixture cleanup");
-        assert!(status.success(), "generated adapter discovery child failed");
+        assert!(status.success(), "ACP discovery child failed");
     }
 
     #[test]

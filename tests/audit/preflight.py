@@ -97,14 +97,6 @@ GATES: dict[str, tuple[str, list[str]]] = {
         [*PY, f"{HOOKS}/configReadOnly.py", "--selftest"],
     ),
     "configReadOnly": ("provider configuration stays read-only", [*PY, f"{HOOKS}/configReadOnly.py"]),
-    "acpRegistrySelftest": (
-        "공식 ACP Registry 검출기 자체 검증",
-        [*PY, f"{HOOKS}/acpRegistry.py", "--selftest"],
-    ),
-    "acpRegistry": (
-        "공식 에이전트 카탈로그는 로컬 설치본만 자동 연결",
-        [*PY, f"{HOOKS}/acpRegistry.py"],
-    ),
     "orphanReapingSelftest": (
         "자식 회수 게이트 자체 검증",
         [*PY, f"{HOOKS}/orphanReaping.py", "--selftest"],
