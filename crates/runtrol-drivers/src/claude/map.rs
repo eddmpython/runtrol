@@ -22,6 +22,8 @@
 //! something new is then a frame a subscriber can render or ignore, rather than an outage. That is the direct
 //! answer to how the last project in this space died.
 
+use std::collections::BTreeMap;
+
 use bytes::Bytes;
 use runtrol_provider::{
     CapabilitySet, Chunk, EventBody, Level, MessageId, NativeSessionId, Notice, NoticeCode, Opaque,
@@ -246,12 +248,18 @@ struct Envelope<'line> {
     rate_limit_info: Option<&'line RawValue>,
 }
 
-/// The limit fields this CLI actually reports, measured on 2.1.235 with a real turn.
+/// The limit fields this CLI reports, measured on 2.1.246 with a real turn.
 ///
-/// The whole measured payload: `status`, `resetsAt`, `rateLimitType`, `overageStatus`,
-/// `overageDisabledReason`, `isUsingOverage`. Notably there is no utilisation number anywhere in it: this CLI
-/// says which window governs and when it resets, never how full it is. Only the two fields a gauge can carry
-/// are read; the rest stays in the payload, which travels whole.
+/// The measured payload: `status`, `resetsAt`, `rateLimitType`, `utilization`, `surpassedThreshold`,
+/// `isUsingOverage`, and `unifiedWindows` holding one entry per window the account has.
+///
+/// # A note about what was believed before
+///
+/// This driver recorded, from 2.1.235, that the CLI reported no utilisation number at all, and the whole product
+/// was arranged around that: the usage strip drew no bar for this service and said so. The number is there, and
+/// it was read again only because the operator pointed at his own editor showing "94% of your weekly limit"
+/// (2026-08-26). A measurement is true of the version it was taken on, and this one names its version for the
+/// next person who has to decide whether to trust it.
 #[derive(Deserialize)]
 struct RateLimitInfo<'line> {
     /// The provider's own word for whether requests pass.
@@ -263,6 +271,59 @@ struct RateLimitInfo<'line> {
     /// weeks after the epoch, which is not a time this CLI resets anything.
     #[serde(default, rename = "resetsAt")]
     resets_at: Option<u64>,
+    /// How full the governing window is, as a fraction from zero to one.
+    #[serde(default)]
+    utilization: Option<f64>,
+    /// Every window the account has, by the provider's own names.
+    #[serde(default, rename = "unifiedWindows")]
+    unified_windows: Option<BTreeMap<String, RateLimitWindow>>,
+}
+
+/// One window inside `unifiedWindows`.
+#[derive(Deserialize)]
+struct RateLimitWindow {
+    /// How full that window is, as a fraction from zero to one.
+    #[serde(default)]
+    utilization: Option<f64>,
+    /// When that window resets, in unix seconds.
+    #[serde(default, rename = "resetsAt")]
+    resets_at: Option<u64>,
+}
+
+/// The window names this CLI uses, and how long each one is.
+///
+/// Named rather than parsed: the length is what the strip labels a bar with, and inventing a length from a name
+/// this build has not seen would put a wrong label on a real number. An unknown name still draws its bar, with
+/// no length claimed.
+const WINDOW_MINUTES: &[(&str, u32)] = &[("five_hour", 300), ("seven_day", 10_080)];
+
+/// Turn one reported window into the shape a gauge draws.
+fn window_of(name: &str, window: &RateLimitWindow) -> Option<Window> {
+    if window.utilization.is_none() && window.resets_at.is_none() {
+        return None;
+    }
+    Some(Window {
+        used_percent: window.utilization.map(percent_of),
+        resets_at: window
+            .resets_at
+            .map(|seconds| WallMs::from_millis(seconds.saturating_mul(1_000))),
+        window_minutes: WINDOW_MINUTES
+            .iter()
+            .find(|(known, _)| *known == name)
+            .map(|(_, minutes)| *minutes),
+    })
+}
+
+/// A fraction from zero to one as the whole percent a bar can draw.
+///
+/// Clamped rather than trusted: the bar is a proportion, and a value outside the range would either overflow the
+/// cast or draw a bar longer than its track.
+fn percent_of(fraction: f64) -> u8 {
+    let scaled = (fraction * 100.0).round();
+    if scaled.is_nan() {
+        return 0;
+    }
+    scaled.clamp(0.0, 100.0) as u8
 }
 
 /// The account's limit position, from the fields this CLI reports.
@@ -270,22 +331,50 @@ fn rate_limit(line: &Bytes, envelope: &Envelope<'_>) -> RateLimit {
     // An unreadable report is not silence: both fields fall back to their conservative readings (no window, and
     // a status that is not known-good), and the whole payload still travels in `detail` for whoever wants the
     // vendor's own words.
-    let (status, resets_at) = match envelope
+    let read = match envelope
         .rate_limit_info
         .map(|raw| serde_json::from_str::<RateLimitInfo<'_>>(raw.get()))
     {
-        Some(Ok(read)) => (read.status, read.resets_at),
-        Some(Err(_)) | None => (None, None),
+        Some(Ok(read)) => Some(read),
+        Some(Err(_)) | None => None,
     };
+    let status = read.as_ref().and_then(|read| read.status);
+    // The shortest window first, because that is the one a person is about to hit. The provider names its
+    // windows and this build knows how long two of them are; an unknown name still draws, unlabelled.
+    let mut windows: Vec<Window> = read
+        .as_ref()
+        .and_then(|read| read.unified_windows.as_ref())
+        .map(|reported| {
+            let mut ordered: Vec<(u32, Window)> = reported
+                .iter()
+                .filter_map(|(name, window)| {
+                    window_of(name, window)
+                        .map(|drawn| (drawn.window_minutes.unwrap_or(u32::MAX), drawn))
+                })
+                .collect();
+            ordered.sort_by_key(|(minutes, _)| *minutes);
+            ordered.into_iter().map(|(_, drawn)| drawn).collect()
+        })
+        .unwrap_or_default();
+    if windows.is_empty() {
+        // Older builds of this CLI reported one governing window at the top level and no `unifiedWindows`. That
+        // report is still a real limit position and still draws.
+        if let Some(read) = read.as_ref() {
+            if read.utilization.is_some() || read.resets_at.is_some() {
+                windows.push(Window {
+                    used_percent: read.utilization.map(percent_of),
+                    resets_at: read
+                        .resets_at
+                        .map(|seconds| WallMs::from_millis(seconds.saturating_mul(1_000))),
+                    window_minutes: None,
+                });
+            }
+        }
+    }
+    let mut windows = windows.into_iter();
     RateLimit {
-        primary: resets_at.map(|seconds| Window {
-            // Measured: this CLI reports no utilisation number at all. Absent is the truth; a number here
-            // would be invented.
-            used_percent: None,
-            resets_at: Some(WallMs::from_millis(seconds.saturating_mul(1_000))),
-            window_minutes: None,
-        }),
-        secondary: None,
+        primary: windows.next(),
+        secondary: windows.next(),
         // Only the provider's own good word means requests pass. A status this build has never seen reads as
         // reached, which errs loudly in a warning colour rather than silently as "no limit exists": the same
         // rule stop reasons follow, where not understood is never rendered as success.
@@ -1345,8 +1434,8 @@ mod tests {
 
     #[test]
     fn the_measured_limit_report_becomes_a_window_and_not_a_guess() {
-        // The exact payload a real turn produced on 2.1.235. It carries no utilisation number anywhere, so the
-        // window's percentage is absent rather than invented, and the reset instant rides in milliseconds.
+        // The payload a 2.1.235 turn produced: a governing window and a reset, with no utilisation anywhere.
+        // That build is still readable, and its window draws with no percentage rather than an invented one.
         let measured = line(&format!(
             r#"{{"type":"rate_limit_event","session_id":"{SESSION}","rate_limit_info":{{"status":"allowed","resetsAt":1787131200,"rateLimitType":"five_hour","overageStatus":"rejected","overageDisabledReason":"org_level_disabled","isUsingOverage":false}}}}"#
         ));
@@ -1370,6 +1459,56 @@ mod tests {
                     limit.detail.as_str().contains("five_hour"),
                     "which window governs stays in the provider's own payload"
                 );
+            }
+            other => panic!("expected a limit update, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn the_measured_windows_become_two_bars_shortest_first() {
+        // The exact payload a real turn produced on 2.1.246, byte for byte from `--output-format stream-json`.
+        // Both windows carry a utilisation, which is the number the strip draws, and the shorter window leads
+        // because that is the one a person is about to hit.
+        let measured = line(&format!(
+            r#"{{"type":"rate_limit_event","session_id":"{SESSION}","rate_limit_info":{{"status":"allowed_warning","resetsAt":1787835600,"rateLimitType":"seven_day","utilization":0.94,"isUsingOverage":false,"surpassedThreshold":0.75,"unifiedWindows":{{"five_hour":{{"utilization":0.21,"resetsAt":1787749800}},"seven_day":{{"utilization":0.94,"resetsAt":1787835600}}}}}}}}"#
+        ));
+        match read(&measured).expect("readable") {
+            Frame::Body(EventBody::RateLimitUpdate(limit)) => {
+                let primary = limit.primary.expect("the five hour window");
+                assert_eq!(primary.used_percent, Some(21));
+                assert_eq!(primary.window_minutes, Some(300));
+                assert_eq!(
+                    primary.resets_at.map(WallMs::as_millis),
+                    Some(1_787_749_800_000)
+                );
+                let secondary = limit.secondary.expect("the seven day window");
+                assert_eq!(secondary.used_percent, Some(94));
+                assert_eq!(secondary.window_minutes, Some(10_080));
+                assert!(
+                    limit.reached,
+                    "a warning is not the provider's word for passing"
+                );
+            }
+            other => panic!("expected a limit update, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_top_level_utilisation_without_named_windows_still_draws() {
+        // A build that reports the governing window at the top level and nothing under `unifiedWindows` is
+        // still reporting a real position. Reading only the newer shape would have thrown it away.
+        let older = line(&format!(
+            r#"{{"type":"rate_limit_event","session_id":"{SESSION}","rate_limit_info":{{"status":"allowed","resetsAt":1787131200,"utilization":0.5}}}}"#
+        ));
+        match read(&older).expect("readable") {
+            Frame::Body(EventBody::RateLimitUpdate(limit)) => {
+                let window = limit.primary.expect("one window");
+                assert_eq!(window.used_percent, Some(50));
+                assert_eq!(
+                    window.window_minutes, None,
+                    "no name, so no length is claimed"
+                );
+                assert!(limit.secondary.is_none());
             }
             other => panic!("expected a limit update, got {other:?}"),
         }
