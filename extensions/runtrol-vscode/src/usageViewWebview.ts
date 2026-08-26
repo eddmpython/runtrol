@@ -1,7 +1,7 @@
 import "./usageView.css";
 
 import type { SetupRow, UsageMeter, UsageRow } from "./usageDisplay";
-import type { UsageViewSnapshot } from "./usageViewMessage";
+import { usageSnapshot, type UsageViewSnapshot } from "./usageViewMessage";
 
 type VsCodeApi = {
   postMessage(message: unknown): void;
@@ -142,18 +142,6 @@ function providerGlyph(declared: string, className: string): HTMLImageElement {
     { once: true },
   );
   return image;
-}
-
-function usageSnapshot(value: unknown): UsageViewSnapshot | null {
-  if (!value || typeof value !== "object") return null;
-  const record = value as Record<string, unknown>;
-  if (
-    record.type !== "snapshot"
-    || !Array.isArray(record.rows)
-    || typeof record.installableCount !== "number"
-    || !(typeof record.error === "string" || record.error === null)
-  ) return null;
-  return value as UsageViewSnapshot;
 }
 
 function element<T extends HTMLElement>(id: string): T {

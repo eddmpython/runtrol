@@ -31,3 +31,22 @@ export function usageViewAction(value: unknown): UsageViewAction | null {
   }
   return null;
 }
+
+/// Validate a snapshot from the host before the document draws it.
+///
+/// The document trusts nothing it is handed, including its own host: a message that does not match this shape is
+/// dropped. That makes the check part of the message contract rather than a detail of the drawing code, so a
+/// field renamed on one side and not the other fails a test here instead of silently emptying the panel, which
+/// is what happened when `installableCount` became `setup` (measured 2026-08-26: every snapshot was discarded
+/// and the strip drew nothing at all, not even its own empty sentence).
+export function usageSnapshot(value: unknown): UsageViewSnapshot | null {
+  if (!value || typeof value !== "object") return null;
+  const record = value as Record<string, unknown>;
+  if (
+    record.type !== "snapshot"
+    || !Array.isArray(record.rows)
+    || !Array.isArray(record.setup)
+    || !(typeof record.error === "string" || record.error === null)
+  ) return null;
+  return value as UsageViewSnapshot;
+}
