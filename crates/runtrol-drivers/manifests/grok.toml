@@ -85,8 +85,41 @@ format = "protocol"
 delete = ["sessions", "delete"]
 
 [account]
-# No status command is published; sign-in state is learned over the ACP handshake.
+# No status command is published: this CLI answers about the account over its own protocol extensions, which
+# the blocks below name. Measured 2026-08-26 on 1.0.5 by handshaking the real binary over `agent stdio`, with
+# no session opened and no turn taken. The extension methods carry a leading underscore on the wire, which is
+# how this protocol marks a vendor extension, and both answer in well under a second.
 protocol = "acp"
+
+[account.identity]
+# `_x.ai/auth/check_subscription` -> {"authenticated": true, "meta": {"auth_mode": "Oidc",
+#   "subscription_tier": "SuperGrok", "email": "...", "team_id": "...", "is_zdr": false}}
+#
+# Only three of those are read. The address and the team are the operator's own details and answer no question
+# the sidebar asks, so no pointer names them and nothing carries them out of the child process.
+method = "_x.ai/auth/check_subscription"
+signed_in = "/authenticated"
+plan = "/meta/subscription_tier"
+via = "/meta/auth_mode"
+
+# `_x.ai/billing` -> {"config": {"currentPeriod": {"type": "USAGE_PERIOD_TYPE_WEEKLY", ...},
+#   "billingPeriodStart": "2026-08-23T22:02:11.135977+00:00",
+#   "billingPeriodEnd":   "2026-08-30T22:02:11.135977+00:00",
+#   "onDemandCap": {"val": 0}, "onDemandUsed": {"val": 0}, "prepaidBalance": {"val": 0},
+#   "isUnifiedBillingUser": true}, "subscription_tier": "SuperGrok"}
+#
+# One window, which is the plan's own usage period. Its length is not declared: the two instants say it, so
+# an account billed monthly reads as a month from this same declaration.
+#
+# `creditUsagePercent` is the percentage this CLI states for a plan that meters credits, and it is simply
+# absent on one that does not (measured: a SuperGrok account returns neither it nor `monthlyLimit`). The
+# window then draws its reset with no bar, because a bar computed from a cap of zero would read as full.
+[[account.window]]
+method = "_x.ai/billing"
+id = "billing_period"
+used_percent = "/config/creditUsagePercent"
+starts_at = "/config/billingPeriodStart"
+resets_at = "/config/billingPeriodEnd"
 
 [events]
 source = "acp"

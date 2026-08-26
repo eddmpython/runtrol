@@ -111,6 +111,7 @@ fn provider_of(
                 delete: delete_command,
             },
             transport,
+            None,
         )),
         "codex" => Box::new(CodexProvider::new(
             provider_id,

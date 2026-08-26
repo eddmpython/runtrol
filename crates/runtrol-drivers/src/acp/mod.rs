@@ -7,11 +7,13 @@
 //! Only the narrow fields runtrol makes decisions on are decoded. Every content block and every unbound frame
 //! stays in its original byte buffer and crosses the provider seam as [`runtrol_provider::Opaque`].
 
+mod account;
 mod agent;
 mod catalogue;
 mod history;
 mod map;
 mod provider;
+mod scratch;
 mod wire;
 
 pub use agent::AcpAgent;

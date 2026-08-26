@@ -22,6 +22,11 @@ pub struct AcpProvider {
     models: ModelAliases,
     sessions: StoreSpec,
     transport_argv: Vec<Box<str>>,
+    /// What this agent's manifest declares about reading its account, when it declares anything.
+    ///
+    /// The standard protocol has no account surface, so every agent that publishes one does it through its
+    /// own extension. This driver holds the declaration and never a vendor's name.
+    account: Option<runtrol_provider::AccountSpec>,
 }
 
 /// How long the CLI's own model listing may take before the answer is treated as absent.
@@ -100,6 +105,7 @@ impl AcpProvider {
         models: ModelAliases,
         sessions: StoreSpec,
         transport_argv: Vec<Box<str>>,
+        account: Option<runtrol_provider::AccountSpec>,
     ) -> Self {
         Self {
             id,
@@ -108,6 +114,7 @@ impl AcpProvider {
             models,
             sessions,
             transport_argv,
+            account,
         }
     }
 
@@ -218,6 +225,34 @@ impl Provider for AcpProvider {
         true
     }
 
+    /// Where the operator's account with this agent stands, from what its manifest declares.
+    ///
+    /// The standard protocol publishes no account surface, so an agent that has one publishes it as its own
+    /// extension. The manifest names that extension's method and where its answer keeps each fact, and
+    /// [`crate::acp::account`] walks it. An agent whose manifest declares none says so rather than having
+    /// this driver guess at a method name.
+    async fn account(&self) -> Result<runtrol_provider::AccountReport, ProviderError> {
+        let Some(spec) = self.account.as_ref() else {
+            return Ok(runtrol_provider::AccountReport::unpublished(
+                "this provider's manifest declares no account surface",
+            ));
+        };
+        let Some(identity) = spec.identity.as_ref() else {
+            return Ok(runtrol_provider::AccountReport::unpublished(
+                "this provider's manifest declares no protocol method that answers about the account",
+            ));
+        };
+        crate::acp::account::read(
+            self.id,
+            &self.program,
+            &self.transport_argv,
+            identity,
+            &spec.windows,
+            &self.contained_by,
+        )
+        .await
+    }
+
     async fn native_sessions(
         &self,
         query: NativeSessionQuery,
@@ -282,6 +317,7 @@ mod tests {
             ModelAliases::default(),
             StoreSpec::default(),
             vec!["serve".into(), "--stdio".into()],
+            None,
         );
         assert_eq!(provider.id().as_str(), "example-acp");
         assert_eq!(
@@ -302,6 +338,7 @@ mod tests {
             },
             StoreSpec::default(),
             Vec::new(),
+            None,
         );
         let ModelCatalog::Aliases { aliases, .. } =
             provider.models().await.expect("manifest aliases are local")

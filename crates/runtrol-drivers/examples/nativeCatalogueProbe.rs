@@ -38,6 +38,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             delete: Vec::new(),
         },
         Vec::new(),
+        None,
     );
     let root = AbsPath::canonicalize(&workspace)?;
     let first = provider
